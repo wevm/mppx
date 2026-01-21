@@ -152,12 +152,11 @@ if (res.status !== 402) return
 
 const challenge = Challenge.fromHeader(res.headers.get('www-authenticate')!)
 
-const credential = await Credential.create({
+const credential = await Credential.fromChallenge(challenge, {
   method: tempo({
     account,
     rpcUrl: 'https://rpc.testnet.tempo.xyz',
   }),
-  challenge,
 })
 
 // Retry with credential
