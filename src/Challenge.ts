@@ -353,6 +353,7 @@ function computeId(challenge: Omit<Challenge, 'id'>, options: { secretKey: strin
     challenge.intent,
     PaymentRequest.serialize(challenge.request),
     challenge.expires ?? '',
+    challenge.digest ?? '',
   ].join('|')
 
   const key = Bytes.fromString(options.secretKey)
