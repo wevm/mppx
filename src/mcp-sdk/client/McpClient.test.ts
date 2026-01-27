@@ -194,7 +194,7 @@ describe('McpClient.wrap', () => {
     })
 
     await expect(mcp.callTool({ name: 'tool_unknown_method', arguments: {} })).rejects.toThrow(
-      'No method found for "unknown_method"',
+      'No compatible payment method. Server offers: unknown_method. Client has: tempo',
     )
   })
 })

@@ -75,8 +75,16 @@ export function wrap<const methods extends readonly AnyClient[]>(
         const challenges = (error.data as { challenges?: Challenge.Challenge[] })?.challenges
         if (!challenges?.length) throw error
 
-        // Use first challenge (add challenge selection logic later)
-        const challenge = challenges[0]!
+        // Select first challenge that matches an installed method
+        const challenge = challenges.find((c) => methods.some((m) => m.name === c.method))
+        if (!challenge) {
+          const available = challenges.map((c) => c.method).join(', ')
+          const installed = methods.map((m) => m.name).join(', ')
+          throw new Error(
+            `No compatible payment method. Server offers: ${available}. Client has: ${installed}`,
+          )
+        }
+
         const credential = await createCredential(challenge, { context, methods })
         const parsed = Credential.deserialize(credential)
 
