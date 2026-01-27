@@ -235,13 +235,13 @@ const request = {
 }
 
 // Send request to MCP server
-let response = await sendMcpRequest(request)
+const response = await sendMcpRequest(request)
 
 // Handle payment if required
 if (mpay.transport.isPaymentRequired(response)) {
   const credential = await mpay.createCredential(response)
-  const paidRequest = mpay.transport.setCredential(request, credential)
-  response = await sendMcpRequest(paidRequest)
+  const paid = mpay.transport.setCredential(request, credential)
+  await sendMcpRequest(paid)
 }
 ```
 
