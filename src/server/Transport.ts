@@ -4,13 +4,19 @@ import type * as Errors from '../Errors.js'
 import * as core_Mcp from '../Mcp.js'
 import * as Receipt from '../Receipt.js'
 
+export { type McpSdk, mcpSdk } from '../mcp-sdk/server/Transport.js'
+
 /**
  * Server-side transport adapter.
  *
  * Abstracts how challenges are issued and credentials are received
  * across different transport protocols (HTTP, MCP, etc.).
  */
-export type Transport<in out input = unknown, in out output = unknown> = {
+export type Transport<
+  in out input = unknown,
+  in out challengeOutput = unknown,
+  in out receiptOutput = challengeOutput,
+> = {
   /** Transport name for identification. */
   name: string
   /**
@@ -19,31 +25,35 @@ export type Transport<in out input = unknown, in out output = unknown> = {
    */
   getCredential: (input: input) => Credential.Credential | null
   /** Creates a transport response for a payment challenge. */
-  respondChallenge: (
-    challenge: Challenge.Challenge,
-    input: input,
-    error?: Errors.PaymentError | undefined,
-  ) => output
+  respondChallenge: (options: {
+    challenge: Challenge.Challenge
+    error?: Errors.PaymentError | undefined
+    input: input
+  }) => challengeOutput
   /** Attaches a receipt to a successful response. */
-  respondReceipt: (
-    receipt: Receipt.Receipt,
-    response: output,
-    context: { challengeId: string },
-  ) => output
+  respondReceipt: (options: {
+    challengeId: string
+    receipt: Receipt.Receipt
+    response: receiptOutput
+  }) => receiptOutput
 }
-export type AnyTransport = Transport<any, any>
+export type AnyTransport = Transport<any, any, any>
 
 export type Http = Transport<Request, Response>
 
-export type Mcp = Transport<core_Mcp.Request, core_Mcp.Response>
+export type Mcp = Transport<core_Mcp.JsonRpcRequest, core_Mcp.Response>
 
 /** Extracts the input type from a transport. */
 export type InputOf<transport extends Transport = Transport> =
-  transport extends Transport<infer input, any> ? input : never
+  transport extends Transport<infer input, any, any> ? input : never
 
-/** Extracts the output type from a transport. */
-export type OutputOf<transport extends Transport = Transport> =
-  transport extends Transport<any, infer output> ? output : never
+/** Extracts the challenge output type from a transport. */
+export type ChallengeOutputOf<transport extends Transport = Transport> =
+  transport extends Transport<any, infer challengeOutput, any> ? challengeOutput : never
+
+/** Extracts the receipt output type from a transport. */
+export type ReceiptOutputOf<transport extends Transport = Transport> =
+  transport extends Transport<any, any, infer receiptOutput> ? receiptOutput : never
 
 /**
  * Creates a custom server-side transport.
@@ -55,14 +65,14 @@ export type OutputOf<transport extends Transport = Transport> =
  * const custom = Transport.from({
  *   name: 'custom',
  *   getCredential(input) { ... },
- *   respondChallenge(challenge, input) { ... },
- *   respondReceipt(receipt, response, context) { ... },
+ *   respondChallenge({ challenge, input }) { ... },
+ *   respondReceipt({ receipt, response, challengeId }) { ... },
  * })
  * ```
  */
-export function from<input = unknown, output = unknown>(
-  transport: Transport<input, output>,
-): Transport<input, output> {
+export function from<input = unknown, challengeOutput = unknown, receiptOutput = challengeOutput>(
+  transport: Transport<input, challengeOutput, receiptOutput>,
+): Transport<input, challengeOutput, receiptOutput> {
   return transport
 }
 
@@ -83,7 +93,7 @@ export function http() {
       return Credential.deserialize(header)
     },
 
-    respondChallenge(challenge, _request, error) {
+    respondChallenge({ challenge, error }) {
       const headers: Record<string, string> = {
         'WWW-Authenticate': Challenge.serialize(challenge),
         'Cache-Control': 'no-store',
@@ -98,7 +108,7 @@ export function http() {
       return new Response(body, { status: 402, headers })
     },
 
-    respondReceipt(receipt, response) {
+    respondReceipt({ receipt, response }) {
       const headers = new Headers(response.headers)
       headers.set('Payment-Receipt', Receipt.serialize(receipt))
       return new Response(response.body, {
@@ -111,14 +121,17 @@ export function http() {
 }
 
 /**
- * MCP transport for server-side payment handling.
+ * MCP transport for server-side payment handling with raw JSON-RPC.
  *
  * - Reads credentials from `_meta["org.paymentauth/credential"]`
  * - Issues challenges via JSON-RPC error with code -32042
  * - Attaches receipts via `_meta["org.paymentauth/receipt"]`
+ *
+ * Use this transport when handling raw JSON-RPC messages directly.
+ * For use with `@modelcontextprotocol/sdk`, use `mcpSdk()` instead.
  */
 export function mcp() {
-  return from<core_Mcp.Request, core_Mcp.Response>({
+  return from<core_Mcp.JsonRpcRequest, core_Mcp.Response>({
     name: 'mcp',
 
     getCredential(request) {
@@ -128,10 +141,10 @@ export function mcp() {
       return credential
     },
 
-    respondChallenge(challenge, request, error) {
+    respondChallenge({ challenge, input, error }) {
       return {
         jsonrpc: '2.0',
-        id: request.id,
+        id: input.id,
         error: {
           code: core_Mcp.paymentRequiredCode,
           message: error?.message ?? 'Payment Required',
@@ -144,12 +157,12 @@ export function mcp() {
       }
     },
 
-    respondReceipt(receipt, response, context) {
+    respondReceipt({ receipt, response, challengeId }) {
       if ('error' in response) return response
 
       const mcpReceipt: core_Mcp.Receipt = {
         ...receipt,
-        challengeId: context.challengeId,
+        challengeId,
       }
 
       return {

@@ -95,36 +95,36 @@ http.createServer(async (req, res) => {
 
 #### MCP (Model Context Protocol)
 
-Use `Transport.mcp()` to handle payments over MCP JSON-RPC. Payment challenges are sent as error code `-32042`, and credentials are passed via `_meta["org.paymentauth/credential"]`.
+Use `Transport.mcpSdk()` for MCP SDK integration.
 
 ```ts
-import { Mpay, Transport } from 'mpay/server'
+import { McpServer } from '@modelcontextprotocol/sdk/server/mcp'
+import { Mpay, Transport, tempo } from 'mpay/server'
 
 const mpay = Mpay.create({
   method: tempo({ rpcUrl: 'https://rpc.tempo.xyz' }),
   realm: 'mcp.example.com',
   secretKey: process.env.SECRET_KEY,
-  transport: Transport.mcp(),
+  transport: Transport.mcpSdk(),
 })
 
-// In your MCP tool handler:
-async function handle(request: McpRequest): Promise<McpResponse> {
+const server = new McpServer({ name: 'my-server', version: '1.0.0' })
+
+server.registerTool('premium_tool', { description: '...' }, async (extra) => {
   const result = await mpay.charge({
     request: {
       amount: '1000000',
       currency: '0x20c0000000000000000000000000000000000001',
       recipient: '0x742d35Cc6634c0532925a3b844bC9e7595F8fE00',
     },
-  })(request)
+  })(extra)
 
-  if (result.status === 402) return result.challenge
+  // Payment required — throw challenge
+  if (result.status === 402) throw result.challenge
 
-  return result.withReceipt({
-    jsonrpc: '2.0',
-    id: request.id,
-    result: { content: [{ type: 'text', text: 'Tool executed' }] },
-  })
-}
+  // Payment verified — return result with receipt
+  return result.withReceipt({ content: [{ type: 'text', text: 'Tool executed' }] })
+})
 ```
 
 ### Client
@@ -210,39 +210,33 @@ const res2 = await fetch('https://api.example.com/resource', {
 
 #### MCP (Model Context Protocol)
 
-Use `Transport.mcp()` to handle payments over MCP JSON-RPC. The client detects payment-required errors (code `-32042`) and attaches credentials via `_meta["org.paymentauth/credential"]`.
+Use `McpClient.wrap` to wrap an MCP SDK client with automatic payment handling. Like `Fetch.from` for HTTP, it detects payment challenges and retries with credentials.
 
 ```ts
-import { Mpay, Transport, tempo } from 'mpay/client'
+import { Client } from '@modelcontextprotocol/sdk/client'
+import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio'
+import { McpClient, tempo } from 'mpay/mcp-sdk/client'
 import { privateKeyToAccount } from 'viem/accounts'
 
-const mpay = Mpay.create({
+// Create MCP client
+const client = new Client({ name: 'my-client', version: '1.0.0' })
+await client.connect(new StdioClientTransport({ command: 'mcp-server' }))
+
+// Wrap with payment handling
+const mcp = McpClient.wrap(client, {
   methods: [
     tempo({
       account: privateKeyToAccount('0x...'),
       rpcUrl: 'https://rpc.tempo.xyz',
     }),
   ],
-  transport: Transport.mcp(),
 })
 
-// MCP request that requires payment
-const request = {
-  jsonrpc: '2.0',
-  id: 1,
-  method: 'tools/call',
-  params: { name: 'premium_tool', arguments: {} },
-}
+// Call tool — handles payment challenges automatically
+const result = await mcp.callTool({ name: 'premium_tool', arguments: {} })
 
-// Send request to MCP server
-const response = await sendMcpRequest(request)
-
-// Handle payment if required
-if (mpay.transport.isPaymentRequired(response)) {
-  const credential = await mpay.createCredential(response)
-  const paid = mpay.transport.setCredential(request, credential)
-  await sendMcpRequest(paid)
-}
+console.log(result.content) // Tool result
+console.log(result.receipt) // Payment receipt if payment was made
 ```
 
 ## API Reference

@@ -14,7 +14,7 @@ import * as Transport from './Transport.js'
  */
 export type Mpay<
   method extends Method.AnyServer = Method.Server,
-  transport extends Transport.Transport = Transport.Transport,
+  transport extends Transport.AnyTransport = Transport.Http,
 > = {
   /** The payment method. */
   method: method
@@ -49,7 +49,7 @@ export type Mpay<
  */
 export function create<
   const method extends Method.AnyServer,
-  const transport extends Transport.Transport<any, any> = Transport.Transport<Request, Response>,
+  const transport extends Transport.AnyTransport = Transport.Http,
 >(config: create.Config<method, transport>): Mpay<method, transport> {
   const { method, realm, secretKey, transport = Transport.http() as transport } = config
   const { intents, request, verify } = method
@@ -74,7 +74,7 @@ export function create<
 export declare namespace create {
   type Config<
     method extends Method.AnyServer = Method.Server,
-    transport extends Transport.Transport = Transport.Transport,
+    transport extends Transport.AnyTransport = Transport.Http,
   > = {
     /** Payment method (e.g., tempo({ ... })). */
     method: method
@@ -89,7 +89,7 @@ export declare namespace create {
 
 function createIntentFn<
   intent extends MethodIntent.MethodIntent,
-  transport extends Transport.Transport,
+  transport extends Transport.AnyTransport,
   context,
 >(
   parameters: createIntentFn.Parameters<intent, transport, context>,
@@ -125,11 +125,11 @@ function createIntentFn(parameters: createIntentFn.Parameters): createIntentFn.R
       } catch (e) {
         // Credential was provided but malformed
         return {
-          challenge: transport.respondChallenge(
+          challenge: transport.respondChallenge({
             challenge,
             input,
-            new Errors.MalformedCredentialError({ reason: (e as Error).message }),
-          ),
+            error: new Errors.MalformedCredentialError({ reason: (e as Error).message }),
+          }),
           status: 402,
         }
       }
@@ -137,11 +137,11 @@ function createIntentFn(parameters: createIntentFn.Parameters): createIntentFn.R
       // No credential provided—issue challenge
       if (!credential)
         return {
-          challenge: transport.respondChallenge(
+          challenge: transport.respondChallenge({
             challenge,
             input,
-            new Errors.PaymentRequiredError({ realm, description }),
-          ),
+            error: new Errors.PaymentRequiredError({ realm, description }),
+          }),
           status: 402,
         }
 
@@ -149,14 +149,14 @@ function createIntentFn(parameters: createIntentFn.Parameters): createIntentFn.R
       // This is stateless—no database lookup needed.
       if (!Challenge.verify(credential.challenge, { secretKey }))
         return {
-          challenge: transport.respondChallenge(
+          challenge: transport.respondChallenge({
             challenge,
             input,
-            new Errors.InvalidChallengeError({
+            error: new Errors.InvalidChallengeError({
               id: credential.challenge.id,
               reason: 'challenge was not issued by this server',
             }),
-          ),
+          }),
           status: 402,
         }
 
@@ -165,11 +165,11 @@ function createIntentFn(parameters: createIntentFn.Parameters): createIntentFn.R
         intent.schema.credential.payload.parse(credential.payload)
       } catch (e) {
         return {
-          challenge: transport.respondChallenge(
+          challenge: transport.respondChallenge({
             challenge,
             input,
-            new Errors.InvalidPayloadError({ reason: (e as Error).message }),
-          ),
+            error: new Errors.InvalidPayloadError({ reason: (e as Error).message }),
+          }),
           status: 402,
         }
       }
@@ -180,21 +180,23 @@ function createIntentFn(parameters: createIntentFn.Parameters): createIntentFn.R
         receiptData = await verify({ context, credential, request } as never)
       } catch (e) {
         return {
-          challenge: transport.respondChallenge(
+          challenge: transport.respondChallenge({
             challenge,
             input,
-            new Errors.VerificationFailedError({ reason: (e as Error).message }),
-          ),
+            error: new Errors.VerificationFailedError({ reason: (e as Error).message }),
+          }),
           status: 402,
         }
       }
 
       return {
         status: 200,
-        withReceipt(response) {
-          return transport.respondReceipt(receiptData, response, {
+        withReceipt<T>(response: T) {
+          return transport.respondReceipt({
+            receipt: receiptData,
+            response: response as never,
             challengeId: credential.challenge.id,
-          })
+          }) as T
         },
       }
     }
@@ -203,7 +205,7 @@ function createIntentFn(parameters: createIntentFn.Parameters): createIntentFn.R
 declare namespace createIntentFn {
   type Parameters<
     intent extends MethodIntent.MethodIntent = MethodIntent.MethodIntent,
-    transport extends Transport.Transport = Transport.Transport,
+    transport extends Transport.AnyTransport = Transport.Http,
     context = unknown,
   > = {
     intent: intent
@@ -216,7 +218,7 @@ declare namespace createIntentFn {
 
   type ReturnType<
     intent extends MethodIntent.MethodIntent = MethodIntent.MethodIntent,
-    transport extends Transport.Transport = Transport.Transport,
+    transport extends Transport.AnyTransport = Transport.Http,
     context = unknown,
   > = IntentFn<intent, transport, context>
 }
@@ -224,7 +226,7 @@ declare namespace createIntentFn {
 /** @internal */
 type IntentFn<
   intent extends MethodIntent.MethodIntent,
-  transport extends Transport.Transport,
+  transport extends Transport.AnyTransport,
   context,
 > = (
   options: IntentFn.Options<intent, context>,
@@ -241,11 +243,11 @@ declare namespace IntentFn {
     request: z.input<intent['schema']['request']>
   } & ([keyof context] extends [never] ? unknown : context)
 
-  export type Response<transport extends Transport.AnyTransport = Transport.Transport> =
-    | { challenge: Transport.OutputOf<transport>; status: 402 }
+  export type Response<transport extends Transport.AnyTransport = Transport.Http> =
+    | { challenge: Transport.ChallengeOutputOf<transport>; status: 402 }
     | {
         status: 200
-        withReceipt: (response: Transport.OutputOf<transport>) => Transport.OutputOf<transport>
+        withReceipt: <T>(response: T) => T
       }
 }
 

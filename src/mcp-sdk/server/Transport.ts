@@ -1,0 +1,82 @@
+import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js'
+import { McpError } from '@modelcontextprotocol/sdk/types.js'
+import type * as Credential from '../../Credential.js'
+import * as core_Mcp from '../../Mcp.js'
+import * as Transport from '../../server/Transport.js'
+
+/**
+ * MCP SDK tool handler "extra" parameter.
+ * Compatible with `@modelcontextprotocol/sdk` RequestHandlerExtra.
+ */
+export type Extra = {
+  _meta?:
+    | {
+        [core_Mcp.credentialMetaKey]?: Credential.Credential
+        [key: string]: unknown
+      }
+    | undefined
+  [key: string]: unknown
+}
+
+export type McpSdk = Transport.Transport<Extra, McpError, CallToolResult>
+
+/**
+ * MCP SDK transport for server-side payment handling with `@modelcontextprotocol/sdk`.
+ *
+ * - Reads credentials from `_meta["org.paymentauth/credential"]`
+ * - Issues challenges as `McpError` with code `-32042` and challenge in `error.data`
+ * - Attaches receipts via `_meta["org.paymentauth/receipt"]` on tool results
+ *
+ * @example
+ * ```ts
+ * import { McpServer } from '@modelcontextprotocol/sdk/server/mcp'
+ * import { Mpay, Transport } from 'mpay/server'
+ *
+ * const payment = Mpay.create({
+ *   method: tempo({ ... }),
+ *   realm: 'api.example.com',
+ *   secretKey: process.env.SECRET_KEY,
+ *   transport: Transport.mcpSdk(),
+ * })
+ *
+ * server.registerTool('premium', { description: '...' }, async (extra) => {
+ *   const result = await payment.charge({ request: { ... } })(extra)
+ *   if (result.status === 402) throw result.challenge
+ *   return result.withReceipt({ content: [...] })
+ * })
+ * ```
+ */
+export function mcpSdk(): McpSdk {
+  return Transport.from<Extra, McpError, CallToolResult>({
+    name: 'mcp-sdk',
+
+    getCredential(extra) {
+      const credential = extra._meta?.[core_Mcp.credentialMetaKey]
+      if (!credential) return null
+      return credential
+    },
+
+    respondChallenge({ challenge, error }) {
+      return new McpError(core_Mcp.paymentRequiredCode, error?.message ?? 'Payment Required', {
+        httpStatus: 402,
+        challenges: [challenge],
+        ...(error && { problem: error.toProblemDetails(challenge.id) }),
+      })
+    },
+
+    respondReceipt({ receipt, response, challengeId }) {
+      const mcpReceipt: core_Mcp.Receipt = {
+        ...receipt,
+        challengeId,
+      }
+
+      return {
+        ...response,
+        _meta: {
+          ...response._meta,
+          [core_Mcp.receiptMetaKey]: mcpReceipt,
+        },
+      }
+    },
+  })
+}

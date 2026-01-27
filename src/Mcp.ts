@@ -20,16 +20,24 @@ export const receiptMetaKey = 'org.paymentauth/receipt'
  * MCP request with payment metadata support.
  */
 export type Request = {
-  jsonrpc: '2.0'
-  id: number | string
   method: string
   params?: {
-    _meta?: {
-      [credentialMetaKey]?: Credential.Credential
-      [key: string]: unknown
-    }
+    _meta?:
+      | {
+          [credentialMetaKey]?: Credential.Credential
+          [key: string]: unknown
+        }
+      | undefined
     [key: string]: unknown
   }
+}
+
+/**
+ * Full JSON-RPC request (used internally by transports).
+ */
+export type JsonRpcRequest = Request & {
+  jsonrpc?: '2.0' | undefined
+  id?: number | string | undefined
 }
 
 /**
@@ -58,11 +66,11 @@ export type ErrorObject = {
 }
 
 /**
- * MCP response (success or error).
+ * Full JSON-RPC response (used internally by transports).
  */
 export type Response = {
-  jsonrpc: '2.0'
-  id: number | string | null
+  jsonrpc?: '2.0' | undefined
+  id?: number | string | undefined
 } & OneOf<{ result: Result } | { error: ErrorObject }>
 
 /**

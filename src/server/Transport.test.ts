@@ -84,7 +84,7 @@ describe('http', () => {
       const transport = Transport.http()
       const request = new Request('https://example.com')
 
-      const response = transport.respondChallenge(challenge, request)
+      const response = transport.respondChallenge({ challenge, input: request })
 
       expect({
         status: response.status,
@@ -106,7 +106,9 @@ describe('http', () => {
       const transport = Transport.http()
       const originalResponse = new Response('OK', { status: 200 })
 
-      const response = transport.respondReceipt(receipt, originalResponse, {
+      const response = transport.respondReceipt({
+        receipt,
+        response: originalResponse,
         challengeId: challenge.id,
       })
 
@@ -127,7 +129,7 @@ describe('http', () => {
 })
 
 describe('mcp', () => {
-  const mcpRequest: Mcp.Request = {
+  const mcpRequest: Mcp.JsonRpcRequest = {
     jsonrpc: '2.0',
     id: 1,
     method: 'tools/call',
@@ -139,7 +141,7 @@ describe('mcp', () => {
   describe('getCredential', () => {
     test('returns credential from _meta', () => {
       const transport = Transport.mcp()
-      const request: Mcp.Request = {
+      const request: Mcp.JsonRpcRequest = {
         ...mcpRequest,
         params: {
           ...mcpRequest.params,
@@ -182,7 +184,7 @@ describe('mcp', () => {
     test('default', () => {
       const transport = Transport.mcp()
 
-      expect(transport.respondChallenge(challenge, mcpRequest)).toMatchInlineSnapshot(`
+      expect(transport.respondChallenge({ challenge, input: mcpRequest })).toMatchInlineSnapshot(`
         {
           "error": {
             "code": -32042,
@@ -218,11 +220,11 @@ describe('mcp', () => {
       const successResponse: Mcp.Response = {
         jsonrpc: '2.0',
         id: 1,
-        result: { content: 'test' },
+        result: { content: [] },
       }
 
       expect(
-        transport.respondReceipt(receipt, successResponse, { challengeId: challenge.id }),
+        transport.respondReceipt({ receipt, response: successResponse, challengeId: challenge.id }),
       ).toMatchInlineSnapshot(`
         {
           "id": 1,
@@ -237,7 +239,7 @@ describe('mcp', () => {
                 "timestamp": "2025-01-01T00:00:00.000Z",
               },
             },
-            "content": "test",
+            "content": [],
           },
         }
       `)
@@ -254,9 +256,9 @@ describe('mcp', () => {
         },
       }
 
-      expect(transport.respondReceipt(receipt, errorResponse, { challengeId: challenge.id })).toBe(
-        errorResponse,
-      )
+      expect(
+        transport.respondReceipt({ receipt, response: errorResponse, challengeId: challenge.id }),
+      ).toBe(errorResponse)
     })
   })
 })

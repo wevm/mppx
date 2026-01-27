@@ -112,8 +112,6 @@ describe('http', () => {
 
 describe('mcp', () => {
   const mcpRequest: Mcp.Request = {
-    jsonrpc: '2.0',
-    id: 1,
     method: 'tools/call',
     params: {
       name: 'test-tool',
@@ -144,7 +142,7 @@ describe('mcp', () => {
       const response: Mcp.Response = {
         jsonrpc: '2.0',
         id: 1,
-        result: { content: 'test' },
+        result: { content: [] },
       }
 
       expect(transport.isPaymentRequired(response)).toBe(false)
@@ -202,7 +200,7 @@ describe('mcp', () => {
       const response: Mcp.Response = {
         jsonrpc: '2.0',
         id: 1,
-        result: { content: 'test' },
+        result: { content: [] },
       }
 
       expect(() => transport.getChallenge(response)).toThrow('Response is not an error')
@@ -234,8 +232,6 @@ describe('mcp', () => {
 
       expect(transport.setCredential(mcpRequest, serialized)).toMatchInlineSnapshot(`
         {
-          "id": 1,
-          "jsonrpc": "2.0",
           "method": "tools/call",
           "params": {
             "_meta": {

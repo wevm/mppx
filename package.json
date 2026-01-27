@@ -11,6 +11,7 @@
   "devDependencies": {
     "@biomejs/biome": "latest",
     "@changesets/cli": "latest",
+    "@modelcontextprotocol/sdk": "^1.25.3",
     "@types/node": "latest",
     "@vitest/coverage-v8": "^4.0.17",
     "prool": "^0.2.2",
@@ -42,6 +43,16 @@
       "types": "./dist/client/index.d.ts",
       "src": "./src/client/index.ts",
       "default": "./dist/client/index.js"
+    },
+    "./mcp-sdk/client": {
+      "types": "./dist/mcp-sdk/client/index.d.ts",
+      "src": "./src/mcp-sdk/client/index.ts",
+      "default": "./dist/mcp-sdk/client/index.js"
+    },
+    "./mcp-sdk/server": {
+      "types": "./dist/mcp-sdk/server/index.d.ts",
+      "src": "./src/mcp-sdk/server/index.ts",
+      "default": "./dist/mcp-sdk/server/index.js"
     },
     "./server": {
       "types": "./dist/server/index.d.ts",
