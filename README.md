@@ -66,22 +66,28 @@ export async function handler(request: Request) {
 
 #### Node.js Compatibility
 
-Intent handlers accept both Fetch `Request` and Node.js `http.IncomingMessage`/`http.ServerResponse`.
+Use `toNodeListener` to wrap payment handlers for Node.js HTTP servers. It automatically handles 402 responses (writes headers, body, and ends the response) and sets the `Payment-Receipt` header on success.
 
 ```ts
 import * as http from 'node:http'
+import { toNodeListener } from 'mpay/server'
 
 http.createServer(async (req, res) => {
-  const { status } = await payment.charge({
-    request: {
-      amount: '1000000',
-      currency: '0x20c0000000000000000000000000000000000001',
-      recipient: '0x742d35Cc6634c0532925a3b844bC9e7595F8fE00',
-      expires: '2030-01-20T12:00:00Z',
-    },
-  })(req, res)
-  if (status === 402) return
+  const result = await toNodeListener(
+    mpay.charge({
+      request: {
+        amount: '1000000',
+        currency: '0x20c0000000000000000000000000000000000001',
+        recipient: '0x742d35Cc6634c0532925a3b844bC9e7595F8fE00',
+        expires: '2030-01-20T12:00:00Z',
+      },
+    }),
+  )(req, res)
 
+  // 402 response already sent
+  if (result.status === 402) return
+
+  // Payment verified — send resource
   res.writeHead(200, { 'Content-Type': 'application/json' })
   res.end(JSON.stringify({ data: '...' }))
 }).listen(3000)
