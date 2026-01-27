@@ -66,14 +66,14 @@ export async function handler(request: Request) {
 
 #### Node.js Compatibility
 
-Use `toNodeListener` to wrap payment handlers for Node.js HTTP servers. It automatically handles 402 responses (writes headers, body, and ends the response) and sets the `Payment-Receipt` header on success.
+Use `Mpay.toNodeListener` to wrap payment handlers for Node.js HTTP servers. It automatically handles 402 responses (writes headers, body, and ends the response) and sets the `Payment-Receipt` header on success.
 
 ```ts
 import * as http from 'node:http'
-import { toNodeListener } from 'mpay/server'
+import { Mpay } from 'mpay/server'
 
 http.createServer(async (req, res) => {
-  const result = await toNodeListener(
+  const result = await Mpay.toNodeListener(
     mpay.charge({
       request: {
         amount: '1000000',
