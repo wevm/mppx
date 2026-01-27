@@ -1,5 +1,6 @@
 import type * as Challenge from './Challenge.js'
 import type * as Credential from './Credential.js'
+import type * as Errors from './Errors.js'
 import type { OneOf } from './internal/types.js'
 import type * as core_Receipt from './Receipt.js'
 
@@ -51,6 +52,8 @@ export type ErrorObject = {
   data?: {
     httpStatus: 402
     challenges: Challenge.Challenge[]
+    /** RFC 9457 Problem Details for rich error context. */
+    problem?: Errors.PaymentError.ProblemDetails
   }
 }
 

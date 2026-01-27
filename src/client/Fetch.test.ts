@@ -4,6 +4,7 @@ import { rpcUrl } from '~test/tempo/prool.js'
 import { accounts, asset, chain } from '~test/tempo/viem.js'
 import * as Receipt from '../Receipt.js'
 import * as Mpay_server from '../server/Mpay.js'
+import { toNodeListener } from '../server/Mpay.js'
 import * as Methods_client from '../tempo/client/Method.js'
 import * as Methods_server from '../tempo/server/Method.js'
 import * as Fetch from './Fetch.js'
@@ -33,14 +34,16 @@ describe('Fetch.from', () => {
     })
 
     const httpServer = await Http.createServer(async (req, res) => {
-      const result = await server.charge({
-        request: {
-          amount: '1000000',
-          currency: asset,
-          expires: new Date(Date.now() + 60_000).toISOString(),
-          recipient: accounts[0].address,
-        },
-      })(req, res)
+      const result = await toNodeListener(
+        server.charge({
+          request: {
+            amount: '1000000',
+            currency: asset,
+            expires: new Date(Date.now() + 60_000).toISOString(),
+            recipient: accounts[0].address,
+          },
+        }),
+      )(req, res)
       if (result.status === 402) return
       res.end('OK')
     })
@@ -76,14 +79,16 @@ describe('Fetch.from', () => {
     })
 
     const httpServer = await Http.createServer(async (req, res) => {
-      const result = await server.charge({
-        request: {
-          amount: '1000000',
-          currency: asset,
-          expires: new Date(Date.now() + 60_000).toISOString(),
-          recipient: accounts[0].address,
-        },
-      })(req, res)
+      const result = await toNodeListener(
+        server.charge({
+          request: {
+            amount: '1000000',
+            currency: asset,
+            expires: new Date(Date.now() + 60_000).toISOString(),
+            recipient: accounts[0].address,
+          },
+        }),
+      )(req, res)
       if (result.status === 402) return
       res.end('OK')
     })
@@ -111,14 +116,16 @@ describe('Fetch.from', () => {
     })
 
     const httpServer = await Http.createServer(async (req, res) => {
-      const result = await server.charge({
-        request: {
-          amount: '1000000',
-          currency: asset,
-          expires: new Date(Date.now() + 60_000).toISOString(),
-          recipient: accounts[0].address,
-        },
-      })(req, res)
+      const result = await toNodeListener(
+        server.charge({
+          request: {
+            amount: '1000000',
+            currency: asset,
+            expires: new Date(Date.now() + 60_000).toISOString(),
+            recipient: accounts[0].address,
+          },
+        }),
+      )(req, res)
       if (result.status === 402) return
       res.end('OK')
     })
@@ -142,14 +149,16 @@ describe('Fetch.from', () => {
     })
 
     const httpServer = await Http.createServer(async (req, res) => {
-      const result = await server.charge({
-        request: {
-          amount: '1000000',
-          currency: asset,
-          expires: new Date(Date.now() + 60_000).toISOString(),
-          recipient: accounts[0].address,
-        },
-      })(req, res)
+      const result = await toNodeListener(
+        server.charge({
+          request: {
+            amount: '1000000',
+            currency: asset,
+            expires: new Date(Date.now() + 60_000).toISOString(),
+            recipient: accounts[0].address,
+          },
+        }),
+      )(req, res)
       if (result.status === 402) return
       res.end('OK')
     })
@@ -206,15 +215,17 @@ describe('Fetch.from', () => {
     })
 
     const httpServer = await Http.createServer(async (req, res) => {
-      const result = await serverWithFeePayer.charge({
-        feePayer: accounts[0],
-        request: {
-          amount: '1000000',
-          currency: asset,
-          expires: new Date(Date.now() + 60_000).toISOString(),
-          recipient: accounts[0].address,
-        },
-      })(req, res)
+      const result = await toNodeListener(
+        serverWithFeePayer.charge({
+          feePayer: accounts[0],
+          request: {
+            amount: '1000000',
+            currency: asset,
+            expires: new Date(Date.now() + 60_000).toISOString(),
+            recipient: accounts[0].address,
+          },
+        }),
+      )(req, res)
       if (result.status === 402) return
       res.end('OK')
     })
@@ -253,14 +264,16 @@ describe('Fetch.polyfill', () => {
     })
 
     const httpServer = await Http.createServer(async (req, res) => {
-      const result = await server.charge({
-        request: {
-          amount: '1000000',
-          currency: asset,
-          expires: new Date(Date.now() + 60_000).toISOString(),
-          recipient: accounts[0].address,
-        },
-      })(req, res)
+      const result = await toNodeListener(
+        server.charge({
+          request: {
+            amount: '1000000',
+            currency: asset,
+            expires: new Date(Date.now() + 60_000).toISOString(),
+            recipient: accounts[0].address,
+          },
+        }),
+      )(req, res)
       if (result.status === 402) return
       res.end('OK')
     })

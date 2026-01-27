@@ -3,10 +3,12 @@ import { rpcUrl } from '~test/tempo/prool.js'
 import { accounts, chain } from '~test/tempo/viem.js'
 import * as Challenge from '../Challenge.js'
 import * as Credential from '../Credential.js'
+import * as Mcp from '../Mcp.js'
 import * as Method from '../Method.js'
 import * as Methods from '../tempo/client/Method.js'
 import * as Intents from '../tempo/Intents.js'
 import * as Mpay from './Mpay.js'
+import * as Transport from './Transport.js'
 
 const realm = 'api.example.com'
 const secretKey = 'test-secret-key'
@@ -22,7 +24,14 @@ describe('Mpay.create', () => {
 
     expect(mpay.methods).toHaveLength(1)
     expect(mpay.methods[0]?.name).toBe('tempo')
+    expect(mpay.transport.name).toBe('http')
     expect(typeof mpay.createCredential).toBe('function')
+  })
+
+  test('behavior: with mcp transport', () => {
+    const mpay = Mpay.create({ methods: [tempo], transport: Transport.mcp() })
+
+    expect(mpay.transport.name).toBe('mcp')
   })
 
   test('behavior: with multiple methods', () => {
@@ -202,5 +211,38 @@ describe('createCredential', () => {
     const credential = await mpay.createCredential(response)
     const parsed = Credential.deserialize(credential)
     expect((parsed.payload as { type: string }).type).toBe('transaction')
+  })
+
+  test('behavior: with mcp transport', async () => {
+    const mpay = Mpay.create({ methods: [tempo], transport: Transport.mcp() })
+
+    const challenge = Challenge.fromIntent(Intents.charge, {
+      realm,
+      secretKey,
+      request: {
+        amount: '1000',
+        currency: '0x1234567890123456789012345678901234567890',
+        recipient: '0x1234567890123456789012345678901234567890',
+        expires: new Date(Date.now() + 60_000).toISOString(),
+      },
+    })
+
+    const mcpResponse: Mcp.Response = {
+      jsonrpc: '2.0',
+      id: 1,
+      error: {
+        code: Mcp.paymentRequiredCode,
+        message: 'Payment Required',
+        data: {
+          httpStatus: 402,
+          challenges: [challenge],
+        },
+      },
+    }
+
+    const credential = await mpay.createCredential(mcpResponse)
+    const parsed = Credential.deserialize(credential)
+    expect((parsed.payload as { type: string }).type).toBe('transaction')
+    expect(parsed.challenge.method).toBe('tempo')
   })
 })

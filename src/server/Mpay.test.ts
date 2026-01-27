@@ -6,6 +6,8 @@ import * as Challenge from '../Challenge.js'
 import * as Credential from '../Credential.js'
 import { tempo } from '../tempo/server/Method.js'
 import * as Mpay from './Mpay.js'
+import { toNodeListener } from './Mpay.js'
+import * as Transport from './Transport.js'
 
 const realm = 'api.example.com'
 const secretKey = 'test-secret-key'
@@ -21,7 +23,14 @@ describe('create', () => {
 
     expect(handler.method).toBe(method)
     expect(handler.realm).toBe(realm)
+    expect(handler.transport.name).toBe('http')
     expect(typeof handler.charge).toBe('function')
+  })
+
+  test('behavior: with mcp transport', () => {
+    const handler = Mpay.create({ method, realm, secretKey, transport: Transport.mcp() })
+
+    expect(handler.transport.name).toBe('mcp')
   })
 })
 
@@ -197,15 +206,18 @@ describe('request handler (node)', () => {
     const handler = Mpay.create({ method, realm, secretKey })
 
     const server = await Http.createServer(async (req, res) => {
-      await handler.charge({
-        request: {
-          amount: '1000',
-          currency: asset,
-          expires: new Date(Date.now() + 60_000).toISOString(),
-          recipient: accounts[0].address,
-        },
-      })(req, res)
-      if (!res.headersSent) res.end('OK')
+      const result = await toNodeListener(
+        handler.charge({
+          request: {
+            amount: '1000',
+            currency: asset,
+            expires: new Date(Date.now() + 60_000).toISOString(),
+            recipient: accounts[0].address,
+          },
+        }),
+      )(req, res)
+      if (result.status === 402) return
+      res.end('OK')
     })
 
     const response = await fetch(server.url)
@@ -236,15 +248,18 @@ describe('request handler (node)', () => {
     const expires = new Date(Date.now() + 60_000).toISOString()
 
     const server = await Http.createServer(async (req, res) => {
-      await handler.charge({
-        request: {
-          amount: '1000',
-          currency: asset,
-          expires,
-          recipient: accounts[0].address,
-        },
-      })(req, res)
-      if (!res.headersSent) res.end('OK')
+      const result = await toNodeListener(
+        handler.charge({
+          request: {
+            amount: '1000',
+            currency: asset,
+            expires,
+            recipient: accounts[0].address,
+          },
+        }),
+      )(req, res)
+      if (result.status === 402) return
+      res.end('OK')
     })
 
     const firstResponse = await fetch(server.url)

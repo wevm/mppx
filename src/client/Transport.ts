@@ -18,6 +18,15 @@ export type Transport<in out request = unknown, in out response = unknown> = {
   /** Attaches a credential to a request. */
   setCredential: (request: request, credential: string) => request
 }
+export type AnyTransport = Transport<any, any>
+
+/** Extracts the response type from a transport. */
+export type ResponseOf<transport extends Transport> =
+  transport extends Transport<any, infer response> ? response : never
+
+/** Extracts the request type from a transport. */
+export type RequestOf<transport extends Transport> =
+  transport extends Transport<infer request, any> ? request : never
 
 /**
  * Creates a custom client-side transport.
@@ -34,9 +43,9 @@ export type Transport<in out request = unknown, in out response = unknown> = {
  * })
  * ```
  */
-export function from<const transport extends Transport<any, any>>(
-  transport: transport,
-): transport {
+export function from<request, response>(
+  transport: Transport<request, response>,
+): Transport<request, response> {
   return transport
 }
 
@@ -47,8 +56,8 @@ export function from<const transport extends Transport<any, any>>(
  * - Extracts challenges from `WWW-Authenticate` header
  * - Sends credentials via `Authorization` header
  */
-export function http(): Transport<RequestInit, Response> {
-  return from({
+export function http() {
+  return from<RequestInit, Response>({
     name: 'http',
 
     isPaymentRequired(response) {
@@ -74,8 +83,8 @@ export function http(): Transport<RequestInit, Response> {
  * - Extracts challenges from `error.data.challenges[0]`
  * - Sends credentials via `_meta["org.paymentauth/credential"]`
  */
-export function mcp(): Transport<Mcp.Request, Mcp.Response> {
-  return from({
+export function mcp() {
+  return from<Mcp.Request, Mcp.Response>({
     name: 'mcp',
 
     isPaymentRequired(response) {

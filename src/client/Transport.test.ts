@@ -90,7 +90,9 @@ describe('http', () => {
       const result = transport.setCredential({}, serialized)
       const headers = result.headers as Headers
 
-      expect(headers.get('Authorization')).toMatchInlineSnapshot(`"Payment eyJjaGFsbGVuZ2UiOnsiaWQiOiI0YTU1Uk10UFZGNUd2eTRNZ2ZRN1Y5a2Q2SFY0RHNqRDAzWXZuVXVRYVZRIiwiaW50ZW50IjoiY2hhcmdlIiwibWV0aG9kIjoidGVtcG8iLCJyZWFsbSI6ImFwaS5leGFtcGxlLmNvbSIsInJlcXVlc3QiOiJleUpoYlc5MWJuUWlPaUl4TURBd0lpd2lZM1Z5Y21WdVkza2lPaUl3ZURJd1l6QXdNREF3TURBd01EQXdNREF3TURBd01EQXdNREF3TURBd01EQXdNREF3TURBd01ERWlMQ0psZUhCcGNtVnpJam9pTWpBeU5TMHdNUzB3TVZRd01Eb3dNRG93TUM0d01EQmFJaXdpY21WamFYQnBaVzUwSWpvaU1IZzNOREprTXpWRFl6WTJNelJETURVek1qa3lOV0V6WWpnME5FSmpPV1UzTlRrMVpqaG1SVEF3SW4wIn0sInBheWxvYWQiOnsic2lnbmF0dXJlIjoiMHhhYmMxMjMiLCJ0eXBlIjoidHJhbnNhY3Rpb24ifX0"`)
+      expect(headers.get('Authorization')).toMatchInlineSnapshot(
+        `"Payment eyJjaGFsbGVuZ2UiOnsiaWQiOiI0YTU1Uk10UFZGNUd2eTRNZ2ZRN1Y5a2Q2SFY0RHNqRDAzWXZuVXVRYVZRIiwiaW50ZW50IjoiY2hhcmdlIiwibWV0aG9kIjoidGVtcG8iLCJyZWFsbSI6ImFwaS5leGFtcGxlLmNvbSIsInJlcXVlc3QiOiJleUpoYlc5MWJuUWlPaUl4TURBd0lpd2lZM1Z5Y21WdVkza2lPaUl3ZURJd1l6QXdNREF3TURBd01EQXdNREF3TURBd01EQXdNREF3TURBd01EQXdNREF3TURBd01ERWlMQ0psZUhCcGNtVnpJam9pTWpBeU5TMHdNUzB3TVZRd01Eb3dNRG93TUM0d01EQmFJaXdpY21WamFYQnBaVzUwSWpvaU1IZzNOREprTXpWRFl6WTJNelJETURVek1qa3lOV0V6WWpnME5FSmpPV1UzTlRrMVpqaG1SVEF3SW4wIn0sInBheWxvYWQiOnsic2lnbmF0dXJlIjoiMHhhYmMxMjMiLCJ0eXBlIjoidHJhbnNhY3Rpb24ifX0"`,
+      )
     })
 
     test('preserves existing headers', () => {

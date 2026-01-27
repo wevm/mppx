@@ -1,18 +1,24 @@
-import * as Challenge from '../Challenge.js'
+import type * as Challenge from '../Challenge.js'
 import type * as Method from '../Method.js'
 import type * as z from '../zod.js'
+import * as Transport from './Transport.js'
 
 type AnyClient = Method.Client<any, any, any>
 
 /**
  * Client-side payment handler.
  */
-export type Mpay<methods extends readonly AnyClient[] = readonly AnyClient[]> = {
+export type Mpay<
+  methods extends readonly AnyClient[] = readonly AnyClient[],
+  transport extends Transport.Transport = Transport.Transport,
+> = {
   /** The configured payment methods. */
   methods: methods
-  /** Creates a credential from a 402 response by routing to the correct method. */
+  /** The transport used. */
+  transport: transport
+  /** Creates a credential from a payment-required response by routing to the correct method. */
   createCredential: (
-    response: Response,
+    response: Transport.ResponseOf<transport>,
     context?: AnyContextFor<methods> | undefined,
   ) => Promise<string>
 }
@@ -44,15 +50,20 @@ export type Mpay<methods extends readonly AnyClient[] = readonly AnyClient[]> = 
  * }
  * ```
  */
-export function create<const methods extends readonly AnyClient[]>(
-  config: create.Config<methods>,
-): Mpay<methods> {
-  const { methods } = config
+export function create<
+  const methods extends readonly AnyClient[],
+  const transport extends Transport.Transport<any, any> = Transport.Transport<
+    RequestInit,
+    Response
+  >,
+>(config: create.Config<methods, transport>): Mpay<methods, transport> {
+  const { methods, transport = Transport.http() as transport } = config
 
   return {
     methods,
-    async createCredential(response: Response, context?: unknown) {
-      const challenge = Challenge.fromResponse(response)
+    transport,
+    async createCredential(response: Transport.ResponseOf<transport>, context?: unknown) {
+      const challenge = transport.getChallenge(response as never) as Challenge.Challenge
 
       const method = methods.find((m) => m.name === challenge.method)
       if (!method)
@@ -72,9 +83,14 @@ export function create<const methods extends readonly AnyClient[]>(
 }
 
 export declare namespace create {
-  type Config<methods extends readonly AnyClient[] = readonly AnyClient[]> = {
+  type Config<
+    methods extends readonly AnyClient[] = readonly AnyClient[],
+    transport extends Transport.Transport = Transport.Transport,
+  > = {
     /** Array of payment methods to use. */
     methods: methods
+    /** Transport to use (defaults to HTTP). */
+    transport?: transport | undefined
   }
 }
 

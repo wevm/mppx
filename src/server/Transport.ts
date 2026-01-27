@@ -1,6 +1,7 @@
 import * as Challenge from '../Challenge.js'
 import * as Credential from '../Credential.js'
-import * as Mcp from '../Mcp.js'
+import type * as Errors from '../Errors.js'
+import * as core_Mcp from '../Mcp.js'
 import * as Receipt from '../Receipt.js'
 
 /**
@@ -12,10 +13,17 @@ import * as Receipt from '../Receipt.js'
 export type Transport<in out input = unknown, in out output = unknown> = {
   /** Transport name for identification. */
   name: string
-  /** Extracts credential from the transport input, or null if not present. */
+  /**
+   * Extracts credential from the transport input.
+   * Returns `null` if no credential was provided, or throws if malformed.
+   */
   getCredential: (input: input) => Credential.Credential | null
   /** Creates a transport response for a payment challenge. */
-  respondChallenge: (challenge: Challenge.Challenge, input: input) => output
+  respondChallenge: (
+    challenge: Challenge.Challenge,
+    input: input,
+    error?: Errors.PaymentError | undefined,
+  ) => output
   /** Attaches a receipt to a successful response. */
   respondReceipt: (
     receipt: Receipt.Receipt,
@@ -23,6 +31,19 @@ export type Transport<in out input = unknown, in out output = unknown> = {
     context: { challengeId: string },
   ) => output
 }
+export type AnyTransport = Transport<any, any>
+
+export type Http = Transport<Request, Response>
+
+export type Mcp = Transport<core_Mcp.Request, core_Mcp.Response>
+
+/** Extracts the input type from a transport. */
+export type InputOf<transport extends Transport = Transport> =
+  transport extends Transport<infer input, any> ? input : never
+
+/** Extracts the output type from a transport. */
+export type OutputOf<transport extends Transport = Transport> =
+  transport extends Transport<any, infer output> ? output : never
 
 /**
  * Creates a custom server-side transport.
@@ -39,9 +60,9 @@ export type Transport<in out input = unknown, in out output = unknown> = {
  * })
  * ```
  */
-export function from<const transport extends Transport<any, any>>(
-  transport: transport,
-): transport {
+export function from<input = unknown, output = unknown>(
+  transport: Transport<input, output>,
+): Transport<input, output> {
   return transport
 }
 
@@ -52,28 +73,29 @@ export function from<const transport extends Transport<any, any>>(
  * - Issues challenges via `WWW-Authenticate` header with 402 status
  * - Attaches receipts via `Payment-Receipt` header
  */
-export function http(): Transport<Request, Response> {
-  return from({
+export function http() {
+  return from<Request, Response>({
     name: 'http',
 
     getCredential(request) {
       const header = request.headers.get('Authorization')
       if (!header) return null
-      try {
-        return Credential.deserialize(header)
-      } catch {
-        return null
-      }
+      return Credential.deserialize(header)
     },
 
-    respondChallenge(challenge) {
-      return new Response(null, {
-        status: 402,
-        headers: {
-          'WWW-Authenticate': Challenge.serialize(challenge),
-          'Cache-Control': 'no-store',
-        },
-      })
+    respondChallenge(challenge, _request, error) {
+      const headers: Record<string, string> = {
+        'WWW-Authenticate': Challenge.serialize(challenge),
+        'Cache-Control': 'no-store',
+      }
+
+      let body: string | null = null
+      if (error) {
+        headers['Content-Type'] = 'application/problem+json'
+        body = JSON.stringify(error.toProblemDetails(challenge.id))
+      }
+
+      return new Response(body, { status: 402, headers })
     },
 
     respondReceipt(receipt, response) {
@@ -95,27 +117,28 @@ export function http(): Transport<Request, Response> {
  * - Issues challenges via JSON-RPC error with code -32042
  * - Attaches receipts via `_meta["org.paymentauth/receipt"]`
  */
-export function mcp(): Transport<Mcp.Request, Mcp.Response> {
-  return from({
+export function mcp() {
+  return from<core_Mcp.Request, core_Mcp.Response>({
     name: 'mcp',
 
     getCredential(request) {
       const meta = request.params?._meta
-      const credential = meta?.[Mcp.credentialMetaKey]
+      const credential = meta?.[core_Mcp.credentialMetaKey]
       if (!credential) return null
       return credential
     },
 
-    respondChallenge(challenge, request) {
+    respondChallenge(challenge, request, error) {
       return {
         jsonrpc: '2.0',
         id: request.id,
         error: {
-          code: Mcp.paymentRequiredCode,
-          message: 'Payment Required',
+          code: core_Mcp.paymentRequiredCode,
+          message: error?.message ?? 'Payment Required',
           data: {
             httpStatus: 402,
             challenges: [challenge],
+            ...(error && { problem: error.toProblemDetails(challenge.id) }),
           },
         },
       }
@@ -124,7 +147,7 @@ export function mcp(): Transport<Mcp.Request, Mcp.Response> {
     respondReceipt(receipt, response, context) {
       if ('error' in response) return response
 
-      const mcpReceipt: Mcp.Receipt = {
+      const mcpReceipt: core_Mcp.Receipt = {
         ...receipt,
         challengeId: context.challengeId,
       }
@@ -135,7 +158,7 @@ export function mcp(): Transport<Mcp.Request, Mcp.Response> {
           ...response.result,
           _meta: {
             ...response.result._meta,
-            [Mcp.receiptMetaKey]: mcpReceipt,
+            [core_Mcp.receiptMetaKey]: mcpReceipt,
           },
         },
       }

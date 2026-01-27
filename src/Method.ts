@@ -23,6 +23,7 @@ export type Method<
   /** Payment method name (e.g., "tempo", "stripe"). */
   name: name
 }
+export type AnyMethod = Method<any, any>
 
 /**
  * A client-side payment method with credential creation logic.
@@ -47,6 +48,7 @@ export type Client<
     context extends z.ZodMiniType ? z.output<context> : Record<never, never>
   >
 }
+export type AnyClient = Client<any, any, any>
 
 /**
  * A server-side payment method with verification logic.
@@ -76,9 +78,6 @@ export type Server<
     context extends z.ZodMiniType ? z.output<context> : Record<never, never>
   >
 }
-
-export type AnyClient = Client<any, any, any>
-export type AnyMethod = Method<any, any>
 export type AnyServer = Server<any, any, any>
 
 /** Credential creation function that produces a serialized credential from a challenge. */

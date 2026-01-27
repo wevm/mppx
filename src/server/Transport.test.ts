@@ -69,13 +69,13 @@ describe('http', () => {
       expect(transport.getCredential(request)).toBeNull()
     })
 
-    test('returns null for invalid credential', () => {
+    test('throws for invalid credential', () => {
       const transport = Transport.http()
       const request = new Request('https://example.com', {
         headers: { Authorization: 'Bearer invalid' },
       })
 
-      expect(transport.getCredential(request)).toBeNull()
+      expect(() => transport.getCredential(request)).toThrow('Missing Payment scheme')
     })
   })
 
