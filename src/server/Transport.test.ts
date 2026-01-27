@@ -84,7 +84,7 @@ describe('http', () => {
       const transport = Transport.http()
       const request = new Request('https://example.com')
 
-      const response = transport.respondChallenge({ challenge, input: request })
+      const response = await transport.respondChallenge({ challenge, input: request })
 
       expect({
         status: response.status,

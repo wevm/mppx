@@ -1,5 +1,5 @@
 import type { Client } from '@modelcontextprotocol/sdk/client/index.js'
-import { McpError } from '@modelcontextprotocol/sdk/types.js'
+import type { McpError } from '@modelcontextprotocol/sdk/types.js'
 import type * as Challenge from '../../Challenge.js'
 import * as Credential from '../../Credential.js'
 import * as core_Mcp from '../../Mcp.js'
@@ -150,9 +150,10 @@ export declare namespace wrap {
 export function isPaymentRequiredError(
   error: unknown,
 ): error is McpError & { data: { challenges: Challenge.Challenge[] } } {
-  if (!(error instanceof McpError)) return false
-  if (error.code !== core_Mcp.paymentRequiredCode) return false
-  const data = error.data as { challenges?: unknown } | undefined
+  if (typeof error !== 'object' || error === null) return false
+  if (!('code' in error) || !('message' in error)) return false
+  if ((error as { code: unknown }).code !== core_Mcp.paymentRequiredCode) return false
+  const data = (error as { data?: { challenges?: unknown } }).data
   return Array.isArray(data?.challenges) && data.challenges.length > 0
 }
 

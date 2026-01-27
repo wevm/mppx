@@ -125,7 +125,7 @@ function createIntentFn(parameters: createIntentFn.Parameters): createIntentFn.R
       } catch (e) {
         // Credential was provided but malformed
         return {
-          challenge: transport.respondChallenge({
+          challenge: await transport.respondChallenge({
             challenge,
             input,
             error: new Errors.MalformedCredentialError({ reason: (e as Error).message }),
@@ -137,7 +137,7 @@ function createIntentFn(parameters: createIntentFn.Parameters): createIntentFn.R
       // No credential provided—issue challenge
       if (!credential)
         return {
-          challenge: transport.respondChallenge({
+          challenge: await transport.respondChallenge({
             challenge,
             input,
             error: new Errors.PaymentRequiredError({ realm, description }),
@@ -149,7 +149,7 @@ function createIntentFn(parameters: createIntentFn.Parameters): createIntentFn.R
       // This is stateless—no database lookup needed.
       if (!Challenge.verify(credential.challenge, { secretKey }))
         return {
-          challenge: transport.respondChallenge({
+          challenge: await transport.respondChallenge({
             challenge,
             input,
             error: new Errors.InvalidChallengeError({
@@ -165,7 +165,7 @@ function createIntentFn(parameters: createIntentFn.Parameters): createIntentFn.R
         intent.schema.credential.payload.parse(credential.payload)
       } catch (e) {
         return {
-          challenge: transport.respondChallenge({
+          challenge: await transport.respondChallenge({
             challenge,
             input,
             error: new Errors.InvalidPayloadError({ reason: (e as Error).message }),
@@ -180,7 +180,7 @@ function createIntentFn(parameters: createIntentFn.Parameters): createIntentFn.R
         receiptData = await verify({ context, credential, request } as never)
       } catch (e) {
         return {
-          challenge: transport.respondChallenge({
+          challenge: await transport.respondChallenge({
             challenge,
             input,
             error: new Errors.VerificationFailedError({ reason: (e as Error).message }),

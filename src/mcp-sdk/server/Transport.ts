@@ -1,5 +1,4 @@
-import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js'
-import { McpError } from '@modelcontextprotocol/sdk/types.js'
+import type { CallToolResult, McpError } from '@modelcontextprotocol/sdk/types.js'
 import type * as Credential from '../../Credential.js'
 import * as core_Mcp from '../../Mcp.js'
 import * as Transport from '../../server/Transport.js'
@@ -47,6 +46,8 @@ export type McpSdk = Transport.Transport<Extra, McpError, CallToolResult>
  * ```
  */
 export function mcpSdk(): McpSdk {
+  let McpErrorClass: typeof McpError | undefined
+
   return Transport.from<Extra, McpError, CallToolResult>({
     name: 'mcp-sdk',
 
@@ -56,8 +57,12 @@ export function mcpSdk(): McpSdk {
       return credential
     },
 
-    respondChallenge({ challenge, error }) {
-      return new McpError(core_Mcp.paymentRequiredCode, error?.message ?? 'Payment Required', {
+    async respondChallenge({ challenge, error }) {
+      if (!McpErrorClass) {
+        const mod = await import('@modelcontextprotocol/sdk/types.js')
+        McpErrorClass = mod.McpError
+      }
+      return new McpErrorClass(core_Mcp.paymentRequiredCode, error?.message ?? 'Payment Required', {
         httpStatus: 402,
         challenges: [challenge],
         ...(error && { problem: error.toProblemDetails(challenge.id) }),

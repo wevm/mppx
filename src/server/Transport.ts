@@ -29,7 +29,7 @@ export type Transport<
     challenge: Challenge.Challenge
     error?: Errors.PaymentError | undefined
     input: input
-  }) => challengeOutput
+  }) => challengeOutput | Promise<challengeOutput>
   /** Attaches a receipt to a successful response. */
   respondReceipt: (options: {
     challengeId: string
