@@ -64,7 +64,7 @@ export async function handler(request: Request) {
 }
 ```
 
-#### Node.js Compatibility
+#### HTTP Node.js Compatibility
 
 Use `Mpay.toNodeListener` to wrap payment handlers for Node.js HTTP servers. It automatically handles 402 responses (writes headers, body, and ends the response) and sets the `Payment-Receipt` header on success.
 
@@ -91,6 +91,40 @@ http.createServer(async (req, res) => {
   res.writeHead(200, { 'Content-Type': 'application/json' })
   res.end(JSON.stringify({ data: '...' }))
 }).listen(3000)
+```
+
+#### MCP (Model Context Protocol)
+
+Use `Transport.mcp()` to handle payments over MCP JSON-RPC. Payment challenges are sent as error code `-32042`, and credentials are passed via `_meta["org.paymentauth/credential"]`.
+
+```ts
+import { Mpay, Transport } from 'mpay/server'
+
+const mpay = Mpay.create({
+  method: tempo({ rpcUrl: 'https://rpc.tempo.xyz' }),
+  realm: 'mcp.example.com',
+  secretKey: process.env.SECRET_KEY,
+  transport: Transport.mcp(),
+})
+
+// In your MCP tool handler:
+async function handleToolCall(request: McpRequest): Promise<McpResponse> {
+  const result = await mpay.charge({
+    request: {
+      amount: '1000000',
+      currency: '0x20c0000000000000000000000000000000000001',
+      recipient: '0x742d35Cc6634c0532925a3b844bC9e7595F8fE00',
+    },
+  })(request)
+
+  if (result.status === 402) return result.challenge
+
+  return result.withReceipt({
+    jsonrpc: '2.0',
+    id: request.id,
+    result: { content: [{ type: 'text', text: 'Tool executed' }] },
+  })
+}
 ```
 
 ### Client
