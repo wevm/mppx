@@ -20,6 +20,11 @@ const transfer = /*#__PURE__*/ AbiFunction.from(
 )
 const transferSelector = /*#__PURE__*/ AbiFunction.getSelector(transfer)
 
+const transferWithMemo = /*#__PURE__*/ AbiFunction.from(
+  'function transferWithMemo(address to, uint256 amount, bytes32 memo)',
+)
+const transferWithMemoSelector = /*#__PURE__*/ AbiFunction.getSelector(transferWithMemo)
+
 /**
  * Creates a Tempo payment method for usage on the server.
  *
@@ -81,28 +86,57 @@ export function tempo(parameters: tempo.Parameters) {
                 hash,
               })
 
-              const logs = parseEventLogs({
-                abi: Abis.tip20,
-                eventName: 'Transfer',
-                logs: receipt.logs,
-              })
+              const memo = methodDetails?.memo as `0x${string}` | undefined
 
-              const match = logs.find(
-                (log) =>
-                  Address.isEqual(log.address, currency) &&
-                  Address.isEqual(log.args.to, recipient) &&
-                  log.args.amount.toString() === amount,
-              )
+              if (memo) {
+                const memoLogs = parseEventLogs({
+                  abi: Abis.tip20,
+                  eventName: 'TransferWithMemo',
+                  logs: receipt.logs,
+                })
 
-              if (!match)
-                throw new MismatchError(
-                  'Payment verification failed: no matching transfer found.',
-                  {
-                    amount,
-                    currency,
-                    recipient,
-                  },
+                const match = memoLogs.find(
+                  (log) =>
+                    Address.isEqual(log.address, currency) &&
+                    Address.isEqual(log.args.to, recipient) &&
+                    log.args.amount.toString() === amount &&
+                    log.args.memo.toLowerCase() === memo.toLowerCase(),
                 )
+
+                if (!match)
+                  throw new MismatchError(
+                    'Payment verification failed: no matching transfer with memo found.',
+                    {
+                      amount,
+                      currency,
+                      memo,
+                      recipient,
+                    },
+                  )
+              } else {
+                const logs = parseEventLogs({
+                  abi: Abis.tip20,
+                  eventName: 'Transfer',
+                  logs: receipt.logs,
+                })
+
+                const match = logs.find(
+                  (log) =>
+                    Address.isEqual(log.address, currency) &&
+                    Address.isEqual(log.args.to, recipient) &&
+                    log.args.amount.toString() === amount,
+                )
+
+                if (!match)
+                  throw new MismatchError(
+                    'Payment verification failed: no matching transfer found.',
+                    {
+                      amount,
+                      currency,
+                      recipient,
+                    },
+                  )
+              }
 
               return toReceipt(receipt)
             }
@@ -136,28 +170,71 @@ export function tempo(parameters: tempo.Parameters) {
                   got: '(empty)',
                 })
 
-              const [to, amount_] = (() => {
-                try {
-                  return AbiFunction.decodeData(transfer, call.data)
-                } catch {
-                  throw new MismatchError('Invalid transaction: failed to decode transfer call', {
-                    expected: transferSelector,
-                    got: call.data.slice(0, 10),
+              const memo = methodDetails?.memo as `0x${string}` | undefined
+              const selector = call.data.slice(0, 10)
+
+              if (memo) {
+                if (selector !== transferWithMemoSelector)
+                  throw new MismatchError('Invalid transaction: expected transferWithMemo call', {
+                    expected: transferWithMemoSelector,
+                    got: selector,
                   })
-                }
-              })()
 
-              if (!Address.isEqual(to, recipient))
-                throw new MismatchError('Invalid transaction: transfer recipient mismatch', {
-                  expected: recipient,
-                  got: to,
-                })
+                const [to, amount_, memo_] = (() => {
+                  try {
+                    return AbiFunction.decodeData(transferWithMemo, call.data)
+                  } catch {
+                    throw new MismatchError(
+                      'Invalid transaction: failed to decode transferWithMemo call',
+                      {
+                        expected: transferWithMemoSelector,
+                        got: selector,
+                      },
+                    )
+                  }
+                })()
 
-              if (amount_.toString() !== amount)
-                throw new MismatchError('Invalid transaction: transfer amount mismatch', {
-                  expected: amount,
-                  got: amount_.toString(),
-                })
+                if (!Address.isEqual(to, recipient))
+                  throw new MismatchError('Invalid transaction: transfer recipient mismatch', {
+                    expected: recipient,
+                    got: to,
+                  })
+
+                if (amount_.toString() !== amount)
+                  throw new MismatchError('Invalid transaction: transfer amount mismatch', {
+                    expected: amount,
+                    got: amount_.toString(),
+                  })
+
+                if (memo_.toLowerCase() !== memo.toLowerCase())
+                  throw new MismatchError('Invalid transaction: memo mismatch', {
+                    expected: memo,
+                    got: memo_,
+                  })
+              } else {
+                const [to, amount_] = (() => {
+                  try {
+                    return AbiFunction.decodeData(transfer, call.data)
+                  } catch {
+                    throw new MismatchError('Invalid transaction: failed to decode transfer call', {
+                      expected: transferSelector,
+                      got: selector,
+                    })
+                  }
+                })()
+
+                if (!Address.isEqual(to, recipient))
+                  throw new MismatchError('Invalid transaction: transfer recipient mismatch', {
+                    expected: recipient,
+                    got: to,
+                  })
+
+                if (amount_.toString() !== amount)
+                  throw new MismatchError('Invalid transaction: transfer amount mismatch', {
+                    expected: amount,
+                    got: amount_.toString(),
+                  })
+              }
 
               const serializedTransaction_final = await (async () => {
                 if (methodDetails?.feePayer && feePayer) {

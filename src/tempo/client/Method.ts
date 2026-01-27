@@ -54,6 +54,7 @@ export function tempo(parameters: tempo.Parameters) {
             calls: [
               Actions.token.transfer.call({
                 amount: BigInt(amount),
+                memo: methodDetails?.memo as Hex.Hex | undefined,
                 to: recipient as Hex.Hex,
                 token: currency as Hex.Hex,
               }),

@@ -36,6 +36,17 @@ describe('charge', () => {
     expect(result.success).toBe(true)
   })
 
+  test('schema: validates request with memo', () => {
+    const result = charge.schema.request.safeParse({
+      amount: '1000000',
+      currency: '0x20c0000000000000000000000000000000000001',
+      expires: '2025-02-05T12:05:00Z',
+      memo: '0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef',
+      recipient: '0x1234567890abcdef1234567890abcdef12345678',
+    })
+    expect(result.success).toBe(true)
+  })
+
   test('schema: rejects invalid request', () => {
     const result = charge.schema.request.safeParse({
       amount: '1000000',
@@ -101,6 +112,16 @@ describe('authorize', () => {
     expect(result.success).toBe(true)
   })
 
+  test('schema: validates request with memo', () => {
+    const result = authorize.schema.request.safeParse({
+      amount: '1000000',
+      currency: '0x20c0000000000000000000000000000000000001',
+      expires: '2025-02-05T12:05:00Z',
+      memo: '0xabcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890',
+    })
+    expect(result.success).toBe(true)
+  })
+
   test('schema: validates transaction payload', () => {
     const result = authorize.schema.credential.payload.safeParse({
       signature: '0x76f90100000000000000000000000000000000000000000000000000000000000000000000',
@@ -156,6 +177,17 @@ describe('subscription', () => {
       currency: '0x20c0000000000000000000000000000000000001',
       expires: '2025-12-31T23:59:59Z',
       methodDetails: { chainId: 42431, validFrom: '2025-01-01T00:00:00Z' },
+      period: 'month',
+    })
+    expect(result.success).toBe(true)
+  })
+
+  test('schema: validates request with memo', () => {
+    const result = subscription.schema.request.safeParse({
+      amount: '1000000',
+      currency: '0x20c0000000000000000000000000000000000001',
+      expires: '2025-12-31T23:59:59Z',
+      memo: '0x0000000000000000000000000000000000000000000000000000000000000001',
       period: 'month',
     })
     expect(result.success).toBe(true)

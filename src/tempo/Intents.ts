@@ -20,6 +20,7 @@ export const charge = MethodIntent.fromIntent(Intent.charge, {
       methodDetails: z.object({
         chainId: z.optional(z.number()),
         feePayer: z.optional(z.boolean()),
+        memo: z.optional(z.hash()),
       }),
       requires: ['recipient', 'expires'],
     },
@@ -45,6 +46,7 @@ export const authorize = MethodIntent.fromIntent(Intent.authorize, {
       methodDetails: z.object({
         chainId: z.optional(z.number()),
         feePayer: z.optional(z.boolean()),
+        memo: z.optional(z.hash()),
         validFrom: z.optional(z.datetime()),
       }),
     },
@@ -65,6 +67,7 @@ export const subscription = MethodIntent.fromIntent(Intent.subscription, {
     request: {
       methodDetails: z.object({
         chainId: z.optional(z.number()),
+        memo: z.optional(z.hash()),
         validFrom: z.optional(z.datetime()),
       }),
     },
