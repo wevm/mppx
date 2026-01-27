@@ -68,9 +68,10 @@ export function wrap<const methods extends readonly AnyClient[]>(
           ...result,
           receipt: result._meta?.[core_Mcp.receiptMetaKey] as core_Mcp.Receipt | undefined,
         }
-      } catch (error) {
+      } catch (error_) {
         // Check if this is a payment required error
-        if (!isPaymentRequiredError(error)) throw error
+        if (!isPaymentRequiredError(error_)) throw error_
+        const error = error_ as McpError
 
         const challenges = (error.data as { challenges?: Challenge.Challenge[] })?.challenges
         if (!challenges?.length) throw error
@@ -147,9 +148,7 @@ export declare namespace wrap {
 /**
  * Checks if an error is a payment required error.
  */
-export function isPaymentRequiredError(
-  error: unknown,
-): error is McpError & { data: { challenges: Challenge.Challenge[] } } {
+export function isPaymentRequiredError(error: unknown): boolean {
   if (!(error instanceof McpError)) return false
   if (error.code !== core_Mcp.paymentRequiredCode) return false
   const data = error.data as { challenges?: unknown } | undefined

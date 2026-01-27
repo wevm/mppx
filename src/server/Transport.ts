@@ -4,8 +4,6 @@ import type * as Errors from '../Errors.js'
 import * as core_Mcp from '../Mcp.js'
 import * as Receipt from '../Receipt.js'
 
-export { type McpSdk, mcpSdk } from '../mcp-sdk/server/Transport.js'
-
 /**
  * Server-side transport adapter.
  *
