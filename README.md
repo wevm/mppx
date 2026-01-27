@@ -108,7 +108,7 @@ const mpay = Mpay.create({
 })
 
 // In your MCP tool handler:
-async function handleToolCall(request: McpRequest): Promise<McpResponse> {
+async function handle(request: McpRequest): Promise<McpResponse> {
   const result = await mpay.charge({
     request: {
       amount: '1000000',
@@ -206,6 +206,43 @@ const credential = await mpay.createCredential(res)
 const res2 = await fetch('https://api.example.com/resource', {
   headers: { 'Authorization': credential }
 })
+```
+
+#### MCP (Model Context Protocol)
+
+Use `Transport.mcp()` to handle payments over MCP JSON-RPC. The client detects payment-required errors (code `-32042`) and attaches credentials via `_meta["org.paymentauth/credential"]`.
+
+```ts
+import { Mpay, Transport, tempo } from 'mpay/client'
+import { privateKeyToAccount } from 'viem/accounts'
+
+const mpay = Mpay.create({
+  methods: [
+    tempo({
+      account: privateKeyToAccount('0x...'),
+      rpcUrl: 'https://rpc.tempo.xyz',
+    }),
+  ],
+  transport: Transport.mcp(),
+})
+
+// MCP request that requires payment
+const request = {
+  jsonrpc: '2.0',
+  id: 1,
+  method: 'tools/call',
+  params: { name: 'premium_tool', arguments: {} },
+}
+
+// Send request to MCP server
+let response = await sendMcpRequest(request)
+
+// Handle payment if required
+if (mpay.transport.isPaymentRequired(response)) {
+  const credential = await mpay.createCredential(response)
+  const paidRequest = mpay.transport.setCredential(request, credential)
+  response = await sendMcpRequest(paidRequest)
+}
 ```
 
 ## API Reference
