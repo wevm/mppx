@@ -47,6 +47,7 @@ export function tempo(parameters: tempo.Parameters) {
       chain: {
         ...tempo_chain,
         id: parameters.chainId,
+        experimental_preconfirmationTime: 500,
       },
       transport: http(parameters.rpcUrl),
     })

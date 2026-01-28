@@ -3,4 +3,5 @@ dist
 node_modules
 coverage
 *.tsbuildinfo
-.envcoverage/
+.env
+coverage/

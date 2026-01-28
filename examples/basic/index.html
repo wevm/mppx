@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Fortune Teller</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { font-family: system-ui, sans-serif; max-width: 600px; margin: 2rem auto; padding: 1rem; }
+    h1 { margin-bottom: 0.5rem; }
+    p { color: #666; margin-top: 0; }
+    form { display: flex; flex-direction: column; gap: 1rem; margin: 2rem 0; }
+    label { font-weight: 500; }
+    input, button { padding: 0.75rem; font-size: 1rem; border: 1px solid #ccc; border-radius: 4px; }
+    button { background: #000; color: #fff; border: none; cursor: pointer; }
+    button:hover { background: #333; }
+    button:disabled { background: #999; cursor: not-allowed; }
+    #output { background: #f5f5f5; padding: 1rem; border-radius: 4px; white-space: pre; overflow-x: auto; font-family: monospace; margin-top: 1rem; }
+    #output:empty { display: none; }
+    .error { color: red; }
+  </style>
+</head>
+<body>
+  <h1>Fortune Teller</h1>
+  <p>Pay per fortune.</p>
+
+  <p id="setup">Setting up ephemeral account...</p>
+
+  <div id="ready" style="display: none;">
+    <p>Balance: <span id="balance"></span></p>
+    <button id="button">Get Fortune ($1 USD)</button>
+    <div id="output"></div>
+  </div>
+
+  <script type="module" src="/src/client.ts"></script>
+</body>
+</html>

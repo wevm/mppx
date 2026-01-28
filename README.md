@@ -32,6 +32,14 @@ Client (Mpay)                                     Server (Mpay)
 npm i mpay
 ```
 
+## Examples
+
+See [examples/](./examples/) for runnable demos.
+
+| Example | Description |
+|---------|-------------|
+| [basic](./examples/basic/) | Barebones Client ↔ Server example |
+
 ## Quick Start
 
 ### Server
