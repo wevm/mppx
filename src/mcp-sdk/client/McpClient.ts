@@ -46,13 +46,14 @@ export type CallToolResult = Awaited<ReturnType<Client['callTool']>> & {
  * console.log(result.content, result.receipt)
  * ```
  */
-export function wrap<const methods extends readonly AnyClient[]>(
-  client: Pick<Client, 'callTool'>,
-  config: wrap.Config<methods>,
-): wrap.McpClient<methods> {
+export function wrap<
+  const methods extends readonly AnyClient[],
+  const client extends Pick<Client, 'callTool'>,
+>(client: client, config: wrap.Config<methods>): wrap.McpClient<methods, client> {
   const { methods } = config
 
   return {
+    ...client,
     async callTool(params, options) {
       const context = options?.context
       const timeout = options?.timeout
@@ -124,7 +125,10 @@ export declare namespace wrap {
     methods: methods
   }
 
-  type McpClient<methods extends readonly AnyClient[] = readonly AnyClient[]> = {
+  type McpClient<
+    methods extends readonly AnyClient[] = readonly AnyClient[],
+    client extends Pick<Client, 'callTool'> = Pick<Client, 'callTool'>,
+  > = Omit<client, 'callTool'> & {
     /** Call a tool with automatic payment handling. */
     callTool: (
       params: {
