@@ -1,5 +1,5 @@
 ---
-name: nextjs-framework
+name: mpay-nextjs
 description: mpay integration with Next.js App Router. Use when building paid APIs with Next.js or when asked about mpay + Next.js patterns.
 ---
 

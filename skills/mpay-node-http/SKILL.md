@@ -1,5 +1,5 @@
 ---
-name: node-http-framework
+name: mpay-node-http
 description: mpay integration with Node.js http module. Use when building paid APIs with raw Node.js http or when asked about mpay + Node.js patterns.
 ---
 

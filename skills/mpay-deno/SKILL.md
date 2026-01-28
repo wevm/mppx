@@ -1,5 +1,5 @@
 ---
-name: deno-framework
+name: mpay-deno
 description: mpay integration with Deno. Use when building paid APIs with Deno or when asked about mpay + Deno patterns.
 ---
 

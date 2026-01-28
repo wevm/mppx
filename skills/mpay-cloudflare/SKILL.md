@@ -1,5 +1,5 @@
 ---
-name: cloudflare-framework
+name: mpay-cloudflare
 description: mpay integration with Cloudflare Workers. Use when building paid APIs with Cloudflare Workers or when asked about mpay + Cloudflare patterns.
 ---
 

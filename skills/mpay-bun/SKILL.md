@@ -1,5 +1,5 @@
 ---
-name: bun-framework
+name: mpay-bun
 description: mpay integration with Bun.serve. Use when building paid APIs with Bun or when asked about mpay + Bun patterns.
 ---
 

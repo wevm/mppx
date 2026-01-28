@@ -1,5 +1,5 @@
 ---
-name: hono-framework
+name: mpay-hono
 description: mpay integration with Hono framework. Use when building paid APIs with Hono or when asked about mpay + Hono patterns.
 ---
 

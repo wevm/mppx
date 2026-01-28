@@ -1,5 +1,5 @@
 ---
-name: elysia-framework
+name: mpay-elysia
 description: mpay integration with Elysia framework. Use when building paid APIs with Elysia or when asked about mpay + Elysia patterns.
 ---
 

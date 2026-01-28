@@ -1,5 +1,5 @@
 ---
-name: express-framework
+name: mpay-express
 description: mpay integration with Express framework. Use when building paid APIs with Express or when asked about mpay + Express patterns.
 ---
 
