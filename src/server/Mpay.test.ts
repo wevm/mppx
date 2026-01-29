@@ -4,7 +4,11 @@ import { rpcUrl } from '~test/tempo/prool.js'
 import { accounts, asset, chain } from '~test/tempo/viem.js'
 import * as Challenge from '../Challenge.js'
 import * as Credential from '../Credential.js'
+import * as Intent from '../Intent.js'
+import * as Method from '../Method.js'
+import * as MethodIntent from '../MethodIntent.js'
 import { tempo } from '../tempo/server/Method.js'
+import * as z from '../zod.js'
 import * as Mpay from './Mpay.js'
 import { toNodeListener } from './Mpay.js'
 import * as Transport from './Transport.js'
@@ -297,5 +301,157 @@ describe('request handler (node)', () => {
     expect(body.detail).toContain('Payment verification failed')
 
     server.close()
+  })
+})
+
+describe('failed receipt handling', () => {
+  test('returns 402 when verify returns a failed receipt', async () => {
+    const mockCharge = MethodIntent.fromIntent(Intent.charge, {
+      method: 'mock',
+      schema: {
+        credential: {
+          payload: z.object({ token: z.string() }),
+        },
+        request: {
+          requires: ['recipient'],
+        },
+      },
+    })
+
+    const mockMethod = Method.toServer(
+      Method.from({
+        name: 'mock',
+        intents: { charge: mockCharge },
+      }),
+      {
+        async verify() {
+          return {
+            method: 'mock',
+            reference: 'tx-failed-123',
+            status: 'failed' as const,
+            timestamp: new Date().toISOString(),
+          }
+        },
+      },
+    )
+
+    const handler = Mpay.create({
+      method: mockMethod,
+      realm,
+      secretKey,
+    })
+
+    const handle = handler.charge({
+      request: {
+        amount: '1000',
+        currency: '0x0000000000000000000000000000000000000001',
+        expires: new Date(Date.now() + 60_000).toISOString(),
+        recipient: '0x0000000000000000000000000000000000000002',
+      },
+    })
+
+    const firstResult = await handle(new Request('https://example.com/resource'))
+    expect(firstResult.status).toBe(402)
+    if (firstResult.status !== 402) throw new Error()
+
+    const challenge = Challenge.fromResponse(firstResult.challenge)
+
+    const credential = Credential.from({
+      challenge,
+      payload: { token: 'valid-token' },
+    })
+
+    const result = await handle(
+      new Request('https://example.com/resource', {
+        headers: { Authorization: Credential.serialize(credential) },
+      }),
+    )
+
+    expect(result.status).toBe(402)
+    if (result.status !== 402) throw new Error()
+
+    const body = (await result.challenge.json()) as { detail: string }
+    expect(body.detail).toContain('payment failed')
+    expect(body.detail).toContain('tx-failed-123')
+    expect({
+      ...body,
+      challengeId: '[challengeId]',
+      detail: '[detail]',
+      instance: '[instance]',
+    }).toMatchInlineSnapshot(`
+      {
+        "challengeId": "[challengeId]",
+        "detail": "[detail]",
+        "instance": "[instance]",
+        "status": 402,
+        "title": "VerificationFailedError",
+        "type": "https://tempoxyz.github.io/payment-auth-spec/problems/verification-failed",
+      }
+    `)
+  })
+
+  test('returns 200 when verify returns a success receipt', async () => {
+    const mockCharge = MethodIntent.fromIntent(Intent.charge, {
+      method: 'mock',
+      schema: {
+        credential: {
+          payload: z.object({ token: z.string() }),
+        },
+        request: {
+          requires: ['recipient'],
+        },
+      },
+    })
+
+    const mockMethod = Method.toServer(
+      Method.from({
+        name: 'mock',
+        intents: { charge: mockCharge },
+      }),
+      {
+        async verify() {
+          return {
+            method: 'mock',
+            reference: 'tx-success-456',
+            status: 'success' as const,
+            timestamp: new Date().toISOString(),
+          }
+        },
+      },
+    )
+
+    const handler = Mpay.create({
+      method: mockMethod,
+      realm,
+      secretKey,
+    })
+
+    const handle = handler.charge({
+      request: {
+        amount: '1000',
+        currency: '0x0000000000000000000000000000000000000001',
+        expires: new Date(Date.now() + 60_000).toISOString(),
+        recipient: '0x0000000000000000000000000000000000000002',
+      },
+    })
+
+    const firstResult = await handle(new Request('https://example.com/resource'))
+    expect(firstResult.status).toBe(402)
+    if (firstResult.status !== 402) throw new Error()
+
+    const challenge = Challenge.fromResponse(firstResult.challenge)
+
+    const credential = Credential.from({
+      challenge,
+      payload: { token: 'valid-token' },
+    })
+
+    const result = await handle(
+      new Request('https://example.com/resource', {
+        headers: { Authorization: Credential.serialize(credential) },
+      }),
+    )
+
+    expect(result.status).toBe(200)
   })
 })

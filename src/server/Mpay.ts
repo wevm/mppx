@@ -189,6 +189,21 @@ function createIntentFn(parameters: createIntentFn.Parameters): createIntentFn.R
         }
       }
 
+      // Per spec, synchronous flows MUST NOT return 200 with a failed receipt.
+      // If payment failed (e.g., tx reverted on-chain), return 402.
+      if (receiptData.status === 'failed') {
+        return {
+          challenge: await transport.respondChallenge({
+            challenge,
+            input,
+            error: new Errors.VerificationFailedError({
+              reason: `payment failed: ${receiptData.reference}`,
+            }),
+          }),
+          status: 402,
+        }
+      }
+
       return {
         status: 200,
         withReceipt<T>(response: T) {

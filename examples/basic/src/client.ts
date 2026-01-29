@@ -21,7 +21,7 @@ document.getElementById('button')!.addEventListener('click', async () => {
   output.textContent = loadingMessages[Math.floor(Math.random() * loadingMessages.length)]!
 
   try {
-    const { fortune } = await fetch('/api/fortune').then(r => r.json())
+    const { fortune } = await fetch('/api/fortune').then((r) => r.json())
     output.textContent = fortune
     await updateBalance()
   } catch (err) {
