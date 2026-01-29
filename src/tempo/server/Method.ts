@@ -148,94 +148,50 @@ export function tempo(parameters: tempo.Parameters) {
               const transaction = Transaction.deserialize(serializedTransaction)
 
               const calls = transaction.calls ?? []
+              const memo = methodDetails?.memo as `0x${string}` | undefined
 
-              if (calls.length !== 1)
-                throw new MismatchError('Invalid transaction: unexpected number of calls', {
-                  expected: '1',
-                  got: String(calls.length),
-                })
+              const call = calls.find((call) => {
+                if (!call.to || !Address.isEqual(call.to, currency)) return false
+                if (!call.data) return false
 
-              const call = calls[0]!
-              if (!call.to || !Address.isEqual(call.to, currency))
+                const selector = call.data.slice(0, 10)
+
+                if (memo) {
+                  if (selector !== transferWithMemoSelector) return false
+                  try {
+                    const [to, amount_, memo_] = AbiFunction.decodeData(
+                      transferWithMemo,
+                      call.data,
+                    )
+                    return (
+                      Address.isEqual(to, recipient) &&
+                      amount_.toString() === amount &&
+                      memo_.toLowerCase() === memo.toLowerCase()
+                    )
+                  } catch {
+                    return false
+                  }
+                }
+
+                if (selector !== transferSelector) return false
+                try {
+                  const [to, amount_] = AbiFunction.decodeData(transfer, call.data)
+                  return Address.isEqual(to, recipient) && amount_.toString() === amount
+                } catch {
+                  return false
+                }
+              })
+
+              if (!call)
                 throw new MismatchError(
-                  'Invalid transaction: call target does not match currency',
+                  'Invalid transaction: no matching payment call found',
                   {
-                    expected: currency,
-                    got: call.to ?? '(empty)',
+                    amount,
+                    currency,
+                    recipient,
+                    memo: memo ?? '(none)',
                   },
                 )
-
-              if (!call.data)
-                throw new MismatchError('Invalid transaction: call data is missing', {
-                  expected: transferSelector,
-                  got: '(empty)',
-                })
-
-              const memo = methodDetails?.memo as `0x${string}` | undefined
-              const selector = call.data.slice(0, 10)
-
-              if (memo) {
-                if (selector !== transferWithMemoSelector)
-                  throw new MismatchError('Invalid transaction: expected transferWithMemo call', {
-                    expected: transferWithMemoSelector,
-                    got: selector,
-                  })
-
-                const [to, amount_, memo_] = (() => {
-                  try {
-                    return AbiFunction.decodeData(transferWithMemo, call.data)
-                  } catch {
-                    throw new MismatchError(
-                      'Invalid transaction: failed to decode transferWithMemo call',
-                      {
-                        expected: transferWithMemoSelector,
-                        got: selector,
-                      },
-                    )
-                  }
-                })()
-
-                if (!Address.isEqual(to, recipient))
-                  throw new MismatchError('Invalid transaction: transfer recipient mismatch', {
-                    expected: recipient,
-                    got: to,
-                  })
-
-                if (amount_.toString() !== amount)
-                  throw new MismatchError('Invalid transaction: transfer amount mismatch', {
-                    expected: amount,
-                    got: amount_.toString(),
-                  })
-
-                if (memo_.toLowerCase() !== memo.toLowerCase())
-                  throw new MismatchError('Invalid transaction: memo mismatch', {
-                    expected: memo,
-                    got: memo_,
-                  })
-              } else {
-                const [to, amount_] = (() => {
-                  try {
-                    return AbiFunction.decodeData(transfer, call.data)
-                  } catch {
-                    throw new MismatchError('Invalid transaction: failed to decode transfer call', {
-                      expected: transferSelector,
-                      got: selector,
-                    })
-                  }
-                })()
-
-                if (!Address.isEqual(to, recipient))
-                  throw new MismatchError('Invalid transaction: transfer recipient mismatch', {
-                    expected: recipient,
-                    got: to,
-                  })
-
-                if (amount_.toString() !== amount)
-                  throw new MismatchError('Invalid transaction: transfer amount mismatch', {
-                    expected: amount,
-                    got: amount_.toString(),
-                  })
-              }
 
               const serializedTransaction_final = await (async () => {
                 if (methodDetails?.feePayer && feePayer) {
