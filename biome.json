@@ -21,6 +21,9 @@
       },
       "suspicious": {
         "noExplicitAny": "off"
+      },
+      "complexity": {
+        "noBannedTypes": "off"
       }
     }
   },
