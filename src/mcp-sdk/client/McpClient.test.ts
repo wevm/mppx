@@ -43,12 +43,10 @@ describe('McpClient.wrap', () => {
       { description: 'A tool that requires payment' },
       async (extra) => {
         const result = await mpayServer.charge({
-          request: {
-            amount: '1000000',
-            currency: asset,
-            expires: new Date(Date.now() + 60_000).toISOString(),
-            recipient: accounts[0].address,
-          },
+          amount: '1000000',
+          currency: asset,
+          expires: new Date(Date.now() + 60_000).toISOString(),
+          recipient: accounts[0].address,
         })(extra)
 
         if (result.status === 402) throw result.challenge

@@ -25,13 +25,11 @@ export async function handler(request: Request): Promise<Response | null> {
   // Paid
   if (url.pathname === '/api/fortune') {
     const result = await mpay.charge({
+      amount: '1000000', // 1 USD
       description: 'Fortune for you',
-      request: {
-        amount: '1000000', // 1 USD
-        currency,
-        expires: Expires.minutes(5),
-        recipient: account.address,
-      },
+      currency,
+      expires: Expires.minutes(5),
+      recipient: account.address,
     })(request)
 
     if (result.status === 402) return result.challenge

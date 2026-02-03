@@ -1,5 +1,6 @@
 import type * as Challenge from './Challenge.js'
 import type * as Credential from './Credential.js'
+import type { UnionMerge } from './internal/types.js'
 import type * as MethodIntent from './MethodIntent.js'
 import type * as Receipt from './Receipt.js'
 import type * as z from './zod.js'
@@ -101,17 +102,18 @@ export declare namespace CreateCredentialFn {
 export type RequestFn<
   intents extends Record<string, MethodIntent.MethodIntent>,
   context = unknown,
-> = (
-  parameters: RequestFn.Parameters<intents, context>,
-) => RequestFn.Parameters<intents, context>['request']
+> = (parameters: RequestFn.Parameters<intents, context>) => RequestFn.ReturnType<intents>
 
 export declare namespace RequestFn {
   type Parameters<intents extends Record<string, MethodIntent.MethodIntent>, context = unknown> = {
     [key in keyof intents]: {
       description?: string | undefined
       expires?: string | undefined
-      request: z.input<intents[key]['schema']['request']>
-    } & ([keyof context] extends [never] ? unknown : context)
+    } & UnionMerge<z.input<intents[key]['schema']['request']>, context>
+  }[keyof intents]
+
+  type ReturnType<intents extends Record<string, MethodIntent.MethodIntent>> = {
+    [key in keyof intents]: z.input<intents[key]['schema']['request']>
   }[keyof intents]
 }
 

@@ -60,9 +60,9 @@ export function tempo(parameters: tempo.Parameters) {
       }),
       { feePayer },
     ),
-    request(options) {
-      if (options.feePayer) return { feePayer: true, ...options.request }
-      return options.request
+    request({ feePayer, ...request }) {
+      if (feePayer) return { feePayer: true, ...request }
+      return request
     },
     async verify({ context, credential }) {
       const { feePayer } = context
@@ -159,10 +159,7 @@ export function tempo(parameters: tempo.Parameters) {
                 if (memo) {
                   if (selector !== transferWithMemoSelector) return false
                   try {
-                    const [to, amount_, memo_] = AbiFunction.decodeData(
-                      transferWithMemo,
-                      call.data,
-                    )
+                    const [to, amount_, memo_] = AbiFunction.decodeData(transferWithMemo, call.data)
                     return (
                       Address.isEqual(to, recipient) &&
                       amount_.toString() === amount &&
@@ -183,15 +180,12 @@ export function tempo(parameters: tempo.Parameters) {
               })
 
               if (!call)
-                throw new MismatchError(
-                  'Invalid transaction: no matching payment call found',
-                  {
-                    amount,
-                    currency,
-                    recipient,
-                    memo: memo ?? '(none)',
-                  },
-                )
+                throw new MismatchError('Invalid transaction: no matching payment call found', {
+                  amount,
+                  currency,
+                  recipient,
+                  memo: memo ?? '(none)',
+                })
 
               const serializedTransaction_final = await (async () => {
                 if (methodDetails?.feePayer && feePayer) {

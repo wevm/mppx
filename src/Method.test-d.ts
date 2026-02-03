@@ -16,8 +16,6 @@ const fooCharge = MethodIntent.fromIntent(Intent.charge, {
   },
 })
 
-
-
 const fooMethod = Method.from({
   name: 'test',
   intents: { charge: fooCharge },

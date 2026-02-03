@@ -45,12 +45,10 @@ describe('request handler', () => {
     const request = new Request('https://example.com/resource')
 
     const result = await handler.charge({
-      request: {
-        amount: '1000',
-        currency: asset,
-        expires: new Date(Date.now() + 60_000).toISOString(),
-        recipient: accounts[0].address,
-      },
+      amount: '1000',
+      currency: asset,
+      expires: new Date(Date.now() + 60_000).toISOString(),
+      recipient: accounts[0].address,
     })(request)
 
     expect(result.status).toBe(402)
@@ -81,12 +79,10 @@ describe('request handler', () => {
     })
 
     const result = await Mpay.create({ method, realm, secretKey }).charge({
-      request: {
-        amount: '1000',
-        currency: asset,
-        expires: new Date(Date.now() + 60_000).toISOString(),
-        recipient: accounts[0].address,
-      },
+      amount: '1000',
+      currency: asset,
+      expires: new Date(Date.now() + 60_000).toISOString(),
+      recipient: accounts[0].address,
     })(request)
 
     expect(result.status).toBe(402)
@@ -127,12 +123,10 @@ describe('request handler', () => {
     })
 
     const result = await Mpay.create({ method, realm, secretKey }).charge({
-      request: {
-        amount: '1000',
-        currency: asset,
-        expires: new Date(Date.now() + 60_000).toISOString(),
-        recipient: accounts[0].address,
-      },
+      amount: '1000',
+      currency: asset,
+      expires: new Date(Date.now() + 60_000).toISOString(),
+      recipient: accounts[0].address,
     })(request)
 
     expect(result.status).toBe(402)
@@ -157,12 +151,10 @@ describe('request handler', () => {
 
   test('returns 402 when payload schema validation fails', async () => {
     const handle = Mpay.create({ method, realm, secretKey }).charge({
-      request: {
-        amount: '1000',
-        currency: asset,
-        expires: new Date(Date.now() + 60_000).toISOString(),
-        recipient: accounts[0].address,
-      },
+      amount: '1000',
+      currency: asset,
+      expires: new Date(Date.now() + 60_000).toISOString(),
+      recipient: accounts[0].address,
     })
 
     const firstResult = await handle(new Request('https://example.com/resource'))
@@ -212,12 +204,10 @@ describe('request handler (node)', () => {
     const server = await Http.createServer(async (req, res) => {
       const result = await toNodeListener(
         handler.charge({
-          request: {
-            amount: '1000',
-            currency: asset,
-            expires: new Date(Date.now() + 60_000).toISOString(),
-            recipient: accounts[0].address,
-          },
+          amount: '1000',
+          currency: asset,
+          expires: new Date(Date.now() + 60_000).toISOString(),
+          recipient: accounts[0].address,
         }),
       )(req, res)
       if (result.status === 402) return
@@ -254,12 +244,10 @@ describe('request handler (node)', () => {
     const server = await Http.createServer(async (req, res) => {
       const result = await toNodeListener(
         handler.charge({
-          request: {
-            amount: '1000',
-            currency: asset,
-            expires,
-            recipient: accounts[0].address,
-          },
+          amount: '1000',
+          currency: asset,
+          expires,
+          recipient: accounts[0].address,
         }),
       )(req, res)
       if (result.status === 402) return
@@ -342,12 +330,10 @@ describe('failed receipt handling', () => {
     })
 
     const handle = handler.charge({
-      request: {
-        amount: '1000',
-        currency: '0x0000000000000000000000000000000000000001',
-        expires: new Date(Date.now() + 60_000).toISOString(),
-        recipient: '0x0000000000000000000000000000000000000002',
-      },
+      amount: '1000',
+      currency: '0x0000000000000000000000000000000000000001',
+      expires: new Date(Date.now() + 60_000).toISOString(),
+      recipient: '0x0000000000000000000000000000000000000002',
     })
 
     const firstResult = await handle(new Request('https://example.com/resource'))
@@ -427,12 +413,10 @@ describe('failed receipt handling', () => {
     })
 
     const handle = handler.charge({
-      request: {
-        amount: '1000',
-        currency: '0x0000000000000000000000000000000000000001',
-        expires: new Date(Date.now() + 60_000).toISOString(),
-        recipient: '0x0000000000000000000000000000000000000002',
-      },
+      amount: '1000',
+      currency: '0x0000000000000000000000000000000000000001',
+      expires: new Date(Date.now() + 60_000).toISOString(),
+      recipient: '0x0000000000000000000000000000000000000002',
     })
 
     const firstResult = await handle(new Request('https://example.com/resource'))

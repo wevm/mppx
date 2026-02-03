@@ -37,7 +37,7 @@ describe('tempo', () => {
       } as const
 
       const httpServer = await Http.createServer(async (req, res) => {
-        const result = await toNodeListener(server.charge({ request }))(req, res)
+        const result = await toNodeListener(server.charge(request))(req, res)
         if (result.status === 402) return
         res.end('OK')
       })
@@ -95,7 +95,7 @@ describe('tempo', () => {
       } as const
 
       const httpServer = await Http.createServer(async (req, res) => {
-        const result = await toNodeListener(server.charge({ request }))(req, res)
+        const result = await toNodeListener(server.charge(request))(req, res)
         if (result.status === 402) return
         res.end('OK')
       })
@@ -138,7 +138,7 @@ describe('tempo', () => {
       } as const
 
       const httpServer = await Http.createServer(async (req, res) => {
-        const result = await toNodeListener(server.charge({ request }))(req, res)
+        const result = await toNodeListener(server.charge(request))(req, res)
         if (result.status === 402) return
         res.end('OK')
       })
@@ -188,12 +188,10 @@ describe('tempo', () => {
       const httpServer = await Http.createServer(async (req, res) => {
         const result = await toNodeListener(
           server.charge({
-            request: {
-              amount: '1000000',
-              currency: asset,
-              expires: new Date(Date.now() + 60_000).toISOString(),
-              recipient: accounts[0].address,
-            },
+            amount: '1000000',
+            currency: asset,
+            expires: new Date(Date.now() + 60_000).toISOString(),
+            recipient: accounts[0].address,
           }),
         )(req, res)
         if (result.status === 402) return
@@ -244,12 +242,10 @@ describe('tempo', () => {
         const result = await toNodeListener(
           server.charge({
             feePayer: accounts[0],
-            request: {
-              amount: '1000000',
-              currency: asset,
-              expires: new Date(Date.now() + 60_000).toISOString(),
-              recipient: accounts[0].address,
-            },
+            amount: '1000000',
+            currency: asset,
+            expires: new Date(Date.now() + 60_000).toISOString(),
+            recipient: accounts[0].address,
           }),
         )(req, res)
         if (result.status === 402) return
@@ -296,7 +292,7 @@ describe('tempo', () => {
       } as const
 
       const httpServer = await Http.createServer(async (req, res) => {
-        const result = await toNodeListener(server.charge({ request }))(req, res)
+        const result = await toNodeListener(server.charge(request))(req, res)
         if (result.status === 402) return
         res.end('OK')
       })

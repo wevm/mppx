@@ -26,5 +26,3 @@ export const charge = MethodIntent.fromIntent(Intent.charge, {
     },
   },
 })
-
-

@@ -2,6 +2,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import * as Challenge from '../Challenge.js'
 import type * as Credential from '../Credential.js'
 import * as Errors from '../Errors.js'
+import type { UnionMerge } from '../internal/types.js'
 import type * as Method from '../Method.js'
 import type * as MethodIntent from '../MethodIntent.js'
 import type * as Receipt from '../Receipt.js'
@@ -100,12 +101,12 @@ function createIntentFn(parameters: createIntentFn.Parameters): createIntentFn.R
 
   return (options) =>
     async (input): Promise<IntentFn.Response> => {
-      const { description, expires, request: request_, ...context } = options
+      const { description, ...rest } = options
+      const expires = 'expires' in options ? (options.expires as string | undefined) : undefined
 
       // Transform request if method provides a `request` function
-      const request = (
-        parameters.request ? parameters.request(options as never) : request_
-      ) as typeof request_
+      const request = (parameters.request ? parameters.request(options as never) : rest) as never
+      const context = rest
 
       // Recompute challenge from options. The HMAC-bound ID means we don't need to
       // store challenges server-side—if the client echoes back a credential with
@@ -254,9 +255,7 @@ declare namespace IntentFn {
     description?: string | undefined
     /** Optional challenge expiration timestamp (ISO 8601). */
     expires?: string | undefined
-    /** Payment request parameters. */
-    request: z.input<intent['schema']['request']>
-  } & ([keyof context] extends [never] ? unknown : context)
+  } & UnionMerge<z.input<intent['schema']['request']>, context>
 
   export type Response<transport extends Transport.AnyTransport = Transport.Http> =
     | { challenge: Transport.ChallengeOutputOf<transport>; status: 402 }

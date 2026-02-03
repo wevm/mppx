@@ -78,5 +78,3 @@ describe('charge', () => {
     expect(result.success).toBe(false)
   })
 })
-
-

@@ -378,3 +378,20 @@ export type UnionPartialBy<T, K extends keyof T> = T extends any ? PartialBy<T, 
  * @internal
  */
 export type UnionRequiredBy<T, K extends keyof T> = T extends any ? RequiredBy<T, K> : never
+
+/**
+ * Merges two object types, creating a union for overlapping properties.
+ *
+ * @example
+ * ```ts
+ * type Result = UnionMerge<{ a: string, b: number }, { b: boolean, c: string }>
+ * // { a: string, b: number | boolean, c: string }
+ * ```
+ *
+ * @internal
+ */
+export type UnionMerge<A, B> = [keyof B] extends [never]
+  ? A
+  : LooseOmit<A, keyof B & string> & {
+      [K in keyof B]: K extends keyof A ? A[K] | B[K] : B[K]
+    }

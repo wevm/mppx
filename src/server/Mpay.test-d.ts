@@ -17,8 +17,6 @@ const fooCharge = MethodIntent.fromIntent(Intent.charge, {
   },
 })
 
-
-
 const fooMethod = Method.from({
   name: 'test',
   intents: { charge: fooCharge },
@@ -94,12 +92,10 @@ describe('Mpay', () => {
     })
 
     handler.charge({
-      request: {
-        amount: '1000',
-        currency: '0x1234',
-        expires: '2025-01-01T00:00:00Z',
-        recipient: '0xabc',
-      },
+      amount: '1000',
+      currency: '0x1234',
+      expires: '2025-01-01T00:00:00Z',
+      recipient: '0xabc',
     })
   })
 
@@ -123,12 +119,10 @@ describe('Mpay', () => {
     })
 
     handler.charge({
-      request: {
-        amount: '1000',
-        currency: '0x1234',
-        expires: '2025-01-01T00:00:00Z',
-        recipient: '0xabc',
-      },
+      amount: '1000',
+      currency: '0x1234',
+      expires: '2025-01-01T00:00:00Z',
+      recipient: '0xabc',
       rpcUrl: 'https://rpc.example.com',
     })
   })
@@ -152,12 +146,10 @@ describe('Mpay', () => {
     })
 
     const chargeHandler = handler.charge({
-      request: {
-        amount: '1000',
-        currency: '0x1234',
-        expires: '2025-01-01T00:00:00Z',
-        recipient: '0xabc',
-      },
+      amount: '1000',
+      currency: '0x1234',
+      expires: '2025-01-01T00:00:00Z',
+      recipient: '0xabc',
     })
 
     const result = await chargeHandler(new Request('https://example.com'))
