@@ -48,9 +48,7 @@ See [examples/](./examples/) for runnable demos.
 import { Mpay, tempo } from 'mpay/server'
 
 const mpay = Mpay.create({
-  method: tempo({
-    rpcUrl: 'https://rpc.tempo.xyz',
-  }),
+  method: tempo(),
   realm: 'api.example.com',
 })
 
@@ -110,7 +108,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp'
 import { Mpay, Transport, tempo } from 'mpay/server'
 
 const mpay = Mpay.create({
-  method: tempo({ rpcUrl: 'https://rpc.tempo.xyz' }),
+  method: tempo(),
   realm: 'mcp.example.com',
   secretKey: process.env.SECRET_KEY,
   transport: Transport.mcpSdk(),
@@ -151,8 +149,7 @@ const account = privateKeyToAccount('0x...')
 Fetch.polyfill({
   methods: [
     tempo({
-      account: privateKeyToAccount('0x...'),
-      rpcUrl: 'https://rpc.tempo.xyz',
+      account: privateKeyToAccount('0x...')
     }),
   ],
 })
@@ -176,10 +173,7 @@ const account = privateKeyToAccount('0x...')
 
 const fetch = Fetch.from({
   methods: [
-    tempo({
-      account,
-      rpcUrl: 'https://rpc.tempo.xyz',
-    }),
+    tempo({ account }),
   ],
 })
 
@@ -198,10 +192,7 @@ import { privateKeyToAccount } from 'viem/accounts'
 
 const mpay = Mpay.create({
   methods: [
-    tempo({
-      account: privateKeyToAccount('0x...'),
-      rpcUrl: 'https://rpc.tempo.xyz',
-    })
+    tempo({ account: privateKeyToAccount('0x...') }),
   ]
 })
 
@@ -233,10 +224,7 @@ await client.connect(new StdioClientTransport({ command: 'mcp-server' }))
 // Wrap with payment handling
 const mcp = McpClient.wrap(client, {
   methods: [
-    tempo({
-      account: privateKeyToAccount('0x...'),
-      rpcUrl: 'https://rpc.tempo.xyz',
-    }),
+    tempo({ account: privateKeyToAccount('0x...') }),
   ],
 })
 
@@ -557,10 +545,7 @@ import { Fetch, tempo } from 'mpay/client'
 
 const fetch = Fetch.from({
   methods: [
-    tempo({ 
-      account, 
-      rpcUrl: 'https://rpc.tempo.xyz' 
-    })
+    tempo({ account }),
   ],
 })
 ```
@@ -572,12 +557,5 @@ Polyfill the global `fetch` function with payment handler(s).
 ```ts
 import { Fetch } from 'mpay/client'
 
-Fetch.polyfill({
-  methods: [
-    tempo({
-      account,
-      rpcUrl: 'https://rpc.tempo.xyz',
-    }),
-  ],
-})
+Fetch.polyfill({ methods: [tempo({ account })] })
 ```
