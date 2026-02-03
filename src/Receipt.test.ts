@@ -20,22 +20,15 @@ describe('from', () => {
     `)
   })
 
-  test('behavior: creates receipt with failed status', () => {
-    const receipt = Receipt.from({
-      method: 'tempo',
-      reference: '0xabcd',
-      status: 'failed',
-      timestamp: '2025-01-21T13:00:00.000Z',
-    })
-
-    expect(receipt).toMatchInlineSnapshot(`
-      {
-        "method": "tempo",
-        "reference": "0xabcd",
-        "status": "failed",
-        "timestamp": "2025-01-21T13:00:00.000Z",
-      }
-    `)
+  test('error: rejects receipt with failed status', () => {
+    expect(() =>
+      Receipt.from({
+        method: 'tempo',
+        reference: '0xabcd',
+        status: 'failed' as 'success',
+        timestamp: '2025-01-21T13:00:00.000Z',
+      }),
+    ).toThrow()
   })
 })
 

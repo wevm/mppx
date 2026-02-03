@@ -16,9 +16,9 @@ export const Schema = z.object({
   method: z.string(),
   /** Method-specific reference (e.g., transaction hash). */
   reference: z.string(),
-  /** Payment status. */
-  status: z.union([z.literal('success'), z.literal('failed')]),
-  /** ISO 8601 settlement timestamp. */
+  /** Payment status. Always "success" — failures use 402 + Problem Details. */
+  status: z.literal('success'),
+  /** RFC 3339 settlement timestamp. */
   timestamp: z.datetime(),
 })
 

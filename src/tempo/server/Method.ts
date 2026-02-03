@@ -268,9 +268,12 @@ export declare namespace tempo {
 /** @internal */
 function toReceipt(receipt: TransactionReceipt) {
   const { status, transactionHash } = receipt
+  if (status !== 'success') {
+    throw new Error(`Transaction reverted: ${transactionHash}`)
+  }
   return {
     method: 'tempo',
-    status: status === 'success' ? 'success' : 'failed',
+    status: 'success',
     timestamp: new Date().toISOString(),
     reference: transactionHash,
   } as const
