@@ -9,7 +9,6 @@ describe('Fetch.from', () => {
       methods: [
         tempo_client.tempo({
           account: {} as Account,
-          rpcUrl: 'https://rpc.tempo.xyz',
         }),
       ],
     })
@@ -20,11 +19,7 @@ describe('Fetch.from', () => {
 
   test('behavior: accepts context in RequestInit when method has context', () => {
     const fetch = Fetch.from({
-      methods: [
-        tempo_client.tempo({
-          rpcUrl: 'https://rpc.tempo.xyz',
-        }),
-      ],
+      methods: [tempo_client.tempo()],
     })
 
     expectTypeOf(fetch).toBeCallableWith('https://example.com', {
@@ -37,7 +32,6 @@ describe('Fetch.from', () => {
       methods: [
         tempo_client.tempo({
           account: {} as Account,
-          rpcUrl: 'https://rpc.tempo.xyz',
         }),
       ],
     })
@@ -51,7 +45,6 @@ describe('Fetch.from', () => {
       methods: [
         tempo_client.tempo({
           account: {} as Account,
-          rpcUrl: 'https://rpc.tempo.xyz',
         }),
       ],
     })
@@ -66,9 +59,7 @@ describe('Fetch.from', () => {
 
 describe('Fetch.from.RequestInit', () => {
   test('behavior: has context property typed to method context', () => {
-    const method = tempo_client.tempo({
-      rpcUrl: 'https://rpc.tempo.xyz',
-    })
+    const method = tempo_client.tempo()
 
     type Methods = [typeof method]
     type Init = Fetch.from.RequestInit<Methods>

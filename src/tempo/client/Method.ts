@@ -24,18 +24,19 @@ import * as Methods from '../Method.js'
  * ```
  */
 export function tempo(parameters: tempo.Parameters = {}) {
-  const { chainId = defaults.chainId, rpcUrl = defaults.rpcUrl } = parameters
+  const rpcUrl = parameters.rpcUrl ?? defaults.rpcUrl
 
-  const client = (() => {
-    if (parameters.client) return parameters.client
+  function getClient(chainId: number): Client {
+    if (parameters.client) return parameters.client(chainId)
+
+    const url = rpcUrl[chainId as keyof typeof rpcUrl]
+    if (!url) throw new Error(`No \`rpcUrl\` configured for \`chainId\` (${chainId}).`)
+
     return createClient({
-      chain: {
-        ...tempo_chain,
-        id: chainId,
-      },
-      transport: http(rpcUrl),
+      chain: { ...tempo_chain, id: chainId },
+      transport: http(url),
     })
-  })()
+  }
 
   return Method.toClient(Methods.tempo, {
     context: z.object({
@@ -46,6 +47,9 @@ export function tempo(parameters: tempo.Parameters = {}) {
       const account = context?.account ?? parameters.account
       if (!account)
         throw new Error('No `account` provided. Pass `account` to parameters or context.')
+
+      const chainId = (challenge.request.methodDetails?.chainId ?? Number(Object.keys(rpcUrl)[0]))!
+      const client = getClient(chainId)
 
       switch (challenge.intent) {
         case 'charge': {
@@ -69,7 +73,7 @@ export function tempo(parameters: tempo.Parameters = {}) {
           return Credential.serialize({
             challenge,
             payload: { signature, type: 'transaction' },
-            source: `did:pkh:eip155:${client.chain?.id}:${account.address}`,
+            source: `did:pkh:eip155:${chainId}:${account.address}`,
           })
         }
 
@@ -86,14 +90,12 @@ export declare namespace tempo {
     account?: Account | undefined
   } & OneOf<
     | {
-        /** Viem Client. */
-        client?: Client | undefined
+        /** Function that returns a client for the given chain ID. */
+        client?: ((chainId: number) => Client) | undefined
       }
     | {
-        /** Tempo chain ID. */
-        chainId?: number | undefined
-        /** Tempo RPC URL. */
-        rpcUrl?: string | undefined
+        /** RPC URLs keyed by chain ID. */
+        rpcUrl?: ({ [chainId: number]: string } & object) | undefined
       }
   >
 }

@@ -18,10 +18,9 @@ const secretKey = 'test-secret-key'
 
 const server = Mpay_server.create({
   method: Methods_server.tempo({
-    chainId: chain.id,
     currency: asset,
     recipient: accounts[0].address,
-    rpcUrl,
+    rpcUrl: { [chain.id]: rpcUrl },
   }),
   realm,
   secretKey,
@@ -210,7 +209,7 @@ describe('tempo', () => {
       httpServer.close()
     })
 
-    test('behavior: rejects when chainId override mismatches configured chain', async () => {
+    test('behavior: rejects when chainId has no RPC URL configured', async () => {
       const httpServer = await Http.createServer(async (req, res) => {
         try {
           const result = await toNodeListener(
@@ -230,7 +229,7 @@ describe('tempo', () => {
       const response = await fetch(httpServer.url)
       expect(response.status).toBe(500)
       expect(await response.text()).toMatchInlineSnapshot(
-        `"Chain ID mismatch. Expected 1337 but got 999999."`,
+        `"No RPC URL configured for chainId 999999."`,
       )
 
       httpServer.close()
@@ -243,8 +242,7 @@ describe('tempo', () => {
         methods: [
           Methods_client.tempo({
             account: accounts[1],
-            chainId: chain.id,
-            rpcUrl,
+            rpcUrl: { [chain.id]: rpcUrl },
           }),
         ],
       })
@@ -299,8 +297,7 @@ describe('tempo', () => {
         methods: [
           Methods_client.tempo({
             account: accounts[1],
-            chainId: chain.id,
-            rpcUrl,
+            rpcUrl: { [chain.id]: rpcUrl },
           }),
         ],
       })
@@ -341,8 +338,7 @@ describe('tempo', () => {
         methods: [
           Methods_client.tempo({
             account: accounts[1],
-            chainId: chain.id,
-            rpcUrl,
+            rpcUrl: { [chain.id]: rpcUrl },
           }),
         ],
       })
@@ -394,19 +390,17 @@ describe('tempo', () => {
         methods: [
           Methods_client.tempo({
             account: accounts[1],
-            chainId: chain.id,
-            rpcUrl,
+            rpcUrl: { [chain.id]: rpcUrl },
           }),
         ],
       })
 
       const server = Mpay_server.create({
         method: Methods_server.tempo({
-          chainId: chain.id,
           currency: asset,
           feePayer: accounts[0],
           recipient: accounts[0].address,
-          rpcUrl,
+          rpcUrl: { [chain.id]: rpcUrl },
         }),
         realm,
         secretKey,
@@ -448,6 +442,55 @@ describe('tempo', () => {
               "timestamp": "[timestamp]",
             }
           `)
+      }
+
+      httpServer.close()
+    })
+
+    test('behavior: routes to correct chain based on chainId', async () => {
+      const server = Mpay_server.create({
+        method: Methods_server.tempo({
+          currency: asset,
+          recipient: accounts[0].address,
+          rpcUrl: { [chain.id]: rpcUrl, 999999: 'https://other-chain.example.com' },
+        }),
+        realm,
+        secretKey,
+      })
+
+      const client = Mpay_client.create({
+        methods: [
+          Methods_client.tempo({
+            account: accounts[1],
+            rpcUrl: { [chain.id]: rpcUrl, 999999: 'https://other-chain.example.com' },
+          }),
+        ],
+      })
+
+      const httpServer = await Http.createServer(async (req, res) => {
+        const result = await toNodeListener(
+          server.charge({
+            amount: '1000000',
+            chainId: chain.id,
+          }),
+        )(req, res)
+        if (result.status === 402) return
+        res.end('OK')
+      })
+
+      const response = await fetch(httpServer.url)
+      expect(response.status).toBe(402)
+
+      const challenge = Challenge.fromResponse(response, { method: server.method })
+      expect(challenge.request.methodDetails?.chainId).toBe(chain.id)
+
+      const credential = await client.createCredential(response)
+
+      {
+        const response = await fetch(httpServer.url, {
+          headers: { Authorization: credential },
+        })
+        expect(response.status).toBe(200)
       }
 
       httpServer.close()

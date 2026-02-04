@@ -18,7 +18,6 @@ let originalFetch: typeof globalThis.fetch | undefined
  *   methods: [
  *     tempo({
  *       account: privateKeyToAccount('0x...'),
- *       rpcUrl: 'https://rpc.tempo.xyz',
  *     }),
  *   ],
  * })
@@ -91,7 +90,6 @@ export declare namespace from {
  *   methods: [
  *     tempo({
  *       account: privateKeyToAccount('0x...'),
- *       rpcUrl: 'https://rpc.tempo.xyz',
  *     }),
  *   ],
  * })

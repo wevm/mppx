@@ -24,8 +24,7 @@ describe('McpClient.wrap', () => {
 
   const mpayServer = Mpay_server.create({
     method: Methods_server.tempo({
-      chainId: chain.id,
-      rpcUrl,
+      rpcUrl: { [chain.id]: rpcUrl },
     }),
     realm,
     secretKey,
@@ -73,8 +72,7 @@ describe('McpClient.wrap', () => {
       methods: [
         Methods_client.tempo({
           account: accounts[1],
-          chainId: chain.id,
-          rpcUrl,
+          rpcUrl: { [chain.id]: rpcUrl },
         }),
       ],
     })
@@ -92,8 +90,7 @@ describe('McpClient.wrap', () => {
     const mcp = McpClient.wrap(client, {
       methods: [
         Methods_client.tempo({
-          chainId: chain.id,
-          rpcUrl,
+          rpcUrl: { [chain.id]: rpcUrl },
         }),
       ],
     })
@@ -112,8 +109,7 @@ describe('McpClient.wrap', () => {
       methods: [
         Methods_client.tempo({
           account: accounts[1],
-          chainId: chain.id,
-          rpcUrl,
+          rpcUrl: { [chain.id]: rpcUrl },
         }),
       ],
     })
@@ -128,8 +124,7 @@ describe('McpClient.wrap', () => {
     const mcp = McpClient.wrap(client, {
       methods: [
         Methods_client.tempo({
-          chainId: chain.id,
-          rpcUrl,
+          rpcUrl: { [chain.id]: rpcUrl },
         }),
       ],
     })
@@ -148,8 +143,7 @@ describe('McpClient.wrap', () => {
       methods: [
         Methods_client.tempo({
           account: accounts[1],
-          chainId: chain.id,
-          rpcUrl,
+          rpcUrl: { [chain.id]: rpcUrl },
         }),
       ],
     })
@@ -161,7 +155,7 @@ describe('McpClient.wrap', () => {
 
   test('error: throws when method not found', async () => {
     const challenge = Challenge.fromIntent(
-      Methods_server.tempo({ chainId: chain.id, rpcUrl }).intents.charge,
+      Methods_server.tempo({ rpcUrl: { [chain.id]: rpcUrl } }).intents.charge,
       {
         realm,
         secretKey,
@@ -185,8 +179,7 @@ describe('McpClient.wrap', () => {
       methods: [
         Methods_client.tempo({
           account: accounts[1],
-          chainId: chain.id,
-          rpcUrl,
+          rpcUrl: { [chain.id]: rpcUrl },
         }),
       ],
     })

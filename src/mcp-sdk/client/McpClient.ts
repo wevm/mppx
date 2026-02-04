@@ -36,7 +36,6 @@ export type CallToolResult = Awaited<ReturnType<Client['callTool']>> & {
  *   methods: [
  *     tempo({
  *       account: privateKeyToAccount('0x...'),
- *       rpcUrl: 'https://rpc.tempo.xyz',
  *     }),
  *   ],
  * })

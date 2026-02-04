@@ -31,11 +31,7 @@ export type Mpay<
  * import { Mpay, tempo } from 'mpay/client'
  *
  * const mpay = Mpay.create({
- *   methods: [
- *     tempo({
- *       rpcUrl: 'https://rpc.tempo.xyz',
- *     }),
- *   ],
+ *   methods: [tempo()],
  * })
  *
  * const response = await fetch('/resource')

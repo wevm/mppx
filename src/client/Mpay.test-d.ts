@@ -10,7 +10,6 @@ describe('Mpay', () => {
   test('has methods array', () => {
     const method = tempo_client.tempo({
       account: {} as Account,
-      rpcUrl: 'https://rpc.tempo.xyz',
     })
     const mpay = Mpay.create({ methods: [method] })
 
@@ -21,7 +20,6 @@ describe('Mpay', () => {
   test('has createCredential function', () => {
     const method = tempo_client.tempo({
       account: {} as Account,
-      rpcUrl: 'https://rpc.tempo.xyz',
     })
     const mpay = Mpay.create({ methods: [method] })
 
@@ -97,9 +95,7 @@ describe('Method.toClient', () => {
 
 describe('Mpay with context', () => {
   test('createCredential accepts context matching method schema', () => {
-    const method = tempo_client.tempo({
-      rpcUrl: 'https://rpc.tempo.xyz',
-    })
+    const method = tempo_client.tempo()
 
     const mpay = Mpay.create({ methods: [method] })
 
@@ -110,7 +106,6 @@ describe('Mpay with context', () => {
   test('createCredential context is optional when account provided at creation', () => {
     const method = tempo_client.tempo({
       account: {} as Account,
-      rpcUrl: 'https://rpc.tempo.xyz',
     })
 
     const mpay = Mpay.create({ methods: [method] })

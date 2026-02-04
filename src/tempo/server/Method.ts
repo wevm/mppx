@@ -38,28 +38,25 @@ const transferWithMemoSelector = /*#__PURE__*/ AbiFunction.getSelector(transferW
 export function tempo<const defaults extends tempo.Defaults>(
   parameters: tempo.Parameters<defaults> = {} as tempo.Parameters<defaults>,
 ) {
-  const {
-    amount,
-    chainId = defaults.chainId,
-    currency,
-    description,
-    externalId,
-    memo,
-    recipient,
-    rpcUrl = defaults.rpcUrl,
-  } = parameters
+  const { amount, currency, description, externalId, memo, recipient } = parameters
 
-  const client = (() => {
-    if (parameters.client) return parameters.client
+  const rpcUrl = parameters.rpcUrl ?? defaults.rpcUrl
+
+  function getClient(chainId: number): Client {
+    if (parameters.client) return parameters.client(chainId)
+
+    const url = rpcUrl[chainId as keyof typeof rpcUrl]
+    if (!url) throw new Error(`No \`rpcUrl\` configured for \`chainId\` (${chainId}).`)
+
     return createClient({
       chain: {
         ...tempo_chain,
         id: chainId,
         experimental_preconfirmationTime: 500,
       },
-      transport: http(rpcUrl),
+      transport: http(url),
     })
-  })()
+  }
 
   return Method.toServer<typeof Methods.tempo, defaults>(Methods.tempo, {
     defaults: {
@@ -72,9 +69,14 @@ export function tempo<const defaults extends tempo.Defaults>(
     } as defaults,
 
     request({ credential, request }) {
-      const chainId = request.chainId ?? client.chain?.id
-      if (chainId !== client.chain?.id)
-        throw new Error(`Chain ID mismatch. Expected ${client.chain?.id} but got ${chainId}.`)
+      const chainId = (() => {
+        if (request.chainId) return request.chainId
+        if (parameters.testnet) return defaults.testnetChainId
+        return Number(Object.keys(rpcUrl)[0])!
+      })()
+
+      if (!parameters.client && !rpcUrl[chainId as keyof typeof rpcUrl])
+        throw new Error(`No RPC URL configured for chainId ${chainId}.`)
 
       const feePayer = (() => {
         const account =
@@ -90,7 +92,9 @@ export function tempo<const defaults extends tempo.Defaults>(
 
     async verify({ credential, request }) {
       const { challenge } = credential
-      const { feePayer } = request
+      const { chainId, feePayer } = request
+
+      const client = getClient(chainId!)
 
       switch (challenge.intent) {
         case 'charge': {
@@ -250,17 +254,17 @@ export declare namespace tempo {
   type Parameters<defaults extends Defaults = {}> = {
     /** Optional fee payer account for covering transaction fees. */
     feePayer?: Account | undefined
+    /** Testnet mode. */
+    testnet?: boolean | undefined
   } & defaults &
     OneOf<
       | {
-          /** Viem Client. */
-          client?: Client | undefined
+          /** Function that returns a client for the given chain ID. */
+          client?: ((chainId: number) => Client) | undefined
         }
       | {
-          /** Tempo chain ID. */
-          chainId?: number | undefined
-          /** Tempo RPC URL. */
-          rpcUrl?: string | undefined
+          /** RPC URLs keyed by chain ID. */
+          rpcUrl?: ({ [chainId: number]: string } & object) | undefined
         }
     >
 }

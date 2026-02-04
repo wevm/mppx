@@ -79,7 +79,7 @@ export declare namespace create {
     method extends Method.AnyServer = Method.Server,
     transport extends Transport.AnyTransport = Transport.Http,
   > = {
-    /** Payment method (e.g., tempo({ ... })). */
+    /** Payment method (e.g., tempo()). */
     method: method
     /** Server realm (e.g., hostname). @default "MPP Payment". */
     realm?: string | undefined

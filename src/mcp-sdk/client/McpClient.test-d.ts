@@ -11,7 +11,6 @@ describe('McpClient.wrap', () => {
       methods: [
         tempo_client.tempo({
           account: {} as Account,
-          rpcUrl: 'https://rpc.tempo.xyz',
         }),
       ],
     })
@@ -26,7 +25,6 @@ describe('McpClient.wrap', () => {
       methods: [
         tempo_client.tempo({
           account: {} as Account,
-          rpcUrl: 'https://rpc.tempo.xyz',
         }),
       ],
     })
@@ -44,7 +42,6 @@ describe('McpClient.wrap', () => {
       methods: [
         tempo_client.tempo({
           account: {} as Account,
-          rpcUrl: 'https://rpc.tempo.xyz',
         }),
       ],
     })
@@ -55,11 +52,7 @@ describe('McpClient.wrap', () => {
   test('callTool accepts context when method has context', () => {
     const client = {} as Client
     const wrapped = McpClient.wrap(client, {
-      methods: [
-        tempo_client.tempo({
-          rpcUrl: 'https://rpc.tempo.xyz',
-        }),
-      ],
+      methods: [tempo_client.tempo({})],
     })
 
     expectTypeOf(wrapped.callTool).toBeCallableWith(
@@ -74,7 +67,6 @@ describe('McpClient.wrap', () => {
       methods: [
         tempo_client.tempo({
           account: {} as Account,
-          rpcUrl: 'https://rpc.tempo.xyz',
         }),
       ],
     })
@@ -90,7 +82,6 @@ describe('McpClient.wrap', () => {
       methods: [
         tempo_client.tempo({
           account: {} as Account,
-          rpcUrl: 'https://rpc.tempo.xyz',
         }),
       ],
     })

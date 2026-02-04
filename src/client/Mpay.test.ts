@@ -14,8 +14,7 @@ const realm = 'api.example.com'
 const secretKey = 'test-secret-key'
 const tempo = Methods.tempo({
   account: accounts[1],
-  chainId: chain.id,
-  rpcUrl,
+  rpcUrl: { [chain.id]: rpcUrl },
 })
 
 describe('Mpay.create', () => {
@@ -156,8 +155,7 @@ describe('createCredential', () => {
 
   test('behavior: passes context to createCredential', async () => {
     const method = Methods.tempo({
-      chainId: chain.id,
-      rpcUrl,
+      rpcUrl: { [chain.id]: rpcUrl },
     })
 
     const mpay = Mpay.create({ methods: [method] })

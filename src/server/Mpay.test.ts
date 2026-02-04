@@ -17,8 +17,7 @@ const realm = 'api.example.com'
 const secretKey = 'test-secret-key'
 
 const method = tempo({
-  chainId: chain.id,
-  rpcUrl,
+  rpcUrl: { [chain.id]: rpcUrl },
 })
 
 describe('create', () => {

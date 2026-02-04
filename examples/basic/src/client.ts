@@ -2,17 +2,9 @@ import { Fetch, tempo } from 'mpay/client'
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts'
 
 const account = privateKeyToAccount(generatePrivateKey())
-const chainId = 42431
-const rpcUrl = 'https://rpc.moderato.tempo.xyz'
 
 Fetch.polyfill({
-  methods: [
-    tempo({
-      account,
-      chainId,
-      rpcUrl,
-    }),
-  ],
+  methods: [tempo({ account })],
 })
 
 document.getElementById('button')!.addEventListener('click', async () => {
@@ -42,11 +34,13 @@ const loadingMessages = [
 // Internal
 
 import { createClient, http } from 'viem'
+import { tempoModerato } from 'viem/chains'
 import { Actions } from 'viem/tempo'
 
 const client = createClient({
+  chain: tempoModerato,
   pollingInterval: 200,
-  transport: http(rpcUrl),
+  transport: http(),
 })
 const currency = '0x20c0000000000000000000000000000000000001' as const
 

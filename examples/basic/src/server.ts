@@ -2,15 +2,12 @@ import { Expires, Mpay, tempo } from 'mpay/server'
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts'
 
 const account = privateKeyToAccount(generatePrivateKey())
-const chainId = 42431
 const currency = '0x20c0000000000000000000000000000000000001' as const // alphaUSD
-const rpcUrl = 'https://rpc.moderato.tempo.xyz'
 
 const mpay = Mpay.create({
   method: tempo({
-    chainId,
     feePayer: account,
-    rpcUrl,
+    testnet: true,
   }),
   realm: 'localhost',
   secretKey: 'top-secret-should-be-hidden-somewhere',
@@ -59,11 +56,13 @@ const fortunes = [
 // Internal
 
 import { createClient, http } from 'viem'
+import { tempoModerato } from 'viem/chains'
 import { Actions } from 'viem/tempo'
 
 const client = createClient({
+  chain: tempoModerato,
   pollingInterval: 200,
-  transport: http(rpcUrl),
+  transport: http(),
 })
 
 // Fund recipient account on startup

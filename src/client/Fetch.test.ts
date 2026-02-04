@@ -14,8 +14,7 @@ const secretKey = 'test-secret-key'
 
 const server = Mpay_server.create({
   method: Methods_server.tempo({
-    chainId: chain.id,
-    rpcUrl,
+    rpcUrl: { [chain.id]: rpcUrl },
   }),
   realm,
   secretKey,
@@ -27,8 +26,7 @@ describe('Fetch.from', () => {
       methods: [
         Methods_client.tempo({
           account: accounts[1],
-          chainId: chain.id,
-          rpcUrl,
+          rpcUrl: { [chain.id]: rpcUrl },
         }),
       ],
     })
@@ -70,8 +68,7 @@ describe('Fetch.from', () => {
     const fetch = Fetch.from({
       methods: [
         Methods_client.tempo({
-          chainId: chain.id,
-          rpcUrl,
+          rpcUrl: { [chain.id]: rpcUrl },
         }),
       ],
     })
@@ -105,8 +102,7 @@ describe('Fetch.from', () => {
       methods: [
         Methods_client.tempo({
           account: accounts[0],
-          chainId: chain.id,
-          rpcUrl,
+          rpcUrl: { [chain.id]: rpcUrl },
         }),
       ],
     })
@@ -136,8 +132,7 @@ describe('Fetch.from', () => {
     const fetch = Fetch.from({
       methods: [
         Methods_client.tempo({
-          chainId: chain.id,
-          rpcUrl,
+          rpcUrl: { [chain.id]: rpcUrl },
         }),
       ],
     })
@@ -167,8 +162,7 @@ describe('Fetch.from', () => {
       methods: [
         Methods_client.tempo({
           account: accounts[1],
-          chainId: chain.id,
-          rpcUrl,
+          rpcUrl: { [chain.id]: rpcUrl },
         }),
       ],
     })
@@ -188,9 +182,8 @@ describe('Fetch.from', () => {
   test('behavior: fee payer', async () => {
     const serverWithFeePayer = Mpay_server.create({
       method: Methods_server.tempo({
-        chainId: chain.id,
         feePayer: accounts[0],
-        rpcUrl,
+        rpcUrl: { [chain.id]: rpcUrl },
       }),
       realm,
       secretKey,
@@ -200,8 +193,7 @@ describe('Fetch.from', () => {
       methods: [
         Methods_client.tempo({
           account: accounts[1],
-          chainId: chain.id,
-          rpcUrl,
+          rpcUrl: { [chain.id]: rpcUrl },
         }),
       ],
     })
@@ -246,8 +238,7 @@ describe('Fetch.polyfill', () => {
       methods: [
         Methods_client.tempo({
           account: accounts[1],
-          chainId: chain.id,
-          rpcUrl,
+          rpcUrl: { [chain.id]: rpcUrl },
         }),
       ],
     })
