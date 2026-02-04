@@ -33,6 +33,9 @@ export type Mpay<
 /**
  * Creates a server-side payment handler from a method.
  *
+ * It is highly recommended to set a `secretKey` to bind challenges to their contents,
+ * and allow the server to verify that incoming credentials match challenges it issued.
+ *
  * @example
  * ```ts
  * import { Mpay, tempo } from 'mpay/server'
