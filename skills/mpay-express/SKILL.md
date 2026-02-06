@@ -18,7 +18,7 @@ import { Expires, Mpay, tempo } from 'mpay/server'
 const app = express()
 
 const mpay = Mpay.create({
-  method: tempo.charge(),
+  methods: [tempo.charge()],
   realm: 'api.example.com',
   secretKey: process.env.MPAY_SECRET_KEY!,
 })
@@ -68,7 +68,7 @@ import { Expires, Mpay, tempo } from 'mpay/server'
 const app = express()
 
 const mpay = Mpay.create({
-  method: tempo.charge(),
+  methods: [tempo.charge()],
   realm: 'api.example.com',
   secretKey: process.env.MPAY_SECRET_KEY!,
 })

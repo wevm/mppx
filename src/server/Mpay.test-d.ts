@@ -24,7 +24,7 @@ const fooMethod = Method.from({
 })
 
 describe('Mpay', () => {
-  test('has method and realm properties', () => {
+  test('has methods and realm properties', () => {
     const method = Method.toServer(fooMethod, {
       async verify() {
         return {
@@ -37,12 +37,12 @@ describe('Mpay', () => {
     })
 
     const handler = Mpay.create({
-      method,
+      methods: [method],
       realm: 'api.example.com',
       secretKey: 'secret',
     })
 
-    expectTypeOf(handler.method).toEqualTypeOf(method)
+    expectTypeOf(handler.methods).toEqualTypeOf([method] as const)
     expectTypeOf(handler.realm).toBeString()
   })
 
@@ -66,7 +66,7 @@ describe('Mpay', () => {
     })
 
     const handler = Mpay.create({
-      method,
+      methods: [method],
       realm: 'api.example.com',
       secretKey: 'secret',
     })
@@ -87,7 +87,7 @@ describe('Mpay', () => {
     })
 
     const handler = Mpay.create({
-      method,
+      methods: [method],
       realm: 'api.example.com',
       secretKey: 'secret',
     })
@@ -114,7 +114,7 @@ describe('Mpay', () => {
     })
 
     const handler = Mpay.create({
-      method,
+      methods: [method],
       realm: 'api.example.com',
       secretKey: 'secret',
     })
@@ -139,7 +139,7 @@ describe('Mpay', () => {
   describe('defaults', () => {
     test('defaulted fields are optional in intent options', () => {
       const handler = Mpay.create({
-        method: tempo({ currency: '0x1234', recipient: '0xabc' }),
+        methods: [tempo({ currency: '0x1234', recipient: '0xabc' })],
         realm: 'api.example.com',
         secretKey: 'secret',
       })
@@ -161,7 +161,7 @@ describe('Mpay', () => {
 
     test('non-defaulted fields remain required', () => {
       const handler = Mpay.create({
-        method: tempo({ currency: '0x1234' }),
+        methods: [tempo({ currency: '0x1234' })],
         realm: 'api.example.com',
         secretKey: 'secret',
       })
@@ -176,7 +176,7 @@ describe('Mpay', () => {
 
     test('no defaults means all fields required', () => {
       const handler = Mpay.create({
-        method: tempo(),
+        methods: [tempo()],
         realm: 'api.example.com',
         secretKey: 'secret',
       })
@@ -192,7 +192,7 @@ describe('Mpay', () => {
 
     test('type: defaulted fields are optional in options type', () => {
       const handler = Mpay.create({
-        method: tempo({ currency: '0x1234', recipient: '0xabc' }),
+        methods: [tempo({ currency: '0x1234', recipient: '0xabc' })],
         realm: 'api.example.com',
         secretKey: 'secret',
       })
@@ -210,10 +210,10 @@ describe('Mpay', () => {
 })
 
 describe('create.Config', () => {
-  test('requires method, realm, and secretKey', () => {
+  test('requires methods, realm, and secretKey', () => {
     type Config = Mpay.create.Config
 
-    expectTypeOf<Config>().toHaveProperty('method')
+    expectTypeOf<Config>().toHaveProperty('methods')
     expectTypeOf<Config>().toHaveProperty('realm')
     expectTypeOf<Config>().toHaveProperty('secretKey')
   })

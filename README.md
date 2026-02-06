@@ -48,10 +48,12 @@ See [examples/](./examples/) for runnable demos.
 import { Mpay, tempo } from 'mpay/server'
 
 const mpay = Mpay.create({
-  method: tempo.charge({
-    currency: '0x20c0000000000000000000000000000000000001',
-    recipient: '0x742d35Cc6634c0532925a3b844bC9e7595F8fE00',
-  }),
+  methods: [
+    tempo.charge({
+      currency: '0x20c0000000000000000000000000000000000001',
+      recipient: '0x742d35Cc6634c0532925a3b844bC9e7595F8fE00',
+    }),
+  ],
 })
 
 export async function handler(request: Request) {
@@ -95,10 +97,12 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp'
 import { Mpay, Transport, tempo } from 'mpay/server'
 
 const mpay = Mpay.create({
-  method: tempo.charge({
-    currency: '0x20c0000000000000000000000000000000000001',
-    recipient: '0x742d35Cc6634c0532925a3b844bC9e7595F8fE00',
-  }),
+  methods: [
+    tempo.charge({
+      currency: '0x20c0000000000000000000000000000000000001',
+      recipient: '0x742d35Cc6634c0532925a3b844bC9e7595F8fE00',
+    }),
+  ],
   transport: Transport.mcpSdk(),
 })
 

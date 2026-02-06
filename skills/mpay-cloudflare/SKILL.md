@@ -21,7 +21,7 @@ export interface Env {
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const mpay = Mpay.create({
-      method: tempo.charge(),
+      methods: [tempo.charge()],
       realm: 'api.example.com',
       secretKey: env.MPAY_SECRET_KEY,
     })
@@ -82,7 +82,7 @@ function createPaid(mpay: ReturnType<typeof Mpay.create>) {
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const mpay = Mpay.create({
-      method: tempo.charge(),
+      methods: [tempo.charge()],
       realm: 'api.example.com',
       secretKey: env.MPAY_SECRET_KEY,
     })
@@ -124,7 +124,7 @@ app.get('/health', (c) => c.json({ status: 'ok' }))
 
 app.get('/fortune', async (c) => {
   const mpay = Mpay.create({
-    method: tempo.charge(),
+    methods: [tempo.charge()],
     realm: 'api.example.com',
     secretKey: c.env.MPAY_SECRET_KEY,
   })
