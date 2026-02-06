@@ -18,7 +18,7 @@ import { Expires, Mpay, tempo } from 'mpay/server'
 const app = new Elysia()
 
 const mpay = Mpay.create({
-  method: tempo(),
+  methods: [tempo.charge()],
   realm: 'api.example.com',
   secretKey: process.env.MPAY_SECRET_KEY!,
 })
@@ -50,7 +50,7 @@ import { Elysia } from 'elysia'
 import { Expires, Mpay, tempo } from 'mpay/server'
 
 const mpay = Mpay.create({
-  method: tempo(),
+  methods: [tempo.charge()],
   realm: 'api.example.com',
   secretKey: process.env.MPAY_SECRET_KEY!,
 })

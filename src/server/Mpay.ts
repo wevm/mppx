@@ -13,25 +13,36 @@ import * as Transport from './Transport.js'
  * Payment handler.
  */
 export type Mpay<
-  method extends Method.AnyServer = Method.Server,
+  methods extends readonly Method.AnyServer[] = readonly Method.Server[],
   transport extends Transport.AnyTransport = Transport.Http,
 > = {
-  /** The payment method. */
-  method: method
+  /** The payment methods. */
+  methods: methods
   /** Server realm (e.g., hostname). */
   realm: string
   /** The transport used. */
   transport: transport
-} & {
-  [intent in keyof Method.IntentsOf<method>]: IntentFn<
-    Method.IntentsOf<method>[intent],
-    transport,
-    Method.DefaultsOf<method>
-  >
-}
+} & MergedIntentFns<methods, transport>
+
+/** Distributes over the methods tuple, collecting intent functions from each method with its own defaults. */
+type MergedIntentFns<
+  methods extends readonly Method.AnyServer[],
+  transport extends Transport.AnyTransport,
+> = methods extends readonly [
+  infer head extends Method.AnyServer,
+  ...infer tail extends readonly Method.AnyServer[],
+]
+  ? {
+      [intent in keyof Method.IntentsOf<head>]: IntentFn<
+        Method.IntentsOf<head>[intent],
+        transport,
+        Method.DefaultsOf<head>
+      >
+    } & MergedIntentFns<tail, transport>
+  : unknown
 
 /**
- * Creates a server-side payment handler from a method.
+ * Creates a server-side payment handler from one or more methods.
  *
  * It is highly recommended to set a `secretKey` to bind challenges to their contents,
  * and allow the server to verify that incoming credentials match challenges it issued.
@@ -41,48 +52,50 @@ export type Mpay<
  * import { Mpay, tempo } from 'mpay/server'
  *
  * const payment = Mpay.create({
- *   method: tempo(),
+ *   methods: [tempo.charge()],
  *   secretKey: process.env.PAYMENT_SECRET_KEY,
  * })
  * ```
  */
 export function create<
-  const method extends Method.AnyServer,
+  const methods extends readonly Method.AnyServer[],
   const transport extends Transport.AnyTransport = Transport.Http,
->(config: create.Config<method, transport>): Mpay<method, transport> {
+>(config: create.Config<methods, transport>): Mpay<methods, transport> {
   const {
-    method,
+    methods,
     realm = 'MPP Payment',
     secretKey = 'tmp',
     transport = Transport.http() as transport,
   } = config
-  const { defaults, intents, request, verify } = method
 
   const intentFns: Record<
     string,
     IntentFn<MethodIntent.MethodIntent, transport, Record<string, unknown>>
   > = {}
-  for (const [name, intent] of Object.entries(intents as Record<string, MethodIntent.MethodIntent>))
-    intentFns[name] = createIntentFn({
-      defaults,
-      intent,
-      realm,
-      request: request as never,
-      secretKey,
-      transport,
-      verify: verify as never,
-    })
+  for (const method of methods) {
+    const { defaults, intents, request, verify } = method
+    for (const [name, intent] of Object.entries(intents as Record<string, MethodIntent.MethodIntent>))
+      intentFns[name] = createIntentFn({
+        defaults,
+        intent,
+        realm,
+        request: request as never,
+        secretKey,
+        transport,
+        verify: verify as never,
+      })
+  }
 
-  return { method, realm: realm as string, transport, ...intentFns } as never
+  return { methods, realm: realm as string, transport, ...intentFns } as never
 }
 
 export declare namespace create {
   type Config<
-    method extends Method.AnyServer = Method.Server,
+    methods extends readonly Method.AnyServer[] = readonly Method.Server[],
     transport extends Transport.AnyTransport = Transport.Http,
   > = {
-    /** Payment method (e.g., tempo()). */
-    method: method
+    /** Payment methods (e.g., [tempo.charge()]). */
+    methods: methods
     /** Server realm (e.g., hostname). @default "MPP Payment". */
     realm?: string | undefined
     /** Secret key for HMAC-bound challenge IDs for stateless verification. */

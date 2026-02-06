@@ -23,9 +23,11 @@ describe('McpClient.wrap', () => {
   let serverTransport: InstanceType<typeof InMemoryTransport>
 
   const mpayServer = Mpay_server.create({
-    method: Methods_server.tempo({
-      rpcUrl: { [chain.id]: rpcUrl },
-    }),
+    methods: [
+      Methods_server.tempo({
+        rpcUrl: { [chain.id]: rpcUrl },
+      }),
+    ],
     realm,
     secretKey,
     transport: McpServer_transport.mcpSdk(),

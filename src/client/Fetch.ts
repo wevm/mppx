@@ -16,7 +16,7 @@ let originalFetch: typeof globalThis.fetch | undefined
  *
  * const fetch = Fetch.from({
  *   methods: [
- *     tempo({
+ *     tempo.charge({
  *       account: privateKeyToAccount('0x...'),
  *     }),
  *   ],
@@ -88,7 +88,7 @@ export declare namespace from {
  *
  * Fetch.polyfill({
  *   methods: [
- *     tempo({
+ *     tempo.charge({
  *       account: privateKeyToAccount('0x...'),
  *     }),
  *   ],

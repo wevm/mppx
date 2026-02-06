@@ -4,7 +4,7 @@ import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts'
 const account = privateKeyToAccount(generatePrivateKey())
 
 Fetch.polyfill({
-  methods: [tempo({ account })],
+  methods: [tempo.charge({ account })],
 })
 
 document.getElementById('button')!.addEventListener('click', async () => {

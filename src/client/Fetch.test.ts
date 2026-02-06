@@ -13,9 +13,11 @@ const realm = 'api.example.com'
 const secretKey = 'test-secret-key'
 
 const server = Mpay_server.create({
-  method: Methods_server.tempo({
-    rpcUrl: { [chain.id]: rpcUrl },
-  }),
+  methods: [
+    Methods_server.tempo({
+      rpcUrl: { [chain.id]: rpcUrl },
+    }),
+  ],
   realm,
   secretKey,
 })
@@ -181,10 +183,12 @@ describe('Fetch.from', () => {
 
   test('behavior: fee payer', async () => {
     const serverWithFeePayer = Mpay_server.create({
-      method: Methods_server.tempo({
-        feePayer: accounts[0],
-        rpcUrl: { [chain.id]: rpcUrl },
-      }),
+      methods: [
+        Methods_server.tempo({
+          feePayer: accounts[0],
+          rpcUrl: { [chain.id]: rpcUrl },
+        }),
+      ],
       realm,
       secretKey,
     })

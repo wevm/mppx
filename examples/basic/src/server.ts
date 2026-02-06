@@ -5,10 +5,12 @@ const account = privateKeyToAccount(generatePrivateKey())
 const currency = '0x20c0000000000000000000000000000000000001' as const // alphaUSD
 
 const mpay = Mpay.create({
-  method: tempo({
-    feePayer: account,
-    testnet: true,
-  }),
+  methods: [
+    tempo.charge({
+      feePayer: account,
+      testnet: true,
+    }),
+  ],
   realm: 'localhost',
   secretKey: 'top-secret-should-be-hidden-somewhere',
 })

@@ -17,13 +17,15 @@ const realm = 'api.example.com'
 const secretKey = 'test-secret-key'
 
 const server = Mpay_server.create({
-  method: Methods_server.tempo({
-    client() {
-      return client
-    },
-    currency: asset,
-    recipient: accounts[0].address,
-  }),
+  methods: [
+    Methods_server.tempo({
+      client() {
+        return client
+      },
+      currency: asset,
+      recipient: accounts[0].address,
+    }),
+  ],
   realm,
   secretKey,
 })
@@ -40,7 +42,7 @@ describe('tempo', () => {
       const response = await fetch(httpServer.url)
       expect(response.status).toBe(402)
 
-      const challenge = Challenge.fromResponse(response, { method: server.method })
+      const challenge = Challenge.fromResponse(response, { method: server.methods[0] })
       expect(challenge.request.methodDetails?.chainId).toBe(chain.id)
 
       const { receipt } = await Actions.token.transferSync(client, {
@@ -101,7 +103,7 @@ describe('tempo', () => {
       const response = await fetch(httpServer.url)
       expect(response.status).toBe(402)
 
-      const challenge = Challenge.fromResponse(response, { method: server.method })
+      const challenge = Challenge.fromResponse(response, { method: server.methods[0] })
       expect(challenge.request.recipient).toBe(overrideRecipient)
       expect(challenge.request.currency).toBe(overrideCurrency)
       expect(challenge.request.expires).toBe(overrideExpires)
@@ -144,7 +146,7 @@ describe('tempo', () => {
       const response = await fetch(httpServer.url)
       expect(response.status).toBe(402)
 
-      const challenge = Challenge.fromResponse(response, { method: server.method })
+      const challenge = Challenge.fromResponse(response, { method: server.methods[0] })
 
       const { receipt } = await Actions.token.transferSync(client, {
         account: accounts[1],
@@ -185,7 +187,7 @@ describe('tempo', () => {
       const response = await fetch(httpServer.url)
       expect(response.status).toBe(402)
 
-      const challenge = Challenge.fromResponse(response, { method: server.method })
+      const challenge = Challenge.fromResponse(response, { method: server.methods[0] })
 
       const { receipt } = await Actions.token.transferSync(client, {
         account: accounts[1],
@@ -400,12 +402,14 @@ describe('tempo', () => {
       })
 
       const server = Mpay_server.create({
-        method: Methods_server.tempo({
-          currency: asset,
-          feePayer: accounts[0],
-          recipient: accounts[0].address,
-          rpcUrl: { [chain.id]: rpcUrl },
-        }),
+        methods: [
+          Methods_server.tempo({
+            currency: asset,
+            feePayer: accounts[0],
+            recipient: accounts[0].address,
+            rpcUrl: { [chain.id]: rpcUrl },
+          }),
+        ],
         realm,
         secretKey,
       })
@@ -453,11 +457,13 @@ describe('tempo', () => {
 
     test('behavior: routes to correct chain based on chainId', async () => {
       const server = Mpay_server.create({
-        method: Methods_server.tempo({
-          currency: asset,
-          recipient: accounts[0].address,
-          rpcUrl: { [chain.id]: rpcUrl, 999999: 'https://other-chain.example.com' },
-        }),
+        methods: [
+          Methods_server.tempo({
+            currency: asset,
+            recipient: accounts[0].address,
+            rpcUrl: { [chain.id]: rpcUrl, 999999: 'https://other-chain.example.com' },
+          }),
+        ],
         realm,
         secretKey,
       })
@@ -485,7 +491,7 @@ describe('tempo', () => {
       const response = await fetch(httpServer.url)
       expect(response.status).toBe(402)
 
-      const challenge = Challenge.fromResponse(response, { method: server.method })
+      const challenge = Challenge.fromResponse(response, { method: server.methods[0] })
       expect(challenge.request.methodDetails?.chainId).toBe(chain.id)
 
       const credential = await client.createCredential(response)
@@ -517,7 +523,7 @@ describe('tempo', () => {
       const response = await fetch(httpServer.url)
       expect(response.status).toBe(402)
 
-      const challenge = Challenge.fromResponse(response, { method: server.method })
+      const challenge = Challenge.fromResponse(response, { method: server.methods[0] })
 
       const credential = Credential.from({
         challenge,
