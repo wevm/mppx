@@ -32,3 +32,57 @@ export const charge = MethodIntent.fromIntent(Intent.charge, {
     },
   },
 })
+
+/**
+ * Tempo stream intent for pay-as-you-go streaming payments.
+ *
+ * Uses cumulative vouchers over a payment channel. Credential payloads
+ * are a discriminated union on `action`: open, topUp, voucher, close.
+ */
+export const stream = MethodIntent.fromIntent(Intent.stream, {
+  method: 'tempo',
+  schema: {
+    credential: {
+      payload: z.discriminatedUnion('action', [
+        z.object({
+          action: z.literal('open'),
+          type: z.union([z.literal('hash'), z.literal('transaction')]),
+          channelId: z.hash(),
+          hash: z.optional(z.hash()),
+          signature: z.optional(z.signature()),
+          authorizedSigner: z.optional(z.string()),
+          cumulativeAmount: z.amount(),
+          voucherSignature: z.signature(),
+        }),
+        z.object({
+          action: z.literal('topUp'),
+          channelId: z.hash(),
+          topUpTxHash: z.hash(),
+          cumulativeAmount: z.amount(),
+          voucherSignature: z.signature(),
+        }),
+        z.object({
+          action: z.literal('voucher'),
+          channelId: z.hash(),
+          cumulativeAmount: z.amount(),
+          signature: z.signature(),
+        }),
+        z.object({
+          action: z.literal('close'),
+          channelId: z.hash(),
+          cumulativeAmount: z.amount(),
+          voucherSignature: z.signature(),
+        }),
+      ]),
+    },
+    request: {
+      methodDetails: z.object({
+        escrowContract: z.string(),
+        channelId: z.optional(z.hash()),
+        minVoucherDelta: z.optional(z.amount()),
+        chainId: z.optional(z.number()),
+      }),
+      requires: ['recipient'],
+    },
+  },
+})

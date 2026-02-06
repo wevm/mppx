@@ -63,6 +63,25 @@ export const charge = from({
   },
 })
 
+/**
+ * Stream intent for pay-as-you-go streaming payments.
+ *
+ * Uses cumulative vouchers over a payment channel for
+ * incremental micropayments without per-request transactions.
+ */
+export const stream = from({
+  name: 'stream',
+  schema: {
+    request: z.object({
+      amount: z.amount(),
+      unitType: z.string(),
+      currency: z.string(),
+      recipient: z.optional(z.string()),
+      suggestedDeposit: z.optional(z.amount()),
+    }),
+  },
+})
+
 /** @internal Extracts shape from an intent's request schema, supporting both object and pipe. */
 export type ShapeOf<intent extends Intent> = intent['schema']['request'] extends z.z.ZodMiniObject
   ? intent['schema']['request']['shape']

@@ -15,6 +15,14 @@ import * as Method from '../../Method.js'
 import * as defaults from '../internal/defaults.js'
 import * as Methods from './../Method.js'
 
+// Charge-only method for type-safe server implementation.
+// Each server declares the intents it handles, giving proper type narrowing
+// without any `as any` casts on credential/request unions.
+const chargeMethod = Method.from({
+  intents: { charge: Methods.tempo.intents.charge },
+  name: 'tempo' as const,
+})
+
 const transfer = /*#__PURE__*/ AbiFunction.from(
   'function transfer(address to, uint256 amount) returns (bool)',
 )
@@ -59,7 +67,7 @@ export function tempo<const defaults extends tempo.Defaults>(
   }
 
   type Defaults = defaults & { decimals: number }
-  return Method.toServer<typeof Methods.tempo, Defaults>(Methods.tempo, {
+  return Method.toServer<typeof chargeMethod, Defaults>(chargeMethod, {
     defaults: {
       amount,
       currency,
@@ -256,7 +264,7 @@ export function tempo<const defaults extends tempo.Defaults>(
 
 export declare namespace tempo {
   /** Request fields that can be hoisted to `tempo.charge()` parameters (excluding feePayer which has different types). */
-  type Defaults = LooseOmit<Method.RequestDefaults<(typeof Methods.tempo)['intents']>, 'feePayer'>
+  type Defaults = LooseOmit<Method.RequestDefaults<(typeof chargeMethod)['intents']>, 'feePayer'>
 
   type Parameters<defaults extends Defaults = {}> = {
     /** Optional fee payer account for covering transaction fees. */
