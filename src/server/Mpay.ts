@@ -74,7 +74,9 @@ export function create<
   > = {}
   for (const method of methods) {
     const { defaults, intents, request, verify } = method
-    for (const [name, intent] of Object.entries(intents as Record<string, MethodIntent.MethodIntent>))
+    for (const [name, intent] of Object.entries(
+      intents as Record<string, MethodIntent.MethodIntent>,
+    ))
       intentFns[name] = createIntentFn({
         defaults,
         intent,
