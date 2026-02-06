@@ -1,6 +1,5 @@
-import type { Account, Address, Client, Hex } from 'viem'
+import type { Account, Address, Hex, WalletClient } from 'viem'
 import { recoverTypedDataAddress } from 'viem'
-import { signTypedData } from 'viem/actions'
 import type { SignedVoucher, Voucher } from './Types.js'
 
 /** Must match the on-chain TempoStreamChannel DOMAIN_SEPARATOR name. */
@@ -35,13 +34,13 @@ const voucherTypes = {
  * Sign a voucher with an account.
  */
 export async function signVoucher(
-  client: Client,
+  client: WalletClient,
   account: Account,
   message: Voucher,
   escrowContract: Address,
   chainId: number,
 ): Promise<Hex> {
-  return signTypedData(client, {
+  return client.signTypedData({
     account,
     domain: getVoucherDomain(escrowContract, chainId),
     types: voucherTypes,

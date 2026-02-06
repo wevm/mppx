@@ -1,4 +1,4 @@
-import { type Address, createClient, type Hex, http } from 'viem'
+import { type Address, createWalletClient, type Hex, http } from 'viem'
 import { privateKeyToAccount } from 'viem/accounts'
 import { beforeEach, describe, expect, test, vi } from 'vitest'
 import type { OnChainChannel } from '../Chain.js'
@@ -46,7 +46,7 @@ const recipient = '0x70997970C51812dc3A010C7d01b50e0d17dc79C8' as Address
 const currency = '0x20C0000000000000000000000000000000000001' as Address
 const channelId = '0x0000000000000000000000000000000000000000000000000000000000000001' as Hex
 
-const client = createClient({
+const walletClient = createWalletClient({
   account,
   transport: http('http://127.0.0.1'), // only used for local signTypedData
 })
@@ -135,7 +135,7 @@ function makeOnChainChannel(overrides: Partial<OnChainChannel> = {}): OnChainCha
 
 async function signTestVoucher(amount: bigint) {
   return signVoucher(
-    client,
+    walletClient,
     account,
     { channelId, cumulativeAmount: amount },
     escrowContract,

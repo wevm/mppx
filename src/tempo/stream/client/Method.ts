@@ -1,27 +1,19 @@
-import type { Account, Address, Client, Hex } from 'viem'
+import type { Account, Address, Client, Hex, WalletClient } from 'viem'
 import * as Credential from '../../../Credential.js'
+import type { OneOf } from '../../../internal/types.js'
 import * as Method from '../../../Method.js'
 import * as z from '../../../zod.js'
+import * as defaults from '../../internal/defaults.js'
 import * as Methods from '../../Method.js'
 import type { StreamCredentialPayload } from '../Types.js'
 import { signVoucher } from '../Voucher.js'
 
-/**
- * Context schema for stream credential creation.
- * This is passed per-request to the createCredential function.
- */
 export const streamContextSchema = z.object({
-  /** Action to perform: open, topUp, voucher, or close */
   action: z.enum(['open', 'topUp', 'voucher', 'close']),
-  /** On-chain channel ID (caller provides from channel open) */
   channelId: z.string(),
-  /** Cumulative amount for the voucher */
   cumulativeAmount: z.bigint(),
-  /** Transaction hash for open action (optional - can derive channelId) */
   hash: z.optional(z.string()),
-  /** Transaction hash for topUp action */
   topUpTxHash: z.optional(z.string()),
-  /** Override authorized signer (defaults to account address) */
   authorizedSigner: z.optional(z.string()),
 })
 
@@ -29,9 +21,6 @@ export type StreamContext = z.infer<typeof streamContextSchema>
 
 /**
  * Creates a stream payment client using the mpay Method.toClient() pattern.
- *
- * The client accepts a channelId from the caller, which should be the
- * real on-chain channel ID from opening a channel on the escrow contract.
  *
  * @example
  * ```ts
@@ -41,21 +30,21 @@ export type StreamContext = z.infer<typeof streamContextSchema>
  *   methods: [
  *     tempo.stream({
  *       account: privateKeyToAccount('0x...'),
- *       walletClient,
- *       escrowContract: '0x...',
- *       chainId: 42431,
  *     }),
  *   ],
  * })
  * ```
  */
-export function stream(parameters: stream.Parameters) {
-  const { account, client, escrowContract, chainId } = parameters
+export function stream(parameters: stream.Parameters = {}) {
+  const escrowContractMap = new Map<string, Address>()
 
   return Method.toClient(Methods.tempo, {
     context: streamContextSchema,
 
     async createCredential({ challenge, context }) {
+      const account = parameters.account
+      if (!account) throw new Error('No `account` provided. Pass `account` to parameters.')
+
       const {
         action,
         channelId: channelIdRaw,
@@ -67,14 +56,28 @@ export function stream(parameters: stream.Parameters) {
 
       const channelId = channelIdRaw as Hex
 
-      // Sign voucher (no sessionHash — cumulative monotonicity prevents replay)
+      const challengeEscrow = (challenge.request.methodDetails as { escrowContract?: string })
+        ?.escrowContract as Address | undefined
+      const escrowContract =
+        escrowContractMap.get(channelId) ?? challengeEscrow ?? parameters.escrowContract
+      if (!escrowContract)
+        throw new Error(
+          'No `escrowContract` available. Provide it in parameters or ensure the server challenge includes it.',
+        )
+      escrowContractMap.set(channelId, escrowContract)
+
+      const chainId =
+        (challenge.request.methodDetails as { chainId?: number })?.chainId ??
+        parameters.chainId ??
+        defaults.testnetChainId
+
+      const walletClient = parameters.walletClient ?? parameters.client
+      if (!walletClient) throw new Error('No `client` or `walletClient` provided.')
+
       const signature = await signVoucher(
-        client,
+        walletClient as WalletClient,
         account,
-        {
-          channelId,
-          cumulativeAmount,
-        },
+        { channelId, cumulativeAmount },
         escrowContract,
         chainId,
       )
@@ -137,13 +140,20 @@ export function stream(parameters: stream.Parameters) {
 
 export declare namespace stream {
   type Parameters = {
-    /** Account to sign vouchers with */
-    account: Account
-    /** Client for signing */
-    client: Client
-    /** Escrow contract address */
-    escrowContract: Address
-    /** Chain ID */
-    chainId: number
-  }
+    /** Account to sign vouchers with. */
+    account?: Account | undefined
+    /** Escrow contract address override. Derived from challenge if not provided. */
+    escrowContract?: Address | undefined
+    /** Chain ID override. Derived from challenge or defaults if not provided. */
+    chainId?: number | undefined
+  } & OneOf<
+    | {
+        /** Client for signing. */
+        client?: Client | undefined
+      }
+    | {
+        /** Wallet client for signing. */
+        walletClient?: WalletClient | undefined
+      }
+  >
 }
