@@ -1,1 +1,1 @@
-export * as Method from './Method.js'
+export { tempo as charge } from './Method.js'

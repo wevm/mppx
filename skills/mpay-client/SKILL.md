@@ -17,7 +17,7 @@ import { privateKeyToAccount } from 'viem/accounts'
 
 Fetch.polyfill({
   methods: [
-    tempo({
+    tempo.charge({
       account: privateKeyToAccount('0x...'),
       rpcUrl: 'https://rpc.tempo.xyz',
     }),
@@ -41,7 +41,7 @@ import { privateKeyToAccount } from 'viem/accounts'
 
 const fetch = Fetch.from({
   methods: [
-    tempo({
+    tempo.charge({
       account: privateKeyToAccount('0x...'),
       rpcUrl: 'https://rpc.tempo.xyz',
     }),
@@ -62,7 +62,7 @@ import { privateKeyToAccount } from 'viem/accounts'
 
 const fetch = Fetch.from({
   methods: [
-    tempo({
+    tempo.charge({
       rpcUrl: 'https://rpc.tempo.xyz',
     }),
   ],
@@ -83,7 +83,7 @@ import { privateKeyToAccount } from 'viem/accounts'
 
 const mpay = Mpay.create({
   methods: [
-    tempo({
+    tempo.charge({
       rpcUrl: 'https://rpc.tempo.xyz',
     }),
   ],

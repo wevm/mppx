@@ -18,7 +18,7 @@ import * as Methods from '../Method.js'
  * import { tempo } from 'mpay/client'
  * import { privateKeyToAccount } from 'viem/accounts'
  *
- * const method = tempo({
+ * const method = tempo.charge({
  *   account: privateKeyToAccount('0x...'),
  * })
  * ```

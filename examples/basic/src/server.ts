@@ -5,7 +5,7 @@ const account = privateKeyToAccount(generatePrivateKey())
 const currency = '0x20c0000000000000000000000000000000000001' as const // alphaUSD
 
 const mpay = Mpay.create({
-  method: tempo({
+  method: tempo.charge({
     feePayer: account,
     testnet: true,
   }),

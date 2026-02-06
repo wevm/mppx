@@ -48,7 +48,7 @@ See [examples/](./examples/) for runnable demos.
 import { Mpay, tempo } from 'mpay/server'
 
 const mpay = Mpay.create({
-  method: tempo({
+  method: tempo.charge({
     currency: '0x20c0000000000000000000000000000000000001',
     recipient: '0x742d35Cc6634c0532925a3b844bC9e7595F8fE00',
   }),
@@ -95,7 +95,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp'
 import { Mpay, Transport, tempo } from 'mpay/server'
 
 const mpay = Mpay.create({
-  method: tempo({
+  method: tempo.charge({
     currency: '0x20c0000000000000000000000000000000000001',
     recipient: '0x742d35Cc6634c0532925a3b844bC9e7595F8fE00',
   }),
@@ -129,7 +129,7 @@ const account = privateKeyToAccount('0x...')
 
 // Globally polyfill fetch (mutates globalThis.fetch)
 Fetch.polyfill({
-  methods: [ tempo({ account })],
+  methods: [ tempo.charge({ account })],
 })
 
 // Now fetch handles 402 automatically
@@ -150,7 +150,7 @@ import { Fetch, tempo } from 'mpay/client'
 const account = privateKeyToAccount('0x...')
 
 const fetch = Fetch.from({
-  methods: [tempo({ account })],
+  methods: [tempo.charge({ account })],
 })
 
 // Use the wrapped fetch — handles 402 automatically
@@ -169,7 +169,7 @@ import { privateKeyToAccount } from 'viem/accounts'
 const account = privateKeyToAccount('0x...')
 
 const mpay = Mpay.create({
-  methods: [tempo({ account })],
+  methods: [tempo.charge({ account })],
 })
 
 const res = await fetch('https://api.example.com/resource')
@@ -200,7 +200,7 @@ await client.connect(new StdioClientTransport({ command: 'mcp-server' }))
 // Wrap with payment handling
 const mcp = McpClient.wrap(client, {
   methods: [
-    tempo({ account: privateKeyToAccount('0x...') }),
+    tempo.charge({ account: privateKeyToAccount('0x...') }),
   ],
 })
 
@@ -521,7 +521,7 @@ import { Fetch, tempo } from 'mpay/client'
 
 const fetch = Fetch.from({
   methods: [
-    tempo({ account }),
+    tempo.charge({ account }),
   ],
 })
 ```
@@ -533,5 +533,5 @@ Polyfill the global `fetch` function with payment handler(s).
 ```ts
 import { Fetch } from 'mpay/client'
 
-Fetch.polyfill({ methods: [tempo({ account })] })
+Fetch.polyfill({ methods: [tempo.charge({ account })] })
 ```

@@ -31,7 +31,7 @@ export type Mpay<
  * import { Mpay, tempo } from 'mpay/client'
  *
  * const mpay = Mpay.create({
- *   methods: [tempo()],
+ *   methods: [tempo.charge()],
  * })
  *
  * const response = await fetch('/resource')

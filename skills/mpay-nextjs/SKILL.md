@@ -16,7 +16,7 @@ Next.js App Router uses Web Standard `Request`/`Response` in route handlers.
 import { Expires, Mpay, tempo } from 'mpay/server'
 
 const mpay = Mpay.create({
-  method: tempo(),
+  method: tempo.charge(),
   realm: 'api.example.com',
   secretKey: process.env.MPAY_SECRET_KEY!,
 })
@@ -51,7 +51,7 @@ export async function GET() {
 import { Expires, Mpay, tempo } from 'mpay/server'
 
 export const mpay = Mpay.create({
-  method: tempo(),
+  method: tempo.charge(),
   realm: 'api.example.com',
   secretKey: process.env.MPAY_SECRET_KEY!,
 })

@@ -34,7 +34,7 @@ export type CallToolResult = Awaited<ReturnType<Client['callTool']>> & {
  *
  * const mcp = McpClient.wrap(client, {
  *   methods: [
- *     tempo({
+ *     tempo.charge({
  *       account: privateKeyToAccount('0x...'),
  *     }),
  *   ],

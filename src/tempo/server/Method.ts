@@ -32,7 +32,7 @@ const transferWithMemoSelector = /*#__PURE__*/ AbiFunction.getSelector(transferW
  * ```ts
  * import { tempo } from 'mpay/server'
  *
- * const method = tempo()
+ * const method = tempo.charge()
  * ```
  */
 export function tempo<const defaults extends tempo.Defaults>(
@@ -255,7 +255,7 @@ export function tempo<const defaults extends tempo.Defaults>(
 }
 
 export declare namespace tempo {
-  /** Request fields that can be hoisted to `tempo()` parameters (excluding feePayer which has different types). */
+  /** Request fields that can be hoisted to `tempo.charge()` parameters (excluding feePayer which has different types). */
   type Defaults = LooseOmit<Method.RequestDefaults<(typeof Methods.tempo)['intents']>, 'feePayer'>
 
   type Parameters<defaults extends Defaults = {}> = {

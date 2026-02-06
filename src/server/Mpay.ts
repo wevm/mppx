@@ -41,7 +41,7 @@ export type Mpay<
  * import { Mpay, tempo } from 'mpay/server'
  *
  * const payment = Mpay.create({
- *   method: tempo(),
+ *   method: tempo.charge(),
  *   secretKey: process.env.PAYMENT_SECRET_KEY,
  * })
  * ```
@@ -81,7 +81,7 @@ export declare namespace create {
     method extends Method.AnyServer = Method.Server,
     transport extends Transport.AnyTransport = Transport.Http,
   > = {
-    /** Payment method (e.g., tempo()). */
+    /** Payment method (e.g., tempo.charge()). */
     method: method
     /** Server realm (e.g., hostname). @default "MPP Payment". */
     realm?: string | undefined

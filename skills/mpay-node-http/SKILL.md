@@ -16,7 +16,7 @@ import * as http from 'node:http'
 import { Expires, Mpay, tempo } from 'mpay/server'
 
 const mpay = Mpay.create({
-  method: tempo(),
+  method: tempo.charge(),
   realm: 'api.example.com',
   secretKey: process.env.MPAY_SECRET_KEY!,
 })
@@ -63,7 +63,7 @@ import * as http from 'node:http'
 import { Expires, Mpay, tempo } from 'mpay/server'
 
 const mpay = Mpay.create({
-  method: tempo(),
+  method: tempo.charge(),
   realm: 'api.example.com',
   secretKey: process.env.MPAY_SECRET_KEY!,
 })
