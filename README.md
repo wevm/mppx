@@ -133,7 +133,7 @@ const account = privateKeyToAccount('0x...')
 
 // Globally polyfill fetch (mutates globalThis.fetch)
 Fetch.polyfill({
-  methods: [ tempo.charge({ account })],
+  methods: [tempo.charge({ account })],
 })
 
 // Now fetch handles 402 automatically

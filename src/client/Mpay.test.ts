@@ -1,44 +1,51 @@
 import { describe, expect, test } from 'vitest'
 import { rpcUrl } from '~test/tempo/prool.js'
-import { accounts, chain } from '~test/tempo/viem.js'
+import { accounts, chain, client } from '~test/tempo/viem.js'
 import * as Challenge from '../Challenge.js'
 import * as Credential from '../Credential.js'
+import * as Intent from '../Intent.js'
 import * as Mcp from '../Mcp.js'
-import * as Method from '../Method.js'
-import * as Methods from '../tempo/client/Method.js'
+import * as MethodIntent from '../MethodIntent.js'
+import * as tempo from '../tempo/client/Intents.js'
 import * as Intents from '../tempo/Intents.js'
 import * as Mpay from './Mpay.js'
 import * as Transport from './Transport.js'
 
 const realm = 'api.example.com'
 const secretKey = 'test-secret-key'
-const tempo = Methods.tempo({
-  account: accounts[1],
-  rpcUrl: { [chain.id]: rpcUrl },
-})
 
 describe('Mpay.create', () => {
   test('default', () => {
-    const mpay = Mpay.create({ methods: [tempo] })
+    const mpay = Mpay.create({
+      methods: [tempo.charge({ account: accounts[1], client: () => client })],
+    })
 
     expect(mpay.methods).toHaveLength(1)
-    expect(mpay.methods[0]?.name).toBe('tempo')
+    expect(mpay.methods[0]?.method).toBe('tempo')
+    expect(mpay.methods[0]?.name).toBe('charge')
     expect(mpay.transport.name).toBe('http')
     expect(typeof mpay.createCredential).toBe('function')
   })
 
   test('behavior: with mcp transport', () => {
-    const mpay = Mpay.create({ methods: [tempo], transport: Transport.mcp() })
+    const mpay = Mpay.create({
+      methods: [tempo.charge({ account: accounts[1], client: () => client })],
+      transport: Transport.mcp(),
+    })
 
     expect(mpay.transport.name).toBe('mcp')
   })
 
   test('behavior: with multiple methods', () => {
-    const stripeBase = Method.from({
-      name: 'stripe',
-      intents: { charge: Intents.charge },
+    const stripeCharge = MethodIntent.fromIntent(Intent.charge, {
+      method: 'stripe',
+      schema: {
+        credential: {
+          payload: Intents.charge.schema.credential.payload,
+        },
+      },
     })
-    const stripeMethod = Method.toClient(stripeBase, {
+    const stripeMethod = MethodIntent.toClient(stripeCharge, {
       async createCredential({ challenge }) {
         return Credential.serialize({
           challenge,
@@ -47,17 +54,21 @@ describe('Mpay.create', () => {
       },
     })
 
-    const mpay = Mpay.create({ methods: [tempo, stripeMethod] })
+    const mpay = Mpay.create({
+      methods: [tempo.charge({ account: accounts[1], client: () => client }), stripeMethod],
+    })
 
     expect(mpay.methods).toHaveLength(2)
-    expect(mpay.methods[0]?.name).toBe('tempo')
-    expect(mpay.methods[1]?.name).toBe('stripe')
+    expect(mpay.methods[0]?.method).toBe('tempo')
+    expect(mpay.methods[1]?.method).toBe('stripe')
   })
 })
 
 describe('createCredential', () => {
   test('behavior: routes to correct method based on challenge', async () => {
-    const mpay = Mpay.create({ methods: [tempo] })
+    const mpay = Mpay.create({
+      methods: [tempo.charge({ account: accounts[1], client: () => client })],
+    })
 
     const challenge = Challenge.fromIntent(Intents.charge, {
       realm,
@@ -88,7 +99,9 @@ describe('createCredential', () => {
   })
 
   test('behavior: throws when method not found', async () => {
-    const mpay = Mpay.create({ methods: [tempo] })
+    const mpay = Mpay.create({
+      methods: [tempo.charge({ account: accounts[1], client: () => client })],
+    })
 
     const challenge = Challenge.from({
       id: 'test-id',
@@ -106,17 +119,21 @@ describe('createCredential', () => {
     })
 
     await expect(mpay.createCredential(response)).rejects.toThrow(
-      'No method found for "unknown". Available: tempo',
+      'No method intent found for "unknown.charge". Available: tempo.charge',
     )
   })
 
   test('behavior: routes to correct method with multiple methods', async () => {
-    const stripeBase = Method.from({
-      name: 'stripe',
-      intents: { charge: Intents.charge },
+    const stripeCharge = MethodIntent.fromIntent(Intent.charge, {
+      method: 'stripe',
+      schema: {
+        credential: {
+          payload: Intents.charge.schema.credential.payload,
+        },
+      },
     })
 
-    const stripe = Method.toClient(stripeBase, {
+    const stripe = MethodIntent.toClient(stripeCharge, {
       async createCredential({ challenge }) {
         return Credential.serialize({
           challenge,
@@ -125,7 +142,9 @@ describe('createCredential', () => {
       },
     })
 
-    const mpay = Mpay.create({ methods: [tempo, stripe] })
+    const mpay = Mpay.create({
+      methods: [tempo.charge({ account: accounts[1], client: () => client }), stripe],
+    })
 
     const stripeChallenge = Challenge.from({
       id: 'stripe-challenge-id',
@@ -155,11 +174,7 @@ describe('createCredential', () => {
   })
 
   test('behavior: passes context to createCredential', async () => {
-    const method = Methods.tempo({
-      rpcUrl: { [chain.id]: rpcUrl },
-    })
-
-    const mpay = Mpay.create({ methods: [method] })
+    const mpay = Mpay.create({ methods: [tempo.charge({ client: () => client })] })
 
     const challenge = Challenge.fromIntent(Intents.charge, {
       realm,
@@ -188,7 +203,9 @@ describe('createCredential', () => {
   })
 
   test('behavior: works without context when account provided at creation', async () => {
-    const mpay = Mpay.create({ methods: [tempo] })
+    const mpay = Mpay.create({
+      methods: [tempo.charge({ account: accounts[1], client: () => client })],
+    })
 
     const challenge = Challenge.fromIntent(Intents.charge, {
       realm,
@@ -215,7 +232,10 @@ describe('createCredential', () => {
   })
 
   test('behavior: with mcp transport', async () => {
-    const mpay = Mpay.create({ methods: [tempo], transport: Transport.mcp() })
+    const mpay = Mpay.create({
+      methods: [tempo.charge({ account: accounts[1], client: () => client })],
+      transport: Transport.mcp(),
+    })
 
     const challenge = Challenge.fromIntent(Intents.charge, {
       realm,

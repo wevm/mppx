@@ -1,8 +1,7 @@
 import { describe, expectTypeOf, test } from 'vitest'
 import * as Intent from '../Intent.js'
-import * as Method from '../Method.js'
 import * as MethodIntent from '../MethodIntent.js'
-import { tempo } from '../tempo/server/Method.js'
+import * as tempo from '../tempo/server/Intents.js'
 import * as z from '../zod.js'
 import * as Mpay from './Mpay.js'
 
@@ -18,14 +17,9 @@ const fooCharge = MethodIntent.fromIntent(Intent.charge, {
   },
 })
 
-const fooMethod = Method.from({
-  name: 'test',
-  intents: { charge: fooCharge },
-})
-
 describe('Mpay', () => {
   test('has methods and realm properties', () => {
-    const method = Method.toServer(fooMethod, {
+    const method = MethodIntent.toServer(fooCharge, {
       async verify() {
         return {
           method: 'test',
@@ -47,14 +41,7 @@ describe('Mpay', () => {
   })
 
   test('has intent functions matching method intents', () => {
-    const baseMethod = Method.from({
-      name: 'test',
-      intents: {
-        charge: fooCharge,
-      },
-    })
-
-    const method = Method.toServer(baseMethod, {
+    const method = MethodIntent.toServer(fooCharge, {
       async verify() {
         return {
           method: 'test',
@@ -75,7 +62,7 @@ describe('Mpay', () => {
   })
 
   test('intent function options include request', () => {
-    const method = Method.toServer(fooMethod, {
+    const method = MethodIntent.toServer(fooCharge, {
       async verify() {
         return {
           method: 'test',
@@ -102,7 +89,7 @@ describe('Mpay', () => {
   })
 
   test('intent function returns handler that accepts Request', async () => {
-    const method = Method.toServer(fooMethod, {
+    const method = MethodIntent.toServer(fooCharge, {
       async verify() {
         return {
           method: 'test',
@@ -136,10 +123,75 @@ describe('Mpay', () => {
     }
   })
 
+  test('multiple method intents', () => {
+    const authorize = Intent.from({
+      name: 'authorize',
+      schema: {
+        request: z.object({
+          scope: z.string(),
+          duration: z.number(),
+        }),
+      },
+    })
+
+    const fooAuthorize = MethodIntent.fromIntent(authorize, {
+      method: 'test',
+      schema: {
+        credential: {
+          payload: z.object({ token: z.string() }),
+        },
+      },
+    })
+
+    const chargeMethod = MethodIntent.toServer(fooCharge, {
+      defaults: {
+        currency: '0x1234',
+        recipient: '0xabc',
+      },
+      async verify() {
+        return {
+          method: 'test',
+          reference: '0x123',
+          status: 'success' as const,
+          timestamp: new Date().toISOString(),
+        }
+      },
+    })
+
+    const authorizeMethod = MethodIntent.toServer(fooAuthorize, {
+      async verify() {
+        return {
+          method: 'test',
+          reference: '0x456',
+          status: 'success' as const,
+          timestamp: new Date().toISOString(),
+        }
+      },
+    })
+
+    const handler = Mpay.create({
+      methods: [chargeMethod, authorizeMethod],
+      realm: 'api.example.com',
+      secretKey: 'secret',
+    })
+
+    handler.charge({
+      amount: '1000',
+      currency: '0x1234',
+      decimals: 6,
+      recipient: '0xabc',
+    })
+
+    handler.authorize({
+      scope: 'read',
+      duration: 3600,
+    })
+  })
+
   describe('defaults', () => {
     test('defaulted fields are optional in intent options', () => {
       const handler = Mpay.create({
-        methods: [tempo({ currency: '0x1234', recipient: '0xabc' })],
+        methods: [tempo.charge({ currency: '0x1234', recipient: '0xabc' })],
         realm: 'api.example.com',
         secretKey: 'secret',
       })
@@ -161,7 +213,7 @@ describe('Mpay', () => {
 
     test('non-defaulted fields remain required', () => {
       const handler = Mpay.create({
-        methods: [tempo({ currency: '0x1234' })],
+        methods: [tempo.charge({ currency: '0x1234' })],
         realm: 'api.example.com',
         secretKey: 'secret',
       })
@@ -176,7 +228,7 @@ describe('Mpay', () => {
 
     test('no defaults means all fields required', () => {
       const handler = Mpay.create({
-        methods: [tempo()],
+        methods: [tempo.charge()],
         realm: 'api.example.com',
         secretKey: 'secret',
       })
@@ -192,7 +244,7 @@ describe('Mpay', () => {
 
     test('type: defaulted fields are optional in options type', () => {
       const handler = Mpay.create({
-        methods: [tempo({ currency: '0x1234', recipient: '0xabc' })],
+        methods: [tempo.charge({ currency: '0x1234', recipient: '0xabc' })],
         realm: 'api.example.com',
         secretKey: 'secret',
       })

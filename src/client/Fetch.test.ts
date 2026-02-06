@@ -1,12 +1,11 @@
 import { describe, expect, test } from 'vitest'
 import * as Http from '~test/Http.js'
-import { rpcUrl } from '~test/tempo/prool.js'
-import { accounts, asset, chain } from '~test/tempo/viem.js'
+import { accounts, asset, client } from '~test/tempo/viem.js'
 import * as Receipt from '../Receipt.js'
 import * as Mpay_server from '../server/Mpay.js'
 import { toNodeListener } from '../server/Mpay.js'
-import * as Methods_client from '../tempo/client/Method.js'
-import * as Methods_server from '../tempo/server/Method.js'
+import * as tempo from '../tempo/client/Intents.js'
+import * as Methods_server from '../tempo/server/Intents.js'
 import * as Fetch from './Fetch.js'
 
 const realm = 'api.example.com'
@@ -14,8 +13,8 @@ const secretKey = 'test-secret-key'
 
 const server = Mpay_server.create({
   methods: [
-    Methods_server.tempo({
-      rpcUrl: { [chain.id]: rpcUrl },
+    Methods_server.charge({
+      client: () => client,
     }),
   ],
   realm,
@@ -26,9 +25,9 @@ describe('Fetch.from', () => {
   test('default: account at creation', async () => {
     const fetch = Fetch.from({
       methods: [
-        Methods_client.tempo({
+        tempo.charge({
           account: accounts[1],
-          rpcUrl: { [chain.id]: rpcUrl },
+          client: () => client,
         }),
       ],
     })
@@ -69,8 +68,8 @@ describe('Fetch.from', () => {
   test('default: account via context', async () => {
     const fetch = Fetch.from({
       methods: [
-        Methods_client.tempo({
-          rpcUrl: { [chain.id]: rpcUrl },
+        tempo.charge({
+          client: () => client,
         }),
       ],
     })
@@ -102,9 +101,9 @@ describe('Fetch.from', () => {
   test('behavior: context overrides account at creation', async () => {
     const fetch = Fetch.from({
       methods: [
-        Methods_client.tempo({
+        tempo.charge({
           account: accounts[0],
-          rpcUrl: { [chain.id]: rpcUrl },
+          client: () => client,
         }),
       ],
     })
@@ -133,8 +132,8 @@ describe('Fetch.from', () => {
   test('behavior: throws when no account provided', async () => {
     const fetch = Fetch.from({
       methods: [
-        Methods_client.tempo({
-          rpcUrl: { [chain.id]: rpcUrl },
+        tempo.charge({
+          client: () => client,
         }),
       ],
     })
@@ -162,9 +161,9 @@ describe('Fetch.from', () => {
   test('behavior: passes through non-402 responses', async () => {
     const fetch = Fetch.from({
       methods: [
-        Methods_client.tempo({
+        tempo.charge({
           account: accounts[1],
-          rpcUrl: { [chain.id]: rpcUrl },
+          client: () => client,
         }),
       ],
     })
@@ -184,9 +183,9 @@ describe('Fetch.from', () => {
   test('behavior: fee payer', async () => {
     const serverWithFeePayer = Mpay_server.create({
       methods: [
-        Methods_server.tempo({
+        Methods_server.charge({
           feePayer: accounts[0],
-          rpcUrl: { [chain.id]: rpcUrl },
+          client: () => client,
         }),
       ],
       realm,
@@ -195,9 +194,9 @@ describe('Fetch.from', () => {
 
     const fetch = Fetch.from({
       methods: [
-        Methods_client.tempo({
+        tempo.charge({
           account: accounts[1],
-          rpcUrl: { [chain.id]: rpcUrl },
+          client: () => client,
         }),
       ],
     })
@@ -240,9 +239,9 @@ describe('Fetch.polyfill', () => {
   test('default', async () => {
     Fetch.polyfill({
       methods: [
-        Methods_client.tempo({
+        tempo.charge({
           account: accounts[1],
-          rpcUrl: { [chain.id]: rpcUrl },
+          client: () => client,
         }),
       ],
     })

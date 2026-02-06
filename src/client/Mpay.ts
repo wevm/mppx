@@ -1,9 +1,9 @@
 import type * as Challenge from '../Challenge.js'
-import type * as Method from '../Method.js'
+import type * as MethodIntent from '../MethodIntent.js'
 import type * as z from '../zod.js'
 import * as Transport from './Transport.js'
 
-type AnyClient = Method.Client<any, any, any>
+type AnyClient = MethodIntent.AnyClient
 
 /**
  * Client-side payment handler.
@@ -12,7 +12,7 @@ export type Mpay<
   methods extends readonly AnyClient[] = readonly AnyClient[],
   transport extends Transport.Transport = Transport.Transport,
 > = {
-  /** The configured payment methods. */
+  /** Methods to configure. */
   methods: methods
   /** The transport used. */
   transport: transport
@@ -24,7 +24,7 @@ export type Mpay<
 }
 
 /**
- * Creates a client-side payment handler from an array of methods.
+ * Creates a client-side payment handler from an array of method.
  *
  * @example
  * ```ts
@@ -47,7 +47,7 @@ export type Mpay<
  * ```
  */
 export function create<
-  const methods extends readonly AnyClient[],
+  const methods extends readonly MethodIntent.AnyClient[],
   const transport extends Transport.Transport<any, any> = Transport.Transport<
     RequestInit,
     Response
@@ -61,16 +61,16 @@ export function create<
     async createCredential(response: Transport.ResponseOf<transport>, context?: unknown) {
       const challenge = transport.getChallenge(response as never) as Challenge.Challenge
 
-      const method = methods.find((m) => m.name === challenge.method)
-      if (!method)
+      const mi = methods.find((m) => m.method === challenge.method && m.name === challenge.intent)
+      if (!mi)
         throw new Error(
-          `No method found for "${challenge.method}". Available: ${methods.map((m) => m.name).join(', ')}`,
+          `No method intent found for "${challenge.method}.${challenge.intent}". Available: ${methods.map((m) => `${m.method}.${m.name}`).join(', ')}`,
         )
 
       const parsedContext =
-        method.context && context !== undefined ? method.context.parse(context) : undefined
+        mi.context && context !== undefined ? mi.context.parse(context) : undefined
 
-      return method.createCredential(
+      return mi.createCredential(
         parsedContext !== undefined
           ? { challenge, context: parsedContext }
           : ({ challenge } as never),
@@ -81,10 +81,10 @@ export function create<
 
 export declare namespace create {
   type Config<
-    methods extends readonly AnyClient[] = readonly AnyClient[],
+    methods extends readonly MethodIntent.AnyClient[] = readonly MethodIntent.AnyClient[],
     transport extends Transport.Transport = Transport.Transport,
   > = {
-    /** Array of payment methods to use. */
+    /** Array of method intents to use. */
     methods: methods
     /** Transport to use (defaults to HTTP). */
     transport?: transport | undefined
@@ -96,7 +96,7 @@ export declare namespace create {
  * @internal
  */
 type AnyContextFor<methods extends readonly AnyClient[]> = {
-  [method in keyof methods]: methods[method] extends Method.Client<any, any, infer context>
+  [method in keyof methods]: methods[method] extends MethodIntent.Client<any, infer context>
     ? context extends z.ZodMiniType
       ? z.input<context>
       : undefined

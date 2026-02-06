@@ -1,6 +1,5 @@
 import { Base64, Bytes, Hash } from 'ox'
 import type { OneOf } from './internal/types.js'
-import type * as Method from './Method.js'
 import type * as MethodIntent from './MethodIntent.js'
 import * as PaymentRequest from './PaymentRequest.js'
 import * as z from './zod.js'
@@ -61,20 +60,15 @@ export type Challenge<
 }
 
 /**
- * Extracts the union of challenge types from a method's intents.
+ * Extracts a union of challenge types from an array of method intents.
  */
-export type FromMethod<method> = method extends {
-  name: infer M extends string
-  intents: infer I extends Record<string, { name: string; schema: { request: unknown } }>
-}
-  ? {
-      [K in keyof I]: Challenge<
-        I[K]['schema']['request'] extends { _zod: { output: infer R } } ? R : unknown,
-        I[K]['name'],
-        M
-      >
-    }[keyof I]
-  : Challenge
+export type FromMethods<methods extends readonly MethodIntent.AnyMethodIntent[]> = {
+  [K in keyof methods]: Challenge<
+    z.output<methods[K]['schema']['request']>,
+    methods[K]['name'],
+    methods[K]['method']
+  >
+}[number]
 
 /**
  * Creates a challenge from the given parameters.
@@ -114,8 +108,8 @@ export type FromMethod<method> = method extends {
  */
 export function from<
   const parameters extends from.Parameters,
-  const method extends Method.Method | undefined = undefined,
->(parameters: parameters, options?: from.Options<method>): from.ReturnType<parameters, method> {
+  const methods extends readonly MethodIntent.AnyMethodIntent[] | undefined = undefined,
+>(parameters: parameters, options?: from.Options<methods>): from.ReturnType<parameters, methods> {
   void options
   const { description, digest, method: methodName, intent, realm, request, secretKey } = parameters
 
@@ -133,12 +127,14 @@ export function from<
     ...(description && { description }),
     ...(digest && { digest }),
     ...(expires && { expires }),
-  }) as from.ReturnType<parameters, method>
+  }) as from.ReturnType<parameters, methods>
 }
 
 export declare namespace from {
-  type Options<method extends Method.AnyMethod | undefined = undefined> = {
-    method?: method
+  type Options<
+    methods extends readonly MethodIntent.AnyMethodIntent[] | undefined = undefined,
+  > = {
+    methods?: methods
   }
 
   type Parameters = OneOf<
@@ -169,8 +165,10 @@ export declare namespace from {
 
   type ReturnType<
     parameters extends Parameters,
-    method extends Method.Method | undefined = undefined,
-  > = method extends { name: string } ? FromMethod<method> : Challenge<parameters['request']>
+    methods extends readonly MethodIntent.AnyMethodIntent[] | undefined = undefined,
+  > = methods extends readonly MethodIntent.AnyMethodIntent[]
+    ? FromMethods<methods>
+    : Challenge<parameters['request']>
 }
 
 /**
@@ -293,18 +291,20 @@ export function serialize(challenge: Challenge): string {
  *
  * const challenge = Challenge.deserialize(header)
  *
- * // With method for type narrowing
- * const challenge = Challenge.deserialize(header, { method })
+ * // With methods for type narrowing
+ * const challenge = Challenge.deserialize(header, { methods })
  * ```
  *
  * @param header - The WWW-Authenticate header value.
  * @param options - Optional settings to narrow the challenge type.
  * @returns The deserialized challenge.
  */
-export function deserialize<const method extends Method.Method | undefined = undefined>(
+export function deserialize<
+  const methods extends readonly MethodIntent.AnyMethodIntent[] | undefined = undefined,
+>(
   value: string,
-  options?: from.Options<method>,
-): from.ReturnType<from.Parameters, method> {
+  options?: from.Options<methods>,
+): from.ReturnType<from.Parameters, methods> {
   const prefixMatch = value.match(/^Payment\s+(.+)$/i)
   if (!prefixMatch?.[1]) throw new Error('Missing Payment scheme.')
 
@@ -342,14 +342,16 @@ export function deserialize<const method extends Method.Method | undefined = und
  *
  * const challenge = Challenge.fromHeaders(response.headers)
  *
- * // With method for type narrowing
- * const challenge = Challenge.fromHeaders(response.headers, { method })
+ * // With methods for type narrowing
+ * const challenge = Challenge.fromHeaders(response.headers, { methods })
  * ```
  */
-export function fromHeaders<const method extends Method.Method | undefined = undefined>(
+export function fromHeaders<
+  const methods extends readonly MethodIntent.AnyMethodIntent[] | undefined = undefined,
+>(
   headers: Headers,
-  options?: from.Options<method>,
-): from.ReturnType<from.Parameters, method> {
+  options?: from.Options<methods>,
+): from.ReturnType<from.Parameters, methods> {
   const header = headers.get('WWW-Authenticate')
   if (!header) throw new Error('Missing WWW-Authenticate header.')
   return deserialize(header, options)
@@ -370,14 +372,16 @@ export function fromHeaders<const method extends Method.Method | undefined = und
  * if (response.status === 402)
  *   const challenge = Challenge.fromResponse(response)
  *
- * // With method for type narrowing
- * const challenge = Challenge.fromResponse(response, { method })
+ * // With methods for type narrowing
+ * const challenge = Challenge.fromResponse(response, { methods })
  * ```
  */
-export function fromResponse<const method extends Method.Method | undefined = undefined>(
+export function fromResponse<
+  const methods extends readonly MethodIntent.AnyMethodIntent[] | undefined = undefined,
+>(
   response: Response,
-  options?: from.Options<method>,
-): from.ReturnType<from.Parameters, method> {
+  options?: from.Options<methods>,
+): from.ReturnType<from.Parameters, methods> {
   if (response.status !== 402) throw new Error('Response status is not 402.')
   return fromHeaders(response.headers, options)
 }

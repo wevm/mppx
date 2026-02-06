@@ -1,13 +1,11 @@
 import { describe, expect, test } from 'vitest'
 import * as Http from '~test/Http.js'
-import { rpcUrl } from '~test/tempo/prool.js'
-import { accounts, asset, chain } from '~test/tempo/viem.js'
+import { accounts, asset, client } from '~test/tempo/viem.js'
 import * as Challenge from '../Challenge.js'
 import * as Credential from '../Credential.js'
 import * as Intent from '../Intent.js'
-import * as Method from '../Method.js'
 import * as MethodIntent from '../MethodIntent.js'
-import { tempo } from '../tempo/server/Method.js'
+import * as tempo from '../tempo/server/Intents.js'
 import * as z from '../zod.js'
 import * as Mpay from './Mpay.js'
 import { toNodeListener } from './Mpay.js'
@@ -16,15 +14,14 @@ import * as Transport from './Transport.js'
 const realm = 'api.example.com'
 const secretKey = 'test-secret-key'
 
-const method = tempo({
-  rpcUrl: { [chain.id]: rpcUrl },
+const method = tempo.charge({
+  client: () => client,
 })
 
 describe('create', () => {
   test('default', () => {
     const handler = Mpay.create({ methods: [method], realm, secretKey })
 
-    expect(handler.methods).toEqual([method])
     expect(handler.realm).toBe(realm)
     expect(handler.transport.name).toBe('http')
     expect(typeof handler.charge).toBe('function')
@@ -305,22 +302,16 @@ describe('receipt handling', () => {
       },
     })
 
-    const mockMethod = Method.toServer(
-      Method.from({
-        name: 'mock',
-        intents: { charge: mockCharge },
-      }),
-      {
-        async verify() {
-          return {
-            method: 'mock',
-            reference: 'tx-success-456',
-            status: 'success' as const,
-            timestamp: new Date().toISOString(),
-          }
-        },
+    const mockMethod = MethodIntent.toServer(mockCharge, {
+      async verify() {
+        return {
+          method: 'mock',
+          reference: 'tx-success-456',
+          status: 'success' as const,
+          timestamp: new Date().toISOString(),
+        }
       },
-    )
+    })
 
     const handler = Mpay.create({
       methods: [mockMethod],

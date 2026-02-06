@@ -1,18 +1,13 @@
 import type { Address, Client, Hex } from 'viem'
 import type { Challenge, Credential } from '../../../index.js'
-import * as Method from '../../../Method.js'
+import * as MethodIntent from '../../../MethodIntent.js'
+import * as Intents from '../../Intents.js'
 import * as defaults from '../../internal/defaults.js'
-import * as Methods from '../../Method.js'
 import { getOnChainChannel, type OnChainChannel, verifyTopUpTransaction } from '../Chain.js'
 import { createStreamReceipt } from '../Receipt.js'
 import type { ChannelState, ChannelStorage, SessionState } from '../Storage.js'
 import type { SignedVoucher, StreamCredentialPayload, StreamReceipt } from '../Types.js'
 import { parseVoucherFromPayload, verifyVoucher } from '../Voucher.js'
-
-const streamMethod = Method.from({
-  intents: { stream: Methods.tempo.intents.stream },
-  name: 'tempo' as const,
-})
 
 /**
  * Creates a stream payment server using the mpay Method.toServer() pattern.
@@ -47,7 +42,7 @@ export function stream(parameters: stream.Parameters) {
       | Address
       | undefined)
 
-  return Method.toServer(streamMethod, {
+  return MethodIntent.toServer(Intents.stream, {
     defaults: {
       recipient: parameters.recipient,
       currency: parameters.currency,

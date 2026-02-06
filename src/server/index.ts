@@ -1,5 +1,5 @@
 export * as Expires from '../Expires.js'
-export * as tempo from '../tempo/server/index.js'
+export * as tempo from '../tempo/server/Intents.js'
 export * as Mpay from './Mpay.js'
 export * as Request from './Request.js'
 export * as Response from './Response.js'

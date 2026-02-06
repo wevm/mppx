@@ -2,10 +2,10 @@ import { type Account, type Address, type Client, createClient, type Hex, http }
 import { tempo as tempo_chain } from 'viem/chains'
 import * as Credential from '../../../Credential.js'
 import type { OneOf } from '../../../internal/types.js'
-import * as Method from '../../../Method.js'
+import * as MethodIntent from '../../../MethodIntent.js'
 import * as z from '../../../zod.js'
+import * as Intents from '../../Intents.js'
 import * as defaults from '../../internal/defaults.js'
-import * as Methods from '../../Method.js'
 import type { StreamCredentialPayload } from '../Types.js'
 import { signVoucher } from '../Voucher.js'
 
@@ -54,7 +54,7 @@ export function stream(parameters: stream.Parameters = {}) {
 
   const escrowContractMap = new Map<string, Address>()
 
-  return Method.toClient(Methods.tempo, {
+  return MethodIntent.toClient(Intents.stream, {
     context: streamContextSchema,
 
     async createCredential({ challenge, context }) {

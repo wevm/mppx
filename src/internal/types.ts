@@ -395,3 +395,6 @@ export type UnionMerge<A, B> = [keyof B] extends [never]
   : LooseOmit<A, keyof B & string> & {
       [K in keyof B]: K extends keyof A ? A[K] | B[K] : B[K]
     }
+
+/** @internal */
+export type Flatten<element> = element extends readonly (infer item)[] ? item : element

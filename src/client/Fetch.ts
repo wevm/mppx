@@ -1,8 +1,6 @@
 import * as Challenge from '../Challenge.js'
-import type * as Method from '../Method.js'
+import type * as MethodIntent from '../MethodIntent.js'
 import type * as z from '../zod.js'
-
-type AnyClient = Method.Client<any, any, any>
 
 let originalFetch: typeof globalThis.fetch | undefined
 
@@ -16,7 +14,7 @@ let originalFetch: typeof globalThis.fetch | undefined
  *
  * const fetch = Fetch.from({
  *   methods: [
- *     tempo.charge({
+ *     tempo({
  *       account: privateKeyToAccount('0x...'),
  *     }),
  *   ],
@@ -26,7 +24,7 @@ let originalFetch: typeof globalThis.fetch | undefined
  * const res = await fetch('https://api.example.com/resource')
  * ```
  */
-export function from<const methods extends readonly Method.AnyClient[]>(
+export function from<const methods extends readonly MethodIntent.AnyClient[]>(
   config: from.Config<methods>,
 ): from.Fetch<methods> {
   const { fetch = globalThis.fetch, methods } = config
@@ -50,8 +48,8 @@ export function from<const methods extends readonly Method.AnyClient[]>(
 }
 
 /** Union of all context types from all methods that have context schemas. */
-type AnyContextFor<methods extends readonly Method.AnyClient[]> = {
-  [K in keyof methods]: methods[K] extends Method.Client<any, any, infer contextSchema>
+type AnyContextFor<methods extends readonly MethodIntent.AnyClient[]> = {
+  [K in keyof methods]: methods[K] extends MethodIntent.Client<any, infer contextSchema>
     ? contextSchema extends z.ZodMiniType
       ? z.input<contextSchema>
       : undefined
@@ -59,23 +57,25 @@ type AnyContextFor<methods extends readonly Method.AnyClient[]> = {
 }[number]
 
 export declare namespace from {
-  type Config<methods extends readonly Method.AnyClient[] = readonly AnyClient[]> = {
+  type Config<
+    methods extends readonly MethodIntent.AnyClient[] = readonly MethodIntent.AnyClient[],
+  > = {
     /** Custom fetch function to wrap. Defaults to `globalThis.fetch`. */
     fetch?: typeof globalThis.fetch
-    /** Array of payment methods to use. */
+    /** Array of method intents to use. */
     methods: methods
   }
 
-  type Fetch<methods extends readonly Method.AnyClient[] = readonly AnyClient[]> = (
-    input: RequestInfo | URL,
-    init?: RequestInit<methods>,
-  ) => Promise<Response>
+  type Fetch<
+    methods extends readonly MethodIntent.AnyClient[] = readonly MethodIntent.AnyClient[],
+  > = (input: RequestInfo | URL, init?: RequestInit<methods>) => Promise<Response>
 
-  type RequestInit<methods extends readonly Method.AnyClient[] = readonly AnyClient[]> =
-    globalThis.RequestInit & {
-      /** Context to pass to the payment method's createCredential. */
-      context?: AnyContextFor<methods>
-    }
+  type RequestInit<
+    methods extends readonly MethodIntent.AnyClient[] = readonly MethodIntent.AnyClient[],
+  > = globalThis.RequestInit & {
+    /** Context to pass to the method intent's createCredential. */
+    context?: AnyContextFor<methods>
+  }
 }
 
 /**
@@ -88,7 +88,7 @@ export declare namespace from {
  *
  * Fetch.polyfill({
  *   methods: [
- *     tempo.charge({
+ *     tempo({
  *       account: privateKeyToAccount('0x...'),
  *     }),
  *   ],
@@ -98,7 +98,7 @@ export declare namespace from {
  * const res = await fetch('https://api.example.com/resource')
  * ```
  */
-export function polyfill<const methods extends readonly AnyClient[]>(
+export function polyfill<const methods extends readonly MethodIntent.AnyClient[]>(
   config: polyfill.Config<methods>,
 ): void {
   originalFetch = globalThis.fetch
@@ -106,8 +106,10 @@ export function polyfill<const methods extends readonly AnyClient[]>(
 }
 
 export declare namespace polyfill {
-  type Config<methods extends readonly Method.AnyClient[] = readonly AnyClient[]> = {
-    /** Array of payment methods to use. */
+  type Config<
+    methods extends readonly MethodIntent.AnyClient[] = readonly MethodIntent.AnyClient[],
+  > = {
+    /** Array of method intents to use. */
     methods: methods
   }
 }
@@ -117,7 +119,7 @@ export declare namespace polyfill {
  *
  * @example
  * ```ts
- * import { Fetch, tempo } from 'mpay/client'
+ * import { Fetch } from 'mpay/client'
  *
  * Fetch.polyfill({ methods: [...] })
  *
@@ -134,7 +136,7 @@ export function restore(): void {
 }
 
 /** @internal */
-async function createCredential<methods extends readonly Method.AnyClient[]>(
+async function createCredential<methods extends readonly MethodIntent.AnyClient[]>(
   response: Response,
   config: {
     context?: unknown
@@ -144,15 +146,14 @@ async function createCredential<methods extends readonly Method.AnyClient[]>(
   const { context, methods } = config
   const challenge = Challenge.fromResponse(response)
 
-  const method = methods.find((m) => m.name === challenge.method)
-  if (!method)
+  const mi = methods.find((m) => m.method === challenge.method && m.name === challenge.intent)
+  if (!mi)
     throw new Error(
-      `No method found for "${challenge.method}". Available: ${methods.map((m) => m.name).join(', ')}`,
+      `No method intent found for "${challenge.method}.${challenge.intent}". Available: ${methods.map((m) => `${m.method}.${m.name}`).join(', ')}`,
     )
 
-  const parsedContext =
-    method.context && context !== undefined ? method.context.parse(context) : undefined
-  return method.createCredential(
+  const parsedContext = mi.context && context !== undefined ? mi.context.parse(context) : undefined
+  return mi.createCredential(
     parsedContext !== undefined ? { challenge, context: parsedContext } : ({ challenge } as never),
   )
 }

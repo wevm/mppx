@@ -32,7 +32,7 @@ export type McpSdk = Transport.Transport<Extra, McpError, CallToolResult>
  * import { Mpay, Transport } from 'mpay/server'
  *
  * const payment = Mpay.create({
- *   method: tempo.charge(),
+ *   method: tempo(),
  *   secretKey: process.env.SECRET_KEY,
  *   transport: Transport.mcpSdk(),
  * })

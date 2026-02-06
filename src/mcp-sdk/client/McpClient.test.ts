@@ -3,13 +3,12 @@ import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { McpError } from '@modelcontextprotocol/sdk/types.js'
 import { afterEach, beforeEach, describe, expect, test } from 'vitest'
-import { rpcUrl } from '~test/tempo/prool.js'
-import { accounts, asset, chain } from '~test/tempo/viem.js'
+import { accounts, asset, client as testClient } from '~test/tempo/viem.js'
 import * as Challenge from '../../Challenge.js'
 import * as core_Mcp from '../../Mcp.js'
 import * as Mpay_server from '../../server/Mpay.js'
-import * as Methods_client from '../../tempo/client/Method.js'
-import * as Methods_server from '../../tempo/server/Method.js'
+import * as tempo from '../../tempo/client/Intents.js'
+import * as Methods_server from '../../tempo/server/Intents.js'
 import * as McpServer_transport from '../server/Transport.js'
 import * as McpClient from './McpClient.js'
 
@@ -24,8 +23,8 @@ describe('McpClient.wrap', () => {
 
   const mpayServer = Mpay_server.create({
     methods: [
-      Methods_server.tempo({
-        rpcUrl: { [chain.id]: rpcUrl },
+      Methods_server.charge({
+        client: () => testClient,
       }),
     ],
     realm,
@@ -72,9 +71,9 @@ describe('McpClient.wrap', () => {
   test('default: handles payment and returns result with receipt', async () => {
     const mcp = McpClient.wrap(client, {
       methods: [
-        Methods_client.tempo({
+        tempo.charge({
           account: accounts[1],
-          rpcUrl: { [chain.id]: rpcUrl },
+          client: () => testClient,
         }),
       ],
     })
@@ -91,8 +90,8 @@ describe('McpClient.wrap', () => {
   test('default: account via context', async () => {
     const mcp = McpClient.wrap(client, {
       methods: [
-        Methods_client.tempo({
-          rpcUrl: { [chain.id]: rpcUrl },
+        tempo.charge({
+          client: () => testClient,
         }),
       ],
     })
@@ -109,9 +108,9 @@ describe('McpClient.wrap', () => {
   test('behavior: passes through when no payment required', async () => {
     const mcp = McpClient.wrap(client, {
       methods: [
-        Methods_client.tempo({
+        tempo.charge({
           account: accounts[1],
-          rpcUrl: { [chain.id]: rpcUrl },
+          client: () => testClient,
         }),
       ],
     })
@@ -125,8 +124,8 @@ describe('McpClient.wrap', () => {
   test('behavior: throws when no account provided', async () => {
     const mcp = McpClient.wrap(client, {
       methods: [
-        Methods_client.tempo({
-          rpcUrl: { [chain.id]: rpcUrl },
+        tempo.charge({
+          client: () => testClient,
         }),
       ],
     })
@@ -143,9 +142,9 @@ describe('McpClient.wrap', () => {
 
     const mcp = McpClient.wrap(client, {
       methods: [
-        Methods_client.tempo({
+        tempo.charge({
           account: accounts[1],
-          rpcUrl: { [chain.id]: rpcUrl },
+          client: () => testClient,
         }),
       ],
     })
@@ -156,20 +155,17 @@ describe('McpClient.wrap', () => {
   })
 
   test('error: throws when method not found', async () => {
-    const challenge = Challenge.fromIntent(
-      Methods_server.tempo({ rpcUrl: { [chain.id]: rpcUrl } }).intents.charge,
-      {
-        realm,
-        secretKey,
-        request: {
-          amount: '1',
-          currency: asset,
-          decimals: 6,
-          expires: new Date(Date.now() + 60_000).toISOString(),
-          recipient: accounts[0].address,
-        },
+    const challenge = Challenge.fromIntent(Methods_server.charge({ client: () => testClient }), {
+      realm,
+      secretKey,
+      request: {
+        amount: '1',
+        currency: asset,
+        decimals: 6,
+        expires: new Date(Date.now() + 60_000).toISOString(),
+        recipient: accounts[0].address,
       },
-    )
+    })
 
     server.registerTool('tool_unknown_method', { description: 'Tool' }, async () => {
       throw new McpError(core_Mcp.paymentRequiredCode, 'Payment Required', {
@@ -180,15 +176,15 @@ describe('McpClient.wrap', () => {
 
     const mcp = McpClient.wrap(client, {
       methods: [
-        Methods_client.tempo({
+        tempo.charge({
           account: accounts[1],
-          rpcUrl: { [chain.id]: rpcUrl },
+          client: () => testClient,
         }),
       ],
     })
 
     await expect(mcp.callTool({ name: 'tool_unknown_method', arguments: {} })).rejects.toThrow(
-      'No compatible payment method. Server offers: unknown_method. Client has: tempo',
+      'No compatible payment method. Server offers: unknown_method.charge. Client has: tempo.charge',
     )
   })
 })

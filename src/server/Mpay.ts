@@ -2,7 +2,6 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import * as Challenge from '../Challenge.js'
 import type * as Credential from '../Credential.js'
 import * as Errors from '../Errors.js'
-import type * as Method from '../Method.js'
 import type * as MethodIntent from '../MethodIntent.js'
 import type * as Receipt from '../Receipt.js'
 import type * as z from '../zod.js'
@@ -13,36 +12,30 @@ import * as Transport from './Transport.js'
  * Payment handler.
  */
 export type Mpay<
-  methods extends readonly Method.AnyServer[] = readonly Method.Server[],
+  methods extends readonly MethodIntent.AnyServer[] = readonly MethodIntent.Server[],
   transport extends Transport.AnyTransport = Transport.Http,
 > = {
-  /** The payment methods. */
+  /** Methods to configure. */
   methods: methods
   /** Server realm (e.g., hostname). */
   realm: string
   /** The transport used. */
   transport: transport
-} & MergedIntentFns<methods, transport>
+} & Handlers<methods, transport>
 
-/** Distributes over the methods tuple, collecting intent functions from each method with its own defaults. */
-type MergedIntentFns<
-  methods extends readonly Method.AnyServer[],
+type Handlers<
+  methods extends readonly MethodIntent.AnyServer[],
   transport extends Transport.AnyTransport,
-> = methods extends readonly [
-  infer head extends Method.AnyServer,
-  ...infer tail extends readonly Method.AnyServer[],
-]
-  ? {
-      [intent in keyof Method.IntentsOf<head>]: IntentFn<
-        Method.IntentsOf<head>[intent],
-        transport,
-        Method.DefaultsOf<head>
-      >
-    } & MergedIntentFns<tail, transport>
-  : unknown
+> = {
+  [intent in methods[number]['name']]: IntentFn<
+    Extract<methods[number], { name: intent }>,
+    transport,
+    NonNullable<Extract<methods[number], { name: intent }>['defaults']>
+  >
+}
 
 /**
- * Creates a server-side payment handler from one or more methods.
+ * Creates a server-side payment handler from method intents.
  *
  * It is highly recommended to set a `secretKey` to bind challenges to their contents,
  * and allow the server to verify that incoming credentials match challenges it issued.
@@ -58,7 +51,7 @@ type MergedIntentFns<
  * ```
  */
 export function create<
-  const methods extends readonly Method.AnyServer[],
+  const methods extends readonly MethodIntent.AnyServer[],
   const transport extends Transport.AnyTransport = Transport.Http,
 >(config: create.Config<methods, transport>): Mpay<methods, transport> {
   const {
@@ -68,35 +61,29 @@ export function create<
     transport = Transport.http() as transport,
   } = config
 
-  const intentFns: Record<
-    string,
-    IntentFn<MethodIntent.MethodIntent, transport, Record<string, unknown>>
-  > = {}
-  for (const method of methods) {
-    const { defaults, intents, request, verify } = method
-    for (const [name, intent] of Object.entries(
-      intents as Record<string, MethodIntent.MethodIntent>,
-    ))
-      intentFns[name] = createIntentFn({
-        defaults,
-        intent,
-        realm,
-        request: request as never,
-        secretKey,
-        transport,
-        verify: verify as never,
-      })
+  const handlers: Record<string, unknown> = {}
+
+  for (const mi of methods) {
+    handlers[mi.name] = createIntentFn({
+      defaults: mi.defaults,
+      intent: mi,
+      realm,
+      request: mi.request as never,
+      secretKey,
+      transport,
+      verify: mi.verify as never,
+    })
   }
 
-  return { methods, realm: realm as string, transport, ...intentFns } as never
+  return { methods, realm: realm as string, transport, ...handlers } as never
 }
 
 export declare namespace create {
   type Config<
-    methods extends readonly Method.AnyServer[] = readonly Method.Server[],
+    methods extends readonly MethodIntent.AnyServer[] = readonly MethodIntent.Server[],
     transport extends Transport.AnyTransport = Transport.Http,
   > = {
-    /** Payment methods (e.g., [tempo.charge()]). */
+    /** Array of configured methods. @example [tempo.charge()] */
     methods: methods
     /** Server realm (e.g., hostname). @default "MPP Payment". */
     realm?: string | undefined
@@ -243,10 +230,10 @@ declare namespace createIntentFn {
     defaults?: defaults
     intent: intent
     realm: string
-    request?: Method.RequestFn<Record<string, intent>>
+    request?: MethodIntent.RequestFn<intent>
     secretKey: string
     transport: transport
-    verify: Method.VerifyFn<Record<string, intent>>
+    verify: MethodIntent.VerifyFn<intent>
   }
 
   type ReturnType<
@@ -275,7 +262,7 @@ declare namespace IntentFn {
     description?: string | undefined
     /** Optional challenge expiration timestamp (ISO 8601). */
     expires?: string | undefined
-  } & Method.RequestFn.WithDefaults<z.input<intent['schema']['request']>, defaults>
+  } & MethodIntent.WithDefaults<z.input<intent['schema']['request']>, defaults>
 
   export type Response<transport extends Transport.AnyTransport = Transport.Http> =
     | { challenge: Transport.ChallengeOutputOf<transport>; status: 402 }
@@ -301,7 +288,7 @@ declare namespace IntentFn {
  * http.createServer(async (req, res) => {
  *   const result = await Mpay.toNodeListener(
  *     payment.charge({
- *       request: { amount: '1000', currency: '...', recipient: '0x...' },
+ *       amount: '1', currency: '...', recipient: '0x...',
  *     }),
  *   )(req, res)
  *   if (result.status === 402) return

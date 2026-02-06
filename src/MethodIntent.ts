@@ -1,4 +1,8 @@
+import type * as Challenge from './Challenge.js'
+import type * as Credential from './Credential.js'
 import * as Intent from './Intent.js'
+import type { ExactPartial, LooseOmit } from './internal/types.js'
+import type * as Receipt from './Receipt.js'
 import * as z from './zod.js'
 
 /**
@@ -17,6 +21,7 @@ export type MethodIntent<
     request: MergedRequestSchema<intent, options>
   }
 }
+export type AnyMethodIntent = MethodIntent<any, any>
 
 /**
  * Creates a method-specific intent.
@@ -200,3 +205,145 @@ type MergedRequestSchema<
   OutputRequestType<intent, options>,
   z.input<z.ZodMiniObject<InputRequestShape<intent, options>>>
 >
+
+/**
+ * A client-side configured method intent with credential creation logic.
+ */
+export type Client<
+  intent extends AnyMethodIntent = MethodIntent,
+  context extends z.ZodMiniType | undefined = z.ZodMiniType | undefined,
+> = intent & {
+  context?: context
+  createCredential: CreateCredentialFn<
+    intent,
+    context extends z.ZodMiniType ? z.output<context> : Record<never, never>
+  >
+}
+export type AnyClient = Client<any, any>
+
+/**
+ * A server-side configured method intent with verification logic.
+ */
+export type Server<
+  intent extends AnyMethodIntent = MethodIntent,
+  defaults extends ExactPartial<z.input<intent['schema']['request']>> = {},
+> = intent & {
+  defaults?: defaults
+  request?: RequestFn<intent>
+  verify: VerifyFn<intent>
+}
+export type AnyServer = Server<any, any>
+
+/** Credential creation function for a single intent. */
+export type CreateCredentialFn<intent extends AnyMethodIntent, context = unknown> = (
+  parameters: {
+    challenge: Challenge.Challenge<
+      z.output<intent['schema']['request']>,
+      intent['name'],
+      intent['method']
+    >
+  } & ([keyof context] extends [never] ? unknown : { context: context }),
+) => Promise<string>
+
+/** Request transform function for a single intent. */
+export type RequestFn<intent extends AnyMethodIntent> = (options: {
+  credential?: Credential.Credential | null | undefined
+  request: z.input<intent['schema']['request']>
+}) => z.input<intent['schema']['request']>
+
+/** Verification function for a single intent. */
+export type VerifyFn<intent extends AnyMethodIntent> = (parameters: {
+  credential: Credential.Credential<
+    z.output<intent['schema']['credential']['payload']>,
+    Challenge.Challenge<z.output<intent['schema']['request']>, intent['name'], intent['method']>
+  >
+  request: z.input<intent['schema']['request']>
+}) => Promise<Receipt.Receipt>
+
+/** Partial request type for defaults. */
+export type RequestDefaults<intent extends AnyMethodIntent> = ExactPartial<
+  z.input<intent['schema']['request']>
+>
+
+/** Makes fields optional if they exist in defaults. */
+export type WithDefaults<request, defaults> = [keyof defaults] extends [never]
+  ? request
+  : LooseOmit<request, keyof defaults & string> &
+      ExactPartial<Pick<request, keyof defaults & keyof request>>
+
+/**
+ * Extends a method intent with client-side credential creation logic.
+ *
+ * @example
+ * ```ts
+ * import { MethodIntent } from 'mpay'
+ * import { Intents } from 'mpay/tempo'
+ *
+ * const tempoCharge = MethodIntent.toClient(Intents.charge, {
+ *   async createCredential({ challenge }) {
+ *     return Credential.serialize({ challenge, payload: { ... } })
+ *   },
+ * })
+ * ```
+ */
+export function toClient<
+  const intent extends AnyMethodIntent,
+  const context extends z.ZodMiniType | undefined = undefined,
+>(intent: intent, options: toClient.Options<intent, context>): Client<intent, context> {
+  const { context, createCredential } = options
+  return {
+    ...intent,
+    context,
+    createCredential,
+  } as Client<intent, context>
+}
+
+export declare namespace toClient {
+  type Options<
+    intent extends AnyMethodIntent,
+    context extends z.ZodMiniType | undefined = undefined,
+  > = {
+    context?: context
+    createCredential: CreateCredentialFn<
+      intent,
+      context extends z.ZodMiniType ? z.output<context> : Record<never, never>
+    >
+  }
+}
+
+/**
+ * Extends a method intent with server-side verification logic.
+ *
+ * @example
+ * ```ts
+ * import { MethodIntent } from 'mpay'
+ * import { Intents } from 'mpay/tempo'
+ *
+ * const tempoCharge = MethodIntent.toServer(Intents.charge, {
+ *   async verify({ credential }) {
+ *     // verification logic
+ *     return { status: 'success', ... }
+ *   },
+ * })
+ * ```
+ */
+export function toServer<
+  const intent extends AnyMethodIntent,
+  const defaults extends RequestDefaults<intent> = {},
+>(intent: intent, options: toServer.Options<intent, defaults>): Server<intent, defaults> {
+  const { defaults, request, verify } = options
+  return {
+    ...intent,
+    defaults,
+    request,
+    verify,
+  } as Server<intent, defaults>
+}
+
+export declare namespace toServer {
+  type Options<intent extends AnyMethodIntent, defaults extends RequestDefaults<intent> = {}> = {
+    defaults?: defaults
+    request?: RequestFn<intent>
+    verify: VerifyFn<intent>
+  }
+}

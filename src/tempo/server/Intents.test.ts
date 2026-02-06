@@ -10,15 +10,15 @@ import * as Mpay_client from '../../client/Mpay.js'
 import * as Receipt from '../../Receipt.js'
 import * as Mpay_server from '../../server/Mpay.js'
 import { toNodeListener } from '../../server/Mpay.js'
-import * as Methods_client from '../client/Method.js'
-import * as Methods_server from './Method.js'
+import * as Methods_client from '../client/Intents.js'
+import * as Methods_server from './Intents.js'
 
 const realm = 'api.example.com'
 const secretKey = 'test-secret-key'
 
 const server = Mpay_server.create({
   methods: [
-    Methods_server.tempo({
+    Methods_server.charge({
       client() {
         return client
       },
@@ -42,14 +42,17 @@ describe('tempo', () => {
       const response = await fetch(httpServer.url)
       expect(response.status).toBe(402)
 
-      const challenge = Challenge.fromResponse(response, { method: server.methods[0] })
-      expect(challenge.request.methodDetails?.chainId).toBe(chain.id)
+      const challenge = Challenge.fromResponse(response, {
+        methods: [Methods_client.charge()],
+      })
+      const request = challenge.request
+      expect(request.methodDetails?.chainId).toBe(chain.id)
 
       const { receipt } = await Actions.token.transferSync(client, {
         account: accounts[1],
-        amount: BigInt(challenge.request.amount),
-        to: challenge.request.recipient as Hex.Hex,
-        token: challenge.request.currency as Hex.Hex,
+        amount: BigInt(request.amount),
+        to: request.recipient as Hex.Hex,
+        token: request.currency as Hex.Hex,
       })
       const hash = receipt.transactionHash
 
@@ -103,16 +106,19 @@ describe('tempo', () => {
       const response = await fetch(httpServer.url)
       expect(response.status).toBe(402)
 
-      const challenge = Challenge.fromResponse(response, { method: server.methods[0] })
-      expect(challenge.request.recipient).toBe(overrideRecipient)
-      expect(challenge.request.currency).toBe(overrideCurrency)
-      expect(challenge.request.expires).toBe(overrideExpires)
+      const challenge = Challenge.fromResponse(response, {
+        methods: [Methods_client.charge()],
+      })
+      const request = challenge.request
+      expect(request.recipient).toBe(overrideRecipient)
+      expect(request.currency).toBe(overrideCurrency)
+      expect(request.expires).toBe(overrideExpires)
 
       const { receipt } = await Actions.token.transferSync(client, {
         account: accounts[1],
-        amount: BigInt(challenge.request.amount),
-        to: challenge.request.recipient as Hex.Hex,
-        token: challenge.request.currency as Hex.Hex,
+        amount: BigInt(request.amount),
+        to: request.recipient as Hex.Hex,
+        token: request.currency as Hex.Hex,
       })
       const hash = receipt.transactionHash
 
@@ -146,13 +152,16 @@ describe('tempo', () => {
       const response = await fetch(httpServer.url)
       expect(response.status).toBe(402)
 
-      const challenge = Challenge.fromResponse(response, { method: server.methods[0] })
+      const challenge = Challenge.fromResponse(response, {
+        methods: [Methods_client.charge()],
+      })
+      const request = challenge.request
 
       const { receipt } = await Actions.token.transferSync(client, {
         account: accounts[1],
-        amount: BigInt(challenge.request.amount),
+        amount: BigInt(request.amount),
         to: wrongRecipient,
-        token: challenge.request.currency as Hex.Hex,
+        token: request.currency as Hex.Hex,
       })
 
       const credential = Credential.from({
@@ -187,13 +196,16 @@ describe('tempo', () => {
       const response = await fetch(httpServer.url)
       expect(response.status).toBe(402)
 
-      const challenge = Challenge.fromResponse(response, { method: server.methods[0] })
+      const challenge = Challenge.fromResponse(response, {
+        methods: [Methods_client.charge()],
+      })
+      const request = challenge.request
 
       const { receipt } = await Actions.token.transferSync(client, {
         account: accounts[1],
-        amount: BigInt(challenge.request.amount),
-        to: challenge.request.recipient as Hex.Hex,
-        token: challenge.request.currency as Hex.Hex,
+        amount: BigInt(request.amount),
+        to: request.recipient as Hex.Hex,
+        token: request.currency as Hex.Hex,
       })
 
       const credential = Credential.from({
@@ -213,7 +225,48 @@ describe('tempo', () => {
       httpServer.close()
     })
 
-    test('behavior: rejects when chainId has no RPC URL configured', async () => {
+    test('behavior: rejects when no client configured for chainId', async () => {
+      const server = Mpay_server.create({
+        methods: [
+          Methods_server.charge({
+            client(chainId) {
+              if (chainId === chain.id) return client
+              throw new Error('not found')
+            },
+            currency: asset,
+            recipient: accounts[0].address,
+          }),
+        ],
+        realm,
+        secretKey,
+      })
+
+      const httpServer = await Http.createServer(async (req, res) => {
+        try {
+          const result = await toNodeListener(
+            server.charge({
+              amount: '1',
+              chainId: 123456,
+            }),
+          )(req, res)
+          if (result.status === 402) return
+          res.end('OK')
+        } catch (e) {
+          res.statusCode = 500
+          res.end((e as Error).message)
+        }
+      })
+
+      const response = await fetch(httpServer.url)
+      expect(response.status).toBe(500)
+      expect(await response.text()).toMatchInlineSnapshot(
+        `"No client configured with chainId 123456."`,
+      )
+
+      httpServer.close()
+    })
+
+    test('behavior: rejects when client not configured for chainId', async () => {
       const httpServer = await Http.createServer(async (req, res) => {
         try {
           const result = await toNodeListener(
@@ -233,7 +286,7 @@ describe('tempo', () => {
       const response = await fetch(httpServer.url)
       expect(response.status).toBe(500)
       expect(await response.text()).toMatchInlineSnapshot(
-        `"No RPC URL configured for chainId 999999."`,
+        `"Client not configured with chainId 999999."`,
       )
 
       httpServer.close()
@@ -244,9 +297,11 @@ describe('tempo', () => {
     test('default', async () => {
       const mpay = Mpay_client.create({
         methods: [
-          Methods_client.tempo({
+          Methods_client.charge({
             account: accounts[1],
-            rpcUrl: { [chain.id]: rpcUrl },
+            client() {
+              return client
+            },
           }),
         ],
       })
@@ -299,9 +354,11 @@ describe('tempo', () => {
 
       const mpay = Mpay_client.create({
         methods: [
-          Methods_client.tempo({
+          Methods_client.charge({
             account: accounts[1],
-            rpcUrl: { [chain.id]: rpcUrl },
+            client() {
+              return client
+            },
           }),
         ],
       })
@@ -340,7 +397,7 @@ describe('tempo', () => {
     test('behavior: fee payer', async () => {
       const mpay = Mpay_client.create({
         methods: [
-          Methods_client.tempo({
+          Methods_client.charge({
             account: accounts[1],
             client() {
               return client
@@ -394,20 +451,24 @@ describe('tempo', () => {
     test('behavior: fee payer (hoisted)', async () => {
       const mpay = Mpay_client.create({
         methods: [
-          Methods_client.tempo({
+          Methods_client.charge({
             account: accounts[1],
-            rpcUrl: { [chain.id]: rpcUrl },
+            client() {
+              return client
+            },
           }),
         ],
       })
 
       const server = Mpay_server.create({
         methods: [
-          Methods_server.tempo({
+          Methods_server.charge({
+            client() {
+              return client
+            },
             currency: asset,
             feePayer: accounts[0],
             recipient: accounts[0].address,
-            rpcUrl: { [chain.id]: rpcUrl },
           }),
         ],
         realm,
@@ -454,57 +515,6 @@ describe('tempo', () => {
 
       httpServer.close()
     })
-
-    test('behavior: routes to correct chain based on chainId', async () => {
-      const server = Mpay_server.create({
-        methods: [
-          Methods_server.tempo({
-            currency: asset,
-            recipient: accounts[0].address,
-            rpcUrl: { [chain.id]: rpcUrl, 999999: 'https://other-chain.example.com' },
-          }),
-        ],
-        realm,
-        secretKey,
-      })
-
-      const client = Mpay_client.create({
-        methods: [
-          Methods_client.tempo({
-            account: accounts[1],
-            rpcUrl: { [chain.id]: rpcUrl, 999999: 'https://other-chain.example.com' },
-          }),
-        ],
-      })
-
-      const httpServer = await Http.createServer(async (req, res) => {
-        const result = await toNodeListener(
-          server.charge({
-            amount: '1',
-            chainId: chain.id,
-          }),
-        )(req, res)
-        if (result.status === 402) return
-        res.end('OK')
-      })
-
-      const response = await fetch(httpServer.url)
-      expect(response.status).toBe(402)
-
-      const challenge = Challenge.fromResponse(response, { method: server.methods[0] })
-      expect(challenge.request.methodDetails?.chainId).toBe(chain.id)
-
-      const credential = await client.createCredential(response)
-
-      {
-        const response = await fetch(httpServer.url, {
-          headers: { Authorization: credential },
-        })
-        expect(response.status).toBe(200)
-      }
-
-      httpServer.close()
-    })
   })
 
   describe('intent: unknown', () => {
@@ -523,7 +533,7 @@ describe('tempo', () => {
       const response = await fetch(httpServer.url)
       expect(response.status).toBe(402)
 
-      const challenge = Challenge.fromResponse(response, { method: server.methods[0] })
+      const challenge = Challenge.fromResponse(response)
 
       const credential = Credential.from({
         challenge,
