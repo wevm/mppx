@@ -8,6 +8,11 @@ overrides:
   mpay: workspace:*
   ox: ^0.12.0
 
+patchedDependencies:
+  prool:
+    hash: c43003b453dbe772c15ecdc0ab03c1c469763a0f881ab614ae427b3e58261aff
+    path: patches/prool.patch
+
 importers:
 
   .:
@@ -33,7 +38,7 @@ importers:
         version: 4.0.18(vitest@4.0.18(@types/node@25.0.10)(tsx@4.21.0)(yaml@2.8.2))
       prool:
         specifier: ^0.2.2
-        version: 0.2.2(testcontainers@11.11.0)
+        version: 0.2.2(patch_hash=c43003b453dbe772c15ecdc0ab03c1c469763a0f881ab614ae427b3e58261aff)(testcontainers@11.11.0)
       testcontainers:
         specifier: ^11.11.0
         version: 11.11.0
@@ -3676,7 +3681,7 @@ snapshots:
 
   process@0.11.10: {}
 
-  prool@0.2.2(testcontainers@11.11.0):
+  prool@0.2.2(patch_hash=c43003b453dbe772c15ecdc0ab03c1c469763a0f881ab614ae427b3e58261aff)(testcontainers@11.11.0):
     dependencies:
       change-case: 5.4.4
       eventemitter3: 5.0.4

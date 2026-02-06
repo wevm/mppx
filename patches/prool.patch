@@ -1,0 +1,81 @@
+diff --git a/dist/testcontainers/Instance.js b/dist/testcontainers/Instance.js
+index e6e55a4196380d839adfd0d513b1b929506f8a86..a28c39758af5c8a6dab0c950f056628fbb30f7c1 100644
+--- a/dist/testcontainers/Instance.js
++++ b/dist/testcontainers/Instance.js
+@@ -34,14 +34,10 @@ export const tempo = Instance.define((parameters) => {
+         port: args.port ?? 8545,
+         async start({ port = args.port }, { emitter }) {
+             const promise = Promise.withResolvers();
+-            const c = new GenericContainer(image)
++            const isMac = process.platform === 'darwin';
++            let c = new GenericContainer(image)
+                 .withPullPolicy(PullPolicy.alwaysPull())
+                 .withPlatform('linux/x86_64')
+-                .withNetworkMode('host')
+-                .withExtraHosts([
+-                { host: 'host.docker.internal', ipAddress: 'host-gateway' },
+-                { host: 'localhost', ipAddress: 'host-gateway' },
+-            ])
+                 .withName(containerName)
+                 .withEnvironment({ RUST_LOG })
+                 .withCommand(command({ ...args, port }))
+@@ -64,7 +60,17 @@ export const tempo = Instance.define((parameters) => {
+                     promise.reject(new Error(`Failed to start: ${error.message}`));
+                 });
+             })
+-                .withStartupTimeout(10_000);
++                .withStartupTimeout(30_000);
++            if (isMac) {
++                c = c.withExposedPorts({ container: port, host: port });
++            } else {
++                c = c
++                    .withNetworkMode('host')
++                    .withExtraHosts([
++                    { host: 'host.docker.internal', ipAddress: 'host-gateway' },
++                    { host: 'localhost', ipAddress: 'host-gateway' },
++                ]);
++            }
+             c.start()
+                 .then((c) => {
+                 container = c;
+diff --git a/src/testcontainers/Instance.ts b/src/testcontainers/Instance.ts
+index 5155fe71a458345bbbf0057f35d0501531b5fff7..5a4eae2f35de1b558cfab7aeb5aba0df128aeed3 100644
+--- a/src/testcontainers/Instance.ts
++++ b/src/testcontainers/Instance.ts
+@@ -50,14 +50,10 @@ export const tempo = Instance.define((parameters?: tempo.Parameters) => {
+     async start({ port = args.port }, { emitter }) {
+       const promise = Promise.withResolvers<void>()
+ 
+-      const c = new GenericContainer(image)
++      const isMac = process.platform === 'darwin'
++      let c = new GenericContainer(image)
+         .withPullPolicy(PullPolicy.alwaysPull())
+         .withPlatform('linux/x86_64')
+-        .withNetworkMode('host')
+-        .withExtraHosts([
+-          { host: 'host.docker.internal', ipAddress: 'host-gateway' },
+-          { host: 'localhost', ipAddress: 'host-gateway' },
+-        ])
+         .withName(containerName)
+         .withEnvironment({ RUST_LOG })
+         .withCommand(command({ ...args, port }))
+@@ -80,7 +76,18 @@ export const tempo = Instance.define((parameters?: tempo.Parameters) => {
+             promise.reject(new Error(`Failed to start: ${error.message}`))
+           })
+         })
+-        .withStartupTimeout(10_000)
++        .withStartupTimeout(30_000)
++
++      if (isMac) {
++        c = c.withExposedPorts({ container: port!, host: port! })
++      } else {
++        c = c
++          .withNetworkMode('host')
++          .withExtraHosts([
++            { host: 'host.docker.internal', ipAddress: 'host-gateway' },
++            { host: 'localhost', ipAddress: 'host-gateway' },
++          ])
++      }
+ 
+       c.start()
+         .then((c) => {

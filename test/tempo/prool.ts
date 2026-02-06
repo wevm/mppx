@@ -25,6 +25,7 @@ export async function createServer() {
 
   const args = {
     blockTime: '200ms',
+    mnemonic: 'test test test test test test test test test test test junk',
     port,
   } satisfies Instance.tempo.Parameters
 

@@ -1,5 +1,4 @@
-import { type Account, type Address, type Client, createClient, type Hex, http } from 'viem'
-import { tempo as tempo_chain } from 'viem/chains'
+import type { Account, Address, Client, Hex, WalletClient } from 'viem'
 import * as Credential from '../../../Credential.js'
 import type { OneOf } from '../../../internal/types.js'
 import * as MethodIntent from '../../../MethodIntent.js'
@@ -10,7 +9,6 @@ import type { StreamCredentialPayload } from '../Types.js'
 import { signVoucher } from '../Voucher.js'
 
 export const streamContextSchema = z.object({
-  account: z.optional(z.custom<Account>()),
   action: z.enum(['open', 'topUp', 'voucher', 'close']),
   channelId: z.string(),
   cumulativeAmount: z.bigint(),
@@ -38,32 +36,14 @@ export type StreamContext = z.infer<typeof streamContextSchema>
  * ```
  */
 export function stream(parameters: stream.Parameters = {}) {
-  const rpcUrl = parameters.rpcUrl ?? defaults.rpcUrl
-
-  function getClient(chainId: number): Client {
-    if (parameters.client) return parameters.client(chainId)
-
-    const url = rpcUrl[chainId as keyof typeof rpcUrl]
-    if (!url) throw new Error(`No \`rpcUrl\` configured for \`chainId\` (${chainId}).`)
-
-    return createClient({
-      chain: { ...tempo_chain, id: chainId },
-      transport: http(url),
-    })
-  }
-
   const escrowContractMap = new Map<string, Address>()
 
   return MethodIntent.toClient(Intents.stream, {
     context: streamContextSchema,
 
     async createCredential({ challenge, context }) {
-      const account = context?.account ?? parameters.account
-      if (!account)
-        throw new Error('No `account` provided. Pass `account` to parameters or context.')
-
-      const chainId = (challenge.request.methodDetails?.chainId ?? Number(Object.keys(rpcUrl)[0]))!
-      const client = getClient(chainId)
+      const account = parameters.account
+      if (!account) throw new Error('No `account` provided. Pass `account` to parameters.')
 
       const {
         action,
@@ -86,8 +66,16 @@ export function stream(parameters: stream.Parameters = {}) {
         )
       escrowContractMap.set(channelId, escrowContract)
 
+      const chainId =
+        (challenge.request.methodDetails as { chainId?: number })?.chainId ??
+        parameters.chainId ??
+        defaults.testnetChainId
+
+      const walletClient = parameters.walletClient ?? parameters.client
+      if (!walletClient) throw new Error('No `client` or `walletClient` provided.')
+
       const signature = await signVoucher(
-        client,
+        walletClient as WalletClient,
         account,
         { channelId, cumulativeAmount },
         escrowContract,
@@ -156,14 +144,16 @@ export declare namespace stream {
     account?: Account | undefined
     /** Escrow contract address override. Derived from challenge if not provided. */
     escrowContract?: Address | undefined
+    /** Chain ID override. Derived from challenge or defaults if not provided. */
+    chainId?: number | undefined
   } & OneOf<
     | {
-        /** Function that returns a client for the given chain ID. */
-        client?: ((chainId: number) => Client) | undefined
+        /** Client for signing. */
+        client?: Client | undefined
       }
     | {
-        /** RPC URLs keyed by chain ID. */
-        rpcUrl?: ({ [chainId: number]: string } & object) | undefined
+        /** Wallet client for signing. */
+        walletClient?: WalletClient | undefined
       }
   >
 }
