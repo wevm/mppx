@@ -74,7 +74,8 @@
   },
   "peerDependencies": {
     "@modelcontextprotocol/sdk": ">=1.25.0",
-    "viem": ">=2.44.4"
+    "viem": ">=2.44.4",
+    "zod": ">=4.0.0"
   },
   "peerDependenciesMeta": {
     "@modelcontextprotocol/sdk": {
