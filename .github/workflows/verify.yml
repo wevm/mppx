@@ -15,8 +15,8 @@ jobs:
       - name: Install dependencies
         uses: ./.github/actions/install-dependencies
 
-      - name: Check code
-        run: pnpm check
+      - name: Lint & format
+        run: pnpm check:ci
 
       - name: Check types
         run: pnpm check:types

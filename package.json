@@ -6,6 +6,7 @@
     "changeset:publish": "zile publish:prepare && changeset publish && zile publish:post",
     "changeset:version": "changeset version",
     "check": "biome check --fix --unsafe",
+    "check:ci": "biome check",
     "check:types": "tsc -b",
     "test": "vitest"
   },
