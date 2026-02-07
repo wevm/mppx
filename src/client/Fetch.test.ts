@@ -4,8 +4,8 @@ import { accounts, asset, client } from '~test/tempo/viem.js'
 import * as Receipt from '../Receipt.js'
 import * as Mpay_server from '../server/Mpay.js'
 import { toNodeListener } from '../server/Mpay.js'
-import * as tempo from '../tempo/client/Intents.js'
-import * as Methods_server from '../tempo/server/Intents.js'
+import { charge as charge_client } from '../tempo/client/Charge.js'
+import { charge as charge_server } from '../tempo/server/Charge.js'
 import * as Fetch from './Fetch.js'
 
 const realm = 'api.example.com'
@@ -13,7 +13,7 @@ const secretKey = 'test-secret-key'
 
 const server = Mpay_server.create({
   methods: [
-    Methods_server.charge({
+    charge_server({
       client: () => client,
     }),
   ],
@@ -25,7 +25,7 @@ describe('Fetch.from', () => {
   test('default: account at creation', async () => {
     const fetch = Fetch.from({
       methods: [
-        tempo.charge({
+        charge_client({
           account: accounts[1],
           client: () => client,
         }),
@@ -68,7 +68,7 @@ describe('Fetch.from', () => {
   test('default: account via context', async () => {
     const fetch = Fetch.from({
       methods: [
-        tempo.charge({
+        charge_client({
           client: () => client,
         }),
       ],
@@ -101,7 +101,7 @@ describe('Fetch.from', () => {
   test('behavior: context overrides account at creation', async () => {
     const fetch = Fetch.from({
       methods: [
-        tempo.charge({
+        charge_client({
           account: accounts[0],
           client: () => client,
         }),
@@ -132,7 +132,7 @@ describe('Fetch.from', () => {
   test('behavior: throws when no account provided', async () => {
     const fetch = Fetch.from({
       methods: [
-        tempo.charge({
+        charge_client({
           client: () => client,
         }),
       ],
@@ -161,7 +161,7 @@ describe('Fetch.from', () => {
   test('behavior: passes through non-402 responses', async () => {
     const fetch = Fetch.from({
       methods: [
-        tempo.charge({
+        charge_client({
           account: accounts[1],
           client: () => client,
         }),
@@ -183,7 +183,7 @@ describe('Fetch.from', () => {
   test('behavior: fee payer', async () => {
     const serverWithFeePayer = Mpay_server.create({
       methods: [
-        Methods_server.charge({
+        charge_server({
           feePayer: accounts[0],
           client: () => client,
         }),
@@ -194,7 +194,7 @@ describe('Fetch.from', () => {
 
     const fetch = Fetch.from({
       methods: [
-        tempo.charge({
+        charge_client({
           account: accounts[1],
           client: () => client,
         }),
@@ -239,7 +239,7 @@ describe('Fetch.polyfill', () => {
   test('default', async () => {
     Fetch.polyfill({
       methods: [
-        tempo.charge({
+        charge_client({
           account: accounts[1],
           client: () => client,
         }),

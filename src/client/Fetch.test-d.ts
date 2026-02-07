@@ -1,12 +1,12 @@
 import type { Account } from 'viem'
 import { describe, expectTypeOf, test } from 'vitest'
-import * as tempo from '../tempo/client/Intents.js'
+import { charge } from '../tempo/client/Charge.js'
 import * as Fetch from './Fetch.js'
 
 describe('Fetch.from', () => {
   test('default', () => {
     const fetch = Fetch.from({
-      methods: [tempo.charge()],
+      methods: [charge()],
     })
 
     expectTypeOf(fetch).toBeFunction()
@@ -15,7 +15,7 @@ describe('Fetch.from', () => {
 
   test('behavior: accepts context in RequestInit when method has context', () => {
     const fetch = Fetch.from({
-      methods: [tempo.charge()],
+      methods: [charge()],
     })
 
     expectTypeOf(fetch).toBeCallableWith('https://example.com', {
@@ -25,7 +25,7 @@ describe('Fetch.from', () => {
 
   test('behavior: context is optional in RequestInit', () => {
     const fetch = Fetch.from({
-      methods: [tempo.charge()],
+      methods: [charge()],
     })
 
     expectTypeOf(fetch).toBeCallableWith('https://example.com')
@@ -34,7 +34,7 @@ describe('Fetch.from', () => {
 
   test('behavior: RequestInit extends standard RequestInit', () => {
     const fetch = Fetch.from({
-      methods: [tempo.charge()],
+      methods: [charge()],
     })
 
     expectTypeOf(fetch).toBeCallableWith('https://example.com', {
@@ -47,7 +47,7 @@ describe('Fetch.from', () => {
 
 describe('Fetch.from.RequestInit', () => {
   test('behavior: has context property typed to method context', () => {
-    const method = tempo.charge()
+    const method = charge()
 
     type Methods = [typeof method]
     type Init = Fetch.from.RequestInit<Methods>

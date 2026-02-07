@@ -1,7 +1,7 @@
 import { describe, expectTypeOf, test } from 'vitest'
 import * as Intent from '../Intent.js'
 import * as MethodIntent from '../MethodIntent.js'
-import * as tempo from '../tempo/server/Intents.js'
+import * as tempo from '../tempo/server/index.js'
 import * as z from '../zod.js'
 import * as Mpay from './Mpay.js'
 

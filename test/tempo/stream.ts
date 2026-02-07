@@ -2,8 +2,8 @@ import { type Account, type Address, encodeFunctionData, type Hex, zeroAddress }
 import {
   deployContract,
   prepareTransactionRequest,
+  readContract,
   signTransaction,
-  simulateContract,
   waitForTransactionReceipt,
   writeContractSync,
 } from 'viem/actions'
@@ -55,12 +55,11 @@ export async function openChannel(params: {
     args: [escrow, deposit],
   })
 
-  const { result: channelId } = await simulateContract(client, {
-    account: payer,
+  const channelId = await readContract(client, {
     address: escrow,
     abi: artifact.abi,
-    functionName: 'open',
-    args: [payee, token, deposit, salt, authorizedSigner],
+    functionName: 'computeChannelId',
+    args: [payer.address, payee, token, deposit, salt, authorizedSigner],
   })
 
   const txReceipt = await writeContractSync(client, {
@@ -134,12 +133,11 @@ export async function signOpenChannel(params: {
   const { escrow, payer, payee, token, deposit, salt } = params
   const authorizedSigner = params.authorizedSigner ?? zeroAddress
 
-  const { result: channelId } = await simulateContract(client, {
-    account: payer,
+  const channelId = await readContract(client, {
     address: escrow,
     abi: artifact.abi,
-    functionName: 'open',
-    args: [payee, token, deposit, salt, authorizedSigner],
+    functionName: 'computeChannelId',
+    args: [payer.address, payee, token, deposit, salt, authorizedSigner],
   })
 
   const approveData = encodeFunctionData({

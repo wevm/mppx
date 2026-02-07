@@ -1,14 +1,14 @@
 import type { Account } from 'viem'
 import { describe, expectTypeOf, test } from 'vitest'
 import * as MethodIntent from '../MethodIntent.js'
-import * as tempo from '../tempo/client/Intents.js'
+import { charge } from '../tempo/client/Charge.js'
 import * as Intents from '../tempo/Intents.js'
 import * as z from '../zod.js'
 import * as Mpay from './Mpay.js'
 
 describe('Mpay', () => {
   test('has methods array', () => {
-    const method = tempo.charge({
+    const method = charge({
       account: {} as Account,
     })
     const mpay = Mpay.create({ methods: [method] })
@@ -18,7 +18,7 @@ describe('Mpay', () => {
   })
 
   test('has createCredential function', () => {
-    const method = tempo.charge({
+    const method = charge({
       account: {} as Account,
     })
     const mpay = Mpay.create({ methods: [method] })
@@ -69,7 +69,7 @@ describe('Method.toClient', () => {
 
 describe('Mpay with context', () => {
   test('createCredential accepts context matching method schema', () => {
-    const method = tempo.charge()
+    const method = charge()
 
     const mpay = Mpay.create({ methods: [method] })
 
@@ -78,7 +78,7 @@ describe('Mpay with context', () => {
   })
 
   test('createCredential context is optional when account provided at creation', () => {
-    const method = tempo.charge({
+    const method = charge({
       account: {} as Account,
     })
 

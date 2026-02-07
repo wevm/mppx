@@ -277,6 +277,3 @@ class MismatchError extends Error {
     super([reason, ...Object.entries(details).map(([k, v]) => `  - ${k}: ${v}`)].join('\n'))
   }
 }
-
-export type { ChannelState, ChannelStorage, SessionState } from '../stream/Storage.js'
-export { stream } from './Stream.js'

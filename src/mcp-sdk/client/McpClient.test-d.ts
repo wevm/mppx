@@ -1,7 +1,7 @@
 import type { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import type { Account } from 'viem'
 import { describe, expectTypeOf, test } from 'vitest'
-import * as tempo from '../../tempo/client/Intents.js'
+import * as tempo from '../../tempo/client/index.js'
 import * as McpClient from './McpClient.js'
 
 describe('McpClient.wrap', () => {

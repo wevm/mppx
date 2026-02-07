@@ -104,7 +104,7 @@ describe('stream server Method', () => {
           },
           request: makeRequest(),
         }),
-      ).rejects.toThrow('on-chain payee does not match server destination')
+      ).rejects.toThrow('open transaction payee does not match server recipient')
     })
 
     test('rejects open when voucher exceeds deposit', async () => {
@@ -126,7 +126,7 @@ describe('stream server Method', () => {
           },
           request: makeRequest(),
         }),
-      ).rejects.toThrow('voucher amount exceeds on-chain deposit')
+      ).rejects.toThrow('channel available balance insufficient for requested amount')
     })
 
     test('rejects open with invalid voucher signature', async () => {
@@ -951,13 +951,13 @@ describe('stream server Method', () => {
       const fakeChannelId =
         '0x0000000000000000000000000000000000000000000000000000000000000000' as Hex
       await expect(settle(storage, client, escrowContract, fakeChannelId)).rejects.toThrow(
-        ChannelClosedError,
+        ChannelNotFoundError,
       )
     })
   })
 
   describe('structured errors', () => {
-    test('ChannelClosedError on unknown channel', async () => {
+    test('ChannelNotFoundError on unknown channel', async () => {
       const { channelId } = await createSignedOpenTransaction(10000000n)
       const server = createServer()
 
@@ -976,8 +976,8 @@ describe('stream server Method', () => {
         })
         expect.unreachable()
       } catch (e) {
-        expect(e).toBeInstanceOf(ChannelClosedError)
-        expect((e as ChannelClosedError).status).toBe(410)
+        expect(e).toBeInstanceOf(ChannelNotFoundError)
+        expect((e as ChannelNotFoundError).status).toBe(410)
       }
     })
 

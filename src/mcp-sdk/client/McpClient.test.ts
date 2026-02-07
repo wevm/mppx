@@ -7,8 +7,8 @@ import { accounts, asset, client as testClient } from '~test/tempo/viem.js'
 import * as Challenge from '../../Challenge.js'
 import * as core_Mcp from '../../Mcp.js'
 import * as Mpay_server from '../../server/Mpay.js'
-import * as tempo from '../../tempo/client/Intents.js'
-import * as Methods_server from '../../tempo/server/Intents.js'
+import * as tempo_client from '../../tempo/client/index.js'
+import * as tempo_server from '../../tempo/server/index.js'
 import * as McpServer_transport from '../server/Transport.js'
 import * as McpClient from './McpClient.js'
 
@@ -23,7 +23,7 @@ describe('McpClient.wrap', () => {
 
   const mpayServer = Mpay_server.create({
     methods: [
-      Methods_server.charge({
+      tempo_server.charge({
         client: () => testClient,
       }),
     ],
@@ -71,7 +71,7 @@ describe('McpClient.wrap', () => {
   test('default: handles payment and returns result with receipt', async () => {
     const mcp = McpClient.wrap(client, {
       methods: [
-        tempo.charge({
+        tempo_client.charge({
           account: accounts[1],
           client: () => testClient,
         }),
@@ -90,7 +90,7 @@ describe('McpClient.wrap', () => {
   test('default: account via context', async () => {
     const mcp = McpClient.wrap(client, {
       methods: [
-        tempo.charge({
+        tempo_client.charge({
           client: () => testClient,
         }),
       ],
@@ -108,7 +108,7 @@ describe('McpClient.wrap', () => {
   test('behavior: passes through when no payment required', async () => {
     const mcp = McpClient.wrap(client, {
       methods: [
-        tempo.charge({
+        tempo_client.charge({
           account: accounts[1],
           client: () => testClient,
         }),
@@ -124,7 +124,7 @@ describe('McpClient.wrap', () => {
   test('behavior: throws when no account provided', async () => {
     const mcp = McpClient.wrap(client, {
       methods: [
-        tempo.charge({
+        tempo_client.charge({
           client: () => testClient,
         }),
       ],
@@ -142,7 +142,7 @@ describe('McpClient.wrap', () => {
 
     const mcp = McpClient.wrap(client, {
       methods: [
-        tempo.charge({
+        tempo_client.charge({
           account: accounts[1],
           client: () => testClient,
         }),
@@ -155,7 +155,7 @@ describe('McpClient.wrap', () => {
   })
 
   test('error: throws when method not found', async () => {
-    const challenge = Challenge.fromIntent(Methods_server.charge({ client: () => testClient }), {
+    const challenge = Challenge.fromIntent(tempo_server.charge({ client: () => testClient }), {
       realm,
       secretKey,
       request: {
@@ -176,7 +176,7 @@ describe('McpClient.wrap', () => {
 
     const mcp = McpClient.wrap(client, {
       methods: [
-        tempo.charge({
+        tempo_client.charge({
           account: accounts[1],
           client: () => testClient,
         }),
