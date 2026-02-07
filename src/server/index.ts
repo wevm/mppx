@@ -4,3 +4,9 @@ export * as Mpay from './Mpay.js'
 export * as Request from './Request.js'
 export * as Response from './Response.js'
 export * as Transport from './Transport.js'
+
+export type {
+  ChannelStorage,
+  ChannelState,
+  SessionState,
+} from '../tempo/stream/Storage.js'

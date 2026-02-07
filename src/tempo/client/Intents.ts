@@ -79,3 +79,5 @@ export declare namespace charge {
     account?: Account | undefined
   }
 }
+
+export { stream } from '../stream/client/Method.js'

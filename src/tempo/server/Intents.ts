@@ -271,3 +271,5 @@ class MismatchError extends Error {
     super([reason, ...Object.entries(details).map(([k, v]) => `  - ${k}: ${v}`)].join('\n'))
   }
 }
+
+export { stream } from '../stream/server/Method.js'

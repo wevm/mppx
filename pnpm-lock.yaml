@@ -69,10 +69,34 @@ importers:
         version: 5.9.3
       viem:
         specifier: latest
-        version: 2.45.0(typescript@5.9.3)(zod@4.3.6)
+        version: 2.45.1(typescript@5.9.3)(zod@4.3.6)
       vite:
         specifier: latest
         version: 7.3.1(@types/node@25.0.10)(tsx@4.21.0)(yaml@2.8.2)
+
+  examples/stream:
+    dependencies:
+      '@remix-run/node-fetch-server':
+        specifier: latest
+        version: 0.13.0
+      '@types/node':
+        specifier: latest
+        version: 25.2.1
+      mpay:
+        specifier: workspace:*
+        version: link:../..
+      tsx:
+        specifier: latest
+        version: 4.21.0
+      typescript:
+        specifier: latest
+        version: 5.9.3
+      viem:
+        specifier: ^2.44.4
+        version: 2.45.1(typescript@5.9.3)(zod@4.3.6)
+      vite:
+        specifier: latest
+        version: 7.3.1(@types/node@25.2.1)(tsx@4.21.0)(yaml@2.8.2)
 
 packages:
 
@@ -671,6 +695,9 @@ packages:
 
   '@types/node@25.0.10':
     resolution: {integrity: sha512-zWW5KPngR/yvakJgGOmZ5vTBemDoSqF3AcV/LrO5u5wTWyEAVVh+IT39G4gtyAkh3CtTZs8aX/yRM82OfzHJRg==}
+
+  '@types/node@25.2.1':
+    resolution: {integrity: sha512-CPrnr8voK8vC6eEtyRzvMpgp3VyVRhgclonE7qYi6P9sXwYb59ucfrnmFBTaP0yUi8Gk4yZg/LlTJULGxvTNsg==}
 
   '@types/ssh2-streams@0.1.13':
     resolution: {integrity: sha512-faHyY3brO9oLEA0QlcO8N2wT7R0+1sHWZvQ+y3rMLwdY1ZyS1z0W3t65j9PqT4HmQ6ALzNe7RZlNuCNE0wBSWA==}
@@ -2007,6 +2034,14 @@ packages:
       typescript:
         optional: true
 
+  viem@2.45.1:
+    resolution: {integrity: sha512-LN6Pp7vSfv50LgwhkfSbIXftAM5J89lP9x8TeDa8QM7o41IxlHrDh0F9X+FfnCWtsz11pEVV5sn+yBUoOHNqYA==}
+    peerDependencies:
+      typescript: '>=5.0.4'
+    peerDependenciesMeta:
+      typescript:
+        optional: true
+
   vite@7.3.1:
     resolution: {integrity: sha512-w+N7Hifpc3gRjZ63vYBXA56dvvRlNWRczTdmCBBa+CotUzAPf5b7YMdMR/8CQoeYE5LX3W4wj6RYTgonm1b9DA==}
     engines: {node: ^20.19.0 || >=22.12.0}
@@ -2697,13 +2732,13 @@ snapshots:
 
   '@types/docker-modem@3.0.6':
     dependencies:
-      '@types/node': 25.0.10
+      '@types/node': 25.2.1
       '@types/ssh2': 1.15.5
 
   '@types/dockerode@3.3.47':
     dependencies:
       '@types/docker-modem': 3.0.6
-      '@types/node': 25.0.10
+      '@types/node': 25.2.1
       '@types/ssh2': 1.15.5
 
   '@types/estree@1.0.8': {}
@@ -2718,13 +2753,17 @@ snapshots:
     dependencies:
       undici-types: 7.16.0
 
+  '@types/node@25.2.1':
+    dependencies:
+      undici-types: 7.16.0
+
   '@types/ssh2-streams@0.1.13':
     dependencies:
-      '@types/node': 25.0.10
+      '@types/node': 25.2.1
 
   '@types/ssh2@0.5.52':
     dependencies:
-      '@types/node': 25.0.10
+      '@types/node': 25.2.1
       '@types/ssh2-streams': 0.1.13
 
   '@types/ssh2@1.15.5':
@@ -3341,7 +3380,6 @@ snapshots:
   get-tsconfig@4.13.0:
     dependencies:
       resolve-pkg-maps: 1.0.0
-    optional: true
 
   glob-parent@5.1.2:
     dependencies:
@@ -3711,7 +3749,7 @@ snapshots:
       '@protobufjs/path': 1.1.2
       '@protobufjs/pool': 1.1.0
       '@protobufjs/utf8': 1.1.0
-      '@types/node': 25.0.10
+      '@types/node': 25.2.1
       long: 5.3.2
 
   proxy-addr@2.0.7:
@@ -3784,8 +3822,7 @@ snapshots:
 
   resolve-from@5.0.0: {}
 
-  resolve-pkg-maps@1.0.0:
-    optional: true
+  resolve-pkg-maps@1.0.0: {}
 
   retry@0.12.0: {}
 
@@ -4095,7 +4132,6 @@ snapshots:
       get-tsconfig: 4.13.0
     optionalDependencies:
       fsevents: 2.3.3
-    optional: true
 
   tweetnacl@0.14.5: {}
 
@@ -4142,6 +4178,23 @@ snapshots:
       - utf-8-validate
       - zod
 
+  viem@2.45.1(typescript@5.9.3)(zod@4.3.6):
+    dependencies:
+      '@noble/curves': 1.9.1
+      '@noble/hashes': 1.8.0
+      '@scure/bip32': 1.7.0
+      '@scure/bip39': 1.6.0
+      abitype: 1.2.3(typescript@5.9.3)(zod@4.3.6)
+      isows: 1.0.7(ws@8.18.3)
+      ox: 0.12.0(typescript@5.9.3)(zod@4.3.6)
+      ws: 8.18.3
+    optionalDependencies:
+      typescript: 5.9.3
+    transitivePeerDependencies:
+      - bufferutil
+      - utf-8-validate
+      - zod
+
   vite@7.3.1(@types/node@25.0.10)(tsx@4.21.0)(yaml@2.8.2):
     dependencies:
       esbuild: 0.27.2
@@ -4152,6 +4205,20 @@ snapshots:
       tinyglobby: 0.2.15
     optionalDependencies:
       '@types/node': 25.0.10
+      fsevents: 2.3.3
+      tsx: 4.21.0
+      yaml: 2.8.2
+
+  vite@7.3.1(@types/node@25.2.1)(tsx@4.21.0)(yaml@2.8.2):
+    dependencies:
+      esbuild: 0.27.2
+      fdir: 6.5.0(picomatch@4.0.3)
+      picomatch: 4.0.3
+      postcss: 8.5.6
+      rollup: 4.57.0
+      tinyglobby: 0.2.15
+    optionalDependencies:
+      '@types/node': 25.2.1
       fsevents: 2.3.3
       tsx: 4.21.0
       yaml: 2.8.2
