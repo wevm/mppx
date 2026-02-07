@@ -1,9 +1,9 @@
-import { type Address, createWalletClient, type Hex } from 'viem'
+import type { Address, Hex } from 'viem'
 import { Addresses } from 'viem/tempo'
 import { beforeAll, beforeEach, describe, expect, test } from 'vitest'
 import { rpcUrl } from '~test/tempo/prool.js'
 import { deployEscrow, openChannel as openOnChain, topUpChannel } from '~test/tempo/stream.js'
-import { accounts, asset, chain, fundAccount, http } from '~test/tempo/viem.js'
+import { accounts, asset, chain, client, fundAccount } from '~test/tempo/viem.js'
 import type { ChannelState, ChannelStorage, SessionState } from '../Storage.js'
 import { signVoucher } from '../Voucher.js'
 import { stream } from './Method.js'
@@ -15,116 +15,11 @@ const currency = asset
 let escrowContract: Address
 let saltCounter = 0
 
-const walletClient = createWalletClient({
-  account: payer,
-  chain,
-  transport: http(rpcUrl),
-})
-
 beforeAll(async () => {
   escrowContract = await deployEscrow()
   await fundAccount({ address: payer.address, token: Addresses.pathUsd })
   await fundAccount({ address: payer.address, token: currency })
 })
-
-function nextSalt(): Hex {
-  saltCounter++
-  return `0x${saltCounter.toString(16).padStart(64, '0')}` as Hex
-}
-
-// ---- In-memory ChannelStorage ----
-
-function createMemoryStorage(): ChannelStorage {
-  const channels = new Map<string, ChannelState>()
-  const sessions = new Map<string, SessionState>()
-
-  return {
-    async getChannel(channelId) {
-      return channels.get(channelId) ?? null
-    },
-    async getSession(challengeId) {
-      return sessions.get(challengeId) ?? null
-    },
-    async updateChannel(channelId, fn) {
-      const current = channels.get(channelId) ?? null
-      const result = fn(current)
-      if (result) channels.set(channelId, result)
-      else channels.delete(channelId)
-      return result
-    },
-    async updateSession(challengeId, fn) {
-      const current = sessions.get(challengeId) ?? null
-      const result = fn(current)
-      if (result) sessions.set(challengeId, result)
-      else sessions.delete(challengeId)
-      return result
-    },
-  }
-}
-
-// ---- Helpers ----
-
-function makeChallenge(opts: { id?: string; channelId: Hex }) {
-  return {
-    id: opts.id ?? 'challenge-1',
-    realm: 'test.example.com',
-    method: 'tempo' as const,
-    intent: 'stream' as const,
-    request: {
-      amount: '1000000',
-      unitType: 'token',
-      currency: currency as string,
-      recipient: recipient as string,
-      suggestedDeposit: undefined as string | undefined,
-      methodDetails: {
-        escrowContract: escrowContract as string,
-        channelId: undefined as string | undefined,
-        minVoucherDelta: undefined as string | undefined,
-        chainId: chain.id as number | undefined,
-      },
-    },
-  }
-}
-
-function makeRequest() {
-  return {
-    amount: '1000000',
-    unitType: 'token',
-    currency: currency as string,
-    recipient: recipient as string,
-    escrowContract: escrowContract as string,
-    chainId: chain.id,
-  }
-}
-
-async function signTestVoucher(channelId: Hex, amount: bigint) {
-  return signVoucher(
-    walletClient,
-    payer,
-    { channelId, cumulativeAmount: amount },
-    escrowContract,
-    chain.id,
-  )
-}
-
-async function createOnChainChannel(
-  deposit: bigint,
-  opts?: { payee?: Address; authorizedSigner?: Address },
-) {
-  const salt = nextSalt()
-  const { channelId } = await openOnChain({
-    escrow: escrowContract,
-    payer,
-    payee: opts?.payee ?? recipient,
-    token: currency,
-    deposit,
-    salt,
-    ...(opts?.authorizedSigner !== undefined && { authorizedSigner: opts.authorizedSigner }),
-  })
-  return channelId
-}
-
-// ---- Tests ----
 
 describe('stream server Method', () => {
   let storage: ChannelStorage
@@ -763,3 +658,96 @@ describe('stream server Method', () => {
     })
   })
 })
+
+function nextSalt(): Hex {
+  saltCounter++
+  return `0x${saltCounter.toString(16).padStart(64, '0')}` as Hex
+}
+
+function createMemoryStorage(): ChannelStorage {
+  const channels = new Map<string, ChannelState>()
+  const sessions = new Map<string, SessionState>()
+
+  return {
+    async getChannel(channelId) {
+      return channels.get(channelId) ?? null
+    },
+    async getSession(challengeId) {
+      return sessions.get(challengeId) ?? null
+    },
+    async updateChannel(channelId, fn) {
+      const current = channels.get(channelId) ?? null
+      const result = fn(current)
+      if (result) channels.set(channelId, result)
+      else channels.delete(channelId)
+      return result
+    },
+    async updateSession(challengeId, fn) {
+      const current = sessions.get(challengeId) ?? null
+      const result = fn(current)
+      if (result) sessions.set(challengeId, result)
+      else sessions.delete(challengeId)
+      return result
+    },
+  }
+}
+
+function makeChallenge(opts: { id?: string; channelId: Hex }) {
+  return {
+    id: opts.id ?? 'challenge-1',
+    realm: 'test.example.com',
+    method: 'tempo' as const,
+    intent: 'stream' as const,
+    request: {
+      amount: '1000000',
+      unitType: 'token',
+      currency: currency as string,
+      recipient: recipient as string,
+      suggestedDeposit: undefined as string | undefined,
+      methodDetails: {
+        escrowContract: escrowContract as string,
+        channelId: undefined as string | undefined,
+        minVoucherDelta: undefined as string | undefined,
+        chainId: chain.id as number | undefined,
+      },
+    },
+  }
+}
+
+function makeRequest() {
+  return {
+    amount: '1000000',
+    unitType: 'token',
+    currency: currency as string,
+    recipient: recipient as string,
+    escrowContract: escrowContract as string,
+    chainId: chain.id,
+  }
+}
+
+async function signTestVoucher(channelId: Hex, amount: bigint) {
+  return signVoucher(
+    client,
+    payer,
+    { channelId, cumulativeAmount: amount },
+    escrowContract,
+    chain.id,
+  )
+}
+
+async function createOnChainChannel(
+  deposit: bigint,
+  opts?: { payee?: Address; authorizedSigner?: Address },
+) {
+  const salt = nextSalt()
+  const { channelId } = await openOnChain({
+    escrow: escrowContract,
+    payer,
+    payee: opts?.payee ?? recipient,
+    token: currency,
+    deposit,
+    salt,
+    ...(opts?.authorizedSigner !== undefined && { authorizedSigner: opts.authorizedSigner }),
+  })
+  return channelId
+}

@@ -1,4 +1,4 @@
-import type { Address, Hex, WalletClient } from 'viem'
+import type { Address, Client, Hex } from 'viem'
 import type { Challenge, Credential } from '../../../index.js'
 import * as MethodIntent from '../../../MethodIntent.js'
 import * as Intents from '../../Intents.js'
@@ -33,7 +33,7 @@ import { parseVoucherFromPayload, verifyVoucher } from '../Voucher.js'
  * ```
  */
 export function stream(parameters: stream.Parameters) {
-  const { storage, minVoucherDelta = 0n, walletClient, rpcUrl } = parameters
+  const { storage, minVoucherDelta = 0n, client, rpcUrl } = parameters
 
   const chainId = parameters.chainId ?? defaults.testnetChainId
   const escrowContract =
@@ -91,7 +91,7 @@ export function stream(parameters: stream.Parameters) {
           streamReceipt = await handleClose(
             storage,
             rpcUrl,
-            walletClient,
+            client,
             challenge,
             payload,
             methodDetails,
@@ -114,17 +114,17 @@ export declare namespace stream {
     /** RPC URL for on-chain verification. */
     rpcUrl: string
     /** Minimum voucher delta to accept (default: 0n). */
-    minVoucherDelta?: bigint
-    /** Optional wallet client for on-chain close transactions. */
-    walletClient?: WalletClient
+    minVoucherDelta?: bigint | undefined
+    /** Optional client for on-chain close transactions. */
+    client?: Client | undefined
     /** Default recipient address. */
-    recipient?: Address
+    recipient?: Address | undefined
     /** Default currency token address. */
-    currency?: Address
+    currency?: Address | undefined
     /** Default escrow contract address. */
-    escrowContract?: Address
+    escrowContract?: Address | undefined
     /** Default chain ID. */
-    chainId?: number
+    chainId?: number | undefined
   }
 }
 
@@ -419,7 +419,7 @@ async function handleVoucher(
 async function handleClose(
   storage: ChannelStorage,
   rpcUrl: string,
-  walletClient: WalletClient | undefined,
+  client: Client | undefined,
   challenge: Challenge.Challenge,
   payload: StreamCredentialPayload & { action: 'close' },
   methodDetails: { escrowContract: Address; chainId: number },
@@ -458,11 +458,11 @@ async function handleClose(
 
   const session = await storage.getSession(challenge.id)
 
-  // TODO: Submit on-chain close transaction if walletClient available
+  // TODO: Submit on-chain close transaction if client available
   let txHash: Hex | undefined
-  if (walletClient) {
+  if (client) {
     // In production, submit the close transaction here
-    // txHash = await submitCloseTransaction(walletClient, channel, voucher)
+    // txHash = await submitCloseTransaction(client, channel, voucher)
   }
 
   // Persist the final voucher for later on-chain settlement instead of deleting

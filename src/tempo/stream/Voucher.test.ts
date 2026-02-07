@@ -1,4 +1,4 @@
-import { createWalletClient, http } from 'viem'
+import { createClient, http } from 'viem'
 import { privateKeyToAccount } from 'viem/accounts'
 import { describe, expect, test } from 'vitest'
 import { parseVoucherFromPayload, signVoucher, verifyVoucher } from './Voucher.js'
@@ -9,7 +9,7 @@ const account = privateKeyToAccount(
 const escrowContract = '0x1234567890abcdef1234567890abcdef12345678' as const
 const chainId = 42431
 
-const walletClient = createWalletClient({
+const client = createClient({
   account,
   transport: http('http://127.0.0.1'), // only used for local signTypedData
 })
@@ -20,7 +20,7 @@ const cumulativeAmount = 1000000n
 describe('Voucher', () => {
   test('signVoucher and verifyVoucher round-trip', async () => {
     const signature = await signVoucher(
-      walletClient,
+      client,
       account,
       { channelId, cumulativeAmount },
       escrowContract,
@@ -40,7 +40,7 @@ describe('Voucher', () => {
 
   test('verifyVoucher rejects wrong signer', async () => {
     const signature = await signVoucher(
-      walletClient,
+      client,
       account,
       { channelId, cumulativeAmount },
       escrowContract,
@@ -59,7 +59,7 @@ describe('Voucher', () => {
 
   test('verifyVoucher rejects tampered amount', async () => {
     const signature = await signVoucher(
-      walletClient,
+      client,
       account,
       { channelId, cumulativeAmount },
       escrowContract,
@@ -77,7 +77,7 @@ describe('Voucher', () => {
 
   test('verifyVoucher rejects tampered channelId', async () => {
     const signature = await signVoucher(
-      walletClient,
+      client,
       account,
       { channelId, cumulativeAmount },
       escrowContract,
@@ -97,7 +97,7 @@ describe('Voucher', () => {
 
   test('verifyVoucher rejects wrong chain ID', async () => {
     const signature = await signVoucher(
-      walletClient,
+      client,
       account,
       { channelId, cumulativeAmount },
       escrowContract,
