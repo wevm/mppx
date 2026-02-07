@@ -10,6 +10,7 @@ import {
 } from 'viem'
 import { prepareTransactionRequest, readContract, signTransaction } from 'viem/actions'
 import { tempo as tempo_chain } from 'viem/chains'
+import { Abis } from 'viem/tempo'
 import type * as Challenge from '../../Challenge.js'
 import * as Credential from '../../Credential.js'
 import type { OneOf } from '../../internal/types.js'
@@ -48,22 +49,7 @@ type ChannelEntry = {
   opened: boolean
 }
 
-// ---------------------------------------------------------------------------
-// ABIs (minimal)
-// ---------------------------------------------------------------------------
 
-const erc20ApproveAbi = [
-  {
-    type: 'function' as const,
-    name: 'approve' as const,
-    inputs: [
-      { name: 'spender', type: 'address' },
-      { name: 'amount', type: 'uint256' },
-    ],
-    outputs: [{ name: '', type: 'bool' }],
-    stateMutability: 'nonpayable' as const,
-  },
-] as const
 
 // ---------------------------------------------------------------------------
 // stream() — main entry point
@@ -306,7 +292,7 @@ export function stream(parameters: stream.Parameters = {}) {
     })
 
     const approveData = encodeFunctionData({
-      abi: erc20ApproveAbi,
+      abi: Abis.tip20,
       functionName: 'approve',
       args: [escrowContract, deposit],
     })
