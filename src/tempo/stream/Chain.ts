@@ -2,10 +2,8 @@ import {
   type Account,
   type Address,
   type Client,
-  createClient,
   decodeFunctionData,
   type Hex,
-  http,
   isAddressEqual,
   type ReadContractReturnType,
   toFunctionSelector,
@@ -116,11 +114,10 @@ export type OnChainChannel = ReadContractReturnType<typeof escrowAbi, 'getChanne
  * Read channel state from the escrow contract.
  */
 export async function getOnChainChannel(
-  rpcUrl: string,
+  client: Client,
   escrowContract: Address,
   channelId: Hex,
 ): Promise<OnChainChannel> {
-  const client = createClient({ transport: http(rpcUrl) })
   return readContract(client, {
     address: escrowContract,
     abi: escrowAbi,
@@ -133,12 +130,12 @@ export async function getOnChainChannel(
  * Verify a topUp by re-reading on-chain channel state.
  */
 export async function verifyTopUpTransaction(
-  rpcUrl: string,
+  client: Client,
   escrowContract: Address,
   channelId: Hex,
   previousDeposit: bigint,
 ): Promise<{ deposit: bigint }> {
-  const channel = await getOnChainChannel(rpcUrl, escrowContract, channelId)
+  const channel = await getOnChainChannel(client, escrowContract, channelId)
 
   if (channel.finalized) {
     throw new ChannelClosedError({ reason: 'channel is finalized on-chain' })
@@ -209,24 +206,22 @@ export type BroadcastResult = {
 }
 
 export async function broadcastOpenTransaction(parameters: {
-  rpcUrl: string
+  client: Client
   serializedTransaction: Hex
   escrowContract: Address
   channelId: Hex
   recipient: Address
   currency: Address
   feePayer?: Account | undefined
-  chainId: number
 }): Promise<BroadcastResult> {
   const {
-    rpcUrl,
+    client,
     serializedTransaction,
     escrowContract,
     channelId,
     recipient,
     currency,
     feePayer,
-    chainId,
   } = parameters
 
   const transaction = Transaction.deserialize(
@@ -259,11 +254,6 @@ export async function broadcastOpenTransaction(parameters: {
     })
   }
 
-  const client = createClient({
-    chain: { id: chainId } as never,
-    transport: http(rpcUrl),
-  })
-
   const serializedTransaction_final = await (async () => {
     if (feePayer) {
       return signTransaction(client, {
@@ -289,37 +279,35 @@ export async function broadcastOpenTransaction(parameters: {
 
     txHash = receipt.transactionHash
   } catch (error) {
-    const onChain = await getOnChainChannel(rpcUrl, escrowContract, channelId)
+    const onChain = await getOnChainChannel(client, escrowContract, channelId)
     if (onChain.deposit > 0n) {
       return { txHash: undefined, onChain }
     }
     throw error
   }
 
-  const onChain = await getOnChainChannel(rpcUrl, escrowContract, channelId)
+  const onChain = await getOnChainChannel(client, escrowContract, channelId)
 
   return { txHash, onChain }
 }
 
 export async function broadcastTopUpTransaction(parameters: {
-  rpcUrl: string
+  client: Client
   serializedTransaction: Hex
   escrowContract: Address
   channelId: Hex
   declaredDeposit: bigint
   previousDeposit: bigint
   feePayer?: Account | undefined
-  chainId: number
 }): Promise<{ txHash: Hex; newDeposit: bigint }> {
   const {
-    rpcUrl,
+    client,
     serializedTransaction,
     escrowContract,
     channelId,
     declaredDeposit,
     previousDeposit,
     feePayer,
-    chainId,
   } = parameters
 
   const transaction = Transaction.deserialize(
@@ -352,11 +340,6 @@ export async function broadcastTopUpTransaction(parameters: {
     })
   }
 
-  const client = createClient({
-    chain: { id: chainId } as never,
-    transport: http(rpcUrl),
-  })
-
   const serializedTransaction_final = await (async () => {
     if (feePayer) {
       return signTransaction(client, {
@@ -378,7 +361,7 @@ export async function broadcastTopUpTransaction(parameters: {
     })
   }
 
-  const onChain = await getOnChainChannel(rpcUrl, escrowContract, channelId)
+  const onChain = await getOnChainChannel(client, escrowContract, channelId)
 
   if (onChain.deposit <= previousDeposit) {
     throw new VerificationFailedError({ reason: 'channel deposit did not increase after topUp' })

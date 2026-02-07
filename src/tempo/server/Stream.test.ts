@@ -1,7 +1,6 @@
 import type { Address, Hex } from 'viem'
 import { Addresses } from 'viem/tempo'
 import { beforeAll, beforeEach, describe, expect, test } from 'vitest'
-import { rpcUrl } from '~test/tempo/prool.js'
 import {
   deployEscrow,
   signOpenChannel,
@@ -44,7 +43,7 @@ describe('stream server Method', () => {
   function createServer(overrides: Partial<Parameters<typeof stream>[0]> = {}) {
     return stream({
       storage,
-      rpcUrl,
+      client: () => client,
       recipient,
       currency,
       escrowContract,
@@ -771,7 +770,7 @@ describe('stream server Method', () => {
 
     test('close submits on-chain when client provided', async () => {
       const { channelId, serializedTransaction } = await createSignedOpenTransaction(10000000n)
-      const server = createServer({ client })
+      const server = createServer({ client: () => client })
       await openServerChannel(server, channelId, serializedTransaction)
 
       const receipt = await server.verify({

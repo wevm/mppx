@@ -1,20 +1,18 @@
 import {
   type Account,
   type Address,
-  type Client,
-  createClient,
   encodeFunctionData,
   type Hex,
-  http,
   toHex,
+  type Client as viem_Client,
 } from 'viem'
 import { prepareTransactionRequest, readContract, signTransaction } from 'viem/actions'
 import { tempo as tempo_chain } from 'viem/chains'
 import { Abis } from 'viem/tempo'
 import type * as Challenge from '../../Challenge.js'
 import * as Credential from '../../Credential.js'
-import type { OneOf } from '../../internal/types.js'
 import * as MethodIntent from '../../MethodIntent.js'
+import * as Client from '../../viem/Client.js'
 import * as z from '../../zod.js'
 import * as Intents from '../Intents.js'
 import * as defaults from '../internal/defaults.js'
@@ -76,19 +74,13 @@ type ChannelEntry = {
  * ```
  */
 export function stream(parameters: stream.Parameters = {}) {
-  const rpcUrl = parameters.rpcUrl ?? defaults.rpcUrl
+  const { client } = parameters
 
-  function getClient(chainId: number): Client {
-    if (parameters.client) return parameters.client(chainId)
-
-    const url = rpcUrl[chainId as keyof typeof rpcUrl]
-    if (!url) throw new Error(`No \`rpcUrl\` configured for \`chainId\` (${chainId}).`)
-
-    return createClient({
-      chain: { ...tempo_chain, id: chainId },
-      transport: http(url),
-    })
-  }
+  const getClient = Client.getResolver({
+    chain: tempo_chain,
+    client,
+    rpcUrl: defaults.rpcUrl,
+  })
 
   const escrowContractMap = new Map<string, Address>()
   const channels = new Map<string, ChannelEntry>()
@@ -105,6 +97,7 @@ export function stream(parameters: stream.Parameters = {}) {
 
   function resolveEscrow(
     challenge: { request: { methodDetails?: unknown } },
+    chainId: number,
     channelId?: string,
   ): Address {
     if (channelId) {
@@ -113,7 +106,10 @@ export function stream(parameters: stream.Parameters = {}) {
     }
     const challengeEscrow = (challenge.request.methodDetails as { escrowContract?: string })
       ?.escrowContract as Address | undefined
-    const escrow = challengeEscrow ?? parameters.escrowContract
+    const escrow =
+      challengeEscrow ??
+      parameters.escrowContract ??
+      ((defaults.escrowContract as Record<number, string>)[chainId] as Address | undefined)
     if (!escrow)
       throw new Error(
         'No `escrowContract` available. Provide it in parameters or ensure the server challenge includes it.',
@@ -121,17 +117,8 @@ export function stream(parameters: stream.Parameters = {}) {
     return escrow
   }
 
-  function resolveChainId(md: { chainId?: number } | undefined): number {
-    const chainId = md?.chainId ?? Number(Object.keys(rpcUrl)[0])
-    if (Number.isNaN(chainId))
-      throw new Error(
-        'No `chainId` available. Provide it in challenge methodDetails or configure `rpcUrl`.',
-      )
-    return chainId
-  }
-
   async function voucherPayload(
-    client: Client,
+    client: viem_Client,
     account: Account,
     channelId: Hex,
     cumulativeAmount: bigint,
@@ -173,9 +160,9 @@ export function stream(parameters: stream.Parameters = {}) {
     const md = challenge.request.methodDetails as
       | { chainId?: number; escrowContract?: string; channelId?: string }
       | undefined
-    const chainId = resolveChainId(md)
+    const chainId = md?.chainId ?? 0
     const client = getClient(chainId)
-    const escrowContract = resolveEscrow(challenge)
+    const escrowContract = resolveEscrow(challenge, chainId)
     const payee = challenge.request.recipient as Address
     const currency = challenge.request.currency as Address
     const amount = BigInt(challenge.request.amount as string)
@@ -186,10 +173,8 @@ export function stream(parameters: stream.Parameters = {}) {
 
     if (!entry) {
       const suggestedChannelId = md?.channelId as Hex | undefined
-      if (suggestedChannelId) {
-        const url = rpcUrl[chainId as keyof typeof rpcUrl]
-        if (url) entry = await tryRecoverChannel(url, escrowContract, suggestedChannelId, key)
-      }
+      if (suggestedChannelId)
+        entry = await tryRecoverChannel(client, escrowContract, suggestedChannelId, key)
     }
 
     let payload: StreamCredentialPayload
@@ -224,7 +209,7 @@ export function stream(parameters: stream.Parameters = {}) {
   }
 
   async function openChannel(
-    client: Client,
+    client: viem_Client,
     account: Account,
     escrowContract: Address,
     payee: Address,
@@ -286,13 +271,13 @@ export function stream(parameters: stream.Parameters = {}) {
   }
 
   async function tryRecoverChannel(
-    chainRpcUrl: string,
+    client: viem_Client,
     escrowContract: Address,
     channelId: Hex,
     key: string,
   ): Promise<ChannelEntry | undefined> {
     try {
-      const onChain = await getOnChainChannel(chainRpcUrl, escrowContract, channelId)
+      const onChain = await getOnChainChannel(client, escrowContract, channelId)
 
       if (onChain.deposit > 0n && !onChain.finalized) {
         const entry: ChannelEntry = {
@@ -318,7 +303,7 @@ export function stream(parameters: stream.Parameters = {}) {
     const md = challenge.request.methodDetails as
       | { chainId?: number; escrowContract?: string; channelId?: string }
       | undefined
-    const chainId = resolveChainId(md)
+    const chainId = md?.chainId ?? 0
     const client = getClient(chainId)
 
     const action = context.action!
@@ -331,7 +316,7 @@ export function stream(parameters: stream.Parameters = {}) {
     } = context
     const channelId = channelIdRaw as Hex
 
-    const escrowContract = resolveEscrow(challenge, channelId)
+    const escrowContract = resolveEscrow(challenge, chainId, channelId)
     escrowContractMap.set(channelId, escrowContract)
 
     let payload: StreamCredentialPayload
@@ -418,13 +403,10 @@ export function stream(parameters: stream.Parameters = {}) {
       if (!account)
         throw new Error('No `account` provided. Pass `account` to parameters or context.')
 
-      if (!context?.action && parameters.deposit !== undefined) {
+      if (!context?.action && parameters.deposit !== undefined)
         return autoManageCredential(challenge, account)
-      }
 
-      if (context?.action) {
-        return manualCredential(challenge, account, context)
-      }
+      if (context?.action) return manualCredential(challenge, account, context)
 
       throw new Error(
         'No `action` in context and no `deposit` configured. Either provide context with action/channelId/cumulativeAmount, or configure `deposit` for auto-management.',
@@ -434,21 +416,12 @@ export function stream(parameters: stream.Parameters = {}) {
 }
 
 export declare namespace stream {
-  type Parameters = {
-    /** Account to sign vouchers with. */
+  type Parameters = Client.getResolver.Parameters & {
+    /** Account to sign vouchers with. Can be overridden per-call via context. */
     account?: Account | undefined
-    /** Escrow contract address override. Derived from challenge if not provided. */
-    escrowContract?: Address | undefined
     /** Initial deposit amount for auto-managed channels. When set, the method handles the full channel lifecycle (open, voucher, cumulative tracking) automatically. */
     deposit?: bigint | undefined
-  } & OneOf<
-    | {
-        /** Function that returns a client for the given chain ID. */
-        client?: ((chainId: number) => Client) | undefined
-      }
-    | {
-        /** RPC URLs keyed by chain ID. */
-        rpcUrl?: ({ [chainId: number]: string } & object) | undefined
-      }
-  >
+    /** Escrow contract address override. Derived from challenge or defaults if not provided. */
+    escrowContract?: Address | undefined
+  }
 }

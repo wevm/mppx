@@ -1,4 +1,5 @@
-import type { Account, Address, Client, Hex } from 'viem'
+import type { Account, Address, Hex, Client as viem_Client } from 'viem'
+import { tempo as tempo_chain } from 'viem/chains'
 import {
   AmountExceedsDepositError,
   BadRequestError,
@@ -12,6 +13,7 @@ import {
 } from '../../Errors.js'
 import type { Challenge, Credential } from '../../index.js'
 import * as MethodIntent from '../../MethodIntent.js'
+import * as Client from '../../viem/Client.js'
 import * as Intents from '../Intents.js'
 import * as defaults from '../internal/defaults.js'
 import {
@@ -47,11 +49,9 @@ type StreamMethodDetails = {
  *   methods: [
  *     tempo.stream({
  *       storage: myStorage,
- *       rpcUrl: 'https://rpc.moderato.tempo.xyz',
  *       recipient: '0x...',
  *       currency: '0x...',
  *       escrowContract: '0x...',
- *       chainId: 42431,
  *     }),
  *   ],
  *   realm: 'my-app',
@@ -60,7 +60,13 @@ type StreamMethodDetails = {
  * ```
  */
 export function stream(parameters: stream.Parameters) {
-  const { storage, minVoucherDelta = 0n, client, feePayer, rpcUrl } = parameters
+  const { client, storage, minVoucherDelta = 0n, feePayer } = parameters
+
+  const getClient = Client.getResolver({
+    chain: tempo_chain,
+    client,
+    rpcUrl: defaults.rpcUrl,
+  })
 
   const chainId = parameters.chainId ?? defaults.testnetChainId
   const escrowContract =
@@ -81,6 +87,7 @@ export function stream(parameters: stream.Parameters) {
       const { challenge, payload } = credential as Credential.Credential<StreamCredentialPayload>
 
       const methodDetails = challenge.request.methodDetails as StreamMethodDetails
+      const client = getClient(methodDetails.chainId)
 
       const resolvedFeePayer = methodDetails.feePayer === true ? feePayer : undefined
       const effectiveMinVoucherDelta = methodDetails.minVoucherDelta
@@ -93,7 +100,7 @@ export function stream(parameters: stream.Parameters) {
         case 'open':
           streamReceipt = await handleOpen(
             storage,
-            rpcUrl,
+            client,
             challenge,
             payload,
             methodDetails,
@@ -104,7 +111,7 @@ export function stream(parameters: stream.Parameters) {
         case 'topUp':
           streamReceipt = await handleTopUp(
             storage,
-            rpcUrl,
+            client,
             challenge,
             payload,
             methodDetails,
@@ -115,7 +122,7 @@ export function stream(parameters: stream.Parameters) {
         case 'voucher':
           streamReceipt = await handleVoucher(
             storage,
-            rpcUrl,
+            client,
             effectiveMinVoucherDelta,
             challenge,
             payload,
@@ -124,14 +131,7 @@ export function stream(parameters: stream.Parameters) {
           break
 
         case 'close':
-          streamReceipt = await handleClose(
-            storage,
-            rpcUrl,
-            client,
-            challenge,
-            payload,
-            methodDetails,
-          )
+          streamReceipt = await handleClose(storage, client, challenge, payload, methodDetails)
           break
 
         default:
@@ -146,15 +146,11 @@ export function stream(parameters: stream.Parameters) {
 }
 
 export declare namespace stream {
-  type Parameters = {
+  type Parameters = Client.getResolver.Parameters & {
     /** Storage backend for channel and session state. */
     storage: ChannelStorage
-    /** RPC URL for on-chain verification and transaction broadcasting. */
-    rpcUrl: string
     /** Minimum voucher delta to accept (default: 0n). */
     minVoucherDelta?: bigint | undefined
-    /** Optional client for on-chain close/settle transactions. */
-    client?: Client | undefined
     /** Optional fee payer account for covering open/topUp transaction fees. */
     feePayer?: Account | undefined
     /** Default recipient address. */
@@ -173,7 +169,7 @@ export declare namespace stream {
  */
 export async function settle(
   storage: ChannelStorage,
-  client: Client,
+  client: viem_Client,
   escrowContract: Address,
   channelId: Hex,
 ): Promise<Hex> {
@@ -359,7 +355,7 @@ async function verifyAndAcceptVoucher(parameters: {
         highestVoucher: voucher,
       }
     }
-    return { ...current, deposit: onChain.deposit }
+    return current
   })
 
   const session = await acceptVoucher(storage, challenge.id, channelId, voucher.cumulativeAmount)
@@ -375,11 +371,11 @@ async function verifyAndAcceptVoucher(parameters: {
 }
 
 /**
- * Handle 'open' action - broadcast transaction, verify channel, and accept initial voucher.
+ * Handle 'open' action - broadcast open transaction, verify voucher, and create channel.
  */
 async function handleOpen(
   storage: ChannelStorage,
-  rpcUrl: string,
+  client: viem_Client,
   challenge: Challenge.Challenge,
   payload: StreamCredentialPayload & { action: 'open' },
   methodDetails: StreamMethodDetails,
@@ -396,14 +392,13 @@ async function handleOpen(
   const amount = challenge.request.amount ? BigInt(challenge.request.amount as string) : undefined
 
   const { onChain } = await broadcastOpenTransaction({
-    rpcUrl,
+    client,
     serializedTransaction: payload.transaction,
     escrowContract: methodDetails.escrowContract,
     channelId: payload.channelId,
     recipient,
     currency,
     feePayer,
-    chainId: methodDetails.chainId,
   })
 
   validateOnChainChannel(onChain, recipient, currency, amount)
@@ -522,7 +517,7 @@ async function handleOpen(
  */
 async function handleTopUp(
   storage: ChannelStorage,
-  rpcUrl: string,
+  client: viem_Client,
   challenge: Challenge.Challenge,
   payload: StreamCredentialPayload & { action: 'topUp' },
   methodDetails: StreamMethodDetails,
@@ -536,14 +531,13 @@ async function handleTopUp(
   const declaredDeposit = BigInt(payload.additionalDeposit)
 
   const { newDeposit: onChainDeposit } = await broadcastTopUpTransaction({
-    rpcUrl,
+    client,
     serializedTransaction: payload.transaction,
     escrowContract: methodDetails.escrowContract,
     channelId: payload.channelId,
     declaredDeposit,
     previousDeposit: channel.deposit,
     feePayer,
-    chainId: methodDetails.chainId,
   })
 
   await storage.updateChannel(payload.channelId, (current) => {
@@ -567,7 +561,7 @@ async function handleTopUp(
  */
 async function handleVoucher(
   storage: ChannelStorage,
-  rpcUrl: string,
+  client: viem_Client,
   minVoucherDelta: bigint,
   challenge: Challenge.Challenge,
   payload: StreamCredentialPayload & { action: 'voucher' },
@@ -587,7 +581,7 @@ async function handleVoucher(
     payload.signature,
   )
 
-  const onChain = await getOnChainChannel(rpcUrl, methodDetails.escrowContract, payload.channelId)
+  const onChain = await getOnChainChannel(client, methodDetails.escrowContract, payload.channelId)
 
   return verifyAndAcceptVoucher({
     storage,
@@ -606,8 +600,7 @@ async function handleVoucher(
  */
 async function handleClose(
   storage: ChannelStorage,
-  rpcUrl: string,
-  client: Client | undefined,
+  client: viem_Client,
   challenge: Challenge.Challenge,
   payload: StreamCredentialPayload & { action: 'close' },
   methodDetails: StreamMethodDetails,
@@ -632,7 +625,7 @@ async function handleClose(
     })
   }
 
-  const onChain = await getOnChainChannel(rpcUrl, methodDetails.escrowContract, payload.channelId)
+  const onChain = await getOnChainChannel(client, methodDetails.escrowContract, payload.channelId)
 
   if (onChain.finalized) {
     throw new ChannelClosedError({ reason: 'channel is finalized on-chain' })
@@ -664,7 +657,7 @@ async function handleClose(
   const session = await storage.getSession(challenge.id)
 
   let txHash: Hex | undefined
-  if (client) {
+  if (client.account) {
     txHash = await closeOnChain(client, methodDetails.escrowContract, voucher)
   }
 
