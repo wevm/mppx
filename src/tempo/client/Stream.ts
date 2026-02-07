@@ -21,6 +21,10 @@ import { escrowAbi, getOnChainChannel } from '../stream/Chain.js'
 import type { StreamCredentialPayload } from '../stream/Types.js'
 import { signVoucher } from '../stream/Voucher.js'
 
+// ---------------------------------------------------------------------------
+// Context schema — accepted by both auto and manual modes.
+// ---------------------------------------------------------------------------
+
 export const streamContextSchema = z.object({
   account: z.optional(z.custom<Account>()),
   action: z.optional(z.enum(['open', 'topUp', 'voucher', 'close'])),
@@ -33,12 +37,20 @@ export const streamContextSchema = z.object({
 
 export type StreamContext = z.infer<typeof streamContextSchema>
 
+// ---------------------------------------------------------------------------
+// Internal types
+// ---------------------------------------------------------------------------
+
 type ChannelEntry = {
   channelId: Hex
   salt: Hex
   cumulativeAmount: bigint
   opened: boolean
 }
+
+// ---------------------------------------------------------------------------
+// ABIs (minimal)
+// ---------------------------------------------------------------------------
 
 const erc20ApproveAbi = [
   {
@@ -53,15 +65,24 @@ const erc20ApproveAbi = [
   },
 ] as const
 
+// ---------------------------------------------------------------------------
+// stream() — main entry point
+// ---------------------------------------------------------------------------
+
 /**
  * Creates a stream payment client that auto-manages channel lifecycle.
  *
- * When `deposit` is provided, the method handles everything internally:
- * channel opening, voucher signing, and cumulative amount tracking.
- * The caller just uses `fetch(url)` and payments happen automatically.
+ * **Two modes:**
+ *
+ * 1. **Auto mode** (set `deposit`) — the client handles channel open, voucher
+ *    signing, and cumulative tracking. Just call `fetch(url)`.
+ *
+ * 2. **Manual mode** (pass `context.action`) — full control over each step.
+ *    You provide channelId, cumulativeAmount, and transaction yourself.
  *
  * @example
  * ```ts
+ * // Auto mode
  * import { Fetch, tempo } from 'mpay/client'
  *
  * const fetch = Fetch.from({
@@ -73,13 +94,12 @@ const erc20ApproveAbi = [
  *   ],
  * })
  *
- * // Payments are handled automatically
  * const res = await fetch('/api/chat?prompt=hello')
  * ```
  *
  * @example
  * ```ts
- * // Manual context for full control (advanced)
+ * // Manual mode
  * const mpay = Mpay.create({
  *   methods: [tempo.stream({ account })],
  * })
@@ -94,6 +114,8 @@ const erc20ApproveAbi = [
 export function stream(parameters: stream.Parameters = {}) {
   const rpcUrl = parameters.rpcUrl ?? defaults.rpcUrl
 
+  // -- Shared helpers -------------------------------------------------------
+
   function getClient(chainId: number): Client {
     if (parameters.client) return parameters.client(chainId)
 
@@ -106,8 +128,10 @@ export function stream(parameters: stream.Parameters = {}) {
     })
   }
 
+  /** channelId → escrowContract cache (populated on open/recover). */
   const escrowContractMap = new Map<string, Address>()
 
+  /** (payee:currency:escrow) → channel state (in-memory, not persisted). */
   const channels = new Map<string, ChannelEntry>()
 
   function channelKey(payee: Address, currency: Address, escrow: Address): string {
@@ -120,6 +144,12 @@ export function stream(parameters: stream.Parameters = {}) {
     return toHex(bytes, { size: 32 })
   }
 
+  /**
+   * Resolve escrow contract address from (in order):
+   *   1. Cache (if we've seen this channelId before)
+   *   2. Server challenge methodDetails
+   *   3. Parameters
+   */
   function resolveEscrow(
     challenge: { request: { methodDetails?: unknown } },
     channelId?: string,
@@ -138,6 +168,63 @@ export function stream(parameters: stream.Parameters = {}) {
     return escrow
   }
 
+  function resolveChainId(md: { chainId?: number } | undefined): number {
+    const chainId = md?.chainId ?? Number(Object.keys(rpcUrl)[0])
+    if (Number.isNaN(chainId))
+      throw new Error(
+        'No `chainId` available. Provide it in challenge methodDetails or configure `rpcUrl`.',
+      )
+    return chainId
+  }
+
+  /** Sign a voucher and build the credential payload. */
+  async function voucherPayload(
+    client: Client,
+    account: Account,
+    channelId: Hex,
+    cumulativeAmount: bigint,
+    escrowContract: Address,
+    chainId: number,
+  ): Promise<StreamCredentialPayload> {
+    const signature = await signVoucher(
+      client,
+      account,
+      { channelId, cumulativeAmount },
+      escrowContract,
+      chainId,
+    )
+    return {
+      action: 'voucher',
+      channelId,
+      cumulativeAmount: cumulativeAmount.toString(),
+      signature,
+    }
+  }
+
+  /** Serialize a credential payload into a full Authorization header value. */
+  function serializeCredential(
+    challenge: Challenge.Challenge,
+    payload: StreamCredentialPayload,
+    chainId: number,
+    account: Account,
+  ): string {
+    return Credential.serialize({
+      challenge,
+      payload,
+      source: `did:pkh:eip155:${chainId}:${account.address}`,
+    })
+  }
+
+  // -- Auto mode ------------------------------------------------------------
+  //
+  // When `parameters.deposit` is set, the client manages the full lifecycle:
+  //
+  //   1. First request → open a channel on-chain + sign initial voucher
+  //   2. Subsequent requests → increment cumulative amount + sign new voucher
+  //
+  // If the server challenge includes a channelId hint, we try to recover
+  // an existing on-chain channel before opening a new one.
+
   async function autoManageCredential(
     challenge: Challenge.Challenge,
     account: Account,
@@ -145,7 +232,7 @@ export function stream(parameters: stream.Parameters = {}) {
     const md = challenge.request.methodDetails as
       | { chainId?: number; escrowContract?: string; channelId?: string }
       | undefined
-    const chainId = (md?.chainId ?? Number(Object.keys(rpcUrl)[0]))!
+    const chainId = resolveChainId(md)
     const client = getClient(chainId)
     const escrowContract = resolveEscrow(challenge)
     const payee = challenge.request.recipient as Address
@@ -156,8 +243,7 @@ export function stream(parameters: stream.Parameters = {}) {
     const key = channelKey(payee, currency, escrowContract)
     let entry = channels.get(key)
 
-    let payload: StreamCredentialPayload
-
+    // Try to recover an existing on-chain channel if the server hinted one.
     if (!entry) {
       const suggestedChannelId = md?.channelId as Hex | undefined
       if (suggestedChannelId) {
@@ -166,83 +252,106 @@ export function stream(parameters: stream.Parameters = {}) {
       }
     }
 
+    let payload: StreamCredentialPayload
+
     if (entry?.opened) {
+      // Channel already open — sign a new voucher with incremented amount.
       entry.cumulativeAmount += amount
-      const signature = await signVoucher(
+      payload = await voucherPayload(
         client,
         account,
-        { channelId: entry.channelId, cumulativeAmount: entry.cumulativeAmount },
+        entry.channelId,
+        entry.cumulativeAmount,
         escrowContract,
         chainId,
       )
-      payload = {
-        action: 'voucher',
-        channelId: entry.channelId,
-        cumulativeAmount: entry.cumulativeAmount.toString(),
-        signature,
-      }
     } else {
-      const salt = randomSalt()
-
-      const channelId = await readContract(client, {
-        address: escrowContract,
-        abi: escrowAbi,
-        functionName: 'computeChannelId',
-        args: [account.address, payee, currency, deposit, salt, account.address],
-      })
-
-      const approveData = encodeFunctionData({
-        abi: erc20ApproveAbi,
-        functionName: 'approve',
-        args: [escrowContract, deposit],
-      })
-      const openData = encodeFunctionData({
-        abi: escrowAbi,
-        functionName: 'open',
-        args: [payee, currency, deposit, salt, account.address],
-      })
-
-      const prepared = await prepareTransactionRequest(client, {
-        account,
-        calls: [
-          { to: currency, data: approveData },
-          { to: escrowContract, data: openData },
-        ],
-      } as never)
-      prepared.gas = prepared.gas! + 5_000n
-      const transaction = (await signTransaction(client, prepared as never)) as Hex
-
-      const cumulativeAmount = amount
-      const signature = await signVoucher(
+      // No channel — open one with approve+open batched in a single tx.
+      const result = await openChannel(
         client,
         account,
-        { channelId, cumulativeAmount },
         escrowContract,
+        payee,
+        currency,
+        deposit,
+        amount,
         chainId,
       )
+      channels.set(key, result.entry)
+      escrowContractMap.set(result.entry.channelId, escrowContract)
+      payload = result.payload
+    }
 
-      entry = { channelId, salt, cumulativeAmount, opened: true }
-      channels.set(key, entry)
-      escrowContractMap.set(channelId, escrowContract)
+    return serializeCredential(challenge, payload, chainId, account)
+  }
 
-      payload = {
+  /** Build and sign an approve+open transaction, returning the open payload + channel entry. */
+  async function openChannel(
+    client: Client,
+    account: Account,
+    escrowContract: Address,
+    payee: Address,
+    currency: Address,
+    deposit: bigint,
+    initialAmount: bigint,
+    chainId: number,
+  ): Promise<{ entry: ChannelEntry; payload: StreamCredentialPayload }> {
+    const salt = randomSalt()
+
+    const channelId = await readContract(client, {
+      address: escrowContract,
+      abi: escrowAbi,
+      functionName: 'computeChannelId',
+      args: [account.address, payee, currency, deposit, salt, account.address],
+    })
+
+    const approveData = encodeFunctionData({
+      abi: erc20ApproveAbi,
+      functionName: 'approve',
+      args: [escrowContract, deposit],
+    })
+    const openData = encodeFunctionData({
+      abi: escrowAbi,
+      functionName: 'open',
+      args: [payee, currency, deposit, salt, account.address],
+    })
+
+    const prepared = await prepareTransactionRequest(client, {
+      account,
+      calls: [
+        { to: currency, data: approveData },
+        { to: escrowContract, data: openData },
+      ],
+    } as never)
+    prepared.gas = prepared.gas! + 5_000n
+    const transaction = (await signTransaction(client, prepared as never)) as Hex
+
+    const signature = await signVoucher(
+      client,
+      account,
+      { channelId, cumulativeAmount: initialAmount },
+      escrowContract,
+      chainId,
+    )
+
+    return {
+      entry: { channelId, salt, cumulativeAmount: initialAmount, opened: true },
+      payload: {
         action: 'open',
         type: 'transaction',
         channelId,
         transaction,
         authorizedSigner: account.address,
-        cumulativeAmount: cumulativeAmount.toString(),
+        cumulativeAmount: initialAmount.toString(),
         signature,
-      }
+      },
     }
-
-    return Credential.serialize({
-      challenge,
-      payload,
-      source: `did:pkh:eip155:${chainId}:${account.address}`,
-    })
   }
 
+  /**
+   * Try to recover an existing on-chain channel by reading its state.
+   * Returns a ChannelEntry if the channel is open and not finalized.
+   */
   async function tryRecoverChannel(
     chainRpcUrl: string,
     escrowContract: Address,
@@ -270,6 +379,119 @@ export function stream(parameters: stream.Parameters = {}) {
     return undefined
   }
 
+  // -- Manual mode ----------------------------------------------------------
+  //
+  // When the caller provides `context.action`, they control the full flow.
+  // The client just signs vouchers and serializes the credential — no
+  // automatic channel management.
+
+  async function manualCredential(
+    challenge: Challenge.Challenge,
+    account: Account,
+    context: StreamContext,
+  ): Promise<string> {
+    const md = challenge.request.methodDetails as
+      | { chainId?: number; escrowContract?: string; channelId?: string }
+      | undefined
+    const chainId = resolveChainId(md)
+    const client = getClient(chainId)
+
+    const action = context.action!
+    const {
+      channelId: channelIdRaw,
+      cumulativeAmount,
+      transaction,
+      authorizedSigner,
+      additionalDeposit,
+    } = context
+    const channelId = channelIdRaw as Hex
+
+    const escrowContract = resolveEscrow(challenge, channelId)
+    escrowContractMap.set(channelId, escrowContract)
+
+    let payload: StreamCredentialPayload
+
+    switch (action) {
+      case 'open': {
+        if (!transaction) throw new Error('transaction required for open action')
+        if (cumulativeAmount === undefined)
+          throw new Error('cumulativeAmount required for open action')
+        const signature = await signVoucher(
+          client,
+          account,
+          { channelId, cumulativeAmount },
+          escrowContract,
+          chainId,
+        )
+        payload = {
+          action: 'open',
+          type: 'transaction',
+          channelId,
+          transaction: transaction as Hex,
+          authorizedSigner: (authorizedSigner as Address) ?? account.address,
+          cumulativeAmount: cumulativeAmount.toString(),
+          signature,
+        }
+        break
+      }
+
+      case 'topUp':
+        if (!transaction) throw new Error('transaction required for topUp action')
+        if (additionalDeposit === undefined)
+          throw new Error('additionalDeposit required for topUp action')
+        payload = {
+          action: 'topUp',
+          type: 'transaction',
+          channelId,
+          transaction: transaction as Hex,
+          additionalDeposit: additionalDeposit.toString(),
+        }
+        break
+
+      case 'voucher': {
+        if (cumulativeAmount === undefined)
+          throw new Error('cumulativeAmount required for voucher action')
+        payload = await voucherPayload(
+          client,
+          account,
+          channelId,
+          cumulativeAmount,
+          escrowContract,
+          chainId,
+        )
+        break
+      }
+
+      case 'close': {
+        if (cumulativeAmount === undefined)
+          throw new Error('cumulativeAmount required for close action')
+        const signature = await signVoucher(
+          client,
+          account,
+          { channelId, cumulativeAmount },
+          escrowContract,
+          chainId,
+        )
+        payload = {
+          action: 'close',
+          channelId,
+          cumulativeAmount: cumulativeAmount.toString(),
+          signature,
+        }
+        break
+      }
+    }
+
+    return serializeCredential(challenge, payload, chainId, account)
+  }
+
+  // -- createCredential (router) --------------------------------------------
+  //
+  //   context.action provided?
+  //     YES → manual mode
+  //     NO  → deposit configured? → auto mode
+  //                               → error
+
   return MethodIntent.toClient(Intents.stream, {
     context: streamContextSchema,
 
@@ -278,121 +500,26 @@ export function stream(parameters: stream.Parameters = {}) {
       if (!account)
         throw new Error('No `account` provided. Pass `account` to parameters or context.')
 
+      // Auto mode: deposit is configured and no explicit action was provided.
       if (!context?.action && parameters.deposit !== undefined) {
         return autoManageCredential(challenge, account)
       }
 
-      if (!context?.action)
-        throw new Error(
-          'No `action` in context and no `deposit` configured. Either provide context with action/channelId/cumulativeAmount, or configure `deposit` for auto-management.',
-        )
-
-      const md = challenge.request.methodDetails as
-        | { chainId?: number; escrowContract?: string; channelId?: string }
-        | undefined
-      const chainId = (md?.chainId ?? Number(Object.keys(rpcUrl)[0]))!
-      const client = getClient(chainId)
-
-      const action = context.action!
-      const {
-        channelId: channelIdRaw,
-        cumulativeAmount,
-        transaction,
-        authorizedSigner,
-        additionalDeposit,
-      } = context
-
-      const channelId = channelIdRaw as Hex
-
-      const escrowContract = resolveEscrow(challenge, channelId)
-      escrowContractMap.set(channelId, escrowContract)
-
-      let payload: StreamCredentialPayload
-
-      switch (action) {
-        case 'open': {
-          if (!transaction) throw new Error('transaction required for open action')
-          if (cumulativeAmount === undefined)
-            throw new Error('cumulativeAmount required for open action')
-          const signature = await signVoucher(
-            client,
-            account,
-            { channelId, cumulativeAmount },
-            escrowContract,
-            chainId,
-          )
-          payload = {
-            action: 'open',
-            type: 'transaction',
-            channelId,
-            transaction: transaction as Hex,
-            authorizedSigner: (authorizedSigner as Address) ?? account.address,
-            cumulativeAmount: cumulativeAmount.toString(),
-            signature,
-          }
-          break
-        }
-
-        case 'topUp':
-          if (!transaction) throw new Error('transaction required for topUp action')
-          if (additionalDeposit === undefined)
-            throw new Error('additionalDeposit required for topUp action')
-          payload = {
-            action: 'topUp',
-            type: 'transaction',
-            channelId,
-            transaction: transaction as Hex,
-            additionalDeposit: additionalDeposit.toString(),
-          }
-          break
-
-        case 'voucher': {
-          if (cumulativeAmount === undefined)
-            throw new Error('cumulativeAmount required for voucher action')
-          const signature = await signVoucher(
-            client,
-            account,
-            { channelId, cumulativeAmount },
-            escrowContract,
-            chainId,
-          )
-          payload = {
-            action: 'voucher',
-            channelId,
-            cumulativeAmount: cumulativeAmount.toString(),
-            signature,
-          }
-          break
-        }
-
-        case 'close': {
-          if (cumulativeAmount === undefined)
-            throw new Error('cumulativeAmount required for close action')
-          const signature = await signVoucher(
-            client,
-            account,
-            { channelId, cumulativeAmount },
-            escrowContract,
-            chainId,
-          )
-          payload = {
-            action: 'close',
-            channelId,
-            cumulativeAmount: cumulativeAmount.toString(),
-            signature,
-          }
-          break
-        }
+      // Manual mode: caller specified an explicit action.
+      if (context?.action) {
+        return manualCredential(challenge, account, context)
       }
 
-      return Credential.serialize({
-        challenge,
-        payload,
-        source: `did:pkh:eip155:${chainId}:${account.address}`,
-      })
+      throw new Error(
+        'No `action` in context and no `deposit` configured. Either provide context with action/channelId/cumulativeAmount, or configure `deposit` for auto-management.',
+      )
     },
   })
 }
+
+// ---------------------------------------------------------------------------
+// Parameters
+// ---------------------------------------------------------------------------
 
 export declare namespace stream {
   type Parameters = {
