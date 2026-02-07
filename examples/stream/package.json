@@ -12,7 +12,7 @@
     "mpay": "latest",
     "tsx": "latest",
     "typescript": "latest",
-    "viem": "^2.44.4",
+    "viem": "latest",
     "vite": "latest"
   }
 }

@@ -28,7 +28,8 @@
   "pnpm": {
     "overrides": {
       "mpay": "workspace:*",
-      "ox": "^0.12.0"
+      "ox": "^0.12.0",
+      "viem": "latest"
     }
   },
   "[!start-pkg]": "",
