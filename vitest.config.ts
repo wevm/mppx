@@ -18,7 +18,7 @@ export default defineConfig({
     retry: 3,
     globalSetup: ['./test/setup.global.ts'],
     setupFiles: ['./test/setup.ts'],
-    hookTimeout: 30_000,
+    hookTimeout: 60_000,
     maxWorkers: 3,
   },
 })

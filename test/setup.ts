@@ -24,6 +24,7 @@ beforeAll(async () => {
   )
 
   await fundAccount({ address: accounts[1].address, token: asset })
+  await fundAccount({ address: accounts[2].address, token: asset })
 })
 
 afterAll(async () => {
