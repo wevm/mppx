@@ -117,3 +117,64 @@ describe('charge', () => {
     `)
   })
 })
+
+describe('stream', () => {
+  test('behavior: converts amount to base units', () => {
+    const result = Intent.stream.schema.request.parse({
+      amount: '0.000025',
+      unitType: 'llm_token',
+      currency: '0x20c0000000000000000000000000000000000001',
+      decimals: 6,
+      recipient: '0x1234567890abcdef1234567890abcdef12345678',
+    })
+    expect(result.amount).toBe('25')
+    expect(result.unitType).toBe('llm_token')
+    expect(result.currency).toBe('0x20c0000000000000000000000000000000000001')
+    expect(result).not.toHaveProperty('decimals')
+  })
+
+  test('behavior: converts suggestedDeposit to base units', () => {
+    const result = Intent.stream.schema.request.parse({
+      amount: '0.000025',
+      unitType: 'llm_token',
+      currency: '0x20c0000000000000000000000000000000000001',
+      decimals: 6,
+      recipient: '0x1234567890abcdef1234567890abcdef12345678',
+      suggestedDeposit: '10',
+    })
+    expect(result.amount).toBe('25')
+    expect(result.suggestedDeposit).toBe('10000000')
+  })
+
+  test('behavior: works without suggestedDeposit', () => {
+    const result = Intent.stream.schema.request.parse({
+      amount: '1',
+      unitType: 'request',
+      currency: '0x20c0000000000000000000000000000000000001',
+      decimals: 6,
+    })
+    expect(result.amount).toBe('1000000')
+    expect(result).not.toHaveProperty('suggestedDeposit')
+  })
+
+  test('error: rejects missing decimals', () => {
+    expect(() =>
+      Intent.stream.schema.request.parse({
+        amount: '25',
+        unitType: 'llm_token',
+        currency: '0x20c0000000000000000000000000000000000001',
+      }),
+    ).toThrow()
+  })
+
+  test('error: rejects invalid amount', () => {
+    expect(() =>
+      Intent.stream.schema.request.parse({
+        amount: 'abc',
+        unitType: 'llm_token',
+        currency: '0x20c0000000000000000000000000000000000001',
+        decimals: 6,
+      }),
+    ).toThrow()
+  })
+})

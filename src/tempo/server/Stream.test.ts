@@ -1183,6 +1183,7 @@ function makeChallenge(opts: { id?: string; channelId: Hex }) {
       amount: '1000000',
       unitType: 'token',
       currency: currency as string,
+      decimals: 6,
       recipient: recipient as string,
       suggestedDeposit: undefined as string | undefined,
       methodDetails: {
@@ -1201,6 +1202,7 @@ function makeRequest() {
     amount: '1000000',
     unitType: 'token',
     currency: currency as string,
+    decimals: 6,
     recipient: recipient as string,
     escrowContract: escrowContract as string,
     chainId: chain.id,

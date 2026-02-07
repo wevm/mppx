@@ -87,7 +87,7 @@ export const stream = MethodIntent.fromIntent(Intent.stream, {
           ),
         ),
       }),
-      requires: ['recipient', 'currency'],
+      requires: ['decimals', 'recipient', 'currency'],
     },
   },
 })

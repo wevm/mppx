@@ -72,13 +72,23 @@ export const charge = from({
 export const stream = from({
   name: 'stream',
   schema: {
-    request: z.object({
-      amount: z.amount(),
-      unitType: z.string(),
-      currency: z.string(),
-      recipient: z.optional(z.string()),
-      suggestedDeposit: z.optional(z.amount()),
-    }),
+    request: z.pipe(
+      z.object({
+        amount: z.amount(),
+        unitType: z.string(),
+        currency: z.string(),
+        decimals: z.number(),
+        recipient: z.optional(z.string()),
+        suggestedDeposit: z.optional(z.amount()),
+      }),
+      z.transform(({ amount, decimals, suggestedDeposit, ...rest }) => ({
+        ...rest,
+        amount: parseUnits(amount, decimals).toString(),
+        ...(suggestedDeposit
+          ? { suggestedDeposit: parseUnits(suggestedDeposit, decimals).toString() }
+          : {}),
+      })),
+    ),
   },
 })
 
