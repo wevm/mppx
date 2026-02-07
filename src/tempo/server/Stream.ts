@@ -67,6 +67,7 @@ export function stream<const defaults extends stream.Defaults>(
     amount,
     client,
     currency,
+    decimals = 6,
     recipient,
     storage,
     suggestedDeposit,
@@ -81,11 +82,12 @@ export function stream<const defaults extends stream.Defaults>(
     rpcUrl: defaults.rpcUrl,
   })
 
-  type Defaults = defaults & { escrowContract: Address }
+  type Defaults = defaults & { decimals: number; escrowContract: Address }
   return MethodIntent.toServer<typeof Intents.stream, Defaults>(Intents.stream, {
     defaults: {
       amount,
       currency,
+      decimals,
       recipient,
       suggestedDeposit,
       unitType,

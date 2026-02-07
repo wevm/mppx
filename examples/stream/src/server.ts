@@ -7,7 +7,7 @@ import { createMemoryStorage } from './storage.js'
 
 const account = privateKeyToAccount(generatePrivateKey())
 const currency = '0x20c0000000000000000000000000000000000001' as const
-const pricePerToken = 75n
+const pricePerToken = '0.000075'
 
 const storage = createMemoryStorage()
 
@@ -33,7 +33,7 @@ export async function handler(request: Request): Promise<Response | null> {
     const prompt = url.searchParams.get('prompt') ?? 'Hello!'
 
     const result = await mpay.stream({
-      amount: pricePerToken.toString(),
+      amount: pricePerToken,
       unitType: 'token',
     })(request)
 
