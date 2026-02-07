@@ -80,7 +80,12 @@ export const stream = MethodIntent.fromIntent(Intent.stream, {
         channelId: z.optional(z.hash()),
         minVoucherDelta: z.optional(z.amount()),
         chainId: z.optional(z.number()),
-        feePayer: z.optional(z.boolean()),
+        feePayer: z.optional(
+          z.pipe(
+            z.union([z.boolean(), z.custom<Account>()]),
+            z.transform((v): boolean => (typeof v === 'object' ? true : v)),
+          ),
+        ),
       }),
       requires: ['recipient', 'currency'],
     },

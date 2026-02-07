@@ -7,8 +7,6 @@ import { createMemoryStorage } from './storage.js'
 
 const account = privateKeyToAccount(generatePrivateKey())
 const currency = '0x20c0000000000000000000000000000000000001' as const
-const chainId = 42431
-const rpcUrl = 'https://rpc.moderato.tempo.xyz'
 const pricePerToken = 75n
 
 const storage = createMemoryStorage()
@@ -16,11 +14,9 @@ const storage = createMemoryStorage()
 const mpay = Mpay.create({
   methods: [
     tempo.stream({
-      storage,
-      rpcUrl,
-      recipient: account.address,
       currency,
-      chainId,
+      recipient: account.address,
+      storage,
     }),
   ],
   realm: 'localhost',
@@ -39,8 +35,6 @@ export async function handler(request: Request): Promise<Response | null> {
     const result = await mpay.stream({
       amount: pricePerToken.toString(),
       unitType: 'token',
-      currency,
-      recipient: account.address,
     })(request)
 
     if (result.status === 402) return result.challenge as globalThis.Response

@@ -12,6 +12,7 @@ import {
   VerificationFailedError,
 } from '../../Errors.js'
 import type { Challenge, Credential } from '../../index.js'
+import type { LooseOmit } from '../../internal/types.js'
 import * as MethodIntent from '../../MethodIntent.js'
 import * as Client from '../../viem/Client.js'
 import * as Intents from '../Intents.js'
@@ -59,8 +60,21 @@ type StreamMethodDetails = {
  * })
  * ```
  */
-export function stream(parameters: stream.Parameters) {
-  const { client, storage, minVoucherDelta = 0n, feePayer } = parameters
+export function stream<const defaults extends stream.Defaults>(
+  parameters: stream.Parameters<defaults>,
+) {
+  const {
+    amount,
+    client,
+    currency,
+    decimals = 6,
+    recipient,
+    storage,
+    suggestedDeposit,
+    unitType,
+    minVoucherDelta = 0n,
+    feePayer,
+  } = parameters
 
   const getClient = Client.getResolver({
     chain: tempo_chain,
@@ -68,19 +82,52 @@ export function stream(parameters: stream.Parameters) {
     rpcUrl: defaults.rpcUrl,
   })
 
-  const chainId = parameters.chainId ?? defaults.testnetChainId
-  const escrowContract =
-    parameters.escrowContract ??
-    (defaults.escrowContract[chainId as keyof typeof defaults.escrowContract] as
-      | Address
-      | undefined)
-
-  return MethodIntent.toServer(Intents.stream, {
+  type Defaults = defaults & { decimals: number; escrowContract: Address }
+  return MethodIntent.toServer<typeof Intents.stream, Defaults>(Intents.stream, {
     defaults: {
-      recipient: parameters.recipient,
-      currency: parameters.currency,
-      escrowContract,
-      chainId,
+      amount,
+      currency,
+      decimals,
+      recipient,
+      suggestedDeposit,
+      unitType,
+    } as Defaults,
+
+    // TODO: dedupe `{charge,stream}.request`
+    request({ credential, request }) {
+      // Extract chainId from request or default.
+      const chainId = (() => {
+        if (request.chainId) return request.chainId
+        if (parameters.testnet) return defaults.testnetChainId
+        return getClient(0).chain?.id
+      })()
+
+      // Validate chainId.
+      const client = (() => {
+        try {
+          return getClient(chainId!)
+        } catch {
+          throw new Error(`No client configured with chainId ${chainId}.`)
+        }
+      })()
+      if (client.chain?.id !== chainId)
+        throw new Error(`Client not configured with chainId ${chainId}.`)
+
+      const escrowContract =
+        request.escrowContract ??
+        defaults.escrowContract[chainId as keyof typeof defaults.escrowContract]
+
+      // Extract feePayer.
+      const feePayer = (() => {
+        const account =
+          typeof request.feePayer === 'object' ? request.feePayer : parameters.feePayer
+        const requested = request.feePayer !== false && (account ?? parameters.feePayer)
+        if (credential) return account
+        if (requested) return true
+        return undefined
+      })()
+
+      return { ...request, chainId, escrowContract, feePayer }
     },
 
     async verify({ credential }) {
@@ -146,22 +193,19 @@ export function stream(parameters: stream.Parameters) {
 }
 
 export declare namespace stream {
-  type Parameters = Client.getResolver.Parameters & {
+  type Defaults = LooseOmit<MethodIntent.RequestDefaults<typeof Intents.stream>, 'feePayer'>
+
+  type Parameters<defaults extends Defaults = {}> = {
     /** Storage backend for channel and session state. */
     storage: ChannelStorage
     /** Minimum voucher delta to accept (default: 0n). */
     minVoucherDelta?: bigint | undefined
     /** Optional fee payer account for covering open/topUp transaction fees. */
     feePayer?: Account | undefined
-    /** Default recipient address. */
-    recipient?: Address | undefined
-    /** Default currency token address. */
-    currency?: Address | undefined
-    /** Default escrow contract address. */
-    escrowContract?: Address | undefined
-    /** Default chain ID. */
-    chainId?: number | undefined
-  }
+    /** Testnet mode. */
+    testnet?: boolean | undefined
+  } & Client.getResolver.Parameters &
+    defaults
 }
 
 /**

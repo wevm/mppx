@@ -65,6 +65,7 @@ export function charge<const defaults extends charge.Defaults>(
       recipient,
     } as Defaults,
 
+    // TODO: dedupe `{charge,stream}.request`
     request({ credential, request }) {
       // Extract chainId from request or default.
       const chainId = (() => {
