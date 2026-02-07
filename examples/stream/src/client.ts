@@ -1,21 +1,17 @@
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { Challenge } from 'mpay'
 import { Mpay, tempo } from 'mpay/client'
-import { type Address, createClient, createWalletClient, type Hex, http } from 'viem'
+import { type Address, createClient, type Hex, http } from 'viem'
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts'
+import { simulateContract, waitForTransactionReceipt, writeContract } from 'viem/actions'
 import { tempoModerato } from 'viem/chains'
 import { Actions } from 'viem/tempo'
-import {
-  simulateContract,
-  waitForTransactionReceipt,
-  writeContract,
-} from 'viem/actions'
 
 const STATE_FILE = '.channel.json'
 const BASE_URL = process.env.BASE_URL ?? 'http://localhost:5173'
 const currency = '0x20c0000000000000000000000000000000000001' as const
 const escrowContract = '0x9d136eEa063eDE5418A6BC7bEafF009bBb6CFa70' as const
-const chainId = 42431
+const _chainId = 42431
 const deposit = 10_000_000n
 const txTimeout = 30_000
 
@@ -79,13 +75,6 @@ async function main() {
     transport: http(),
   })
 
-  const walletClient = createWalletClient({
-    account,
-    chain: tempoModerato,
-    pollingInterval: 1_000,
-    transport: http(),
-  })
-
   console.log('Funding account via faucet...')
   await Actions.faucet.fundSync(client, { account, timeout: txTimeout })
   console.log('Account funded')
@@ -100,9 +89,7 @@ async function main() {
     methods: [
       tempo.stream({
         account,
-        walletClient,
         escrowContract,
-        chainId,
       }),
     ],
   })
@@ -148,7 +135,7 @@ async function main() {
     const salt = `0x${Date.now().toString(16).padStart(64, '0')}` as Hex
 
     console.log('  Opening channel on escrow...')
-    const { result } = await simulateContract(client, {
+    const { result, request } = await simulateContract(client, {
       address: escrowContract,
       abi: escrowOpenAbi,
       functionName: 'open',
@@ -156,12 +143,7 @@ async function main() {
     })
     channelId = result
 
-    openTxHash = await writeContract(client, {
-      address: escrowContract,
-      abi: escrowOpenAbi,
-      functionName: 'open',
-      args: [payee, currency, deposit, salt, account.address],
-    })
+    openTxHash = await writeContract(client, request)
     await waitForTransactionReceipt(client, { hash: openTxHash, timeout: txTimeout })
 
     cumulativeAmount = 0n

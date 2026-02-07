@@ -1,5 +1,8 @@
 import { Mpay, tempo } from 'mpay/server'
+import { createClient, http } from 'viem'
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts'
+import { tempoModerato } from 'viem/chains'
+import { Actions } from 'viem/tempo'
 import { createMemoryStorage } from './storage.js'
 
 const account = privateKeyToAccount(generatePrivateKey())
@@ -23,7 +26,8 @@ const mpay = Mpay.create({
     }),
   ],
   realm: 'localhost',
-  secretKey: 'stream-example-secret',
+  // Example-only. In production, use a strong random secret from env.
+  secretKey: process.env.SECRET_KEY ?? 'stream-example-secret',
 })
 
 export async function handler(request: Request): Promise<Response | null> {
@@ -88,13 +92,6 @@ function generateTokens(_prompt: string): string[] {
     ' answer.',
   ]
 }
-
-////////////////////////////////////////////////////////////////////
-// Internal
-
-import { createClient, http } from 'viem'
-import { tempoModerato } from 'viem/chains'
-import { Actions } from 'viem/tempo'
 
 const client = createClient({
   chain: tempoModerato,

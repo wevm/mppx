@@ -272,4 +272,5 @@ class MismatchError extends Error {
   }
 }
 
+export type { ChannelState, ChannelStorage, SessionState } from '../stream/Storage.js'
 export { stream } from '../stream/server/Method.js'

@@ -1,4 +1,8 @@
-import type { ChannelState, ChannelStorage, SessionState } from 'mpay/server'
+import type { tempo } from 'mpay/server'
+
+type ChannelStorage = tempo.ChannelStorage
+type ChannelState = tempo.ChannelState
+type SessionState = tempo.SessionState
 
 export function createMemoryStorage(): ChannelStorage {
   const channels = new Map<string, ChannelState>()
