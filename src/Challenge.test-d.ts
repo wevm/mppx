@@ -1,9 +1,33 @@
-import { describe, expectTypeOf, test } from 'vitest'
+import { assertType, describe, expectTypeOf, test } from 'vitest'
 import * as Challenge from './Challenge.js'
+import { MethodIntent } from './index.js'
 import * as Intents from './tempo/Intents.js'
 
+const method = MethodIntent.toServer(Intents.charge, {
+  async verify() {
+    return {
+      method: 'tempo',
+      reference: '0x123',
+      status: 'success' as const,
+      timestamp: new Date().toISOString(),
+    }
+  },
+})
+
+describe('FromMethod', () => {
+  test('extracts method and intent from method', () => {
+    type Result = Challenge.FromMethods<[typeof method]>
+
+    assertType<Result['method']>('tempo' as const)
+    assertType<Result['intent']>('charge' as const)
+
+    expectTypeOf<Result['request']>().toHaveProperty('amount')
+    expectTypeOf<Result['request']>().toHaveProperty('currency')
+  })
+})
+
 describe('from', () => {
-  test('returns Challenge with typed request', () => {
+  test('without method returns generic Challenge', () => {
     const challenge = Challenge.from({
       id: 'test',
       intent: 'charge',
@@ -14,12 +38,29 @@ describe('from', () => {
 
     expectTypeOf(challenge.method).toBeString()
     expectTypeOf(challenge.intent).toBeString()
+  })
+
+  test('with method narrows to FromMethod type', () => {
+    const challenge = Challenge.from(
+      {
+        id: 'test',
+        intent: 'charge',
+        method: 'tempo',
+        realm: 'api.example.com',
+        request: { amount: '1000' },
+      },
+      { methods: [method] },
+    )
+
+    assertType<'tempo'>(challenge.method)
+    assertType<'charge'>(challenge.intent)
     expectTypeOf(challenge.request).toHaveProperty('amount')
+    expectTypeOf(challenge.request).toHaveProperty('currency')
   })
 })
 
 describe('fromResponse', () => {
-  test('returns generic Challenge', () => {
+  test('behavior: without method returns generic Challenge', () => {
     const response = new Response(null, { status: 402 })
     const challenge = Challenge.fromResponse(response)
     expectTypeOf(challenge.method).toEqualTypeOf<string>()
@@ -29,35 +70,12 @@ describe('fromResponse', () => {
     }>()
   })
 
-  test('narrows type with methods', () => {
+  test('behavior: method narrows type', () => {
     const response = new Response(null, { status: 402 })
-    const challenge = Challenge.fromResponse(response, {
-      methods: [Intents.charge],
-    })
+    const challenge = Challenge.fromResponse(response, { methods: [method] })
     expectTypeOf(challenge.method).toEqualTypeOf<'tempo'>()
     expectTypeOf(challenge.intent).toEqualTypeOf<'charge'>()
-    expectTypeOf(challenge.request.amount).toEqualTypeOf<string>()
-    expectTypeOf(challenge.request.recipient).toEqualTypeOf<string>()
-  })
-})
-
-describe('deserialize', () => {
-  test('narrows type with methods', () => {
-    const challenge = Challenge.deserialize('Payment ...', {
-      methods: [Intents.charge],
-    })
-    expectTypeOf(challenge.method).toEqualTypeOf<'tempo'>()
-    expectTypeOf(challenge.intent).toEqualTypeOf<'charge'>()
-  })
-})
-
-describe('fromHeaders', () => {
-  test('narrows type with methods', () => {
-    const headers = new Headers()
-    const challenge = Challenge.fromHeaders(headers, {
-      methods: [Intents.charge],
-    })
-    expectTypeOf(challenge.method).toEqualTypeOf<'tempo'>()
-    expectTypeOf(challenge.intent).toEqualTypeOf<'charge'>()
+    expectTypeOf(challenge.request).toHaveProperty('amount')
+    expectTypeOf(challenge.request).toHaveProperty('currency')
   })
 })

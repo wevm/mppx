@@ -131,9 +131,7 @@ export function from<
 }
 
 export declare namespace from {
-  type Options<
-    methods extends readonly MethodIntent.AnyMethodIntent[] | undefined = undefined,
-  > = {
+  type Options<methods extends readonly MethodIntent.AnyMethodIntent[] | undefined = undefined> = {
     methods?: methods
   }
 
@@ -301,10 +299,7 @@ export function serialize(challenge: Challenge): string {
  */
 export function deserialize<
   const methods extends readonly MethodIntent.AnyMethodIntent[] | undefined = undefined,
->(
-  value: string,
-  options?: from.Options<methods>,
-): from.ReturnType<from.Parameters, methods> {
+>(value: string, options?: from.Options<methods>): from.ReturnType<from.Parameters, methods> {
   const prefixMatch = value.match(/^Payment\s+(.+)$/i)
   if (!prefixMatch?.[1]) throw new Error('Missing Payment scheme.')
 
@@ -348,10 +343,7 @@ export function deserialize<
  */
 export function fromHeaders<
   const methods extends readonly MethodIntent.AnyMethodIntent[] | undefined = undefined,
->(
-  headers: Headers,
-  options?: from.Options<methods>,
-): from.ReturnType<from.Parameters, methods> {
+>(headers: Headers, options?: from.Options<methods>): from.ReturnType<from.Parameters, methods> {
   const header = headers.get('WWW-Authenticate')
   if (!header) throw new Error('Missing WWW-Authenticate header.')
   return deserialize(header, options)
@@ -378,10 +370,7 @@ export function fromHeaders<
  */
 export function fromResponse<
   const methods extends readonly MethodIntent.AnyMethodIntent[] | undefined = undefined,
->(
-  response: Response,
-  options?: from.Options<methods>,
-): from.ReturnType<from.Parameters, methods> {
+>(response: Response, options?: from.Options<methods>): from.ReturnType<from.Parameters, methods> {
   if (response.status !== 402) throw new Error('Response status is not 402.')
   return fromHeaders(response.headers, options)
 }

@@ -1,6 +1,5 @@
 import { describe, expect, test } from 'vitest'
-import { rpcUrl } from '~test/tempo/prool.js'
-import { accounts, chain, client } from '~test/tempo/viem.js'
+import { accounts, client } from '~test/tempo/viem.js'
 import * as Challenge from '../Challenge.js'
 import * as Credential from '../Credential.js'
 import * as Intent from '../Intent.js'
