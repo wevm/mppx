@@ -1,4 +1,11 @@
-import { type Account, type Address, encodeFunctionData, type Hex, zeroAddress } from 'viem'
+import {
+  type Account,
+  type Address,
+  encodeFunctionData,
+  erc20Abi,
+  type Hex,
+  zeroAddress,
+} from 'viem'
 import {
   deployContract,
   prepareTransactionRequest,
@@ -11,19 +18,6 @@ import artifact from '../fixtures/TempoStreamChannel.json' with { type: 'json' }
 import { client } from './viem.js'
 
 export const escrowAbi = artifact.abi
-
-const erc20ApproveAbi = [
-  {
-    type: 'function',
-    name: 'approve',
-    inputs: [
-      { name: 'spender', type: 'address' },
-      { name: 'amount', type: 'uint256' },
-    ],
-    outputs: [{ name: '', type: 'bool' }],
-    stateMutability: 'nonpayable',
-  },
-] as const
 
 export async function deployEscrow(): Promise<Address> {
   const hash = await deployContract(client, {
@@ -50,7 +44,7 @@ export async function openChannel(params: {
   await writeContractSync(client, {
     account: payer,
     address: token,
-    abi: erc20ApproveAbi,
+    abi: erc20Abi,
     functionName: 'approve',
     args: [escrow, deposit],
   })
@@ -85,7 +79,7 @@ export async function topUpChannel(params: {
   await writeContractSync(client, {
     account: payer,
     address: token,
-    abi: erc20ApproveAbi,
+    abi: erc20Abi,
     functionName: 'approve',
     args: [escrow, amount],
   })
@@ -141,7 +135,7 @@ export async function signOpenChannel(params: {
   })
 
   const approveData = encodeFunctionData({
-    abi: erc20ApproveAbi,
+    abi: erc20Abi,
     functionName: 'approve',
     args: [escrow, deposit],
   })
@@ -175,7 +169,7 @@ export async function signTopUpChannel(params: {
   const { escrow, payer, channelId, token, amount } = params
 
   const approveData = encodeFunctionData({
-    abi: erc20ApproveAbi,
+    abi: erc20Abi,
     functionName: 'approve',
     args: [escrow, amount],
   })
