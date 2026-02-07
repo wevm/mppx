@@ -22,10 +22,6 @@ import { escrowAbi, getOnChainChannel } from '../stream/Chain.js'
 import type { StreamCredentialPayload } from '../stream/Types.js'
 import { signVoucher } from '../stream/Voucher.js'
 
-// ---------------------------------------------------------------------------
-// Context schema — accepted by both auto and manual modes.
-// ---------------------------------------------------------------------------
-
 export const streamContextSchema = z.object({
   account: z.optional(z.custom<Account>()),
   action: z.optional(z.enum(['open', 'topUp', 'voucher', 'close'])),
@@ -38,10 +34,6 @@ export const streamContextSchema = z.object({
 
 export type StreamContext = z.infer<typeof streamContextSchema>
 
-// ---------------------------------------------------------------------------
-// Internal types
-// ---------------------------------------------------------------------------
-
 type ChannelEntry = {
   channelId: Hex
   salt: Hex
@@ -49,22 +41,8 @@ type ChannelEntry = {
   opened: boolean
 }
 
-
-
-// ---------------------------------------------------------------------------
-// stream() — main entry point
-// ---------------------------------------------------------------------------
-
 /**
- * Creates a stream payment client that auto-manages channel lifecycle.
- *
- * **Two modes:**
- *
- * 1. **Auto mode** (set `deposit`) — the client handles channel open, voucher
- *    signing, and cumulative tracking. Just call `fetch(url)`.
- *
- * 2. **Manual mode** (pass `context.action`) — full control over each step.
- *    You provide channelId, cumulativeAmount, and transaction yourself.
+ * Creates a stream payment client.
  *
  * @example
  * ```ts
@@ -100,8 +78,6 @@ type ChannelEntry = {
 export function stream(parameters: stream.Parameters = {}) {
   const rpcUrl = parameters.rpcUrl ?? defaults.rpcUrl
 
-  // -- Shared helpers -------------------------------------------------------
-
   function getClient(chainId: number): Client {
     if (parameters.client) return parameters.client(chainId)
 
@@ -114,10 +90,7 @@ export function stream(parameters: stream.Parameters = {}) {
     })
   }
 
-  /** channelId → escrowContract cache (populated on open/recover). */
   const escrowContractMap = new Map<string, Address>()
-
-  /** (payee:currency:escrow) → channel state (in-memory, not persisted). */
   const channels = new Map<string, ChannelEntry>()
 
   function channelKey(payee: Address, currency: Address, escrow: Address): string {
@@ -130,12 +103,6 @@ export function stream(parameters: stream.Parameters = {}) {
     return toHex(bytes, { size: 32 })
   }
 
-  /**
-   * Resolve escrow contract address from (in order):
-   *   1. Cache (if we've seen this channelId before)
-   *   2. Server challenge methodDetails
-   *   3. Parameters
-   */
   function resolveEscrow(
     challenge: { request: { methodDetails?: unknown } },
     channelId?: string,
@@ -163,7 +130,6 @@ export function stream(parameters: stream.Parameters = {}) {
     return chainId
   }
 
-  /** Sign a voucher and build the credential payload. */
   async function voucherPayload(
     client: Client,
     account: Account,
@@ -187,7 +153,6 @@ export function stream(parameters: stream.Parameters = {}) {
     }
   }
 
-  /** Serialize a credential payload into a full Authorization header value. */
   function serializeCredential(
     challenge: Challenge.Challenge,
     payload: StreamCredentialPayload,
@@ -200,16 +165,6 @@ export function stream(parameters: stream.Parameters = {}) {
       source: `did:pkh:eip155:${chainId}:${account.address}`,
     })
   }
-
-  // -- Auto mode ------------------------------------------------------------
-  //
-  // When `parameters.deposit` is set, the client manages the full lifecycle:
-  //
-  //   1. First request → open a channel on-chain + sign initial voucher
-  //   2. Subsequent requests → increment cumulative amount + sign new voucher
-  //
-  // If the server challenge includes a channelId hint, we try to recover
-  // an existing on-chain channel before opening a new one.
 
   async function autoManageCredential(
     challenge: Challenge.Challenge,
@@ -229,7 +184,6 @@ export function stream(parameters: stream.Parameters = {}) {
     const key = channelKey(payee, currency, escrowContract)
     let entry = channels.get(key)
 
-    // Try to recover an existing on-chain channel if the server hinted one.
     if (!entry) {
       const suggestedChannelId = md?.channelId as Hex | undefined
       if (suggestedChannelId) {
@@ -241,7 +195,6 @@ export function stream(parameters: stream.Parameters = {}) {
     let payload: StreamCredentialPayload
 
     if (entry?.opened) {
-      // Channel already open — sign a new voucher with incremented amount.
       entry.cumulativeAmount += amount
       payload = await voucherPayload(
         client,
@@ -252,7 +205,6 @@ export function stream(parameters: stream.Parameters = {}) {
         chainId,
       )
     } else {
-      // No channel — open one with approve+open batched in a single tx.
       const result = await openChannel(
         client,
         account,
@@ -271,7 +223,6 @@ export function stream(parameters: stream.Parameters = {}) {
     return serializeCredential(challenge, payload, chainId, account)
   }
 
-  /** Build and sign an approve+open transaction, returning the open payload + channel entry. */
   async function openChannel(
     client: Client,
     account: Account,
@@ -334,10 +285,6 @@ export function stream(parameters: stream.Parameters = {}) {
     }
   }
 
-  /**
-   * Try to recover an existing on-chain channel by reading its state.
-   * Returns a ChannelEntry if the channel is open and not finalized.
-   */
   async function tryRecoverChannel(
     chainRpcUrl: string,
     escrowContract: Address,
@@ -358,18 +305,10 @@ export function stream(parameters: stream.Parameters = {}) {
         escrowContractMap.set(channelId, escrowContract)
         return entry
       }
-    } catch {
-      // Channel doesn't exist on-chain or query failed
-    }
+    } catch {}
 
     return undefined
   }
-
-  // -- Manual mode ----------------------------------------------------------
-  //
-  // When the caller provides `context.action`, they control the full flow.
-  // The client just signs vouchers and serializes the credential — no
-  // automatic channel management.
 
   async function manualCredential(
     challenge: Challenge.Challenge,
@@ -471,13 +410,6 @@ export function stream(parameters: stream.Parameters = {}) {
     return serializeCredential(challenge, payload, chainId, account)
   }
 
-  // -- createCredential (router) --------------------------------------------
-  //
-  //   context.action provided?
-  //     YES → manual mode
-  //     NO  → deposit configured? → auto mode
-  //                               → error
-
   return MethodIntent.toClient(Intents.stream, {
     context: streamContextSchema,
 
@@ -486,12 +418,10 @@ export function stream(parameters: stream.Parameters = {}) {
       if (!account)
         throw new Error('No `account` provided. Pass `account` to parameters or context.')
 
-      // Auto mode: deposit is configured and no explicit action was provided.
       if (!context?.action && parameters.deposit !== undefined) {
         return autoManageCredential(challenge, account)
       }
 
-      // Manual mode: caller specified an explicit action.
       if (context?.action) {
         return manualCredential(challenge, account, context)
       }
@@ -502,10 +432,6 @@ export function stream(parameters: stream.Parameters = {}) {
     },
   })
 }
-
-// ---------------------------------------------------------------------------
-// Parameters
-// ---------------------------------------------------------------------------
 
 export declare namespace stream {
   type Parameters = {

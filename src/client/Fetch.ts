@@ -24,21 +24,6 @@ let originalFetch: typeof globalThis.fetch | undefined
  * const res = await fetch('https://api.example.com/resource')
  * ```
  *
- * @example
- * ```ts
- * // With a context resolver for dynamic per-request context (e.g., stream payments)
- * const fetch = Fetch.from({
- *   methods: [tempo.stream({ account })],
- * })
- *
- * const res = await fetch('/api/chat', {
- *   context: async ({ challenge }) => ({
- *     action: 'voucher',
- *     channelId,
- *     cumulativeAmount,
- *   }),
- * })
- * ```
  */
 export function from<const methods extends readonly MethodIntent.AnyClient[]>(
   config: from.Config<methods>,
@@ -46,7 +31,7 @@ export function from<const methods extends readonly MethodIntent.AnyClient[]>(
   const { fetch = globalThis.fetch, methods } = config
 
   return async (input, init) => {
-    const { context: contextOrResolver, ...fetchInit } = init ?? {}
+    const { context, ...fetchInit } = init ?? {}
     const response = await fetch(input, fetchInit)
 
     if (response.status !== 402) return response
@@ -58,16 +43,6 @@ export function from<const methods extends readonly MethodIntent.AnyClient[]>(
       throw new Error(
         `No method intent found for "${challenge.method}.${challenge.intent}". Available: ${methods.map((m) => `${m.method}.${m.name}`).join(', ')}`,
       )
-
-    const context =
-      typeof contextOrResolver === 'function'
-        ? await (
-            contextOrResolver as (args: {
-              challenge: Challenge.Challenge
-              response: Response
-            }) => unknown
-          )({ challenge, response })
-        : contextOrResolver
 
     const credential = await resolveCredential(challenge, mi, context)
 
@@ -107,13 +82,8 @@ export declare namespace from {
   type RequestInit<
     methods extends readonly MethodIntent.AnyClient[] = readonly MethodIntent.AnyClient[],
   > = globalThis.RequestInit & {
-    /** Context to pass to the method intent's createCredential — a value or an async resolver. */
-    context?:
-      | AnyContextFor<methods>
-      | ((args: {
-          challenge: Challenge.Challenge
-          response: Response
-        }) => AnyContextFor<methods> | Promise<AnyContextFor<methods>>)
+    /** Context to pass to the method intent's createCredential. */
+    context?: AnyContextFor<methods>
   }
 }
 

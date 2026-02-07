@@ -1,6 +1,5 @@
 import type { Account } from 'viem'
 import { describe, expectTypeOf, test } from 'vitest'
-import type * as Challenge from '../Challenge.js'
 import * as tempo from '../tempo/client/Intents.js'
 import * as Fetch from './Fetch.js'
 
@@ -21,30 +20,6 @@ describe('Fetch.from', () => {
 
     expectTypeOf(fetch).toBeCallableWith('https://example.com', {
       context: { account: {} as Account },
-    })
-  })
-
-  test('behavior: accepts context resolver function in RequestInit', () => {
-    const fetch = Fetch.from({
-      methods: [tempo.charge()],
-    })
-
-    expectTypeOf(fetch).toBeCallableWith('https://example.com', {
-      context: ({ challenge: _challenge }: { challenge: Challenge.Challenge }) => ({
-        account: {} as Account,
-      }),
-    })
-  })
-
-  test('behavior: accepts async context resolver function in RequestInit', () => {
-    const fetch = Fetch.from({
-      methods: [tempo.charge()],
-    })
-
-    expectTypeOf(fetch).toBeCallableWith('https://example.com', {
-      context: async ({ challenge: _challenge }: { challenge: Challenge.Challenge }) => ({
-        account: {} as Account,
-      }),
     })
   })
 
