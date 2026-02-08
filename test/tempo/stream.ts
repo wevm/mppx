@@ -9,13 +9,13 @@ import {
 import {
   deployContract,
   prepareTransactionRequest,
-  readContract,
   signTransaction,
   waitForTransactionReceipt,
   writeContractSync,
 } from 'viem/actions'
+import * as Channel from '../../src/tempo/stream/Channel.js'
 import artifact from '../fixtures/TempoStreamChannel.json' with { type: 'json' }
-import { client } from './viem.js'
+import { chain, client } from './viem.js'
 
 export const escrowAbi = artifact.abi
 
@@ -49,11 +49,15 @@ export async function openChannel(params: {
     args: [escrow, deposit],
   })
 
-  const channelId = await readContract(client, {
-    address: escrow,
-    abi: artifact.abi,
-    functionName: 'computeChannelId',
-    args: [payer.address, payee, token, deposit, salt, authorizedSigner],
+  const channelId = Channel.computeId({
+    authorizedSigner,
+    chainId: chain.id,
+    deposit,
+    escrowContract: escrow,
+    payee,
+    payer: payer.address,
+    salt,
+    token,
   })
 
   const txReceipt = await writeContractSync(client, {
@@ -127,11 +131,15 @@ export async function signOpenChannel(params: {
   const { escrow, payer, payee, token, deposit, salt } = params
   const authorizedSigner = params.authorizedSigner ?? zeroAddress
 
-  const channelId = await readContract(client, {
-    address: escrow,
-    abi: artifact.abi,
-    functionName: 'computeChannelId',
-    args: [payer.address, payee, token, deposit, salt, authorizedSigner],
+  const channelId = Channel.computeId({
+    authorizedSigner,
+    chainId: chain.id,
+    deposit,
+    escrowContract: escrow,
+    payee,
+    payer: payer.address,
+    salt,
+    token,
   })
 
   const approveData = encodeFunctionData({

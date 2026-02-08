@@ -1,4 +1,5 @@
 export * as Chain from './Chain.js'
+export * as Channel from './Channel.js'
 export * as Receipt from './Receipt.js'
 export * as Sse from './Sse.js'
 export * as Storage from './Storage.js'

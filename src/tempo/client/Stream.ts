@@ -6,7 +6,7 @@ import {
   toHex,
   type Client as viem_Client,
 } from 'viem'
-import { prepareTransactionRequest, readContract, signTransaction } from 'viem/actions'
+import { prepareTransactionRequest, signTransaction } from 'viem/actions'
 import { tempo as tempo_chain } from 'viem/chains'
 import { Abis } from 'viem/tempo'
 import type * as Challenge from '../../Challenge.js'
@@ -17,6 +17,7 @@ import * as z from '../../zod.js'
 import * as Intents from '../Intents.js'
 import * as defaults from '../internal/defaults.js'
 import { escrowAbi, getOnChainChannel } from '../stream/Chain.js'
+import * as Channel from '../stream/Channel.js'
 import type { StreamCredentialPayload } from '../stream/Types.js'
 import { signVoucher } from '../stream/Voucher.js'
 
@@ -218,11 +219,15 @@ export function stream(parameters: stream.Parameters = {}) {
   ): Promise<{ entry: ChannelEntry; payload: StreamCredentialPayload }> {
     const salt = randomSalt()
 
-    const channelId = await readContract(client, {
-      address: escrowContract,
-      abi: escrowAbi,
-      functionName: 'computeChannelId',
-      args: [account.address, payee, currency, deposit, salt, account.address],
+    const channelId = Channel.computeId({
+      authorizedSigner: account.address,
+      chainId,
+      deposit,
+      escrowContract,
+      payee,
+      payer: account.address,
+      salt,
+      token: currency,
     })
 
     const approveData = encodeFunctionData({
