@@ -142,7 +142,7 @@ export function session<const parameters extends session.Parameters>(p?: paramet
       if (client.chain?.id !== chainId)
         throw new Error(`Client not configured with chainId ${chainId}.`)
 
-      const escrowContract =
+      const resolvedEscrow =
         request.escrowContract ??
         parameters.escrowContract ??
         defaults.escrowContract[chainId as keyof typeof defaults.escrowContract]
@@ -156,7 +156,7 @@ export function session<const parameters extends session.Parameters>(p?: paramet
         return undefined
       })()
 
-      return { ...request, chainId, escrowContract, feePayer: resolvedFeePayer }
+      return { ...request, chainId, escrowContract: resolvedEscrow, feePayer: resolvedFeePayer }
     },
 
     async verify({ credential }) {

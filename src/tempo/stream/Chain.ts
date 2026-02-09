@@ -196,7 +196,7 @@ const escrowOpenSelector = /*#__PURE__*/ toFunctionSelector(
 )
 
 const escrowTopUpSelector = /*#__PURE__*/ toFunctionSelector(
-  'function topUp(bytes32 channelId, uint128 additionalDeposit)',
+  'function topUp(bytes32 channelId, uint256 additionalDeposit)',
 )
 
 const erc20ApproveSelector = /*#__PURE__*/ toFunctionSelector(
