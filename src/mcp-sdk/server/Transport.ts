@@ -1,6 +1,5 @@
 import type { CallToolResult, McpError } from '@modelcontextprotocol/sdk/types.js'
 import type * as Credential from '../../Credential.js'
-import * as Errors from '../../Errors.js'
 import * as core_Mcp from '../../Mcp.js'
 import * as Transport from '../../server/Transport.js'
 
@@ -70,7 +69,7 @@ export function mcpSdk(): McpSdk {
           throw err
         }
       }
-      return new McpErrorClass(mcpSdkErrorCode(error), error?.message ?? 'Payment Required', {
+      return new McpErrorClass(core_Mcp.paymentRequiredCode, error?.message ?? 'Payment Required', {
         httpStatus: 402,
         challenges: [challenge],
         ...(error && { problem: error.toProblemDetails(challenge.id) }),
@@ -92,11 +91,4 @@ export function mcpSdk(): McpSdk {
       }
     },
   })
-}
-
-function mcpSdkErrorCode(error?: Errors.PaymentError): number {
-  if (!error) return core_Mcp.paymentRequiredCode
-  if (error instanceof Errors.MalformedCredentialError) return -32602
-  if (error instanceof Errors.PaymentRequiredError) return core_Mcp.paymentRequiredCode
-  return core_Mcp.paymentVerificationFailedCode
 }

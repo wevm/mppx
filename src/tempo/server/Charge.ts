@@ -8,7 +8,6 @@ import {
 import { getTransactionReceipt, sendRawTransactionSync, signTransaction } from 'viem/actions'
 import { tempo as tempo_chain } from 'viem/chains'
 import { Abis, Transaction } from 'viem/tempo'
-import { PaymentExpiredError } from '../../Errors.js'
 import type { LooseOmit } from '../../internal/types.js'
 import * as MethodIntent from '../../MethodIntent.js'
 import * as Client from '../../viem/Client.js'
@@ -113,7 +112,7 @@ export function charge<const parameters extends charge.Parameters>(
       const currency = challengeRequest.currency as `0x${string}`
       const recipient = challengeRequest.recipient as `0x${string}`
 
-      if (expires && new Date(expires) < new Date()) throw new PaymentExpiredError({ expires })
+      if (expires && new Date(expires) < new Date()) throw new Error('Payment request expired')
 
       const memo = methodDetails?.memo as `0x${string}` | undefined
 
