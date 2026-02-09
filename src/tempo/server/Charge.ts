@@ -61,7 +61,6 @@ export function charge<const defaults extends charge.Defaults>(
       // Extract chainId from request or default.
       const chainId = await (async () => {
         if (request.chainId) return request.chainId
-        if (parameters.testnet) return defaults.testnetChainId
         return (await getClient({})).chain?.id
       })()
 
@@ -241,8 +240,6 @@ export declare namespace charge {
   type Parameters<defaults extends Defaults = {}> = {
     /** Optional fee payer account for covering transaction fees. */
     feePayer?: Account | undefined
-    /** Testnet mode. */
-    testnet?: boolean | undefined
   } & Client.getResolver.Parameters &
     defaults
 }

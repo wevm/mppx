@@ -97,7 +97,6 @@ export function stream<const defaults extends stream.Defaults>(
       // Extract chainId from request or default.
       const chainId = await (async () => {
         if (request.chainId) return request.chainId
-        if (parameters.testnet) return defaults.testnetChainId
         return (await getClient({})).chain?.id
       })()
 
@@ -201,8 +200,6 @@ export declare namespace stream {
     minVoucherDelta?: bigint | undefined
     /** Optional fee payer account for covering open/topUp transaction fees. */
     feePayer?: Account | undefined
-    /** Testnet mode. */
-    testnet?: boolean | undefined
   } & Client.getResolver.Parameters &
     defaults
 }
