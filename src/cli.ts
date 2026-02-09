@@ -9,6 +9,7 @@ import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts'
 import { tempo as tempoMainnet, tempoModerato } from 'viem/chains'
 import * as Challenge from './Challenge.js'
 import * as Mpay from './client/Mpay.js'
+import * as Receipt from './Receipt.js'
 import * as tempo from './tempo/client/index.js'
 
 const require = createRequire(import.meta.url)
@@ -245,11 +246,23 @@ cli
             }
           } catch {}
         } else {
+          const receiptHeader = credentialResponse.headers.get('Payment-Receipt')
+          if (receiptHeader) {
+            const receipt = Receipt.deserialize(receiptHeader)
+            const receiptEntries: [string, string][] = [
+              ['reference', explorerLink(receipt.reference, chain, 'tx')],
+              ['timestamp', receipt.timestamp],
+            ]
+            log('Receipt')
+            printEntries(receiptEntries)
+            log('')
+          }
           console.log(await credentialResponse.text())
         }
       } catch (err) {
         // TODO: revert cast when https://github.com/wevm/zile/pull/26 is merged
-        const errCause = err instanceof Error ? (err as unknown as Record<string, unknown>).cause : undefined
+        const errCause =
+          err instanceof Error ? (err as unknown as Record<string, unknown>).cause : undefined
         const cause = errCause instanceof Error ? errCause.message : null
         console.error('Request failed:', err instanceof Error ? err.message : err)
         if (cause) console.error('  Cause:', cause)
@@ -534,9 +547,13 @@ function createKeychain(account = 'default') {
   }
 }
 
-function explorerLink(address: string, chain?: { blockExplorers?: { default?: { url: string } } }) {
+function explorerLink(
+  value: string,
+  chain?: { blockExplorers?: { default?: { url: string } } },
+  type: 'address' | 'tx' = 'address',
+) {
   const explorerUrl = chain?.blockExplorers?.default?.url
-  return explorerUrl ? link(`${explorerUrl}/address/${address}`, address) : address
+  return explorerUrl ? link(`${explorerUrl}/${type}/${value}`, value) : value
 }
 
 function printEntries(entries: [string, string][], padEnd?: number) {
