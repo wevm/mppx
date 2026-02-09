@@ -4,13 +4,13 @@ import type * as z from '../zod.js'
 import * as Fetch from './Fetch.js'
 import * as Transport from './Transport.js'
 
-type AnyClient = MethodIntent.AnyClient
+export type Methods = readonly (MethodIntent.AnyClient | readonly MethodIntent.AnyClient[])[]
 
 /**
  * Client-side payment handler.
  */
 export type Mpay<
-  methods extends readonly AnyClient[] = readonly AnyClient[],
+  methods extends Methods = Methods,
   transport extends Transport.Transport = Transport.Transport,
 > = {
   /** Payment-aware fetch function that automatically handles 402 responses. */
@@ -48,13 +48,15 @@ export type Mpay<
  * ```
  */
 export function create<
-  const methods extends readonly MethodIntent.AnyClient[],
+  const methods extends Methods,
   const transport extends Transport.Transport<any, any> = Transport.Transport<
     RequestInit,
     Response
   >,
->(config: create.Config<methods, transport>): Mpay<methods, transport> {
-  const { methods, polyfill = true, transport = Transport.http() as transport } = config
+>(config: create.Config<methods, transport>): Mpay<FlattenMethods<methods>, transport> {
+  const { polyfill = true, transport = Transport.http() as transport } = config
+
+  const methods = config.methods.flat() as unknown as FlattenMethods<methods>
 
   const config_fetch = { ...(config.fetch && { fetch: config.fetch }), methods }
   const fetch = Fetch.from(config_fetch)
@@ -105,12 +107,12 @@ export function restore(): void {
 
 export declare namespace create {
   type Config<
-    methods extends readonly MethodIntent.AnyClient[] = readonly MethodIntent.AnyClient[],
+    methods extends Methods = Methods,
     transport extends Transport.Transport = Transport.Transport,
   > = {
     /** Custom fetch function to wrap. Defaults to `globalThis.fetch`. */
     fetch?: typeof globalThis.fetch
-    /** Array of method intents to use. */
+    /** Array of method intents to use. Accepts individual clients or tuples (e.g. from `tempo()`). */
     methods: methods
     /** Whether to polyfill `globalThis.fetch` with the payment-aware wrapper. @default true */
     polyfill?: boolean | undefined
@@ -123,10 +125,25 @@ export declare namespace create {
  * Union of all context types from all methods that have context schemas.
  * @internal
  */
-type AnyContextFor<methods extends readonly AnyClient[]> = {
+type AnyContextFor<methods extends readonly MethodIntent.AnyClient[]> = {
   [method in keyof methods]: methods[method] extends MethodIntent.Client<any, infer context>
     ? context extends z.ZodMiniType
       ? z.input<context>
       : undefined
     : undefined
 }[number]
+
+/**
+ * Flattens a methods config tuple, preserving positional types.
+ * @internal
+ */
+type FlattenMethods<methods extends Methods> = methods extends readonly [
+  infer head,
+  ...infer tail extends Methods,
+]
+  ? head extends readonly MethodIntent.AnyClient[]
+    ? readonly [...head, ...FlattenMethods<tail>]
+    : head extends MethodIntent.AnyClient
+      ? readonly [head, ...FlattenMethods<tail>]
+      : never
+  : readonly []
