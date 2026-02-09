@@ -8,8 +8,8 @@ const mpay = Mpay.create({
   methods: [
     tempo.charge({
       currency,
-      feePayer: account,
-      recipient: account.address,
+      feePayer: true,
+      recipient: account,
       testnet: true,
     }),
   ],

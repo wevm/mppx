@@ -14,6 +14,7 @@ import * as MethodIntent from '../../MethodIntent.js'
 import * as Client from '../../viem/Client.js'
 import * as Intents from '../Intents.js'
 import * as defaults from '../internal/defaults.js'
+import type * as types from '../internal/types.js'
 
 const transferSelector = /*#__PURE__*/ toFunctionSelector(
   'function transfer(address to, uint256 amount)',
@@ -33,10 +34,21 @@ const transferWithMemoSelector = /*#__PURE__*/ toFunctionSelector(
  * const charge = tempo.charge()
  * ```
  */
-export function charge<const defaults extends charge.Defaults>(
-  parameters: charge.Parameters<defaults> = {} as charge.Parameters<defaults>,
+export function charge<const parameters extends charge.Parameters>(
+  parameters: parameters = {} as parameters,
 ) {
-  const { amount, currency, decimals = 6, description, externalId, memo, recipient } = parameters
+  const { amount, currency, decimals = 6, description, externalId, memo } = parameters
+
+  const recipient = (() => {
+    if (typeof parameters.recipient === 'object') return parameters.recipient.address
+    return parameters.recipient
+  })()
+  const feePayer = (() => {
+    if (typeof parameters.recipient === 'object' && parameters.feePayer === true)
+      return parameters.recipient
+    if (typeof parameters.feePayer === 'object') return parameters.feePayer
+    return undefined
+  })()
 
   const getClient = Client.getResolver({
     chain: { ...tempo_chain, experimental_preconfirmationTime: 500 },
@@ -44,7 +56,7 @@ export function charge<const defaults extends charge.Defaults>(
     rpcUrl: defaults.rpcUrl,
   })
 
-  type Defaults = defaults & { decimals: number }
+  type Defaults = charge.DeriveDefaults<parameters>
   return MethodIntent.toServer<typeof Intents.charge, Defaults>(Intents.charge, {
     defaults: {
       amount,
@@ -54,7 +66,7 @@ export function charge<const defaults extends charge.Defaults>(
       externalId,
       memo,
       recipient,
-    } as Defaults,
+    } as unknown as Defaults,
 
     // TODO: dedupe `{charge,stream}.request`
     async request({ credential, request }) {
@@ -77,16 +89,15 @@ export function charge<const defaults extends charge.Defaults>(
         throw new Error(`Client not configured with chainId ${chainId}.`)
 
       // Extract feePayer.
-      const feePayer = (() => {
-        const account =
-          typeof request.feePayer === 'object' ? request.feePayer : parameters.feePayer
-        const requested = request.feePayer !== false && (account ?? parameters.feePayer)
+      const resolvedFeePayer = (() => {
+        const account = typeof request.feePayer === 'object' ? request.feePayer : feePayer
+        const requested = request.feePayer !== false && (account ?? feePayer)
         if (credential) return account
         if (requested) return true
         return undefined
       })()
 
-      return { ...request, chainId, feePayer }
+      return { ...request, chainId, feePayer: resolvedFeePayer }
     },
 
     async verify({ credential, request }) {
@@ -236,15 +247,37 @@ export function charge<const defaults extends charge.Defaults>(
 }
 
 export declare namespace charge {
-  type Defaults = LooseOmit<MethodIntent.RequestDefaults<typeof Intents.charge>, 'feePayer'>
+  type Defaults = LooseOmit<
+    MethodIntent.RequestDefaults<typeof Intents.charge>,
+    'feePayer' | 'recipient'
+  >
 
-  type Parameters<defaults extends Defaults = {}> = {
-    /** Optional fee payer account for covering transaction fees. */
-    feePayer?: Account | undefined
+  type Parameters = {
     /** Testnet mode. */
     testnet?: boolean | undefined
-  } & Client.getResolver.Parameters &
-    defaults
+  } & (
+    | {
+        /** Recipient account. Address is used as the payment recipient. */
+        recipient?: Account | undefined
+        /** When true, the recipient account also sponsors (pays) transaction fees. */
+        feePayer?: true | undefined
+      }
+    | {
+        /** Address that receives payment. */
+        recipient?: string | undefined
+        /** Optional fee payer account for covering transaction fees. */
+        feePayer?: Account | undefined
+      }
+  ) &
+    Client.getResolver.Parameters &
+    Defaults
+
+  type DeriveDefaults<parameters extends Parameters> = types.DeriveDefaults<
+    parameters,
+    Defaults
+  > & {
+    decimals: number
+  }
 }
 
 /** @internal */

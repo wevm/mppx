@@ -17,6 +17,7 @@ import * as MethodIntent from '../../MethodIntent.js'
 import * as Client from '../../viem/Client.js'
 import * as Intents from '../Intents.js'
 import * as defaults from '../internal/defaults.js'
+import type * as types from '../internal/types.js'
 import {
   broadcastOpenTransaction,
   broadcastTopUpTransaction,
@@ -60,20 +61,27 @@ type StreamMethodDetails = {
  * })
  * ```
  */
-export function stream<const defaults extends stream.Defaults>(
-  parameters: stream.Parameters<defaults>,
-) {
+export function stream<const parameters extends stream.Parameters>(parameters: parameters) {
   const {
     amount,
     currency,
     decimals = 6,
-    recipient,
     storage,
     suggestedDeposit,
     unitType,
     minVoucherDelta = 0n,
-    feePayer,
   } = parameters
+
+  const recipient = (() => {
+    if (typeof parameters.recipient === 'object') return parameters.recipient.address
+    return parameters.recipient
+  })()
+  const feePayer = (() => {
+    if (typeof parameters.recipient === 'object' && parameters.feePayer === true)
+      return parameters.recipient
+    if (typeof parameters.feePayer === 'object') return parameters.feePayer
+    return undefined
+  })()
 
   const getClient = Client.getResolver({
     chain: tempo_chain,
@@ -81,7 +89,7 @@ export function stream<const defaults extends stream.Defaults>(
     rpcUrl: defaults.rpcUrl,
   })
 
-  type Defaults = defaults & { decimals: number; escrowContract: Address }
+  type Defaults = stream.DeriveDefaults<parameters>
   return MethodIntent.toServer<typeof Intents.stream, Defaults>(Intents.stream, {
     defaults: {
       amount,
@@ -90,7 +98,7 @@ export function stream<const defaults extends stream.Defaults>(
       recipient,
       suggestedDeposit,
       unitType,
-    } as Defaults,
+    } as unknown as Defaults,
 
     // TODO: dedupe `{charge,stream}.request`
     async request({ credential, request }) {
@@ -117,16 +125,15 @@ export function stream<const defaults extends stream.Defaults>(
         defaults.escrowContract[chainId as keyof typeof defaults.escrowContract]
 
       // Extract feePayer.
-      const feePayer = (() => {
-        const account =
-          typeof request.feePayer === 'object' ? request.feePayer : parameters.feePayer
-        const requested = request.feePayer !== false && (account ?? parameters.feePayer)
+      const resolvedFeePayer = (() => {
+        const account = typeof request.feePayer === 'object' ? request.feePayer : feePayer
+        const requested = request.feePayer !== false && (account ?? feePayer)
         if (credential) return account
         if (requested) return true
         return undefined
       })()
 
-      return { ...request, chainId, escrowContract, feePayer }
+      return { ...request, chainId, escrowContract, feePayer: resolvedFeePayer }
     },
 
     async verify({ credential }) {
@@ -192,19 +199,42 @@ export function stream<const defaults extends stream.Defaults>(
 }
 
 export declare namespace stream {
-  type Defaults = LooseOmit<MethodIntent.RequestDefaults<typeof Intents.stream>, 'feePayer'>
+  type Defaults = LooseOmit<
+    MethodIntent.RequestDefaults<typeof Intents.stream>,
+    'feePayer' | 'recipient'
+  >
 
-  type Parameters<defaults extends Defaults = {}> = {
+  type Parameters = {
     /** Storage backend for channel and session state. */
     storage: ChannelStorage
     /** Minimum voucher delta to accept (default: 0n). */
     minVoucherDelta?: bigint | undefined
-    /** Optional fee payer account for covering open/topUp transaction fees. */
-    feePayer?: Account | undefined
     /** Testnet mode. */
     testnet?: boolean | undefined
-  } & Client.getResolver.Parameters &
-    defaults
+  } & (
+    | {
+        /** Recipient account. Address is used as the payment recipient. */
+        recipient?: Account | undefined
+        /** When true, the recipient account also sponsors (pays) transaction fees. */
+        feePayer?: true | undefined
+      }
+    | {
+        /** Address that receives payment. */
+        recipient?: string | undefined
+        /** Optional fee payer account for covering open/topUp transaction fees. */
+        feePayer?: Account | undefined
+      }
+  ) &
+    Client.getResolver.Parameters &
+    Defaults
+
+  type DeriveDefaults<parameters extends Parameters> = types.DeriveDefaults<
+    parameters,
+    Defaults
+  > & {
+    decimals: number
+    escrowContract: Address
+  }
 }
 
 /**

@@ -1,9 +1,12 @@
+import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts'
 import { describe, expectTypeOf, test } from 'vitest'
 import * as Intent from '../Intent.js'
 import * as MethodIntent from '../MethodIntent.js'
 import * as tempo from '../tempo/server/index.js'
 import * as z from '../zod.js'
 import * as Mpay from './Mpay.js'
+
+const account = privateKeyToAccount(generatePrivateKey())
 
 const fooCharge = MethodIntent.fromIntent(Intent.charge, {
   method: 'test',
@@ -257,6 +260,40 @@ describe('Mpay', () => {
 
       // amount should still be required (no undefined)
       expectTypeOf<ChargeOptions['amount']>().toEqualTypeOf<string>()
+    })
+
+    test('recipient as Account defaults recipient', () => {
+      const handler = Mpay.create({
+        methods: [tempo.charge({ currency: '0x1234', recipient: account })],
+        realm: 'api.example.com',
+        secretKey: 'secret',
+      })
+
+      // recipient is defaulted via account, so it should be optional
+      handler.charge({
+        amount: '1000',
+        decimals: 6,
+      })
+
+      // can still override recipient
+      handler.charge({
+        amount: '1000',
+        decimals: 6,
+        recipient: '0xdef',
+      })
+    })
+
+    test('recipient as Account with feePayer: true', () => {
+      const handler = Mpay.create({
+        methods: [tempo.charge({ currency: '0x1234', recipient: account, feePayer: true })],
+        realm: 'api.example.com',
+        secretKey: 'secret',
+      })
+
+      handler.charge({
+        amount: '1000',
+        decimals: 6,
+      })
     })
   })
 })

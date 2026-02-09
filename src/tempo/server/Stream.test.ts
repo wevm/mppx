@@ -33,14 +33,14 @@ beforeAll(async () => {
   await fundAccount({ address: payer.address, token: currency })
 })
 
-describe('stream server Method', () => {
+describe('stream', () => {
   let storage: ChannelStorage
 
   beforeEach(() => {
     storage = createMemoryStorage()
   })
 
-  function createServer(overrides: Partial<Parameters<typeof stream>[0]> = {}) {
+  function createServer(overrides: Partial<stream.Parameters> = {}) {
     return stream({
       storage,
       getClient: () => client,
@@ -49,7 +49,7 @@ describe('stream server Method', () => {
       escrowContract,
       chainId: chain.id,
       ...overrides,
-    })
+    } as stream.Parameters)
   }
 
   describe('open', () => {
