@@ -1,4 +1,3 @@
-export type { ChannelState, ChannelStorage, SessionState } from '../tempo/stream/Storage.js'
 export * as Expires from '../Expires.js'
 export * as Store from '../Store.js'
 export { tempo } from './Methods.js'
