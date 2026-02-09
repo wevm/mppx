@@ -22,12 +22,10 @@ const mpay = Mpay.create({
 export const GET = PaidRoute(
   mpay.stream({ amount: '0.000075', unitType: 'token' }),
   async (_request, { withReceipt }) => {
-    const tokens = ['The', ' answer', ' to', ' your', ' question', ' is', ' 42.']
     const encoder = new TextEncoder()
-
     const readable = new ReadableStream({
       async start(controller) {
-        for (const token of tokens) {
+        for (const token of ['The', ' answer', ' is', ' 42.']) {
           controller.enqueue(encoder.encode(`data: ${JSON.stringify({ token })}\n\n`))
           await new Promise((r) => setTimeout(r, 50))
         }
