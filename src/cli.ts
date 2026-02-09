@@ -4,11 +4,12 @@ import { createRequire } from 'node:module'
 import * as os from 'node:os'
 import * as readline from 'node:readline'
 import { cac } from 'cac'
-import { Challenge } from 'mpay'
-import { Mpay, tempo } from 'mpay/client'
 import { createClient, http } from 'viem'
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts'
 import { tempo as tempoMainnet, tempoModerato } from 'viem/chains'
+import * as Challenge from './Challenge.js'
+import * as Mpay from './client/Mpay.js'
+import * as tempo from './tempo/client/index.js'
 
 const require = createRequire(import.meta.url)
 const { name, version } = require('../package.json') as { name: string; version: string }
@@ -25,7 +26,7 @@ cli
   .option('-k, --insecure', 'Skip TLS certificate verification (true for localhost/.local)')
   .option('-L, --location', 'Follow redirects')
   .option('-s, --silent', 'Silent mode (suppress progress and info)')
-  .option('-v, --verbose', 'Make the operation more talkative')
+  .option('-v, --verbose', 'Make operation more talkative')
   .option('-X, --method <method>', 'HTTP method')
   .option('--accept <type>', 'Set Accept header (e.g. json, markdown, text/html)')
   .option('--account <name>', 'Account name (default: default)')
@@ -138,7 +139,7 @@ cli
         if (options.include || options.verbose) printResponse(challengeResponse)
 
         const challenge = Challenge.fromResponse(challengeResponse)
-        const request = challenge.request as Record<string, unknown>
+        const request = challenge.request
 
         const formatValue = (value: unknown): string => {
           const str = typeof value === 'string' ? value : JSON.stringify(value)
@@ -199,9 +200,10 @@ cli
         }
         log('')
 
-        const confirmed = await confirm('Proceed with this payment?')
+        const intentLabel = challenge.intent ?? 'payment'
+        const confirmed = await confirm(`Proceed with ${intentLabel}?`)
         if (!confirmed) {
-          logErr('Payment cancelled.')
+          logErr(`${intentLabel.charAt(0).toUpperCase()}${intentLabel.slice(1)} cancelled.`)
           process.exit(0)
         }
         log('')
@@ -246,7 +248,9 @@ cli
           console.log(await credentialResponse.text())
         }
       } catch (err) {
-        const cause = err instanceof Error && err.cause instanceof Error ? err.cause.message : null
+        // TODO: revert cast when https://github.com/wevm/zile/pull/26 is merged
+        const errCause = err instanceof Error ? (err as unknown as Record<string, unknown>).cause : undefined
+        const cause = errCause instanceof Error ? errCause.message : null
         console.error('Request failed:', err instanceof Error ? err.message : err)
         if (cause) console.error('  Cause:', cause)
         process.exit(1)
@@ -372,9 +376,9 @@ cli.help((sections) => {
     const actionsSection = {
       title: 'Actions',
       body: [
-        '  create  Create a new account',
-        '  delete  Delete an account',
-        '  fund    Fund an account with testnet tokens',
+        '  create  Create new account',
+        '  delete  Delete account',
+        '  fund    Fund account with testnet tokens',
         '  list    List all accounts',
         '  view    View account address',
       ].join('\n'),
