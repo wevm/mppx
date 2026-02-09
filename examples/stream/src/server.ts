@@ -9,19 +9,15 @@ const account = privateKeyToAccount(generatePrivateKey())
 const currency = '0x20c0000000000000000000000000000000000001' as const
 const pricePerToken = '0.000075'
 
-const storage = createMemoryStorage()
-
 const mpay = Mpay.create({
   methods: [
     tempo.stream({
       currency,
       recipient: account.address,
-      storage,
+      storage: createMemoryStorage(),
+      testnet: true,
     }),
   ],
-  realm: 'localhost',
-  // Example-only. In production, use a strong random secret from env.
-  secretKey: process.env.SECRET_KEY ?? 'stream-example-secret',
 })
 
 export async function handler(request: Request): Promise<Response | null> {
