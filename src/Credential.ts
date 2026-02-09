@@ -108,7 +108,9 @@ export declare namespace from {
 export function fromRequest<payload = unknown>(request: Request): Credential<payload> {
   const header = request.headers.get('Authorization')
   if (!header) throw new Error('Missing Authorization header.')
-  return deserialize<payload>(header)
+  const payment = extractPaymentScheme(header)
+  if (!payment) throw new Error('Missing Payment scheme.')
+  return deserialize<payload>(payment)
 }
 
 /**
@@ -137,4 +139,16 @@ export function serialize(credential: Credential): string {
   const json = JSON.stringify(wire)
   const encoded = Base64.fromString(json, { pad: false, url: true })
   return `Payment ${encoded}`
+}
+
+/**
+ * Extracts the `Payment` scheme from an Authorization header value
+ * that may contain multiple schemes (comma-separated per RFC 9110).
+ *
+ * @param header - The raw Authorization header value.
+ * @returns The `Payment ...` scheme string, or `null` if not found.
+ */
+export function extractPaymentScheme(header: string): string | null {
+  const schemes = header.split(',').map((s) => s.trim())
+  return schemes.find((s) => /^Payment\s+/i.test(s)) ?? null
 }

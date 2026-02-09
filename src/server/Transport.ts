@@ -90,7 +90,9 @@ export function http() {
     getCredential(request) {
       const header = request.headers.get('Authorization')
       if (!header) return null
-      return Credential.deserialize(header)
+      const payment = Credential.extractPaymentScheme(header)
+      if (!payment) return null
+      return Credential.deserialize(payment)
     },
 
     respondChallenge({ challenge, error }) {

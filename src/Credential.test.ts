@@ -198,8 +198,31 @@ describe('fromRequest', () => {
     expect(credential.payload).toEqual({ signature: '0x1234' })
   })
 
+  test('behavior: extracts Payment from multiple Authorization schemes', () => {
+    const original = Credential.from({
+      challenge,
+      payload: { signature: '0x1234' },
+    })
+    const headers = new Headers()
+    headers.append('Authorization', 'Bearer some-jwt-token')
+    headers.append('Authorization', Credential.serialize(original))
+    const request = new Request('https://api.example.com/resource', { headers })
+
+    const credential = Credential.fromRequest(request)
+
+    expect(credential.challenge.id).toBe('x7Tg2pLqR9mKvNwY3hBcZa')
+    expect(credential.payload).toEqual({ signature: '0x1234' })
+  })
+
   test('error: throws for missing Authorization header', () => {
     const request = new Request('https://api.example.com/resource')
     expect(() => Credential.fromRequest(request)).toThrow('Missing Authorization header.')
+  })
+
+  test('error: throws when no Payment scheme present', () => {
+    const request = new Request('https://api.example.com/resource', {
+      headers: { Authorization: 'Bearer some-jwt-token' },
+    })
+    expect(() => Credential.fromRequest(request)).toThrow('Missing Payment scheme.')
   })
 })
