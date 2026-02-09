@@ -28,7 +28,7 @@ const mpay = Mpay.create({
   methods: [
     tempo({
       account,
-      deposit: 10_000_000n,
+      deposit: '10',
     }),
   ],
 })

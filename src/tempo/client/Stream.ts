@@ -1,5 +1,5 @@
 import { Hex } from 'ox'
-import { type Address, encodeFunctionData, type Client as viem_Client } from 'viem'
+import { type Address, encodeFunctionData, parseUnits, type Client as viem_Client } from 'viem'
 import { prepareTransactionRequest, signTransaction } from 'viem/actions'
 import { tempo as tempo_chain } from 'viem/chains'
 import { Abis } from 'viem/tempo'
@@ -20,10 +20,10 @@ export const streamContextSchema = z.object({
   account: z.optional(z.custom<Account.getResolver.Parameters['account']>()),
   action: z.optional(z.enum(['open', 'topUp', 'voucher', 'close'])),
   channelId: z.optional(z.string()),
-  cumulativeAmount: z.optional(z.bigint()),
+  cumulativeAmount: z.optional(z.amount()),
   transaction: z.optional(z.string()),
   authorizedSigner: z.optional(z.string()),
-  additionalDeposit: z.optional(z.bigint()),
+  additionalDeposit: z.optional(z.amount()),
 })
 
 export type StreamContext = z.infer<typeof streamContextSchema>
@@ -46,7 +46,7 @@ type ChannelEntry = {
  * const mpay = Mpay.create({
  *   methods: [tempo({
  *     account: privateKeyToAccount('0x...'),
- *     deposit: 10_000_000n,
+ *     deposit: '10',
  *   })],
  * })
  *
@@ -63,11 +63,13 @@ type ChannelEntry = {
  * const credential = await mpay.createCredential(response, {
  *   action: 'voucher',
  *   channelId: '0x...',
- *   cumulativeAmount: 1_000_000n,
+ *   cumulativeAmount: '1',
  * })
  * ```
  */
 export function stream(parameters: stream.Parameters = {}) {
+  const { decimals = defaults.decimals } = parameters
+
   const getClient = Client.getResolver({
     chain: tempo_chain,
     getClient: parameters.getClient,
@@ -153,7 +155,7 @@ export function stream(parameters: stream.Parameters = {}) {
     const payee = challenge.request.recipient as Address
     const currency = challenge.request.currency as Address
     const amount = BigInt(challenge.request.amount as string)
-    const deposit = parameters.deposit!
+    const deposit = parseUnits(parameters.deposit!, decimals)
 
     const key = channelKey(payee, currency, escrowContract)
     let entry = channels.get(key)
@@ -198,7 +200,7 @@ export function stream(parameters: stream.Parameters = {}) {
 
   async function openChannel(
     client: viem_Client,
-    account: Account,
+    account: Account.Account,
     escrowContract: Address,
     payee: Address,
     currency: Address,
@@ -303,12 +305,14 @@ export function stream(parameters: stream.Parameters = {}) {
     const action = context.action!
     const {
       channelId: channelIdRaw,
-      cumulativeAmount,
+      cumulativeAmount: cumulativeAmountStr,
       transaction,
       authorizedSigner,
       additionalDeposit,
     } = context
     const channelId = channelIdRaw as Hex.Hex
+    const cumulativeAmount =
+      cumulativeAmountStr !== undefined ? parseUnits(cumulativeAmountStr, decimals) : undefined
 
     const escrowContract = resolveEscrow(challenge, chainId, channelId)
     escrowContractMap.set(channelId, escrowContract)
@@ -348,7 +352,7 @@ export function stream(parameters: stream.Parameters = {}) {
           type: 'transaction',
           channelId,
           transaction: transaction as Hex.Hex,
-          additionalDeposit: additionalDeposit.toString(),
+          additionalDeposit: parseUnits(additionalDeposit!, decimals).toString(),
         }
         break
 
@@ -412,8 +416,10 @@ export function stream(parameters: stream.Parameters = {}) {
 export declare namespace stream {
   type Parameters = Account.getResolver.Parameters &
     Client.getResolver.Parameters & {
-      /** Initial deposit amount for auto-managed channels. When set, the method handles the full channel lifecycle (open, voucher, cumulative tracking) automatically. */
-      deposit?: bigint | undefined
+      /** Token decimals for parsing human-readable amounts (default: 6). */
+      decimals?: number | undefined
+      /** Initial deposit amount in human-readable units (e.g. "10" for 10 tokens). When set, the method handles the full channel lifecycle (open, voucher, cumulative tracking) automatically. */
+      deposit?: string | undefined
       /** Escrow contract address override. Derived from challenge or defaults if not provided. */
       escrowContract?: Address | undefined
     }

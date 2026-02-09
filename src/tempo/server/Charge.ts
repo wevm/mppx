@@ -36,7 +36,15 @@ const transferWithMemoSelector = /*#__PURE__*/ toFunctionSelector(
 export function charge<const defaults extends charge.Defaults>(
   parameters: charge.Parameters<defaults> = {} as charge.Parameters<defaults>,
 ) {
-  const { amount, currency, decimals = 6, description, externalId, memo, recipient } = parameters
+  const {
+    amount,
+    currency,
+    decimals = defaults.decimals,
+    description,
+    externalId,
+    memo,
+    recipient,
+  } = parameters
 
   const getClient = Client.getResolver({
     chain: { ...tempo_chain, experimental_preconfirmationTime: 500 },

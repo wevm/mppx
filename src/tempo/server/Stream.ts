@@ -1,4 +1,4 @@
-import type { Account, Address, Hex, Client as viem_Client } from 'viem'
+import { type Account, type Address, type Hex, parseUnits, type Client as viem_Client } from 'viem'
 import { tempo as tempo_chain } from 'viem/chains'
 import {
   AmountExceedsDepositError,
@@ -66,12 +66,13 @@ export function stream<const defaults extends stream.Defaults>(
   const {
     amount,
     currency,
-    decimals = 6,
+    decimals = defaults.decimals,
+    escrowContract,
     recipient,
     storage,
     suggestedDeposit,
     unitType,
-    minVoucherDelta = 0n,
+    minVoucherDelta: minVoucherDeltaStr = '0',
     feePayer,
   } = parameters
 
@@ -112,8 +113,9 @@ export function stream<const defaults extends stream.Defaults>(
       if (client.chain?.id !== chainId)
         throw new Error(`Client not configured with chainId ${chainId}.`)
 
-      const escrowContract =
+      const resolvedEscrow =
         request.escrowContract ??
+        escrowContract ??
         defaults.escrowContract[chainId as keyof typeof defaults.escrowContract]
 
       // Extract feePayer.
@@ -126,7 +128,7 @@ export function stream<const defaults extends stream.Defaults>(
         return undefined
       })()
 
-      return { ...request, chainId, escrowContract, feePayer }
+      return { ...request, chainId, escrowContract: resolvedEscrow, feePayer }
     },
 
     async verify({ credential }) {
@@ -136,6 +138,7 @@ export function stream<const defaults extends stream.Defaults>(
       const client = await getClient({ chainId: methodDetails.chainId })
 
       const resolvedFeePayer = methodDetails.feePayer === true ? feePayer : undefined
+      const minVoucherDelta = parseUnits(minVoucherDeltaStr, decimals)
       const effectiveMinVoucherDelta = methodDetails.minVoucherDelta
         ? BigInt(methodDetails.minVoucherDelta)
         : minVoucherDelta
@@ -197,8 +200,8 @@ export declare namespace stream {
   type Parameters<defaults extends Defaults = {}> = {
     /** Storage backend for channel and session state. */
     storage: ChannelStorage
-    /** Minimum voucher delta to accept (default: 0n). */
-    minVoucherDelta?: bigint | undefined
+    /** Minimum voucher delta to accept (numeric string, default: "0"). */
+    minVoucherDelta?: string | undefined
     /** Optional fee payer account for covering open/topUp transaction fees. */
     feePayer?: Account | undefined
     /** Testnet mode. */
