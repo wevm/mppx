@@ -4,6 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "tsx src/server.ts",
+    "stream": "tsx src/stream.ts",
     "client": "tsx src/client.ts"
   },
   "dependencies": {
