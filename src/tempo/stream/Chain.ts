@@ -84,7 +84,7 @@ export const escrowAbi = [
     name: 'topUp',
     inputs: [
       { name: 'channelId', type: 'bytes32' },
-      { name: 'additionalDeposit', type: 'uint128' },
+      { name: 'additionalDeposit', type: 'uint256' },
     ],
     outputs: [],
     stateMutability: 'nonpayable',
