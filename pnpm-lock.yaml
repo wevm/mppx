@@ -77,6 +77,9 @@ importers:
 
   examples/express:
     dependencies:
+      '@mpp/express':
+        specifier: workspace:*
+        version: link:../../packages/express
       '@types/express':
         specifier: latest
         version: 5.0.6
@@ -104,6 +107,9 @@ importers:
       '@hono/node-server':
         specifier: latest
         version: 1.19.9(hono@4.11.9)
+      '@mpp/hono':
+        specifier: workspace:*
+        version: link:../../packages/hono
       '@types/node':
         specifier: latest
         version: 25.2.2
@@ -125,6 +131,9 @@ importers:
 
   examples/nextjs:
     dependencies:
+      '@mpp/nextjs':
+        specifier: workspace:*
+        version: link:../../packages/nextjs
       '@types/node':
         specifier: latest
         version: 25.2.2
@@ -173,6 +182,42 @@ importers:
       vite:
         specifier: latest
         version: 7.3.1(@types/node@25.2.1)(tsx@4.21.0)(yaml@2.8.2)
+
+  packages/express:
+    devDependencies:
+      '@types/express':
+        specifier: latest
+        version: 5.0.6
+      express:
+        specifier: latest
+        version: 5.2.1
+      mpay:
+        specifier: workspace:*
+        version: link:../..
+      typescript:
+        specifier: latest
+        version: 5.9.3
+
+  packages/hono:
+    devDependencies:
+      hono:
+        specifier: latest
+        version: 4.11.9
+      mpay:
+        specifier: workspace:*
+        version: link:../..
+      typescript:
+        specifier: latest
+        version: 5.9.3
+
+  packages/nextjs:
+    devDependencies:
+      mpay:
+        specifier: workspace:*
+        version: link:../..
+      typescript:
+        specifier: latest
+        version: 5.9.3
 
 packages:
 

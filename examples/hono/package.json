@@ -8,6 +8,7 @@
   },
   "dependencies": {
     "@hono/node-server": "latest",
+    "@mpp/hono": "workspace:*",
     "@types/node": "latest",
     "hono": "latest",
     "mpay": "latest",

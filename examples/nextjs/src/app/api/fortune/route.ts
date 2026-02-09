@@ -1,3 +1,4 @@
+import { PaidRoute } from '@mpp/nextjs'
 import { Mpay, tempo } from 'mpay/server'
 import { privateKeyToAccount } from 'viem/accounts'
 
@@ -15,10 +16,8 @@ const mpay = Mpay.create({
   ],
 })
 
-export async function GET(request: Request) {
-  const result = await mpay.charge({ amount: '1' })(request)
-  if (result.status === 402) return result.challenge
-  return result.withReceipt(
+export const GET = PaidRoute(mpay, 'charge', { amount: '1' }, async (_request, { withReceipt }) => {
+  return withReceipt(
     Response.json({ fortune: 'A golden egg of opportunity falls into your lap this month.' }),
   )
-}
+})

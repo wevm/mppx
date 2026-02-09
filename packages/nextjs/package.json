@@ -1,0 +1,21 @@
+{
+  "name": "@mpp/nextjs",
+  "version": "0.0.1",
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
+    }
+  },
+  "peerDependencies": {
+    "mpay": "workspace:*"
+  },
+  "devDependencies": {
+    "mpay": "workspace:*",
+    "typescript": "latest"
+  },
+  "license": "MIT"
+}

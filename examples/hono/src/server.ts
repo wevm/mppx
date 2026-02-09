@@ -1,4 +1,5 @@
 import { serve } from '@hono/node-server'
+import { paymentRequired } from '@mpp/hono'
 import { Hono } from 'hono'
 import { Mpay, tempo } from 'mpay/server'
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts'
@@ -19,10 +20,9 @@ const mpay = Mpay.create({
 
 const app = new Hono()
 
-app.get('/api/fortune', async (c) => {
-  const result = await mpay.charge({ amount: '1' })(c.req.raw)
-  if (result.status === 402) return result.challenge
-  return result.withReceipt(
+app.get('/api/fortune', paymentRequired(mpay, 'charge', { amount: '1' }), (c) => {
+  const withReceipt = c.get('withReceipt')
+  return withReceipt(
     c.json({ fortune: 'A golden egg of opportunity falls into your lap this month.' }),
   )
 })

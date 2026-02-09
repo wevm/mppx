@@ -7,6 +7,7 @@
     "client": "tsx src/client.ts"
   },
   "dependencies": {
+    "@mpp/express": "workspace:*",
     "@types/express": "latest",
     "@types/node": "latest",
     "express": "latest",

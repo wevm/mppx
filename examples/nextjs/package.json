@@ -9,6 +9,7 @@
     "client": "tsx src/client.ts"
   },
   "dependencies": {
+    "@mpp/nextjs": "workspace:*",
     "@types/node": "latest",
     "mpay": "latest",
     "next": "latest",

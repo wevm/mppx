@@ -1,3 +1,4 @@
+import { paymentRequired } from '@mpp/express'
 import express from 'express'
 import { Mpay, tempo } from 'mpay/server'
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts'
@@ -18,9 +19,7 @@ const mpay = Mpay.create({
 
 const app = express()
 
-app.get('/api/fortune', async (req, res) => {
-  const result = await Mpay.toNodeListener(mpay.charge({ amount: '1' }))(req, res)
-  if (result.status === 402) return
+app.get('/api/fortune', paymentRequired(mpay, 'charge', { amount: '1' }), (_req, res) => {
   res.json({ fortune: 'A golden egg of opportunity falls into your lap this month.' })
 })
 
