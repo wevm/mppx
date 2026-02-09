@@ -133,7 +133,6 @@ export async function createOpenPayload(
   const channelId = Channel.computeId({
     authorizedSigner: account.address,
     chainId,
-    deposit,
     escrowContract,
     payee,
     payer: account.address,

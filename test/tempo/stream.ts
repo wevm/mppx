@@ -13,15 +13,16 @@ import {
   waitForTransactionReceipt,
   writeContractSync,
 } from 'viem/actions'
+import { escrowAbi } from '../../src/tempo/stream/Chain.js'
 import * as Channel from '../../src/tempo/stream/Channel.js'
 import artifact from '../fixtures/TempoStreamChannel.json' with { type: 'json' }
 import { chain, client } from './viem.js'
 
-export const escrowAbi = artifact.abi
+export { escrowAbi }
 
 export async function deployEscrow(): Promise<Address> {
   const hash = await deployContract(client, {
-    abi: artifact.abi,
+    abi: escrowAbi,
     bytecode: artifact.bytecode as Hex,
   })
   const receipt = await waitForTransactionReceipt(client, { hash })
@@ -52,7 +53,6 @@ export async function openChannel(params: {
   const channelId = Channel.computeId({
     authorizedSigner,
     chainId: chain.id,
-    deposit,
     escrowContract: escrow,
     payee,
     payer: payer.address,
@@ -63,7 +63,7 @@ export async function openChannel(params: {
   const txReceipt = await writeContractSync(client, {
     account: payer,
     address: escrow,
-    abi: artifact.abi,
+    abi: escrowAbi,
     functionName: 'open',
     args: [payee, token, deposit, salt, authorizedSigner],
   })
@@ -91,7 +91,7 @@ export async function topUpChannel(params: {
   const txReceipt = await writeContractSync(client, {
     account: payer,
     address: escrow,
-    abi: artifact.abi,
+    abi: escrowAbi,
     functionName: 'topUp',
     args: [channelId, amount],
   })
@@ -111,7 +111,7 @@ export async function closeChannelOnChain(params: {
   const txReceipt = await writeContractSync(client, {
     account: payee,
     address: escrow,
-    abi: artifact.abi,
+    abi: escrowAbi,
     functionName: 'close',
     args: [channelId, cumulativeAmount, signature],
   })
@@ -134,7 +134,6 @@ export async function signOpenChannel(params: {
   const channelId = Channel.computeId({
     authorizedSigner,
     chainId: chain.id,
-    deposit,
     escrowContract: escrow,
     payee,
     payer: payer.address,
@@ -148,7 +147,7 @@ export async function signOpenChannel(params: {
     args: [escrow, deposit],
   })
   const openData = encodeFunctionData({
-    abi: artifact.abi,
+    abi: escrowAbi,
     functionName: 'open',
     args: [payee, token, deposit, salt, authorizedSigner],
   })
@@ -182,7 +181,7 @@ export async function signTopUpChannel(params: {
     args: [escrow, amount],
   })
   const topUpData = encodeFunctionData({
-    abi: artifact.abi,
+    abi: escrowAbi,
     functionName: 'topUp',
     args: [channelId, amount],
   })

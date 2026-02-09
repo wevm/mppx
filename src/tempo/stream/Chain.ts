@@ -96,7 +96,6 @@ export const escrowAbi = [
       { name: 'payer', type: 'address' },
       { name: 'payee', type: 'address' },
       { name: 'token', type: 'address' },
-      { name: 'deposit', type: 'uint128' },
       { name: 'salt', type: 'bytes32' },
       { name: 'authorizedSigner', type: 'address' },
     ],
