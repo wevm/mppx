@@ -8,7 +8,7 @@ Added composed `tempo()` client factory that returns both `charge` and `stream` 
 import { Mpay, tempo } from 'mpay/client'
 
 const mpay = Mpay.create({
-  methods: tempo({ account, deposit: 10_000_000n }),
+  methods: [tempo({ account, deposit: 10_000_000n })],
 })
 ```
 
