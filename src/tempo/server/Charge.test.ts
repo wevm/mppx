@@ -218,7 +218,7 @@ describe('tempo', () => {
         })
         expect(response.status).toBe(402)
         const body = (await response.json()) as { detail: string }
-        expect(body.detail).toBe('Payment verification failed: Payment request expired.')
+        expect(body.detail).toMatch(/^Payment expired at /)
       }
 
       httpServer.close()
