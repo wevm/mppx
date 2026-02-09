@@ -6,8 +6,11 @@ Standalone, runnable examples demonstrating the mpay HTTP 402 payment flow.
 
 | Example | Description |
 |---------|-------------|
-| [basic](./basic/) | Bun server with pay-per-request fortune API |
+| [basic](./basic/) | Vite dev server with pay-per-request fortune API |
 | [stream](./stream/) | Streaming payment channels with per-token LLM metering |
+| [hono](./hono/) | Minimal Hono server with paid endpoint |
+| [express](./express/) | Minimal Express server with paid endpoint |
+| [nextjs](./nextjs/) | Next.js App Router with paid API route |
 
 ## Running Examples
 
@@ -25,5 +28,5 @@ This will show a picker to select which example to run.
 You can install any example directly into your project:
 
 ```bash
-npx gitpick wevm/mpay/examples/basic
+npx gitpick wevm/mpay/examples/hono
 ```

@@ -1,0 +1,21 @@
+{
+  "name": "nextjs",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "dev": "next dev --turbopack",
+    "build": "next build",
+    "start": "next start",
+    "client": "tsx src/client.ts"
+  },
+  "dependencies": {
+    "@types/node": "latest",
+    "mpay": "latest",
+    "next": "latest",
+    "react": "latest",
+    "react-dom": "latest",
+    "tsx": "latest",
+    "typescript": "latest",
+    "viem": "latest"
+  }
+}
