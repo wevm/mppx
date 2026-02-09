@@ -1,30 +1,35 @@
 # mpay
 
-HTTP Payment Authentication for TypeScript. Implements the ["Payment" HTTP Authentication Scheme](https://datatracker.ietf.org/doc/draft-ietf-httpauth-payment/) with pluggable payment methods & intents.
+TypeScript SDK for [Web Payment Auth](https://datatracker.ietf.org/doc/draft-ietf-httpauth-payment/) — the IETF standard for HTTP authentication-based payments.
 
-```
-Client (Mpay)                                     Server (Mpay)
-   │                                                   │
-   │  (1) GET /resource                                │
-   ├──────────────────────────────────────────────────>│
-   │                                                   │
-   │             (2) mpay.intent(request, { ... })     │
-   │                   402 + WWW-Authenticate: Payment │
-   │<──────────────────────────────────────────────────┤
-   │                                                   │
-   │  (3) mpay.createCredential(response)              │
-   │                                                   │
-   │  (4) GET /resource                                │
-   │      Authorization: Payment <credential>          │
-   ├──────────────────────────────────────────────────>│
-   │                                                   │
-   │               (5) intent.verify(request)          │
-   │                                                   │
-   │               (6) 200 OK                          │
-   │                   Payment-Receipt: <receipt>      │
-   │<──────────────────────────────────────────────────┤
-   │                                                   │
-```
+[![npm](https://img.shields.io/npm/v/mpay.svg)](https://www.npmjs.com/package/mpay)
+[![License](https://img.shields.io/npm/l/mpay.svg)](LICENSE)
+
+## Features
+
+- **Full 402 flow** — Server issues challenges, client creates credentials, server verifies and returns receipts
+- **Pluggable methods** — Ship with Tempo support, bring your own payment methods
+- **Multiple intents** — `charge`, `stream`, and custom intents with validated schemas
+- **Fetch polyfill** — Automatic 402 handling via `globalThis.fetch` or a standalone wrapper
+- **MCP support** — First-class integration with `@modelcontextprotocol/sdk` for both client and server
+- **Node.js compatible** — Works with `http.createServer` via `Mpay.toNodeListener`
+- **Type-safe** — Full TypeScript inference from intent schemas to credential payloads
+
+## Contents
+
+- [Install](#install)
+- [Quick Start](#quick-start)
+  - [Server](#server)
+  - [Client](#client)
+- [MCP Integration](#mcp-integration)
+- [Streaming Payments](#streaming-payments)
+- [API Reference](#api-reference)
+  - [Core](#core)
+  - [Server](#server-1)
+  - [Client](#client-1)
+- [Examples](#examples)
+- [Development](#development)
+- [License](#license)
 
 ## Install
 
@@ -32,13 +37,13 @@ Client (Mpay)                                     Server (Mpay)
 npm i mpay
 ```
 
-## Examples
+**Peer dependencies** (install as needed):
 
-See [examples/](./examples/) for runnable demos.
-
-| Example | Description |
+| Package | Required for |
 |---------|-------------|
-| [basic](./examples/basic/) | Barebones Client ↔ Server example |
+| `viem` | Tempo payment method |
+| `zod` | Custom intent schemas |
+| `@modelcontextprotocol/sdk` | MCP integration |
 
 ## Quick Start
 
@@ -59,17 +64,15 @@ const mpay = Mpay.create({
 export async function handler(request: Request) {
   const response = await mpay.charge({ amount: '1' })(request)
 
-  // Payment required — send 402 response with challenge
   if (response.status === 402) return response.challenge
 
-  // Payment verified — attach receipt and return resource
   return response.withReceipt(Response.json({ data: '...' }))
 }
 ```
 
-#### HTTP Node.js Compatibility
+#### Node.js HTTP
 
-Use `Mpay.toNodeListener` to wrap payment handlers for Node.js HTTP servers. It automatically handles 402 responses (writes headers, body, and ends the response) and sets the `Payment-Receipt` header on success.
+Use `Mpay.toNodeListener` for Node.js `http.createServer` compatibility:
 
 ```ts
 import * as http from 'node:http'
@@ -79,18 +82,75 @@ http.createServer(async (req, res) => {
   const result = await Mpay.toNodeListener(
     mpay.charge({ amount: '1' }))(req, res)
 
-  // 402 response already sent
   if (result.status === 402) return
 
-  // Payment verified — send resource
   res.writeHead(200, { 'Content-Type': 'application/json' })
   res.end(JSON.stringify({ data: '...' }))
 }).listen(3000)
 ```
 
-#### MCP (Model Context Protocol)
+### Client
 
-Use `Transport.mcpSdk()` for MCP SDK integration.
+#### Polyfill (default)
+
+The easiest approach — `Mpay.create()` polyfills `globalThis.fetch`:
+
+```ts
+import { privateKeyToAccount } from 'viem/accounts'
+import { Mpay, tempo } from 'mpay/client'
+
+Mpay.create({
+  methods: [tempo.charge({ account: privateKeyToAccount('0x...') })],
+})
+
+// Global fetch now handles 402 automatically
+const res = await fetch('https://api.example.com/resource')
+
+// Restore original fetch when done
+Mpay.restore()
+```
+
+#### Fetch wrapper
+
+If you prefer not to polyfill globals, set `polyfill: false`:
+
+```ts
+import { Mpay, tempo } from 'mpay/client'
+
+const mpay = Mpay.create({
+  polyfill: false,
+  methods: [tempo.charge({ account: privateKeyToAccount('0x...') })],
+})
+
+const res = await mpay.fetch('https://api.example.com/resource')
+```
+
+#### Manual
+
+For full control, create credentials yourself:
+
+```ts
+import { Challenge } from 'mpay'
+import { Mpay, tempo } from 'mpay/client'
+
+const mpay = Mpay.create({
+  polyfill: false,
+  methods: [tempo.charge({ account: privateKeyToAccount('0x...') })],
+})
+
+const res = await fetch('https://api.example.com/resource')
+if (res.status !== 402) return
+
+const credential = await mpay.createCredential(res)
+
+const res2 = await fetch('https://api.example.com/resource', {
+  headers: { 'Authorization': credential },
+})
+```
+
+## MCP Integration
+
+### MCP Server
 
 ```ts
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp'
@@ -111,86 +171,13 @@ const server = new McpServer({ name: 'my-server', version: '1.0.0' })
 server.registerTool('premium_tool', { description: '...' }, async (extra) => {
   const result = await mpay.charge({ amount: '1' })(extra)
 
-  // Payment required — throw challenge
   if (result.status === 402) throw result.challenge
 
-  // Payment verified — return result with receipt
   return result.withReceipt({ content: [{ type: 'text', text: 'Tool executed' }] })
 })
 ```
 
-### Client
-
-#### Automatic: Polyfill (default)
-
-The easiest way to use mpay on the client — `Mpay.create()` polyfills `globalThis.fetch` by default:
-
-```ts
-import { privateKeyToAccount } from 'viem/accounts'
-import { Mpay, tempo } from 'mpay/client'
-
-const account = privateKeyToAccount('0x...')
-
-Mpay.create({
-  methods: [tempo.charge({ account })],
-})
-
-// Global fetch now handles 402 automatically
-const res = await fetch('https://api.example.com/resource')
-
-// Restore original fetch if needed
-Mpay.restore()
-```
-
-#### Automatic: Fetch Wrapper
-
-If you prefer not to polyfill globals, set `polyfill: false` and use the returned `fetch`:
-
-```ts
-import { privateKeyToAccount } from 'viem/accounts'
-import { Mpay, tempo } from 'mpay/client'
-
-const account = privateKeyToAccount('0x...')
-
-const mpay = Mpay.create({
-  polyfill: false,
-  methods: [tempo.charge({ account })],
-})
-
-// Use the returned fetch — handles 402 automatically
-const res = await mpay.fetch('https://api.example.com/resource')
-```
-
-#### Manual
-
-For more control, you can manually create credentials:
-
-```ts
-import { Challenge } from 'mpay' 
-import { Mpay, tempo } from 'mpay/client'
-import { privateKeyToAccount } from 'viem/accounts'
-
-const account = privateKeyToAccount('0x...')
-
-const mpay = Mpay.create({
-  polyfill: false,
-  methods: [tempo.charge({ account })],
-})
-
-const res = await fetch('https://api.example.com/resource')
-if (res.status !== 402) return
-
-const credential = await mpay.createCredential(res)
-
-// Retry with credential
-const res2 = await fetch('https://api.example.com/resource', {
-  headers: { 'Authorization': credential }
-})
-```
-
-#### MCP (Model Context Protocol)
-
-Use `McpClient.wrap` to wrap an MCP SDK client with automatic payment handling. Like `mpay.fetch` for HTTP, it detects payment challenges and retries with credentials.
+### MCP Client
 
 ```ts
 import { Client } from '@modelcontextprotocol/sdk/client'
@@ -198,31 +185,67 @@ import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio'
 import { McpClient, tempo } from 'mpay/mcp-sdk/client'
 import { privateKeyToAccount } from 'viem/accounts'
 
-// Create MCP client
 const client = new Client({ name: 'my-client', version: '1.0.0' })
 await client.connect(new StdioClientTransport({ command: 'mcp-server' }))
 
-// Wrap with payment handling
 const mcp = McpClient.wrap(client, {
-  intents: [
-    tempo.charge({ account: privateKeyToAccount('0x...') }),
-  ],
+  methods: [tempo.charge({ account: privateKeyToAccount('0x...') })],
 })
 
-// Call tool — handles payment challenges automatically
 const result = await mcp.callTool({ name: 'premium_tool', arguments: {} })
 
 console.log(result.content) // Tool result
-console.log(result.receipt) // Payment receipt if payment was made
+console.log(result.receipt) // Payment receipt
 ```
+
+## Streaming Payments
+
+The `stream` intent enables pay-as-you-go payments using cumulative vouchers over a payment channel, ideal for metered services like per-token LLM billing.
+
+```ts
+// Server
+import { Mpay, tempo } from 'mpay/server'
+
+const mpay = Mpay.create({
+  intents: [
+    tempo.stream({
+      currency: '0x20c0000000000000000000000000000000000001',
+      recipient: '0x742d35Cc...',
+      escrowContract: '0xescrow...',
+    }),
+  ],
+})
+```
+
+```ts
+// Client
+import { Mpay, tempo } from 'mpay/client'
+
+const mpay = Mpay.create({
+  methods: [tempo.stream({ account: privateKeyToAccount('0x...') })],
+})
+```
+
+See the [stream example](./examples/stream/) for a full working demo.
 
 ## API Reference
 
 ### Core
 
-#### `Challenge.from`
+Import from `mpay`:
 
-Defines a challenge.
+| Export | Description |
+|--------|------------|
+| `Challenge` | Create, serialize, deserialize, and verify payment challenges |
+| `Credential` | Create, serialize, and deserialize payment credentials |
+| `Receipt` | Create, serialize, and deserialize payment receipts |
+| `Intent` | Define method-agnostic intent schemas |
+| `MethodIntent` | Extend intents with method-specific details |
+| `PaymentRequest` | Create and serialize intent-specific request data |
+| `BodyDigest` | Compute SHA-256 body digests for request binding |
+| `z` | Re-exported Zod with payment-specific refinements (`z.amount()`, `z.hash()`, `z.signature()`, `z.datetime()`) |
+
+#### `Challenge.from`
 
 ```ts
 import { Challenge } from 'mpay'
@@ -232,297 +255,180 @@ const challenge = Challenge.from({
   realm: 'api.example.com',
   method: 'tempo',
   intent: 'charge',
-  request: { amount: '1', currency: '0x...', recipient: '0x...' },
+  request: { amount: '1000000', currency: '0x...', recipient: '0x...' },
 })
 ```
 
-#### `Challenge.fromIntent`
-
-Defines a challenge from an intent.
+#### `Challenge.serialize` / `Challenge.deserialize`
 
 ```ts
-import { Challenge } from 'mpay'
-import { Intents } from 'mpay/tempo'
-
-const challenge = Challenge.fromIntent(Intents.charge, {
-  id: 'challenge-id',
-  realm: 'api.example.com',
-  request: {
-    amount: '1',
-    currency: '0x20c0000000000000000000000000000000000001',
-    recipient: '0x742d35Cc6634C0532925a3b844Bc9e7595f8fE00',
-    expires: '2025-01-06T12:00:00Z',
-    chainId: 42431,
-  },
-})
-```
-
-#### `Challenge.fromResponse`
-
-Parses a challenge from a 402 response.
-
-```ts
-import { Challenge } from 'mpay'
-
-const challenge = Challenge.fromResponse(response)
-```
-
-#### `Challenge.serialize`
-
-Serialize a challenge to the WWW-Authenticate header format.
-
-```ts
-import { Challenge } from 'mpay'
-
 const header = Challenge.serialize(challenge)
-// => 'Payment id="...", realm="...", method="...", intent="...", request="..."'
-```
+// => 'Payment id="...", realm="...", method="...", intent="...", request="<base64url>"'
 
-#### `Challenge.deserialize`
-
-Deserialize a WWW-Authenticate header value to a challenge.
-
-```ts
-import { Challenge } from 'mpay'
-
-const challenge = Challenge.deserialize(header)
+const parsed = Challenge.deserialize(header)
 ```
 
 #### `Challenge.verify`
 
-Verifies that a challenge ID matches the expected HMAC for the given parameters.
+Verify that a challenge ID matches the expected HMAC:
 
 ```ts
-import { Challenge } from 'mpay'
-
 const isValid = Challenge.verify(challenge, { secretKey: 'my-secret' })
 ```
 
-#### `Credential.from`
-
-Create a credential with a challenge ID and payload.
+#### `Credential.from` / `Credential.serialize` / `Credential.deserialize`
 
 ```ts
 import { Credential } from 'mpay'
 
 const credential = Credential.from({
-  id: 'challenge-id',
-  source: 'did:pkh:eip155:1:0x1234567890abcdef',
+  challenge,
+  source: 'did:pkh:eip155:42431:0x...',
   payload: { signature: '0x...', type: 'transaction' },
 })
+
+const header = Credential.serialize(credential)   // => 'Payment <base64url>'
+const parsed = Credential.deserialize(header)
 ```
 
-#### `Credential.fromRequest`
-
-Parses a credential from a request's Authorization header.
-
-```ts
-import { Credential } from 'mpay'
-
-const credential = Credential.fromRequest(request)
-```
-
-#### `Credential.serialize`
-
-Serialize a credential to the Authorization header format.
-
-```ts
-import { Credential } from 'mpay'
-
-const header = Credential.serialize(credential)
-// => 'Payment eyJpZCI6Li4ufQ'
-```
-
-#### `Credential.deserialize`
-
-Deserialize an Authorization header value to a credential.
-
-```ts
-import { Credential } from 'mpay'
-
-const credential = Credential.deserialize(header)
-```
-
-#### `Intent.from`
-
-Define a method-agnostic intent with a validated request schema.
-
-```ts
-import { Intent, z } from 'mpay'
-
-const charge = Intent.from({
-  name: 'charge',
-  schema: {
-    request: z.object({
-      amount: z.string(),
-      currency: z.string(),
-      description: z.optional(z.string()),
-      expires: z.optional(z.string()),
-      recipient: z.optional(z.string()),
-    }),
-  },
-})
-```
-
-#### `MethodIntent.fromIntent`
-
-Extend a base intent with method-specific details, required fields, and credential payload schema.
-
-```ts
-import { MethodIntent, z } from 'mpay'
-
-const tempoCharge = MethodIntent.fromIntent(charge, {
-  method: 'tempo',
-  schema: {
-    credential: {
-      payload: z.object({
-        signature: z.string(),
-        type: z.literal('transaction'),
-      }),
-    },
-    request: {
-      methodDetails: z.object({
-        chainId: z.optional(z.number()),
-      }),
-      requires: ['recipient', 'expires'],
-    },
-  },
-})
-```
-
-#### `Receipt.from`
-
-Create a payment receipt after successful verification.
+#### `Receipt.from` / `Receipt.serialize` / `Receipt.deserialize`
 
 ```ts
 import { Receipt } from 'mpay'
 
 const receipt = Receipt.from({
   status: 'success',
+  method: 'tempo',
   timestamp: new Date().toISOString(),
   reference: '0x...',
 })
-```
-
-#### `Receipt.serialize`
-
-Serialize a receipt to a base64url string for the Payment-Receipt header.
-
-```ts
-import { Receipt } from 'mpay'
 
 const header = Receipt.serialize(receipt)
-```
-
-#### `Receipt.deserialize`
-
-Deserialize a Payment-Receipt header value to a receipt.
-
-```ts
-import { Receipt } from 'mpay'
-
-const receipt = Receipt.deserialize(header)
-```
-
-#### `Request.fromIntent`
-
-Create a validated request from a method intent.
-
-```ts
-import { Request } from 'mpay'
-import { Intents } from 'mpay/tempo'
-
-const request = Request.fromIntent(Intents.charge, {
-  amount: '1',
-  currency: '0x20c0000000000000000000000000000000000001',
-  recipient: '0x742d35Cc6634C0532925a3b844Bc9e7595f8fE00',
-  expires: '2025-01-06T12:00:00Z',
-  chainId: 42431,
-})
-
-```
-
-#### `Request.serialize`
-
-Serialize a request to a base64url string.
-
-```ts
-import { Request } from 'mpay'
-
-const serialized = Request.serialize(request)
-```
-
-#### `Request.deserialize`
-
-Deserialize a base64url string to a request.
-
-```ts
-import { Request } from 'mpay'
-
-const request = Request.deserialize(serialized)
+const parsed = Receipt.deserialize(header)
 ```
 
 ### Server
 
-#### `Mpay.from`
+Import from `mpay/server`:
 
-Creates a server-side payment handler with configured intents.
+| Export | Description |
+|--------|------------|
+| `Mpay` | Server-side payment handler |
+| `tempo` | Tempo payment method (`.charge()`, `.stream()`) |
+| `Transport` | Transport adapters (`.http()`, `.mcp()`, `.mcpSdk()`) |
+
+#### `Mpay.create`
 
 ```ts
-import { Mpay } from 'mpay/server'
-import { Intents } from 'mpay/tempo'
+import { Mpay, tempo } from 'mpay/server'
 
-const payment = Mpay.from({
-  method: 'tempo',
-  realm: 'api.example.com',
-  secretKey: 'my-secret-key',
-  intents: {
-    authorize: Intents.authorize,
-    charge: Intents.charge,
-  },
-  async verify({ credential, request }) {
-    // Verify the credential and return a receipt
-    return { 
-      method: 'tempo',
-      status: 'success', 
-      timestamp: new Date().toISOString(), 
-      reference: '0x...' 
-    }
-  },
+const mpay = Mpay.create({
+  intents: [
+    tempo.charge({
+      currency: '0x20c0000000000000000000000000000000000001',
+      recipient: '0x742d35Cc...',
+    }),
+  ],
+  realm: 'api.example.com',         // default: "MPP Payment"
+  secretKey: process.env.SECRET_KEY, // recommended for production
 })
 ```
 
+#### `Mpay.toNodeListener`
+
+Wraps a payment handler for `http.createServer`. Automatically writes 402 responses and sets `Payment-Receipt` headers on success.
+
 ### Client
 
-#### `Mpay.from`
+Import from `mpay/client`:
 
-Defines a client-side payment handler for a payment method.
+| Export | Description |
+|--------|------------|
+| `Mpay` | Client-side payment handler |
+| `tempo` | Tempo payment method (`.charge()`, `.stream()`) |
+
+#### `Mpay.create`
 
 ```ts
-import { Mpay } from 'mpay/client'
-import { Intents } from 'mpay/tempo'
+import { Mpay, tempo } from 'mpay/client'
+import { privateKeyToAccount } from 'viem/accounts'
 
-export function tempo(options: tempo.Options) {
-  return Mpay.from({
-    method: 'tempo',
-    intents: {
-      authorize: Intents.authorize,
-      charge: Intents.charge,
-      subscription: Intents.subscription,
-    },
-    async createCredential(response) {
-      // ... parse challenge from response and create a credential
-    },
-  })
-}
+const mpay = Mpay.create({
+  methods: [tempo.charge({ account: privateKeyToAccount('0x...') })],
+  polyfill: true, // default — patches globalThis.fetch
+})
 ```
 
 #### `Mpay.restore`
 
-Restores the original `globalThis.fetch` after `Mpay.create()` polyfilled it.
+Restores the original `globalThis.fetch` after polyfilling:
 
 ```ts
-import { Mpay } from 'mpay/client'
-
 Mpay.restore()
 ```
+
+### Entrypoints
+
+| Path | Description |
+|------|------------|
+| `mpay` | Core types: `Challenge`, `Credential`, `Receipt`, `Intent`, `MethodIntent`, `z` |
+| `mpay/server` | Server-side: `Mpay`, `tempo`, `Transport` |
+| `mpay/client` | Client-side: `Mpay`, `tempo` |
+| `mpay/tempo` | Tempo method intents and stream utilities |
+| `mpay/mcp-sdk/client` | MCP SDK client wrapper: `McpClient`, `tempo` |
+| `mpay/mcp-sdk/server` | MCP SDK server transport |
+
+## Examples
+
+| Example | Description |
+|---------|-------------|
+| [basic](./examples/basic/) | Bun server with pay-per-request fortune API |
+| [stream](./examples/stream/) | Streaming payment channels with per-token LLM metering |
+
+Run examples from the repo root:
+
+```bash
+pnpm install
+pnpm dev:example
+```
+
+Or install directly into your project:
+
+```bash
+npx gitpick wevm/mpay/examples/basic
+```
+
+## Protocol
+
+```
+Client                                              Server
+  │                                                   │
+  │  GET /resource                                    │
+  ├──────────────────────────────────────────────────>│
+  │                                                   │
+  │                 402 + WWW-Authenticate: Payment   │
+  │<──────────────────────────────────────────────────┤
+  │                                                   │
+  │  GET /resource                                    │
+  │  Authorization: Payment <credential>              │
+  ├──────────────────────────────────────────────────>│
+  │                                                   │
+  │                 200 OK                             │
+  │                 Payment-Receipt: <receipt>         │
+  │<──────────────────────────────────────────────────┤
+```
+
+Built on the ["Payment" HTTP Authentication Scheme](https://datatracker.ietf.org/doc/draft-ietf-httpauth-payment/). See [payment-auth-spec](https://github.com/tempoxyz/payment-auth-spec) for the full specification.
+
+## Development
+
+```bash
+pnpm build        # Build with zile
+pnpm check        # Lint and format with biome
+pnpm check:types  # TypeScript type checking
+pnpm test         # Run tests with vitest
+```
+
+## License
+
+MIT
