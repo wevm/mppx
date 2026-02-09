@@ -1,6 +1,10 @@
 import type { MiddlewareHandler } from 'hono'
 
-type AnyMpay = Record<string, (options: any) => (request: Request) => Promise<any>>
+type PaymentHandler = (request: Request) => Promise<PaymentResult>
+
+type PaymentResult =
+  | { challenge: Response; status: 402 }
+  | { status: 200; withReceipt: <T>(response: T) => T }
 
 type WithReceipt = <T>(response: T) => T
 
@@ -10,20 +14,11 @@ type PaymentEnv = {
   }
 }
 
-export function paymentRequired<M extends AnyMpay>(
-  mpay: M,
-  intent: keyof M & string,
-  options: Record<string, unknown>,
-): MiddlewareHandler<PaymentEnv> {
-  const handler = mpay[intent]
-  if (!handler) throw new Error(`Unknown intent: ${intent}`)
-
+export function paymentRequired(handler: PaymentHandler): MiddlewareHandler<PaymentEnv> {
   return async (c, next) => {
-    const result = await handler(options)(c.req.raw)
-
+    const result = await handler(c.req.raw)
     if (result.status === 402) return result.challenge as Response
-
-    c.set('withReceipt', result.withReceipt as WithReceipt)
+    c.set('withReceipt', result.withReceipt)
     await next()
   }
 }

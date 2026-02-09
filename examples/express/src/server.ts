@@ -4,12 +4,11 @@ import { Mpay, tempo } from 'mpay/server'
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts'
 
 const account = privateKeyToAccount(generatePrivateKey())
-const currency = '0x20c0000000000000000000000000000000000001' as const
 
 const mpay = Mpay.create({
   methods: [
     tempo.charge({
-      currency,
+      currency: '0x20c0000000000000000000000000000000000001',
       feePayer: account,
       recipient: account.address,
       testnet: true,
@@ -19,7 +18,7 @@ const mpay = Mpay.create({
 
 const app = express()
 
-app.get('/api/fortune', paymentRequired(mpay, 'charge', { amount: '1' }), (_req, res) => {
+app.get('/api/fortune', paymentRequired(mpay.charge({ amount: '1' })), (_req, res) => {
   res.json({ fortune: 'A golden egg of opportunity falls into your lap this month.' })
 })
 

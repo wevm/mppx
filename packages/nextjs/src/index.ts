@@ -1,25 +1,18 @@
-type AnyMpay = Record<string, (options: any) => (request: Request) => Promise<any>>
+type PaymentHandler = (request: Request) => Promise<PaymentResult>
+
+type PaymentResult =
+  | { challenge: Response; status: 402 }
+  | { status: 200; withReceipt: <T>(response: T) => T }
 
 type WithReceipt = <T>(response: T) => T
 
-type RouteContext = {
-  withReceipt: WithReceipt
-}
-
-type RouteHandler = (request: Request, context: RouteContext) => Promise<Response>
-
 export function PaidRoute(
-  mpay: AnyMpay,
-  intent: string,
-  options: Record<string, unknown>,
-  handler: RouteHandler,
+  handler: PaymentHandler,
+  fn: (request: Request, context: { withReceipt: WithReceipt }) => Promise<Response>,
 ): (request: Request) => Promise<Response> {
-  const intentFn = mpay[intent]
-  if (!intentFn) throw new Error(`Unknown intent: ${intent}`)
-
-  return async (request: Request) => {
-    const result = await intentFn(options)(request)
-    if (result.status === 402) return result.challenge as Response
-    return handler(request, { withReceipt: result.withReceipt as WithReceipt })
+  return async (request) => {
+    const result = await handler(request)
+    if (result.status === 402) return result.challenge
+    return fn(request, { withReceipt: result.withReceipt })
   }
 }

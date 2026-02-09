@@ -21,12 +21,7 @@ const mpay = Mpay.create({
 
 const app = new Hono()
 
-app.get(
-  '/api/fortune',
-  paymentRequired(mpay, 'charge', { amount: '1' }),
-  (c) => {
-    const withReceipt = c.get('withReceipt')
-    return withReceipt(c.json({ fortune: 'Hello!' }))
-  },
-)
+app.get('/api/fortune', paymentRequired(mpay.charge({ amount: '1' })), (c) => {
+  return c.get('withReceipt')(c.json({ fortune: 'Hello!' }))
+})
 ```

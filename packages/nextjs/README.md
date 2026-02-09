@@ -19,12 +19,7 @@ const mpay = Mpay.create({
   methods: [tempo.charge({ currency, recipient, feePayer, testnet: true })],
 })
 
-export const GET = PaidRoute(
-  mpay,
-  'charge',
-  { amount: '1' },
-  async (request, { withReceipt }) => {
-    return withReceipt(Response.json({ fortune: 'Hello!' }))
-  },
-)
+export const GET = PaidRoute(mpay.charge({ amount: '1' }), async (request, { withReceipt }) => {
+  return withReceipt(Response.json({ fortune: 'Hello!' }))
+})
 ```

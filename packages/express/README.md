@@ -21,11 +21,7 @@ const mpay = Mpay.create({
 
 const app = express()
 
-app.get(
-  '/api/fortune',
-  paymentRequired(mpay, 'charge', { amount: '1' }),
-  (req, res) => {
-    res.json({ fortune: 'Hello!' })
-  },
-)
+app.get('/api/fortune', paymentRequired(mpay.charge({ amount: '1' })), (req, res) => {
+  res.json({ fortune: 'Hello!' })
+})
 ```

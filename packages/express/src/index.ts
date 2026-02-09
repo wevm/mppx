@@ -1,18 +1,17 @@
 import type { NextFunction, Request, Response } from 'express'
 import { Mpay } from 'mpay/server'
 
-type AnyMpay = Record<string, (options: any) => (request: globalThis.Request) => Promise<any>>
+type PaymentHandler = (request: globalThis.Request) => Promise<PaymentResult>
+
+type PaymentResult =
+  | { challenge: globalThis.Response; status: 402 }
+  | { status: 200; withReceipt: <T>(response: T) => T }
 
 export function paymentRequired(
-  mpay: AnyMpay,
-  intent: string,
-  options: Record<string, unknown>,
+  handler: PaymentHandler,
 ): (req: Request, res: Response, next: NextFunction) => Promise<void> {
-  const handler = mpay[intent]
-  if (!handler) throw new Error(`Unknown intent: ${intent}`)
-
   return async (req, res, next) => {
-    const result = await Mpay.toNodeListener(handler(options))(req, res)
+    const result = await Mpay.toNodeListener(handler)(req, res)
     if (result.status === 402) return
     next()
   }
