@@ -5,7 +5,7 @@ import * as os from 'node:os'
 import * as readline from 'node:readline'
 import { cac } from 'cac'
 import type { Chain } from 'viem'
-import { createClient, http } from 'viem'
+import { createClient, formatUnits, http } from 'viem'
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts'
 import { tempo as tempoMainnet, tempoModerato } from 'viem/chains'
 import * as Challenge from './Challenge.js'
@@ -163,10 +163,16 @@ cli
             : []),
           ...(challenge.expires ? [['expires', challenge.expires] as [string, string]] : []),
         ]
+        const decimals = 6
         const requestEntries: [string, string][] = [
           ...Object.entries(request)
             .filter(([key]) => key !== 'methodDetails')
-            .map(([key, value]) => [key, formatValue(value)] as [string, string]),
+            .map(([key, value]) => {
+              let formatted = formatValue(value)
+              if (key === 'amount' && typeof value === 'string' && /^\d+$/.test(value))
+                formatted = `${formatted} ($${formatUnits(BigInt(value), decimals)})`
+              return [key, formatted] as [string, string]
+            }),
           ['from', explorerLink(account.address, client.chain)],
         ]
         requestEntries.sort(([a], [b]) => a.localeCompare(b))
@@ -186,8 +192,7 @@ cli
               if (hex.length % 2 === 0) {
                 const text = Buffer.from(hex, 'hex').toString('utf8')
                 if (/^[\x20-\x7e]+$/.test(text)) {
-                  methodDetailEntries.push([key, text])
-                  methodDetailEntries.push([`${key} (hex)`, formatValue(value)])
+                  methodDetailEntries.push([key, `${text} (${formatValue(value)})`])
                   continue
                 }
               }
@@ -424,15 +429,22 @@ try {
 
 /////////////////////////////////////////////////////////////////////////////////////////////////
 
-function execCommand(
-  command: string,
-  args: string[],
-  options?: { ignoreExitCode?: boolean },
-): Promise<string> {
+function execCommand(command: string, args: string[]): Promise<string> {
   return new Promise((resolve, reject) => {
     child.execFile(command, args, (error, stdout, stderr) => {
-      if (error && !options?.ignoreExitCode) reject(new Error(stderr.trim() || error.message))
-      else resolve(stdout.trim() || stderr.trim())
+      if (error) reject(new Error(stderr.trim() || error.message))
+      else resolve(stdout.trim())
+    })
+  })
+}
+
+function execCommandFull(
+  command: string,
+  args: string[],
+): Promise<{ stdout: string; stderr: string }> {
+  return new Promise((resolve) => {
+    child.execFile(command, args, (_error, stdout, stderr) => {
+      resolve({ stdout: stdout.trim(), stderr: stderr.trim() })
     })
   })
 }
@@ -474,9 +486,10 @@ function createKeychain(account = 'default') {
       }
       if (platform === 'linux') {
         try {
-          const output = await execCommand('secret-tool', ['search', '--all', '--unlock', 'service', service], { ignoreExitCode: true })
+          const { stdout, stderr } = await execCommandFull('secret-tool', ['search', '--all', '--unlock', 'service', service])
+          const combined = `${stdout}\n${stderr}`
           const accounts: string[] = []
-          const matches = output.matchAll(/\baccount = (.+)/g)
+          const matches = combined.matchAll(/\baccount = (.+)/g)
           for (const match of matches) if (match[1]) accounts.push(match[1])
           return accounts
         } catch {
