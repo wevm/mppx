@@ -9,9 +9,9 @@ export default async function () {
   await server.start()
 
   // Arbitrary request to start server to trigger Docker image download.
-  console.log('Downloading Docker image & starting Tempo server...')
+  console.log('Starting Tempo server')
   await fetch(`http://localhost:${port}/1/start`)
-  console.log('Tempo server started.')
+  console.log('Tempo server started')
 
   return () => server.stop()
 }
