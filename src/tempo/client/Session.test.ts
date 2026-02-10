@@ -57,7 +57,7 @@ describe('Session', () => {
       expect(event).toEqual({ type: 'message', data: 'hello world' })
     })
 
-    test('parses mpay-need-voucher events', () => {
+    test('parses 402-need-voucher events', () => {
       const params: NeedVoucherEvent = {
         channelId,
         requiredCumulative: '6000000',
@@ -65,7 +65,7 @@ describe('Session', () => {
       }
       const raw = formatNeedVoucherEvent(params)
       const event = parseEvent(raw)
-      expect(event).toEqual({ type: 'mpay-need-voucher', data: params })
+      expect(event).toEqual({ type: '402-need-voucher', data: params })
     })
   })
 

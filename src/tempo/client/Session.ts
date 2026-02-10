@@ -338,7 +338,7 @@ export function session(parameters: session.Parameters): Session {
                   yield event.data
                   break
 
-                case 'mpay-need-voucher': {
+                case '402-need-voucher': {
                   if (!channel || !lastChallenge) break
                   const required = BigInt(event.data.requiredCumulative)
                   channel.cumulativeAmount =

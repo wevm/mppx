@@ -31,7 +31,7 @@ export function formatReceiptEvent(receipt: StreamReceipt): string {
  * any mpay-protected endpoint.
  */
 export function formatNeedVoucherEvent(params: NeedVoucherEvent): string {
-  return `event: mpay-need-voucher\ndata: ${JSON.stringify(params)}\n\n`
+  return `event: 402-need-voucher\ndata: ${JSON.stringify(params)}\n\n`
 }
 
 /**
@@ -39,7 +39,7 @@ export function formatNeedVoucherEvent(params: NeedVoucherEvent): string {
  */
 export type SseEvent =
   | { type: 'message'; data: string }
-  | { type: 'mpay-need-voucher'; data: NeedVoucherEvent }
+  | { type: '402-need-voucher'; data: NeedVoucherEvent }
   | { type: 'payment-receipt'; data: StreamReceipt }
 
 /**
@@ -47,7 +47,7 @@ export type SseEvent =
  *
  * Handles the three event types used by mpay streaming:
  * - `message` (default / no event field) — application data
- * - `mpay-need-voucher` — balance exhausted, client should send voucher
+ * - `402-need-voucher` — balance exhausted, client should send voucher
  * - `payment-receipt` — final receipt
  */
 export function parseEvent(raw: string): SseEvent | null {
@@ -70,8 +70,8 @@ export function parseEvent(raw: string): SseEvent | null {
   switch (eventType) {
     case 'message':
       return { type: 'message', data }
-    case 'mpay-need-voucher':
-      return { type: 'mpay-need-voucher', data: JSON.parse(data) as NeedVoucherEvent }
+    case '402-need-voucher':
+      return { type: '402-need-voucher', data: JSON.parse(data) as NeedVoucherEvent }
     case 'payment-receipt':
       return { type: 'payment-receipt', data: JSON.parse(data) as StreamReceipt }
     default:
@@ -95,7 +95,7 @@ export type StreamController = {
  * For each emitted value the stream:
  * 1. Deducts `tickCost` from the channel balance atomically (auto or manual).
  * 2. If balance is sufficient, emits `event: message` with the value.
- * 3. If balance is exhausted, emits `event: mpay-need-voucher`
+ * 3. If balance is exhausted, emits `event: 402-need-voucher`
  *    and polls storage until the client tops up the channel.
  * 4. On generator completion, emits a final `event: payment-receipt`.
  *
@@ -224,7 +224,7 @@ export declare namespace fromRequest {
  * Atomically deduct `amount` from a channel, retrying when balance is
  * insufficient. Uses `storage.waitForUpdate()` when available for
  * event-driven wakeups, falling back to polling otherwise. Emits
- * `mpay-need-voucher` events via `emit` while waiting.
+ * `402-need-voucher` events via `emit` while waiting.
  */
 async function chargeOrWait(options: {
   storage: ChannelStorage

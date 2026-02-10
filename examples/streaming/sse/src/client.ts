@@ -31,7 +31,7 @@ console.log(`Balance: ${fmt(balanceBefore)}`)
 //   1. GET  /api/chat  → server returns 402 with a payment challenge
 //   2. POST /api/chat  → client sends an open-channel credential (on-chain tx)
 //   3. GET  /api/chat  → client retries with a voucher; server begins SSE stream
-//   4. POST /api/chat  → for each `mpay-need-voucher` SSE event, the client
+//   4. POST /api/chat  → for each `402-need-voucher` SSE event, the client
 //                         sends an updated cumulative voucher via POST
 //                         (one POST per token — this is the streaming payment)
 //   5. close()         → settles the final voucher on-chain
