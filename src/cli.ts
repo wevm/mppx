@@ -470,7 +470,7 @@ function createKeychain(account = 'default') {
       }
       if (platform === 'linux') {
         try {
-          const output = await execCommand('secret-tool', ['search', 'service', service], { ignoreExitCode: true })
+          const output = await execCommand('secret-tool', ['search', '--all', '--unlock', 'service', service], { ignoreExitCode: true })
           const accounts: string[] = []
           const matches = output.matchAll(/\baccount = (.+)/g)
           for (const match of matches) if (match[1]) accounts.push(match[1])

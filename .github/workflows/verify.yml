@@ -42,7 +42,8 @@ jobs:
       - name: Run tests
         run: |
           eval "$(dbus-launch --sh-syntax)"
-          echo '' | gnome-keyring-daemon --unlock --components=secrets
+          eval "$(printf '\n' | gnome-keyring-daemon --unlock)"
+          eval "$(printf '\n' | gnome-keyring-daemon --start)"
           pnpm run test --bail=1
         env:
           CI: true
