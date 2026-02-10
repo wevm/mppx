@@ -5,13 +5,17 @@ import * as os from 'node:os'
 import * as readline from 'node:readline'
 import { cac } from 'cac'
 import type { Chain } from 'viem'
-import { createClient, formatUnits, http } from 'viem'
+import { type Address, createClient, formatUnits, http, isAddress } from 'viem'
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts'
+import { readContract } from 'viem/actions'
 import { tempo as tempoMainnet, tempoModerato } from 'viem/chains'
+import { Abis } from 'viem/tempo'
 import * as Challenge from './Challenge.js'
+import * as Credential from './Credential.js'
 import * as Mpay from './client/Mpay.js'
 import * as Receipt from './Receipt.js'
-import * as tempo from './tempo/client/index.js'
+import { tempo } from './tempo/client/index.js'
+import type { StreamCredentialPayload } from './tempo/stream/Types.js'
 
 const require = createRequire(import.meta.url)
 const { name, version } = require('../package.json') as { name: string; version: string }
@@ -34,8 +38,9 @@ cli
   .option('--account <name>', 'Account name (default: default)')
   .option('--json <json>', 'Send JSON body (sets Content-Type, implies POST)')
   .option('-M, --mainnet', 'Use mainnet')
-  .option('--rpc-url <url>', 'Custom RPC URL')
+  .option('--rpc-url <url>', 'Custom RPC URL (or set RPC_URL env var)')
   .option('--yes', 'Skip confirmation prompts')
+  .option('--deposit <amount>', 'Deposit amount for stream payments (human-readable units)')
   .example(`${name} example.com/foo/bar/baz --accept markdown`)
   .example(`${name} example.com/test -A claude`)
   .example(`${name} example.com/api -X POST --json '{"key":"value"}'`)
@@ -59,6 +64,7 @@ cli
         userAgent?: string
         verbose?: boolean
         yes?: boolean
+        deposit?: string
       },
     ) => {
       if (!rawUrl) {
@@ -66,7 +72,9 @@ cli
         return
       }
       const keychain = createKeychain(options.account)
-      const url = /^https?:\/\//.test(rawUrl) ? rawUrl : `https://${rawUrl}`
+      const hasProtocol = /^https?:\/\//.test(rawUrl)
+      const isLocal = /^(localhost|127\.0\.0\.1|\[::1\])(:\d+)?/.test(rawUrl)
+      const url = hasProtocol ? rawUrl : `${isLocal ? 'http' : 'https'}://${rawUrl}`
       const privateKey = await keychain.get()
       if (!privateKey) {
         console.error(`No account found. Run:\n\n  ${name} account create\n`)
@@ -74,13 +82,10 @@ cli
       }
 
       const account = privateKeyToAccount(privateKey as `0x${string}`)
+      const rpcUrl = options.rpcUrl ?? process.env.RPC_URL
       const client = createClient({
-        chain: await resolveChain(options),
-        transport: http(options.rpcUrl),
-      })
-      const mpay = Mpay.create({
-        methods: [tempo.charge({ account, getClient: () => client })],
-        polyfill: false,
+        chain: await resolveChain({ ...options, rpcUrl }),
+        transport: http(rpcUrl),
       })
 
       const headers: Record<string, string> = {}
@@ -149,21 +154,54 @@ cli
         const challenge = Challenge.fromResponse(challengeResponse)
         const request = challenge.request
 
+        let deposit: string | undefined
+        if (challenge.intent === 'stream') {
+          const suggestedDeposit = (request as Record<string, unknown>).suggestedDeposit as
+            | string
+            | undefined
+          const cliDeposit = options.deposit !== undefined ? String(options.deposit) : undefined
+          deposit = suggestedDeposit ?? cliDeposit ?? (!options.mainnet ? '10' : undefined)
+          if (!deposit) {
+            logErr(
+              'Stream payment requires a deposit. Use --deposit <amount> or connect to testnet.',
+            )
+            process.exit(1)
+          }
+        }
+
+        const mpay = Mpay.create({
+          methods: tempo({ account, getClient: () => client, deposit }),
+          polyfill: false,
+        })
+
         const formatValue = (value: unknown): string => {
           const str = typeof value === 'string' ? value : JSON.stringify(value)
-          if (/^0x[0-9a-fA-F]{40}$/.test(str)) return explorerLink(str, client.chain)
+          if (isAddress(str)) return explorerLink(str, client.chain)
           return str
         }
-        const challengeEntries: [string, string][] = [
-          ['realm', link(`https://${challenge.realm}`, challenge.realm)],
-          ['method', challenge.method],
-          ['intent', challenge.intent],
-          ...(challenge.description
-            ? [['description', challenge.description] as [string, string]]
-            : []),
-          ...(challenge.expires ? [['expires', challenge.expires] as [string, string]] : []),
-        ]
+        const formatChallengeValue = (key: string, value: unknown): string => {
+          const str = String(value)
+          if (key === 'realm') return formatRealm(str)
+          return str
+        }
+        const challengeExclude = new Set(['request'])
+        const challengeEntries = Object.entries(challenge)
+          .filter(([k, v]) => v != null && !challengeExclude.has(k))
+          .map(([k, v]) => [k, formatChallengeValue(k, v)] as [string, string])
+        challengeEntries.sort(([a], [b]) => a.localeCompare(b))
         const decimals = 6
+        let currencySymbol = 'tokens'
+        const currencyAddr = challenge.request.currency as string | undefined
+        if (currencyAddr && isAddress(currencyAddr)) {
+          try {
+            currencySymbol = await readContract(client, {
+              address: currencyAddr as Address,
+              abi: Abis.tip20,
+              functionName: 'symbol',
+            })
+          } catch {}
+        }
+
         const requestEntries: [string, string][] = [
           ...Object.entries(request)
             .filter(([key]) => key !== 'methodDetails')
@@ -171,6 +209,8 @@ cli
               let formatted = formatValue(value)
               if (key === 'amount' && typeof value === 'string' && /^\d+$/.test(value))
                 formatted = `${formatted} ($${formatUnits(BigInt(value), decimals)})`
+              if (key === 'currency' && typeof value === 'string' && isAddress(value))
+                formatted = `${formatted} (${currencySymbol})`
               return [key, formatted] as [string, string]
             }),
           ['from', explorerLink(account.address, client.chain)],
@@ -202,20 +242,28 @@ cli
           }
         const allEntries = [...challengeEntries, ...requestEntries, ...methodDetailEntries]
         const padEnd = Math.max(...allEntries.map(([key]) => key.length))
-        log('Challenge')
+        log(bold('Challenge'))
         printEntries(challengeEntries, padEnd)
         log('')
-        log('Request')
+        log(bold('Request'))
         printEntries(requestEntries, padEnd)
         if (methodDetailEntries.length > 0) {
           log('')
-          log('Method Details')
+          log(bold('Details'))
           printEntries(methodDetailEntries, padEnd)
         }
         log('')
 
         const intentLabel = challenge.intent ?? 'payment'
-        const confirmed = options.yes || (await confirm(`Proceed with ${intentLabel}?`))
+        const confirmMessage = (() => {
+          if (challenge.intent === 'stream' && deposit)
+            return `Proceed with stream? (deposit: ${deposit} ${currencySymbol})`
+          const amount = challenge.request.amount as string | undefined
+          if (amount && /^\d+$/.test(amount))
+            return `Proceed with ${intentLabel}? ($${formatUnits(BigInt(amount), decimals)} ${currencySymbol})`
+          return `Proceed with ${intentLabel}?`
+        })()
+        const confirmed = options.yes || (await confirm(confirmMessage))
         if (!confirmed) {
           logErr(`${intentLabel.charAt(0).toUpperCase()}${intentLabel.slice(1)} cancelled.`)
           process.exit(0)
@@ -223,6 +271,33 @@ cli
         log('')
 
         const credential = await mpay.createCredential(challengeResponse)
+
+        if (challenge.intent === 'stream') {
+          try {
+            const parsed = Credential.deserialize<StreamCredentialPayload>(credential)
+            const { payload } = parsed
+            const streamEntries: [string, string][] = [
+              ['channelId', payload.channelId],
+              ['action', payload.action],
+            ]
+            if ('cumulativeAmount' in payload)
+              streamEntries.push([
+                'amount',
+                `${payload.cumulativeAmount} ($${formatUnits(BigInt(payload.cumulativeAmount), decimals)})`,
+              ])
+            if (payload.action === 'open')
+              streamEntries.push(['deposit', `${deposit} ${currencySymbol}`])
+            if (payload.action === 'topUp' && 'additionalDeposit' in payload)
+              streamEntries.push([
+                'topUp',
+                `${payload.additionalDeposit} ($${formatUnits(BigInt(payload.additionalDeposit), decimals)})`,
+              ])
+            log(bold('Stream'))
+            printEntries(streamEntries, padEnd)
+            log('')
+          } catch {}
+        }
+
         const credentialResponse = await globalThis.fetch(url, {
           ...fetchInit,
           headers: { ...(fetchInit.headers as Record<string, string>), Authorization: credential },
@@ -231,46 +306,93 @@ cli
         if (options.include || options.verbose) printResponse(credentialResponse)
         if (options.fail && credentialResponse.status >= 400) process.exit(22)
         if (credentialResponse.status === 402) {
-          const retryChallenge = Challenge.fromResponse(credentialResponse)
-          printEntries([
-            ...(retryChallenge.description
-              ? [['description', retryChallenge.description] as [string, string]]
-              : []),
-            ...(retryChallenge.expires
-              ? [['expires', retryChallenge.expires] as [string, string]]
-              : []),
-            ['intent', retryChallenge.intent],
-            ['method', retryChallenge.method],
-            ['realm', link(`https://${retryChallenge.realm}`, retryChallenge.realm)],
-            ...Object.entries(retryChallenge.request).map(
-              ([key, value]) =>
-                [key, typeof value === 'string' ? value : JSON.stringify(value)] as [
-                  string,
-                  string,
-                ],
-            ),
-          ])
           const body = await credentialResponse.text()
           try {
             const problem = JSON.parse(body)
-            if (problem.detail) {
-              log('')
-              logErr(problem.detail.split('\n')[0])
-            }
-          } catch {}
-        } else {
-          const receiptHeader = credentialResponse.headers.get('Payment-Receipt')
-          if (receiptHeader) {
-            const receipt = Receipt.deserialize(receiptHeader)
-            const receiptEntries: [string, string][] = [
-              ['reference', explorerLink(receipt.reference, client.chain, 'tx')],
-              ['timestamp', receipt.timestamp],
-            ]
-            log('Receipt')
-            printEntries(receiptEntries)
-            log('')
+            if (problem.detail) logErr(problem.detail.split('\n')[0])
+            else logErr(body)
+          } catch {
+            if (body) logErr(body)
           }
-          console.log(await credentialResponse.text())
+          process.exit(1)
+        } else {
+          const contentType = credentialResponse.headers.get('Content-Type') ?? ''
+          if (contentType.includes('text/event-stream')) {
+            const reader = credentialResponse.body?.getReader()
+            if (!reader) {
+              logErr('No response body')
+              process.exit(1)
+            }
+            const decoder = new TextDecoder()
+            let buffer = ''
+            let currentEvent = ''
+
+            const processLines = (lines: string[]) => {
+              for (const line of lines) {
+                if (line.startsWith('event: ')) {
+                  currentEvent = line.slice(7).trim()
+                  continue
+                }
+                if (!line.startsWith('data: ')) {
+                  if (line === '') currentEvent = ''
+                  continue
+                }
+                const data = line.slice(6).trim()
+                if (data === '[DONE]') continue
+                if (currentEvent === 'payment-receipt') {
+                  try {
+                    const raw = JSON.parse(data) as Record<string, unknown>
+                    const formatReceiptValue = (key: string, value: unknown): string => {
+                      const str = String(value)
+                      if (key === 'txHash') return explorerLink(str, client.chain, 'tx')
+                      if (
+                        (key === 'spent' || key === 'acceptedCumulative' || key === 'amount') &&
+                        /^\d+$/.test(str)
+                      )
+                        return `${str} ($${formatUnits(BigInt(str), decimals)})`
+                      return str
+                    }
+                    const receiptExclude = new Set(['method', 'intent', 'challengeId', 'status'])
+                    if (raw.reference && raw.channelId && raw.reference === raw.channelId)
+                      receiptExclude.add('reference')
+                    const receiptEntries = Object.entries(raw)
+                      .filter(([k, v]) => v != null && !receiptExclude.has(k))
+                      .map(
+                        ([k, v]) =>
+                          [receiptKeyAliases[k] ?? k, formatReceiptValue(k, v)] as [string, string],
+                      )
+                    receiptEntries.sort(([a], [b]) => a.localeCompare(b))
+                    log('')
+                    log(bold('Receipt'))
+                    printEntries(receiptEntries, padEnd)
+                    log('')
+                  } catch {}
+                  currentEvent = ''
+                  continue
+                }
+                try {
+                  const { token } = JSON.parse(data) as { token: string }
+                  process.stdout.write(token)
+                } catch {}
+                currentEvent = ''
+              }
+            }
+
+            while (true) {
+              const { done, value } = await reader.read()
+              if (done) break
+              buffer += decoder.decode(value, { stream: true })
+              const lines = buffer.split('\n')
+              buffer = lines.pop()!
+              processLines(lines)
+            }
+            if (buffer.trim()) processLines([buffer])
+            process.stdout.write('\n')
+            printReceiptHeader(credentialResponse, client.chain, decimals, log, padEnd)
+          } else {
+            printReceiptHeader(credentialResponse, client.chain, decimals, log, padEnd)
+            console.log(await credentialResponse.text())
+          }
         }
       } catch (err) {
         // TODO: revert cast when https://github.com/wevm/zile/pull/26 is merged
@@ -287,7 +409,7 @@ cli
 cli
   .command('account [action]', 'Manage accounts (create, delete, fund, list, view)')
   .option('--account <name>', 'Account name (default: default)')
-  .option('--rpc-url <url>', 'Custom RPC URL')
+  .option('--rpc-url <url>', 'Custom RPC URL (or set RPC_URL env var)')
   .example(`${name} account create`)
   .example(`${name} account create --account work`)
   .example(`${name} account fund`)
@@ -439,6 +561,10 @@ function execCommand(command: string, args: string[]): Promise<string> {
   })
 }
 
+const receiptKeyAliases: Record<string, string> = {
+  acceptedCumulative: 'cumulative',
+}
+
 function execCommandFull(
   command: string,
   args: string[],
@@ -450,7 +576,56 @@ function execCommandFull(
   })
 }
 
-async function resolveChain(opts: { mainnet?: boolean; rpcUrl?: string } = {}): Promise<Chain> {
+function printReceiptHeader(
+  response: Response,
+  chain: Chain | undefined,
+  decimals: number,
+  log: (...args: unknown[]) => void,
+  padEnd?: number,
+) {
+  const header = response.headers.get('Payment-Receipt')
+  if (!header) return
+  try {
+    const raw = JSON.parse(Buffer.from(header, 'base64url').toString()) as Record<string, unknown>
+    const formatReceiptValue = (key: string, value: unknown): string => {
+      const str = String(value)
+      if (key === 'txHash') return explorerLink(str, chain, 'tx')
+      if (
+        (key === 'spent' || key === 'acceptedCumulative' || key === 'amount') &&
+        /^\d+$/.test(str)
+      )
+        return `${str} ($${formatUnits(BigInt(str), decimals)})`
+      return str
+    }
+    const receiptExclude = new Set(['method', 'intent', 'challengeId', 'status'])
+    if (raw.reference && raw.channelId && raw.reference === raw.channelId)
+      receiptExclude.add('reference')
+    const entries = Object.entries(raw)
+      .filter(([k, v]) => v != null && !receiptExclude.has(k))
+      .map(([k, v]) => [receiptKeyAliases[k] ?? k, formatReceiptValue(k, v)] as [string, string])
+    entries.sort(([a], [b]) => a.localeCompare(b))
+    log('')
+    log(bold('Receipt'))
+    printEntries(entries, padEnd)
+  } catch {
+    try {
+      const receipt = Receipt.deserialize(header)
+      log('')
+      log(bold('Receipt'))
+      printEntries(
+        [
+          ['reference', explorerLink(receipt.reference, chain, 'tx')],
+          ['timestamp', receipt.timestamp],
+        ],
+        padEnd,
+      )
+    } catch {}
+  }
+}
+
+async function resolveChain(
+  opts: { mainnet?: boolean; rpcUrl?: string | undefined } = {},
+): Promise<Chain> {
   if (!opts.rpcUrl) return opts.mainnet ? tempoMainnet : tempoModerato
   const { getChainId } = await import('viem/actions')
   const chainId = await getChainId(createClient({ transport: http(opts.rpcUrl) }))
@@ -603,17 +778,25 @@ function printEntries(entries: [string, string][], padEnd?: number) {
 }
 
 function printExplorerLinks(address: string) {
-  const truncated = truncateAddress(address)
-  const mainnetExplorer = tempoMainnet.blockExplorers?.default?.url
-  const testnetExplorer = tempoModerato.blockExplorers?.default?.url
-  if (mainnetExplorer)
-    console.log(
-      `${chainName(tempoMainnet)}: ${link(`${mainnetExplorer}/address/${address}`, `${mainnetExplorer}/address/${truncated}`)}`,
-    )
-  if (testnetExplorer)
-    console.log(
-      `${chainName(tempoModerato)}: ${link(`${testnetExplorer}/address/${address}`, `${testnetExplorer}/address/${truncated}`)}`,
-    )
+  for (const chain of [tempoMainnet, tempoModerato]) {
+    const explorerUrl = chain.blockExplorers?.default?.url
+    if (explorerUrl)
+      console.log(
+        `${chainName(chain)}: ${link(`${explorerUrl}/address/${address}`, `${explorerUrl}/address/${truncateAddress(address)}`)}`,
+      )
+  }
+}
+
+function formatRealm(realm: string) {
+  try {
+    const url = new URL(`https://${realm}`)
+    if (url.hostname === realm) return link(url.href, realm)
+  } catch {}
+  return realm
+}
+
+function bold(text: string) {
+  return `\x1b[1m${text}\x1b[22m`
 }
 
 function link(url: string, text: string) {

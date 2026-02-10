@@ -4,10 +4,12 @@ import { parseUnits } from 'viem'
 import { afterAll, describe, expect, test } from 'vitest'
 import * as Http from '~test/Http.js'
 import { rpcUrl } from '~test/tempo/prool.js'
+import { deployEscrow } from '~test/tempo/stream.js'
 import { accounts, asset, client } from '~test/tempo/viem.js'
 import * as Mpay_server from './server/Mpay.js'
 import { toNodeListener } from './server/Mpay.js'
 import { charge as charge_server } from './tempo/server/Charge.js'
+import { stream as stream_server } from './tempo/server/Stream.js'
 
 const cliPath = path.resolve(import.meta.dirname, 'cli.ts')
 const cwd = path.resolve(import.meta.dirname, '..')
@@ -79,6 +81,33 @@ afterAll(() => {
   } catch {}
 })
 
+function createMemoryStorage() {
+  const channels = new Map<string, any>()
+  const sessions = new Map<string, any>()
+  return {
+    async getChannel(channelId: string) {
+      return channels.get(channelId) ?? null
+    },
+    async getSession(challengeId: string) {
+      return sessions.get(challengeId) ?? null
+    },
+    async updateChannel(channelId: string, fn: (current: any) => any) {
+      const current = channels.get(channelId) ?? null
+      const result = fn(current)
+      if (result) channels.set(channelId, result)
+      else channels.delete(channelId)
+      return result
+    },
+    async updateSession(challengeId: string, fn: (current: any) => any) {
+      const current = sessions.get(challengeId) ?? null
+      const result = fn(current)
+      if (result) sessions.set(challengeId, result)
+      else sessions.delete(challengeId)
+      return result
+    },
+  }
+}
+
 test('mpay --help', () => {
   const stdout = run(['--help'])
   expect(stdout).toMatchInlineSnapshot(`
@@ -119,6 +148,7 @@ test('mpay --help', () => {
       -M, --mainnet          Use mainnet 
       --rpc-url <url>        Custom RPC URL 
       --yes                  Skip confirmation prompts 
+      --deposit <amount>     Deposit amount for stream payments (human-readable units) 
       -V, --version          Display version number 
       -h, --help             Display this message 
 
@@ -264,6 +294,69 @@ describe('mpay [url]', () => {
       expect(stdout.trim()).toBe('body-content')
       expect(stderr).toContain('HTTP/1.1 200')
       expect(stderr).toContain('x-test: yes')
+    } finally {
+      httpServer.close()
+    }
+  })
+
+  test('streams SSE tokens to stdout', { timeout: 120_000 }, async () => {
+    const escrow = await deployEscrow()
+    const storage = createMemoryStorage()
+
+    const server = Mpay_server.create({
+      methods: [
+        stream_server({
+          storage,
+          getClient: () => client,
+          recipient: accounts[0].address,
+          currency: asset,
+          escrowContract: escrow,
+          chainId: client.chain.id,
+          feePayer: accounts[0],
+        }),
+      ],
+      realm,
+      secretKey,
+    })
+
+    const httpServer = await Http.createServer(async (req, res) => {
+      const result = await toNodeListener(
+        server.stream({
+          amount: '0.001',
+          unitType: 'token',
+        }),
+      )(req, res)
+      if (result.status === 402) return
+
+      res.writeHead(200, {
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache',
+        Connection: 'keep-alive',
+      })
+      const tokens = ['Hello', ' world', '!']
+      for (const token of tokens) {
+        res.write(`data: ${JSON.stringify({ token })}\n\n`)
+      }
+      res.write('data: [DONE]\n\n')
+      res.end()
+    })
+
+    try {
+      const { stdout, stderr } = await runAsync(
+        [
+          httpServer.url,
+          '--rpc-url',
+          rpcUrl,
+          '--account',
+          testAccountName,
+          '--yes',
+          '--deposit',
+          '10',
+        ],
+        { input: '' },
+      )
+      expect(stdout.trim()).toBe('Hello world!')
+      expect(stderr).toContain('stream')
     } finally {
       httpServer.close()
     }

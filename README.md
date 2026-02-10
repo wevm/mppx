@@ -128,6 +128,9 @@ Options:
   --account <name>       Account name (default: default)
   --json <json>          Send JSON body (sets Content-Type, implies POST)
   -M, --mainnet          Use mainnet
+  --rpc-url <url>        Custom RPC URL
+  --yes                  Skip confirmation prompts
+  --deposit <amount>     Deposit amount for stream payments (human-readable units)
   -V, --version          Display version number
   -h, --help             Display this message
 ```
