@@ -270,7 +270,6 @@ cli
           process.exit(0)
         }
         const credential = await mpay.createCredential(challengeResponse)
-        log('')
 
         if (challenge.intent === 'stream') {
           try {
@@ -294,6 +293,7 @@ cli
               })
             if (payload.action === 'open' && deposit)
               streamEntries.push(['deposit', `${deposit} ${currencySymbol}`])
+            log('')
             log(bold('Stream'))
             printEntries(streamEntries, padEnd)
             if (options.verbose && 'transaction' in payload) {
@@ -708,7 +708,7 @@ function createKeychain(account = 'default') {
         try {
           await execCommand('security', ['delete-generic-password', '-s', service, '-a', account])
         } catch {}
-        await execCommand('security', ['add-generic-password', '-s', service, '-a', account, '-w', value])
+        await execCommand('security', ['add-generic-password', '-s', service, '-a', account, '-w', value, '-T', ''])
         return
       }
       if (platform === 'linux') {
