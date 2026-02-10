@@ -146,11 +146,14 @@ id = base64url(HMAC-SHA256(server_secret, input))
 ## Commands
 
 ```bash
-pnpm build          # Build with zile
+pnpm build          # Build with zile (required before running examples — they import from dist/)
 pnpm check          # Lint and format with biome
 pnpm check:types    # TypeScript type checking
-pnpm test           # Run tests with vitest
 ```
+
+### Testing
+
+**Do NOT run `pnpm test` unless explicitly asked.** The default test suite starts a Docker-based Tempo server which is slow and requires Docker to be running. Use `pnpm check:types` for quick validation instead.
 
 ## Skills Reference
 
