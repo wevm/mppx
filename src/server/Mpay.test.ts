@@ -7,7 +7,7 @@ import { accounts, asset, client } from '~test/tempo/viem.js'
 const realm = 'api.example.com'
 const secretKey = 'test-secret-key'
 
-const method = tempo.charge({
+const method = tempo({
   getClient: () => client,
 })
 

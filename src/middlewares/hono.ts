@@ -15,7 +15,7 @@ export namespace Mpay {
    * import { Mpay, tempo } from 'mpay/hono'
    *
    * const app = new Hono()
-   * const mpay = Mpay.create({ methods: [tempo.charge()] })
+   * const mpay = Mpay.create({ methods: [tempo()] })
    *
    * app.get('/premium', mpay.charge({ amount: '1' }), (c) =>
    *   c.json({ data: 'paid content' }),
@@ -41,7 +41,7 @@ export namespace Mpay {
  * import { Mpay } from 'mpay/server'
  * import { payment } from 'mpay/hono'
  *
- * const mpay = Mpay.create({ methods: [tempo.charge()] })
+ * const mpay = Mpay.create({ methods: [tempo()] })
  *
  * const app = new Hono()
  * app.get('/premium', payment(mpay.charge, { amount: '1' }), (c) =>

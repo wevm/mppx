@@ -14,7 +14,7 @@ import { stream as stream_ } from './Stream.js'
  * ```
  */
 export function tempo<const defaults extends tempo.Defaults>(
-  parameters: tempo.Parameters<defaults>,
+  parameters?: tempo.Parameters<defaults>,
 ) {
   return [tempo.charge(parameters), tempo.stream(parameters)] as const
 }

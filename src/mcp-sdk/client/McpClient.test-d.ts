@@ -1,7 +1,7 @@
 import type { Client } from '@modelcontextprotocol/sdk/client/index.js'
+import { tempo } from 'mpay/client'
 import type { Account } from 'viem'
 import { describe, expectTypeOf, test } from 'vitest'
-import * as tempo from '../../tempo/client/index.js'
 import * as McpClient from './McpClient.js'
 
 describe('McpClient.wrap', () => {
@@ -9,7 +9,7 @@ describe('McpClient.wrap', () => {
     const client = {} as Client
     const wrapped = McpClient.wrap(client, {
       methods: [
-        tempo.charge({
+        tempo({
           account: {} as Account,
         }),
       ],
@@ -23,7 +23,7 @@ describe('McpClient.wrap', () => {
     const client = {} as Client
     const wrapped = McpClient.wrap(client, {
       methods: [
-        tempo.charge({
+        tempo({
           account: {} as Account,
         }),
       ],
@@ -40,7 +40,7 @@ describe('McpClient.wrap', () => {
     const client = { callTool: {} as Client['callTool'], customProp: 'hello' }
     const wrapped = McpClient.wrap(client, {
       methods: [
-        tempo.charge({
+        tempo({
           account: {} as Account,
         }),
       ],
@@ -52,7 +52,7 @@ describe('McpClient.wrap', () => {
   test('callTool accepts context when method has context', () => {
     const client = {} as Client
     const wrapped = McpClient.wrap(client, {
-      methods: [tempo.charge({})],
+      methods: [tempo({})],
     })
 
     expectTypeOf(wrapped.callTool).toBeCallableWith(
@@ -65,7 +65,7 @@ describe('McpClient.wrap', () => {
     const client = {} as Client
     const wrapped = McpClient.wrap(client, {
       methods: [
-        tempo.charge({
+        tempo({
           account: {} as Account,
         }),
       ],
@@ -80,7 +80,7 @@ describe('McpClient.wrap', () => {
     const client = {} as Client
     const wrapped = McpClient.wrap(client, {
       methods: [
-        tempo.charge({
+        tempo({
           account: {} as Account,
         }),
       ],

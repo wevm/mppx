@@ -21,7 +21,7 @@ export namespace Mpay {
    * import { Mpay, tempo } from 'mpay/express'
    *
    * const app = express()
-   * const mpay = Mpay.create({ methods: [tempo.charge()] })
+   * const mpay = Mpay.create({ methods: [tempo()] })
    *
    * app.get('/premium', mpay.charge({ amount: '1' }), (req, res) => {
    *   res.json({ data: 'paid content' })
@@ -47,7 +47,7 @@ export namespace Mpay {
  * import { Mpay } from 'mpay/server'
  * import { payment } from 'mpay/express'
  *
- * const mpay = Mpay.create({ methods: [tempo.charge()] })
+ * const mpay = Mpay.create({ methods: [tempo()] })
  *
  * const app = express()
  * app.get('/premium', payment(mpay.charge, { amount: '1' }), (req, res) => {

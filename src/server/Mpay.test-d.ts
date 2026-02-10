@@ -1,7 +1,7 @@
+import { tempo } from 'mpay/server'
 import { describe, expectTypeOf, test } from 'vitest'
 import * as Intent from '../Intent.js'
 import * as MethodIntent from '../MethodIntent.js'
-import * as tempo from '../tempo/server/index.js'
 import * as z from '../zod.js'
 import * as Mpay from './Mpay.js'
 
@@ -191,7 +191,7 @@ describe('Mpay', () => {
   describe('defaults', () => {
     test('defaulted fields are optional in intent options', () => {
       const handler = Mpay.create({
-        methods: [tempo.charge({ currency: '0x1234', recipient: '0xabc' })],
+        methods: [tempo({ currency: '0x1234', recipient: '0xabc' })],
         realm: 'api.example.com',
         secretKey: 'secret',
       })
@@ -213,7 +213,7 @@ describe('Mpay', () => {
 
     test('non-defaulted fields remain required', () => {
       const handler = Mpay.create({
-        methods: [tempo.charge({ currency: '0x1234' })],
+        methods: [tempo({ currency: '0x1234' })],
         realm: 'api.example.com',
         secretKey: 'secret',
       })
@@ -228,7 +228,7 @@ describe('Mpay', () => {
 
     test('no defaults means all fields required', () => {
       const handler = Mpay.create({
-        methods: [tempo.charge()],
+        methods: [tempo({})],
         realm: 'api.example.com',
         secretKey: 'secret',
       })
@@ -244,7 +244,7 @@ describe('Mpay', () => {
 
     test('type: defaulted fields are optional in options type', () => {
       const handler = Mpay.create({
-        methods: [tempo.charge({ currency: '0x1234', recipient: '0xabc' })],
+        methods: [tempo({ currency: '0x1234', recipient: '0xabc' })],
         realm: 'api.example.com',
         secretKey: 'secret',
       })

@@ -60,9 +60,8 @@ type StreamMethodDetails = {
  * })
  * ```
  */
-export function stream<const defaults extends stream.Defaults>(
-  parameters: stream.Parameters<defaults>,
-) {
+export function stream<const defaults extends stream.Defaults>(p?: stream.Parameters<defaults>) {
+  const parameters = p as stream.Parameters<defaults>
   const {
     amount,
     currency,

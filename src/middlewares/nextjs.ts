@@ -17,7 +17,7 @@ export namespace Mpay {
    * // app/api/premium/route.ts
    * import { Mpay, tempo } from 'mpay/nextjs'
    *
-   * const mpay = Mpay.create({ methods: [tempo.charge()] })
+   * const mpay = Mpay.create({ methods: [tempo()] })
    *
    * export const GET = mpay.charge({ amount: '1' })(() =>
    *   Response.json({ data: 'paid content' }),
@@ -45,7 +45,7 @@ export namespace Mpay {
  * import { Mpay } from 'mpay/server'
  * import { payment } from 'mpay/nextjs'
  *
- * const mpay = Mpay.create({ methods: [tempo.charge()] })
+ * const mpay = Mpay.create({ methods: [tempo()] })
  *
  * export const GET = payment(mpay.charge, { amount: '1' }, () =>
  *   Response.json({ data: 'paid content' }),

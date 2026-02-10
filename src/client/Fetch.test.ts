@@ -12,7 +12,7 @@ const secretKey = 'test-secret-key'
 
 const server = Mpay_server.create({
   methods: [
-    tempo_server.charge({
+    tempo_server({
       getClient: () => client,
     }),
   ],
@@ -24,7 +24,7 @@ describe('Fetch.from', () => {
   test('default: account at creation', async () => {
     const fetch = Fetch.from({
       methods: [
-        tempo.charge({
+        tempo({
           account: accounts[1],
           getClient: () => client,
         }),
@@ -67,7 +67,7 @@ describe('Fetch.from', () => {
   test('default: account via context', async () => {
     const fetch = Fetch.from({
       methods: [
-        tempo.charge({
+        tempo({
           getClient: () => client,
         }),
       ],
@@ -100,7 +100,7 @@ describe('Fetch.from', () => {
   test('behavior: context overrides account at creation', async () => {
     const fetch = Fetch.from({
       methods: [
-        tempo.charge({
+        tempo({
           account: accounts[0],
           getClient: () => client,
         }),
@@ -131,7 +131,7 @@ describe('Fetch.from', () => {
   test('behavior: throws when no account provided', async () => {
     const fetch = Fetch.from({
       methods: [
-        tempo.charge({
+        tempo({
           getClient: () => createClient({ chain, transport: http() }),
         }),
       ],
@@ -160,7 +160,7 @@ describe('Fetch.from', () => {
   test('behavior: passes through non-402 responses', async () => {
     const fetch = Fetch.from({
       methods: [
-        tempo.charge({
+        tempo({
           account: accounts[1],
           getClient: () => client,
         }),
@@ -193,7 +193,7 @@ describe('Fetch.from', () => {
 
     const fetch = Fetch.from({
       methods: [
-        tempo.charge({
+        tempo({
           account: accounts[1],
           getClient: () => client,
         }),
@@ -238,7 +238,7 @@ describe('Fetch.polyfill', () => {
   test('default', async () => {
     Fetch.polyfill({
       methods: [
-        tempo.charge({
+        tempo({
           account: accounts[1],
           getClient: () => client,
         }),

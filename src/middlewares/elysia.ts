@@ -19,7 +19,7 @@ export namespace Mpay {
    * import { Elysia } from 'elysia'
    * import { Mpay, tempo } from 'mpay/elysia'
    *
-   * const mpay = Mpay.create({ methods: [tempo.charge()] })
+   * const mpay = Mpay.create({ methods: [tempo()] })
    *
    * const app = new Elysia()
    *   .guard(
@@ -46,7 +46,7 @@ export namespace Mpay {
  * import { Mpay } from 'mpay/server'
  * import { payment } from 'mpay/elysia'
  *
- * const mpay = Mpay.create({ methods: [tempo.charge()] })
+ * const mpay = Mpay.create({ methods: [tempo()] })
  *
  * const app = new Elysia()
  *   .guard(

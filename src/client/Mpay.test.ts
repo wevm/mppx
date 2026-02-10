@@ -298,7 +298,7 @@ describe('fetch', () => {
     const mpay = Mpay.create({
       polyfill: false,
       methods: [
-        tempo.charge({
+        tempo({
           account: accounts[1],
           getClient: () => client,
         }),
@@ -329,7 +329,7 @@ describe('fetch', () => {
     const mpay = Mpay.create({
       polyfill: false,
       methods: [
-        tempo.charge({
+        tempo({
           account: accounts[1],
           getClient: () => client,
         }),
@@ -352,7 +352,7 @@ describe('fetch', () => {
     const mpay = Mpay.create({
       polyfill: false,
       methods: [
-        tempo.charge({
+        tempo({
           getClient: () => client,
         }),
       ],
@@ -383,7 +383,7 @@ describe('polyfill', () => {
 
     Mpay.create({
       methods: [
-        tempo.charge({
+        tempo({
           account: accounts[1],
           getClient: () => client,
         }),
@@ -417,7 +417,7 @@ describe('polyfill', () => {
     Mpay.create({
       polyfill: false,
       methods: [
-        tempo.charge({
+        tempo({
           account: accounts[1],
           getClient: () => client,
         }),
@@ -434,7 +434,7 @@ describe('restore', () => {
 
     Mpay.create({
       methods: [
-        tempo.charge({
+        tempo({
           account: accounts[1],
           getClient: () => client,
         }),
@@ -454,7 +454,7 @@ describe('restore', () => {
     Mpay.create({
       polyfill: false,
       methods: [
-        tempo.charge({
+        tempo({
           account: accounts[1],
           getClient: () => client,
         }),
