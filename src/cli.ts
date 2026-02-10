@@ -277,17 +277,17 @@ cli
             const parsed = Credential.deserialize<StreamCredentialPayload>(credential)
             const { payload } = parsed
             const streamExclude = new Set(['method', 'intent', 'type', 'transaction'])
-            const amountKeys = new Set([
-              'cumulativeAmount',
-              'additionalDeposit',
-            ])
+            const amountKeys = new Set(['cumulativeAmount', 'additionalDeposit'])
             const streamEntries: [string, string][] = Object.entries(payload)
               .filter(([k, v]) => v != null && !streamExclude.has(k))
               .map(([k, v]) => {
                 const str = String(v)
                 const label = keyAliases[k] ?? k
                 if (amountKeys.has(k) && /^\d+$/.test(str))
-                  return [label, `${str} ($${formatUnits(BigInt(str), decimals)})`] as [string, string]
+                  return [label, `${str} ($${formatUnits(BigInt(str), decimals)})`] as [
+                    string,
+                    string,
+                  ]
                 if (isAddress(str))
                   return [label, explorerLink(str, client.chain)] as [string, string]
                 return [label, str] as [string, string]
