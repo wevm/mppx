@@ -438,21 +438,6 @@ function execCommand(
   })
 }
 
-function execCommandRaw(
-  command: string,
-  args: string[],
-): Promise<{ stdout: string; stderr: string; code: number | null }> {
-  return new Promise((resolve) => {
-    child.execFile(command, args, (error, stdout, stderr) => {
-      resolve({
-        stdout: stdout.trim(),
-        stderr: stderr.trim(),
-        code: error ? ((error as NodeJS.ErrnoException & { code?: number }).code ? null : 1) : 0,
-      })
-    })
-  })
-}
-
 async function resolveChain(opts: { mainnet?: boolean; rpcUrl?: string } = {}): Promise<Chain> {
   if (!opts.rpcUrl) return opts.mainnet ? tempoMainnet : tempoModerato
   const { getChainId } = await import('viem/actions')
@@ -490,18 +475,12 @@ function createKeychain(account = 'default') {
       }
       if (platform === 'linux') {
         try {
-          const output = await execCommandRaw('secret-tool', ['search', '--all', '--unlock', 'service', service])
-          if (process.env.CI) console.error(`[debug] secret-tool search stdout=${JSON.stringify(output.stdout)} stderr=${JSON.stringify(output.stderr)} code=${output.code}`)
+          const output = await execCommand('secret-tool', ['search', '--all', '--unlock', 'service', service], { ignoreExitCode: true })
           const accounts: string[] = []
-          const matches = output.stdout.matchAll(/\baccount = (.+)/g)
+          const matches = output.matchAll(/\baccount = (.+)/g)
           for (const match of matches) if (match[1]) accounts.push(match[1])
-          if (accounts.length === 0) {
-            const stderrMatches = output.stderr.matchAll(/\baccount = (.+)/g)
-            for (const match of stderrMatches) if (match[1]) accounts.push(match[1])
-          }
           return accounts
-        } catch (e) {
-          if (process.env.CI) console.error(`[debug] secret-tool search error: ${e}`)
+        } catch {
           return []
         }
       }
@@ -519,10 +498,8 @@ function createKeychain(account = 'default') {
       if (platform === 'linux') {
         try {
           const result = await execCommand('secret-tool', ['lookup', 'service', service, 'account', account])
-          if (process.env.CI) console.error(`[debug] secret-tool lookup service=${service} account=${account} result=${JSON.stringify(result)}`)
           return result || undefined
-        } catch (e) {
-          if (process.env.CI) console.error(`[debug] secret-tool lookup error: ${e}`)
+        } catch {
           return undefined
         }
       }
@@ -538,14 +515,11 @@ function createKeychain(account = 'default') {
         return
       }
       if (platform === 'linux') {
-        if (process.env.CI) console.error(`[debug] secret-tool store --label "${service} ${account}" service ${service} account ${account}`)
-        if (process.env.CI) console.error(`[debug] DBUS_SESSION_BUS_ADDRESS=${process.env.DBUS_SESSION_BUS_ADDRESS} GNOME_KEYRING_CONTROL=${process.env.GNOME_KEYRING_CONTROL}`)
         const proc = child.execFile('secret-tool', ['store', '--label', `${service} ${account}`, 'service', service, 'account', account])
         proc.stdin?.write(value)
         proc.stdin?.end()
         return new Promise((resolve, reject) => {
           proc.on('close', (code) => {
-            if (process.env.CI) console.error(`[debug] secret-tool store exited with code ${code}`)
             if (code === 0) resolve()
             else reject(new Error(`secret-tool exited with code ${code}`))
           })
