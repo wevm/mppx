@@ -21,14 +21,14 @@ export namespace Mpay {
    * import { Mpay, tempo } from 'mpay/express'
    *
    * const app = express()
-   * const mpay = Mpay.create({ methods: [tempo.charge()] })
+   * const mpay = Mpay.create({ methods: [tempo()] })
    *
    * app.get('/premium', mpay.charge({ amount: '1' }), (req, res) => {
    *   res.json({ data: 'paid content' })
    * })
    * ```
    */
-  export function create<const methods extends readonly Mpay_internal.AnyServer[]>(
+  export function create<const methods extends Mpay_core.Methods>(
     config: Mpay_core.create.Config<methods>,
   ): Mpay_internal.Wrap<Mpay_core.Mpay<methods>, RequestHandler> {
     return Mpay_internal.wrap(Mpay_core.create(config), payment)
@@ -47,7 +47,7 @@ export namespace Mpay {
  * import { Mpay } from 'mpay/server'
  * import { payment } from 'mpay/express'
  *
- * const mpay = Mpay.create({ methods: [tempo.charge()] })
+ * const mpay = Mpay.create({ methods: [tempo()] })
  *
  * const app = express()
  * app.get('/premium', payment(mpay.charge, { amount: '1' }), (req, res) => {

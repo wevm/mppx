@@ -19,7 +19,7 @@ export namespace Mpay {
    * import { Elysia } from 'elysia'
    * import { Mpay, tempo } from 'mpay/elysia'
    *
-   * const mpay = Mpay.create({ methods: [tempo.charge()] })
+   * const mpay = Mpay.create({ methods: [tempo()] })
    *
    * const app = new Elysia()
    *   .guard(
@@ -28,7 +28,7 @@ export namespace Mpay {
    *   )
    * ```
    */
-  export function create<const methods extends readonly Mpay_internal.AnyServer[]>(
+  export function create<const methods extends Mpay_core.Methods>(
     config: Mpay_core.create.Config<methods>,
   ): Mpay_internal.Wrap<Mpay_core.Mpay<methods>, ElysiaHook> {
     return Mpay_internal.wrap(Mpay_core.create(config), payment)
@@ -46,7 +46,7 @@ export namespace Mpay {
  * import { Mpay } from 'mpay/server'
  * import { payment } from 'mpay/elysia'
  *
- * const mpay = Mpay.create({ methods: [tempo.charge()] })
+ * const mpay = Mpay.create({ methods: [tempo()] })
  *
  * const app = new Elysia()
  *   .guard(

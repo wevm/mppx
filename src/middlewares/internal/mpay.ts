@@ -4,8 +4,10 @@ import type * as Mpay from '../../server/Mpay.js'
 export type AnyIntentFn = Mpay.AnyIntentFn
 export type AnyServer = MethodIntent.AnyServer
 
-export type Wrap<mpay extends Mpay.Mpay, handler> = {
-  [K in keyof mpay]: mpay[K] extends (options: infer O) => any ? (options: O) => handler : mpay[K]
+export type Wrap<mpay, handler> = {
+  [key in keyof mpay]: mpay[key] extends (options: infer options) => any
+    ? (o: options) => handler
+    : mpay[key]
 }
 
 /**
@@ -15,12 +17,12 @@ export type Wrap<mpay extends Mpay.Mpay, handler> = {
  * @param mpay - The payment handler created by `Mpay.create`.
  * @param wrapper - A function that adapts an intent function into a framework handler.
  */
-export function wrap<mpay extends Mpay.Mpay, handler>(
+export function wrap<mpay extends Mpay.Mpay<any, any>, handler>(
   mpay: mpay,
   wrapper: (intent: AnyIntentFn, options: any) => handler,
 ): Wrap<mpay, handler> {
   const result: Record<string, unknown> = { ...mpay }
-  for (const mi of mpay.methods) {
+  for (const mi of mpay.methods as readonly MethodIntent.AnyServer[]) {
     const intentFn = (mpay as any)[mi.name]
     result[mi.name] = (options: any) => wrapper(intentFn, options)
   }

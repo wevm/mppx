@@ -17,14 +17,14 @@ export namespace Mpay {
    * // app/api/premium/route.ts
    * import { Mpay, tempo } from 'mpay/nextjs'
    *
-   * const mpay = Mpay.create({ methods: [tempo.charge()] })
+   * const mpay = Mpay.create({ methods: [tempo()] })
    *
    * export const GET = mpay.charge({ amount: '1' })(() =>
    *   Response.json({ data: 'paid content' }),
    * )
    * ```
    */
-  export function create<const methods extends readonly Mpay_internal.AnyServer[]>(
+  export function create<const methods extends Mpay_core.Methods>(
     config: Mpay_core.create.Config<methods>,
   ): Mpay_internal.Wrap<Mpay_core.Mpay<methods>, NextjsHandler> {
     return Mpay_internal.wrap(Mpay_core.create(config), (intent, options) => {
@@ -45,7 +45,7 @@ export namespace Mpay {
  * import { Mpay } from 'mpay/server'
  * import { payment } from 'mpay/nextjs'
  *
- * const mpay = Mpay.create({ methods: [tempo.charge()] })
+ * const mpay = Mpay.create({ methods: [tempo()] })
  *
  * export const GET = payment(mpay.charge, { amount: '1' }, () =>
  *   Response.json({ data: 'paid content' }),

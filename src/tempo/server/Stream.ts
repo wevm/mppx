@@ -62,7 +62,8 @@ type StreamMethodDetails = {
  * })
  * ```
  */
-export function stream<const parameters extends stream.Parameters>(parameters: parameters) {
+export function stream<const parameters extends stream.Parameters>(p?: parameters) {
+  const parameters = p as parameters
   const {
     amount,
     currency,
@@ -71,6 +72,8 @@ export function stream<const parameters extends stream.Parameters>(parameters: p
     suggestedDeposit,
     unitType,
   } = parameters
+
+  if (!storage) throw new Error('storage is required')
 
   const [recipient, feePayer] = Recipient.resolve(parameters)
 
@@ -199,7 +202,7 @@ export declare namespace stream {
 
   type Parameters = {
     /** Storage backend for channel and session state. */
-    storage: ChannelStorage
+    storage?: ChannelStorage | undefined
     /** Minimum voucher delta to accept (numeric string, default: "0"). */
     minVoucherDelta?: string | undefined
     /** Testnet mode. */
