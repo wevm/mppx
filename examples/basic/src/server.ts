@@ -15,7 +15,7 @@ const client = createClient({
 
 const mpay = Mpay.create({
   methods: [
-    tempo.charge({
+    tempo({
       currency,
       feePayer: account,
       getClient: () => client,

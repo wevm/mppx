@@ -74,6 +74,8 @@ export function stream<const defaults extends stream.Defaults>(
     feePayer,
   } = parameters
 
+  if (!storage) throw new Error('storage is required')
+
   const getClient = Client.getResolver({
     chain: tempo_chain,
     getClient: parameters.getClient,
@@ -197,7 +199,7 @@ export declare namespace stream {
 
   type Parameters<defaults extends Defaults = {}> = {
     /** Storage backend for channel and session state. */
-    storage: ChannelStorage
+    storage?: ChannelStorage | undefined
     /** Minimum voucher delta to accept (numeric string, default: "0"). */
     minVoucherDelta?: string | undefined
     /** Optional fee payer account for covering open/topUp transaction fees. */
