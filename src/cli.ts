@@ -154,20 +154,21 @@ cli
         const challenge = Challenge.fromResponse(challengeResponse)
         const request = challenge.request
 
-        let deposit: string | undefined
-        if (challenge.intent === 'stream') {
+        const deposit = (() => {
+          if (challenge.intent !== 'stream') return undefined
           const suggestedDeposit = (request as Record<string, unknown>).suggestedDeposit as
             | string
             | undefined
           const cliDeposit = options.deposit !== undefined ? String(options.deposit) : undefined
-          deposit = suggestedDeposit ?? cliDeposit ?? (!options.mainnet ? '10' : undefined)
-          if (!deposit) {
+          const resolved = suggestedDeposit ?? cliDeposit ?? (!options.mainnet ? '10' : undefined)
+          if (!resolved) {
             logErr(
               'Stream payment requires a deposit. Use --deposit <amount> or connect to testnet.',
             )
             process.exit(1)
           }
-        }
+          return resolved
+        })()
 
         const mpay = Mpay.create({
           methods: tempo({ account, getClient: () => client, deposit }),
@@ -187,7 +188,7 @@ cli
         const challengeExclude = new Set(['request'])
         const challengeEntries = Object.entries(challenge)
           .filter(([k, v]) => v != null && !challengeExclude.has(k))
-          .map(([k, v]) => [k, formatChallengeValue(k, v)] as [string, string])
+          .map(([k, v]) => [keyAliases[k] ?? k, formatChallengeValue(k, v)] as [string, string])
         challengeEntries.sort(([a], [b]) => a.localeCompare(b))
         const decimals = 6
         let currencySymbol = 'tokens'
@@ -211,7 +212,7 @@ cli
                 formatted = `${formatted} ($${formatUnits(BigInt(value), decimals)})`
               if (key === 'currency' && typeof value === 'string' && isAddress(value))
                 formatted = `${formatted} (${currencySymbol})`
-              return [key, formatted] as [string, string]
+              return [keyAliases[key] ?? key, formatted] as [string, string]
             }),
           ['from', explorerLink(account.address, client.chain)],
         ]
@@ -238,7 +239,7 @@ cli
                 }
               }
             }
-            methodDetailEntries.push([key, formatted])
+            methodDetailEntries.push([keyAliases[key] ?? key, formatted])
           }
         const allEntries = [...challengeEntries, ...requestEntries, ...methodDetailEntries]
         const padEnd = Math.max(...allEntries.map(([key]) => key.length))
@@ -269,29 +270,36 @@ cli
           process.exit(0)
         }
         const credential = await mpay.createCredential(challengeResponse)
+        log('')
 
         if (challenge.intent === 'stream') {
           try {
             const parsed = Credential.deserialize<StreamCredentialPayload>(credential)
             const { payload } = parsed
-            const streamEntries: [string, string][] = [
-              ['channelId', payload.channelId],
-              ['action', payload.action],
-            ]
-            if ('cumulativeAmount' in payload)
-              streamEntries.push([
-                'amount',
-                `${payload.cumulativeAmount} ($${formatUnits(BigInt(payload.cumulativeAmount), decimals)})`,
-              ])
-            if (payload.action === 'open')
+            const streamExclude = new Set(['method', 'intent', 'type', 'transaction'])
+            const amountKeys = new Set([
+              'cumulativeAmount',
+              'additionalDeposit',
+            ])
+            const streamEntries: [string, string][] = Object.entries(payload)
+              .filter(([k, v]) => v != null && !streamExclude.has(k))
+              .map(([k, v]) => {
+                const str = String(v)
+                const label = keyAliases[k] ?? k
+                if (amountKeys.has(k) && /^\d+$/.test(str))
+                  return [label, `${str} ($${formatUnits(BigInt(str), decimals)})`] as [string, string]
+                if (isAddress(str))
+                  return [label, explorerLink(str, client.chain)] as [string, string]
+                return [label, str] as [string, string]
+              })
+            if (payload.action === 'open' && deposit)
               streamEntries.push(['deposit', `${deposit} ${currencySymbol}`])
-            if (payload.action === 'topUp' && 'additionalDeposit' in payload)
-              streamEntries.push([
-                'topUp',
-                `${payload.additionalDeposit} ($${formatUnits(BigInt(payload.additionalDeposit), decimals)})`,
-              ])
             log(bold('Stream'))
             printEntries(streamEntries, padEnd)
+            if (options.verbose && 'transaction' in payload) {
+              log('')
+              log(String(payload.transaction))
+            }
             log('')
           } catch {}
         }
@@ -357,7 +365,7 @@ cli
                       .filter(([k, v]) => v != null && !receiptExclude.has(k))
                       .map(
                         ([k, v]) =>
-                          [receiptKeyAliases[k] ?? k, formatReceiptValue(k, v)] as [string, string],
+                          [keyAliases[k] ?? k, formatReceiptValue(k, v)] as [string, string],
                       )
                     receiptEntries.sort(([a], [b]) => a.localeCompare(b))
                     log('')
@@ -560,8 +568,10 @@ function execCommand(command: string, args: string[]): Promise<string> {
   })
 }
 
-const receiptKeyAliases: Record<string, string> = {
-  acceptedCumulative: 'cumulative',
+const keyAliases: Record<string, string> = {
+  acceptedCumulative: 'accepted',
+  authorizedSigner: 'signer',
+  cumulativeAmount: 'cumulative',
 }
 
 function execCommandFull(
@@ -601,7 +611,7 @@ function printReceiptHeader(
       receiptExclude.add('reference')
     const entries = Object.entries(raw)
       .filter(([k, v]) => v != null && !receiptExclude.has(k))
-      .map(([k, v]) => [receiptKeyAliases[k] ?? k, formatReceiptValue(k, v)] as [string, string])
+      .map(([k, v]) => [keyAliases[k] ?? k, formatReceiptValue(k, v)] as [string, string])
     entries.sort(([a], [b]) => a.localeCompare(b))
     log('')
     log(bold('Receipt'))
