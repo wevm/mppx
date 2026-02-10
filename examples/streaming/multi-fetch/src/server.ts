@@ -20,7 +20,7 @@ const mpay = Mpay.create({
   methods: [
     tempo.stream({
       currency,
-      getClient: () => client,
+      // getClient: () => client,
       recipient: account.address,
       storage,
       testnet: true,
@@ -38,7 +38,7 @@ export async function handler(request: Request): Promise<Response | null> {
 
     const result = await mpay.stream({
       amount: '0.002',
-      unitType: 'page',
+      unitType: 'page', // remove 
     })(request)
 
     if (result.status === 402) return result.challenge as globalThis.Response

@@ -52,8 +52,7 @@ export async function handler(request: Request): Promise<Response | null> {
       unitType: 'token',
     })(request)
 
-    // `result.response` is set for 402 challenges and channel-open POSTs.
-    // When null, the request is authenticated and we can start streaming.
+    if (result.status === 402) return result.challenge as globalThis.Response
     if (result.response) return result.response as globalThis.Response
 
     const ctx = tempo.Sse.fromRequest(request)

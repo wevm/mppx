@@ -311,6 +311,9 @@ function validateOnChainChannel(
   if (onChain.finalized) {
     throw new ChannelClosedError({ reason: 'channel is finalized on-chain' })
   }
+  if (onChain.closeRequestedAt !== 0n) {
+    throw new ChannelClosedError({ reason: 'channel has a pending close request' })
+  }
   if (onChain.payee.toLowerCase() !== recipient.toLowerCase()) {
     throw new VerificationFailedError({
       reason: 'on-chain payee does not match server destination',
@@ -353,6 +356,9 @@ async function verifyAndAcceptVoucher(parameters: {
 
   if (onChain.finalized) {
     throw new ChannelClosedError({ reason: 'channel is finalized on-chain' })
+  }
+  if (onChain.closeRequestedAt !== 0n) {
+    throw new ChannelClosedError({ reason: 'channel has a pending close request' })
   }
 
   if (voucher.cumulativeAmount < onChain.settled) {
