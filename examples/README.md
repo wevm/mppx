@@ -8,6 +8,7 @@ Standalone, runnable examples demonstrating the mpay HTTP 402 payment flow.
 |---------|-------------|
 | [basic](./basic/) | Bun server with pay-per-request fortune API |
 | [stream](./stream/) | Streaming payment channels with per-token LLM metering |
+| [sdk-integrations](./sdk-integrations/) | How mpay composes with every major LLM/AI SDK |
 
 ## Running Examples
 
