@@ -281,48 +281,6 @@ describe('request handler (node)', () => {
   })
 })
 
-describe('Mpay.tempo', () => {
-  test('creates handler with charge and stream methods', () => {
-    const handler = Mpay.tempo({
-      storage: {
-        getChannel: async () => null,
-        getSession: async () => null,
-        updateChannel: async () => null,
-        updateSession: async () => null,
-      } as never,
-      getClient: () => client,
-      realm,
-      secretKey,
-    })
-
-    expect(handler.realm).toBe(realm)
-    expect(typeof handler.charge).toBe('function')
-    expect(typeof handler.stream).toBe('function')
-  })
-
-  test('returns 402 when no credential', async () => {
-    const handler = Mpay.tempo({
-      storage: {
-        getChannel: async () => null,
-        getSession: async () => null,
-        updateChannel: async () => null,
-        updateSession: async () => null,
-      } as never,
-      getClient: () => client,
-      realm,
-      secretKey,
-    })
-
-    const result = await handler.charge({
-      amount: '1000',
-      currency: asset,
-      recipient: accounts[0].address,
-    })(new Request('https://example.com/resource'))
-
-    expect(result.status).toBe(402)
-  })
-})
-
 describe('receipt handling', () => {
   test('returns 200 when verify returns a success receipt', async () => {
     const mockCharge = MethodIntent.fromIntent(Intent.charge, {

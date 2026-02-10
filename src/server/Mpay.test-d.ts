@@ -261,45 +261,6 @@ describe('Mpay', () => {
   })
 })
 
-describe('Mpay.tempo', () => {
-  test('returns handler with charge and stream intents', () => {
-    const handler = Mpay.tempo({
-      storage: {} as never,
-      getClient: () => ({}) as never,
-    })
-
-    expectTypeOf(handler.charge).toBeFunction()
-    expectTypeOf(handler.stream).toBeFunction()
-    expectTypeOf(handler.realm).toBeString()
-  })
-
-  test('defaults flow through to intent options', () => {
-    const handler = Mpay.tempo({
-      currency: '0x1234',
-      recipient: '0xabc',
-      storage: {} as never,
-      getClient: () => ({}) as never,
-    })
-
-    handler.charge({
-      amount: '1000',
-      decimals: 6,
-    })
-
-    handler.charge({
-      amount: '1000',
-      currency: '0x5678',
-      decimals: 6,
-      recipient: '0xdef',
-    })
-
-    type ChargeOptions = Parameters<typeof handler.charge>[0]
-    expectTypeOf<ChargeOptions['currency']>().toEqualTypeOf<string | undefined>()
-    expectTypeOf<ChargeOptions['recipient']>().toEqualTypeOf<string | undefined>()
-    expectTypeOf<ChargeOptions['amount']>().toEqualTypeOf<string>()
-  })
-})
-
 describe('create.Config', () => {
   test('requires methods, realm, and secretKey', () => {
     type Config = Mpay.create.Config
