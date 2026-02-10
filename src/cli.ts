@@ -424,10 +424,10 @@ try {
 
 /////////////////////////////////////////////////////////////////////////////////////////////////
 
-function execCommand(command: string, args: string[]): Promise<string> {
+function execCommand(command: string, args: string[], options?: { ignoreExitCode?: boolean }): Promise<string> {
   return new Promise((resolve, reject) => {
     child.execFile(command, args, (error, stdout, stderr) => {
-      if (error) reject(new Error(stderr.trim() || error.message))
+      if (error && !(options?.ignoreExitCode && stdout)) reject(new Error(stderr.trim() || error.message))
       else resolve(stdout.trim())
     })
   })
@@ -470,7 +470,7 @@ function createKeychain(account = 'default') {
       }
       if (platform === 'linux') {
         try {
-          const output = await execCommand('secret-tool', ['search', 'service', service])
+          const output = await execCommand('secret-tool', ['search', 'service', service], { ignoreExitCode: true })
           const accounts: string[] = []
           const matches = output.matchAll(/\baccount = (.+)/g)
           for (const match of matches) if (match[1]) accounts.push(match[1])
