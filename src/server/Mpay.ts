@@ -4,25 +4,26 @@ import type * as Credential from '../Credential.js'
 import * as Errors from '../Errors.js'
 import type * as MethodIntent from '../MethodIntent.js'
 import type * as Receipt from '../Receipt.js'
-import { tempo as tempo_ } from '../tempo/server/index.js'
 import type * as z from '../zod.js'
 import * as Request from './Request.js'
 import * as Transport from './Transport.js'
+
+export type Methods = readonly (MethodIntent.AnyServer | readonly MethodIntent.AnyServer[])[]
 
 /**
  * Payment handler.
  */
 export type Mpay<
-  methods extends readonly MethodIntent.AnyServer[] = readonly MethodIntent.Server[],
+  methods extends Methods = Methods,
   transport extends Transport.AnyTransport = Transport.Http,
 > = {
   /** Methods to configure. */
-  methods: methods
+  methods: FlattenMethods<methods>
   /** Server realm (e.g., hostname). */
   realm: string
   /** The transport used. */
   transport: transport
-} & Handlers<methods, transport>
+} & Handlers<FlattenMethods<methods>, transport>
 
 type Handlers<
   methods extends readonly MethodIntent.AnyServer[],
@@ -52,15 +53,16 @@ type Handlers<
  * ```
  */
 export function create<
-  const methods extends readonly MethodIntent.AnyServer[],
+  const methods extends Methods,
   const transport extends Transport.AnyTransport = Transport.Http,
 >(config: create.Config<methods, transport>): Mpay<methods, transport> {
   const {
-    methods,
     realm = 'MPP Payment',
     secretKey = 'tmp',
     transport = Transport.http() as transport,
   } = config
+
+  const methods = config.methods.flat() as unknown as FlattenMethods<methods>
 
   const handlers: Record<string, unknown> = {}
 
@@ -81,7 +83,7 @@ export function create<
 
 export declare namespace create {
   type Config<
-    methods extends readonly MethodIntent.AnyServer[] = readonly MethodIntent.Server[],
+    methods extends Methods = Methods,
     transport extends Transport.AnyTransport = Transport.Http,
   > = {
     /** Array of configured methods. @example [tempo.charge()] */
@@ -93,31 +95,6 @@ export declare namespace create {
     /** Transport to use. @default Transport.http() */
     transport?: transport | undefined
   }
-}
-
-/**
- * Creates an Mpay instance pre-configured with Tempo charge and stream methods.
- *
- * @example
- * ```ts
- * import { Mpay } from 'mpay/server'
- *
- * const mpay = Mpay.tempo({
- *   currency: '0x...',
- *   recipient: '0x...',
- * })
- * ```
- */
-export function tempo<const defaults extends tempo_.Defaults>(
-  parameters: tempo_.Parameters<defaults> & Omit<create.Config, 'methods'>,
-) {
-  const { realm, secretKey, transport, ...rest } = parameters
-  return create({
-    methods: tempo_(rest as tempo_.Parameters<defaults>),
-    realm,
-    secretKey,
-    transport,
-  })
 }
 
 function createIntentFn<
@@ -345,3 +322,18 @@ export function toNodeListener(
     return result
   }
 }
+
+/**
+ * Flattens a methods config tuple, preserving positional types.
+ * @internal
+ */
+type FlattenMethods<methods extends Methods> = methods extends readonly [
+  infer head,
+  ...infer tail extends Methods,
+]
+  ? head extends readonly MethodIntent.AnyServer[]
+    ? readonly [...head, ...FlattenMethods<tail>]
+    : head extends MethodIntent.AnyServer
+      ? readonly [head, ...FlattenMethods<tail>]
+      : never
+  : readonly []

@@ -14,15 +14,15 @@ export type Mpay<
   transport extends Transport.Transport = Transport.Transport,
 > = {
   /** Payment-aware fetch function that automatically handles 402 responses. */
-  fetch: Fetch.from.Fetch<methods>
+  fetch: Fetch.from.Fetch<FlattenMethods<methods>>
   /** Methods to configure. */
-  methods: methods
+  methods: FlattenMethods<methods>
   /** The transport used. */
   transport: transport
   /** Creates a credential from a payment-required response by routing to the correct method. */
   createCredential: (
     response: Transport.ResponseOf<transport>,
-    context?: AnyContextFor<methods> | undefined,
+    context?: AnyContextFor<FlattenMethods<methods>> | undefined,
   ) => Promise<string>
 }
 
@@ -53,7 +53,7 @@ export function create<
     RequestInit,
     Response
   >,
->(config: create.Config<methods, transport>): Mpay<FlattenMethods<methods>, transport> {
+>(config: create.Config<methods, transport>): Mpay<methods, transport> {
   const { polyfill = true, transport = Transport.http() as transport } = config
 
   const methods = config.methods.flat() as unknown as FlattenMethods<methods>
