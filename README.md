@@ -1,6 +1,6 @@
 # mpay
 
-TypeScript SDK for the [Machine Payments Protocol](https://machinepayments.dev).
+TypeScript SDK for the [**Machine Payments Protocol**](https://machinepayments.dev).
 
 [![npm](https://img.shields.io/npm/v/mpay.svg)](https://www.npmjs.com/package/mpay)
 [![License](https://img.shields.io/npm/l/mpay.svg)](LICENSE)
@@ -13,6 +13,12 @@ Full documentation, API reference, and guides are available at **[machinepayment
 
 ```bash
 npm i mpay
+```
+```bash
+pnpm add mpay
+```
+```bash
+bun add mpay
 ```
 
 ## Quick Start
@@ -63,6 +69,83 @@ const res = await fetch('https://api.example.com/resource')
 
 ```bash
 npx gitpick wevm/mpay/examples/basic
+```
+```bash
+pnpx gitpick wevm/mpay/examples/basic
+```
+```bash
+bunx gitpick wevm/mpay/examples/basic
+```
+
+## CLI
+
+mpay includes a basic CLI for making HTTP requests with automatic payment handling.
+
+```bash
+# create account - stored in keychain, autofunded on testnet
+pnpm mpay account create
+
+# make request - automatic payment handling, curl-like api
+pnpm mpay example.com
+```
+
+<details>
+<summary><code>mpay --help</code></summary>
+
+```
+mpay/0.1.0
+
+Usage:
+  $ mpay [url]
+
+Commands:
+  [url]             Make HTTP request with automatic payment
+  account [action]  Manage accounts (create, delete, fund, list, view)
+
+For more info, run any command with the `--help` flag:
+  $ mpay --help
+  $ mpay account --help
+
+Actions:
+  create  Create new account
+  delete  Delete account
+  fund    Fund account with testnet tokens
+  list    List all accounts
+  view    View account address
+
+Options:
+  -A, --user-agent <ua>  Set User-Agent header
+  -d, --data <data>      Send request body (implies POST unless -X is set)
+  -f, --fail             Fail silently on HTTP errors (exit 22)
+  -H, --header <header>  Add header (repeatable)
+  -i, --include          Include response headers in output
+  -k, --insecure         Skip TLS certificate verification (true for localhost/.local)
+  -L, --location         Follow redirects
+  -s, --silent           Silent mode (suppress progress and info)
+  -v, --verbose          Make operation more talkative
+  -X, --method <method>  HTTP method
+  --accept <type>        Set Accept header (e.g. json, markdown, text/html)
+  --account <name>       Account name (default: default)
+  --json <json>          Send JSON body (sets Content-Type, implies POST)
+  -M, --mainnet          Use mainnet
+  -V, --version          Display version number
+  -h, --help             Display this message
+```
+
+</details>
+
+### Global Install
+
+Install globally to use `mpay` from anywhere:
+
+```bash
+npm i -g mpay
+```
+```bash
+pnpm add -g mpay
+```
+```bash
+bun add -g mpay
 ```
 
 ## Protocol

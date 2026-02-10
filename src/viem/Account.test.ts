@@ -48,40 +48,24 @@ describe('getResolver', () => {
     expect(result).toBe(account)
   })
 
-  test('behavior: Address matching client.account returns client.account', () => {
+  test('behavior: Address returns parsed account', () => {
     const getAccount = Account.getResolver()
-    const result = getAccount(clientWithAccount, { account: account.address })
-    expect(result).toBe(account)
+    const result = getAccount(clientWithoutAccount, { account: account.address })
+    expect(result.address).toBe(account.address)
+    expect(result.type).toBe('json-rpc')
   })
 
-  test('behavior: Address as default matching client.account returns client.account', () => {
+  test('behavior: Address as default returns parsed account', () => {
     const getAccount = Account.getResolver({ account: account.address })
-    const result = getAccount(clientWithAccount)
-    expect(result).toBe(account)
+    const result = getAccount(clientWithoutAccount)
+    expect(result.address).toBe(account.address)
+    expect(result.type).toBe('json-rpc')
   })
 
   test('error: throws when no account and client has no account', () => {
     const getAccount = Account.getResolver()
     expect(() => getAccount(clientWithoutAccount)).toThrowErrorMatchingInlineSnapshot(
       `[Error: No \`account\` provided. Pass \`account\` to parameters or context.]`,
-    )
-  })
-
-  test('error: throws when Address provided but client has no account', () => {
-    const getAccount = Account.getResolver()
-    expect(() =>
-      getAccount(clientWithoutAccount, { account: account.address }),
-    ).toThrowErrorMatchingInlineSnapshot(
-      `[Error: Address "${account.address}" was provided but the client does not have an account.]`,
-    )
-  })
-
-  test('error: throws when Address does not match client.account', () => {
-    const getAccount = Account.getResolver()
-    expect(() =>
-      getAccount(clientWithAccount, { account: otherAccount.address }),
-    ).toThrowErrorMatchingInlineSnapshot(
-      `[Error: Address "${otherAccount.address}" does not match the client account "${account.address}".]`,
     )
   })
 })

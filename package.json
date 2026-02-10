@@ -8,6 +8,7 @@
     "check": "biome check --fix --unsafe",
     "check:ci": "biome check",
     "check:types": "tsc -b",
+    "mpay": "node --import tsx src/cli.ts",
     "test": "vitest"
   },
   "devDependencies": {
@@ -18,6 +19,7 @@
     "@vitest/coverage-v8": "^4.0.17",
     "prool": "^0.2.2",
     "testcontainers": "^11.11.0",
+    "tsx": "^4.21.0",
     "typescript": "~5.9.3",
     "viem": "^2.44.4",
     "vitest": "latest",
@@ -88,9 +90,14 @@
     }
   },
   "dependencies": {
+    "cac": "^6.7.14",
     "ox": "^0.12.0"
   },
   "sideEffects": false,
   "module": "./dist/index.js",
-  "types": "./dist/index.d.ts"
+  "types": "./dist/index.d.ts",
+  "bin": {
+    "mpay": "./dist/cli.js",
+    "mpay.src": "./src/cli.ts"
+  }
 }
