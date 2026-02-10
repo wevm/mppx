@@ -17,6 +17,7 @@ import * as MethodIntent from '../../MethodIntent.js'
 import * as Client from '../../viem/Client.js'
 import * as Intents from '../Intents.js'
 import * as defaults from '../internal/defaults.js'
+import * as Recipient from '../internal/recipient.js'
 import type * as types from '../internal/types.js'
 import {
   broadcastOpenTransaction,
@@ -71,16 +72,7 @@ export function stream<const parameters extends stream.Parameters>(parameters: p
     unitType,
   } = parameters
 
-  const recipient = (() => {
-    if (typeof parameters.recipient === 'object') return parameters.recipient.address
-    return parameters.recipient
-  })()
-  const feePayer = (() => {
-    if (typeof parameters.recipient === 'object' && parameters.feePayer === true)
-      return parameters.recipient
-    if (typeof parameters.feePayer === 'object') return parameters.feePayer
-    return undefined
-  })()
+  const [recipient, feePayer] = Recipient.resolve(parameters)
 
   const getClient = Client.getResolver({
     chain: tempo_chain,
@@ -213,7 +205,7 @@ export declare namespace stream {
     /** Testnet mode. */
     testnet?: boolean | undefined
   } & Client.getResolver.Parameters &
-    types.FeePayerParameters &
+    Recipient.resolve.Parameters &
     Defaults
 
   type DeriveDefaults<parameters extends Parameters> = types.DeriveDefaults<
