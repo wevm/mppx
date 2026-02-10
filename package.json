@@ -13,9 +13,14 @@
   "devDependencies": {
     "@biomejs/biome": "latest",
     "@changesets/cli": "latest",
+    "@hono/node-server": "^1.19.9",
     "@modelcontextprotocol/sdk": "^1.25.3",
+    "@types/express": "^5.0.6",
     "@types/node": "latest",
     "@vitest/coverage-v8": "^4.0.17",
+    "elysia": "^1.4.23",
+    "express": "^5.2.1",
+    "hono": "^4.11.9",
     "prool": "^0.2.2",
     "testcontainers": "^11.11.0",
     "typescript": "~5.9.3",
@@ -72,23 +77,62 @@
       "types": "./dist/tempo/index.d.ts",
       "src": "./src/tempo/index.ts",
       "default": "./dist/tempo/index.js"
+    },
+    "./hono": {
+      "types": "./dist/middlewares/hono.d.ts",
+      "src": "./src/middlewares/hono.ts",
+      "default": "./dist/middlewares/hono.js"
+    },
+    "./express": {
+      "types": "./dist/middlewares/express.d.ts",
+      "src": "./src/middlewares/express.ts",
+      "default": "./dist/middlewares/express.js"
+    },
+    "./nextjs": {
+      "types": "./dist/middlewares/nextjs.d.ts",
+      "src": "./src/middlewares/nextjs.ts",
+      "default": "./dist/middlewares/nextjs.js"
+    },
+    "./elysia": {
+      "types": "./dist/middlewares/elysia.d.ts",
+      "src": "./src/middlewares/elysia.ts",
+      "default": "./dist/middlewares/elysia.js"
+    },
+    "./fetch": {
+      "types": "./dist/middlewares/fetch.d.ts",
+      "src": "./src/middlewares/fetch.ts",
+      "default": "./dist/middlewares/fetch.js"
+    },
+    "./node-http": {
+      "types": "./dist/middlewares/node-http.d.ts",
+      "src": "./src/middlewares/node-http.ts",
+      "default": "./dist/middlewares/node-http.js"
     }
   },
   "peerDependencies": {
     "@modelcontextprotocol/sdk": ">=1.25.0",
-    "viem": ">=2.44.4",
-    "zod": ">=4.0.0"
+    "elysia": ">=1",
+    "express": ">=5",
+    "hono": ">=4",
+    "viem": ">=2.44.4"
   },
   "peerDependenciesMeta": {
     "@modelcontextprotocol/sdk": {
       "optional": true
     },
-    "viem": {
+    "elysia": {
+      "optional": true
+    },
+    "express": {
+      "optional": true
+    },
+    "hono": {
       "optional": true
     }
   },
   "dependencies": {
-    "ox": "^0.12.0"
+    "ox": "^0.12.0",
+    "zod": "^4.3.6"
   },
   "sideEffects": false,
   "module": "./dist/index.js",
