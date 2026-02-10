@@ -119,7 +119,7 @@ cli
         process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0'
       }
 
-      const log = options.silent ? () => {} : console.log
+      const log = options.silent ? () => {} : console.error
       const logErr = options.silent ? () => {} : console.error
 
       try {
@@ -431,9 +431,8 @@ function execCommand(
 ): Promise<string> {
   return new Promise((resolve, reject) => {
     child.execFile(command, args, (error, stdout, stderr) => {
-      if (error && !(options?.ignoreExitCode && stdout))
-        reject(new Error(stderr.trim() || error.message))
-      else resolve(stdout.trim())
+      if (error && !options?.ignoreExitCode) reject(new Error(stderr.trim() || error.message))
+      else resolve(stdout.trim() || stderr.trim())
     })
   })
 }
@@ -548,9 +547,9 @@ function createKeychain(account = 'default') {
 }
 
 function printResponse(response: Response) {
-  console.log(`HTTP/1.1 ${response.status}`)
-  for (const [key, value] of response.headers) console.log(`${key}: ${value}`)
-  console.log('')
+  console.error(`HTTP/1.1 ${response.status}`)
+  for (const [key, value] of response.headers) console.error(`${key}: ${value}`)
+  console.error('')
 }
 
 function confirm(message: string): Promise<boolean> {
@@ -583,7 +582,7 @@ function chainName(chain: { id: number; name: string }) {
 
 function printEntries(entries: [string, string][], padEnd?: number) {
   const maxKeyLength = padEnd ?? Math.max(...entries.map(([key]) => key.length))
-  for (const [key, value] of entries) console.log(`${`${key}:`.padEnd(maxKeyLength + 2)}${value}`)
+  for (const [key, value] of entries) console.error(`${`${key}:`.padEnd(maxKeyLength + 2)}${value}`)
 }
 
 function printExplorerLinks(address: string) {

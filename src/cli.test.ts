@@ -197,4 +197,75 @@ describe('mpay [url]', () => {
       httpServer.close()
     }
   })
+
+  test('diagnostics go to stderr, body to stdout', { timeout: 120_000 }, async () => {
+    const server = Mpay_server.create({
+      methods: [charge_server({ getClient: () => client })],
+      realm,
+      secretKey,
+    })
+
+    const httpServer = await Http.createServer(async (req, res) => {
+      const result = await toNodeListener(
+        server.charge({
+          amount: '1',
+          currency: asset,
+          expires: new Date(Date.now() + 60_000).toISOString(),
+          recipient: accounts[0].address,
+        }),
+      )(req, res)
+      if (result.status === 402) return
+      res.end('paid-body')
+    })
+
+    try {
+      const { stdout, stderr } = await runAsync(
+        [httpServer.url, '--rpc-url', rpcUrl, '--account', testAccountName, '--yes'],
+        { input: '' },
+      )
+      expect(stdout.trim()).toBe('paid-body')
+      expect(stderr).toContain('Challenge')
+      expect(stderr).toContain('Request')
+      expect(stderr).toContain('Receipt')
+    } finally {
+      httpServer.close()
+    }
+  })
+
+  test('non-402 response body goes to stdout only', { timeout: 60_000 }, async () => {
+    const httpServer = await Http.createServer(async (_req, res) => {
+      res.writeHead(200)
+      res.end('hello-world')
+    })
+
+    try {
+      const { stdout, stderr } = await runAsync(
+        [httpServer.url, '--rpc-url', rpcUrl, '--account', testAccountName],
+        { input: '' },
+      )
+      expect(stdout.trim()).toBe('hello-world')
+      expect(stderr).not.toContain('hello-world')
+    } finally {
+      httpServer.close()
+    }
+  })
+
+  test('--include headers go to stderr', { timeout: 60_000 }, async () => {
+    const httpServer = await Http.createServer(async (_req, res) => {
+      res.writeHead(200, { 'X-Test': 'yes' })
+      res.end('body-content')
+    })
+
+    try {
+      const { stdout, stderr } = await runAsync(
+        [httpServer.url, '--rpc-url', rpcUrl, '--account', testAccountName, '--include'],
+        { input: '' },
+      )
+      expect(stdout.trim()).toBe('body-content')
+      expect(stderr).toContain('HTTP/1.1 200')
+      expect(stderr).toContain('x-test: yes')
+    } finally {
+      httpServer.close()
+    }
+  })
 })
