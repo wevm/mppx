@@ -100,11 +100,6 @@
       "src": "./src/middlewares/elysia.ts",
       "default": "./dist/middlewares/elysia.js"
     },
-    "./fetch": {
-      "types": "./dist/middlewares/fetch.d.ts",
-      "src": "./src/middlewares/fetch.ts",
-      "default": "./dist/middlewares/fetch.js"
-    },
     "./node-http": {
       "types": "./dist/middlewares/node-http.d.ts",
       "src": "./src/middlewares/node-http.ts",
