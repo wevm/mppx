@@ -1,5 +1,11 @@
 import { Hex } from 'ox'
-import { type Address, encodeFunctionData, parseUnits, type Client as viem_Client } from 'viem'
+import {
+  type Address,
+  encodeFunctionData,
+  parseUnits,
+  type Account as viem_Account,
+  type Client as viem_Client,
+} from 'viem'
 import { prepareTransactionRequest, signTransaction } from 'viem/actions'
 import { tempo as tempo_chain } from 'viem/chains'
 import { Abis } from 'viem/tempo'
@@ -108,7 +114,7 @@ export function stream(parameters: stream.Parameters = {}) {
 
   async function voucherPayload(
     client: viem_Client,
-    account: Account.Account,
+    account: viem_Account,
     channelId: Hex.Hex,
     cumulativeAmount: bigint,
     escrowContract: Address,
@@ -133,7 +139,7 @@ export function stream(parameters: stream.Parameters = {}) {
     challenge: Challenge.Challenge,
     payload: StreamCredentialPayload,
     chainId: number,
-    account: Account.Account,
+    account: viem_Account,
   ): string {
     return Credential.serialize({
       challenge,
@@ -144,7 +150,7 @@ export function stream(parameters: stream.Parameters = {}) {
 
   async function autoManageCredential(
     challenge: Challenge.Challenge,
-    account: Account.Account,
+    account: viem_Account,
   ): Promise<string> {
     const md = challenge.request.methodDetails as
       | { chainId?: number; escrowContract?: string; channelId?: string; feePayer?: boolean }
@@ -200,7 +206,7 @@ export function stream(parameters: stream.Parameters = {}) {
 
   async function openChannel(
     client: viem_Client,
-    account: Account.Account,
+    account: viem_Account,
     escrowContract: Address,
     payee: Address,
     currency: Address,
@@ -293,7 +299,7 @@ export function stream(parameters: stream.Parameters = {}) {
 
   async function manualCredential(
     challenge: Challenge.Challenge,
-    account: Account.Account,
+    account: viem_Account,
     context: StreamContext,
   ): Promise<string> {
     const md = challenge.request.methodDetails as

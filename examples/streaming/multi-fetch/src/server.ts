@@ -10,6 +10,7 @@ const currency = '0x20c0000000000000000000000000000000000000' as const
 const storage = tempo.memoryStorage()
 
 const client = createClient({
+  account,
   chain: tempoModerato,
   pollingInterval: 1_000,
   transport: http(),

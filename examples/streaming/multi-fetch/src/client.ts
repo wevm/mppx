@@ -1,10 +1,11 @@
+import { Receipt } from 'mpay'
 import { tempo } from 'mpay/client'
 import { createClient, type Hex, http } from 'viem'
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts'
 import { tempoModerato } from 'viem/chains'
 import { Actions } from 'viem/tempo'
 
-const BASE_URL = process.env.BASE_URL ?? 'http://localhost:5173'
+const BASE_URL = (process.env.BASE_URL ?? 'http://localhost:5173').replace(/\/+$/, '')
 const currency = '0x20c0000000000000000000000000000000000000' as const
 
 const account = privateKeyToAccount((process.env.PRIVATE_KEY as Hex) ?? generatePrivateKey())
@@ -45,14 +46,21 @@ for (const url of urls) {
     process.exit(1)
   }
 
-  const receipt = response.headers.get('Payment-Receipt')
-  if (receipt) console.log(`Payment-Receipt: ${receipt.slice(0, 40)}...`)
+  const receiptHeader = response.headers.get('Payment-Receipt')
+  if (receiptHeader) {
+    const receipt = Receipt.deserialize(receiptHeader)
+    console.log(`Receipt: ${receipt.reference} (${receipt.method}, ${receipt.timestamp})`)
+  }
 
   const data = await response.json()
   console.log(`Content: ${data.content}`)
 }
 
+console.log(`\nVoucher cumulative: ${fmt(s.cumulative)}`)
+
 await s.close()
+
+await new Promise((r) => setTimeout(r, 2_000))
 
 const balanceAfter = await getBalance()
 console.log(`\nScraped ${urls.length} pages`)
