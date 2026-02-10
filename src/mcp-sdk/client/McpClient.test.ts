@@ -2,8 +2,9 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { McpError } from '@modelcontextprotocol/sdk/types.js'
+import { createClient } from 'viem'
 import { afterEach, beforeEach, describe, expect, test } from 'vitest'
-import { accounts, asset, client as testClient } from '~test/tempo/viem.js'
+import { accounts, asset, chain, http, client as testClient } from '~test/tempo/viem.js'
 import * as Challenge from '../../Challenge.js'
 import * as core_Mcp from '../../Mcp.js'
 import * as Mpay_server from '../../server/Mpay.js'
@@ -125,7 +126,7 @@ describe('McpClient.wrap', () => {
     const mcp = McpClient.wrap(client, {
       methods: [
         tempo_client.charge({
-          getClient: () => testClient,
+          getClient: () => createClient({ chain, transport: http() }),
         }),
       ],
     })

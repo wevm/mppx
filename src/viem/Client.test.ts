@@ -9,7 +9,7 @@ describe('getResolver', () => {
       rpcUrl,
     })
 
-    const client = await getClient(42)
+    const client = await getClient({ chainId: 42 })
 
     expect(client).toBeDefined()
     expect(client.chain?.id).toBe(42)
@@ -20,7 +20,7 @@ describe('getResolver', () => {
       rpcUrl,
     })
 
-    const client = await getClient(0)
+    const client = await getClient({})
 
     expect(client.chain?.id).toBe(42)
   })
@@ -32,7 +32,7 @@ describe('getResolver', () => {
       rpcUrl,
     })
 
-    const client = await getClient(99)
+    const client = await getClient({ chainId: 99 })
 
     expect(client.chain?.id).toBe(99)
     expect(client.chain?.name).toBe('test')
@@ -41,7 +41,7 @@ describe('getResolver', () => {
   test('error: throws when no rpcUrl provided', () => {
     const getClient = Client.getResolver({})
 
-    expect(() => getClient(1)).toThrowErrorMatchingInlineSnapshot(
+    expect(() => getClient({ chainId: 1 })).toThrowErrorMatchingInlineSnapshot(
       `[Error: No \`rpcUrl\` provided.]`,
     )
   })
@@ -51,7 +51,7 @@ describe('getResolver', () => {
       rpcUrl: { 42: 'https://example.com' },
     })
 
-    expect(() => getClient(99)).toThrowErrorMatchingInlineSnapshot(
+    expect(() => getClient({ chainId: 99 })).toThrowErrorMatchingInlineSnapshot(
       `[Error: No \`rpcUrl\` configured for \`chainId\` (99).]`,
     )
   })

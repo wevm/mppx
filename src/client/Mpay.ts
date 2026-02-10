@@ -1,17 +1,20 @@
 import type * as Challenge from '../Challenge.js'
 import type * as MethodIntent from '../MethodIntent.js'
 import type * as z from '../zod.js'
+import * as Fetch from './Fetch.js'
 import * as Transport from './Transport.js'
 
-type AnyClient = MethodIntent.AnyClient
+export type Methods = readonly (MethodIntent.AnyClient | readonly MethodIntent.AnyClient[])[]
 
 /**
  * Client-side payment handler.
  */
 export type Mpay<
-  methods extends readonly AnyClient[] = readonly AnyClient[],
+  methods extends Methods = Methods,
   transport extends Transport.Transport = Transport.Transport,
 > = {
+  /** Payment-aware fetch function that automatically handles 402 responses. */
+  fetch: Fetch.from.Fetch<methods>
   /** Methods to configure. */
   methods: methods
   /** The transport used. */
@@ -24,38 +27,43 @@ export type Mpay<
 }
 
 /**
- * Creates a client-side payment handler from an array of method.
+ * Creates a client-side payment handler from an array of method intents.
+ *
+ * Returns a payment handler with a `fetch` function that automatically handles
+ * 402 Payment Required responses. By default, also polyfills `globalThis.fetch`.
  *
  * @example
  * ```ts
  * import { Mpay, tempo } from 'mpay/client'
  *
  * const mpay = Mpay.create({
- *   methods: [tempo.charge()],
+ *   methods: [tempo({ account })],
  * })
  *
- * const response = await fetch('/resource')
- * if (response.status === 402) {
- *   const credential = await mpay.createCredential(response, {
- *     account: privateKeyToAccount('0x...'),
- *   })
- *   // Retry with credential
- *   await fetch('/resource', {
- *     headers: { Authorization: credential },
- *   })
- * }
+ * // Use the returned fetch — handles 402 automatically
+ * const res = await mpay.fetch('/resource')
+ *
+ * // Or use globalThis.fetch (polyfilled by default)
+ * const res2 = await fetch('/resource')
  * ```
  */
 export function create<
-  const methods extends readonly MethodIntent.AnyClient[],
+  const methods extends Methods,
   const transport extends Transport.Transport<any, any> = Transport.Transport<
     RequestInit,
     Response
   >,
->(config: create.Config<methods, transport>): Mpay<methods, transport> {
-  const { methods, transport = Transport.http() as transport } = config
+>(config: create.Config<methods, transport>): Mpay<FlattenMethods<methods>, transport> {
+  const { polyfill = true, transport = Transport.http() as transport } = config
 
+  const methods = config.methods.flat() as unknown as FlattenMethods<methods>
+
+  const config_fetch = { ...(config.fetch && { fetch: config.fetch }), methods }
+  const fetch = Fetch.from(config_fetch)
+
+  if (polyfill) Fetch.polyfill(config_fetch)
   return {
+    fetch,
     methods,
     transport,
     async createCredential(response: Transport.ResponseOf<transport>, context?: unknown) {
@@ -79,13 +87,35 @@ export function create<
   }
 }
 
+/**
+ * Restores the original `fetch` after `create()` polyfilled it.
+ *
+ * @example
+ * ```ts
+ * import { Mpay, tempo } from 'mpay/client'
+ *
+ * Mpay.create({ methods: [tempo({ account })] })
+ *
+ * // ... use payment-aware fetch ...
+ *
+ * Mpay.restore()
+ * ```
+ */
+export function restore(): void {
+  Fetch.restore()
+}
+
 export declare namespace create {
   type Config<
-    methods extends readonly MethodIntent.AnyClient[] = readonly MethodIntent.AnyClient[],
+    methods extends Methods = Methods,
     transport extends Transport.Transport = Transport.Transport,
   > = {
-    /** Array of method intents to use. */
+    /** Custom fetch function to wrap. Defaults to `globalThis.fetch`. */
+    fetch?: typeof globalThis.fetch
+    /** Array of method intents to use. Accepts individual clients or tuples (e.g. from `tempo()`). */
     methods: methods
+    /** Whether to polyfill `globalThis.fetch` with the payment-aware wrapper. @default true */
+    polyfill?: boolean | undefined
     /** Transport to use (defaults to HTTP). */
     transport?: transport | undefined
   }
@@ -95,10 +125,25 @@ export declare namespace create {
  * Union of all context types from all methods that have context schemas.
  * @internal
  */
-type AnyContextFor<methods extends readonly AnyClient[]> = {
+type AnyContextFor<methods extends readonly MethodIntent.AnyClient[]> = {
   [method in keyof methods]: methods[method] extends MethodIntent.Client<any, infer context>
     ? context extends z.ZodMiniType
       ? z.input<context>
       : undefined
     : undefined
 }[number]
+
+/**
+ * Flattens a methods config tuple, preserving positional types.
+ * @internal
+ */
+type FlattenMethods<methods extends Methods> = methods extends readonly [
+  infer head,
+  ...infer tail extends Methods,
+]
+  ? head extends readonly MethodIntent.AnyClient[]
+    ? readonly [...head, ...FlattenMethods<tail>]
+    : head extends MethodIntent.AnyClient
+      ? readonly [head, ...FlattenMethods<tail>]
+      : never
+  : readonly []

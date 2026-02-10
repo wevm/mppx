@@ -1,5 +1,8 @@
 import { Mpay, tempo } from 'mpay/server'
+import { createClient, http } from 'viem'
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts'
+import { tempoModerato } from 'viem/chains'
+import { Actions } from 'viem/tempo'
 
 const account = privateKeyToAccount(generatePrivateKey())
 const currency = '0x20c0000000000000000000000000000000000001' as const // alphaUSD
@@ -8,9 +11,8 @@ const mpay = Mpay.create({
   methods: [
     tempo.charge({
       currency,
-      feePayer: account,
-      recipient: account.address,
-      testnet: true,
+      feePayer: true,
+      recipient: account,
     }),
   ],
 })
@@ -47,19 +49,6 @@ const fortunes = [
   'A light heart carries you through all the hard times.',
   'A new perspective will come with the new year.',
 ]
-
-////////////////////////////////////////////////////////////////////
-// Internal
-
-import { createClient, http } from 'viem'
-import { tempoModerato } from 'viem/chains'
-import { Actions } from 'viem/tempo'
-
-const client = createClient({
-  chain: tempoModerato,
-  pollingInterval: 200,
-  transport: http(),
-})
 
 // Fund recipient account on startup
 await Actions.faucet.fundSync(client, { account })

@@ -1,6 +1,6 @@
 import * as Challenge from '../Challenge.js'
 import * as Credential from '../Credential.js'
-import type * as Errors from '../Errors.js'
+import * as Errors from '../Errors.js'
 import * as core_Mcp from '../Mcp.js'
 import * as Receipt from '../Receipt.js'
 
@@ -126,7 +126,7 @@ export function http() {
  * MCP transport for server-side payment handling with raw JSON-RPC.
  *
  * - Reads credentials from `_meta["org.paymentauth/credential"]`
- * - Issues challenges via JSON-RPC error with code -32042
+ * - Issues challenges via JSON-RPC error with code -32042/-32043
  * - Attaches receipts via `_meta["org.paymentauth/receipt"]`
  *
  * Use this transport when handling raw JSON-RPC messages directly.
@@ -148,7 +148,7 @@ export function mcp() {
         jsonrpc: '2.0',
         id: input.id,
         error: {
-          code: core_Mcp.paymentRequiredCode,
+          code: mcpErrorCode(error),
           message: error?.message ?? 'Payment Required',
           data: {
             httpStatus: error?.status ?? 402,
@@ -179,4 +179,11 @@ export function mcp() {
       }
     },
   })
+}
+
+function mcpErrorCode(error?: Errors.PaymentError): number {
+  if (!error) return core_Mcp.paymentRequiredCode
+  if (error instanceof Errors.MalformedCredentialError) return -32602
+  if (error instanceof Errors.PaymentRequiredError) return core_Mcp.paymentRequiredCode
+  return core_Mcp.paymentVerificationFailedCode
 }

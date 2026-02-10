@@ -1,6 +1,7 @@
+import { createClient } from 'viem'
 import { describe, expect, test } from 'vitest'
 import * as Http from '~test/Http.js'
-import { accounts, asset, client } from '~test/tempo/viem.js'
+import { accounts, asset, chain, client, http } from '~test/tempo/viem.js'
 import * as Receipt from '../Receipt.js'
 import * as Mpay_server from '../server/Mpay.js'
 import { toNodeListener } from '../server/Mpay.js'
@@ -133,7 +134,7 @@ describe('Fetch.from', () => {
     const fetch = Fetch.from({
       methods: [
         charge_client({
-          getClient: () => client,
+          getClient: () => createClient({ chain, transport: http() }),
         }),
       ],
     })

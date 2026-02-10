@@ -98,13 +98,13 @@ export function stream<const defaults extends stream.Defaults>(
       const chainId = await (async () => {
         if (request.chainId) return request.chainId
         if (parameters.testnet) return defaults.testnetChainId
-        return (await getClient(0)).chain?.id
+        return (await getClient({})).chain?.id
       })()
 
       // Validate chainId.
       const client = await (async () => {
         try {
-          return await getClient(chainId!)
+          return await getClient({ chainId })
         } catch {
           throw new Error(`No client configured with chainId ${chainId}.`)
         }
@@ -133,7 +133,7 @@ export function stream<const defaults extends stream.Defaults>(
       const { challenge, payload } = credential as Credential.Credential<StreamCredentialPayload>
 
       const methodDetails = challenge.request.methodDetails as StreamMethodDetails
-      const client = await getClient(methodDetails.chainId)
+      const client = await getClient({ chainId: methodDetails.chainId })
 
       const resolvedFeePayer = methodDetails.feePayer === true ? feePayer : undefined
       const effectiveMinVoucherDelta = methodDetails.minVoucherDelta

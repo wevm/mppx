@@ -1,10 +1,10 @@
-import { Fetch, tempo } from 'mpay/client'
+import { Mpay, tempo } from 'mpay/client'
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts'
 
 const account = privateKeyToAccount(generatePrivateKey())
 
-Fetch.polyfill({
-  methods: [tempo.charge({ account })],
+Mpay.create({
+  methods: [tempo({ account })],
 })
 
 document.getElementById('button')!.addEventListener('click', async () => {

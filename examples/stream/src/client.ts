@@ -1,4 +1,4 @@
-import { Fetch, tempo } from 'mpay/client'
+import { Mpay, tempo } from 'mpay/client'
 import { createClient, type Hex, http } from 'viem'
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts'
 import { tempoModerato } from 'viem/chains'
@@ -23,9 +23,10 @@ await Actions.faucet.fundSync(client, { account, timeout: 30_000 })
 const balance = await Actions.token.getBalance(client, { account, token: currency })
 console.log(`Balance: ${Number(balance) / 1e6} alphaUSD`)
 
-const paidFetch = Fetch.from({
+const mpay = Mpay.create({
+  polyfill: false,
   methods: [
-    tempo.stream({
+    tempo({
       account,
       deposit: 10_000_000n,
     }),
@@ -35,7 +36,7 @@ const paidFetch = Fetch.from({
 const prompt = process.argv[2] ?? 'Tell me something interesting'
 console.log(`\nPrompt: ${prompt}`)
 
-const response = await paidFetch(`${BASE_URL}/api/chat?prompt=${encodeURIComponent(prompt)}`)
+const response = await mpay.fetch(`${BASE_URL}/api/chat?prompt=${encodeURIComponent(prompt)}`)
 
 if (!response.ok) {
   console.error(`Error: ${response.status}`)

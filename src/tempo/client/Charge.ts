@@ -1,10 +1,10 @@
 import type * as Hex from 'ox/Hex'
-import type { Account } from 'viem'
 import { prepareTransactionRequest, signTransaction } from 'viem/actions'
 import { tempo as tempo_chain } from 'viem/chains'
 import { Actions } from 'viem/tempo'
 import * as Credential from '../../Credential.js'
 import * as MethodIntent from '../../MethodIntent.js'
+import * as Account from '../../viem/Account.js'
 import * as Client from '../../viem/Client.js'
 import * as z from '../../zod.js'
 import * as Intents from '../Intents.js'
@@ -29,19 +29,17 @@ export function charge(parameters: charge.Parameters = {}) {
     getClient: parameters.getClient,
     rpcUrl: defaults.rpcUrl,
   })
+  const getAccount = Account.getResolver({ account: parameters.account })
 
   return MethodIntent.toClient(Intents.charge, {
     context: z.object({
-      account: z.optional(z.custom<Account>()),
+      account: z.optional(z.custom<Account.getResolver.Parameters['account']>()),
     }),
 
     async createCredential({ challenge, context }) {
-      const account = context?.account ?? parameters.account
-      if (!account)
-        throw new Error('No `account` provided. Pass `account` to parameters or context.')
-
-      const chainId = challenge.request.methodDetails?.chainId ?? 0
-      const client = await getClient(chainId)
+      const chainId = challenge.request.methodDetails?.chainId
+      const client = await getClient({ chainId })
+      const account = getAccount(client, context)
 
       const { request } = challenge
       const { amount, currency, recipient, methodDetails } = request
@@ -72,8 +70,5 @@ export function charge(parameters: charge.Parameters = {}) {
 }
 
 export declare namespace charge {
-  type Parameters = Client.getResolver.Parameters & {
-    /** Account to sign transactions with. Can be overridden per-call via context. */
-    account?: Account | undefined
-  }
+  type Parameters = Account.getResolver.Parameters & Client.getResolver.Parameters
 }
