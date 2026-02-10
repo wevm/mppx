@@ -1,5 +1,4 @@
 import {
-  type Account,
   decodeFunctionData,
   isAddressEqual,
   parseEventLogs,
