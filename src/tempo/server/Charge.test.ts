@@ -553,7 +553,7 @@ describe('tempo', () => {
 
   describe('recipient/feePayer resolution', () => {
     test('recipient: string resolves to string', () => {
-      const method = Methods_server.charge({
+      const method = tempo_server.charge({
         getClient: () => client,
         recipient: accounts[0].address,
       })
@@ -561,7 +561,7 @@ describe('tempo', () => {
     })
 
     test('recipient: Account resolves to account.address', () => {
-      const method = Methods_server.charge({
+      const method = tempo_server.charge({
         getClient: () => client,
         recipient: accounts[0],
       })
@@ -571,7 +571,7 @@ describe('tempo', () => {
     test('recipient: Account with feePayer: true resolves feePayer', async () => {
       const mpay = Mpay_client.create({
         methods: [
-          Methods_client.charge({
+          tempo_client.charge({
             account: accounts[1],
             getClient: () => client,
           }),
@@ -580,7 +580,7 @@ describe('tempo', () => {
 
       const server_ = Mpay_server.create({
         methods: [
-          Methods_server.charge({
+          tempo_server.charge({
             getClient: () => client,
             currency: asset,
             recipient: accounts[0],
@@ -592,7 +592,7 @@ describe('tempo', () => {
       })
 
       const httpServer = await Http.createServer(async (req, res) => {
-        const result = await toNodeListener(server_.charge({ amount: '1' }))(req, res)
+        const result = await Mpay_server.toNodeListener(server_.charge({ amount: '1' }))(req, res)
         if (result.status === 402) return
         res.end('OK')
       })
@@ -612,7 +612,7 @@ describe('tempo', () => {
     test('recipient: string with feePayer: Account resolves separately', async () => {
       const mpay = Mpay_client.create({
         methods: [
-          Methods_client.charge({
+          tempo_client.charge({
             account: accounts[1],
             getClient: () => client,
           }),
@@ -621,7 +621,7 @@ describe('tempo', () => {
 
       const server_ = Mpay_server.create({
         methods: [
-          Methods_server.charge({
+          tempo_server.charge({
             getClient: () => client,
             currency: asset,
             recipient: accounts[0].address,
@@ -633,7 +633,7 @@ describe('tempo', () => {
       })
 
       const httpServer = await Http.createServer(async (req, res) => {
-        const result = await toNodeListener(server_.charge({ amount: '1' }))(req, res)
+        const result = await Mpay_server.toNodeListener(server_.charge({ amount: '1' }))(req, res)
         if (result.status === 402) return
         res.end('OK')
       })
@@ -651,7 +651,7 @@ describe('tempo', () => {
     })
 
     test('no feePayer resolves to undefined', () => {
-      const method = Methods_server.charge({
+      const method = tempo_server.charge({
         getClient: () => client,
         recipient: accounts[0].address,
       })
