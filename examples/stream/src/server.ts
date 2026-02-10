@@ -12,7 +12,7 @@ const pricePerToken = '0.000075'
 const client = createClient({
   chain: tempoModerato,
   pollingInterval: 1_000,
-  transport: http(),
+  transport: http(process.env.RPC_URL),
 })
 
 const mpay = Mpay.create({

@@ -1,16 +1,25 @@
 import { Mpay, tempo } from 'mpay/server'
+import { createClient, http } from 'viem'
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts'
+import { tempoModerato } from 'viem/chains'
 import { Actions } from 'viem/tempo'
 
 const account = privateKeyToAccount(generatePrivateKey())
 const currency = '0x20c0000000000000000000000000000000000001' as const // alphaUSD
 
+const client = createClient({
+  chain: tempoModerato,
+  pollingInterval: 1_000,
+  transport: http(process.env.RPC_URL),
+})
+
 const mpay = Mpay.create({
   methods: [
     tempo.charge({
       currency,
-      feePayer: true,
-      recipient: account,
+      feePayer: account,
+      getClient: () => client,
+      recipient: account.address,
       testnet: true,
     }),
   ],

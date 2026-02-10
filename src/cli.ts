@@ -268,8 +268,6 @@ cli
           logErr(`${intentLabel.charAt(0).toUpperCase()}${intentLabel.slice(1)} cancelled.`)
           process.exit(0)
         }
-        log('')
-
         const credential = await mpay.createCredential(challengeResponse)
 
         if (challenge.intent === 'stream') {
@@ -391,6 +389,7 @@ cli
             printReceiptHeader(credentialResponse, client.chain, decimals, log, padEnd)
           } else {
             printReceiptHeader(credentialResponse, client.chain, decimals, log, padEnd)
+            log('')
             console.log(await credentialResponse.text())
           }
         }
@@ -589,7 +588,7 @@ function printReceiptHeader(
     const raw = JSON.parse(Buffer.from(header, 'base64url').toString()) as Record<string, unknown>
     const formatReceiptValue = (key: string, value: unknown): string => {
       const str = String(value)
-      if (key === 'txHash') return explorerLink(str, chain, 'tx')
+      if (key === 'txHash' || key === 'reference') return explorerLink(str, chain, 'tx')
       if (
         (key === 'spent' || key === 'acceptedCumulative' || key === 'amount') &&
         /^\d+$/.test(str)
