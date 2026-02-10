@@ -147,7 +147,7 @@ describe('stream', () => {
       methods: [
         stream_client({
           account: accounts[2],
-          deposit: 10_000_000n,
+          deposit: '10',
           getClient: () => client,
         }),
       ],
