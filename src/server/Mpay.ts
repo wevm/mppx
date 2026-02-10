@@ -140,14 +140,13 @@ function createIntentFn(parameters: createIntentFn.Parameters): createIntentFn.R
       const merged = { ...defaults, ...rest }
 
       // Extract credential once — getCredential may have side effects (e.g. SSE transports).
-      let credential: Credential.Credential | null
-      let credentialError: Error | undefined
-      try {
-        credential = transport.getCredential(input) as Credential.Credential | null
-      } catch (e) {
-        credential = null
-        credentialError = e as Error
-      }
+      const [credential, credentialError] = (() => {
+        try {
+          return [transport.getCredential(input) as Credential.Credential | null, undefined] as const
+        } catch (e) {
+          return [null, e as Error] as const
+        }
+      })()
 
       // Transform request if method provides a `request` function.
       const request = (
