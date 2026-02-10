@@ -26,6 +26,15 @@ const fmt = (b: bigint) => `${Number(b) / 1e6} pathUSD`
 const balanceBefore = await getBalance()
 console.log(`Balance: ${fmt(balanceBefore)}`)
 
+// `session` manages the full payment channel lifecycle automatically:
+//
+//   1. GET  /api/chat  → server returns 402 with a payment challenge
+//   2. POST /api/chat  → client sends an open-channel credential (on-chain tx)
+//   3. GET  /api/chat  → client retries with a voucher; server begins SSE stream
+//   4. POST /api/chat  → for each `mpay-need-voucher` SSE event, the client
+//                         sends an updated cumulative voucher via POST
+//                         (one POST per token — this is the streaming payment)
+//   5. close()         → settles the final voucher on-chain
 const s = tempo.session({
   account,
   getClient: () => client,
@@ -48,7 +57,9 @@ for await (const token of tokens) {
 
 console.log(`\nVoucher cumulative: ${fmt(s.cumulative)}`)
 
-await s.close()
+// Settle the payment channel on-chain with the final cumulative voucher.
+const closeReceipt = await s.close()
+if (closeReceipt?.txHash) console.log(`Settlement tx: ${closeReceipt.txHash}`)
 
 await new Promise((r) => setTimeout(r, 2_000))
 

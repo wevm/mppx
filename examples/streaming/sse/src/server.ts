@@ -39,16 +39,28 @@ export async function handler(request: Request): Promise<Response | null> {
 
     console.log(`[server] ${request.method} /api/chat`)
 
+    // This handler receives multiple request types during a single session:
+    //
+    //   GET  (no auth)   → returns 402 with a payment challenge
+    //   POST (open cred) → verifies the on-chain channel open, returns 200
+    //   GET  (voucher)   → begins the SSE stream below
+    //   POST (voucher)   → receives incremental voucher updates mid-stream
+    //                      (one per token, triggered by `stream.charge()`)
+
     const result = await mpay.stream({
       amount: pricePerToken,
       unitType: 'token',
     })(request)
 
+    // `result.response` is set for 402 challenges and channel-open POSTs.
+    // When null, the request is authenticated and we can start streaming.
     if (result.response) return result.response as globalThis.Response
 
     return tempo.Sse.from({ request, storage }).sse(async function* (stream) {
       for await (const token of generateTokens(prompt)) {
         try {
+          // Sends an `mpay-need-voucher` SSE event to the client, which
+          // responds with a POST containing an updated cumulative voucher.
           await stream.charge()
         } catch (e) {
           console.error('[server] charge error:', e)

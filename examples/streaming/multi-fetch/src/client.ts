@@ -58,7 +58,8 @@ for (const url of urls) {
 
 console.log(`\nVoucher cumulative: ${fmt(s.cumulative)}`)
 
-await s.close()
+const closeReceipt = await s.close()
+if (closeReceipt?.txHash) console.log(`Settlement tx: ${closeReceipt.txHash}`)
 
 await new Promise((r) => setTimeout(r, 2_000))
 

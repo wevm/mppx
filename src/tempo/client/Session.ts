@@ -10,6 +10,7 @@ import * as Client from '../../viem/Client.js'
 import * as defaults from '../internal/defaults.js'
 import { escrowAbi } from '../stream/Chain.js'
 import * as Channel from '../stream/Channel.js'
+import { deserializeStreamReceipt } from '../stream/Receipt.js'
 import { parseEvent } from '../stream/Sse.js'
 import type { StreamCredentialPayload, StreamReceipt } from '../stream/Types.js'
 import { signVoucher } from '../stream/Voucher.js'
@@ -37,7 +38,7 @@ export type Session = {
       signal?: AbortSignal | undefined
     },
   ): Promise<AsyncIterable<string>>
-  close(): Promise<void>
+  close(): Promise<StreamReceipt | undefined>
 }
 
 export function session(parameters: session.Parameters): Session {
@@ -368,7 +369,7 @@ export function session(parameters: session.Parameters): Session {
     },
 
     async close() {
-      if (!channel?.opened || !lastChallenge) return
+      if (!channel?.opened || !lastChallenge) return undefined
 
       const client = await getClient({ chainId: channel.chainId })
       const account = getAccount(client)
@@ -394,14 +395,18 @@ export function session(parameters: session.Parameters): Session {
         source: `did:pkh:eip155:${channel.chainId}:${account.address}`,
       })
 
+      let receipt: StreamReceipt | undefined
       if (lastUrl) {
-        await fetchFn(lastUrl, {
+        const response = await fetchFn(lastUrl, {
           method: 'POST',
           headers: { Authorization: credential },
         })
+        const receiptHeader = response.headers.get('Payment-Receipt')
+        if (receiptHeader) receipt = deserializeStreamReceipt(receiptHeader)
       }
 
       channel = { ...channel, opened: false }
+      return receipt
     },
   }
 
