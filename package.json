@@ -99,11 +99,6 @@
       "types": "./dist/middlewares/elysia.d.ts",
       "src": "./src/middlewares/elysia.ts",
       "default": "./dist/middlewares/elysia.js"
-    },
-    "./node-http": {
-      "types": "./dist/middlewares/node-http.d.ts",
-      "src": "./src/middlewares/node-http.ts",
-      "default": "./dist/middlewares/node-http.js"
     }
   },
   "peerDependencies": {
