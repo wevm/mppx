@@ -31,10 +31,18 @@ jobs:
       - name: Setup Docker
         uses: docker/setup-docker-action@v4
 
+      - name: Install secret-tool (libsecret)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libsecret-tools gnome-keyring dbus-x11
+
       - name: Install dependencies
         uses: ./.github/actions/install-dependencies
 
       - name: Run tests
-        run: pnpm run test --bail=1
+        run: |
+          eval "$(dbus-launch --sh-syntax)"
+          echo '' | gnome-keyring-daemon --unlock --components=secrets
+          pnpm run test --bail=1
         env:
           CI: true
