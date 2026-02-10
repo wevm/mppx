@@ -424,11 +424,31 @@ try {
 
 /////////////////////////////////////////////////////////////////////////////////////////////////
 
-function execCommand(command: string, args: string[], options?: { ignoreExitCode?: boolean }): Promise<string> {
+function execCommand(
+  command: string,
+  args: string[],
+  options?: { ignoreExitCode?: boolean },
+): Promise<string> {
   return new Promise((resolve, reject) => {
     child.execFile(command, args, (error, stdout, stderr) => {
-      if (error && !(options?.ignoreExitCode && stdout)) reject(new Error(stderr.trim() || error.message))
+      if (error && !(options?.ignoreExitCode && stdout))
+        reject(new Error(stderr.trim() || error.message))
       else resolve(stdout.trim())
+    })
+  })
+}
+
+function execCommandRaw(
+  command: string,
+  args: string[],
+): Promise<{ stdout: string; stderr: string; code: number | null }> {
+  return new Promise((resolve) => {
+    child.execFile(command, args, (error, stdout, stderr) => {
+      resolve({
+        stdout: stdout.trim(),
+        stderr: stderr.trim(),
+        code: error ? ((error as NodeJS.ErrnoException & { code?: number }).code ? null : 1) : 0,
+      })
     })
   })
 }
@@ -470,12 +490,18 @@ function createKeychain(account = 'default') {
       }
       if (platform === 'linux') {
         try {
-          const output = await execCommand('secret-tool', ['search', '--all', '--unlock', 'service', service], { ignoreExitCode: true })
+          const output = await execCommandRaw('secret-tool', ['search', '--all', '--unlock', 'service', service])
+          if (process.env.CI) console.error(`[debug] secret-tool search stdout=${JSON.stringify(output.stdout)} stderr=${JSON.stringify(output.stderr)} code=${output.code}`)
           const accounts: string[] = []
-          const matches = output.matchAll(/\baccount = (.+)/g)
+          const matches = output.stdout.matchAll(/\baccount = (.+)/g)
           for (const match of matches) if (match[1]) accounts.push(match[1])
+          if (accounts.length === 0) {
+            const stderrMatches = output.stderr.matchAll(/\baccount = (.+)/g)
+            for (const match of stderrMatches) if (match[1]) accounts.push(match[1])
+          }
           return accounts
-        } catch {
+        } catch (e) {
+          if (process.env.CI) console.error(`[debug] secret-tool search error: ${e}`)
           return []
         }
       }
@@ -493,8 +519,10 @@ function createKeychain(account = 'default') {
       if (platform === 'linux') {
         try {
           const result = await execCommand('secret-tool', ['lookup', 'service', service, 'account', account])
+          if (process.env.CI) console.error(`[debug] secret-tool lookup service=${service} account=${account} result=${JSON.stringify(result)}`)
           return result || undefined
-        } catch {
+        } catch (e) {
+          if (process.env.CI) console.error(`[debug] secret-tool lookup error: ${e}`)
           return undefined
         }
       }
@@ -510,15 +538,18 @@ function createKeychain(account = 'default') {
         return
       }
       if (platform === 'linux') {
-        const process = child.execFile('secret-tool', ['store', '--label', `${service} ${account}`, 'service', service, 'account', account])
-        process.stdin?.write(value)
-        process.stdin?.end()
+        if (process.env.CI) console.error(`[debug] secret-tool store --label "${service} ${account}" service ${service} account ${account}`)
+        if (process.env.CI) console.error(`[debug] DBUS_SESSION_BUS_ADDRESS=${process.env.DBUS_SESSION_BUS_ADDRESS} GNOME_KEYRING_CONTROL=${process.env.GNOME_KEYRING_CONTROL}`)
+        const proc = child.execFile('secret-tool', ['store', '--label', `${service} ${account}`, 'service', service, 'account', account])
+        proc.stdin?.write(value)
+        proc.stdin?.end()
         return new Promise((resolve, reject) => {
-          process.on('close', (code) => {
+          proc.on('close', (code) => {
+            if (process.env.CI) console.error(`[debug] secret-tool store exited with code ${code}`)
             if (code === 0) resolve()
             else reject(new Error(`secret-tool exited with code ${code}`))
           })
-          process.on('error', reject)
+          proc.on('error', reject)
         })
       }
       throw new Error(`Unsupported platform: ${platform}`)
