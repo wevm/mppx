@@ -74,7 +74,7 @@ export type FromMethods<methods extends readonly MethodIntent.AnyMethodIntent[]>
  * Creates a challenge from the given parameters.
  *
  * If `secretKey` option is provided, the challenge ID is computed as HMAC-SHA256
- * over the challenge parameters (realm|method|intent|request|expires),
+ * over the challenge parameters (realm|method|intent|request|expires|digest),
  * cryptographically binding the ID to its contents.
  *
  * @param parameters - Challenge parameters.

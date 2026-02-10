@@ -117,10 +117,7 @@ export function polyfill<const methods extends readonly MethodIntent.AnyClient[]
 export declare namespace polyfill {
   type Config<
     methods extends readonly MethodIntent.AnyClient[] = readonly MethodIntent.AnyClient[],
-  > = {
-    /** Array of method intents to use. */
-    methods: methods
-  }
+  > = from.Config<methods>
 }
 
 /**

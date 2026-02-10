@@ -9,19 +9,22 @@ const account = privateKeyToAccount(generatePrivateKey())
 const currency = '0x20c0000000000000000000000000000000000001' as const
 const pricePerToken = '0.000075'
 
-const storage = createMemoryStorage()
+const client = createClient({
+  chain: tempoModerato,
+  pollingInterval: 1_000,
+  transport: http(process.env.RPC_URL),
+})
 
 const mpay = Mpay.create({
   methods: [
     tempo.stream({
       currency,
-      recipient: account,
-      storage,
+      getClient: () => client,
+      recipient: account.address,
+      storage: createMemoryStorage(),
+      testnet: true,
     }),
   ],
-  realm: 'localhost',
-  // Example-only. In production, use a strong random secret from env.
-  secretKey: process.env.SECRET_KEY ?? 'stream-example-secret',
 })
 
 export async function handler(request: Request): Promise<Response | null> {
@@ -84,12 +87,6 @@ function generateTokens(_prompt: string): string[] {
     ' answer.',
   ]
 }
-
-const client = createClient({
-  chain: tempoModerato,
-  pollingInterval: 1_000,
-  transport: http(),
-})
 
 console.log(`Server recipient: ${account.address}`)
 await Actions.faucet.fundSync(client, { account, timeout: 30_000 })

@@ -8,12 +8,12 @@ export function getResolver(
     /** RPC URLs keyed by chain ID. */
     rpcUrl?: ({ [chainId: number]: string } & object) | undefined
   },
-): (chainId: number) => MaybePromise<Client> {
+): (parameters: { chainId?: number | undefined }) => MaybePromise<Client> {
   const { chain, getClient, rpcUrl } = parameters
 
   if (getClient) return getClient
 
-  return (chainId: number) => {
+  return ({ chainId }: { chainId?: number | undefined }) => {
     if (!rpcUrl) throw new Error('No `rpcUrl` provided.')
     const resolvedChainId = chainId || Number(Object.keys(rpcUrl)[0])!
     const url = rpcUrl[resolvedChainId as keyof typeof rpcUrl]
@@ -28,6 +28,6 @@ export function getResolver(
 export declare namespace getResolver {
   type Parameters = {
     /** Function that returns a client for the given chain ID. */
-    getClient?: ((chainId: number) => MaybePromise<Client>) | undefined
+    getClient?: ((parameters: { chainId?: number | undefined }) => MaybePromise<Client>) | undefined
   }
 }

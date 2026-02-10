@@ -4,6 +4,15 @@ import { defineConfig } from 'vitest/config'
 export default defineConfig({
   test: {
     alias: {
+      'mpay/client': path.resolve(import.meta.dirname, 'src/client'),
+      'mpay/mcp-sdk/client': path.resolve(import.meta.dirname, 'src/mcp-sdk/client'),
+      'mpay/mcp-sdk/server': path.resolve(import.meta.dirname, 'src/mcp-sdk/server'),
+      'mpay/server': path.resolve(import.meta.dirname, 'src/server'),
+      'mpay/tempo': path.resolve(import.meta.dirname, 'src/tempo'),
+      'mpay/hono': path.resolve(import.meta.dirname, 'src/middlewares/hono'),
+      'mpay/express': path.resolve(import.meta.dirname, 'src/middlewares/express'),
+      'mpay/nextjs': path.resolve(import.meta.dirname, 'src/middlewares/nextjs'),
+      'mpay/elysia': path.resolve(import.meta.dirname, 'src/middlewares/elysia'),
       mpay: path.resolve(import.meta.dirname, 'src'),
       '~test': path.resolve(import.meta.dirname, 'test'),
     },

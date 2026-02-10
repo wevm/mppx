@@ -1,5 +1,5 @@
+import { BodyDigest } from 'mpay'
 import { describe, expect, test } from 'vitest'
-import * as BodyDigest from './BodyDigest.js'
 
 describe('compute', () => {
   test('behavior: computes sha-256 digest from string', () => {

@@ -472,7 +472,7 @@ describe('stream', () => {
 
     test('rejects voucher below minVoucherDelta', async () => {
       const { channelId, serializedTransaction } = await createSignedOpenTransaction(10000000n)
-      const server = createServer({ minVoucherDelta: 2000000n as never })
+      const server = createServer({ minVoucherDelta: '2' })
       await openServerChannel(server, channelId, serializedTransaction)
 
       await expect(

@@ -1,9 +1,7 @@
+import { Challenge, Credential, Mcp } from 'mpay'
+import { Transport } from 'mpay/client'
+import { MethodIntents as Intents } from 'mpay/tempo'
 import { describe, expect, test } from 'vitest'
-import * as Challenge from '../Challenge.js'
-import * as Credential from '../Credential.js'
-import * as Mcp from '../Mcp.js'
-import * as Intents from '../tempo/Intents.js'
-import * as Transport from './Transport.js'
 
 const realm = 'api.example.com'
 const secretKey = 'test-secret-key'

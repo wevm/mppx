@@ -1,11 +1,12 @@
 import { Hex } from 'ox'
-import { type Account, type Address, encodeFunctionData, type Client as viem_Client } from 'viem'
+import { type Address, encodeFunctionData, parseUnits, type Client as viem_Client } from 'viem'
 import { prepareTransactionRequest, signTransaction } from 'viem/actions'
 import { tempo as tempo_chain } from 'viem/chains'
 import { Abis } from 'viem/tempo'
 import type * as Challenge from '../../Challenge.js'
 import * as Credential from '../../Credential.js'
 import * as MethodIntent from '../../MethodIntent.js'
+import * as Account from '../../viem/Account.js'
 import * as Client from '../../viem/Client.js'
 import * as z from '../../zod.js'
 import * as Intents from '../Intents.js'
@@ -16,13 +17,13 @@ import type { StreamCredentialPayload } from '../stream/Types.js'
 import { signVoucher } from '../stream/Voucher.js'
 
 export const streamContextSchema = z.object({
-  account: z.optional(z.custom<Account>()),
+  account: z.optional(z.custom<Account.getResolver.Parameters['account']>()),
   action: z.optional(z.enum(['open', 'topUp', 'voucher', 'close'])),
   channelId: z.optional(z.string()),
-  cumulativeAmount: z.optional(z.bigint()),
+  cumulativeAmount: z.optional(z.amount()),
   transaction: z.optional(z.string()),
   authorizedSigner: z.optional(z.string()),
-  additionalDeposit: z.optional(z.bigint()),
+  additionalDeposit: z.optional(z.amount()),
 })
 
 export type StreamContext = z.infer<typeof streamContextSchema>
@@ -40,40 +41,41 @@ type ChannelEntry = {
  * @example
  * ```ts
  * // Auto mode
- * import { Fetch, tempo } from 'mpay/client'
+ * import { Mpay, tempo } from 'mpay/client'
  *
- * const fetch = Fetch.from({
- *   methods: [
- *     tempo.stream({
- *       account: privateKeyToAccount('0x...'),
- *       deposit: 10_000_000n,
- *     }),
- *   ],
+ * const mpay = Mpay.create({
+ *   methods: [tempo({
+ *     account: privateKeyToAccount('0x...'),
+ *     deposit: '10',
+ *   })],
  * })
  *
- * const res = await fetch('/api/chat?prompt=hello')
+ * const res = await mpay.fetch('/api/chat?prompt=hello')
  * ```
  *
  * @example
  * ```ts
  * // Manual mode
  * const mpay = Mpay.create({
- *   methods: [tempo.stream({ account })],
+ *   methods: [tempo({ account })],
  * })
  *
  * const credential = await mpay.createCredential(response, {
  *   action: 'voucher',
  *   channelId: '0x...',
- *   cumulativeAmount: 1_000_000n,
+ *   cumulativeAmount: '1',
  * })
  * ```
  */
 export function stream(parameters: stream.Parameters = {}) {
+  const { decimals = defaults.decimals } = parameters
+
   const getClient = Client.getResolver({
     chain: tempo_chain,
     getClient: parameters.getClient,
     rpcUrl: defaults.rpcUrl,
   })
+  const getAccount = Account.getResolver({ account: parameters.account })
 
   const escrowContractMap = new Map<string, Address>()
   const channels = new Map<string, ChannelEntry>()
@@ -106,7 +108,7 @@ export function stream(parameters: stream.Parameters = {}) {
 
   async function voucherPayload(
     client: viem_Client,
-    account: Account,
+    account: Account.Account,
     channelId: Hex.Hex,
     cumulativeAmount: bigint,
     escrowContract: Address,
@@ -131,7 +133,7 @@ export function stream(parameters: stream.Parameters = {}) {
     challenge: Challenge.Challenge,
     payload: StreamCredentialPayload,
     chainId: number,
-    account: Account,
+    account: Account.Account,
   ): string {
     return Credential.serialize({
       challenge,
@@ -142,18 +144,18 @@ export function stream(parameters: stream.Parameters = {}) {
 
   async function autoManageCredential(
     challenge: Challenge.Challenge,
-    account: Account,
+    account: Account.Account,
   ): Promise<string> {
     const md = challenge.request.methodDetails as
       | { chainId?: number; escrowContract?: string; channelId?: string; feePayer?: boolean }
       | undefined
     const chainId = md?.chainId ?? 0
-    const client = await getClient(chainId)
+    const client = await getClient({ chainId })
     const escrowContract = resolveEscrow(challenge, chainId)
     const payee = challenge.request.recipient as Address
     const currency = challenge.request.currency as Address
     const amount = BigInt(challenge.request.amount as string)
-    const deposit = parameters.deposit!
+    const deposit = parseUnits(parameters.deposit!, decimals)
 
     const key = channelKey(payee, currency, escrowContract)
     let entry = channels.get(key)
@@ -198,7 +200,7 @@ export function stream(parameters: stream.Parameters = {}) {
 
   async function openChannel(
     client: viem_Client,
-    account: Account,
+    account: Account.Account,
     escrowContract: Address,
     payee: Address,
     currency: Address,
@@ -291,24 +293,21 @@ export function stream(parameters: stream.Parameters = {}) {
 
   async function manualCredential(
     challenge: Challenge.Challenge,
-    account: Account,
+    account: Account.Account,
     context: StreamContext,
   ): Promise<string> {
     const md = challenge.request.methodDetails as
       | { chainId?: number; escrowContract?: string; channelId?: string }
       | undefined
     const chainId = md?.chainId ?? 0
-    const client = await getClient(chainId)
+    const client = await getClient({ chainId })
 
     const action = context.action!
-    const {
-      channelId: channelIdRaw,
-      cumulativeAmount,
-      transaction,
-      authorizedSigner,
-      additionalDeposit,
-    } = context
+    const { channelId: channelIdRaw, transaction, authorizedSigner, additionalDeposit } = context
     const channelId = channelIdRaw as Hex.Hex
+    const cumulativeAmount = context.cumulativeAmount
+      ? parseUnits(context.cumulativeAmount, decimals)
+      : undefined
 
     const escrowContract = resolveEscrow(challenge, chainId, channelId)
     escrowContractMap.set(channelId, escrowContract)
@@ -348,7 +347,7 @@ export function stream(parameters: stream.Parameters = {}) {
           type: 'transaction',
           channelId,
           transaction: transaction as Hex.Hex,
-          additionalDeposit: additionalDeposit.toString(),
+          additionalDeposit: parseUnits(additionalDeposit!, decimals).toString(),
         }
         break
 
@@ -393,9 +392,9 @@ export function stream(parameters: stream.Parameters = {}) {
     context: streamContextSchema,
 
     async createCredential({ challenge, context }) {
-      const account = context?.account ?? parameters.account
-      if (!account)
-        throw new Error('No `account` provided. Pass `account` to parameters or context.')
+      const chainId = challenge.request.methodDetails?.chainId ?? 0
+      const client = await getClient({ chainId })
+      const account = getAccount(client, context)
 
       if (!context?.action && parameters.deposit !== undefined)
         return autoManageCredential(challenge, account)
@@ -410,12 +409,13 @@ export function stream(parameters: stream.Parameters = {}) {
 }
 
 export declare namespace stream {
-  type Parameters = Client.getResolver.Parameters & {
-    /** Account to sign vouchers with. Can be overridden per-call via context. */
-    account?: Account | undefined
-    /** Initial deposit amount for auto-managed channels. When set, the method handles the full channel lifecycle (open, voucher, cumulative tracking) automatically. */
-    deposit?: bigint | undefined
-    /** Escrow contract address override. Derived from challenge or defaults if not provided. */
-    escrowContract?: Address | undefined
-  }
+  type Parameters = Account.getResolver.Parameters &
+    Client.getResolver.Parameters & {
+      /** Token decimals for parsing human-readable amounts (default: 6). */
+      decimals?: number | undefined
+      /** Initial deposit amount in human-readable units (e.g. "10" for 10 tokens). When set, the method handles the full channel lifecycle (open, voucher, cumulative tracking) automatically. */
+      deposit?: string | undefined
+      /** Escrow contract address override. Derived from challenge or defaults if not provided. */
+      escrowContract?: Address | undefined
+    }
 }

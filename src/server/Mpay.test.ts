@@ -1,15 +1,8 @@
+import { Challenge, Credential, Intent, MethodIntent, z } from 'mpay'
+import { Mpay, Transport, tempo } from 'mpay/server'
 import { describe, expect, test } from 'vitest'
 import * as Http from '~test/Http.js'
 import { accounts, asset, client } from '~test/tempo/viem.js'
-import * as Challenge from '../Challenge.js'
-import * as Credential from '../Credential.js'
-import * as Intent from '../Intent.js'
-import * as MethodIntent from '../MethodIntent.js'
-import * as tempo from '../tempo/server/index.js'
-import * as z from '../zod.js'
-import * as Mpay from './Mpay.js'
-import { toNodeListener } from './Mpay.js'
-import * as Transport from './Transport.js'
 
 const realm = 'api.example.com'
 const secretKey = 'test-secret-key'
@@ -198,7 +191,7 @@ describe('request handler (node)', () => {
     const handler = Mpay.create({ methods: [method], realm, secretKey })
 
     const server = await Http.createServer(async (req, res) => {
-      const result = await toNodeListener(
+      const result = await Mpay.toNodeListener(
         handler.charge({
           amount: '1000',
           currency: asset,
@@ -238,7 +231,7 @@ describe('request handler (node)', () => {
     const expires = new Date(Date.now() + 60_000).toISOString()
 
     const server = await Http.createServer(async (req, res) => {
-      const result = await toNodeListener(
+      const result = await Mpay.toNodeListener(
         handler.charge({
           amount: '1000',
           currency: asset,

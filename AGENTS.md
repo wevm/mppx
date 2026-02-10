@@ -132,7 +132,7 @@ The challenge `id` is an HMAC-SHA256 over the challenge parameters, cryptographi
 **HMAC input** (concatenated, pipe-delimited):
 
 ```
-realm | method | intent | request | expires
+realm | method | intent | request | expires | digest
 ```
 
 **Generation:**

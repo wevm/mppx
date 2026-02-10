@@ -10,7 +10,7 @@ jobs:
 
     steps:
       - name: Clone repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - name: Install dependencies
         uses: ./.github/actions/install-dependencies
@@ -26,15 +26,25 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Clone repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - name: Setup Docker
-        uses: docker/setup-docker-action@v4
+        uses: docker/setup-docker-action@e43656e248c0bd0647d3f5c195d116aacf6fcaf4 # v4.7.0
+
+      - name: Install secret-tool (libsecret)
+        uses: awalsh128/cache-apt-pkgs-action@acb598e5ddbc6f68a970c5da0688d2f3a9f04d05 # v1.6.0
+        with:
+          packages: libsecret-tools gnome-keyring dbus-x11
+          version: 1.0
 
       - name: Install dependencies
         uses: ./.github/actions/install-dependencies
 
       - name: Run tests
-        run: pnpm run test --bail=1
+        run: |
+          eval "$(dbus-launch --sh-syntax)"
+          eval "$(printf '\n' | gnome-keyring-daemon --unlock)"
+          eval "$(printf '\n' | gnome-keyring-daemon --start)"
+          pnpm run test --bail=1
         env:
           CI: true

@@ -1,6 +1,5 @@
+import { Challenge, Credential } from 'mpay'
 import { describe, expect, test } from 'vitest'
-import * as Challenge from './Challenge.js'
-import * as Credential from './Credential.js'
 
 const challenge = Challenge.from({
   id: 'x7Tg2pLqR9mKvNwY3hBcZa',

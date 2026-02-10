@@ -2,13 +2,12 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { McpError } from '@modelcontextprotocol/sdk/types.js'
+import { Challenge, Mcp as core_Mcp } from 'mpay'
+import { tempo as tempo_client } from 'mpay/client'
+import { Mpay as Mpay_server, tempo as tempo_server } from 'mpay/server'
+import { createClient } from 'viem'
 import { afterEach, beforeEach, describe, expect, test } from 'vitest'
-import { accounts, asset, client as testClient } from '~test/tempo/viem.js'
-import * as Challenge from '../../Challenge.js'
-import * as core_Mcp from '../../Mcp.js'
-import * as Mpay_server from '../../server/Mpay.js'
-import * as tempo_client from '../../tempo/client/index.js'
-import * as tempo_server from '../../tempo/server/index.js'
+import { accounts, asset, chain, http, client as testClient } from '~test/tempo/viem.js'
 import * as McpServer_transport from '../server/Transport.js'
 import * as McpClient from './McpClient.js'
 
@@ -125,7 +124,7 @@ describe('McpClient.wrap', () => {
     const mcp = McpClient.wrap(client, {
       methods: [
         tempo_client.charge({
-          getClient: () => testClient,
+          getClient: () => createClient({ chain, transport: http() }),
         }),
       ],
     })

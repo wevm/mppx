@@ -1,5 +1,5 @@
+import { Intent } from 'mpay'
 import { describe, expect, test } from 'vitest'
-import * as Intent from './Intent.js'
 
 describe('charge', () => {
   test('behavior: validates valid request', () => {

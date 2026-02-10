@@ -1,7 +1,7 @@
+import { Challenge } from 'mpay'
+import { Response } from 'mpay/server'
 import { describe, expect, test } from 'vitest'
-import * as Challenge from '../Challenge.js'
 import * as Errors from '../Errors.js'
-import * as Response from './Response.js'
 
 const challenge = Challenge.from({
   id: 'abc123',

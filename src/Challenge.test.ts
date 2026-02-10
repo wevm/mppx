@@ -1,6 +1,6 @@
+import { Challenge } from 'mpay'
+import { MethodIntents as Intents } from 'mpay/tempo'
 import { describe, expect, test } from 'vitest'
-import * as Challenge from './Challenge.js'
-import * as Intents from './tempo/Intents.js'
 
 describe('from', () => {
   test('behavior: creates challenge', () => {

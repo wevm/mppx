@@ -9,3 +9,12 @@ export const escrowContract = {
 } as const
 
 export const testnetChainId = 42431
+
+/**
+ * Default token decimals for TIP-20 stablecoins (e.g. alphaUSD).
+ *
+ * All TIP-20 tokens on Tempo use 6 decimals, so there is no risk of
+ * client/server mismatch within the Tempo ecosystem. Other chains and
+ * runtimes should set `decimals` explicitly to match their token.
+ */
+export const decimals = 6

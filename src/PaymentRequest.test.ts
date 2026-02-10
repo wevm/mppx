@@ -1,6 +1,6 @@
+import { PaymentRequest } from 'mpay'
+import { MethodIntents as Intents } from 'mpay/tempo'
 import { describe, expect, test } from 'vitest'
-import * as PaymentRequest from './PaymentRequest.js'
-import * as Intents from './tempo/Intents.js'
 
 describe('from', () => {
   test('creates a request', () => {

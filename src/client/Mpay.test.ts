@@ -1,34 +1,39 @@
-import { describe, expect, test } from 'vitest'
-import { accounts, client } from '~test/tempo/viem.js'
-import * as Challenge from '../Challenge.js'
-import * as Credential from '../Credential.js'
-import * as Intent from '../Intent.js'
-import * as Mcp from '../Mcp.js'
-import * as MethodIntent from '../MethodIntent.js'
-import * as tempo from '../tempo/client/index.js'
-import * as Intents from '../tempo/Intents.js'
-import * as Mpay from './Mpay.js'
-import * as Transport from './Transport.js'
+import { Challenge, Credential, Intent, Mcp, MethodIntent, Receipt } from 'mpay'
+import { Mpay, Transport, tempo } from 'mpay/client'
+import { Mpay as Mpay_server, tempo as tempo_server } from 'mpay/server'
+import { MethodIntents } from 'mpay/tempo'
+import { afterEach, describe, expect, test } from 'vitest'
+import * as Http from '~test/Http.js'
+import { accounts, asset, client } from '~test/tempo/viem.js'
 
 const realm = 'api.example.com'
 const secretKey = 'test-secret-key'
 
+afterEach(() => {
+  Mpay.restore()
+})
+
 describe('Mpay.create', () => {
   test('default', () => {
     const mpay = Mpay.create({
-      methods: [tempo.charge({ account: accounts[1], getClient: () => client })],
+      polyfill: false,
+      methods: [tempo({ account: accounts[1], getClient: () => client })],
     })
 
-    expect(mpay.methods).toHaveLength(1)
+    expect(mpay.methods).toHaveLength(2)
     expect(mpay.methods[0]?.method).toBe('tempo')
     expect(mpay.methods[0]?.name).toBe('charge')
+    expect(mpay.methods[1]?.method).toBe('tempo')
+    expect(mpay.methods[1]?.name).toBe('stream')
     expect(mpay.transport.name).toBe('http')
     expect(typeof mpay.createCredential).toBe('function')
+    expect(typeof mpay.fetch).toBe('function')
   })
 
   test('behavior: with mcp transport', () => {
     const mpay = Mpay.create({
-      methods: [tempo.charge({ account: accounts[1], getClient: () => client })],
+      polyfill: false,
+      methods: [tempo({ account: accounts[1], getClient: () => client })],
       transport: Transport.mcp(),
     })
 
@@ -40,7 +45,7 @@ describe('Mpay.create', () => {
       method: 'stripe',
       schema: {
         credential: {
-          payload: Intents.charge.schema.credential.payload,
+          payload: MethodIntents.charge.schema.credential.payload,
         },
       },
     })
@@ -54,22 +59,25 @@ describe('Mpay.create', () => {
     })
 
     const mpay = Mpay.create({
-      methods: [tempo.charge({ account: accounts[1], getClient: () => client }), stripeMethod],
+      polyfill: false,
+      methods: [tempo({ account: accounts[1], getClient: () => client }), stripeMethod],
     })
 
-    expect(mpay.methods).toHaveLength(2)
+    expect(mpay.methods).toHaveLength(3)
     expect(mpay.methods[0]?.method).toBe('tempo')
-    expect(mpay.methods[1]?.method).toBe('stripe')
+    expect(mpay.methods[1]?.method).toBe('tempo')
+    expect(mpay.methods[2]?.method).toBe('stripe')
   })
 })
 
 describe('createCredential', () => {
   test('behavior: routes to correct method based on challenge', async () => {
     const mpay = Mpay.create({
-      methods: [tempo.charge({ account: accounts[1], getClient: () => client })],
+      polyfill: false,
+      methods: [tempo({ account: accounts[1], getClient: () => client })],
     })
 
-    const challenge = Challenge.fromIntent(Intents.charge, {
+    const challenge = Challenge.fromIntent(MethodIntents.charge, {
       realm,
       secretKey,
       request: {
@@ -99,7 +107,8 @@ describe('createCredential', () => {
 
   test('behavior: throws when method not found', async () => {
     const mpay = Mpay.create({
-      methods: [tempo.charge({ account: accounts[1], getClient: () => client })],
+      polyfill: false,
+      methods: [tempo({ account: accounts[1], getClient: () => client })],
     })
 
     const challenge = Challenge.from({
@@ -118,7 +127,7 @@ describe('createCredential', () => {
     })
 
     await expect(mpay.createCredential(response)).rejects.toThrow(
-      'No method intent found for "unknown.charge". Available: tempo.charge',
+      'No method intent found for "unknown.charge". Available: tempo.charge, tempo.stream',
     )
   })
 
@@ -127,7 +136,7 @@ describe('createCredential', () => {
       method: 'stripe',
       schema: {
         credential: {
-          payload: Intents.charge.schema.credential.payload,
+          payload: MethodIntents.charge.schema.credential.payload,
         },
       },
     })
@@ -142,7 +151,8 @@ describe('createCredential', () => {
     })
 
     const mpay = Mpay.create({
-      methods: [tempo.charge({ account: accounts[1], getClient: () => client }), stripe],
+      polyfill: false,
+      methods: [tempo({ account: accounts[1], getClient: () => client }), stripe],
     })
 
     const stripeChallenge = Challenge.from({
@@ -173,9 +183,12 @@ describe('createCredential', () => {
   })
 
   test('behavior: passes context to createCredential', async () => {
-    const mpay = Mpay.create({ methods: [tempo.charge({ getClient: () => client })] })
+    const mpay = Mpay.create({
+      polyfill: false,
+      methods: [tempo({ getClient: () => client })],
+    })
 
-    const challenge = Challenge.fromIntent(Intents.charge, {
+    const challenge = Challenge.fromIntent(MethodIntents.charge, {
       realm,
       secretKey,
       request: {
@@ -203,10 +216,11 @@ describe('createCredential', () => {
 
   test('behavior: works without context when account provided at creation', async () => {
     const mpay = Mpay.create({
-      methods: [tempo.charge({ account: accounts[1], getClient: () => client })],
+      polyfill: false,
+      methods: [tempo({ account: accounts[1], getClient: () => client })],
     })
 
-    const challenge = Challenge.fromIntent(Intents.charge, {
+    const challenge = Challenge.fromIntent(MethodIntents.charge, {
       realm,
       secretKey,
       request: {
@@ -232,11 +246,12 @@ describe('createCredential', () => {
 
   test('behavior: with mcp transport', async () => {
     const mpay = Mpay.create({
-      methods: [tempo.charge({ account: accounts[1], getClient: () => client })],
+      polyfill: false,
+      methods: [tempo({ account: accounts[1], getClient: () => client })],
       transport: Transport.mcp(),
     })
 
-    const challenge = Challenge.fromIntent(Intents.charge, {
+    const challenge = Challenge.fromIntent(MethodIntents.charge, {
       realm,
       secretKey,
       request: {
@@ -265,5 +280,189 @@ describe('createCredential', () => {
     const parsed = Credential.deserialize(credential)
     expect((parsed.payload as { type: string }).type).toBe('transaction')
     expect(parsed.challenge.method).toBe('tempo')
+  })
+})
+
+const server = Mpay_server.create({
+  methods: [
+    tempo_server.charge({
+      currency: asset,
+      getClient: () => client,
+      recipient: accounts[0].address,
+    }),
+  ],
+})
+
+describe('fetch', () => {
+  test('default: handles 402 automatically', async () => {
+    const mpay = Mpay.create({
+      polyfill: false,
+      methods: [
+        tempo.charge({
+          account: accounts[1],
+          getClient: () => client,
+        }),
+      ],
+    })
+
+    const httpServer = await Http.createServer(async (req, res) => {
+      const result = await Mpay_server.toNodeListener(
+        server.charge({
+          amount: '1',
+        }),
+      )(req, res)
+      if (result.status === 402) return
+      res.end('OK')
+    })
+
+    const response = await mpay.fetch(httpServer.url)
+    expect(response.status).toBe(200)
+
+    const receipt = Receipt.fromResponse(response)
+    expect(receipt.status).toBe('success')
+    expect(receipt.method).toBe('tempo')
+
+    httpServer.close()
+  })
+
+  test('behavior: passes through non-402 responses', async () => {
+    const mpay = Mpay.create({
+      polyfill: false,
+      methods: [
+        tempo.charge({
+          account: accounts[1],
+          getClient: () => client,
+        }),
+      ],
+    })
+
+    const httpServer = await Http.createServer(async (_req, res) => {
+      res.writeHead(200)
+      res.end('OK')
+    })
+
+    const response = await mpay.fetch(httpServer.url)
+    expect(response.status).toBe(200)
+    expect(await response.text()).toBe('OK')
+
+    httpServer.close()
+  })
+
+  test('behavior: supports context', async () => {
+    const mpay = Mpay.create({
+      polyfill: false,
+      methods: [
+        tempo.charge({
+          getClient: () => client,
+        }),
+      ],
+    })
+
+    const httpServer = await Http.createServer(async (req, res) => {
+      const result = await Mpay_server.toNodeListener(
+        server.charge({
+          amount: '1',
+        }),
+      )(req, res)
+      if (result.status === 402) return
+      res.end('OK')
+    })
+
+    const response = await mpay.fetch(httpServer.url, {
+      context: { account: accounts[1] },
+    })
+    expect(response.status).toBe(200)
+
+    httpServer.close()
+  })
+})
+
+describe('polyfill', () => {
+  test('default: polyfills globalThis.fetch', async () => {
+    const originalFetch = globalThis.fetch
+
+    Mpay.create({
+      methods: [
+        tempo.charge({
+          account: accounts[1],
+          getClient: () => client,
+        }),
+      ],
+    })
+
+    expect(globalThis.fetch).not.toBe(originalFetch)
+
+    const httpServer = await Http.createServer(async (req, res) => {
+      const result = await Mpay_server.toNodeListener(
+        server.charge({
+          amount: '1',
+        }),
+      )(req, res)
+      if (result.status === 402) return
+      res.end('OK')
+    })
+
+    const response = await fetch(httpServer.url)
+    expect(response.status).toBe(200)
+
+    const receipt = Receipt.fromResponse(response)
+    expect(receipt.status).toBe('success')
+
+    httpServer.close()
+  })
+
+  test('behavior: polyfill false does not mutate globalThis.fetch', () => {
+    const originalFetch = globalThis.fetch
+
+    Mpay.create({
+      polyfill: false,
+      methods: [
+        tempo.charge({
+          account: accounts[1],
+          getClient: () => client,
+        }),
+      ],
+    })
+
+    expect(globalThis.fetch).toBe(originalFetch)
+  })
+})
+
+describe('restore', () => {
+  test('default: restores original fetch', () => {
+    const originalFetch = globalThis.fetch
+
+    Mpay.create({
+      methods: [
+        tempo.charge({
+          account: accounts[1],
+          getClient: () => client,
+        }),
+      ],
+    })
+
+    expect(globalThis.fetch).not.toBe(originalFetch)
+
+    Mpay.restore()
+
+    expect(globalThis.fetch).toBe(originalFetch)
+  })
+
+  test('behavior: noop when not polyfilled', () => {
+    const originalFetch = globalThis.fetch
+
+    Mpay.create({
+      polyfill: false,
+      methods: [
+        tempo.charge({
+          account: accounts[1],
+          getClient: () => client,
+        }),
+      ],
+    })
+
+    Mpay.restore()
+
+    expect(globalThis.fetch).toBe(originalFetch)
   })
 })

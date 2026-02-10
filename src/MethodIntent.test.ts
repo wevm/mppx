@@ -1,7 +1,5 @@
+import { Intent, MethodIntent, z } from 'mpay'
 import { describe, expect, expectTypeOf, test } from 'vitest'
-import * as Intent from './Intent.js'
-import * as MethodIntent from './MethodIntent.js'
-import * as z from './zod.js'
 
 describe('from', () => {
   test('behavior: creates intent', () => {

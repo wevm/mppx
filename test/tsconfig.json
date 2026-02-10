@@ -3,7 +3,17 @@
   "compilerOptions": {
     "types": ["node", "vitest/globals", "vitest/importMeta"],
     "paths": {
-      "~test/*": ["./*"]
+      "~test/*": ["./*"],
+      "mpay": ["../src/index.ts"],
+      "mpay/client": ["../src/client/index.ts"],
+      "mpay/server": ["../src/server/index.ts"],
+      "mpay/tempo": ["../src/tempo/index.ts"],
+      "mpay/hono": ["../src/middlewares/hono.ts"],
+      "mpay/express": ["../src/middlewares/express.ts"],
+      "mpay/nextjs": ["../src/middlewares/nextjs.ts"],
+      "mpay/elysia": ["../src/middlewares/elysia.ts"],
+      "mpay/mcp-sdk/client": ["../src/mcp-sdk/client/index.ts"],
+      "mpay/mcp-sdk/server": ["../src/mcp-sdk/server/index.ts"]
     }
   },
   "include": [

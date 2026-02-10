@@ -247,14 +247,14 @@ declare namespace createIntentFn {
   > = IntentFn<intent, transport, defaults>
 }
 
-/** @internal */
-type IntentFn<
+export type IntentFn<
   intent extends MethodIntent.MethodIntent,
   transport extends Transport.AnyTransport,
   defaults extends Record<string, unknown>,
 > = (
   options: IntentFn.Options<intent, defaults>,
 ) => (input: Transport.InputOf<transport>) => Promise<IntentFn.Response<transport>>
+export type AnyIntentFn = (options: any) => (input: any) => Promise<any>
 
 /** @internal */
 declare namespace IntentFn {

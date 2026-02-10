@@ -1,4 +1,4 @@
-import type { Account, Address, Hex, Client as viem_Client } from 'viem'
+import { type Account, type Address, type Hex, parseUnits, type Client as viem_Client } from 'viem'
 import { tempo as tempo_chain } from 'viem/chains'
 import {
   AmountExceedsDepositError,
@@ -65,11 +65,10 @@ export function stream<const parameters extends stream.Parameters>(parameters: p
   const {
     amount,
     currency,
-    decimals = 6,
+    decimals = defaults.decimals,
     storage,
     suggestedDeposit,
     unitType,
-    minVoucherDelta = 0n,
   } = parameters
 
   const recipient = (() => {
@@ -106,13 +105,13 @@ export function stream<const parameters extends stream.Parameters>(parameters: p
       const chainId = await (async () => {
         if (request.chainId) return request.chainId
         if (parameters.testnet) return defaults.testnetChainId
-        return (await getClient(0)).chain?.id
+        return (await getClient({})).chain?.id
       })()
 
       // Validate chainId.
       const client = await (async () => {
         try {
-          return await getClient(chainId!)
+          return await getClient({ chainId })
         } catch {
           throw new Error(`No client configured with chainId ${chainId}.`)
         }
@@ -122,6 +121,7 @@ export function stream<const parameters extends stream.Parameters>(parameters: p
 
       const escrowContract =
         request.escrowContract ??
+        parameters.escrowContract ??
         defaults.escrowContract[chainId as keyof typeof defaults.escrowContract]
 
       // Extract feePayer.
@@ -140,9 +140,10 @@ export function stream<const parameters extends stream.Parameters>(parameters: p
       const { challenge, payload } = credential as Credential.Credential<StreamCredentialPayload>
 
       const methodDetails = challenge.request.methodDetails as StreamMethodDetails
-      const client = await getClient(methodDetails.chainId)
+      const client = await getClient({ chainId: methodDetails.chainId })
 
       const resolvedFeePayer = methodDetails.feePayer === true ? feePayer : undefined
+      const minVoucherDelta = parseUnits(parameters.minVoucherDelta ?? '0', decimals)
       const effectiveMinVoucherDelta = methodDetails.minVoucherDelta
         ? BigInt(methodDetails.minVoucherDelta)
         : minVoucherDelta
@@ -207,8 +208,8 @@ export declare namespace stream {
   type Parameters = {
     /** Storage backend for channel and session state. */
     storage: ChannelStorage
-    /** Minimum voucher delta to accept (default: 0n). */
-    minVoucherDelta?: bigint | undefined
+    /** Minimum voucher delta to accept (numeric string, default: "0"). */
+    minVoucherDelta?: string | undefined
     /** Testnet mode. */
     testnet?: boolean | undefined
   } & (

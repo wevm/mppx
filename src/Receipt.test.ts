@@ -1,5 +1,5 @@
+import { Receipt } from 'mpay'
 import { describe, expect, test } from 'vitest'
-import * as Receipt from './Receipt.js'
 
 describe('from', () => {
   test('behavior: creates receipt with success status', () => {

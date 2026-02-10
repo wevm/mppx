@@ -1,11 +1,10 @@
+import { Receipt } from 'mpay'
+import { tempo } from 'mpay/client'
+import { Mpay as Mpay_server, tempo as tempo_server } from 'mpay/server'
+import { createClient } from 'viem'
 import { describe, expect, test } from 'vitest'
 import * as Http from '~test/Http.js'
-import { accounts, asset, client } from '~test/tempo/viem.js'
-import * as Receipt from '../Receipt.js'
-import * as Mpay_server from '../server/Mpay.js'
-import { toNodeListener } from '../server/Mpay.js'
-import { charge as charge_client } from '../tempo/client/Charge.js'
-import { charge as charge_server } from '../tempo/server/Charge.js'
+import { accounts, asset, chain, client, http } from '~test/tempo/viem.js'
 import * as Fetch from './Fetch.js'
 
 const realm = 'api.example.com'
@@ -13,7 +12,7 @@ const secretKey = 'test-secret-key'
 
 const server = Mpay_server.create({
   methods: [
-    charge_server({
+    tempo_server.charge({
       getClient: () => client,
     }),
   ],
@@ -25,7 +24,7 @@ describe('Fetch.from', () => {
   test('default: account at creation', async () => {
     const fetch = Fetch.from({
       methods: [
-        charge_client({
+        tempo.charge({
           account: accounts[1],
           getClient: () => client,
         }),
@@ -33,7 +32,7 @@ describe('Fetch.from', () => {
     })
 
     const httpServer = await Http.createServer(async (req, res) => {
-      const result = await toNodeListener(
+      const result = await Mpay_server.toNodeListener(
         server.charge({
           amount: '1',
           currency: asset,
@@ -68,14 +67,14 @@ describe('Fetch.from', () => {
   test('default: account via context', async () => {
     const fetch = Fetch.from({
       methods: [
-        charge_client({
+        tempo.charge({
           getClient: () => client,
         }),
       ],
     })
 
     const httpServer = await Http.createServer(async (req, res) => {
-      const result = await toNodeListener(
+      const result = await Mpay_server.toNodeListener(
         server.charge({
           amount: '1',
           currency: asset,
@@ -101,7 +100,7 @@ describe('Fetch.from', () => {
   test('behavior: context overrides account at creation', async () => {
     const fetch = Fetch.from({
       methods: [
-        charge_client({
+        tempo.charge({
           account: accounts[0],
           getClient: () => client,
         }),
@@ -109,7 +108,7 @@ describe('Fetch.from', () => {
     })
 
     const httpServer = await Http.createServer(async (req, res) => {
-      const result = await toNodeListener(
+      const result = await Mpay_server.toNodeListener(
         server.charge({
           amount: '1',
           currency: asset,
@@ -132,14 +131,14 @@ describe('Fetch.from', () => {
   test('behavior: throws when no account provided', async () => {
     const fetch = Fetch.from({
       methods: [
-        charge_client({
-          getClient: () => client,
+        tempo.charge({
+          getClient: () => createClient({ chain, transport: http() }),
         }),
       ],
     })
 
     const httpServer = await Http.createServer(async (req, res) => {
-      const result = await toNodeListener(
+      const result = await Mpay_server.toNodeListener(
         server.charge({
           amount: '1',
           currency: asset,
@@ -161,7 +160,7 @@ describe('Fetch.from', () => {
   test('behavior: passes through non-402 responses', async () => {
     const fetch = Fetch.from({
       methods: [
-        charge_client({
+        tempo.charge({
           account: accounts[1],
           getClient: () => client,
         }),
@@ -183,7 +182,7 @@ describe('Fetch.from', () => {
   test('behavior: fee payer', async () => {
     const serverWithFeePayer = Mpay_server.create({
       methods: [
-        charge_server({
+        tempo_server.charge({
           feePayer: accounts[0],
           getClient: () => client,
         }),
@@ -194,7 +193,7 @@ describe('Fetch.from', () => {
 
     const fetch = Fetch.from({
       methods: [
-        charge_client({
+        tempo.charge({
           account: accounts[1],
           getClient: () => client,
         }),
@@ -202,7 +201,7 @@ describe('Fetch.from', () => {
     })
 
     const httpServer = await Http.createServer(async (req, res) => {
-      const result = await toNodeListener(
+      const result = await Mpay_server.toNodeListener(
         serverWithFeePayer.charge({
           amount: '1',
           currency: asset,
@@ -239,7 +238,7 @@ describe('Fetch.polyfill', () => {
   test('default', async () => {
     Fetch.polyfill({
       methods: [
-        charge_client({
+        tempo.charge({
           account: accounts[1],
           getClient: () => client,
         }),
@@ -247,7 +246,7 @@ describe('Fetch.polyfill', () => {
     })
 
     const httpServer = await Http.createServer(async (req, res) => {
-      const result = await toNodeListener(
+      const result = await Mpay_server.toNodeListener(
         server.charge({
           amount: '1',
           currency: asset,
