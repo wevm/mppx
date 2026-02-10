@@ -142,7 +142,10 @@ function createIntentFn(parameters: createIntentFn.Parameters): createIntentFn.R
       // Extract credential once — getCredential may have side effects (e.g. SSE transports).
       const [credential, credentialError] = (() => {
         try {
-          return [transport.getCredential(input) as Credential.Credential | null, undefined] as const
+          return [
+            transport.getCredential(input) as Credential.Credential | null,
+            undefined,
+          ] as const
         } catch (e) {
           return [null, e as Error] as const
         }
