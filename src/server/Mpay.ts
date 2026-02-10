@@ -4,6 +4,7 @@ import type * as Credential from '../Credential.js'
 import * as Errors from '../Errors.js'
 import type * as MethodIntent from '../MethodIntent.js'
 import type * as Receipt from '../Receipt.js'
+import { tempo as tempo_ } from '../tempo/server/index.js'
 import type * as z from '../zod.js'
 import * as Request from './Request.js'
 import * as Transport from './Transport.js'
@@ -94,6 +95,29 @@ export declare namespace create {
   }
 }
 
+/**
+ * Creates an Mpay instance pre-configured with Tempo charge and stream methods.
+ *
+ * @example
+ * ```ts
+ * import { Mpay } from 'mpay/server'
+ *
+ * const mpay = Mpay.tempo({
+ *   currency: '0x...',
+ *   recipient: '0x...',
+ * })
+ * ```
+ */
+export function tempo(parameters: tempo_.Parameters & Omit<create.Config, 'methods'>) {
+  const { realm, secretKey, transport, ...rest } = parameters
+  return create({
+    methods: tempo_(rest),
+    realm,
+    secretKey,
+    transport,
+  })
+}
+
 function createIntentFn<
   intent extends MethodIntent.MethodIntent,
   transport extends Transport.AnyTransport,
@@ -113,16 +137,20 @@ function createIntentFn(parameters: createIntentFn.Parameters): createIntentFn.R
       // Merge defaults with per-request options
       const merged = { ...defaults, ...rest }
 
-      const credential_request = (() => {
-        try {
-          return transport.getCredential(input) as Credential.Credential | null
-        } catch {}
-      })()
+      // Extract credential once — getCredential may have side effects (e.g. SSE transports).
+      let credential: Credential.Credential | null
+      let credentialError: Error | undefined
+      try {
+        credential = transport.getCredential(input) as Credential.Credential | null
+      } catch (e) {
+        credential = null
+        credentialError = e as Error
+      }
 
       // Transform request if method provides a `request` function.
       const request = (
         parameters.request
-          ? await parameters.request({ credential: credential_request, request: merged } as never)
+          ? await parameters.request({ credential, request: merged } as never)
           : merged
       ) as never
 
@@ -137,63 +165,54 @@ function createIntentFn(parameters: createIntentFn.Parameters): createIntentFn.R
         secretKey,
       })
 
-      // Extract credential from transport input
-      let credential: Credential.Credential | null
-      try {
-        credential = transport.getCredential(input) as Credential.Credential | null
-      } catch (e) {
-        // Credential was provided but malformed
-        return {
-          challenge: await transport.respondChallenge({
-            challenge,
-            input,
-            error: new Errors.MalformedCredentialError({ reason: (e as Error).message }),
-          }),
-          status: 402,
-        }
+      // Credential was provided but malformed
+      if (credentialError) {
+        const response = await transport.respondChallenge({
+          challenge,
+          input,
+          error: new Errors.MalformedCredentialError({ reason: credentialError.message }),
+        })
+        return { challenge: response, status: 402 }
       }
 
       // No credential provided—issue challenge
-      if (!credential)
-        return {
-          challenge: await transport.respondChallenge({
-            challenge,
-            input,
-            error: new Errors.PaymentRequiredError({ realm, description }),
-          }),
-          status: 402,
-        }
+      if (!credential) {
+        const response = await transport.respondChallenge({
+          challenge,
+          input,
+          error: new Errors.PaymentRequiredError({ realm, description }),
+        })
+        return { challenge: response, status: 402 }
+      }
 
       // Verify the echoed challenge was issued by us by recomputing its HMAC.
       // This is stateless—no database lookup needed.
-      if (!Challenge.verify(credential.challenge, { secretKey }))
-        return {
-          challenge: await transport.respondChallenge({
-            challenge,
-            input,
-            error: new Errors.InvalidChallengeError({
-              id: credential.challenge.id,
-              reason: 'challenge was not issued by this server',
-            }),
+      if (!Challenge.verify(credential.challenge, { secretKey })) {
+        const response = await transport.respondChallenge({
+          challenge,
+          input,
+          error: new Errors.InvalidChallengeError({
+            id: credential.challenge.id,
+            reason: 'challenge was not issued by this server',
           }),
-          status: 402,
-        }
+        })
+        return { challenge: response, status: 402 }
+      }
 
       // Validate payload structure against intent schema
       try {
         intent.schema.credential.payload.parse(credential.payload)
       } catch (e) {
-        return {
-          challenge: await transport.respondChallenge({
-            challenge,
-            input,
-            error: new Errors.InvalidPayloadError({ reason: (e as Error).message }),
-          }),
-          status: 402,
-        }
+        const response = await transport.respondChallenge({
+          challenge,
+          input,
+          error: new Errors.InvalidPayloadError({ reason: (e as Error).message }),
+        })
+        return { challenge: response, status: 402 }
       }
 
-      // User-provided verification (e.g., check signature, submit tx, verify payment)
+      // User-provided verification (e.g., check signature, submit tx, verify payment).
+      // If verification fails, re-issue the challenge so the client can retry.
       let receiptData: Receipt.Receipt
       try {
         receiptData = await verify({ credential, request } as never)
@@ -202,14 +221,12 @@ function createIntentFn(parameters: createIntentFn.Parameters): createIntentFn.R
           e instanceof Errors.PaymentError
             ? e
             : new Errors.VerificationFailedError({ reason: (e as Error).message })
-        return {
-          challenge: await transport.respondChallenge({
-            challenge,
-            input,
-            error,
-          }),
-          status: 402,
-        }
+        const response = await transport.respondChallenge({
+          challenge,
+          input,
+          error,
+        })
+        return { challenge: response, status: 402 }
       }
 
       return {
@@ -254,6 +271,7 @@ export type IntentFn<
 > = (
   options: IntentFn.Options<intent, defaults>,
 ) => (input: Transport.InputOf<transport>) => Promise<IntentFn.Response<transport>>
+/** @internal */
 export type AnyIntentFn = (options: any) => (input: any) => Promise<any>
 
 /** @internal */
@@ -269,7 +287,10 @@ declare namespace IntentFn {
   } & MethodIntent.WithDefaults<z.input<intent['schema']['request']>, defaults>
 
   export type Response<transport extends Transport.AnyTransport = Transport.Http> =
-    | { challenge: Transport.ChallengeOutputOf<transport>; status: 402 }
+    | {
+        challenge: Transport.ChallengeOutputOf<transport>
+        status: 402
+      }
     | {
         status: 200
         withReceipt: <response>(response: response) => response

@@ -261,6 +261,19 @@ describe('Mpay', () => {
   })
 })
 
+describe('Mpay.tempo', () => {
+  test('returns handler with charge and stream intents', () => {
+    const handler = Mpay.tempo({
+      storage: {} as never,
+      getClient: () => ({}) as never,
+    })
+
+    expectTypeOf(handler.charge).toBeFunction()
+    expectTypeOf(handler.stream).toBeFunction()
+    expectTypeOf(handler.realm).toBeString()
+  })
+})
+
 describe('create.Config', () => {
   test('requires methods, realm, and secretKey', () => {
     type Config = Mpay.create.Config

@@ -65,7 +65,8 @@ const res = await fetch('https://api.example.com/resource')
 | Example | Description |
 |---------|-------------|
 | [basic](./examples/basic/) | Bun server with pay-per-request fortune API |
-| [stream](./examples/stream/) | Streaming payment channels with per-token LLM metering |
+| [streaming/sse](./examples/streaming/sse/) | Streaming payment channels with per-token LLM metering |
+| [streaming/multi-fetch](./examples/streaming/multi-fetch/) | Multi-request scraping with payment channels |
 
 ```bash
 npx gitpick wevm/mpay/examples/basic
