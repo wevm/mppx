@@ -67,12 +67,10 @@ export function stream<const defaults extends stream.Defaults>(
     amount,
     currency,
     decimals = defaults.decimals,
-    escrowContract,
     recipient,
     storage,
     suggestedDeposit,
     unitType,
-    minVoucherDelta: minVoucherDeltaStr = '0',
     feePayer,
   } = parameters
 
@@ -113,9 +111,9 @@ export function stream<const defaults extends stream.Defaults>(
       if (client.chain?.id !== chainId)
         throw new Error(`Client not configured with chainId ${chainId}.`)
 
-      const resolvedEscrow =
+      const escrowContract =
         request.escrowContract ??
-        escrowContract ??
+        parameters.escrowContract ??
         defaults.escrowContract[chainId as keyof typeof defaults.escrowContract]
 
       // Extract feePayer.
@@ -128,7 +126,7 @@ export function stream<const defaults extends stream.Defaults>(
         return undefined
       })()
 
-      return { ...request, chainId, escrowContract: resolvedEscrow, feePayer }
+      return { ...request, chainId, escrowContract, feePayer }
     },
 
     async verify({ credential }) {
@@ -138,7 +136,7 @@ export function stream<const defaults extends stream.Defaults>(
       const client = await getClient({ chainId: methodDetails.chainId })
 
       const resolvedFeePayer = methodDetails.feePayer === true ? feePayer : undefined
-      const minVoucherDelta = parseUnits(minVoucherDeltaStr, decimals)
+      const minVoucherDelta = parseUnits(parameters.minVoucherDelta ?? '0', decimals)
       const effectiveMinVoucherDelta = methodDetails.minVoucherDelta
         ? BigInt(methodDetails.minVoucherDelta)
         : minVoucherDelta

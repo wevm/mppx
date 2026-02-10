@@ -303,16 +303,11 @@ export function stream(parameters: stream.Parameters = {}) {
     const client = await getClient({ chainId })
 
     const action = context.action!
-    const {
-      channelId: channelIdRaw,
-      cumulativeAmount: cumulativeAmountStr,
-      transaction,
-      authorizedSigner,
-      additionalDeposit,
-    } = context
+    const { channelId: channelIdRaw, transaction, authorizedSigner, additionalDeposit } = context
     const channelId = channelIdRaw as Hex.Hex
-    const cumulativeAmount =
-      cumulativeAmountStr !== undefined ? parseUnits(cumulativeAmountStr, decimals) : undefined
+    const cumulativeAmount = context.cumulativeAmount
+      ? parseUnits(context.cumulativeAmount, decimals)
+      : undefined
 
     const escrowContract = resolveEscrow(challenge, chainId, channelId)
     escrowContractMap.set(channelId, escrowContract)
