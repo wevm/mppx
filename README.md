@@ -60,6 +60,54 @@ Mpay.create({
 const res = await fetch('https://api.example.com/resource')
 ```
 
+### Proxy
+
+```ts
+import { openai, stripe, Proxy } from 'mpay/proxy'
+import { Mpay, tempo } from 'mpay/server'
+
+const mpay = Mpay.create({ methods: [tempo()] })
+
+const proxy = Proxy.create({
+  services: [
+    openai({
+      apiKey: 'sk-...',
+      routes: {
+        'POST /v1/chat/completions': mpay.charge({ amount: '0.05' }),
+        'POST /v1/completions': mpay.stream({ amount: '0.0001' }),
+        'GET /v1/models': mpay.free(),
+      },
+    }),
+    stripe({
+      apiKey: 'sk-...',
+      routes: {
+        'POST /v1/charges': mpay.charge({ amount: '0.01' }),
+        'GET /v1/customers/:id': mpay.free(),
+      },
+    }),
+  ],
+})
+
+createServer(proxy.listener) // Node.js
+Bun.serve(proxy) // Bun
+Deno.serve(proxy.fetch) // Deno
+app.use(proxy.listener) // Express
+app.all('*', (c) => proxy.fetch(c.req.raw)) // Hono
+app.all('*', (c) => proxy.fetch(c.request)) // Elysia
+export const GET = proxy.fetch // Next.js
+export const POST = proxy.fetch // Next.js
+```
+
+This exposes the following routes:
+
+| Route | Pricing |
+|-------|---------|
+| `POST /openai/v1/chat/completions` | charge **$0.005** |
+| `POST /openai/v1/completions` | stream **$0.0001 per token** |
+| `GET /openai/v1/models` | free |
+| `POST /stripe/v1/charges` | charge **$0.01** |
+| `GET /stripe/v1/customers/:id` | free |
+
 ## Examples
 
 | Example | Description |

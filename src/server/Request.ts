@@ -1,67 +1,33 @@
-import type { IncomingMessage, ServerResponse } from 'node:http'
+import type { IncomingMessage, RequestListener, ServerResponse } from 'node:http'
+import * as FetchServer from '@remix-run/node-fetch-server'
+
+export type FetchHandler = (request: Request) => Promise<Response> | Response
 
 /**
- * Converts a Node.js listener to a Fetch API Request.
+ * Converts a Fetch API handler into a Node.js HTTP request listener.
  *
- * @param req - The Node.js IncomingMessage.
- * @param res - The Node.js ServerResponse (used for abort signal).
- * @returns A Fetch API Request.
+ * Uses [`@remix-run/node-fetch-server`](https://github.com/remix-run/remix/blob/main/packages/node-fetch-server/src/lib/request-listener.ts).
+ *
+ * @param handler - A Fetch API handler: `(request: Request) => Response`.
+ * @param options - Optional error handler.
+ * @returns A Node.js `(req, res)` listener.
  */
-export function fromNodeListener(req: IncomingMessage, res?: ServerResponse): Request {
-  let controller: AbortController | null = new AbortController()
-
-  if (res) {
-    res.once('close', () => controller?.abort())
-    res.once('finish', () => {
-      controller = null
-    })
-  }
-
-  const method = req.method ?? 'GET'
-  const headers = createHeaders(req)
-
-  const protocol = 'encrypted' in req.socket && req.socket.encrypted ? 'https:' : 'http:'
-  const host = headers.get('Host') ?? 'localhost'
-  const url = new URL(req.url ?? '/', `${protocol}//${host}`)
-
-  const init: RequestInit = { method, headers, signal: controller.signal }
-
-  if (method !== 'GET' && method !== 'HEAD') {
-    init.body = new ReadableStream({
-      start(controller) {
-        req.on('data', (chunk: Buffer) => {
-          controller.enqueue(new Uint8Array(chunk.buffer, chunk.byteOffset, chunk.byteLength))
-        })
-        req.on('end', () => {
-          controller.close()
-        })
-      },
-    })
-    ;(init as { duplex: 'half' }).duplex = 'half'
-  }
-
-  return new Request(url, init)
+export function toNodeListener(
+  handler: FetchHandler,
+  options?: FetchServer.RequestListenerOptions | undefined,
+): RequestListener {
+  return FetchServer.createRequestListener(handler, options) as never
 }
 
 /**
- * Creates a Headers object from a Node.js IncomingMessage.
+ * Converts a Node.js `IncomingMessage`/`ServerResponse` pair to a Fetch API `Request`.
  *
- * Uses rawHeaders to preserve header casing and multi-value headers.
+ * Uses [`@remix-run/node-fetch-server`](https://github.com/remix-run/remix/blob/main/packages/node-fetch-server/src/lib/request-listener.ts).
  *
  * @param req - The Node.js IncomingMessage.
- * @returns A Headers object.
+ * @param res - The Node.js ServerResponse (used for abort signal lifecycle).
+ * @returns A Fetch API Request.
  */
-function createHeaders(req: IncomingMessage): Headers {
-  const headers = new Headers()
-  const rawHeaders = req.rawHeaders
-
-  for (let i = 0; i < rawHeaders.length; i += 2) {
-    const key = rawHeaders[i]
-    const value = rawHeaders[i + 1]
-    if (key && value && !key.startsWith(':')) {
-      headers.append(key, value)
-    }
-  }
-
-  return headers
+export function fromNodeListener(req: IncomingMessage, res: ServerResponse): Request {
+  return FetchServer.createRequest(req, res)
 }

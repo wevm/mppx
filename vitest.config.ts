@@ -7,6 +7,7 @@ export default defineConfig({
       'mpay/client': path.resolve(import.meta.dirname, 'src/client'),
       'mpay/mcp-sdk/client': path.resolve(import.meta.dirname, 'src/mcp-sdk/client'),
       'mpay/mcp-sdk/server': path.resolve(import.meta.dirname, 'src/mcp-sdk/server'),
+      'mpay/proxy': path.resolve(import.meta.dirname, 'src/proxy'),
       'mpay/server': path.resolve(import.meta.dirname, 'src/server'),
       'mpay/tempo': path.resolve(import.meta.dirname, 'src/tempo'),
       'mpay/hono': path.resolve(import.meta.dirname, 'src/middlewares/hono'),
