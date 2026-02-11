@@ -11,80 +11,67 @@ describe('from', () => {
     expect(service.baseUrl).toBe('https://api.example.com')
   })
 
-  test('behavior: resolves bearer auth', () => {
+  test('behavior: bearer sets Authorization header', async () => {
     const service = Service.from('api', {
       baseUrl: 'https://api.example.com',
       bearer: 'sk-123',
       routes: { 'GET /v1/data': true },
     })
-    const auth = service.auth(true)
-    expect(auth).toEqual({ type: 'bearer', token: 'sk-123' })
+    const req = new Request('https://example.com')
+    const ctx = { request: req, service, upstreamPath: '/v1/data' }
+    const result = await service.rewriteRequest!(req, ctx)
+    expect(result.headers.get('authorization')).toBe('Bearer sk-123')
   })
 
-  test('behavior: resolves single header auth', () => {
+  test('behavior: headers sets custom headers', async () => {
     const service = Service.from('api', {
       baseUrl: 'https://api.example.com',
       headers: { 'X-Api-Key': 'secret' },
       routes: { 'GET /v1/data': true },
     })
-    const auth = service.auth(true)
-    expect(auth).toEqual({ type: 'header', name: 'X-Api-Key', value: 'secret' })
+    const req = new Request('https://example.com')
+    const ctx = { request: req, service, upstreamPath: '/v1/data' }
+    const result = await service.rewriteRequest!(req, ctx)
+    expect(result.headers.get('x-api-key')).toBe('secret')
   })
 
-  test('behavior: resolves multiple headers as custom auth', async () => {
+  test('behavior: multiple headers sets all headers', async () => {
     const service = Service.from('api', {
       baseUrl: 'https://api.example.com',
       headers: { 'X-Key': 'a', 'X-Secret': 'b' },
       routes: { 'GET /v1/data': true },
     })
-    const auth = service.auth(true)
-    expect(auth.type).toBe('custom')
-
-    if (auth.type !== 'custom') throw new Error()
     const req = new Request('https://example.com')
-    const result = await auth.apply(req)
-    expect(result.headers.get('X-Key')).toBe('a')
-    expect(result.headers.get('X-Secret')).toBe('b')
+    const ctx = { request: req, service, upstreamPath: '/v1/data' }
+    const result = await service.rewriteRequest!(req, ctx)
+    expect(result.headers.get('x-key')).toBe('a')
+    expect(result.headers.get('x-secret')).toBe('b')
   })
 
-  test('behavior: resolves mutate auth', () => {
-    const mutate = (req: Request) => req
+  test('behavior: mutate calls mutate function', async () => {
     const service = Service.from('api', {
       baseUrl: 'https://api.example.com',
-      mutate,
+      mutate: (req) => {
+        req.headers.set('X-Mutated', 'yes')
+        return req
+      },
       routes: { 'GET /v1/data': true },
     })
-    const auth = service.auth(true)
-    expect(auth).toEqual({ type: 'custom', apply: mutate })
-  })
-
-  test('behavior: mutate takes priority over bearer', () => {
-    const mutate = (req: Request) => req
-    const service = Service.from('api', {
-      baseUrl: 'https://api.example.com',
-      mutate,
-      bearer: 'sk-123',
-      routes: { 'GET /v1/data': true },
-    })
-    const auth = service.auth(true)
-    expect(auth.type).toBe('custom')
-  })
-
-  test('behavior: no-op auth when no config', async () => {
-    const service = Service.from('api', {
-      baseUrl: 'https://api.example.com',
-      routes: { 'GET /v1/data': true },
-    })
-    const auth = service.auth(true)
-    expect(auth.type).toBe('custom')
-
-    if (auth.type !== 'custom') throw new Error()
     const req = new Request('https://example.com')
-    const result = await auth.apply(req)
-    expect(result).toBe(req)
+    const ctx = { request: req, service, upstreamPath: '/v1/data' }
+    const result = await service.rewriteRequest!(req, ctx)
+    expect(result.headers.get('x-mutated')).toBe('yes')
   })
 
-  test('behavior: per-endpoint options override service auth', () => {
+  test('behavior: no auth config means no rewriteRequest', () => {
+    const service = Service.from('api', {
+      baseUrl: 'https://api.example.com',
+      routes: { 'GET /v1/data': true },
+    })
+    expect(service.rewriteRequest).toBeUndefined()
+  })
+
+  test('behavior: per-endpoint options override service bearer', async () => {
     const handler: Service.IntentHandler = async () => ({
       status: 200 as const,
       withReceipt: <T>(r: T) => r,
@@ -100,8 +87,11 @@ describe('from', () => {
       },
     })
     const endpoint = service.routes['GET /v1/data']!
-    const auth = service.auth(endpoint)
-    expect(auth).toEqual({ type: 'bearer', token: 'sk-override' })
+    const options = Service.getOptions(endpoint)
+    const req = new Request('https://example.com')
+    const ctx = { request: req, service, upstreamPath: '/v1/data', ...options }
+    const result = await service.rewriteRequest!(req, ctx)
+    expect(result.headers.get('authorization')).toBe('Bearer sk-override')
   })
 })
 

@@ -1,5 +1,4 @@
-import type { Endpoint, EndpointMap, Service } from '../Service.js'
-import { from, getOptions } from '../Service.js'
+import * as Service from '../Service.js'
 
 type KnownRoute =
   | 'POST /v1/chat/completions'
@@ -15,27 +14,22 @@ type KnownRoute =
   | 'GET /v1/models'
   | 'GET /v1/models/:model'
 
-type Options = {
-  apiKey: string
-  baseUrl?: string | undefined
+export function openai(config: openai.Config) {
+  return Service.from<openai.Config>('openai', {
+    baseUrl: config.baseUrl ?? 'https://api.openai.com',
+    rewriteRequest(request, ctx) {
+      const apiKey = ctx.apiKey ?? config.apiKey
+      request.headers.set('Authorization', `Bearer ${apiKey}`)
+      return request
+    },
+    routes: config.routes,
+  })
 }
 
-export function openai(config: {
-  apiKey: string
-  baseUrl?: string | undefined
-  routes: Partial<Record<KnownRoute, Endpoint>> & Record<string & {}, Endpoint>
-}): Service {
-  const base = from('openai', {
-    baseUrl: config.baseUrl ?? 'https://api.openai.com',
-    bearer: config.apiKey,
-    routes: config.routes as EndpointMap,
-  })
-  return {
-    ...base,
-    auth(endpoint) {
-      const overrides = getOptions(endpoint) as Options | undefined
-      if (overrides?.apiKey) return { type: 'bearer', token: overrides.apiKey }
-      return base.auth(endpoint)
-    },
+export declare namespace openai {
+  export type Config = {
+    routes: Service.EndpointMap<KnownRoute>
+    apiKey: string
+    baseUrl?: string | undefined
   }
 }

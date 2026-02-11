@@ -5,19 +5,14 @@ import { createFetchProxy } from '@remix-run/fetch-proxy'
 import * as Request from '../server/Request.js'
 import * as Headers from './internal/Headers.js'
 import * as Route from './internal/Route.js'
-import type * as Service from './Service.js'
+import * as Service from './Service.js'
 
 export type Proxy = {
   fetch: (request: Request) => Promise<Response>
   listener: (req: http.IncomingMessage, res: http.ServerResponse) => void
 }
 
-export type Config = {
-  services: Service.Service[]
-  fetch?: typeof globalThis.fetch | undefined
-}
-
-export function create(config: Config): Proxy {
+export function create(config: create.Config): Proxy {
   const fetchImpl = config.fetch ?? globalThis.fetch
 
   const services = new Map(
@@ -48,14 +43,21 @@ export function create(config: Config): Proxy {
     const endpoint = matched.value as Service.Endpoint
     const ctx: Service.Context = { request, service, upstreamPath }
 
-    if (endpoint === true) return proxyUpstream(request, service, ctx, proxy)
+    if (endpoint === true)
+      return proxyUpstream({ request, service, ctx, proxy, rewrite: false })
 
     const handler: Service.IntentHandler = typeof endpoint === 'function' ? endpoint : endpoint.pay
     const result = await handler(request)
     if (result.status === 402) return result.challenge
 
-    const auth = service.auth(endpoint)
-    const upstreamRes = await proxyUpstream(request, service, ctx, proxy, auth)
+    const options = Service.getOptions(endpoint)
+    const upstreamRes = await proxyUpstream({
+      request,
+      service,
+      ctx: { ...ctx, ...options },
+      proxy,
+      rewrite: true,
+    })
     return result.withReceipt(upstreamRes)
   }
 
@@ -65,13 +67,25 @@ export function create(config: Config): Proxy {
   }
 }
 
-async function proxyUpstream(
-  request: globalThis.Request,
-  service: Service.Service,
-  ctx: Service.Context,
-  proxy: (input: URL | RequestInfo, init?: RequestInit) => Promise<Response>,
-  auth?: Service.Auth,
-): Promise<Response> {
+export declare namespace create {
+  export type Config = {
+    fetch?: typeof globalThis.fetch | undefined
+    services: Service.Service[]
+  }
+}
+
+declare namespace proxyUpstream {
+  type Options = {
+    ctx: Service.Context
+    proxy: (input: URL | RequestInfo, init?: RequestInit) => Promise<Response>
+    request: globalThis.Request
+    rewrite: boolean
+    service: Service.Service
+  }
+}
+
+async function proxyUpstream(options: proxyUpstream.Options): Promise<Response> {
+  const { request, service, ctx, proxy, rewrite } = options
   const url = ctx.upstreamPath + new URL(request.url).search
   const headers = Headers.scrub(request.headers)
 
@@ -81,9 +95,8 @@ async function proxyUpstream(
     signal: request.signal,
   })
 
-  if (auth) upstreamReq = await Headers.applyAuth(upstreamReq, auth)
-
-  if (service.rewriteRequest) upstreamReq = await service.rewriteRequest(upstreamReq, ctx)
+  if (rewrite && service.rewriteRequest)
+    upstreamReq = await service.rewriteRequest(upstreamReq, ctx)
 
   let upstreamRes = await proxy(upstreamReq)
 

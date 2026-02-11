@@ -1,5 +1,3 @@
-import type { Auth } from '../Service.js'
-
 const hopByHopHeaders = new Set([
   'connection',
   'keep-alive',
@@ -38,37 +36,4 @@ export function scrubResponse(response: Response): Response {
     statusText: response.statusText,
     headers,
   })
-}
-
-export function applyAuth(request: Request, auth: Auth): Request | Promise<Request> {
-  switch (auth.type) {
-    case 'bearer': {
-      request.headers.set('Authorization', `Bearer ${auth.token}`)
-      return request
-    }
-
-    case 'basic': {
-      const encoded = btoa(`${auth.username}:${auth.password}`)
-      request.headers.set('Authorization', `Basic ${encoded}`)
-      return request
-    }
-
-    case 'header': {
-      request.headers.set(auth.name, auth.value)
-      return request
-    }
-
-    case 'query': {
-      const url = new URL(request.url)
-      url.searchParams.set(auth.name, auth.value)
-      return new Request(url, {
-        method: request.method,
-        headers: request.headers,
-        signal: request.signal,
-      })
-    }
-
-    case 'custom':
-      return auth.apply(request)
-  }
 }
