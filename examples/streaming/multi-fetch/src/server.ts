@@ -135,7 +135,7 @@ export async function handler(request: Request): Promise<Response | null> {
     // If status is 402, the request had no valid credential.
     // Return the challenge response (402 + WWW-Authenticate header) to the client.
     // The client's session will automatically parse this, open a channel, and retry.
-    if (result.status === 402) return result.challenge as globalThis.Response
+    if (result.status === 402) return result.challenge
 
     // If we get here, the credential was valid — the client paid for this request.
     // Generate the content they paid for.

@@ -218,7 +218,7 @@ export async function handler(request: Request): Promise<Response | null> {
     // Phase 1: No valid credential → 402 Payment Required.
     // `result.challenge` is a Response object with the WWW-Authenticate header
     // containing the base64url-encoded challenge parameters.
-    if (result.status === 402) return result.challenge as globalThis.Response
+    if (result.status === 402) return result.challenge
 
     // Phase 2 & 4: The request was fully handled by the transport layer.
     // `result.managed` is `true` when the SSE transport recognized this as
@@ -231,7 +231,7 @@ export async function handler(request: Request): Promise<Response | null> {
     // In both cases, the application doesn't need to produce any content —
     // just return the managed response (which may include a Payment-Receipt
     // header).
-    if (result.managed) return result.withReceipt() as globalThis.Response
+    if (result.managed) return result.withReceipt()
 
     // Phase 3: Channel is open, start the SSE stream.
     // `result.withReceipt(generator)` wraps an async generator in an SSE
@@ -280,7 +280,7 @@ export async function handler(request: Request): Promise<Response | null> {
         // the next value in `for await (const token of tokens)`.
         yield token
       }
-    }) as globalThis.Response
+    })
   }
 
   // Return null for unrecognized paths (framework can handle 404).
