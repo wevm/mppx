@@ -570,6 +570,7 @@ describe('tempo', () => {
 
     test('recipient: Account with feePayer: true resolves feePayer', async () => {
       const mpay = Mpay_client.create({
+        polyfill: false,
         methods: [
           tempo_client.charge({
             account: accounts[1],
@@ -597,20 +598,15 @@ describe('tempo', () => {
         res.end('OK')
       })
 
-      const response = await fetch(httpServer.url)
-      expect(response.status).toBe(402)
-
-      const credential = await mpay.createCredential(response)
-      const response2 = await fetch(httpServer.url, {
-        headers: { Authorization: credential },
-      })
-      expect(response2.status).toBe(200)
+      const response = await mpay.fetch(httpServer.url)
+      expect(response.status).toBe(200)
 
       httpServer.close()
     })
 
     test('recipient: string with feePayer: Account resolves separately', async () => {
       const mpay = Mpay_client.create({
+        polyfill: false,
         methods: [
           tempo_client.charge({
             account: accounts[1],
@@ -638,14 +634,8 @@ describe('tempo', () => {
         res.end('OK')
       })
 
-      const response = await fetch(httpServer.url)
-      expect(response.status).toBe(402)
-
-      const credential = await mpay.createCredential(response)
-      const response2 = await fetch(httpServer.url, {
-        headers: { Authorization: credential },
-      })
-      expect(response2.status).toBe(200)
+      const response = await mpay.fetch(httpServer.url)
+      expect(response.status).toBe(200)
 
       httpServer.close()
     })
