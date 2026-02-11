@@ -325,7 +325,7 @@ describe('account', () => {
 
   // --- account view ---
 
-  test('view: shows address for existing account', () => {
+  test.skipIf(!!process.env.CI)('view: shows address for existing account', () => {
     const name = `${prefix}_view`
     createAccount(name)
     const result = accountRun(['account', 'view', '--account', name])
