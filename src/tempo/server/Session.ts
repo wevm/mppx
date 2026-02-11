@@ -11,6 +11,7 @@
  * request, use {@link ../stream/Sse} instead.
  */
 import { type Account, type Address, type Hex, parseUnits, type Client as viem_Client } from 'viem'
+import { tempo as tempo_chain } from 'viem/chains'
 import {
   AmountExceedsDepositError,
   BadRequestError,
@@ -24,7 +25,7 @@ import {
 import type { Challenge, Credential } from '../../index.js'
 import type { LooseOmit } from '../../internal/types.js'
 import * as MethodIntent from '../../MethodIntent.js'
-import type * as Client from '../../viem/Client.js'
+import * as Client from '../../viem/Client.js'
 import * as Intents from '../Intents.js'
 import * as defaults from '../internal/defaults.js'
 import * as Recipient from '../internal/recipient.js'
@@ -86,9 +87,12 @@ export function session<const parameters extends session.Parameters>(p?: paramet
 
   const storage = channelStorage(rawStorage)
 
+  const getClient = Client.getResolver({
+    chain: tempo_chain,
+    getClient: parameters.getClient,
+    rpcUrl: defaults.rpcUrl,
+  })
   const [recipient, feePayer] = Recipient.resolve(parameters)
-
-  const getClient = parameters.getClient
 
   type Defaults = session.DeriveDefaults<parameters>
   return MethodIntent.toServer<typeof Intents.session, Defaults>(Intents.session, {
@@ -228,19 +232,14 @@ export declare namespace session {
   >
 
   type Parameters = {
-    /** Storage backend for channel state. */
-    storage?: Storage | undefined
     /** Minimum voucher delta to accept (numeric string, default: "0"). */
     minVoucherDelta?: string | undefined
+    /** Storage backend for channel state. */
+    storage?: Storage | undefined
     /** Testnet mode. */
     testnet?: boolean | undefined
-    /**
-     * Returns a viem Client for the given chain ID. The client **must** have an
-     * `account` attached so the server can sign settlement and close transactions.
-     * Without an account the server silently fails to settle on-chain.
-     */
-    getClient: NonNullable<Client.getResolver.Parameters['getClient']>
   } & Recipient.resolve.Parameters &
+    Client.getResolver.Parameters &
     Defaults
 
   type DeriveDefaults<parameters extends Parameters> = types.DeriveDefaults<

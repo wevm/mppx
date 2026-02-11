@@ -295,7 +295,9 @@ declare namespace IntentFn {
         status: 200
         withReceipt: {
           (): Transport.ReceiptOutputOf<transport>
-          <response>(response: response): response
+          <response extends Transport.ReceiptOutputOf<transport>>(
+            response: response,
+          ): Transport.ReceiptOutputOf<transport>
         }
       }
 }

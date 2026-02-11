@@ -7,7 +7,7 @@ settings:
 overrides:
   mpay: workspace:*
   ox: ^0.12.0
-  viem: latest
+  viem: ^2.45.3
 
 importers:
 
@@ -19,9 +19,6 @@ importers:
       ox:
         specifier: ^0.12.0
         version: 0.12.0(typescript@5.9.3)(zod@4.3.6)
-      viem:
-        specifier: latest
-        version: 2.45.1(typescript@5.9.3)(zod@4.3.6)
       zod:
         specifier: ^4.3.6
         version: 4.3.6
@@ -68,6 +65,9 @@ importers:
       typescript:
         specifier: ~5.9.3
         version: 5.9.3
+      viem:
+        specifier: ^2.45.3
+        version: 2.45.3(typescript@5.9.3)(zod@4.3.6)
       vitest:
         specifier: latest
         version: 4.0.18(@types/node@25.2.2)(tsx@4.21.0)(yaml@2.8.2)
@@ -90,8 +90,8 @@ importers:
         specifier: latest
         version: 5.9.3
       viem:
-        specifier: latest
-        version: 2.45.1(typescript@5.9.3)(zod@4.3.6)
+        specifier: ^2.45.3
+        version: 2.45.3(typescript@5.9.3)(zod@4.3.6)
       vite:
         specifier: latest
         version: 7.3.1(@types/node@25.2.2)(tsx@4.21.0)(yaml@2.8.2)
@@ -114,8 +114,8 @@ importers:
         specifier: latest
         version: 5.9.3
       viem:
-        specifier: latest
-        version: 2.45.2(typescript@5.9.3)(zod@4.3.6)
+        specifier: ^2.45.3
+        version: 2.45.3(typescript@5.9.3)(zod@4.3.6)
       vite:
         specifier: latest
         version: 7.3.1(@types/node@25.2.2)(tsx@4.21.0)(yaml@2.8.2)
@@ -138,8 +138,8 @@ importers:
         specifier: latest
         version: 5.9.3
       viem:
-        specifier: latest
-        version: 2.45.2(typescript@5.9.3)(zod@4.3.6)
+        specifier: ^2.45.3
+        version: 2.45.3(typescript@5.9.3)(zod@4.3.6)
       vite:
         specifier: latest
         version: 7.3.1(@types/node@25.2.2)(tsx@4.21.0)(yaml@2.8.2)
@@ -2162,16 +2162,8 @@ packages:
     resolution: {integrity: sha512-BNGbWLfd0eUPabhkXUVm0j8uuvREyTh5ovRa/dyow/BqAbZJyC+5fU+IzQOzmAKzYqYRAISoRhdQr3eIZ/PXqg==}
     engines: {node: '>= 0.8'}
 
-  viem@2.45.1:
-    resolution: {integrity: sha512-LN6Pp7vSfv50LgwhkfSbIXftAM5J89lP9x8TeDa8QM7o41IxlHrDh0F9X+FfnCWtsz11pEVV5sn+yBUoOHNqYA==}
-    peerDependencies:
-      typescript: '>=5.0.4'
-    peerDependenciesMeta:
-      typescript:
-        optional: true
-
-  viem@2.45.2:
-    resolution: {integrity: sha512-GXPMmj0ukqFNL87sgpsZBy4CjGvsFQk42/EUdsn8dv3ZWtL4ukDXNCM0nME2hU0IcuS29CuUbrwbZN6iWxAipw==}
+  viem@2.45.3:
+    resolution: {integrity: sha512-axOD7rIbGiDHHA1MHKmpqqTz3CMCw7YpE/FVypddQMXL5i364VkNZh9JeEJH17NO484LaZUOMueo35IXyL76Mw==}
     peerDependencies:
       typescript: '>=5.0.4'
     peerDependenciesMeta:
@@ -4388,24 +4380,7 @@ snapshots:
 
   vary@1.1.2: {}
 
-  viem@2.45.1(typescript@5.9.3)(zod@4.3.6):
-    dependencies:
-      '@noble/curves': 1.9.1
-      '@noble/hashes': 1.8.0
-      '@scure/bip32': 1.7.0
-      '@scure/bip39': 1.6.0
-      abitype: 1.2.3(typescript@5.9.3)(zod@4.3.6)
-      isows: 1.0.7(ws@8.18.3)
-      ox: 0.12.0(typescript@5.9.3)(zod@4.3.6)
-      ws: 8.18.3
-    optionalDependencies:
-      typescript: 5.9.3
-    transitivePeerDependencies:
-      - bufferutil
-      - utf-8-validate
-      - zod
-
-  viem@2.45.2(typescript@5.9.3)(zod@4.3.6):
+  viem@2.45.3(typescript@5.9.3)(zod@4.3.6):
     dependencies:
       '@noble/curves': 1.9.1
       '@noble/hashes': 1.8.0

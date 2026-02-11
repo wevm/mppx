@@ -3,16 +3,18 @@ import * as Sse from '../stream/Sse.js'
 import type { Storage } from '../stream/Storage.js'
 import { channelStorage as toChannelStorage } from '../stream/Storage.js'
 
-export type SseTransport = Transport.Transport<Request, Response>
-
-export function sseTransport(config: sseTransport.Config): SseTransport {
+export function sseTransport(config: sseTransport.Config) {
   const { storage: rawStorage, pollIntervalMs } = config
   const storage = toChannelStorage(rawStorage)
   const httpTransport = Transport.http()
 
   let lastContext: Sse.fromRequest.Context | null = null
 
-  return Transport.from<Request, Response>({
+  return Transport.from<
+    Request,
+    Response,
+    Response | AsyncIterable<string> | ((stream: Sse.StreamController) => AsyncIterable<string>)
+  >({
     name: 'sse',
 
     getCredential(request) {
