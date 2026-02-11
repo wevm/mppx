@@ -38,17 +38,21 @@ afterEach(() => {
 function createUpstream(handler: (req: Request) => Response | Promise<Response>) {
   return Http.createServer(async (req, res) => {
     const url = new URL(req.url!, 'http://localhost')
+    const chunks: Buffer[] = []
+    for await (const chunk of req) chunks.push(chunk)
+    const body = chunks.length > 0 ? Buffer.concat(chunks) : undefined
     const request = new Request(url, {
       method: req.method!,
       headers: Object.entries(req.headers).reduce((h, [k, v]) => {
         if (v) h.set(k, Array.isArray(v) ? v.join(', ') : v)
         return h
       }, new Headers()),
+      ...(body !== undefined && { body }),
     })
     const response = await handler(request)
     res.writeHead(response.status, Object.fromEntries(response.headers))
-    const body = await response.text()
-    if (body) res.write(body)
+    const resBody = await response.text()
+    if (resBody) res.write(resBody)
     res.end()
   })
 }
@@ -177,7 +181,7 @@ describe('create', () => {
     expect(await res.json()).toEqual({ key: 'secret' })
   })
 
-  test('behavior: no auth injected for free passthrough', async () => {
+  test('behavior: auth injected for free passthrough', async () => {
     upstream = await createUpstream((req) =>
       Response.json({ auth: req.headers.get('authorization') }),
     )
@@ -193,7 +197,7 @@ describe('create', () => {
     proxyServer = await Http.createServer(proxy.listener)
 
     const res = await fetch(`${proxyServer.url}/api/v1/public`)
-    expect(await res.json()).toEqual({ auth: null })
+    expect(await res.json()).toEqual({ auth: 'Bearer sk-test-123' })
   })
 
   test('behavior: strips incoming authorization from upstream', async () => {
@@ -236,6 +240,33 @@ describe('create', () => {
       headers: { Accept: 'application/json' },
     })
     expect(await res.json()).toEqual({ accept: 'application/json' })
+  })
+
+  test('behavior: forwards request body to upstream', async () => {
+    upstream = await createUpstream(async (req) => {
+      const body = await req.text()
+      return Response.json({ method: req.method, body: JSON.parse(body) })
+    })
+    const proxy = ApiProxy.create({
+      services: [
+        Service.from('api', {
+          baseUrl: upstream.url,
+          routes: { 'POST /v1/generate': true },
+        }),
+      ],
+    })
+    proxyServer = await Http.createServer(proxy.listener)
+
+    const res = await fetch(`${proxyServer.url}/api/v1/generate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: 'gpt-4', prompt: 'hello' }),
+    })
+    expect(res.status).toBe(200)
+    expect(await res.json()).toEqual({
+      method: 'POST',
+      body: { model: 'gpt-4', prompt: 'hello' },
+    })
   })
 
   test('behavior: forwards query params to upstream', async () => {

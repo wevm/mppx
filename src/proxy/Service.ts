@@ -17,9 +17,12 @@ export type Service = {
  *
  * - `IntentHandler` — payment required, calls the handler to issue a 402 challenge or verify payment.
  * - `{ pay, options }` — payment required with per-endpoint config overrides.
- * - `true` — free passthrough, no payment or auth injection.
+ * - `true` — free passthrough, no payment required, rewriteRequest is applied.
  */
-export type Endpoint = IntentHandler | { pay: IntentHandler; options: EndpointOptions } | true
+export type Endpoint =
+  | IntentHandler
+  | { pay: IntentHandler; options: EndpointOptions }
+  | true
 
 /** Map of `"METHOD /pattern"` keys to endpoint definitions. */
 export type EndpointMap<routes extends string = string> = Partial<Record<routes, Endpoint>> &
