@@ -1,16 +1,5 @@
 import * as Service from '../Service.js'
 
-type KnownRoute =
-  | 'POST /v1/charges'
-  | 'POST /v1/customers'
-  | 'GET /v1/customers/:id'
-  | 'POST /v1/payment_intents'
-  | 'GET /v1/payment_intents/:id'
-  | 'POST /v1/subscriptions'
-  | 'GET /v1/subscriptions/:id'
-  | 'POST /v1/invoices'
-  | 'GET /v1/invoices/:id'
-
 export function stripe(config: stripe.Config) {
   return Service.from<stripe.Config>('stripe', {
     baseUrl: config.baseUrl ?? 'https://api.stripe.com',
@@ -24,9 +13,18 @@ export function stripe(config: stripe.Config) {
 }
 
 export declare namespace stripe {
-  export type Config = {
-    routes: Service.EndpointMap<KnownRoute>
+  export type Config = Service.From<{
     apiKey: string
     baseUrl?: string | undefined
-  }
+    routes:
+      | 'POST /v1/charges'
+      | 'POST /v1/customers'
+      | 'GET /v1/customers/:id'
+      | 'POST /v1/payment_intents'
+      | 'GET /v1/payment_intents/:id'
+      | 'POST /v1/subscriptions'
+      | 'GET /v1/subscriptions/:id'
+      | 'POST /v1/invoices'
+      | 'GET /v1/invoices/:id'
+  }>
 }

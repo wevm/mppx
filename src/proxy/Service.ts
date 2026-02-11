@@ -27,6 +27,14 @@ export type Context = {
   upstreamPath: string
 } & EndpointOptions
 
+export type From<
+  options extends {
+    routes: string
+  },
+> = {
+  routes: EndpointMap<options['routes']>
+} & Omit<options, 'routes'>
+
 export function from<options = unknown>(id: string, config: from.Config<options>): Service {
   const rewriteFromConfig = resolveRewriteRequest(config)
   return {

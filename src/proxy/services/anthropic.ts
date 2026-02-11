@@ -1,12 +1,5 @@
 import * as Service from '../Service.js'
 
-type KnownRoute =
-  | 'POST /v1/messages'
-  | 'POST /v1/messages/batches'
-  | 'GET /v1/messages/batches'
-  | 'GET /v1/messages/batches/:batchId'
-  | 'POST /v1/complete'
-
 export function anthropic(config: anthropic.Config) {
   return Service.from<anthropic.Config>('anthropic', {
     baseUrl: config.baseUrl ?? 'https://api.anthropic.com',
@@ -20,9 +13,14 @@ export function anthropic(config: anthropic.Config) {
 }
 
 export declare namespace anthropic {
-  export type Config = {
-    routes: Service.EndpointMap<KnownRoute>
+  export type Config = Service.From<{
     apiKey: string
     baseUrl?: string | undefined
-  }
+    routes:
+      | 'POST /v1/messages'
+      | 'POST /v1/messages/batches'
+      | 'GET /v1/messages/batches'
+      | 'GET /v1/messages/batches/:batchId'
+      | 'POST /v1/complete'
+  }>
 }
