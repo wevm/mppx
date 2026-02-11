@@ -485,6 +485,50 @@ describe('stream', () => {
       expect(ch!.deposit).toBe(20000000n)
     })
 
+    test('topUp receipt preserves spent and units from prior charges', async () => {
+      const { channelId, serializedTransaction } = await createSignedOpenTransaction(10000000n)
+      const server = createServer()
+      await openServerChannel(server, channelId, serializedTransaction)
+
+      await charge(storage, channelId, 500000n)
+      await charge(storage, channelId, 300000n)
+
+      const chBefore = await storage.getChannel(channelId)
+      expect(chBefore!.spent).toBe(800000n)
+      expect(chBefore!.units).toBe(2)
+
+      const { serializedTransaction: topUpTx } = await signTopUpChannel({
+        escrow: escrowContract,
+        payer,
+        channelId,
+        token: currency,
+        amount: 5000000n,
+      })
+
+      const receipt = (await server.verify({
+        credential: {
+          challenge: makeChallenge({ id: 'challenge-topup', channelId }),
+          payload: {
+            action: 'topUp' as const,
+            type: 'transaction' as const,
+            channelId,
+            transaction: topUpTx,
+            additionalDeposit: '5000000',
+          },
+        },
+        request: makeRequest(),
+      })) as StreamReceipt
+
+      expect(receipt.status).toBe('success')
+      expect(receipt.spent).toBe('800000')
+      expect(receipt.units).toBe(2)
+
+      const chAfter = await storage.getChannel(channelId)
+      expect(chAfter!.spent).toBe(800000n)
+      expect(chAfter!.units).toBe(2)
+      expect(chAfter!.deposit).toBe(15000000n)
+    })
+
     test('rejects topUp on unknown channel', async () => {
       const { channelId } = await createSignedOpenTransaction(10000000n)
       const server = createServer()

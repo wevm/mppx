@@ -574,8 +574,8 @@ async function handleTopUp(
     challengeId: challenge.id,
     channelId: payload.channelId,
     acceptedCumulative: updated?.highestVoucherAmount ?? channel.highestVoucherAmount,
-    spent: updated?.spent ?? 0n,
-    units: updated?.units ?? 0,
+    spent: updated?.spent ?? channel.spent,
+    units: updated?.units ?? channel.units,
   })
 }
 
