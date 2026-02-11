@@ -39,6 +39,34 @@ describe('parse', () => {
   test('error: returns null for empty pathname', () => {
     expect(Route.parse(new URL('http://localhost'))).toBeNull()
   })
+
+  test('behavior: strips basePath before parsing', () => {
+    expect(
+      Route.parse(new URL('http://localhost/api/proxy/openai/v1/models'), '/api/proxy'),
+    ).toMatchInlineSnapshot(`
+      {
+        "serviceId": "openai",
+        "upstreamPath": "/v1/models",
+      }
+    `)
+  })
+
+  test('behavior: strips basePath with trailing slash', () => {
+    expect(
+      Route.parse(new URL('http://localhost/api/proxy/stripe/v1/charges'), '/api/proxy/'),
+    ).toMatchInlineSnapshot(`
+      {
+        "serviceId": "stripe",
+        "upstreamPath": "/v1/charges",
+      }
+    `)
+  })
+
+  test('error: returns null when basePath does not match', () => {
+    expect(
+      Route.parse(new URL('http://localhost/other/openai/v1/models'), '/api/proxy'),
+    ).toBeNull()
+  })
 })
 
 describe('match', () => {

@@ -7,11 +7,40 @@ import * as Headers from './internal/Headers.js'
 import * as Route from './internal/Route.js'
 import * as Service from './Service.js'
 
+/** A paid API proxy that gates upstream services behind the mpay 402 protocol. */
 export type Proxy = {
+  /** Fetch API handler. Works with Bun, Deno, Next.js, Hono, Elysia, SvelteKit, etc. */
   fetch: (request: Request) => Promise<Response>
+  /** Node.js request listener. Works with Express, Fastify, `http.createServer`, etc. */
   listener: (req: http.IncomingMessage, res: http.ServerResponse) => void
 }
 
+/**
+ * Creates a paid API proxy.
+ *
+ * Routes incoming requests to upstream services, injects credentials,
+ * and requires payment via the mpay 402 protocol for non-free endpoints.
+ *
+ * @example
+ * ```ts
+ * import { Proxy, openai } from 'mpay/proxy'
+ * import { Mpay, tempo } from 'mpay/server'
+ *
+ * const mpay = Mpay.create({ methods: [tempo()] })
+ *
+ * const proxy = Proxy.create({
+ *   services: [
+ *     openai({
+ *       apiKey: 'sk-...',
+ *       routes: {
+ *         'POST /v1/chat/completions': mpay.charge({ amount: '0.05' }),
+ *         'GET /v1/models': true,
+ *       },
+ *     }),
+ *   ],
+ * })
+ * ```
+ */
 export function create(config: create.Config): Proxy {
   const fetchImpl = config.fetch ?? globalThis.fetch
 
@@ -28,7 +57,7 @@ export function create(config: create.Config): Proxy {
 
   async function handle(request: globalThis.Request): Promise<Response> {
     const url = new URL(request.url)
-    const parsed = Route.parse(url)
+    const parsed = Route.parse(url, config.basePath)
     if (!parsed) return new Response('Not Found', { status: 404 })
 
     const { serviceId, upstreamPath } = parsed
@@ -69,7 +98,11 @@ export function create(config: create.Config): Proxy {
 
 export declare namespace create {
   export type Config = {
+    /** Base path prefix to strip before routing (e.g. `'/api/proxy'`). */
+    basePath?: string | undefined
+    /** Custom `fetch` implementation. Defaults to `globalThis.fetch`. */
     fetch?: typeof globalThis.fetch | undefined
+    /** Services to proxy. Each service is mounted at `/{serviceId}/`. */
     services: Service.Service[]
   }
 }

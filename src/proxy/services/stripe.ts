@@ -1,5 +1,22 @@
 import * as Service from '../Service.js'
 
+/**
+ * Creates a Stripe service definition.
+ *
+ * Injects `Authorization: Basic` header (API key as username) for upstream authentication.
+ * Per-endpoint `apiKey` overrides are supported via `options`.
+ *
+ * @example
+ * ```ts
+ * stripe({
+ *   apiKey: 'sk-...',
+ *   routes: {
+ *     'POST /v1/charges': mpay.charge({ amount: '1' }),
+ *     'GET /v1/customers/:id': true,
+ *   },
+ * })
+ * ```
+ */
 export function stripe(config: stripe.Config) {
   return Service.from<stripe.Config>('stripe', {
     baseUrl: config.baseUrl ?? 'https://api.stripe.com',
@@ -14,7 +31,9 @@ export function stripe(config: stripe.Config) {
 
 export declare namespace stripe {
   export type Config = Service.From<{
+    /** Stripe API key. Used as Basic auth username. */
     apiKey: string
+    /** Base URL override. Defaults to `'https://api.stripe.com'`. */
     baseUrl?: string | undefined
     routes:
       | 'POST /v1/charges'

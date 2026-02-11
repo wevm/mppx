@@ -1,7 +1,17 @@
 const httpMethods = new Set(['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'HEAD', 'OPTIONS'])
 
-export function parse(url: URL): { serviceId: string; upstreamPath: string } | null {
-  const segments = url.pathname.split('/').filter(Boolean)
+export function parse(
+  url: URL,
+  basePath?: string,
+): { serviceId: string; upstreamPath: string } | null {
+  let pathname = url.pathname
+  if (basePath) {
+    const base = basePath.replace(/\/+$/, '')
+    if (!pathname.startsWith(base)) return null
+    pathname = pathname.slice(base.length)
+  }
+
+  const segments = pathname.split('/').filter(Boolean)
   const serviceId = segments[0]
   if (!serviceId) return null
 
