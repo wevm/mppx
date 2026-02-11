@@ -1,19 +1,5 @@
 import * as Service from '../Service.js'
 
-type KnownRoute =
-  | 'POST /v1/chat/completions'
-  | 'POST /v1/completions'
-  | 'POST /v1/embeddings'
-  | 'POST /v1/images/generations'
-  | 'POST /v1/images/edits'
-  | 'POST /v1/images/variations'
-  | 'POST /v1/audio/transcriptions'
-  | 'POST /v1/audio/translations'
-  | 'POST /v1/audio/speech'
-  | 'POST /v1/moderations'
-  | 'GET /v1/models'
-  | 'GET /v1/models/:model'
-
 export function openai(config: openai.Config) {
   return Service.from<openai.Config>('openai', {
     baseUrl: config.baseUrl ?? 'https://api.openai.com',
