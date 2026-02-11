@@ -20,7 +20,8 @@
         "noNonNullAssertion": "off"
       },
       "suspicious": {
-        "noExplicitAny": "off"
+        "noExplicitAny": "off",
+        "noShadowRestrictedNames": "off"
       },
       "complexity": {
         "noBannedTypes": "off"
