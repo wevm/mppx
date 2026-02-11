@@ -1,4 +1,4 @@
-import type { Address, Hex } from 'viem'
+import { type Address, createClient, type Hex } from 'viem'
 import { Addresses } from 'viem/tempo'
 import { beforeAll, beforeEach, describe, expect, test } from 'vitest'
 import {
@@ -7,7 +7,7 @@ import {
   signTopUpChannel,
   topUpChannel,
 } from '~test/tempo/stream.js'
-import { accounts, asset, chain, client, fundAccount } from '~test/tempo/viem.js'
+import { accounts, asset, chain, client, fundAccount, http } from '~test/tempo/viem.js'
 import {
   ChannelClosedError,
   ChannelNotFoundError,
@@ -680,7 +680,7 @@ describe('stream', () => {
       ).rejects.toThrow(ChannelNotFoundError)
     })
 
-    test('close submits on-chain when client provided', async () => {
+    test('close submits on-chain and returns txHash', async () => {
       const { channelId, serializedTransaction } = await createSignedOpenTransaction(10000000n)
       const server = createServer({ getClient: () => client })
       await openServerChannel(server, channelId, serializedTransaction)
@@ -700,6 +700,32 @@ describe('stream', () => {
 
       expect(receipt.status).toBe('success')
       expect((receipt as StreamReceipt).txHash).toMatch(/^0x/)
+
+      const ch = await storage.getChannel(channelId)
+      expect(ch!.finalized).toBe(true)
+    })
+
+    test('close throws when client has no account', async () => {
+      const { channelId, serializedTransaction } = await createSignedOpenTransaction(10000000n)
+      const server = createServer({
+        getClient: () => createClient({ chain, transport: http() }),
+      })
+      await openServerChannel(server, channelId, serializedTransaction)
+
+      await expect(
+        server.verify({
+          credential: {
+            challenge: makeChallenge({ id: 'challenge-2', channelId }),
+            payload: {
+              action: 'close' as const,
+              channelId,
+              cumulativeAmount: '1000000',
+              signature: await signTestVoucher(channelId, 1000000n),
+            },
+          },
+          request: makeRequest(),
+        }),
+      ).rejects.toThrow('Cannot close channel: client has no account')
     })
   })
 

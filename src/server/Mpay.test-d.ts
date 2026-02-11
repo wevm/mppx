@@ -1,4 +1,5 @@
 import { tempo } from 'mpay/server'
+import { createClient, http } from 'viem'
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts'
 import { describe, expectTypeOf, test } from 'vitest'
 import * as Intent from '../Intent.js'
@@ -7,6 +8,7 @@ import * as z from '../zod.js'
 import * as Mpay from './Mpay.js'
 
 const account = privateKeyToAccount(generatePrivateKey())
+const getClient = () => createClient({ account, transport: http() })
 
 const fooCharge = MethodIntent.fromIntent(Intent.charge, {
   method: 'test',
@@ -194,7 +196,7 @@ describe('Mpay', () => {
   describe('defaults', () => {
     test('defaulted fields are optional in intent options', () => {
       const handler = Mpay.create({
-        methods: [tempo({ currency: '0x1234', recipient: '0xabc' })],
+        methods: [tempo({ currency: '0x1234', recipient: '0xabc', getClient })],
         realm: 'api.example.com',
         secretKey: 'secret',
       })
@@ -216,7 +218,7 @@ describe('Mpay', () => {
 
     test('non-defaulted fields remain required', () => {
       const handler = Mpay.create({
-        methods: [tempo({ currency: '0x1234' })],
+        methods: [tempo({ currency: '0x1234', getClient })],
         realm: 'api.example.com',
         secretKey: 'secret',
       })
@@ -231,7 +233,7 @@ describe('Mpay', () => {
 
     test('no defaults means all fields required', () => {
       const handler = Mpay.create({
-        methods: [tempo({})],
+        methods: [tempo({ getClient })],
         realm: 'api.example.com',
         secretKey: 'secret',
       })
@@ -247,7 +249,7 @@ describe('Mpay', () => {
 
     test('type: defaulted fields are optional in options type', () => {
       const handler = Mpay.create({
-        methods: [tempo({ currency: '0x1234', recipient: '0xabc' })],
+        methods: [tempo({ currency: '0x1234', recipient: '0xabc', getClient })],
         realm: 'api.example.com',
         secretKey: 'secret',
       })
@@ -293,6 +295,38 @@ describe('Mpay', () => {
       handler.charge({
         amount: '1000',
         decimals: 6,
+      })
+    })
+  })
+
+  describe('stream getClient', () => {
+    test('tempo.stream requires getClient', () => {
+      Mpay.create({
+        methods: [
+          tempo.stream({
+            currency: '0x1234',
+            recipient: '0xabc',
+            getClient,
+          }),
+        ],
+        realm: 'api.example.com',
+        secretKey: 'secret',
+      })
+    })
+
+    test('combined tempo() requires getClient', () => {
+      Mpay.create({
+        methods: [tempo({ currency: '0x1234', recipient: '0xabc', getClient })],
+        realm: 'api.example.com',
+        secretKey: 'secret',
+      })
+    })
+
+    test('tempo.charge does not require getClient', () => {
+      Mpay.create({
+        methods: [tempo.charge({ currency: '0x1234', recipient: '0xabc' })],
+        realm: 'api.example.com',
+        secretKey: 'secret',
       })
     })
   })

@@ -1,13 +1,63 @@
+// SSE Streaming Payment Server — Example
+
+//
+// This example demonstrates the server side of a metered Server-Sent Events
+// (SSE) streaming session using mpay's "Payment" HTTP Authentication Scheme.
+//
+// The server charges per-token during an SSE stream. The full flow on a
+// single endpoint (`/api/chat`) handles four distinct request phases:
+//
+//   GET  (no auth)     → 402 Payment Required + WWW-Authenticate challenge
+//   POST (open cred)   → Verify on-chain channel open, return 200
+//   GET  (with voucher)→ Begin SSE stream, charging per token
+//   POST (voucher)     → Receive incremental voucher updates mid-stream
+//
+// The server never stores payment state in memory variables — it uses
+// `tempo.memoryStorage()` which is shared between the stream method and the
+// SSE transport so that mid-stream voucher POSTs can update channel state
+// while the SSE generator is running.
+//
+
+// `Mpay` is the server-side payment handler. `tempo` provides Tempo-specific
+// payment method implementations (stream channels, SSE transport, storage).
 import { Mpay, tempo } from 'mpay/server'
 import { createClient, http } from 'viem'
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts'
+// `tempoModerato` is Tempo's testnet chain.
 import { tempoModerato } from 'viem/chains'
+// `Actions` provides Tempo-specific viem actions (faucet, token ops, etc.)
 import { Actions } from 'viem/tempo'
 
+// Server Account Setup
+
+//
+// Generate a fresh keypair for this demo server. In production, you'd use a
+// persistent key stored securely. This account is the "payee" (recipient) in
+// the payment channel — funds flow from the client's channel deposit to this
+// address when the channel is settled on-chain.
 const account = privateKeyToAccount(generatePrivateKey())
+
+// pathUSD — TIP-20 token on Tempo testnet (Moderato).
+// Address `0x20c0...` is the well-known testnet pathUSD contract.
+// All payment amounts in this example are denominated in pathUSD (6 decimals).
 const currency = '0x20c0000000000000000000000000000000000000' as const
+
+// Price charged per streamed token. The server emits a `402-need-voucher`
+// SSE event for each token, and the client must respond with an updated
+// cumulative voucher covering this amount before the next token is sent.
 const pricePerToken = '0.000075'
 
+// Viem Client
+
+//
+// The server needs a viem client for on-chain operations:
+//   1. Broadcasting the channel-open transaction (submitted by the client
+//      but relayed through the server)
+//   2. Settling the channel on-chain when the session ends (calling the
+//      escrow contract's settle function with the highest voucher)
+//
+// `getClient: () => client` is passed to `tempo.stream()` below so the
+// payment method can access the chain when needed.
 const client = createClient({
   account,
   chain: tempoModerato,
@@ -15,23 +65,126 @@ const client = createClient({
   transport: http(),
 })
 
+// Shared Channel Storage
+
+//
+// `tempo.memoryStorage()` creates an in-memory store for payment channel state.
+// This is the critical piece that connects the SSE stream to mid-stream
+// voucher updates.
+//
+// Here's why shared storage matters:
+//
+// During an SSE stream, two things happen concurrently:
+//   1. The SSE generator yields tokens and calls `stream.charge()` per token.
+//      `charge()` atomically deducts from the channel's available balance in
+//      storage. If the balance is insufficient, it emits a `402-need-voucher`
+//      event and polls storage waiting for the balance to increase.
+//
+//   2. The client receives the `402-need-voucher` event and sends a POST
+//      with an updated cumulative voucher. This POST hits the same endpoint,
+//      is intercepted by the SSE transport, and updates the channel's
+//      `highestVoucherAmount` in storage.
+//
+// Because both the SSE generator (step 1) and the voucher POST handler
+// (step 2) share the same `storage` instance, the generator's poll
+// immediately sees the new balance and continues streaming. The storage
+// also supports `waitForUpdate()` for event-driven wakeups instead of
+// polling, which `memoryStorage` implements via a simple waiter set.
+//
+// In production, you'd replace this with a durable storage backend
+// (e.g., Cloudflare Durable Objects, a database with transactions) to
+// survive server restarts and support horizontal scaling.
 const storage = tempo.memoryStorage()
 
+// Mpay Server Instance
+
+//
+// `Mpay.create()` assembles the payment handler with two key components:
+//
+//   `methods` — An array of payment method handlers. Here we use
+//   `tempo.stream()` which implements the Tempo streaming payment channel
+//   protocol. It handles:
+//     - Generating 402 challenges with the correct payment parameters
+//     - Verifying "open" credentials (checking the on-chain channel exists)
+//     - Verifying "voucher" credentials (validating EIP-712 signatures)
+//     - Verifying "close" credentials and settling on-chain
+//
+//   `transport` — The transport layer that adapts mpay to a specific
+//   delivery mechanism. `tempo.sseTransport({ storage })` wires up the
+//   SSE-specific behavior:
+//     - When the response is an async generator, it wraps it in an SSE
+//       ReadableStream with proper headers (text/event-stream, etc.)
+//     - It handles mid-stream voucher POSTs by detecting them as "managed"
+//       requests and processing the voucher update without invoking the
+//       application's stream generator
+//     - It extracts channelId, challengeId, and tickCost from the
+//       Authorization header to configure the SSE metering loop
+//
 const mpay = Mpay.create({
   methods: [
     tempo.stream({
+      // The TIP-20 token to accept payment in.
       currency,
+      // Provides chain access for broadcasting txs and settling channels.
       getClient: () => client,
+      // The server's address — where settled funds are transferred to.
       recipient: account.address,
+      // Shared storage so mid-stream voucher POSTs update the same state
+      // that `stream.charge()` reads from.
       storage,
+      // Enable testnet mode (relaxes certain validation constraints).
       testnet: true,
     }),
   ],
+  // The SSE transport layer. Must share the same `storage` instance as the
+  // stream method above, so that voucher updates from POST requests are
+  // visible to the SSE generator's charge loop.
+  transport: tempo.sseTransport({ storage }),
 })
 
+// Request Handler
+
+//
+// This is a framework-agnostic request handler (works with any runtime that
+// supports the standard Request/Response API — Bun, Deno, Cloudflare Workers,
+// or Node with a compatibility layer).
+//
+// The key insight is that a SINGLE endpoint (`/api/chat`) handles ALL four
+// phases of the payment flow. The server distinguishes phases by HTTP method
+// and the presence/type of the Authorization header:
+//
+//   Phase 1 — GET, no Authorization header:
+//     First contact. The client wants to access the resource but hasn't paid.
+//     `mpay.stream()` returns `{ status: 402 }` with a challenge containing
+//     the payment terms (method: "tempo", intent: "stream", amount per token,
+//     currency, recipient, etc.). The server returns this as a 402 response
+//     with `WWW-Authenticate: Payment <challenge>`.
+//
+//   Phase 2 — POST, Authorization contains "open" credential:
+//     The client has opened an on-chain payment channel and is sending the
+//     signed transaction + initial voucher. `mpay.stream()` verifies the
+//     credential, broadcasts the channel-open tx, and returns a managed
+//     result. `result.managed` is true — the transport handled everything.
+//     We call `result.withReceipt()` to return the 200 response.
+//
+//   Phase 3 — GET, Authorization contains "voucher" credential:
+//     The channel is open. The client is requesting the SSE stream with a
+//     valid voucher. `result.managed` is false and `result.status` is not
+//     402, so we fall through to `result.withReceipt(generator)` which
+//     starts the SSE stream.
+//
+//   Phase 4 — POST, Authorization contains "voucher" credential (mid-stream):
+//     While the SSE stream from Phase 3 is still running, the client sends
+//     incremental voucher updates (triggered by `402-need-voucher` events).
+//     These POSTs are intercepted by the SSE transport and update the
+//     channel's `highestVoucherAmount` in shared storage. `result.managed`
+//     is true, so we return the managed response without touching the
+//     stream generator.
+//
 export async function handler(request: Request): Promise<Response | null> {
   const url = new URL(request.url)
 
+  // Simple health check endpoint (no payment required).
   if (url.pathname === '/api/health') return Response.json({ status: 'ok' })
 
   if (url.pathname === '/api/chat') {
@@ -39,45 +192,107 @@ export async function handler(request: Request): Promise<Response | null> {
 
     console.log(`[server] ${request.method} /api/chat`)
 
-    // This handler receives multiple request types during a single session:
+    // `mpay.stream()` creates a streaming payment handler configured with
+    // the per-token price and unit type. It returns a function that processes
+    // the incoming request through the payment flow.
     //
-    //   GET  (no auth)   → returns 402 with a payment challenge
-    //   POST (open cred) → verifies the on-chain channel open, returns 200
-    //   GET  (voucher)   → begins the SSE stream below
-    //   POST (voucher)   → receives incremental voucher updates mid-stream
-    //                      (one per token, triggered by `stream.charge()`)
-
+    // `amount` — The price per charge unit (per token in this case).
+    //   This becomes the `tickCost` in the SSE metering loop.
+    //
+    // `unitType` — A label for what's being charged ("token"). Appears in
+    //   receipts so the client knows what the units represent.
+    //
+    // The returned function accepts a Request and returns a result object
+    // describing what phase we're in and how to respond.
     const result = await mpay.stream({
       amount: pricePerToken,
       unitType: 'token',
     })(request)
 
+    // Phase 1: No valid credential → 402 Payment Required.
+    // `result.challenge` is a Response object with the WWW-Authenticate header
+    // containing the base64url-encoded challenge parameters.
     if (result.status === 402) return result.challenge as globalThis.Response
-    if (result.response) return result.response as globalThis.Response
 
-    const ctx = tempo.Sse.fromRequest(request)
-    return tempo.Sse.toResponse(
-      tempo.Sse.serve({
-        ...ctx,
-        storage,
-        generate: async function* (stream) {
-          for await (const token of generateTokens(prompt)) {
-            try {
-              await stream.charge()
-            } catch (e) {
-              console.error('[server] charge error:', e)
-              throw e
-            }
-            yield token
-          }
-        },
-      }),
-    )
+    // Phase 2 & 4: The request was fully handled by the transport layer.
+    // `result.managed` is `true` when the SSE transport recognized this as
+    // either:
+    //   - A channel-open POST (Phase 2): credential verified, channel state
+    //     initialized in storage, 200 returned.
+    //   - A mid-stream voucher POST (Phase 4): voucher verified, channel's
+    //     `highestVoucherAmount` updated in storage, 200 returned.
+    //
+    // In both cases, the application doesn't need to produce any content —
+    // just return the managed response (which may include a Payment-Receipt
+    // header).
+    if (result.managed) return result.withReceipt() as globalThis.Response
+
+    // Phase 3: Channel is open, start the SSE stream.
+    // `result.withReceipt(generator)` wraps an async generator in an SSE
+    // response. The generator receives a `stream` controller with a
+    // `charge()` method.
+    //
+    // The generator pattern: yield content tokens, call `stream.charge()`
+    // before each one. `charge()` does the following:
+    //
+    //   1. Atomically deducts `tickCost` (the per-token price) from the
+    //      channel's available balance in shared storage.
+    //
+    //   2. If sufficient balance: returns immediately, and we yield the
+    //      next token as an SSE `event: message`.
+    //
+    //   3. If insufficient balance: emits a `event: 402-need-voucher` SSE
+    //      event with the required cumulative amount, then blocks (polls
+    //      or waits on storage updates) until the client sends a new
+    //      voucher via POST. Once the client's POST updates storage,
+    //      `charge()` retries the deduction and succeeds.
+    //
+    // After all tokens are yielded, the transport automatically appends a
+    // final `event: payment-receipt` SSE event with the settlement details.
+    //
+    return result.withReceipt(async function* (stream) {
+      for await (const token of generateTokens(prompt)) {
+        try {
+          // `stream.charge()` — Charge the client for one token.
+          //
+          // This is the core of the pay-per-token model. Each call:
+          //   - Deducts `pricePerToken` from the channel's available balance
+          //   - If the client's voucher doesn't cover this charge, a
+          //     `402-need-voucher` SSE event is emitted and the call blocks
+          //     until a new voucher arrives via POST
+          //   - Only returns once payment is confirmed, ensuring the server
+          //     never gives away content for free
+          await stream.charge()
+        } catch (e) {
+          // Charge errors occur if the client disconnects mid-stream,
+          // the abort signal fires, or the channel is in an invalid state.
+          console.error('[server] charge error:', e)
+          throw e
+        }
+        // Yield the token — this becomes an `event: message\ndata: <token>`
+        // in the SSE stream. The client's async iterator surfaces this as
+        // the next value in `for await (const token of tokens)`.
+        yield token
+      }
+    }) as globalThis.Response
   }
 
+  // Return null for unrecognized paths (framework can handle 404).
   return null
 }
 
+// Mock Token Generator
+
+//
+// Simulates an LLM-style token stream. In a real application, this would be
+// replaced with an actual LLM API call (e.g., OpenAI, Anthropic) that yields
+// tokens as they're generated.
+//
+// Each yielded string is one "token" — the unit of billing. The server
+// charges `pricePerToken` pathUSD for each one via `stream.charge()`.
+//
+// The random delay (20-80ms) simulates realistic LLM token generation
+// latency, which varies based on model size, load, and token complexity.
 async function* generateTokens(prompt: string): AsyncGenerator<string> {
   const words = [
     'The',
@@ -138,6 +353,13 @@ async function* generateTokens(prompt: string): AsyncGenerator<string> {
   }
 }
 
+// Server Startup
+
+//
+// Log the server's recipient address (where settled funds go) and fund it
+// via the testnet faucet. The server account needs a small amount of native
+// tokens (for gas) to settle channels on-chain, though in production the
+// `feePayer` option can be used to have the protocol cover gas.
 console.log(`Server recipient: ${account.address}`)
 await Actions.faucet.fundSync(client, { account, timeout: 30_000 })
 console.log('Server account funded')

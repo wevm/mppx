@@ -11,7 +11,6 @@
  * request, use {@link ../stream/Sse} instead.
  */
 import { type Account, type Address, type Hex, parseUnits, type Client as viem_Client } from 'viem'
-import { tempo as tempo_chain } from 'viem/chains'
 import {
   AmountExceedsDepositError,
   BadRequestError,
@@ -25,7 +24,7 @@ import {
 import type { Challenge, Credential } from '../../index.js'
 import type { LooseOmit } from '../../internal/types.js'
 import * as MethodIntent from '../../MethodIntent.js'
-import * as Client from '../../viem/Client.js'
+import type * as Client from '../../viem/Client.js'
 import * as Intents from '../Intents.js'
 import * as defaults from '../internal/defaults.js'
 import * as Recipient from '../internal/recipient.js'
@@ -87,11 +86,7 @@ export function stream<const parameters extends stream.Parameters>(p?: parameter
 
   const [recipient, feePayer] = Recipient.resolve(parameters)
 
-  const getClient = Client.getResolver({
-    chain: tempo_chain,
-    getClient: parameters.getClient,
-    rpcUrl: defaults.rpcUrl,
-  })
+  const getClient = parameters.getClient
 
   type Defaults = stream.DeriveDefaults<parameters>
   return MethodIntent.toServer<typeof Intents.stream, Defaults>(Intents.stream, {
@@ -226,8 +221,13 @@ export declare namespace stream {
     minVoucherDelta?: string | undefined
     /** Testnet mode. */
     testnet?: boolean | undefined
-  } & Client.getResolver.Parameters &
-    Recipient.resolve.Parameters &
+    /**
+     * Returns a viem Client for the given chain ID. The client **must** have an
+     * `account` attached so the server can sign settlement and close transactions.
+     * Without an account the server silently fails to settle on-chain.
+     */
+    getClient: NonNullable<Client.getResolver.Parameters['getClient']>
+  } & Recipient.resolve.Parameters &
     Defaults
 
   type DeriveDefaults<parameters extends Parameters> = types.DeriveDefaults<
@@ -674,10 +674,13 @@ async function handleClose(
     throw new InvalidSignatureError({ reason: 'invalid voucher signature' })
   }
 
-  let txHash: Hex | undefined
-  if (client.account) {
-    txHash = await closeOnChain(client, methodDetails.escrowContract, voucher)
+  if (!client.account) {
+    throw new Error(
+      'Cannot close channel: client has no account. Provide a `getClient` that returns an account-bearing client.',
+    )
   }
+
+  const txHash = await closeOnChain(client, methodDetails.escrowContract, voucher)
 
   const updated = await storage.updateChannel(payload.channelId, (current) => {
     if (!current) return null

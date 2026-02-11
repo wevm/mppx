@@ -72,6 +72,7 @@ export function create<
       intent: mi,
       realm,
       request: mi.request as never,
+      respond: mi.respond as never,
       secretKey,
       transport,
       verify: mi.verify as never,
@@ -106,7 +107,7 @@ function createIntentFn<
 ): createIntentFn.ReturnType<intent, transport, defaults>
 // biome-ignore lint/correctness/noUnusedVariables: _
 function createIntentFn(parameters: createIntentFn.Parameters): createIntentFn.ReturnType {
-  const { defaults, intent, realm, secretKey, transport, verify } = parameters
+  const { defaults, intent, realm, respond, secretKey, transport, verify } = parameters
 
   return (options) =>
     async (input): Promise<IntentFn.Response> => {
@@ -210,12 +211,19 @@ function createIntentFn(parameters: createIntentFn.Parameters): createIntentFn.R
         return { challenge: response, status: 402 }
       }
 
+      const managementResponse = respond
+        ? await respond({ credential, input, receipt: receiptData, request } as never)
+        : undefined
+
       return {
         status: 200,
-        withReceipt<response>(response: response) {
+        managed: managementResponse !== undefined,
+        withReceipt<response>(response?: response) {
+          const target = response ?? managementResponse
+          if (!target) throw new Error('withReceipt() requires a response argument')
           return transport.respondReceipt({
             receipt: receiptData,
-            response: response as never,
+            response: target as never,
             challengeId: credential.challenge.id,
           }) as response
         },
@@ -233,6 +241,7 @@ declare namespace createIntentFn {
     intent: intent
     realm: string
     request?: MethodIntent.RequestFn<intent>
+    respond?: MethodIntent.RespondFn<intent>
     secretKey: string
     transport: transport
     verify: MethodIntent.VerifyFn<intent>
@@ -274,7 +283,11 @@ declare namespace IntentFn {
       }
     | {
         status: 200
-        withReceipt: <response>(response: response) => response
+        managed: boolean
+        withReceipt: {
+          (): Transport.ReceiptOutputOf<transport>
+          <response>(response: response): response
+        }
       }
 }
 

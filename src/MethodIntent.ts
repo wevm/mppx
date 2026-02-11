@@ -265,8 +265,9 @@ export type VerifyFn<intent extends AnyMethodIntent> = (parameters: {
  * Optional respond function for a server-side method intent.
  *
  * Called after `verify` succeeds. If it returns a `Response`, the library
- * treats the request as fully handled (e.g. channel open/close) and sets
- * `result.response` so the server handler can return it directly.
+ * treats the request as fully handled (e.g. channel open/close) and
+ * `result.managed` will be `true`; calling `result.withReceipt()` with no
+ * args returns the management response with the receipt header attached.
  * If it returns `undefined`, the server handler is expected to serve content.
  *
  * **HTTP-only.** The `input` parameter is a `Request` object; MCP transports
