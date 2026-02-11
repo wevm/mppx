@@ -1,7 +1,7 @@
 import type * as Challenge from '../Challenge.js'
 import type * as MethodIntent from '../MethodIntent.js'
 import type * as z from '../zod.js'
-import * as Fetch from './Fetch.js'
+import * as Fetch from './internal/Fetch.js'
 import * as Transport from './Transport.js'
 
 export type Methods = readonly (MethodIntent.AnyClient | readonly MethodIntent.AnyClient[])[]

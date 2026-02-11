@@ -73,8 +73,6 @@ export function stream<const parameters extends stream.Parameters>(p?: parameter
     unitType,
   } = parameters
 
-  if (!storage) throw new Error('storage is required')
-
   const [recipient, feePayer] = Recipient.resolve(parameters)
 
   const getClient = Client.getResolver({

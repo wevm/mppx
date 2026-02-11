@@ -1,6 +1,6 @@
-import * as Challenge from '../Challenge.js'
-import type * as MethodIntent from '../MethodIntent.js'
-import type * as z from '../zod.js'
+import * as Challenge from '../../Challenge.js'
+import type * as MethodIntent from '../../MethodIntent.js'
+import type * as z from '../../zod.js'
 
 let originalFetch: typeof globalThis.fetch | undefined
 

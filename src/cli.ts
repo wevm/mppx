@@ -708,7 +708,7 @@ function createKeychain(account = 'default') {
         try {
           await execCommand('security', ['delete-generic-password', '-s', service, '-a', account])
         } catch {}
-        await execCommand('security', ['add-generic-password', '-s', service, '-a', account, '-w', value, '-T', ''])
+        await execCommand('security', ['add-generic-password', '-s', service, '-a', account, '-w', value])
         return
       }
       if (platform === 'linux') {

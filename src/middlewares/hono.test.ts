@@ -9,7 +9,7 @@ import { Addresses } from 'viem/tempo'
 import { beforeAll, beforeEach, describe, expect, test } from 'vitest'
 import { deployEscrow } from '~test/tempo/stream.js'
 import { accounts, asset, client, fundAccount } from '~test/tempo/viem.js'
-import * as Fetch from '../client/Fetch.js'
+import * as Fetch from '../client/internal/Fetch.js'
 import type { ChannelState, ChannelStorage, SessionState } from '../tempo/stream/Storage.js'
 
 function createServer(app: Hono) {
