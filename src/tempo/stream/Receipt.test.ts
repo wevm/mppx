@@ -15,7 +15,7 @@ describe('Receipt', () => {
     })
 
     expect(receipt.method).toBe('tempo')
-    expect(receipt.intent).toBe('stream')
+    expect(receipt.intent).toBe('session')
     expect(receipt.status).toBe('success')
     expect(receipt.reference).toBe(channelId)
     expect(receipt.challengeId).toBe('test-challenge-id')

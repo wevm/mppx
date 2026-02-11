@@ -1,4 +1,4 @@
-import type { Address, Hex } from 'viem'
+import { type Address, createClient, type Hex } from 'viem'
 import { Addresses } from 'viem/tempo'
 import { beforeAll, beforeEach, describe, expect, test } from 'vitest'
 import {
@@ -7,18 +7,18 @@ import {
   signTopUpChannel,
   topUpChannel,
 } from '~test/tempo/stream.js'
-import { accounts, asset, chain, client, fundAccount } from '~test/tempo/viem.js'
+import { accounts, asset, chain, client, fundAccount, http } from '~test/tempo/viem.js'
 import {
   ChannelClosedError,
-  ChannelConflictError,
   ChannelNotFoundError,
   InsufficientBalanceError,
   InvalidSignatureError,
 } from '../../Errors.js'
-import type { ChannelState, ChannelStorage, SessionState } from '../stream/Storage.js'
+import type { ChannelState, ChannelStorage, Storage } from '../stream/Storage.js'
+import { channelStorage, memoryStorage } from '../stream/Storage.js'
 import type { StreamReceipt } from '../stream/Types.js'
 import { signVoucher } from '../stream/Voucher.js'
-import { charge, settle, stream } from './Stream.js'
+import { charge, session, settle } from './Session.js'
 
 const payer = accounts[2]
 const recipient = accounts[0].address
@@ -33,23 +33,25 @@ beforeAll(async () => {
   await fundAccount({ address: payer.address, token: currency })
 })
 
-describe('stream', () => {
+describe('session', () => {
+  let rawStorage: Storage
   let storage: ChannelStorage
 
   beforeEach(() => {
-    storage = createMemoryStorage()
+    rawStorage = memoryStorage()
+    storage = channelStorage(rawStorage)
   })
 
-  function createServer(overrides: Partial<stream.Parameters> = {}) {
-    return stream({
-      storage,
+  function createServer(overrides: Partial<session.Parameters> = {}) {
+    return session({
+      storage: rawStorage,
       getClient: () => client,
       recipient,
       currency,
       escrowContract,
       chainId: chain.id,
       ...overrides,
-    } as stream.Parameters)
+    } as session.Parameters)
   }
 
   describe('open', () => {
@@ -169,10 +171,6 @@ describe('stream', () => {
         request: makeRequest(),
       })
 
-      await storage.updateChannel(channelId, (ch) =>
-        ch ? { ...ch, activeSessionId: undefined } : null,
-      )
-
       const ch1 = await storage.getChannel(channelId)
       expect(ch1!.highestVoucherAmount).toBe(1000000n)
 
@@ -215,10 +213,6 @@ describe('stream', () => {
         request: makeRequest(),
       })
 
-      await storage.updateChannel(channelId, (ch) =>
-        ch ? { ...ch, activeSessionId: undefined } : null,
-      )
-
       const receipt = await server.verify({
         credential: {
           challenge: makeChallenge({ id: 'open-2', channelId }),
@@ -259,7 +253,7 @@ describe('stream', () => {
       })
 
       await storage.updateChannel(channelId, (ch) =>
-        ch ? { ...ch, settledOnChain: 5000000n, activeSessionId: undefined } : null,
+        ch ? { ...ch, settledOnChain: 5000000n } : null,
       )
 
       await expect(
@@ -296,82 +290,6 @@ describe('stream', () => {
             transaction: serializedTransaction,
             cumulativeAmount: '1000000',
             signature: await signTestVoucher(channelId, 1000000n),
-          },
-        },
-        request: makeRequest(),
-      })
-
-      expect(receipt.status).toBe('success')
-    })
-
-    test('rejects concurrent stream on same channel', async () => {
-      const { channelId, serializedTransaction } = await createSignedOpenTransaction(10000000n)
-      const server = createServer()
-
-      await server.verify({
-        credential: {
-          challenge: makeChallenge({ id: 'c1', channelId }),
-          payload: {
-            action: 'open' as const,
-            type: 'transaction' as const,
-            channelId,
-            transaction: serializedTransaction,
-            cumulativeAmount: '1000000',
-            signature: await signTestVoucher(channelId, 1000000n),
-          },
-        },
-        request: makeRequest(),
-      })
-
-      await expect(
-        server.verify({
-          credential: {
-            challenge: makeChallenge({ id: 'c2', channelId }),
-            payload: {
-              action: 'open' as const,
-              type: 'transaction' as const,
-              channelId,
-              transaction: serializedTransaction,
-              cumulativeAmount: '2000000',
-              signature: await signTestVoucher(channelId, 2000000n),
-            },
-          },
-          request: makeRequest(),
-        }),
-      ).rejects.toThrow(ChannelConflictError)
-    })
-
-    test('allows reopen when previous session is stale', async () => {
-      const { channelId, serializedTransaction } = await createSignedOpenTransaction(10000000n)
-      const server = createServer()
-
-      await server.verify({
-        credential: {
-          challenge: makeChallenge({ id: 'c1', channelId }),
-          payload: {
-            action: 'open' as const,
-            type: 'transaction' as const,
-            channelId,
-            transaction: serializedTransaction,
-            cumulativeAmount: '1000000',
-            signature: await signTestVoucher(channelId, 1000000n),
-          },
-        },
-        request: makeRequest(),
-      })
-
-      await storage.updateSession('c1', () => null)
-
-      const receipt = await server.verify({
-        credential: {
-          challenge: makeChallenge({ id: 'c2', channelId }),
-          payload: {
-            action: 'open' as const,
-            type: 'transaction' as const,
-            channelId,
-            transaction: serializedTransaction,
-            cumulativeAmount: '2000000',
-            signature: await signTestVoucher(channelId, 2000000n),
           },
         },
         request: makeRequest(),
@@ -567,6 +485,50 @@ describe('stream', () => {
       expect(ch!.deposit).toBe(20000000n)
     })
 
+    test('topUp receipt preserves spent and units from prior charges', async () => {
+      const { channelId, serializedTransaction } = await createSignedOpenTransaction(10000000n)
+      const server = createServer()
+      await openServerChannel(server, channelId, serializedTransaction)
+
+      await charge(storage, channelId, 500000n)
+      await charge(storage, channelId, 300000n)
+
+      const chBefore = await storage.getChannel(channelId)
+      expect(chBefore!.spent).toBe(800000n)
+      expect(chBefore!.units).toBe(2)
+
+      const { serializedTransaction: topUpTx } = await signTopUpChannel({
+        escrow: escrowContract,
+        payer,
+        channelId,
+        token: currency,
+        amount: 5000000n,
+      })
+
+      const receipt = (await server.verify({
+        credential: {
+          challenge: makeChallenge({ id: 'challenge-topup', channelId }),
+          payload: {
+            action: 'topUp' as const,
+            type: 'transaction' as const,
+            channelId,
+            transaction: topUpTx,
+            additionalDeposit: '5000000',
+          },
+        },
+        request: makeRequest(),
+      })) as StreamReceipt
+
+      expect(receipt.status).toBe('success')
+      expect(receipt.spent).toBe('800000')
+      expect(receipt.units).toBe(2)
+
+      const chAfter = await storage.getChannel(channelId)
+      expect(chAfter!.spent).toBe(800000n)
+      expect(chAfter!.units).toBe(2)
+      expect(chAfter!.deposit).toBe(15000000n)
+    })
+
     test('rejects topUp on unknown channel', async () => {
       const { channelId } = await createSignedOpenTransaction(10000000n)
       const server = createServer()
@@ -631,13 +593,9 @@ describe('stream', () => {
 
       expect(receipt.status).toBe('success')
 
-      const session = await storage.getSession('challenge-2')
-      expect(session).toBeNull()
-
       const ch = await storage.getChannel(channelId)
       expect(ch).not.toBeNull()
       expect(ch!.highestVoucherAmount).toBe(1000000n)
-      expect(ch!.activeSessionId).toBeUndefined()
     })
 
     test('accepts close with voucher higher than previous highest', async () => {
@@ -768,7 +726,7 @@ describe('stream', () => {
       ).rejects.toThrow(ChannelNotFoundError)
     })
 
-    test('close submits on-chain when client provided', async () => {
+    test('close submits on-chain and returns txHash', async () => {
       const { channelId, serializedTransaction } = await createSignedOpenTransaction(10000000n)
       const server = createServer({ getClient: () => client })
       await openServerChannel(server, channelId, serializedTransaction)
@@ -788,6 +746,32 @@ describe('stream', () => {
 
       expect(receipt.status).toBe('success')
       expect((receipt as StreamReceipt).txHash).toMatch(/^0x/)
+
+      const ch = await storage.getChannel(channelId)
+      expect(ch!.finalized).toBe(true)
+    })
+
+    test('close throws when client has no account', async () => {
+      const { channelId, serializedTransaction } = await createSignedOpenTransaction(10000000n)
+      const server = createServer({
+        getClient: () => createClient({ chain, transport: http() }),
+      })
+      await openServerChannel(server, channelId, serializedTransaction)
+
+      await expect(
+        server.verify({
+          credential: {
+            challenge: makeChallenge({ id: 'challenge-2', channelId }),
+            payload: {
+              action: 'close' as const,
+              channelId,
+              cumulativeAmount: '1000000',
+              signature: await signTestVoucher(channelId, 1000000n),
+            },
+          },
+          request: makeRequest(),
+        }),
+      ).rejects.toThrow('Cannot close channel: client has no account')
     })
   })
 
@@ -883,13 +867,13 @@ describe('stream', () => {
         request: makeRequest(),
       })
 
-      const session = await charge(storage, 'c1', 1000000n)
-      expect(session.spent).toBe(1000000n)
-      expect(session.units).toBe(1)
+      const result = await charge(storage, channelId, 1000000n)
+      expect(result.spent).toBe(1000000n)
+      expect(result.units).toBe(1)
 
-      const session2 = await charge(storage, 'c1', 2000000n)
-      expect(session2.spent).toBe(3000000n)
-      expect(session2.units).toBe(2)
+      const result2 = await charge(storage, channelId, 2000000n)
+      expect(result2.spent).toBe(3000000n)
+      expect(result2.units).toBe(2)
     })
 
     test('rejects overdraft with InsufficientBalanceError', async () => {
@@ -911,11 +895,13 @@ describe('stream', () => {
         request: makeRequest(),
       })
 
-      await expect(charge(storage, 'c1', 2000000n)).rejects.toThrow(InsufficientBalanceError)
+      await expect(charge(storage, channelId, 2000000n)).rejects.toThrow(InsufficientBalanceError)
     })
 
-    test('rejects charge on missing session', async () => {
-      await expect(charge(storage, 'nonexistent', 100n)).rejects.toThrow(ChannelClosedError)
+    test('rejects charge on missing channel', async () => {
+      const fakeChannelId =
+        '0x0000000000000000000000000000000000000000000000000000000000000000' as Hex
+      await expect(charge(storage, fakeChannelId, 100n)).rejects.toThrow(ChannelClosedError)
     })
   })
 
@@ -1006,6 +992,96 @@ describe('stream', () => {
       }
     })
   })
+
+  describe('respond', () => {
+    test('returns 204 for POST with open action', () => {
+      const server = createServer()
+      const result = server.respond!({
+        credential: {
+          challenge: makeChallenge({
+            channelId: '0x0000000000000000000000000000000000000000000000000000000000000001' as Hex,
+          }),
+          payload: { action: 'open' },
+        },
+        input: new Request('http://localhost', { method: 'POST' }),
+      } as any)
+      expect(result).toBeInstanceOf(Response)
+      expect((result as Response).status).toBe(204)
+    })
+
+    test('returns 204 for POST with topUp action', () => {
+      const server = createServer()
+      const result = server.respond!({
+        credential: {
+          challenge: makeChallenge({
+            channelId: '0x0000000000000000000000000000000000000000000000000000000000000001' as Hex,
+          }),
+          payload: { action: 'topUp' },
+        },
+        input: new Request('http://localhost', { method: 'POST' }),
+      } as any)
+      expect(result).toBeInstanceOf(Response)
+      expect((result as Response).status).toBe(204)
+    })
+
+    test('returns 204 for POST with close action', () => {
+      const server = createServer()
+      const result = server.respond!({
+        credential: {
+          challenge: makeChallenge({
+            channelId: '0x0000000000000000000000000000000000000000000000000000000000000001' as Hex,
+          }),
+          payload: { action: 'close' },
+        },
+        input: new Request('http://localhost', { method: 'POST' }),
+      } as any)
+      expect(result).toBeInstanceOf(Response)
+      expect((result as Response).status).toBe(204)
+    })
+
+    test('returns 204 for POST with voucher action', () => {
+      const server = createServer()
+      const result = server.respond!({
+        credential: {
+          challenge: makeChallenge({
+            channelId: '0x0000000000000000000000000000000000000000000000000000000000000001' as Hex,
+          }),
+          payload: { action: 'voucher' },
+        },
+        input: new Request('http://localhost', { method: 'POST' }),
+      } as any)
+      expect(result).toBeInstanceOf(Response)
+      expect((result as Response).status).toBe(204)
+    })
+
+    test('returns undefined for GET with open action (auto-mode)', () => {
+      const server = createServer()
+      const result = server.respond!({
+        credential: {
+          challenge: makeChallenge({
+            channelId: '0x0000000000000000000000000000000000000000000000000000000000000001' as Hex,
+          }),
+          payload: { action: 'open' },
+        },
+        input: new Request('http://localhost', { method: 'GET' }),
+      } as any)
+      expect(result).toBeUndefined()
+    })
+
+    test('returns undefined for GET with voucher action (auto-mode)', () => {
+      const server = createServer()
+      const result = server.respond!({
+        credential: {
+          challenge: makeChallenge({
+            channelId: '0x0000000000000000000000000000000000000000000000000000000000000001' as Hex,
+          }),
+          payload: { action: 'voucher' },
+        },
+        input: new Request('http://localhost', { method: 'GET' }),
+      } as any)
+      expect(result).toBeUndefined()
+    })
+  })
 })
 
 describe('monotonicity and TOCTOU (unit tests)', () => {
@@ -1026,39 +1102,25 @@ describe('monotonicity and TOCTOU (unit tests)', () => {
         cumulativeAmount: 5000000n,
         signature: '0xdeadbeef' as Hex,
       },
+      spent: 0n,
+      units: 0,
       finalized: false,
       createdAt: new Date(),
       ...overrides,
     }))
   }
 
-  function seedSession(
-    storage: ChannelStorage,
-    challengeId: string,
-    overrides: Partial<SessionState> = {},
-  ) {
-    return storage.updateSession(challengeId, () => ({
-      challengeId,
-      channelId: testChannelId,
-      acceptedCumulative: 5000000n,
-      spent: 1000000n,
-      units: 3,
-      createdAt: new Date(),
-      ...overrides,
-    }))
-  }
+  test('charge does not allow highestVoucherAmount to decrease', async () => {
+    const storage = channelStorage(memoryStorage())
+    await seedChannel(storage, { highestVoucherAmount: 5000000n, spent: 0n, units: 0 })
 
-  test('charge does not allow acceptedCumulative to decrease', async () => {
-    const storage = createMemoryStorage()
-    await seedSession(storage, 's1', { acceptedCumulative: 5000000n, spent: 0n, units: 0 })
-
-    const session = await charge(storage, 's1', 1000000n)
-    expect(session.spent).toBe(1000000n)
-    expect(session.acceptedCumulative).toBe(5000000n)
+    const channel = await charge(storage, testChannelId, 1000000n)
+    expect(channel.spent).toBe(1000000n)
+    expect(channel.highestVoucherAmount).toBe(5000000n)
   })
 
   test('settle uses max(settledOnChain) and does not regress', async () => {
-    const storage = createMemoryStorage()
+    const storage = channelStorage(memoryStorage())
     await seedChannel(storage, { settledOnChain: 3000000n })
 
     await storage.updateChannel(testChannelId, (current) => {
@@ -1074,7 +1136,7 @@ describe('monotonicity and TOCTOU (unit tests)', () => {
   })
 
   test('settle updates settledOnChain when higher', async () => {
-    const storage = createMemoryStorage()
+    const storage = channelStorage(memoryStorage())
     await seedChannel(storage, { settledOnChain: 1000000n })
 
     await storage.updateChannel(testChannelId, (current) => {
@@ -1089,54 +1151,20 @@ describe('monotonicity and TOCTOU (unit tests)', () => {
     expect(ch!.settledOnChain).toBe(5000000n)
   })
 
-  test('acceptVoucher is monotonic — lower value does not decrease acceptedCumulative', async () => {
-    const storage = createMemoryStorage()
-    await seedSession(storage, 's1', { acceptedCumulative: 5000000n, spent: 2000000n, units: 3 })
+  test('acceptVoucher is monotonic — lower value does not decrease highestVoucherAmount', async () => {
+    const storage = channelStorage(memoryStorage())
+    await seedChannel(storage, { highestVoucherAmount: 5000000n, spent: 2000000n, units: 3 })
 
-    const session = await storage.updateSession('s1', (existing) => {
+    const channel = await storage.updateChannel(testChannelId, (existing) => {
       if (!existing) return null
-      const nextAccepted =
-        3000000n > existing.acceptedCumulative ? 3000000n : existing.acceptedCumulative
-      return { ...existing, acceptedCumulative: nextAccepted }
+      const nextHighest =
+        3000000n > existing.highestVoucherAmount ? 3000000n : existing.highestVoucherAmount
+      return { ...existing, highestVoucherAmount: nextHighest }
     })
 
-    expect(session!.acceptedCumulative).toBe(5000000n)
-    expect(session!.spent).toBe(2000000n)
-    expect(session!.units).toBe(3)
-  })
-
-  test('session cleanup on conflict — pre-created session is removed', async () => {
-    const storage = createMemoryStorage()
-    await seedChannel(storage, { activeSessionId: 'existing-session' })
-    await seedSession(storage, 'existing-session')
-
-    await storage.updateSession('new-session', () => ({
-      challengeId: 'new-session',
-      channelId: testChannelId,
-      acceptedCumulative: 2000000n,
-      spent: 0n,
-      units: 0,
-      createdAt: new Date(),
-    }))
-
-    try {
-      await storage.updateChannel(testChannelId, (existing) => {
-        if (existing?.activeSessionId && existing.activeSessionId !== 'new-session') {
-          throw new ChannelConflictError({ reason: 'another stream is active on this channel' })
-        }
-        return { ...existing!, activeSessionId: 'new-session' }
-      })
-      expect.unreachable()
-    } catch (e) {
-      await storage.updateSession('new-session', () => null)
-      expect(e).toBeInstanceOf(ChannelConflictError)
-    }
-
-    const cleaned = await storage.getSession('new-session')
-    expect(cleaned).toBeNull()
-
-    const original = await storage.getSession('existing-session')
-    expect(original).not.toBeNull()
+    expect(channel!.highestVoucherAmount).toBe(5000000n)
+    expect(channel!.spent).toBe(2000000n)
+    expect(channel!.units).toBe(3)
   })
 })
 
@@ -1145,40 +1173,12 @@ function nextSalt(): Hex {
   return `0x${saltCounter.toString(16).padStart(64, '0')}` as Hex
 }
 
-function createMemoryStorage(): ChannelStorage {
-  const channels = new Map<string, ChannelState>()
-  const sessions = new Map<string, SessionState>()
-
-  return {
-    async getChannel(channelId) {
-      return channels.get(channelId) ?? null
-    },
-    async getSession(challengeId) {
-      return sessions.get(challengeId) ?? null
-    },
-    async updateChannel(channelId, fn) {
-      const current = channels.get(channelId) ?? null
-      const result = fn(current)
-      if (result) channels.set(channelId, result)
-      else channels.delete(channelId)
-      return result
-    },
-    async updateSession(challengeId, fn) {
-      const current = sessions.get(challengeId) ?? null
-      const result = fn(current)
-      if (result) sessions.set(challengeId, result)
-      else sessions.delete(challengeId)
-      return result
-    },
-  }
-}
-
 function makeChallenge(opts: { id?: string; channelId: Hex }) {
   return {
     id: opts.id ?? 'challenge-1',
     realm: 'test.example.com',
     method: 'tempo' as const,
-    intent: 'stream' as const,
+    intent: 'session' as const,
     request: {
       amount: '1000000',
       unitType: 'token',

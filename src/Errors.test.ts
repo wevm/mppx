@@ -2,9 +2,7 @@ import { describe, expect, test } from 'vitest'
 import {
   AmountExceedsDepositError,
   BadRequestError,
-  ChallengeNotFoundError,
   ChannelClosedError,
-  ChannelConflictError,
   ChannelNotFoundError,
   DeltaTooSmallError,
   InsufficientBalanceError,
@@ -272,32 +270,6 @@ describe('InsufficientBalanceError', () => {
   })
 })
 
-describe('ChannelConflictError', () => {
-  test('default', () => {
-    expect(errorSnapshot(new ChannelConflictError())).toMatchInlineSnapshot(`
-      {
-        "message": "Channel conflict.",
-        "name": "ChannelConflictError",
-        "status": 409,
-        "type": "https://paymentauth.org/problems/stream/channel-conflict",
-      }
-    `)
-  })
-
-  test('with reason', () => {
-    expect(
-      errorSnapshot(new ChannelConflictError({ reason: 'another stream is active' })),
-    ).toMatchInlineSnapshot(`
-        {
-          "message": "Channel conflict: another stream is active.",
-          "name": "ChannelConflictError",
-          "status": 409,
-          "type": "https://paymentauth.org/problems/stream/channel-conflict",
-        }
-      `)
-  })
-})
-
 describe('InvalidSignatureError', () => {
   test('default', () => {
     expect(errorSnapshot(new InvalidSignatureError())).toMatchInlineSnapshot(`
@@ -371,19 +343,6 @@ describe('ChannelNotFoundError', () => {
         "name": "ChannelNotFoundError",
         "status": 410,
         "type": "https://paymentauth.org/problems/stream/channel-not-found",
-      }
-    `)
-  })
-})
-
-describe('ChallengeNotFoundError', () => {
-  test('default', () => {
-    expect(errorSnapshot(new ChallengeNotFoundError())).toMatchInlineSnapshot(`
-      {
-        "message": "Challenge ID unknown or expired.",
-        "name": "ChallengeNotFoundError",
-        "status": 410,
-        "type": "https://paymentauth.org/problems/stream/challenge-not-found",
       }
     `)
   })

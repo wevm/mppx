@@ -64,13 +64,13 @@ export const charge = from({
 })
 
 /**
- * Stream intent for pay-as-you-go streaming payments.
+ * Session intent for pay-as-you-go streaming payments.
  *
  * Uses cumulative vouchers over a payment channel for
  * incremental micropayments without per-request transactions.
  */
-export const stream = from({
-  name: 'stream',
+export const session = from({
+  name: 'session',
   schema: {
     request: z.pipe(
       z.object({

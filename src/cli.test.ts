@@ -9,7 +9,7 @@ import { accounts, asset, client } from '~test/tempo/viem.js'
 import * as Mpay_server from './server/Mpay.js'
 import { toNodeListener } from './server/Mpay.js'
 import { charge as charge_server } from './tempo/server/Charge.js'
-import { stream as stream_server } from './tempo/server/Stream.js'
+import { session as session_server } from './tempo/server/Session.js'
 
 const cliPath = path.resolve(import.meta.dirname, 'cli.ts')
 const cwd = path.resolve(import.meta.dirname, '..')
@@ -80,33 +80,6 @@ afterAll(() => {
     run(['account', 'delete', '--account', testAccountName], { input: 'y\n' })
   } catch {}
 })
-
-function createMemoryStorage() {
-  const channels = new Map<string, any>()
-  const sessions = new Map<string, any>()
-  return {
-    async getChannel(channelId: string) {
-      return channels.get(channelId) ?? null
-    },
-    async getSession(challengeId: string) {
-      return sessions.get(challengeId) ?? null
-    },
-    async updateChannel(channelId: string, fn: (current: any) => any) {
-      const current = channels.get(channelId) ?? null
-      const result = fn(current)
-      if (result) channels.set(channelId, result)
-      else channels.delete(channelId)
-      return result
-    },
-    async updateSession(challengeId: string, fn: (current: any) => any) {
-      const current = sessions.get(challengeId) ?? null
-      const result = fn(current)
-      if (result) sessions.set(challengeId, result)
-      else sessions.delete(challengeId)
-      return result
-    },
-  }
-}
 
 test('mpay --help', () => {
   const stdout = run(['--help'])
@@ -301,12 +274,10 @@ describe('mpay [url]', () => {
 
   test('streams SSE tokens to stdout', { timeout: 120_000 }, async () => {
     const escrow = await deployEscrow()
-    const storage = createMemoryStorage()
 
     const server = Mpay_server.create({
       methods: [
-        stream_server({
-          storage,
+        session_server({
           getClient: () => client,
           recipient: accounts[0].address,
           currency: asset,
@@ -321,7 +292,7 @@ describe('mpay [url]', () => {
 
     const httpServer = await Http.createServer(async (req, res) => {
       const result = await toNodeListener(
-        server.stream({
+        server.session({
           amount: '0.001',
           unitType: 'token',
         }),
@@ -356,7 +327,7 @@ describe('mpay [url]', () => {
         { input: '' },
       )
       expect(stdout.trim()).toBe('Hello world!')
-      expect(stderr).toContain('stream')
+      expect(stderr).toContain('session')
     } finally {
       httpServer.close()
     }

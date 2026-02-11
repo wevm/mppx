@@ -2,7 +2,7 @@ import { Challenge, Credential, Mcp, Receipt } from 'mpay'
 import { Transport } from 'mpay/server'
 import { MethodIntents as Intents } from 'mpay/tempo'
 import { describe, expect, test } from 'vitest'
-import { BadRequestError, ChannelClosedError, ChannelConflictError } from '../Errors.js'
+import { BadRequestError, ChannelClosedError } from '../Errors.js'
 
 const realm = 'api.example.com'
 const secretKey = 'test-secret-key'
@@ -113,19 +113,6 @@ describe('http', () => {
       const body = await response.json()
       expect(body.type).toBe('https://tempoxyz.github.io/payment-auth-spec/problems/bad-request')
       expect(body.status).toBe(400)
-    })
-
-    test('ChannelConflictError returns 409', async () => {
-      const transport = Transport.http()
-      const request = new Request('https://example.com')
-      const error = new ChannelConflictError({ reason: 'another stream active' })
-
-      const response = await transport.respondChallenge({ challenge, input: request, error })
-
-      expect(response.status).toBe(409)
-      const body = await response.json()
-      expect(body.type).toBe('https://paymentauth.org/problems/stream/channel-conflict')
-      expect(body.status).toBe(409)
     })
 
     test('ChannelClosedError returns 410', async () => {

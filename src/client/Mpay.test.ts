@@ -24,7 +24,7 @@ describe('Mpay.create', () => {
     expect(mpay.methods[0]?.method).toBe('tempo')
     expect(mpay.methods[0]?.name).toBe('charge')
     expect(mpay.methods[1]?.method).toBe('tempo')
-    expect(mpay.methods[1]?.name).toBe('stream')
+    expect(mpay.methods[1]?.name).toBe('session')
     expect(mpay.transport.name).toBe('http')
     expect(typeof mpay.createCredential).toBe('function')
     expect(typeof mpay.fetch).toBe('function')
@@ -127,7 +127,7 @@ describe('createCredential', () => {
     })
 
     await expect(mpay.createCredential(response)).rejects.toThrow(
-      'No method intent found for "unknown.charge". Available: tempo.charge, tempo.stream',
+      'No method intent found for "unknown.charge". Available: tempo.charge, tempo.session',
     )
   })
 

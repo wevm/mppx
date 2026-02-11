@@ -155,7 +155,7 @@ cli
         const request = challenge.request
 
         const deposit = (() => {
-          if (challenge.intent !== 'stream') return undefined
+          if (challenge.intent !== 'session') return undefined
           const suggestedDeposit = (request as Record<string, unknown>).suggestedDeposit as
             | string
             | undefined
@@ -257,7 +257,7 @@ cli
 
         const intentLabel = challenge.intent ?? 'payment'
         const confirmMessage = (() => {
-          if (challenge.intent === 'stream' && deposit)
+          if (challenge.intent === 'session' && deposit)
             return `Proceed with stream? (deposit: ${deposit} ${currencySymbol})`
           const amount = challenge.request.amount as string | undefined
           if (amount && /^\d+$/.test(amount))
@@ -271,7 +271,7 @@ cli
         }
         const credential = await mpay.createCredential(challengeResponse)
 
-        if (challenge.intent === 'stream') {
+        if (challenge.intent === 'session') {
           try {
             const parsed = Credential.deserialize<StreamCredentialPayload>(credential)
             const { payload } = parsed
@@ -294,7 +294,7 @@ cli
             if (payload.action === 'open' && deposit)
               streamEntries.push(['deposit', `${deposit} ${currencySymbol}`])
             log('')
-            log(bold('Stream'))
+            log(bold('Session'))
             printEntries(streamEntries, padEnd)
             if (options.verbose && 'transaction' in payload) {
               log('')

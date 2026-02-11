@@ -118,9 +118,9 @@ describe('charge', () => {
   })
 })
 
-describe('stream', () => {
+describe('session', () => {
   test('behavior: converts amount to base units', () => {
-    const result = Intent.stream.schema.request.parse({
+    const result = Intent.session.schema.request.parse({
       amount: '0.000025',
       unitType: 'llm_token',
       currency: '0x20c0000000000000000000000000000000000001',
@@ -134,7 +134,7 @@ describe('stream', () => {
   })
 
   test('behavior: converts suggestedDeposit to base units', () => {
-    const result = Intent.stream.schema.request.parse({
+    const result = Intent.session.schema.request.parse({
       amount: '0.000025',
       unitType: 'llm_token',
       currency: '0x20c0000000000000000000000000000000000001',
@@ -147,7 +147,7 @@ describe('stream', () => {
   })
 
   test('behavior: works without suggestedDeposit', () => {
-    const result = Intent.stream.schema.request.parse({
+    const result = Intent.session.schema.request.parse({
       amount: '1',
       unitType: 'request',
       currency: '0x20c0000000000000000000000000000000000001',
@@ -159,7 +159,7 @@ describe('stream', () => {
 
   test('error: rejects missing decimals', () => {
     expect(() =>
-      Intent.stream.schema.request.parse({
+      Intent.session.schema.request.parse({
         amount: '25',
         unitType: 'llm_token',
         currency: '0x20c0000000000000000000000000000000000001',
@@ -169,7 +169,7 @@ describe('stream', () => {
 
   test('error: rejects invalid amount', () => {
     expect(() =>
-      Intent.stream.schema.request.parse({
+      Intent.session.schema.request.parse({
         amount: 'abc',
         unitType: 'llm_token',
         currency: '0x20c0000000000000000000000000000000000001',

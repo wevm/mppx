@@ -34,12 +34,12 @@ export const charge = MethodIntent.fromIntent(Intent.charge, {
 })
 
 /**
- * Tempo stream intent for pay-as-you-go streaming payments.
+ * Tempo session intent for pay-as-you-go streaming payments.
  *
  * Uses cumulative vouchers over a payment channel. Credential payloads
  * are a discriminated union on `action`: open, topUp, voucher, close.
  */
-export const stream = MethodIntent.fromIntent(Intent.stream, {
+export const session = MethodIntent.fromIntent(Intent.session, {
   method: 'tempo',
   schema: {
     credential: {

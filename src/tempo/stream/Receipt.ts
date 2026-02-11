@@ -15,7 +15,7 @@ export function createStreamReceipt(params: {
 }): StreamReceipt {
   return {
     method: 'tempo',
-    intent: 'stream',
+    intent: 'session',
     status: 'success',
     timestamp: new Date().toISOString(),
     reference: params.channelId,

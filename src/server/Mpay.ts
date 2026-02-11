@@ -73,6 +73,7 @@ export function create<
       intent: mi,
       realm,
       request: mi.request as never,
+      respond: mi.respond as never,
       secretKey,
       transport,
       verify: mi.verify as never,
@@ -107,7 +108,7 @@ function createIntentFn<
 ): createIntentFn.ReturnType<intent, transport, defaults>
 // biome-ignore lint/correctness/noUnusedVariables: _
 function createIntentFn(parameters: createIntentFn.Parameters): createIntentFn.ReturnType {
-  const { defaults, intent, realm, secretKey, transport, verify } = parameters
+  const { defaults, intent, realm, respond, secretKey, transport, verify } = parameters
 
   return (options) =>
     async (input): Promise<IntentFn.Response> => {
@@ -211,9 +212,26 @@ function createIntentFn(parameters: createIntentFn.Parameters): createIntentFn.R
         return { challenge: response, status: 402 }
       }
 
+      // If the method's `respond` hook returns a Response, it means this
+      // request is a management action (e.g. channel open, voucher POST)
+      // and the user's route handler should NOT run. `withReceipt()` will
+      // return the management response directly. If undefined, `withReceipt()`
+      // expects the caller to pass the user handler's response instead.
+      const managementResponse = respond
+        ? await respond({ credential, input, receipt: receiptData, request } as never)
+        : undefined
+
       return {
         status: 200,
-        withReceipt<response>(response: response) {
+        withReceipt<response>(response?: response) {
+          if (managementResponse) {
+            return transport.respondReceipt({
+              receipt: receiptData,
+              response: managementResponse as never,
+              challengeId: credential.challenge.id,
+            }) as response
+          }
+          if (!response) throw new Error('withReceipt() requires a response argument')
           return transport.respondReceipt({
             receipt: receiptData,
             response: response as never,
@@ -234,6 +252,7 @@ declare namespace createIntentFn {
     intent: intent
     realm: string
     request?: MethodIntent.RequestFn<intent>
+    respond?: MethodIntent.RespondFn<intent>
     secretKey: string
     transport: transport
     verify: MethodIntent.VerifyFn<intent>
@@ -275,7 +294,12 @@ declare namespace IntentFn {
       }
     | {
         status: 200
-        withReceipt: <response>(response: response) => response
+        withReceipt: {
+          (): Transport.ReceiptOutputOf<transport>
+          <response extends Transport.ReceiptOutputOf<transport>>(
+            response: response,
+          ): Transport.ReceiptOutputOf<transport>
+        }
       }
 }
 

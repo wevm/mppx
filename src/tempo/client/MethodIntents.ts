@@ -1,8 +1,9 @@
 import { charge as charge_ } from './Charge.js'
-import { stream as stream_ } from './Stream.js'
+import { session as sessionIntent_ } from './Session.js'
+import { sessionManager as session_ } from './SessionManager.js'
 
 /**
- * Creates both Tempo `charge` and `stream` client method intents from shared parameters.
+ * Creates both Tempo `charge` and `session` client method intents from shared parameters.
  *
  * @example
  * ```ts
@@ -14,14 +15,14 @@ import { stream as stream_ } from './Stream.js'
  * ```
  */
 export function tempo(parameters: tempo.Parameters = {}) {
-  return [tempo.charge(parameters), tempo.stream(parameters)] as const
+  return [charge_(parameters), sessionIntent_(parameters)] as const
 }
 
 export namespace tempo {
-  export type Parameters = charge_.Parameters & stream_.Parameters
+  export type Parameters = charge_.Parameters & sessionIntent_.Parameters
 
   /** Creates a Tempo `charge` client method intent for one-time TIP-20 token transfers. */
   export const charge = charge_
-  /** Creates a Tempo `stream` client method intent for streaming TIP-20 token payments. */
-  export const stream = stream_
+  /** Creates a client-side streaming session for managing payment channels. */
+  export const session = session_
 }

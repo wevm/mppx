@@ -307,47 +307,6 @@ export declare namespace ChannelNotFoundError {
 }
 
 /**
- * Challenge ID is unknown or expired (stream-specific).
- */
-export class ChallengeNotFoundError extends PaymentError {
-  override readonly name = 'ChallengeNotFoundError'
-  override readonly status = 410
-  readonly type = 'https://paymentauth.org/problems/stream/challenge-not-found'
-
-  constructor(options: ChallengeNotFoundError.Options = {}) {
-    const { reason } = options
-    super(reason ? `Challenge not found: ${reason}.` : 'Challenge ID unknown or expired.')
-  }
-}
-
-export declare namespace ChallengeNotFoundError {
-  type Options = {
-    reason?: string
-  }
-}
-
-/**
- * Conflict with existing channel state (e.g., concurrent stream).
- */
-export class ChannelConflictError extends PaymentError {
-  override readonly name = 'ChannelConflictError'
-  override readonly status = 409
-  readonly type = 'https://paymentauth.org/problems/stream/channel-conflict'
-
-  constructor(options: ChannelConflictError.Options = {}) {
-    const { reason } = options
-    super(reason ? `Channel conflict: ${reason}.` : 'Channel conflict.')
-  }
-}
-
-export declare namespace ChannelConflictError {
-  type Options = {
-    /** Reason for the conflict. */
-    reason?: string
-  }
-}
-
-/**
  * Channel is closed or finalized.
  */
 export class ChannelClosedError extends PaymentError {

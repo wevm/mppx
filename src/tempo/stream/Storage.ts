@@ -2,13 +2,55 @@ import type { Address, Hex } from 'viem'
 import type { SignedVoucher } from './Types.js'
 
 /**
- * Long-lived state for an on-chain payment channel.
+ * Storage interface for channel state persistence.
  *
- * Tracks the channel's identity, on-chain balance, and the highest voucher
- * the server has accepted. A channel is created when a payer opens an escrow
- * on-chain and persists until the channel is finalized (closed/settled).
+ * Implementations store {@link ChannelState} objects directly — no manual
+ * serialization is required. Backends that need serialization (e.g.,
+ * localStorage, Cloudflare KV) should handle it internally.
+ */
+export interface Storage {
+  get(key: string): Promise<ChannelState | null>
+  set(key: string, value: ChannelState): Promise<void>
+  delete(key: string): Promise<void>
+
+  /**
+   * Atomic read-modify-write for a key.
+   *
+   * The callback receives the current value (or `null` if absent) and
+   * returns the next value (or `null` to delete). Implementations must
+   * guarantee that no concurrent mutation occurs between reading `current`
+   * and writing the return value.
+   *
+   * When implemented, {@link channelStorage} delegates all state mutations
+   * to this method, providing true atomicity across concurrent requests.
+   *
+   * When absent, {@link channelStorage} falls back to `get` → `fn` → `set`
+   * guarded by an in-process per-key mutex. This is safe for single-instance
+   * deployments but does **not** protect against races across multiple
+   * processes or instances.
+   *
+   * Backend examples:
+   * - **Durable Objects**: Single-threaded execution — callback runs atomically.
+   * - **D1 / SQLite**: Wrap in a SQL transaction.
+   * - **DynamoDB**: Conditional put with a version attribute.
+   * - **In-memory**: Synchronous callback execution.
+   */
+  update?(
+    key: string,
+    fn: (current: ChannelState | null) => ChannelState | null,
+  ): Promise<ChannelState | null>
+}
+
+/**
+ * State for an on-chain payment channel, including per-session accounting.
  *
- * One channel may back many sessions over its lifetime.
+ * Tracks the channel's identity, on-chain balance, the highest voucher
+ * the server has accepted, and the current session's spend counters.
+ * A channel is created when a payer opens an escrow on-chain and persists
+ * until the channel is finalized (closed/settled).
+ *
+ * One channel = one session. The client owns the key and can't race with
+ * itself, so concurrent session support is unnecessary.
  *
  * Monotonicity invariants (enforced by update callbacks):
  * - `highestVoucherAmount` only increases
@@ -31,68 +73,26 @@ export interface ChannelState {
   /** The signed voucher corresponding to `highestVoucherAmount`. */
   highestVoucher: SignedVoucher | null
 
-  /** Challenge ID of the currently active session, if any. */
-  activeSessionId?: string | undefined
+  /** Cumulative amount spent (charged) against this channel's current session. */
+  spent: bigint
+  /** Number of charge operations (API requests) fulfilled in the current session. */
+  units: number
+
   /** Whether the channel has been finalized (closed) on-chain. */
   finalized: boolean
   createdAt: Date
 }
 
 /**
- * Short-lived state for per-challenge accounting within a channel.
- *
- * Each 402 challenge creates a session that tracks how much of the channel's
- * voucher balance has been consumed by API requests. This separates the
- * channel's total accepted balance from what a specific authorization flow
- * has actually spent.
- *
- * ```
- * Channel (long-lived)         Session (per-challenge)
- * ┌──────────────────┐         ┌──────────────────────┐
- * │ deposit: 100     │         │ acceptedCumulative: 50│ ← from voucher
- * │ highestVoucher:50│ ──1:N──>│ spent: 30            │ ← consumed by requests
- * │ settledOnChain: 0│         │ available: 20        │ ← (computed)
- * └──────────────────┘         │ units: 15            │ ← request count
- *                              └──────────────────────┘
- * ```
- *
- * Monotonicity invariant: `acceptedCumulative` only increases.
- */
-export interface SessionState {
-  /** The challenge ID that created this session (also the lookup key). */
-  challengeId: string
-  /** The channel this session draws balance from. */
-  channelId: Hex
-  /** Cumulative voucher amount accepted into this session. */
-  acceptedCumulative: bigint
-  /** Cumulative amount spent (charged) against this session. */
-  spent: bigint
-  /** Number of charge operations (API requests) fulfilled. */
-  units: number
-  createdAt: Date
-}
-
-/**
- * Storage interface for channel and session state persistence.
- *
- * ## Why two state types?
- *
- * **Channels** are long-lived and map 1:1 to on-chain escrow contracts.
- * They track deposits, vouchers, and settlement — things that persist
- * across multiple authorization flows.
- *
- * **Sessions** are short-lived and map 1:1 to 402 challenges. They track
- * how much balance a specific authorization flow has consumed. This lets
- * the server issue multiple challenges against the same channel without
- * conflating their accounting.
+ * Internal storage interface for channel state persistence.
  *
  * ## Atomicity contract
  *
- * The `update*` methods use atomic read-modify-write callbacks. The callback
- * receives the current state (or `null` if none exists), and returns the
- * next state (or `null` to delete). Implementations must guarantee that no
- * concurrent mutation occurs between reading `current` and writing the
- * return value.
+ * The `updateChannel` method uses an atomic read-modify-write callback.
+ * The callback receives the current state (or `null` if none exists), and
+ * returns the next state (or `null` to delete). Implementations must
+ * guarantee that no concurrent mutation occurs between reading `current`
+ * and writing the return value.
  *
  * Backends implement this via their native mechanisms:
  * - **In-memory / JS single-thread**: Synchronous callback execution
@@ -101,7 +101,6 @@ export interface SessionState {
  */
 export interface ChannelStorage {
   getChannel(channelId: Hex): Promise<ChannelState | null>
-  getSession(challengeId: string): Promise<SessionState | null>
 
   /**
    * Atomic read-modify-write for channel state.
@@ -113,11 +112,160 @@ export interface ChannelStorage {
   ): Promise<ChannelState | null>
 
   /**
-   * Atomic read-modify-write for session state.
-   * Return `null` from `fn` to delete the session.
+   * Wait for the next update to a channel.
+   *
+   * Returns a `Promise` that resolves once `updateChannel` is called for
+   * `channelId`. Implementations should resolve immediately if the channel
+   * was updated between the call to `waitForUpdate` and the `Promise`
+   * being awaited.
+   *
+   * When not implemented, callers fall back to polling.
    */
-  updateSession(
-    challengeId: string,
-    fn: (current: SessionState | null) => SessionState | null,
-  ): Promise<SessionState | null>
+  waitForUpdate?(channelId: Hex): Promise<void>
+}
+
+export type DeductResult =
+  | { ok: true; channel: ChannelState }
+  | { ok: false; channel: ChannelState }
+
+/**
+ * Atomically deduct `amount` from a channel's available balance.
+ *
+ * Returns `{ ok: true, channel }` if the deduction succeeded, or
+ * `{ ok: false, channel }` with the unchanged state if balance is
+ * insufficient. Throws if the channel does not exist.
+ */
+export async function deductFromChannel(
+  storage: ChannelStorage,
+  channelId: Hex,
+  amount: bigint,
+): Promise<DeductResult> {
+  let deducted = false
+  const channel = await storage.updateChannel(channelId, (current) => {
+    deducted = false
+    if (!current) return null
+    if (current.highestVoucherAmount - current.spent >= amount) {
+      deducted = true
+      return { ...current, spent: current.spent + amount, units: current.units + 1 }
+    }
+    return current
+  })
+  if (!channel) throw new Error('channel not found')
+  return { ok: deducted, channel }
+}
+
+/**
+ * Wraps a generic {@link Storage} into the internal {@link ChannelStorage}
+ * interface used by server handlers and the SSE metering loop.
+ *
+ * Provides `waitForUpdate` notifications so the SSE `chargeOrWait` loop
+ * can wake up without polling.
+ *
+ * ## Atomicity
+ *
+ * When `storage.update` is available, all mutations go through it —
+ * the backend is responsible for atomicity.
+ *
+ * When `storage.update` is absent, mutations use `get` → `fn` → `set`
+ * guarded by a per-key in-process mutex. This serializes concurrent
+ * `updateChannel` calls within a single JS runtime but does **not**
+ * protect against races across multiple processes or instances.
+ */
+const channelStorageCache = new WeakMap<Storage, ChannelStorage>()
+
+export function channelStorage(storage: Storage): ChannelStorage {
+  const cached = channelStorageCache.get(storage)
+  if (cached) return cached
+
+  const waiters = new Map<string, Set<() => void>>()
+  const locks = new Map<string, Promise<void>>()
+
+  function notify(channelId: string) {
+    const set = waiters.get(channelId)
+    if (!set) return
+    for (const resolve of set) resolve()
+    waiters.delete(channelId)
+  }
+
+  async function updateWithMutex(
+    channelId: Hex,
+    fn: (current: ChannelState | null) => ChannelState | null,
+  ): Promise<ChannelState | null> {
+    while (locks.has(channelId)) await locks.get(channelId)
+
+    let release!: () => void
+    locks.set(
+      channelId,
+      new Promise<void>((r) => {
+        release = r
+      }),
+    )
+
+    try {
+      const current = await storage.get(channelId)
+      const next = fn(current)
+      if (next) await storage.set(channelId, next)
+      else await storage.delete(channelId)
+      return next
+    } finally {
+      locks.delete(channelId)
+      release()
+    }
+  }
+
+  async function updateWithAtomic(
+    channelId: Hex,
+    fn: (current: ChannelState | null) => ChannelState | null,
+  ): Promise<ChannelState | null> {
+    return storage.update!(channelId, fn)
+  }
+
+  const doUpdate = storage.update ? updateWithAtomic : updateWithMutex
+
+  const cs: ChannelStorage = {
+    async getChannel(channelId) {
+      return storage.get(channelId)
+    },
+    async updateChannel(channelId, fn) {
+      const result = await doUpdate(channelId, fn)
+      notify(channelId)
+      return result
+    },
+    waitForUpdate(channelId) {
+      return new Promise<void>((resolve) => {
+        let set = waiters.get(channelId)
+        if (!set) {
+          set = new Set()
+          waiters.set(channelId, set)
+        }
+        set.add(resolve)
+      })
+    },
+  }
+
+  channelStorageCache.set(storage, cs)
+  return cs
+}
+
+/** In-memory storage backed by a simple Map. Useful for development and testing. */
+export function memoryStorage(): Storage {
+  const store = new Map<string, ChannelState>()
+  return {
+    async get(key) {
+      return store.get(key) ?? null
+    },
+    async set(key, value) {
+      store.set(key, value)
+    },
+    async delete(key) {
+      store.delete(key)
+    },
+    async update(key, fn) {
+      const current = store.get(key) ?? null
+      const next = fn(current)
+      if (next !== null) store.set(key, next)
+      else store.delete(key)
+      return next
+    },
+  }
 }

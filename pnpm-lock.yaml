@@ -7,7 +7,7 @@ settings:
 overrides:
   mpay: workspace:*
   ox: ^0.12.0
-  viem: latest
+  viem: ^2.45.3
 
 importers:
 
@@ -25,9 +25,6 @@ importers:
       ox:
         specifier: ^0.12.0
         version: 0.12.0(typescript@5.9.3)(zod@4.3.6)
-      viem:
-        specifier: latest
-        version: 2.45.1(typescript@5.9.3)(zod@4.3.6)
       zod:
         specifier: ^4.3.6
         version: 4.3.6
@@ -74,6 +71,9 @@ importers:
       typescript:
         specifier: ~5.9.3
         version: 5.9.3
+      viem:
+        specifier: ^2.45.3
+        version: 2.45.3(typescript@5.9.3)(zod@4.3.6)
       vitest:
         specifier: latest
         version: 4.0.18(@types/node@25.2.2)(tsx@4.21.0)(yaml@2.8.2)
@@ -96,23 +96,23 @@ importers:
         specifier: latest
         version: 5.9.3
       viem:
-        specifier: latest
-        version: 2.45.1(typescript@5.9.3)(zod@4.3.6)
+        specifier: ^2.45.3
+        version: 2.45.3(typescript@5.9.3)(zod@4.3.6)
       vite:
         specifier: latest
         version: 7.3.1(@types/node@25.2.2)(tsx@4.21.0)(yaml@2.8.2)
 
-  examples/stream:
+  examples/streaming/multi-fetch:
     dependencies:
       '@remix-run/node-fetch-server':
         specifier: latest
         version: 0.13.0
       '@types/node':
         specifier: latest
-        version: 25.2.1
+        version: 25.2.2
       mpay:
         specifier: workspace:*
-        version: link:../..
+        version: link:../../..
       tsx:
         specifier: latest
         version: 4.21.0
@@ -120,11 +120,35 @@ importers:
         specifier: latest
         version: 5.9.3
       viem:
-        specifier: latest
-        version: 2.45.1(typescript@5.9.3)(zod@4.3.6)
+        specifier: ^2.45.3
+        version: 2.45.3(typescript@5.9.3)(zod@4.3.6)
       vite:
         specifier: latest
-        version: 7.3.1(@types/node@25.2.1)(tsx@4.21.0)(yaml@2.8.2)
+        version: 7.3.1(@types/node@25.2.2)(tsx@4.21.0)(yaml@2.8.2)
+
+  examples/streaming/sse:
+    dependencies:
+      '@remix-run/node-fetch-server':
+        specifier: latest
+        version: 0.13.0
+      '@types/node':
+        specifier: latest
+        version: 25.2.2
+      mpay:
+        specifier: workspace:*
+        version: link:../../..
+      tsx:
+        specifier: latest
+        version: 4.21.0
+      typescript:
+        specifier: latest
+        version: 5.9.3
+      viem:
+        specifier: ^2.45.3
+        version: 2.45.3(typescript@5.9.3)(zod@4.3.6)
+      vite:
+        specifier: latest
+        version: 7.3.1(@types/node@25.2.2)(tsx@4.21.0)(yaml@2.8.2)
 
 packages:
 
@@ -754,9 +778,6 @@ packages:
 
   '@types/node@18.19.130':
     resolution: {integrity: sha512-GRaXQx6jGfL8sKfaIDD6OupbIHBr9jv7Jnaml9tB7l4v068PAOXqfcujMMo5PhbIs6ggR1XODELqahT2R8v0fg==}
-
-  '@types/node@25.2.1':
-    resolution: {integrity: sha512-CPrnr8voK8vC6eEtyRzvMpgp3VyVRhgclonE7qYi6P9sXwYb59ucfrnmFBTaP0yUi8Gk4yZg/LlTJULGxvTNsg==}
 
   '@types/node@25.2.2':
     resolution: {integrity: sha512-BkmoP5/FhRYek5izySdkOneRyXYN35I860MFAGupTdebyE66uZaR+bXLHq8k4DirE5DwQi3NuhvRU1jqTVwUrQ==}
@@ -2153,8 +2174,8 @@ packages:
     resolution: {integrity: sha512-BNGbWLfd0eUPabhkXUVm0j8uuvREyTh5ovRa/dyow/BqAbZJyC+5fU+IzQOzmAKzYqYRAISoRhdQr3eIZ/PXqg==}
     engines: {node: '>= 0.8'}
 
-  viem@2.45.1:
-    resolution: {integrity: sha512-LN6Pp7vSfv50LgwhkfSbIXftAM5J89lP9x8TeDa8QM7o41IxlHrDh0F9X+FfnCWtsz11pEVV5sn+yBUoOHNqYA==}
+  viem@2.45.3:
+    resolution: {integrity: sha512-axOD7rIbGiDHHA1MHKmpqqTz3CMCw7YpE/FVypddQMXL5i364VkNZh9JeEJH17NO484LaZUOMueo35IXyL76Mw==}
     peerDependencies:
       typescript: '>=5.0.4'
     peerDependenciesMeta:
@@ -2910,10 +2931,6 @@ snapshots:
   '@types/node@18.19.130':
     dependencies:
       undici-types: 5.26.5
-
-  '@types/node@25.2.1':
-    dependencies:
-      undici-types: 7.16.0
 
   '@types/node@25.2.2':
     dependencies:
@@ -4381,7 +4398,7 @@ snapshots:
 
   vary@1.1.2: {}
 
-  viem@2.45.1(typescript@5.9.3)(zod@4.3.6):
+  viem@2.45.3(typescript@5.9.3)(zod@4.3.6):
     dependencies:
       '@noble/curves': 1.9.1
       '@noble/hashes': 1.8.0
@@ -4397,20 +4414,6 @@ snapshots:
       - bufferutil
       - utf-8-validate
       - zod
-
-  vite@7.3.1(@types/node@25.2.1)(tsx@4.21.0)(yaml@2.8.2):
-    dependencies:
-      esbuild: 0.27.2
-      fdir: 6.5.0(picomatch@4.0.3)
-      picomatch: 4.0.3
-      postcss: 8.5.6
-      rollup: 4.57.0
-      tinyglobby: 0.2.15
-    optionalDependencies:
-      '@types/node': 25.2.1
-      fsevents: 2.3.3
-      tsx: 4.21.0
-      yaml: 2.8.2
 
   vite@7.3.1(@types/node@25.2.2)(tsx@4.21.0)(yaml@2.8.2):
     dependencies:

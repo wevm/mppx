@@ -1,42 +1,44 @@
-import { Hex } from 'ox'
-import { type Address, encodeFunctionData, parseUnits, type Client as viem_Client } from 'viem'
-import { prepareTransactionRequest, signTransaction } from 'viem/actions'
+import type { Hex } from 'ox'
+import { type Address, parseUnits, type Account as viem_Account } from 'viem'
 import { tempo as tempo_chain } from 'viem/chains'
-import { Abis } from 'viem/tempo'
 import type * as Challenge from '../../Challenge.js'
-import * as Credential from '../../Credential.js'
 import * as MethodIntent from '../../MethodIntent.js'
 import * as Account from '../../viem/Account.js'
 import * as Client from '../../viem/Client.js'
 import * as z from '../../zod.js'
 import * as Intents from '../Intents.js'
 import * as defaults from '../internal/defaults.js'
-import { escrowAbi, getOnChainChannel } from '../stream/Chain.js'
-import * as Channel from '../stream/Channel.js'
 import type { StreamCredentialPayload } from '../stream/Types.js'
 import { signVoucher } from '../stream/Voucher.js'
+import {
+  type ChannelEntry,
+  createOpenPayload,
+  createVoucherPayload,
+  resolveEscrow,
+  serializeCredential,
+  tryRecoverChannel,
+} from './ChannelOps.js'
 
 export const streamContextSchema = z.object({
   account: z.optional(z.custom<Account.getResolver.Parameters['account']>()),
   action: z.optional(z.enum(['open', 'topUp', 'voucher', 'close'])),
   channelId: z.optional(z.string()),
   cumulativeAmount: z.optional(z.amount()),
+  cumulativeAmountRaw: z.optional(z.string()),
   transaction: z.optional(z.string()),
   authorizedSigner: z.optional(z.string()),
   additionalDeposit: z.optional(z.amount()),
+  additionalDepositRaw: z.optional(z.string()),
+  depositRaw: z.optional(z.string()),
 })
 
 export type StreamContext = z.infer<typeof streamContextSchema>
 
-type ChannelEntry = {
-  channelId: Hex.Hex
-  salt: Hex.Hex
-  cumulativeAmount: bigint
-  opened: boolean
-}
-
 /**
- * Creates a stream payment client.
+ * Creates a session payment MethodIntent plugin for use with `Mpay.create()`.
+ *
+ * Supports both auto mode (set `deposit` to manage channels automatically)
+ * and manual mode (pass `context.action` to control each step).
  *
  * @example
  * ```ts
@@ -67,7 +69,7 @@ type ChannelEntry = {
  * })
  * ```
  */
-export function stream(parameters: stream.Parameters = {}) {
+export function session(parameters: session.Parameters = {}) {
   const { decimals = defaults.decimals } = parameters
 
   const getClient = Client.getResolver({
@@ -77,14 +79,22 @@ export function stream(parameters: stream.Parameters = {}) {
   })
   const getAccount = Account.getResolver({ account: parameters.account })
 
+  const maxDeposit =
+    parameters.maxDeposit !== undefined ? parseUnits(parameters.maxDeposit, decimals) : undefined
+
   const escrowContractMap = new Map<string, Address>()
   const channels = new Map<string, ChannelEntry>()
+  const channelIdToKey = new Map<string, string>()
+
+  function notifyUpdate(entry: ChannelEntry) {
+    parameters.onChannelUpdate?.(entry)
+  }
 
   function channelKey(payee: Address, currency: Address, escrow: Address): string {
     return `${payee.toLowerCase()}:${currency.toLowerCase()}:${escrow.toLowerCase()}`
   }
 
-  function resolveEscrow(
+  function resolveEscrowCached(
     challenge: { request: { methodDetails?: unknown } },
     chainId: number,
     channelId?: string,
@@ -93,84 +103,67 @@ export function stream(parameters: stream.Parameters = {}) {
       const cached = escrowContractMap.get(channelId)
       if (cached) return cached
     }
-    const challengeEscrow = (challenge.request.methodDetails as { escrowContract?: string })
-      ?.escrowContract as Address | undefined
-    const escrow =
-      challengeEscrow ??
-      parameters.escrowContract ??
-      ((defaults.escrowContract as Record<number, string>)[chainId] as Address | undefined)
-    if (!escrow)
-      throw new Error(
-        'No `escrowContract` available. Provide it in parameters or ensure the server challenge includes it.',
-      )
-    return escrow
-  }
-
-  async function voucherPayload(
-    client: viem_Client,
-    account: Account.Account,
-    channelId: Hex.Hex,
-    cumulativeAmount: bigint,
-    escrowContract: Address,
-    chainId: number,
-  ): Promise<StreamCredentialPayload> {
-    const signature = await signVoucher(
-      client,
-      account,
-      { channelId, cumulativeAmount },
-      escrowContract,
-      chainId,
-    )
-    return {
-      action: 'voucher',
-      channelId,
-      cumulativeAmount: cumulativeAmount.toString(),
-      signature,
-    }
-  }
-
-  function serializeCredential(
-    challenge: Challenge.Challenge,
-    payload: StreamCredentialPayload,
-    chainId: number,
-    account: Account.Account,
-  ): string {
-    return Credential.serialize({
-      challenge,
-      payload,
-      source: `did:pkh:eip155:${chainId}:${account.address}`,
-    })
+    return resolveEscrow(challenge, chainId, parameters.escrowContract)
   }
 
   async function autoManageCredential(
     challenge: Challenge.Challenge,
-    account: Account.Account,
+    account: viem_Account,
+    context?: StreamContext,
   ): Promise<string> {
     const md = challenge.request.methodDetails as
       | { chainId?: number; escrowContract?: string; channelId?: string; feePayer?: boolean }
       | undefined
     const chainId = md?.chainId ?? 0
     const client = await getClient({ chainId })
-    const escrowContract = resolveEscrow(challenge, chainId)
+    const escrowContract = resolveEscrowCached(challenge, chainId)
     const payee = challenge.request.recipient as Address
     const currency = challenge.request.currency as Address
     const amount = BigInt(challenge.request.amount as string)
-    const deposit = parseUnits(parameters.deposit!, decimals)
+
+    const suggestedDepositRaw = (challenge.request as { suggestedDeposit?: string })
+      .suggestedDeposit
+    const suggestedDeposit = suggestedDepositRaw ? BigInt(suggestedDepositRaw) : undefined
+
+    const deposit = (() => {
+      if (context?.depositRaw) return BigInt(context.depositRaw)
+      if (suggestedDeposit !== undefined && maxDeposit !== undefined)
+        return suggestedDeposit < maxDeposit ? suggestedDeposit : maxDeposit
+      if (suggestedDeposit !== undefined) return suggestedDeposit
+      if (maxDeposit !== undefined) return maxDeposit
+      if (parameters.deposit !== undefined) return parseUnits(parameters.deposit, decimals)
+      throw new Error(
+        'No deposit amount available. Set `deposit`, `maxDeposit`, or ensure the server challenge includes `suggestedDeposit`.',
+      )
+    })()
 
     const key = channelKey(payee, currency, escrowContract)
     let entry = channels.get(key)
 
     if (!entry) {
       const suggestedChannelId = md?.channelId as Hex.Hex | undefined
-      if (suggestedChannelId)
-        entry = await tryRecoverChannel(client, escrowContract, suggestedChannelId, key)
+      if (suggestedChannelId) {
+        const recovered = await tryRecoverChannel(
+          client,
+          escrowContract,
+          suggestedChannelId,
+          chainId,
+        )
+        if (recovered) {
+          channels.set(key, recovered)
+          channelIdToKey.set(recovered.channelId, key)
+          escrowContractMap.set(recovered.channelId, escrowContract)
+          entry = recovered
+          notifyUpdate(entry)
+        }
+      }
     }
 
     let payload: StreamCredentialPayload
 
     if (entry?.opened) {
       entry.cumulativeAmount += amount
-      payload = await voucherPayload(
+      payload = await createVoucherPayload(
         client,
         account,
         entry.channelId,
@@ -178,122 +171,30 @@ export function stream(parameters: stream.Parameters = {}) {
         escrowContract,
         chainId,
       )
+      notifyUpdate(entry)
     } else {
-      const result = await openChannel(
-        client,
-        account,
+      const result = await createOpenPayload(client, account, {
         escrowContract,
         payee,
         currency,
         deposit,
-        amount,
+        initialAmount: amount,
         chainId,
-        md?.feePayer,
-      )
+        feePayer: md?.feePayer,
+      })
       channels.set(key, result.entry)
+      channelIdToKey.set(result.entry.channelId, key)
       escrowContractMap.set(result.entry.channelId, escrowContract)
       payload = result.payload
+      notifyUpdate(result.entry)
     }
 
     return serializeCredential(challenge, payload, chainId, account)
   }
 
-  async function openChannel(
-    client: viem_Client,
-    account: Account.Account,
-    escrowContract: Address,
-    payee: Address,
-    currency: Address,
-    deposit: bigint,
-    initialAmount: bigint,
-    chainId: number,
-    feePayer?: boolean | undefined,
-  ): Promise<{ entry: ChannelEntry; payload: StreamCredentialPayload }> {
-    const salt = Hex.random(32)
-
-    const channelId = Channel.computeId({
-      authorizedSigner: account.address,
-      chainId,
-      deposit,
-      escrowContract,
-      payee,
-      payer: account.address,
-      salt,
-      token: currency,
-    })
-
-    const approveData = encodeFunctionData({
-      abi: Abis.tip20,
-      functionName: 'approve',
-      args: [escrowContract, deposit],
-    })
-    const openData = encodeFunctionData({
-      abi: escrowAbi,
-      functionName: 'open',
-      args: [payee, currency, deposit, salt, account.address],
-    })
-
-    const prepared = await prepareTransactionRequest(client, {
-      account,
-      calls: [
-        { to: currency, data: approveData },
-        { to: escrowContract, data: openData },
-      ],
-      ...(feePayer && { feePayer: true }),
-    } as never)
-    prepared.gas = prepared.gas! + 5_000n
-    const transaction = (await signTransaction(client, prepared as never)) as Hex.Hex
-
-    const signature = await signVoucher(
-      client,
-      account,
-      { channelId, cumulativeAmount: initialAmount },
-      escrowContract,
-      chainId,
-    )
-
-    return {
-      entry: { channelId, salt, cumulativeAmount: initialAmount, opened: true },
-      payload: {
-        action: 'open',
-        type: 'transaction',
-        channelId,
-        transaction,
-        authorizedSigner: account.address,
-        cumulativeAmount: initialAmount.toString(),
-        signature,
-      },
-    }
-  }
-
-  async function tryRecoverChannel(
-    client: viem_Client,
-    escrowContract: Address,
-    channelId: Hex.Hex,
-    key: string,
-  ): Promise<ChannelEntry | undefined> {
-    try {
-      const onChain = await getOnChainChannel(client, escrowContract, channelId)
-
-      if (onChain.deposit > 0n && !onChain.finalized) {
-        const entry: ChannelEntry = {
-          channelId,
-          salt: '0x' as Hex.Hex,
-          cumulativeAmount: onChain.settled,
-          opened: true,
-        }
-        channels.set(key, entry)
-        escrowContractMap.set(channelId, escrowContract)
-        return entry
-      }
-    } catch {}
-
-    return undefined
-  }
-
   async function manualCredential(
     challenge: Challenge.Challenge,
-    account: Account.Account,
+    account: viem_Account,
     context: StreamContext,
   ): Promise<string> {
     const md = challenge.request.methodDetails as
@@ -303,13 +204,20 @@ export function stream(parameters: stream.Parameters = {}) {
     const client = await getClient({ chainId })
 
     const action = context.action!
-    const { channelId: channelIdRaw, transaction, authorizedSigner, additionalDeposit } = context
+    const { channelId: channelIdRaw, transaction, authorizedSigner } = context
     const channelId = channelIdRaw as Hex.Hex
-    const cumulativeAmount = context.cumulativeAmount
-      ? parseUnits(context.cumulativeAmount, decimals)
-      : undefined
+    const cumulativeAmount = context.cumulativeAmountRaw
+      ? BigInt(context.cumulativeAmountRaw)
+      : context.cumulativeAmount
+        ? parseUnits(context.cumulativeAmount, decimals)
+        : undefined
+    const resolvedAdditionalDeposit = context.additionalDepositRaw
+      ? BigInt(context.additionalDepositRaw)
+      : context.additionalDeposit
+        ? parseUnits(context.additionalDeposit, decimals)
+        : undefined
 
-    const escrowContract = resolveEscrow(challenge, chainId, channelId)
+    const escrowContract = resolveEscrowCached(challenge, chainId, channelId)
     escrowContractMap.set(channelId, escrowContract)
 
     let payload: StreamCredentialPayload
@@ -340,21 +248,21 @@ export function stream(parameters: stream.Parameters = {}) {
 
       case 'topUp':
         if (!transaction) throw new Error('transaction required for topUp action')
-        if (additionalDeposit === undefined)
+        if (resolvedAdditionalDeposit === undefined)
           throw new Error('additionalDeposit required for topUp action')
         payload = {
           action: 'topUp',
           type: 'transaction',
           channelId,
           transaction: transaction as Hex.Hex,
-          additionalDeposit: parseUnits(additionalDeposit!, decimals).toString(),
+          additionalDeposit: resolvedAdditionalDeposit.toString(),
         }
         break
 
       case 'voucher': {
         if (cumulativeAmount === undefined)
           throw new Error('cumulativeAmount required for voucher action')
-        payload = await voucherPayload(
+        payload = await createVoucherPayload(
           client,
           account,
           channelId,
@@ -362,6 +270,15 @@ export function stream(parameters: stream.Parameters = {}) {
           escrowContract,
           chainId,
         )
+        const key = channelIdToKey.get(channelId)
+        if (key) {
+          const entry = channels.get(key)
+          if (entry) {
+            entry.cumulativeAmount =
+              entry.cumulativeAmount > cumulativeAmount ? entry.cumulativeAmount : cumulativeAmount
+            notifyUpdate(entry)
+          }
+        }
         break
       }
 
@@ -381,6 +298,16 @@ export function stream(parameters: stream.Parameters = {}) {
           cumulativeAmount: cumulativeAmount.toString(),
           signature,
         }
+        const closeKey = channelIdToKey.get(channelId)
+        if (closeKey) {
+          const entry = channels.get(closeKey)
+          if (entry) {
+            entry.opened = false
+            entry.cumulativeAmount =
+              entry.cumulativeAmount > cumulativeAmount ? entry.cumulativeAmount : cumulativeAmount
+            notifyUpdate(entry)
+          }
+        }
         break
       }
     }
@@ -388,7 +315,7 @@ export function stream(parameters: stream.Parameters = {}) {
     return serializeCredential(challenge, payload, chainId, account)
   }
 
-  return MethodIntent.toClient(Intents.stream, {
+  return MethodIntent.toClient(Intents.session, {
     context: streamContextSchema,
 
     async createCredential({ challenge, context }) {
@@ -396,19 +323,19 @@ export function stream(parameters: stream.Parameters = {}) {
       const client = await getClient({ chainId })
       const account = getAccount(client, context)
 
-      if (!context?.action && parameters.deposit !== undefined)
-        return autoManageCredential(challenge, account)
+      if (!context?.action && (parameters.deposit !== undefined || maxDeposit !== undefined))
+        return autoManageCredential(challenge, account, context)
 
       if (context?.action) return manualCredential(challenge, account, context)
 
       throw new Error(
-        'No `action` in context and no `deposit` configured. Either provide context with action/channelId/cumulativeAmount, or configure `deposit` for auto-management.',
+        'No `action` in context and no `deposit` or `maxDeposit` configured. Either provide context with action/channelId/cumulativeAmount, or configure `deposit`/`maxDeposit` for auto-management.',
       )
     },
   })
 }
 
-export declare namespace stream {
+export declare namespace session {
   type Parameters = Account.getResolver.Parameters &
     Client.getResolver.Parameters & {
       /** Token decimals for parsing human-readable amounts (default: 6). */
@@ -417,5 +344,9 @@ export declare namespace stream {
       deposit?: string | undefined
       /** Escrow contract address override. Derived from challenge or defaults if not provided. */
       escrowContract?: Address | undefined
+      /** Maximum deposit in human-readable units (e.g. "10"). Caps the server's `suggestedDeposit`. Enables auto-management like `deposit`. */
+      maxDeposit?: string | undefined
+      /** Called whenever channel state changes (open, voucher, close, recovery). */
+      onChannelUpdate?: ((entry: ChannelEntry) => void) | undefined
     }
 }

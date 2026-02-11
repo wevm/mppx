@@ -50,11 +50,29 @@ export type StreamCredentialPayload =
     }
 
 /**
+ * SSE event emitted when session balance is exhausted mid-stream.
+ * The client responds by sending a new voucher credential.
+ *
+ * Per spec §11.6, the event data contains:
+ * - `channelId` — channel identifier
+ * - `requiredCumulative` — minimum cumulative amount the next voucher must authorize
+ * - `acceptedCumulative` — current highest accepted voucher amount
+ * - `deposit` — current on-chain deposit ceiling; when `requiredCumulative > deposit`
+ *   the client must top up the channel before sending a new voucher
+ */
+export interface NeedVoucherEvent {
+  channelId: Hex
+  requiredCumulative: string
+  acceptedCumulative: string
+  deposit: string
+}
+
+/**
  * Stream receipt returned in Payment-Receipt header.
  */
 export interface StreamReceipt {
   method: 'tempo'
-  intent: 'stream'
+  intent: 'session'
   status: 'success'
   timestamp: string
   /** Payment reference (channelId). Satisfies Receipt.Receipt contract. */
