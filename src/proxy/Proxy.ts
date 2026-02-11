@@ -73,7 +73,7 @@ export function create(config: create.Config): Proxy {
     const ctx: Service.Context = { request, service, upstreamPath }
 
     if (endpoint === true)
-      return proxyUpstream({ request, service, ctx, proxy, rewrite: false })
+      return proxyUpstream({ request, service, ctx, proxy })
 
     const handler: Service.IntentHandler = typeof endpoint === 'function' ? endpoint : endpoint.pay
     const result = await handler(request)
@@ -85,7 +85,6 @@ export function create(config: create.Config): Proxy {
       service,
       ctx: { ...ctx, ...options },
       proxy,
-      rewrite: true,
     })
     return result.withReceipt(upstreamRes)
   }
@@ -112,23 +111,32 @@ declare namespace proxyUpstream {
     ctx: Service.Context
     proxy: (input: URL | RequestInfo, init?: RequestInit) => Promise<Response>
     request: globalThis.Request
-    rewrite: boolean
     service: Service.Service
   }
 }
 
 async function proxyUpstream(options: proxyUpstream.Options): Promise<Response> {
-  const { request, service, ctx, proxy, rewrite } = options
+  const { request, service, ctx, proxy } = options
   const url = ctx.upstreamPath + new URL(request.url).search
   const headers = Headers.scrub(request.headers)
 
-  let upstreamReq = new globalThis.Request(new URL(url, 'http://localhost'), {
+  const method = request.method.toUpperCase()
+  const hasBody = method !== 'GET' && method !== 'HEAD'
+
+  const init: RequestInit & { duplex?: 'half' } = {
     method: request.method,
     headers,
     signal: request.signal,
-  })
+  }
 
-  if (rewrite && service.rewriteRequest)
+  if (hasBody && request.body) {
+    init.body = request.body
+    init.duplex = 'half'
+  }
+
+  let upstreamReq = new globalThis.Request(new URL(url, new URL(service.baseUrl).origin), init)
+
+  if (service.rewriteRequest)
     upstreamReq = await service.rewriteRequest(upstreamReq, ctx)
 
   let upstreamRes = await proxy(upstreamReq)
