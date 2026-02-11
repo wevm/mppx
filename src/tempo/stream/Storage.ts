@@ -17,6 +17,30 @@ export interface Storage {
   get(key: string): Promise<string | null>
   set(key: string, value: string): Promise<void>
   delete(key: string): Promise<void>
+
+  /**
+   * Atomic read-modify-write for a key.
+   *
+   * The callback receives the current value (or `null` if absent) and
+   * returns the next value (or `null` to delete). Implementations must
+   * guarantee that no concurrent mutation occurs between reading `current`
+   * and writing the return value.
+   *
+   * When implemented, {@link channelStorage} delegates all state mutations
+   * to this method, providing true atomicity across concurrent requests.
+   *
+   * When absent, {@link channelStorage} falls back to `get` → `fn` → `set`
+   * guarded by an in-process per-key mutex. This is safe for single-instance
+   * deployments but does **not** protect against races across multiple
+   * processes or instances.
+   *
+   * Backend examples:
+   * - **Durable Objects**: Single-threaded execution — callback runs atomically.
+   * - **D1 / SQLite**: Wrap in a SQL transaction.
+   * - **DynamoDB**: Conditional put with a version attribute.
+   * - **In-memory**: Synchronous callback execution.
+   */
+  update?(key: string, fn: (current: string | null) => string | null): Promise<string | null>
 }
 
 /**
@@ -135,9 +159,10 @@ export async function deductFromChannel(
 const bigintFields = new Set(['deposit', 'settledOnChain', 'highestVoucherAmount', 'spent'])
 
 function serialize(state: ChannelState): string {
-  return JSON.stringify(state, (_key, value) => {
+  return JSON.stringify(state, function (_key, value) {
+    const raw = this[_key]
     if (typeof value === 'bigint') return `__bigint:${value.toString()}`
-    if (value instanceof Date) return `__date:${value.toISOString()}`
+    if (raw instanceof Date) return `__date:${raw.toISOString()}`
     return value
   })
 }
@@ -160,9 +185,25 @@ function deserialize(raw: string): ChannelState {
  * Handles JSON serialization of {@link ChannelState} (including bigint and
  * Date fields) and provides `waitForUpdate` notifications so the SSE
  * `chargeOrWait` loop can wake up without polling.
+ *
+ * ## Atomicity
+ *
+ * When `storage.update` is available, all mutations go through it —
+ * the backend is responsible for atomicity.
+ *
+ * When `storage.update` is absent, mutations use `get` → `fn` → `set`
+ * guarded by a per-key in-process mutex. This serializes concurrent
+ * `updateChannel` calls within a single JS runtime but does **not**
+ * protect against races across multiple processes or instances.
  */
+const channelStorageCache = new WeakMap<Storage, ChannelStorage>()
+
 export function channelStorage(storage: Storage): ChannelStorage {
+  const cached = channelStorageCache.get(storage)
+  if (cached) return cached
+
   const waiters = new Map<string, Set<() => void>>()
+  const locks = new Map<string, Promise<void>>()
 
   function notify(channelId: string) {
     const set = waiters.get(channelId)
@@ -171,20 +212,57 @@ export function channelStorage(storage: Storage): ChannelStorage {
     waiters.delete(channelId)
   }
 
-  return {
+  async function updateWithMutex(
+    channelId: Hex,
+    fn: (current: ChannelState | null) => ChannelState | null,
+  ): Promise<ChannelState | null> {
+    while (locks.has(channelId)) await locks.get(channelId)
+
+    let release!: () => void
+    locks.set(
+      channelId,
+      new Promise<void>((r) => {
+        release = r
+      }),
+    )
+
+    try {
+      const raw = await storage.get(channelId)
+      const current = raw ? deserialize(raw) : null
+      const next = fn(current)
+      if (next) await storage.set(channelId, serialize(next))
+      else await storage.delete(channelId)
+      return next
+    } finally {
+      locks.delete(channelId)
+      release()
+    }
+  }
+
+  async function updateWithAtomic(
+    channelId: Hex,
+    fn: (current: ChannelState | null) => ChannelState | null,
+  ): Promise<ChannelState | null> {
+    const raw = await storage.update!(channelId, (current) => {
+      const state = current ? deserialize(current) : null
+      const next = fn(state)
+      return next ? serialize(next) : null
+    })
+    return raw ? deserialize(raw) : null
+  }
+
+  const doUpdate = storage.update ? updateWithAtomic : updateWithMutex
+
+  const cs: ChannelStorage = {
     async getChannel(channelId) {
       const raw = await storage.get(channelId)
       if (!raw) return null
       return deserialize(raw)
     },
     async updateChannel(channelId, fn) {
-      const raw = await storage.get(channelId)
-      const current = raw ? deserialize(raw) : null
-      const next = fn(current)
-      if (next) await storage.set(channelId, serialize(next))
-      else await storage.delete(channelId)
+      const result = await doUpdate(channelId, fn)
       notify(channelId)
-      return next
+      return result
     },
     waitForUpdate(channelId) {
       return new Promise<void>((resolve) => {
@@ -197,6 +275,9 @@ export function channelStorage(storage: Storage): ChannelStorage {
       })
     },
   }
+
+  channelStorageCache.set(storage, cs)
+  return cs
 }
 
 /** In-memory storage backed by a simple Map. Useful for development and testing. */
@@ -211,6 +292,13 @@ export function memoryStorage(): Storage {
     },
     async delete(key) {
       store.delete(key)
+    },
+    async update(key, fn) {
+      const current = store.get(key) ?? null
+      const next = fn(current)
+      if (next !== null) store.set(key, next)
+      else store.delete(key)
+      return next
     },
   }
 }
