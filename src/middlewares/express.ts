@@ -70,6 +70,16 @@ export function payment<const intent extends Mpay_internal.AnyIntentFn>(
       return
     }
 
+    if (result.response) {
+      const managed = result.response as Response
+      res.status(managed.status)
+      for (const [key, value] of managed.headers) res.setHeader(key, value)
+      const body = await managed.text()
+      if (body) res.send(body)
+      else res.end()
+      return
+    }
+
     const originalJson = res.json.bind(res)
     res.json = (body: any) => {
       const wrapped = result.withReceipt(Response.json(body))
