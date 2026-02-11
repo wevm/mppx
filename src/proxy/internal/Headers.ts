@@ -17,6 +17,7 @@ export function scrub(headers: Headers): Headers {
 
     if (lower === 'authorization') continue
     if (lower === 'accept-encoding') continue
+    if (lower === 'content-length') continue
     if (lower === 'cookie') continue
     if (hopByHopHeaders.has(lower)) continue
     if (lower.startsWith('x-forwarded-')) continue

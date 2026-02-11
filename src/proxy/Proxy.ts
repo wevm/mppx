@@ -134,7 +134,7 @@ async function proxyUpstream(options: proxyUpstream.Options): Promise<Response> 
     init.duplex = 'half'
   }
 
-  let upstreamReq = new globalThis.Request(new URL(url, 'http://localhost'), init)
+  let upstreamReq = new globalThis.Request(new URL(url, new URL(service.baseUrl).origin), init)
 
   if (service.rewriteRequest)
     upstreamReq = await service.rewriteRequest(upstreamReq, ctx)
