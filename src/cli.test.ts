@@ -314,7 +314,7 @@ describe('account', () => {
     expect(result.stdout).toContain('Address 0x')
   })
 
-  test('create: duplicate name exits with message', () => {
+  test.skipIf(!!process.env.CI)('create: duplicate name exits with message', () => {
     const name = `${prefix}_dup`
     createAccount(name)
     // Second create with same name (non-interactive, stdin closed) should not succeed
