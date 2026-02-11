@@ -200,11 +200,12 @@ export function stream<const parameters extends stream.Parameters>(p?: parameter
     },
 
     respond({ credential, input }) {
+      if (input.method !== 'POST') return undefined
       const { payload } = credential as Credential.Credential<StreamCredentialPayload>
       const isManagement =
         payload.action === 'open' || payload.action === 'topUp' || payload.action === 'close'
-      const isVoucherPost = payload.action === 'voucher' && input.method === 'POST'
-      if (!isManagement && !isVoucherPost) return undefined
+      const isVoucher = payload.action === 'voucher'
+      if (!isManagement && !isVoucher) return undefined
       return new Response(null, { status: 204 })
     },
   })
