@@ -63,9 +63,7 @@ describe('parse', () => {
   })
 
   test('error: returns null when basePath does not match', () => {
-    expect(
-      Route.parse(new URL('http://localhost/other/openai/v1/models'), '/api/proxy'),
-    ).toBeNull()
+    expect(Route.parse(new URL('http://localhost/other/openai/v1/models'), '/api/proxy')).toBeNull()
   })
 })
 

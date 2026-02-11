@@ -8,7 +8,6 @@ import { Addresses } from 'viem/tempo'
 import { beforeAll, describe, expect, test } from 'vitest'
 import { deployEscrow } from '~test/tempo/stream.js'
 import { accounts, asset, client, fundAccount } from '~test/tempo/viem.js'
-import type { ChannelState, ChannelStorage, SessionState } from '../tempo/stream/Storage.js'
 
 function createServer(handler: (request: Request) => Promise<Response> | Response) {
   return new Promise<{ url: string; close: () => void }>((resolve) => {

@@ -72,8 +72,7 @@ export function create(config: create.Config): Proxy {
     const endpoint = matched.value as Service.Endpoint
     const ctx: Service.Context = { request, service, upstreamPath }
 
-    if (endpoint === true)
-      return proxyUpstream({ request, service, ctx, proxy })
+    if (endpoint === true) return proxyUpstream({ request, service, ctx, proxy })
 
     const handler: Service.IntentHandler = typeof endpoint === 'function' ? endpoint : endpoint.pay
     const result = await handler(request)
@@ -136,8 +135,7 @@ async function proxyUpstream(options: proxyUpstream.Options): Promise<Response> 
 
   let upstreamReq = new globalThis.Request(new URL(url, new URL(service.baseUrl).origin), init)
 
-  if (service.rewriteRequest)
-    upstreamReq = await service.rewriteRequest(upstreamReq, ctx)
+  if (service.rewriteRequest) upstreamReq = await service.rewriteRequest(upstreamReq, ctx)
 
   let upstreamRes = await proxy(upstreamReq)
 

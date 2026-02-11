@@ -19,10 +19,7 @@ export type Service = {
  * - `{ pay, options }` — payment required with per-endpoint config overrides.
  * - `true` — free passthrough, no payment required, rewriteRequest is applied.
  */
-export type Endpoint =
-  | IntentHandler
-  | { pay: IntentHandler; options: EndpointOptions }
-  | true
+export type Endpoint = IntentHandler | { pay: IntentHandler; options: EndpointOptions } | true
 
 /** Map of `"METHOD /pattern"` keys to endpoint definitions. */
 export type EndpointMap<routes extends string = string> = Partial<Record<routes, Endpoint>> &
