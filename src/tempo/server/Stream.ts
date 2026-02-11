@@ -132,6 +132,8 @@ export function stream<const parameters extends stream.Parameters>(p?: parameter
     },
 
     async verify({ credential }) {
+      if (!storage) throw new Error('storage is required')
+
       const { challenge, payload } = credential as Credential.Credential<StreamCredentialPayload>
 
       const methodDetails = challenge.request.methodDetails as StreamMethodDetails
