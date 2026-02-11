@@ -47,7 +47,7 @@ function stripUpdateMethod(storage: Storage): Storage {
 }
 
 function delayedStorage(delayMs: number): Storage {
-  const store = new Map<string, string>()
+  const store = new Map<string, ChannelState>()
   return {
     async get(key) {
       await sleep(delayMs)
@@ -78,35 +78,38 @@ describe('memoryStorage', () => {
 
   test('set then get returns value', async () => {
     const s = memoryStorage()
-    await s.set('k', 'v')
-    expect(await s.get('k')).toBe('v')
+    const ch = makeChannel()
+    await s.set('k', ch)
+    expect(await s.get('k')).toEqual(ch)
   })
 
   test('delete removes key', async () => {
     const s = memoryStorage()
-    await s.set('k', 'v')
+    await s.set('k', makeChannel())
     await s.delete('k')
     expect(await s.get('k')).toBeNull()
   })
 
   test('update creates new key', async () => {
     const s = memoryStorage()
-    const result = await s.update!('k', () => 'created')
-    expect(result).toBe('created')
-    expect(await s.get('k')).toBe('created')
+    const ch = makeChannel()
+    const result = await s.update!('k', () => ch)
+    expect(result).toEqual(ch)
+    expect(await s.get('k')).toEqual(ch)
   })
 
   test('update modifies existing key', async () => {
     const s = memoryStorage()
-    await s.set('k', 'old')
-    const result = await s.update!('k', (current) => `${current}-new`)
-    expect(result).toBe('old-new')
-    expect(await s.get('k')).toBe('old-new')
+    const ch = makeChannel()
+    await s.set('k', ch)
+    const result = await s.update!('k', (current) => ({ ...current!, spent: 42n }))
+    expect(result!.spent).toBe(42n)
+    expect((await s.get('k'))!.spent).toBe(42n)
   })
 
   test('update returning null deletes key', async () => {
     const s = memoryStorage()
-    await s.set('k', 'v')
+    await s.set('k', makeChannel())
     const result = await s.update!('k', () => null)
     expect(result).toBeNull()
     expect(await s.get('k')).toBeNull()
@@ -122,7 +125,7 @@ describe('channelStorage', () => {
       expect(await cs.getChannel(channelId)).toBeNull()
     })
 
-    test('returns deserialized channel after update', async () => {
+    test('returns channel after update', async () => {
       const cs = channelStorage(memoryStorage())
       const ch = makeChannel()
       await cs.updateChannel(channelId, () => ch)
@@ -167,7 +170,7 @@ describe('channelStorage', () => {
       expect(await cs.getChannel(channelId)).toBeNull()
     })
 
-    test('serialization round-trips bigint fields', async () => {
+    test('preserves bigint fields', async () => {
       const cs = channelStorage(memoryStorage())
       const ch = makeChannel({
         deposit: 999_999_999_999_999_999n,
@@ -184,7 +187,7 @@ describe('channelStorage', () => {
       expect(loaded!.spent).toBe(42n)
     })
 
-    test('serialization round-trips Date fields', async () => {
+    test('preserves Date fields', async () => {
       const cs = channelStorage(memoryStorage())
       const date = new Date('2025-06-15T12:30:00.000Z')
       await cs.updateChannel(channelId, () => makeChannel({ createdAt: date }))

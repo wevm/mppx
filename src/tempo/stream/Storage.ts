@@ -2,20 +2,15 @@ import type { Address, Hex } from 'viem'
 import type { SignedVoucher } from './Types.js'
 
 /**
- * Generic key-value storage interface.
+ * Storage interface for channel state persistence.
  *
- * Implementations map string keys to string values and can be backed by
- * any persistence layer (in-memory Map, localStorage, Cloudflare KV, D1,
- * Durable Objects, etc.). This is the user-facing storage type — callers
- * pass a `Storage` and mpay wraps it internally with {@link channelStorage}
- * to produce the richer {@link ChannelStorage} needed by server handlers.
- *
- * Modeled after the Wagmi `Storage` interface for cross-environment
- * compatibility.
+ * Implementations store {@link ChannelState} objects directly — no manual
+ * serialization is required. Backends that need serialization (e.g.,
+ * localStorage, Cloudflare KV) should handle it internally.
  */
 export interface Storage {
-  get(key: string): Promise<string | null>
-  set(key: string, value: string): Promise<void>
+  get(key: string): Promise<ChannelState | null>
+  set(key: string, value: ChannelState): Promise<void>
   delete(key: string): Promise<void>
 
   /**
@@ -40,7 +35,10 @@ export interface Storage {
    * - **DynamoDB**: Conditional put with a version attribute.
    * - **In-memory**: Synchronous callback execution.
    */
-  update?(key: string, fn: (current: string | null) => string | null): Promise<string | null>
+  update?(
+    key: string,
+    fn: (current: ChannelState | null) => ChannelState | null,
+  ): Promise<ChannelState | null>
 }
 
 /**
@@ -156,35 +154,12 @@ export async function deductFromChannel(
   return { ok: deducted, channel }
 }
 
-const bigintFields = new Set(['deposit', 'settledOnChain', 'highestVoucherAmount', 'spent'])
-
-function serialize(state: ChannelState): string {
-  return JSON.stringify(state, function (_key, value) {
-    const raw = this[_key]
-    if (typeof value === 'bigint') return `__bigint:${value.toString()}`
-    if (raw instanceof Date) return `__date:${raw.toISOString()}`
-    return value
-  })
-}
-
-function deserialize(raw: string): ChannelState {
-  return JSON.parse(raw, (key, value) => {
-    if (typeof value === 'string') {
-      if (value.startsWith('__bigint:')) return BigInt(value.slice(9))
-      if (value.startsWith('__date:')) return new Date(value.slice(7))
-    }
-    if (bigintFields.has(key) && typeof value === 'number') return BigInt(value)
-    return value
-  })
-}
-
 /**
  * Wraps a generic {@link Storage} into the internal {@link ChannelStorage}
  * interface used by server handlers and the SSE metering loop.
  *
- * Handles JSON serialization of {@link ChannelState} (including bigint and
- * Date fields) and provides `waitForUpdate` notifications so the SSE
- * `chargeOrWait` loop can wake up without polling.
+ * Provides `waitForUpdate` notifications so the SSE `chargeOrWait` loop
+ * can wake up without polling.
  *
  * ## Atomicity
  *
@@ -227,10 +202,9 @@ export function channelStorage(storage: Storage): ChannelStorage {
     )
 
     try {
-      const raw = await storage.get(channelId)
-      const current = raw ? deserialize(raw) : null
+      const current = await storage.get(channelId)
       const next = fn(current)
-      if (next) await storage.set(channelId, serialize(next))
+      if (next) await storage.set(channelId, next)
       else await storage.delete(channelId)
       return next
     } finally {
@@ -243,21 +217,14 @@ export function channelStorage(storage: Storage): ChannelStorage {
     channelId: Hex,
     fn: (current: ChannelState | null) => ChannelState | null,
   ): Promise<ChannelState | null> {
-    const raw = await storage.update!(channelId, (current) => {
-      const state = current ? deserialize(current) : null
-      const next = fn(state)
-      return next ? serialize(next) : null
-    })
-    return raw ? deserialize(raw) : null
+    return storage.update!(channelId, fn)
   }
 
   const doUpdate = storage.update ? updateWithAtomic : updateWithMutex
 
   const cs: ChannelStorage = {
     async getChannel(channelId) {
-      const raw = await storage.get(channelId)
-      if (!raw) return null
-      return deserialize(raw)
+      return storage.get(channelId)
     },
     async updateChannel(channelId, fn) {
       const result = await doUpdate(channelId, fn)
@@ -282,7 +249,7 @@ export function channelStorage(storage: Storage): ChannelStorage {
 
 /** In-memory storage backed by a simple Map. Useful for development and testing. */
 export function memoryStorage(): Storage {
-  const store = new Map<string, string>()
+  const store = new Map<string, ChannelState>()
   return {
     async get(key) {
       return store.get(key) ?? null

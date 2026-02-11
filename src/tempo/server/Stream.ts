@@ -199,10 +199,16 @@ export function stream<const parameters extends stream.Parameters>(p?: parameter
       return streamReceipt
     },
 
-    // Returns a 204 management response only for explicit POST requests
-    // (SSE/manual mode). GET requests return undefined so the user's route
-    // handler can serve content — this is critical for auto-mode clients
-    // where the fetch wrapper bundles open+voucher into a single GET retry.
+    // This hook acts as a gate: when it returns a Response, `withReceipt()`
+    // in Mpay.ts short-circuits and returns that response directly without
+    // invoking the user's route handler. When it returns undefined, the
+    // user's handler runs normally and serves content.
+    //
+    // We only gate on POST because POST signals an explicit management
+    // request (SSE/manual mode) — e.g. a mid-stream voucher POST to
+    // /api/chat should NOT start a new SSE stream. GET requests always
+    // fall through so auto-mode clients (whose fetch wrapper bundles
+    // open+voucher into a single GET retry) receive content as expected.
     respond({ credential, input }) {
       if (input.method !== 'POST') return undefined
       const { payload } = credential as Credential.Credential<StreamCredentialPayload>

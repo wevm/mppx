@@ -211,6 +211,11 @@ function createIntentFn(parameters: createIntentFn.Parameters): createIntentFn.R
         return { challenge: response, status: 402 }
       }
 
+      // If the method's `respond` hook returns a Response, it means this
+      // request is a management action (e.g. channel open, voucher POST)
+      // and the user's route handler should NOT run. `withReceipt()` will
+      // return the management response directly. If undefined, `withReceipt()`
+      // expects the caller to pass the user handler's response instead.
       const managementResponse = respond
         ? await respond({ credential, input, receipt: receiptData, request } as never)
         : undefined

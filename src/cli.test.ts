@@ -81,21 +81,6 @@ afterAll(() => {
   } catch {}
 })
 
-function createMemoryStorage() {
-  const store = new Map<string, string>()
-  return {
-    async get(key: string) {
-      return store.get(key) ?? null
-    },
-    async set(key: string, value: string) {
-      store.set(key, value)
-    },
-    async delete(key: string) {
-      store.delete(key)
-    },
-  }
-}
-
 test('mpay --help', () => {
   const stdout = run(['--help'])
   expect(stdout).toMatchInlineSnapshot(`
@@ -289,12 +274,10 @@ describe('mpay [url]', () => {
 
   test('streams SSE tokens to stdout', { timeout: 120_000 }, async () => {
     const escrow = await deployEscrow()
-    const storage = createMemoryStorage()
 
     const server = Mpay_server.create({
       methods: [
         stream_server({
-          storage,
           getClient: () => client,
           recipient: accounts[0].address,
           currency: asset,
