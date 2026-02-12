@@ -87,8 +87,8 @@ const client = createClient({
 const mpay = Mpay.create({
   methods: [
     tempo.session({
+      account,
       currency,
-      recipient: account,
       feePayer: true,
       testnet: true,
       getClient: () => client,

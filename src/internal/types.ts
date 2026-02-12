@@ -396,5 +396,8 @@ export type UnionMerge<A, B> = [keyof B] extends [never]
       [K in keyof B]: K extends keyof A ? A[K] | B[K] : B[K]
     }
 
+/** @internal Distributes union `U` into per-member function overloads returning `R`. */
+export type Distribute<U, R> = U extends infer member ? (response: member) => R : never
+
 /** @internal */
 export type Flatten<element> = element extends readonly (infer item)[] ? item : element

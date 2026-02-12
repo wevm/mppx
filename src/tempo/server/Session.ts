@@ -10,7 +10,13 @@
  * For long-lived connections that emit multiple paid events over a single
  * request, use {@link ../stream/Sse} instead.
  */
-import { type Account, type Address, type Hex, parseUnits, type Client as viem_Client } from 'viem'
+import {
+  type Address,
+  type Hex,
+  parseUnits,
+  type Account as viem_Account,
+  type Client as viem_Client,
+} from 'viem'
 import { tempo as tempo_chain } from 'viem/chains'
 import {
   AmountExceedsDepositError,
@@ -27,8 +33,8 @@ import type { LooseOmit } from '../../internal/types.js'
 import * as MethodIntent from '../../MethodIntent.js'
 import * as Client from '../../viem/Client.js'
 import * as Intents from '../Intents.js'
+import * as Account from '../internal/account.js'
 import * as defaults from '../internal/defaults.js'
-import * as Recipient from '../internal/recipient.js'
 import type * as types from '../internal/types.js'
 import {
   broadcastOpenTransaction,
@@ -43,6 +49,7 @@ import type { ChannelState, ChannelStorage, Storage } from '../stream/Storage.js
 import { channelStorage, deductFromChannel, memoryStorage } from '../stream/Storage.js'
 import type { SignedVoucher, StreamCredentialPayload, StreamReceipt } from '../stream/Types.js'
 import { parseVoucherFromPayload, verifyVoucher } from '../stream/Voucher.js'
+import * as Transport from './internal/transport.js'
 
 /** Challenge methodDetails shape for stream intents. */
 type StreamMethodDetails = {
@@ -92,10 +99,13 @@ export function session<const parameters extends session.Parameters>(p?: paramet
     getClient: parameters.getClient,
     rpcUrl: defaults.rpcUrl,
   })
-  const [recipient, feePayer] = Recipient.resolve(parameters)
+  const { recipient, feePayer } = Account.resolve(parameters)
+
+  type Transport = parameters['stream'] extends true ? Transport.Sse : undefined
+  const transport = parameters.stream ? Transport.sse(storage) : undefined
 
   type Defaults = session.DeriveDefaults<parameters>
-  return MethodIntent.toServer<typeof Intents.session, Defaults>(Intents.session, {
+  return MethodIntent.toServer<typeof Intents.session, Defaults, Transport>(Intents.session, {
     defaults: {
       amount,
       currency,
@@ -104,6 +114,8 @@ export function session<const parameters extends session.Parameters>(p?: paramet
       suggestedDeposit,
       unitType,
     } as unknown as Defaults,
+
+    transport: transport as never,
 
     // TODO: dedupe `{charge,stream}.request`
     async request({ credential, request }) {
@@ -249,9 +261,11 @@ export declare namespace session {
     minVoucherDelta?: string | undefined
     /** Storage backend for channel state. */
     storage?: Storage | undefined
+    /** Enable SSE streaming. */
+    stream?: boolean | undefined
     /** Testnet mode. */
     testnet?: boolean | undefined
-  } & Recipient.resolve.Parameters &
+  } & Account.resolve.Parameters &
     Client.getResolver.Parameters &
     Defaults
 
@@ -454,7 +468,7 @@ async function handleOpen(
   challenge: Challenge.Challenge,
   payload: StreamCredentialPayload & { action: 'open' },
   methodDetails: StreamMethodDetails,
-  feePayer: Account | undefined,
+  feePayer: viem_Account | undefined,
 ): Promise<StreamReceipt> {
   const voucher = parseVoucherFromPayload(
     payload.channelId,
@@ -569,7 +583,7 @@ async function handleTopUp(
   challenge: Challenge.Challenge,
   payload: StreamCredentialPayload & { action: 'topUp' },
   methodDetails: StreamMethodDetails,
-  feePayer: Account | undefined,
+  feePayer: viem_Account | undefined,
 ): Promise<StreamReceipt> {
   const channel = await storage.getChannel(payload.channelId)
   if (!channel) {

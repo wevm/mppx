@@ -13,9 +13,9 @@ if (!apiKey) console.warn('OPENAI_API_KEY not set — openai proxy tests will be
 const mpay_server = Mpay_server.create({
   methods: [
     tempo_server({
+      account: accounts[0],
       currency: asset,
       getClient: () => client,
-      recipient: accounts[0],
     }),
   ],
 })

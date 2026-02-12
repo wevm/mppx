@@ -10,9 +10,9 @@ import * as Service from './Service.js'
 const mpay_server = Mpay_server.create({
   methods: [
     tempo_server({
+      account: accounts[0],
       currency: asset,
       getClient: () => client,
-      recipient: accounts[0],
     }),
   ],
 })

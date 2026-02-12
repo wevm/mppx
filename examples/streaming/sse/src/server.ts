@@ -21,10 +21,7 @@
 // `Mpay` is the server-side payment handler. `tempo` provides Tempo-specific
 // payment method implementations (stream channels, SSE transport, storage).
 import { Mpay, tempo } from 'mpay/server'
-import { createClient, http } from 'viem'
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts'
-// `tempoModerato` is Tempo's testnet chain.
-import { tempoModerato } from 'viem/chains'
 // `Actions` provides Tempo-specific viem actions (faucet, token ops, etc.)
 import { Actions } from 'viem/tempo'
 
@@ -46,24 +43,6 @@ const currency = '0x20c0000000000000000000000000000000000000' as const
 // SSE event for each token, and the client must respond with an updated
 // cumulative voucher covering this amount before the next token is sent.
 const pricePerToken = '0.000075'
-
-// Viem Client
-
-//
-// The server needs a viem client for on-chain operations:
-//   1. Broadcasting the channel-open transaction (submitted by the client
-//      but relayed through the server)
-//   2. Settling the channel on-chain when the session ends (calling the
-//      escrow contract's settle function with the highest voucher)
-//
-// `getClient: () => client` is passed to `tempo.session()` below so the
-// payment method can access the chain when needed.
-const client = createClient({
-  account,
-  chain: tempoModerato,
-  pollingInterval: 1_000,
-  transport: http(),
-})
 
 // Shared Channel Storage
 
@@ -99,7 +78,7 @@ const storage = tempo.memoryStorage()
 // Mpay Server Instance
 
 //
-// `Mpay.create()` assembles the payment handler with two key components:
+// `Mpay.create()` assembles the payment handler from method intents.
 //
 //   `methods` — An array of payment method handlers. Here we use
 //   `tempo.session()` which implements the Tempo streaming payment channel
@@ -109,9 +88,8 @@ const storage = tempo.memoryStorage()
 //     - Verifying "voucher" credentials (validating EIP-712 signatures)
 //     - Verifying "close" credentials and settling on-chain
 //
-//   `transport` — The transport layer that adapts mpay to a specific
-//   delivery mechanism. `tempo.sseTransport({ storage })` wires up the
-//   SSE-specific behavior:
+//   `transport` — Each method intent can specify its own transport.
+//   `Transport.sse()` wires up SSE-specific behavior:
 //     - When the response is an async generator, it wraps it in an SSE
 //       ReadableStream with proper headers (text/event-stream, etc.)
 //     - It handles mid-stream voucher POSTs by detecting them as "managed"
@@ -123,14 +101,12 @@ const storage = tempo.memoryStorage()
 const mpay = Mpay.create({
   methods: [
     tempo.session({
-      // The TIP-20 token to accept payment in.
-      currency,
-      // Provides chain access for broadcasting txs and settling channels.
-      getClient: () => client,
       // The server's account — where settled funds are transferred to.
       // Passing the Account object (not just .address) allows the server
       // to co-sign transactions when `feePayer` is enabled.
-      recipient: account,
+      account,
+      // The TIP-20 token to accept payment in.
+      currency,
       // Enable fee-sponsored transactions. When true, the server co-signs
       // the client's channel-open transaction so the protocol covers gas
       // fees instead of the client paying them.
@@ -138,14 +114,14 @@ const mpay = Mpay.create({
       // Shared storage so mid-stream voucher POSTs update the same state
       // that `stream.charge()` reads from.
       storage,
+      // SSE transport for streaming. The session method detects the SSE
+      // transport and wires up Tempo metering (per-token charging, voucher
+      // handling) automatically using the shared storage.
+      stream: true,
       // Enable testnet mode (relaxes certain validation constraints).
       testnet: true,
     }),
   ],
-  // The SSE transport layer. Must share the same `storage` instance as the
-  // stream method above, so that voucher updates from POST requests are
-  // visible to the SSE generator's charge loop.
-  transport: tempo.sseTransport({ storage }),
 })
 
 // Request Handler
@@ -356,6 +332,15 @@ async function* generateTokens(prompt: string): AsyncGenerator<string> {
 // via the testnet faucet. The server account needs a small amount of native
 // tokens (for gas) to settle channels on-chain, though in production the
 // `feePayer` option can be used to have the protocol cover gas.
+import { createClient, http } from 'viem'
+import { tempoModerato } from 'viem/chains'
+
 console.log(`Server recipient: ${account.address}`)
+const client = createClient({
+  account,
+  chain: tempoModerato,
+  pollingInterval: 1_000,
+  transport: http(),
+})
 await Actions.faucet.fundSync(client, { account, timeout: 30_000 })
 console.log('Server account funded')

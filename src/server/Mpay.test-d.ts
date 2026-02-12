@@ -264,9 +264,9 @@ describe('Mpay', () => {
       expectTypeOf<ChargeOptions['amount']>().toEqualTypeOf<string>()
     })
 
-    test('recipient as Account defaults recipient', () => {
+    test('account as Account defaults recipient', () => {
       const handler = Mpay.create({
-        methods: [tempo.charge({ currency: '0x1234', recipient: account })],
+        methods: [tempo.charge({ currency: '0x1234', account })],
         realm: 'api.example.com',
         secretKey: 'secret',
       })
@@ -285,9 +285,9 @@ describe('Mpay', () => {
       })
     })
 
-    test('recipient as Account with feePayer: true', () => {
+    test('account as Account with feePayer: true', () => {
       const handler = Mpay.create({
-        methods: [tempo.charge({ currency: '0x1234', recipient: account, feePayer: true })],
+        methods: [tempo.charge({ currency: '0x1234', account, feePayer: true })],
         realm: 'api.example.com',
         secretKey: 'secret',
       })

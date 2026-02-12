@@ -151,9 +151,9 @@ describe('streaming multi-fetch (examples/streaming/multi-fetch)', () => {
     const server = Mpay_server.create({
       methods: [
         tempo.session({
+          account: accounts[0],
           storage,
           getClient: () => client,
-          recipient: accounts[0],
           currency: asset,
           escrowContract: escrow,
           chainId: client.chain.id,
@@ -213,9 +213,9 @@ describe('streaming sse (examples/streaming/sse)', () => {
     const server = Mpay_server.create({
       methods: [
         tempo.session({
+          account: accounts[0],
           storage,
           getClient: () => client,
-          recipient: accounts[0],
           currency: asset,
           escrowContract: escrow,
           chainId: client.chain.id,
