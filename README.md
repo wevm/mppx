@@ -79,7 +79,7 @@ bunx gitpick wevm/mpay/examples/basic
 
 ## CLI
 
-mpay includes a basic CLI for making HTTP requests with automatic payment handling.
+`mpay` includes a basic CLI for making HTTP requests with automatic payment handling.
 
 ```bash
 # create account - stored in keychain, autofunded on testnet
@@ -100,46 +100,48 @@ Usage:
 
 Commands:
   [url]             Make HTTP request with automatic payment
-  account [action]  Manage accounts (create, delete, fund, list, view)
+  account [action]  Manage accounts (create, default, delete, fund, list, view)
 
 For more info, run any command with the `--help` flag:
   $ mpay --help
   $ mpay account --help
 
 Actions:
-  create  Create new account
-  delete  Delete account
-  fund    Fund account with testnet tokens
-  list    List all accounts
-  view    View account address
+  create   Create new account
+  default  Set default account
+  delete   Delete account
+  fund     Fund account with testnet tokens
+  list     List all accounts
+  view     View account address
 
 Options:
-  -A, --user-agent <ua>  Set User-Agent header
+  -a, --account <name>   Account name (env: MPAY_ACCOUNT)
   -d, --data <data>      Send request body (implies POST unless -X is set)
   -f, --fail             Fail silently on HTTP errors (exit 22)
-  -H, --header <header>  Add header (repeatable)
   -i, --include          Include response headers in output
   -k, --insecure         Skip TLS certificate verification (true for localhost/.local)
-  -L, --location         Follow redirects
+  -r, --rpc-url <url>    RPC endpoint, defaults to public RPC for chain (env: MPAY_RPC_URL)
   -s, --silent           Silent mode (suppress progress and info)
-  -v, --verbose          Make operation more talkative
+  -v, --verbose          Show request/response headers
+  -A, --user-agent <ua>  Set User-Agent header
+  -H, --header <header>  Add header (repeatable)
+  -L, --location         Follow redirects
   -X, --method <method>  HTTP method
-  --accept <type>        Set Accept header (e.g. json, markdown, text/html)
-  --account <name>       Account name (default: default)
-  --json <json>          Send JSON body (sets Content-Type, implies POST)
-  -M, --mainnet          Use mainnet
-  --rpc-url <url>        Custom RPC URL
-  --yes                  Skip confirmation prompts
+  --channel <id>         Reuse existing stream channel ID
   --deposit <amount>     Deposit amount for stream payments (human-readable units)
+  --json <json>          Send JSON body (sets Content-Type and Accept, implies POST)
+  --yes                  Skip confirmation prompts
   -V, --version          Display version number
   -h, --help             Display this message
+
+Examples:
+mpay example.com/content
+mpay example.com/api --json '{"key":"value"}'
 ```
 
 </details>
 
-### Global Install
-
-Install globally to use `mpay` from anywhere:
+You can also install globally to use the `mpay` CLI from anywhere:
 
 ```bash
 npm i -g mpay
@@ -150,6 +152,56 @@ pnpm add -g mpay
 ```bash
 bun add -g mpay
 ```
+
+## Payments Proxy
+
+`mpay` exports a `Proxy` server handler so that you can create or define a 402-protected payments proxy for any API.
+
+```ts
+import { openai, stripe, Proxy } from 'mpay/proxy'
+import { Mpay, tempo } from 'mpay/server'
+
+const mpay = Mpay.create({ methods: [tempo()] })
+
+const proxy = Proxy.create({
+  services: [
+    openai({
+      apiKey: 'sk-...',
+      routes: {
+        'POST /v1/chat/completions': mpay.charge({ amount: '0.05' }),
+        'POST /v1/completions': mpay.stream({ amount: '0.0001' }),
+        'GET /v1/models': mpay.free(),
+      },
+    }),
+    stripe({
+      apiKey: 'sk-...',
+      routes: {
+        'POST /v1/charges': mpay.charge({ amount: '0.01' }),
+        'GET /v1/customers/:id': mpay.free(),
+      },
+    }),
+  ],
+})
+
+createServer(proxy.listener) // Node.js
+Bun.serve(proxy) // Bun
+Deno.serve(proxy.fetch) // Deno
+app.use(proxy.listener) // Express
+app.all('*', (c) => proxy.fetch(c.req.raw)) // Hono
+app.all('*', (c) => proxy.fetch(c.request)) // Elysia
+export const GET = proxy.fetch // Next.js
+export const POST = proxy.fetch // Next.js
+```
+
+This exposes the following routes:
+
+| Route | Pricing |
+|-------|---------|
+| `POST /openai/v1/chat/completions` | charge **$0.005** |
+| `POST /openai/v1/completions` | stream **$0.0001 per token** |
+| `GET /openai/v1/models` | free |
+| `POST /stripe/v1/charges` | charge **$0.01** |
+| `GET /stripe/v1/customers/:id` | free |
 
 ## Protocol
 

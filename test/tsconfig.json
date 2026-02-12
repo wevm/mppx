@@ -6,6 +6,7 @@
       "~test/*": ["./*"],
       "mpay": ["../src/index.ts"],
       "mpay/client": ["../src/client/index.ts"],
+      "mpay/proxy": ["../src/proxy/index.ts"],
       "mpay/server": ["../src/server/index.ts"],
       "mpay/tempo": ["../src/tempo/index.ts"],
       "mpay/hono": ["../src/middlewares/hono.ts"],
