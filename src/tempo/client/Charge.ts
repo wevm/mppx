@@ -7,6 +7,7 @@ import * as MethodIntent from '../../MethodIntent.js'
 import * as Account from '../../viem/Account.js'
 import * as Client from '../../viem/Client.js'
 import * as z from '../../zod.js'
+import * as Attribution from '../Attribution.js'
 import * as Intents from '../Intents.js'
 import * as defaults from '../internal/defaults.js'
 
@@ -24,6 +25,7 @@ import * as defaults from '../internal/defaults.js'
  * ```
  */
 export function charge(parameters: charge.Parameters = {}) {
+  const { clientId } = parameters
   const getClient = Client.getResolver({
     chain: tempo_chain,
     getClient: parameters.getClient,
@@ -44,12 +46,16 @@ export function charge(parameters: charge.Parameters = {}) {
       const { request } = challenge
       const { amount, currency, recipient, methodDetails } = request
 
+      const memo = methodDetails?.memo
+        ? (methodDetails.memo as Hex.Hex)
+        : Attribution.encode({ serverId: challenge.realm, clientId })
+
       const prepared = await prepareTransactionRequest(client, {
         account,
         calls: [
           Actions.token.transfer.call({
             amount: BigInt(amount),
-            memo: methodDetails?.memo as Hex.Hex | undefined,
+            memo,
             to: recipient as Hex.Hex,
             token: currency as Hex.Hex,
           }),
@@ -70,5 +76,9 @@ export function charge(parameters: charge.Parameters = {}) {
 }
 
 export declare namespace charge {
-  type Parameters = Account.getResolver.Parameters & Client.getResolver.Parameters
+  type Parameters = {
+    /** Client identifier used to derive the client fingerprint in attribution memos. */
+    clientId?: string | undefined
+  } & Account.getResolver.Parameters &
+    Client.getResolver.Parameters
 }

@@ -142,7 +142,7 @@ export function session<const parameters extends session.Parameters>(p?: paramet
       if (client.chain?.id !== chainId)
         throw new Error(`Client not configured with chainId ${chainId}.`)
 
-      const escrowContract =
+      const resolvedEscrow =
         request.escrowContract ??
         parameters.escrowContract ??
         defaults.escrowContract[chainId as keyof typeof defaults.escrowContract]
@@ -156,7 +156,7 @@ export function session<const parameters extends session.Parameters>(p?: paramet
         return undefined
       })()
 
-      return { ...request, chainId, escrowContract, feePayer: resolvedFeePayer }
+      return { ...request, chainId, escrowContract: resolvedEscrow, feePayer: resolvedFeePayer }
     },
 
     async verify({ credential }) {
@@ -238,8 +238,9 @@ export function session<const parameters extends session.Parameters>(p?: paramet
     respond({ credential, input }) {
       const { payload } = credential as Credential.Credential<StreamCredentialPayload>
 
-      const isManagement =
-        payload.action === 'open' || payload.action === 'topUp' || payload.action === 'close'
+      if (payload.action === 'close') return new Response(null, { status: 204 })
+
+      const isManagement = payload.action === 'open' || payload.action === 'topUp'
       if (isManagement && input.method === 'POST') return new Response(null, { status: 204 })
 
       const isVoucher = payload.action === 'voucher'

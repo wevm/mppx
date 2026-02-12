@@ -6,14 +6,15 @@ import * as os from 'node:os'
 import * as path from 'node:path'
 import * as readline from 'node:readline'
 import { cac } from 'cac'
+import { Base64 } from 'ox'
 import type { Chain } from 'viem'
 import { type Address, createClient, http } from 'viem'
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts'
 import { tempo as tempoMainnet, tempoModerato } from 'viem/chains'
+import { type ZodMiniType, z } from 'zod/mini'
 import * as Challenge from './Challenge.js'
 import * as Credential from './Credential.js'
 import * as Mpay from './client/Mpay.js'
-import * as Receipt from './Receipt.js'
 import { tempo } from './tempo/client/index.js'
 import type { StreamCredentialPayload } from './tempo/stream/Types.js'
 import { signVoucher } from './tempo/stream/Voucher.js'
@@ -46,644 +47,651 @@ cli
   .option('--yes', 'Skip confirmation prompts')
   .example(`${name} example.com/content`)
   .example(`${name} example.com/api --json '{"key":"value"}'`)
-  .action(
-    async (
-      rawUrl: string | undefined,
-      options: {
-        account?: string
-        channel?: string
-        data?: string
-        fail?: boolean
-        header?: string | string[]
-        include?: boolean
-        insecure?: boolean
-        json?: string
-        location?: boolean
-        method?: string
-        rpcUrl?: string
-        silent?: boolean
-        userAgent?: string
-        verbose?: boolean
-        yes?: boolean
-        deposit?: string
-      },
-    ) => {
-      if (!rawUrl) {
-        cli.outputHelp()
+  .action(async (rawUrl: string | undefined, rawOptions: unknown) => {
+    const options = parseOptions(
+      z.object({
+        account: z.optional(z.string()),
+        channel: z.optional(z.coerce.string()),
+        data: z.optional(z.string()),
+        deposit: z.optional(z.union([z.string(), z.number()])),
+        fail: z.optional(z.boolean()),
+        header: z.optional(z.union([z.string(), z.array(z.string())])),
+        include: z.optional(z.boolean()),
+        insecure: z.optional(z.boolean()),
+        json: z.optional(z.string()),
+        location: z.optional(z.boolean()),
+        method: z.optional(z.string()),
+        rpcUrl: z.optional(z.string()),
+        silent: z.optional(z.boolean()),
+        userAgent: z.optional(z.string()),
+        verbose: z.optional(z.boolean()),
+        yes: z.optional(z.boolean()),
+      }),
+      rawOptions,
+    )
+    if (!rawUrl) {
+      cli.outputHelp()
+      return
+    }
+
+    const silent = options.silent ?? false
+    const info = silent ? (_msg: string) => {} : (msg: string) => process.stderr.write(msg)
+    if (silent) options.yes = true
+
+    const accountName = resolveAccountName(options.account)
+    const privateKey = process.env.MPAY_PRIVATE_KEY ?? (await createKeychain(accountName).get())
+    if (!privateKey) {
+      if (options.account) console.log(`Account "${accountName}" not found.`)
+      else console.log(`No account found.`)
+      process.exit(1)
+    }
+
+    const headers: Record<string, string> = {}
+    if (options.header) {
+      const headerList = Array.isArray(options.header) ? options.header : [options.header]
+      for (const header of headerList) {
+        const index = header.indexOf(':')
+        if (index === -1) {
+          console.error(`Invalid header format: ${header}`)
+          process.exit(1)
+        }
+        headers[header.slice(0, index).trim()] = header.slice(index + 1).trim()
+      }
+    }
+    headers['User-Agent'] = options.userAgent ?? `${name}/${version}`
+
+    const url = (() => {
+      const hasProtocol = /^https?:\/\//.test(rawUrl)
+      const isLocal = /^(localhost|127\.0\.0\.1|\[::1\])(:\d+)?/.test(rawUrl)
+      return hasProtocol ? rawUrl : `${isLocal ? 'http' : 'https'}://${rawUrl}`
+    })()
+    const { hostname } = new URL(url)
+    if (options.insecure || hostname === 'localhost' || hostname.endsWith('.local')) {
+      process.removeAllListeners('warning')
+      process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0'
+    }
+
+    try {
+      const fetchInit: RequestInit = { redirect: options.location ? 'follow' : 'manual' }
+      if (options.json) {
+        fetchInit.body = options.json
+        headers['Content-Type'] ??= 'application/json'
+        headers.Accept ??= 'application/json'
+      } else if (options.data) {
+        fetchInit.body = options.data
+      }
+      if (options.method) fetchInit.method = options.method.toUpperCase()
+      else if (fetchInit.body) fetchInit.method = 'POST'
+      if (Object.keys(headers).length > 0) fetchInit.headers = headers
+
+      const verbose = options.verbose ?? false
+
+      const printRequestHeaders = (reqUrl: string, init: RequestInit) => {
+        if (!verbose) return
+        const { pathname, host } = new URL(reqUrl)
+        const method = (init.method ?? 'GET').toUpperCase()
+        info(`> ${method} ${pathname} HTTP/1.1\n`)
+        info(`> Host: ${host}\n`)
+        for (const [k, v] of Object.entries((init.headers ?? {}) as Record<string, string>))
+          info(`> ${k}: ${v}\n`)
+        info('>\n')
+      }
+
+      const printResponseHeaders = (res: Response) => {
+        if (!options.include && !verbose) return
+        if (silent) return
+        const status = `HTTP/1.1 ${res.status} ${res.statusText}`
+        const out = verbose ? process.stderr : process.stdout
+        const prefix = verbose ? '< ' : ''
+        out.write(`${prefix}${status}\n`)
+        for (const [k, v] of res.headers) out.write(`${prefix}${k}: ${v}\n`)
+        out.write(verbose ? '<\n' : '\n')
+      }
+
+      printRequestHeaders(url, fetchInit)
+      const challengeResponse = await globalThis.fetch(url, fetchInit)
+      if (challengeResponse.status !== 402) {
+        if (options.fail && challengeResponse.status >= 400) process.exit(22)
+        printResponseHeaders(challengeResponse)
+        console.log((await challengeResponse.text()).replace(/\n+$/, ''))
         return
       }
 
-      const silent = options.silent ?? false
-      const info = silent ? (_msg: string) => {} : (msg: string) => process.stderr.write(msg)
-      if (silent) options.yes = true
+      const account = privateKeyToAccount(privateKey as `0x${string}`)
+      const rpcUrl = options.rpcUrl ?? process.env.RPC_URL
+      const client = createClient({
+        chain: await resolveChain({ ...options, rpcUrl }),
+        transport: http(rpcUrl),
+      })
 
-      const accountName = resolveAccountName(options.account)
-      const privateKey = process.env.MPAY_PRIVATE_KEY ?? (await createKeychain(accountName).get())
-      if (!privateKey) {
-        if (options.account) console.log(`Account "${accountName}" not found.`)
-        else console.log(`No account found.`)
-        process.exit(1)
-      }
+      const challenge = Challenge.fromResponse(challengeResponse)
+      const explorerUrl = client.chain?.blockExplorers?.default?.url
+      const shownKeys = new Set<string>()
+      const challengeRequest = challenge.request as Record<string, unknown>
+      const currency = challengeRequest.currency as string | undefined
+      const tokenInfo = currency
+        ? await fetchTokenInfo(client, currency as Address, account.address).catch(() => undefined)
+        : undefined
+      const tokenSymbol = tokenInfo?.symbol ?? currency ?? ''
+      const tokenDecimals =
+        tokenInfo?.decimals ?? (challengeRequest.decimals as number | undefined) ?? 6
 
-      const headers: Record<string, string> = {}
-      if (options.header) {
-        const headerList = Array.isArray(options.header) ? options.header : [options.header]
-        for (const header of headerList) {
-          const index = header.indexOf(':')
-          if (index === -1) {
-            console.error(`Invalid header format: ${header}`)
-            process.exit(1)
+      {
+        printResponseHeaders(challengeResponse)
+        const request = challengeRequest
+
+        const balanceKeys = new Set(['amount', 'suggestedDeposit', 'minVoucherDelta'])
+        const skipKeys = new Set(['decimals', 'currency', 'methodDetails'])
+        const fmtRequestValue = (key: string, value: unknown): string => {
+          if (balanceKeys.has(key) && typeof value === 'string') {
+            return `${value} ${pc.dim(`(${fmtBalance(BigInt(value), tokenSymbol, tokenDecimals)})`)}`
           }
-          headers[header.slice(0, index).trim()] = header.slice(index + 1).trim()
+          if (key === 'chainId' && typeof value === 'number') {
+            const name = chainName({ id: value, name: '' })
+            return name ? `${value} ${pc.dim(`(${name})`)}` : String(value)
+          }
+          if (typeof value === 'string' && /^0x[0-9a-fA-F]{40}$/.test(value))
+            return explorerUrl ? pc.link(`${explorerUrl}/address/${value}`, value) : value
+          if (typeof value === 'string' && /^https?:\/\//.test(value)) return pc.link(value, value)
+          return String(value)
         }
-      }
-      headers['User-Agent'] = options.userAgent ?? `${name}/${version}`
-
-      const url = (() => {
-        const hasProtocol = /^https?:\/\//.test(rawUrl)
-        const isLocal = /^(localhost|127\.0\.0\.1|\[::1\])(:\d+)?/.test(rawUrl)
-        return hasProtocol ? rawUrl : `${isLocal ? 'http' : 'https'}://${rawUrl}`
-      })()
-      const { hostname } = new URL(url)
-      if (options.insecure || hostname === 'localhost' || hostname.endsWith('.local')) {
-        process.removeAllListeners('warning')
-        process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0'
-      }
-
-      try {
-        const fetchInit: RequestInit = { redirect: options.location ? 'follow' : 'manual' }
-        if (options.json) {
-          fetchInit.body = options.json
-          headers['Content-Type'] ??= 'application/json'
-          headers.Accept ??= 'application/json'
-        } else if (options.data) {
-          fetchInit.body = options.data
-        }
-        if (options.method) fetchInit.method = options.method.toUpperCase()
-        else if (fetchInit.body) fetchInit.method = 'POST'
-        if (Object.keys(headers).length > 0) fetchInit.headers = headers
-
-        const verbose = options.verbose ?? false
-
-        const printRequestHeaders = (reqUrl: string, init: RequestInit) => {
-          if (!verbose) return
-          const { pathname, host } = new URL(reqUrl)
-          const method = (init.method ?? 'GET').toUpperCase()
-          info(`> ${method} ${pathname} HTTP/1.1\n`)
-          info(`> Host: ${host}\n`)
-          for (const [k, v] of Object.entries((init.headers ?? {}) as Record<string, string>))
-            info(`> ${k}: ${v}\n`)
-          info('>\n')
-        }
-
-        const printResponseHeaders = (res: Response) => {
-          if (!options.include && !verbose) return
-          if (silent) return
-          const status = `HTTP/1.1 ${res.status} ${res.statusText}`
-          const out = verbose ? process.stderr : process.stdout
-          const prefix = verbose ? '< ' : ''
-          out.write(`${prefix}${status}\n`)
-          for (const [k, v] of res.headers) out.write(`${prefix}${k}: ${v}\n`)
-          out.write(verbose ? '<\n' : '\n')
-        }
-
-        printRequestHeaders(url, fetchInit)
-        const challengeResponse = await globalThis.fetch(url, fetchInit)
-        if (challengeResponse.status !== 402) {
-          if (options.fail && challengeResponse.status >= 400) process.exit(22)
-          printResponseHeaders(challengeResponse)
-          console.log((await challengeResponse.text()).replace(/\n+$/, ''))
-          return
-        }
-
-        const account = privateKeyToAccount(privateKey as `0x${string}`)
-        const rpcUrl = options.rpcUrl ?? process.env.RPC_URL
-        const client = createClient({
-          chain: await resolveChain({ ...options, rpcUrl }),
-          transport: http(rpcUrl),
-        })
-
-        const challenge = Challenge.fromResponse(challengeResponse)
-        const explorerUrl = client.chain?.blockExplorers?.default?.url
-        const shownKeys = new Set<string>()
-        const challengeRequest = challenge.request as Record<string, unknown>
-        const currency = challengeRequest.currency as string | undefined
-        const tokenInfo = currency
-          ? await fetchTokenInfo(client, currency as Address, account.address).catch(
-              () => undefined,
-            )
-          : undefined
-        const tokenSymbol = tokenInfo?.symbol ?? currency ?? ''
-        const tokenDecimals =
-          tokenInfo?.decimals ?? (challengeRequest.decimals as number | undefined) ?? 6
-
-        {
-          printResponseHeaders(challengeResponse)
-          const request = challengeRequest
-
-          const balanceKeys = new Set(['amount', 'suggestedDeposit', 'minVoucherDelta'])
-          const skipKeys = new Set(['decimals', 'currency', 'methodDetails'])
-          const fmtRequestValue = (key: string, value: unknown): string => {
-            if (balanceKeys.has(key) && typeof value === 'string') {
-              return `${value} ${pc.dim(`(${fmtBalance(BigInt(value), tokenSymbol, tokenDecimals)})`)}`
-            }
-            if (key === 'chainId' && typeof value === 'number') {
-              const name = chainName({ id: value, name: '' })
-              return name ? `${value} ${pc.dim(`(${name})`)}` : String(value)
-            }
-            if (typeof value === 'string' && /^0x[0-9a-fA-F]{40}$/.test(value))
-              return explorerUrl ? pc.link(`${explorerUrl}/address/${value}`, value) : value
-            if (typeof value === 'string' && /^https?:\/\//.test(value))
-              return pc.link(value, value)
-            return String(value)
-          }
-          const decodeMemo = (hex: string): string | undefined => {
-            try {
-              const stripped = hex.replace(/^0x0*/, '')
-              if (!stripped) return undefined
-              const bytes = Uint8Array.from(
-                stripped.match(/.{1,2}/g)!.map((b) => Number.parseInt(b, 16)),
-              )
-              const decoded = new TextDecoder().decode(bytes)
-              return /^[\x20-\x7e]+$/.test(decoded) ? decoded : undefined
-            } catch {
-              return undefined
-            }
-          }
-
-          const skipChallengeKeys = new Set(['id', 'request'])
-          const fmtChallengeValue = (key: string, value: unknown): string => {
-            if (key === 'realm' && typeof value === 'string') {
-              try {
-                const realmUrl = new URL(value.includes('://') ? value : `https://${value}`)
-                return pc.link(realmUrl.href, value)
-              } catch {}
-            }
-            return String(value)
-          }
-          const challengeRows: [string, string][] = []
-          for (const [key, value] of Object.entries(challenge)) {
-            if (skipChallengeKeys.has(key) || value === undefined) continue
-            challengeRows.push([key, fmtChallengeValue(key, value)])
-          }
-          challengeRows.sort(([a], [b]) => a.localeCompare(b))
-
-          const requestRows: [string, string][] = []
-          for (const [key, value] of Object.entries(request)) {
-            if (skipKeys.has(key) || value === undefined) continue
-            requestRows.push([key, fmtRequestValue(key, value)])
-          }
-          requestRows.sort(([a], [b]) => a.localeCompare(b))
-
-          const detailRows: [string, string, string?][] = []
-          const methodDetails = request.methodDetails as Record<string, unknown> | undefined
-          if (methodDetails) {
-            for (const [key, value] of Object.entries(methodDetails)) {
-              if (value === undefined) continue
-              if (key === 'memo' && typeof value === 'string') {
-                const decoded = decodeMemo(value)
-                detailRows.push([key, decoded ? `${decoded}\n${pc.dim(value)}` : value])
-              } else {
-                detailRows.push([key, fmtRequestValue(key, value)])
-              }
-            }
-            detailRows.sort(([a], [b]) => a.localeCompare(b))
-          }
-
-          const sections: [string, [string, string][]][] = [
-            ['Challenge', challengeRows],
-            ['Request', requestRows],
-            ...(detailRows.length ? [['Details', detailRows] as [string, [string, string][]]] : []),
-          ]
-          for (const [, rows] of sections) for (const [key] of rows) shownKeys.add(key)
-          const pad = Math.max(...sections.flatMap(([, rows]) => rows.map(([k]) => k.length)))
-          const indent = `  ${''.padEnd(pad)}  `
-
-          info(`${pc.bold(pc.yellow('Payment Required'))}\n`)
-          for (const [title, rows] of sections) {
-            info(`${pc.bold(title)}\n`)
-            for (const [label, value] of rows) {
-              const [first, ...rest] = value.split('\n')
-              info(`  ${pc.dim(label.padEnd(pad))}  ${first}\n`)
-              for (const line of rest) info(`${indent}${line}\n`)
-            }
-          }
-          info('\n')
-
-          if (!options.yes) {
-            const ok = await confirm(`Proceed with ${challenge.intent}?`)
-            if (!ok) {
-              info('Aborted.\n')
-              process.exit(0)
-            }
-          }
-        }
-
-        const mpay = Mpay.create({
-          methods: tempo({
-            account,
-            getClient: () => client,
-            deposit: (() => {
-              if (challenge.intent !== 'session') return undefined
-              const suggestedDeposit = (challenge.request as Record<string, unknown>)
-                .suggestedDeposit as string | undefined
-              const cliDeposit = options.deposit !== undefined ? String(options.deposit) : undefined
-              const resolved =
-                suggestedDeposit ?? cliDeposit ?? (isTestnet(client.chain!) ? '10' : undefined)
-              if (!resolved) {
-                console.error(
-                  'Stream payment requires a deposit. Use --deposit <amount> or connect to testnet.',
-                )
-                process.exit(1)
-              }
-              return resolved
-            })(),
-          }),
-          polyfill: false,
-        })
-
-        const credential = await mpay.createCredential(
-          challengeResponse,
-          (() => {
-            if (!options.channel) return undefined
-            const idx = process.argv.indexOf('--channel')
-            return { channelId: idx !== -1 ? process.argv[idx + 1]! : String(options.channel) }
-          })(),
-        )
-
-        const streamMd = challenge.request.methodDetails as
-          | { escrowContract?: string; chainId?: number }
-          | undefined
-        let streamChannelId: `0x${string}` | undefined
-        let streamEscrowContract: Address | undefined
-        let streamChainId = 0
-        let streamCumulativeAmount = 0n
-
-        if (challenge.intent === 'session') {
-          const parsed = Credential.deserialize<StreamCredentialPayload>(credential)
-          streamChannelId = parsed.payload.channelId
-          streamChainId = streamMd?.chainId ?? client.chain?.id ?? 0
-          streamEscrowContract = streamMd?.escrowContract as Address | undefined
-          if ('cumulativeAmount' in parsed.payload && parsed.payload.cumulativeAmount)
-            streamCumulativeAmount = BigInt(parsed.payload.cumulativeAmount)
-
-          if (parsed.payload.action === 'open') {
-            const depositRaw =
-              (challengeRequest.suggestedDeposit as string | undefined) ?? options.deposit
-            const depositDisplay = depositRaw
-              ? ` ${pc.dim(`(deposit ${depositRaw} ${tokenSymbol})`)}`
-              : ''
-            info(`${pc.dim(`Channel opened ${parsed.payload.channelId}`)}${depositDisplay}\n`)
-          }
-        }
-
-        const credentialFetchInit = {
-          ...fetchInit,
-          headers: { ...(fetchInit.headers as Record<string, string>), Authorization: credential },
-        }
-        printRequestHeaders(url, credentialFetchInit)
-        let credentialResponse = await globalThis.fetch(url, credentialFetchInit)
-
-        if (options.fail && credentialResponse.status >= 400) process.exit(22)
-
-        if (
-          challenge.intent === 'session' &&
-          credentialResponse.ok &&
-          !credentialResponse.headers.get('Content-Type')?.includes('text/event-stream')
-        ) {
-          const parsed = Credential.deserialize<StreamCredentialPayload>(credential)
-          if (parsed.payload.action === 'open' && 'cumulativeAmount' in parsed.payload) {
-            const tickAmount = BigInt(challenge.request.amount as string)
-            streamCumulativeAmount = BigInt(parsed.payload.cumulativeAmount) + tickAmount
-
-            if (streamEscrowContract) {
-              const signature = await signVoucher(
-                client,
-                account,
-                { channelId: streamChannelId!, cumulativeAmount: streamCumulativeAmount },
-                streamEscrowContract,
-                streamChainId,
-              )
-              const voucherPayload: StreamCredentialPayload = {
-                action: 'voucher',
-                channelId: streamChannelId!,
-                cumulativeAmount: streamCumulativeAmount.toString(),
-                signature,
-              }
-              const voucherCred = Credential.serialize({
-                challenge,
-                payload: voucherPayload,
-                source: `did:pkh:eip155:${streamChainId}:${account.address}`,
-              })
-              credentialResponse = await globalThis.fetch(url, {
-                ...fetchInit,
-                headers: {
-                  ...(fetchInit.headers as Record<string, string>),
-                  Authorization: voucherCred,
-                },
-              })
-            }
-          }
-        }
-
-        if (credentialResponse.status === 402) {
-          const body = await credentialResponse.text()
-          info(`${pc.bold(pc.red('Payment Rejected'))}\n`)
+        const decodeMemo = (hex: string): string | undefined => {
           try {
-            const problem = JSON.parse(body) as Record<string, unknown>
+            const stripped = hex.replace(/^0x0*/, '')
+            if (!stripped) return undefined
+            const bytes = Uint8Array.from(
+              stripped.match(/.{1,2}/g)!.map((b) => Number.parseInt(b, 16)),
+            )
+            const decoded = new TextDecoder().decode(bytes)
+            return /^[\x20-\x7e]+$/.test(decoded) ? decoded : undefined
+          } catch {
+            return undefined
+          }
+        }
+
+        const skipChallengeKeys = new Set(['id', 'request'])
+        const fmtChallengeValue = (key: string, value: unknown): string => {
+          if (key === 'realm' && typeof value === 'string') {
+            try {
+              const realmUrl = new URL(value.includes('://') ? value : `https://${value}`)
+              return pc.link(realmUrl.href, value)
+            } catch {}
+          }
+          return String(value)
+        }
+        const challengeRows: [string, string][] = []
+        for (const [key, value] of Object.entries(challenge)) {
+          if (skipChallengeKeys.has(key) || value === undefined) continue
+          challengeRows.push([key, fmtChallengeValue(key, value)])
+        }
+        challengeRows.sort(([a], [b]) => a.localeCompare(b))
+
+        const requestRows: [string, string][] = []
+        for (const [key, value] of Object.entries(request)) {
+          if (skipKeys.has(key) || value === undefined) continue
+          requestRows.push([key, fmtRequestValue(key, value)])
+        }
+        requestRows.sort(([a], [b]) => a.localeCompare(b))
+
+        const detailRows: [string, string, string?][] = []
+        const methodDetails = request.methodDetails as Record<string, unknown> | undefined
+        if (methodDetails) {
+          for (const [key, value] of Object.entries(methodDetails)) {
+            if (value === undefined) continue
+            if (key === 'memo' && typeof value === 'string') {
+              const decoded = decodeMemo(value)
+              detailRows.push([key, decoded ? `${decoded}\n${pc.dim(value)}` : value])
+            } else {
+              detailRows.push([key, fmtRequestValue(key, value)])
+            }
+          }
+          detailRows.sort(([a], [b]) => a.localeCompare(b))
+        }
+
+        const sections: [string, [string, string][]][] = [
+          ['Challenge', challengeRows],
+          ['Request', requestRows],
+          ...(detailRows.length ? [['Details', detailRows] as [string, [string, string][]]] : []),
+        ]
+        for (const [, rows] of sections) for (const [key] of rows) shownKeys.add(key)
+        const pad = Math.max(...sections.flatMap(([, rows]) => rows.map(([k]) => k.length)))
+        const indent = `  ${''.padEnd(pad)}  `
+
+        info(`${pc.bold(pc.yellow('Payment Required'))}\n`)
+        for (const [title, rows] of sections) {
+          info(`${pc.bold(title)}\n`)
+          for (const [label, value] of rows) {
+            const [first, ...rest] = value.split('\n')
+            info(`  ${pc.dim(label.padEnd(pad))}  ${first}\n`)
+            for (const line of rest) info(`${indent}${line}\n`)
+          }
+        }
+        info('\n')
+
+        if (!options.yes) {
+          const ok = await confirm(`Proceed with ${challenge.intent}?`)
+          if (!ok) {
+            info('Aborted.\n')
+            process.exit(0)
+          }
+        }
+      }
+
+      const mpay = Mpay.create({
+        methods: tempo({
+          account,
+          getClient: () => client,
+          deposit: (() => {
+            if (challenge.intent !== 'session') return undefined
+            const suggestedDeposit = (challenge.request as Record<string, unknown>)
+              .suggestedDeposit as string | undefined
+            const cliDeposit = options.deposit !== undefined ? String(options.deposit) : undefined
+            const resolved =
+              suggestedDeposit ?? cliDeposit ?? (isTestnet(client.chain!) ? '10' : undefined)
+            if (!resolved) {
+              console.error(
+                'Stream payment requires a deposit. Use --deposit <amount> or connect to testnet.',
+              )
+              process.exit(1)
+            }
+            return resolved
+          })(),
+        }),
+        polyfill: false,
+      })
+
+      const credential = await mpay.createCredential(
+        challengeResponse,
+        (() => {
+          if (!options.channel) return undefined
+          const idx = process.argv.indexOf('--channel')
+          const channelId = idx !== -1 ? process.argv[idx + 1]! : String(options.channel)
+          const saved = readChannelCumulative(channelId)
+          return {
+            channelId,
+            ...(saved !== undefined && { cumulativeAmountRaw: saved.toString() }),
+          }
+        })(),
+      )
+
+      const streamMd = challenge.request.methodDetails as
+        | { escrowContract?: string; chainId?: number }
+        | undefined
+      let streamChannelId: `0x${string}` | undefined
+      let streamEscrowContract: Address | undefined
+      let streamChainId = 0
+      let streamCumulativeAmount = 0n
+
+      if (challenge.intent === 'session') {
+        const parsed = Credential.deserialize<StreamCredentialPayload>(credential)
+        streamChannelId = parsed.payload.channelId
+        streamChainId = streamMd?.chainId ?? client.chain?.id ?? 0
+        streamEscrowContract = streamMd?.escrowContract as Address | undefined
+        if ('cumulativeAmount' in parsed.payload && parsed.payload.cumulativeAmount)
+          streamCumulativeAmount = BigInt(parsed.payload.cumulativeAmount)
+
+        if (parsed.payload.action === 'open') {
+          const depositRaw =
+            (challengeRequest.suggestedDeposit as string | undefined) ?? options.deposit
+          const depositDisplay = depositRaw
+            ? ` ${pc.dim(`(deposit ${depositRaw} ${tokenSymbol})`)}`
+            : ''
+          info(`${pc.dim(`Channel opened ${parsed.payload.channelId}`)}${depositDisplay}\n`)
+        }
+      }
+
+      const credentialFetchInit = {
+        ...fetchInit,
+        headers: { ...(fetchInit.headers as Record<string, string>), Authorization: credential },
+      }
+      printRequestHeaders(url, credentialFetchInit)
+      const credentialResponse = await globalThis.fetch(url, credentialFetchInit)
+
+      if (options.fail && credentialResponse.status >= 400) process.exit(22)
+
+      if (credentialResponse.status === 402) {
+        const body = await credentialResponse.text()
+        info(`${pc.bold(pc.red('Payment Rejected'))}\n`)
+        try {
+          const problem = JSON.parse(body) as Record<string, unknown>
+          const rows: [string, string][] = []
+          for (const [key, value] of Object.entries(problem)) {
+            if (value === undefined) continue
+            rows.push([key, String(value)])
+          }
+          rows.sort(([a], [b]) => a.localeCompare(b))
+          const pad = Math.max(...rows.map(([k]) => k.length))
+          for (const [label, value] of rows) info(`  ${pc.dim(label.padEnd(pad))}  ${value}\n`)
+        } catch {
+          if (body) info(`  ${body}\n`)
+        }
+        process.exit(1)
+      } else {
+        printResponseHeaders(credentialResponse)
+
+        const receiptHeader = credentialResponse.headers.get('Payment-Receipt')
+        if (receiptHeader) {
+          try {
+            const receiptJson = JSON.parse(Base64.toString(receiptHeader)) as Record<
+              string,
+              unknown
+            >
+            if (
+              typeof receiptJson.acceptedCumulative === 'string' &&
+              receiptJson.acceptedCumulative
+            ) {
+              streamCumulativeAmount = BigInt(receiptJson.acceptedCumulative)
+              if (streamChannelId) writeChannelCumulative(streamChannelId, streamCumulativeAmount)
+            }
+            info(`\n${pc.bold(pc.green('Payment Receipt'))}\n`)
             const rows: [string, string][] = []
-            for (const [key, value] of Object.entries(problem)) {
-              if (value === undefined) continue
-              rows.push([key, String(value)])
+            for (const [key, value] of Object.entries(receiptJson)) {
+              if (value === undefined || shownKeys.has(key)) continue
+              if (key === 'reference' && typeof value === 'string' && explorerUrl)
+                rows.push([key, pc.link(`${explorerUrl}/tx/${value}`, value)])
+              else rows.push([key, String(value)])
             }
             rows.sort(([a], [b]) => a.localeCompare(b))
             const pad = Math.max(...rows.map(([k]) => k.length))
             for (const [label, value] of rows) info(`  ${pc.dim(label.padEnd(pad))}  ${value}\n`)
-          } catch {
-            if (body) info(`  ${body}\n`)
+            info('\n')
+          } catch {}
+        }
+        const contentType = credentialResponse.headers.get('Content-Type') ?? ''
+        if (contentType.includes('text/event-stream')) {
+          const reader = credentialResponse.body?.getReader()
+          if (!reader) {
+            console.error('No response body')
+            process.exit(1)
           }
-          process.exit(1)
-        } else {
-          printResponseHeaders(credentialResponse)
+          const decoder = new TextDecoder()
+          let buffer = ''
+          let currentEvent = ''
 
-          const receiptHeader = credentialResponse.headers.get('Payment-Receipt')
-          if (receiptHeader) {
-            try {
-              const receipt = Receipt.deserialize(receiptHeader)
-              info(`\n${pc.bold(pc.green('Payment Receipt'))}\n`)
-              const rows: [string, string][] = []
-              for (const [key, value] of Object.entries(receipt)) {
-                if (value === undefined || shownKeys.has(key)) continue
-                if (key === 'reference' && typeof value === 'string' && explorerUrl)
-                  rows.push([key, pc.link(`${explorerUrl}/tx/${value}`, value)])
-                else rows.push([key, String(value)])
-              }
-              rows.sort(([a], [b]) => a.localeCompare(b))
-              const pad = Math.max(...rows.map(([k]) => k.length))
-              for (const [label, value] of rows) info(`  ${pc.dim(label.padEnd(pad))}  ${value}\n`)
-              info('\n')
-            } catch {}
+          const streamCred =
+            challenge.intent === 'session'
+              ? Credential.deserialize<StreamCredentialPayload>(credential)
+              : undefined
+          const channelId = streamCred?.payload.channelId
+          const md = challenge.request.methodDetails as
+            | { escrowContract?: string; chainId?: number }
+            | undefined
+          const streamChainId = md?.chainId ?? client.chain?.id ?? 0
+          const escrowContract = md?.escrowContract as Address | undefined
+          let cumulativeAmount =
+            streamCred?.payload &&
+            'cumulativeAmount' in streamCred.payload &&
+            streamCred.payload.cumulativeAmount
+              ? BigInt(streamCred.payload.cumulativeAmount)
+              : 0n
+          let _voucherSeq = 0
+
+          const termBg = await detectTerminalBg()
+          const chunkBgs = (() => {
+            if (!termBg || !pc.isColorSupported) return undefined
+            const clamp = (n: number) => Math.max(0, Math.min(255, Math.round(n)))
+            const isDark = 0.299 * termBg.r + 0.587 * termBg.g + 0.114 * termBg.b < 128
+            const offset = isDark ? 1 : -1
+            const bgRgb = (d: number) => (s: string) => {
+              const r = clamp(termBg.r + d * offset)
+              const g = clamp(termBg.g + d * offset)
+              const b = clamp(termBg.b + d * offset)
+              return `\x1b[48;2;${r};${g};${b}m${s}\x1b[49m`
+            }
+            return [bgRgb(12), bgRgb(24)] as const
+          })()
+          let chunkIdx = 0
+
+          const writeContent = (chunk: string) => {
+            if (chunkBgs) {
+              const bgFn = chunkBgs[chunkIdx % chunkBgs.length]!
+              process.stdout.write(chunk.replace(/[^\n]+/g, (m) => bgFn(m)))
+              chunkIdx++
+            } else {
+              process.stdout.write(chunk)
+            }
           }
-          const contentType = credentialResponse.headers.get('Content-Type') ?? ''
-          if (contentType.includes('text/event-stream')) {
-            const reader = credentialResponse.body?.getReader()
-            if (!reader) {
-              console.error('No response body')
-              process.exit(1)
-            }
-            const decoder = new TextDecoder()
-            let buffer = ''
-            let currentEvent = ''
 
-            const streamCred =
-              challenge.intent === 'session'
-                ? Credential.deserialize<StreamCredentialPayload>(credential)
-                : undefined
-            const channelId = streamCred?.payload.channelId
-            const md = challenge.request.methodDetails as
-              | { escrowContract?: string; chainId?: number }
-              | undefined
-            const streamChainId = md?.chainId ?? client.chain?.id ?? 0
-            const escrowContract = md?.escrowContract as Address | undefined
-            let cumulativeAmount =
-              streamCred?.payload &&
-              'cumulativeAmount' in streamCred.payload &&
-              streamCred.payload.cumulativeAmount
-                ? BigInt(streamCred.payload.cumulativeAmount)
-                : 0n
-            let _voucherSeq = 0
-            const _canRewrite = process.stdout.isTTY === true
-
-            const termBg = await detectTerminalBg()
-            const chunkBgs = (() => {
-              if (!termBg || !pc.isColorSupported) return undefined
-              const clamp = (n: number) => Math.max(0, Math.min(255, Math.round(n)))
-              const isDark = 0.299 * termBg.r + 0.587 * termBg.g + 0.114 * termBg.b < 128
-              const offset = isDark ? 1 : -1
-              const bgRgb = (d: number) => (s: string) => {
-                const r = clamp(termBg.r + d * offset)
-                const g = clamp(termBg.g + d * offset)
-                const b = clamp(termBg.b + d * offset)
-                return `\x1b[48;2;${r};${g};${b}m${s}\x1b[49m`
+          const processLines = async (lines: string[]) => {
+            for (const line of lines) {
+              if (line.startsWith('event: ')) {
+                currentEvent = line.slice(7).trim()
+                continue
               }
-              return [bgRgb(12), bgRgb(24)] as const
-            })()
-            let chunkIdx = 0
-
-            const writeContent = (chunk: string) => {
-              if (chunkBgs) {
-                const bgFn = chunkBgs[chunkIdx % chunkBgs.length]!
-                process.stdout.write(chunk.replace(/[^\n]+/g, (m) => bgFn(m)))
-                chunkIdx++
-              } else {
-                process.stdout.write(chunk)
+              if (!line.startsWith('data: ')) {
+                if (line === '') currentEvent = ''
+                continue
               }
-            }
-
-            const processLines = async (lines: string[]) => {
-              for (const line of lines) {
-                if (line.startsWith('event: ')) {
-                  currentEvent = line.slice(7).trim()
-                  continue
-                }
-                if (!line.startsWith('data: ')) {
-                  if (line === '') currentEvent = ''
-                  continue
-                }
-                const data = line.slice(6)
-                if (data.trim() === '[DONE]') continue
-                if (
-                  currentEvent === 'payment-need-voucher' &&
-                  channelId &&
-                  escrowContract &&
-                  streamChainId
-                ) {
-                  try {
-                    const event = JSON.parse(data) as {
-                      channelId: string
-                      requiredCumulative: string
-                    }
-                    const required = BigInt(event.requiredCumulative)
-                    cumulativeAmount = cumulativeAmount > required ? cumulativeAmount : required
-
-                    const signature = await signVoucher(
-                      client,
-                      account,
-                      { channelId, cumulativeAmount },
-                      escrowContract,
-                      streamChainId,
-                    )
-                    const voucherCred = Credential.serialize({
-                      challenge,
-                      payload: {
-                        action: 'voucher',
-                        channelId,
-                        cumulativeAmount: cumulativeAmount.toString(),
-                        signature,
-                      },
-                      source: `did:pkh:eip155:${streamChainId}:${account.address}`,
-                    })
-                    await globalThis.fetch(url, {
-                      method: 'POST',
-                      headers: { Authorization: voucherCred },
-                    })
-                    _voucherSeq++
-                  } catch (e) {
-                    info(
-                      pc.dim(pc.yellow(` [voucher failed: ${e instanceof Error ? e.message : e}]`)),
-                    )
+              const data = line.slice(6)
+              if (data.trim() === '[DONE]') continue
+              if (
+                currentEvent === 'payment-need-voucher' &&
+                channelId &&
+                escrowContract &&
+                streamChainId
+              ) {
+                try {
+                  const event = JSON.parse(data) as {
+                    channelId: string
+                    requiredCumulative: string
                   }
-                  currentEvent = ''
-                  continue
-                }
-                if (currentEvent === 'payment-receipt') {
-                  try {
-                    const receipt = JSON.parse(data) as Record<string, unknown>
-                    info(`\n\n${pc.bold(pc.green('Payment Receipt'))}\n`)
-                    const rows: [string, string][] = []
-                    for (const [key, value] of Object.entries(receipt)) {
-                      if (value === undefined || shownKeys.has(key)) continue
-                      if (key === 'channelId' && value === receipt.reference) continue
-                      const receiptBalanceKeys = ['acceptedCumulative', 'spent']
-                      if (receiptBalanceKeys.includes(key) && typeof value === 'string') {
-                        rows.push([
-                          key,
-                          `${value} ${pc.dim(`(${fmtBalance(BigInt(value), tokenSymbol, tokenDecimals)})`)}`,
-                        ])
-                      } else if (key === 'reference' && typeof value === 'string' && explorerUrl)
-                        rows.push([key, pc.link(`${explorerUrl}/tx/${value}`, value)])
-                      else rows.push([key, String(value)])
-                    }
-                    rows.sort(([a], [b]) => a.localeCompare(b))
-                    const rpad = Math.max(...rows.map(([k]) => k.length))
-                    for (const [label, value] of rows)
-                      info(`  ${pc.dim(label.padEnd(rpad))}  ${value}\n`)
-                  } catch {}
-                  currentEvent = ''
-                  continue
-                }
-                if (data.length === 0) {
-                  writeContent('\n')
-                } else {
-                  try {
-                    const parsed = JSON.parse(data) as {
-                      token?: string
-                      choices?: { delta?: { content?: string } }[]
-                    }
+                  const required = BigInt(event.requiredCumulative)
+                  cumulativeAmount = cumulativeAmount > required ? cumulativeAmount : required
 
-                    writeContent(parsed.token ?? parsed.choices?.[0]?.delta?.content ?? data)
-                  } catch {
-                    writeContent(data)
-                  }
+                  const signature = await signVoucher(
+                    client,
+                    account,
+                    { channelId, cumulativeAmount },
+                    escrowContract,
+                    streamChainId,
+                  )
+                  const voucherCred = Credential.serialize({
+                    challenge,
+                    payload: {
+                      action: 'voucher',
+                      channelId,
+                      cumulativeAmount: cumulativeAmount.toString(),
+                      signature,
+                    },
+                    source: `did:pkh:eip155:${streamChainId}:${account.address}`,
+                  })
+                  await globalThis.fetch(url, {
+                    method: 'POST',
+                    headers: { Authorization: voucherCred },
+                  })
+                  _voucherSeq++
+                } catch (e) {
+                  info(
+                    pc.dim(pc.yellow(` [voucher failed: ${e instanceof Error ? e.message : e}]`)),
+                  )
                 }
                 currentEvent = ''
+                continue
               }
-            }
-
-            while (true) {
-              const { done, value } = await reader.read()
-              if (done) break
-              buffer += decoder.decode(value, { stream: true })
-              const lines = buffer.split('\n')
-              buffer = lines.pop()!
-              await processLines(lines)
-            }
-            if (buffer.trim()) await processLines([buffer])
-
-            if (channelId && escrowContract && streamChainId) {
-              const signature = await signVoucher(
-                client,
-                account,
-                { channelId, cumulativeAmount },
-                escrowContract,
-                streamChainId,
-              )
-              const closePayload: StreamCredentialPayload = {
-                action: 'close',
-                channelId,
-                cumulativeAmount: cumulativeAmount.toString(),
-                signature,
+              if (currentEvent === 'payment-receipt') {
+                try {
+                  const receipt = JSON.parse(data) as Record<string, unknown>
+                  info(`\n\n${pc.bold(pc.green('Payment Receipt'))}\n`)
+                  const rows: [string, string][] = []
+                  for (const [key, value] of Object.entries(receipt)) {
+                    if (value === undefined || shownKeys.has(key)) continue
+                    if (key === 'channelId' && value === receipt.reference) continue
+                    const receiptBalanceKeys = ['acceptedCumulative', 'spent']
+                    if (receiptBalanceKeys.includes(key) && typeof value === 'string') {
+                      rows.push([
+                        key,
+                        `${value} ${pc.dim(`(${fmtBalance(BigInt(value), tokenSymbol, tokenDecimals)})`)}`,
+                      ])
+                    } else if (key === 'reference' && typeof value === 'string' && explorerUrl)
+                      rows.push([key, pc.link(`${explorerUrl}/tx/${value}`, value)])
+                    else rows.push([key, String(value)])
+                  }
+                  rows.sort(([a], [b]) => a.localeCompare(b))
+                  const rpad = Math.max(...rows.map(([k]) => k.length))
+                  for (const [label, value] of rows)
+                    info(`  ${pc.dim(label.padEnd(rpad))}  ${value}\n`)
+                } catch {}
+                currentEvent = ''
+                continue
               }
-              const closeCred = Credential.serialize({
-                challenge,
-                payload: closePayload,
-                source: `did:pkh:eip155:${streamChainId}:${account.address}`,
-              })
-              const closeRes = await globalThis.fetch(url, {
-                method: 'POST',
-                headers: { Authorization: closeCred },
-              })
-              if (closeRes.ok) {
-                info(
-                  `\n${pc.dim('Channel closed.')} ${pc.dim(`Spent ${fmtBalance(cumulativeAmount, tokenSymbol, tokenDecimals)}.`)}\n`,
-                )
+              if (data.length === 0) {
+                writeContent('\n')
               } else {
-                info(
-                  `\n${pc.dim(pc.yellow('Channel close failed'))} ${pc.dim(`(${closeRes.status})`)}\n`,
-                )
-              }
-            }
-          } else {
-            const body = (await credentialResponse.text()).replace(/\n+$/, '')
-            console.log(body)
+                try {
+                  const parsed = JSON.parse(data) as {
+                    token?: string
+                    choices?: { delta?: { content?: string } }[]
+                  }
 
-            const shouldClose =
-              challenge.intent === 'session' &&
-              credentialResponse.ok &&
-              streamChannelId &&
-              streamEscrowContract &&
-              streamChainId
-            if (shouldClose && !options.yes) {
-              info('\n')
+                  writeContent(parsed.token ?? parsed.choices?.[0]?.delta?.content ?? data)
+                } catch {
+                  writeContent(data)
+                }
+              }
+              currentEvent = ''
             }
-            if (shouldClose && !(options.yes || (await confirm('Close channel?')))) {
-              info(`${pc.dim('Kept channel open.')}\n`)
-            } else if (shouldClose) {
-              const signature = await signVoucher(
-                client,
-                account,
-                { channelId: streamChannelId!, cumulativeAmount: streamCumulativeAmount },
-                streamEscrowContract!,
-                streamChainId,
+          }
+
+          while (true) {
+            const { done, value } = await reader.read()
+            if (done) break
+            buffer += decoder.decode(value, { stream: true })
+            const lines = buffer.split('\n')
+            buffer = lines.pop()!
+            await processLines(lines)
+          }
+          if (buffer.trim()) await processLines([buffer])
+
+          if (channelId && escrowContract && streamChainId) {
+            const signature = await signVoucher(
+              client,
+              account,
+              { channelId, cumulativeAmount },
+              escrowContract,
+              streamChainId,
+            )
+            const closePayload: StreamCredentialPayload = {
+              action: 'close',
+              channelId,
+              cumulativeAmount: cumulativeAmount.toString(),
+              signature,
+            }
+            const closeCred = Credential.serialize({
+              challenge,
+              payload: closePayload,
+              source: `did:pkh:eip155:${streamChainId}:${account.address}`,
+            })
+            const closeRes = await globalThis.fetch(url, {
+              method: 'POST',
+              headers: { Authorization: closeCred },
+            })
+            if (closeRes.ok) {
+              info(
+                `\n${pc.dim('Channel closed.')} ${pc.dim(`Spent ${fmtBalance(cumulativeAmount, tokenSymbol, tokenDecimals)}.`)}\n`,
               )
-              const closePayload: StreamCredentialPayload = {
-                action: 'close',
-                channelId: streamChannelId!,
-                cumulativeAmount: streamCumulativeAmount.toString(),
-                signature,
-              }
-              const closeCred = Credential.serialize({
-                challenge,
-                payload: closePayload,
-                source: `did:pkh:eip155:${streamChainId}:${account.address}`,
-              })
-              const closeRes = await globalThis.fetch(url, {
-                method: 'POST',
-                headers: { Authorization: closeCred },
-              })
-              if (closeRes.ok) {
-                info(
-                  `${pc.dim('Channel closed.')} ${pc.dim(`Spent ${fmtBalance(streamCumulativeAmount, tokenSymbol, tokenDecimals)}.`)}\n`,
-                )
-              } else {
-                info(
-                  `${pc.dim(pc.yellow('Channel close failed'))} ${pc.dim(`(${closeRes.status})`)}\n`,
-                )
-              }
+            } else {
+              info(
+                `\n${pc.dim(pc.yellow('Channel close failed'))} ${pc.dim(`(${closeRes.status})`)}\n`,
+              )
+            }
+          }
+        } else {
+          const body = (await credentialResponse.text()).replace(/\n+$/, '')
+          console.log(body)
+
+          const shouldClose =
+            challenge.intent === 'session' &&
+            credentialResponse.ok &&
+            streamChannelId &&
+            streamEscrowContract &&
+            streamChainId
+          if (shouldClose && !options.yes) {
+            info('\n')
+          }
+          if (shouldClose && !(options.yes || (await confirm('Close channel?')))) {
+            info(`${pc.dim('Kept channel open.')}\n`)
+          } else if (shouldClose) {
+            const signature = await signVoucher(
+              client,
+              account,
+              { channelId: streamChannelId!, cumulativeAmount: streamCumulativeAmount },
+              streamEscrowContract!,
+              streamChainId,
+            )
+            const closePayload: StreamCredentialPayload = {
+              action: 'close',
+              channelId: streamChannelId!,
+              cumulativeAmount: streamCumulativeAmount.toString(),
+              signature,
+            }
+            const closeCred = Credential.serialize({
+              challenge,
+              payload: closePayload,
+              source: `did:pkh:eip155:${streamChainId}:${account.address}`,
+            })
+            const closeRes = await globalThis.fetch(url, {
+              ...fetchInit,
+              headers: {
+                ...(fetchInit.headers as Record<string, string>),
+                Authorization: closeCred,
+              },
+            })
+            if (closeRes.ok) {
+              deleteChannelState(streamChannelId!)
+              info(
+                `${pc.dim('Channel closed.')} ${pc.dim(`Spent ${fmtBalance(streamCumulativeAmount, tokenSymbol, tokenDecimals)}.`)}\n`,
+              )
+            } else {
+              const closeBody = await closeRes.text().catch(() => '')
+              info(
+                `${pc.dim(pc.yellow('Channel close failed'))} ${pc.dim(`(${closeRes.status})`)}\n`,
+              )
+              info(
+                `${pc.dim(`  channelId:          ${streamChannelId}`)}\n` +
+                  `${pc.dim(`  cumulativeAmount:   ${streamCumulativeAmount}`)}\n` +
+                  `${pc.dim(`  escrowContract:     ${streamEscrowContract}`)}\n` +
+                  `${pc.dim(`  chainId:            ${streamChainId}`)}\n` +
+                  `${pc.dim(`  account:            ${account.address}`)}\n` +
+                  `${pc.dim(`  response:           ${closeBody || '(empty)'}`)}\n`,
+              )
             }
           }
         }
-      } catch (err) {
-        // TODO: revert cast when https://github.com/wevm/zile/pull/26 is merged
-        const errCause =
-          err instanceof Error ? (err as unknown as Record<string, unknown>).cause : undefined
-        const cause = errCause instanceof Error ? errCause.message : null
-        console.error('Request failed:', err instanceof Error ? err.message : err)
-        if (cause) console.error('Cause:', cause)
-        process.exit(1)
       }
-    },
-  )
+    } catch (err) {
+      // TODO: revert cast when https://github.com/wevm/zile/pull/26 is merged
+      const errCause =
+        err instanceof Error ? (err as unknown as Record<string, unknown>).cause : undefined
+      const cause = errCause instanceof Error ? errCause : undefined
+
+      if (cause && 'code' in cause) {
+        const code = cause.code as string
+        if (code === 'ENOTFOUND')
+          console.error(`Could not resolve host "${hostname}". Check the URL and try again.`)
+        else if (code === 'ECONNREFUSED')
+          console.error(`Connection refused by "${hostname}". Is the server running?`)
+        else if (code === 'ECONNRESET') console.error(`Connection to "${hostname}" was reset.`)
+        else if (code === 'ETIMEDOUT') console.error(`Connection to "${hostname}" timed out.`)
+        else if (code === 'CERT_HAS_EXPIRED' || code === 'UNABLE_TO_VERIFY_LEAF_SIGNATURE')
+          console.error(
+            `TLS certificate error for "${hostname}". Use --insecure to skip verification.`,
+          )
+        else {
+          console.error(`Request to "${hostname}" failed: ${cause.message}`)
+        }
+      } else {
+        console.error('Request failed:', err instanceof Error ? err.message : err)
+        if (cause) console.error('Cause:', cause.message)
+      }
+      process.exit(1)
+    }
+  })
+
+const accountOptionsSchema = z.object({
+  account: z.optional(z.string()),
+  rpcUrl: z.optional(z.string()),
+  yes: z.optional(z.boolean()),
+})
 
 cli
   .command('account [action]', 'Manage accounts (create, default, delete, fund, list, view)')
@@ -693,196 +701,192 @@ cli
     'RPC endpoint, defaults to public RPC for chain (env: MPAY_RPC_URL)',
   )
   .option('--yes', 'DANGER!! Skip confirmation prompts')
-  .action(
-    async (
-      action: string | undefined,
-      options: { account?: string; rpcUrl?: string; yes?: boolean },
-    ) => {
-      if (!action) {
-        cli.outputHelp()
-        return
-      }
-      switch (action) {
-        case 'create': {
-          let resolvedName = options.account
-          if (!resolvedName) {
-            const existing = await createKeychain().list()
-            if (existing.length === 0) resolvedName = 'main'
-            else {
-              const input = await prompt('Account name')
-              if (!input) return
-              resolvedName = input
-            }
-          }
-          let keychain = createKeychain(resolvedName)
-          while (await keychain.get()) {
-            process.stderr.write(`${pc.dim(`Account "${resolvedName}" already exists.`)}\n\n`)
-            const input = await prompt('Enter different name')
+  .action(async (action: string | undefined, rawOptions: unknown) => {
+    if (!action) {
+      cli.outputHelp()
+      return
+    }
+    const options = parseOptions(accountOptionsSchema, rawOptions)
+    switch (action) {
+      case 'create': {
+        let resolvedName = options.account
+        if (!resolvedName) {
+          const existing = await createKeychain().list()
+          if (existing.length === 0) resolvedName = 'main'
+          else {
+            const input = await prompt('Account name')
             if (!input) return
             resolvedName = input
-            keychain = createKeychain(resolvedName)
           }
-          const privateKey = generatePrivateKey()
-          const account = privateKeyToAccount(privateKey)
-          await keychain.set(privateKey)
-          const accounts = await createKeychain().list()
-          if (accounts.length === 1) createDefaultStore().set(resolvedName)
-          console.log(`Account "${resolvedName}" saved to keychain.`)
-          console.log(pc.dim(`Address ${account.address}`))
-          resolveChain(options)
-            .then((chain) => createClient({ chain, transport: http(options.rpcUrl) }))
-            .then((client) =>
-              import('viem/tempo').then(({ Actions }) =>
-                Actions.faucet.fund(client, { account }).catch(() => {}),
-              ),
+        }
+        let keychain = createKeychain(resolvedName)
+        while (await keychain.get()) {
+          process.stderr.write(`${pc.dim(`Account "${resolvedName}" already exists.`)}\n\n`)
+          const input = await prompt('Enter different name')
+          if (!input) return
+          resolvedName = input
+          keychain = createKeychain(resolvedName)
+        }
+        const privateKey = generatePrivateKey()
+        const account = privateKeyToAccount(privateKey)
+        await keychain.set(privateKey)
+        const accounts = await createKeychain().list()
+        if (accounts.length === 1) createDefaultStore().set(resolvedName)
+        console.log(`Account "${resolvedName}" saved to keychain.`)
+        console.log(pc.dim(`Address ${account.address}`))
+        resolveChain(options)
+          .then((chain) => createClient({ chain, transport: http(options.rpcUrl) }))
+          .then((client) =>
+            import('viem/tempo').then(({ Actions }) =>
+              Actions.faucet.fund(client, { account }).catch(() => {}),
+            ),
+          )
+        return
+      }
+      case 'default': {
+        const accountName = options.account
+        if (!accountName) {
+          console.error('-a, --account <name> is required for default.')
+          process.exit(1)
+        }
+        const key = await createKeychain(accountName).get()
+        if (!key) {
+          console.log(`Account "${accountName}" not found.`)
+          process.exit(1)
+        }
+        createDefaultStore().set(accountName)
+        console.log(`Default account set to "${accountName}"`)
+        return
+      }
+      case 'delete': {
+        if (!options.account) {
+          console.error('-a, --account <name> is required for delete.')
+          process.exit(1)
+        }
+        const keychain = createKeychain(options.account)
+        const key = await keychain.get()
+        if (!key) {
+          console.log(`Account "${options.account}" not found.`)
+          process.exit(1)
+        }
+        const account = privateKeyToAccount(key as `0x${string}`)
+        const balanceLines = await fetchBalanceLines(account.address, { includeTestnet: false })
+        if (!options.yes) {
+          process.stderr.write(pc.dim(`Delete account "${options.account}"\n`))
+          process.stderr.write(pc.dim(`  Address  ${account.address}\n`))
+          for (let i = 0; i < balanceLines.length; i++)
+            process.stderr.write(
+              pc.dim(`  ${i === 0 ? 'Balance' : '       '}  ${balanceLines[i]}\n`),
             )
-          return
-        }
-        case 'default': {
-          const accountName = options.account
-          if (!accountName) {
-            console.error('-a, --account <name> is required for default.')
-            process.exit(1)
-          }
-          const key = await createKeychain(accountName).get()
-          if (!key) {
-            console.log(`Account "${accountName}" not found.`)
-            process.exit(1)
-          }
-          createDefaultStore().set(accountName)
-          console.log(`Default account set to "${accountName}"`)
-          return
-        }
-        case 'delete': {
-          if (!options.account) {
-            console.error('-a, --account <name> is required for delete.')
-            process.exit(1)
-          }
-          const keychain = createKeychain(options.account)
-          const key = await keychain.get()
-          if (!key) {
-            console.log(`Account "${options.account}" not found.`)
-            process.exit(1)
-          }
-          const account = privateKeyToAccount(key as `0x${string}`)
-          const balanceLines = await fetchBalanceLines(account.address, { includeTestnet: false })
-          if (!options.yes) {
-            process.stderr.write(pc.dim(`Delete account "${options.account}"\n`))
-            process.stderr.write(pc.dim(`  Address  ${account.address}\n`))
-            for (let i = 0; i < balanceLines.length; i++)
-              process.stderr.write(
-                pc.dim(`  ${i === 0 ? 'Balance' : '       '}  ${balanceLines[i]}\n`),
-              )
-            process.stderr.write(pc.dim('This action cannot be undone\n\n'))
-            const confirmed = await confirm('Confirm delete?')
-            if (!confirmed) {
-              console.log('Canceled')
-              return
-            }
-          }
-          await keychain.delete()
-          const currentDefault = createDefaultStore().get()
-          if (currentDefault === options.account) {
-            const remaining = await createKeychain().list()
-            if (remaining.length > 0) {
-              createDefaultStore().set(remaining[0]!)
-              console.log(`Default account set to "${remaining[0]}"`)
-            } else {
-              createDefaultStore().clear()
-            }
-          }
-          console.log(`Account "${options.account}" deleted`)
-          return
-        }
-        case 'fund': {
-          const accountName = resolveAccountName(options.account)
-          const keychain = createKeychain(accountName)
-          const key = await keychain.get()
-          if (!key) {
-            if (options.account) console.log(`Account "${accountName}" not found.`)
-            else console.log(`No account found.`)
-            process.exit(1)
-          }
-          const account = privateKeyToAccount(key as `0x${string}`)
-          const chain = await resolveChain(options)
-          const client = createClient({ chain, transport: http(options.rpcUrl) })
-          console.log(`Funding "${accountName}" on ${chainName(chain)}`)
-          try {
-            const { Actions } = await import('viem/tempo')
-            const hashes = await Actions.faucet.fund(client, { account })
-            const explorerUrl = chain.blockExplorers?.default?.url
-            for (const hash of hashes) {
-              const label = explorerUrl ? pc.link(`${explorerUrl}/tx/${hash}`, pc.gray(hash)) : hash
-              console.log(`  ${label}`)
-            }
-            const { waitForTransactionReceipt } = await import('viem/actions')
-            await Promise.all(hashes.map((hash) => waitForTransactionReceipt(client, { hash })))
-            console.log('Funded successfully')
-          } catch (err) {
-            console.error('Funding failed:', err instanceof Error ? err.message : err)
-          }
-          return
-        }
-        case 'list': {
-          const currentDefault = createDefaultStore().get()
-          const accounts = (await createKeychain().list()).sort()
-          if (accounts.length === 0) {
-            console.log(`No accounts found.`)
+          process.stderr.write(pc.dim('This action cannot be undone\n\n'))
+          const confirmed = await confirm('Confirm delete?')
+          if (!confirmed) {
+            console.log('Canceled')
             return
           }
-          const entries = await Promise.all(
-            accounts.map(async (accountName) => {
-              const key = await createKeychain(accountName).get()
-              if (!key) return undefined
-              return {
-                name: accountName,
-                address: privateKeyToAccount(key as `0x${string}`).address,
-              }
-            }),
-          )
-          const resolved = entries.filter((e) => e !== undefined)
-          const maxWidth = Math.max(
-            ...resolved.map((e) => e.name.length + (e.name === currentDefault ? 1 : 0)),
-          )
-          for (const entry of resolved) {
-            const isDefault = entry.name === currentDefault
-            const label = isDefault ? `${entry.name}${pc.dim('*')}` : entry.name
-            const width = entry.name.length + (isDefault ? 1 : 0)
-            console.log(`${label}${' '.repeat(maxWidth - width + 2)}${pc.dim(entry.address)}`)
-          }
-          return
         }
-        case 'view': {
-          const accountName = resolveAccountName(options.account)
-          const keychain = createKeychain(accountName)
-          const key = await keychain.get()
-          if (!key) {
-            if (options.account) console.log(`Account "${accountName}" not found.`)
-            else console.log(`No account found.`)
-            process.exit(1)
+        await keychain.delete()
+        const currentDefault = createDefaultStore().get()
+        if (currentDefault === options.account) {
+          const remaining = await createKeychain().list()
+          if (remaining.length > 0) {
+            createDefaultStore().set(remaining[0]!)
+            console.log(`Default account set to "${remaining[0]}"`)
+          } else {
+            createDefaultStore().clear()
           }
-          const account = privateKeyToAccount(key as `0x${string}`)
-          console.log(`${pc.dim('Address')}  ${account.address}`)
-
-          const rpcUrl = options.rpcUrl ?? process.env.RPC_URL
-          const chain = rpcUrl ? await resolveChain({ rpcUrl }) : undefined
-          const balanceLines = await fetchBalanceLines(
-            account.address,
-            chain && rpcUrl ? { chain, rpcUrl } : undefined,
-          )
-          for (let i = 0; i < balanceLines.length; i++)
-            console.log(`${pc.dim(i === 0 ? 'Balance' : '       ')}  ${balanceLines[i]}`)
-
-          console.log(`${pc.dim('Name')}     ${accountName}`)
-          return
         }
-        default:
-          console.error(`Unknown action: ${action}`)
-          console.error('Available: create, default, delete, fund, list, view')
-          process.exit(1)
+        console.log(`Account "${options.account}" deleted`)
+        return
       }
-    },
-  )
+      case 'fund': {
+        const accountName = resolveAccountName(options.account)
+        const keychain = createKeychain(accountName)
+        const key = await keychain.get()
+        if (!key) {
+          if (options.account) console.log(`Account "${accountName}" not found.`)
+          else console.log(`No account found.`)
+          process.exit(1)
+        }
+        const account = privateKeyToAccount(key as `0x${string}`)
+        const chain = await resolveChain(options)
+        const client = createClient({ chain, transport: http(options.rpcUrl) })
+        console.log(`Funding "${accountName}" on ${chainName(chain)}`)
+        try {
+          const { Actions } = await import('viem/tempo')
+          const hashes = await Actions.faucet.fund(client, { account })
+          const explorerUrl = chain.blockExplorers?.default?.url
+          for (const hash of hashes) {
+            const label = explorerUrl ? pc.link(`${explorerUrl}/tx/${hash}`, pc.gray(hash)) : hash
+            console.log(`  ${label}`)
+          }
+          const { waitForTransactionReceipt } = await import('viem/actions')
+          await Promise.all(hashes.map((hash) => waitForTransactionReceipt(client, { hash })))
+          console.log('Funded successfully')
+        } catch (err) {
+          console.error('Funding failed:', err instanceof Error ? err.message : err)
+        }
+        return
+      }
+      case 'list': {
+        const currentDefault = createDefaultStore().get()
+        const accounts = (await createKeychain().list()).sort()
+        if (accounts.length === 0) {
+          console.log(`No accounts found.`)
+          return
+        }
+        const entries = await Promise.all(
+          accounts.map(async (accountName) => {
+            const key = await createKeychain(accountName).get()
+            if (!key) return undefined
+            return {
+              name: accountName,
+              address: privateKeyToAccount(key as `0x${string}`).address,
+            }
+          }),
+        )
+        const resolved = entries.filter((e) => e !== undefined)
+        const maxWidth = Math.max(
+          ...resolved.map((e) => e.name.length + (e.name === currentDefault ? 1 : 0)),
+        )
+        for (const entry of resolved) {
+          const isDefault = entry.name === currentDefault
+          const label = isDefault ? `${entry.name}${pc.dim('*')}` : entry.name
+          const width = entry.name.length + (isDefault ? 1 : 0)
+          console.log(`${label}${' '.repeat(maxWidth - width + 2)}${pc.dim(entry.address)}`)
+        }
+        return
+      }
+      case 'view': {
+        const accountName = resolveAccountName(options.account)
+        const keychain = createKeychain(accountName)
+        const key = await keychain.get()
+        if (!key) {
+          if (options.account) console.log(`Account "${accountName}" not found.`)
+          else console.log(`No account found.`)
+          process.exit(1)
+        }
+        const account = privateKeyToAccount(key as `0x${string}`)
+        console.log(`${pc.dim('Address')}  ${account.address}`)
+
+        const rpcUrl = options.rpcUrl ?? process.env.RPC_URL
+        const chain = rpcUrl ? await resolveChain({ rpcUrl }) : undefined
+        const balanceLines = await fetchBalanceLines(
+          account.address,
+          chain && rpcUrl ? { chain, rpcUrl } : undefined,
+        )
+        for (let i = 0; i < balanceLines.length; i++)
+          console.log(`${pc.dim(i === 0 ? 'Balance' : '       ')}  ${balanceLines[i]}`)
+
+        console.log(`${pc.dim('Name')}     ${accountName}`)
+        return
+      }
+      default:
+        console.error(`Unknown action: ${action}`)
+        console.error('Available: create, default, delete, fund, list, view')
+        process.exit(1)
+    }
+  })
 
 cli.version(version, '-V, --version')
 
@@ -916,6 +920,21 @@ try {
 
 /////////////////////////////////////////////////////////////////////////////////////////////////
 
+function parseOptions<const schema extends ZodMiniType>(
+  schema: schema,
+  rawOptions: unknown,
+): z.output<schema> {
+  const result = schema.safeParse(rawOptions ?? {})
+  if (result.success) return result.data
+  const summary = result.error.issues
+    .map((issue) => {
+      const path = issue.path.length ? issue.path.join('.') : 'options'
+      return `${path}: ${issue.message}`
+    })
+    .join(', ')
+  throw new Error(`Invalid CLI options (${summary})`)
+}
+
 function execCommand(
   command: string,
   args: string[],
@@ -925,6 +944,35 @@ function execCommand(
       resolve({ stdout: stdout.trim(), stderr: stderr.trim(), error })
     })
   })
+}
+
+function channelStateDir() {
+  return path.join(
+    process.env.XDG_CONFIG_HOME || path.join(os.homedir(), '.config'),
+    'mpay',
+    'channels',
+  )
+}
+
+function readChannelCumulative(channelId: string): bigint | undefined {
+  try {
+    const raw = fs.readFileSync(path.join(channelStateDir(), channelId), 'utf-8').trim()
+    return raw ? BigInt(raw) : undefined
+  } catch {
+    return undefined
+  }
+}
+
+function writeChannelCumulative(channelId: string, cumulative: bigint): void {
+  const dir = channelStateDir()
+  fs.mkdirSync(dir, { recursive: true })
+  fs.writeFileSync(path.join(dir, channelId), cumulative.toString(), 'utf-8')
+}
+
+function deleteChannelState(channelId: string): void {
+  try {
+    fs.unlinkSync(path.join(channelStateDir(), channelId))
+  } catch {}
 }
 
 function createDefaultStore() {
@@ -1167,12 +1215,12 @@ function chainName(chain: { id: number; name: string }) {
 }
 
 const pathUsd = '0x20c0000000000000000000000000000000000000' as Address
-const testnetTokens: Address[] = [
+const testnetTokens = [
   '0x20c0000000000000000000000000000000000000',
   '0x20c0000000000000000000000000000000000001',
   '0x20c0000000000000000000000000000000000002',
   '0x20c0000000000000000000000000000000000003',
-]
+] as const
 
 function fmtBalance(b: bigint, symbol: string, decimals = 6) {
   const value = Number(b) / 10 ** decimals

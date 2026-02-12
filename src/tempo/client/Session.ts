@@ -141,7 +141,7 @@ export function session(parameters: session.Parameters = {}) {
     let entry = channels.get(key)
 
     if (!entry) {
-      const suggestedChannelId = md?.channelId as Hex.Hex | undefined
+      const suggestedChannelId = (context?.channelId ?? md?.channelId) as Hex.Hex | undefined
       if (suggestedChannelId) {
         const recovered = await tryRecoverChannel(
           client,
@@ -150,11 +150,21 @@ export function session(parameters: session.Parameters = {}) {
           chainId,
         )
         if (recovered) {
+          const contextCumulative = context?.cumulativeAmountRaw
+            ? BigInt(context.cumulativeAmountRaw)
+            : context?.cumulativeAmount
+              ? parseUnits(context.cumulativeAmount, decimals)
+              : undefined
+          if (contextCumulative !== undefined) recovered.cumulativeAmount = contextCumulative
           channels.set(key, recovered)
           channelIdToKey.set(recovered.channelId, key)
           escrowContractMap.set(recovered.channelId, escrowContract)
           entry = recovered
           notifyUpdate(entry)
+        } else if (context?.channelId) {
+          throw new Error(
+            `Channel ${context.channelId} cannot be reused (closed or not found on-chain).`,
+          )
         }
       }
     }

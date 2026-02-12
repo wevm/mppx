@@ -3,6 +3,7 @@ import {
   type Address,
   type Client,
   decodeFunctionData,
+  getAbiItem,
   type Hex,
   isAddressEqual,
   type ReadContractReturnType,
@@ -11,99 +12,12 @@ import {
 import { readContract, sendRawTransactionSync, signTransaction, writeContract } from 'viem/actions'
 import { Transaction } from 'viem/tempo'
 import { BadRequestError, ChannelClosedError, VerificationFailedError } from '../../Errors.js'
+import { escrowAbi } from './escrow.abi.js'
 import type { SignedVoucher } from './Types.js'
 
-const UINT128_MAX = 2n ** 128n - 1n
+export { escrowAbi }
 
-/**
- * Minimal ABI for the TempoStreamChannel escrow contract.
- * Only includes the functions needed for server-side verification.
- * TODO (brendanryan): Move this to a more robust type once this is
- * fully a TIP.
- */
-export const escrowAbi = [
-  {
-    type: 'function',
-    name: 'getChannel',
-    inputs: [{ name: 'channelId', type: 'bytes32' }],
-    outputs: [
-      {
-        name: '',
-        type: 'tuple',
-        components: [
-          { name: 'payer', type: 'address' },
-          { name: 'payee', type: 'address' },
-          { name: 'token', type: 'address' },
-          { name: 'authorizedSigner', type: 'address' },
-          { name: 'deposit', type: 'uint128' },
-          { name: 'settled', type: 'uint128' },
-          { name: 'closeRequestedAt', type: 'uint64' },
-          { name: 'finalized', type: 'bool' },
-        ],
-      },
-    ],
-    stateMutability: 'view',
-  },
-  {
-    type: 'function',
-    name: 'settle',
-    inputs: [
-      { name: 'channelId', type: 'bytes32' },
-      { name: 'cumulativeAmount', type: 'uint128' },
-      { name: 'signature', type: 'bytes' },
-    ],
-    outputs: [],
-    stateMutability: 'nonpayable',
-  },
-  {
-    type: 'function',
-    name: 'close',
-    inputs: [
-      { name: 'channelId', type: 'bytes32' },
-      { name: 'cumulativeAmount', type: 'uint128' },
-      { name: 'signature', type: 'bytes' },
-    ],
-    outputs: [],
-    stateMutability: 'nonpayable',
-  },
-  {
-    type: 'function',
-    name: 'open',
-    inputs: [
-      { name: 'payee', type: 'address' },
-      { name: 'token', type: 'address' },
-      { name: 'deposit', type: 'uint128' },
-      { name: 'salt', type: 'bytes32' },
-      { name: 'authorizedSigner', type: 'address' },
-    ],
-    outputs: [{ name: 'channelId', type: 'bytes32' }],
-    stateMutability: 'nonpayable',
-  },
-  {
-    type: 'function',
-    name: 'topUp',
-    inputs: [
-      { name: 'channelId', type: 'bytes32' },
-      { name: 'additionalDeposit', type: 'uint128' },
-    ],
-    outputs: [],
-    stateMutability: 'nonpayable',
-  },
-  {
-    type: 'function',
-    name: 'computeChannelId',
-    inputs: [
-      { name: 'payer', type: 'address' },
-      { name: 'payee', type: 'address' },
-      { name: 'token', type: 'address' },
-      { name: 'deposit', type: 'uint128' },
-      { name: 'salt', type: 'bytes32' },
-      { name: 'authorizedSigner', type: 'address' },
-    ],
-    outputs: [{ name: '', type: 'bytes32' }],
-    stateMutability: 'view',
-  },
-] as const
+const UINT128_MAX = 2n ** 128n - 1n
 
 /**
  * On-chain channel state from the escrow contract.
@@ -193,11 +107,11 @@ export async function closeOnChain(
 }
 
 const escrowOpenSelector = /*#__PURE__*/ toFunctionSelector(
-  'function open(address payee, address token, uint128 deposit, bytes32 salt, address authorizedSigner)',
+  getAbiItem({ abi: escrowAbi, name: 'open' }),
 )
 
 const escrowTopUpSelector = /*#__PURE__*/ toFunctionSelector(
-  'function topUp(bytes32 channelId, uint128 additionalDeposit)',
+  getAbiItem({ abi: escrowAbi, name: 'topUp' }),
 )
 
 const erc20ApproveSelector = /*#__PURE__*/ toFunctionSelector(

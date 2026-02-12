@@ -2,11 +2,33 @@ import { describe, expect, test } from 'vitest'
 
 import * as Route from './Route.js'
 
+describe('pathname', () => {
+  test('behavior: returns pathname without basePath', () => {
+    expect(
+      Route.pathname(new URL('http://localhost/api/proxy/openai/v1/models'), '/api/proxy'),
+    ).toBe('/openai/v1/models')
+  })
+
+  test('behavior: handles basePath with trailing slash', () => {
+    expect(
+      Route.pathname(new URL('http://localhost/api/proxy/stripe/v1/charges'), '/api/proxy/'),
+    ).toBe('/stripe/v1/charges')
+  })
+
+  test('behavior: returns pathname as-is when no basePath', () => {
+    expect(Route.pathname(new URL('http://localhost/openai/v1/models'))).toBe('/openai/v1/models')
+  })
+
+  test('error: returns null when basePath does not match', () => {
+    expect(
+      Route.pathname(new URL('http://localhost/other/openai/v1/models'), '/api/proxy'),
+    ).toBeNull()
+  })
+})
+
 describe('parse', () => {
   test('behavior: extracts serviceId and upstreamPath', () => {
-    expect(
-      Route.parse(new URL('http://localhost/openai/v1/chat/completions')),
-    ).toMatchInlineSnapshot(`
+    expect(Route.parse('/openai/v1/chat/completions')).toMatchInlineSnapshot(`
       {
         "serviceId": "openai",
         "upstreamPath": "/v1/chat/completions",
@@ -15,7 +37,7 @@ describe('parse', () => {
   })
 
   test('behavior: parses anthropic service path', () => {
-    expect(Route.parse(new URL('http://localhost/anthropic/v1/messages'))).toMatchInlineSnapshot(`
+    expect(Route.parse('/anthropic/v1/messages')).toMatchInlineSnapshot(`
       {
         "serviceId": "anthropic",
         "upstreamPath": "/v1/messages",
@@ -24,7 +46,7 @@ describe('parse', () => {
   })
 
   test('behavior: returns root upstreamPath when no sub-path', () => {
-    expect(Route.parse(new URL('http://localhost/stripe'))).toMatchInlineSnapshot(`
+    expect(Route.parse('/stripe')).toMatchInlineSnapshot(`
       {
         "serviceId": "stripe",
         "upstreamPath": "/",
@@ -33,37 +55,11 @@ describe('parse', () => {
   })
 
   test('error: returns null for root path', () => {
-    expect(Route.parse(new URL('http://localhost/'))).toBeNull()
+    expect(Route.parse('/')).toBeNull()
   })
 
   test('error: returns null for empty pathname', () => {
-    expect(Route.parse(new URL('http://localhost'))).toBeNull()
-  })
-
-  test('behavior: strips basePath before parsing', () => {
-    expect(
-      Route.parse(new URL('http://localhost/api/proxy/openai/v1/models'), '/api/proxy'),
-    ).toMatchInlineSnapshot(`
-      {
-        "serviceId": "openai",
-        "upstreamPath": "/v1/models",
-      }
-    `)
-  })
-
-  test('behavior: strips basePath with trailing slash', () => {
-    expect(
-      Route.parse(new URL('http://localhost/api/proxy/stripe/v1/charges'), '/api/proxy/'),
-    ).toMatchInlineSnapshot(`
-      {
-        "serviceId": "stripe",
-        "upstreamPath": "/v1/charges",
-      }
-    `)
-  })
-
-  test('error: returns null when basePath does not match', () => {
-    expect(Route.parse(new URL('http://localhost/other/openai/v1/models'), '/api/proxy')).toBeNull()
+    expect(Route.parse('')).toBeNull()
   })
 })
 

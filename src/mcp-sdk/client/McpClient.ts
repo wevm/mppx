@@ -159,9 +159,7 @@ export function isPaymentRequiredError(
 ): error is McpError & { data: { challenges: Challenge.Challenge[] } } {
   if (typeof error !== 'object' || error === null) return false
   if (!('code' in error) || !('message' in error)) return false
-  const code = (error as { code: unknown }).code
-  if (code !== core_Mcp.paymentRequiredCode && code !== core_Mcp.paymentVerificationFailedCode)
-    return false
+  if ((error as { code: unknown }).code !== core_Mcp.paymentRequiredCode) return false
   const data = (error as { data?: { challenges?: unknown } }).data
   return Array.isArray(data?.challenges) && data.challenges.length > 0
 }

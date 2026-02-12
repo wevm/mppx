@@ -1,6 +1,5 @@
 import type { CallToolResult, McpError } from '@modelcontextprotocol/sdk/types.js'
 import type * as Credential from '../../Credential.js'
-import * as Errors from '../../Errors.js'
 import * as core_Mcp from '../../Mcp.js'
 import * as Transport from '../../server/Transport.js'
 
@@ -59,10 +58,18 @@ export function mcpSdk(): McpSdk {
 
     async respondChallenge({ challenge, error }) {
       if (!McpErrorClass) {
-        const mod = await import('@modelcontextprotocol/sdk/types.js')
-        McpErrorClass = mod.McpError
+        try {
+          const mod = await import('@modelcontextprotocol/sdk/types.js')
+          McpErrorClass = mod.McpError
+        } catch (error) {
+          const err = new Error(
+            'Missing optional dependency "@modelcontextprotocol/sdk". Install it to use mpay MCP SDK transports.',
+          )
+          ;(err as Error & { cause?: unknown }).cause = error
+          throw err
+        }
       }
-      return new McpErrorClass(mcpSdkErrorCode(error), error?.message ?? 'Payment Required', {
+      return new McpErrorClass(core_Mcp.paymentRequiredCode, error?.message ?? 'Payment Required', {
         httpStatus: 402,
         challenges: [challenge],
         ...(error && { problem: error.toProblemDetails(challenge.id) }),
@@ -84,11 +91,4 @@ export function mcpSdk(): McpSdk {
       }
     },
   })
-}
-
-function mcpSdkErrorCode(error?: Errors.PaymentError): number {
-  if (!error) return core_Mcp.paymentRequiredCode
-  if (error instanceof Errors.MalformedCredentialError) return -32602
-  if (error instanceof Errors.PaymentRequiredError) return core_Mcp.paymentRequiredCode
-  return core_Mcp.paymentVerificationFailedCode
 }

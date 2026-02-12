@@ -124,136 +124,145 @@ function createIntentFn<
 function createIntentFn(parameters: createIntentFn.Parameters): createIntentFn.ReturnType {
   const { defaults, intent, realm, respond, secretKey, transport, verify } = parameters
 
-  return (options) =>
-    async (input): Promise<IntentFn.Response> => {
-      const { description, ...rest } = options
-      const expires = 'expires' in options ? (options.expires as string | undefined) : undefined
+  return (options) => {
+    const meta = {
+      ...intent,
+      ...defaults,
+      ...options,
+    }
+    return Object.assign(
+      async (input: Transport.InputOf): Promise<IntentFn.Response> => {
+        const { description, ...rest } = options
+        const expires = 'expires' in options ? (options.expires as string | undefined) : undefined
 
-      // Merge defaults with per-request options
-      const merged = { ...defaults, ...rest }
+        // Merge defaults with per-request options
+        const merged = { ...defaults, ...rest }
 
-      // Extract credential once — getCredential may have side effects (e.g. SSE transports).
-      const [credential, credentialError] = (() => {
-        try {
-          return [
-            transport.getCredential(input) as Credential.Credential | null,
-            undefined,
-          ] as const
-        } catch (e) {
-          return [null, e as Error] as const
+        // Extract credential once — getCredential may have side effects (e.g. SSE transports).
+        const [credential, credentialError] = (() => {
+          try {
+            return [
+              transport.getCredential(input) as Credential.Credential | null,
+              undefined,
+            ] as const
+          } catch (e) {
+            return [null, e as Error] as const
+          }
+        })()
+
+        // Transform request if method provides a `request` function.
+        const request = (
+          parameters.request
+            ? await parameters.request({ credential, request: merged } as never)
+            : merged
+        ) as never
+
+        // Recompute challenge from options. The HMAC-bound ID means we don't need to
+        // store challenges server-side—if the client echoes back a credential with
+        // a matching ID, we know it was issued by us with these exact parameters.
+        const challenge = Challenge.fromIntent(intent, {
+          description,
+          expires,
+          realm,
+          request,
+          secretKey,
+        })
+
+        // Credential was provided but malformed
+        if (credentialError) {
+          const response = await transport.respondChallenge({
+            challenge,
+            input,
+            error: new Errors.MalformedCredentialError({ reason: credentialError.message }),
+          })
+          return { challenge: response, status: 402 }
         }
-      })()
 
-      // Transform request if method provides a `request` function.
-      const request = (
-        parameters.request
-          ? await parameters.request({ credential, request: merged } as never)
-          : merged
-      ) as never
+        // No credential provided—issue challenge
+        if (!credential) {
+          const response = await transport.respondChallenge({
+            challenge,
+            input,
+            error: new Errors.PaymentRequiredError({ realm, description }),
+          })
+          return { challenge: response, status: 402 }
+        }
 
-      // Recompute challenge from options. The HMAC-bound ID means we don't need to
-      // store challenges server-side—if the client echoes back a credential with
-      // a matching ID, we know it was issued by us with these exact parameters.
-      const challenge = Challenge.fromIntent(intent, {
-        description,
-        expires,
-        realm,
-        request,
-        secretKey,
-      })
+        // Verify the echoed challenge was issued by us by recomputing its HMAC.
+        // This is stateless—no database lookup needed.
+        if (!Challenge.verify(credential.challenge, { secretKey })) {
+          const response = await transport.respondChallenge({
+            challenge,
+            input,
+            error: new Errors.InvalidChallengeError({
+              id: credential.challenge.id,
+              reason: 'challenge was not issued by this server',
+            }),
+          })
+          return { challenge: response, status: 402 }
+        }
 
-      // Credential was provided but malformed
-      if (credentialError) {
-        const response = await transport.respondChallenge({
-          challenge,
-          input,
-          error: new Errors.MalformedCredentialError({ reason: credentialError.message }),
-        })
-        return { challenge: response, status: 402 }
-      }
+        // Validate payload structure against intent schema
+        try {
+          intent.schema.credential.payload.parse(credential.payload)
+        } catch (e) {
+          const response = await transport.respondChallenge({
+            challenge,
+            input,
+            error: new Errors.InvalidPayloadError({ reason: (e as Error).message }),
+          })
+          return { challenge: response, status: 402 }
+        }
 
-      // No credential provided—issue challenge
-      if (!credential) {
-        const response = await transport.respondChallenge({
-          challenge,
-          input,
-          error: new Errors.PaymentRequiredError({ realm, description }),
-        })
-        return { challenge: response, status: 402 }
-      }
+        // User-provided verification (e.g., check signature, submit tx, verify payment).
+        // If verification fails, re-issue the challenge so the client can retry.
+        let receiptData: Receipt.Receipt
+        try {
+          receiptData = await verify({ credential, request } as never)
+        } catch (e) {
+          const error =
+            e instanceof Errors.PaymentError
+              ? e
+              : new Errors.VerificationFailedError({ reason: (e as Error).message })
+          const response = await transport.respondChallenge({
+            challenge,
+            input,
+            error,
+          })
+          return { challenge: response, status: 402 }
+        }
 
-      // Verify the echoed challenge was issued by us by recomputing its HMAC.
-      // This is stateless—no database lookup needed.
-      if (!Challenge.verify(credential.challenge, { secretKey })) {
-        const response = await transport.respondChallenge({
-          challenge,
-          input,
-          error: new Errors.InvalidChallengeError({
-            id: credential.challenge.id,
-            reason: 'challenge was not issued by this server',
-          }),
-        })
-        return { challenge: response, status: 402 }
-      }
+        // If the method's `respond` hook returns a Response, it means this
+        // request is a management action (e.g. channel open, voucher POST)
+        // and the user's route handler should NOT run. `withReceipt()` will
+        // return the management response directly. If undefined, `withReceipt()`
+        // expects the caller to pass the user handler's response instead.
+        const managementResponse = respond
+          ? await respond({ credential, input, receipt: receiptData, request } as never)
+          : undefined
 
-      // Validate payload structure against intent schema
-      try {
-        intent.schema.credential.payload.parse(credential.payload)
-      } catch (e) {
-        const response = await transport.respondChallenge({
-          challenge,
-          input,
-          error: new Errors.InvalidPayloadError({ reason: (e as Error).message }),
-        })
-        return { challenge: response, status: 402 }
-      }
-
-      // User-provided verification (e.g., check signature, submit tx, verify payment).
-      // If verification fails, re-issue the challenge so the client can retry.
-      let receiptData: Receipt.Receipt
-      try {
-        receiptData = await verify({ credential, request } as never)
-      } catch (e) {
-        const error =
-          e instanceof Errors.PaymentError
-            ? e
-            : new Errors.VerificationFailedError({ reason: (e as Error).message })
-        const response = await transport.respondChallenge({
-          challenge,
-          input,
-          error,
-        })
-        return { challenge: response, status: 402 }
-      }
-
-      // If the method's `respond` hook returns a Response, it means this
-      // request is a management action (e.g. channel open, voucher POST)
-      // and the user's route handler should NOT run. `withReceipt()` will
-      // return the management response directly. If undefined, `withReceipt()`
-      // expects the caller to pass the user handler's response instead.
-      const managementResponse = respond
-        ? await respond({ credential, input, receipt: receiptData, request } as never)
-        : undefined
-
-      return {
-        status: 200,
-        withReceipt<response>(response?: response) {
-          if (managementResponse) {
+        return {
+          status: 200,
+          withReceipt<response>(response?: response) {
+            if (managementResponse) {
+              return transport.respondReceipt({
+                receipt: receiptData,
+                response: managementResponse as never,
+                challengeId: credential.challenge.id,
+              }) as response
+            }
+            if (!response) throw new Error('withReceipt() requires a response argument')
             return transport.respondReceipt({
               receipt: receiptData,
-              response: managementResponse as never,
+              response: response as never,
               challengeId: credential.challenge.id,
             }) as response
-          }
-          if (!response) throw new Error('withReceipt() requires a response argument')
-          return transport.respondReceipt({
-            receipt: receiptData,
-            response: response as never,
-            challengeId: credential.challenge.id,
-          }) as response
-        },
-      }
-    }
+          },
+        }
+      },
+      { _internal: meta },
+    )
+  }
 }
 
 declare namespace createIntentFn {

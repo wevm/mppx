@@ -69,14 +69,12 @@ export function charge<const parameters extends charge.Parameters>(
 
     // TODO: dedupe `{charge,stream}.request`
     async request({ credential, request }) {
-      // Extract chainId from request or default.
       const chainId = await (async () => {
         if (request.chainId) return request.chainId
         if (parameters.testnet) return defaults.testnetChainId
         return (await getClient({})).chain?.id
       })()
 
-      // Validate chainId.
       const client = await (async () => {
         try {
           return await getClient({ chainId })
@@ -87,7 +85,6 @@ export function charge<const parameters extends charge.Parameters>(
       if (client.chain?.id !== chainId)
         throw new Error(`Client not configured with chainId ${chainId}.`)
 
-      // Extract feePayer.
       const resolvedFeePayer = (() => {
         const account = typeof request.feePayer === 'object' ? request.feePayer : feePayer
         const requested = request.feePayer !== false && (account ?? feePayer)
@@ -96,7 +93,12 @@ export function charge<const parameters extends charge.Parameters>(
         return undefined
       })()
 
-      return { ...request, chainId, feePayer: resolvedFeePayer }
+      return {
+        ...request,
+        chainId,
+        feePayer: resolvedFeePayer,
+        memo: request.memo || undefined,
+      }
     },
 
     async verify({ credential, request }) {
@@ -113,6 +115,8 @@ export function charge<const parameters extends charge.Parameters>(
 
       if (expires && new Date(expires) < new Date()) throw new PaymentExpiredError({ expires })
 
+      const memo = methodDetails?.memo as `0x${string}` | undefined
+
       const payload = credential.payload
 
       switch (payload.type) {
@@ -121,8 +125,6 @@ export function charge<const parameters extends charge.Parameters>(
           const receipt = await getTransactionReceipt(client, {
             hash,
           })
-
-          const memo = methodDetails?.memo as `0x${string}` | undefined
 
           if (memo) {
             const memoLogs = parseEventLogs({
@@ -150,13 +152,19 @@ export function charge<const parameters extends charge.Parameters>(
                 },
               )
           } else {
-            const logs = parseEventLogs({
+            const transferLogs = parseEventLogs({
               abi: Abis.tip20,
               eventName: 'Transfer',
               logs: receipt.logs,
             })
 
-            const match = logs.find(
+            const memoLogs = parseEventLogs({
+              abi: Abis.tip20,
+              eventName: 'TransferWithMemo',
+              logs: receipt.logs,
+            })
+
+            const match = [...transferLogs, ...memoLogs].find(
               (log) =>
                 isAddressEqual(log.address, currency) &&
                 isAddressEqual(log.args.to, recipient) &&
@@ -179,7 +187,6 @@ export function charge<const parameters extends charge.Parameters>(
           const transaction = Transaction.deserialize(serializedTransaction)
 
           const calls = transaction.calls ?? []
-          const memo = methodDetails?.memo as `0x${string}` | undefined
 
           const call = calls.find((call) => {
             if (!call.to || !isAddressEqual(call.to, currency)) return false
@@ -202,14 +209,27 @@ export function charge<const parameters extends charge.Parameters>(
               }
             }
 
-            if (selector !== transferSelector) return false
-            try {
-              const { args } = decodeFunctionData({ abi: Abis.tip20, data: call.data })
-              const [to, amount_] = args as [`0x${string}`, bigint]
-              return isAddressEqual(to, recipient) && amount_.toString() === amount
-            } catch {
-              return false
+            if (selector === transferSelector) {
+              try {
+                const { args } = decodeFunctionData({ abi: Abis.tip20, data: call.data })
+                const [to, amount_] = args as [`0x${string}`, bigint]
+                return isAddressEqual(to, recipient) && amount_.toString() === amount
+              } catch {
+                return false
+              }
             }
+
+            if (selector === transferWithMemoSelector) {
+              try {
+                const { args } = decodeFunctionData({ abi: Abis.tip20, data: call.data })
+                const [to, amount_] = args as [`0x${string}`, bigint, `0x${string}`]
+                return isAddressEqual(to, recipient) && amount_.toString() === amount
+              } catch {
+                return false
+              }
+            }
+
+            return false
           })
 
           if (!call)
@@ -217,7 +237,6 @@ export function charge<const parameters extends charge.Parameters>(
               amount,
               currency,
               recipient,
-              memo: memo ?? '(none)',
             })
 
           const serializedTransaction_final = await (async () => {
