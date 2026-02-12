@@ -20,7 +20,7 @@ function makeChannel(overrides?: Partial<ChannelStore.State>): ChannelStore.Stat
     spent: 0n,
     units: 0,
     finalized: false,
-    createdAt: new Date('2025-01-01T00:00:00.000Z'),
+    createdAt: '2025-01-01T00:00:00.000Z',
     ...overrides,
   }
 }
@@ -74,7 +74,8 @@ describe('Store.memory', () => {
     const s = Store.memory()
     const ch = makeChannel()
     await s.put('k', ch)
-    expect(await s.get('k')).toEqual(ch)
+    const result = await s.get('k')
+    expect(result).toEqual(ch)
   })
 
   test('delete removes key', async () => {
@@ -104,7 +105,7 @@ describe('channelStore', () => {
       expect(loaded!.channelId).toBe(channelId)
       expect(loaded!.deposit).toBe(10_000_000n)
       expect(typeof loaded!.deposit).toBe('bigint')
-      expect(loaded!.createdAt).toBeInstanceOf(Date)
+      expect(typeof loaded!.createdAt).toBe('string')
     })
   })
 
@@ -154,15 +155,6 @@ describe('channelStore', () => {
       expect(loaded!.settledOnChain).toBe(123_456_789n)
       expect(loaded!.highestVoucherAmount).toBe(888_888_888n)
       expect(loaded!.spent).toBe(42n)
-    })
-
-    test('preserves Date fields', async () => {
-      const cs = ChannelStore.fromStore(Store.memory())
-      const date = new Date('2025-06-15T12:30:00.000Z')
-      await cs.updateChannel(channelId, () => makeChannel({ createdAt: date }))
-
-      const loaded = await cs.getChannel(channelId)
-      expect(loaded!.createdAt.toISOString()).toBe(date.toISOString())
     })
   })
 

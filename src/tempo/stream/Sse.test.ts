@@ -224,7 +224,7 @@ describe('serve', () => {
       spent: 0n,
       units: 0,
       finalized: false,
-      createdAt: new Date(),
+      createdAt: new Date().toISOString(),
     }))
   }
 

@@ -1200,7 +1200,7 @@ describe('monotonicity and TOCTOU (unit tests)', () => {
       spent: 0n,
       units: 0,
       finalized: false,
-      createdAt: new Date(),
+      createdAt: new Date().toISOString(),
       ...overrides,
     }))
   }

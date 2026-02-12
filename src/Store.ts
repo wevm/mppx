@@ -4,8 +4,10 @@
  * Modeled after Cloudflare KV's API (`get`/`put`/`delete`).
  * Implementations handle serialization internally.
  */
+import { Json } from 'ox'
+
 export type Store = {
-  get: <value = unknown>(key: string) => Promise<value>
+  get: <value = unknown>(key: string) => Promise<value | null>
   put: (key: string, value: unknown) => Promise<void>
   delete: (key: string) => Promise<void>
 }
@@ -19,10 +21,12 @@ export function from<store extends Store>(store: store): store {
 export function cloudflare(kv: cloudflare.Parameters): Store {
   return from({
     async get(key) {
-      return (await kv.get(key)) as any
+      const raw = await kv.get(key)
+      if (raw == null) return null as any
+      return Json.parse(raw as string)
     },
     async put(key, value) {
-      await kv.put(key, JSON.stringify(value))
+      await kv.put(key, Json.stringify(value))
     },
     async delete(key) {
       await kv.delete(key)
@@ -38,15 +42,17 @@ export declare namespace cloudflare {
   }
 }
 
-/** In-memory store backed by a `Map`. Useful for development and testing. */
+/** In-memory store backed by a `Map`. JSON-roundtrips values to match production behavior. */
 export function memory(): Store {
-  const store = new Map<string, unknown>()
+  const store = new Map<string, string>()
   return from({
     async get(key) {
-      return (store.get(key) ?? null) as any
+      const raw = store.get(key)
+      if (raw === undefined) return null as any
+      return Json.parse(raw)
     },
     async put(key, value) {
-      store.set(key, value)
+      store.set(key, Json.stringify(value))
     },
     async delete(key) {
       store.delete(key)
