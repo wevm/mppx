@@ -164,13 +164,12 @@ export function charge<const parameters extends charge.Parameters>(
               logs: receipt.logs,
             })
 
-            const match =
-              [...transferLogs, ...memoLogs].find(
-                (log) =>
-                  isAddressEqual(log.address, currency) &&
-                  isAddressEqual(log.args.to, recipient) &&
-                  log.args.amount.toString() === amount,
-              )
+            const match = [...transferLogs, ...memoLogs].find(
+              (log) =>
+                isAddressEqual(log.address, currency) &&
+                isAddressEqual(log.args.to, recipient) &&
+                log.args.amount.toString() === amount,
+            )
 
             if (!match)
               throw new MismatchError('Payment verification failed: no matching transfer found.', {

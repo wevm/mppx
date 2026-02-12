@@ -147,9 +147,7 @@ describe('tempo', () => {
       const wrongRecipient = accounts[2].address
 
       const httpServer = await Http.createServer(async (req, res) => {
-        const result = await Mpay_server.toNodeListener(
-          server.charge({ amount: '1' }),
-        )(req, res)
+        const result = await Mpay_server.toNodeListener(server.charge({ amount: '1' }))(req, res)
         if (result.status === 402) return
         res.end('OK')
       })
