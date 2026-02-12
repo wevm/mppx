@@ -1,7 +1,5 @@
 import type * as http from 'node:http'
-
 import { createFetchProxy } from '@remix-run/fetch-proxy'
-
 import * as Request from '../server/Request.js'
 import * as Headers from './internal/Headers.js'
 import * as Route from './internal/Route.js'
@@ -57,7 +55,29 @@ export function create(config: create.Config): Proxy {
 
   async function handle(request: globalThis.Request): Promise<Response> {
     const url = new URL(request.url)
-    const parsed = Route.parse(url, config.basePath)
+
+    const pathname = Route.pathname(url, config.basePath)
+
+    if (!pathname) return new Response('Not Found', { status: 404 })
+
+    if (request.method === 'GET' && (pathname === '/llms.txt'))
+      return new Response(Service.toLlmsTxt(config.services), {
+        headers: { 'Content-Type': 'text/plain; charset=utf-8' },
+      })
+
+    if (request.method === 'GET' && (pathname === '/services' || pathname === '/services/'))
+      return Response.json(config.services.map(Service.serialize))
+
+    {
+      const match = pathname.match(/^\/services\/([^/]+)\/?$/)
+      if (request.method === 'GET' && match) {
+        const service = config.services.find((s) => s.id === match[1])
+        if (!service) return new Response('Not Found', { status: 404 })
+        return Response.json(Service.serialize(service))
+      }
+    }
+
+    const parsed = Route.parse(pathname)
     if (!parsed) return new Response('Not Found', { status: 404 })
 
     const { serviceId, upstreamPath } = parsed
@@ -74,7 +94,7 @@ export function create(config: create.Config): Proxy {
 
     if (endpoint === true) return proxyUpstream({ request, service, ctx, proxy })
 
-    const handler: Service.IntentHandler = typeof endpoint === 'function' ? endpoint : endpoint.pay
+    const handler = typeof endpoint === 'function' ? endpoint : endpoint.pay
     const result = await handler(request)
     if (result.status === 402) return result.challenge
 
@@ -114,6 +134,7 @@ declare namespace proxyUpstream {
   }
 }
 
+/** @internal */
 async function proxyUpstream(options: proxyUpstream.Options): Promise<Response> {
   const { request, service, ctx, proxy } = options
   const url = ctx.upstreamPath + new URL(request.url).search

@@ -6,6 +6,8 @@ import * as Http from '~test/Http.js'
 import { accounts, asset, client } from '~test/tempo/viem.js'
 import * as ApiProxy from './Proxy.js'
 import * as Service from './Service.js'
+import { anthropic } from './services/anthropic.js'
+import { openai } from './services/openai.js'
 
 const mpay_server = Mpay_server.create({
   methods: [
@@ -13,6 +15,7 @@ const mpay_server = Mpay_server.create({
       account: accounts[0],
       currency: asset,
       getClient: () => client,
+      feePayer: true,
     }),
   ],
 })
@@ -58,6 +61,178 @@ function createUpstream(handler: (req: Request) => Response | Promise<Response>)
 }
 
 describe('create', () => {
+  test('behavior: GET /services returns service discovery', async () => {
+    const proxy = ApiProxy.create({
+      services: [
+        Service.from('api', {
+          baseUrl: 'https://api.example.com',
+          routes: {
+            'GET /v1/models': true,
+            'POST /v1/generate': mpay_server.charge({ amount: '1', description: 'Generate text' }),
+            'POST /v1/stream': mpay_server.session({
+              amount: '1',
+              description: 'Stream text',
+              unitType: 'token',
+            }),
+          },
+        }),
+      ],
+    })
+    proxyServer = await Http.createServer(proxy.listener)
+
+    const res = await fetch(`${proxyServer.url}/services`)
+    expect(res.status).toBe(200)
+    expect(await res.json()).toMatchInlineSnapshot(`
+      [
+        {
+          "baseUrl": "https://api.example.com",
+          "id": "api",
+          "routes": [
+            {
+              "pattern": "GET /v1/models",
+              "payment": null,
+            },
+            {
+              "pattern": "POST /v1/generate",
+              "payment": {
+                "amount": "1000000",
+                "currency": "0x20c0000000000000000000000000000000000001",
+                "decimals": 6,
+                "description": "Generate text",
+                "intent": "charge",
+                "method": "tempo",
+                "recipient": "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266",
+              },
+            },
+            {
+              "pattern": "POST /v1/stream",
+              "payment": {
+                "amount": "1000000",
+                "currency": "0x20c0000000000000000000000000000000000001",
+                "decimals": 6,
+                "description": "Stream text",
+                "intent": "session",
+                "method": "tempo",
+                "recipient": "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266",
+                "unitType": "token",
+              },
+            },
+          ],
+        },
+      ]
+    `)
+  })
+
+  test('behavior: GET /llms.txt returns markdown', async () => {
+    const proxy = ApiProxy.create({
+      services: [
+        openai({
+          apiKey: 'sk-test',
+          routes: {
+            'POST /v1/chat/completions': mpay_server.charge({
+              amount: '0.05',
+              description: 'Chat completion',
+            }),
+            'POST /v1/embeddings': mpay_server.charge({
+              amount: '0.01',
+              description: 'Generate embeddings',
+            }),
+          },
+        }),
+        anthropic({
+          apiKey: 'sk-ant-test',
+          routes: {
+            'POST /v1/messages': mpay_server.charge({
+              amount: '0.03',
+              description: 'Send message',
+            }),
+            'POST /v1/messages/stream': mpay_server.session({
+              amount: '0.01',
+              description: 'Stream message',
+              unitType: 'token',
+            }),
+          },
+        }),
+      ],
+    })
+    proxyServer = await Http.createServer(proxy.listener)
+
+    const res = await fetch(`${proxyServer.url}/llms.txt`)
+    expect(res.status).toBe(200)
+    expect(res.headers.get('content-type')).toBe('text/plain; charset=utf-8')
+    expect(await res.text()).toMatchInlineSnapshot(`
+      "# API Proxy
+
+      > Paid API proxy powered by [Machine Payments Protocol](https://mpp.tempo.xyz).
+
+      For machine-readable service data, use \`GET /services\` (JSON).
+
+      ## Services
+
+      - [openai](https://api.openai.com): 2 paid
+      - [anthropic](https://api.anthropic.com): 2 paid
+
+      ## openai
+
+      - \`POST /v1/chat/completions\`: charge — 50000 units — "Chat completion" — (currency: 0x20c0000000000000000000000000000000000001, decimals: 6)
+      - \`POST /v1/embeddings\`: charge — 10000 units — "Generate embeddings" — (currency: 0x20c0000000000000000000000000000000000001, decimals: 6)
+
+      ## anthropic
+
+      - \`POST /v1/messages\`: charge — 30000 units — "Send message" — (currency: 0x20c0000000000000000000000000000000000001, decimals: 6)
+      - \`POST /v1/messages/stream\`: session — 10000 units per token — "Stream message" — (currency: 0x20c0000000000000000000000000000000000001, decimals: 6)"
+    `)
+  })
+
+  test('behavior: GET /services/:id returns single service', async () => {
+    const proxy = ApiProxy.create({
+      services: [
+        Service.from('api', {
+          baseUrl: 'https://api.example.com',
+          routes: {
+            'GET /v1/models': true,
+            'POST /v1/generate': mpay_server.charge({ amount: '1', description: 'Generate text' }),
+          },
+        }),
+      ],
+    })
+    proxyServer = await Http.createServer(proxy.listener)
+
+    const res = await fetch(`${proxyServer.url}/services/api`)
+    expect(res.status).toBe(200)
+    expect(await res.json()).toMatchInlineSnapshot(`
+      {
+        "baseUrl": "https://api.example.com",
+        "id": "api",
+        "routes": [
+          {
+            "pattern": "GET /v1/models",
+            "payment": null,
+          },
+          {
+            "pattern": "POST /v1/generate",
+            "payment": {
+              "amount": "1000000",
+              "currency": "0x20c0000000000000000000000000000000000001",
+              "decimals": 6,
+              "description": "Generate text",
+              "intent": "charge",
+              "method": "tempo",
+              "recipient": "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266",
+            },
+          },
+        ],
+      }
+    `)
+  })
+
+  test('behavior: GET /services/:id returns 404 for unknown', async () => {
+    const proxy = ApiProxy.create({ services: [] })
+    proxyServer = await Http.createServer(proxy.listener)
+    const res = await fetch(`${proxyServer.url}/services/unknown`)
+    expect(res.status).toBe(404)
+  })
+
   test('behavior: returns 404 for unknown service', async () => {
     const proxy = ApiProxy.create({ services: [] })
     proxyServer = await Http.createServer(proxy.listener)

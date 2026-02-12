@@ -1,3 +1,5 @@
+import { Value } from 'ox'
+
 /** A proxied upstream service with route definitions and optional request/response hooks. */
 export type Service = {
   /** Unique identifier used as the URL prefix (e.g. `'openai'` → `/{id}/...`). */
@@ -137,9 +139,83 @@ function resolveRewriteRequest(
   return undefined
 }
 
+/** Serializes a service for discovery responses. */
+export function serialize(s: Service) {
+  return {
+    id: s.id,
+    baseUrl: s.baseUrl,
+    routes: Object.entries(s.routes).map(([pattern, endpoint]) => ({
+      pattern,
+      payment: endpoint ? resolvePayment(endpoint) : null,
+    })),
+  }
+}
+
+/** Renders an llms.txt markdown string for a list of services. */
+export function toLlmsTxt(services: Service[]): string {
+  const lines: string[] = [
+    '# API Proxy',
+    '',
+    '> Paid API proxy powered by [Machine Payments Protocol](https://mpp.tempo.xyz).',
+    '',
+    'For machine-readable service data, use `GET /services` (JSON).',
+    '',
+  ]
+
+  if (services.length === 0) return lines.join('\n')
+
+  lines.push('## Services', '')
+  for (const s of services) {
+    const serialized = serialize(s)
+    const free = serialized.routes.filter((r) => r.payment === null).length
+    const paid = serialized.routes.length - free
+    const parts = [paid && `${paid} paid`, free && `${free} free`].filter(Boolean).join(', ')
+    lines.push(`- [${s.id}](${s.baseUrl}): ${parts}`)
+  }
+
+  for (const s of services) {
+    const serialized = serialize(s)
+    lines.push('', `## ${s.id}`, '')
+    for (const route of serialized.routes) {
+      if (!route.payment) {
+        lines.push(`- \`${route.pattern}\`: Free`)
+        continue
+      }
+      const p = route.payment as Record<string, unknown>
+      const parts = [`${p.intent}`]
+      if (p.amount) {
+        const unit = `${p.amount} units`
+        parts.push(p.unitType ? `${unit} per ${p.unitType}` : unit)
+      }
+      if (p.description) parts.push(`"${p.description}"`)
+      const meta = [
+        p.currency && `currency: ${p.currency}`,
+        p.decimals !== undefined && `decimals: ${p.decimals}`,
+      ].filter(Boolean)
+      if (meta.length) parts.push(`(${meta.join(', ')})`)
+      lines.push(`- \`${route.pattern}\`: ${parts.join(' — ')}`)
+    }
+  }
+
+  return lines.join('\n')
+}
+
 /** Extracts per-endpoint options from an endpoint definition. */
 export function getOptions(endpoint: Endpoint): EndpointOptions | undefined {
   if (typeof endpoint === 'object' && endpoint !== null && 'options' in endpoint)
     return endpoint.options
   return undefined
+}
+
+function resolvePayment(endpoint: Endpoint): Record<string, unknown> | null {
+  if (endpoint === true) return null
+  const handler = typeof endpoint === 'function' ? endpoint : endpoint.pay
+  if (!('_internal' in handler)) return {}
+  const { name, method, defaults, schema, ...rest } = handler._internal as Record<string, unknown>
+  const amount = (() => {
+    if (typeof rest.amount === 'string' && typeof rest.decimals === 'number')
+      return String(Value.from(rest.amount, rest.decimals))
+    return rest.amount
+  })()
+  return { intent: name, method, ...rest, ...(amount !== undefined && { amount }) }
 }
