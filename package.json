@@ -81,6 +81,21 @@
       "src": "./src/server/index.ts",
       "default": "./dist/server/index.js"
     },
+    "./stripe": {
+      "types": "./dist/stripe/index.d.ts",
+      "src": "./src/stripe/index.ts",
+      "default": "./dist/stripe/index.js"
+    },
+    "./stripe/client": {
+      "types": "./dist/stripe/client/index.d.ts",
+      "src": "./src/stripe/client/index.ts",
+      "default": "./dist/stripe/client/index.js"
+    },
+    "./stripe/server": {
+      "types": "./dist/stripe/server/index.d.ts",
+      "src": "./src/stripe/server/index.ts",
+      "default": "./dist/stripe/server/index.js"
+    },
     "./tempo": {
       "types": "./dist/tempo/index.d.ts",
       "src": "./src/tempo/index.ts",
