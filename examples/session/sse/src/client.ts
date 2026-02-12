@@ -108,6 +108,7 @@ console.log(`Balance: ${fmt(balanceBefore)}`)
 const DEPOSIT = '1'
 const s = tempo.session({
   account,
+  client,
   maxDeposit: DEPOSIT,
 })
 

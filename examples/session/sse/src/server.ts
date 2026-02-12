@@ -21,7 +21,9 @@
 // `Mpay` is the server-side payment handler. `tempo` provides Tempo-specific
 // payment method implementations (stream channels, SSE transport, storage).
 import { Mpay, Store, tempo } from 'mpay/server'
+import { createClient, http } from 'viem'
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts'
+import { tempoModerato } from 'viem/chains'
 // `Actions` provides Tempo-specific viem actions (faucet, token ops, etc.)
 import { Actions } from 'viem/tempo'
 
@@ -43,6 +45,18 @@ const currency = '0x20c0000000000000000000000000000000000000' as const
 // SSE event for each token, and the client must respond with an updated
 // cumulative voucher covering this amount before the next token is sent.
 const pricePerToken = '0.000075'
+
+// Viem Client
+//
+// The viem client MUST have an `account` attached. This is critical because
+// the server needs to sign on-chain transactions when closing/settling
+// payment channels and co-signing fee-payer transactions.
+const client = createClient({
+  account,
+  chain: tempoModerato,
+  pollingInterval: 1_000,
+  transport: http(),
+})
 
 // Shared Channel Store
 
@@ -111,6 +125,10 @@ const mpay = Mpay.create({
       // the client's channel-open transaction so the protocol covers gas
       // fees instead of the client paying them.
       feePayer: true,
+      // Returns an account-bearing viem client for on-chain operations:
+      // broadcasting channel-open txs, verifying channel state, and
+      // submitting close/settle transactions.
+      getClient: () => client,
       // Shared store so mid-stream voucher POSTs update the same state
       // that `stream.charge()` reads from.
       store,
@@ -332,15 +350,6 @@ async function* generateTokens(prompt: string): AsyncGenerator<string> {
 // via the testnet faucet. The server account needs a small amount of native
 // tokens (for gas) to settle channels on-chain, though in production the
 // `feePayer` option can be used to have the protocol cover gas.
-import { createClient, http } from 'viem'
-import { tempoModerato } from 'viem/chains'
-
 console.log(`Server recipient: ${account.address}`)
-const client = createClient({
-  account,
-  chain: tempoModerato,
-  pollingInterval: 1_000,
-  transport: http(),
-})
 await Actions.faucet.fundSync(client, { account, timeout: 30_000 })
 console.log('Server account funded')

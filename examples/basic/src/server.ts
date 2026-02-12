@@ -12,7 +12,7 @@ const mpay = Mpay.create({
     tempo({
       currency,
       feePayer: true,
-      recipient: account,
+      recipient: account.address,
       testnet: true,
     }),
   ],

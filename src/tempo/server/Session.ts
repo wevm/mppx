@@ -250,7 +250,7 @@ export function session<const parameters extends session.Parameters>(p?: paramet
       if (input.method !== 'POST') return undefined
       const contentLength = input.headers.get('content-length')
       if (contentLength !== null && contentLength !== '0') return undefined
-      if (input.body !== null) return undefined
+      if (input.headers.has('transfer-encoding')) return undefined
       return new Response(null, { status: 204 })
     },
   })
