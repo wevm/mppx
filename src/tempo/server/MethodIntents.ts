@@ -1,4 +1,3 @@
-import type * as ChannelStore_ from '../stream/ChannelStore.js'
 import { charge as charge_ } from './Charge.js'
 import { session as session_, settle as settle_ } from './Session.js'
 
@@ -20,8 +19,6 @@ export function tempo<const parameters extends tempo.Parameters>(parameters?: pa
 
 export namespace tempo {
   export type Parameters = charge_.Parameters & session_.Parameters
-
-  export type ChannelStore = ChannelStore_.ChannelStore
 
   /** Creates a Tempo `charge` method intent for one-time TIP-20 token transfers. */
   export const charge = charge_
