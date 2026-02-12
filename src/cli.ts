@@ -570,9 +570,8 @@ cli
                       token?: string
                       choices?: { delta?: { content?: string } }[]
                     }
-                      
-                    writeContent(parsed.token ??
-                      parsed.choices?.[0]?.delta?.content ?? data)
+
+                    writeContent(parsed.token ?? parsed.choices?.[0]?.delta?.content ?? data)
                   } catch {
                     writeContent(data)
                   }

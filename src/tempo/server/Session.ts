@@ -607,7 +607,7 @@ async function handleTopUp(
  */
 async function handleVoucher(
   storage: ChannelStorage,
-  client: viem_Client,
+  _client: viem_Client,
   minVoucherDelta: bigint,
   challenge: Challenge.Challenge,
   payload: StreamCredentialPayload & { action: 'voucher' },
