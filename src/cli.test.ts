@@ -419,9 +419,10 @@ describe.skipIf(!!process.env.CI)('account', () => {
 })
 
 test('mpay --help', () => {
-  const stdout = run(['--help'])
+  const { version } = require('../package.json') as { version: string }
+  const stdout = run(['--help']).replace(`mpay/${version}`, 'mpay/x.x.x')
   expect(stdout).toMatchInlineSnapshot(`
-    "mpay/0.1.0
+    "mpay/x.x.x
 
     Usage:
       $ mpay [url]
