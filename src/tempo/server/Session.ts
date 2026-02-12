@@ -271,7 +271,7 @@ export declare namespace session {
      * Enable SSE streaming.
      *
      * Pass `true` to enable with defaults, or an options object
-     * to configure the stream (e.g. `{ pollingOnly: true }` for
+     * to configure the stream (e.g. `{ poll: true }` for
      * Cloudflare Workers compatibility).
      */
     stream?: boolean | Transport.sse.Options | undefined
