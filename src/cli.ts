@@ -566,8 +566,13 @@ cli
                   writeContent('\n')
                 } else {
                   try {
-                    const parsed = JSON.parse(data) as { token?: string }
-                    writeContent(parsed.token ?? data)
+                    const parsed = JSON.parse(data) as {
+                      token?: string
+                      choices?: { delta?: { content?: string } }[]
+                    }
+                      
+                    writeContent(parsed.token ??
+                      parsed.choices?.[0]?.delta?.content ?? data)
                   } catch {
                     writeContent(data)
                   }

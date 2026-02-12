@@ -238,19 +238,25 @@ async function chargeOrWait(options: {
 
   let result = await deductFromChannel(storage, channelId, amount)
 
-  while (!result.ok) {
-    const requiredCumulative = (result.channel.spent + amount).toString()
+  if (!result.ok) {
+    // Emit a single need-voucher event, then poll/wait until the client
+    // sends an updated voucher. The requiredCumulative is constant here:
+    // `spent` only changes on successful deduction (which exits the loop),
+    // so re-emitting on every poll cycle would just cause redundant
+    // voucher POSTs from the client.
     emit(
       formatNeedVoucherEvent({
         channelId,
-        requiredCumulative,
+        requiredCumulative: (result.channel.spent + amount).toString(),
         acceptedCumulative: result.channel.highestVoucherAmount.toString(),
         deposit: result.channel.deposit.toString(),
       }),
     )
 
-    await waitForUpdate(storage, channelId, pollIntervalMs, signal)
-    result = await deductFromChannel(storage, channelId, amount)
+    while (!result.ok) {
+      await waitForUpdate(storage, channelId, pollIntervalMs, signal)
+      result = await deductFromChannel(storage, channelId, amount)
+    }
   }
 }
 
