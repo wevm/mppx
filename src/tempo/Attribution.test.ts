@@ -126,9 +126,9 @@ describe('Attribution', () => {
       const result = Attribution.decode(memo)
       expect(result).not.toBeNull()
       expect(result!.version).toBe(1)
-      expect(result!.serverId).toMatch(/^0x[0-9a-f]{20}$/i) // 10 bytes = 20 hex chars
-      expect(result!.clientId).toMatch(/^0x[0-9a-f]{20}$/i)
-      expect(result!.clientId).not.toBeNull()
+      expect(result!.serverFingerprint).toMatch(/^0x[0-9a-f]{20}$/i) // 10 bytes = 20 hex chars
+      expect(result!.clientFingerprint).toMatch(/^0x[0-9a-f]{20}$/i)
+      expect(result!.clientFingerprint).not.toBeNull()
       expect(result!.nonce).toMatch(/^0x[0-9a-f]{14}$/i) // 7 bytes = 14 hex chars
     })
 
@@ -136,7 +136,7 @@ describe('Attribution', () => {
       const memo = Attribution.encode({ serverId: 'api.example.com' })
       const result = Attribution.decode(memo)
       expect(result).not.toBeNull()
-      expect(result!.clientId).toBeNull()
+      expect(result!.clientFingerprint).toBeNull()
     })
 
     test('returns null for non-MPP memo', () => {
@@ -159,7 +159,7 @@ describe('Attribution', () => {
         0,
         10,
       )
-      expect(result.serverId.toLowerCase()).toBe(expectedServer.toLowerCase())
+      expect(result.serverFingerprint.toLowerCase()).toBe(expectedServer.toLowerCase())
     })
   })
 })

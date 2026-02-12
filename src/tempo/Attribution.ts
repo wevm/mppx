@@ -135,20 +135,20 @@ export function verifyServer(memo: `0x${string}`, serverId: string): boolean {
  *
  * const memo = Attribution.encode({ serverId: 'api.example.com', clientId: 'my-app' })
  * const decoded = Attribution.decode(memo)
- * // { version: 1, serverId: '0x...', clientId: '0x...', nonce: '0x...' }
+ * // { version: 1, serverFingerprint: '0x...', clientFingerprint: '0x...', nonce: '0x...' }
  * ```
  */
 export function decode(memo: `0x${string}`): decode.Result | null {
   if (!isMppMemo(memo)) return null
 
   const version = Number.parseInt(memo.slice(10, 12), 16)
-  const serverId = `0x${memo.slice(12, 32)}` as `0x${string}` // bytes 5..14
+  const serverFingerprint = `0x${memo.slice(12, 32)}` as `0x${string}` // bytes 5..14
   const clientHex = `0x${memo.slice(32, 52)}` as `0x${string}` // bytes 15..24
   const nonce = `0x${memo.slice(52)}` as `0x${string}` // bytes 25..31
 
-  const clientId = clientHex.toLowerCase() === ANONYMOUS.toLowerCase() ? null : clientHex
+  const clientFingerprint = clientHex.toLowerCase() === ANONYMOUS.toLowerCase() ? null : clientHex
 
-  return { version, serverId, clientId, nonce }
+  return { version, serverFingerprint, clientFingerprint, nonce }
 }
 
 export declare namespace decode {
@@ -156,9 +156,9 @@ export declare namespace decode {
     /** Memo version (currently always 1). */
     version: number
     /** 10-byte server fingerprint hex (keccak256(serverId)[0..9]). */
-    serverId: `0x${string}`
+    serverFingerprint: `0x${string}`
     /** 10-byte client fingerprint hex, or `null` if anonymous. */
-    clientId: `0x${string}` | null
+    clientFingerprint: `0x${string}` | null
     /** 7-byte random nonce hex. */
     nonce: `0x${string}`
   }

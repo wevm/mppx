@@ -724,7 +724,7 @@ describe('tempo', () => {
       const memo = Attribution.encode({ serverId: challenge.realm })
       const decoded = Attribution.decode(memo)
       expect(decoded).not.toBeNull()
-      expect(decoded!.clientId).toBeNull()
+      expect(decoded!.clientFingerprint).toBeNull()
 
       const { receipt } = await Actions.token.transferSync(client, {
         account: accounts[1],
