@@ -219,7 +219,4 @@ function mcpErrorCode(error?: Errors.PaymentError): number {
 type WithReceiptOverloads<transport extends AnyTransport = Http> = {
   // biome-ignore lint/style/useShorthandFunctionType: _
   (): ReceiptOutputOf<transport>
-} & UnionToIntersection<
-  Distribute<ReceiptResponseOf<transport>, ReceiptOutputOf<transport>>
->
-
+} & UnionToIntersection<Distribute<ReceiptResponseOf<transport>, ReceiptOutputOf<transport>>>

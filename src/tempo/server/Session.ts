@@ -11,10 +11,10 @@
  * request, use {@link ../stream/Sse} instead.
  */
 import {
-  type Account as viem_Account,
   type Address,
   type Hex,
   parseUnits,
+  type Account as viem_Account,
   type Client as viem_Client,
 } from 'viem'
 import { tempo as tempo_chain } from 'viem/chains'
@@ -33,8 +33,8 @@ import type { LooseOmit } from '../../internal/types.js'
 import * as MethodIntent from '../../MethodIntent.js'
 import * as Client from '../../viem/Client.js'
 import * as Intents from '../Intents.js'
-import * as defaults from '../internal/defaults.js'
 import * as Account from '../internal/account.js'
+import * as defaults from '../internal/defaults.js'
 import type * as types from '../internal/types.js'
 import {
   broadcastOpenTransaction,
@@ -45,11 +45,11 @@ import {
   settleOnChain,
 } from '../stream/Chain.js'
 import { createStreamReceipt } from '../stream/Receipt.js'
-import * as Transport from './internal/transport.js'
 import type { ChannelState, ChannelStorage, Storage } from '../stream/Storage.js'
 import { channelStorage, deductFromChannel, memoryStorage } from '../stream/Storage.js'
 import type { SignedVoucher, StreamCredentialPayload, StreamReceipt } from '../stream/Types.js'
 import { parseVoucherFromPayload, verifyVoucher } from '../stream/Voucher.js'
+import * as Transport from './internal/transport.js'
 
 /** Challenge methodDetails shape for stream intents. */
 type StreamMethodDetails = {

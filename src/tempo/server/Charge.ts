@@ -13,8 +13,8 @@ import type { LooseOmit } from '../../internal/types.js'
 import * as MethodIntent from '../../MethodIntent.js'
 import * as Client from '../../viem/Client.js'
 import * as Intents from '../Intents.js'
-import * as defaults from '../internal/defaults.js'
 import * as Account from '../internal/account.js'
+import * as defaults from '../internal/defaults.js'
 import type * as types from '../internal/types.js'
 
 const transferSelector = /*#__PURE__*/ toFunctionSelector(

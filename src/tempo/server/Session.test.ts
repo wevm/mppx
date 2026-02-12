@@ -1,7 +1,7 @@
+import { Mpay as Mpay_server, tempo as tempo_server } from 'mpay/server'
 import { type Address, createClient, type Hex } from 'viem'
 import { Addresses } from 'viem/tempo'
 import { beforeAll, beforeEach, describe, expect, test } from 'vitest'
-import { Mpay as Mpay_server, tempo as tempo_server } from 'mpay/server'
 import {
   deployEscrow,
   signOpenChannel,
