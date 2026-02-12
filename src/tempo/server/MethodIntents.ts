@@ -1,4 +1,7 @@
-import { memoryStorage as memoryStorage_ } from '../stream/Storage.js'
+import {
+  type ChannelStorage as ChannelStorage_,
+  memoryStorage as memoryStorage_,
+} from '../stream/Storage.js'
 import { charge as charge_ } from './Charge.js'
 import { session as session_, settle as settle_ } from './Session.js'
 
@@ -21,8 +24,11 @@ export function tempo<const parameters extends tempo.Parameters>(parameters?: pa
 export namespace tempo {
   export type Parameters = charge_.Parameters & session_.Parameters
 
+  export type ChannelStorage = ChannelStorage_
+
   /** Creates a Tempo `charge` method intent for one-time TIP-20 token transfers. */
   export const charge = charge_
+  /** Creates a Tempo `memoryStorage` method intent for in-memory storage. */
   export const memoryStorage = memoryStorage_
   /** Creates a Tempo `session` method intent for session-based TIP-20 token payments. */
   export const session = session_
