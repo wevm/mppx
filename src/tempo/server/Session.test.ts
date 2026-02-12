@@ -1091,6 +1091,7 @@ describe('session', () => {
           tempo_server.session({
             account: accounts[0],
             currency: asset,
+            escrowContract,
             getClient: () => client,
             stream: true,
           }),
@@ -1135,6 +1136,7 @@ describe('session', () => {
           tempo_server.session({
             account: accounts[0],
             currency: asset,
+            escrowContract,
             getClient: () => client,
           }),
         ],
