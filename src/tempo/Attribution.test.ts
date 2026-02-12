@@ -15,13 +15,13 @@ describe('Attribution', () => {
 
   describe('encode', () => {
     test('returns a 32-byte hex string', () => {
-      const memo = Attribution.encode({ realm: 'api.example.com' })
+      const memo = Attribution.encode({ serverId: 'api.example.com' })
       // 0x prefix + 64 hex chars = 32 bytes
       expect(memo).toMatch(/^0x[0-9a-f]{64}$/i)
     })
 
     test('starts with TAG + version byte', () => {
-      const memo = Attribution.encode({ realm: 'api.example.com' })
+      const memo = Attribution.encode({ serverId: 'api.example.com' })
       const tag = memo.slice(0, 10) // 0x + 8 hex chars
       expect(tag.toLowerCase()).toBe(Attribution.TAG.toLowerCase())
       const version = memo.slice(10, 12)
@@ -29,13 +29,13 @@ describe('Attribution', () => {
     })
 
     test('generates unique memos (random nonce)', () => {
-      const a = Attribution.encode({ realm: 'api.example.com' })
-      const b = Attribution.encode({ realm: 'api.example.com' })
+      const a = Attribution.encode({ serverId: 'api.example.com' })
+      const b = Attribution.encode({ serverId: 'api.example.com' })
       expect(a).not.toBe(b)
     })
 
-    test('encodes server fingerprint from realm', () => {
-      const memo = Attribution.encode({ realm: 'api.example.com' })
+    test('encodes server fingerprint from serverId', () => {
+      const memo = Attribution.encode({ serverId: 'api.example.com' })
       const expectedFingerprint = Hex.slice(
         Hash.keccak256(Bytes.fromString('api.example.com'), { as: 'Hex' }),
         0,
@@ -45,8 +45,8 @@ describe('Attribution', () => {
       expect(serverHex.toLowerCase()).toBe(expectedFingerprint.toLowerCase())
     })
 
-    test('encodes client fingerprint from slug', () => {
-      const memo = Attribution.encode({ realm: 'api.example.com', client: 'my-app' })
+    test('encodes client fingerprint from clientId', () => {
+      const memo = Attribution.encode({ serverId: 'api.example.com', clientId: 'my-app' })
       const expectedFingerprint = Hex.slice(
         Hash.keccak256(Bytes.fromString('my-app'), { as: 'Hex' }),
         0,
@@ -56,8 +56,8 @@ describe('Attribution', () => {
       expect(clientHex.toLowerCase()).toBe(expectedFingerprint.toLowerCase())
     })
 
-    test('encodes zero client bytes when no slug', () => {
-      const memo = Attribution.encode({ realm: 'api.example.com' })
+    test('encodes zero client bytes when no clientId', () => {
+      const memo = Attribution.encode({ serverId: 'api.example.com' })
       const clientHex = `0x${memo.slice(32, 52)}` as `0x${string}`
       expect(clientHex).toBe(Attribution.ANONYMOUS)
     })
@@ -65,12 +65,12 @@ describe('Attribution', () => {
 
   describe('isMppMemo', () => {
     test('returns true for encoded memos', () => {
-      const memo = Attribution.encode({ realm: 'api.example.com' })
+      const memo = Attribution.encode({ serverId: 'api.example.com' })
       expect(Attribution.isMppMemo(memo)).toBe(true)
     })
 
-    test('returns true for encoded memos with slug', () => {
-      const memo = Attribution.encode({ realm: 'api.example.com', client: 'my-app' })
+    test('returns true for encoded memos with clientId', () => {
+      const memo = Attribution.encode({ serverId: 'api.example.com', clientId: 'my-app' })
       expect(Attribution.isMppMemo(memo)).toBe(true)
     })
 
@@ -91,25 +91,25 @@ describe('Attribution', () => {
     })
 
     test('returns false for wrong version', () => {
-      const memo = Attribution.encode({ realm: 'api.example.com' })
+      const memo = Attribution.encode({ serverId: 'api.example.com' })
       const wrongVersion = `${memo.slice(0, 10)}ff${memo.slice(12)}` as `0x${string}`
       expect(Attribution.isMppMemo(wrongVersion)).toBe(false)
     })
   })
 
   describe('verifyServer', () => {
-    test('returns true for matching realm', () => {
-      const memo = Attribution.encode({ realm: 'api.example.com' })
+    test('returns true for matching serverId', () => {
+      const memo = Attribution.encode({ serverId: 'api.example.com' })
       expect(Attribution.verifyServer(memo, 'api.example.com')).toBe(true)
     })
 
-    test('returns true for matching realm with client slug', () => {
-      const memo = Attribution.encode({ realm: 'api.example.com', client: 'my-app' })
+    test('returns true for matching serverId with clientId', () => {
+      const memo = Attribution.encode({ serverId: 'api.example.com', clientId: 'my-app' })
       expect(Attribution.verifyServer(memo, 'api.example.com')).toBe(true)
     })
 
-    test('returns false for wrong realm', () => {
-      const memo = Attribution.encode({ realm: 'api.example.com' })
+    test('returns false for wrong serverId', () => {
+      const memo = Attribution.encode({ serverId: 'api.example.com' })
       expect(Attribution.verifyServer(memo, 'other.example.com')).toBe(false)
     })
 
@@ -121,22 +121,22 @@ describe('Attribution', () => {
   })
 
   describe('decode', () => {
-    test('decodes an encoded memo with realm and slug', () => {
-      const memo = Attribution.encode({ realm: 'api.example.com', client: 'my-app' })
+    test('decodes an encoded memo with serverId and clientId', () => {
+      const memo = Attribution.encode({ serverId: 'api.example.com', clientId: 'my-app' })
       const result = Attribution.decode(memo)
       expect(result).not.toBeNull()
       expect(result!.version).toBe(1)
-      expect(result!.server).toMatch(/^0x[0-9a-f]{20}$/i) // 10 bytes = 20 hex chars
-      expect(result!.client).toMatch(/^0x[0-9a-f]{20}$/i)
-      expect(result!.client).not.toBeNull()
+      expect(result!.serverId).toMatch(/^0x[0-9a-f]{20}$/i) // 10 bytes = 20 hex chars
+      expect(result!.clientId).toMatch(/^0x[0-9a-f]{20}$/i)
+      expect(result!.clientId).not.toBeNull()
       expect(result!.nonce).toMatch(/^0x[0-9a-f]{14}$/i) // 7 bytes = 14 hex chars
     })
 
     test('decodes anonymous client as null', () => {
-      const memo = Attribution.encode({ realm: 'api.example.com' })
+      const memo = Attribution.encode({ serverId: 'api.example.com' })
       const result = Attribution.decode(memo)
       expect(result).not.toBeNull()
-      expect(result!.client).toBeNull()
+      expect(result!.clientId).toBeNull()
     })
 
     test('returns null for non-MPP memo', () => {
@@ -146,20 +146,20 @@ describe('Attribution', () => {
     })
 
     test('different encodes produce different nonces', () => {
-      const a = Attribution.decode(Attribution.encode({ realm: 'api.example.com' }))
-      const b = Attribution.decode(Attribution.encode({ realm: 'api.example.com' }))
+      const a = Attribution.decode(Attribution.encode({ serverId: 'api.example.com' }))
+      const b = Attribution.decode(Attribution.encode({ serverId: 'api.example.com' }))
       expect(a!.nonce).not.toBe(b!.nonce)
     })
 
-    test('server fingerprint matches expected keccak hash', () => {
-      const memo = Attribution.encode({ realm: 'api.example.com', client: 'my-app' })
+    test('serverId fingerprint matches expected keccak hash', () => {
+      const memo = Attribution.encode({ serverId: 'api.example.com', clientId: 'my-app' })
       const result = Attribution.decode(memo)!
       const expectedServer = Hex.slice(
         Hash.keccak256(Bytes.fromString('api.example.com'), { as: 'Hex' }),
         0,
         10,
       )
-      expect(result.server.toLowerCase()).toBe(expectedServer.toLowerCase())
+      expect(result.serverId.toLowerCase()).toBe(expectedServer.toLowerCase())
     })
   })
 })

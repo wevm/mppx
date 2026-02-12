@@ -25,7 +25,7 @@ import * as defaults from '../internal/defaults.js'
  * ```
  */
 export function charge(parameters: charge.Parameters = {}) {
-  const { slug } = parameters
+  const { clientId } = parameters
   const getClient = Client.getResolver({
     chain: tempo_chain,
     getClient: parameters.getClient,
@@ -48,7 +48,7 @@ export function charge(parameters: charge.Parameters = {}) {
 
       const memo = methodDetails?.memo
         ? (methodDetails.memo as Hex.Hex)
-        : (Attribution.encode({ realm: challenge.realm, client: slug }) as Hex.Hex)
+        : (Attribution.encode({ serverId: challenge.realm, clientId }) as Hex.Hex)
 
       const prepared = await prepareTransactionRequest(client, {
         account,
@@ -77,8 +77,8 @@ export function charge(parameters: charge.Parameters = {}) {
 
 export declare namespace charge {
   type Parameters = {
-    /** Client slug used to derive the client fingerprint in attribution memos. */
-    slug?: string | undefined
+    /** Client identifier used to derive the client fingerprint in attribution memos. */
+    clientId?: string | undefined
   } & Account.getResolver.Parameters &
     Client.getResolver.Parameters
 }

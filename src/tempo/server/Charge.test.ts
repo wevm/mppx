@@ -45,7 +45,7 @@ describe('tempo', () => {
       const request = challenge.request
       expect(request.methodDetails?.chainId).toBe(chain.id)
 
-      const memo = Attribution.encode({ realm: challenge.realm }) as Hex.Hex
+      const memo = Attribution.encode({ serverId: challenge.realm }) as Hex.Hex
 
       const { receipt } = await Actions.token.transferSync(client, {
         account: accounts[1],
@@ -114,7 +114,7 @@ describe('tempo', () => {
       expect(request.currency).toBe(overrideCurrency)
       expect(request.expires).toBe(overrideExpires)
 
-      const memo = Attribution.encode({ realm: challenge.realm }) as Hex.Hex
+      const memo = Attribution.encode({ serverId: challenge.realm }) as Hex.Hex
 
       const { receipt } = await Actions.token.transferSync(client, {
         account: accounts[1],
@@ -146,24 +146,9 @@ describe('tempo', () => {
     test('behavior: rejects hash with non-matching Transfer log', async () => {
       const wrongRecipient = accounts[2].address
 
-      const serverNoAttribution = Mpay_server.create({
-        methods: [
-          tempo_server.charge({
-            getClient() {
-              return client
-            },
-            currency: asset,
-            account: accounts[0],
-            attribution: false,
-          }),
-        ],
-        realm,
-        secretKey,
-      })
-
       const httpServer = await Http.createServer(async (req, res) => {
         const result = await Mpay_server.toNodeListener(
-          serverNoAttribution.charge({ amount: '1' }),
+          server.charge({ amount: '1' }),
         )(req, res)
         if (result.status === 402) return
         res.end('OK')
@@ -692,7 +677,7 @@ describe('tempo', () => {
 
       expect(challenge.request.methodDetails?.memo).toBeUndefined()
 
-      const memo = Attribution.encode({ realm: challenge.realm, client: 'test-app' })
+      const memo = Attribution.encode({ serverId: challenge.realm, clientId: 'test-app' })
       expect(Attribution.isMppMemo(memo)).toBe(true)
       expect(Attribution.verifyServer(memo, realm)).toBe(true)
 
@@ -722,7 +707,7 @@ describe('tempo', () => {
       httpServer.close()
     })
 
-    test('anonymous client (no slug) generates valid attribution memo', async () => {
+    test('anonymous client (no clientId) generates valid attribution memo', async () => {
       const httpServer = await Http.createServer(async (req, res) => {
         const result = await Mpay_server.toNodeListener(
           server.charge({ amount: '1', decimals: 6 }),
@@ -738,10 +723,10 @@ describe('tempo', () => {
         methods: [tempo_client.charge()],
       })
 
-      const memo = Attribution.encode({ realm: challenge.realm })
+      const memo = Attribution.encode({ serverId: challenge.realm })
       const decoded = Attribution.decode(memo)
       expect(decoded).not.toBeNull()
-      expect(decoded!.client).toBeNull()
+      expect(decoded!.clientId).toBeNull()
 
       const { receipt } = await Actions.token.transferSync(client, {
         account: accounts[1],
@@ -772,7 +757,7 @@ describe('tempo', () => {
         methods: [
           tempo_client({
             account: accounts[1],
-            slug: 'test-app',
+            clientId: 'test-app',
             getClient() {
               return client
             },
@@ -798,25 +783,10 @@ describe('tempo', () => {
       httpServer.close()
     })
 
-    test('attribution: false skips memo verification on server', async () => {
-      const serverNoAttribution = Mpay_server.create({
-        methods: [
-          tempo_server.charge({
-            getClient() {
-              return client
-            },
-            currency: asset,
-            account: accounts[0],
-            attribution: false,
-          }),
-        ],
-        realm,
-        secretKey,
-      })
-
+    test('server accepts plain transfer without memo', async () => {
       const httpServer = await Http.createServer(async (req, res) => {
         const result = await Mpay_server.toNodeListener(
-          serverNoAttribution.charge({ amount: '1', decimals: 6 }),
+          server.charge({ amount: '1', decimals: 6 }),
         )(req, res)
         if (result.status === 402) return
         res.end('OK')

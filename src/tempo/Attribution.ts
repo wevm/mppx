@@ -8,13 +8,13 @@ import { Bytes, Hash, Hex } from 'ox'
  *
  * ## Byte Layout (32 bytes)
  *
- * | Offset | Size | Field                               |
- * |--------|------|-------------------------------------|
- * | 0..3   | 4    | TAG = keccak256("mpp")[0..3]         |
- * | 4      | 1    | version (0x01)                      |
- * | 5..14  | 10   | server = keccak256(realm)[0..9]      |
- * | 15..24 | 10   | client = keccak256(slug)[0..9] or 0s |
- * | 25..31 | 7    | nonce (random bytes)                |
+ * | Offset | Size | Field                                     |
+ * |--------|------|-------------------------------------------|
+ * | 0..3   | 4    | TAG = keccak256("mpp")[0..3]               |
+ * | 4      | 1    | version (0x01)                            |
+ * | 5..14  | 10   | serverId = keccak256(serverId)[0..9]       |
+ * | 15..24 | 10   | clientId = keccak256(clientId)[0..9] or 0s |
+ * | 25..31 | 7    | nonce (random bytes)                      |
  *
  * The TAG prefix makes MPP transactions trivially distinguishable
  * from arbitrary memos via `TransferWithMemo` event topic filtering.
@@ -28,7 +28,7 @@ export const TAG = Hex.slice(Hash.keccak256(Bytes.fromString('mpp'), { as: 'Hex'
 /** Current memo version. */
 const VERSION = 0x01
 
-/** 10 zero bytes representing an anonymous (no slug) client. */
+/** 10 zero bytes representing an anonymous (no clientId) client. */
 export const ANONYMOUS = '0x00000000000000000000' as `0x${string}`
 
 /**
@@ -43,18 +43,18 @@ function fingerprint(value: string): Uint8Array {
 /**
  * Encodes an MPP attribution memo as a `bytes32` hex string.
  *
- * @param parameters - The realm (server identity) and optional client slug.
+ * @param parameters - The serverId (server identity) and optional clientId.
  * @returns A `0x`-prefixed 64-char hex string (32 bytes).
  *
  * @example
  * ```ts
  * import * as Attribution from './Attribution.js'
  *
- * const memo = Attribution.encode({ realm: 'api.example.com', client: 'my-app' })
+ * const memo = Attribution.encode({ serverId: 'api.example.com', clientId: 'my-app' })
  * ```
  */
 export function encode(parameters: encode.Parameters): `0x${string}` {
-  const { realm, client } = parameters
+  const { serverId, clientId } = parameters
   const buf = new Uint8Array(32)
 
   // [0..3] TAG
@@ -64,10 +64,10 @@ export function encode(parameters: encode.Parameters): `0x${string}` {
   buf[4] = VERSION
 
   // [5..14] server fingerprint (10 bytes)
-  buf.set(fingerprint(realm), 5)
+  buf.set(fingerprint(serverId), 5)
 
   // [15..24] client fingerprint or zero bytes (10 bytes)
-  if (client) buf.set(fingerprint(client), 15)
+  if (clientId) buf.set(fingerprint(clientId), 15)
   // else: already zero-filled
 
   // [25..31] nonce (7 random bytes)
@@ -79,10 +79,10 @@ export function encode(parameters: encode.Parameters): `0x${string}` {
 
 export declare namespace encode {
   type Parameters = {
-    /** Server realm used to derive the server fingerprint. */
-    realm: string
-    /** Optional client slug used to derive the client fingerprint. */
-    client?: string | undefined
+    /** Server identity used to derive the server fingerprint. */
+    serverId: string
+    /** Optional client identity used to derive the client fingerprint. */
+    clientId?: string | undefined
   }
 }
 
@@ -96,7 +96,7 @@ export declare namespace encode {
  * ```ts
  * import * as Attribution from './Attribution.js'
  *
- * Attribution.isMppMemo(Attribution.encode({ realm: 'api.example.com' })) // true
+ * Attribution.isMppMemo(Attribution.encode({ serverId: 'api.example.com' })) // true
  * Attribution.isMppMemo('0x0000...0000')      // false
  * ```
  */
@@ -108,18 +108,18 @@ export function isMppMemo(memo: `0x${string}`): boolean {
 }
 
 /**
- * Verifies that a memo's server fingerprint matches the given realm.
+ * Verifies that a memo's server fingerprint matches the given serverId.
  *
- * Checks TAG, version byte, and that bytes 5–14 equal keccak256(realm)[0..9].
+ * Checks TAG, version byte, and that bytes 5–14 equal keccak256(serverId)[0..9].
  *
  * @param memo - A `0x`-prefixed hex string (bytes32).
- * @param realm - The expected server realm.
+ * @param serverId - The expected server identity.
  * @returns `true` if the memo has a valid MPP tag and matching server fingerprint.
  */
-export function verifyServer(memo: `0x${string}`, realm: string): boolean {
+export function verifyServer(memo: `0x${string}`, serverId: string): boolean {
   if (!isMppMemo(memo)) return false
   const memoServerHex = `0x${memo.slice(12, 32)}` as `0x${string}` // bytes 5..14 = 10 bytes = 20 hex chars
-  const expectedHex = Hex.fromBytes(fingerprint(realm)) as `0x${string}`
+  const expectedHex = Hex.fromBytes(fingerprint(serverId)) as `0x${string}`
   return memoServerHex.toLowerCase() === expectedHex.toLowerCase()
 }
 
@@ -133,32 +133,32 @@ export function verifyServer(memo: `0x${string}`, realm: string): boolean {
  * ```ts
  * import * as Attribution from './Attribution.js'
  *
- * const memo = Attribution.encode({ realm: 'api.example.com', client: 'my-app' })
+ * const memo = Attribution.encode({ serverId: 'api.example.com', clientId: 'my-app' })
  * const decoded = Attribution.decode(memo)
- * // { version: 1, server: '0x...', client: '0x...', nonce: '0x...' }
+ * // { version: 1, serverId: '0x...', clientId: '0x...', nonce: '0x...' }
  * ```
  */
 export function decode(memo: `0x${string}`): decode.Result | null {
   if (!isMppMemo(memo)) return null
 
   const version = Number.parseInt(memo.slice(10, 12), 16)
-  const server = `0x${memo.slice(12, 32)}` as `0x${string}` // bytes 5..14
+  const serverId = `0x${memo.slice(12, 32)}` as `0x${string}` // bytes 5..14
   const clientHex = `0x${memo.slice(32, 52)}` as `0x${string}` // bytes 15..24
   const nonce = `0x${memo.slice(52)}` as `0x${string}` // bytes 25..31
 
-  const client = clientHex.toLowerCase() === ANONYMOUS.toLowerCase() ? null : clientHex
+  const clientId = clientHex.toLowerCase() === ANONYMOUS.toLowerCase() ? null : clientHex
 
-  return { version, server, client, nonce }
+  return { version, serverId, clientId, nonce }
 }
 
 export declare namespace decode {
   type Result = {
     /** Memo version (currently always 1). */
     version: number
-    /** 10-byte server fingerprint hex (keccak256(realm)[0..9]). */
-    server: `0x${string}`
+    /** 10-byte server fingerprint hex (keccak256(serverId)[0..9]). */
+    serverId: `0x${string}`
     /** 10-byte client fingerprint hex, or `null` if anonymous. */
-    client: `0x${string}` | null
+    clientId: `0x${string}` | null
     /** 7-byte random nonce hex. */
     nonce: `0x${string}`
   }

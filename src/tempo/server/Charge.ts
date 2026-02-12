@@ -12,7 +12,6 @@ import { PaymentExpiredError } from '../../Errors.js'
 import type { LooseOmit } from '../../internal/types.js'
 import * as MethodIntent from '../../MethodIntent.js'
 import * as Client from '../../viem/Client.js'
-import * as Attribution from '../Attribution.js'
 import * as Intents from '../Intents.js'
 import * as Account from '../internal/account.js'
 import * as defaults from '../internal/defaults.js'
@@ -41,7 +40,6 @@ export function charge<const parameters extends charge.Parameters>(
 ) {
   const {
     amount,
-    attribution = true,
     currency,
     decimals = defaults.decimals,
     description,
@@ -114,7 +112,6 @@ export function charge<const parameters extends charge.Parameters>(
 
       const currency = challengeRequest.currency as `0x${string}`
       const recipient = challengeRequest.recipient as `0x${string}`
-      const realm = challenge.realm
 
       if (expires && new Date(expires) < new Date()) throw new PaymentExpiredError({ expires })
 
@@ -154,44 +151,26 @@ export function charge<const parameters extends charge.Parameters>(
                   recipient,
                 },
               )
-          } else if (attribution) {
+          } else {
+            const transferLogs = parseEventLogs({
+              abi: Abis.tip20,
+              eventName: 'Transfer',
+              logs: receipt.logs,
+            })
+
             const memoLogs = parseEventLogs({
               abi: Abis.tip20,
               eventName: 'TransferWithMemo',
               logs: receipt.logs,
             })
 
-            const match = memoLogs.find(
-              (log) =>
-                isAddressEqual(log.address, currency) &&
-                isAddressEqual(log.args.to, recipient) &&
-                log.args.amount.toString() === amount &&
-                Attribution.verifyServer(log.args.memo as `0x${string}`, realm),
-            )
-
-            if (!match)
-              throw new MismatchError(
-                'Payment verification failed: no matching transfer with attribution memo found.',
-                {
-                  amount,
-                  currency,
-                  realm,
-                  recipient,
-                },
+            const match =
+              [...transferLogs, ...memoLogs].find(
+                (log) =>
+                  isAddressEqual(log.address, currency) &&
+                  isAddressEqual(log.args.to, recipient) &&
+                  log.args.amount.toString() === amount,
               )
-          } else {
-            const logs = parseEventLogs({
-              abi: Abis.tip20,
-              eventName: 'Transfer',
-              logs: receipt.logs,
-            })
-
-            const match = logs.find(
-              (log) =>
-                isAddressEqual(log.address, currency) &&
-                isAddressEqual(log.args.to, recipient) &&
-                log.args.amount.toString() === amount,
-            )
 
             if (!match)
               throw new MismatchError('Payment verification failed: no matching transfer found.', {
@@ -231,29 +210,27 @@ export function charge<const parameters extends charge.Parameters>(
               }
             }
 
-            if (attribution) {
-              if (selector !== transferWithMemoSelector) return false
+            if (selector === transferSelector) {
               try {
                 const { args } = decodeFunctionData({ abi: Abis.tip20, data: call.data })
-                const [to, amount_, memo_] = args as [`0x${string}`, bigint, `0x${string}`]
-                return (
-                  isAddressEqual(to, recipient) &&
-                  amount_.toString() === amount &&
-                  Attribution.verifyServer(memo_, realm)
-                )
+                const [to, amount_] = args as [`0x${string}`, bigint]
+                return isAddressEqual(to, recipient) && amount_.toString() === amount
               } catch {
                 return false
               }
             }
 
-            if (selector !== transferSelector) return false
-            try {
-              const { args } = decodeFunctionData({ abi: Abis.tip20, data: call.data })
-              const [to, amount_] = args as [`0x${string}`, bigint]
-              return isAddressEqual(to, recipient) && amount_.toString() === amount
-            } catch {
-              return false
+            if (selector === transferWithMemoSelector) {
+              try {
+                const { args } = decodeFunctionData({ abi: Abis.tip20, data: call.data })
+                const [to, amount_] = args as [`0x${string}`, bigint, `0x${string}`]
+                return isAddressEqual(to, recipient) && amount_.toString() === amount
+              } catch {
+                return false
+              }
             }
+
+            return false
           })
 
           if (!call)
@@ -295,17 +272,6 @@ export declare namespace charge {
   >
 
   type Parameters = {
-    /**
-     * MPP attribution verification.
-     *
-     * When `true` (default), the server verifies that the client's
-     * transaction includes a valid attribution memo with a matching
-     * server fingerprint. The client always generates attribution
-     * memos — this controls whether the server validates them.
-     *
-     * Set to `false` to accept any transfer (with or without memo).
-     */
-    attribution?: boolean | undefined
     /** Testnet mode. */
     testnet?: boolean | undefined
   } & Client.getResolver.Parameters &
