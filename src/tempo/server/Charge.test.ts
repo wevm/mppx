@@ -6,6 +6,7 @@ import { Actions } from 'viem/tempo'
 import { describe, expect, test } from 'vitest'
 import * as Http from '~test/Http.js'
 import { accounts, asset, chain, client } from '~test/tempo/viem.js'
+import * as Attribution from '../Attribution.js'
 
 const realm = 'api.example.com'
 const secretKey = 'test-secret-key'
@@ -44,9 +45,12 @@ describe('tempo', () => {
       const request = challenge.request
       expect(request.methodDetails?.chainId).toBe(chain.id)
 
+      const memo = request.methodDetails?.memo as Hex.Hex | undefined
+
       const { receipt } = await Actions.token.transferSync(client, {
         account: accounts[1],
         amount: BigInt(request.amount),
+        memo,
         to: request.recipient as Hex.Hex,
         token: request.currency as Hex.Hex,
       })
@@ -110,9 +114,12 @@ describe('tempo', () => {
       expect(request.currency).toBe(overrideCurrency)
       expect(request.expires).toBe(overrideExpires)
 
+      const memo = request.methodDetails?.memo as Hex.Hex | undefined
+
       const { receipt } = await Actions.token.transferSync(client, {
         account: accounts[1],
         amount: BigInt(request.amount),
+        memo,
         to: request.recipient as Hex.Hex,
         token: request.currency as Hex.Hex,
       })
@@ -139,8 +146,26 @@ describe('tempo', () => {
     test('behavior: rejects hash with non-matching Transfer log', async () => {
       const wrongRecipient = accounts[2].address
 
+      // Disable attribution so we test plain transfer (no memo) rejection
+      const serverNoAttribution = Mpay_server.create({
+        methods: [
+          tempo_server.charge({
+            getClient() {
+              return client
+            },
+            currency: asset,
+            account: accounts[0],
+            attribution: false,
+          }),
+        ],
+        realm,
+        secretKey,
+      })
+
       const httpServer = await Http.createServer(async (req, res) => {
-        const result = await Mpay_server.toNodeListener(server.charge({ amount: '1' }))(req, res)
+        const result = await Mpay_server.toNodeListener(
+          serverNoAttribution.charge({ amount: '1' }),
+        )(req, res)
         if (result.status === 402) return
         res.end('OK')
       })
@@ -648,6 +673,211 @@ describe('tempo', () => {
       // feePayer is not exposed on defaults, but we can verify
       // the method was created without error
       expect(method.defaults?.recipient).toBe(accounts[0].address)
+    })
+  })
+
+  describe('attribution memo', () => {
+    test('auto-generates MPP memo for hash credential (default)', async () => {
+      const httpServer = await Http.createServer(async (req, res) => {
+        const result = await Mpay_server.toNodeListener(
+          server.charge({ amount: '1', decimals: 6 }),
+        )(req, res)
+        if (result.status === 402) return
+        res.end('OK')
+      })
+
+      const response = await fetch(httpServer.url)
+      expect(response.status).toBe(402)
+
+      const challenge = Challenge.fromResponse(response, {
+        methods: [tempo_client.charge()],
+      })
+
+      // The challenge should contain an auto-generated MPP memo
+      const memo = challenge.request.methodDetails?.memo as `0x${string}` | undefined
+      expect(memo).toBeDefined()
+      expect(Attribution.isMppMemo(memo!)).toBe(true)
+
+      // Verify the memo decodes correctly
+      const decoded = Attribution.decode(memo!)
+      expect(decoded).not.toBeNull()
+      expect(decoded!.version).toBe(1)
+
+      // Complete the payment using transferWithMemo
+      const { receipt } = await Actions.token.transferSync(client, {
+        account: accounts[1],
+        amount: BigInt(challenge.request.amount),
+        memo,
+        to: challenge.request.recipient as Hex.Hex,
+        token: challenge.request.currency as Hex.Hex,
+      })
+
+      const credential = Credential.from({
+        challenge,
+        payload: { hash: receipt.transactionHash, type: 'hash' as const },
+      })
+
+      {
+        const response = await fetch(httpServer.url, {
+          headers: { Authorization: Credential.serialize(credential) },
+        })
+        expect(response.status).toBe(200)
+
+        const paymentReceipt = Receipt.fromResponse(response)
+        expect(paymentReceipt.status).toBe('success')
+      }
+
+      httpServer.close()
+    })
+
+    test('auto-generates MPP memo for transaction credential via Mpay', async () => {
+      const mpay = Mpay_client.create({
+        polyfill: false,
+        methods: [
+          tempo_client({
+            account: accounts[1],
+            getClient() {
+              return client
+            },
+          }),
+        ],
+      })
+
+      const httpServer = await Http.createServer(async (req, res) => {
+        const result = await Mpay_server.toNodeListener(
+          server.charge({
+            amount: '1',
+            currency: asset,
+            recipient: accounts[0].address,
+          }),
+        )(req, res)
+        if (result.status === 402) return
+        res.end('OK')
+      })
+
+      const response = await fetch(httpServer.url)
+      expect(response.status).toBe(402)
+
+      // Verify the challenge has an MPP memo
+      const challenge = Challenge.fromResponse(response, {
+        methods: [tempo_client.charge()],
+      })
+      const memo = challenge.request.methodDetails?.memo as `0x${string}` | undefined
+      expect(memo).toBeDefined()
+      expect(Attribution.isMppMemo(memo!)).toBe(true)
+
+      const credential = await mpay.createCredential(response)
+
+      {
+        const response = await fetch(httpServer.url, {
+          headers: { Authorization: credential },
+        })
+        expect(response.status).toBe(200)
+      }
+
+      httpServer.close()
+    })
+
+    test('attribution with fingerprint', async () => {
+      const serverWithFp = Mpay_server.create({
+        methods: [
+          tempo_server.charge({
+            getClient() {
+              return client
+            },
+            currency: asset,
+            account: accounts[0],
+            attribution: { fingerprint: 'api.myapp.com' },
+          }),
+        ],
+        realm,
+        secretKey,
+      })
+
+      const httpServer = await Http.createServer(async (req, res) => {
+        const result = await Mpay_server.toNodeListener(
+          serverWithFp.charge({ amount: '1', decimals: 6 }),
+        )(req, res)
+        if (result.status === 402) return
+        res.end('OK')
+      })
+
+      const response = await fetch(httpServer.url)
+      expect(response.status).toBe(402)
+
+      const challenge = Challenge.fromResponse(response, {
+        methods: [tempo_client.charge()],
+      })
+      const memo = challenge.request.methodDetails?.memo as `0x${string}` | undefined
+      expect(memo).toBeDefined()
+      expect(Attribution.isMppMemo(memo!)).toBe(true)
+
+      const decoded = Attribution.decode(memo!)
+      expect(decoded).not.toBeNull()
+      expect(decoded!.fingerprint).not.toBe('0x000000000000')
+
+      httpServer.close()
+    })
+
+    test('attribution: false disables auto-memo', async () => {
+      const serverNoAttribution = Mpay_server.create({
+        methods: [
+          tempo_server.charge({
+            getClient() {
+              return client
+            },
+            currency: asset,
+            account: accounts[0],
+            attribution: false,
+          }),
+        ],
+        realm,
+        secretKey,
+      })
+
+      const httpServer = await Http.createServer(async (req, res) => {
+        const result = await Mpay_server.toNodeListener(
+          serverNoAttribution.charge({ amount: '1', decimals: 6 }),
+        )(req, res)
+        if (result.status === 402) return
+        res.end('OK')
+      })
+
+      const response = await fetch(httpServer.url)
+      expect(response.status).toBe(402)
+
+      const challenge = Challenge.fromResponse(response, {
+        methods: [tempo_client.charge()],
+      })
+      const memo = challenge.request.methodDetails?.memo as `0x${string}` | undefined
+      expect(memo).toBeUndefined()
+
+      httpServer.close()
+    })
+
+    test('user-provided memo takes priority over attribution', async () => {
+      const userMemo =
+        '0xdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef' as `0x${string}`
+
+      const httpServer = await Http.createServer(async (req, res) => {
+        const result = await Mpay_server.toNodeListener(
+          server.charge({ amount: '1', decimals: 6, memo: userMemo }),
+        )(req, res)
+        if (result.status === 402) return
+        res.end('OK')
+      })
+
+      const response = await fetch(httpServer.url)
+      expect(response.status).toBe(402)
+
+      const challenge = Challenge.fromResponse(response, {
+        methods: [tempo_client.charge()],
+      })
+      const memo = challenge.request.methodDetails?.memo as `0x${string}` | undefined
+      expect(memo).toBe(userMemo)
+      expect(Attribution.isMppMemo(memo!)).toBe(false)
+
+      httpServer.close()
     })
   })
 })

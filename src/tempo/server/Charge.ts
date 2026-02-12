@@ -12,6 +12,7 @@ import { PaymentExpiredError } from '../../Errors.js'
 import type { LooseOmit } from '../../internal/types.js'
 import * as MethodIntent from '../../MethodIntent.js'
 import * as Client from '../../viem/Client.js'
+import * as Attribution from '../Attribution.js'
 import * as Intents from '../Intents.js'
 import * as Account from '../internal/account.js'
 import * as defaults from '../internal/defaults.js'
@@ -40,6 +41,7 @@ export function charge<const parameters extends charge.Parameters>(
 ) {
   const {
     amount,
+    attribution = {},
     currency,
     decimals = defaults.decimals,
     description,
@@ -96,7 +98,16 @@ export function charge<const parameters extends charge.Parameters>(
         return undefined
       })()
 
-      return { ...request, chainId, feePayer: resolvedFeePayer }
+      // Auto-generate MPP attribution memo when no user memo is provided.
+      const resolvedMemo = (() => {
+        if (request.memo) return request.memo
+        if (attribution === false) return undefined
+        return Attribution.encode(
+          typeof attribution === 'object' ? attribution : undefined,
+        )
+      })()
+
+      return { ...request, chainId, feePayer: resolvedFeePayer, memo: resolvedMemo }
     },
 
     async verify({ credential, request }) {
@@ -252,6 +263,18 @@ export declare namespace charge {
   >
 
   type Parameters = {
+    /**
+     * MPP attribution configuration.
+     *
+     * When enabled (default), an attribution memo is auto-generated for
+     * transactions that don't already have a user-provided memo. This
+     * tags on-chain transactions as MPP for analytics.
+     *
+     * - `{}` or omitted: enabled with default options (no fingerprint)
+     * - `{ fingerprint: 'api.myapp.com' }`: enabled with server fingerprint
+     * - `false`: disabled — no attribution memo is generated
+     */
+    attribution?: Attribution.encode.Options | false | undefined
     /** Testnet mode. */
     testnet?: boolean | undefined
   } & Client.getResolver.Parameters &
