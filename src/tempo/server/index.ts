@@ -1,7 +1,6 @@
 export * as Sse from '../stream/Sse.js'
 export type { ChannelState, ChannelStorage, Storage } from '../stream/Storage.js'
-export { channelStorage, memoryStorage } from '../stream/Storage.js'
+export { memoryStorage } from '../stream/Storage.js'
 export { charge } from './Charge.js'
 export { tempo } from './MethodIntents.js'
 export { session, settle } from './Session.js'
-export { sseTransport } from './SseTransport.js'

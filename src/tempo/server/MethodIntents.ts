@@ -1,7 +1,6 @@
 import { memoryStorage as memoryStorage_ } from '../stream/Storage.js'
 import { charge as charge_ } from './Charge.js'
 import { session as session_ } from './Session.js'
-import { sseTransport as sseTransport_ } from './SseTransport.js'
 
 /**
  * Creates both Tempo `charge` and `session` method intents from shared parameters.
@@ -25,8 +24,6 @@ export namespace tempo {
   /** Creates a Tempo `charge` method intent for one-time TIP-20 token transfers. */
   export const charge = charge_
   export const memoryStorage = memoryStorage_
-  /** Creates an SSE transport that wires storage into the response pipeline. */
-  export const sseTransport = sseTransport_
   /** Creates a Tempo `session` method intent for session-based TIP-20 token payments. */
   export const session = session_
 }

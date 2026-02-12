@@ -1,6 +1,7 @@
 import * as Challenge from '../Challenge.js'
 import * as Credential from '../Credential.js'
 import * as Errors from '../Errors.js'
+import type { UnionToIntersection } from '../internal/types.js'
 import * as core_Mcp from '../Mcp.js'
 import * as Receipt from '../Receipt.js'
 
@@ -15,7 +16,8 @@ export { type McpSdk, mcpSdk } from '../mcp-sdk/server/Transport.js'
 export type Transport<
   in out input = unknown,
   in out challengeOutput = unknown,
-  in out receiptOutput = challengeOutput,
+  in receiptResponse = challengeOutput,
+  out receiptOutput = receiptResponse,
 > = {
   /** Transport name for identification. */
   name: string
@@ -34,26 +36,45 @@ export type Transport<
   respondReceipt: (options: {
     challengeId: string
     receipt: Receipt.Receipt
-    response: receiptOutput
+    response: receiptResponse
   }) => receiptOutput
 }
-export type AnyTransport = Transport<any, any, any>
+export type AnyTransport = Transport<any, any, any, any>
 
 export type Http = Transport<Request, Response>
 
 export type Mcp = Transport<core_Mcp.JsonRpcRequest, core_Mcp.Response>
 
+export type Sse<stream = any> = Transport<
+  Request,
+  Response,
+  Response | AsyncIterable<string> | ((stream: stream) => AsyncIterable<string>),
+  Response
+>
+
 /** Extracts the input type from a transport. */
-export type InputOf<transport extends Transport = Transport> =
+export type InputOf<transport extends AnyTransport = AnyTransport> =
   transport extends Transport<infer input, any, any> ? input : never
 
 /** Extracts the challenge output type from a transport. */
-export type ChallengeOutputOf<transport extends Transport = Transport> =
+export type ChallengeOutputOf<transport extends AnyTransport = AnyTransport> =
   transport extends Transport<any, infer challengeOutput, any> ? challengeOutput : never
 
 /** Extracts the receipt output type from a transport. */
-export type ReceiptOutputOf<transport extends Transport = Transport> =
-  transport extends Transport<any, any, infer receiptOutput> ? receiptOutput : never
+export type ReceiptOutputOf<transport extends AnyTransport = AnyTransport> =
+  transport extends Transport<any, any, infer receiptOutput, any> ? receiptOutput : never
+
+/** Extracts the resolved receipt type (return type of respondReceipt). */
+export type ReceiptResolvedOf<transport extends AnyTransport = AnyTransport> =
+  transport extends Transport<any, any, any, infer receiptResolved> ? receiptResolved : never
+
+/**
+ * The `withReceipt` overload set for a given transport.
+ *
+ * Produces one overload per union member of `ReceiptOutputOf<transport>`,
+ * so TypeScript can contextually type generator function parameters.
+ */
+export type WithReceipt<transport extends AnyTransport = Http> = WithReceiptOverloads<transport>
 
 /**
  * Creates a custom server-side transport.
@@ -70,9 +91,14 @@ export type ReceiptOutputOf<transport extends Transport = Transport> =
  * })
  * ```
  */
-export function from<input = unknown, challengeOutput = unknown, receiptOutput = challengeOutput>(
-  transport: Transport<input, challengeOutput, receiptOutput>,
-): Transport<input, challengeOutput, receiptOutput> {
+export function from<
+  input = unknown,
+  challengeOutput = unknown,
+  receiptOutput = challengeOutput,
+  receiptResolved = receiptOutput,
+>(
+  transport: Transport<input, challengeOutput, receiptOutput, receiptResolved>,
+): Transport<input, challengeOutput, receiptOutput, receiptResolved> {
   return transport
 }
 
@@ -83,7 +109,7 @@ export function from<input = unknown, challengeOutput = unknown, receiptOutput =
  * - Issues challenges via `WWW-Authenticate` header with 402 status
  * - Attaches receipts via `Payment-Receipt` header
  */
-export function http() {
+export function http(): Http {
   return from<Request, Response>({
     name: 'http',
 
@@ -181,9 +207,20 @@ export function mcp() {
   })
 }
 
+/** @internal */
 function mcpErrorCode(error?: Errors.PaymentError): number {
   if (!error) return core_Mcp.paymentRequiredCode
   if (error instanceof Errors.MalformedCredentialError) return -32602
   if (error instanceof Errors.PaymentRequiredError) return core_Mcp.paymentRequiredCode
   return core_Mcp.paymentVerificationFailedCode
 }
+
+/** @internal Distributes over the receipt output union to create overloads. */
+type WithReceiptOverloads<transport extends AnyTransport = Http> = {
+  // biome-ignore lint/style/useShorthandFunctionType: _
+  (): ReceiptResolvedOf<transport>
+} & UnionToIntersection<
+  ReceiptOutputOf<transport> extends infer member
+    ? (response: member) => ReceiptResolvedOf<transport>
+    : never
+>

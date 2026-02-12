@@ -39,6 +39,7 @@ import {
   settleOnChain,
 } from '../stream/Chain.js'
 import { createStreamReceipt } from '../stream/Receipt.js'
+import * as Transport from './internal/transport.js'
 import type { ChannelState, ChannelStorage, Storage } from '../stream/Storage.js'
 import { channelStorage, deductFromChannel, memoryStorage } from '../stream/Storage.js'
 import type { SignedVoucher, StreamCredentialPayload, StreamReceipt } from '../stream/Types.js'
@@ -94,8 +95,11 @@ export function session<const parameters extends session.Parameters>(p?: paramet
   })
   const [recipient, feePayer] = Recipient.resolve(parameters)
 
+  type Transport = parameters['stream'] extends true ? Transport.Sse : undefined
+  const transport = parameters.stream ? Transport.sse(storage) : undefined
+
   type Defaults = session.DeriveDefaults<parameters>
-  return MethodIntent.toServer<typeof Intents.session, Defaults>(Intents.session, {
+  return MethodIntent.toServer<typeof Intents.session, Defaults, Transport>(Intents.session, {
     defaults: {
       amount,
       currency,
@@ -104,6 +108,8 @@ export function session<const parameters extends session.Parameters>(p?: paramet
       suggestedDeposit,
       unitType,
     } as unknown as Defaults,
+
+    transport: transport as never,
 
     // TODO: dedupe `{charge,stream}.request`
     async request({ credential, request }) {
@@ -236,6 +242,8 @@ export declare namespace session {
     minVoucherDelta?: string | undefined
     /** Storage backend for channel state. */
     storage?: Storage | undefined
+    /** Enable SSE streaming. */
+    stream?: boolean | undefined
     /** Testnet mode. */
     testnet?: boolean | undefined
   } & Recipient.resolve.Parameters &
