@@ -99,7 +99,7 @@ const storage = tempo.memoryStorage()
 // Mpay Server Instance
 
 //
-// `Mpay.create()` assembles the payment handler with two key components:
+// `Mpay.create()` assembles the payment handler from method intents.
 //
 //   `methods` — An array of payment method handlers. Here we use
 //   `tempo.session()` which implements the Tempo streaming payment channel
@@ -109,9 +109,8 @@ const storage = tempo.memoryStorage()
 //     - Verifying "voucher" credentials (validating EIP-712 signatures)
 //     - Verifying "close" credentials and settling on-chain
 //
-//   `transport` — The transport layer that adapts mpay to a specific
-//   delivery mechanism. `tempo.sseTransport({ storage })` wires up the
-//   SSE-specific behavior:
+//   `transport` — Each method intent can specify its own transport.
+//   `Transport.sse()` wires up SSE-specific behavior:
 //     - When the response is an async generator, it wraps it in an SSE
 //       ReadableStream with proper headers (text/event-stream, etc.)
 //     - It handles mid-stream voucher POSTs by detecting them as "managed"
@@ -123,14 +122,14 @@ const storage = tempo.memoryStorage()
 const mpay = Mpay.create({
   methods: [
     tempo.session({
+      // The server's account — where settled funds are transferred to.
+      // Passing the Account object (not just .address) allows the server
+      // to co-sign transactions when `feePayer` is enabled.
+      account,
       // The TIP-20 token to accept payment in.
       currency,
       // Provides chain access for broadcasting txs and settling channels.
       getClient: () => client,
-      // The server's account — where settled funds are transferred to.
-      // Passing the Account object (not just .address) allows the server
-      // to co-sign transactions when `feePayer` is enabled.
-      recipient: account,
       // Enable fee-sponsored transactions. When true, the server co-signs
       // the client's channel-open transaction so the protocol covers gas
       // fees instead of the client paying them.
@@ -138,14 +137,14 @@ const mpay = Mpay.create({
       // Shared storage so mid-stream voucher POSTs update the same state
       // that `stream.charge()` reads from.
       storage,
+      // SSE transport for streaming. The session method detects the SSE
+      // transport and wires up Tempo metering (per-token charging, voucher
+      // handling) automatically using the shared storage.
+      stream: true,
       // Enable testnet mode (relaxes certain validation constraints).
       testnet: true,
     }),
   ],
-  // The SSE transport layer. Must share the same `storage` instance as the
-  // stream method above, so that voucher updates from POST requests are
-  // visible to the SSE generator's charge loop.
-  transport: tempo.sseTransport({ storage }),
 })
 
 // Request Handler

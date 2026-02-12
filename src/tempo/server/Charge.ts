@@ -14,7 +14,7 @@ import * as MethodIntent from '../../MethodIntent.js'
 import * as Client from '../../viem/Client.js'
 import * as Intents from '../Intents.js'
 import * as defaults from '../internal/defaults.js'
-import * as Recipient from '../internal/recipient.js'
+import * as Account from '../internal/account.js'
 import type * as types from '../internal/types.js'
 
 const transferSelector = /*#__PURE__*/ toFunctionSelector(
@@ -47,7 +47,7 @@ export function charge<const parameters extends charge.Parameters>(
     memo,
   } = parameters
 
-  const [recipient, feePayer] = Recipient.resolve(parameters)
+  const { recipient, feePayer } = Account.resolve(parameters)
 
   const getClient = Client.getResolver({
     chain: { ...tempo_chain, experimental_preconfirmationTime: 500 },
@@ -255,7 +255,7 @@ export declare namespace charge {
     /** Testnet mode. */
     testnet?: boolean | undefined
   } & Client.getResolver.Parameters &
-    Recipient.resolve.Parameters &
+    Account.resolve.Parameters &
     Defaults
 
   type DeriveDefaults<parameters extends Parameters> = types.DeriveDefaults<

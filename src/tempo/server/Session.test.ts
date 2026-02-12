@@ -46,7 +46,7 @@ describe('session', () => {
     return session({
       storage: rawStorage,
       getClient: () => client,
-      recipient,
+      account: recipient,
       currency,
       escrowContract,
       chainId: chain.id,

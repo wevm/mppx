@@ -4,4 +4,5 @@ export type DeriveDefaults<parameters, defaults> = Pick<
   parameters,
   Extract<keyof parameters, keyof defaults>
 > &
-  (parameters extends { recipient: Account | string } ? { recipient: string } : {})
+  (parameters extends { account: Account | string } ? { recipient: string } : {}) &
+  (parameters extends { recipient: string } ? { recipient: string } : {})

@@ -17,7 +17,7 @@ const server = Mpay_server.create({
         return client
       },
       currency: asset,
-      recipient: accounts[0],
+      account: accounts[0],
     }),
   ],
   realm,
@@ -230,7 +230,7 @@ describe('tempo', () => {
               throw new Error('not found')
             },
             currency: asset,
-            recipient: accounts[0],
+            account: accounts[0],
           }),
         ],
         realm,
@@ -463,11 +463,11 @@ describe('tempo', () => {
       const server = Mpay_server.create({
         methods: [
           tempo_server.charge({
+            account: accounts[0],
             getClient() {
               return client
             },
             currency: asset,
-            recipient: accounts[0],
             feePayer: true,
           }),
         ],
@@ -555,7 +555,7 @@ describe('tempo', () => {
     test('recipient: string resolves to string', () => {
       const method = tempo_server.charge({
         getClient: () => client,
-        recipient: accounts[0].address,
+        account: accounts[0].address,
       })
       expect(method.defaults?.recipient).toBe(accounts[0].address)
     })
@@ -563,7 +563,7 @@ describe('tempo', () => {
     test('recipient: Account resolves to account.address', () => {
       const method = tempo_server.charge({
         getClient: () => client,
-        recipient: accounts[0],
+        account: accounts[0],
       })
       expect(method.defaults?.recipient).toBe(accounts[0].address)
     })
@@ -582,9 +582,9 @@ describe('tempo', () => {
       const server_ = Mpay_server.create({
         methods: [
           tempo_server.charge({
+            account: accounts[0],
             getClient: () => client,
             currency: asset,
-            recipient: accounts[0],
             feePayer: true,
           }),
         ],
@@ -620,7 +620,7 @@ describe('tempo', () => {
           tempo_server.charge({
             getClient: () => client,
             currency: asset,
-            recipient: accounts[0].address,
+            account: accounts[0].address,
             feePayer: accounts[0],
           }),
         ],
@@ -643,7 +643,7 @@ describe('tempo', () => {
     test('no feePayer resolves to undefined', () => {
       const method = tempo_server.charge({
         getClient: () => client,
-        recipient: accounts[0].address,
+        account: accounts[0].address,
       })
       // feePayer is not exposed on defaults, but we can verify
       // the method was created without error
