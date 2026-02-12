@@ -18,13 +18,23 @@ export type Sse = Transport.Sse<Sse_core.StreamController>
  * Wraps an HTTP transport with:
  * - Context capture from credentials (channelId, tickCost)
  * - Per-token charging via Sse.serve for generator/iterable responses
+ * - Auto-detection of upstream SSE responses
  * - Fallback to standard HTTP receipt handling for plain Response
  */
-export function sse(storage: ChannelStorage): Sse {
+export function sse(options: sse.Options): Sse {
+  const { pollingOnly } = options
+  // When pollingOnly is true, strip waitForUpdate so the SSE charge loop
+  // falls back to polling. This is needed for runtimes like Cloudflare Workers
+  // where resolving promises across request contexts is not supported.
+  const storage = (() => {
+    if (!pollingOnly) return options.storage
+    const { waitForUpdate: _, ...storage } = options.storage
+    return storage
+  })()
+
+  const contextMap = new Map<string, Sse_core.fromRequest.Context>()
+
   const base = Transport.http()
-
-  let context: Sse_core.fromRequest.Context | null = null
-
   return Transport.from<Request, Response, Transport.ReceiptResponseOf<Sse>, Response>({
     name: 'sse',
 
@@ -32,9 +42,10 @@ export function sse(storage: ChannelStorage): Sse {
       const credential = base.getCredential(request)
       if (credential) {
         try {
-          context = Sse_core.fromRequest(request)
+          const ctx = Sse_core.fromRequest(request)
+          contextMap.set(ctx.challengeId, ctx)
         } catch {
-          context = null
+          // ignore — non-SSE credentials won't have stream context
         }
       }
       return credential
@@ -45,25 +56,57 @@ export function sse(storage: ChannelStorage): Sse {
     },
 
     respondReceipt({ receipt, response, challengeId }) {
-      if (
-        typeof response === 'function' ||
-        (response !== null && typeof response === 'object' && Symbol.asyncIterator in response)
-      ) {
-        if (!context) throw new Error('No SSE context available — credential was not parsed')
-        const generate =
-          typeof response === 'function' ? response : () => response as AsyncIterable<string>
+      // Auto-detect upstream SSE responses and parse them into an
+      // AsyncIterable so they flow through the metered pipeline.
+      // This lets proxy consumers simply pass `result.withReceipt(upstreamRes)`
+      // and get per-event charging automatically.
+      const resolved =
+        response instanceof Response && Sse_core.isEventStream(response) && response.body
+          ? Sse_core.iterateData(response, { skip: (d) => d === '[DONE]' })
+          : response
+
+      if (isAsyncGeneratorFunction(resolved) || isAsyncIterable(resolved)) {
+        const ctx = contextMap.get(challengeId)
+        if (!ctx) throw new Error('No SSE context available — credential was not parsed')
+        contextMap.delete(challengeId)
+
+        // Pass async generator functions directly so Sse.serve gives them
+        // a StreamController for manual charge(). Pass raw AsyncIterables
+        // as-is so Sse.serve auto-charges per yielded value.
+        const generate: Sse_core.serve.Options['generate'] = isAsyncGeneratorFunction(resolved)
+          ? (resolved as Sse_core.serve.Options['generate'])
+          : (resolved as AsyncIterable<string>)
         const stream = Sse_core.serve({
           storage,
-          channelId: context.channelId,
+          channelId: ctx.channelId,
           challengeId,
-          tickCost: context.tickCost,
-          generate: generate as Sse_core.serve.Options['generate'],
+          tickCost: ctx.tickCost,
+          generate,
         })
         return Sse_core.toResponse(stream)
       }
+
       return base.respondReceipt({ receipt, response: response as Response, challengeId })
     },
   })
+}
+
+export declare namespace sse {
+  type Options = {
+    /**
+     * When true, the SSE charge loop uses polling instead of `waitForUpdate()`.
+     *
+     * Required for runtimes like Cloudflare Workers where resolving promises
+     * across request contexts is not supported. Without this flag, a mid-stream
+     * voucher POST (Request B) would resolve a waiter created in the SSE
+     * stream's request context (Request A), causing a Workers error.
+     *
+     * @default false
+     */
+    pollingOnly?: boolean | undefined
+    /** Storage backend for channel state. */
+    storage: ChannelStorage
+  }
 }
 
 /** Default SSE serve: iterates values and emits `event: message` per value. */
@@ -94,4 +137,15 @@ export function defaultServe(options: {
       Connection: 'keep-alive',
     },
   })
+}
+
+function isAsyncGeneratorFunction(
+  value: unknown,
+): value is (...args: unknown[]) => AsyncIterable<string> {
+  if (typeof value !== 'function') return false
+  return value.constructor?.name === 'AsyncGeneratorFunction'
+}
+
+function isAsyncIterable(value: unknown): value is AsyncIterable<string> {
+  return value !== null && typeof value === 'object' && Symbol.asyncIterator in (value as object)
 }

@@ -101,8 +101,13 @@ export function session<const parameters extends session.Parameters>(p?: paramet
   })
   const { recipient, feePayer } = Account.resolve(parameters)
 
-  type Transport = parameters['stream'] extends true ? Transport.Sse : undefined
-  const transport = parameters.stream ? Transport.sse(storage) : undefined
+  type Transport = parameters['stream'] extends false | undefined ? undefined : Transport.Sse
+  const transport = parameters.stream
+    ? Transport.sse({
+        storage,
+        ...(typeof parameters.stream === 'object' ? parameters.stream : undefined),
+      })
+    : undefined
 
   type Defaults = session.DeriveDefaults<parameters>
   return MethodIntent.toServer<typeof Intents.session, Defaults, Transport>(Intents.session, {
@@ -261,8 +266,14 @@ export declare namespace session {
     minVoucherDelta?: string | undefined
     /** Storage backend for channel state. */
     storage?: Storage | undefined
-    /** Enable SSE streaming. */
-    stream?: boolean | undefined
+    /**
+     * Enable SSE streaming.
+     *
+     * Pass `true` to enable with defaults, or an options object
+     * to configure the stream (e.g. `{ pollingOnly: true }` for
+     * Cloudflare Workers compatibility).
+     */
+    stream?: boolean | Transport.sse.Options | undefined
     /** Testnet mode. */
     testnet?: boolean | undefined
   } & Account.resolve.Parameters &
