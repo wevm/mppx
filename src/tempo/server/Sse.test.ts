@@ -89,7 +89,7 @@ describe('Sse.serve', () => {
     expect(channel!.units).toBe(3)
   })
 
-  test('emits 402-need-voucher when balance exhausted and resumes after top-up', async () => {
+  test('emits payment-need-voucher when balance exhausted and resumes after top-up', async () => {
     const storage = memoryStorage()
     await seedChannel(storage, 1000000n)
 
@@ -131,7 +131,7 @@ describe('Sse.serve', () => {
     })
 
     const secondChunk = await readNext
-    expect(secondChunk).toContain('event: 402-need-voucher\n')
+    expect(secondChunk).toContain('event: payment-need-voucher\n')
 
     const remaining: string[] = []
     while (true) {

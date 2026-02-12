@@ -51,7 +51,7 @@ describe('formatReceiptEvent', () => {
 })
 
 describe('formatNeedVoucherEvent', () => {
-  test('produces valid SSE format with 402-need-voucher event type', () => {
+  test('produces valid SSE format with payment-need-voucher event type', () => {
     const params: NeedVoucherEvent = {
       channelId,
       requiredCumulative: '6000000',
@@ -61,9 +61,9 @@ describe('formatNeedVoucherEvent', () => {
 
     const event = formatNeedVoucherEvent(params)
 
-    expect(event).toMatch(/^event: 402-need-voucher\n/)
+    expect(event).toMatch(/^event: payment-need-voucher\n/)
     expect(event).toMatch(/\ndata: \{.*\}\n\n$/)
-    expect(event).toBe(`event: 402-need-voucher\ndata: ${JSON.stringify(params)}\n\n`)
+    expect(event).toBe(`event: payment-need-voucher\ndata: ${JSON.stringify(params)}\n\n`)
   })
 
   test('data is valid JSON with all fields', () => {
@@ -98,17 +98,17 @@ describe('parseEvent', () => {
     expect(event).toEqual({ type: 'message', data: 'hello' })
   })
 
-  test('parses 402-need-voucher event', () => {
+  test('parses payment-need-voucher event', () => {
     const params: NeedVoucherEvent = {
       channelId,
       requiredCumulative: '6000000',
       acceptedCumulative: '5000000',
       deposit: '10000000',
     }
-    const raw = `event: 402-need-voucher\ndata: ${JSON.stringify(params)}\n\n`
+    const raw = `event: payment-need-voucher\ndata: ${JSON.stringify(params)}\n\n`
     const event = parseEvent(raw)
 
-    expect(event).toEqual({ type: '402-need-voucher', data: params })
+    expect(event).toEqual({ type: 'payment-need-voucher', data: params })
   })
 
   test('parses payment-receipt event', () => {
@@ -164,7 +164,7 @@ describe('parseEvent', () => {
     const formatted = formatNeedVoucherEvent(params)
     const parsed = parseEvent(formatted)
 
-    expect(parsed).toEqual({ type: '402-need-voucher', data: params })
+    expect(parsed).toEqual({ type: 'payment-need-voucher', data: params })
   })
 
   test('treats unknown event types as message', () => {
@@ -249,7 +249,7 @@ describe('serve', () => {
     expect(channel!.units).toBe(3)
   })
 
-  test('emits 402-need-voucher when balance exhausted and resumes after top-up', async () => {
+  test('emits payment-need-voucher when balance exhausted and resumes after top-up', async () => {
     const storage = memoryStorage()
     await seedChannel(storage, 1000000n)
 
@@ -286,7 +286,7 @@ describe('serve', () => {
     })
 
     const secondChunk = await readNext
-    expect(secondChunk).toContain('event: 402-need-voucher\n')
+    expect(secondChunk).toContain('event: payment-need-voucher\n')
 
     const remaining: string[] = []
     while (true) {

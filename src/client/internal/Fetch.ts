@@ -28,7 +28,7 @@ let originalFetch: typeof globalThis.fetch | undefined
 export function from<const methods extends readonly MethodIntent.AnyClient[]>(
   config: from.Config<methods>,
 ): from.Fetch<methods> {
-  const { fetch = globalThis.fetch, methods } = config
+  const { fetch = globalThis.fetch, methods, onChallenge } = config
 
   return async (input, init) => {
     const { context, ...fetchInit } = init ?? {}
@@ -37,6 +37,7 @@ export function from<const methods extends readonly MethodIntent.AnyClient[]>(
     if (response.status !== 402) return response
 
     const challenge = Challenge.fromResponse(response)
+    onChallenge?.(challenge)
 
     const mi = methods.find((m) => m.method === challenge.method && m.name === challenge.intent)
     if (!mi)
@@ -73,6 +74,8 @@ export declare namespace from {
     fetch?: typeof globalThis.fetch
     /** Array of method intents to use. */
     methods: methods
+    /** Called when a 402 challenge is received, before credential creation. */
+    onChallenge?: ((challenge: Challenge.Challenge) => void) | undefined
   }
 
   type Fetch<

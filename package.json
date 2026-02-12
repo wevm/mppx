@@ -71,6 +71,11 @@
       "src": "./src/mcp-sdk/server/index.ts",
       "default": "./dist/mcp-sdk/server/index.js"
     },
+    "./proxy": {
+      "types": "./dist/proxy/index.d.ts",
+      "src": "./src/proxy/index.ts",
+      "default": "./dist/proxy/index.js"
+    },
     "./server": {
       "types": "./dist/server/index.d.ts",
       "src": "./src/server/index.ts",
@@ -124,6 +129,8 @@
     }
   },
   "dependencies": {
+    "@remix-run/fetch-proxy": "^0.7.1",
+    "@remix-run/node-fetch-server": "^0.13.0",
     "cac": "^6.7.14",
     "ox": "^0.12.0",
     "zod": "^4.3.6"

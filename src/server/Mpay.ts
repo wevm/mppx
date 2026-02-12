@@ -5,6 +5,7 @@ import * as Errors from '../Errors.js'
 import type * as MethodIntent from '../MethodIntent.js'
 import type * as Receipt from '../Receipt.js'
 import type * as z from '../zod.js'
+import * as NodeListener from './NodeListener.js'
 import * as Request from './Request.js'
 import * as Transport from './Transport.js'
 
@@ -25,25 +26,13 @@ export type Mpay<
   transport: transport
 } & Handlers<FlattenMethods<methods>, transport>
 
-/** Extracts the transport override from a method intent, if any. */
-type TransportOverrideOf<mi> = mi extends { transport?: infer transport extends Transport.AnyTransport }
-  ? Exclude<transport, undefined>
-  : never
-
-/** Resolves the effective transport for an intent: override if present, else global default. */
-type EffectiveTransportOf<mi, defaultTransport extends Transport.AnyTransport> = [
-  TransportOverrideOf<mi>,
-] extends [never]
-  ? defaultTransport
-  : TransportOverrideOf<mi>
-
 type Handlers<
   methods extends readonly MethodIntent.AnyServer[],
   transport extends Transport.AnyTransport,
 > = {
   [intent in methods[number]['name']]: IntentFn<
     Extract<methods[number], { name: intent }>,
-    EffectiveTransportOf<Extract<methods[number], { name: intent }>, transport>,
+    transport,
     NonNullable<Extract<methods[number], { name: intent }>['defaults']>
   >
 }
@@ -86,7 +75,7 @@ export function create<
       request: mi.request as never,
       respond: mi.respond as never,
       secretKey,
-      transport: (mi.transport ?? transport) as never,
+      transport,
       verify: mi.verify as never,
     })
   }
@@ -305,7 +294,12 @@ declare namespace IntentFn {
       }
     | {
         status: 200
-        withReceipt: Transport.WithReceipt<transport>
+        withReceipt: {
+          (): Transport.ReceiptOutputOf<transport>
+          <response extends Transport.ReceiptOutputOf<transport>>(
+            response: response,
+          ): Transport.ReceiptOutputOf<transport>
+        }
       }
 }
 
@@ -340,11 +334,7 @@ export function toNodeListener(
     const result = await handler(Request.fromNodeListener(req, res))
 
     if (result.status === 402) {
-      const httpResponse = result.challenge as globalThis.Response
-      res.writeHead(httpResponse.status, Object.fromEntries(httpResponse.headers))
-      const body = await httpResponse.text()
-      if (body) res.write(body)
-      res.end()
+      await NodeListener.sendResponse(res, result.challenge as globalThis.Response)
     } else {
       const wrapped = result.withReceipt(new globalThis.Response()) as globalThis.Response
       res.setHeader('Payment-Receipt', wrapped.headers.get('Payment-Receipt')!)

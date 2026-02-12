@@ -42,7 +42,7 @@ const account = privateKeyToAccount(generatePrivateKey())
 // All payment amounts in this example are denominated in pathUSD (6 decimals).
 const currency = '0x20c0000000000000000000000000000000000000' as const
 
-// Price charged per streamed token. The server emits a `402-need-voucher`
+// Price charged per streamed token. The server emits a `payment-need-voucher`
 // SSE event for each token, and the client must respond with an updated
 // cumulative voucher covering this amount before the next token is sent.
 const pricePerToken = '0.000075'
@@ -77,10 +77,10 @@ const client = createClient({
 // During an SSE stream, two things happen concurrently:
 //   1. The SSE generator yields tokens and calls `stream.charge()` per token.
 //      `charge()` atomically deducts from the channel's available balance in
-//      storage. If the balance is insufficient, it emits a `402-need-voucher`
+//      storage. If the balance is insufficient, it emits a `payment-need-voucher`
 //      event and polls storage waiting for the balance to increase.
 //
-//   2. The client receives the `402-need-voucher` event and sends a POST
+//   2. The client receives the `payment-need-voucher` event and sends a POST
 //      with an updated cumulative voucher. This POST hits the same endpoint,
 //      is intercepted by the SSE transport, and updates the channel's
 //      `highestVoucherAmount` in storage.
@@ -99,7 +99,7 @@ const storage = tempo.memoryStorage()
 // Mpay Server Instance
 
 //
-// `Mpay.create()` assembles the payment handler from method intents.
+// `Mpay.create()` assembles the payment handler with two key components:
 //
 //   `methods` — An array of payment method handlers. Here we use
 //   `tempo.session()` which implements the Tempo streaming payment channel
@@ -109,8 +109,9 @@ const storage = tempo.memoryStorage()
 //     - Verifying "voucher" credentials (validating EIP-712 signatures)
 //     - Verifying "close" credentials and settling on-chain
 //
-//   `transport` — Each method intent can specify its own transport.
-//   `Transport.sse()` wires up SSE-specific behavior:
+//   `transport` — The transport layer that adapts mpay to a specific
+//   delivery mechanism. `tempo.sseTransport({ storage })` wires up the
+//   SSE-specific behavior:
 //     - When the response is an async generator, it wraps it in an SSE
 //       ReadableStream with proper headers (text/event-stream, etc.)
 //     - It handles mid-stream voucher POSTs by detecting them as "managed"
@@ -137,14 +138,14 @@ const mpay = Mpay.create({
       // Shared storage so mid-stream voucher POSTs update the same state
       // that `stream.charge()` reads from.
       storage,
-      // SSE transport for streaming. The session method detects the SSE
-      // transport and wires up Tempo metering (per-token charging, voucher
-      // handling) automatically using the shared storage.
-      stream: true,
       // Enable testnet mode (relaxes certain validation constraints).
       testnet: true,
     }),
   ],
+  // The SSE transport layer. Must share the same `storage` instance as the
+  // stream method above, so that voucher updates from POST requests are
+  // visible to the SSE generator's charge loop.
+  transport: tempo.sseTransport({ storage }),
 })
 
 // Request Handler
@@ -179,7 +180,7 @@ const mpay = Mpay.create({
 //
 //   Phase 4 — POST, Authorization contains "voucher" credential (mid-stream):
 //     While the SSE stream from Phase 3 is still running, the client sends
-//     incremental voucher updates (triggered by `402-need-voucher` events).
+//     incremental voucher updates (triggered by `payment-need-voucher` events).
 //     These POSTs are intercepted by the SSE transport and update the
 //     channel's `highestVoucherAmount` in shared storage. `withReceipt()`
 //     returns the management response without invoking the generator.
@@ -236,7 +237,7 @@ export async function handler(request: Request): Promise<Response | null> {
     //   2. If sufficient balance: returns immediately, and we yield the
     //      next token as an SSE `event: message`.
     //
-    //   3. If insufficient balance: emits a `event: 402-need-voucher` SSE
+    //   3. If insufficient balance: emits a `event: payment-need-voucher` SSE
     //      event with the required cumulative amount, then blocks (polls
     //      or waits on storage updates) until the client sends a new
     //      voucher via POST. Once the client's POST updates storage,
@@ -253,7 +254,7 @@ export async function handler(request: Request): Promise<Response | null> {
           // This is the core of the pay-per-token model. Each call:
           //   - Deducts `pricePerToken` from the channel's available balance
           //   - If the client's voucher doesn't cover this charge, a
-          //     `402-need-voucher` SSE event is emitted and the call blocks
+          //     `payment-need-voucher` SSE event is emitted and the call blocks
           //     until a new voucher arrives via POST
           //   - Only returns once payment is confirmed, ensuring the server
           //     never gives away content for free

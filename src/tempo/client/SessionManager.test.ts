@@ -57,7 +57,7 @@ describe('Session', () => {
       expect(event).toEqual({ type: 'message', data: 'hello world' })
     })
 
-    test('parses 402-need-voucher events', () => {
+    test('parses payment-need-voucher events', () => {
       const params: NeedVoucherEvent = {
         channelId,
         requiredCumulative: '6000000',
@@ -66,7 +66,7 @@ describe('Session', () => {
       }
       const raw = formatNeedVoucherEvent(params)
       const event = parseEvent(raw)
-      expect(event).toEqual({ type: '402-need-voucher', data: params })
+      expect(event).toEqual({ type: 'payment-need-voucher', data: params })
     })
   })
 
@@ -107,7 +107,7 @@ describe('Session', () => {
       })
 
       await expect(s.fetch('https://api.example.com/data')).rejects.toThrow(
-        'no `maxDeposit` configured',
+        'no `deposit` or `maxDeposit` configured',
       )
     })
   })
@@ -174,7 +174,7 @@ describe('Session', () => {
   })
 
   describe('error handling', () => {
-    test('.sse() silently skips 402-need-voucher when no channel open', async () => {
+    test('.sse() silently skips payment-need-voucher when no channel open', async () => {
       const needVoucher: NeedVoucherEvent = {
         channelId,
         requiredCumulative: '2000000',

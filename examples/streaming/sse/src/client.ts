@@ -17,7 +17,7 @@
 //                                       Server broadcasts tx, verifies voucher, responds 200
 //        GET  /api/chat  (voucher)    → Client sends voucher credential, server begins SSE stream
 //
-//   3. During the SSE stream, the server emits `402-need-voucher` events
+//   3. During the SSE stream, the server emits `payment-need-voucher` events
 //      whenever it needs more payment (one per token). The client automatically
 //      intercepts these events and responds with a POST containing an updated
 //      cumulative voucher — no new on-chain transactions, just signatures.
@@ -151,7 +151,7 @@ console.log(`Price per token: ${PRICE_PER_TOKEN} pathUSD`)
 //
 //   Phase 4 — POST (mid-stream vouchers):
 //     During the stream, whenever the server needs payment for the next
-//     token, it emits a `402-need-voucher` SSE event. The client's SSE
+//     token, it emits a `payment-need-voucher` SSE event. The client's SSE
 //     iterator automatically intercepts this event, signs a new cumulative
 //     voucher (incrementing by `PRICE_PER_TOKEN`), and sends it via POST.
 //     The server receives the voucher, updates its channel state, and
@@ -175,7 +175,7 @@ const tokens = await s.sse(`${BASE_URL}/api/chat?prompt=${encodeURIComponent(pro
 
 // Consume the SSE stream. Each iteration yields one content token.
 // Behind the scenes, between tokens, the client may be handling
-// `402-need-voucher` events and sending updated vouchers via POST.
+// `payment-need-voucher` events and sending updated vouchers via POST.
 // Each voucher is cumulative — it represents the total amount spent so far,
 // not just the latest increment. For example:
 //   Token 1: voucher for 0.000075 pathUSD

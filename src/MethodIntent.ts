@@ -3,7 +3,6 @@ import type * as Credential from './Credential.js'
 import * as Intent from './Intent.js'
 import type { ExactPartial, LooseOmit, MaybePromise } from './internal/types.js'
 import type * as Receipt from './Receipt.js'
-import type * as Transport from './server/Transport.js'
 import * as z from './zod.js'
 
 /**
@@ -228,15 +227,13 @@ export type AnyClient = Client<any, any>
 export type Server<
   intent extends AnyMethodIntent = MethodIntent,
   defaults extends ExactPartial<z.input<intent['schema']['request']>> = {},
-  transportOverride = undefined,
 > = intent & {
-  defaults?: defaults | undefined
-  request?: RequestFn<intent> | undefined
-  respond?: RespondFn<intent> | undefined
-  transport?: transportOverride | undefined
+  defaults?: defaults
+  request?: RequestFn<intent>
+  respond?: RespondFn<intent>
   verify: VerifyFn<intent>
 }
-export type AnyServer = Server<any, any, any>
+export type AnyServer = Server<any, any>
 
 /** Credential creation function for a single intent. */
 export type CreateCredentialFn<intent extends AnyMethodIntent, context = unknown> = (
@@ -357,32 +354,22 @@ export declare namespace toClient {
 export function toServer<
   const intent extends AnyMethodIntent,
   const defaults extends RequestDefaults<intent> = {},
-  const transportOverride extends Transport.AnyTransport | undefined = undefined,
->(
-  intent: intent,
-  options: toServer.Options<intent, defaults, transportOverride>,
-): Server<intent, defaults, transportOverride> {
-  const { defaults, request, respond, transport, verify } = options
+>(intent: intent, options: toServer.Options<intent, defaults>): Server<intent, defaults> {
+  const { defaults, request, respond, verify } = options
   return {
     ...intent,
     defaults,
     request,
     respond,
-    transport,
     verify,
-  } as Server<intent, defaults, transportOverride>
+  } as Server<intent, defaults>
 }
 
 export declare namespace toServer {
-  type Options<
-    intent extends AnyMethodIntent,
-    defaults extends RequestDefaults<intent> = {},
-    transportOverride extends Transport.AnyTransport | undefined = undefined,
-  > = {
-    defaults?: defaults | undefined
-    request?: RequestFn<intent> | undefined
-    respond?: RespondFn<intent> | undefined
-    transport?: transportOverride | undefined
+  type Options<intent extends AnyMethodIntent, defaults extends RequestDefaults<intent> = {}> = {
+    defaults?: defaults
+    request?: RequestFn<intent>
+    respond?: RespondFn<intent>
     verify: VerifyFn<intent>
   }
 }

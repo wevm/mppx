@@ -1,5 +1,5 @@
 import { EventEmitter } from 'node:events'
-import type { IncomingMessage } from 'node:http'
+import type { IncomingMessage, ServerResponse } from 'node:http'
 import { Request } from 'mpay/server'
 import { describe, expect, test } from 'vitest'
 
@@ -8,19 +8,30 @@ function createMockRequest(options: {
   url?: string
   rawHeaders?: string[]
   socket?: { encrypted?: boolean }
-}): IncomingMessage {
-  const emitter = new EventEmitter()
-  return Object.assign(emitter, {
+}): [IncomingMessage, ServerResponse] {
+  const rawHeaders = options.rawHeaders ?? []
+  const headers = Object.fromEntries(
+    rawHeaders.reduce<[string, string][]>((acc, v, i, arr) => {
+      if (i % 2 === 0 && arr[i + 1]) acc.push([v.toLowerCase(), arr[i + 1]!])
+      return acc
+    }, []),
+  )
+  const req = Object.assign(new EventEmitter(), {
     method: options.method ?? 'GET',
     url: options.url ?? '/',
-    rawHeaders: options.rawHeaders ?? [],
+    headers,
+    rawHeaders,
     socket: options.socket ?? {},
   }) as unknown as IncomingMessage
+
+  const res = new EventEmitter() as unknown as ServerResponse
+
+  return [req, res]
 }
 
-describe('fromNodeRequest', () => {
+describe('fromNodeListener', () => {
   test('converts IncomingMessage to Fetch Request', () => {
-    const incoming = createMockRequest({
+    const [req, res] = createMockRequest({
       method: 'POST',
       url: '/api/resource',
       rawHeaders: [
@@ -33,7 +44,7 @@ describe('fromNodeRequest', () => {
       ],
     })
 
-    const request = Request.fromNodeListener(incoming)
+    const request = Request.fromNodeListener(req, res)
 
     expect(request.method).toBe('POST')
     expect(request.url).toBe('http://example.com/api/resource')
@@ -42,47 +53,47 @@ describe('fromNodeRequest', () => {
   })
 
   test('uses default values when host/url/method missing', () => {
-    const incoming = createMockRequest({})
+    const [req, res] = createMockRequest({})
 
-    const request = Request.fromNodeListener(incoming)
+    const request = Request.fromNodeListener(req, res)
 
     expect(request.method).toBe('GET')
     expect(request.url).toBe('http://localhost/')
   })
 
   test('preserves multi-value headers via append', () => {
-    const incoming = createMockRequest({
+    const [req, res] = createMockRequest({
       rawHeaders: ['Host', 'example.com', 'Set-Cookie', 'a=1', 'Set-Cookie', 'b=2'],
     })
 
-    const request = Request.fromNodeListener(incoming)
+    const request = Request.fromNodeListener(req, res)
 
     expect(request.headers.get('Set-Cookie')).toBe('a=1, b=2')
   })
 
   test('skips HTTP/2 pseudo-headers', () => {
-    const incoming = createMockRequest({
+    const [req, res] = createMockRequest({
       rawHeaders: [':method', 'GET', ':path', '/', 'Host', 'example.com'],
     })
 
-    const request = Request.fromNodeListener(incoming)
+    const request = Request.fromNodeListener(req, res)
 
     expect([...request.headers.keys()]).toEqual(['host'])
     expect(request.headers.get('Host')).toBe('example.com')
   })
 
   test('streams body for POST requests', async () => {
-    const incoming = createMockRequest({
+    const [req, res] = createMockRequest({
       method: 'POST',
       rawHeaders: ['Host', 'example.com', 'Content-Type', 'application/json'],
     })
 
-    const request = Request.fromNodeListener(incoming)
+    const request = Request.fromNodeListener(req, res)
 
     setImmediate(() => {
-      incoming.emit('data', Buffer.from('{"hello":'))
-      incoming.emit('data', Buffer.from('"world"}'))
-      incoming.emit('end')
+      req.emit('data', Buffer.from('{"hello":'))
+      req.emit('data', Buffer.from('"world"}'))
+      req.emit('end')
     })
 
     const body = await request.text()
