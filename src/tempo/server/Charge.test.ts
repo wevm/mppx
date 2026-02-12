@@ -45,7 +45,6 @@ describe('tempo', () => {
       const request = challenge.request
       expect(request.methodDetails?.chainId).toBe(chain.id)
 
-      // Client generates the attribution memo
       const memo = Attribution.encode({ realm: challenge.realm }) as Hex.Hex
 
       const { receipt } = await Actions.token.transferSync(client, {
@@ -115,7 +114,6 @@ describe('tempo', () => {
       expect(request.currency).toBe(overrideCurrency)
       expect(request.expires).toBe(overrideExpires)
 
-      // Client generates the attribution memo
       const memo = Attribution.encode({ realm: challenge.realm }) as Hex.Hex
 
       const { receipt } = await Actions.token.transferSync(client, {
@@ -148,7 +146,6 @@ describe('tempo', () => {
     test('behavior: rejects hash with non-matching Transfer log', async () => {
       const wrongRecipient = accounts[2].address
 
-      // Disable attribution so we test plain transfer (no memo) rejection
       const serverNoAttribution = Mpay_server.create({
         methods: [
           tempo_server.charge({
@@ -672,8 +669,6 @@ describe('tempo', () => {
         getClient: () => client,
         account: accounts[0].address,
       })
-      // feePayer is not exposed on defaults, but we can verify
-      // the method was created without error
       expect(method.defaults?.recipient).toBe(accounts[0].address)
     })
   })
@@ -695,10 +690,8 @@ describe('tempo', () => {
         methods: [tempo_client.charge()],
       })
 
-      // No attribution flag in challenge — client always generates memo
       expect(challenge.request.methodDetails?.memo).toBeUndefined()
 
-      // Client generates attribution memo with realm
       const memo = Attribution.encode({ realm: challenge.realm, client: 'test-app' })
       expect(Attribution.isMppMemo(memo)).toBe(true)
       expect(Attribution.verifyServer(memo, realm)).toBe(true)
@@ -745,7 +738,6 @@ describe('tempo', () => {
         methods: [tempo_client.charge()],
       })
 
-      // Anonymous client (no slug)
       const memo = Attribution.encode({ realm: challenge.realm })
       const decoded = Attribution.decode(memo)
       expect(decoded).not.toBeNull()
@@ -837,7 +829,6 @@ describe('tempo', () => {
         methods: [tempo_client.charge()],
       })
 
-      // Client still sends a transfer (plain, no memo) — server accepts it
       const { receipt } = await Actions.token.transferSync(client, {
         account: accounts[1],
         amount: BigInt(challenge.request.amount),

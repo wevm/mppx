@@ -46,7 +46,6 @@ export function charge(parameters: charge.Parameters = {}) {
       const { request } = challenge
       const { amount, currency, recipient, methodDetails } = request
 
-      // Resolve memo: user-provided memo takes priority, otherwise always generate attribution
       const memo = methodDetails?.memo
         ? (methodDetails.memo as Hex.Hex)
         : (Attribution.encode({ realm: challenge.realm, client: slug }) as Hex.Hex)

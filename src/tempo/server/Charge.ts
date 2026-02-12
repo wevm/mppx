@@ -71,14 +71,12 @@ export function charge<const parameters extends charge.Parameters>(
 
     // TODO: dedupe `{charge,stream}.request`
     async request({ credential, request }) {
-      // Extract chainId from request or default.
       const chainId = await (async () => {
         if (request.chainId) return request.chainId
         if (parameters.testnet) return defaults.testnetChainId
         return (await getClient({})).chain?.id
       })()
 
-      // Validate chainId.
       const client = await (async () => {
         try {
           return await getClient({ chainId })
@@ -89,7 +87,6 @@ export function charge<const parameters extends charge.Parameters>(
       if (client.chain?.id !== chainId)
         throw new Error(`Client not configured with chainId ${chainId}.`)
 
-      // Extract feePayer.
       const resolvedFeePayer = (() => {
         const account = typeof request.feePayer === 'object' ? request.feePayer : feePayer
         const requested = request.feePayer !== false && (account ?? feePayer)
