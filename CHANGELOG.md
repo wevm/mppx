@@ -1,5 +1,12 @@
 # mpay
 
+## 0.2.2
+
+### Patch Changes
+
+- c08b40d: Added client-side MPP attribution memo generation for on-chain observability. The client now auto-generates a 32-byte attribution memo embedded in TIP-20 `transferWithMemo` calls, making MPP transactions identifiable on-chain. User-provided memos take priority. Pass `clientId` to `tempo.charge()` to include a client fingerprint.
+- 8eb2140: Fixed MCP SDK transport optional dependency import for Wrangler.
+
 ## 0.2.1
 
 ### Patch Changes
