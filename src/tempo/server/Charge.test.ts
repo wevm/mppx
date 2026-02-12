@@ -45,7 +45,8 @@ describe('tempo', () => {
       const request = challenge.request
       expect(request.methodDetails?.chainId).toBe(chain.id)
 
-      const memo = request.methodDetails?.memo as Hex.Hex | undefined
+      // Client generates the attribution memo
+      const memo = Attribution.encode({ realm: challenge.realm }) as Hex.Hex
 
       const { receipt } = await Actions.token.transferSync(client, {
         account: accounts[1],
@@ -114,7 +115,8 @@ describe('tempo', () => {
       expect(request.currency).toBe(overrideCurrency)
       expect(request.expires).toBe(overrideExpires)
 
-      const memo = request.methodDetails?.memo as Hex.Hex | undefined
+      // Client generates the attribution memo
+      const memo = Attribution.encode({ realm: challenge.realm }) as Hex.Hex
 
       const { receipt } = await Actions.token.transferSync(client, {
         account: accounts[1],
@@ -677,7 +679,7 @@ describe('tempo', () => {
   })
 
   describe('attribution memo', () => {
-    test('auto-generates MPP memo for hash credential (default)', async () => {
+    test('server signals attribution=true, client generates memo (hash credential)', async () => {
       const httpServer = await Http.createServer(async (req, res) => {
         const result = await Mpay_server.toNodeListener(
           server.charge({ amount: '1', decimals: 6 }),
@@ -693,21 +695,19 @@ describe('tempo', () => {
         methods: [tempo_client.charge()],
       })
 
-      // The challenge should contain an auto-generated MPP memo
-      const memo = challenge.request.methodDetails?.memo as `0x${string}` | undefined
-      expect(memo).toBeDefined()
-      expect(Attribution.isMppMemo(memo!)).toBe(true)
+      // Server signals attribution=true, no memo in challenge
+      expect(challenge.request.methodDetails?.attribution).toBe(true)
+      expect(challenge.request.methodDetails?.memo).toBeUndefined()
 
-      // Verify the memo decodes correctly
-      const decoded = Attribution.decode(memo!)
-      expect(decoded).not.toBeNull()
-      expect(decoded!.version).toBe(1)
+      // Client generates attribution memo with realm
+      const memo = Attribution.encode({ realm: challenge.realm, client: 'test-app' })
+      expect(Attribution.isMppMemo(memo)).toBe(true)
+      expect(Attribution.verifyServer(memo, realm)).toBe(true)
 
-      // Complete the payment using transferWithMemo
       const { receipt } = await Actions.token.transferSync(client, {
         account: accounts[1],
         amount: BigInt(challenge.request.amount),
-        memo,
+        memo: memo as Hex.Hex,
         to: challenge.request.recipient as Hex.Hex,
         token: challenge.request.currency as Hex.Hex,
       })
@@ -730,12 +730,58 @@ describe('tempo', () => {
       httpServer.close()
     })
 
-    test('auto-generates MPP memo for transaction credential via Mpay', async () => {
+    test('anonymous client (no slug) generates valid attribution memo', async () => {
+      const httpServer = await Http.createServer(async (req, res) => {
+        const result = await Mpay_server.toNodeListener(
+          server.charge({ amount: '1', decimals: 6 }),
+        )(req, res)
+        if (result.status === 402) return
+        res.end('OK')
+      })
+
+      const response = await fetch(httpServer.url)
+      expect(response.status).toBe(402)
+
+      const challenge = Challenge.fromResponse(response, {
+        methods: [tempo_client.charge()],
+      })
+
+      // Anonymous client (no slug)
+      const memo = Attribution.encode({ realm: challenge.realm })
+      const decoded = Attribution.decode(memo)
+      expect(decoded).not.toBeNull()
+      expect(decoded!.client).toBeNull()
+
+      const { receipt } = await Actions.token.transferSync(client, {
+        account: accounts[1],
+        amount: BigInt(challenge.request.amount),
+        memo: memo as Hex.Hex,
+        to: challenge.request.recipient as Hex.Hex,
+        token: challenge.request.currency as Hex.Hex,
+      })
+
+      const credential = Credential.from({
+        challenge,
+        payload: { hash: receipt.transactionHash, type: 'hash' as const },
+      })
+
+      {
+        const response = await fetch(httpServer.url, {
+          headers: { Authorization: Credential.serialize(credential) },
+        })
+        expect(response.status).toBe(200)
+      }
+
+      httpServer.close()
+    })
+
+    test('client generates memo for transaction credential via Mpay', async () => {
       const mpay = Mpay_client.create({
         polyfill: false,
         methods: [
           tempo_client({
             account: accounts[1],
+            slug: 'test-app',
             getClient() {
               return client
             },
@@ -758,13 +804,12 @@ describe('tempo', () => {
       const response = await fetch(httpServer.url)
       expect(response.status).toBe(402)
 
-      // Verify the challenge has an MPP memo
+      // Challenge signals attribution=true but no memo
       const challenge = Challenge.fromResponse(response, {
         methods: [tempo_client.charge()],
       })
-      const memo = challenge.request.methodDetails?.memo as `0x${string}` | undefined
-      expect(memo).toBeDefined()
-      expect(Attribution.isMppMemo(memo!)).toBe(true)
+      expect(challenge.request.methodDetails?.attribution).toBe(true)
+      expect(challenge.request.methodDetails?.memo).toBeUndefined()
 
       const credential = await mpay.createCredential(response)
 
@@ -808,8 +853,8 @@ describe('tempo', () => {
       const challenge = Challenge.fromResponse(response, {
         methods: [tempo_client.charge()],
       })
-      const memo = challenge.request.methodDetails?.memo as `0x${string}` | undefined
-      expect(memo).toBeUndefined()
+      expect(challenge.request.methodDetails?.attribution).toBe(false)
+      expect(challenge.request.methodDetails?.memo).toBeUndefined()
 
       httpServer.close()
     })
@@ -834,6 +879,7 @@ describe('tempo', () => {
       })
       const memo = challenge.request.methodDetails?.memo as `0x${string}` | undefined
       expect(memo).toBe(userMemo)
+      expect(challenge.request.methodDetails?.attribution).toBeUndefined()
       expect(Attribution.isMppMemo(memo!)).toBe(false)
 
       httpServer.close()

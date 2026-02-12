@@ -98,14 +98,21 @@ export function charge<const parameters extends charge.Parameters>(
         return undefined
       })()
 
-      // Auto-generate MPP attribution memo when no user memo is provided.
-      const resolvedMemo = (() => {
-        if (request.memo) return request.memo
-        if (!attribution) return undefined
-        return Attribution.encode()
+      // Resolve attribution: user memo > attribution flag > nothing.
+      const resolvedMemo = request.memo || undefined
+      const resolvedAttribution = (() => {
+        if (resolvedMemo) return undefined
+        if (!attribution) return false
+        return true
       })()
 
-      return { ...request, chainId, feePayer: resolvedFeePayer, memo: resolvedMemo }
+      return {
+        ...request,
+        chainId,
+        feePayer: resolvedFeePayer,
+        memo: resolvedMemo,
+        attribution: resolvedAttribution,
+      }
     },
 
     async verify({ credential, request }) {
@@ -119,8 +126,12 @@ export function charge<const parameters extends charge.Parameters>(
 
       const currency = challengeRequest.currency as `0x${string}`
       const recipient = challengeRequest.recipient as `0x${string}`
+      const realm = challenge.realm
 
       if (expires && new Date(expires) < new Date()) throw new PaymentExpiredError({ expires })
+
+      const memo = methodDetails?.memo as `0x${string}` | undefined
+      const attributionEnabled = methodDetails?.attribution === true
 
       const payload = credential.payload
 
@@ -130,8 +141,6 @@ export function charge<const parameters extends charge.Parameters>(
           const receipt = await getTransactionReceipt(client, {
             hash,
           })
-
-          const memo = methodDetails?.memo as `0x${string}` | undefined
 
           if (memo) {
             const memoLogs = parseEventLogs({
@@ -155,6 +164,31 @@ export function charge<const parameters extends charge.Parameters>(
                   amount,
                   currency,
                   memo,
+                  recipient,
+                },
+              )
+          } else if (attributionEnabled) {
+            const memoLogs = parseEventLogs({
+              abi: Abis.tip20,
+              eventName: 'TransferWithMemo',
+              logs: receipt.logs,
+            })
+
+            const match = memoLogs.find(
+              (log) =>
+                isAddressEqual(log.address, currency) &&
+                isAddressEqual(log.args.to, recipient) &&
+                log.args.amount.toString() === amount &&
+                Attribution.verifyServer(log.args.memo as `0x${string}`, realm),
+            )
+
+            if (!match)
+              throw new MismatchError(
+                'Payment verification failed: no matching transfer with attribution memo found.',
+                {
+                  amount,
+                  currency,
+                  realm,
                   recipient,
                 },
               )
@@ -188,7 +222,6 @@ export function charge<const parameters extends charge.Parameters>(
           const transaction = Transaction.deserialize(serializedTransaction)
 
           const calls = transaction.calls ?? []
-          const memo = methodDetails?.memo as `0x${string}` | undefined
 
           const call = calls.find((call) => {
             if (!call.to || !isAddressEqual(call.to, currency)) return false
@@ -211,6 +244,21 @@ export function charge<const parameters extends charge.Parameters>(
               }
             }
 
+            if (attributionEnabled) {
+              if (selector !== transferWithMemoSelector) return false
+              try {
+                const { args } = decodeFunctionData({ abi: Abis.tip20, data: call.data })
+                const [to, amount_, memo_] = args as [`0x${string}`, bigint, `0x${string}`]
+                return (
+                  isAddressEqual(to, recipient) &&
+                  amount_.toString() === amount &&
+                  Attribution.verifyServer(memo_, realm)
+                )
+              } catch {
+                return false
+              }
+            }
+
             if (selector !== transferSelector) return false
             try {
               const { args } = decodeFunctionData({ abi: Abis.tip20, data: call.data })
@@ -226,7 +274,6 @@ export function charge<const parameters extends charge.Parameters>(
               amount,
               currency,
               recipient,
-              memo: memo ?? '(none)',
             })
 
           const serializedTransaction_final = await (async () => {

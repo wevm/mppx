@@ -1,3 +1,4 @@
+import { Bytes, Hash, Hex } from 'ox'
 import { describe, expect, test } from 'vitest'
 import * as Attribution from './Attribution.js'
 
@@ -14,13 +15,13 @@ describe('Attribution', () => {
 
   describe('encode', () => {
     test('returns a 32-byte hex string', () => {
-      const memo = Attribution.encode()
+      const memo = Attribution.encode({ realm: 'api.example.com' })
       // 0x prefix + 64 hex chars = 32 bytes
       expect(memo).toMatch(/^0x[0-9a-f]{64}$/i)
     })
 
     test('starts with TAG + version byte', () => {
-      const memo = Attribution.encode()
+      const memo = Attribution.encode({ realm: 'api.example.com' })
       const tag = memo.slice(0, 10) // 0x + 8 hex chars
       expect(tag.toLowerCase()).toBe(Attribution.TAG.toLowerCase())
       const version = memo.slice(10, 12)
@@ -28,15 +29,48 @@ describe('Attribution', () => {
     })
 
     test('generates unique memos (random nonce)', () => {
-      const a = Attribution.encode()
-      const b = Attribution.encode()
+      const a = Attribution.encode({ realm: 'api.example.com' })
+      const b = Attribution.encode({ realm: 'api.example.com' })
       expect(a).not.toBe(b)
+    })
+
+    test('encodes server fingerprint from realm', () => {
+      const memo = Attribution.encode({ realm: 'api.example.com' })
+      const expectedFingerprint = Hex.slice(
+        Hash.keccak256(Bytes.fromString('api.example.com'), { as: 'Hex' }),
+        0,
+        10,
+      )
+      const serverHex = `0x${memo.slice(12, 32)}` as `0x${string}`
+      expect(serverHex.toLowerCase()).toBe(expectedFingerprint.toLowerCase())
+    })
+
+    test('encodes client fingerprint from slug', () => {
+      const memo = Attribution.encode({ realm: 'api.example.com', client: 'my-app' })
+      const expectedFingerprint = Hex.slice(
+        Hash.keccak256(Bytes.fromString('my-app'), { as: 'Hex' }),
+        0,
+        10,
+      )
+      const clientHex = `0x${memo.slice(32, 52)}` as `0x${string}`
+      expect(clientHex.toLowerCase()).toBe(expectedFingerprint.toLowerCase())
+    })
+
+    test('encodes zero client bytes when no slug', () => {
+      const memo = Attribution.encode({ realm: 'api.example.com' })
+      const clientHex = `0x${memo.slice(32, 52)}` as `0x${string}`
+      expect(clientHex).toBe(Attribution.ANONYMOUS)
     })
   })
 
   describe('isMppMemo', () => {
     test('returns true for encoded memos', () => {
-      const memo = Attribution.encode()
+      const memo = Attribution.encode({ realm: 'api.example.com' })
+      expect(Attribution.isMppMemo(memo)).toBe(true)
+    })
+
+    test('returns true for encoded memos with slug', () => {
+      const memo = Attribution.encode({ realm: 'api.example.com', client: 'my-app' })
       expect(Attribution.isMppMemo(memo)).toBe(true)
     })
 
@@ -57,19 +91,52 @@ describe('Attribution', () => {
     })
 
     test('returns false for wrong version', () => {
-      const memo = Attribution.encode()
+      const memo = Attribution.encode({ realm: 'api.example.com' })
       const wrongVersion = `${memo.slice(0, 10)}ff${memo.slice(12)}` as `0x${string}`
       expect(Attribution.isMppMemo(wrongVersion)).toBe(false)
     })
   })
 
+  describe('verifyServer', () => {
+    test('returns true for matching realm', () => {
+      const memo = Attribution.encode({ realm: 'api.example.com' })
+      expect(Attribution.verifyServer(memo, 'api.example.com')).toBe(true)
+    })
+
+    test('returns true for matching realm with client slug', () => {
+      const memo = Attribution.encode({ realm: 'api.example.com', client: 'my-app' })
+      expect(Attribution.verifyServer(memo, 'api.example.com')).toBe(true)
+    })
+
+    test('returns false for wrong realm', () => {
+      const memo = Attribution.encode({ realm: 'api.example.com' })
+      expect(Attribution.verifyServer(memo, 'other.example.com')).toBe(false)
+    })
+
+    test('returns false for non-MPP memo', () => {
+      const arbitrary =
+        '0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef' as `0x${string}`
+      expect(Attribution.verifyServer(arbitrary, 'api.example.com')).toBe(false)
+    })
+  })
+
   describe('decode', () => {
-    test('decodes an encoded memo', () => {
-      const memo = Attribution.encode()
+    test('decodes an encoded memo with realm and slug', () => {
+      const memo = Attribution.encode({ realm: 'api.example.com', client: 'my-app' })
       const result = Attribution.decode(memo)
       expect(result).not.toBeNull()
       expect(result!.version).toBe(1)
-      expect(result!.nonce).toMatch(/^0x[0-9a-f]{54}$/i) // 27 bytes = 54 hex chars
+      expect(result!.server).toMatch(/^0x[0-9a-f]{20}$/i) // 10 bytes = 20 hex chars
+      expect(result!.client).toMatch(/^0x[0-9a-f]{20}$/i)
+      expect(result!.client).not.toBeNull()
+      expect(result!.nonce).toMatch(/^0x[0-9a-f]{14}$/i) // 7 bytes = 14 hex chars
+    })
+
+    test('decodes anonymous client as null', () => {
+      const memo = Attribution.encode({ realm: 'api.example.com' })
+      const result = Attribution.decode(memo)
+      expect(result).not.toBeNull()
+      expect(result!.client).toBeNull()
     })
 
     test('returns null for non-MPP memo', () => {
@@ -79,9 +146,20 @@ describe('Attribution', () => {
     })
 
     test('different encodes produce different nonces', () => {
-      const a = Attribution.decode(Attribution.encode())
-      const b = Attribution.decode(Attribution.encode())
+      const a = Attribution.decode(Attribution.encode({ realm: 'api.example.com' }))
+      const b = Attribution.decode(Attribution.encode({ realm: 'api.example.com' }))
       expect(a!.nonce).not.toBe(b!.nonce)
+    })
+
+    test('server fingerprint matches expected keccak hash', () => {
+      const memo = Attribution.encode({ realm: 'api.example.com', client: 'my-app' })
+      const result = Attribution.decode(memo)!
+      const expectedServer = Hex.slice(
+        Hash.keccak256(Bytes.fromString('api.example.com'), { as: 'Hex' }),
+        0,
+        10,
+      )
+      expect(result.server.toLowerCase()).toBe(expectedServer.toLowerCase())
     })
   })
 })

@@ -19,6 +19,7 @@ export const charge = MethodIntent.fromIntent(Intent.charge, {
     },
     request: {
       methodDetails: z.object({
+        attribution: z.optional(z.boolean()),
         chainId: z.optional(z.number()),
         feePayer: z.optional(
           z.pipe(
