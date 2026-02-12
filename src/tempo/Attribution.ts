@@ -23,13 +23,13 @@ import { Bytes, Hash, Hex } from 'ox'
  */
 
 /** First 4 bytes of keccak256("mpp") — the on-chain MPP tag. */
-export const TAG = Hex.slice(Hash.keccak256(Bytes.fromString('mpp'), { as: 'Hex' }), 0, 4)
+export const tag = Hex.slice(Hash.keccak256(Bytes.fromString('mpp'), { as: 'Hex' }), 0, 4)
 
 /** Current memo version. */
-const VERSION = 0x01
+const version = 0x01
 
 /** 10 zero bytes representing an anonymous (no clientId) client. */
-export const ANONYMOUS = '0x00000000000000000000' as `0x${string}`
+export const anonymous = '0x00000000000000000000' as const
 
 /**
  * Computes a 10-byte fingerprint from a string via keccak256.
@@ -53,19 +53,19 @@ function fingerprint(value: string): Uint8Array {
  * const memo = Attribution.encode({ serverId: 'api.example.com', clientId: 'my-app' })
  * ```
  */
-export function encode(parameters: encode.Parameters): `0x${string}` {
+export function encode(parameters: encode.Parameters) {
   const { serverId, clientId } = parameters
   const buf = new Uint8Array(32)
 
-  buf.set(Hex.toBytes(TAG), 0)
-  buf[4] = VERSION
+  buf.set(Hex.toBytes(tag), 0)
+  buf[4] = version
   buf.set(fingerprint(serverId), 5)
   if (clientId) buf.set(fingerprint(clientId), 15)
 
   const nonce = crypto.getRandomValues(new Uint8Array(7))
   buf.set(nonce, 25)
 
-  return Hex.fromBytes(buf) as `0x${string}`
+  return Hex.fromBytes(buf)
 }
 
 export declare namespace encode {
@@ -94,8 +94,8 @@ export declare namespace encode {
 export function isMppMemo(memo: `0x${string}`): boolean {
   if (memo.length !== 66) return false
   const memoTag = memo.slice(0, 10) as `0x${string}`
-  const version = Number.parseInt(memo.slice(10, 12), 16)
-  return memoTag.toLowerCase() === TAG.toLowerCase() && version === VERSION
+  const memoVersion = Number.parseInt(memo.slice(10, 12), 16)
+  return memoTag.toLowerCase() === tag.toLowerCase() && memoVersion === version
 }
 
 /**
@@ -132,14 +132,14 @@ export function verifyServer(memo: `0x${string}`, serverId: string): boolean {
 export function decode(memo: `0x${string}`): decode.Result | null {
   if (!isMppMemo(memo)) return null
 
-  const version = Number.parseInt(memo.slice(10, 12), 16)
+  const memoVersion = Number.parseInt(memo.slice(10, 12), 16)
   const serverFingerprint = `0x${memo.slice(12, 32)}` as `0x${string}`
   const clientHex = `0x${memo.slice(32, 52)}` as `0x${string}`
   const nonce = `0x${memo.slice(52)}` as `0x${string}`
 
-  const clientFingerprint = clientHex.toLowerCase() === ANONYMOUS.toLowerCase() ? null : clientHex
+  const clientFingerprint = clientHex.toLowerCase() === anonymous.toLowerCase() ? null : clientHex
 
-  return { version, serverFingerprint, clientFingerprint, nonce }
+  return { version: memoVersion, serverFingerprint, clientFingerprint, nonce }
 }
 
 export declare namespace decode {

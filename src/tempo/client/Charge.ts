@@ -48,7 +48,7 @@ export function charge(parameters: charge.Parameters = {}) {
 
       const memo = methodDetails?.memo
         ? (methodDetails.memo as Hex.Hex)
-        : (Attribution.encode({ serverId: challenge.realm, clientId }) as Hex.Hex)
+        : Attribution.encode({ serverId: challenge.realm, clientId })
 
       const prepared = await prepareTransactionRequest(client, {
         account,

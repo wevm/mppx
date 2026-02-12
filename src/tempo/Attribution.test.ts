@@ -3,13 +3,13 @@ import { describe, expect, test } from 'vitest'
 import * as Attribution from './Attribution.js'
 
 describe('Attribution', () => {
-  describe('TAG', () => {
+  describe('tag', () => {
     test('is a 4-byte hex string', () => {
-      expect(Attribution.TAG).toMatch(/^0x[0-9a-f]{8}$/i)
+      expect(Attribution.tag).toMatch(/^0x[0-9a-f]{8}$/i)
     })
 
     test('is deterministic (keccak256("mpp")[0..3])', () => {
-      expect(Attribution.TAG).toBe('0xef1ed712')
+      expect(Attribution.tag).toBe('0xef1ed712')
     })
   })
 
@@ -23,7 +23,7 @@ describe('Attribution', () => {
     test('starts with TAG + version byte', () => {
       const memo = Attribution.encode({ serverId: 'api.example.com' })
       const tag = memo.slice(0, 10) // 0x + 8 hex chars
-      expect(tag.toLowerCase()).toBe(Attribution.TAG.toLowerCase())
+      expect(tag.toLowerCase()).toBe(Attribution.tag.toLowerCase())
       const version = memo.slice(10, 12)
       expect(version).toBe('01')
     })
@@ -59,7 +59,7 @@ describe('Attribution', () => {
     test('encodes zero client bytes when no clientId', () => {
       const memo = Attribution.encode({ serverId: 'api.example.com' })
       const clientHex = `0x${memo.slice(32, 52)}` as `0x${string}`
-      expect(clientHex).toBe(Attribution.ANONYMOUS)
+      expect(clientHex).toBe(Attribution.anonymous)
     })
   })
 

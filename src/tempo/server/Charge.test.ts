@@ -45,7 +45,7 @@ describe('tempo', () => {
       const request = challenge.request
       expect(request.methodDetails?.chainId).toBe(chain.id)
 
-      const memo = Attribution.encode({ serverId: challenge.realm }) as Hex.Hex
+      const memo = Attribution.encode({ serverId: challenge.realm })
 
       const { receipt } = await Actions.token.transferSync(client, {
         account: accounts[1],
@@ -114,7 +114,7 @@ describe('tempo', () => {
       expect(request.currency).toBe(overrideCurrency)
       expect(request.expires).toBe(overrideExpires)
 
-      const memo = Attribution.encode({ serverId: challenge.realm }) as Hex.Hex
+      const memo = Attribution.encode({ serverId: challenge.realm })
 
       const { receipt } = await Actions.token.transferSync(client, {
         account: accounts[1],
