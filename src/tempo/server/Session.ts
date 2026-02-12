@@ -237,9 +237,10 @@ export function session<const parameters extends session.Parameters>(p?: paramet
     // single GET retry) receive content as expected.
     respond({ credential, input }) {
       const { payload } = credential as Credential.Credential<StreamCredentialPayload>
+
       const isManagement =
         payload.action === 'open' || payload.action === 'topUp' || payload.action === 'close'
-      if (isManagement) return new Response(null, { status: 204 })
+      if (isManagement && input.method === 'POST') return new Response(null, { status: 204 })
 
       const isVoucher = payload.action === 'voucher'
       if (!isVoucher) return undefined
