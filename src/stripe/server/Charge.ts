@@ -36,11 +36,13 @@ export function charge<const parameters extends charge.Parameters>(parameters: p
       if (request.expires && new Date(request.expires) < new Date())
         throw new PaymentExpiredError({ expires: request.expires })
 
-      const { spt } = credential.payload as { spt: string }
+      const parsed = Intents.charge.schema.credential.payload.safeParse(credential.payload)
+      if (!parsed.success) throw new Error('Invalid credential payload: missing or malformed spt')
+      const { spt } = parsed.data as { spt: string }
 
       const body = new URLSearchParams({
         amount: request.amount as string,
-        currency: 'usd',
+        currency: request.currency as string,
         shared_payment_granted_token: spt,
         confirm: 'true',
         'automatic_payment_methods[enabled]': 'true',
@@ -64,6 +66,8 @@ export function charge<const parameters extends charge.Parameters>(parameters: p
       }
 
       const pi = (await response.json()) as { id: string; status: string }
+
+      if (pi.status !== 'succeeded') throw new Error(`Stripe PaymentIntent status: ${pi.status}`)
 
       return {
         method: 'stripe',

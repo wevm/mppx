@@ -27,15 +27,17 @@ export function charge(parameters: charge.Parameters) {
 
   return MethodIntent.toClient(Intents.charge, {
     async createCredential({ challenge }) {
-      const amount = Number(challenge.request.amount)
-      const currency = (challenge.request.currency as string) ?? 'usd'
+      const amount = challenge.request.amount as string
+      const currency = challenge.request.currency as string
       const networkId = challenge.request.methodDetails?.networkId as string | undefined
 
-      const expiresAt = Math.floor(Date.now() / 1000) + 3600
+      const expiresAt = challenge.request.expires
+        ? Math.floor(new Date(challenge.request.expires as string).getTime() / 1000)
+        : Math.floor(Date.now() / 1000) + 3600
       const body = new URLSearchParams({
         payment_method: paymentMethod,
         'usage_limits[currency]': currency,
-        'usage_limits[max_amount]': (amount * 100).toString(),
+        'usage_limits[max_amount]': amount,
         'usage_limits[expires_at]': expiresAt.toString(),
       })
       if (networkId && !testMode) body.set('seller_details[network_id]', networkId)
