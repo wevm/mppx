@@ -1,13 +1,13 @@
 import type { Address, Hex } from 'viem'
 import { describe, expect, test } from 'vitest'
+import type * as ChannelStore from '../stream/ChannelStore.js'
 import { serve, toResponse } from '../stream/Sse.js'
-import type { ChannelState, ChannelStorage } from '../stream/Storage.js'
 
 const channelId = '0x0000000000000000000000000000000000000000000000000000000000000001' as Hex
 const challengeId = 'test-challenge-id'
 const tickCost = 1000000n
 
-function memoryStorage(): ChannelStorage {
+function memoryStore(): ChannelStore.ChannelStore {
   const channels = new Map()
   return {
     async getChannel(id) {
@@ -22,8 +22,11 @@ function memoryStorage(): ChannelStorage {
   }
 }
 
-function seedChannel(storage: ChannelStorage, balance: bigint): Promise<ChannelState | null> {
-  return storage.updateChannel(channelId, () => ({
+function seedChannel(
+  store: ChannelStore.ChannelStore,
+  balance: bigint,
+): Promise<ChannelStore.State | null> {
+  return store.updateChannel(channelId, () => ({
     channelId,
     payer: '0x0000000000000000000000000000000000000001' as Address,
     payee: '0x0000000000000000000000000000000000000002' as Address,
@@ -54,12 +57,12 @@ async function readStream(stream: ReadableStream<Uint8Array>): Promise<string> {
 
 describe('Sse.serve', () => {
   test('emits message events for each yielded value (StreamController)', async () => {
-    const storage = memoryStorage()
-    await seedChannel(storage, 3000000n)
+    const store = memoryStore()
+    await seedChannel(store, 3000000n)
 
     const response = toResponse(
       serve({
-        storage,
+        store,
         channelId,
         challengeId,
         tickCost,
@@ -84,18 +87,18 @@ describe('Sse.serve', () => {
     expect(output).toContain('event: message\ndata: done\n\n')
     expect(output).toContain('event: payment-receipt\n')
 
-    const channel = await storage.getChannel(channelId)
+    const channel = await store.getChannel(channelId)
     expect(channel!.spent).toBe(3000000n)
     expect(channel!.units).toBe(3)
   })
 
   test('emits payment-need-voucher when balance exhausted and resumes after top-up', async () => {
-    const storage = memoryStorage()
-    await seedChannel(storage, 1000000n)
+    const store = memoryStore()
+    await seedChannel(store, 1000000n)
 
     const response = toResponse(
       serve({
-        storage,
+        store,
         channelId,
         challengeId,
         tickCost,
@@ -125,7 +128,7 @@ describe('Sse.serve', () => {
 
     await new Promise((r) => setTimeout(r, 30))
 
-    await storage.updateChannel(channelId, (current) => {
+    await store.updateChannel(channelId, (current) => {
       if (!current) return null
       return { ...current, highestVoucherAmount: current.highestVoucherAmount + 2000000n }
     })
@@ -145,14 +148,14 @@ describe('Sse.serve', () => {
   })
 
   test('respects abort signal', async () => {
-    const storage = memoryStorage()
-    await seedChannel(storage, 10000000n)
+    const store = memoryStore()
+    await seedChannel(store, 10000000n)
 
     const controller = new AbortController()
 
     const response = toResponse(
       serve({
-        storage,
+        store,
         channelId,
         challengeId,
         tickCost,
@@ -183,12 +186,12 @@ describe('Sse.serve', () => {
   })
 
   test('emits receipt with correct spent and units', async () => {
-    const storage = memoryStorage()
-    await seedChannel(storage, 2000000n)
+    const store = memoryStore()
+    await seedChannel(store, 2000000n)
 
     const response = toResponse(
       serve({
-        storage,
+        store,
         channelId,
         challengeId,
         tickCost,
@@ -212,12 +215,12 @@ describe('Sse.serve', () => {
   })
 
   test('handles empty generator', async () => {
-    const storage = memoryStorage()
-    await seedChannel(storage, 1000000n)
+    const store = memoryStore()
+    await seedChannel(store, 1000000n)
 
     const response = toResponse(
       serve({
-        storage,
+        store,
         channelId,
         challengeId,
         tickCost,
@@ -229,18 +232,18 @@ describe('Sse.serve', () => {
     expect(output).toContain('event: payment-receipt\n')
     expect(output).not.toContain('event: message\n')
 
-    const channel = await storage.getChannel(channelId)
+    const channel = await store.getChannel(channelId)
     expect(channel!.spent).toBe(0n)
     expect(channel!.units).toBe(0)
   })
 
   test('allows tickCost override', async () => {
-    const storage = memoryStorage()
-    await seedChannel(storage, 500n)
+    const store = memoryStore()
+    await seedChannel(store, 500n)
 
     const response = toResponse(
       serve({
-        storage,
+        store,
         channelId,
         challengeId,
         tickCost: 100n,
@@ -258,18 +261,18 @@ describe('Sse.serve', () => {
       expect(output).toContain(`event: message\ndata: tok-${i}\n\n`)
     }
 
-    const channel = await storage.getChannel(channelId)
+    const channel = await store.getChannel(channelId)
     expect(channel!.spent).toBe(500n)
     expect(channel!.units).toBe(5)
   })
 
   test('sets correct SSE response headers', async () => {
-    const storage = memoryStorage()
-    await seedChannel(storage, 1000000n)
+    const store = memoryStore()
+    await seedChannel(store, 1000000n)
 
     const response = toResponse(
       serve({
-        storage,
+        store,
         channelId,
         challengeId,
         tickCost,

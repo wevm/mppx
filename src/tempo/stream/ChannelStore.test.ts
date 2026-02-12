@@ -1,18 +1,12 @@
 import type { Address, Hex } from 'viem'
 import { describe, expect, test } from 'vitest'
-import {
-  type ChannelState,
-  type ChannelStorage,
-  channelStorage,
-  deductFromChannel,
-  memoryStorage,
-  type Storage,
-} from './Storage.js'
+import * as Store from '../../Store.js'
+import * as ChannelStore from './ChannelStore.js'
 
 const channelId = '0x0000000000000000000000000000000000000000000000000000000000000001' as Hex
 const channelId2 = '0x0000000000000000000000000000000000000000000000000000000000000002' as Hex
 
-function makeChannel(overrides?: Partial<ChannelState>): ChannelState {
+function makeChannel(overrides?: Partial<ChannelStore.State>): ChannelStore.State {
   return {
     channelId,
     payer: '0x0000000000000000000000000000000000000001' as Address,
@@ -32,28 +26,28 @@ function makeChannel(overrides?: Partial<ChannelState>): ChannelState {
 }
 
 function seedChannel(
-  storage: ChannelStorage,
-  overrides?: Partial<ChannelState>,
-): Promise<ChannelState | null> {
-  return storage.updateChannel(channelId, () => makeChannel(overrides))
+  store: ChannelStore.ChannelStore,
+  overrides?: Partial<ChannelStore.State>,
+): Promise<ChannelStore.State | null> {
+  return store.updateChannel(channelId, () => makeChannel(overrides))
 }
 
-function stripUpdateMethod(storage: Storage): Storage {
+function stripUpdateMethod(store: Store.Store): Store.Store {
   return {
-    get: storage.get.bind(storage),
-    set: storage.set.bind(storage),
-    delete: storage.delete.bind(storage),
+    get: store.get.bind(store),
+    put: store.put.bind(store),
+    delete: store.delete.bind(store),
   }
 }
 
-function delayedStorage(delayMs: number): Storage {
-  const store = new Map<string, ChannelState>()
+function delayedStore(delayMs: number): Store.Store {
+  const store = new Map<string, unknown>()
   return {
     async get(key) {
       await sleep(delayMs)
-      return store.get(key) ?? null
+      return (store.get(key) ?? null) as any
     },
-    async set(key, value) {
+    async put(key, value) {
       await sleep(delayMs)
       store.set(key, value)
     },
@@ -68,65 +62,40 @@ function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms))
 }
 
-// ---------- memoryStorage ----------
+// ---------- Store.memory ----------
 
-describe('memoryStorage', () => {
+describe('Store.memory', () => {
   test('get returns null for missing key', async () => {
-    const s = memoryStorage()
+    const s = Store.memory()
     expect(await s.get('missing')).toBeNull()
   })
 
-  test('set then get returns value', async () => {
-    const s = memoryStorage()
+  test('put then get returns value', async () => {
+    const s = Store.memory()
     const ch = makeChannel()
-    await s.set('k', ch)
+    await s.put('k', ch)
     expect(await s.get('k')).toEqual(ch)
   })
 
   test('delete removes key', async () => {
-    const s = memoryStorage()
-    await s.set('k', makeChannel())
+    const s = Store.memory()
+    await s.put('k', makeChannel())
     await s.delete('k')
-    expect(await s.get('k')).toBeNull()
-  })
-
-  test('update creates new key', async () => {
-    const s = memoryStorage()
-    const ch = makeChannel()
-    const result = await s.update!('k', () => ch)
-    expect(result).toEqual(ch)
-    expect(await s.get('k')).toEqual(ch)
-  })
-
-  test('update modifies existing key', async () => {
-    const s = memoryStorage()
-    const ch = makeChannel()
-    await s.set('k', ch)
-    const result = await s.update!('k', (current) => ({ ...current!, spent: 42n }))
-    expect(result!.spent).toBe(42n)
-    expect((await s.get('k'))!.spent).toBe(42n)
-  })
-
-  test('update returning null deletes key', async () => {
-    const s = memoryStorage()
-    await s.set('k', makeChannel())
-    const result = await s.update!('k', () => null)
-    expect(result).toBeNull()
     expect(await s.get('k')).toBeNull()
   })
 })
 
-// ---------- channelStorage ----------
+// ---------- channelStore ----------
 
-describe('channelStorage', () => {
+describe('channelStore', () => {
   describe('getChannel', () => {
     test('returns null for missing channel', async () => {
-      const cs = channelStorage(memoryStorage())
+      const cs = ChannelStore.fromStore(Store.memory())
       expect(await cs.getChannel(channelId)).toBeNull()
     })
 
     test('returns channel after update', async () => {
-      const cs = channelStorage(memoryStorage())
+      const cs = ChannelStore.fromStore(Store.memory())
       const ch = makeChannel()
       await cs.updateChannel(channelId, () => ch)
 
@@ -141,7 +110,7 @@ describe('channelStorage', () => {
 
   describe('updateChannel', () => {
     test('creates channel from null', async () => {
-      const cs = channelStorage(memoryStorage())
+      const cs = ChannelStore.fromStore(Store.memory())
       const result = await cs.updateChannel(channelId, (current) => {
         expect(current).toBeNull()
         return makeChannel()
@@ -151,7 +120,7 @@ describe('channelStorage', () => {
     })
 
     test('updates existing channel', async () => {
-      const cs = channelStorage(memoryStorage())
+      const cs = ChannelStore.fromStore(Store.memory())
       await seedChannel(cs)
 
       const result = await cs.updateChannel(channelId, (current) => {
@@ -162,7 +131,7 @@ describe('channelStorage', () => {
     })
 
     test('returning null deletes channel', async () => {
-      const cs = channelStorage(memoryStorage())
+      const cs = ChannelStore.fromStore(Store.memory())
       await seedChannel(cs)
 
       const result = await cs.updateChannel(channelId, () => null)
@@ -171,7 +140,7 @@ describe('channelStorage', () => {
     })
 
     test('preserves bigint fields', async () => {
-      const cs = channelStorage(memoryStorage())
+      const cs = ChannelStore.fromStore(Store.memory())
       const ch = makeChannel({
         deposit: 999_999_999_999_999_999n,
         settledOnChain: 123_456_789n,
@@ -188,7 +157,7 @@ describe('channelStorage', () => {
     })
 
     test('preserves Date fields', async () => {
-      const cs = channelStorage(memoryStorage())
+      const cs = ChannelStore.fromStore(Store.memory())
       const date = new Date('2025-06-15T12:30:00.000Z')
       await cs.updateChannel(channelId, () => makeChannel({ createdAt: date }))
 
@@ -199,7 +168,7 @@ describe('channelStorage', () => {
 
   describe('waitForUpdate', () => {
     test('resolves on next updateChannel call', async () => {
-      const cs = channelStorage(memoryStorage())
+      const cs = ChannelStore.fromStore(Store.memory())
       await seedChannel(cs)
 
       let resolved = false
@@ -216,7 +185,7 @@ describe('channelStorage', () => {
     })
 
     test('multiple waiters all resolve', async () => {
-      const cs = channelStorage(memoryStorage())
+      const cs = ChannelStore.fromStore(Store.memory())
       await seedChannel(cs)
 
       let count = 0
@@ -230,7 +199,7 @@ describe('channelStorage', () => {
     })
 
     test('different channels are independent', async () => {
-      const cs = channelStorage(memoryStorage())
+      const cs = ChannelStore.fromStore(Store.memory())
       await seedChannel(cs)
       await cs.updateChannel(channelId2, () => makeChannel({ channelId: channelId2 }))
 
@@ -246,54 +215,56 @@ describe('channelStorage', () => {
   })
 })
 
-// ---------- deductFromChannel ----------
+// ---------- ChannelStore.deductFromChannel ----------
 
-describe('deductFromChannel', () => {
+describe('ChannelStore.deductFromChannel', () => {
   test('deducts when balance is sufficient', async () => {
-    const cs = channelStorage(memoryStorage())
+    const cs = ChannelStore.fromStore(Store.memory())
     await seedChannel(cs, { highestVoucherAmount: 5_000_000n, spent: 0n })
 
-    const result = await deductFromChannel(cs, channelId, 1_000_000n)
+    const result = await ChannelStore.deductFromChannel(cs, channelId, 1_000_000n)
     expect(result.ok).toBe(true)
     expect(result.channel.spent).toBe(1_000_000n)
     expect(result.channel.units).toBe(1)
   })
 
   test('returns ok: false when balance insufficient', async () => {
-    const cs = channelStorage(memoryStorage())
+    const cs = ChannelStore.fromStore(Store.memory())
     await seedChannel(cs, { highestVoucherAmount: 1_000_000n, spent: 500_000n })
 
-    const result = await deductFromChannel(cs, channelId, 1_000_000n)
+    const result = await ChannelStore.deductFromChannel(cs, channelId, 1_000_000n)
     expect(result.ok).toBe(false)
     expect(result.channel.spent).toBe(500_000n)
   })
 
   test('throws when channel does not exist', async () => {
-    const cs = channelStorage(memoryStorage())
-    await expect(deductFromChannel(cs, channelId, 1_000_000n)).rejects.toThrow('channel not found')
+    const cs = ChannelStore.fromStore(Store.memory())
+    await expect(ChannelStore.deductFromChannel(cs, channelId, 1_000_000n)).rejects.toThrow(
+      'channel not found',
+    )
   })
 
   test('exact balance succeeds', async () => {
-    const cs = channelStorage(memoryStorage())
+    const cs = ChannelStore.fromStore(Store.memory())
     await seedChannel(cs, { highestVoucherAmount: 1_000_000n, spent: 0n })
 
-    const result = await deductFromChannel(cs, channelId, 1_000_000n)
+    const result = await ChannelStore.deductFromChannel(cs, channelId, 1_000_000n)
     expect(result.ok).toBe(true)
     expect(result.channel.spent).toBe(1_000_000n)
   })
 
   test('sequential deductions accumulate correctly', async () => {
-    const cs = channelStorage(memoryStorage())
+    const cs = ChannelStore.fromStore(Store.memory())
     await seedChannel(cs, { highestVoucherAmount: 5_000_000n, spent: 0n })
 
     for (let i = 0; i < 5; i++) {
-      const result = await deductFromChannel(cs, channelId, 1_000_000n)
+      const result = await ChannelStore.deductFromChannel(cs, channelId, 1_000_000n)
       expect(result.ok).toBe(true)
       expect(result.channel.spent).toBe(BigInt((i + 1) * 1_000_000))
       expect(result.channel.units).toBe(i + 1)
     }
 
-    const final = await deductFromChannel(cs, channelId, 1_000_000n)
+    const final = await ChannelStore.deductFromChannel(cs, channelId, 1_000_000n)
     expect(final.ok).toBe(false)
   })
 })
@@ -303,12 +274,12 @@ describe('deductFromChannel', () => {
 describe('concurrency', () => {
   describe('with update (atomic backend)', () => {
     test('concurrent deductions do not lose updates', async () => {
-      const cs = channelStorage(memoryStorage())
+      const cs = ChannelStore.fromStore(Store.memory())
       await seedChannel(cs, { highestVoucherAmount: 100_000_000n, spent: 0n })
 
       const N = 50
       const results = await Promise.all(
-        Array.from({ length: N }, () => deductFromChannel(cs, channelId, 1_000_000n)),
+        Array.from({ length: N }, () => ChannelStore.deductFromChannel(cs, channelId, 1_000_000n)),
       )
 
       const successes = results.filter((r) => r.ok).length
@@ -320,12 +291,12 @@ describe('concurrency', () => {
     })
 
     test('concurrent deductions respect balance limit', async () => {
-      const cs = channelStorage(memoryStorage())
+      const cs = ChannelStore.fromStore(Store.memory())
       await seedChannel(cs, { highestVoucherAmount: 3_000_000n, spent: 0n })
 
       const N = 10
       const results = await Promise.all(
-        Array.from({ length: N }, () => deductFromChannel(cs, channelId, 1_000_000n)),
+        Array.from({ length: N }, () => ChannelStore.deductFromChannel(cs, channelId, 1_000_000n)),
       )
 
       const successes = results.filter((r) => r.ok).length
@@ -339,7 +310,7 @@ describe('concurrency', () => {
     })
 
     test('concurrent updates to different channels are independent', async () => {
-      const cs = channelStorage(memoryStorage())
+      const cs = ChannelStore.fromStore(Store.memory())
       await seedChannel(cs, { highestVoucherAmount: 10_000_000n, spent: 0n })
       await cs.updateChannel(channelId2, () =>
         makeChannel({ channelId: channelId2, highestVoucherAmount: 10_000_000n, spent: 0n }),
@@ -347,8 +318,16 @@ describe('concurrency', () => {
 
       const N = 20
       const [results1, results2] = await Promise.all([
-        Promise.all(Array.from({ length: N }, () => deductFromChannel(cs, channelId, 1_000_000n))),
-        Promise.all(Array.from({ length: N }, () => deductFromChannel(cs, channelId2, 1_000_000n))),
+        Promise.all(
+          Array.from({ length: N }, () =>
+            ChannelStore.deductFromChannel(cs, channelId, 1_000_000n),
+          ),
+        ),
+        Promise.all(
+          Array.from({ length: N }, () =>
+            ChannelStore.deductFromChannel(cs, channelId2, 1_000_000n),
+          ),
+        ),
       ])
 
       expect(results1.filter((r) => r.ok).length).toBe(10)
@@ -363,12 +342,12 @@ describe('concurrency', () => {
 
   describe('with mutex fallback (no update method)', () => {
     test('concurrent deductions do not lose updates', async () => {
-      const cs = channelStorage(stripUpdateMethod(memoryStorage()))
+      const cs = ChannelStore.fromStore(stripUpdateMethod(Store.memory()))
       await seedChannel(cs, { highestVoucherAmount: 100_000_000n, spent: 0n })
 
       const N = 50
       const results = await Promise.all(
-        Array.from({ length: N }, () => deductFromChannel(cs, channelId, 1_000_000n)),
+        Array.from({ length: N }, () => ChannelStore.deductFromChannel(cs, channelId, 1_000_000n)),
       )
 
       const successes = results.filter((r) => r.ok).length
@@ -380,12 +359,12 @@ describe('concurrency', () => {
     })
 
     test('concurrent deductions respect balance limit', async () => {
-      const cs = channelStorage(stripUpdateMethod(memoryStorage()))
+      const cs = ChannelStore.fromStore(stripUpdateMethod(Store.memory()))
       await seedChannel(cs, { highestVoucherAmount: 3_000_000n, spent: 0n })
 
       const N = 10
       const results = await Promise.all(
-        Array.from({ length: N }, () => deductFromChannel(cs, channelId, 1_000_000n)),
+        Array.from({ length: N }, () => ChannelStore.deductFromChannel(cs, channelId, 1_000_000n)),
       )
 
       const successes = results.filter((r) => r.ok).length
@@ -399,13 +378,13 @@ describe('concurrency', () => {
     })
 
     test('mutex serializes async operations', async () => {
-      const s = delayedStorage(5)
-      const cs = channelStorage(s)
+      const s = delayedStore(5)
+      const cs = ChannelStore.fromStore(s)
       await seedChannel(cs, { highestVoucherAmount: 100_000_000n, spent: 0n })
 
       const N = 10
       const results = await Promise.all(
-        Array.from({ length: N }, () => deductFromChannel(cs, channelId, 1_000_000n)),
+        Array.from({ length: N }, () => ChannelStore.deductFromChannel(cs, channelId, 1_000_000n)),
       )
 
       const successes = results.filter((r) => r.ok).length
@@ -417,7 +396,7 @@ describe('concurrency', () => {
     })
 
     test('mutex does not block different channels', async () => {
-      const cs = channelStorage(stripUpdateMethod(memoryStorage()))
+      const cs = ChannelStore.fromStore(stripUpdateMethod(Store.memory()))
       await seedChannel(cs, { highestVoucherAmount: 10_000_000n, spent: 0n })
       await cs.updateChannel(channelId2, () =>
         makeChannel({ channelId: channelId2, highestVoucherAmount: 10_000_000n, spent: 0n }),
@@ -425,8 +404,16 @@ describe('concurrency', () => {
 
       const N = 20
       const [results1, results2] = await Promise.all([
-        Promise.all(Array.from({ length: N }, () => deductFromChannel(cs, channelId, 1_000_000n))),
-        Promise.all(Array.from({ length: N }, () => deductFromChannel(cs, channelId2, 1_000_000n))),
+        Promise.all(
+          Array.from({ length: N }, () =>
+            ChannelStore.deductFromChannel(cs, channelId, 1_000_000n),
+          ),
+        ),
+        Promise.all(
+          Array.from({ length: N }, () =>
+            ChannelStore.deductFromChannel(cs, channelId2, 1_000_000n),
+          ),
+        ),
       ])
 
       expect(results1.filter((r) => r.ok).length).toBe(10)
@@ -434,7 +421,7 @@ describe('concurrency', () => {
     })
 
     test('mutex releases on callback error', async () => {
-      const cs = channelStorage(stripUpdateMethod(memoryStorage()))
+      const cs = ChannelStore.fromStore(stripUpdateMethod(Store.memory()))
       await seedChannel(cs)
 
       await expect(
@@ -454,22 +441,26 @@ describe('concurrency', () => {
       const balance = 20_000_000n
       const deduction = 1_000_000n
 
-      const atomicCs = channelStorage(memoryStorage())
+      const atomicCs = ChannelStore.fromStore(Store.memory())
       await atomicCs.updateChannel(channelId, () =>
         makeChannel({ highestVoucherAmount: balance, spent: 0n }),
       )
 
-      const mutexCs = channelStorage(stripUpdateMethod(memoryStorage()))
+      const mutexCs = ChannelStore.fromStore(stripUpdateMethod(Store.memory()))
       await mutexCs.updateChannel(channelId, () =>
         makeChannel({ highestVoucherAmount: balance, spent: 0n }),
       )
 
       const [atomicResults, mutexResults] = await Promise.all([
         Promise.all(
-          Array.from({ length: N }, () => deductFromChannel(atomicCs, channelId, deduction)),
+          Array.from({ length: N }, () =>
+            ChannelStore.deductFromChannel(atomicCs, channelId, deduction),
+          ),
         ),
         Promise.all(
-          Array.from({ length: N }, () => deductFromChannel(mutexCs, channelId, deduction)),
+          Array.from({ length: N }, () =>
+            ChannelStore.deductFromChannel(mutexCs, channelId, deduction),
+          ),
         ),
       ])
 

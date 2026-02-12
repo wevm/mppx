@@ -8,9 +8,8 @@
  */
 import type { Hex } from 'viem'
 import * as Credential from '../../Credential.js'
+import * as ChannelStore from './ChannelStore.js'
 import { createStreamReceipt } from './Receipt.js'
-import type { ChannelStorage } from './Storage.js'
-import { deductFromChannel } from './Storage.js'
 import type { NeedVoucherEvent, StreamCredentialPayload, StreamReceipt } from './Types.js'
 
 /**
@@ -96,14 +95,14 @@ export type StreamController = {
  * 1. Deducts `tickCost` from the channel balance atomically (auto or manual).
  * 2. If balance is sufficient, emits `event: message` with the value.
  * 3. If balance is exhausted, emits `event: payment-need-voucher`
- *    and polls storage until the client tops up the channel.
+ *    and polls store until the client tops up the channel.
  * 4. On generator completion, emits a final `event: payment-receipt`.
  *
  * Returns a `ReadableStream<Uint8Array>` suitable for use as an HTTP response body.
  */
 export function serve(options: serve.Options): ReadableStream<Uint8Array> {
   const {
-    storage,
+    store,
     channelId,
     challengeId,
     tickCost,
@@ -121,7 +120,7 @@ export function serve(options: serve.Options): ReadableStream<Uint8Array> {
 
       const charge = () =>
         chargeOrWait({
-          storage,
+          store,
           channelId,
           amount: tickCost,
           emit,
@@ -142,7 +141,7 @@ export function serve(options: serve.Options): ReadableStream<Uint8Array> {
         }
 
         if (!aborted()) {
-          const channel = await storage.getChannel(channelId)
+          const channel = await store.getChannel(channelId)
           if (channel) {
             const receipt = createStreamReceipt({
               challengeId,
@@ -165,7 +164,7 @@ export function serve(options: serve.Options): ReadableStream<Uint8Array> {
 
 export declare namespace serve {
   type Options = {
-    storage: ChannelStorage
+    store: ChannelStore.ChannelStore
     channelId: Hex
     challengeId: string
     tickCost: bigint
@@ -222,21 +221,21 @@ export declare namespace fromRequest {
 
 /**
  * Atomically deduct `amount` from a channel, retrying when balance is
- * insufficient. Uses `storage.waitForUpdate()` when available for
+ * insufficient. Uses `store.waitForUpdate()` when available for
  * event-driven wakeups, falling back to polling otherwise. Emits
  * `payment-need-voucher` events via `emit` while waiting.
  */
 async function chargeOrWait(options: {
-  storage: ChannelStorage
+  store: ChannelStore.ChannelStore
   channelId: Hex
   amount: bigint
   emit: (event: string) => void
   pollIntervalMs: number
   signal?: AbortSignal | undefined
 }): Promise<void> {
-  const { storage, channelId, amount, emit, pollIntervalMs, signal } = options
+  const { store, channelId, amount, emit, pollIntervalMs, signal } = options
 
-  let result = await deductFromChannel(storage, channelId, amount)
+  let result = await ChannelStore.deductFromChannel(store, channelId, amount)
 
   if (!result.ok) {
     // Emit a single need-voucher event, then poll/wait until the client
@@ -254,24 +253,21 @@ async function chargeOrWait(options: {
     )
 
     while (!result.ok) {
-      await waitForUpdate(storage, channelId, pollIntervalMs, signal)
-      result = await deductFromChannel(storage, channelId, amount)
+      await waitForUpdate(store, channelId, pollIntervalMs, signal)
+      result = await ChannelStore.deductFromChannel(store, channelId, amount)
     }
   }
 }
 
 async function waitForUpdate(
-  storage: ChannelStorage,
+  store: ChannelStore.ChannelStore,
   channelId: Hex,
   pollIntervalMs: number,
   signal?: AbortSignal,
 ): Promise<void> {
   if (signal?.aborted) throw new Error('Aborted while waiting for voucher')
-  if (storage.waitForUpdate) {
-    await Promise.race([
-      storage.waitForUpdate(channelId),
-      ...(signal ? [abortPromise(signal)] : []),
-    ])
+  if (store.waitForUpdate) {
+    await Promise.race([store.waitForUpdate(channelId), ...(signal ? [abortPromise(signal)] : [])])
   } else {
     await sleep(pollIntervalMs)
   }
@@ -297,7 +293,7 @@ function sleep(ms: number): Promise<void> {
  */
 export function isEventStream(response: Response): boolean {
   const ct = response.headers.get('content-type')
-  return ct !== null && ct.toLowerCase().startsWith('text/event-stream')
+  return ct?.toLowerCase().startsWith('text/event-stream') ?? false
 }
 
 /**

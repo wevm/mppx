@@ -6,8 +6,8 @@
  * @internal
  */
 import * as Transport from '../../../server/Transport.js'
+import type * as ChannelStore from '../../stream/ChannelStore.js'
 import * as Sse_core from '../../stream/Sse.js'
-import type { ChannelStorage } from '../../stream/Storage.js'
 
 /** SSE transport with Tempo stream controller. */
 export type Sse = Transport.Sse<Sse_core.StreamController>
@@ -27,10 +27,10 @@ export function sse(options: sse.Options): Sse {
   // When `poll` is true, strip `waitForUpdate` so the SSE charge loop
   // falls back to polling. This is needed for runtimes like Cloudflare Workers
   // where resolving promises across request contexts is not supported.
-  const storage = (() => {
-    if (!poll) return options.storage
-    const { waitForUpdate: _, ...storage } = options.storage
-    return storage
+  const store = (() => {
+    if (!poll) return options.store
+    const { waitForUpdate: _, ...store } = options.store
+    return store
   })()
 
   const contextMap = new Map<string, Sse_core.fromRequest.Context>()
@@ -78,7 +78,7 @@ export function sse(options: sse.Options): Sse {
           ? (resolved as Sse_core.serve.Options['generate'])
           : (resolved as AsyncIterable<string>)
         const stream = Sse_core.serve({
-          storage,
+          store,
           channelId: ctx.channelId,
           challengeId,
           tickCost: ctx.tickCost,
@@ -108,8 +108,8 @@ export declare namespace sse {
     poll?: boolean | undefined
     /** Polling interval (in milliseconds). @default 10 */
     pollingInterval?: number | undefined
-    /** Storage backend for channel state. */
-    storage: ChannelStorage
+    /** Store backend for channel state. */
+    store: ChannelStore.ChannelStore
   }
 }
 

@@ -1,7 +1,7 @@
 import type { Address, Hex } from 'viem'
 import { describe, expect, test } from 'vitest'
+import type * as ChannelStore from './ChannelStore.js'
 import { formatNeedVoucherEvent, formatReceiptEvent, parseEvent, serve } from './Sse.js'
-import type { ChannelState, ChannelStorage } from './Storage.js'
 import type { NeedVoucherEvent, StreamReceipt } from './Types.js'
 
 const channelId = '0x0000000000000000000000000000000000000000000000000000000000000001' as Hex
@@ -176,7 +176,7 @@ describe('parseEvent', () => {
 })
 
 describe('serve', () => {
-  function memoryStorage(): ChannelStorage {
+  function memoryStore(): ChannelStore.ChannelStore {
     const channels = new Map()
     return {
       async getChannel(id) {
@@ -207,7 +207,10 @@ describe('serve', () => {
     for (const v of values) yield v
   }
 
-  function seedChannel(storage: ChannelStorage, balance: bigint): Promise<ChannelState | null> {
+  function seedChannel(
+    storage: ChannelStore.ChannelStore,
+    balance: bigint,
+  ): Promise<ChannelStore.State | null> {
     return storage.updateChannel(channelId, () => ({
       channelId,
       payer: '0x0000000000000000000000000000000000000001' as Address,
@@ -226,11 +229,11 @@ describe('serve', () => {
   }
 
   test('emits message events for each generated value', async () => {
-    const storage = memoryStorage()
+    const storage = memoryStore()
     await seedChannel(storage, 3000000n)
 
     const stream = serve({
-      storage,
+      store: storage,
       channelId,
       challengeId,
       tickCost: 1000000n,
@@ -250,13 +253,13 @@ describe('serve', () => {
   })
 
   test('emits payment-need-voucher when balance exhausted and resumes after top-up', async () => {
-    const storage = memoryStorage()
+    const storage = memoryStore()
     await seedChannel(storage, 1000000n)
 
     const gen = generate(['first', 'second'])
 
     const streamResult = serve({
-      storage,
+      store: storage,
       channelId,
       challengeId,
       tickCost: 1000000n,
@@ -300,7 +303,7 @@ describe('serve', () => {
   })
 
   test('respects abort signal', async () => {
-    const storage = memoryStorage()
+    const storage = memoryStore()
     await seedChannel(storage, 10000000n)
 
     const controller = new AbortController()
@@ -314,7 +317,7 @@ describe('serve', () => {
     }
 
     const stream = serve({
-      storage,
+      store: storage,
       channelId,
       challengeId,
       tickCost: 1000000n,
@@ -337,11 +340,11 @@ describe('serve', () => {
   })
 
   test('emits receipt with correct spent and units', async () => {
-    const storage = memoryStorage()
+    const storage = memoryStore()
     await seedChannel(storage, 2000000n)
 
     const stream = serve({
-      storage,
+      store: storage,
       channelId,
       challengeId,
       tickCost: 1000000n,
@@ -359,11 +362,11 @@ describe('serve', () => {
   })
 
   test('handles empty generator', async () => {
-    const storage = memoryStorage()
+    const storage = memoryStore()
     await seedChannel(storage, 1000000n)
 
     const stream = serve({
-      storage,
+      store: storage,
       channelId,
       challengeId,
       tickCost: 1000000n,
@@ -380,10 +383,10 @@ describe('serve', () => {
   })
 
   test('throws when channel does not exist', async () => {
-    const storage = memoryStorage()
+    const storage = memoryStore()
 
     const stream = serve({
-      storage,
+      store: storage,
       channelId,
       challengeId,
       tickCost: 1000000n,

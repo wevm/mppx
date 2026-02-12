@@ -31,6 +31,7 @@ import {
 import type { Challenge, Credential } from '../../index.js'
 import type { LooseOmit } from '../../internal/types.js'
 import * as MethodIntent from '../../MethodIntent.js'
+import * as Store from '../../Store.js'
 import * as Client from '../../viem/Client.js'
 import * as Intents from '../Intents.js'
 import * as Account from '../internal/account.js'
@@ -44,9 +45,8 @@ import {
   type OnChainChannel,
   settleOnChain,
 } from '../stream/Chain.js'
+import * as ChannelStore from '../stream/ChannelStore.js'
 import { createStreamReceipt } from '../stream/Receipt.js'
-import type { ChannelState, ChannelStorage, Storage } from '../stream/Storage.js'
-import { channelStorage, deductFromChannel, memoryStorage } from '../stream/Storage.js'
 import type { SignedVoucher, StreamCredentialPayload, StreamReceipt } from '../stream/Types.js'
 import { parseVoucherFromPayload, verifyVoucher } from '../stream/Voucher.js'
 import * as Transport from './internal/transport.js'
@@ -70,7 +70,7 @@ type StreamMethodDetails = {
  * const mpay = Mpay.create({
  *   methods: [
  *     tempo.session({
- *       storage: myStorage,
+ *       store: myStore,
  *       recipient: '0x...',
  *       currency: '0x...',
  *       escrowContract: '0x...',
@@ -87,12 +87,12 @@ export function session<const parameters extends session.Parameters>(p?: paramet
     amount,
     currency,
     decimals = defaults.decimals,
-    storage: rawStorage = memoryStorage(),
+    store: rawStore = Store.memory(),
     suggestedDeposit,
     unitType,
   } = parameters
 
-  const storage = channelStorage(rawStorage)
+  const store = ChannelStore.fromStore(rawStore)
 
   const getClient = Client.getResolver({
     chain: tempo_chain,
@@ -104,7 +104,7 @@ export function session<const parameters extends session.Parameters>(p?: paramet
   type Transport = parameters['stream'] extends false | undefined ? undefined : Transport.Sse
   const transport = parameters.stream
     ? Transport.sse({
-        storage,
+        store,
         ...(typeof parameters.stream === 'object' ? parameters.stream : undefined),
       })
     : undefined
@@ -176,7 +176,7 @@ export function session<const parameters extends session.Parameters>(p?: paramet
       switch (payload.action) {
         case 'open':
           streamReceipt = await handleOpen(
-            storage,
+            store,
             client,
             challenge,
             payload,
@@ -187,7 +187,7 @@ export function session<const parameters extends session.Parameters>(p?: paramet
 
         case 'topUp':
           streamReceipt = await handleTopUp(
-            storage,
+            store,
             client,
             challenge,
             payload,
@@ -198,7 +198,7 @@ export function session<const parameters extends session.Parameters>(p?: paramet
 
         case 'voucher':
           streamReceipt = await handleVoucher(
-            storage,
+            store,
             client,
             effectiveMinVoucherDelta,
             challenge,
@@ -208,7 +208,7 @@ export function session<const parameters extends session.Parameters>(p?: paramet
           break
 
         case 'close':
-          streamReceipt = await handleClose(storage, client, challenge, payload, methodDetails)
+          streamReceipt = await handleClose(store, client, challenge, payload, methodDetails)
           break
 
         default:
@@ -265,8 +265,8 @@ export declare namespace session {
   type Parameters = {
     /** Minimum voucher delta to accept (numeric string, default: "0"). */
     minVoucherDelta?: string | undefined
-    /** Storage backend for channel state. */
-    storage?: Storage | undefined
+    /** Store backend for channel state. */
+    store?: Store.Store | undefined
     /**
      * Enable SSE streaming.
      *
@@ -291,22 +291,22 @@ export declare namespace session {
 }
 
 /**
- * One-shot settle: reads highest voucher from storage and submits on-chain.
+ * One-shot settle: reads highest voucher from store and submits on-chain.
  */
 export async function settle(
-  storage: ChannelStorage,
+  store: ChannelStore.ChannelStore,
   client: viem_Client,
   escrowContract: Address,
   channelId: Hex,
 ): Promise<Hex> {
-  const channel = await storage.getChannel(channelId)
+  const channel = await store.getChannel(channelId)
   if (!channel) throw new ChannelNotFoundError({ reason: 'channel not found' })
   if (!channel.highestVoucher) throw new VerificationFailedError({ reason: 'no voucher to settle' })
 
   const settledAmount = channel.highestVoucher.cumulativeAmount
   const txHash = await settleOnChain(client, escrowContract, channel.highestVoucher)
 
-  await storage.updateChannel(channelId, (current) => {
+  await store.updateChannel(channelId, (current) => {
     if (!current) return null
     const nextSettled =
       settledAmount > current.settledOnChain ? settledAmount : current.settledOnChain
@@ -326,13 +326,13 @@ export async function settle(
  * failure modes into typed errors (`InsufficientBalanceError`, `ChannelClosedError`).
  */
 export async function charge(
-  storage: ChannelStorage,
+  store: ChannelStore.ChannelStore,
   channelId: Hex,
   amount: bigint,
-): Promise<ChannelState> {
-  let result: Awaited<ReturnType<typeof deductFromChannel>>
+): Promise<ChannelStore.State> {
+  let result: Awaited<ReturnType<typeof ChannelStore.deductFromChannel>>
   try {
-    result = await deductFromChannel(storage, channelId, amount)
+    result = await ChannelStore.deductFromChannel(store, channelId, amount)
   } catch {
     throw new ChannelClosedError({ reason: 'channel not found' })
   }
@@ -383,25 +383,17 @@ function validateOnChainChannel(
  * Used by both handleVoucher and (indirectly) handleOpen.
  */
 async function verifyAndAcceptVoucher(parameters: {
-  storage: ChannelStorage
+  store: ChannelStore.ChannelStore
   minVoucherDelta: bigint
   challenge: Challenge.Challenge
-  channel: ChannelState
+  channel: ChannelStore.State
   channelId: Hex
   voucher: SignedVoucher
   onChain: OnChainChannel
   methodDetails: StreamMethodDetails
 }): Promise<StreamReceipt> {
-  const {
-    storage,
-    minVoucherDelta,
-    challenge,
-    channel,
-    channelId,
-    voucher,
-    onChain,
-    methodDetails,
-  } = parameters
+  const { store, minVoucherDelta, challenge, channel, channelId, voucher, onChain, methodDetails } =
+    parameters
 
   if (onChain.finalized) {
     throw new ChannelClosedError({ reason: 'channel is finalized on-chain' })
@@ -448,7 +440,7 @@ async function verifyAndAcceptVoucher(parameters: {
     throw new InvalidSignatureError({ reason: 'invalid voucher signature' })
   }
 
-  const updated = await storage.updateChannel(channelId, (current) => {
+  const updated = await store.updateChannel(channelId, (current) => {
     if (!current) throw new ChannelNotFoundError({ reason: 'channel not found' })
     if (voucher.cumulativeAmount > current.highestVoucherAmount) {
       return {
@@ -475,7 +467,7 @@ async function verifyAndAcceptVoucher(parameters: {
  * Handle 'open' action - broadcast open transaction, verify voucher, and create channel.
  */
 async function handleOpen(
-  storage: ChannelStorage,
+  store: ChannelStore.ChannelStore,
   client: viem_Client,
   challenge: Challenge.Challenge,
   payload: StreamCredentialPayload & { action: 'open' },
@@ -530,7 +522,7 @@ async function handleOpen(
     throw new InvalidSignatureError({ reason: 'invalid voucher signature' })
   }
 
-  const updated = await storage.updateChannel(payload.channelId, (existing) => {
+  const updated = await store.updateChannel(payload.channelId, (existing) => {
     if (existing) {
       if (voucher.cumulativeAmount < existing.settledOnChain) {
         throw new VerificationFailedError({
@@ -590,14 +582,14 @@ async function handleOpen(
  * action to authorize spending the new funds.
  */
 async function handleTopUp(
-  storage: ChannelStorage,
+  store: ChannelStore.ChannelStore,
   client: viem_Client,
   challenge: Challenge.Challenge,
   payload: StreamCredentialPayload & { action: 'topUp' },
   methodDetails: StreamMethodDetails,
   feePayer: viem_Account | undefined,
 ): Promise<StreamReceipt> {
-  const channel = await storage.getChannel(payload.channelId)
+  const channel = await store.getChannel(payload.channelId)
   if (!channel) {
     throw new ChannelNotFoundError({ reason: 'channel not found' })
   }
@@ -614,7 +606,7 @@ async function handleTopUp(
     feePayer,
   })
 
-  const updated = await storage.updateChannel(payload.channelId, (current) => {
+  const updated = await store.updateChannel(payload.channelId, (current) => {
     if (!current) throw new ChannelNotFoundError({ reason: 'channel not found' })
     return { ...current, deposit: onChainDeposit }
   })
@@ -632,14 +624,14 @@ async function handleTopUp(
  * Handle 'voucher' action - verify and accept a new voucher.
  */
 async function handleVoucher(
-  storage: ChannelStorage,
+  store: ChannelStore.ChannelStore,
   _client: viem_Client,
   minVoucherDelta: bigint,
   challenge: Challenge.Challenge,
   payload: StreamCredentialPayload & { action: 'voucher' },
   methodDetails: StreamMethodDetails,
 ): Promise<StreamReceipt> {
-  const channel = await storage.getChannel(payload.channelId)
+  const channel = await store.getChannel(payload.channelId)
   if (!channel) {
     throw new ChannelNotFoundError({ reason: 'channel not found' })
   }
@@ -671,7 +663,7 @@ async function handleVoucher(
   }
 
   return verifyAndAcceptVoucher({
-    storage,
+    store,
     minVoucherDelta,
     challenge,
     channel,
@@ -686,13 +678,13 @@ async function handleVoucher(
  * Handle 'close' action - verify final voucher and close channel.
  */
 async function handleClose(
-  storage: ChannelStorage,
+  store: ChannelStore.ChannelStore,
   client: viem_Client,
   challenge: Challenge.Challenge,
   payload: StreamCredentialPayload & { action: 'close' },
   methodDetails: StreamMethodDetails,
 ): Promise<StreamReceipt> {
-  const channel = await storage.getChannel(payload.channelId)
+  const channel = await store.getChannel(payload.channelId)
   if (!channel) {
     throw new ChannelNotFoundError({ reason: 'channel not found' })
   }
@@ -749,7 +741,7 @@ async function handleClose(
 
   const txHash = await closeOnChain(client, methodDetails.escrowContract, voucher)
 
-  const updated = await storage.updateChannel(payload.channelId, (current) => {
+  const updated = await store.updateChannel(payload.channelId, (current) => {
     if (!current) return null
     return {
       ...current,

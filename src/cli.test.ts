@@ -8,6 +8,7 @@ import * as Http from '~test/Http.js'
 import { rpcUrl } from '~test/tempo/prool.js'
 import { deployEscrow } from '~test/tempo/stream.js'
 import { accounts, asset, client, fundAccount } from '~test/tempo/viem.js'
+import * as Store from './Store.js'
 import * as Mpay_server from './server/Mpay.js'
 import { toNodeListener } from './server/Mpay.js'
 import { tempo } from './tempo/server/MethodIntents.js'
@@ -147,12 +148,12 @@ describe('streaming multi-fetch (examples/streaming/multi-fetch)', () => {
     await fundAccount({ address: testAccount.address, token: asset })
 
     const escrow = await deployEscrow()
-    const storage = tempo.memoryStorage()
+    const store = Store.memory()
     const server = Mpay_server.create({
       methods: [
         tempo.session({
           account: accounts[0],
-          storage,
+          store,
           getClient: () => client,
           currency: asset,
           escrowContract: escrow,
@@ -209,12 +210,12 @@ describe('streaming sse (examples/streaming/sse)', () => {
     await fundAccount({ address: testAccount.address, token: asset })
 
     const escrow = await deployEscrow()
-    const storage = tempo.memoryStorage()
+    const store = Store.memory()
     const server = Mpay_server.create({
       methods: [
         tempo.session({
           account: accounts[0],
-          storage,
+          store,
           getClient: () => client,
           currency: asset,
           escrowContract: escrow,

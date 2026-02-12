@@ -13,14 +13,14 @@
 //   POST (voucher)     → Receive incremental voucher updates mid-stream
 //
 // The server never stores payment state in memory variables — it uses
-// `tempo.memoryStorage()` which is shared between the stream method and the
+// `Storage.memory()` which is shared between the stream method and the
 // SSE transport so that mid-stream voucher POSTs can update channel state
 // while the SSE generator is running.
 //
 
 // `Mpay` is the server-side payment handler. `tempo` provides Tempo-specific
 // payment method implementations (stream channels, SSE transport, storage).
-import { Mpay, tempo } from 'mpay/server'
+import { Mpay, Store, tempo } from 'mpay/server'
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts'
 // `Actions` provides Tempo-specific viem actions (faucet, token ops, etc.)
 import { Actions } from 'viem/tempo'
@@ -44,10 +44,10 @@ const currency = '0x20c0000000000000000000000000000000000000' as const
 // cumulative voucher covering this amount before the next token is sent.
 const pricePerToken = '0.000075'
 
-// Shared Channel Storage
+// Shared Channel Store
 
 //
-// `tempo.memoryStorage()` creates an in-memory store for payment channel state.
+// `Store.memory()` creates an in-memory store for payment channel state.
 // This is the critical piece that connects the SSE stream to mid-stream
 // voucher updates.
 //
@@ -65,15 +65,15 @@ const pricePerToken = '0.000075'
 //      `highestVoucherAmount` in storage.
 //
 // Because both the SSE generator (step 1) and the voucher POST handler
-// (step 2) share the same `storage` instance, the generator's poll
+// (step 2) share the same `store` instance, the generator's poll
 // immediately sees the new balance and continues streaming. The storage
 // also supports `waitForUpdate()` for event-driven wakeups instead of
-// polling, which `memoryStorage` implements via a simple waiter set.
+// polling, which `Store.memory()` implements via a simple waiter set.
 //
 // In production, you'd replace this with a durable storage backend
 // (e.g., Cloudflare Durable Objects, a database with transactions) to
 // survive server restarts and support horizontal scaling.
-const storage = tempo.memoryStorage()
+const store = Store.memory()
 
 // Mpay Server Instance
 
@@ -111,9 +111,9 @@ const mpay = Mpay.create({
       // the client's channel-open transaction so the protocol covers gas
       // fees instead of the client paying them.
       feePayer: true,
-      // Shared storage so mid-stream voucher POSTs update the same state
+      // Shared store so mid-stream voucher POSTs update the same state
       // that `stream.charge()` reads from.
-      storage,
+      store,
       // SSE transport for streaming. The session method detects the SSE
       // transport and wires up Tempo metering (per-token charging, voucher
       // handling) automatically using the shared storage.
