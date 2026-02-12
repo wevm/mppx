@@ -1,15 +1,14 @@
 import { charge as charge_ } from './Charge.js'
 
 /**
- * Creates Stripe client method intents from shared parameters.
+ * Creates a Stripe `charge` client method intent.
  *
  * @example
  * ```ts
- * import { Mpay } from 'mpay/client'
- * import { stripe } from 'mpay/stripe/client'
+ * import { Mpay, stripe } from 'mpay/client'
  *
  * const mpay = Mpay.create({
- *   methods: [stripe({ apiKey: 'sk_test_...', paymentMethod: 'pm_card_visa' })],
+ *   methods: [stripe({ secretKey: 'sk_test_...', paymentMethod: 'pm_card_visa' })],
  * })
  * ```
  */

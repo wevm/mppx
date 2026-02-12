@@ -1,20 +1,19 @@
 import { charge as charge_ } from './Charge.js'
 
 /**
- * Creates Stripe method intents from shared parameters.
+ * Creates a Stripe `charge` method intent for usage on the server.
  *
  * @example
  * ```ts
- * import { Mpay } from 'mpay/server'
- * import { stripe } from 'mpay/stripe/server'
+ * import { Mpay, stripe } from 'mpay/server'
  *
  * const mpay = Mpay.create({
- *   methods: [stripe({ apiKey: 'sk_live_...' })],
+ *   methods: [stripe({ secretKey: 'sk_...' })],
  * })
  * ```
  */
 export function stripe<const parameters extends stripe.Parameters>(parameters: parameters) {
-  return [charge_(parameters)] as const
+  return [stripe.charge(parameters)] as const
 }
 
 export namespace stripe {
