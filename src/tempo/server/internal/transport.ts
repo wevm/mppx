@@ -21,7 +21,7 @@ export type Sse = Transport.Sse<Sse_core.StreamController>
  * - Auto-detection of upstream SSE responses
  * - Fallback to standard HTTP receipt handling for plain Response
  */
-export function sse(options: sse.Options): Sse {
+export function sse(options: sse.Options & { store: ChannelStore.ChannelStore }): Sse {
   const { pollingInterval, poll } = options
 
   // When `poll` is true, strip `waitForUpdate` so the SSE charge loop
@@ -96,20 +96,18 @@ export function sse(options: sse.Options): Sse {
 export declare namespace sse {
   type Options = {
     /**
-     * When true, the SSE charge loop uses polling instead of `waitForUpdate()`.
+     * When true, the charge loop uses polling instead of `waitForUpdate()`.
      *
      * Required for runtimes like Cloudflare Workers where resolving promises
      * across request contexts is not supported. Without this flag, a mid-stream
-     * voucher POST (Request B) would resolve a waiter created in the SSE
-     * stream's request context (Request A), causing a Workers error.
+     * voucher POST (Request B) would resolve a waiter created in the streaming
+     * request context (Request A), causing a Workers error.
      *
      * @default false
      */
     poll?: boolean | undefined
     /** Polling interval (in milliseconds). @default 10 */
     pollingInterval?: number | undefined
-    /** Store backend for channel state. */
-    store: ChannelStore.ChannelStore
   }
 }
 
