@@ -4,8 +4,8 @@ export const rpcUrl = {
 } as const
 
 export const escrowContract = {
-  4217: '0x9d136eEa063eDE5418A6BC7bEafF009bBb6CFa70',
-  42431: '0x9d136eEa063eDE5418A6BC7bEafF009bBb6CFa70',
+  4217: '0x0901aED692C755b870F9605E56BAA66C35BEfF69',
+  42431: '0x542831e3E4Ace07559b7C8787395f4Fb99F70787',
 } as const
 
 export const testnetChainId = 42431
