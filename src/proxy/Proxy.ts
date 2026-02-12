@@ -66,7 +66,14 @@ export function create(config: create.Config): Proxy {
 
     const { service, proxy } = entry
 
-    const matched = Route.match(service.routes, request.method, upstreamPath)
+    const matched =
+      Route.match(service.routes, request.method, upstreamPath) ??
+      // Management POSTs (e.g. session close) may target a path whose route
+      // is registered for a different HTTP method (e.g. GET). Fall back to
+      // path-only matching so the payment handler can process the action.
+      (request.method === 'POST' && request.headers.has('authorization')
+        ? Route.matchPath(service.routes, upstreamPath)
+        : null)
     if (!matched) return new Response('Not Found', { status: 404 })
 
     const endpoint = matched.value as Service.Endpoint

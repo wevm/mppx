@@ -25,23 +25,30 @@ export function match(
   path: string,
 ): { key: string; value: unknown } | null {
   for (const [key, value] of Object.entries(routes)) {
-    const tokens = key.trim().split(/\s+/)
-
-    let routeMethod: string | undefined
-    let pattern: string
-
-    if (tokens.length >= 2 && httpMethods.has(tokens[0]!.toUpperCase())) {
-      routeMethod = tokens[0]!.toUpperCase()
-      pattern = tokens.slice(1).join(' ')
-    } else {
-      pattern = key
-    }
-
+    const { method: routeMethod, pattern } = parseRouteKey(key)
     if (routeMethod && routeMethod !== method.toUpperCase()) continue
-
     const urlPattern = new URLPattern({ pathname: pattern })
     if (urlPattern.test({ pathname: path })) return { key, value }
   }
-
   return null
+}
+
+export function matchPath(
+  routes: Record<string, unknown>,
+  path: string,
+): { key: string; value: unknown } | null {
+  for (const [key, value] of Object.entries(routes)) {
+    const { pattern } = parseRouteKey(key)
+    const urlPattern = new URLPattern({ pathname: pattern })
+    if (urlPattern.test({ pathname: path })) return { key, value }
+  }
+  return null
+}
+
+function parseRouteKey(key: string): { method: string | undefined; pattern: string } {
+  const tokens = key.trim().split(/\s+/)
+  if (tokens.length >= 2 && httpMethods.has(tokens[0]!.toUpperCase())) {
+    return { method: tokens[0]!.toUpperCase(), pattern: tokens.slice(1).join(' ') }
+  }
+  return { method: undefined, pattern: key }
 }

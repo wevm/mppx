@@ -188,6 +188,64 @@ describe('session multi-fetch (examples/session/multi-fetch)', () => {
     }
   })
 
+  test('--channel reuse: second request reuses existing channel', { timeout: 120_000 }, async () => {
+    await fundAccount({ address: testAccount.address, token: Addresses.pathUsd })
+    await fundAccount({ address: testAccount.address, token: asset })
+
+    const escrow = await deployEscrow()
+    const store = Store.memory()
+    const server = Mpay_server.create({
+      methods: [
+        tempo.session({
+          account: accounts[0],
+          store,
+          getClient: () => client,
+          currency: asset,
+          escrowContract: escrow,
+          chainId: client.chain.id,
+          feePayer: true,
+        }),
+      ],
+      realm: 'cli-test-channel-reuse',
+      secretKey: 'cli-test-secret',
+    })
+
+    const httpServer = await Http.createServer(async (req, res) => {
+      const result = await toNodeListener(
+        server.session({
+          amount: '0.001',
+          recipient: accounts[0].address,
+          unitType: 'page',
+        }),
+      )(req, res)
+      if (result.status === 402) return
+      res.end('scraped-content')
+    })
+
+    try {
+      // First request: open a channel, answer "y" to proceed, "n" to close channel
+      const first = await runAsync(
+        [httpServer.url, '--rpc-url', rpcUrl, '--deposit', '10'],
+        { input: 'y\nn\n' },
+      )
+      expect(first.stdout).toContain('scraped-content')
+
+      // Extract channel ID from stderr (logged as "Channel opened 0x...")
+      const match = first.stderr.match(/Channel opened (0x[0-9a-fA-F]+)/)
+      expect(match).toBeTruthy()
+      const channelId = match![1]!
+
+      // Second request: reuse the channel via --channel
+      const second = await runAsync(
+        [httpServer.url, '--rpc-url', rpcUrl, '--yes', '-s', '--channel', channelId, '--deposit', '10'],
+        { input: '' },
+      )
+      expect(second.stdout).toContain('scraped-content')
+    } finally {
+      httpServer.close()
+    }
+  })
+
   test('error: --fail exits on server error', { timeout: 60_000 }, async () => {
     const httpServer = await Http.createServer(async (_req, res) => {
       res.writeHead(500)

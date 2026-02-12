@@ -238,8 +238,9 @@ export function session<const parameters extends session.Parameters>(p?: paramet
     respond({ credential, input }) {
       const { payload } = credential as Credential.Credential<StreamCredentialPayload>
 
-      const isManagement =
-        payload.action === 'open' || payload.action === 'topUp' || payload.action === 'close'
+      if (payload.action === 'close') return new Response(null, { status: 204 })
+
+      const isManagement = payload.action === 'open' || payload.action === 'topUp'
       if (isManagement && input.method === 'POST') return new Response(null, { status: 204 })
 
       const isVoucher = payload.action === 'voucher'

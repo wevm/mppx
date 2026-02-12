@@ -1040,6 +1040,21 @@ describe('session', () => {
       expect((result as Response).status).toBe(204)
     })
 
+    test('returns 204 for GET with close action', () => {
+      const server = createServer()
+      const result = server.respond!({
+        credential: {
+          challenge: makeChallenge({
+            channelId: '0x0000000000000000000000000000000000000000000000000000000000000001' as Hex,
+          }),
+          payload: { action: 'close' },
+        },
+        input: new Request('http://localhost', { method: 'GET' }),
+      } as any)
+      expect(result).toBeInstanceOf(Response)
+      expect((result as Response).status).toBe(204)
+    })
+
     test('returns 204 for POST with voucher action', () => {
       const server = createServer()
       const result = server.respond!({

@@ -53,7 +53,7 @@ const client = createClient({
   account,
   chain: tempoModerato,
   pollingInterval: 1_000,
-  transport: http(),
+  transport: http(process.env.RPC_URL),
 })
 
 // Payment handler setup

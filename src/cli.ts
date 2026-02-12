@@ -5,6 +5,7 @@ import { createRequire } from 'node:module'
 import * as os from 'node:os'
 import * as path from 'node:path'
 import * as readline from 'node:readline'
+import { Base64 } from 'ox'
 import { cac } from 'cac'
 import type { Chain } from 'viem'
 import { type Address, createClient, http } from 'viem'
@@ -51,7 +52,7 @@ cli
     const options = parseOptions(
       z.object({
         account: z.optional(z.string()),
-        channel: z.optional(z.string()),
+        channel: z.optional(z.coerce.string()),
         data: z.optional(z.string()),
         deposit: z.optional(z.union([z.string(), z.number()])),
         fail: z.optional(z.boolean()),
@@ -305,7 +306,12 @@ cli
         (() => {
           if (!options.channel) return undefined
           const idx = process.argv.indexOf('--channel')
-          return { channelId: idx !== -1 ? process.argv[idx + 1]! : String(options.channel) }
+          const channelId = idx !== -1 ? process.argv[idx + 1]! : String(options.channel)
+          const saved = readChannelCumulative(channelId)
+          return {
+            channelId,
+            ...(saved !== undefined && { cumulativeAmountRaw: saved.toString() }),
+          }
         })(),
       )
 
@@ -344,46 +350,6 @@ cli
 
       if (options.fail && credentialResponse.status >= 400) process.exit(22)
 
-      if (
-        challenge.intent === 'session' &&
-        credentialResponse.ok &&
-        !credentialResponse.headers.get('Content-Type')?.includes('text/event-stream')
-      ) {
-        const parsed = Credential.deserialize<StreamCredentialPayload>(credential)
-        if (parsed.payload.action === 'open' && 'cumulativeAmount' in parsed.payload) {
-          const tickAmount = BigInt(challenge.request.amount as string)
-          streamCumulativeAmount = BigInt(parsed.payload.cumulativeAmount) + tickAmount
-
-          if (streamEscrowContract) {
-            const signature = await signVoucher(
-              client,
-              account,
-              { channelId: streamChannelId!, cumulativeAmount: streamCumulativeAmount },
-              streamEscrowContract,
-              streamChainId,
-            )
-            const voucherPayload: StreamCredentialPayload = {
-              action: 'voucher',
-              channelId: streamChannelId!,
-              cumulativeAmount: streamCumulativeAmount.toString(),
-              signature,
-            }
-            const voucherCred = Credential.serialize({
-              challenge,
-              payload: voucherPayload,
-              source: `did:pkh:eip155:${streamChainId}:${account.address}`,
-            })
-            credentialResponse = await globalThis.fetch(url, {
-              ...fetchInit,
-              headers: {
-                ...(fetchInit.headers as Record<string, string>),
-                Authorization: voucherCred,
-              },
-            })
-          }
-        }
-      }
-
       if (credentialResponse.status === 402) {
         const body = await credentialResponse.text()
         info(`${pc.bold(pc.red('Payment Rejected'))}\n`)
@@ -407,10 +373,15 @@ cli
         const receiptHeader = credentialResponse.headers.get('Payment-Receipt')
         if (receiptHeader) {
           try {
-            const receipt = Receipt.deserialize(receiptHeader)
+            const receiptJson = JSON.parse(Base64.toString(receiptHeader)) as Record<string, unknown>
+            const receipt = Receipt.from(receiptJson)
+            if (typeof receiptJson.acceptedCumulative === 'string' && receiptJson.acceptedCumulative) {
+              streamCumulativeAmount = BigInt(receiptJson.acceptedCumulative)
+              if (streamChannelId) writeChannelCumulative(streamChannelId, streamCumulativeAmount)
+            }
             info(`\n${pc.bold(pc.green('Payment Receipt'))}\n`)
             const rows: [string, string][] = []
-            for (const [key, value] of Object.entries(receipt)) {
+            for (const [key, value] of Object.entries(receiptJson)) {
               if (value === undefined || shownKeys.has(key)) continue
               if (key === 'reference' && typeof value === 'string' && explorerUrl)
                 rows.push([key, pc.link(`${explorerUrl}/tx/${value}`, value)])
@@ -655,16 +626,29 @@ cli
               source: `did:pkh:eip155:${streamChainId}:${account.address}`,
             })
             const closeRes = await globalThis.fetch(url, {
-              method: 'POST',
-              headers: { Authorization: closeCred },
+              ...fetchInit,
+              headers: {
+                ...(fetchInit.headers as Record<string, string>),
+                Authorization: closeCred,
+              },
             })
             if (closeRes.ok) {
+              deleteChannelState(streamChannelId!)
               info(
                 `${pc.dim('Channel closed.')} ${pc.dim(`Spent ${fmtBalance(streamCumulativeAmount, tokenSymbol, tokenDecimals)}.`)}\n`,
               )
             } else {
+              const closeBody = await closeRes.text().catch(() => '')
               info(
                 `${pc.dim(pc.yellow('Channel close failed'))} ${pc.dim(`(${closeRes.status})`)}\n`,
+              )
+              info(
+                `${pc.dim(`  channelId:          ${streamChannelId}`)}\n` +
+                  `${pc.dim(`  cumulativeAmount:   ${streamCumulativeAmount}`)}\n` +
+                  `${pc.dim(`  escrowContract:     ${streamEscrowContract}`)}\n` +
+                  `${pc.dim(`  chainId:            ${streamChainId}`)}\n` +
+                  `${pc.dim(`  account:            ${account.address}`)}\n` +
+                  `${pc.dim(`  response:           ${closeBody || '(empty)'}`)}\n`,
               )
             }
           }
@@ -674,9 +658,29 @@ cli
       // TODO: revert cast when https://github.com/wevm/zile/pull/26 is merged
       const errCause =
         err instanceof Error ? (err as unknown as Record<string, unknown>).cause : undefined
-      const cause = errCause instanceof Error ? errCause.message : null
-      console.error('Request failed:', err instanceof Error ? err.message : err)
-      if (cause) console.error('Cause:', cause)
+      const cause = errCause instanceof Error ? errCause : undefined
+
+      if (cause && 'code' in cause) {
+        const code = cause.code as string
+        if (code === 'ENOTFOUND')
+          console.error(`Could not resolve host "${hostname}". Check the URL and try again.`)
+        else if (code === 'ECONNREFUSED')
+          console.error(`Connection refused by "${hostname}". Is the server running?`)
+        else if (code === 'ECONNRESET')
+          console.error(`Connection to "${hostname}" was reset.`)
+        else if (code === 'ETIMEDOUT')
+          console.error(`Connection to "${hostname}" timed out.`)
+        else if (code === 'CERT_HAS_EXPIRED' || code === 'UNABLE_TO_VERIFY_LEAF_SIGNATURE')
+          console.error(
+            `TLS certificate error for "${hostname}". Use --insecure to skip verification.`,
+          )
+        else {
+          console.error(`Request to "${hostname}" failed: ${cause.message}`)
+        }
+      } else {
+        console.error('Request failed:', err instanceof Error ? err.message : err)
+        if (cause) console.error('Cause:', cause.message)
+      }
       process.exit(1)
     }
   })
@@ -938,6 +942,35 @@ function execCommand(
       resolve({ stdout: stdout.trim(), stderr: stderr.trim(), error })
     })
   })
+}
+
+function channelStateDir() {
+  return path.join(
+    process.env.XDG_CONFIG_HOME || path.join(os.homedir(), '.config'),
+    'mpay',
+    'channels',
+  )
+}
+
+function readChannelCumulative(channelId: string): bigint | undefined {
+  try {
+    const raw = fs.readFileSync(path.join(channelStateDir(), channelId), 'utf-8').trim()
+    return raw ? BigInt(raw) : undefined
+  } catch {
+    return undefined
+  }
+}
+
+function writeChannelCumulative(channelId: string, cumulative: bigint): void {
+  const dir = channelStateDir()
+  fs.mkdirSync(dir, { recursive: true })
+  fs.writeFileSync(path.join(dir, channelId), cumulative.toString(), 'utf-8')
+}
+
+function deleteChannelState(channelId: string): void {
+  try {
+    fs.unlinkSync(path.join(channelStateDir(), channelId))
+  } catch {}
 }
 
 function createDefaultStore() {
