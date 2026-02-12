@@ -71,7 +71,7 @@ export function encode(): `0x${string}` {
  * ```
  */
 export function isMppMemo(memo: `0x${string}`): boolean {
-  if (memo.length < 12) return false // need at least tag (4 bytes = 8 hex chars) + "0x"
+  if (memo.length !== 66) return false // v1 is exactly 32 bytes (0x + 64 hex chars)
   const memoTag = memo.slice(0, 10) as `0x${string}` // 0x + 8 hex chars = 4 bytes
   const version = Number.parseInt(memo.slice(10, 12), 16)
   return memoTag.toLowerCase() === TAG.toLowerCase() && version === VERSION

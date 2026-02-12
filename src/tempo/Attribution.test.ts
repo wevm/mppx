@@ -8,7 +8,7 @@ describe('Attribution', () => {
     })
 
     test('is deterministic (keccak256("mpp")[0..3])', () => {
-      expect(Attribution.TAG).toBe(Attribution.TAG)
+      expect(Attribution.TAG).toBe('0xef1ed712')
     })
   })
 
