@@ -59,8 +59,16 @@ export function mcpSdk(): McpSdk {
 
     async respondChallenge({ challenge, error }) {
       if (!McpErrorClass) {
-        const mod = await import('@modelcontextprotocol/sdk/types.js')
-        McpErrorClass = mod.McpError
+        try {
+          const mod = await import('@modelcontextprotocol/sdk/types.js')
+          McpErrorClass = mod.McpError
+        } catch (error) {
+          const err = new Error(
+            'Missing optional dependency "@modelcontextprotocol/sdk". Install it to use mpay MCP SDK transports.',
+          )
+          ;(err as Error & { cause?: unknown }).cause = error
+          throw err
+        }
       }
       return new McpErrorClass(mcpSdkErrorCode(error), error?.message ?? 'Payment Required', {
         httpStatus: 402,

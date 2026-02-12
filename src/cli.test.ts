@@ -420,9 +420,9 @@ describe.skipIf(!!process.env.CI)('account', () => {
 
 test('mpay --help', () => {
   const { version } = require('../package.json') as { version: string }
-  const stdout = run(['--help']).replace(`mpay/${version}`, 'mpay/x.x.x')
+  const stdout = run(['--help']).replace(`mpay/${version}`, 'mpay/x.y.z')
   expect(stdout).toMatchInlineSnapshot(`
-    "mpay/x.x.x
+    "mpay/x.y.z
 
     Usage:
       $ mpay [url]
