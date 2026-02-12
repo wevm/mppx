@@ -144,10 +144,16 @@ export function serialize(s: Service) {
   return {
     id: s.id,
     baseUrl: s.baseUrl,
-    routes: Object.entries(s.routes).map(([pattern, endpoint]) => ({
-      pattern,
-      payment: endpoint ? resolvePayment(endpoint) : null,
-    })),
+    routes: Object.entries(s.routes).map(([pattern, endpoint]) => {
+      const tokens = pattern.trim().split(/\s+/)
+      const hasMethod = tokens.length >= 2
+      return {
+        method: hasMethod ? tokens[0] : undefined,
+        path: hasMethod ? tokens.slice(1).join(' ') : tokens[0],
+        pattern,
+        payment: endpoint ? resolvePayment(endpoint) : null,
+      }
+    }),
   }
 }
 

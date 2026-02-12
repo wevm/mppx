@@ -89,10 +89,14 @@ describe('create', () => {
           "id": "api",
           "routes": [
             {
+              "method": "GET",
+              "path": "/v1/models",
               "pattern": "GET /v1/models",
               "payment": null,
             },
             {
+              "method": "POST",
+              "path": "/v1/generate",
               "pattern": "POST /v1/generate",
               "payment": {
                 "amount": "1000000",
@@ -105,6 +109,8 @@ describe('create', () => {
               },
             },
             {
+              "method": "POST",
+              "path": "/v1/stream",
               "pattern": "POST /v1/stream",
               "payment": {
                 "amount": "1000000",
@@ -206,10 +212,14 @@ describe('create', () => {
         "id": "api",
         "routes": [
           {
+            "method": "GET",
+            "path": "/v1/models",
             "pattern": "GET /v1/models",
             "payment": null,
           },
           {
+            "method": "POST",
+            "path": "/v1/generate",
             "pattern": "POST /v1/generate",
             "payment": {
               "amount": "1000000",
