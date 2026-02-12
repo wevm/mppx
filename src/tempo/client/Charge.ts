@@ -46,14 +46,10 @@ export function charge(parameters: charge.Parameters = {}) {
       const { request } = challenge
       const { amount, currency, recipient, methodDetails } = request
 
-      // Resolve memo: user-provided > attribution > nothing
-      const memo = (() => {
-        if (methodDetails?.memo) return methodDetails.memo as Hex.Hex
-        if (methodDetails?.attribution !== false) {
-          return Attribution.encode({ realm: challenge.realm, client: slug }) as Hex.Hex
-        }
-        return undefined
-      })()
+      // Resolve memo: user-provided memo takes priority, otherwise always generate attribution
+      const memo = methodDetails?.memo
+        ? (methodDetails.memo as Hex.Hex)
+        : (Attribution.encode({ realm: challenge.realm, client: slug }) as Hex.Hex)
 
       const prepared = await prepareTransactionRequest(client, {
         account,

@@ -98,20 +98,11 @@ export function charge<const parameters extends charge.Parameters>(
         return undefined
       })()
 
-      // Resolve attribution: user memo > attribution flag > nothing.
-      const resolvedMemo = request.memo || undefined
-      const resolvedAttribution = (() => {
-        if (resolvedMemo) return undefined
-        if (!attribution) return false
-        return true
-      })()
-
       return {
         ...request,
         chainId,
         feePayer: resolvedFeePayer,
-        memo: resolvedMemo,
-        attribution: resolvedAttribution,
+        memo: request.memo || undefined,
       }
     },
 
@@ -131,7 +122,6 @@ export function charge<const parameters extends charge.Parameters>(
       if (expires && new Date(expires) < new Date()) throw new PaymentExpiredError({ expires })
 
       const memo = methodDetails?.memo as `0x${string}` | undefined
-      const attributionEnabled = methodDetails?.attribution === true
 
       const payload = credential.payload
 
@@ -167,7 +157,7 @@ export function charge<const parameters extends charge.Parameters>(
                   recipient,
                 },
               )
-          } else if (attributionEnabled) {
+          } else if (attribution) {
             const memoLogs = parseEventLogs({
               abi: Abis.tip20,
               eventName: 'TransferWithMemo',
@@ -244,7 +234,7 @@ export function charge<const parameters extends charge.Parameters>(
               }
             }
 
-            if (attributionEnabled) {
+            if (attribution) {
               if (selector !== transferWithMemoSelector) return false
               try {
                 const { args } = decodeFunctionData({ abi: Abis.tip20, data: call.data })
@@ -309,13 +299,14 @@ export declare namespace charge {
 
   type Parameters = {
     /**
-     * MPP attribution memo.
+     * MPP attribution verification.
      *
-     * When `true` (default), an attribution memo is auto-generated for
-     * transactions that don't already have a user-provided memo. This
-     * tags on-chain transactions as MPP for analytics.
+     * When `true` (default), the server verifies that the client's
+     * transaction includes a valid attribution memo with a matching
+     * server fingerprint. The client always generates attribution
+     * memos — this controls whether the server validates them.
      *
-     * Set to `false` to disable.
+     * Set to `false` to accept any transfer (with or without memo).
      */
     attribution?: boolean | undefined
     /** Testnet mode. */
