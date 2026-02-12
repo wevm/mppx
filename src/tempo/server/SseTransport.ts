@@ -44,7 +44,16 @@ export function sseTransport(config: sseTransport.Config) {
     },
 
     respondReceipt({ receipt, response, challengeId }) {
-      if (isAsyncGeneratorFunction(response) || isAsyncIterable(response)) {
+      // Auto-detect upstream SSE responses and parse them into an
+      // AsyncIterable so they flow through the metered pipeline.
+      // This lets proxy consumers simply pass `result.withReceipt(upstreamRes)`
+      // and get per-event charging automatically.
+      const resolved =
+        response instanceof Response && Sse.isEventStream(response) && response.body
+          ? Sse.iterateData(response, { skip: (d) => d === '[DONE]' })
+          : response
+
+      if (isAsyncGeneratorFunction(resolved) || isAsyncIterable(resolved)) {
         const ctx = contextMap.get(challengeId)
         if (!ctx) throw new Error('No SSE context available — credential was not parsed')
         contextMap.delete(challengeId)
@@ -52,9 +61,9 @@ export function sseTransport(config: sseTransport.Config) {
         // Pass async generator functions directly so Sse.serve gives them
         // a StreamController for manual charge(). Pass raw AsyncIterables
         // as-is so Sse.serve auto-charges per yielded value.
-        const generate: Sse.serve.Options['generate'] = isAsyncGeneratorFunction(response)
-          ? (response as Sse.serve.Options['generate'])
-          : (response as AsyncIterable<string>)
+        const generate: Sse.serve.Options['generate'] = isAsyncGeneratorFunction(resolved)
+          ? (resolved as Sse.serve.Options['generate'])
+          : (resolved as AsyncIterable<string>)
         const stream = Sse.serve({
           storage,
           channelId: ctx.channelId,
