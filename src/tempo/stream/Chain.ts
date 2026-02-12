@@ -200,6 +200,10 @@ const escrowTopUpSelector = /*#__PURE__*/ toFunctionSelector(
   'function topUp(bytes32 channelId, uint128 additionalDeposit)',
 )
 
+const erc20ApproveSelector = /*#__PURE__*/ toFunctionSelector(
+  'function approve(address spender, uint256 amount)',
+)
+
 export type BroadcastResult = {
   txHash: Hex | undefined
   onChain: OnChainChannel
@@ -239,6 +243,25 @@ export async function broadcastOpenTransaction(parameters: {
     throw new BadRequestError({
       reason: 'transaction does not contain a valid escrow open call',
     })
+
+  if (feePayer) {
+    for (const call of calls) {
+      if (!call.to || !call.data) {
+        throw new BadRequestError({
+          reason: 'fee-sponsored transactions must not contain calls without target or data',
+        })
+      }
+      const selector = call.data.slice(0, 10)
+      const isEscrowOpen =
+        isAddressEqual(call.to, escrowContract) && selector === escrowOpenSelector
+      const isTokenApprove = isAddressEqual(call.to, currency) && selector === erc20ApproveSelector
+      if (!isEscrowOpen && !isTokenApprove) {
+        throw new BadRequestError({
+          reason: 'fee-sponsored open transaction contains an unauthorized call',
+        })
+      }
+    }
+  }
 
   const { args: openArgs } = decodeFunctionData({ abi: escrowAbi, data: openCall.data! })
   const [payee, token] = openArgs as readonly [Address, Address, ...unknown[]]
@@ -325,6 +348,25 @@ export async function broadcastTopUpTransaction(parameters: {
     throw new BadRequestError({
       reason: 'transaction does not contain a valid escrow topUp call',
     })
+
+  if (feePayer) {
+    for (const call of calls) {
+      if (!call.to || !call.data) {
+        throw new BadRequestError({
+          reason: 'fee-sponsored transactions must not contain calls without target or data',
+        })
+      }
+      const selector = call.data.slice(0, 10)
+      const isEscrowTopUp =
+        isAddressEqual(call.to, escrowContract) && selector === escrowTopUpSelector
+      const isTokenApprove = selector === erc20ApproveSelector
+      if (!isEscrowTopUp && !isTokenApprove) {
+        throw new BadRequestError({
+          reason: 'fee-sponsored topUp transaction contains an unauthorized call',
+        })
+      }
+    }
+  }
 
   const { args: topUpArgs } = decodeFunctionData({ abi: escrowAbi, data: topUpCall.data! })
   const [txChannelId, txAmount] = topUpArgs as [Hex, bigint]
