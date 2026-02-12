@@ -57,20 +57,11 @@ export function encode(parameters: encode.Parameters): `0x${string}` {
   const { serverId, clientId } = parameters
   const buf = new Uint8Array(32)
 
-  // [0..3] TAG
   buf.set(Hex.toBytes(TAG), 0)
-
-  // [4] version
   buf[4] = VERSION
-
-  // [5..14] server fingerprint (10 bytes)
   buf.set(fingerprint(serverId), 5)
-
-  // [15..24] client fingerprint or zero bytes (10 bytes)
   if (clientId) buf.set(fingerprint(clientId), 15)
-  // else: already zero-filled
 
-  // [25..31] nonce (7 random bytes)
   const nonce = crypto.getRandomValues(new Uint8Array(7))
   buf.set(nonce, 25)
 
@@ -101,8 +92,8 @@ export declare namespace encode {
  * ```
  */
 export function isMppMemo(memo: `0x${string}`): boolean {
-  if (memo.length !== 66) return false // v1 is exactly 32 bytes (0x + 64 hex chars)
-  const memoTag = memo.slice(0, 10) as `0x${string}` // 0x + 8 hex chars = 4 bytes
+  if (memo.length !== 66) return false
+  const memoTag = memo.slice(0, 10) as `0x${string}`
   const version = Number.parseInt(memo.slice(10, 12), 16)
   return memoTag.toLowerCase() === TAG.toLowerCase() && version === VERSION
 }
@@ -118,7 +109,7 @@ export function isMppMemo(memo: `0x${string}`): boolean {
  */
 export function verifyServer(memo: `0x${string}`, serverId: string): boolean {
   if (!isMppMemo(memo)) return false
-  const memoServerHex = `0x${memo.slice(12, 32)}` as `0x${string}` // bytes 5..14 = 10 bytes = 20 hex chars
+  const memoServerHex = `0x${memo.slice(12, 32)}` as `0x${string}`
   const expectedHex = Hex.fromBytes(fingerprint(serverId)) as `0x${string}`
   return memoServerHex.toLowerCase() === expectedHex.toLowerCase()
 }
@@ -142,9 +133,9 @@ export function decode(memo: `0x${string}`): decode.Result | null {
   if (!isMppMemo(memo)) return null
 
   const version = Number.parseInt(memo.slice(10, 12), 16)
-  const serverFingerprint = `0x${memo.slice(12, 32)}` as `0x${string}` // bytes 5..14
-  const clientHex = `0x${memo.slice(32, 52)}` as `0x${string}` // bytes 15..24
-  const nonce = `0x${memo.slice(52)}` as `0x${string}` // bytes 25..31
+  const serverFingerprint = `0x${memo.slice(12, 32)}` as `0x${string}`
+  const clientHex = `0x${memo.slice(32, 52)}` as `0x${string}`
+  const nonce = `0x${memo.slice(52)}` as `0x${string}`
 
   const clientFingerprint = clientHex.toLowerCase() === ANONYMOUS.toLowerCase() ? null : clientHex
 
