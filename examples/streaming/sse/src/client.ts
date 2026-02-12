@@ -55,20 +55,12 @@ const PRICE_PER_TOKEN = '0.000075'
 // will be the "payer" in the payment channel.
 const account = privateKeyToAccount((process.env.PRIVATE_KEY as Hex) ?? generatePrivateKey())
 
-// Create a viem client connected to Tempo Moderato (testnet).
-// The client is needed for two reasons in SSE mode:
-//   1. Signing on-chain transactions (opening the payment channel)
-//   2. Signing EIP-712 vouchers (off-chain payment proofs sent mid-stream)
-//
-// `pollingInterval: 1_000` sets how frequently the client polls for new blocks
-// (used when waiting for transaction confirmations).
 const client = createClient({
   account,
   chain: tempoModerato,
   pollingInterval: 1_000,
   transport: http(),
 })
-
 console.log(`Client account: ${account.address}`)
 
 // Fund the account via Tempo's testnet faucet. This gives us pathUSD and
@@ -116,7 +108,6 @@ console.log(`Balance: ${fmt(balanceBefore)}`)
 const DEPOSIT = '1'
 const s = tempo.session({
   account,
-  getClient: () => client,
   maxDeposit: DEPOSIT,
 })
 

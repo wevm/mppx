@@ -1,7 +1,7 @@
 import * as Challenge from '../Challenge.js'
 import * as Credential from '../Credential.js'
 import * as Errors from '../Errors.js'
-import type { UnionToIntersection } from '../internal/types.js'
+import type { Distribute, UnionToIntersection } from '../internal/types.js'
 import * as core_Mcp from '../Mcp.js'
 import * as Receipt from '../Receipt.js'
 
@@ -215,12 +215,11 @@ function mcpErrorCode(error?: Errors.PaymentError): number {
   return core_Mcp.paymentVerificationFailedCode
 }
 
-/** @internal Distributes over the receipt output union to create overloads. */
+/** @internal Distributes over the receipt response union to create overloads. */
 type WithReceiptOverloads<transport extends AnyTransport = Http> = {
   // biome-ignore lint/style/useShorthandFunctionType: _
   (): ReceiptOutputOf<transport>
 } & UnionToIntersection<
-  ReceiptOutputOf<transport> extends infer member
-    ? (response: member) => ReceiptOutputOf<transport>
-    : never
+  Distribute<ReceiptResponseOf<transport>, ReceiptOutputOf<transport>>
 >
+

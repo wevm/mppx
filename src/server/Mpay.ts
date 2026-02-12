@@ -27,10 +27,10 @@ export type Mpay<
 } & Handlers<FlattenMethods<methods>, transport>
 
 /** Extracts the transport override from a method intent, if any. */
-type TransportOverrideOf<mi> = mi extends {
-  transport?: infer transport extends Transport.AnyTransport
-}
-  ? Exclude<transport, undefined>
+type TransportOverrideOf<mi> = mi extends { transport?: infer transport }
+  ? Exclude<transport, undefined> extends Transport.AnyTransport
+    ? Exclude<transport, undefined>
+    : never
   : never
 
 /** Resolves the effective transport for an intent: override if present, else global default. */
@@ -308,12 +308,7 @@ declare namespace IntentFn {
       }
     | {
         status: 200
-        withReceipt: {
-          (): Transport.ReceiptOutputOf<transport>
-          <response extends Transport.ReceiptOutputOf<transport>>(
-            response: response,
-          ): Transport.ReceiptOutputOf<transport>
-        }
+        withReceipt: Transport.WithReceipt<transport>
       }
 }
 

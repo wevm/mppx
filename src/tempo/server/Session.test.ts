@@ -1,6 +1,7 @@
 import { type Address, createClient, type Hex } from 'viem'
 import { Addresses } from 'viem/tempo'
 import { beforeAll, beforeEach, describe, expect, test } from 'vitest'
+import { Mpay as Mpay_server, tempo as tempo_server } from 'mpay/server'
 import {
   deployEscrow,
   signOpenChannel,
@@ -1080,6 +1081,95 @@ describe('session', () => {
         input: new Request('http://localhost', { method: 'GET' }),
       } as any)
       expect(result).toBeUndefined()
+    })
+  })
+
+  describe('SSE', () => {
+    test('behavior: withReceipt accepts async generator and returns Response', async () => {
+      const handler = Mpay_server.create({
+        methods: [
+          tempo_server.session({
+            account: accounts[0],
+            currency: asset,
+            getClient: () => client,
+            stream: true,
+          }),
+        ],
+        realm: 'api.example.com',
+        secretKey: 'secret',
+      })
+
+      const result = await handler.session({
+        amount: '1000',
+        decimals: 6,
+        unitType: 'token',
+      })(new Request('https://example.com'))
+
+      if (result.status === 200) {
+        // async generator function should be accepted and return Response
+        const response = result.withReceipt(async function* (_stream) {
+          yield 'token'
+        })
+        expectTypeOf(response).toEqualTypeOf<Response>()
+
+        // plain Response should also be accepted
+        const response2 = result.withReceipt(new Response())
+        expectTypeOf(response2).toEqualTypeOf<Response>()
+
+        // async iterable should also be accepted
+        const iterable: AsyncIterable<string> = (async function* () {
+          yield 'token'
+        })()
+        const response3 = result.withReceipt(iterable)
+        expectTypeOf(response3).toEqualTypeOf<Response>()
+
+        // no-arg form should return Response
+        const response4 = result.withReceipt()
+        expectTypeOf(response4).toEqualTypeOf<Response>()
+      }
+    })
+
+    test('behavior: non-stream session withReceipt only accepts Response', async () => {
+      const handler = Mpay_server.create({
+        methods: [
+          tempo_server.session({
+            account: accounts[0],
+            currency: asset,
+            getClient: () => client,
+          }),
+        ],
+        realm: 'api.example.com',
+        secretKey: 'secret',
+      })
+
+      const result = await handler.session({
+        amount: '1000',
+        decimals: 6,
+        unitType: 'token',
+      })(new Request('https://example.com'))
+
+      if (result.status === 200) {
+        const response = result.withReceipt(new Response())
+        expectTypeOf(response).toEqualTypeOf<Response>()
+      }
+    })
+
+    test('behavior: charge withReceipt returns Response', async () => {
+      const handler = Mpay_server.create({
+        methods: [tempo_server.charge({ account: accounts[0], currency: asset })],
+        realm: 'api.example.com',
+        secretKey: 'secret',
+      })
+
+      const result = await handler.charge({
+        amount: '1000',
+        decimals: 6,
+      })(new Request('https://example.com'))
+
+      if (result.status === 200) {
+        const response = result.withReceipt(new Response())
+        expectTypeOf(response).toEqualTypeOf<Response>()
+      }
     })
   })
 })
