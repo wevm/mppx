@@ -5,8 +5,8 @@ import { createRequire } from 'node:module'
 import * as os from 'node:os'
 import * as path from 'node:path'
 import * as readline from 'node:readline'
-import { Base64 } from 'ox'
 import { cac } from 'cac'
+import { Base64 } from 'ox'
 import type { Chain } from 'viem'
 import { type Address, createClient, http } from 'viem'
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts'
@@ -15,7 +15,6 @@ import { type ZodMiniType, z } from 'zod/mini'
 import * as Challenge from './Challenge.js'
 import * as Credential from './Credential.js'
 import * as Mpay from './client/Mpay.js'
-import * as Receipt from './Receipt.js'
 import { tempo } from './tempo/client/index.js'
 import type { StreamCredentialPayload } from './tempo/stream/Types.js'
 import { signVoucher } from './tempo/stream/Voucher.js'
@@ -346,7 +345,7 @@ cli
         headers: { ...(fetchInit.headers as Record<string, string>), Authorization: credential },
       }
       printRequestHeaders(url, credentialFetchInit)
-      let credentialResponse = await globalThis.fetch(url, credentialFetchInit)
+      const credentialResponse = await globalThis.fetch(url, credentialFetchInit)
 
       if (options.fail && credentialResponse.status >= 400) process.exit(22)
 
@@ -373,9 +372,14 @@ cli
         const receiptHeader = credentialResponse.headers.get('Payment-Receipt')
         if (receiptHeader) {
           try {
-            const receiptJson = JSON.parse(Base64.toString(receiptHeader)) as Record<string, unknown>
-            const receipt = Receipt.from(receiptJson)
-            if (typeof receiptJson.acceptedCumulative === 'string' && receiptJson.acceptedCumulative) {
+            const receiptJson = JSON.parse(Base64.toString(receiptHeader)) as Record<
+              string,
+              unknown
+            >
+            if (
+              typeof receiptJson.acceptedCumulative === 'string' &&
+              receiptJson.acceptedCumulative
+            ) {
               streamCumulativeAmount = BigInt(receiptJson.acceptedCumulative)
               if (streamChannelId) writeChannelCumulative(streamChannelId, streamCumulativeAmount)
             }
@@ -666,10 +670,8 @@ cli
           console.error(`Could not resolve host "${hostname}". Check the URL and try again.`)
         else if (code === 'ECONNREFUSED')
           console.error(`Connection refused by "${hostname}". Is the server running?`)
-        else if (code === 'ECONNRESET')
-          console.error(`Connection to "${hostname}" was reset.`)
-        else if (code === 'ETIMEDOUT')
-          console.error(`Connection to "${hostname}" timed out.`)
+        else if (code === 'ECONNRESET') console.error(`Connection to "${hostname}" was reset.`)
+        else if (code === 'ETIMEDOUT') console.error(`Connection to "${hostname}" timed out.`)
         else if (code === 'CERT_HAS_EXPIRED' || code === 'UNABLE_TO_VERIFY_LEAF_SIGNATURE')
           console.error(
             `TLS certificate error for "${hostname}". Use --insecure to skip verification.`,
@@ -1213,12 +1215,12 @@ function chainName(chain: { id: number; name: string }) {
 }
 
 const pathUsd = '0x20c0000000000000000000000000000000000000' as Address
-const testnetTokens: Address[] = [
+const testnetTokens = [
   '0x20c0000000000000000000000000000000000000',
   '0x20c0000000000000000000000000000000000001',
   '0x20c0000000000000000000000000000000000002',
   '0x20c0000000000000000000000000000000000003',
-]
+] as const
 
 function fmtBalance(b: bigint, symbol: string, decimals = 6) {
   const value = Number(b) / 10 ** decimals
