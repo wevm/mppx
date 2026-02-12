@@ -1,5 +1,11 @@
 # mpay
 
+## 0.2.1
+
+### Patch Changes
+
+- da6510f: Fix version snapshot test to survive changeset bumps
+
 ## 0.2.0
 
 ### Minor Changes
