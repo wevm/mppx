@@ -778,47 +778,6 @@ describe('tempo', () => {
       httpServer.close()
     })
 
-    test('attribution with fingerprint', async () => {
-      const serverWithFp = Mpay_server.create({
-        methods: [
-          tempo_server.charge({
-            getClient() {
-              return client
-            },
-            currency: asset,
-            account: accounts[0],
-            attribution: { fingerprint: 'api.myapp.com' },
-          }),
-        ],
-        realm,
-        secretKey,
-      })
-
-      const httpServer = await Http.createServer(async (req, res) => {
-        const result = await Mpay_server.toNodeListener(
-          serverWithFp.charge({ amount: '1', decimals: 6 }),
-        )(req, res)
-        if (result.status === 402) return
-        res.end('OK')
-      })
-
-      const response = await fetch(httpServer.url)
-      expect(response.status).toBe(402)
-
-      const challenge = Challenge.fromResponse(response, {
-        methods: [tempo_client.charge()],
-      })
-      const memo = challenge.request.methodDetails?.memo as `0x${string}` | undefined
-      expect(memo).toBeDefined()
-      expect(Attribution.isMppMemo(memo!)).toBe(true)
-
-      const decoded = Attribution.decode(memo!)
-      expect(decoded).not.toBeNull()
-      expect(decoded!.fingerprint).not.toBe('0x000000000000')
-
-      httpServer.close()
-    })
-
     test('attribution: false disables auto-memo', async () => {
       const serverNoAttribution = Mpay_server.create({
         methods: [

@@ -41,7 +41,7 @@ export function charge<const parameters extends charge.Parameters>(
 ) {
   const {
     amount,
-    attribution = {},
+    attribution = true,
     currency,
     decimals = defaults.decimals,
     description,
@@ -101,10 +101,8 @@ export function charge<const parameters extends charge.Parameters>(
       // Auto-generate MPP attribution memo when no user memo is provided.
       const resolvedMemo = (() => {
         if (request.memo) return request.memo
-        if (attribution === false) return undefined
-        return Attribution.encode(
-          typeof attribution === 'object' ? attribution : undefined,
-        )
+        if (!attribution) return undefined
+        return Attribution.encode()
       })()
 
       return { ...request, chainId, feePayer: resolvedFeePayer, memo: resolvedMemo }
@@ -264,17 +262,15 @@ export declare namespace charge {
 
   type Parameters = {
     /**
-     * MPP attribution configuration.
+     * MPP attribution memo.
      *
-     * When enabled (default), an attribution memo is auto-generated for
+     * When `true` (default), an attribution memo is auto-generated for
      * transactions that don't already have a user-provided memo. This
      * tags on-chain transactions as MPP for analytics.
      *
-     * - `{}` or omitted: enabled with default options (no fingerprint)
-     * - `{ fingerprint: 'api.myapp.com' }`: enabled with server fingerprint
-     * - `false`: disabled — no attribution memo is generated
+     * Set to `false` to disable.
      */
-    attribution?: Attribution.encode.Options | false | undefined
+    attribution?: boolean | undefined
     /** Testnet mode. */
     testnet?: boolean | undefined
   } & Client.getResolver.Parameters &

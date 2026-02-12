@@ -8,15 +8,15 @@ import { Bytes, Hash, Hex } from 'ox'
  *
  * ## Byte Layout (32 bytes)
  *
- * | Offset | Size | Field                                         |
- * |--------|------|-----------------------------------------------|
- * | 0..3   | 4    | TAG = keccak256("mpp")[0..3]                   |
- * | 4      | 1    | version (0x01)                                |
- * | 5..10  | 6    | fingerprint (truncated keccak256 of domain/id) |
- * | 11..31 | 21   | nonce (random bytes for uniqueness)            |
+ * | Offset | Size | Field                           |
+ * |--------|------|---------------------------------|
+ * | 0..3   | 4    | TAG = keccak256("mpp")[0..3]     |
+ * | 4      | 1    | version (0x01)                  |
+ * | 5..31  | 27   | nonce (random bytes)            |
  *
  * The TAG prefix makes MPP transactions trivially distinguishable
  * from arbitrary memos via `TransferWithMemo` event topic filtering.
+ * Server identity is already available via the `to` (recipient) address.
  *
  * @module
  */
@@ -30,21 +30,16 @@ const VERSION = 0x01
 /**
  * Encodes an MPP attribution memo as a `bytes32` hex string.
  *
- * @param options - Optional fingerprint (domain/agent identifier).
  * @returns A `0x`-prefixed 64-char hex string (32 bytes).
  *
  * @example
  * ```ts
  * import * as Attribution from './Attribution.js'
  *
- * // Basic (tag + version + random nonce)
  * const memo = Attribution.encode()
- *
- * // With server fingerprint
- * const memo = Attribution.encode({ fingerprint: 'api.myapp.com' })
  * ```
  */
-export function encode(options?: encode.Options): `0x${string}` {
+export function encode(): `0x${string}` {
   const buf = new Uint8Array(32)
 
   // [0..3] TAG
@@ -54,33 +49,11 @@ export function encode(options?: encode.Options): `0x${string}` {
   // [4] version
   buf[4] = VERSION
 
-  // [5..10] fingerprint (6 bytes)
-  if (options?.fingerprint) {
-    const fpInput =
-      typeof options.fingerprint === 'string'
-        ? Bytes.fromString(options.fingerprint)
-        : Hex.toBytes(options.fingerprint)
-    const fpHash = Hash.keccak256(fpInput, { as: 'Bytes' })
-    buf.set(fpHash.slice(0, 6), 5)
-  }
-
-  // [11..31] nonce (21 random bytes)
-  const nonce = crypto.getRandomValues(new Uint8Array(21))
-  buf.set(nonce, 11)
+  // [5..31] nonce (27 random bytes)
+  const nonce = crypto.getRandomValues(new Uint8Array(27))
+  buf.set(nonce, 5)
 
   return Hex.fromBytes(buf) as `0x${string}`
-}
-
-export declare namespace encode {
-  type Options = {
-    /**
-     * Server domain or agent identifier for grouping analytics.
-     *
-     * Accepts a string (hashed via keccak256) or raw hex bytes.
-     * Only the first 6 bytes of the hash are used.
-     */
-    fingerprint?: string | `0x${string}` | undefined
-  }
 }
 
 /**
@@ -114,28 +87,25 @@ export function isMppMemo(memo: `0x${string}`): boolean {
  * ```ts
  * import * as Attribution from './Attribution.js'
  *
- * const memo = Attribution.encode({ fingerprint: 'api.myapp.com' })
+ * const memo = Attribution.encode()
  * const decoded = Attribution.decode(memo)
- * // { version: 1, fingerprint: '0x...', nonce: '0x...' }
+ * // { version: 1, nonce: '0x...' }
  * ```
  */
 export function decode(memo: `0x${string}`): decode.Result | null {
   if (!isMppMemo(memo)) return null
 
   const version = Number.parseInt(memo.slice(10, 12), 16)
-  const fingerprint = `0x${memo.slice(12, 24)}` as `0x${string}` // bytes 5..10
-  const nonce = `0x${memo.slice(24)}` as `0x${string}` // bytes 11..31
+  const nonce = `0x${memo.slice(12)}` as `0x${string}` // bytes 5..31
 
-  return { version, fingerprint, nonce }
+  return { version, nonce }
 }
 
 export declare namespace decode {
   type Result = {
     /** Memo version (currently always 1). */
     version: number
-    /** 6-byte fingerprint hex (truncated keccak256 of domain/agent id). */
-    fingerprint: `0x${string}`
-    /** 21-byte random nonce hex. */
+    /** 27-byte random nonce hex. */
     nonce: `0x${string}`
   }
 }
