@@ -13,7 +13,7 @@
 //   POST (voucher)     → Receive incremental voucher updates mid-stream
 //
 // The server never stores payment state in memory variables — it uses
-// `Storage.memory()` which is shared between the stream method and the
+// `Store.memory()` which is shared between the stream method and the
 // SSE transport so that mid-stream voucher POSTs can update channel state
 // while the SSE generator is running.
 //
