@@ -22,12 +22,13 @@ export type Sse = Transport.Sse<Sse_core.StreamController>
  * - Fallback to standard HTTP receipt handling for plain Response
  */
 export function sse(options: sse.Options): Sse {
-  const { pollingOnly } = options
-  // When pollingOnly is true, strip waitForUpdate so the SSE charge loop
+  const { pollingInterval, poll } = options
+
+  // When `poll` is true, strip `waitForUpdate` so the SSE charge loop
   // falls back to polling. This is needed for runtimes like Cloudflare Workers
   // where resolving promises across request contexts is not supported.
   const storage = (() => {
-    if (!pollingOnly) return options.storage
+    if (!poll) return options.storage
     const { waitForUpdate: _, ...storage } = options.storage
     return storage
   })()
@@ -81,6 +82,7 @@ export function sse(options: sse.Options): Sse {
           channelId: ctx.channelId,
           challengeId,
           tickCost: ctx.tickCost,
+          pollIntervalMs: pollingInterval,
           generate,
         })
         return Sse_core.toResponse(stream)
@@ -103,7 +105,9 @@ export declare namespace sse {
      *
      * @default false
      */
-    pollingOnly?: boolean | undefined
+    poll?: boolean | undefined
+    /** Polling interval (in milliseconds). @default 10 */
+    pollingInterval?: number | undefined
     /** Storage backend for channel state. */
     storage: ChannelStorage
   }
