@@ -1,4 +1,4 @@
-import { MethodIntents } from 'mpay/tempo'
+import { MethodIntents } from 'mppx/tempo'
 import { describe, expect, expectTypeOf, test } from 'vitest'
 
 describe('charge', () => {

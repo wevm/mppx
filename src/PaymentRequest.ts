@@ -8,7 +8,7 @@ import type * as z from './zod.js'
  *
  * @example
  * ```ts
- * import { Request } from 'mpay'
+ * import { Request } from 'mppx'
  *
  * const request: Request.Request = {
  *   amount: '1000000',
@@ -28,7 +28,7 @@ export type Request<request extends Record<string, unknown> = Record<string, unk
  *
  * @example
  * ```ts
- * import { Request } from 'mpay'
+ * import { Request } from 'mppx'
  *
  * const request = Request.deserialize(serialized)
  * ```
@@ -46,7 +46,7 @@ export function deserialize(encoded: string): Request {
  *
  * @example
  * ```ts
- * import { Request } from 'mpay'
+ * import { Request } from 'mppx'
  *
  * const request = Request.from({
  *   amount: '1000000',
@@ -68,8 +68,8 @@ export function from<const request extends Request>(request: request): request {
  *
  * @example
  * ```ts
- * import { Request } from 'mpay'
- * import { Intents } from 'mpay/tempo'
+ * import { Request } from 'mppx'
+ * import { Intents } from 'mppx/tempo'
  *
  * const request = Request.fromIntent(Intents.charge, {
  *   amount: '1000000',
@@ -95,7 +95,7 @@ export function fromIntent<const intent extends MethodIntent.MethodIntent>(
  *
  * @example
  * ```ts
- * import { Request } from 'mpay'
+ * import { Request } from 'mppx'
  *
  * const serialized = Request.serialize(request)
  * // => "eyJhbW91bnQiOiIxMDAwMDAwIiwiY3VycmVuY3kiOiIweC4uLiJ9"

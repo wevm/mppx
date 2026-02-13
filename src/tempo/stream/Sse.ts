@@ -27,7 +27,7 @@ export function formatReceiptEvent(receipt: StreamReceipt): string {
  *
  * Emitted when the channel balance is exhausted mid-stream.
  * The client responds by sending a new voucher credential to
- * any mpay-protected endpoint.
+ * any mppx-protected endpoint.
  */
 export function formatNeedVoucherEvent(params: NeedVoucherEvent): string {
   return `event: payment-need-voucher\ndata: ${JSON.stringify(params)}\n\n`
@@ -44,7 +44,7 @@ export type SseEvent =
 /**
  * Parse a raw SSE event string into a typed event.
  *
- * Handles the three event types used by mpay streaming:
+ * Handles the three event types used by mppx streaming:
  * - `message` (default / no event field) — application data
  * - `payment-need-voucher` — balance exhausted, client should send voucher
  * - `payment-receipt` — final receipt

@@ -30,7 +30,7 @@ const transferWithMemoSelector = /*#__PURE__*/ toFunctionSelector(
  *
  * @example
  * ```ts
- * import { tempo } from 'mpay/server'
+ * import { tempo } from 'mppx/server'
  *
  * const charge = tempo.charge()
  * ```

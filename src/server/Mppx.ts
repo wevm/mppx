@@ -14,7 +14,7 @@ export type Methods = readonly (MethodIntent.AnyServer | readonly MethodIntent.A
 /**
  * Payment handler.
  */
-export type Mpay<
+export type Mppx<
   methods extends Methods = Methods,
   transport extends Transport.AnyTransport = Transport.Http,
 > = {
@@ -59,9 +59,9 @@ type Handlers<
  *
  * @example
  * ```ts
- * import { Mpay, tempo } from 'mpay/server'
+ * import { Mppx, tempo } from 'mppx/server'
  *
- * const payment = Mpay.create({
+ * const payment = Mppx.create({
  *   methods: [tempo()],
  *   secretKey: process.env.PAYMENT_SECRET_KEY,
  * })
@@ -70,7 +70,7 @@ type Handlers<
 export function create<
   const methods extends Methods,
   const transport extends Transport.AnyTransport = Transport.Http,
->(config: create.Config<methods, transport>): Mpay<methods, transport> {
+>(config: create.Config<methods, transport>): Mppx<methods, transport> {
   const {
     realm = 'MPP Payment',
     secretKey = 'tmp',
@@ -330,12 +330,12 @@ declare namespace IntentFn {
  * @example
  * ```ts
  * import * as http from 'node:http'
- * import { Mpay } from 'mpay/server'
+ * import { Mppx } from 'mppx/server'
  *
- * const payment = Mpay.create({ ... })
+ * const payment = Mppx.create({ ... })
  *
  * http.createServer(async (req, res) => {
- *   const result = await Mpay.toNodeListener(
+ *   const result = await Mppx.toNodeListener(
  *     payment.charge({
  *       amount: '1', currency: '...', recipient: '0x...',
  *     }),

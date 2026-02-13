@@ -16,7 +16,7 @@ import * as defaults from '../internal/defaults.js'
  *
  * @example
  * ```ts
- * import { tempo } from 'mpay/client'
+ * import { tempo } from 'mppx/client'
  * import { privateKeyToAccount } from 'viem/accounts'
  *
  * const charge = tempo.charge({

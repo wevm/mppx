@@ -1,6 +1,6 @@
 import { EventEmitter } from 'node:events'
 import type { IncomingMessage, ServerResponse } from 'node:http'
-import { Request } from 'mpay/server'
+import { Request } from 'mppx/server'
 import { describe, expect, test } from 'vitest'
 
 function createMockRequest(options: {

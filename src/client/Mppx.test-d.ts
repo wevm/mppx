@@ -4,33 +4,33 @@ import * as MethodIntent from '../MethodIntent.js'
 import { charge } from '../tempo/client/Charge.js'
 import * as Intents from '../tempo/Intents.js'
 import * as z from '../zod.js'
-import * as Mpay from './Mpay.js'
+import * as Mppx from './Mppx.js'
 
-describe('Mpay', () => {
+describe('Mppx', () => {
   test('has methods array', () => {
     const method = charge({
       account: {} as Account,
     })
-    const mpay = Mpay.create({ methods: [method] })
+    const mppx = Mppx.create({ methods: [method] })
 
-    expectTypeOf(mpay.methods).toMatchTypeOf<readonly MethodIntent.AnyClient[]>()
-    expectTypeOf(mpay.methods[0]?.name).toEqualTypeOf<'charge'>()
+    expectTypeOf(mppx.methods).toMatchTypeOf<readonly MethodIntent.AnyClient[]>()
+    expectTypeOf(mppx.methods[0]?.name).toEqualTypeOf<'charge'>()
   })
 
   test('has createCredential function', () => {
     const method = charge({
       account: {} as Account,
     })
-    const mpay = Mpay.create({ methods: [method] })
+    const mppx = Mppx.create({ methods: [method] })
 
-    expectTypeOf(mpay.createCredential).toBeFunction()
-    expectTypeOf(mpay.createCredential).returns.toMatchTypeOf<Promise<string>>()
+    expectTypeOf(mppx.createCredential).toBeFunction()
+    expectTypeOf(mppx.createCredential).returns.toMatchTypeOf<Promise<string>>()
   })
 })
 
 describe('create.Config', () => {
   test('requires methods array', () => {
-    type Config = Mpay.create.Config
+    type Config = Mppx.create.Config
 
     expectTypeOf<Config>().toHaveProperty('methods')
   })
@@ -67,14 +67,14 @@ describe('Method.toClient', () => {
   })
 })
 
-describe('Mpay with context', () => {
+describe('Mppx with context', () => {
   test('createCredential accepts context matching method schema', () => {
     const method = charge()
 
-    const mpay = Mpay.create({ methods: [method] })
+    const mppx = Mppx.create({ methods: [method] })
 
-    expectTypeOf(mpay.createCredential).toBeFunction()
-    expectTypeOf(mpay.createCredential).returns.toMatchTypeOf<Promise<string>>()
+    expectTypeOf(mppx.createCredential).toBeFunction()
+    expectTypeOf(mppx.createCredential).returns.toMatchTypeOf<Promise<string>>()
   })
 
   test('createCredential context is optional when account provided at creation', () => {
@@ -82,9 +82,9 @@ describe('Mpay with context', () => {
       account: {} as Account,
     })
 
-    const mpay = Mpay.create({ methods: [method] })
+    const mppx = Mppx.create({ methods: [method] })
 
-    expectTypeOf(mpay.createCredential).toBeFunction()
-    expectTypeOf(mpay.createCredential).returns.toMatchTypeOf<Promise<string>>()
+    expectTypeOf(mppx.createCredential).toBeFunction()
+    expectTypeOf(mppx.createCredential).returns.toMatchTypeOf<Promise<string>>()
   })
 })

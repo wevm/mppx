@@ -5,7 +5,7 @@ Multiple paid requests over a single payment channel, then close and settle. Dem
 ## Setup
 
 ```bash
-npx gitpick wevm/mpay/examples/session/multi-fetch
+npx gitpick wevm/mppx/examples/session/multi-fetch
 pnpm i
 ```
 

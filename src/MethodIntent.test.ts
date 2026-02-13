@@ -1,4 +1,4 @@
-import { Intent, MethodIntent, z } from 'mpay'
+import { Intent, MethodIntent, z } from 'mppx'
 import { describe, expect, expectTypeOf, test } from 'vitest'
 
 describe('from', () => {

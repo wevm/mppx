@@ -5,7 +5,7 @@ settings:
   excludeLinksFromLockfile: false
 
 overrides:
-  mpay: workspace:*
+  mppx: workspace:*
   ox: ^0.12.0
   viem: ^2.45.3
 
@@ -89,7 +89,7 @@ importers:
       '@types/node':
         specifier: latest
         version: 25.2.2
-      mpay:
+      mppx:
         specifier: workspace:*
         version: link:../..
       typescript:
@@ -110,7 +110,7 @@ importers:
       '@types/node':
         specifier: latest
         version: 25.2.3
-      mpay:
+      mppx:
         specifier: workspace:*
         version: link:../../..
       tsx:
@@ -134,7 +134,7 @@ importers:
       '@types/node':
         specifier: latest
         version: 25.2.3
-      mpay:
+      mppx:
         specifier: workspace:*
         version: link:../../..
       tsx:

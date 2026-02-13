@@ -1,9 +1,9 @@
-import { Mpay, tempo } from 'mpay/client'
+import { Mppx, tempo } from 'mppx/client'
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts'
 
 const account = privateKeyToAccount(generatePrivateKey())
 
-Mpay.create({
+Mppx.create({
   methods: [tempo({ account })],
 })
 

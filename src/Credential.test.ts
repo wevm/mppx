@@ -1,4 +1,4 @@
-import { Challenge, Credential } from 'mpay'
+import { Challenge, Credential } from 'mppx'
 import { describe, expect, test } from 'vitest'
 
 const challenge = Challenge.from({

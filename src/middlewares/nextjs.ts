@@ -1,5 +1,5 @@
-import * as Mpay_core from '../server/Mpay.js'
-import * as Mpay_internal from './internal/mpay.js'
+import * as Mppx_core from '../server/Mppx.js'
+import * as Mppx_internal from './internal/mppx.js'
 
 export * from '../server/Methods.js'
 
@@ -7,7 +7,7 @@ type RouteHandler = (request: Request) => Promise<Response> | Response
 
 type NextjsHandler = (handler: RouteHandler) => RouteHandler
 
-export namespace Mpay {
+export namespace Mppx {
   /**
    * Creates a Next.js-aware payment handler where each intent
    * returns a wrapper that accepts a route handler.
@@ -15,19 +15,19 @@ export namespace Mpay {
    * @example
    * ```ts
    * // app/api/premium/route.ts
-   * import { Mpay, tempo } from 'mpay/nextjs'
+   * import { Mppx, tempo } from 'mppx/nextjs'
    *
-   * const mpay = Mpay.create({ methods: [tempo()] })
+   * const mppx = Mppx.create({ methods: [tempo()] })
    *
-   * export const GET = mpay.charge({ amount: '1' })(() =>
+   * export const GET = mppx.charge({ amount: '1' })(() =>
    *   Response.json({ data: 'paid content' }),
    * )
    * ```
    */
-  export function create<const methods extends Mpay_core.Methods>(
-    config: Mpay_core.create.Config<methods>,
-  ): Mpay_internal.Wrap<Mpay_core.Mpay<methods>, NextjsHandler> {
-    return Mpay_internal.wrap(Mpay_core.create(config), (intent, options) => {
+  export function create<const methods extends Mppx_core.Methods>(
+    config: Mppx_core.create.Config<methods>,
+  ): Mppx_internal.Wrap<Mppx_core.Mppx<methods>, NextjsHandler> {
+    return Mppx_internal.wrap(Mppx_core.create(config), (intent, options) => {
       return (handler: RouteHandler) => payment(intent, options, handler)
     })
   }
@@ -42,17 +42,17 @@ export namespace Mpay {
  * @example
  * ```ts
  * // app/api/premium/route.ts
- * import { Mpay } from 'mpay/server'
- * import { payment } from 'mpay/nextjs'
+ * import { Mppx } from 'mppx/server'
+ * import { payment } from 'mppx/nextjs'
  *
- * const mpay = Mpay.create({ methods: [tempo()] })
+ * const mppx = Mppx.create({ methods: [tempo()] })
  *
- * export const GET = payment(mpay.charge, { amount: '1' }, () =>
+ * export const GET = payment(mppx.charge, { amount: '1' }, () =>
  *   Response.json({ data: 'paid content' }),
  * )
  * ```
  */
-export function payment<const intent extends Mpay_internal.AnyIntentFn>(
+export function payment<const intent extends Mppx_internal.AnyIntentFn>(
   intent: intent,
   options: intent extends (options: infer options) => any ? options : never,
   handler: RouteHandler,

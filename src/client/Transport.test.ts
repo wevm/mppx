@@ -1,6 +1,6 @@
-import { Challenge, Credential, Mcp } from 'mpay'
-import { Transport } from 'mpay/client'
-import { MethodIntents as Intents } from 'mpay/tempo'
+import { Challenge, Credential, Mcp } from 'mppx'
+import { Transport } from 'mppx/client'
+import { MethodIntents as Intents } from 'mppx/tempo'
 import { describe, expect, test } from 'vitest'
 
 const realm = 'api.example.com'

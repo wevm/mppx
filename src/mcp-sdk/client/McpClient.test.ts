@@ -2,9 +2,9 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { McpError } from '@modelcontextprotocol/sdk/types.js'
-import { Challenge, Mcp as core_Mcp } from 'mpay'
-import { tempo as tempo_client } from 'mpay/client'
-import { Mpay as Mpay_server, tempo as tempo_server } from 'mpay/server'
+import { Challenge, Mcp as core_Mcp } from 'mppx'
+import { tempo as tempo_client } from 'mppx/client'
+import { Mppx as Mppx_server, tempo as tempo_server } from 'mppx/server'
 import { createClient } from 'viem'
 import { afterEach, beforeEach, describe, expect, test } from 'vitest'
 import { accounts, asset, chain, http, client as testClient } from '~test/tempo/viem.js'
@@ -20,7 +20,7 @@ describe('McpClient.wrap', () => {
   let clientTransport: InstanceType<typeof InMemoryTransport>
   let serverTransport: InstanceType<typeof InMemoryTransport>
 
-  const mpayServer = Mpay_server.create({
+  const mppxServer = Mppx_server.create({
     methods: [
       tempo_server.charge({
         getClient: () => testClient,
@@ -41,7 +41,7 @@ describe('McpClient.wrap', () => {
       'premium_tool',
       { description: 'A tool that requires payment' },
       async (extra) => {
-        const result = await mpayServer.charge({
+        const result = await mppxServer.charge({
           amount: '1',
           currency: asset,
           expires: new Date(Date.now() + 60_000).toISOString(),

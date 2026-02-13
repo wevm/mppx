@@ -81,7 +81,7 @@ export type WithReceipt<transport extends AnyTransport = Http> = WithReceiptOver
  *
  * @example
  * ```ts
- * import { Transport } from 'mpay/server'
+ * import { Transport } from 'mppx/server'
  *
  * const custom = Transport.from({
  *   name: 'custom',

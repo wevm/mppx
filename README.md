@@ -1,9 +1,9 @@
-# mpay
+# mppx
 
 TypeScript SDK for the [**Machine Payments Protocol**](https://machinepayments.dev).
 
-[![npm](https://img.shields.io/npm/v/mpay.svg)](https://www.npmjs.com/package/mpay)
-[![License](https://img.shields.io/npm/l/mpay.svg)](LICENSE)
+[![npm](https://img.shields.io/npm/v/mppx.svg)](https://www.npmjs.com/package/mppx)
+[![License](https://img.shields.io/npm/l/mppx.svg)](LICENSE)
 
 ## Documentation
 
@@ -12,13 +12,7 @@ Full documentation, API reference, and guides are available at **[machinepayment
 ## Install
 
 ```bash
-npm i mpay
-```
-```bash
-pnpm add mpay
-```
-```bash
-bun add mpay
+npm i mppx
 ```
 
 ## Quick Start
@@ -26,9 +20,9 @@ bun add mpay
 ### Server
 
 ```ts
-import { Mpay, tempo } from 'mpay/server'
+import { Mppx, tempo } from 'mppx/server'
 
-const mpay = Mpay.create({
+const mppx = Mppx.create({
   methods: [
     tempo({
       currency: '0x20c0000000000000000000000000000000000001',
@@ -38,7 +32,7 @@ const mpay = Mpay.create({
 })
 
 export async function handler(request: Request) {
-  const response = await mpay.charge({ amount: '1' })(request)
+  const response = await mppx.charge({ amount: '1' })(request)
 
   if (response.status === 402) return response.challenge
 
@@ -50,9 +44,9 @@ export async function handler(request: Request) {
 
 ```ts
 import { privateKeyToAccount } from 'viem/accounts'
-import { Mpay, tempo } from 'mpay/client'
+import { Mppx, tempo } from 'mppx/client'
 
-Mpay.create({
+Mppx.create({
   methods: [tempo({ account: privateKeyToAccount('0x...') })],
 })
 
@@ -69,43 +63,37 @@ const res = await fetch('https://api.example.com/resource')
 | [session/sse](./examples/session/sse/) | Pay-per-token LLM streaming with SSE |
 
 ```bash
-npx gitpick wevm/mpay/examples/basic
-```
-```bash
-pnpx gitpick wevm/mpay/examples/basic
-```
-```bash
-bunx gitpick wevm/mpay/examples/basic
+npx gitpick wevm/mppx/examples/basic
 ```
 
 ## CLI
 
-`mpay` includes a basic CLI for making HTTP requests with automatic payment handling.
+`mppx` includes a basic CLI for making HTTP requests with automatic payment handling.
 
 ```bash
 # create account - stored in keychain, autofunded on testnet
-pnpm mpay account create
+mppx account create
 
 # make request - automatic payment handling, curl-like api
-pnpm mpay example.com
+mppx example.com
 ```
 
 <details>
-<summary><code>mpay --help</code></summary>
+<summary><code>mppx --help</code></summary>
 
 ```
-mpay/0.1.0
+mppx/0.1.0
 
 Usage:
-  $ mpay [url]
+  $ mppx [url]
 
 Commands:
   [url]             Make HTTP request with automatic payment
   account [action]  Manage accounts (create, default, delete, fund, list, view)
 
 For more info, run any command with the `--help` flag:
-  $ mpay --help
-  $ mpay account --help
+  $ mppx --help
+  $ mppx account --help
 
 Actions:
   create   Create new account
@@ -116,12 +104,12 @@ Actions:
   view     View account address
 
 Options:
-  -a, --account <name>   Account name (env: MPAY_ACCOUNT)
+  -a, --account <name>   Account name (env: MPPX_ACCOUNT)
   -d, --data <data>      Send request body (implies POST unless -X is set)
   -f, --fail             Fail silently on HTTP errors (exit 22)
   -i, --include          Include response headers in output
   -k, --insecure         Skip TLS certificate verification (true for localhost/.local)
-  -r, --rpc-url <url>    RPC endpoint, defaults to public RPC for chain (env: MPAY_RPC_URL)
+  -r, --rpc-url <url>    RPC endpoint, defaults to public RPC for chain (env: MPPX_RPC_URL)
   -s, --silent           Silent mode (suppress progress and info)
   -v, --verbose          Show request/response headers
   -A, --user-agent <ua>  Set User-Agent header
@@ -136,49 +124,43 @@ Options:
   -h, --help             Display this message
 
 Examples:
-mpay example.com/content
-mpay example.com/api --json '{"key":"value"}'
+mppx example.com/content
+mppx example.com/api --json '{"key":"value"}'
 ```
 
 </details>
 
-You can also install globally to use the `mpay` CLI from anywhere:
+You can also install globally to use the `mppx` CLI from anywhere:
 
 ```bash
-npm i -g mpay
-```
-```bash
-pnpm add -g mpay
-```
-```bash
-bun add -g mpay
+npm i -g mppx
 ```
 
 ## Payments Proxy
 
-`mpay` exports a `Proxy` server handler so that you can create or define a 402-protected payments proxy for any API.
+`mppx` exports a `Proxy` server handler so that you can create or define a 402-protected payments proxy for any API.
 
 ```ts
-import { openai, stripe, Proxy } from 'mpay/proxy'
-import { Mpay, tempo } from 'mpay/server'
+import { openai, stripe, Proxy } from 'mppx/proxy'
+import { Mppx, tempo } from 'mppx/server'
 
-const mpay = Mpay.create({ methods: [tempo()] })
+const mppx = Mppx.create({ methods: [tempo()] })
 
 const proxy = Proxy.create({
   services: [
     openai({
       apiKey: 'sk-...',
       routes: {
-        'POST /v1/chat/completions': mpay.charge({ amount: '0.05' }),
-        'POST /v1/completions': mpay.stream({ amount: '0.0001' }),
-        'GET /v1/models': mpay.free(),
+        'POST /v1/chat/completions': mppx.charge({ amount: '0.05' }),
+        'POST /v1/completions': mppx.stream({ amount: '0.0001' }),
+        'GET /v1/models': mppx.free(),
       },
     }),
     stripe({
       apiKey: 'sk-...',
       routes: {
-        'POST /v1/charges': mpay.charge({ amount: '0.01' }),
-        'GET /v1/customers/:id': mpay.free(),
+        'POST /v1/charges': mppx.charge({ amount: '0.01' }),
+        'GET /v1/customers/:id': mppx.free(),
       },
     }),
   ],

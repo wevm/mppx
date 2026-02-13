@@ -1,7 +1,7 @@
 export * as Expires from '../Expires.js'
 export * as Store from '../Store.js'
 export { tempo } from './Methods.js'
-export * as Mpay from './Mpay.js'
+export * as Mppx from './Mppx.js'
 export * as NodeListener from './NodeListener.js'
 export * as Request from './Request.js'
 export * as Response from './Response.js'

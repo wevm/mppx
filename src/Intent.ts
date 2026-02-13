@@ -17,7 +17,7 @@ export type Intent = {
  *
  * @example
  * ```ts
- * import { z } from 'mpay'
+ * import { z } from 'mppx'
  *
  * const charge = Intent.from({
  *   name: 'charge',

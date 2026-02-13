@@ -1,6 +1,6 @@
-import { Receipt } from 'mpay'
-import { tempo } from 'mpay/client'
-import { Mpay as Mpay_server, tempo as tempo_server } from 'mpay/server'
+import { Receipt } from 'mppx'
+import { tempo } from 'mppx/client'
+import { Mppx as Mppx_server, tempo as tempo_server } from 'mppx/server'
 import { createClient } from 'viem'
 import { describe, expect, test } from 'vitest'
 import * as Http from '~test/Http.js'
@@ -10,7 +10,7 @@ import * as Fetch from './Fetch.js'
 const realm = 'api.example.com'
 const secretKey = 'test-secret-key'
 
-const server = Mpay_server.create({
+const server = Mppx_server.create({
   methods: [
     tempo_server({
       getClient: () => client,
@@ -32,7 +32,7 @@ describe('Fetch.from', () => {
     })
 
     const httpServer = await Http.createServer(async (req, res) => {
-      const result = await Mpay_server.toNodeListener(
+      const result = await Mppx_server.toNodeListener(
         server.charge({
           amount: '1',
           currency: asset,
@@ -74,7 +74,7 @@ describe('Fetch.from', () => {
     })
 
     const httpServer = await Http.createServer(async (req, res) => {
-      const result = await Mpay_server.toNodeListener(
+      const result = await Mppx_server.toNodeListener(
         server.charge({
           amount: '1',
           currency: asset,
@@ -108,7 +108,7 @@ describe('Fetch.from', () => {
     })
 
     const httpServer = await Http.createServer(async (req, res) => {
-      const result = await Mpay_server.toNodeListener(
+      const result = await Mppx_server.toNodeListener(
         server.charge({
           amount: '1',
           currency: asset,
@@ -138,7 +138,7 @@ describe('Fetch.from', () => {
     })
 
     const httpServer = await Http.createServer(async (req, res) => {
-      const result = await Mpay_server.toNodeListener(
+      const result = await Mppx_server.toNodeListener(
         server.charge({
           amount: '1',
           currency: asset,
@@ -180,7 +180,7 @@ describe('Fetch.from', () => {
   })
 
   test('behavior: fee payer', async () => {
-    const serverWithFeePayer = Mpay_server.create({
+    const serverWithFeePayer = Mppx_server.create({
       methods: [
         tempo_server.charge({
           feePayer: accounts[0],
@@ -201,7 +201,7 @@ describe('Fetch.from', () => {
     })
 
     const httpServer = await Http.createServer(async (req, res) => {
-      const result = await Mpay_server.toNodeListener(
+      const result = await Mppx_server.toNodeListener(
         serverWithFeePayer.charge({
           amount: '1',
           currency: asset,
@@ -246,7 +246,7 @@ describe('Fetch.polyfill', () => {
     })
 
     const httpServer = await Http.createServer(async (req, res) => {
-      const result = await Mpay_server.toNodeListener(
+      const result = await Mppx_server.toNodeListener(
         server.charge({
           amount: '1',
           currency: asset,

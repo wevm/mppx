@@ -4,17 +4,17 @@
     "types": ["node", "vitest/globals", "vitest/importMeta"],
     "paths": {
       "~test/*": ["./*"],
-      "mpay": ["../src/index.ts"],
-      "mpay/client": ["../src/client/index.ts"],
-      "mpay/proxy": ["../src/proxy/index.ts"],
-      "mpay/server": ["../src/server/index.ts"],
-      "mpay/tempo": ["../src/tempo/index.ts"],
-      "mpay/hono": ["../src/middlewares/hono.ts"],
-      "mpay/express": ["../src/middlewares/express.ts"],
-      "mpay/nextjs": ["../src/middlewares/nextjs.ts"],
-      "mpay/elysia": ["../src/middlewares/elysia.ts"],
-      "mpay/mcp-sdk/client": ["../src/mcp-sdk/client/index.ts"],
-      "mpay/mcp-sdk/server": ["../src/mcp-sdk/server/index.ts"]
+      "mppx": ["../src/index.ts"],
+      "mppx/client": ["../src/client/index.ts"],
+      "mppx/proxy": ["../src/proxy/index.ts"],
+      "mppx/server": ["../src/server/index.ts"],
+      "mppx/tempo": ["../src/tempo/index.ts"],
+      "mppx/hono": ["../src/middlewares/hono.ts"],
+      "mppx/express": ["../src/middlewares/express.ts"],
+      "mppx/nextjs": ["../src/middlewares/nextjs.ts"],
+      "mppx/elysia": ["../src/middlewares/elysia.ts"],
+      "mppx/mcp-sdk/client": ["../src/mcp-sdk/client/index.ts"],
+      "mppx/mcp-sdk/server": ["../src/mcp-sdk/server/index.ts"]
     }
   },
   "include": [

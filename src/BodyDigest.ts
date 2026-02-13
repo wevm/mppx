@@ -5,7 +5,7 @@ import { Base64, Bytes, Hash } from 'ox'
  *
  * @example
  * ```ts
- * import { BodyDigest } from 'mpay'
+ * import { BodyDigest } from 'mppx'
  *
  * const digest: BodyDigest.BodyDigest = 'sha-256=X48E9qOokqqrvdts8nOJRJN3OWDUoyWxBf7kbu9DBPE'
  * ```
@@ -20,7 +20,7 @@ export type BodyDigest = `sha-256=${string}`
  *
  * @example
  * ```ts
- * import { BodyDigest } from 'mpay'
+ * import { BodyDigest } from 'mppx'
  *
  * const digest = BodyDigest.compute({ amount: '1000' })
  * // => 'sha-256=X48E9qOokqqrvdts8nOJRJN3OWDUoyWxBf7kbu9DBPE'
@@ -43,7 +43,7 @@ export function compute(body: Record<string, unknown> | string): BodyDigest {
  *
  * @example
  * ```ts
- * import { BodyDigest } from 'mpay'
+ * import { BodyDigest } from 'mppx'
  *
  * const isValid = BodyDigest.verify(digest, '{"amount":"1000"}')
  * ```

@@ -9,7 +9,7 @@ export type Methods = readonly (MethodIntent.AnyClient | readonly MethodIntent.A
 /**
  * Client-side payment handler.
  */
-export type Mpay<
+export type Mppx<
   methods extends Methods = Methods,
   transport extends Transport.Transport = Transport.Transport,
 > = {
@@ -34,14 +34,14 @@ export type Mpay<
  *
  * @example
  * ```ts
- * import { Mpay, tempo } from 'mpay/client'
+ * import { Mppx, tempo } from 'mppx/client'
  *
- * const mpay = Mpay.create({
+ * const mppx = Mppx.create({
  *   methods: [tempo({ account })],
  * })
  *
  * // Use the returned fetch — handles 402 automatically
- * const res = await mpay.fetch('/resource')
+ * const res = await mppx.fetch('/resource')
  *
  * // Or use globalThis.fetch (polyfilled by default)
  * const res2 = await fetch('/resource')
@@ -53,7 +53,7 @@ export function create<
     RequestInit,
     Response
   >,
->(config: create.Config<methods, transport>): Mpay<methods, transport> {
+>(config: create.Config<methods, transport>): Mppx<methods, transport> {
   const { polyfill = true, transport = Transport.http() as transport } = config
 
   const methods = config.methods.flat() as unknown as FlattenMethods<methods>
@@ -92,13 +92,13 @@ export function create<
  *
  * @example
  * ```ts
- * import { Mpay, tempo } from 'mpay/client'
+ * import { Mppx, tempo } from 'mppx/client'
  *
- * Mpay.create({ methods: [tempo({ account })] })
+ * Mppx.create({ methods: [tempo({ account })] })
  *
  * // ... use payment-aware fetch ...
  *
- * Mpay.restore()
+ * Mppx.restore()
  * ```
  */
 export function restore(): void {

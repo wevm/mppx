@@ -5,7 +5,7 @@ Pay-per-token LLM streaming using the SSE handler API. The server uses `tempo.Ss
 ## Setup
 
 ```bash
-npx gitpick wevm/mpay/examples/session/sse
+npx gitpick wevm/mppx/examples/session/sse
 pnpm i
 ```
 

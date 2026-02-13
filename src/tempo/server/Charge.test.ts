@@ -1,6 +1,6 @@
-import { Challenge, Credential, Receipt } from 'mpay'
-import { Mpay as Mpay_client, tempo as tempo_client } from 'mpay/client'
-import { Mpay as Mpay_server, tempo as tempo_server } from 'mpay/server'
+import { Challenge, Credential, Receipt } from 'mppx'
+import { Mppx as Mppx_client, tempo as tempo_client } from 'mppx/client'
+import { Mppx as Mppx_server, tempo as tempo_server } from 'mppx/server'
 import type { Hex } from 'ox'
 import { Actions } from 'viem/tempo'
 import { describe, expect, test } from 'vitest'
@@ -11,7 +11,7 @@ import * as Attribution from '../Attribution.js'
 const realm = 'api.example.com'
 const secretKey = 'test-secret-key'
 
-const server = Mpay_server.create({
+const server = Mppx_server.create({
   methods: [
     tempo_server.charge({
       getClient() {
@@ -29,7 +29,7 @@ describe('tempo', () => {
   describe('intent: charge; type: hash', () => {
     test('default', async () => {
       const httpServer = await Http.createServer(async (req, res) => {
-        const result = await Mpay_server.toNodeListener(
+        const result = await Mppx_server.toNodeListener(
           server.charge({ amount: '1', decimals: 6 }),
         )(req, res)
         if (result.status === 402) return
@@ -91,7 +91,7 @@ describe('tempo', () => {
       const overrideExpires = new Date(Date.now() + 60_000).toISOString()
 
       const httpServer = await Http.createServer(async (req, res) => {
-        const result = await Mpay_server.toNodeListener(
+        const result = await Mppx_server.toNodeListener(
           server.charge({
             amount: '1',
             currency: overrideCurrency,
@@ -147,7 +147,7 @@ describe('tempo', () => {
       const wrongRecipient = accounts[2].address
 
       const httpServer = await Http.createServer(async (req, res) => {
-        const result = await Mpay_server.toNodeListener(server.charge({ amount: '1' }))(req, res)
+        const result = await Mppx_server.toNodeListener(server.charge({ amount: '1' }))(req, res)
         if (result.status === 402) return
         res.end('OK')
       })
@@ -186,7 +186,7 @@ describe('tempo', () => {
 
     test('behavior: rejects expired request', async () => {
       const httpServer = await Http.createServer(async (req, res) => {
-        const result = await Mpay_server.toNodeListener(
+        const result = await Mppx_server.toNodeListener(
           server.charge({
             amount: '1',
             expires: new Date(Date.now() - 1000).toISOString(),
@@ -229,7 +229,7 @@ describe('tempo', () => {
     })
 
     test('behavior: rejects when no client configured for chainId', async () => {
-      const server = Mpay_server.create({
+      const server = Mppx_server.create({
         methods: [
           tempo_server.charge({
             getClient({ chainId }: { chainId?: number | undefined }) {
@@ -246,7 +246,7 @@ describe('tempo', () => {
 
       const httpServer = await Http.createServer(async (req, res) => {
         try {
-          const result = await Mpay_server.toNodeListener(
+          const result = await Mppx_server.toNodeListener(
             server.charge({
               amount: '1',
               chainId: 123456,
@@ -272,7 +272,7 @@ describe('tempo', () => {
     test('behavior: rejects when client not configured for chainId', async () => {
       const httpServer = await Http.createServer(async (req, res) => {
         try {
-          const result = await Mpay_server.toNodeListener(
+          const result = await Mppx_server.toNodeListener(
             server.charge({
               amount: '1',
               chainId: 999999,
@@ -296,9 +296,9 @@ describe('tempo', () => {
     })
   })
 
-  describe('intent: charge; type: transaction; via Mpay', () => {
+  describe('intent: charge; type: transaction; via Mppx', () => {
     test('default', async () => {
-      const mpay = Mpay_client.create({
+      const mppx = Mppx_client.create({
         polyfill: false,
         methods: [
           tempo_client({
@@ -311,7 +311,7 @@ describe('tempo', () => {
       })
 
       const httpServer = await Http.createServer(async (req, res) => {
-        const result = await Mpay_server.toNodeListener(
+        const result = await Mppx_server.toNodeListener(
           server.charge({
             amount: '1',
             currency: asset,
@@ -325,7 +325,7 @@ describe('tempo', () => {
       const response = await fetch(httpServer.url)
       expect(response.status).toBe(402)
 
-      const credential = await mpay.createCredential(response)
+      const credential = await mppx.createCredential(response)
 
       {
         const response = await fetch(httpServer.url, {
@@ -356,7 +356,7 @@ describe('tempo', () => {
       const overrideCurrency = asset
       const overrideExpires = new Date(Date.now() + 60_000).toISOString()
 
-      const mpay = Mpay_client.create({
+      const mppx = Mppx_client.create({
         polyfill: false,
         methods: [
           tempo_client({
@@ -369,7 +369,7 @@ describe('tempo', () => {
       })
 
       const httpServer = await Http.createServer(async (req, res) => {
-        const result = await Mpay_server.toNodeListener(
+        const result = await Mppx_server.toNodeListener(
           server.charge({
             amount: '1',
             currency: overrideCurrency,
@@ -384,7 +384,7 @@ describe('tempo', () => {
       const response = await fetch(httpServer.url)
       expect(response.status).toBe(402)
 
-      const credential = await mpay.createCredential(response)
+      const credential = await mppx.createCredential(response)
 
       {
         const response = await fetch(httpServer.url, {
@@ -400,7 +400,7 @@ describe('tempo', () => {
     })
 
     test('behavior: fee payer', async () => {
-      const mpay = Mpay_client.create({
+      const mppx = Mppx_client.create({
         polyfill: false,
         methods: [
           tempo_client({
@@ -413,7 +413,7 @@ describe('tempo', () => {
       })
 
       const httpServer = await Http.createServer(async (req, res) => {
-        const result = await Mpay_server.toNodeListener(
+        const result = await Mppx_server.toNodeListener(
           server.charge({
             feePayer: accounts[0],
             amount: '1',
@@ -428,7 +428,7 @@ describe('tempo', () => {
       const response = await fetch(httpServer.url)
       expect(response.status).toBe(402)
 
-      const credential = await mpay.createCredential(response)
+      const credential = await mppx.createCredential(response)
 
       {
         const response = await fetch(httpServer.url, {
@@ -455,7 +455,7 @@ describe('tempo', () => {
     })
 
     test('behavior: fee payer (hoisted)', async () => {
-      const mpay = Mpay_client.create({
+      const mppx = Mppx_client.create({
         polyfill: false,
         methods: [
           tempo_client({
@@ -467,7 +467,7 @@ describe('tempo', () => {
         ],
       })
 
-      const server = Mpay_server.create({
+      const server = Mppx_server.create({
         methods: [
           tempo_server.charge({
             account: accounts[0],
@@ -483,7 +483,7 @@ describe('tempo', () => {
       })
 
       const httpServer = await Http.createServer(async (req, res) => {
-        const result = await Mpay_server.toNodeListener(
+        const result = await Mppx_server.toNodeListener(
           server.charge({
             amount: '1',
             currency: asset,
@@ -497,7 +497,7 @@ describe('tempo', () => {
       const response = await fetch(httpServer.url)
       expect(response.status).toBe(402)
 
-      const credential = await mpay.createCredential(response)
+      const credential = await mppx.createCredential(response)
 
       {
         const response = await fetch(httpServer.url, {
@@ -527,7 +527,7 @@ describe('tempo', () => {
   describe('intent: unknown', () => {
     test('behavior: returns 402 for invalid payload schema', async () => {
       const httpServer = await Http.createServer(async (req, res) => {
-        const result = await Mpay_server.toNodeListener(
+        const result = await Mppx_server.toNodeListener(
           server.charge({
             amount: '1',
             expires: new Date(Date.now() + 60_000).toISOString(),
@@ -576,7 +576,7 @@ describe('tempo', () => {
     })
 
     test('recipient: Account with feePayer: true resolves feePayer', async () => {
-      const mpay = Mpay_client.create({
+      const mppx = Mppx_client.create({
         polyfill: false,
         methods: [
           tempo_client.charge({
@@ -586,7 +586,7 @@ describe('tempo', () => {
         ],
       })
 
-      const server_ = Mpay_server.create({
+      const server_ = Mppx_server.create({
         methods: [
           tempo_server.charge({
             account: accounts[0],
@@ -600,19 +600,19 @@ describe('tempo', () => {
       })
 
       const httpServer = await Http.createServer(async (req, res) => {
-        const result = await Mpay_server.toNodeListener(server_.charge({ amount: '1' }))(req, res)
+        const result = await Mppx_server.toNodeListener(server_.charge({ amount: '1' }))(req, res)
         if (result.status === 402) return
         res.end('OK')
       })
 
-      const response = await mpay.fetch(httpServer.url)
+      const response = await mppx.fetch(httpServer.url)
       expect(response.status).toBe(200)
 
       httpServer.close()
     })
 
     test('recipient: string with feePayer: Account resolves separately', async () => {
-      const mpay = Mpay_client.create({
+      const mppx = Mppx_client.create({
         polyfill: false,
         methods: [
           tempo_client.charge({
@@ -622,7 +622,7 @@ describe('tempo', () => {
         ],
       })
 
-      const server_ = Mpay_server.create({
+      const server_ = Mppx_server.create({
         methods: [
           tempo_server.charge({
             getClient: () => client,
@@ -636,12 +636,12 @@ describe('tempo', () => {
       })
 
       const httpServer = await Http.createServer(async (req, res) => {
-        const result = await Mpay_server.toNodeListener(server_.charge({ amount: '1' }))(req, res)
+        const result = await Mppx_server.toNodeListener(server_.charge({ amount: '1' }))(req, res)
         if (result.status === 402) return
         res.end('OK')
       })
 
-      const response = await mpay.fetch(httpServer.url)
+      const response = await mppx.fetch(httpServer.url)
       expect(response.status).toBe(200)
 
       httpServer.close()
@@ -659,7 +659,7 @@ describe('tempo', () => {
   describe('attribution memo', () => {
     test('client always generates attribution memo (hash credential)', async () => {
       const httpServer = await Http.createServer(async (req, res) => {
-        const result = await Mpay_server.toNodeListener(
+        const result = await Mppx_server.toNodeListener(
           server.charge({ amount: '1', decimals: 6 }),
         )(req, res)
         if (result.status === 402) return
@@ -707,7 +707,7 @@ describe('tempo', () => {
 
     test('anonymous client (no clientId) generates valid attribution memo', async () => {
       const httpServer = await Http.createServer(async (req, res) => {
-        const result = await Mpay_server.toNodeListener(
+        const result = await Mppx_server.toNodeListener(
           server.charge({ amount: '1', decimals: 6 }),
         )(req, res)
         if (result.status === 402) return
@@ -749,8 +749,8 @@ describe('tempo', () => {
       httpServer.close()
     })
 
-    test('client generates memo for transaction credential via Mpay', async () => {
-      const mpay = Mpay_client.create({
+    test('client generates memo for transaction credential via Mppx', async () => {
+      const mppx = Mppx_client.create({
         polyfill: false,
         methods: [
           tempo_client({
@@ -764,7 +764,7 @@ describe('tempo', () => {
       })
 
       const httpServer = await Http.createServer(async (req, res) => {
-        const result = await Mpay_server.toNodeListener(
+        const result = await Mppx_server.toNodeListener(
           server.charge({
             amount: '1',
             currency: asset,
@@ -775,7 +775,7 @@ describe('tempo', () => {
         res.end('OK')
       })
 
-      const response = await mpay.fetch(httpServer.url)
+      const response = await mppx.fetch(httpServer.url)
       expect(response.status).toBe(200)
 
       httpServer.close()
@@ -783,7 +783,7 @@ describe('tempo', () => {
 
     test('server accepts plain transfer without memo', async () => {
       const httpServer = await Http.createServer(async (req, res) => {
-        const result = await Mpay_server.toNodeListener(
+        const result = await Mppx_server.toNodeListener(
           server.charge({ amount: '1', decimals: 6 }),
         )(req, res)
         if (result.status === 402) return
@@ -824,7 +824,7 @@ describe('tempo', () => {
         '0xdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef' as `0x${string}`
 
       const httpServer = await Http.createServer(async (req, res) => {
-        const result = await Mpay_server.toNodeListener(
+        const result = await Mppx_server.toNodeListener(
           server.charge({ amount: '1', decimals: 6, memo: userMemo }),
         )(req, res)
         if (result.status === 402) return

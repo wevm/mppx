@@ -1,4 +1,4 @@
-import { Receipt } from 'mpay'
+import { Receipt } from 'mppx'
 import { describe, expect, test } from 'vitest'
 
 describe('from', () => {

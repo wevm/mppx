@@ -11,8 +11,8 @@ import * as Service from '../Service.js'
  * anthropic({
  *   apiKey: 'sk-ant-...',
  *   routes: {
- *     'POST /v1/messages': mpay.charge({ amount: '0.03' }),
- *     'POST /v1/complete': mpay.charge({ amount: '0.02' }),
+ *     'POST /v1/messages': mppx.charge({ amount: '0.03' }),
+ *     'POST /v1/complete': mppx.charge({ amount: '0.02' }),
  *   },
  * })
  * ```

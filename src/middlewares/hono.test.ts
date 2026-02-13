@@ -1,9 +1,9 @@
 import { serve } from '@hono/node-server'
 import { Hono } from 'hono'
-import { Receipt } from 'mpay'
-import { Mpay as Mpay_client, session as sessionIntent, tempo as tempo_client } from 'mpay/client'
-import { Mpay } from 'mpay/hono'
-import { tempo as tempo_server } from 'mpay/server'
+import { Receipt } from 'mppx'
+import { Mppx as Mppx_client, session as sessionIntent, tempo as tempo_client } from 'mppx/client'
+import { Mppx } from 'mppx/hono'
+import { tempo as tempo_server } from 'mppx/server'
 import type { Address } from 'viem'
 import { Addresses } from 'viem/tempo'
 import { beforeAll, describe, expect, test } from 'vitest'
@@ -22,7 +22,7 @@ function createServer(app: Hono) {
 }
 
 describe('charge', () => {
-  const mpay = Mpay.create({
+  const mppx = Mppx.create({
     methods: [
       tempo_server.charge({
         getClient: () => client,
@@ -32,7 +32,7 @@ describe('charge', () => {
     ],
   })
 
-  const { fetch } = Mpay_client.create({
+  const { fetch } = Mppx_client.create({
     polyfill: false,
     methods: [
       tempo_client.charge({
@@ -44,7 +44,7 @@ describe('charge', () => {
 
   test('returns 402 when no credential', async () => {
     const app = new Hono()
-    app.get('/', mpay.charge({ amount: '1' }), (c) => c.json({ fortune: 'You will be rich' }))
+    app.get('/', mppx.charge({ amount: '1' }), (c) => c.json({ fortune: 'You will be rich' }))
 
     const server = await createServer(app)
     const response = await globalThis.fetch(server.url)
@@ -56,7 +56,7 @@ describe('charge', () => {
 
   test('returns 200 with receipt on valid payment', async () => {
     const app = new Hono()
-    app.get('/', mpay.charge({ amount: '1' }), (c) => c.json({ fortune: 'You will be rich' }))
+    app.get('/', mppx.charge({ amount: '1' }), (c) => c.json({ fortune: 'You will be rich' }))
 
     const server = await createServer(app)
     const response = await fetch(server.url)
@@ -83,7 +83,7 @@ describe('session', () => {
   })
 
   test('returns 402 when no credential', async () => {
-    const mpay = Mpay.create({
+    const mppx = Mppx.create({
       methods: [
         tempo_server.session({
           getClient: () => client,
@@ -95,7 +95,7 @@ describe('session', () => {
     })
 
     const app = new Hono()
-    app.get('/', mpay.session({ amount: '1', unitType: 'token' }), (c) =>
+    app.get('/', mppx.session({ amount: '1', unitType: 'token' }), (c) =>
       c.json({ data: 'streamed' }),
     )
 
@@ -108,7 +108,7 @@ describe('session', () => {
   })
 
   test('returns 200 with receipt on valid payment', async () => {
-    const mpay = Mpay.create({
+    const mppx = Mppx.create({
       methods: [
         tempo_server.session({
           getClient: () => client,
@@ -120,7 +120,7 @@ describe('session', () => {
       ],
     })
 
-    const { fetch } = Mpay_client.create({
+    const { fetch } = Mppx_client.create({
       polyfill: false,
       methods: [
         sessionIntent({
@@ -132,7 +132,7 @@ describe('session', () => {
     })
 
     const app = new Hono()
-    app.get('/', mpay.session({ amount: '1', unitType: 'token' }), (c) =>
+    app.get('/', mppx.session({ amount: '1', unitType: 'token' }), (c) =>
       c.json({ data: 'streamed' }),
     )
 
