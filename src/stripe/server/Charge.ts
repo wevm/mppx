@@ -20,16 +20,8 @@ import * as Intents from '../Intents.js'
  * ```
  */
 export function charge<const parameters extends charge.Parameters>(parameters: parameters) {
-  const {
-    amount,
-    currency,
-    decimals,
-    description,
-    externalId,
-    metadata,
-    networkId,
-    secretKey,
-  } = parameters
+  const { amount, currency, decimals, description, externalId, metadata, networkId, secretKey } =
+    parameters
 
   type Defaults = charge.DeriveDefaults<parameters>
   return MethodIntent.toServer<typeof Intents.charge, Defaults>(Intents.charge, {
@@ -82,10 +74,7 @@ export function charge<const parameters extends charge.Parameters>(parameters: p
         body,
       })
 
-      if (!response.ok) {
-        const error = (await response.json()) as { error: { message: string } }
-        throw new VerificationFailedError({ reason: 'Stripe PaymentIntent failed' })
-      }
+      if (!response.ok) throw new VerificationFailedError({ reason: 'Stripe PaymentIntent failed' })
 
       const pi = (await response.json()) as { id: string; status: string }
 

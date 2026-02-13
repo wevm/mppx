@@ -36,11 +36,7 @@ import * as Intents from '../Intents.js'
  * ```
  */
 export function charge(parameters: charge.Parameters) {
-  const {
-    createSpt,
-    externalId,
-    paymentMethod: defaultPaymentMethod,
-  } = parameters
+  const { createSpt, externalId, paymentMethod: defaultPaymentMethod } = parameters
 
   return MethodIntent.toClient(Intents.charge, {
     context: z.object({
