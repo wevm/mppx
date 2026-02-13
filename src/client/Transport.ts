@@ -33,7 +33,7 @@ export type RequestOf<transport extends Transport> =
  *
  * @example
  * ```ts
- * import { Transport } from 'mpay/client'
+ * import { Transport } from 'mppx/client'
  *
  * const custom = Transport.from({
  *   name: 'custom',

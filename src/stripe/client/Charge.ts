@@ -14,7 +14,7 @@ import * as Intents from '../Intents.js'
  *
  * @example
  * ```ts
- * import { stripe } from 'mpay/client'
+ * import { stripe } from 'mppx/client'
  *
  * const charge = stripe.charge({
  *   createSpt: async ({ paymentMethod, amount, currency, networkId, expiresAt, metadata }) => {

@@ -1,4 +1,4 @@
-// mpay Streaming Payment Channel — Client Example
+// mppx Streaming Payment Channel — Client Example
 
 //
 // This example demonstrates a full payment channel lifecycle:
@@ -29,9 +29,9 @@
 //     Server keeps the voucher amount, remainder refunded to client.
 //
 
-// `tempo` from 'mpay/client' provides the streaming payment session API.
+// `tempo` from 'mppx/client' provides the streaming payment session API.
 // It handles the full 402 → open → voucher → close lifecycle automatically.
-import { tempo } from 'mpay/client'
+import { tempo } from 'mppx/client'
 import { createClient, type Hex, http } from 'viem'
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts'
 import { tempoModerato } from 'viem/chains'

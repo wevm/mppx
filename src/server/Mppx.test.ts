@@ -1,5 +1,5 @@
-import { Challenge, Credential, Intent, MethodIntent, z } from 'mpay'
-import { Mpay, Transport, tempo } from 'mpay/server'
+import { Challenge, Credential, Intent, MethodIntent, z } from 'mppx'
+import { Mppx, Transport, tempo } from 'mppx/server'
 import { describe, expect, test } from 'vitest'
 import * as Http from '~test/Http.js'
 import { accounts, asset, client } from '~test/tempo/viem.js'
@@ -13,7 +13,7 @@ const method = tempo({
 
 describe('create', () => {
   test('default', () => {
-    const handler = Mpay.create({ methods: [method], realm, secretKey })
+    const handler = Mppx.create({ methods: [method], realm, secretKey })
 
     expect(handler.realm).toBe(realm)
     expect(handler.transport.name).toBe('http')
@@ -21,7 +21,7 @@ describe('create', () => {
   })
 
   test('behavior: with mcp transport', () => {
-    const handler = Mpay.create({ methods: [method], realm, secretKey, transport: Transport.mcp() })
+    const handler = Mppx.create({ methods: [method], realm, secretKey, transport: Transport.mcp() })
 
     expect(handler.transport.name).toBe('mcp')
   })
@@ -29,7 +29,7 @@ describe('create', () => {
 
 describe('request handler', () => {
   test('returns 402 when no Authorization header', async () => {
-    const handler = Mpay.create({ methods: [method], realm, secretKey })
+    const handler = Mppx.create({ methods: [method], realm, secretKey })
 
     const request = new Request('https://example.com/resource')
 
@@ -67,7 +67,7 @@ describe('request handler', () => {
       headers: { Authorization: 'Payment invalid' },
     })
 
-    const result = await Mpay.create({ methods: [method], realm, secretKey }).charge({
+    const result = await Mppx.create({ methods: [method], realm, secretKey }).charge({
       amount: '1000',
       currency: asset,
       expires: new Date(Date.now() + 60_000).toISOString(),
@@ -111,7 +111,7 @@ describe('request handler', () => {
       headers: { Authorization: Credential.serialize(credential) },
     })
 
-    const result = await Mpay.create({ methods: [method], realm, secretKey }).charge({
+    const result = await Mppx.create({ methods: [method], realm, secretKey }).charge({
       amount: '1000',
       currency: asset,
       expires: new Date(Date.now() + 60_000).toISOString(),
@@ -139,7 +139,7 @@ describe('request handler', () => {
   })
 
   test('returns 402 when payload schema validation fails', async () => {
-    const handle = Mpay.create({ methods: [method], realm, secretKey }).charge({
+    const handle = Mppx.create({ methods: [method], realm, secretKey }).charge({
       amount: '1000',
       currency: asset,
       expires: new Date(Date.now() + 60_000).toISOString(),
@@ -188,10 +188,10 @@ describe('request handler', () => {
 
 describe('request handler (node)', () => {
   test('returns 402 when no Authorization header', async () => {
-    const handler = Mpay.create({ methods: [method], realm, secretKey })
+    const handler = Mppx.create({ methods: [method], realm, secretKey })
 
     const server = await Http.createServer(async (req, res) => {
-      const result = await Mpay.toNodeListener(
+      const result = await Mppx.toNodeListener(
         handler.charge({
           amount: '1000',
           currency: asset,
@@ -227,11 +227,11 @@ describe('request handler (node)', () => {
   })
 
   test('returns 200 with Payment-Receipt header on success', async () => {
-    const handler = Mpay.create({ methods: [method], realm, secretKey })
+    const handler = Mppx.create({ methods: [method], realm, secretKey })
     const expires = new Date(Date.now() + 60_000).toISOString()
 
     const server = await Http.createServer(async (req, res) => {
-      const result = await Mpay.toNodeListener(
+      const result = await Mppx.toNodeListener(
         handler.charge({
           amount: '1000',
           currency: asset,
@@ -306,7 +306,7 @@ describe('receipt handling', () => {
       },
     })
 
-    const handler = Mpay.create({
+    const handler = Mppx.create({
       methods: [mockMethod],
       realm,
       secretKey,

@@ -2,7 +2,7 @@
 
 //
 // This example demonstrates the server side of a metered Server-Sent Events
-// (SSE) streaming session using mpay's "Payment" HTTP Authentication Scheme.
+// (SSE) streaming session using mppx's "Payment" HTTP Authentication Scheme.
 //
 // The server charges per-token during an SSE stream. The full flow on a
 // single endpoint (`/api/chat`) handles four distinct request phases:
@@ -18,9 +18,9 @@
 // while the SSE generator is running.
 //
 
-// `Mpay` is the server-side payment handler. `tempo` provides Tempo-specific
+// `Mppx` is the server-side payment handler. `tempo` provides Tempo-specific
 // payment method implementations (stream channels, SSE transport, storage).
-import { Mpay, Store, tempo } from 'mpay/server'
+import { Mppx, Store, tempo } from 'mppx/server'
 import { createClient, http } from 'viem'
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts'
 import { tempoModerato } from 'viem/chains'
@@ -89,10 +89,10 @@ const client = createClient({
 // survive server restarts and support horizontal scaling.
 const store = Store.memory()
 
-// Mpay Server Instance
+// Mppx Server Instance
 
 //
-// `Mpay.create()` assembles the payment handler from method intents.
+// `Mppx.create()` assembles the payment handler from method intents.
 //
 //   `methods` — An array of payment method handlers. Here we use
 //   `tempo.session()` which implements the Tempo streaming payment channel
@@ -112,7 +112,7 @@ const store = Store.memory()
 //     - It extracts channelId, challengeId, and tickCost from the
 //       Authorization header to configure the SSE metering loop
 //
-const mpay = Mpay.create({
+const mppx = Mppx.create({
   methods: [
     tempo.session({
       // The server's account — where settled funds are transferred to.
@@ -155,14 +155,14 @@ const mpay = Mpay.create({
 //
 //   Phase 1 — GET, no Authorization header:
 //     First contact. The client wants to access the resource but hasn't paid.
-//     `mpay.session()` returns `{ status: 402 }` with a challenge containing
+//     `mppx.session()` returns `{ status: 402 }` with a challenge containing
 //     the payment terms (method: "tempo", intent: "session", amount per token,
 //     currency, recipient, etc.). The server returns this as a 402 response
 //     with `WWW-Authenticate: Payment <challenge>`.
 //
 //   Phase 2 — POST, Authorization contains "open" credential:
 //     The client has opened an on-chain payment channel and is sending the
-//     signed transaction + initial voucher. `mpay.stream()` verifies the
+//     signed transaction + initial voucher. `mppx.stream()` verifies the
 //     credential, broadcasts the channel-open tx, and returns a managed
 //     result. `withReceipt()` detects this and returns the management
 //     response automatically (the generator is never invoked).
@@ -190,7 +190,7 @@ export async function handler(request: Request): Promise<Response | null> {
 
     console.log(`[server] ${request.method} /api/chat`)
 
-    // `mpay.session()` creates a streaming payment handler configured with
+    // `mppx.session()` creates a streaming payment handler configured with
     // the per-token price and unit type. It returns a function that processes
     // the incoming request through the payment flow.
     //
@@ -202,7 +202,7 @@ export async function handler(request: Request): Promise<Response | null> {
     //
     // The returned function accepts a Request and returns a result object
     // describing what phase we're in and how to respond.
-    const result = await mpay.session({
+    const result = await mppx.session({
       amount: pricePerToken,
       unitType: 'token',
     })(request)

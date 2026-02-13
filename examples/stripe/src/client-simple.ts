@@ -1,9 +1,9 @@
 // Example of a simple client that creates an SPT and retries with the credential.
 // This is useful if you know the payment method ahead of time, and don't need to collect it from the user.
 
-import { Mpay, stripe } from 'mpay/client'
+import { Mppx, stripe } from 'mppx/client'
 
-Mpay.create({
+Mppx.create({
   methods: [
     stripe({
       createSpt: async (params) => {

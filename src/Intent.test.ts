@@ -1,4 +1,4 @@
-import { Intent } from 'mpay'
+import { Intent } from 'mppx'
 import { describe, expect, test } from 'vitest'
 
 describe('charge', () => {

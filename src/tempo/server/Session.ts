@@ -61,13 +61,13 @@ type StreamMethodDetails = {
 }
 
 /**
- * Creates a stream payment server using the mpay Method.toServer() pattern.
+ * Creates a stream payment server using the mppx Method.toServer() pattern.
  *
  * @example
  * ```ts
- * import { Mpay, tempo } from 'mpay/server'
+ * import { Mppx, tempo } from 'mppx/server'
  *
- * const mpay = Mpay.create({
+ * const mppx = Mppx.create({
  *   methods: [
  *     tempo.session({
  *       store: myStore,
@@ -228,7 +228,7 @@ export function session<const parameters extends session.Parameters>(p?: paramet
     },
 
     // This hook acts as a gate: when it returns a Response, `withReceipt()`
-    // in Mpay.ts short-circuits and returns that response directly without
+    // in Mppx.ts short-circuits and returns that response directly without
     // invoking the user's route handler. When it returns undefined, the
     // user's handler runs normally and serves content.
     //

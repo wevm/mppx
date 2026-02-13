@@ -2,7 +2,7 @@
 
 //
 // This example demonstrates the client side of a metered Server-Sent Events
-// (SSE) streaming session using mpay's "Payment" HTTP Authentication Scheme.
+// (SSE) streaming session using mppx's "Payment" HTTP Authentication Scheme.
 //
 // The flow works like this:
 //
@@ -26,9 +26,9 @@
 //      the server settles the channel on-chain, returning any unspent deposit.
 //
 
-// `tempo` from 'mpay/client' provides the session API for Tempo payment channels.
+// `tempo` from 'mppx/client' provides the session API for Tempo payment channels.
 // A session manages the full lifecycle: open → voucher → close.
-import { tempo } from 'mpay/client'
+import { tempo } from 'mppx/client'
 import { createClient, type Hex, http } from 'viem'
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts'
 // `tempoModerato` is Tempo's testnet chain (like Ethereum's Sepolia/Goerli).

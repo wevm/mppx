@@ -10,7 +10,7 @@
   "dependencies": {
     "@remix-run/node-fetch-server": "latest",
     "@types/node": "latest",
-    "mpay": "latest",
+    "mppx": "latest",
     "typescript": "latest",
     "viem": "latest",
     "vite": "latest"

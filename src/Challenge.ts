@@ -9,7 +9,7 @@ import * as z from './zod.js'
  *
  * @example
  * ```ts
- * import { Challenge } from 'mpay'
+ * import { Challenge } from 'mppx'
  *
  * const challenge = Challenge.Schema.parse(data)
  * ```
@@ -38,7 +38,7 @@ export const Schema = z.object({
  *
  * @example
  * ```ts
- * import { Challenge } from 'mpay'
+ * import { Challenge } from 'mppx'
  *
  * const challenge: Challenge.Challenge = {
  *   id: 'abc123',
@@ -83,7 +83,7 @@ export type FromMethods<methods extends readonly MethodIntent.AnyMethodIntent[]>
  *
  * @example
  * ```ts
- * import { Challenge } from 'mpay'
+ * import { Challenge } from 'mppx'
  *
  * // With HMAC-bound ID (recommended for servers)
  * const challenge = Challenge.from(
@@ -182,8 +182,8 @@ export declare namespace from {
  *
  * @example
  * ```ts
- * import { Challenge } from 'mpay'
- * import { Intents } from 'mpay/tempo'
+ * import { Challenge } from 'mppx'
+ * import { Intents } from 'mppx/tempo'
  *
  * // With HMAC-bound ID (recommended for servers)
  * const challenge = Challenge.fromIntent(
@@ -258,7 +258,7 @@ export declare namespace fromIntent {
  *
  * @example
  * ```ts
- * import { Challenge } from 'mpay'
+ * import { Challenge } from 'mppx'
  *
  * const header = Challenge.serialize(challenge)
  * // => 'Payment id="abc123", realm="api.example.com", method="tempo", intent="charge", request="eyJhbW91bnQiOi..."'
@@ -285,7 +285,7 @@ export function serialize(challenge: Challenge): string {
  *
  * @example
  * ```ts
- * import { Challenge } from 'mpay'
+ * import { Challenge } from 'mppx'
  *
  * const challenge = Challenge.deserialize(header)
  *
@@ -333,7 +333,7 @@ export function deserialize<
  *
  * @example
  * ```ts
- * import { Challenge } from 'mpay'
+ * import { Challenge } from 'mppx'
  *
  * const challenge = Challenge.fromHeaders(response.headers)
  *
@@ -358,7 +358,7 @@ export function fromHeaders<
  *
  * @example
  * ```ts
- * import { Challenge } from 'mpay'
+ * import { Challenge } from 'mppx'
  *
  * const response = await fetch('/resource')
  * if (response.status === 402)
@@ -384,7 +384,7 @@ export function fromResponse<
  *
  * @example
  * ```ts
- * import { Challenge } from 'mpay'
+ * import { Challenge } from 'mppx'
  *
  * const isValid = Challenge.verify(challenge, { secretKey: 'my-secret' })
  * ```

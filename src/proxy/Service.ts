@@ -32,7 +32,7 @@ export type EndpointOptions = {
   [key: string]: unknown
 }
 
-/** A function that handles the mpay payment flow for a request. */
+/** A function that handles the mppx payment flow for a request. */
 export type IntentHandler = (input: Request) => Promise<IntentResult>
 
 /** Result of an intent handler — either a 402 challenge or a 200 with receipt attachment. */
@@ -64,7 +64,7 @@ export type From<
  *   baseUrl: 'https://api.example.com',
  *   bearer: 'sk-...',
  *   routes: {
- *     'POST /v1/generate': mpay.charge({ amount: '0.01' }),
+ *     'POST /v1/generate': mppx.charge({ amount: '0.01' }),
  *     'GET /v1/status': true,
  *   },
  * })

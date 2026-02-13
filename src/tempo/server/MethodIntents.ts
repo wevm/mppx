@@ -6,9 +6,9 @@ import { session as session_, settle as settle_ } from './Session.js'
  *
  * @example
  * ```ts
- * import { Mpay, tempo } from 'mpay/server'
+ * import { Mppx, tempo } from 'mppx/server'
  *
- * const mpay = Mpay.create({
+ * const mppx = Mppx.create({
  *   methods: [tempo({ currency: '0x...', recipient: '0x...' })],
  * })
  * ```

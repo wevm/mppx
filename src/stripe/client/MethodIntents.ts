@@ -5,9 +5,9 @@ import { charge as charge_ } from './Charge.js'
  *
  * @example
  * ```ts
- * import { Mpay, stripe } from 'mpay/client'
+ * import { Mppx, stripe } from 'mppx/client'
  *
- * const mpay = Mpay.create({
+ * const mppx = Mppx.create({
  *   methods: [
  *     stripe({
  *       createSpt: async (params) => {

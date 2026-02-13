@@ -1,10 +1,10 @@
-# mpay
+# mppx
 
 TypeScript implementation of the "Payment" HTTP Authentication Scheme (402 Protocol).
 
 ## Vision
 
-mpay provides abstractions for the complete HTTP 402 payment flow — both client and server. The architecture has three layers:
+mppx provides abstractions for the complete HTTP 402 payment flow — both client and server. The architecture has three layers:
 
 ### Core Abstractions
 

@@ -1,4 +1,4 @@
-import { Mpay as Mpay_server, tempo as tempo_server } from 'mpay/server'
+import { Mppx as Mppx_server, tempo as tempo_server } from 'mppx/server'
 import { type Address, createClient, type Hex } from 'viem'
 import { Addresses } from 'viem/tempo'
 import { beforeAll, beforeEach, describe, expect, test } from 'vitest'
@@ -1101,7 +1101,7 @@ describe('session', () => {
 
   describe('SSE', () => {
     test('behavior: withReceipt accepts async generator and returns Response', async () => {
-      const handler = Mpay_server.create({
+      const handler = Mppx_server.create({
         methods: [
           tempo_server.session({
             account: accounts[0],
@@ -1146,7 +1146,7 @@ describe('session', () => {
     })
 
     test('behavior: non-stream session withReceipt only accepts Response', async () => {
-      const handler = Mpay_server.create({
+      const handler = Mppx_server.create({
         methods: [
           tempo_server.session({
             account: accounts[0],
@@ -1172,7 +1172,7 @@ describe('session', () => {
     })
 
     test('behavior: charge withReceipt returns Response', async () => {
-      const handler = Mpay_server.create({
+      const handler = Mppx_server.create({
         methods: [tempo_server.charge({ account: accounts[0], currency: asset })],
         realm: 'api.example.com',
         secretKey: 'secret',

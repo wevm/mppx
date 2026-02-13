@@ -1,10 +1,10 @@
 import type { MiddlewareHandler } from 'hono'
-import * as Mpay_core from '../server/Mpay.js'
-import * as Mpay_internal from './internal/mpay.js'
+import * as Mppx_core from '../server/Mppx.js'
+import * as Mppx_internal from './internal/mppx.js'
 
 export * from '../server/Methods.js'
 
-export namespace Mpay {
+export namespace Mppx {
   /**
    * Creates a Hono-aware payment handler where each intent
    * returns a Hono `MiddlewareHandler`.
@@ -12,20 +12,20 @@ export namespace Mpay {
    * @example
    * ```ts
    * import { Hono } from 'hono'
-   * import { Mpay, tempo } from 'mpay/hono'
+   * import { Mppx, tempo } from 'mppx/hono'
    *
    * const app = new Hono()
-   * const mpay = Mpay.create({ methods: [tempo()] })
+   * const mppx = Mppx.create({ methods: [tempo()] })
    *
-   * app.get('/premium', mpay.charge({ amount: '1' }), (c) =>
+   * app.get('/premium', mppx.charge({ amount: '1' }), (c) =>
    *   c.json({ data: 'paid content' }),
    * )
    * ```
    */
-  export function create<const methods extends Mpay_core.Methods>(
-    config: Mpay_core.create.Config<methods>,
-  ): Mpay_internal.Wrap<Mpay_core.Mpay<methods>, MiddlewareHandler> {
-    return Mpay_internal.wrap(Mpay_core.create(config), payment)
+  export function create<const methods extends Mppx_core.Methods>(
+    config: Mppx_core.create.Config<methods>,
+  ): Mppx_internal.Wrap<Mppx_core.Mppx<methods>, MiddlewareHandler> {
+    return Mppx_internal.wrap(Mppx_core.create(config), payment)
   }
 }
 
@@ -38,18 +38,18 @@ export namespace Mpay {
  * @example
  * ```ts
  * import { Hono } from 'hono'
- * import { Mpay } from 'mpay/server'
- * import { payment } from 'mpay/hono'
+ * import { Mppx } from 'mppx/server'
+ * import { payment } from 'mppx/hono'
  *
- * const mpay = Mpay.create({ methods: [tempo()] })
+ * const mppx = Mppx.create({ methods: [tempo()] })
  *
  * const app = new Hono()
- * app.get('/premium', payment(mpay.charge, { amount: '1' }), (c) =>
+ * app.get('/premium', payment(mppx.charge, { amount: '1' }), (c) =>
  *   c.json({ data: 'paid content' }),
  * )
  * ```
  */
-export function payment<const intent extends Mpay_internal.AnyIntentFn>(
+export function payment<const intent extends Mppx_internal.AnyIntentFn>(
   intent: intent,
   options: intent extends (options: infer options) => any ? options : never,
 ): MiddlewareHandler {

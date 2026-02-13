@@ -1,7 +1,7 @@
-import { Challenge, Credential, Intent, Mcp, MethodIntent, Receipt } from 'mpay'
-import { Mpay, Transport, tempo } from 'mpay/client'
-import { Mpay as Mpay_server, tempo as tempo_server } from 'mpay/server'
-import { MethodIntents } from 'mpay/tempo'
+import { Challenge, Credential, Intent, Mcp, MethodIntent, Receipt } from 'mppx'
+import { Mppx, Transport, tempo } from 'mppx/client'
+import { Mppx as Mppx_server, tempo as tempo_server } from 'mppx/server'
+import { MethodIntents } from 'mppx/tempo'
 import { afterEach, describe, expect, test } from 'vitest'
 import * as Http from '~test/Http.js'
 import { accounts, asset, client } from '~test/tempo/viem.js'
@@ -10,34 +10,34 @@ const realm = 'api.example.com'
 const secretKey = 'test-secret-key'
 
 afterEach(() => {
-  Mpay.restore()
+  Mppx.restore()
 })
 
-describe('Mpay.create', () => {
+describe('Mppx.create', () => {
   test('default', () => {
-    const mpay = Mpay.create({
+    const mppx = Mppx.create({
       polyfill: false,
       methods: [tempo({ account: accounts[1], getClient: () => client })],
     })
 
-    expect(mpay.methods).toHaveLength(2)
-    expect(mpay.methods[0]?.method).toBe('tempo')
-    expect(mpay.methods[0]?.name).toBe('charge')
-    expect(mpay.methods[1]?.method).toBe('tempo')
-    expect(mpay.methods[1]?.name).toBe('session')
-    expect(mpay.transport.name).toBe('http')
-    expect(typeof mpay.createCredential).toBe('function')
-    expect(typeof mpay.fetch).toBe('function')
+    expect(mppx.methods).toHaveLength(2)
+    expect(mppx.methods[0]?.method).toBe('tempo')
+    expect(mppx.methods[0]?.name).toBe('charge')
+    expect(mppx.methods[1]?.method).toBe('tempo')
+    expect(mppx.methods[1]?.name).toBe('session')
+    expect(mppx.transport.name).toBe('http')
+    expect(typeof mppx.createCredential).toBe('function')
+    expect(typeof mppx.fetch).toBe('function')
   })
 
   test('behavior: with mcp transport', () => {
-    const mpay = Mpay.create({
+    const mppx = Mppx.create({
       polyfill: false,
       methods: [tempo({ account: accounts[1], getClient: () => client })],
       transport: Transport.mcp(),
     })
 
-    expect(mpay.transport.name).toBe('mcp')
+    expect(mppx.transport.name).toBe('mcp')
   })
 
   test('behavior: with multiple methods', () => {
@@ -58,21 +58,21 @@ describe('Mpay.create', () => {
       },
     })
 
-    const mpay = Mpay.create({
+    const mppx = Mppx.create({
       polyfill: false,
       methods: [tempo({ account: accounts[1], getClient: () => client }), stripeMethod],
     })
 
-    expect(mpay.methods).toHaveLength(3)
-    expect(mpay.methods[0]?.method).toBe('tempo')
-    expect(mpay.methods[1]?.method).toBe('tempo')
-    expect(mpay.methods[2]?.method).toBe('stripe')
+    expect(mppx.methods).toHaveLength(3)
+    expect(mppx.methods[0]?.method).toBe('tempo')
+    expect(mppx.methods[1]?.method).toBe('tempo')
+    expect(mppx.methods[2]?.method).toBe('stripe')
   })
 })
 
 describe('createCredential', () => {
   test('behavior: routes to correct method based on challenge', async () => {
-    const mpay = Mpay.create({
+    const mppx = Mppx.create({
       polyfill: false,
       methods: [tempo({ account: accounts[1], getClient: () => client })],
     })
@@ -96,7 +96,7 @@ describe('createCredential', () => {
       },
     })
 
-    const credential = await mpay.createCredential(response)
+    const credential = await mppx.createCredential(response)
 
     expect(credential).toMatch(/^Payment /)
 
@@ -106,7 +106,7 @@ describe('createCredential', () => {
   })
 
   test('behavior: throws when method not found', async () => {
-    const mpay = Mpay.create({
+    const mppx = Mppx.create({
       polyfill: false,
       methods: [tempo({ account: accounts[1], getClient: () => client })],
     })
@@ -126,7 +126,7 @@ describe('createCredential', () => {
       },
     })
 
-    await expect(mpay.createCredential(response)).rejects.toThrow(
+    await expect(mppx.createCredential(response)).rejects.toThrow(
       'No method intent found for "unknown.charge". Available: tempo.charge, tempo.session',
     )
   })
@@ -150,7 +150,7 @@ describe('createCredential', () => {
       },
     })
 
-    const mpay = Mpay.create({
+    const mppx = Mppx.create({
       polyfill: false,
       methods: [tempo({ account: accounts[1], getClient: () => client }), stripe],
     })
@@ -175,7 +175,7 @@ describe('createCredential', () => {
       },
     })
 
-    const credential = await mpay.createCredential(response)
+    const credential = await mppx.createCredential(response)
     const parsed = Credential.deserialize(credential)
 
     expect(parsed.payload).toEqual({ signature: '0xstripe', type: 'transaction' })
@@ -183,7 +183,7 @@ describe('createCredential', () => {
   })
 
   test('behavior: passes context to createCredential', async () => {
-    const mpay = Mpay.create({
+    const mppx = Mppx.create({
       polyfill: false,
       methods: [tempo({ getClient: () => client })],
     })
@@ -207,7 +207,7 @@ describe('createCredential', () => {
       },
     })
 
-    const credential = await mpay.createCredential(response, { account: accounts[1] })
+    const credential = await mppx.createCredential(response, { account: accounts[1] })
 
     const parsed = Credential.deserialize(credential)
     expect((parsed.payload as { type: string }).type).toBe('transaction')
@@ -215,7 +215,7 @@ describe('createCredential', () => {
   })
 
   test('behavior: works without context when account provided at creation', async () => {
-    const mpay = Mpay.create({
+    const mppx = Mppx.create({
       polyfill: false,
       methods: [tempo({ account: accounts[1], getClient: () => client })],
     })
@@ -239,13 +239,13 @@ describe('createCredential', () => {
       },
     })
 
-    const credential = await mpay.createCredential(response)
+    const credential = await mppx.createCredential(response)
     const parsed = Credential.deserialize(credential)
     expect((parsed.payload as { type: string }).type).toBe('transaction')
   })
 
   test('behavior: with mcp transport', async () => {
-    const mpay = Mpay.create({
+    const mppx = Mppx.create({
       polyfill: false,
       methods: [tempo({ account: accounts[1], getClient: () => client })],
       transport: Transport.mcp(),
@@ -276,14 +276,14 @@ describe('createCredential', () => {
       },
     }
 
-    const credential = await mpay.createCredential(mcpResponse)
+    const credential = await mppx.createCredential(mcpResponse)
     const parsed = Credential.deserialize(credential)
     expect((parsed.payload as { type: string }).type).toBe('transaction')
     expect(parsed.challenge.method).toBe('tempo')
   })
 })
 
-const server = Mpay_server.create({
+const server = Mppx_server.create({
   methods: [
     tempo_server.charge({
       currency: asset,
@@ -295,7 +295,7 @@ const server = Mpay_server.create({
 
 describe('fetch', () => {
   test('default: handles 402 automatically', async () => {
-    const mpay = Mpay.create({
+    const mppx = Mppx.create({
       polyfill: false,
       methods: [
         tempo({
@@ -306,7 +306,7 @@ describe('fetch', () => {
     })
 
     const httpServer = await Http.createServer(async (req, res) => {
-      const result = await Mpay_server.toNodeListener(
+      const result = await Mppx_server.toNodeListener(
         server.charge({
           amount: '1',
         }),
@@ -315,7 +315,7 @@ describe('fetch', () => {
       res.end('OK')
     })
 
-    const response = await mpay.fetch(httpServer.url)
+    const response = await mppx.fetch(httpServer.url)
     expect(response.status).toBe(200)
 
     const receipt = Receipt.fromResponse(response)
@@ -326,7 +326,7 @@ describe('fetch', () => {
   })
 
   test('behavior: passes through non-402 responses', async () => {
-    const mpay = Mpay.create({
+    const mppx = Mppx.create({
       polyfill: false,
       methods: [
         tempo({
@@ -341,7 +341,7 @@ describe('fetch', () => {
       res.end('OK')
     })
 
-    const response = await mpay.fetch(httpServer.url)
+    const response = await mppx.fetch(httpServer.url)
     expect(response.status).toBe(200)
     expect(await response.text()).toBe('OK')
 
@@ -349,7 +349,7 @@ describe('fetch', () => {
   })
 
   test('behavior: supports context', async () => {
-    const mpay = Mpay.create({
+    const mppx = Mppx.create({
       polyfill: false,
       methods: [
         tempo({
@@ -359,7 +359,7 @@ describe('fetch', () => {
     })
 
     const httpServer = await Http.createServer(async (req, res) => {
-      const result = await Mpay_server.toNodeListener(
+      const result = await Mppx_server.toNodeListener(
         server.charge({
           amount: '1',
         }),
@@ -368,7 +368,7 @@ describe('fetch', () => {
       res.end('OK')
     })
 
-    const response = await mpay.fetch(httpServer.url, {
+    const response = await mppx.fetch(httpServer.url, {
       context: { account: accounts[1] },
     })
     expect(response.status).toBe(200)
@@ -381,7 +381,7 @@ describe('polyfill', () => {
   test('default: polyfills globalThis.fetch', async () => {
     const originalFetch = globalThis.fetch
 
-    Mpay.create({
+    Mppx.create({
       methods: [
         tempo({
           account: accounts[1],
@@ -393,7 +393,7 @@ describe('polyfill', () => {
     expect(globalThis.fetch).not.toBe(originalFetch)
 
     const httpServer = await Http.createServer(async (req, res) => {
-      const result = await Mpay_server.toNodeListener(
+      const result = await Mppx_server.toNodeListener(
         server.charge({
           amount: '1',
         }),
@@ -414,7 +414,7 @@ describe('polyfill', () => {
   test('behavior: polyfill false does not mutate globalThis.fetch', () => {
     const originalFetch = globalThis.fetch
 
-    Mpay.create({
+    Mppx.create({
       polyfill: false,
       methods: [
         tempo({
@@ -432,7 +432,7 @@ describe('restore', () => {
   test('default: restores original fetch', () => {
     const originalFetch = globalThis.fetch
 
-    Mpay.create({
+    Mppx.create({
       methods: [
         tempo({
           account: accounts[1],
@@ -443,7 +443,7 @@ describe('restore', () => {
 
     expect(globalThis.fetch).not.toBe(originalFetch)
 
-    Mpay.restore()
+    Mppx.restore()
 
     expect(globalThis.fetch).toBe(originalFetch)
   })
@@ -451,7 +451,7 @@ describe('restore', () => {
   test('behavior: noop when not polyfilled', () => {
     const originalFetch = globalThis.fetch
 
-    Mpay.create({
+    Mppx.create({
       polyfill: false,
       methods: [
         tempo({
@@ -461,7 +461,7 @@ describe('restore', () => {
       ],
     })
 
-    Mpay.restore()
+    Mppx.restore()
 
     expect(globalThis.fetch).toBe(originalFetch)
   })

@@ -30,7 +30,7 @@ export type AnyMethodIntent = MethodIntent<any, any>
  * @example
  * ```ts
  * import { z } from 'zod/mini'
- * import { MethodIntent } from 'mpay'
+ * import { MethodIntent } from 'mppx'
  *
  * const tempoCharge = MethodIntent.from({
  *   method: 'tempo',
@@ -61,7 +61,7 @@ export function from<const intent extends MethodIntent>(intent: intent): intent 
  * @example
  * ```ts
  * import { z } from 'zod/mini'
- * import { Intent, MethodIntent } from 'mpay'
+ * import { Intent, MethodIntent } from 'mppx'
  *
  * const tempoCharge = MethodIntent.fromIntent(Intent.charge, {
  *   method: 'tempo',
@@ -303,8 +303,8 @@ export type WithDefaults<request, defaults> = [keyof defaults] extends [never]
  *
  * @example
  * ```ts
- * import { MethodIntent } from 'mpay'
- * import { Intents } from 'mpay/tempo'
+ * import { MethodIntent } from 'mppx'
+ * import { Intents } from 'mppx/tempo'
  *
  * const tempoCharge = MethodIntent.toClient(Intents.charge, {
  *   async createCredential({ challenge }) {
@@ -343,8 +343,8 @@ export declare namespace toClient {
  *
  * @example
  * ```ts
- * import { MethodIntent } from 'mpay'
- * import { Intents } from 'mpay/tempo'
+ * import { MethodIntent } from 'mppx'
+ * import { Intents } from 'mppx/tempo'
  *
  * const tempoCharge = MethodIntent.toServer(Intents.charge, {
  *   async verify({ credential }) {

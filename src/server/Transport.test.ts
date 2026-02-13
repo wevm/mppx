@@ -1,6 +1,6 @@
-import { Challenge, Credential, Mcp, Receipt } from 'mpay'
-import { Transport } from 'mpay/server'
-import { MethodIntents as Intents } from 'mpay/tempo'
+import { Challenge, Credential, Mcp, Receipt } from 'mppx'
+import { Transport } from 'mppx/server'
+import { MethodIntents as Intents } from 'mppx/tempo'
 import { describe, expect, test } from 'vitest'
 import { BadRequestError, ChannelClosedError } from '../Errors.js'
 

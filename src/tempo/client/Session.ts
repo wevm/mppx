@@ -35,7 +35,7 @@ export const streamContextSchema = z.object({
 export type StreamContext = z.infer<typeof streamContextSchema>
 
 /**
- * Creates a session payment MethodIntent plugin for use with `Mpay.create()`.
+ * Creates a session payment MethodIntent plugin for use with `Mppx.create()`.
  *
  * Supports both auto mode (set `deposit` to manage channels automatically)
  * and manual mode (pass `context.action` to control each step).
@@ -43,26 +43,26 @@ export type StreamContext = z.infer<typeof streamContextSchema>
  * @example
  * ```ts
  * // Auto mode
- * import { Mpay, tempo } from 'mpay/client'
+ * import { Mppx, tempo } from 'mppx/client'
  *
- * const mpay = Mpay.create({
+ * const mppx = Mppx.create({
  *   methods: [tempo({
  *     account: privateKeyToAccount('0x...'),
  *     deposit: '10',
  *   })],
  * })
  *
- * const res = await mpay.fetch('/api/chat?prompt=hello')
+ * const res = await mppx.fetch('/api/chat?prompt=hello')
  * ```
  *
  * @example
  * ```ts
  * // Manual mode
- * const mpay = Mpay.create({
+ * const mppx = Mppx.create({
  *   methods: [tempo({ account })],
  * })
  *
- * const credential = await mpay.createCredential(response, {
+ * const credential = await mppx.createCredential(response, {
  *   action: 'voucher',
  *   channelId: '0x...',
  *   cumulativeAmount: '1',

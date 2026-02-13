@@ -1,8 +1,8 @@
 import express from 'express'
-import { Receipt } from 'mpay'
-import { Mpay as Mpay_client, session as sessionIntent, tempo as tempo_client } from 'mpay/client'
-import { Mpay } from 'mpay/express'
-import { tempo as tempo_server } from 'mpay/server'
+import { Receipt } from 'mppx'
+import { Mppx as Mppx_client, session as sessionIntent, tempo as tempo_client } from 'mppx/client'
+import { Mppx } from 'mppx/express'
+import { tempo as tempo_server } from 'mppx/server'
 import type { Address } from 'viem'
 import { Addresses } from 'viem/tempo'
 import { beforeAll, describe, expect, test } from 'vitest'
@@ -22,7 +22,7 @@ function createServer(app: express.Express) {
 }
 
 describe('charge', () => {
-  const mpay = Mpay.create({
+  const mppx = Mppx.create({
     methods: [
       tempo_server({
         getClient: () => client,
@@ -32,7 +32,7 @@ describe('charge', () => {
     ],
   })
 
-  const { fetch } = Mpay_client.create({
+  const { fetch } = Mppx_client.create({
     polyfill: false,
     methods: [
       tempo_client({
@@ -44,7 +44,7 @@ describe('charge', () => {
 
   test('returns 402 when no credential', async () => {
     const app = express()
-    app.get('/', mpay.charge({ amount: '1' }), (_req, res) => {
+    app.get('/', mppx.charge({ amount: '1' }), (_req, res) => {
       res.json({ fortune: 'You will be rich' })
     })
 
@@ -58,7 +58,7 @@ describe('charge', () => {
 
   test('returns 200 with receipt on valid payment', async () => {
     const app = express()
-    app.get('/', mpay.charge({ amount: '1' }), (_req, res) => {
+    app.get('/', mppx.charge({ amount: '1' }), (_req, res) => {
       res.json({ fortune: 'You will be rich' })
     })
 
@@ -90,7 +90,7 @@ describe('session', () => {
   })
 
   test('returns 402 when no credential', async () => {
-    const mpay = Mpay.create({
+    const mppx = Mppx.create({
       methods: [
         tempo_server.session({
           getClient: () => client,
@@ -102,7 +102,7 @@ describe('session', () => {
     })
 
     const app = express()
-    app.get('/', mpay.session({ amount: '1', unitType: 'token' }), (_req, res) => {
+    app.get('/', mppx.session({ amount: '1', unitType: 'token' }), (_req, res) => {
       res.json({ data: 'streamed' })
     })
 
@@ -115,7 +115,7 @@ describe('session', () => {
   })
 
   test('returns 200 with receipt on valid payment', async () => {
-    const mpay = Mpay.create({
+    const mppx = Mppx.create({
       methods: [
         tempo_server.session({
           getClient: () => client,
@@ -127,7 +127,7 @@ describe('session', () => {
       ],
     })
 
-    const { fetch } = Mpay_client.create({
+    const { fetch } = Mppx_client.create({
       polyfill: false,
       methods: [
         sessionIntent({
@@ -139,7 +139,7 @@ describe('session', () => {
     })
 
     const app = express()
-    app.get('/', mpay.session({ amount: '1', unitType: 'token' }), (_req, res) => {
+    app.get('/', mppx.session({ amount: '1', unitType: 'token' }), (_req, res) => {
       res.json({ data: 'streamed' })
     })
 

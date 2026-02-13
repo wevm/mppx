@@ -5,7 +5,7 @@ import * as Headers from './internal/Headers.js'
 import * as Route from './internal/Route.js'
 import * as Service from './Service.js'
 
-/** A paid API proxy that gates upstream services behind the mpay 402 protocol. */
+/** A paid API proxy that gates upstream services behind the mppx 402 protocol. */
 export type Proxy = {
   /** Fetch API handler. Works with Bun, Deno, Next.js, Hono, Elysia, SvelteKit, etc. */
   fetch: (request: Request) => Promise<Response>
@@ -17,21 +17,21 @@ export type Proxy = {
  * Creates a paid API proxy.
  *
  * Routes incoming requests to upstream services, injects credentials,
- * and requires payment via the mpay 402 protocol for non-free endpoints.
+ * and requires payment via the mppx 402 protocol for non-free endpoints.
  *
  * @example
  * ```ts
- * import { Proxy, openai } from 'mpay/proxy'
- * import { Mpay, tempo } from 'mpay/server'
+ * import { Proxy, openai } from 'mppx/proxy'
+ * import { Mppx, tempo } from 'mppx/server'
  *
- * const mpay = Mpay.create({ methods: [tempo()] })
+ * const mppx = Mppx.create({ methods: [tempo()] })
  *
  * const proxy = Proxy.create({
  *   services: [
  *     openai({
  *       apiKey: 'sk-...',
  *       routes: {
- *         'POST /v1/chat/completions': mpay.charge({ amount: '0.05' }),
+ *         'POST /v1/chat/completions': mppx.charge({ amount: '0.05' }),
  *         'GET /v1/models': true,
  *       },
  *     }),

@@ -1,6 +1,6 @@
-# mpay Examples
+# mppx Examples
 
-Standalone, runnable examples demonstrating the mpay HTTP 402 payment flow.
+Standalone, runnable examples demonstrating the mppx HTTP 402 payment flow.
 
 ## Examples
 
@@ -27,5 +27,5 @@ This will show a picker to select which example to run.
 You can install any example directly into your project:
 
 ```bash
-npx gitpick wevm/mpay/examples/basic
+npx gitpick wevm/mppx/examples/basic
 ```

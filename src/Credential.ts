@@ -25,7 +25,7 @@ export type Credential<
  *
  * @example
  * ```ts
- * import { Credential } from 'mpay'
+ * import { Credential } from 'mppx'
  *
  * const credential = Credential.deserialize(header)
  * ```
@@ -62,7 +62,7 @@ export function deserialize<payload = unknown>(value: string): Credential<payloa
  *
  * @example
  * ```ts
- * import { Credential, Challenge } from 'mpay'
+ * import { Credential, Challenge } from 'mppx'
  *
  * const credential = Credential.from({
  *   challenge,
@@ -100,7 +100,7 @@ export declare namespace from {
  *
  * @example
  * ```ts
- * import { Credential } from 'mpay'
+ * import { Credential } from 'mppx'
  *
  * const credential = Credential.fromRequest(request)
  * ```
@@ -121,7 +121,7 @@ export function fromRequest<payload = unknown>(request: Request): Credential<pay
  *
  * @example
  * ```ts
- * import { Credential } from 'mpay'
+ * import { Credential } from 'mppx'
  *
  * const header = Credential.serialize(credential)
  * // => 'Payment eyJjaGFsbGVuZ2UiOnsi...'

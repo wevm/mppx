@@ -1,4 +1,4 @@
-import { MethodIntents } from 'mpay/stripe'
+import { MethodIntents } from 'mppx/stripe'
 import { describe, expect, expectTypeOf, test } from 'vitest'
 
 describe('charge', () => {

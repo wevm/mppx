@@ -7,9 +7,9 @@ import { sessionManager as session_ } from './SessionManager.js'
  *
  * @example
  * ```ts
- * import { Mpay, tempo } from 'mpay/client'
+ * import { Mppx, tempo } from 'mppx/client'
  *
- * const mpay = Mpay.create({
+ * const mppx = Mppx.create({
  *   methods: [tempo({ account })],
  * })
  * ```

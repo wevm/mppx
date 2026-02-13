@@ -9,15 +9,15 @@ import { rpcUrl } from '~test/tempo/prool.js'
 import { deployEscrow } from '~test/tempo/stream.js'
 import { accounts, asset, client, fundAccount } from '~test/tempo/viem.js'
 import * as Store from './Store.js'
-import * as Mpay_server from './server/Mpay.js'
-import { toNodeListener } from './server/Mpay.js'
+import * as Mppx_server from './server/Mppx.js'
+import { toNodeListener } from './server/Mppx.js'
 import { tempo } from './tempo/server/MethodIntents.js'
 
 const cliPath = path.resolve(import.meta.dirname, 'cli.ts')
 const cwd = path.resolve(import.meta.dirname, '..')
 const testPrivateKey = generatePrivateKey()
 const testAccount = privateKeyToAccount(testPrivateKey)
-const env = { ...process.env, NODE_NO_WARNINGS: '1', MPAY_PRIVATE_KEY: testPrivateKey }
+const env = { ...process.env, NODE_NO_WARNINGS: '1', MPPX_PRIVATE_KEY: testPrivateKey }
 
 function run(args: string[], options?: { input?: string }): string {
   const result = runRaw(args, options)
@@ -97,7 +97,7 @@ describe('basic charge (examples/basic)', () => {
       amount: parseUnits('100', 6),
     })
 
-    const server = Mpay_server.create({
+    const server = Mppx_server.create({
       methods: [tempo.charge({ getClient: () => client })],
       realm: 'cli-test-basic',
       secretKey: 'cli-test-secret',
@@ -149,7 +149,7 @@ describe('session multi-fetch (examples/session/multi-fetch)', () => {
 
     const escrow = await deployEscrow()
     const store = Store.memory()
-    const server = Mpay_server.create({
+    const server = Mppx_server.create({
       methods: [
         tempo.session({
           account: accounts[0],
@@ -197,7 +197,7 @@ describe('session multi-fetch (examples/session/multi-fetch)', () => {
 
       const escrow = await deployEscrow()
       const store = Store.memory()
-      const server = Mpay_server.create({
+      const server = Mppx_server.create({
         methods: [
           tempo.session({
             account: accounts[0],
@@ -282,7 +282,7 @@ describe('session sse (examples/session/sse)', () => {
 
     const escrow = await deployEscrow()
     const store = Store.memory()
-    const server = Mpay_server.create({
+    const server = Mppx_server.create({
       methods: [
         tempo.session({
           account: accounts[0],
@@ -352,9 +352,9 @@ describe('session sse (examples/session/sse)', () => {
 // TODO: investigate account tests timing out in CI (secret-tool/gnome-keyring hangs)
 // ---------------------------------------------------------------------------
 describe.skipIf(!!process.env.CI)('account', () => {
-  // Env without MPAY_PRIVATE_KEY so account commands use the keychain
+  // Env without MPPX_PRIVATE_KEY so account commands use the keychain
   const accountEnv = { ...process.env, NODE_NO_WARNINGS: '1' }
-  const prefix = `__mpay_test_${Date.now()}`
+  const prefix = `__mppx_test_${Date.now()}`
   const createdAccounts: string[] = []
 
   function accountRun(args: string[], options?: { input?: string }) {
@@ -489,22 +489,22 @@ describe.skipIf(!!process.env.CI)('account', () => {
   })
 })
 
-test('mpay --help', () => {
+test('mppx --help', () => {
   const { version } = require('../package.json') as { version: string }
-  const stdout = run(['--help']).replace(`mpay/${version}`, 'mpay/x.y.z')
+  const stdout = run(['--help']).replace(`mppx/${version}`, 'mppx/x.y.z')
   expect(stdout).toMatchInlineSnapshot(`
-    "mpay/x.y.z
+    "mppx/x.y.z
 
     Usage:
-      $ mpay [url]
+      $ mppx [url]
 
     Commands:
       [url]             Make HTTP request with automatic payment
       account [action]  Manage accounts (create, default, delete, fund, list, view)
 
     For more info, run any command with the \`--help\` flag:
-      $ mpay --help
-      $ mpay account --help
+      $ mppx --help
+      $ mppx account --help
 
     Actions:
       create   Create new account
@@ -515,12 +515,12 @@ test('mpay --help', () => {
       view     View account address
 
     Options:
-      -a, --account <name>   Account name (env: MPAY_ACCOUNT) 
+      -a, --account <name>   Account name (env: MPPX_ACCOUNT) 
       -d, --data <data>      Send request body (implies POST unless -X is set) 
       -f, --fail             Fail silently on HTTP errors (exit 22) 
       -i, --include          Include response headers in output 
       -k, --insecure         Skip TLS certificate verification (true for localhost/.local) 
-      -r, --rpc-url <url>    RPC endpoint, defaults to public RPC for chain (env: MPAY_RPC_URL) 
+      -r, --rpc-url <url>    RPC endpoint, defaults to public RPC for chain (env: MPPX_RPC_URL) 
       -s, --silent           Silent mode (suppress progress and info) 
       -v, --verbose          Show request/response headers 
       -A, --user-agent <ua>  Set User-Agent header 
@@ -535,8 +535,8 @@ test('mpay --help', () => {
       -h, --help             Display this message 
 
     Examples:
-    mpay example.com/content
-    mpay example.com/api --json '{"key":"value"}'
+    mppx example.com/content
+    mppx example.com/api --json '{"key":"value"}'
     "
   `)
 })

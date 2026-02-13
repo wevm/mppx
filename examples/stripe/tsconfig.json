@@ -9,8 +9,8 @@
     "noEmit": true,
     "types": ["vite/client", "node"],
     "paths": {
-      "mpay": ["../../src/index.ts"],
-      "mpay/*": ["../../src/*/index.ts"]
+      "mppx": ["../../src/index.ts"],
+      "mppx/*": ["../../src/*/index.ts"]
     }
   },
   "include": ["src/**/*"]

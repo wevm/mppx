@@ -1,6 +1,6 @@
-import { Receipt } from 'mpay'
-import { Mpay as Mpay_client, tempo as tempo_client } from 'mpay/client'
-import { Mpay as Mpay_server, tempo as tempo_server } from 'mpay/server'
+import { Receipt } from 'mppx'
+import { Mppx as Mppx_client, tempo as tempo_client } from 'mppx/client'
+import { Mppx as Mppx_server, tempo as tempo_server } from 'mppx/server'
 import { afterEach, describe, expect, test } from 'vitest'
 import * as Http from '~test/Http.js'
 import { accounts, asset, client } from '~test/tempo/viem.js'
@@ -9,7 +9,7 @@ import * as Service from './Service.js'
 import { anthropic } from './services/anthropic.js'
 import { openai } from './services/openai.js'
 
-const mpay_server = Mpay_server.create({
+const mppx_server = Mppx_server.create({
   methods: [
     tempo_server({
       account: accounts[0],
@@ -20,7 +20,7 @@ const mpay_server = Mpay_server.create({
   ],
 })
 
-const mpay_client = Mpay_client.create({
+const mppx_client = Mppx_client.create({
   polyfill: false,
   methods: [
     tempo_client({
@@ -68,8 +68,8 @@ describe('create', () => {
           baseUrl: 'https://api.example.com',
           routes: {
             'GET /v1/models': true,
-            'POST /v1/generate': mpay_server.charge({ amount: '1', description: 'Generate text' }),
-            'POST /v1/stream': mpay_server.session({
+            'POST /v1/generate': mppx_server.charge({ amount: '1', description: 'Generate text' }),
+            'POST /v1/stream': mppx_server.session({
               amount: '1',
               description: 'Stream text',
               unitType: 'token',
@@ -135,11 +135,11 @@ describe('create', () => {
         openai({
           apiKey: 'sk-test',
           routes: {
-            'POST /v1/chat/completions': mpay_server.charge({
+            'POST /v1/chat/completions': mppx_server.charge({
               amount: '0.05',
               description: 'Chat completion',
             }),
-            'POST /v1/embeddings': mpay_server.charge({
+            'POST /v1/embeddings': mppx_server.charge({
               amount: '0.01',
               description: 'Generate embeddings',
             }),
@@ -148,11 +148,11 @@ describe('create', () => {
         anthropic({
           apiKey: 'sk-ant-test',
           routes: {
-            'POST /v1/messages': mpay_server.charge({
+            'POST /v1/messages': mppx_server.charge({
               amount: '0.03',
               description: 'Send message',
             }),
-            'POST /v1/messages/stream': mpay_server.session({
+            'POST /v1/messages/stream': mppx_server.session({
               amount: '0.01',
               description: 'Stream message',
               unitType: 'token',
@@ -197,7 +197,7 @@ describe('create', () => {
           baseUrl: 'https://api.example.com',
           routes: {
             'GET /v1/models': true,
-            'POST /v1/generate': mpay_server.charge({ amount: '1', description: 'Generate text' }),
+            'POST /v1/generate': mppx_server.charge({ amount: '1', description: 'Generate text' }),
           },
         }),
       ],
@@ -295,7 +295,7 @@ describe('create', () => {
       services: [
         Service.from('api', {
           baseUrl: upstream.url,
-          routes: { 'GET /v1/generate': mpay_server.charge({ amount: '1', decimals: 6 }) },
+          routes: { 'GET /v1/generate': mppx_server.charge({ amount: '1', decimals: 6 }) },
         }),
       ],
     })
@@ -306,20 +306,20 @@ describe('create', () => {
     expect(res.headers.get('WWW-Authenticate')).toContain('Payment')
   })
 
-  test('behavior: full 402 flow with mpay client', async () => {
+  test('behavior: full 402 flow with mppx client', async () => {
     upstream = await createUpstream((req) => Response.json({ path: new URL(req.url).pathname }))
     const proxy = ApiProxy.create({
       services: [
         Service.from('api', {
           baseUrl: upstream.url,
           bearer: 'sk-upstream-key',
-          routes: { 'GET /v1/generate': mpay_server.charge({ amount: '1', decimals: 6 }) },
+          routes: { 'GET /v1/generate': mppx_server.charge({ amount: '1', decimals: 6 }) },
         }),
       ],
     })
     proxyServer = await Http.createServer(proxy.listener)
 
-    const res = await mpay_client.fetch(`${proxyServer.url}/api/v1/generate`)
+    const res = await mppx_client.fetch(`${proxyServer.url}/api/v1/generate`)
     expect(res.status).toBe(200)
     expect(await res.json()).toEqual({ path: '/v1/generate' })
 
@@ -337,13 +337,13 @@ describe('create', () => {
         Service.from('api', {
           baseUrl: upstream.url,
           bearer: 'sk-test-123',
-          routes: { 'GET /v1/data': mpay_server.charge({ amount: '1', decimals: 6 }) },
+          routes: { 'GET /v1/data': mppx_server.charge({ amount: '1', decimals: 6 }) },
         }),
       ],
     })
     proxyServer = await Http.createServer(proxy.listener)
 
-    const res = await mpay_client.fetch(`${proxyServer.url}/api/v1/data`)
+    const res = await mppx_client.fetch(`${proxyServer.url}/api/v1/data`)
     expect(res.status).toBe(200)
     expect(await res.json()).toEqual({ auth: 'Bearer sk-test-123' })
   })
@@ -355,13 +355,13 @@ describe('create', () => {
         Service.from('api', {
           baseUrl: upstream.url,
           headers: { 'X-Api-Key': 'secret' },
-          routes: { 'GET /v1/data': mpay_server.charge({ amount: '1', decimals: 6 }) },
+          routes: { 'GET /v1/data': mppx_server.charge({ amount: '1', decimals: 6 }) },
         }),
       ],
     })
     proxyServer = await Http.createServer(proxy.listener)
 
-    const res = await mpay_client.fetch(`${proxyServer.url}/api/v1/data`)
+    const res = await mppx_client.fetch(`${proxyServer.url}/api/v1/data`)
     expect(res.status).toBe(200)
     expect(await res.json()).toEqual({ key: 'secret' })
   })

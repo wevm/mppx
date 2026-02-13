@@ -1,11 +1,11 @@
-import { tempo } from 'mpay/server'
+import { tempo } from 'mppx/server'
 import { createClient, http } from 'viem'
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts'
 import { describe, expectTypeOf, test } from 'vitest'
 import * as Intent from '../Intent.js'
 import * as MethodIntent from '../MethodIntent.js'
 import * as z from '../zod.js'
-import * as Mpay from './Mpay.js'
+import * as Mppx from './Mppx.js'
 
 const account = privateKeyToAccount(generatePrivateKey())
 const getClient = () => createClient({ account, transport: http() })
@@ -22,7 +22,7 @@ const fooCharge = MethodIntent.fromIntent(Intent.charge, {
   },
 })
 
-describe('Mpay', () => {
+describe('Mppx', () => {
   test('has methods and realm properties', () => {
     const method = MethodIntent.toServer(fooCharge, {
       async verify() {
@@ -35,7 +35,7 @@ describe('Mpay', () => {
       },
     })
 
-    const handler = Mpay.create({
+    const handler = Mppx.create({
       methods: [method],
       realm: 'api.example.com',
       secretKey: 'secret',
@@ -57,7 +57,7 @@ describe('Mpay', () => {
       },
     })
 
-    const handler = Mpay.create({
+    const handler = Mppx.create({
       methods: [method],
       realm: 'api.example.com',
       secretKey: 'secret',
@@ -78,7 +78,7 @@ describe('Mpay', () => {
       },
     })
 
-    const handler = Mpay.create({
+    const handler = Mppx.create({
       methods: [method],
       realm: 'api.example.com',
       secretKey: 'secret',
@@ -105,7 +105,7 @@ describe('Mpay', () => {
       },
     })
 
-    const handler = Mpay.create({
+    const handler = Mppx.create({
       methods: [method],
       realm: 'api.example.com',
       secretKey: 'secret',
@@ -174,7 +174,7 @@ describe('Mpay', () => {
       },
     })
 
-    const handler = Mpay.create({
+    const handler = Mppx.create({
       methods: [chargeMethod, authorizeMethod],
       realm: 'api.example.com',
       secretKey: 'secret',
@@ -195,7 +195,7 @@ describe('Mpay', () => {
 
   describe('defaults', () => {
     test('defaulted fields are optional in intent options', () => {
-      const handler = Mpay.create({
+      const handler = Mppx.create({
         methods: [tempo({ currency: '0x1234', recipient: '0xabc', getClient })],
         realm: 'api.example.com',
         secretKey: 'secret',
@@ -217,7 +217,7 @@ describe('Mpay', () => {
     })
 
     test('non-defaulted fields remain required', () => {
-      const handler = Mpay.create({
+      const handler = Mppx.create({
         methods: [tempo({ currency: '0x1234', getClient })],
         realm: 'api.example.com',
         secretKey: 'secret',
@@ -232,7 +232,7 @@ describe('Mpay', () => {
     })
 
     test('no defaults means all fields required', () => {
-      const handler = Mpay.create({
+      const handler = Mppx.create({
         methods: [tempo({ getClient })],
         realm: 'api.example.com',
         secretKey: 'secret',
@@ -248,7 +248,7 @@ describe('Mpay', () => {
     })
 
     test('type: defaulted fields are optional in options type', () => {
-      const handler = Mpay.create({
+      const handler = Mppx.create({
         methods: [tempo({ currency: '0x1234', recipient: '0xabc', getClient })],
         realm: 'api.example.com',
         secretKey: 'secret',
@@ -265,7 +265,7 @@ describe('Mpay', () => {
     })
 
     test('account as Account defaults recipient', () => {
-      const handler = Mpay.create({
+      const handler = Mppx.create({
         methods: [tempo.charge({ currency: '0x1234', account })],
         realm: 'api.example.com',
         secretKey: 'secret',
@@ -286,7 +286,7 @@ describe('Mpay', () => {
     })
 
     test('account as Account with feePayer: true', () => {
-      const handler = Mpay.create({
+      const handler = Mppx.create({
         methods: [tempo.charge({ currency: '0x1234', account, feePayer: true })],
         realm: 'api.example.com',
         secretKey: 'secret',
@@ -301,7 +301,7 @@ describe('Mpay', () => {
 
   describe('session getClient', () => {
     test('tempo.session requires getClient', () => {
-      Mpay.create({
+      Mppx.create({
         methods: [
           tempo.session({
             currency: '0x1234',
@@ -315,7 +315,7 @@ describe('Mpay', () => {
     })
 
     test('combined tempo() requires getClient', () => {
-      Mpay.create({
+      Mppx.create({
         methods: [tempo({ currency: '0x1234', recipient: '0xabc', getClient })],
         realm: 'api.example.com',
         secretKey: 'secret',
@@ -323,7 +323,7 @@ describe('Mpay', () => {
     })
 
     test('tempo.charge does not require getClient', () => {
-      Mpay.create({
+      Mppx.create({
         methods: [tempo.charge({ currency: '0x1234', recipient: '0xabc' })],
         realm: 'api.example.com',
         secretKey: 'secret',
@@ -334,7 +334,7 @@ describe('Mpay', () => {
 
 describe('create.Config', () => {
   test('requires methods, realm, and secretKey', () => {
-    type Config = Mpay.create.Config
+    type Config = Mppx.create.Config
 
     expectTypeOf<Config>().toHaveProperty('methods')
     expectTypeOf<Config>().toHaveProperty('realm')

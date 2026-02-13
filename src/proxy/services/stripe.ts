@@ -11,7 +11,7 @@ import * as Service from '../Service.js'
  * stripe({
  *   apiKey: 'sk-...',
  *   routes: {
- *     'POST /v1/charges': mpay.charge({ amount: '1' }),
+ *     'POST /v1/charges': mppx.charge({ amount: '1' }),
  *     'GET /v1/customers/:id': true,
  *   },
  * })

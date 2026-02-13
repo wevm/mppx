@@ -1,4 +1,4 @@
-import { Mpay, tempo } from 'mpay/server'
+import { Mppx, tempo } from 'mppx/server'
 import { createClient, http } from 'viem'
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts'
 import { tempoModerato } from 'viem/chains'
@@ -7,7 +7,7 @@ import { Actions } from 'viem/tempo'
 const account = privateKeyToAccount(generatePrivateKey())
 const currency = '0x20c0000000000000000000000000000000000001' as const // alphaUSD
 
-const mpay = Mpay.create({
+const mppx = Mppx.create({
   methods: [
     tempo({
       currency,
@@ -26,7 +26,7 @@ export async function handler(request: Request): Promise<Response | null> {
 
   // Paid
   if (url.pathname === '/api/fortune') {
-    const result = await mpay.charge({ amount: '1' })(request)
+    const result = await mppx.charge({ amount: '1' })(request)
 
     if (result.status === 402) return result.challenge
 

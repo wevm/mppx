@@ -11,7 +11,7 @@ import * as Service from '../Service.js'
  * openai({
  *   apiKey: 'sk-...',
  *   routes: {
- *     'POST /v1/chat/completions': mpay.charge({ amount: '0.05' }),
+ *     'POST /v1/chat/completions': mppx.charge({ amount: '0.05' }),
  *     'GET /v1/models': true,
  *   },
  * })

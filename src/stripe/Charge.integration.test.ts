@@ -1,6 +1,6 @@
-import { Challenge, Credential, Receipt } from 'mpay'
-import { Mpay as Mpay_client, stripe as stripe_client } from 'mpay/client'
-import { Mpay as Mpay_server, stripe as stripe_server } from 'mpay/server'
+import { Challenge, Credential, Receipt } from 'mppx'
+import { Mppx as Mppx_client, stripe as stripe_client } from 'mppx/client'
+import { Mppx as Mppx_server, stripe as stripe_server } from 'mppx/server'
 import { afterEach, describe, expect, test } from 'vitest'
 import * as Http from '~test/Http.js'
 
@@ -73,7 +73,7 @@ async function createTestSpt(parameters: {
 }
 
 describe.skipIf(!stripeSecretKey)('stripe', () => {
-  const server = Mpay_server.create({
+  const server = Mppx_server.create({
     methods: [
       stripe_server.charge({
         secretKey: stripeSecretKey!,
@@ -95,7 +95,7 @@ describe.skipIf(!stripeSecretKey)('stripe', () => {
   describe('intent: charge; type: spt', () => {
     test('default', async () => {
       httpServer = await Http.createServer(async (req, res) => {
-        const result = await Mpay_server.toNodeListener(
+        const result = await Mppx_server.toNodeListener(
           server.charge({ amount: '1', currency: 'usd', decimals: 2 }),
         )(req, res)
         if (result.status === 402) return
@@ -141,7 +141,7 @@ describe.skipIf(!stripeSecretKey)('stripe', () => {
 
     test('behavior: rejects invalid SPT', async () => {
       httpServer = await Http.createServer(async (req, res) => {
-        const result = await Mpay_server.toNodeListener(
+        const result = await Mppx_server.toNodeListener(
           server.charge({ amount: '1', currency: 'usd', decimals: 2 }),
         )(req, res)
         if (result.status === 402) return
@@ -168,7 +168,7 @@ describe.skipIf(!stripeSecretKey)('stripe', () => {
 
     test('behavior: rejects expired challenge', async () => {
       httpServer = await Http.createServer(async (req, res) => {
-        const result = await Mpay_server.toNodeListener(
+        const result = await Mppx_server.toNodeListener(
           server.charge({
             amount: '1',
             currency: 'usd',
@@ -202,7 +202,7 @@ describe.skipIf(!stripeSecretKey)('stripe', () => {
 
     test('behavior: rejects malformed credential payload (missing spt)', async () => {
       httpServer = await Http.createServer(async (req, res) => {
-        const result = await Mpay_server.toNodeListener(
+        const result = await Mppx_server.toNodeListener(
           server.charge({ amount: '1', currency: 'usd', decimals: 2 }),
         )(req, res)
         if (result.status === 402) return
@@ -227,7 +227,7 @@ describe.skipIf(!stripeSecretKey)('stripe', () => {
 
     test('behavior: receipt format stability', async () => {
       httpServer = await Http.createServer(async (req, res) => {
-        const result = await Mpay_server.toNodeListener(
+        const result = await Mppx_server.toNodeListener(
           server.charge({ amount: '1', currency: 'usd', decimals: 2 }),
         )(req, res)
         if (result.status === 402) return
@@ -256,15 +256,15 @@ describe.skipIf(!stripeSecretKey)('stripe', () => {
     })
   })
 
-  describe('intent: charge; type: spt; via Mpay', () => {
+  describe('intent: charge; type: spt; via Mppx', () => {
     test('default', async () => {
-      const mpay = Mpay_client.create({
+      const mppx = Mppx_client.create({
         polyfill: false,
         methods: [clientCharge],
       })
 
       httpServer = await Http.createServer(async (req, res) => {
-        const result = await Mpay_server.toNodeListener(
+        const result = await Mppx_server.toNodeListener(
           server.charge({ amount: '1', currency: 'usd', decimals: 2 }),
         )(req, res)
         if (result.status === 402) return
@@ -274,7 +274,7 @@ describe.skipIf(!stripeSecretKey)('stripe', () => {
       const response = await fetch(httpServer.url)
       expect(response.status).toBe(402)
 
-      const credential = await mpay.createCredential(response)
+      const credential = await mppx.createCredential(response)
 
       {
         const response = await fetch(httpServer.url, {
@@ -300,21 +300,21 @@ describe.skipIf(!stripeSecretKey)('stripe', () => {
       }
     })
 
-    test('behavior: full mpay.fetch() auto flow', async () => {
-      const mpay = Mpay_client.create({
+    test('behavior: full mppx.fetch() auto flow', async () => {
+      const mppx = Mppx_client.create({
         polyfill: false,
         methods: [clientCharge],
       })
 
       httpServer = await Http.createServer(async (req, res) => {
-        const result = await Mpay_server.toNodeListener(
+        const result = await Mppx_server.toNodeListener(
           server.charge({ amount: '1', currency: 'usd', decimals: 2 }),
         )(req, res)
         if (result.status === 402) return
         res.end('OK')
       })
 
-      const response = await mpay.fetch(httpServer.url)
+      const response = await mppx.fetch(httpServer.url)
       expect(response.status).toBe(200)
 
       const receipt = Receipt.fromResponse(response)

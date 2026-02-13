@@ -1,13 +1,13 @@
 import { loadStripe } from '@stripe/stripe-js'
-import { Challenge, Receipt } from 'mpay'
-import { stripe } from 'mpay/client'
+import { Challenge, Receipt } from 'mppx'
+import { stripe } from 'mppx/client'
 
 const stripePublishableKey = import.meta.env.VITE_STRIPE_PUBLIC_KEY as string
 if (!stripePublishableKey) {
   throw new Error('Missing VITE_STRIPE_PUBLIC_KEY')
 }
 
-// MPay client for handling stripe charges
+// MPPX client for handling stripe charges
 const charge = stripe.charge({
   createSpt: async (params) => {
     log('Creating SPT...')

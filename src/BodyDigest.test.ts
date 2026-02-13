@@ -1,4 +1,4 @@
-import { BodyDigest } from 'mpay'
+import { BodyDigest } from 'mppx'
 import { describe, expect, test } from 'vitest'
 
 describe('compute', () => {

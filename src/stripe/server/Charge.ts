@@ -14,7 +14,7 @@ import * as Intents from '../Intents.js'
  *
  * @example
  * ```ts
- * import { stripe } from 'mpay/server'
+ * import { stripe } from 'mppx/server'
  *
  * const charge = stripe.charge({ secretKey: 'sk_...' })
  * ```
@@ -79,7 +79,7 @@ export function charge<const parameters extends charge.Parameters>(parameters: p
         headers: {
           Authorization: `Basic ${btoa(`${secretKey}:`)}`,
           'Content-Type': 'application/x-www-form-urlencoded',
-          'Idempotency-Key': `mpay_${challenge.id}_${spt}`,
+          'Idempotency-Key': `mppx_${challenge.id}_${spt}`,
         },
         body,
       })

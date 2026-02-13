@@ -26,7 +26,7 @@ export type CallToolResult = Awaited<ReturnType<Client['callTool']>> & {
  * @example
  * ```ts
  * import { Client } from '@modelcontextprotocol/sdk/client'
- * import { McpClient, tempo } from 'mpay/mcp-sdk/client'
+ * import { McpClient, tempo } from 'mppx/mcp-sdk/client'
  * import { privateKeyToAccount } from 'viem/accounts'
  *
  * const client = new Client({ name: 'my-client', version: '1.0.0' })

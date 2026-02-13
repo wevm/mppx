@@ -1,5 +1,5 @@
-import { Challenge } from 'mpay'
-import { MethodIntents as Intents } from 'mpay/tempo'
+import { Challenge } from 'mppx'
+import { MethodIntents as Intents } from 'mppx/tempo'
 import { describe, expect, test } from 'vitest'
 
 describe('from', () => {

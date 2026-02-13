@@ -5,9 +5,9 @@ import { charge as charge_ } from './Charge.js'
  *
  * @example
  * ```ts
- * import { Mpay, stripe } from 'mpay/server'
+ * import { Mppx, stripe } from 'mppx/server'
  *
- * const mpay = Mpay.create({
+ * const mppx = Mppx.create({
  *   methods: [stripe({ secretKey: 'sk_...' })],
  * })
  * ```

@@ -9,7 +9,7 @@ let originalFetch: typeof globalThis.fetch | undefined
  *
  * @example
  * ```ts
- * import { Fetch, tempo } from 'mpay/client'
+ * import { Fetch, tempo } from 'mppx/client'
  * import { privateKeyToAccount } from 'viem/accounts'
  *
  * const fetch = Fetch.from({
@@ -95,7 +95,7 @@ export declare namespace from {
  *
  * @example
  * ```ts
- * import { Fetch, tempo } from 'mpay/client'
+ * import { Fetch, tempo } from 'mppx/client'
  * import { privateKeyToAccount } from 'viem/accounts'
  *
  * Fetch.polyfill({
@@ -128,7 +128,7 @@ export declare namespace polyfill {
  *
  * @example
  * ```ts
- * import { Fetch } from 'mpay/client'
+ * import { Fetch } from 'mppx/client'
  *
  * Fetch.polyfill({ methods: [...] })
  *

@@ -1,4 +1,4 @@
-// mpay Streaming Payment Channel — Server Example
+// mppx Streaming Payment Channel — Server Example
 
 //
 // This server demonstrates how to charge per-request using payment channels.
@@ -23,10 +23,10 @@
 //      the owed amount to the server and refunds the remainder to the client.
 //
 
-// `Mpay` is the server-side payment handler that manages challenges, credential
+// `Mppx` is the server-side payment handler that manages challenges, credential
 // verification, and receipt generation. `tempo` provides the Tempo-specific
 // streaming payment method.
-import { Mpay, tempo } from 'mpay/server'
+import { Mppx, tempo } from 'mppx/server'
 import { createClient, http } from 'viem'
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts'
 import { tempoModerato } from 'viem/chains'
@@ -59,7 +59,7 @@ const client = createClient({
 // Payment handler setup
 
 //
-// `Mpay.create()` builds a payment handler from one or more payment methods.
+// `Mppx.create()` builds a payment handler from one or more payment methods.
 // Each method defines how challenges are issued, credentials are verified,
 // and receipts are generated.
 //
@@ -84,7 +84,7 @@ const client = createClient({
 //     If you omit the account from the client, channel opens will work (the
 //     client's signed tx is broadcast) but closes will silently fail — the
 //     server can't sign the settle tx without a key.
-const mpay = Mpay.create({
+const mppx = Mppx.create({
   methods: [
     tempo.session({
       account,
@@ -110,8 +110,8 @@ export async function handler(request: Request): Promise<Response | null> {
   if (url.pathname === '/api/scrape') {
     const pageUrl = url.searchParams.get('url') ?? 'https://example.com'
 
-    // `mpay.session()` returns a curried function:
-    //   mpay.session({ amount, unitType }) → (request) → result
+    // `mppx.session()` returns a curried function:
+    //   mppx.session({ amount, unitType }) → (request) → result
     //
     // The first call configures the per-request payment parameters:
     //   - `amount: '0.01'` — each request costs 0.01 pathUSD (in human units, 6 decimals)
@@ -127,7 +127,7 @@ export async function handler(request: Request): Promise<Response | null> {
     // always produces the same HMAC-bound challenge ID. This means the server is stateless —
     // it doesn't need to store issued challenges. When the client echoes back the challenge
     // in its credential, the server just recomputes the HMAC and verifies it matches.
-    const result = await mpay.session({
+    const result = await mppx.session({
       amount: '0.01',
       unitType: 'page',
     })(request)

@@ -29,9 +29,9 @@ export type McpSdk = Transport.Transport<Extra, McpError, CallToolResult>
  * @example
  * ```ts
  * import { McpServer } from '@modelcontextprotocol/sdk/server/mcp'
- * import { Mpay, Transport } from 'mpay/server'
+ * import { Mppx, Transport } from 'mppx/server'
  *
- * const payment = Mpay.create({
+ * const payment = Mppx.create({
  *   method: tempo(),
  *   secretKey: process.env.SECRET_KEY,
  *   transport: Transport.mcpSdk(),
@@ -63,7 +63,7 @@ export function mcpSdk(): McpSdk {
           McpErrorClass = mod.McpError
         } catch (error) {
           const err = new Error(
-            'Missing optional dependency "@modelcontextprotocol/sdk". Install it to use mpay MCP SDK transports.',
+            'Missing optional dependency "@modelcontextprotocol/sdk". Install it to use mppx MCP SDK transports.',
           )
           ;(err as Error & { cause?: unknown }).cause = error
           throw err

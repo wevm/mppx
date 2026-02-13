@@ -1,9 +1,9 @@
-import { Mpay, stripe } from 'mpay/server'
+import { Mppx, stripe } from 'mppx/server'
 
 const secretKey = process.env.VITE_STRIPE_SECRET_KEY!
 
 //
-const mpay = Mpay.create({
+const mppx = Mppx.create({
   methods: [
     stripe.charge({
       secretKey,
@@ -89,7 +89,7 @@ export async function handler(request: Request): Promise<Response | null> {
   }
 
   if (url.pathname === '/api/fortune') {
-    const result = await mpay.charge({
+    const result = await mppx.charge({
       amount: '1',
       currency: 'usd',
       decimals: 2,

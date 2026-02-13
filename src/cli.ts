@@ -14,7 +14,7 @@ import { tempo as tempoMainnet, tempoModerato } from 'viem/chains'
 import { type ZodMiniType, z } from 'zod/mini'
 import * as Challenge from './Challenge.js'
 import * as Credential from './Credential.js'
-import * as Mpay from './client/Mpay.js'
+import * as Mppx from './client/Mppx.js'
 import { tempo } from './tempo/client/index.js'
 import type { StreamCredentialPayload } from './tempo/stream/Types.js'
 import { signVoucher } from './tempo/stream/Voucher.js'
@@ -26,14 +26,14 @@ const cli = cac(name)
 
 cli
   .command('[url]', 'Make HTTP request with automatic payment')
-  .option('-a, --account <name>', 'Account name (env: MPAY_ACCOUNT)')
+  .option('-a, --account <name>', 'Account name (env: MPPX_ACCOUNT)')
   .option('-d, --data <data>', 'Send request body (implies POST unless -X is set)')
   .option('-f, --fail', 'Fail silently on HTTP errors (exit 22)')
   .option('-i, --include', 'Include response headers in output')
   .option('-k, --insecure', 'Skip TLS certificate verification (true for localhost/.local)')
   .option(
     '-r, --rpc-url <url>',
-    'RPC endpoint, defaults to public RPC for chain (env: MPAY_RPC_URL)',
+    'RPC endpoint, defaults to public RPC for chain (env: MPPX_RPC_URL)',
   )
   .option('-s, --silent', 'Silent mode (suppress progress and info)')
   .option('-v, --verbose', 'Show request/response headers')
@@ -79,7 +79,7 @@ cli
     if (silent) options.yes = true
 
     const accountName = resolveAccountName(options.account)
-    const privateKey = process.env.MPAY_PRIVATE_KEY ?? (await createKeychain(accountName).get())
+    const privateKey = process.env.MPPX_PRIVATE_KEY ?? (await createKeychain(accountName).get())
     if (!privateKey) {
       if (options.account) console.log(`Account "${accountName}" not found.`)
       else console.log(`No account found.`)
@@ -277,7 +277,7 @@ cli
         }
       }
 
-      const mpay = Mpay.create({
+      const mppx = Mppx.create({
         methods: tempo({
           account,
           getClient: () => client,
@@ -300,7 +300,7 @@ cli
         polyfill: false,
       })
 
-      const credential = await mpay.createCredential(
+      const credential = await mppx.createCredential(
         challengeResponse,
         (() => {
           if (!options.channel) return undefined
@@ -695,10 +695,10 @@ const accountOptionsSchema = z.object({
 
 cli
   .command('account [action]', 'Manage accounts (create, default, delete, fund, list, view)')
-  .option('-a, --account <name>', 'Account name (env: MPAY_ACCOUNT)')
+  .option('-a, --account <name>', 'Account name (env: MPPX_ACCOUNT)')
   .option(
     '-r, --rpc-url <url>',
-    'RPC endpoint, defaults to public RPC for chain (env: MPAY_RPC_URL)',
+    'RPC endpoint, defaults to public RPC for chain (env: MPPX_RPC_URL)',
   )
   .option('--yes', 'DANGER!! Skip confirmation prompts')
   .action(async (action: string | undefined, rawOptions: unknown) => {
@@ -891,7 +891,7 @@ cli
 cli.version(version, '-V, --version')
 
 cli.help((sections) => {
-  const isAccount = sections.some((s: { body?: string }) => s.body?.includes('$ mpay account'))
+  const isAccount = sections.some((s: { body?: string }) => s.body?.includes('$ mppx account'))
   if (isAccount) {
     const actionsSection = {
       title: 'Actions',
@@ -949,7 +949,7 @@ function execCommand(
 function channelStateDir() {
   return path.join(
     process.env.XDG_CONFIG_HOME || path.join(os.homedir(), '.config'),
-    'mpay',
+    'mppx',
     'channels',
   )
 }
@@ -978,7 +978,7 @@ function deleteChannelState(channelId: string): void {
 function createDefaultStore() {
   const configPath = path.join(
     process.env.XDG_CONFIG_HOME || path.join(os.homedir(), '.config'),
-    'mpay',
+    'mppx',
     'default',
   )
   return {
@@ -1003,7 +1003,7 @@ function createDefaultStore() {
 
 function resolveAccountName(explicit?: string): string {
   if (explicit) return explicit
-  if (process.env.MPAY_ACCOUNT) return process.env.MPAY_ACCOUNT
+  if (process.env.MPPX_ACCOUNT) return process.env.MPPX_ACCOUNT
   return createDefaultStore().get()
 }
 

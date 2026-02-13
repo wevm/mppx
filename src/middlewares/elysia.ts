@@ -1,12 +1,12 @@
 import type { Context } from 'elysia'
-import * as Mpay_core from '../server/Mpay.js'
-import * as Mpay_internal from './internal/mpay.js'
+import * as Mppx_core from '../server/Mppx.js'
+import * as Mppx_internal from './internal/mppx.js'
 
 export * from '../server/Methods.js'
 
 type ElysiaHook = (context: Context) => Promise<Response | undefined>
 
-export namespace Mpay {
+export namespace Mppx {
   /**
    * Creates an Elysia-aware payment handler where each intent
    * returns an Elysia `beforeHandle` hook.
@@ -17,21 +17,21 @@ export namespace Mpay {
    * @example
    * ```ts
    * import { Elysia } from 'elysia'
-   * import { Mpay, tempo } from 'mpay/elysia'
+   * import { Mppx, tempo } from 'mppx/elysia'
    *
-   * const mpay = Mpay.create({ methods: [tempo()] })
+   * const mppx = Mppx.create({ methods: [tempo()] })
    *
    * const app = new Elysia()
    *   .guard(
-   *     { beforeHandle: mpay.charge({ amount: '1' }) },
+   *     { beforeHandle: mppx.charge({ amount: '1' }) },
    *     (app) => app.get('/premium', () => ({ data: 'paid content' })),
    *   )
    * ```
    */
-  export function create<const methods extends Mpay_core.Methods>(
-    config: Mpay_core.create.Config<methods>,
-  ): Mpay_internal.Wrap<Mpay_core.Mpay<methods>, ElysiaHook> {
-    return Mpay_internal.wrap(Mpay_core.create(config), payment)
+  export function create<const methods extends Mppx_core.Methods>(
+    config: Mppx_core.create.Config<methods>,
+  ): Mppx_internal.Wrap<Mppx_core.Mppx<methods>, ElysiaHook> {
+    return Mppx_internal.wrap(Mppx_core.create(config), payment)
   }
 }
 
@@ -43,19 +43,19 @@ export namespace Mpay {
  * @example
  * ```ts
  * import { Elysia } from 'elysia'
- * import { Mpay } from 'mpay/server'
- * import { payment } from 'mpay/elysia'
+ * import { Mppx } from 'mppx/server'
+ * import { payment } from 'mppx/elysia'
  *
- * const mpay = Mpay.create({ methods: [tempo()] })
+ * const mppx = Mppx.create({ methods: [tempo()] })
  *
  * const app = new Elysia()
  *   .guard(
- *     { beforeHandle: payment(mpay.charge, { amount: '1' }) },
+ *     { beforeHandle: payment(mppx.charge, { amount: '1' }) },
  *     (app) => app.get('/premium', () => ({ data: 'paid content' })),
  *   )
  * ```
  */
-export function payment<const intent extends Mpay_internal.AnyIntentFn>(
+export function payment<const intent extends Mppx_internal.AnyIntentFn>(
   intent: intent,
   options: intent extends (options: infer options) => any ? options : never,
 ): ElysiaHook {

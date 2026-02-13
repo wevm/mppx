@@ -6,7 +6,7 @@ import * as z from './zod.js'
  *
  * @example
  * ```ts
- * import { Receipt } from 'mpay'
+ * import { Receipt } from 'mppx'
  *
  * const receipt = Receipt.Schema.parse(data)
  * ```
@@ -29,7 +29,7 @@ export const Schema = z.object({
  *
  * @example
  * ```ts
- * import { Receipt } from 'mpay'
+ * import { Receipt } from 'mppx'
  *
  * const receipt: Receipt.Receipt = {
  *   method: 'tempo',
@@ -49,7 +49,7 @@ export type Receipt = z.infer<typeof Schema>
  *
  * @example
  * ```ts
- * import { Receipt } from 'mpay'
+ * import { Receipt } from 'mppx'
  *
  * const receipt = Receipt.deserialize(encoded)
  * ```
@@ -67,7 +67,7 @@ export function deserialize(encoded: string): Receipt {
  *
  * @example
  * ```ts
- * import { Receipt } from 'mpay'
+ * import { Receipt } from 'mppx'
  *
  * const receipt = Receipt.from({
  *   method: 'tempo',
@@ -93,7 +93,7 @@ export declare namespace from {
  *
  * @example
  * ```ts
- * import { Receipt } from 'mpay'
+ * import { Receipt } from 'mppx'
  *
  * const header = Receipt.serialize(receipt)
  * // => "eyJzdGF0dXMiOiJzdWNjZXNzIiwidGltZXN0YW1wIjoi..."
@@ -112,7 +112,7 @@ export function serialize(receipt: Receipt): string {
  *
  * @example
  * ```ts
- * import { Receipt } from 'mpay'
+ * import { Receipt } from 'mppx'
  *
  * const response = await fetch('/resource', {
  *   headers: { Authorization: Credential.serialize(credential) },

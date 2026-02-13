@@ -1,6 +1,6 @@
-import { Receipt } from 'mpay'
-import { Mpay as Mpay_client, tempo as tempo_client } from 'mpay/client'
-import { Mpay as Mpay_server, tempo as tempo_server } from 'mpay/server'
+import { Receipt } from 'mppx'
+import { Mppx as Mppx_client, tempo as tempo_client } from 'mppx/client'
+import { Mppx as Mppx_server, tempo as tempo_server } from 'mppx/server'
 import { afterEach, describe, expect, test } from 'vitest'
 import * as Http from '~test/Http.js'
 import { accounts, asset, client } from '~test/tempo/viem.js'
@@ -10,7 +10,7 @@ import { openai } from './openai.js'
 const apiKey = process.env.VITE_OPENAI_API_KEY
 if (!apiKey) console.warn('OPENAI_API_KEY not set — openai proxy tests will be skipped')
 
-const mpay_server = Mpay_server.create({
+const mppx_server = Mppx_server.create({
   methods: [
     tempo_server({
       account: accounts[0],
@@ -20,7 +20,7 @@ const mpay_server = Mpay_server.create({
   ],
 })
 
-const mpay_client = Mpay_client.create({
+const mppx_client = Mppx_client.create({
   polyfill: false,
   methods: [
     tempo_client({
@@ -41,14 +41,14 @@ describe.skipIf(!apiKey)('openai', () => {
         openai({
           apiKey: apiKey!,
           routes: {
-            'GET /v1/models': mpay_server.charge({ amount: '1', decimals: 6 }),
+            'GET /v1/models': mppx_server.charge({ amount: '1', decimals: 6 }),
           },
         }),
       ],
     })
     proxyServer = await Http.createServer(proxy.listener)
 
-    const res = await mpay_client.fetch(`${proxyServer.url}/openai/v1/models`)
+    const res = await mppx_client.fetch(`${proxyServer.url}/openai/v1/models`)
     expect(res.status).toBe(200)
 
     const body = (await res.json()) as { data: unknown[] }
@@ -66,7 +66,7 @@ describe.skipIf(!apiKey)('openai', () => {
         openai({
           apiKey: apiKey!,
           routes: {
-            'GET /v1/models': mpay_server.charge({ amount: '1', decimals: 6 }),
+            'GET /v1/models': mppx_server.charge({ amount: '1', decimals: 6 }),
           },
         }),
       ],
@@ -84,7 +84,7 @@ describe.skipIf(!apiKey)('openai', () => {
         openai({
           apiKey: apiKey!,
           routes: {
-            'GET /v1/models': mpay_server.charge({ amount: '1', decimals: 6 }),
+            'GET /v1/models': mppx_server.charge({ amount: '1', decimals: 6 }),
           },
         }),
       ],
