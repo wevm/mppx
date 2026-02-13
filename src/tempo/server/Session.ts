@@ -561,6 +561,7 @@ async function handleOpen(
     return {
       channelId: payload.channelId,
       chainId: methodDetails.chainId,
+      escrowContract: methodDetails.escrowContract,
       payer: onChain.payer,
       payee: onChain.payee,
       token: onChain.token,

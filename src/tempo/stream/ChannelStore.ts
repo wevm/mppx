@@ -23,6 +23,8 @@ export interface State {
   authorizedSigner: Address
   /** Chain ID the channel was opened on. */
   chainId: number
+  /** Escrow contract address the channel was opened on. */
+  escrowContract: Address
   /** Unique identifier for this payment channel. */
   channelId: Hex
   /** ISO 8601 timestamp when the channel was created. */
