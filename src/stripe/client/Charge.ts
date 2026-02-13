@@ -3,20 +3,6 @@ import * as MethodIntent from '../../MethodIntent.js'
 import * as z from '../../zod.js'
 import * as Intents from '../Intents.js'
 
-export class PaymentMethodNotAllowedError extends Error {
-  override readonly name = 'PaymentMethodNotAllowedError'
-
-  constructor(
-    readonly paymentMethod: string,
-    readonly allowedPaymentMethods: string[],
-    readonly paymentMethodType?: string,
-  ) {
-    super(
-      `paymentMethod "${paymentMethod}" is not supported (allowed: ${allowedPaymentMethods.join(', ')})`,
-    )
-  }
-}
-
 /**
  * Creates a Stripe charge method intent for usage on the client.
  *
@@ -54,38 +40,17 @@ export function charge(parameters: charge.Parameters) {
     createSpt,
     externalId,
     paymentMethod: defaultPaymentMethod,
-    paymentMethodType: defaultPaymentMethodType,
-    paymentMethods: defaultPaymentMethods,
   } = parameters
 
   return MethodIntent.toClient(Intents.charge, {
     context: z.object({
       paymentMethod: z.optional(z.string()),
-      paymentMethodType: z.optional(z.string()),
     }),
 
     async createCredential({ challenge, context }) {
       const paymentMethod = context?.paymentMethod ?? defaultPaymentMethod
       if (!paymentMethod)
         throw new Error('paymentMethod is required (pass via context or parameters)')
-
-      const paymentMethodType = context?.paymentMethodType ?? defaultPaymentMethodType
-
-      const allowedPaymentMethods =
-        (challenge.request.methodDetails?.paymentMethods as string[] | undefined) ??
-        defaultPaymentMethods
-      if (
-        allowedPaymentMethods &&
-        !(
-          allowedPaymentMethods.includes(paymentMethod) ||
-          (paymentMethodType && allowedPaymentMethods.includes(paymentMethodType))
-        )
-      )
-        throw new PaymentMethodNotAllowedError(
-          paymentMethod,
-          allowedPaymentMethods,
-          paymentMethodType,
-        )
 
       const amount = challenge.request.amount as string
       const currency = challenge.request.currency as string
@@ -139,10 +104,6 @@ export declare namespace charge {
     externalId?: string | undefined
     /** Default payment method ID. Overridden by `context.paymentMethod`. */
     paymentMethod?: string | undefined
-    /** Default payment method type (e.g. "card"). Overridden by `context.paymentMethodType`. */
-    paymentMethodType?: string | undefined
-    /** Default list of allowed payment methods, if the server doesn't specify one. */
-    paymentMethods?: string[] | undefined
   }
 
   type CreateSptParameters = {

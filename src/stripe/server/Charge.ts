@@ -1,4 +1,8 @@
-import { PaymentActionRequiredError, PaymentExpiredError } from '../../Errors.js'
+import {
+  PaymentActionRequiredError,
+  PaymentExpiredError,
+  VerificationFailedError,
+} from '../../Errors.js'
 import type { LooseOmit } from '../../internal/types.js'
 import * as MethodIntent from '../../MethodIntent.js'
 import * as Intents from '../Intents.js'
@@ -24,7 +28,6 @@ export function charge<const parameters extends charge.Parameters>(parameters: p
     externalId,
     metadata,
     networkId,
-    paymentMethods,
     secretKey,
   } = parameters
 
@@ -38,7 +41,6 @@ export function charge<const parameters extends charge.Parameters>(parameters: p
       externalId,
       metadata,
       networkId,
-      paymentMethods,
     } as unknown as Defaults,
 
     async verify({ credential }) {
@@ -75,13 +77,14 @@ export function charge<const parameters extends charge.Parameters>(parameters: p
         headers: {
           Authorization: `Basic ${btoa(`${secretKey}:`)}`,
           'Content-Type': 'application/x-www-form-urlencoded',
+          'Idempotency-Key': `mpay_${challenge.id}_${spt}`,
         },
         body,
       })
 
       if (!response.ok) {
         const error = (await response.json()) as { error: { message: string } }
-        throw new Error(`Stripe PaymentIntent failed: ${error.error.message}`)
+        throw new VerificationFailedError({ reason: 'Stripe PaymentIntent failed' })
       }
 
       const pi = (await response.json()) as { id: string; status: string }
@@ -110,8 +113,6 @@ export declare namespace charge {
     secretKey: string
     /** Optional metadata to include in SPT creation requests. */
     metadata?: Record<string, string> | undefined
-    /** Explicit list of supported payment method IDs/types. */
-    paymentMethods?: string[] | undefined
   } & Defaults
 
   type DeriveDefaults<parameters extends Parameters> = Pick<

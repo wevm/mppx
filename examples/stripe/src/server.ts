@@ -9,8 +9,6 @@ const mpay = Mpay.create({
       secretKey,
       // Stripe Business Network profile ID.
       networkId: 'internal',
-      // Payment methods supported by the server.
-      paymentMethods: ['card'],
     }),
   ],
 })
@@ -52,6 +50,7 @@ export async function handler(request: Request): Promise<Response | null> {
       }
     }
 
+    // Test-only endpoint; production SPT flow uses the agent-side issued_tokens API.
     const createSpt = async (bodyParams: URLSearchParams) =>
       fetch('https://api.stripe.com/v1/test_helpers/shared_payment/granted_tokens', {
         method: 'POST',

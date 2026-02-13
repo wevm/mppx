@@ -19,7 +19,6 @@ export const charge = MethodIntent.fromIntent(Intent.charge, {
     request: {
       methodDetails: z.object({
         networkId: z.string(),
-        paymentMethods: z.optional(z.array(z.string())),
         metadata: z.optional(z.record(z.string(), z.string())),
       }),
     },

@@ -109,7 +109,7 @@ actionButton?.addEventListener('click', async () => {
     if (response.status !== 402) throw new Error(`Unexpected status: ${response.status}`)
 
     const challenge = Challenge.fromResponse(response, { methods: [charge] })
-    log(`→ challenge: ${JSON.stringify(challenge)}`)
+    log(`→ challenge:\n${JSON.stringify(challenge, null, 2)}`)
 
     log('Collecting card details...')
     const paymentMethodResult = await stripeClient.createPaymentMethod({

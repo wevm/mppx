@@ -33,6 +33,7 @@ async function createTestSpt(parameters: {
       body.set(`metadata[${key}]`, value)
     }
   }
+  // Test-only endpoint; production SPT flow uses the agent-side issued_tokens API.
   const createSpt = async (bodyParams: URLSearchParams) =>
     fetch('https://api.stripe.com/v1/test_helpers/shared_payment/granted_tokens', {
       method: 'POST',
@@ -77,7 +78,6 @@ describe.skipIf(!stripeSecretKey)('stripe', () => {
       stripe_server.charge({
         secretKey: stripeSecretKey!,
         networkId: 'internal',
-        paymentMethods: ['pm_card_visa'],
         metadata: { example: 'metadata' },
       }),
     ],
