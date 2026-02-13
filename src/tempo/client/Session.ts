@@ -180,10 +180,12 @@ export function session(parameters: session.Parameters = {}) {
         entry.cumulativeAmount,
         escrowContract,
         chainId,
+        parameters.authorizedSigner,
       )
       notifyUpdate(entry)
     } else {
       const result = await createOpenPayload(client, account, {
+        authorizedSigner: parameters.authorizedSigner,
         escrowContract,
         payee,
         currency,
@@ -243,6 +245,7 @@ export function session(parameters: session.Parameters = {}) {
           { channelId, cumulativeAmount },
           escrowContract,
           chainId,
+          parameters.authorizedSigner,
         )
         payload = {
           action: 'open',
@@ -279,6 +282,7 @@ export function session(parameters: session.Parameters = {}) {
           cumulativeAmount,
           escrowContract,
           chainId,
+          parameters.authorizedSigner,
         )
         const key = channelIdToKey.get(channelId)
         if (key) {
@@ -301,6 +305,7 @@ export function session(parameters: session.Parameters = {}) {
           { channelId, cumulativeAmount },
           escrowContract,
           chainId,
+          parameters.authorizedSigner,
         )
         payload = {
           action: 'close',
@@ -348,6 +353,8 @@ export function session(parameters: session.Parameters = {}) {
 export declare namespace session {
   type Parameters = Account.getResolver.Parameters &
     Client.getResolver.Parameters & {
+      /** Address authorized to sign vouchers. Defaults to the account address. Use when a separate access key (e.g. secp256k1) signs vouchers while the root account funds the channel. */
+      authorizedSigner?: Address | undefined
       /** Token decimals for parsing human-readable amounts (default: 6). */
       decimals?: number | undefined
       /** Initial deposit amount in human-readable units (e.g. "10" for 10 tokens). When set, the method handles the full channel lifecycle (open, voucher, cumulative tracking) automatically. */

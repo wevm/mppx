@@ -208,7 +208,14 @@ export function session<const parameters extends session.Parameters>(p?: paramet
           break
 
         case 'close':
-          streamReceipt = await handleClose(store, client, challenge, payload, methodDetails, account)
+          streamReceipt = await handleClose(
+            store,
+            client,
+            challenge,
+            payload,
+            methodDetails,
+            account,
+          )
           break
 
         default:

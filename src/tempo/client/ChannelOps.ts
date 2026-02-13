@@ -75,6 +75,7 @@ export async function createVoucherPayload(
   cumulativeAmount: bigint,
   escrowContract: Address,
   chainId: number,
+  authorizedSigner?: Address | undefined,
 ): Promise<StreamCredentialPayload> {
   const signature = await signVoucher(
     client,
@@ -82,6 +83,7 @@ export async function createVoucherPayload(
     { channelId, cumulativeAmount },
     escrowContract,
     chainId,
+    authorizedSigner,
   )
   return {
     action: 'voucher',
@@ -98,6 +100,7 @@ export async function createClosePayload(
   cumulativeAmount: bigint,
   escrowContract: Address,
   chainId: number,
+  authorizedSigner?: Address | undefined,
 ): Promise<StreamCredentialPayload> {
   const signature = await signVoucher(
     client,
@@ -105,6 +108,7 @@ export async function createClosePayload(
     { channelId, cumulativeAmount },
     escrowContract,
     chainId,
+    authorizedSigner,
   )
   return {
     action: 'close',
@@ -118,6 +122,7 @@ export async function createOpenPayload(
   client: viem_Client,
   account: viem_Account,
   options: {
+    authorizedSigner?: Address | undefined
     escrowContract: Address
     payee: Address
     currency: Address
@@ -128,10 +133,11 @@ export async function createOpenPayload(
   },
 ): Promise<{ entry: ChannelEntry; payload: StreamCredentialPayload }> {
   const { escrowContract, payee, currency, deposit, initialAmount, chainId, feePayer } = options
+  const authorizedSigner = options.authorizedSigner ?? account.address
 
   const salt = Hex.random(32)
   const channelId = Channel.computeId({
-    authorizedSigner: account.address,
+    authorizedSigner,
     chainId,
     escrowContract,
     payee,
@@ -148,7 +154,7 @@ export async function createOpenPayload(
   const openData = encodeFunctionData({
     abi: escrowAbi,
     functionName: 'open',
-    args: [payee, currency, deposit, salt, account.address],
+    args: [payee, currency, deposit, salt, authorizedSigner],
   })
 
   const prepared = await prepareTransactionRequest(client, {
@@ -168,6 +174,7 @@ export async function createOpenPayload(
     { channelId, cumulativeAmount: initialAmount },
     escrowContract,
     chainId,
+    options.authorizedSigner,
   )
 
   return {
@@ -184,7 +191,7 @@ export async function createOpenPayload(
       type: 'transaction',
       channelId,
       transaction,
-      authorizedSigner: account.address,
+      authorizedSigner,
       cumulativeAmount: initialAmount.toString(),
       signature,
     },
