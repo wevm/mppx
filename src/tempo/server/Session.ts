@@ -297,15 +297,20 @@ export declare namespace session {
 export async function settle(
   store: ChannelStore.ChannelStore,
   client: viem_Client,
-  escrowContract: Address,
   channelId: Hex,
+  escrowContract?: Address | undefined,
 ): Promise<Hex> {
   const channel = await store.getChannel(channelId)
   if (!channel) throw new ChannelNotFoundError({ reason: 'channel not found' })
   if (!channel.highestVoucher) throw new VerificationFailedError({ reason: 'no voucher to settle' })
 
+  const chainId = client.chain?.id
+  const resolvedEscrow =
+    escrowContract ?? defaults.escrowContract[chainId as keyof typeof defaults.escrowContract]
+  if (!resolvedEscrow) throw new Error(`No escrow contract for chainId ${chainId}.`)
+
   const settledAmount = channel.highestVoucher.cumulativeAmount
-  const txHash = await settleOnChain(client, escrowContract, channel.highestVoucher)
+  const txHash = await settleOnChain(client, resolvedEscrow, channel.highestVoucher)
 
   await store.updateChannel(channelId, (current) => {
     if (!current) return null
