@@ -1,15 +1,10 @@
 # mpay
 
-## 0.2.4
-
-### Patch Changes
-
-- 7f934e6: Made `escrowContract` optional in `settle()`, resolving it from chain defaults to match `session()` behavior.
-
 ## 0.2.3
 
 ### Patch Changes
 
+- 7f934e6: Made `escrowContract` optional in `settle()`, resolving it from chain defaults to match `session()` behavior.
 - 465dbb2: Added `authorizedSigner` parameter to `session()` and `sessionManager()`. This allows a separate address (e.g. a secp256k1 access key) to sign vouchers while the root account funds the escrow channel. When `authorizedSigner` is set, keychain envelope signatures are automatically unwrapped to raw ECDSA for on-chain verification. This is a workaround until TIP-1020 enshrinement.
 - a5050a9: Added service discovery endpoints to the proxy: `GET /services` (JSON), `GET /services/:id` (JSON), and `GET /llms.txt` (Markdown). Payment metadata (intent, amount, currency, decimals) is automatically extracted from intent handlers.
 - a3d297e: Fixed channel close to use the session config's `account` instead of requiring an account-bearing client.
