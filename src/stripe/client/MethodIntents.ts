@@ -8,7 +8,19 @@ import { charge as charge_ } from './Charge.js'
  * import { Mpay, stripe } from 'mpay/client'
  *
  * const mpay = Mpay.create({
- *   methods: [stripe({ secretKey: 'sk_test_...', paymentMethod: 'pm_card_visa' })],
+ *   methods: [
+ *     stripe({
+ *       createSpt: async (params) => {
+ *         const res = await fetch('/api/create-spt', {
+ *           method: 'POST',
+ *           headers: { 'Content-Type': 'application/json' },
+ *           body: JSON.stringify(params),
+ *         })
+ *         const { spt } = await res.json()
+ *         return spt
+ *       },
+ *     }),
+ *   ],
  * })
  * ```
  */

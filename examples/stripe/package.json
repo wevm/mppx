@@ -9,7 +9,6 @@
   },
   "dependencies": {
     "@remix-run/node-fetch-server": "latest",
-    "@stripe/stripe-js": "latest",
     "@types/node": "latest",
     "mpay": "latest",
     "typescript": "latest",

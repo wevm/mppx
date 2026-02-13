@@ -2,7 +2,8 @@ import { createRequest, sendResponse } from '@remix-run/node-fetch-server'
 import { defineConfig, loadEnv } from 'vite'
 
 export default defineConfig(({ mode }) => {
-  Object.assign(process.env, loadEnv(mode, '.'))
+  const env = loadEnv(mode, process.cwd(), '')
+  Object.assign(process.env, env)
 
   return {
     plugins: [

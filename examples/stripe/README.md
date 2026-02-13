@@ -2,14 +2,13 @@
 
 End-to-end demo of the HTTP 402 payment flow using Stripe SPTs.
 
-Uses Stripe.js Elements to collect a test card, creates a Shared Payment Token (SPT) via a server proxy, and sends it as a credential to a payment-gated API endpoint.
+Uses the automatic mpay client — `Mpay.create()` polyfills `globalThis.fetch` so any `fetch()` call that gets a 402 automatically creates an SPT and retries with the credential. The server verifies the SPT by creating a Stripe PaymentIntent.
 
 ## Setup
 
 1. Set your Stripe **test** keys in `.env` at the repo root:
 
 ```
-VITE_STRIPE_PUBLIC_KEY=pk_test_...
 VITE_STRIPE_SECRET_KEY=sk_test_...
 ```
 
@@ -20,7 +19,7 @@ pnpm install
 pnpm dev
 ```
 
-3. Enter a test card number (e.g. `4242 4242 4242 4242`, any future expiry, any CVC) and click **Get Fortune**.
+3. Click **Get Fortune** — the 402 handshake happens automatically.
 
 ## Flow
 
@@ -33,19 +32,10 @@ Browser                          Server                          Stripe
   │  402 + WWW-Authenticate        │                               │
   │<────────────────────────────── │                               │
   │                                │                               │
-  │  stripe.createPaymentMethod()  │                               │
+  │  (mpay auto: create SPT)       │                               │
   ├──────────────────────────────────────────────────────────────> │
-  │                         pm_... │                               │
-  │<────────────────────────────────────────────────────────────── │
-  │                                │                               │
-  │  POST /api/create-spt          │                               │
-  ├──────────────────────────────> │                               │
-  │                                │  POST /v1/.../granted_tokens  │
-  │                                ├─────────────────────────────> │
-  │                                │                   spt_...     │
-  │                                │<───────────────────────────── │
   │                       spt_...  │                               │
-  │<────────────────────────────── │                               │
+  │<────────────────────────────────────────────────────────────── │
   │                                │                               │
   │  GET /api/fortune              │                               │
   │  Authorization: Payment <cred> │                               │

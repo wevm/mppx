@@ -1,32 +1,53 @@
 import * as Credential from '../../Credential.js'
 import * as MethodIntent from '../../MethodIntent.js'
+import * as z from '../../zod.js'
 import * as Intents from '../Intents.js'
-
-const defaultSptUrl = 'https://api.stripe.com/v1/shared_payment/issued_tokens'
-const testSptUrl = 'https://api.stripe.com/v1/test_helpers/shared_payment/granted_tokens'
 
 /**
  * Creates a Stripe charge method intent for usage on the client.
  *
- * Creates a Shared Payment Token (SPT) and submits it as the
- * credential payload.
+ * Accepts a `createSpt` callback that handles SPT creation (requires
+ * a secret key, so typically proxied through a server endpoint).
+ *
+ * The `paymentMethod` (e.g. from Stripe Elements) can be provided at
+ * initialization or at credential-creation time via `context`.
  *
  * @example
  * ```ts
  * import { stripe } from 'mpay/client'
  *
  * const charge = stripe.charge({
- *   secretKey: 'sk_test_...',
- *   paymentMethod: 'pm_card_visa',
+ *   createSpt: async ({ paymentMethod, amount, currency, networkId, expiresAt }) => {
+ *     const res = await fetch('/api/create-spt', {
+ *       method: 'POST',
+ *       headers: { 'Content-Type': 'application/json' },
+ *       body: JSON.stringify({ paymentMethod, amount, currency, networkId, expiresAt }),
+ *     })
+ *     const { spt } = await res.json()
+ *     return spt
+ *   },
+ * })
+ *
+ * // paymentMethod comes from Stripe Elements at credential-creation time
+ * const credential = await charge.createCredential({
+ *   challenge,
+ *   context: { paymentMethod: 'pm_xxx' },
  * })
  * ```
  */
 export function charge(parameters: charge.Parameters) {
-  const { paymentMethod, secretKey, testMode } = parameters
-  const sptUrl = testMode ? testSptUrl : defaultSptUrl
+  const { createSpt, paymentMethod: defaultPaymentMethod } = parameters
 
   return MethodIntent.toClient(Intents.charge, {
-    async createCredential({ challenge }) {
+    context: z.object({
+      paymentMethod: z.optional(z.string()),
+    }),
+
+    async createCredential({ challenge, context }) {
+      const paymentMethod = context?.paymentMethod ?? defaultPaymentMethod
+      if (!paymentMethod)
+        throw new Error('paymentMethod is required (pass via context or parameters)')
+
       const amount = challenge.request.amount as string
       const currency = challenge.request.currency as string
       const networkId = challenge.request.methodDetails?.networkId as string | undefined
@@ -34,29 +55,8 @@ export function charge(parameters: charge.Parameters) {
       const expiresAt = challenge.request.expires
         ? Math.floor(new Date(challenge.request.expires as string).getTime() / 1000)
         : Math.floor(Date.now() / 1000) + 3600
-      const body = new URLSearchParams({
-        payment_method: paymentMethod,
-        'usage_limits[currency]': currency,
-        'usage_limits[max_amount]': amount,
-        'usage_limits[expires_at]': expiresAt.toString(),
-      })
-      if (networkId && !testMode) body.set('seller_details[network_id]', networkId)
 
-      const response = await fetch(sptUrl, {
-        method: 'POST',
-        headers: {
-          Authorization: `Basic ${btoa(`${secretKey}:`)}`,
-          'Content-Type': 'application/x-www-form-urlencoded',
-        },
-        body,
-      })
-
-      if (!response.ok) {
-        const error = (await response.json()) as { error: { message: string } }
-        throw new Error(`Failed to create SPT: ${error.error.message}`)
-      }
-
-      const { id: spt } = (await response.json()) as { id: string }
+      const spt = await createSpt({ paymentMethod, amount, currency, networkId, expiresAt })
 
       return Credential.serialize({
         challenge,
@@ -68,11 +68,27 @@ export function charge(parameters: charge.Parameters) {
 
 export declare namespace charge {
   type Parameters = {
-    /** Stripe secret API key. */
-    secretKey: string
-    /** Stripe payment method ID (e.g. `pm_card_visa` for testing). */
+    /**
+     * Creates a Shared Payment Token (SPT) for the given parameters.
+     *
+     * SPT creation requires a Stripe secret key, so this typically
+     * proxies through a server endpoint (e.g. `POST /api/create-spt`).
+     */
+    createSpt: (parameters: CreateSptParameters) => Promise<string>
+    /** Default payment method ID. Overridden by `context.paymentMethod`. */
+    paymentMethod?: string | undefined
+  }
+
+  type CreateSptParameters = {
+    /** Stripe payment method ID (e.g. from Stripe Elements). */
     paymentMethod: string
-    /** Use Stripe test helper endpoint for SPT creation. */
-    testMode?: boolean | undefined
+    /** Payment amount (in smallest currency unit). */
+    amount: string
+    /** Three-letter ISO currency code. */
+    currency: string
+    /** Stripe Business Network profile ID. */
+    networkId: string | undefined
+    /** SPT expiration as a Unix timestamp (seconds). */
+    expiresAt: number
   }
 }

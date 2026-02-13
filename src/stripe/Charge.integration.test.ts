@@ -8,11 +8,42 @@ const stripeSecretKey = process.env.VITE_STRIPE_SECRET_KEY
 
 const realm = 'api.example.com'
 const secretKey = 'test-secret-key'
-const paymentMethod = 'pm_card_visa'
 
 let httpServer: Awaited<ReturnType<typeof Http.createServer>> | undefined
 
 afterEach(() => httpServer?.close())
+
+async function createTestSpt(parameters: {
+  paymentMethod: string
+  amount: string
+  currency: string
+  networkId: string | undefined
+  expiresAt: number
+}) {
+  const body = new URLSearchParams({
+    payment_method: parameters.paymentMethod,
+    'usage_limits[currency]': parameters.currency,
+    'usage_limits[max_amount]': parameters.amount,
+    'usage_limits[expires_at]': parameters.expiresAt.toString(),
+  })
+  const response = await fetch(
+    'https://api.stripe.com/v1/test_helpers/shared_payment/granted_tokens',
+    {
+      method: 'POST',
+      headers: {
+        Authorization: `Basic ${btoa(`${stripeSecretKey!}:`)}`,
+        'Content-Type': 'application/x-www-form-urlencoded',
+      },
+      body,
+    },
+  )
+  if (!response.ok) {
+    const error = (await response.json()) as { error: { message: string } }
+    throw new Error(`Failed to create SPT: ${error.error.message}`)
+  }
+  const { id } = (await response.json()) as { id: string }
+  return id
+}
 
 describe.skipIf(!stripeSecretKey)('stripe', () => {
   const server = Mpay_server.create({
@@ -22,9 +53,8 @@ describe.skipIf(!stripeSecretKey)('stripe', () => {
   })
 
   const clientCharge = stripe_client.charge({
-    secretKey: stripeSecretKey!,
-    paymentMethod,
-    testMode: true,
+    createSpt: createTestSpt,
+    paymentMethod: 'pm_card_visa',
   })
 
   describe('intent: charge; type: spt', () => {
@@ -48,7 +78,7 @@ describe.skipIf(!stripeSecretKey)('stripe', () => {
       expect(challenge.request.amount).toBe('100')
       expect(challenge.realm).toBe(realm)
 
-      const credential = await clientCharge.createCredential({ challenge })
+      const credential = await clientCharge.createCredential({ challenge, context: {} })
 
       {
         const response = await fetch(httpServer.url, {
@@ -172,7 +202,7 @@ describe.skipIf(!stripeSecretKey)('stripe', () => {
         methods: [clientCharge],
       })
 
-      const credential = await clientCharge.createCredential({ challenge })
+      const credential = await clientCharge.createCredential({ challenge, context: {} })
 
       {
         const response = await fetch(httpServer.url, {

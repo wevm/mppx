@@ -6,111 +6,23 @@
   <title>Stripe charge demo</title>
   <style>
     * { box-sizing: border-box; }
-    body { font-family: system-ui, sans-serif; max-width: 500px; margin: 2rem auto; padding: 1rem; }
-    h1 { margin-bottom: 1.5rem; }
-    p.subtitle { color: #666; margin-top: 0; }
-    #card-form {
-      display: none;
-      border: 1px solid #e0e0e0;
-      border-radius: 8px;
-      padding: 1rem;
-      margin-top: 1rem;
-      background: #fafafa;
-    }
-    #card-form p { margin: 0 0 0.75rem; font-size: 0.9rem; font-weight: 500; }
-    #card-element {
-      padding: 0.75rem;
-      border: 1px solid #ccc;
-      border-radius: 4px;
-      background: #fff;
-      margin-bottom: 0.75rem;
-    }
-    .test-hint {
-      display: flex;
-      flex-wrap: wrap;
-      align-items: center;
-      gap: 0.35rem;
-      margin-bottom: 0.75rem;
-      font-size: 0.75rem;
-      color: #666;
-    }
-    .test-hint code {
-      background: #e8e8e8;
-      padding: 0.15rem 0.35rem;
-      border-radius: 3px;
-      cursor: pointer;
-      font-size: 0.7rem;
-      white-space: nowrap;
-    }
-    .test-hint code:hover { background: #d0d0d0; }
-    .test-hint code.copied { background: #c8e6c9; }
-    .link-btn {
-      all: unset;
-      color: #635bff;
-      cursor: pointer;
-      font-size: 0.8rem;
-      text-decoration: underline;
-    }
-    .link-btn:hover { color: #524ddb; }
-    button {
-      width: 100%;
-      padding: 0.75rem;
-      font-size: 1rem;
-      background: #635bff;
-      color: #fff;
-      border: none;
-      border-radius: 4px;
-      cursor: pointer;
-    }
+    body { font-family: system-ui, sans-serif; max-width: 600px; margin: 2rem auto; padding: 1rem; }
+    h1 { margin-bottom: 0.5rem; }
+    p { color: #666; margin-top: 0; }
+    button { padding: 0.75rem; font-size: 1rem; background: #635bff; color: #fff; border: none; border-radius: 4px; cursor: pointer; width: 100%; }
     button:hover { background: #524ddb; }
     button:disabled { background: #999; cursor: not-allowed; }
-    #fortune {
-      background: #f0fdf4;
-      border: 1px solid #bbf7d0;
-      border-radius: 4px;
-      padding: 1rem;
-      margin-top: 1rem;
-      font-size: 1.1rem;
-      text-align: center;
-    }
+    #fortune { background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 4px; padding: 1rem; margin-top: 1rem; font-size: 1.1rem; text-align: center; }
     #fortune:empty { display: none; }
-    #output {
-      background: #1e1e1e;
-      color: #d4d4d4;
-      padding: 1rem;
-      border-radius: 4px;
-      font-family: 'SF Mono', 'Fira Code', monospace;
-      font-size: 0.8rem;
-      line-height: 1.6;
-      margin-top: 1rem;
-      overflow-x: auto;
-    }
+    #output { background: #f5f5f5; padding: 1rem; border-radius: 4px; white-space: pre; overflow-x: auto; font-family: monospace; margin-top: 1rem; }
     #output:empty { display: none; }
-    .error { color: #f44747; }
-    .step { color: #808080; }
-    .status { color: #569cd6; }
-    .done { color: #6a9955; }
   </style>
 </head>
 <body>
   <h1>Stripe charge demo</h1>
+  <p>Pay per fortune via Stripe SPT.</p>
 
-  <button id="request">Get Fortune ($1.00)</button>
-
-  <div id="card-form">
-    <p>Payment required — enter card details:</p>
-    <div id="card-element"></div>
-    <div class="test-hint">
-      <span>Test card:</span>
-      <code data-copy="4242424242424242">4242 4242 4242 4242</code>
-      <code data-copy="1230">12/30</code>
-      <code data-copy="123">123</code>
-      <code data-copy="10001">10001</code>
-      <span>or</span>
-      <button id="test-card" type="button" class="link-btn">autofill</button>
-    </div>
-    <button id="pay">Pay</button>
-  </div>
+  <button id="button">Get Fortune ($1.00)</button>
 
   <div id="fortune"></div>
   <div id="output"></div>

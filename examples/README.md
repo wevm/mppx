@@ -7,7 +7,7 @@ Standalone, runnable examples demonstrating the mpay HTTP 402 payment flow.
 | Example | Description |
 |---------|-------------|
 | [basic](./basic/) | Payment-gated Fortune Teller API |
-| [stripe](./stripe/) | Stripe SPT charge with Stripe.js Elements |
+| [stripe](./stripe/) | Stripe SPT charge with automatic client |
 | [session/multi-fetch](./session/multi-fetch/) | Multiple paid requests over a single payment channel |
 | [session/sse](./session/sse/) | Pay-per-token LLM streaming with SSE |
 
