@@ -772,7 +772,7 @@ describe('session', () => {
           },
           request: makeRequest(),
         }),
-      ).rejects.toThrow('Cannot close channel: client has no account')
+      ).rejects.toThrow('Cannot close channel: no account available')
     })
   })
 

@@ -99,7 +99,7 @@ export function session<const parameters extends session.Parameters>(p?: paramet
     getClient: parameters.getClient,
     rpcUrl: defaults.rpcUrl,
   })
-  const { recipient, feePayer } = Account.resolve(parameters)
+  const { account, recipient, feePayer } = Account.resolve(parameters)
 
   type Transport = parameters['stream'] extends false | undefined ? undefined : Transport.Sse
   const transport = parameters.stream
@@ -208,7 +208,7 @@ export function session<const parameters extends session.Parameters>(p?: paramet
           break
 
         case 'close':
-          streamReceipt = await handleClose(store, client, challenge, payload, methodDetails)
+          streamReceipt = await handleClose(store, client, challenge, payload, methodDetails, account)
           break
 
         default:
@@ -684,6 +684,7 @@ async function handleClose(
   challenge: Challenge.Challenge,
   payload: StreamCredentialPayload & { action: 'close' },
   methodDetails: StreamMethodDetails,
+  account?: viem_Account,
 ): Promise<StreamReceipt> {
   const channel = await store.getChannel(payload.channelId)
   if (!channel) {
@@ -734,13 +735,7 @@ async function handleClose(
     throw new InvalidSignatureError({ reason: 'invalid voucher signature' })
   }
 
-  if (!client.account) {
-    throw new Error(
-      'Cannot close channel: client has no account. Provide a `getClient` that returns an account-bearing client.',
-    )
-  }
-
-  const txHash = await closeOnChain(client, methodDetails.escrowContract, voucher)
+  const txHash = await closeOnChain(client, methodDetails.escrowContract, voucher, account)
 
   const updated = await store.updateChannel(payload.channelId, (current) => {
     if (!current) return null

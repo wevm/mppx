@@ -94,10 +94,16 @@ export async function closeOnChain(
   client: Client,
   escrowContract: Address,
   voucher: SignedVoucher,
+  account?: Account,
 ): Promise<Hex> {
   assertUint128(voucher.cumulativeAmount)
+  const resolved = account ?? client.account
+  if (!resolved)
+    throw new Error(
+      'Cannot close channel: no account available. Provide an `account` in the session config or a `getClient` that returns an account-bearing client.',
+    )
   return writeContract(client, {
-    account: client.account!,
+    account: resolved,
     chain: client.chain,
     address: escrowContract,
     abi: escrowAbi,
