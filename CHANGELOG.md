@@ -1,5 +1,12 @@
 # mpay
 
+## 0.2.4
+
+### Patch Changes
+
+- 230406d: Added `chainId` to `ChannelStore.State` so channels track which chain they were opened on.
+- 41e4fe1: Added `escrowContract` to `ChannelStore.State`, populated from `methodDetails.escrowContract` when a channel is created.
+
 ## 0.2.3
 
 ### Patch Changes
