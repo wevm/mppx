@@ -1,5 +1,0 @@
----
-"mppx": minor
----
-
-Initial release.
