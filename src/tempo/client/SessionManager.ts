@@ -75,8 +75,9 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
   const wrappedFetch = Fetch.from({
     fetch: fetchFn,
     methods: [method],
-    onChallenge(c) {
-      lastChallenge = c
+    onChallenge: async (challenge, _helpers) => {
+      lastChallenge = challenge
+      return undefined
     },
   })
 

@@ -87,7 +87,10 @@ describe.skipIf(!stripeSecretKey)('stripe', () => {
   })
 
   const clientCharge = stripe_client.charge({
-    createSpt: createTestSpt,
+    createToken: async (params) => {
+      if (!params.paymentMethod) throw new Error('paymentMethod is required')
+      return createTestSpt({ ...params, paymentMethod: params.paymentMethod })
+    },
     paymentMethod: 'pm_card_visa',
     externalId: 'client_order_789',
   })

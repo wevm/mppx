@@ -37,7 +37,6 @@ export function from<const methods extends readonly MethodIntent.AnyClient[]>(
     if (response.status !== 402) return response
 
     const challenge = Challenge.fromResponse(response)
-    onChallenge?.(challenge)
 
     const mi = methods.find((m) => m.method === challenge.method && m.name === challenge.intent)
     if (!mi)
@@ -45,7 +44,13 @@ export function from<const methods extends readonly MethodIntent.AnyClient[]>(
         `No method intent found for "${challenge.method}.${challenge.intent}". Available: ${methods.map((m) => `${m.method}.${m.name}`).join(', ')}`,
       )
 
-    const credential = await resolveCredential(challenge, mi, context)
+    const onChallengeCredential = onChallenge
+      ? await onChallenge(challenge, {
+          createCredential: async (overrideContext?: AnyContextFor<methods>) =>
+            resolveCredential(challenge, mi, overrideContext ?? context),
+        })
+      : undefined
+    const credential = onChallengeCredential ?? (await resolveCredential(challenge, mi, context))
 
     return fetch(input, {
       ...fetchInit,
@@ -75,7 +80,14 @@ export declare namespace from {
     /** Array of method intents to use. */
     methods: methods
     /** Called when a 402 challenge is received, before credential creation. */
-    onChallenge?: ((challenge: Challenge.Challenge) => void) | undefined
+    onChallenge?:
+      | ((
+          challenge: Challenge.Challenge,
+          helpers: {
+            createCredential: (context?: AnyContextFor<methods>) => Promise<string>
+          },
+        ) => Promise<string | undefined>)
+      | undefined
   }
 
   type Fetch<

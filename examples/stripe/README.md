@@ -2,7 +2,7 @@
 
 End-to-end demo of the HTTP 402 payment flow using Stripe SPTs and Stripe.js.
 
-Uses the automatic mppx client — `Mppx.create()` polyfills `globalThis.fetch` so any `fetch()` call that gets a 402 automatically creates an SPT and retries with the credential. The server verifies the SPT by creating a Stripe PaymentIntent.
+Uses the automatic mppx client — `Mppx.create()` polyfills `globalThis.fetch` so any `fetch()` call that gets a 402 automatically runs `onChallenge`, creates an SPT, and retries with the credential. The server verifies the SPT by creating a Stripe PaymentIntent.
 
 The server advertises supported payment methods and a Stripe Business Network profile ID in `methodDetails`. The client uses those values to create an SPT, then retries with the credential payload.
 
@@ -35,7 +35,7 @@ Browser                          Server                          Stripe
   │  402 + WWW-Authenticate        │                               │
   │<────────────────────────────── │                               │
   │                                │                               │
-  │  (mppx auto: create SPT)       │                               │
+  │  (mppx auto: onChallenge)      │                               │
   ├──────────────────────────────────────────────────────────────> │
   │                       spt_...  │                               │
   │<────────────────────────────────────────────────────────────── │

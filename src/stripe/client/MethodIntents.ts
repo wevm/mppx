@@ -10,7 +10,7 @@ import { charge as charge_ } from './Charge.js'
  * const mppx = Mppx.create({
  *   methods: [
  *     stripe({
- *       createSpt: async (params) => {
+ *       createToken: async (params) => {
  *         const res = await fetch('/api/create-spt', {
  *           method: 'POST',
  *           headers: { 'Content-Type': 'application/json' },

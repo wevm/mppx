@@ -54,12 +54,19 @@ export function create<
     Response
   >,
 >(config: create.Config<methods, transport>): Mppx<methods, transport> {
-  const { polyfill = true, transport = Transport.http() as transport } = config
+  const { onChallenge, polyfill = true, transport = Transport.http() as transport } = config
 
   const methods = config.methods.flat() as unknown as FlattenMethods<methods>
 
-  const config_fetch = { ...(config.fetch && { fetch: config.fetch }), methods }
-  const fetch = Fetch.from(config_fetch)
+  const resolvedOnChallenge = onChallenge as Fetch.from.Config<
+    FlattenMethods<methods>
+  >['onChallenge']
+  const config_fetch = {
+    ...(config.fetch && { fetch: config.fetch }),
+    ...(resolvedOnChallenge && { onChallenge: resolvedOnChallenge }),
+    methods,
+  } satisfies Fetch.from.Config<FlattenMethods<methods>>
+  const fetch = Fetch.from<FlattenMethods<methods>>(config_fetch)
 
   if (polyfill) Fetch.polyfill(config_fetch)
   return {
@@ -112,6 +119,15 @@ export declare namespace create {
   > = {
     /** Custom fetch function to wrap. Defaults to `globalThis.fetch`. */
     fetch?: typeof globalThis.fetch
+    /** Called when a 402 challenge is received, before credential creation. */
+    onChallenge?:
+      | ((
+          challenge: Challenge.Challenge,
+          helpers: {
+            createCredential: (context?: AnyContextFor<FlattenMethods<methods>>) => Promise<string>
+          },
+        ) => Promise<string | undefined>)
+      | undefined
     /** Array of method intents to use. Accepts individual clients or tuples (e.g. from `tempo()`). */
     methods: methods
     /** Whether to polyfill `globalThis.fetch` with the payment-aware wrapper. @default true */
