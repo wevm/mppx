@@ -13,6 +13,9 @@
       "mpay/express": ["../src/middlewares/express.ts"],
       "mpay/nextjs": ["../src/middlewares/nextjs.ts"],
       "mpay/elysia": ["../src/middlewares/elysia.ts"],
+      "mpay/stripe": ["../src/stripe/index.ts"],
+      "mpay/stripe/client": ["../src/stripe/client/index.ts"],
+      "mpay/stripe/server": ["../src/stripe/server/index.ts"],
       "mpay/mcp-sdk/client": ["../src/mcp-sdk/client/index.ts"],
       "mpay/mcp-sdk/server": ["../src/mcp-sdk/server/index.ts"]
     }
