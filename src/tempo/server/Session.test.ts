@@ -772,7 +772,7 @@ describe('session', () => {
           },
           request: makeRequest(),
         }),
-      ).rejects.toThrow('Cannot close channel: client has no account')
+      ).rejects.toThrow('Cannot close channel: no account available')
     })
   })
 
@@ -926,7 +926,7 @@ describe('session', () => {
         request: makeRequest(),
       })
 
-      const settleTxHash = await settle(store, client, escrowContract, channelId)
+      const settleTxHash = await settle(store, client, channelId, escrowContract)
       expect(settleTxHash).toMatch(/^0x/)
 
       const ch = await store.getChannel(channelId)
@@ -936,7 +936,7 @@ describe('session', () => {
     test('settle rejects when no channel found', async () => {
       const fakeChannelId =
         '0x0000000000000000000000000000000000000000000000000000000000000000' as Hex
-      await expect(settle(store, client, escrowContract, fakeChannelId)).rejects.toThrow(
+      await expect(settle(store, client, fakeChannelId, escrowContract)).rejects.toThrow(
         ChannelNotFoundError,
       )
     })
@@ -1204,6 +1204,8 @@ describe('monotonicity and TOCTOU (unit tests)', () => {
       payee: '0x0000000000000000000000000000000000000002' as Address,
       token: '0x0000000000000000000000000000000000000003' as Address,
       authorizedSigner: '0x0000000000000000000000000000000000000004' as Address,
+      chainId: 42431,
+      escrowContract: '0x542831e3E4Ace07559b7C8787395f4Fb99F70787' as Address,
       deposit: 10000000n,
       settledOnChain: 0n,
       highestVoucherAmount: 5000000n,

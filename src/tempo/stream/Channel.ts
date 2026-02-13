@@ -4,7 +4,7 @@ import type * as Hex from 'ox/Hex'
 /**
  * Computes a channel ID from its parameters.
  *
- * Mirrors the onchain `computeChannelId` function: `keccak256(abi.encode(payer, payee, token, deposit, salt, authorizedSigner, escrowContract, chainId))`.
+ * Mirrors the onchain `computeChannelId` function: `keccak256(abi.encode(payer, payee, token, salt, authorizedSigner, escrowContract, chainId))`.
  */
 export function computeId(parameters: computeId.Parameters): Hex.Hex {
   const encoded = AbiParameters.encode(
@@ -12,7 +12,6 @@ export function computeId(parameters: computeId.Parameters): Hex.Hex {
       'address payer',
       'address payee',
       'address token',
-      'uint128 deposit',
       'bytes32 salt',
       'address authorizedSigner',
       'address escrowContract',
@@ -22,7 +21,6 @@ export function computeId(parameters: computeId.Parameters): Hex.Hex {
       parameters.payer,
       parameters.payee,
       parameters.token,
-      parameters.deposit,
       parameters.salt,
       parameters.authorizedSigner,
       parameters.escrowContract,
@@ -38,8 +36,6 @@ export declare namespace computeId {
     authorizedSigner: Hex.Hex
     /** Chain ID of the network the escrow contract is deployed on. */
     chainId: number
-    /** Initial deposit amount in the channel. */
-    deposit: bigint
     /** Address of the escrow contract. */
     escrowContract: Hex.Hex
     /** Address of the payee (recipient). */

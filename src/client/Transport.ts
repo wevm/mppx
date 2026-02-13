@@ -88,11 +88,7 @@ export function mcp() {
     name: 'mcp',
 
     isPaymentRequired(response) {
-      return (
-        'error' in response &&
-        (response.error?.code === Mcp.paymentRequiredCode ||
-          response.error?.code === Mcp.paymentVerificationFailedCode)
-      )
+      return 'error' in response && response.error?.code === Mcp.paymentRequiredCode
     },
 
     getChallenge(response) {

@@ -62,6 +62,7 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
 
   const method = sessionPlugin({
     account: parameters.account,
+    authorizedSigner: parameters.authorizedSigner,
     getClient: parameters.client ? () => parameters.client! : parameters.getClient,
     escrowContract: parameters.escrowContract,
     decimals: parameters.decimals,
@@ -254,10 +255,13 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
 export declare namespace sessionManager {
   type Parameters = Account.getResolver.Parameters &
     Client.getResolver.Parameters & {
+      /** Address authorized to sign vouchers. Defaults to the account address. */
+      authorizedSigner?: Address | undefined
       /** Viem client instance. Shorthand for `getClient: () => client`. */
       client?: import('viem').Client | undefined
       /** Token decimals used to convert `maxDeposit` to raw units. Defaults to `6`. */
       decimals?: number | undefined
+      /** Escrow contract address. */
       escrowContract?: Address | undefined
       fetch?: typeof globalThis.fetch | undefined
       /** Maximum deposit in human-readable units (e.g. `'10'` for 10 tokens). Converted to raw units via `decimals`. */
