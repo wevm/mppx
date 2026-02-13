@@ -19,6 +19,7 @@ async function createTestSpt(parameters: {
   currency: string
   networkId: string | undefined
   expiresAt: number
+  metadata?: Record<string, string>
 }) {
   const body = new URLSearchParams({
     payment_method: parameters.paymentMethod,
@@ -26,28 +27,60 @@ async function createTestSpt(parameters: {
     'usage_limits[max_amount]': parameters.amount,
     'usage_limits[expires_at]': parameters.expiresAt.toString(),
   })
-  const response = await fetch(
-    'https://api.stripe.com/v1/test_helpers/shared_payment/granted_tokens',
-    {
+  if (parameters.networkId) body.set('seller_details[network_id]', parameters.networkId)
+  if (parameters.metadata) {
+    for (const [key, value] of Object.entries(parameters.metadata)) {
+      body.set(`metadata[${key}]`, value)
+    }
+  }
+  const createSpt = async (bodyParams: URLSearchParams) =>
+    fetch('https://api.stripe.com/v1/test_helpers/shared_payment/granted_tokens', {
       method: 'POST',
       headers: {
         Authorization: `Basic ${btoa(`${stripeSecretKey!}:`)}`,
         'Content-Type': 'application/x-www-form-urlencoded',
       },
-      body,
-    },
-  )
+      body: bodyParams,
+    })
+
+  let response = await createSpt(body)
+  if (!response.ok) {
+    const error = (await response.json()) as { error: { message: string } }
+    if (
+      (parameters.metadata || parameters.networkId) &&
+      error.error.message.includes('Received unknown parameter')
+    ) {
+      const fallbackBody = new URLSearchParams({
+        payment_method: parameters.paymentMethod,
+        'usage_limits[currency]': parameters.currency,
+        'usage_limits[max_amount]': parameters.amount,
+        'usage_limits[expires_at]': parameters.expiresAt.toString(),
+      })
+      response = await createSpt(fallbackBody)
+    } else {
+      throw new Error(`Failed to create SPT: ${error.error.message}`)
+    }
+  }
+
   if (!response.ok) {
     const error = (await response.json()) as { error: { message: string } }
     throw new Error(`Failed to create SPT: ${error.error.message}`)
   }
+
   const { id } = (await response.json()) as { id: string }
   return id
 }
 
 describe.skipIf(!stripeSecretKey)('stripe', () => {
   const server = Mpay_server.create({
-    methods: [stripe_server.charge({ secretKey: stripeSecretKey!, networkId: 'profile_test' })],
+    methods: [
+      stripe_server.charge({
+        secretKey: stripeSecretKey!,
+        networkId: 'internal',
+        paymentMethods: ['pm_card_visa'],
+        metadata: { example: 'metadata' },
+      }),
+    ],
     realm,
     secretKey,
   })
@@ -55,6 +88,7 @@ describe.skipIf(!stripeSecretKey)('stripe', () => {
   const clientCharge = stripe_client.charge({
     createSpt: createTestSpt,
     paymentMethod: 'pm_card_visa',
+    externalId: 'client_order_789',
   })
 
   describe('intent: charge; type: spt', () => {
@@ -91,8 +125,10 @@ describe.skipIf(!stripeSecretKey)('stripe', () => {
           ...receipt,
           reference: '[reference]',
           timestamp: '[timestamp]',
+          externalId: '[externalId]',
         }).toMatchInlineSnapshot(`
           {
+            "externalId": "[externalId]",
             "method": "stripe",
             "reference": "[reference]",
             "status": "success",
@@ -250,8 +286,10 @@ describe.skipIf(!stripeSecretKey)('stripe', () => {
           ...receipt,
           reference: '[reference]',
           timestamp: '[timestamp]',
+          externalId: '[externalId]',
         }).toMatchInlineSnapshot(`
           {
+            "externalId": "[externalId]",
             "method": "stripe",
             "reference": "[reference]",
             "status": "success",

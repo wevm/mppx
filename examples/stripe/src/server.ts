@@ -2,19 +2,41 @@ import { Mpay, stripe } from 'mpay/server'
 
 const secretKey = process.env.VITE_STRIPE_SECRET_KEY!
 
+//
 const mpay = Mpay.create({
-  methods: [stripe.charge({ secretKey, networkId: 'profile_test' })],
+  methods: [
+    stripe.charge({
+      secretKey,
+      // Stripe Business Network profile ID.
+      networkId: 'internal',
+      // Payment methods supported by the server.
+      paymentMethods: ['card'],
+    }),
+  ],
 })
 
+// Handles creating an SPT and charging a customer.
+// In production examples, this would be a DIFFERENT server than
+// the one that handles the HTTP 402 flow.
 export async function handler(request: Request): Promise<Response | null> {
   const url = new URL(request.url)
 
   if (url.pathname === '/api/create-spt') {
-    const { paymentMethod, amount, currency, expiresAt } = (await request.json()) as {
-      paymentMethod: string
-      amount: string
-      currency: string
-      expiresAt: number
+    const { paymentMethod, amount, currency, expiresAt, networkId, metadata } =
+      (await request.json()) as {
+        paymentMethod: string
+        amount: string
+        currency: string
+        expiresAt: number
+        networkId?: string
+        metadata?: Record<string, string>
+      }
+
+    if (metadata?.externalId) {
+      return Response.json(
+        { error: 'metadata.externalId is reserved; use credential externalId instead' },
+        { status: 400 },
+      )
     }
 
     const body = new URLSearchParams({
@@ -23,18 +45,38 @@ export async function handler(request: Request): Promise<Response | null> {
       'usage_limits[max_amount]': amount,
       'usage_limits[expires_at]': expiresAt.toString(),
     })
+    if (networkId) body.set('seller_details[network_id]', networkId)
+    if (metadata) {
+      for (const [key, value] of Object.entries(metadata)) {
+        body.set(`metadata[${key}]`, value)
+      }
+    }
 
-    const response = await fetch(
-      'https://api.stripe.com/v1/test_helpers/shared_payment/granted_tokens',
-      {
+    const createSpt = async (bodyParams: URLSearchParams) =>
+      fetch('https://api.stripe.com/v1/test_helpers/shared_payment/granted_tokens', {
         method: 'POST',
         headers: {
           Authorization: `Basic ${btoa(`${secretKey}:`)}`,
           'Content-Type': 'application/x-www-form-urlencoded',
         },
-        body,
-      },
-    )
+        body: bodyParams,
+      })
+
+    let response = await createSpt(body)
+    if (!response.ok) {
+      const error = (await response.json()) as { error: { message: string } }
+      if ((metadata || networkId) && error.error.message.includes('Received unknown parameter')) {
+        const fallbackBody = new URLSearchParams({
+          payment_method: paymentMethod,
+          'usage_limits[currency]': currency,
+          'usage_limits[max_amount]': amount,
+          'usage_limits[expires_at]': expiresAt.toString(),
+        })
+        response = await createSpt(fallbackBody)
+      } else {
+        return Response.json({ error: error.error.message }, { status: 500 })
+      }
+    }
 
     if (!response.ok) {
       const error = (await response.json()) as { error: { message: string } }
@@ -46,7 +88,11 @@ export async function handler(request: Request): Promise<Response | null> {
   }
 
   if (url.pathname === '/api/fortune') {
-    const result = await mpay.charge({ amount: '1', currency: 'usd', decimals: 2 })(request)
+    const result = await mpay.charge({
+      amount: '1',
+      currency: 'usd',
+      decimals: 2,
+    })(request)
 
     if (result.status === 402) return result.challenge
 

@@ -19,6 +19,7 @@ import { charge as charge_ } from './Charge.js'
  *         const { spt } = await res.json()
  *         return spt
  *       },
+ *       paymentMethods: ['pm_card_visa'],
  *     }),
  *   ],
  * })

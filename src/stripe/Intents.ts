@@ -11,11 +11,16 @@ export const charge = MethodIntent.fromIntent(Intent.charge, {
   method: 'stripe',
   schema: {
     credential: {
-      payload: z.object({ spt: z.string() }),
+      payload: z.object({
+        spt: z.string(),
+        externalId: z.optional(z.string()),
+      }),
     },
     request: {
       methodDetails: z.object({
         networkId: z.string(),
+        paymentMethods: z.optional(z.array(z.string())),
+        metadata: z.optional(z.record(z.string(), z.string())),
       }),
     },
   },

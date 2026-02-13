@@ -18,8 +18,14 @@ jobs:
       - name: Lint & format
         run: pnpm check:ci
 
+      - name: Lint & format (examples)
+        run: pnpm check:examples
+
       - name: Check types
         run: pnpm check:types
+
+      - name: Check types (examples)
+        run: pnpm check:types:examples
 
   test:
     name: Test Runtime

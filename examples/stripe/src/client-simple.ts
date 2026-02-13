@@ -1,8 +1,5 @@
-// Same Stripe charge example, but using Mpay.create to handle the
-// 402 flow automatically. Polyfills globalThis.fetch so plain fetch()
-// calls negotiate payment transparently.
-//
-// Hits the same server as client.ts — see src/server.ts.
+// Example of a simple client that creates an SPT and retries with the credential.
+// This is useful if you know the payment method ahead of time, and don't need to collect it from the user.
 
 import { Mpay, stripe } from 'mpay/client'
 
@@ -18,6 +15,7 @@ Mpay.create({
         if (!res.ok) throw new Error('Failed to create SPT')
         return (await res.json()).spt
       },
+      // Stripe test payment method.
       paymentMethod: 'pm_card_visa',
     }),
   ],

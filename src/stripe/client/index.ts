@@ -1,2 +1,2 @@
-export { charge } from './Charge.js'
+export { charge, PaymentMethodNotAllowedError } from './Charge.js'
 export { stripe } from './MethodIntents.js'

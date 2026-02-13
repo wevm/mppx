@@ -22,6 +22,8 @@ describe('charge', () => {
       decimals: 2,
       expires: '2025-02-05T12:05:00Z',
       networkId: 'profile_123',
+      paymentMethods: ['pm_card_visa'],
+      metadata: { example: 'metadata' },
     })
     expect(result.success).toBe(true)
   })
@@ -36,6 +38,7 @@ describe('charge', () => {
   test('schema: validates spt payload', () => {
     const result = MethodIntents.charge.schema.credential.payload.safeParse({
       spt: 'spt_test_123',
+      externalId: 'client_order_789',
     })
     expect(result.success).toBe(true)
   })

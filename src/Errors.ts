@@ -100,6 +100,26 @@ export declare namespace VerificationFailedError {
 }
 
 /**
+ * Payment requires additional action (e.g., 3DS authentication).
+ */
+export class PaymentActionRequiredError extends PaymentError {
+  override readonly name = 'PaymentActionRequiredError'
+  readonly type = 'https://tempoxyz.github.io/payment-auth-spec/problems/payment-action-required'
+
+  constructor(options: PaymentActionRequiredError.Options = {}) {
+    const { reason } = options
+    super(reason ? `Payment requires action: ${reason}.` : 'Payment requires action.')
+  }
+}
+
+export declare namespace PaymentActionRequiredError {
+  type Options = {
+    /** Reason action is required (e.g., "requires_action"). */
+    reason?: string
+  }
+}
+
+/**
  * Payment has expired.
  */
 export class PaymentExpiredError extends PaymentError {

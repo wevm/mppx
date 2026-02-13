@@ -6,7 +6,8 @@
     "strict": true,
     "skipLibCheck": true,
     "lib": ["ESNext", "DOM"],
-    "noEmit": true
+    "noEmit": true,
+    "types": ["vite/client", "node"]
   },
   "include": ["src/**/*"]
 }

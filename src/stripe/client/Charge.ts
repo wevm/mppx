@@ -3,6 +3,20 @@ import * as MethodIntent from '../../MethodIntent.js'
 import * as z from '../../zod.js'
 import * as Intents from '../Intents.js'
 
+export class PaymentMethodNotAllowedError extends Error {
+  override readonly name = 'PaymentMethodNotAllowedError'
+
+  constructor(
+    readonly paymentMethod: string,
+    readonly allowedPaymentMethods: string[],
+    readonly paymentMethodType?: string,
+  ) {
+    super(
+      `paymentMethod "${paymentMethod}" is not supported (allowed: ${allowedPaymentMethods.join(', ')})`,
+    )
+  }
+}
+
 /**
  * Creates a Stripe charge method intent for usage on the client.
  *
@@ -17,11 +31,11 @@ import * as Intents from '../Intents.js'
  * import { stripe } from 'mpay/client'
  *
  * const charge = stripe.charge({
- *   createSpt: async ({ paymentMethod, amount, currency, networkId, expiresAt }) => {
+ *   createSpt: async ({ paymentMethod, amount, currency, networkId, expiresAt, metadata }) => {
  *     const res = await fetch('/api/create-spt', {
  *       method: 'POST',
  *       headers: { 'Content-Type': 'application/json' },
- *       body: JSON.stringify({ paymentMethod, amount, currency, networkId, expiresAt }),
+ *       body: JSON.stringify({ paymentMethod, amount, currency, networkId, expiresAt, metadata }),
  *     })
  *     const { spt } = await res.json()
  *     return spt
@@ -36,11 +50,18 @@ import * as Intents from '../Intents.js'
  * ```
  */
 export function charge(parameters: charge.Parameters) {
-  const { createSpt, paymentMethod: defaultPaymentMethod } = parameters
+  const {
+    createSpt,
+    externalId,
+    paymentMethod: defaultPaymentMethod,
+    paymentMethodType: defaultPaymentMethodType,
+    paymentMethods: defaultPaymentMethods,
+  } = parameters
 
   return MethodIntent.toClient(Intents.charge, {
     context: z.object({
       paymentMethod: z.optional(z.string()),
+      paymentMethodType: z.optional(z.string()),
     }),
 
     async createCredential({ challenge, context }) {
@@ -48,19 +69,56 @@ export function charge(parameters: charge.Parameters) {
       if (!paymentMethod)
         throw new Error('paymentMethod is required (pass via context or parameters)')
 
+      const paymentMethodType = context?.paymentMethodType ?? defaultPaymentMethodType
+
+      const allowedPaymentMethods =
+        (challenge.request.methodDetails?.paymentMethods as string[] | undefined) ??
+        defaultPaymentMethods
+      if (
+        allowedPaymentMethods &&
+        !(
+          allowedPaymentMethods.includes(paymentMethod) ||
+          (paymentMethodType && allowedPaymentMethods.includes(paymentMethodType))
+        )
+      )
+        throw new PaymentMethodNotAllowedError(
+          paymentMethod,
+          allowedPaymentMethods,
+          paymentMethodType,
+        )
+
       const amount = challenge.request.amount as string
       const currency = challenge.request.currency as string
       const networkId = challenge.request.methodDetails?.networkId as string | undefined
+      if (!networkId) throw new Error('networkId is required in challenge.methodDetails')
+      const metadata = challenge.request.methodDetails?.metadata as
+        | Record<string, string>
+        | undefined
+      if (metadata?.externalId) {
+        throw new Error(
+          'methodDetails.metadata.externalId is reserved; use credential externalId instead',
+        )
+      }
 
       const expiresAt = challenge.request.expires
         ? Math.floor(new Date(challenge.request.expires as string).getTime() / 1000)
         : Math.floor(Date.now() / 1000) + 3600
 
-      const spt = await createSpt({ paymentMethod, amount, currency, networkId, expiresAt })
+      const spt = await createSpt({
+        paymentMethod,
+        amount,
+        currency,
+        networkId,
+        expiresAt,
+        metadata,
+      })
 
       return Credential.serialize({
         challenge,
-        payload: { spt },
+        payload: {
+          spt,
+          ...(externalId ? { externalId } : {}),
+        },
       })
     },
   })
@@ -73,10 +131,18 @@ export declare namespace charge {
      *
      * SPT creation requires a Stripe secret key, so this typically
      * proxies through a server endpoint (e.g. `POST /api/create-spt`).
+     * If you are running a client in an enviroment with a secret key, you can just create the
+     * SPT directly in this callback.
      */
     createSpt: (parameters: CreateSptParameters) => Promise<string>
+    /** Optional client-side external reference ID for the credential payload. */
+    externalId?: string | undefined
     /** Default payment method ID. Overridden by `context.paymentMethod`. */
     paymentMethod?: string | undefined
+    /** Default payment method type (e.g. "card"). Overridden by `context.paymentMethodType`. */
+    paymentMethodType?: string | undefined
+    /** Default list of allowed payment methods, if the server doesn't specify one. */
+    paymentMethods?: string[] | undefined
   }
 
   type CreateSptParameters = {
@@ -90,5 +156,7 @@ export declare namespace charge {
     networkId: string | undefined
     /** SPT expiration as a Unix timestamp (seconds). */
     expiresAt: number
+    /** Optional metadata to associate with the SPT. */
+    metadata?: Record<string, string> | undefined
   }
 }

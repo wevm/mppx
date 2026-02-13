@@ -1,4 +1,4 @@
-import { PaymentExpiredError } from '../../Errors.js'
+import { PaymentActionRequiredError, PaymentExpiredError } from '../../Errors.js'
 import type { LooseOmit } from '../../internal/types.js'
 import * as MethodIntent from '../../MethodIntent.js'
 import * as Intents from '../Intents.js'
@@ -16,7 +16,17 @@ import * as Intents from '../Intents.js'
  * ```
  */
 export function charge<const parameters extends charge.Parameters>(parameters: parameters) {
-  const { amount, currency, decimals, description, externalId, networkId, secretKey } = parameters
+  const {
+    amount,
+    currency,
+    decimals,
+    description,
+    externalId,
+    metadata,
+    networkId,
+    paymentMethods,
+    secretKey,
+  } = parameters
 
   type Defaults = charge.DeriveDefaults<parameters>
   return MethodIntent.toServer<typeof Intents.charge, Defaults>(Intents.charge, {
@@ -26,7 +36,9 @@ export function charge<const parameters extends charge.Parameters>(parameters: p
       decimals,
       description,
       externalId,
+      metadata,
       networkId,
+      paymentMethods,
     } as unknown as Defaults,
 
     async verify({ credential }) {
@@ -38,7 +50,10 @@ export function charge<const parameters extends charge.Parameters>(parameters: p
 
       const parsed = Intents.charge.schema.credential.payload.safeParse(credential.payload)
       if (!parsed.success) throw new Error('Invalid credential payload: missing or malformed spt')
-      const { spt } = parsed.data as { spt: string }
+      const { spt, externalId: credentialExternalId } = parsed.data as {
+        spt: string
+        externalId?: string
+      }
 
       const body = new URLSearchParams({
         amount: request.amount as string,
@@ -48,8 +63,12 @@ export function charge<const parameters extends charge.Parameters>(parameters: p
         'automatic_payment_methods[enabled]': 'true',
         'automatic_payment_methods[allow_redirects]': 'never',
       })
-      const resolvedNetworkId = request.methodDetails?.networkId as string | undefined
-      if (resolvedNetworkId) body.set('metadata[network_id]', resolvedNetworkId)
+      const resolvedMetadata = request.methodDetails?.metadata as Record<string, string> | undefined
+      if (resolvedMetadata) {
+        for (const [key, value] of Object.entries(resolvedMetadata)) {
+          body.set(`metadata[${key}]`, value)
+        }
+      }
 
       const response = await fetch('https://api.stripe.com/v1/payment_intents', {
         method: 'POST',
@@ -67,6 +86,9 @@ export function charge<const parameters extends charge.Parameters>(parameters: p
 
       const pi = (await response.json()) as { id: string; status: string }
 
+      if (pi.status === 'requires_action') {
+        throw new PaymentActionRequiredError({ reason: 'Stripe PaymentIntent requires action' })
+      }
       if (pi.status !== 'succeeded') throw new Error(`Stripe PaymentIntent status: ${pi.status}`)
 
       return {
@@ -74,6 +96,7 @@ export function charge<const parameters extends charge.Parameters>(parameters: p
         status: 'success',
         timestamp: new Date().toISOString(),
         reference: pi.id,
+        ...(credentialExternalId ? { externalId: credentialExternalId } : {}),
       } as const
     },
   })
@@ -85,6 +108,10 @@ export declare namespace charge {
   type Parameters = {
     /** Stripe secret API key. */
     secretKey: string
+    /** Optional metadata to include in SPT creation requests. */
+    metadata?: Record<string, string> | undefined
+    /** Explicit list of supported payment method IDs/types. */
+    paymentMethods?: string[] | undefined
   } & Defaults
 
   type DeriveDefaults<parameters extends Parameters> = Pick<
