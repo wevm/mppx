@@ -1,5 +1,11 @@
 # mpay
 
+## 0.2.4
+
+### Patch Changes
+
+- 7f934e6: Made `escrowContract` optional in `settle()`, resolving it from chain defaults to match `session()` behavior.
+
 ## 0.2.3
 
 ### Patch Changes
