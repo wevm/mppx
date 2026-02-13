@@ -25,23 +25,13 @@ const charge = stripe.charge({
 
 const stripeClient = await loadStripe(stripePublishableKey)
 if (!stripeClient) throw new Error('Stripe.js failed to load')
-const elements = stripeClient.elements()
-const cardElement = elements.create('card', { hidePostalCode: true })
-cardElement.mount('#card-element')
 
 const output = document.getElementById('output')!
-const testStatus = document.getElementById('test-status')
 const formError = document.getElementById('form-error')
-const cardForm = document.getElementById('card-form')
+const paymentForm = document.getElementById('payment-form')
+const testHelpers = document.getElementById('test-helpers')
 const fortuneEl = document.getElementById('fortune')
 const actionButton = document.getElementById('button') as HTMLButtonElement | null
-
-if (actionButton) actionButton.disabled = true
-
-cardElement.on('change', (event: { complete?: boolean }) => {
-  if (!actionButton) return
-  actionButton.disabled = !event.complete
-})
 
 function log(message: string) {
   output.textContent += `${output.textContent ? '\n' : ''}${message}`
@@ -65,6 +55,7 @@ const TEST_VALUES = {
 }
 
 async function copyText(value: string) {
+  const testStatus = document.getElementById('test-status')
   try {
     await navigator.clipboard.writeText(value)
     if (testStatus) testStatus.textContent = 'Copied to clipboard.'
@@ -97,10 +88,6 @@ actionButton?.addEventListener('click', async () => {
   setFormError(null)
   if (fortuneEl) fortuneEl.textContent = ''
   if (actionButton) actionButton.disabled = true
-  if (cardForm) {
-    cardForm.classList.add('hidden')
-    cardForm.setAttribute('hidden', 'true')
-  }
 
   try {
     const response = await fetch('/api/fortune')
@@ -111,18 +98,72 @@ actionButton?.addEventListener('click', async () => {
     const challenge = Challenge.fromResponse(response, { methods: [charge] })
     log(`→ challenge:\n${JSON.stringify(challenge, null, 2)}`)
 
-    log('Collecting card details...')
-    const paymentMethodResult = await stripeClient.createPaymentMethod({
-      type: 'card',
-      card: cardElement,
+    const paymentMethodTypes = challenge.request.methodDetails?.paymentMethodTypes as string[]
+    log(`Payment method types: ${paymentMethodTypes.join(', ')}`)
+
+    // Create Payment Element using types from the challenge
+    const elements = stripeClient.elements({
+      mode: 'payment',
+      amount: Number(challenge.request.amount),
+      currency: challenge.request.currency as string,
+      paymentMethodTypes,
+      paymentMethodCreation: 'manual',
     })
-    if (paymentMethodResult.error?.message) throw new Error(paymentMethodResult.error.message)
-    if (!paymentMethodResult.paymentMethod?.id) throw new Error('Failed to create PaymentMethod')
+    const paymentElement = elements.create('payment', {
+      fields: {
+        billingDetails: { address: { postalCode: 'never', country: 'never' } },
+      },
+    })
+    if (paymentForm) {
+      paymentForm.innerHTML = '<div id="payment-element"></div>'
+      paymentForm.classList.remove('hidden')
+    }
+    paymentElement.mount('#payment-element')
+    // Expose for testing
+    ;(window as any).__stripeElements = elements
+    if (actionButton) actionButton.classList.add('hidden')
+    if (testHelpers) testHelpers.classList.remove('hidden')
+
+    log('Collecting payment details...')
+    const submitButton = document.getElementById('submit-payment') as HTMLButtonElement | null
+    if (submitButton) submitButton.classList.remove('hidden')
+
+    // Wait for user to click "Confirm Payment"
+    const paymentMethod = await new Promise<{ id: string }>((resolve, reject) => {
+      submitButton?.addEventListener(
+        'click',
+        async () => {
+          try {
+            const { error: submitError } = await elements.submit()
+            if (submitError?.message) return reject(new Error(submitError.message))
+
+            const { error: pmError, paymentMethod } =
+              await stripeClient.createPaymentMethod({
+                elements,
+                params: {
+                  billing_details: {
+                    address: { postal_code: '10001', country: 'US' },
+                  },
+                },
+              })
+            if (pmError?.message) return reject(new Error(pmError.message))
+            if (!paymentMethod?.id) return reject(new Error('Failed to create PaymentMethod'))
+            if (submitButton) submitButton.classList.add('hidden')
+            if (paymentForm) paymentForm.classList.add('hidden')
+            if (testHelpers) testHelpers.classList.add('hidden')
+            resolve(paymentMethod)
+          } catch (err) {
+            reject(err)
+          }
+        },
+        { once: true },
+      )
+    })
 
     const credential = await charge.createCredential({
       challenge,
       context: {
-        paymentMethod: paymentMethodResult.paymentMethod.id,
+        paymentMethod: paymentMethod.id,
       },
     })
     log('Retrying with credential...')

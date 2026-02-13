@@ -78,6 +78,7 @@ describe.skipIf(!stripeSecretKey)('stripe', () => {
       stripe_server.charge({
         secretKey: stripeSecretKey!,
         networkId: 'internal',
+        paymentMethodTypes: ['card'],
         metadata: { example: 'metadata' },
       }),
     ],

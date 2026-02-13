@@ -9,6 +9,8 @@ const mpay = Mpay.create({
       secretKey,
       // Stripe Business Network profile ID.
       networkId: 'internal',
+      // Ensure only card is supported.
+      paymentMethodTypes: ['card'],
     }),
   ],
 })

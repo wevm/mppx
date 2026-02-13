@@ -22,6 +22,7 @@ describe('charge', () => {
       decimals: 2,
       expires: '2025-02-05T12:05:00Z',
       networkId: 'profile_123',
+      paymentMethodTypes: ['card'],
       metadata: { example: 'metadata' },
     })
     expect(result.success).toBe(true)

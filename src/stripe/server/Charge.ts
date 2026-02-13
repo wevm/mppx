@@ -20,8 +20,17 @@ import * as Intents from '../Intents.js'
  * ```
  */
 export function charge<const parameters extends charge.Parameters>(parameters: parameters) {
-  const { amount, currency, decimals, description, externalId, metadata, networkId, secretKey } =
-    parameters
+  const {
+    amount,
+    currency,
+    decimals,
+    description,
+    externalId,
+    metadata,
+    networkId,
+    paymentMethodTypes,
+    secretKey,
+  } = parameters
 
   type Defaults = charge.DeriveDefaults<parameters>
   return MethodIntent.toServer<typeof Intents.charge, Defaults>(Intents.charge, {
@@ -33,6 +42,7 @@ export function charge<const parameters extends charge.Parameters>(parameters: p
       externalId,
       metadata,
       networkId,
+      paymentMethodTypes,
     } as unknown as Defaults,
 
     async verify({ credential }) {
