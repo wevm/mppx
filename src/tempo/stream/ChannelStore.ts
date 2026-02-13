@@ -21,6 +21,8 @@ import type { SignedVoucher } from './Types.js'
 export interface State {
   /** Address authorized to sign vouchers on behalf of the payer. */
   authorizedSigner: Address
+  /** Chain ID the channel was opened on. */
+  chainId: number
   /** Unique identifier for this payment channel. */
   channelId: Hex
   /** ISO 8601 timestamp when the channel was created. */

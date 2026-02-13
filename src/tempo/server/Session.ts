@@ -560,6 +560,7 @@ async function handleOpen(
     }
     return {
       channelId: payload.channelId,
+      chainId: methodDetails.chainId,
       payer: onChain.payer,
       payee: onChain.payee,
       token: onChain.token,

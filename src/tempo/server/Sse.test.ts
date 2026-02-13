@@ -32,6 +32,7 @@ function seedChannel(
     payee: '0x0000000000000000000000000000000000000002' as Address,
     token: '0x0000000000000000000000000000000000000003' as Address,
     authorizedSigner: '0x0000000000000000000000000000000000000004' as Address,
+    chainId: 42431,
     deposit: balance,
     settledOnChain: 0n,
     highestVoucherAmount: balance,
