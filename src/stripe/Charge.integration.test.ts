@@ -19,7 +19,7 @@ async function createTestSpt(parameters: {
   currency: string
   networkId: string | undefined
   expiresAt: number
-  metadata?: Record<string, string>
+  metadata?: Record<string, string> | undefined
 }) {
   const body = new URLSearchParams({
     payment_method: parameters.paymentMethod,

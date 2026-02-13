@@ -137,15 +137,14 @@ actionButton?.addEventListener('click', async () => {
             const { error: submitError } = await elements.submit()
             if (submitError?.message) return reject(new Error(submitError.message))
 
-            const { error: pmError, paymentMethod } =
-              await stripeClient.createPaymentMethod({
-                elements,
-                params: {
-                  billing_details: {
-                    address: { postal_code: '10001', country: 'US' },
-                  },
+            const { error: pmError, paymentMethod } = await stripeClient.createPaymentMethod({
+              elements,
+              params: {
+                billing_details: {
+                  address: { postal_code: '10001', country: 'US' },
                 },
-              })
+              },
+            })
             if (pmError?.message) return reject(new Error(pmError.message))
             if (!paymentMethod?.id) return reject(new Error('Failed to create PaymentMethod'))
             if (submitButton) submitButton.classList.add('hidden')
