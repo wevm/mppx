@@ -176,13 +176,13 @@ actionButton?.addEventListener('click', async () => {
     if (!paid.ok) throw new Error(`Payment failed: ${paid.status}`)
 
     const receipt = Receipt.fromResponse(paid)
-    log(`✓ ${receipt.method} / ${receipt.status} / ${receipt.reference}`)
+    log(`${receipt.method} / ${receipt.status} / ${receipt.reference}`)
 
     const { fortune } = await paid.json()
     if (fortuneEl) fortuneEl.textContent = fortune
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
-    log(`✗ ${message}`)
+    log(`Error: ${message}`)
     setFormError(message)
     if (actionButton) actionButton.disabled = false
   }
