@@ -150,6 +150,27 @@ importers:
         specifier: latest
         version: 7.3.1(@types/node@25.2.3)(tsx@4.21.0)(yaml@2.8.2)
 
+  examples/stripe:
+    dependencies:
+      '@remix-run/node-fetch-server':
+        specifier: latest
+        version: 0.13.0
+      '@stripe/stripe-js':
+        specifier: latest
+        version: 8.7.0
+      '@types/node':
+        specifier: latest
+        version: 25.2.3
+      mpay:
+        specifier: workspace:*
+        version: link:../..
+      typescript:
+        specifier: latest
+        version: 5.9.3
+      vite:
+        specifier: latest
+        version: 7.3.1(@types/node@25.2.3)(tsx@4.21.0)(yaml@2.8.2)
+
 packages:
 
   '@adraffy/ens-normalize@1.11.1':
@@ -735,6 +756,10 @@ packages:
 
   '@standard-schema/spec@1.1.0':
     resolution: {integrity: sha512-l2aFy5jALhniG5HgqrD6jXLi/rUWrKvqN/qJx6yoJsgKhblVd+iqqU4RCXavm/jPityDo5TCvKMnpjKnOriy0w==}
+
+  '@stripe/stripe-js@8.7.0':
+    resolution: {integrity: sha512-tNUerSstwNC1KuHgX4CASGO0Md3CB26IJzSXmVlSuFvhsBP4ZaEPpY4jxWOn9tfdDscuVT4Kqb8cZ2o9nLCgRQ==}
+    engines: {node: '>=12.16'}
 
   '@tokenizer/inflate@0.4.1':
     resolution: {integrity: sha512-2mAv+8pkG6GIZiF1kNg1jAjh27IDxEPKwdGul3snfztFerfPGI1LjDezZp3i7BElXompqEtPmoPx6c2wgtWsOA==}
@@ -2875,6 +2900,8 @@ snapshots:
   '@sindresorhus/merge-streams@4.0.0': {}
 
   '@standard-schema/spec@1.1.0': {}
+
+  '@stripe/stripe-js@8.7.0': {}
 
   '@tokenizer/inflate@0.4.1':
     dependencies:
