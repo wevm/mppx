@@ -1,4 +1,4 @@
-import type { Address } from 'ox'
+import { type Address, Signature } from 'ox'
 import { SignatureEnvelope } from 'ox/tempo'
 import type { Account, Client, Hex } from 'viem'
 import { isAddressEqual, recoverTypedDataAddress } from 'viem'
@@ -42,8 +42,9 @@ export async function signVoucher(
   message: Voucher,
   escrowContract: Address.Address,
   chainId: number,
+  authorizedSigner?: Address.Address | undefined,
 ): Promise<Hex> {
-  return signTypedData(client, {
+  const signature = await signTypedData(client, {
     account,
     domain: getVoucherDomain(escrowContract, chainId),
     types: voucherTypes,
@@ -53,6 +54,20 @@ export async function signVoucher(
       cumulativeAmount: message.cumulativeAmount,
     },
   })
+
+  // When a separate authorizedSigner is used (e.g. access key), unwrap the
+  // keychain envelope — the escrow contract verifies raw ECDSA signatures
+  // against authorizedSigner, not keychain-wrapped ones.
+  // TODO: when TIP-1020 is implemented, we can remove this.
+  if (authorizedSigner) {
+    try {
+      const envelope = SignatureEnvelope.from(signature as SignatureEnvelope.Serialized)
+      if (envelope.type === 'keychain' && envelope.inner.type === 'secp256k1')
+        return Signature.toHex(envelope.inner.signature)
+    } catch {}
+  }
+
+  return signature
 }
 
 /**

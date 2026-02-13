@@ -99,7 +99,7 @@ export function session<const parameters extends session.Parameters>(p?: paramet
     getClient: parameters.getClient,
     rpcUrl: defaults.rpcUrl,
   })
-  const { recipient, feePayer } = Account.resolve(parameters)
+  const { account, recipient, feePayer } = Account.resolve(parameters)
 
   type Transport = parameters['stream'] extends false | undefined ? undefined : Transport.Sse
   const transport = parameters.stream
@@ -208,7 +208,14 @@ export function session<const parameters extends session.Parameters>(p?: paramet
           break
 
         case 'close':
-          streamReceipt = await handleClose(store, client, challenge, payload, methodDetails)
+          streamReceipt = await handleClose(
+            store,
+            client,
+            challenge,
+            payload,
+            methodDetails,
+            account,
+          )
           break
 
         default:
@@ -297,15 +304,20 @@ export declare namespace session {
 export async function settle(
   store: ChannelStore.ChannelStore,
   client: viem_Client,
-  escrowContract: Address,
   channelId: Hex,
+  escrowContract?: Address | undefined,
 ): Promise<Hex> {
   const channel = await store.getChannel(channelId)
   if (!channel) throw new ChannelNotFoundError({ reason: 'channel not found' })
   if (!channel.highestVoucher) throw new VerificationFailedError({ reason: 'no voucher to settle' })
 
+  const chainId = client.chain?.id
+  const resolvedEscrow =
+    escrowContract ?? defaults.escrowContract[chainId as keyof typeof defaults.escrowContract]
+  if (!resolvedEscrow) throw new Error(`No escrow contract for chainId ${chainId}.`)
+
   const settledAmount = channel.highestVoucher.cumulativeAmount
-  const txHash = await settleOnChain(client, escrowContract, channel.highestVoucher)
+  const txHash = await settleOnChain(client, resolvedEscrow, channel.highestVoucher)
 
   await store.updateChannel(channelId, (current) => {
     if (!current) return null
@@ -548,6 +560,8 @@ async function handleOpen(
     }
     return {
       channelId: payload.channelId,
+      chainId: methodDetails.chainId,
+      escrowContract: methodDetails.escrowContract,
       payer: onChain.payer,
       payee: onChain.payee,
       token: onChain.token,
@@ -684,6 +698,7 @@ async function handleClose(
   challenge: Challenge.Challenge,
   payload: StreamCredentialPayload & { action: 'close' },
   methodDetails: StreamMethodDetails,
+  account?: viem_Account,
 ): Promise<StreamReceipt> {
   const channel = await store.getChannel(payload.channelId)
   if (!channel) {
@@ -734,13 +749,7 @@ async function handleClose(
     throw new InvalidSignatureError({ reason: 'invalid voucher signature' })
   }
 
-  if (!client.account) {
-    throw new Error(
-      'Cannot close channel: client has no account. Provide a `getClient` that returns an account-bearing client.',
-    )
-  }
-
-  const txHash = await closeOnChain(client, methodDetails.escrowContract, voucher)
+  const txHash = await closeOnChain(client, methodDetails.escrowContract, voucher, account)
 
   const updated = await store.updateChannel(payload.channelId, (current) => {
     if (!current) return null
