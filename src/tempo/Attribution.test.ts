@@ -61,6 +61,15 @@ describe('Attribution', () => {
       const clientHex = `0x${memo.slice(32, 52)}` as `0x${string}`
       expect(clientHex).toBe(Attribution.anonymous)
     })
+
+    test('treats empty string clientId as anonymous', () => {
+      const memo = Attribution.encode({ serverId: 'api.example.com', clientId: '' })
+      const clientHex = `0x${memo.slice(32, 52)}` as `0x${string}`
+      expect(clientHex).toBe(Attribution.anonymous)
+      const decoded = Attribution.decode(memo)
+      expect(decoded).not.toBeNull()
+      expect(decoded!.clientFingerprint).toBeNull()
+    })
   })
 
   describe('isMppMemo', () => {
@@ -94,6 +103,13 @@ describe('Attribution', () => {
       const memo = Attribution.encode({ serverId: 'api.example.com' })
       const wrongVersion = `${memo.slice(0, 10)}ff${memo.slice(12)}` as `0x${string}`
       expect(Attribution.isMppMemo(wrongVersion)).toBe(false)
+    })
+
+    test('handles mixed case hex', () => {
+      const memo = Attribution.encode({ serverId: 'api.example.com' })
+      const tagUpper = memo.slice(0, 10).toUpperCase()
+      const mixed = `0x${tagUpper.slice(2)}${memo.slice(10)}` as `0x${string}`
+      expect(Attribution.isMppMemo(mixed)).toBe(true)
     })
   })
 
@@ -160,6 +176,12 @@ describe('Attribution', () => {
         10,
       )
       expect(result.serverFingerprint.toLowerCase()).toBe(expectedServer.toLowerCase())
+    })
+
+    test('returns null for wrong version via decode', () => {
+      const memo = Attribution.encode({ serverId: 'api.example.com' })
+      const corrupted = `${memo.slice(0, 10)}ff${memo.slice(12)}` as `0x${string}`
+      expect(Attribution.decode(corrupted)).toBeNull()
     })
   })
 })

@@ -16,6 +16,8 @@ export const Schema = z.object({
   method: z.string(),
   /** Method-specific reference (e.g., transaction hash). */
   reference: z.string(),
+  /** Optional external reference ID echoed from the credential payload. */
+  externalId: z.optional(z.string()),
   /** Payment status. Always "success" — failures use 402 + Problem Details. */
   status: z.literal('success'),
   /** RFC 3339 settlement timestamp. */

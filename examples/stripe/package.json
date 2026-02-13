@@ -1,0 +1,20 @@
+{
+  "name": "stripe",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "dev": "vite",
+    "check": "biome check --fix --unsafe",
+    "check:types": "tsc -b",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@remix-run/node-fetch-server": "latest",
+    "@stripe/stripe-js": "^8.7.0",
+    "@types/node": "latest",
+    "mppx": "latest",
+    "typescript": "latest",
+    "vite": "latest"
+  }
+}
