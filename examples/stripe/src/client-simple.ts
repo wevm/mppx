@@ -6,7 +6,7 @@ import { Mppx, stripe } from 'mppx/client'
 Mppx.create({
   methods: [
     stripe({
-      createSpt: async (params) => {
+      createToken: async (params) => {
         const res = await fetch('/api/create-spt', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },

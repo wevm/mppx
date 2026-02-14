@@ -2,7 +2,7 @@ import { Receipt } from 'mppx'
 import { tempo } from 'mppx/client'
 import { Mppx as Mppx_server, tempo as tempo_server } from 'mppx/server'
 import { createClient } from 'viem'
-import { describe, expect, test } from 'vitest'
+import { describe, expect, test, vi } from 'vitest'
 import * as Http from '~test/Http.js'
 import { accounts, asset, chain, client, http } from '~test/tempo/viem.js'
 import * as Fetch from './Fetch.js'
@@ -229,6 +229,40 @@ describe('Fetch.from', () => {
         "timestamp": "[timestamp]",
       }
     `)
+
+    httpServer.close()
+  })
+
+  test('behavior: onChallenge can create credential', async () => {
+    const onChallenge = vi.fn(async (_challenge, { createCredential }) =>
+      createCredential({ account: accounts[1] }),
+    )
+
+    const fetch = Fetch.from({
+      methods: [
+        tempo.charge({
+          getClient: () => client,
+        }),
+      ],
+      onChallenge,
+    })
+
+    const httpServer = await Http.createServer(async (req, res) => {
+      const result = await Mppx_server.toNodeListener(
+        server.charge({
+          amount: '1',
+          currency: asset,
+          expires: new Date(Date.now() + 60_000).toISOString(),
+          recipient: accounts[0].address,
+        }),
+      )(req, res)
+      if (result.status === 402) return
+      res.end('OK')
+    })
+
+    const response = await fetch(httpServer.url)
+    expect(response.status).toBe(200)
+    expect(onChallenge).toHaveBeenCalledTimes(1)
 
     httpServer.close()
   })
