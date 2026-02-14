@@ -42,7 +42,7 @@ const client = createClient({
   pollingInterval: 200,
   transport: http(),
 })
-const currency = '0x20c0000000000000000000000000000000000001' as const
+const currency = '0x20c0000000000000000000000000000000000000' as const // pathUSD
 
 const formatter = new Intl.NumberFormat('en-US', {
   style: 'currency',

@@ -23,7 +23,7 @@ export const Schema = z.object({
   expires: z.optional(z.datetime()),
   /** Unique challenge identifier (HMAC-bound). */
   id: z.string(),
-  /** Intent type (e.g., "charge", "authorize"). */
+  /** Intent type (e.g., "charge", "session"). */
   intent: z.string(),
   /** Payment method (e.g., "tempo", "stripe"). */
   method: z.string(),
@@ -151,7 +151,7 @@ export declare namespace from {
     digest?: string | undefined
     /** Optional expiration timestamp (ISO 8601). */
     expires?: string | undefined
-    /** Intent type (e.g., "charge", "authorize"). */
+    /** Intent type (e.g., "charge", "session"). */
     intent: string
     /** Payment method (e.g., "tempo", "stripe"). */
     method: string
