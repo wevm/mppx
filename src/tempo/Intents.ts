@@ -21,6 +21,7 @@ export const charge = MethodIntent.fromIntent(Intent.charge, {
       methodDetails: z.object({
         acceptedCurrencies: z.optional(z.array(z.string())),
         chainId: z.optional(z.number()),
+        dexRouter: z.optional(z.string()),
         feePayer: z.optional(
           z.pipe(
             z.union([z.boolean(), z.custom<Account>()]),

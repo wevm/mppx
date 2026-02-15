@@ -1,5 +1,4 @@
 import {
-  type Address,
   decodeFunctionData,
   isAddressEqual,
   parseEventLogs,
@@ -47,7 +46,6 @@ export function charge<const parameters extends charge.Parameters>(
     description,
     externalId,
     memo,
-    onSwap,
   } = parameters
 
   const { recipient, feePayer } = Account.resolve(parameters)
@@ -107,6 +105,7 @@ export function charge<const parameters extends charge.Parameters>(
         ...(resolved.acceptedCurrencies && {
           acceptedCurrencies: [...resolved.acceptedCurrencies],
         }),
+        ...(resolved.dexRouter && { dexRouter: resolved.dexRouter }),
         feePayer: resolvedFeePayer,
         memo: request.memo || undefined,
       }
@@ -132,9 +131,6 @@ export function charge<const parameters extends charge.Parameters>(
       const memo = methodDetails?.memo as `0x${string}` | undefined
 
       const payload = credential.payload
-
-      let paidToken: `0x${string}` = currency
-      let paidAmount: bigint = BigInt(amount)
 
       switch (payload.type) {
         case 'hash': {
@@ -168,9 +164,6 @@ export function charge<const parameters extends charge.Parameters>(
                   recipient,
                 },
               )
-
-            paidToken = match.address as `0x${string}`
-            paidAmount = match.args.amount
           } else {
             const transferLogs = parseEventLogs({
               abi: Abis.tip20,
@@ -197,19 +190,6 @@ export function charge<const parameters extends charge.Parameters>(
                 currency,
                 recipient,
               })
-
-            paidToken = match.address as `0x${string}`
-            paidAmount = match.args.amount
-          }
-
-          if (onSwap && chainId && !isAddressEqual(paidToken, currency)) {
-            await onSwap({
-              from: paidToken,
-              to: currency,
-              amount: paidAmount,
-              recipient,
-              chainId,
-            })
           }
 
           return toReceipt(receipt)
@@ -219,61 +199,63 @@ export function charge<const parameters extends charge.Parameters>(
           const serializedTransaction = payload.signature as Transaction.TransactionSerializedTempo
           const transaction = Transaction.deserialize(serializedTransaction)
 
-          const calls = transaction.calls ?? []
+          const hasMultipleCurrencies = acceptedCurrencies.length > 1
 
-          const call = calls.find((call) => {
-            if (!call.to || !acceptedCurrencies.some((c) => isAddressEqual(call.to!, c)))
+          // For single-currency (no swap possible), validate calls pre-flight
+          if (!hasMultipleCurrencies) {
+            const calls = transaction.calls ?? []
+
+            const call = calls.find((call) => {
+              if (!call.to || !isAddressEqual(call.to, currency)) return false
+              if (!call.data) return false
+
+              const selector = call.data.slice(0, 10)
+
+              if (memo) {
+                if (selector !== transferWithMemoSelector) return false
+                try {
+                  const { args } = decodeFunctionData({ abi: Abis.tip20, data: call.data })
+                  const [to, amount_, memo_] = args as [`0x${string}`, bigint, `0x${string}`]
+                  return (
+                    isAddressEqual(to, recipient) &&
+                    amount_.toString() === amount &&
+                    memo_.toLowerCase() === memo.toLowerCase()
+                  )
+                } catch {
+                  return false
+                }
+              }
+
+              if (selector === transferSelector) {
+                try {
+                  const { args } = decodeFunctionData({ abi: Abis.tip20, data: call.data })
+                  const [to, amount_] = args as [`0x${string}`, bigint]
+                  return isAddressEqual(to, recipient) && amount_.toString() === amount
+                } catch {
+                  return false
+                }
+              }
+
+              if (selector === transferWithMemoSelector) {
+                try {
+                  const { args } = decodeFunctionData({ abi: Abis.tip20, data: call.data })
+                  const [to, amount_] = args as [`0x${string}`, bigint, `0x${string}`]
+                  return isAddressEqual(to, recipient) && amount_.toString() === amount
+                } catch {
+                  return false
+                }
+              }
+
               return false
-            if (!call.data) return false
-
-            const selector = call.data.slice(0, 10)
-
-            if (memo) {
-              if (selector !== transferWithMemoSelector) return false
-              try {
-                const { args } = decodeFunctionData({ abi: Abis.tip20, data: call.data })
-                const [to, amount_, memo_] = args as [`0x${string}`, bigint, `0x${string}`]
-                return (
-                  isAddressEqual(to, recipient) &&
-                  amount_.toString() === amount &&
-                  memo_.toLowerCase() === memo.toLowerCase()
-                )
-              } catch {
-                return false
-              }
-            }
-
-            if (selector === transferSelector) {
-              try {
-                const { args } = decodeFunctionData({ abi: Abis.tip20, data: call.data })
-                const [to, amount_] = args as [`0x${string}`, bigint]
-                return isAddressEqual(to, recipient) && amount_.toString() === amount
-              } catch {
-                return false
-              }
-            }
-
-            if (selector === transferWithMemoSelector) {
-              try {
-                const { args } = decodeFunctionData({ abi: Abis.tip20, data: call.data })
-                const [to, amount_] = args as [`0x${string}`, bigint, `0x${string}`]
-                return isAddressEqual(to, recipient) && amount_.toString() === amount
-              } catch {
-                return false
-              }
-            }
-
-            return false
-          })
-
-          if (!call)
-            throw new MismatchError('Invalid transaction: no matching payment call found', {
-              amount,
-              currency,
-              recipient,
             })
 
-          const matchedToken = call.to! as `0x${string}`
+            if (!call)
+              throw new MismatchError('Invalid transaction: no matching payment call found', {
+                amount,
+                currency,
+                recipient,
+              })
+          }
 
           const serializedTransaction_final = await (async () => {
             if (feePayer && methodDetails?.feePayer !== false) {
@@ -290,14 +272,36 @@ export function charge<const parameters extends charge.Parameters>(
             serializedTransaction: serializedTransaction_final,
           })
 
-          if (onSwap && chainId && !isAddressEqual(matchedToken, currency)) {
-            await onSwap({
-              from: matchedToken,
-              to: currency,
-              amount: BigInt(amount),
-              recipient,
-              chainId,
+          // For multi-currency (swap possible), verify outcome via Transfer logs
+          if (hasMultipleCurrencies) {
+            const transferLogs = parseEventLogs({
+              abi: Abis.tip20,
+              eventName: 'Transfer',
+              logs: receipt.logs,
             })
+
+            const memoLogs = parseEventLogs({
+              abi: Abis.tip20,
+              eventName: 'TransferWithMemo',
+              logs: receipt.logs,
+            })
+
+            const match = [...transferLogs, ...memoLogs].find(
+              (log) =>
+                isAddressEqual(log.address, currency) &&
+                isAddressEqual(log.args.to, recipient) &&
+                BigInt(log.args.amount.toString()) >= BigInt(amount),
+            )
+
+            if (!match)
+              throw new MismatchError(
+                'Payment verification failed: no matching transfer found after swap.',
+                {
+                  amount,
+                  currency,
+                  recipient,
+                },
+              )
           }
 
           return toReceipt(receipt)
@@ -319,20 +323,6 @@ export declare namespace charge {
   type Parameters = {
     /** Testnet mode. */
     testnet?: boolean | undefined
-    /**
-     * Called after payment verification when the client paid with a different
-     * token than the server's configured currency (e.g. client paid tokenA
-     * but server wants tokenB). Use this to perform a DEX swap.
-     */
-    onSwap?:
-      | ((parameters: {
-          from: Address
-          to: Address
-          amount: bigint
-          recipient: Address
-          chainId: number
-        }) => Promise<void>)
-      | undefined
   } & Client.getResolver.Parameters &
     Account.resolve.Parameters &
     Defaults
