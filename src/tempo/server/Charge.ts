@@ -1,4 +1,5 @@
 import {
+  type Address,
   decodeFunctionData,
   isAddressEqual,
   parseEventLogs,
@@ -46,6 +47,7 @@ export function charge<const parameters extends charge.Parameters>(
     description,
     externalId,
     memo,
+    onSwap,
   } = parameters
 
   const { recipient, feePayer } = Account.resolve(parameters)
@@ -131,6 +133,9 @@ export function charge<const parameters extends charge.Parameters>(
 
       const payload = credential.payload
 
+      let paidToken: `0x${string}` = currency
+      let paidAmount: bigint = BigInt(amount)
+
       switch (payload.type) {
         case 'hash': {
           const hash = payload.hash as `0x${string}`
@@ -163,6 +168,9 @@ export function charge<const parameters extends charge.Parameters>(
                   recipient,
                 },
               )
+
+            paidToken = match.address as `0x${string}`
+            paidAmount = match.args.amount
           } else {
             const transferLogs = parseEventLogs({
               abi: Abis.tip20,
@@ -189,6 +197,19 @@ export function charge<const parameters extends charge.Parameters>(
                 currency,
                 recipient,
               })
+
+            paidToken = match.address as `0x${string}`
+            paidAmount = match.args.amount
+          }
+
+          if (onSwap && chainId && !isAddressEqual(paidToken, currency)) {
+            await onSwap({
+              from: paidToken,
+              to: currency,
+              amount: paidAmount,
+              recipient,
+              chainId,
+            })
           }
 
           return toReceipt(receipt)
@@ -252,6 +273,8 @@ export function charge<const parameters extends charge.Parameters>(
               recipient,
             })
 
+          const matchedToken = call.to! as `0x${string}`
+
           const serializedTransaction_final = await (async () => {
             if (feePayer && methodDetails?.feePayer !== false) {
               return signTransaction(client, {
@@ -266,6 +289,16 @@ export function charge<const parameters extends charge.Parameters>(
           const receipt = await sendRawTransactionSync(client, {
             serializedTransaction: serializedTransaction_final,
           })
+
+          if (onSwap && chainId && !isAddressEqual(matchedToken, currency)) {
+            await onSwap({
+              from: matchedToken,
+              to: currency,
+              amount: BigInt(amount),
+              recipient,
+              chainId,
+            })
+          }
 
           return toReceipt(receipt)
         }
@@ -286,6 +319,20 @@ export declare namespace charge {
   type Parameters = {
     /** Testnet mode. */
     testnet?: boolean | undefined
+    /**
+     * Called after payment verification when the client paid with a different
+     * token than the server's configured currency (e.g. client paid tokenA
+     * but server wants tokenB). Use this to perform a DEX swap.
+     */
+    onSwap?:
+      | ((parameters: {
+          from: Address
+          to: Address
+          amount: bigint
+          recipient: Address
+          chainId: number
+        }) => Promise<void>)
+      | undefined
   } & Client.getResolver.Parameters &
     Account.resolve.Parameters &
     Defaults
