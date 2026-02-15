@@ -33,7 +33,7 @@ export function sse(options: sse.Options & { store: ChannelStore.ChannelStore })
     return store
   })()
 
-  const contextMap = new Map<string, Sse_core.fromRequest.Context>()
+  const contextMap = new Map<string, Sse_core.fromRequest.Context & { signal?: AbortSignal }>()
 
   const base = Transport.http()
   return Transport.from<Request, Response, Transport.ReceiptResponseOf<Sse>, Response>({
@@ -44,7 +44,7 @@ export function sse(options: sse.Options & { store: ChannelStore.ChannelStore })
       if (credential) {
         try {
           const ctx = Sse_core.fromRequest(request)
-          contextMap.set(ctx.challengeId, ctx)
+          contextMap.set(ctx.challengeId, { ...ctx, signal: request.signal })
         } catch {
           // ignore — non-SSE credentials won't have stream context
         }
@@ -84,6 +84,7 @@ export function sse(options: sse.Options & { store: ChannelStore.ChannelStore })
           tickCost: ctx.tickCost,
           pollIntervalMs: pollingInterval,
           generate,
+          signal: ctx.signal,
         })
         return Sse_core.toResponse(stream)
       }

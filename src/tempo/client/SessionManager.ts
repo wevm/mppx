@@ -150,9 +150,14 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
           ...fetchInit.headers,
           Accept: 'text/event-stream',
         },
+        ...(signal ? { signal } : {}),
       }
 
       const response = await doFetch(input, sseInit)
+
+      // Snapshot the challenge at SSE open time so concurrent
+      // calls don't overwrite it.
+      const sseChallenge = lastChallenge
 
       if (!response.body) throw new Error('Response has no body.')
 
@@ -186,13 +191,13 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
                   break
 
                 case 'payment-need-voucher': {
-                  if (!channel || !lastChallenge) break
+                  if (!channel || !sseChallenge) break
                   const required = BigInt(event.data.requiredCumulative)
                   channel.cumulativeAmount =
                     channel.cumulativeAmount > required ? channel.cumulativeAmount : required
 
                   const credential = await method.createCredential({
-                    challenge: lastChallenge as never,
+                    challenge: sseChallenge as never,
                     context: {
                       action: 'voucher',
                       channelId: channel.channelId,
