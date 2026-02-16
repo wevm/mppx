@@ -147,6 +147,7 @@
     "@remix-run/fetch-proxy": "^0.7.1",
     "@remix-run/node-fetch-server": "^0.13.0",
     "cac": "^6.7.14",
+    "canonicalize": "^2.1.0",
     "ox": "^0.12.0",
     "zod": "^4.3.6"
   },

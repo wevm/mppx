@@ -43,7 +43,7 @@ describe('http', () => {
         {
           "challenge": {
             "expires": "2025-01-01T00:00:00.000Z",
-            "id": "jIuTUdphF_TyhJ-NT1lK2r5YzPXw4tuELfslOVa3nls",
+            "id": "6FkNG-Uv4Ff-viAxYvfyNLhbXbEXcfsbdEtB74ADviw",
             "intent": "charge",
             "method": "tempo",
             "realm": "api.example.com",
@@ -93,7 +93,7 @@ describe('http', () => {
         {
           "headers": {
             "cache-control": "no-store",
-            "www-authenticate": "Payment id="jIuTUdphF_TyhJ-NT1lK2r5YzPXw4tuELfslOVa3nls", realm="api.example.com", method="tempo", intent="charge", request="eyJjdXJyZW5jeSI6IjB4MjBjMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMSIsImV4cGlyZXMiOiIyMDI1LTAxLTAxVDAwOjAwOjAwLjAwMFoiLCJyZWNpcGllbnQiOiIweDc0MmQzNUNjNjYzNEMwNTMyOTI1YTNiODQ0QmM5ZTc1OTVmOGZFMDAiLCJhbW91bnQiOiIxMDAwMDAwMDAwIn0", expires="2025-01-01T00:00:00.000Z"",
+            "www-authenticate": "Payment id="6FkNG-Uv4Ff-viAxYvfyNLhbXbEXcfsbdEtB74ADviw", realm="api.example.com", method="tempo", intent="charge", request="eyJhbW91bnQiOiIxMDAwMDAwMDAwIiwiY3VycmVuY3kiOiIweDIwYzAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDEiLCJleHBpcmVzIjoiMjAyNS0wMS0wMVQwMDowMDowMC4wMDBaIiwicmVjaXBpZW50IjoiMHg3NDJkMzVDYzY2MzRDMDUzMjkyNWEzYjg0NEJjOWU3NTk1ZjhmRTAwIn0", expires="2025-01-01T00:00:00.000Z"",
           },
           "status": 402,
         }
@@ -183,7 +183,7 @@ describe('mcp', () => {
         {
           "challenge": {
             "expires": "2025-01-01T00:00:00.000Z",
-            "id": "jIuTUdphF_TyhJ-NT1lK2r5YzPXw4tuELfslOVa3nls",
+            "id": "6FkNG-Uv4Ff-viAxYvfyNLhbXbEXcfsbdEtB74ADviw",
             "intent": "charge",
             "method": "tempo",
             "realm": "api.example.com",
@@ -221,7 +221,7 @@ describe('mcp', () => {
               "challenges": [
                 {
                   "expires": "2025-01-01T00:00:00.000Z",
-                  "id": "jIuTUdphF_TyhJ-NT1lK2r5YzPXw4tuELfslOVa3nls",
+                  "id": "6FkNG-Uv4Ff-viAxYvfyNLhbXbEXcfsbdEtB74ADviw",
                   "intent": "charge",
                   "method": "tempo",
                   "realm": "api.example.com",
@@ -262,7 +262,7 @@ describe('mcp', () => {
           "result": {
             "_meta": {
               "org.paymentauth/receipt": {
-                "challengeId": "jIuTUdphF_TyhJ-NT1lK2r5YzPXw4tuELfslOVa3nls",
+                "challengeId": "6FkNG-Uv4Ff-viAxYvfyNLhbXbEXcfsbdEtB74ADviw",
                 "method": "tempo",
                 "reference": "0xtxhash",
                 "status": "success",

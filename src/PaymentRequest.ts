@@ -1,7 +1,11 @@
+import { createRequire } from 'node:module'
 import { Base64 } from 'ox'
 import type { Compute } from './internal/types.js'
 import type * as Method from './Method.js'
 import type * as z from './zod.js'
+
+const require = createRequire(import.meta.url)
+const canonicalize = require('canonicalize') as (input: unknown) => string | undefined
 
 /**
  * Intent-specific payment parameters.
@@ -102,6 +106,7 @@ export function fromIntent<const method extends Method.Method>(
  * ```
  */
 export function serialize(request: Request): string {
-  const json = JSON.stringify(request)
+  const json = canonicalize(request)
+  if (!json) throw new Error('Failed to canonicalize request')
   return Base64.fromString(json, { pad: false, url: true })
 }
