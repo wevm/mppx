@@ -11,6 +11,8 @@ import {
   InvalidSignatureError,
   MalformedCredentialError,
   PaymentExpiredError,
+  PaymentInsufficientError,
+  PaymentMethodUnsupportedError,
   PaymentRequiredError,
   SignerMismatchError,
   VerificationFailedError,
@@ -31,8 +33,8 @@ describe('MalformedCredentialError', () => {
       {
         "message": "Credential is malformed.",
         "name": "MalformedCredentialError",
-        "status": 402,
-        "type": "https://tempoxyz.github.io/payment-auth-spec/problems/malformed-credential",
+        "status": 400,
+        "type": "https://paymentauth.org/problems/malformed-credential",
       }
     `)
   })
@@ -44,8 +46,8 @@ describe('MalformedCredentialError', () => {
         {
           "message": "Credential is malformed: invalid base64url.",
           "name": "MalformedCredentialError",
-          "status": 402,
-          "type": "https://tempoxyz.github.io/payment-auth-spec/problems/malformed-credential",
+          "status": 400,
+          "type": "https://paymentauth.org/problems/malformed-credential",
         }
       `)
   })
@@ -57,8 +59,8 @@ describe('InvalidChallengeError', () => {
       {
         "message": "Challenge is invalid.",
         "name": "InvalidChallengeError",
-        "status": 402,
-        "type": "https://tempoxyz.github.io/payment-auth-spec/problems/invalid-challenge",
+        "status": 400,
+        "type": "https://paymentauth.org/problems/invalid-challenge",
       }
     `)
   })
@@ -68,8 +70,8 @@ describe('InvalidChallengeError', () => {
       {
         "message": "Challenge "abc123" is invalid.",
         "name": "InvalidChallengeError",
-        "status": 402,
-        "type": "https://tempoxyz.github.io/payment-auth-spec/problems/invalid-challenge",
+        "status": 400,
+        "type": "https://paymentauth.org/problems/invalid-challenge",
       }
     `)
   })
@@ -79,8 +81,8 @@ describe('InvalidChallengeError', () => {
       {
         "message": "Challenge is invalid: expired.",
         "name": "InvalidChallengeError",
-        "status": 402,
-        "type": "https://tempoxyz.github.io/payment-auth-spec/problems/invalid-challenge",
+        "status": 400,
+        "type": "https://paymentauth.org/problems/invalid-challenge",
       }
     `)
   })
@@ -92,8 +94,8 @@ describe('InvalidChallengeError', () => {
         {
           "message": "Challenge "abc123" is invalid: already used.",
           "name": "InvalidChallengeError",
-          "status": 402,
-          "type": "https://tempoxyz.github.io/payment-auth-spec/problems/invalid-challenge",
+          "status": 400,
+          "type": "https://paymentauth.org/problems/invalid-challenge",
         }
       `)
   })
@@ -106,7 +108,7 @@ describe('VerificationFailedError', () => {
         "message": "Payment verification failed.",
         "name": "VerificationFailedError",
         "status": 402,
-        "type": "https://tempoxyz.github.io/payment-auth-spec/problems/verification-failed",
+        "type": "https://paymentauth.org/problems/verification-failed",
       }
     `)
   })
@@ -119,7 +121,7 @@ describe('VerificationFailedError', () => {
           "message": "Payment verification failed: invalid signature.",
           "name": "VerificationFailedError",
           "status": 402,
-          "type": "https://tempoxyz.github.io/payment-auth-spec/problems/verification-failed",
+          "type": "https://paymentauth.org/problems/verification-failed",
         }
       `)
   })
@@ -132,7 +134,7 @@ describe('PaymentExpiredError', () => {
         "message": "Payment has expired.",
         "name": "PaymentExpiredError",
         "status": 402,
-        "type": "https://tempoxyz.github.io/payment-auth-spec/problems/payment-expired",
+        "type": "https://paymentauth.org/problems/payment-expired",
       }
     `)
   })
@@ -145,7 +147,7 @@ describe('PaymentExpiredError', () => {
           "message": "Payment expired at 2025-01-26T12:00:00Z.",
           "name": "PaymentExpiredError",
           "status": 402,
-          "type": "https://tempoxyz.github.io/payment-auth-spec/problems/payment-expired",
+          "type": "https://paymentauth.org/problems/payment-expired",
         }
       `)
   })
@@ -158,7 +160,7 @@ describe('PaymentRequiredError', () => {
         "message": "Payment is required.",
         "name": "PaymentRequiredError",
         "status": 402,
-        "type": "https://tempoxyz.github.io/payment-auth-spec/problems/payment-required",
+        "type": "https://paymentauth.org/problems/payment-required",
       }
     `)
   })
@@ -171,7 +173,7 @@ describe('PaymentRequiredError', () => {
           "message": "Payment is required for "api.example.com".",
           "name": "PaymentRequiredError",
           "status": 402,
-          "type": "https://tempoxyz.github.io/payment-auth-spec/problems/payment-required",
+          "type": "https://paymentauth.org/problems/payment-required",
         }
       `)
   })
@@ -186,7 +188,7 @@ describe('PaymentRequiredError', () => {
           "message": "Payment is required for "api.example.com" (API access fee).",
           "name": "PaymentRequiredError",
           "status": 402,
-          "type": "https://tempoxyz.github.io/payment-auth-spec/problems/payment-required",
+          "type": "https://paymentauth.org/problems/payment-required",
         }
       `)
   })
@@ -199,7 +201,7 @@ describe('InvalidPayloadError', () => {
         "message": "Credential payload is invalid.",
         "name": "InvalidPayloadError",
         "status": 402,
-        "type": "https://tempoxyz.github.io/payment-auth-spec/problems/invalid-payload",
+        "type": "https://paymentauth.org/problems/invalid-payload",
       }
     `)
   })
@@ -212,7 +214,7 @@ describe('InvalidPayloadError', () => {
           "message": "Credential payload is invalid: missing signature field.",
           "name": "InvalidPayloadError",
           "status": 402,
-          "type": "https://tempoxyz.github.io/payment-auth-spec/problems/invalid-payload",
+          "type": "https://paymentauth.org/problems/invalid-payload",
         }
       `)
   })
@@ -225,7 +227,7 @@ describe('BadRequestError', () => {
         "message": "Bad request.",
         "name": "BadRequestError",
         "status": 400,
-        "type": "https://tempoxyz.github.io/payment-auth-spec/problems/bad-request",
+        "type": "https://paymentauth.org/problems/bad-request",
       }
     `)
   })
@@ -238,7 +240,59 @@ describe('BadRequestError', () => {
           "message": "Bad request: cannot combine hash type with feePayer.",
           "name": "BadRequestError",
           "status": 400,
-          "type": "https://tempoxyz.github.io/payment-auth-spec/problems/bad-request",
+          "type": "https://paymentauth.org/problems/bad-request",
+        }
+      `)
+  })
+})
+
+describe('PaymentInsufficientError', () => {
+  test('default', () => {
+    expect(errorSnapshot(new PaymentInsufficientError())).toMatchInlineSnapshot(`
+      {
+        "message": "Payment amount is insufficient.",
+        "name": "PaymentInsufficientError",
+        "status": 402,
+        "type": "https://paymentauth.org/problems/payment-insufficient",
+      }
+    `)
+  })
+
+  test('with reason', () => {
+    expect(
+      errorSnapshot(new PaymentInsufficientError({ reason: 'expected 1000, received 500' })),
+    ).toMatchInlineSnapshot(`
+        {
+          "message": "Payment insufficient: expected 1000, received 500.",
+          "name": "PaymentInsufficientError",
+          "status": 402,
+          "type": "https://paymentauth.org/problems/payment-insufficient",
+        }
+      `)
+  })
+})
+
+describe('PaymentMethodUnsupportedError', () => {
+  test('default', () => {
+    expect(errorSnapshot(new PaymentMethodUnsupportedError())).toMatchInlineSnapshot(`
+      {
+        "message": "Payment method is not supported.",
+        "name": "PaymentMethodUnsupportedError",
+        "status": 400,
+        "type": "https://paymentauth.org/problems/method-unsupported",
+      }
+    `)
+  })
+
+  test('with method', () => {
+    expect(
+      errorSnapshot(new PaymentMethodUnsupportedError({ method: 'bitcoin' })),
+    ).toMatchInlineSnapshot(`
+        {
+          "message": "Payment method "bitcoin" is not supported.",
+          "name": "PaymentMethodUnsupportedError",
+          "status": 400,
+          "type": "https://paymentauth.org/problems/method-unsupported",
         }
       `)
   })
@@ -380,9 +434,9 @@ describe('toProblemDetails', () => {
     expect(error.toProblemDetails()).toMatchInlineSnapshot(`
       {
         "detail": "Credential is malformed: invalid JSON.",
-        "status": 402,
-        "title": "MalformedCredentialError",
-        "type": "https://tempoxyz.github.io/payment-auth-spec/problems/malformed-credential",
+        "status": 400,
+        "title": "Malformed Credential",
+        "type": "https://paymentauth.org/problems/malformed-credential",
       }
     `)
   })
@@ -393,9 +447,9 @@ describe('toProblemDetails', () => {
       {
         "challengeId": "abc123",
         "detail": "Challenge "abc123" is invalid: expired.",
-        "status": 402,
-        "title": "InvalidChallengeError",
-        "type": "https://tempoxyz.github.io/payment-auth-spec/problems/invalid-challenge",
+        "status": 400,
+        "title": "Invalid Challenge",
+        "type": "https://paymentauth.org/problems/invalid-challenge",
       }
     `)
   })

@@ -56,8 +56,8 @@ describe('request handler', () => {
         "detail": "Payment is required for "api.example.com".",
         "instance": "[instance]",
         "status": 402,
-        "title": "PaymentRequiredError",
-        "type": "https://tempoxyz.github.io/payment-auth-spec/problems/payment-required",
+        "title": "Payment Required",
+        "type": "https://paymentauth.org/problems/payment-required",
       }
     `)
   })
@@ -87,9 +87,9 @@ describe('request handler', () => {
         "challengeId": "[challengeId]",
         "detail": "Credential is malformed: Invalid base64url or JSON..",
         "instance": "[instance]",
-        "status": 402,
-        "title": "MalformedCredentialError",
-        "type": "https://tempoxyz.github.io/payment-auth-spec/problems/malformed-credential",
+        "status": 400,
+        "title": "Malformed Credential",
+        "type": "https://paymentauth.org/problems/malformed-credential",
       }
     `)
   })
@@ -131,9 +131,9 @@ describe('request handler', () => {
         "challengeId": "[challengeId]",
         "detail": "Challenge "wrong-id" is invalid: challenge was not issued by this server.",
         "instance": "[instance]",
-        "status": 402,
-        "title": "InvalidChallengeError",
-        "type": "https://tempoxyz.github.io/payment-auth-spec/problems/invalid-challenge",
+        "status": 400,
+        "title": "Invalid Challenge",
+        "type": "https://paymentauth.org/problems/invalid-challenge",
       }
     `)
   })
@@ -178,8 +178,8 @@ describe('request handler', () => {
         "detail": "[detail]",
         "instance": "[instance]",
         "status": 402,
-        "title": "InvalidPayloadError",
-        "type": "https://tempoxyz.github.io/payment-auth-spec/problems/invalid-payload",
+        "title": "Invalid Payload",
+        "type": "https://paymentauth.org/problems/invalid-payload",
       }
     `)
     expect(body.detail).toContain('Credential payload is invalid')
@@ -218,8 +218,8 @@ describe('request handler (node)', () => {
         "detail": "Payment is required for "api.example.com".",
         "instance": "[instance]",
         "status": 402,
-        "title": "PaymentRequiredError",
-        "type": "https://tempoxyz.github.io/payment-auth-spec/problems/payment-required",
+        "title": "Payment Required",
+        "type": "https://paymentauth.org/problems/payment-required",
       }
     `)
 
@@ -271,8 +271,8 @@ describe('request handler (node)', () => {
         "detail": "[detail]",
         "instance": "[instance]",
         "status": 402,
-        "title": "VerificationFailedError",
-        "type": "https://tempoxyz.github.io/payment-auth-spec/problems/verification-failed",
+        "title": "Verification Failed",
+        "type": "https://paymentauth.org/problems/verification-failed",
       }
     `)
     expect(body.detail).toContain('Payment verification failed')

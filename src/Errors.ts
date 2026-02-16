@@ -5,6 +5,9 @@ export abstract class PaymentError extends Error {
   /** RFC 9457 Problem Details type URI. */
   abstract readonly type: string
 
+  /** Human-readable summary for RFC 9457 Problem Details. */
+  abstract readonly title: string
+
   /** HTTP status code. */
   readonly status: number = 402
 
@@ -12,7 +15,7 @@ export abstract class PaymentError extends Error {
   toProblemDetails(challengeId?: string): PaymentError.ProblemDetails {
     return {
       type: this.type,
-      title: this.name,
+      title: this.title,
       status: this.status,
       detail: this.message,
       ...(challengeId && { challengeId }),
@@ -40,7 +43,9 @@ export declare namespace PaymentError {
  */
 export class MalformedCredentialError extends PaymentError {
   override readonly name = 'MalformedCredentialError'
-  readonly type = 'https://tempoxyz.github.io/payment-auth-spec/problems/malformed-credential'
+  readonly title = 'Malformed Credential'
+  override readonly status = 400
+  readonly type = 'https://paymentauth.org/problems/malformed-credential'
 
   constructor(options: MalformedCredentialError.Options = {}) {
     const { reason } = options
@@ -60,7 +65,9 @@ export declare namespace MalformedCredentialError {
  */
 export class InvalidChallengeError extends PaymentError {
   override readonly name = 'InvalidChallengeError'
-  readonly type = 'https://tempoxyz.github.io/payment-auth-spec/problems/invalid-challenge'
+  readonly title = 'Invalid Challenge'
+  override readonly status = 400
+  readonly type = 'https://paymentauth.org/problems/invalid-challenge'
 
   constructor(options: InvalidChallengeError.Options = {}) {
     const { id, reason } = options
@@ -84,7 +91,8 @@ export declare namespace InvalidChallengeError {
  */
 export class VerificationFailedError extends PaymentError {
   override readonly name = 'VerificationFailedError'
-  readonly type = 'https://tempoxyz.github.io/payment-auth-spec/problems/verification-failed'
+  readonly title = 'Verification Failed'
+  readonly type = 'https://paymentauth.org/problems/verification-failed'
 
   constructor(options: VerificationFailedError.Options = {}) {
     const { reason } = options
@@ -104,7 +112,8 @@ export declare namespace VerificationFailedError {
  */
 export class PaymentActionRequiredError extends PaymentError {
   override readonly name = 'PaymentActionRequiredError'
-  readonly type = 'https://tempoxyz.github.io/payment-auth-spec/problems/payment-action-required'
+  readonly title = 'Payment Action Required'
+  readonly type = 'https://paymentauth.org/problems/payment-action-required'
 
   constructor(options: PaymentActionRequiredError.Options = {}) {
     const { reason } = options
@@ -124,7 +133,8 @@ export declare namespace PaymentActionRequiredError {
  */
 export class PaymentExpiredError extends PaymentError {
   override readonly name = 'PaymentExpiredError'
-  readonly type = 'https://tempoxyz.github.io/payment-auth-spec/problems/payment-expired'
+  readonly title = 'Payment Expired'
+  readonly type = 'https://paymentauth.org/problems/payment-expired'
 
   constructor(options: PaymentExpiredError.Options = {}) {
     const { expires } = options
@@ -144,7 +154,8 @@ export declare namespace PaymentExpiredError {
  */
 export class PaymentRequiredError extends PaymentError {
   override readonly name = 'PaymentRequiredError'
-  readonly type = 'https://tempoxyz.github.io/payment-auth-spec/problems/payment-required'
+  readonly title = 'Payment Required'
+  readonly type = 'https://paymentauth.org/problems/payment-required'
 
   constructor(options: PaymentRequiredError.Options = {}) {
     const { description, realm } = options
@@ -169,7 +180,8 @@ export declare namespace PaymentRequiredError {
  */
 export class InvalidPayloadError extends PaymentError {
   override readonly name = 'InvalidPayloadError'
-  readonly type = 'https://tempoxyz.github.io/payment-auth-spec/problems/invalid-payload'
+  readonly title = 'Invalid Payload'
+  readonly type = 'https://paymentauth.org/problems/invalid-payload'
 
   constructor(options: InvalidPayloadError.Options = {}) {
     const { reason } = options
@@ -189,8 +201,9 @@ export declare namespace InvalidPayloadError {
  */
 export class BadRequestError extends PaymentError {
   override readonly name = 'BadRequestError'
+  readonly title = 'Bad Request'
   override readonly status = 400
-  readonly type = 'https://tempoxyz.github.io/payment-auth-spec/problems/bad-request'
+  readonly type = 'https://paymentauth.org/problems/bad-request'
 
   constructor(options: BadRequestError.Options = {}) {
     const { reason } = options
@@ -206,10 +219,56 @@ export declare namespace BadRequestError {
 }
 
 /**
+ * Payment amount is insufficient (too low).
+ */
+export class PaymentInsufficientError extends PaymentError {
+  override readonly name = 'PaymentInsufficientError'
+  readonly title = 'Payment Insufficient'
+  readonly type = 'https://paymentauth.org/problems/payment-insufficient'
+
+  constructor(options: PaymentInsufficientError.Options = {}) {
+    const { reason } = options
+    super(reason ? `Payment insufficient: ${reason}.` : 'Payment amount is insufficient.')
+  }
+}
+
+export declare namespace PaymentInsufficientError {
+  type Options = {
+    /** Reason the payment is insufficient (e.g., "expected 1000, received 500"). */
+    reason?: string
+  }
+}
+
+/**
+ * Payment method is not supported by the server.
+ */
+export class PaymentMethodUnsupportedError extends PaymentError {
+  override readonly name = 'PaymentMethodUnsupportedError'
+  readonly title = 'Method Unsupported'
+  override readonly status = 400
+  readonly type = 'https://paymentauth.org/problems/method-unsupported'
+
+  constructor(options: PaymentMethodUnsupportedError.Options = {}) {
+    const { method } = options
+    super(
+      method ? `Payment method "${method}" is not supported.` : 'Payment method is not supported.',
+    )
+  }
+}
+
+export declare namespace PaymentMethodUnsupportedError {
+  type Options = {
+    /** The unsupported method identifier. */
+    method?: string
+  }
+}
+
+/**
  * Insufficient balance in the payment channel.
  */
 export class InsufficientBalanceError extends PaymentError {
   override readonly name = 'InsufficientBalanceError'
+  readonly title = 'Insufficient Balance'
   override readonly status = 402
   readonly type = 'https://paymentauth.org/problems/stream/insufficient-balance'
 
@@ -231,6 +290,7 @@ export declare namespace InsufficientBalanceError {
  */
 export class InvalidSignatureError extends PaymentError {
   override readonly name = 'InvalidSignatureError'
+  readonly title = 'Invalid Signature'
   override readonly status = 402
   readonly type = 'https://paymentauth.org/problems/stream/invalid-signature'
 
@@ -251,6 +311,7 @@ export declare namespace InvalidSignatureError {
  */
 export class SignerMismatchError extends PaymentError {
   override readonly name = 'SignerMismatchError'
+  readonly title = 'Signer Mismatch'
   override readonly status = 402
   readonly type = 'https://paymentauth.org/problems/stream/signer-mismatch'
 
@@ -271,6 +332,7 @@ export declare namespace SignerMismatchError {
  */
 export class AmountExceedsDepositError extends PaymentError {
   override readonly name = 'AmountExceedsDepositError'
+  readonly title = 'Amount Exceeds Deposit'
   override readonly status = 402
   readonly type = 'https://paymentauth.org/problems/stream/amount-exceeds-deposit'
 
@@ -291,6 +353,7 @@ export declare namespace AmountExceedsDepositError {
  */
 export class DeltaTooSmallError extends PaymentError {
   override readonly name = 'DeltaTooSmallError'
+  readonly title = 'Delta Too Small'
   override readonly status = 402
   readonly type = 'https://paymentauth.org/problems/stream/delta-too-small'
 
@@ -311,6 +374,7 @@ export declare namespace DeltaTooSmallError {
  */
 export class ChannelNotFoundError extends PaymentError {
   override readonly name = 'ChannelNotFoundError'
+  readonly title = 'Channel Not Found'
   override readonly status = 410
   readonly type = 'https://paymentauth.org/problems/stream/channel-not-found'
 
@@ -331,6 +395,7 @@ export declare namespace ChannelNotFoundError {
  */
 export class ChannelClosedError extends PaymentError {
   override readonly name = 'ChannelClosedError'
+  readonly title = 'Channel Closed'
   override readonly status = 410
   readonly type = 'https://paymentauth.org/problems/stream/channel-finalized'
 

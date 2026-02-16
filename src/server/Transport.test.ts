@@ -111,7 +111,7 @@ describe('http', () => {
 
       expect(response.status).toBe(400)
       const body = await response.json()
-      expect(body.type).toBe('https://tempoxyz.github.io/payment-auth-spec/problems/bad-request')
+      expect(body.type).toBe('https://paymentauth.org/problems/bad-request')
       expect(body.status).toBe(400)
     })
 
