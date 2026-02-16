@@ -241,16 +241,7 @@ describe('session multi-fetch (examples/session/multi-fetch)', () => {
 
         // Second request: reuse the channel via --channel
         const second = await runAsync(
-          [
-            httpServer.url,
-            '--rpc-url',
-            rpcUrl,
-            '-s',
-            '--channel',
-            channelId,
-            '--deposit',
-            '10',
-          ],
+          [httpServer.url, '--rpc-url', rpcUrl, '-s', '--channel', channelId, '--deposit', '10'],
           { input: '' },
         )
         expect(second.stdout).toContain('scraped-content')
@@ -370,10 +361,9 @@ describe('session sse (examples/session/sse)', () => {
     })
 
     try {
-      const { stdout } = await runAsync(
-        [httpServer.url, '--rpc-url', rpcUrl, '--deposit', '10'],
-        { input: '' },
-      )
+      const { stdout } = await runAsync([httpServer.url, '--rpc-url', rpcUrl, '--deposit', '10'], {
+        input: '',
+      })
       expect(stdout.trim()).toBe('Hello world!')
     } finally {
       httpServer.close()

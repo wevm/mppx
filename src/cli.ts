@@ -178,7 +178,9 @@ cli
         })
         explorerUrl = client.chain?.blockExplorers?.default?.url
         const tokenInfo = currency
-          ? await fetchTokenInfo(client, currency as Address, account.address).catch(() => undefined)
+          ? await fetchTokenInfo(client, currency as Address, account.address).catch(
+              () => undefined,
+            )
           : undefined
         tokenSymbol = tokenInfo?.symbol ?? currency ?? ''
         tokenDecimals =
@@ -419,7 +421,9 @@ cli
             ? ` ${pc.dim(`(deposit ${depositRaw} ${tokenSymbol})`)}`
             : ''
           const prefix = options.confirm ? '' : '\n'
-          info(`${prefix}${pc.dim(`Channel opened ${parsed.payload.channelId}`)}${depositDisplay}\n`)
+          info(
+            `${prefix}${pc.dim(`Channel opened ${parsed.payload.channelId}`)}${depositDisplay}\n`,
+          )
         } else {
           const prefix = options.confirm ? '' : '\n'
           info(`${prefix}${pc.dim(`Channel reused ${parsed.payload.channelId}`)}\n`)
