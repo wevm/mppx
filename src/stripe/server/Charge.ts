@@ -1,3 +1,4 @@
+import type * as Credential from '../../Credential.js'
 import {
   PaymentActionRequiredError,
   PaymentExpiredError,
@@ -67,11 +68,10 @@ export function charge<const parameters extends charge.Parameters>(parameters: p
         'automatic_payment_methods[enabled]': 'true',
         'automatic_payment_methods[allow_redirects]': 'never',
       })
-      const resolvedMetadata = request.methodDetails?.metadata as Record<string, string> | undefined
-      if (resolvedMetadata) {
-        for (const [key, value] of Object.entries(resolvedMetadata)) {
-          body.set(`metadata[${key}]`, value)
-        }
+      const userMetadata = request.methodDetails?.metadata as Record<string, string> | undefined
+      const resolvedMetadata = { ...buildAnalytics({ credential }), ...userMetadata }
+      for (const [key, value] of Object.entries(resolvedMetadata)) {
+        body.set(`metadata[${key}]`, value)
       }
 
       const response = await fetch('https://api.stripe.com/v1/payment_intents', {
@@ -118,4 +118,20 @@ export declare namespace charge {
     parameters,
     Extract<keyof parameters, keyof Defaults>
   > & { decimals: number }
+}
+
+/** @internal */
+function buildAnalytics(parameters: {
+  credential: Credential.Credential
+}): Record<string, string> {
+  const { credential } = parameters
+  const { challenge } = credential
+  return {
+    mpp_version: '1',
+    mpp_is_mpp: 'true',
+    mpp_intent: challenge.intent,
+    mpp_challenge_id: challenge.id,
+    mpp_server_id: challenge.realm,
+    ...(credential.source ? { mpp_client_id: credential.source } : {}),
+  }
 }
