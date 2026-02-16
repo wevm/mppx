@@ -30,13 +30,13 @@ import {
 } from '../../Errors.js'
 import type { Challenge, Credential } from '../../index.js'
 import type { LooseOmit } from '../../internal/types.js'
-import * as MethodIntent from '../../MethodIntent.js'
+import * as Method from '../../Method.js'
 import * as Store from '../../Store.js'
 import * as Client from '../../viem/Client.js'
-import * as Intents from '../Intents.js'
 import * as Account from '../internal/account.js'
 import * as defaults from '../internal/defaults.js'
 import type * as types from '../internal/types.js'
+import * as Methods from '../Methods.js'
 import {
   broadcastOpenTransaction,
   broadcastTopUpTransaction,
@@ -51,7 +51,7 @@ import type { SignedVoucher, StreamCredentialPayload, StreamReceipt } from '../s
 import { parseVoucherFromPayload, verifyVoucher } from '../stream/Voucher.js'
 import * as Transport from './internal/transport.js'
 
-/** Challenge methodDetails shape for stream intents. */
+/** Challenge methodDetails shape for stream methods. */
 type StreamMethodDetails = {
   escrowContract: Address
   chainId: number
@@ -61,7 +61,7 @@ type StreamMethodDetails = {
 }
 
 /**
- * Creates a stream payment server using the mppx Method.toServer() pattern.
+ * Creates a stream payment server using the Method.toServer() pattern.
  *
  * @example
  * ```ts
@@ -110,7 +110,7 @@ export function session<const parameters extends session.Parameters>(p?: paramet
     : undefined
 
   type Defaults = session.DeriveDefaults<parameters>
-  return MethodIntent.toServer<typeof Intents.session, Defaults, Transport>(Intents.session, {
+  return Method.toServer<typeof Methods.session, Defaults, Transport>(Methods.session, {
     defaults: {
       amount,
       currency,
@@ -266,7 +266,7 @@ export function session<const parameters extends session.Parameters>(p?: paramet
 
 export declare namespace session {
   type Defaults = LooseOmit<
-    MethodIntent.RequestDefaults<typeof Intents.session>,
+    Method.RequestDefaults<typeof Methods.session>,
     'feePayer' | 'recipient'
   >
 

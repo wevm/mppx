@@ -1,13 +1,13 @@
 import { Challenge, Credential, Mcp, Receipt } from 'mppx'
 import { Transport } from 'mppx/server'
-import { MethodIntents as Intents } from 'mppx/tempo'
+import { Methods } from 'mppx/tempo'
 import { describe, expect, test } from 'vitest'
 import { BadRequestError, ChannelClosedError } from '../Errors.js'
 
 const realm = 'api.example.com'
 const secretKey = 'test-secret-key'
 
-const challenge = Challenge.fromIntent(Intents.charge, {
+const challenge = Challenge.fromIntent(Methods.charge, {
   realm,
   secretKey,
   request: {

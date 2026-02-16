@@ -1,9 +1,9 @@
 import { assertType, describe, expectTypeOf, test } from 'vitest'
 import * as Challenge from './Challenge.js'
-import { MethodIntent } from './index.js'
-import * as Intents from './tempo/Intents.js'
+import { Method } from './index.js'
+import * as Methods from './tempo/Methods.js'
 
-const method = MethodIntent.toServer(Intents.charge, {
+const method = Method.toServer(Methods.charge, {
   async verify() {
     return {
       method: 'tempo',

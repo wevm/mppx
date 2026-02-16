@@ -2,12 +2,12 @@ import type { Hex } from 'ox'
 import { type Address, parseUnits, type Account as viem_Account } from 'viem'
 import { tempo as tempo_chain } from 'viem/chains'
 import type * as Challenge from '../../Challenge.js'
-import * as MethodIntent from '../../MethodIntent.js'
+import * as Method from '../../Method.js'
 import * as Account from '../../viem/Account.js'
 import * as Client from '../../viem/Client.js'
 import * as z from '../../zod.js'
-import * as Intents from '../Intents.js'
 import * as defaults from '../internal/defaults.js'
+import * as Methods from '../Methods.js'
 import type { StreamCredentialPayload } from '../stream/Types.js'
 import { signVoucher } from '../stream/Voucher.js'
 import {
@@ -35,7 +35,7 @@ export const streamContextSchema = z.object({
 export type StreamContext = z.infer<typeof streamContextSchema>
 
 /**
- * Creates a session payment MethodIntent plugin for use with `Mppx.create()`.
+ * Creates a session payment Intent plugin for use with `Mppx.create()`.
  *
  * Supports both auto mode (set `deposit` to manage channels automatically)
  * and manual mode (pass `context.action` to control each step).
@@ -330,7 +330,7 @@ export function session(parameters: session.Parameters = {}) {
     return serializeCredential(challenge, payload, chainId, account)
   }
 
-  return MethodIntent.toClient(Intents.session, {
+  return Method.toClient(Methods.session, {
     context: streamContextSchema,
 
     async createCredential({ challenge, context }) {

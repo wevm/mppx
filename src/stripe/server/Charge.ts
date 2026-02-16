@@ -5,8 +5,8 @@ import {
   VerificationFailedError,
 } from '../../Errors.js'
 import type { LooseOmit } from '../../internal/types.js'
-import * as MethodIntent from '../../MethodIntent.js'
-import * as Intents from '../Intents.js'
+import * as Method from '../../Method.js'
+import * as Methods from '../Methods.js'
 
 /**
  * Creates a Stripe charge method intent for usage on the server.
@@ -34,7 +34,7 @@ export function charge<const parameters extends charge.Parameters>(parameters: p
   } = parameters
 
   type Defaults = charge.DeriveDefaults<parameters>
-  return MethodIntent.toServer<typeof Intents.charge, Defaults>(Intents.charge, {
+  return Method.toServer<typeof Methods.charge, Defaults>(Methods.charge, {
     defaults: {
       amount,
       currency,
@@ -53,7 +53,7 @@ export function charge<const parameters extends charge.Parameters>(parameters: p
       if (request.expires && new Date(request.expires) < new Date())
         throw new PaymentExpiredError({ expires: request.expires })
 
-      const parsed = Intents.charge.schema.credential.payload.safeParse(credential.payload)
+      const parsed = Methods.charge.schema.credential.payload.safeParse(credential.payload)
       if (!parsed.success) throw new Error('Invalid credential payload: missing or malformed spt')
       const { spt, externalId: credentialExternalId } = parsed.data as {
         spt: string
@@ -105,7 +105,7 @@ export function charge<const parameters extends charge.Parameters>(parameters: p
 }
 
 export declare namespace charge {
-  type Defaults = LooseOmit<MethodIntent.RequestDefaults<typeof Intents.charge>, 'recipient'>
+  type Defaults = LooseOmit<Method.RequestDefaults<typeof Methods.charge>, 'recipient'>
 
   type Parameters = {
     /** Stripe secret API key. */

@@ -1,5 +1,5 @@
 export { charge } from './Charge.js'
-export { tempo } from './MethodIntents.js'
+export { tempo } from './Methods.js'
 export { session } from './Session.js'
 export type { PaymentResponse, SessionManager } from './SessionManager.js'
 export { sessionManager } from './SessionManager.js'

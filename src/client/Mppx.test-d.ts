@@ -1,8 +1,8 @@
 import type { Account } from 'viem'
 import { describe, expectTypeOf, test } from 'vitest'
-import * as MethodIntent from '../MethodIntent.js'
+import * as Method from '../Method.js'
 import { charge } from '../tempo/client/Charge.js'
-import * as Intents from '../tempo/Intents.js'
+import * as Methods from '../tempo/Methods.js'
 import * as z from '../zod.js'
 import * as Mppx from './Mppx.js'
 
@@ -13,7 +13,7 @@ describe('Mppx', () => {
     })
     const mppx = Mppx.create({ methods: [method] })
 
-    expectTypeOf(mppx.methods).toMatchTypeOf<readonly MethodIntent.AnyClient[]>()
+    expectTypeOf(mppx.methods).toMatchTypeOf<readonly Method.AnyClient[]>()
     expectTypeOf(mppx.methods[0]?.name).toEqualTypeOf<'charge'>()
   })
 
@@ -38,7 +38,7 @@ describe('create.Config', () => {
 
 describe('Method.toClient', () => {
   test('createCredential receives typed challenge', () => {
-    MethodIntent.toClient(Intents.charge, {
+    Method.toClient(Methods.charge, {
       async createCredential({ challenge }) {
         expectTypeOf(challenge.method).toBeString()
         expectTypeOf(challenge.intent).toBeString()
@@ -52,7 +52,7 @@ describe('Method.toClient', () => {
   })
 
   test('createCredential receives typed context when provided', () => {
-    MethodIntent.toClient(Intents.charge, {
+    Method.toClient(Methods.charge, {
       context: z.object({
         account: z.custom<Account>(),
         extra: z.optional(z.string()),

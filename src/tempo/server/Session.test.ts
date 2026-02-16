@@ -1,3 +1,4 @@
+import type { Challenge, z } from 'mppx'
 import { Mppx as Mppx_server, tempo as tempo_server } from 'mppx/server'
 import { type Address, createClient, type Hex } from 'viem'
 import { Addresses } from 'viem/tempo'
@@ -16,6 +17,7 @@ import {
   InvalidSignatureError,
 } from '../../Errors.js'
 import * as Store from '../../Store.js'
+import type * as Methods from '../Methods.js'
 import * as ChannelStore from '../stream/ChannelStore.js'
 import type { StreamReceipt } from '../stream/Types.js'
 import { signVoucher } from '../stream/Voucher.js'
@@ -1295,18 +1297,13 @@ function makeChallenge(opts: { id?: string; channelId: Hex }) {
       amount: '1000000',
       unitType: 'token',
       currency: currency as string,
-      decimals: 6,
       recipient: recipient as string,
-      suggestedDeposit: undefined as string | undefined,
       methodDetails: {
         escrowContract: escrowContract as string,
-        channelId: undefined as string | undefined,
-        minVoucherDelta: undefined as string | undefined,
-        chainId: chain.id as number | undefined,
-        feePayer: undefined as boolean | undefined,
+        chainId: chain.id,
       },
     },
-  }
+  } as Challenge.Challenge<z.output<typeof Methods.session.schema.request>, 'session', 'tempo'>
 }
 
 function makeRequest() {

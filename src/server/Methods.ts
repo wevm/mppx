@@ -1,2 +1,2 @@
-export { stripe } from '../stripe/server/MethodIntents.js'
-export { tempo } from '../tempo/server/MethodIntents.js'
+export { stripe } from '../stripe/server/index.js'
+export { tempo } from '../tempo/server/index.js'

@@ -1,5 +1,5 @@
 import { PaymentRequest } from 'mppx'
-import { MethodIntents as Intents } from 'mppx/tempo'
+import { Methods } from 'mppx/tempo'
 import { describe, expect, test } from 'vitest'
 
 describe('from', () => {
@@ -21,7 +21,7 @@ describe('from', () => {
 
 describe('fromIntent', () => {
   test('creates a validated request from intent', () => {
-    const request = PaymentRequest.fromIntent(Intents.charge, {
+    const request = PaymentRequest.fromIntent(Methods.charge, {
       amount: '1',
       currency: '0x20c0000000000000000000000000000000000001',
       decimals: 6,
@@ -39,7 +39,7 @@ describe('fromIntent', () => {
   })
 
   test('includes methodDetails fields', () => {
-    const request = PaymentRequest.fromIntent(Intents.charge, {
+    const request = PaymentRequest.fromIntent(Methods.charge, {
       amount: '1',
       currency: '0x20c0000000000000000000000000000000000001',
       decimals: 6,
@@ -62,7 +62,7 @@ describe('fromIntent', () => {
 
   test('throws on invalid request', () => {
     expect(() =>
-      PaymentRequest.fromIntent(Intents.charge, {
+      PaymentRequest.fromIntent(Methods.charge, {
         amount: 123,
         currency: '0x20c0000000000000000000000000000000000001',
         recipient: '0x742d35Cc6634C0532925a3b844Bc9e7595f8fE00',

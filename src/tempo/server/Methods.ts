@@ -2,7 +2,7 @@ import { charge as charge_ } from './Charge.js'
 import { session as session_, settle as settle_ } from './Session.js'
 
 /**
- * Creates both Tempo `charge` and `session` method intents from shared parameters.
+ * Creates both Tempo `charge` and `session` methods from shared parameters.
  *
  * @example
  * ```ts
@@ -20,9 +20,9 @@ export function tempo<const parameters extends tempo.Parameters>(parameters?: pa
 export namespace tempo {
   export type Parameters = charge_.Parameters & session_.Parameters
 
-  /** Creates a Tempo `charge` method intent for one-time TIP-20 token transfers. */
+  /** Creates a Tempo `charge` method for one-time TIP-20 token transfers. */
   export const charge = charge_
-  /** Creates a Tempo `session` method intent for session-based TIP-20 token payments. */
+  /** Creates a Tempo `session` method for session-based TIP-20 token payments. */
   export const session = session_
   /** One-shot settle: reads highest voucher from storage and submits on-chain. */
   export const settle = settle_

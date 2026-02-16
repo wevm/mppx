@@ -49,7 +49,7 @@ export namespace Mppx {
  * )
  * ```
  */
-export function payment<const intent extends Mppx_internal.AnyIntentFn>(
+export function payment<const intent extends Mppx_internal.AnyMethodFn>(
   intent: intent,
   options: intent extends (options: infer options) => any ? options : never,
 ): MiddlewareHandler {

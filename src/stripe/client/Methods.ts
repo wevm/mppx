@@ -1,7 +1,7 @@
 import { charge as charge_ } from './Charge.js'
 
 /**
- * Creates a Stripe `charge` client method intent.
+ * Creates a Stripe `charge` client method.
  *
  * @example
  * ```ts
@@ -32,6 +32,6 @@ export function stripe(parameters: stripe.Parameters) {
 export namespace stripe {
   export type Parameters = charge_.Parameters
 
-  /** Creates a Stripe `charge` client method intent for SPT-based payments. */
+  /** Creates a Stripe `charge` client method for SPT-based payments. */
   export const charge = charge_
 }

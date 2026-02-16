@@ -1,8 +1,8 @@
 import type * as Challenge from '../../Challenge.js'
 import * as Credential from '../../Credential.js'
-import * as MethodIntent from '../../MethodIntent.js'
+import * as Method from '../../Method.js'
 import * as z from '../../zod.js'
-import * as Intents from '../Intents.js'
+import * as Methods from '../Methods.js'
 
 /**
  * Creates a Stripe charge method intent for usage on the client.
@@ -34,7 +34,7 @@ import * as Intents from '../Intents.js'
 export function charge(parameters: charge.Parameters) {
   const { createToken, externalId, paymentMethod: defaultPaymentMethod } = parameters
 
-  return MethodIntent.toClient(Intents.charge, {
+  return Method.toClient(Methods.charge, {
     context: z.object({
       paymentMethod: z.optional(z.string()),
     }),
@@ -95,9 +95,9 @@ export declare namespace charge {
 
   type OnChallengeParameters = {
     challenge: Challenge.Challenge<
-      z.output<typeof Intents.charge.schema.request>,
-      typeof Intents.charge.name,
-      typeof Intents.charge.method
+      z.output<typeof Methods.charge.schema.request>,
+      typeof Methods.charge.name,
+      typeof Methods.charge.method
     >
     /** Stripe payment method ID (e.g. from Stripe Elements). */
     paymentMethod?: string | undefined

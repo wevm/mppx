@@ -1,5 +1,5 @@
 import { Challenge } from 'mppx'
-import { MethodIntents as Intents } from 'mppx/tempo'
+import { Methods } from 'mppx/tempo'
 import { describe, expect, test } from 'vitest'
 
 describe('from', () => {
@@ -108,7 +108,7 @@ describe('from', () => {
 
 describe('fromIntent', () => {
   test('behavior: creates validated challenge from intent', () => {
-    const challenge = Challenge.fromIntent(Intents.charge, {
+    const challenge = Challenge.fromIntent(Methods.charge, {
       id: 'abc123',
       realm: 'api.example.com',
       request: {
@@ -138,7 +138,7 @@ describe('fromIntent', () => {
   })
 
   test('behavior: includes methodDetails in request', () => {
-    const challenge = Challenge.fromIntent(Intents.charge, {
+    const challenge = Challenge.fromIntent(Methods.charge, {
       id: 'abc123',
       realm: 'api.example.com',
       request: {
@@ -174,7 +174,7 @@ describe('fromIntent', () => {
   })
 
   test('behavior: includes optional digest and expires', () => {
-    const challenge = Challenge.fromIntent(Intents.charge, {
+    const challenge = Challenge.fromIntent(Methods.charge, {
       id: 'abc123',
       realm: 'api.example.com',
       request: {
@@ -193,7 +193,7 @@ describe('fromIntent', () => {
   })
 
   test('behavior: creates challenge with HMAC-bound id via secretKey', () => {
-    const challenge = Challenge.fromIntent(Intents.charge, {
+    const challenge = Challenge.fromIntent(Methods.charge, {
       realm: 'api.example.com',
       request: {
         amount: '1',
@@ -212,7 +212,7 @@ describe('fromIntent', () => {
 
   test('error: invalid request', () => {
     expect(() =>
-      Challenge.fromIntent(Intents.charge, {
+      Challenge.fromIntent(Methods.charge, {
         id: 'abc123',
         realm: 'api.example.com',
         request: {

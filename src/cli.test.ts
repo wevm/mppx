@@ -11,7 +11,7 @@ import { accounts, asset, client, fundAccount } from '~test/tempo/viem.js'
 import * as Store from './Store.js'
 import * as Mppx_server from './server/Mppx.js'
 import { toNodeListener } from './server/Mppx.js'
-import { tempo } from './tempo/server/MethodIntents.js'
+import { tempo } from './tempo/server/Methods.js'
 
 const cliPath = path.resolve(import.meta.dirname, 'cli.ts')
 const cwd = path.resolve(import.meta.dirname, '..')
@@ -240,16 +240,7 @@ describe('session multi-fetch (examples/session/multi-fetch)', () => {
 
         // Second request: reuse the channel via --channel
         const second = await runAsync(
-          [
-            httpServer.url,
-            '--rpc-url',
-            rpcUrl,
-            '-s',
-            '--channel',
-            channelId,
-            '--deposit',
-            '10',
-          ],
+          [httpServer.url, '--rpc-url', rpcUrl, '-s', '--channel', channelId, '--deposit', '10'],
           { input: '' },
         )
         expect(second.stdout).toContain('scraped-content')
@@ -322,10 +313,9 @@ describe('session sse (examples/session/sse)', () => {
     })
 
     try {
-      const { stdout } = await runAsync(
-        [httpServer.url, '--rpc-url', rpcUrl, '--deposit', '10'],
-        { input: '' },
-      )
+      const { stdout } = await runAsync([httpServer.url, '--rpc-url', rpcUrl, '--deposit', '10'], {
+        input: '',
+      })
       expect(stdout.trim()).toBe('Hello world!')
     } finally {
       httpServer.close()

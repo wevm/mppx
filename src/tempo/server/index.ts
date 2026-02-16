@@ -1,5 +1,5 @@
 export * as ChannelStore from '../stream/ChannelStore.js'
 export * as Sse from '../stream/Sse.js'
 export { charge } from './Charge.js'
-export { tempo } from './MethodIntents.js'
+export { tempo } from './Methods.js'
 export { session, settle } from './Session.js'

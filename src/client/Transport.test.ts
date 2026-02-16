@@ -1,12 +1,12 @@
 import { Challenge, Credential, Mcp } from 'mppx'
 import { Transport } from 'mppx/client'
-import { MethodIntents as Intents } from 'mppx/tempo'
+import { Methods } from 'mppx/tempo'
 import { describe, expect, test } from 'vitest'
 
 const realm = 'api.example.com'
 const secretKey = 'test-secret-key'
 
-const challenge = Challenge.fromIntent(Intents.charge, {
+const challenge = Challenge.fromIntent(Methods.charge, {
   realm,
   secretKey,
   request: {

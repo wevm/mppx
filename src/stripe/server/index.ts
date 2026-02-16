@@ -1,2 +1,2 @@
 export { charge } from './Charge.js'
-export { stripe } from './MethodIntents.js'
+export { stripe } from './Methods.js'
