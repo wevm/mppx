@@ -166,8 +166,8 @@ cli
       if (challenge.method === 'tempo') {
         const privateKey = process.env.MPPX_PRIVATE_KEY ?? (await createKeychain(accountName).get())
         if (!privateKey) {
-          if (options.account) console.log(`Account "${accountName}" not found.`)
-          else console.log(`No account found.`)
+          if (options.account) console.error(`Account "${accountName}" not found.`)
+          else console.error(`No account found.`)
           process.exit(1)
         }
         account = privateKeyToAccount(privateKey as `0x${string}`)

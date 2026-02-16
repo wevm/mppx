@@ -127,19 +127,36 @@ describe('basic charge (examples/basic)', () => {
     }
   })
 
-  test('error: no account found', { timeout: 60_000 }, () => {
-    const result = spawnSync(
-      'node',
-      ['--import', 'tsx', cliPath, 'http://localhost:1', '--account', 'nonexistent-account'],
-      {
-        encoding: 'utf8',
-        cwd,
-        timeout: 60_000,
+  test('error: no account found', { timeout: 60_000 }, async () => {
+    const server = Mppx_server.create({
+      methods: [tempo.charge({ getClient: () => client })],
+      realm: 'cli-test-no-account',
+      secretKey: 'cli-test-secret',
+    })
+
+    const httpServer = await Http.createServer(async (req, res) => {
+      const result = await toNodeListener(
+        server.charge({
+          amount: '1',
+          currency: asset,
+          expires: new Date(Date.now() + 60_000).toISOString(),
+          recipient: accounts[0].address,
+        }),
+      )(req, res)
+      if (result.status === 402) return
+      res.end('paid')
+    })
+
+    try {
+      const result = await runAsync([httpServer.url, '--account', 'nonexistent-account'], {
+        input: '',
         env: { ...process.env, NODE_NO_WARNINGS: '1' },
-      },
-    )
-    expect(result.status).not.toBe(0)
-    expect(result.stdout).toContain('Account "nonexistent-account" not found')
+      }).catch((err) => err as Error)
+      expect(result).toBeInstanceOf(Error)
+      expect((result as Error).message).toContain('Account "nonexistent-account" not found')
+    } finally {
+      httpServer.close()
+    }
   })
 })
 
@@ -180,7 +197,7 @@ describe('session multi-fetch (examples/session/multi-fetch)', () => {
 
     try {
       const { stdout } = await runAsync(
-        [httpServer.url, '--rpc-url', rpcUrl, '-s', '--deposit', '10'],
+        [httpServer.url, '--rpc-url', rpcUrl, '-s', '-M', 'deposit=10'],
         { input: '' },
       )
       expect(stdout).toContain('scraped-content')
@@ -229,7 +246,7 @@ describe('session multi-fetch (examples/session/multi-fetch)', () => {
       try {
         // First request: open a channel, answer "y" to proceed, "n" to close channel
         const first = await runAsync(
-          [httpServer.url, '--rpc-url', rpcUrl, '--confirm', '--deposit', '10'],
+          [httpServer.url, '--rpc-url', rpcUrl, '--confirm', '-M', 'deposit=10'],
           { input: 'y\nn\n' },
         )
         expect(first.stdout).toContain('scraped-content')
@@ -239,9 +256,9 @@ describe('session multi-fetch (examples/session/multi-fetch)', () => {
         expect(match).toBeTruthy()
         const channelId = match![1]!
 
-        // Second request: reuse the channel via --channel
+        // Second request: reuse the channel via -M channel=<id>
         const second = await runAsync(
-          [httpServer.url, '--rpc-url', rpcUrl, '-s', '--channel', channelId, '--deposit', '10'],
+          [httpServer.url, '--rpc-url', rpcUrl, '-s', '-M', `channel=${channelId}`, '-M', 'deposit=10'],
           { input: '' },
         )
         expect(second.stdout).toContain('scraped-content')
@@ -361,7 +378,7 @@ describe('session sse (examples/session/sse)', () => {
     })
 
     try {
-      const { stdout } = await runAsync([httpServer.url, '--rpc-url', rpcUrl, '--deposit', '10'], {
+      const { stdout } = await runAsync([httpServer.url, '--rpc-url', rpcUrl, '-M', 'deposit=10'], {
         input: '',
       })
       expect(stdout.trim()).toBe('Hello world!')
@@ -553,24 +570,23 @@ test('mppx --help', () => {
       view     View account address
 
     Options:
-      -a, --account <name>   Account name (env: MPPX_ACCOUNT) 
-      -d, --data <data>      Send request body (implies POST unless -X is set) 
-      -f, --fail             Fail silently on HTTP errors (exit 22) 
-      -i, --include          Include response headers in output 
-      -k, --insecure         Skip TLS certificate verification (true for localhost/.local) 
-      -r, --rpc-url <url>    RPC endpoint, defaults to public RPC for chain (env: MPPX_RPC_URL) 
-      -s, --silent           Silent mode (suppress progress and info) 
-      -v, --verbose          Show request/response headers 
-      -A, --user-agent <ua>  Set User-Agent header 
-      -H, --header <header>  Add header (repeatable) 
-      -L, --location         Follow redirects 
-      -X, --method <method>  HTTP method 
-      --channel <id>         Reuse existing stream channel ID 
-      --confirm              Show confirmation prompts 
-      --deposit <amount>     Deposit amount for stream payments (human-readable units) 
-      --json <json>          Send JSON body (sets Content-Type and Accept, implies POST) 
-      -V, --version          Display version number 
-      -h, --help             Display this message 
+      -a, --account <name>    Account name (env: MPPX_ACCOUNT) 
+      -d, --data <data>       Send request body (implies POST unless -X is set) 
+      -f, --fail              Fail silently on HTTP errors (exit 22) 
+      -i, --include           Include response headers in output 
+      -k, --insecure          Skip TLS certificate verification (true for localhost/.local) 
+      -r, --rpc-url <url>     RPC endpoint, defaults to public RPC for chain (env: MPPX_RPC_URL) 
+      -s, --silent            Silent mode (suppress progress and info) 
+      -v, --verbose           Show request/response headers 
+      -A, --user-agent <ua>   Set User-Agent header 
+      -H, --header <header>   Add header (repeatable) 
+      -L, --location          Follow redirects 
+      -X, --method <method>   HTTP method 
+      -M, --method-opt <opt>  Method-specific option (key=value, repeatable) 
+      --confirm               Show confirmation prompts 
+      --json <json>           Send JSON body (sets Content-Type and Accept, implies POST) 
+      -V, --version           Display version number 
+      -h, --help              Display this message 
 
     Examples:
     mppx example.com/content
