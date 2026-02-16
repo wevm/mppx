@@ -11,6 +11,7 @@ import { accounts, asset, client, fundAccount } from '~test/tempo/viem.js'
 import * as Store from './Store.js'
 import * as Mppx_server from './server/Mppx.js'
 import { toNodeListener } from './server/Mppx.js'
+import { stripe as stripe_server } from './stripe/server/MethodIntents.js'
 import { tempo } from './tempo/server/MethodIntents.js'
 
 const cliPath = path.resolve(import.meta.dirname, 'cli.ts')
@@ -44,12 +45,12 @@ function runRaw(
 
 function runAsync(
   args: string[],
-  options?: { input?: string },
+  options?: { input?: string; env?: NodeJS.ProcessEnv },
 ): Promise<{ stdout: string; stderr: string }> {
   return new Promise((resolve, reject) => {
     const child = spawn('node', ['--import', 'tsx', cliPath, ...args], {
       cwd,
-      env,
+      env: options?.env ?? env,
       stdio: ['pipe', 'pipe', 'pipe'],
     })
 
@@ -269,6 +270,53 @@ describe('session multi-fetch (examples/session/multi-fetch)', () => {
       await expect(
         runAsync([httpServer.url, '--rpc-url', rpcUrl, '--fail'], { input: '' }),
       ).rejects.toThrow()
+    } finally {
+      httpServer.close()
+    }
+  })
+})
+
+describe.skipIf(!process.env.VITE_STRIPE_SECRET_KEY)('stripe charge', () => {
+  test('happy path: makes Stripe payment and receives response', { timeout: 120_000 }, async () => {
+    const stripeSecretKey = process.env.VITE_STRIPE_SECRET_KEY!
+
+    const server = Mppx_server.create({
+      methods: [
+        stripe_server.charge({
+          secretKey: stripeSecretKey,
+          networkId: 'internal',
+          paymentMethodTypes: ['card'],
+        }),
+      ],
+      realm: 'cli-test-stripe',
+      secretKey: 'cli-test-secret',
+    })
+
+    const httpServer = await Http.createServer(async (req, res) => {
+      const result = await toNodeListener(
+        server.charge({
+          amount: '1',
+          currency: 'usd',
+          decimals: 2,
+        }),
+      )(req, res)
+      if (result.status === 402) return
+      res.end('paid')
+    })
+
+    try {
+      const { stdout } = await runAsync(
+        [httpServer.url, '-M', 'paymentMethod=pm_card_visa', '-s'],
+        {
+          input: '',
+          env: {
+            ...env,
+            STRIPE_SECRET_KEY: stripeSecretKey,
+            MPPX_PRIVATE_KEY: undefined as unknown as string,
+          },
+        },
+      )
+      expect(stdout).toContain('paid')
     } finally {
       httpServer.close()
     }

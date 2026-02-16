@@ -15,6 +15,7 @@ import { type ZodMiniType, z } from 'zod/mini'
 import * as Challenge from './Challenge.js'
 import * as Credential from './Credential.js'
 import * as Mppx from './client/Mppx.js'
+import { stripe } from './stripe/client/index.js'
 import { tempo } from './tempo/client/index.js'
 import type { StreamCredentialPayload } from './tempo/stream/Types.js'
 import { signVoucher } from './tempo/stream/Voucher.js'
@@ -41,9 +42,8 @@ cli
   .option('-H, --header <header>', 'Add header (repeatable)')
   .option('-L, --location', 'Follow redirects')
   .option('-X, --method <method>', 'HTTP method')
-  .option('--channel <id>', 'Reuse existing stream channel ID')
+  .option('-M, --method-opt <opt>', 'Method-specific option (key=value, repeatable)')
   .option('--confirm', 'Show confirmation prompts')
-  .option('--deposit <amount>', 'Deposit amount for stream payments (human-readable units)')
   .option('--json <json>', 'Send JSON body (sets Content-Type and Accept, implies POST)')
   .example(`${name} example.com/content`)
   .example(`${name} example.com/api --json '{"key":"value"}'`)
@@ -51,10 +51,8 @@ cli
     const options = parseOptions(
       z.object({
         account: z.optional(z.string()),
-        channel: z.optional(z.coerce.string()),
         confirm: z.optional(z.boolean()),
         data: z.optional(z.string()),
-        deposit: z.optional(z.union([z.string(), z.number()])),
         fail: z.optional(z.boolean()),
         header: z.optional(z.union([z.string(), z.array(z.string())])),
         include: z.optional(z.boolean()),
@@ -62,6 +60,7 @@ cli
         json: z.optional(z.string()),
         location: z.optional(z.boolean()),
         method: z.optional(z.string()),
+        methodOpt: z.optional(z.union([z.string(), z.array(z.string())])),
         rpcUrl: z.optional(z.string()),
         silent: z.optional(z.boolean()),
         userAgent: z.optional(z.string()),
@@ -69,6 +68,7 @@ cli
       }),
       rawOptions,
     )
+    const methodOpts = parseMethodOpts(options.methodOpt)
     if (!rawUrl) {
       cli.outputHelp()
       return
@@ -79,12 +79,6 @@ cli
     if (silent) options.confirm = false
 
     const accountName = resolveAccountName(options.account)
-    const privateKey = process.env.MPPX_PRIVATE_KEY ?? (await createKeychain(accountName).get())
-    if (!privateKey) {
-      if (options.account) console.log(`Account "${accountName}" not found.`)
-      else console.log(`No account found.`)
-      process.exit(1)
-    }
 
     const headers: Record<string, string> = {}
     if (options.header) {
@@ -157,24 +151,39 @@ cli
         return
       }
 
-      const account = privateKeyToAccount(privateKey as `0x${string}`)
-      const rpcUrl = options.rpcUrl ?? process.env.RPC_URL
-      const client = createClient({
-        chain: await resolveChain({ ...options, rpcUrl }),
-        transport: http(rpcUrl),
-      })
-
       const challenge = Challenge.fromResponse(challengeResponse)
-      const explorerUrl = client.chain?.blockExplorers?.default?.url
-      const shownKeys = new Set<string>()
       const challengeRequest = challenge.request as Record<string, unknown>
       const currency = challengeRequest.currency as string | undefined
-      const tokenInfo = currency
-        ? await fetchTokenInfo(client, currency as Address, account.address).catch(() => undefined)
-        : undefined
-      const tokenSymbol = tokenInfo?.symbol ?? currency ?? ''
-      const tokenDecimals =
-        tokenInfo?.decimals ?? (challengeRequest.decimals as number | undefined) ?? 6
+      const shownKeys = new Set<string>()
+
+      let tokenSymbol = currency ?? ''
+      let tokenDecimals = (challengeRequest.decimals as number | undefined) ?? 6
+      let explorerUrl: string | undefined
+
+      // Tempo-specific setup (private key, viem account/client, token info)
+      let account: ReturnType<typeof privateKeyToAccount> | undefined
+      let client: ReturnType<typeof createClient> | undefined
+      if (challenge.method === 'tempo') {
+        const privateKey = process.env.MPPX_PRIVATE_KEY ?? (await createKeychain(accountName).get())
+        if (!privateKey) {
+          if (options.account) console.log(`Account "${accountName}" not found.`)
+          else console.log(`No account found.`)
+          process.exit(1)
+        }
+        account = privateKeyToAccount(privateKey as `0x${string}`)
+        const rpcUrl = options.rpcUrl ?? process.env.RPC_URL
+        client = createClient({
+          chain: await resolveChain({ ...options, rpcUrl }),
+          transport: http(rpcUrl),
+        })
+        explorerUrl = client.chain?.blockExplorers?.default?.url
+        const tokenInfo = currency
+          ? await fetchTokenInfo(client, currency as Address, account.address).catch(() => undefined)
+          : undefined
+        tokenSymbol = tokenInfo?.symbol ?? currency ?? ''
+        tokenDecimals =
+          tokenInfo?.decimals ?? (challengeRequest.decimals as number | undefined) ?? 6
+      }
 
       {
         printResponseHeaders(challengeResponse)
@@ -276,42 +285,117 @@ cli
         }
       }
 
-      const mppx = Mppx.create({
-        methods: tempo({
-          account,
-          getClient: () => client,
-          deposit: (() => {
-            if (challenge.intent !== 'session') return undefined
-            const suggestedDeposit = (challenge.request as Record<string, unknown>)
-              .suggestedDeposit as string | undefined
-            const cliDeposit = options.deposit !== undefined ? String(options.deposit) : undefined
-            const resolved =
-              suggestedDeposit ?? cliDeposit ?? (isTestnet(client.chain!) ? '10' : undefined)
-            if (!resolved) {
-              console.error(
-                'Stream payment requires a deposit. Use --deposit <amount> or connect to testnet.',
-              )
-              process.exit(1)
+      let credential: string
+      if (challenge.method === 'tempo') {
+        if (!account || !client) {
+          console.error('Tempo requires a configured account.')
+          process.exit(1)
+        }
+        const tempoOpts = parseOptions(
+          z.object({
+            channel: z.optional(z.coerce.string()),
+            deposit: z.optional(z.union([z.string(), z.number()])),
+          }),
+          methodOpts,
+        )
+        const mppx = Mppx.create({
+          methods: tempo({
+            account,
+            getClient: () => client!,
+            deposit: (() => {
+              if (challenge.intent !== 'session') return undefined
+              const suggestedDeposit = (challenge.request as Record<string, unknown>)
+                .suggestedDeposit as string | undefined
+              const cliDeposit =
+                tempoOpts.deposit !== undefined ? String(tempoOpts.deposit) : undefined
+              const resolved =
+                suggestedDeposit ?? cliDeposit ?? (isTestnet(client!.chain!) ? '10' : undefined)
+              if (!resolved) {
+                console.error(
+                  'Stream payment requires a deposit. Use -M deposit=<amount> or connect to testnet.',
+                )
+                process.exit(1)
+              }
+              return resolved
+            })(),
+          }),
+          polyfill: false,
+        })
+        credential = await mppx.createCredential(
+          challengeResponse,
+          (() => {
+            if (!tempoOpts.channel) return undefined
+            const channelId = tempoOpts.channel
+            const saved = readChannelCumulative(channelId)
+            return {
+              channelId,
+              ...(saved !== undefined && { cumulativeAmountRaw: saved.toString() }),
             }
-            return resolved
           })(),
-        }),
-        polyfill: false,
-      })
-
-      const credential = await mppx.createCredential(
-        challengeResponse,
-        (() => {
-          if (!options.channel) return undefined
-          const idx = process.argv.indexOf('--channel')
-          const channelId = idx !== -1 ? process.argv[idx + 1]! : String(options.channel)
-          const saved = readChannelCumulative(channelId)
-          return {
-            channelId,
-            ...(saved !== undefined && { cumulativeAmountRaw: saved.toString() }),
-          }
-        })(),
-      )
+        )
+      } else if (challenge.method === 'stripe') {
+        const stripeOpts = parseOptions(
+          z.object({
+            paymentMethod: z.string(),
+          }),
+          methodOpts,
+        )
+        const stripeSecretKey = process.env.STRIPE_SECRET_KEY
+        if (!stripeSecretKey) {
+          console.error('STRIPE_SECRET_KEY environment variable is required for Stripe payments.')
+          process.exit(1)
+        }
+        const mppx = Mppx.create({
+          methods: [
+            stripe.charge({
+              paymentMethod: stripeOpts.paymentMethod,
+              createToken: async ({
+                paymentMethod,
+                amount,
+                currency,
+                networkId,
+                expiresAt,
+                metadata,
+              }) => {
+                const body = new URLSearchParams({
+                  payment_method: paymentMethod!,
+                  'usage_limits[currency]': currency,
+                  'usage_limits[max_amount]': amount,
+                  'usage_limits[expires_at]': expiresAt.toString(),
+                })
+                if (networkId) body.set('seller_details[network_id]', networkId)
+                if (metadata) {
+                  for (const [key, value] of Object.entries(metadata)) {
+                    body.set(`metadata[${key}]`, value)
+                  }
+                }
+                const response = await globalThis.fetch(
+                  'https://api.stripe.com/v1/test_helpers/shared_payment/granted_tokens',
+                  {
+                    method: 'POST',
+                    headers: {
+                      Authorization: `Basic ${btoa(`${stripeSecretKey}:`)}`,
+                      'Content-Type': 'application/x-www-form-urlencoded',
+                    },
+                    body,
+                  },
+                )
+                if (!response.ok) {
+                  const error = (await response.json()) as { error: { message: string } }
+                  throw new Error(`Failed to create SPT: ${error.error.message}`)
+                }
+                const { id } = (await response.json()) as { id: string }
+                return id
+              },
+            }),
+          ],
+          polyfill: false,
+        })
+        credential = await mppx.createCredential(challengeResponse)
+      } else {
+        console.error(`Unsupported payment method: ${challenge.method}`)
+        process.exit(1)
+      }
 
       const streamMd = challenge.request.methodDetails as
         | { escrowContract?: string; chainId?: number }
@@ -324,18 +408,21 @@ cli
       if (challenge.intent === 'session') {
         const parsed = Credential.deserialize<StreamCredentialPayload>(credential)
         streamChannelId = parsed.payload.channelId
-        streamChainId = streamMd?.chainId ?? client.chain?.id ?? 0
+        streamChainId = streamMd?.chainId ?? client?.chain?.id ?? 0
         streamEscrowContract = streamMd?.escrowContract as Address | undefined
         if ('cumulativeAmount' in parsed.payload && parsed.payload.cumulativeAmount)
           streamCumulativeAmount = BigInt(parsed.payload.cumulativeAmount)
 
         if (parsed.payload.action === 'open') {
-          const depositRaw =
-            (challengeRequest.suggestedDeposit as string | undefined) ?? options.deposit
+          const depositRaw = challengeRequest.suggestedDeposit as string | undefined
           const depositDisplay = depositRaw
             ? ` ${pc.dim(`(deposit ${depositRaw} ${tokenSymbol})`)}`
             : ''
-          info(`\n${pc.dim(`Channel opened ${parsed.payload.channelId}`)}${depositDisplay}\n`)
+          const prefix = options.confirm ? '' : '\n'
+          info(`${prefix}${pc.dim(`Channel opened ${parsed.payload.channelId}`)}${depositDisplay}\n`)
+        } else {
+          const prefix = options.confirm ? '' : '\n'
+          info(`${prefix}${pc.dim(`Channel reused ${parsed.payload.channelId}`)}\n`)
         }
       }
 
@@ -429,7 +516,7 @@ cli
           const md = challenge.request.methodDetails as
             | { escrowContract?: string; chainId?: number }
             | undefined
-          const streamChainId = md?.chainId ?? client.chain?.id ?? 0
+          const streamChainId = md?.chainId ?? client?.chain?.id ?? 0
           const escrowContract = md?.escrowContract as Address | undefined
           let cumulativeAmount =
             streamCred?.payload &&
@@ -492,8 +579,8 @@ cli
                   cumulativeAmount = cumulativeAmount > required ? cumulativeAmount : required
 
                   const signature = await signVoucher(
-                    client,
-                    account,
+                    client!,
+                    account!,
                     { channelId, cumulativeAmount },
                     escrowContract,
                     streamChainId,
@@ -506,7 +593,7 @@ cli
                       cumulativeAmount: cumulativeAmount.toString(),
                       signature,
                     },
-                    source: `did:pkh:eip155:${streamChainId}:${account.address}`,
+                    source: `did:pkh:eip155:${streamChainId}:${account!.address}`,
                   })
                   await globalThis.fetch(url, {
                     method: 'POST',
@@ -585,8 +672,8 @@ cli
 
           if (channelId && escrowContract && streamChainId) {
             const signature = await signVoucher(
-              client,
-              account,
+              client!,
+              account!,
               { channelId, cumulativeAmount },
               escrowContract,
               streamChainId,
@@ -600,7 +687,7 @@ cli
             const closeCred = Credential.serialize({
               challenge,
               payload: closePayload,
-              source: `did:pkh:eip155:${streamChainId}:${account.address}`,
+              source: `did:pkh:eip155:${streamChainId}:${account!.address}`,
             })
             const closeRes = await globalThis.fetch(url, {
               method: 'POST',
@@ -648,8 +735,8 @@ cli
             info(`${pc.dim('Kept channel open.')}\n`)
           } else if (shouldClose) {
             const signature = await signVoucher(
-              client,
-              account,
+              client!,
+              account!,
               { channelId: streamChannelId!, cumulativeAmount: streamCumulativeAmount },
               streamEscrowContract!,
               streamChainId,
@@ -663,7 +750,7 @@ cli
             const closeCred = Credential.serialize({
               challenge,
               payload: closePayload,
-              source: `did:pkh:eip155:${streamChainId}:${account.address}`,
+              source: `did:pkh:eip155:${streamChainId}:${account!.address}`,
             })
             const closeRes = await globalThis.fetch(url, {
               ...fetchInit,
@@ -689,20 +776,21 @@ cli
                 closeTxHash && explorerUrl
                   ? ` ${pc.dim(pc.link(`${explorerUrl}/tx/${closeTxHash}`, closeTxHash))}`
                   : ''
+              const closePrefix = options.confirm ? '' : '\n'
               info(
-                `\n${pc.dim('Channel closed.')} ${pc.dim(`Spent ${fmtBalance(streamCumulativeAmount, tokenSymbol, tokenDecimals)}.`)}${txInfo}\n`,
+                `${closePrefix}${pc.dim('Channel closed.')} ${pc.dim(`Spent ${fmtBalance(streamCumulativeAmount, tokenSymbol, tokenDecimals)}.`)}${txInfo}\n`,
               )
             } else {
               const closeBody = await closeRes.text().catch(() => '')
               info(
-                `${pc.dim(pc.yellow('Channel close failed'))} ${pc.dim(`(${closeRes.status})`)}\n`,
+                `\n${pc.dim(pc.yellow('Channel close failed'))} ${pc.dim(`(${closeRes.status})`)}\n`,
               )
               info(
                 `${pc.dim(`  channelId:          ${streamChannelId}`)}\n` +
                   `${pc.dim(`  cumulativeAmount:   ${streamCumulativeAmount}`)}\n` +
                   `${pc.dim(`  escrowContract:     ${streamEscrowContract}`)}\n` +
                   `${pc.dim(`  chainId:            ${streamChainId}`)}\n` +
-                  `${pc.dim(`  account:            ${account.address}`)}\n` +
+                  `${pc.dim(`  account:            ${account?.address}`)}\n` +
                   `${pc.dim(`  response:           ${closeBody || '(empty)'}`)}\n`,
               )
             }
@@ -970,6 +1058,21 @@ try {
 }
 
 /////////////////////////////////////////////////////////////////////////////////////////////////
+
+function parseMethodOpts(raw: string | string[] | undefined): Record<string, string> {
+  if (!raw) return {}
+  const list = Array.isArray(raw) ? raw : [raw]
+  const result: Record<string, string> = {}
+  for (const item of list) {
+    const idx = item.indexOf('=')
+    if (idx === -1) {
+      console.error(`Invalid method option format: ${item} (expected key=value)`)
+      process.exit(1)
+    }
+    result[item.slice(0, idx)] = item.slice(idx + 1)
+  }
+  return result
+}
 
 function parseOptions<const schema extends ZodMiniType>(
   schema: schema,
