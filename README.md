@@ -82,7 +82,7 @@ mppx example.com
 <summary><code>mppx --help</code></summary>
 
 ```
-mppx/0.1.0
+mppx/0.1.1
 
 Usage:
   $ mppx [url]
@@ -119,7 +119,7 @@ Options:
   --channel <id>         Reuse existing stream channel ID
   --deposit <amount>     Deposit amount for stream payments (human-readable units)
   --json <json>          Send JSON body (sets Content-Type and Accept, implies POST)
-  --yes                  Skip confirmation prompts
+  --confirm              Show confirmation prompts
   -V, --version          Display version number
   -h, --help             Display this message
 
