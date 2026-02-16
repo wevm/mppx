@@ -10,8 +10,8 @@ const account = privateKeyToAccount(generatePrivateKey())
 const getClient = () => createClient({ account, transport: http() })
 
 const fooCharge = Method.from({
-  method: 'test',
-  name: 'charge',
+  name: 'test',
+  intent: 'charge',
   schema: {
     credential: {
       payload: z.object({ signature: z.string() }),
@@ -133,8 +133,8 @@ describe('Mppx', () => {
 
   test('multiple methods', () => {
     const fooAuthorize = Method.from({
-      method: 'test',
-      name: 'authorize',
+      name: 'test',
+      intent: 'authorize',
       schema: {
         credential: {
           payload: z.object({ token: z.string() }),

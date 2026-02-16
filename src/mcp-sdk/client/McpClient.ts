@@ -77,11 +77,11 @@ export function wrap<
 
         // Select first challenge that matches an installed method intent
         const challenge = challenges.find((c) =>
-          methods.some((m) => m.method === c.method && m.name === c.intent),
+          methods.some((m) => m.name === c.method && m.intent === c.intent),
         )
         if (!challenge) {
           const available = challenges.map((c) => `${c.method}.${c.intent}`).join(', ')
-          const installed = methods.map((m) => `${m.method}.${m.name}`).join(', ')
+          const installed = methods.map((m) => `${m.name}.${m.intent}`).join(', ')
           throw new Error(
             `No compatible payment method. Server offers: ${available}. Client has: ${installed}`,
           )
@@ -172,10 +172,10 @@ async function createCredential<methods extends readonly Method.AnyClient[]>(
 ): Promise<string> {
   const { context, methods } = config
 
-  const mi = methods.find((m) => m.method === challenge.method && m.name === challenge.intent)
+  const mi = methods.find((m) => m.name === challenge.method && m.intent === challenge.intent)
   if (!mi)
     throw new Error(
-      `No method found for "${challenge.method}.${challenge.intent}". Available: ${methods.map((m) => `${m.method}.${m.name}`).join(', ')}`,
+      `No method found for "${challenge.method}.${challenge.intent}". Available: ${methods.map((m) => `${m.name}.${m.intent}`).join(', ')}`,
     )
 
   const parsedContext = mi.context && context !== undefined ? mi.context.parse(context) : undefined

@@ -96,8 +96,8 @@ export declare namespace charge {
   type OnChallengeParameters = {
     challenge: Challenge.Challenge<
       z.output<typeof Methods.charge.schema.request>,
-      typeof Methods.charge.name,
-      typeof Methods.charge.method
+      typeof Methods.charge.intent,
+      typeof Methods.charge.name
     >
     /** Stripe payment method ID (e.g. from Stripe Elements). */
     paymentMethod?: string | undefined

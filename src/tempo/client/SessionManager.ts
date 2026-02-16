@@ -38,7 +38,7 @@ export type PaymentResponse = Response & {
  * Creates a session manager that handles the full client payment lifecycle:
  * channel open, incremental vouchers, SSE streaming, and channel close.
  *
- * Internally delegates to the `session()` Intent plugin for all
+ * Internally delegates to the `session()` method for all
  * channel state management and credential creation, and to `Fetch.from`
  * for the 402 challenge/retry flow.
  *

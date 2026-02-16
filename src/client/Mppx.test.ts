@@ -21,10 +21,10 @@ describe('Mppx.create', () => {
     })
 
     expect(mppx.methods).toHaveLength(2)
-    expect(mppx.methods[0]?.method).toBe('tempo')
-    expect(mppx.methods[0]?.name).toBe('charge')
-    expect(mppx.methods[1]?.method).toBe('tempo')
-    expect(mppx.methods[1]?.name).toBe('session')
+    expect(mppx.methods[0]?.name).toBe('tempo')
+    expect(mppx.methods[0]?.intent).toBe('charge')
+    expect(mppx.methods[1]?.name).toBe('tempo')
+    expect(mppx.methods[1]?.intent).toBe('session')
     expect(mppx.transport.name).toBe('http')
     expect(typeof mppx.createCredential).toBe('function')
     expect(typeof mppx.fetch).toBe('function')
@@ -42,8 +42,8 @@ describe('Mppx.create', () => {
 
   test('behavior: with multiple methods', () => {
     const stripeCharge = Method.from({
-      method: 'stripe',
-      name: 'charge',
+      name: 'stripe',
+      intent: 'charge',
       schema: {
         credential: {
           payload: Methods.charge.schema.credential.payload,
@@ -66,9 +66,9 @@ describe('Mppx.create', () => {
     })
 
     expect(mppx.methods).toHaveLength(3)
-    expect(mppx.methods[0]?.method).toBe('tempo')
-    expect(mppx.methods[1]?.method).toBe('tempo')
-    expect(mppx.methods[2]?.method).toBe('stripe')
+    expect(mppx.methods[0]?.name).toBe('tempo')
+    expect(mppx.methods[1]?.name).toBe('tempo')
+    expect(mppx.methods[2]?.name).toBe('stripe')
   })
 })
 
@@ -135,8 +135,8 @@ describe('createCredential', () => {
 
   test('behavior: routes to correct method with multiple methods', async () => {
     const stripeCharge = Method.from({
-      method: 'stripe',
-      name: 'charge',
+      name: 'stripe',
+      intent: 'charge',
       schema: {
         credential: {
           payload: Methods.charge.schema.credential.payload,

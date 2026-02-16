@@ -284,8 +284,8 @@ describe('request handler (node)', () => {
 describe('receipt handling', () => {
   test('returns 200 when verify returns a success receipt', async () => {
     const mockCharge = Method.from({
-      method: 'mock',
-      name: 'charge',
+      name: 'mock',
+      intent: 'charge',
       schema: {
         credential: {
           payload: z.object({ token: z.string() }),

@@ -4,8 +4,8 @@ import { describe, expect, expectTypeOf, test } from 'vitest'
 describe('from', () => {
   test('behavior: creates intent', () => {
     const method = Method.from({
-      method: 'tempo',
-      name: 'charge',
+      name: 'tempo',
+      intent: 'charge',
       schema: {
         credential: {
           payload: z.object({
@@ -19,36 +19,36 @@ describe('from', () => {
       },
     })
 
-    expect(method.name).toBe('charge')
-    expect(method.method).toBe('tempo')
+    expect(method.intent).toBe('charge')
+    expect(method.name).toBe('tempo')
     expect(method.schema.request).toBeDefined()
     expect(method.schema.credential.payload).toBeDefined()
   })
 
-  test('types: name literal is inferred', () => {
+  test('types: intent literal is inferred', () => {
     const method = Method.from({
-      method: 'tempo',
-      name: 'charge',
+      name: 'tempo',
+      intent: 'charge',
       schema: {
         credential: { payload: z.object({ sig: z.string() }) },
         request: z.object({ amount: z.string() }),
       },
     })
 
-    expectTypeOf(method.name).toEqualTypeOf<'charge'>()
+    expectTypeOf(method.intent).toEqualTypeOf<'charge'>()
   })
 
-  test('types: method literal is inferred', () => {
+  test('types: name literal is inferred', () => {
     const method = Method.from({
-      method: 'tempo',
-      name: 'charge',
+      name: 'tempo',
+      intent: 'charge',
       schema: {
         credential: { payload: z.object({ sig: z.string() }) },
         request: z.object({ amount: z.string() }),
       },
     })
 
-    expectTypeOf(method.method).toEqualTypeOf<'tempo'>()
+    expectTypeOf(method.name).toEqualTypeOf<'tempo'>()
   })
 
   test('types: schema types are preserved', () => {
@@ -62,8 +62,8 @@ describe('from', () => {
     })
 
     const method = Method.from({
-      method: 'tempo',
-      name: 'charge',
+      name: 'tempo',
+      intent: 'charge',
       schema: {
         credential: { payload: payloadSchema },
         request: requestSchema,

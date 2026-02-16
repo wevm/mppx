@@ -9,8 +9,8 @@ import type * as z from './zod.js'
  * A payment method.
  */
 export type Method = {
-  method: string
   name: string
+  intent: string
   schema: {
     credential: {
       payload: z.ZodMiniType
@@ -28,8 +28,8 @@ export type Method = {
  * import { Method } from 'mppx'
  *
  * const tempoCharge = Method.from({
- *   method: 'tempo',
- *   name: 'charge',
+ *   name: 'tempo',
+ *   intent: 'charge',
  *   schema: {
  *     credential: {
  *       payload: z.object({
@@ -86,8 +86,8 @@ export type CreateCredentialFn<method extends Method, context = unknown> = (
   parameters: {
     challenge: Challenge.Challenge<
       z.output<method['schema']['request']>,
-      method['name'],
-      method['method']
+      method['intent'],
+      method['name']
     >
   } & ([keyof context] extends [never] ? unknown : { context: context }),
 ) => Promise<string>
@@ -102,7 +102,7 @@ export type RequestFn<method extends Method> = (options: {
 export type VerifyFn<method extends Method> = (parameters: {
   credential: Credential.Credential<
     z.output<method['schema']['credential']['payload']>,
-    Challenge.Challenge<z.output<method['schema']['request']>, method['name'], method['method']>
+    Challenge.Challenge<z.output<method['schema']['request']>, method['intent'], method['name']>
   >
   request: z.input<method['schema']['request']>
 }) => Promise<Receipt.Receipt>
@@ -123,7 +123,7 @@ export type VerifyFn<method extends Method> = (parameters: {
 export type RespondFn<method extends Method> = (parameters: {
   credential: Credential.Credential<
     z.output<method['schema']['credential']['payload']>,
-    Challenge.Challenge<z.output<method['schema']['request']>, method['name'], method['method']>
+    Challenge.Challenge<z.output<method['schema']['request']>, method['intent'], method['name']>
   >
   input: globalThis.Request
   receipt: Receipt.Receipt

@@ -9,8 +9,8 @@ import * as z from '../zod.js'
  * @see https://github.com/tempoxyz/payment-auth-spec/blob/main/specs/methods/stripe/draft-stripe-charge-00.md
  */
 export const charge = Method.from({
-  method: 'stripe',
-  name: 'charge',
+  name: 'stripe',
+  intent: 'charge',
   schema: {
     credential: {
       payload: z.object({

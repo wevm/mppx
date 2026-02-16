@@ -10,8 +10,8 @@ import * as z from '../zod.js'
  * @see https://github.com/tempoxyz/payment-auth-spec/blob/main/specs/methods/tempo/draft-tempo-charge-00.md
  */
 export const charge = Method.from({
-  method: 'tempo',
-  name: 'charge',
+  name: 'tempo',
+  intent: 'charge',
   schema: {
     credential: {
       payload: z.discriminatedUnion('type', [
@@ -61,8 +61,8 @@ export const charge = Method.from({
  * are a discriminated union on `action`: open, topUp, voucher, close.
  */
 export const session = Method.from({
-  method: 'tempo',
-  name: 'session',
+  name: 'tempo',
+  intent: 'session',
   schema: {
     credential: {
       payload: z.discriminatedUnion('action', [

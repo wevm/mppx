@@ -35,7 +35,7 @@ export const streamContextSchema = z.object({
 export type StreamContext = z.infer<typeof streamContextSchema>
 
 /**
- * Creates a session payment Intent plugin for use with `Mppx.create()`.
+ * Creates a session payment method for use with `Mppx.create()`.
  *
  * Supports both auto mode (set `deposit` to manage channels automatically)
  * and manual mode (pass `context.action` to control each step).

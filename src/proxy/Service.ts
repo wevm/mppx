@@ -217,11 +217,11 @@ function resolvePayment(endpoint: Endpoint): Record<string, unknown> | null {
   if (endpoint === true) return null
   const handler = typeof endpoint === 'function' ? endpoint : endpoint.pay
   if (!('_internal' in handler)) return {}
-  const { name, method, defaults, schema, ...rest } = handler._internal as Record<string, unknown>
+  const { name, intent, defaults, schema, ...rest } = handler._internal as Record<string, unknown>
   const amount = (() => {
     if (typeof rest.amount === 'string' && typeof rest.decimals === 'number')
       return String(Value.from(rest.amount, rest.decimals))
     return rest.amount
   })()
-  return { intent: name, method, ...rest, ...(amount !== undefined && { amount }) }
+  return { intent, method: name, ...rest, ...(amount !== undefined && { amount }) }
 }

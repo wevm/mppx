@@ -76,10 +76,10 @@ export function create<
     async createCredential(response: Transport.ResponseOf<transport>, context?: unknown) {
       const challenge = transport.getChallenge(response as never) as Challenge.Challenge
 
-      const mi = methods.find((m) => m.method === challenge.method && m.name === challenge.intent)
+      const mi = methods.find((m) => m.name === challenge.method && m.intent === challenge.intent)
       if (!mi)
         throw new Error(
-          `No method found for "${challenge.method}.${challenge.intent}". Available: ${methods.map((m) => `${m.method}.${m.name}`).join(', ')}`,
+          `No method found for "${challenge.method}.${challenge.intent}". Available: ${methods.map((m) => `${m.name}.${m.intent}`).join(', ')}`,
         )
 
       const parsedContext =

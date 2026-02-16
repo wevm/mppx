@@ -14,7 +14,7 @@ describe('Mppx', () => {
     const mppx = Mppx.create({ methods: [method] })
 
     expectTypeOf(mppx.methods).toMatchTypeOf<readonly Method.AnyClient[]>()
-    expectTypeOf(mppx.methods[0]?.name).toEqualTypeOf<'charge'>()
+    expectTypeOf(mppx.methods[0]?.intent).toEqualTypeOf<'charge'>()
   })
 
   test('has createCredential function', () => {

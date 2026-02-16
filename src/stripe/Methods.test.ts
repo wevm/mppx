@@ -2,17 +2,17 @@ import { Methods } from 'mppx/stripe'
 import { describe, expect, expectTypeOf, test } from 'vitest'
 
 describe('charge', () => {
-  test('has correct name and method', () => {
-    expect(Methods.charge.name).toBe('charge')
-    expect(Methods.charge.method).toBe('stripe')
+  test('has correct name and intent', () => {
+    expect(Methods.charge.intent).toBe('charge')
+    expect(Methods.charge.name).toBe('stripe')
+  })
+
+  test('types: intent is literal', () => {
+    expectTypeOf(Methods.charge.intent).toEqualTypeOf<'charge'>()
   })
 
   test('types: name is literal', () => {
-    expectTypeOf(Methods.charge.name).toEqualTypeOf<'charge'>()
-  })
-
-  test('types: method is literal', () => {
-    expectTypeOf(Methods.charge.method).toEqualTypeOf<'stripe'>()
+    expectTypeOf(Methods.charge.name).toEqualTypeOf<'stripe'>()
   })
 
   test('schema: validates valid request', () => {

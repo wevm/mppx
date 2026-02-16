@@ -1,7 +1,7 @@
 /**
  * Shared client-side channel operations.
  *
- * Provides the low-level helpers that both `session()` (Intent plugin)
+ * Provides the low-level helpers that both `session()`
  * and `sessionManager()` (orchestrator) rely on: escrow resolution, channel
  * ID computation, on-chain open/voucher/close payload construction, channel
  * recovery from on-chain state, and credential serialization.

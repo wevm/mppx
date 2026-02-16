@@ -44,10 +44,10 @@ type Handlers<
   methods extends readonly Method.AnyServer[],
   transport extends Transport.AnyTransport,
 > = {
-  [method_name in methods[number]['name']]: MethodFn<
-    Extract<methods[number], { name: method_name }>,
-    EffectiveTransportOf<Extract<methods[number], { name: method_name }>, transport>,
-    NonNullable<Extract<methods[number], { name: method_name }>['defaults']>
+  [method_name in methods[number]['intent']]: MethodFn<
+    Extract<methods[number], { intent: method_name }>,
+    EffectiveTransportOf<Extract<methods[number], { intent: method_name }>, transport>,
+    NonNullable<Extract<methods[number], { intent: method_name }>['defaults']>
   >
 }
 
@@ -82,7 +82,7 @@ export function create<
   const handlers: Record<string, unknown> = {}
 
   for (const mi of methods) {
-    handlers[mi.name] = createMethodFn({
+    handlers[mi.intent] = createMethodFn({
       defaults: mi.defaults,
       method: mi,
       realm,

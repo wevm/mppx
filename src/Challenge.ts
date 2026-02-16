@@ -65,8 +65,8 @@ export type Challenge<
 export type FromMethods<methods extends readonly Method.Method[]> = {
   [method in keyof methods]: Challenge<
     z.output<methods[method]['schema']['request']>,
-    methods[method]['name'],
-    methods[method]['method']
+    methods[method]['intent'],
+    methods[method]['name']
   >
 }[number]
 
@@ -205,7 +205,7 @@ export function fromIntent<const method extends Method.Method>(
   method: method,
   parameters: fromIntent.Parameters<method>,
 ): fromIntent.ReturnType<method> {
-  const { method: methodName, name } = method
+  const { name: methodName, intent } = method
   const { description, digest, expires, id, realm, secretKey } = parameters
 
   const request = PaymentRequest.fromIntent(method, parameters.request)
@@ -214,7 +214,7 @@ export function fromIntent<const method extends Method.Method>(
     ...(id ? { id } : { secretKey }),
     realm,
     method: methodName,
-    intent: name,
+    intent: intent,
     request,
     description,
     digest,

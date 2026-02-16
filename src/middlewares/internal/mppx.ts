@@ -23,8 +23,8 @@ export function wrap<mppx extends Mppx.Mppx<any, any>, handler>(
 ): Wrap<mppx, handler> {
   const result: Record<string, unknown> = { ...mppx }
   for (const mi of mppx.methods as readonly Method.AnyServer[]) {
-    const methodFn = (mppx as any)[mi.name]
-    result[mi.name] = (options: any) => wrapper(methodFn, options)
+    const methodFn = (mppx as any)[mi.intent]
+    result[mi.intent] = (options: any) => wrapper(methodFn, options)
   }
   return result as never
 }
