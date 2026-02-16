@@ -117,7 +117,7 @@ describe('basic charge (examples/basic)', () => {
     })
 
     try {
-      const { stdout } = await runAsync([httpServer.url, '--rpc-url', rpcUrl, '--yes', '-s'], {
+      const { stdout } = await runAsync([httpServer.url, '--rpc-url', rpcUrl, '-s'], {
         input: '',
       })
       expect(stdout).toContain('paid')
@@ -179,7 +179,7 @@ describe('session multi-fetch (examples/session/multi-fetch)', () => {
 
     try {
       const { stdout } = await runAsync(
-        [httpServer.url, '--rpc-url', rpcUrl, '--yes', '-s', '--deposit', '10'],
+        [httpServer.url, '--rpc-url', rpcUrl, '-s', '--deposit', '10'],
         { input: '' },
       )
       expect(stdout).toContain('scraped-content')
@@ -227,9 +227,10 @@ describe('session multi-fetch (examples/session/multi-fetch)', () => {
 
       try {
         // First request: open a channel, answer "y" to proceed, "n" to close channel
-        const first = await runAsync([httpServer.url, '--rpc-url', rpcUrl, '--deposit', '10'], {
-          input: 'y\nn\n',
-        })
+        const first = await runAsync(
+          [httpServer.url, '--rpc-url', rpcUrl, '--confirm', '--deposit', '10'],
+          { input: 'y\nn\n' },
+        )
         expect(first.stdout).toContain('scraped-content')
 
         // Extract channel ID from stderr (logged as "Channel opened 0x...")
@@ -243,7 +244,6 @@ describe('session multi-fetch (examples/session/multi-fetch)', () => {
             httpServer.url,
             '--rpc-url',
             rpcUrl,
-            '--yes',
             '-s',
             '--channel',
             channelId,
@@ -323,7 +323,7 @@ describe('session sse (examples/session/sse)', () => {
 
     try {
       const { stdout } = await runAsync(
-        [httpServer.url, '--rpc-url', rpcUrl, '--yes', '--deposit', '10'],
+        [httpServer.url, '--rpc-url', rpcUrl, '--deposit', '10'],
         { input: '' },
       )
       expect(stdout.trim()).toBe('Hello world!')
@@ -528,9 +528,9 @@ test('mppx --help', () => {
       -L, --location         Follow redirects 
       -X, --method <method>  HTTP method 
       --channel <id>         Reuse existing stream channel ID 
+      --confirm              Show confirmation prompts 
       --deposit <amount>     Deposit amount for stream payments (human-readable units) 
       --json <json>          Send JSON body (sets Content-Type and Accept, implies POST) 
-      --yes                  Skip confirmation prompts 
       -V, --version          Display version number 
       -h, --help             Display this message 
 

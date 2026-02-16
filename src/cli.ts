@@ -42,9 +42,9 @@ cli
   .option('-L, --location', 'Follow redirects')
   .option('-X, --method <method>', 'HTTP method')
   .option('--channel <id>', 'Reuse existing stream channel ID')
+  .option('--confirm', 'Show confirmation prompts')
   .option('--deposit <amount>', 'Deposit amount for stream payments (human-readable units)')
   .option('--json <json>', 'Send JSON body (sets Content-Type and Accept, implies POST)')
-  .option('--yes', 'Skip confirmation prompts')
   .example(`${name} example.com/content`)
   .example(`${name} example.com/api --json '{"key":"value"}'`)
   .action(async (rawUrl: string | undefined, rawOptions: unknown) => {
@@ -52,6 +52,7 @@ cli
       z.object({
         account: z.optional(z.string()),
         channel: z.optional(z.coerce.string()),
+        confirm: z.optional(z.boolean()),
         data: z.optional(z.string()),
         deposit: z.optional(z.union([z.string(), z.number()])),
         fail: z.optional(z.boolean()),
@@ -65,7 +66,6 @@ cli
         silent: z.optional(z.boolean()),
         userAgent: z.optional(z.string()),
         verbose: z.optional(z.boolean()),
-        yes: z.optional(z.boolean()),
       }),
       rawOptions,
     )
@@ -76,7 +76,7 @@ cli
 
     const silent = options.silent ?? false
     const info = silent ? (_msg: string) => {} : (msg: string) => process.stderr.write(msg)
-    if (silent) options.yes = true
+    if (silent) options.confirm = false
 
     const accountName = resolveAccountName(options.account)
     const privateKey = process.env.MPPX_PRIVATE_KEY ?? (await createKeychain(accountName).get())
@@ -266,10 +266,9 @@ cli
             for (const line of rest) info(`${indent}${line}\n`)
           }
         }
-        info('\n')
-
-        if (!options.yes) {
-          const ok = await confirm(`Proceed with ${challenge.intent}?`)
+        if (options.confirm) {
+          info('\n')
+          const ok = await confirm(`Proceed with ${challenge.intent}?`, true)
           if (!ok) {
             info('Aborted.\n')
             process.exit(0)
@@ -336,7 +335,7 @@ cli
           const depositDisplay = depositRaw
             ? ` ${pc.dim(`(deposit ${depositRaw} ${tokenSymbol})`)}`
             : ''
-          info(`${pc.dim(`Channel opened ${parsed.payload.channelId}`)}${depositDisplay}\n`)
+          info(`\n${pc.dim(`Channel opened ${parsed.payload.channelId}`)}${depositDisplay}\n`)
         }
       }
 
@@ -385,11 +384,25 @@ cli
             }
             info(`\n${pc.bold(pc.green('Payment Receipt'))}\n`)
             const rows: [string, string][] = []
+            const channelId = receiptJson.channelId
+            const reference = receiptJson.reference
+            const skipReference = channelId && reference && channelId === reference
+            const receiptBalanceKeys = new Set(['acceptedCumulative', 'spent'])
             for (const [key, value] of Object.entries(receiptJson)) {
               if (value === undefined || shownKeys.has(key)) continue
-              if (key === 'reference' && typeof value === 'string' && explorerUrl)
+              if (key === 'reference' && skipReference) continue
+              if (receiptBalanceKeys.has(key) && typeof value === 'string') {
+                rows.push([
+                  key,
+                  `${value} ${pc.dim(`(${fmtBalance(BigInt(value), tokenSymbol, tokenDecimals)})`)}`,
+                ])
+              } else if (
+                (key === 'reference' || key === 'txHash') &&
+                typeof value === 'string' &&
+                explorerUrl
+              ) {
                 rows.push([key, pc.link(`${explorerUrl}/tx/${value}`, value)])
-              else rows.push([key, String(value)])
+              } else rows.push([key, String(value)])
             }
             rows.sort(([a], [b]) => a.localeCompare(b))
             const pad = Math.max(...rows.map(([k]) => k.length))
@@ -426,7 +439,7 @@ cli
               : 0n
           let _voucherSeq = 0
 
-          const termBg = await detectTerminalBg()
+          const termBg = verbose ? await detectTerminalBg() : undefined
           const chunkBgs = (() => {
             if (!termBg || !pc.isColorSupported) return undefined
             const clamp = (n: number) => Math.max(0, Math.min(255, Math.round(n)))
@@ -513,18 +526,26 @@ cli
                   const receipt = JSON.parse(data) as Record<string, unknown>
                   info(`\n\n${pc.bold(pc.green('Payment Receipt'))}\n`)
                   const rows: [string, string][] = []
+                  const skipRef =
+                    receipt.channelId &&
+                    receipt.reference &&
+                    receipt.channelId === receipt.reference
                   for (const [key, value] of Object.entries(receipt)) {
                     if (value === undefined || shownKeys.has(key)) continue
-                    if (key === 'channelId' && value === receipt.reference) continue
+                    if (key === 'reference' && skipRef) continue
                     const receiptBalanceKeys = ['acceptedCumulative', 'spent']
                     if (receiptBalanceKeys.includes(key) && typeof value === 'string') {
                       rows.push([
                         key,
                         `${value} ${pc.dim(`(${fmtBalance(BigInt(value), tokenSymbol, tokenDecimals)})`)}`,
                       ])
-                    } else if (key === 'reference' && typeof value === 'string' && explorerUrl)
+                    } else if (
+                      (key === 'reference' || key === 'txHash') &&
+                      typeof value === 'string' &&
+                      explorerUrl
+                    ) {
                       rows.push([key, pc.link(`${explorerUrl}/tx/${value}`, value)])
-                    else rows.push([key, String(value)])
+                    } else rows.push([key, String(value)])
                   }
                   rows.sort(([a], [b]) => a.localeCompare(b))
                   const rpad = Math.max(...rows.map(([k]) => k.length))
@@ -586,8 +607,23 @@ cli
               headers: { Authorization: closeCred },
             })
             if (closeRes.ok) {
+              const closeReceiptHeader = closeRes.headers.get('Payment-Receipt')
+              let closeTxHash: string | undefined
+              if (closeReceiptHeader) {
+                try {
+                  const r = JSON.parse(Base64.toString(closeReceiptHeader)) as Record<
+                    string,
+                    unknown
+                  >
+                  if (typeof r.txHash === 'string') closeTxHash = r.txHash
+                } catch {}
+              }
+              const txInfo =
+                closeTxHash && explorerUrl
+                  ? ` ${pc.dim(pc.link(`${explorerUrl}/tx/${closeTxHash}`, closeTxHash))}`
+                  : ''
               info(
-                `\n${pc.dim('Channel closed.')} ${pc.dim(`Spent ${fmtBalance(cumulativeAmount, tokenSymbol, tokenDecimals)}.`)}\n`,
+                `\n${pc.dim('Channel closed.')} ${pc.dim(`Spent ${fmtBalance(cumulativeAmount, tokenSymbol, tokenDecimals)}.`)}${txInfo}\n`,
               )
             } else {
               info(
@@ -605,10 +641,10 @@ cli
             streamChannelId &&
             streamEscrowContract &&
             streamChainId
-          if (shouldClose && !options.yes) {
+          if (shouldClose && options.confirm) {
             info('\n')
           }
-          if (shouldClose && !(options.yes || (await confirm('Close channel?')))) {
+          if (shouldClose && options.confirm && !(await confirm('Close channel?', true))) {
             info(`${pc.dim('Kept channel open.')}\n`)
           } else if (shouldClose) {
             const signature = await signVoucher(
@@ -638,8 +674,23 @@ cli
             })
             if (closeRes.ok) {
               deleteChannelState(streamChannelId!)
+              const closeReceiptHeader = closeRes.headers.get('Payment-Receipt')
+              let closeTxHash: string | undefined
+              if (closeReceiptHeader) {
+                try {
+                  const r = JSON.parse(Base64.toString(closeReceiptHeader)) as Record<
+                    string,
+                    unknown
+                  >
+                  if (typeof r.txHash === 'string') closeTxHash = r.txHash
+                } catch {}
+              }
+              const txInfo =
+                closeTxHash && explorerUrl
+                  ? ` ${pc.dim(pc.link(`${explorerUrl}/tx/${closeTxHash}`, closeTxHash))}`
+                  : ''
               info(
-                `${pc.dim('Channel closed.')} ${pc.dim(`Spent ${fmtBalance(streamCumulativeAmount, tokenSymbol, tokenDecimals)}.`)}\n`,
+                `\n${pc.dim('Channel closed.')} ${pc.dim(`Spent ${fmtBalance(streamCumulativeAmount, tokenSymbol, tokenDecimals)}.`)}${txInfo}\n`,
               )
             } else {
               const closeBody = await closeRes.text().catch(() => '')
@@ -1097,12 +1148,14 @@ function prompt(message: string): Promise<string | undefined> {
   })
 }
 
-function confirm(prompt: string): Promise<boolean> {
+function confirm(prompt: string, defaultYes = false): Promise<boolean> {
   const reader = readline.createInterface({ input: process.stdin, output: process.stderr })
   return new Promise((resolve) => {
-    reader.question(`${pc.bold(`▸ ${prompt}`)} ${pc.dim('(y/N)')} `, (answer) => {
+    const hint = defaultYes ? '(Y/n)' : '(y/N)'
+    reader.question(`${pc.bold(`▸ ${prompt}`)} ${pc.dim(hint)} `, (answer) => {
       reader.close()
-      resolve(answer.trim().toLowerCase() === 'y')
+      const trimmed = answer.trim().toLowerCase()
+      resolve(trimmed === '' ? defaultYes : trimmed === 'y')
     })
   })
 }
