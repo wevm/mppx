@@ -1,5 +1,5 @@
 ---
-"mppx": major
+"mppx": minor
 ---
 
 **Breaking:** 
