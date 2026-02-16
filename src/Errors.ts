@@ -44,7 +44,7 @@ export declare namespace PaymentError {
 export class MalformedCredentialError extends PaymentError {
   override readonly name = 'MalformedCredentialError'
   readonly title = 'Malformed Credential'
-  override readonly status = 400
+  override readonly status = 402
   readonly type = 'https://paymentauth.org/problems/malformed-credential'
 
   constructor(options: MalformedCredentialError.Options = {}) {
@@ -66,7 +66,7 @@ export declare namespace MalformedCredentialError {
 export class InvalidChallengeError extends PaymentError {
   override readonly name = 'InvalidChallengeError'
   readonly title = 'Invalid Challenge'
-  override readonly status = 400
+  override readonly status = 402
   readonly type = 'https://paymentauth.org/problems/invalid-challenge'
 
   constructor(options: InvalidChallengeError.Options = {}) {

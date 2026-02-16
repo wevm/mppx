@@ -33,7 +33,7 @@ describe('MalformedCredentialError', () => {
       {
         "message": "Credential is malformed.",
         "name": "MalformedCredentialError",
-        "status": 400,
+        "status": 402,
         "type": "https://paymentauth.org/problems/malformed-credential",
       }
     `)
@@ -46,7 +46,7 @@ describe('MalformedCredentialError', () => {
         {
           "message": "Credential is malformed: invalid base64url.",
           "name": "MalformedCredentialError",
-          "status": 400,
+          "status": 402,
           "type": "https://paymentauth.org/problems/malformed-credential",
         }
       `)
@@ -59,7 +59,7 @@ describe('InvalidChallengeError', () => {
       {
         "message": "Challenge is invalid.",
         "name": "InvalidChallengeError",
-        "status": 400,
+        "status": 402,
         "type": "https://paymentauth.org/problems/invalid-challenge",
       }
     `)
@@ -70,7 +70,7 @@ describe('InvalidChallengeError', () => {
       {
         "message": "Challenge "abc123" is invalid.",
         "name": "InvalidChallengeError",
-        "status": 400,
+        "status": 402,
         "type": "https://paymentauth.org/problems/invalid-challenge",
       }
     `)
@@ -81,7 +81,7 @@ describe('InvalidChallengeError', () => {
       {
         "message": "Challenge is invalid: expired.",
         "name": "InvalidChallengeError",
-        "status": 400,
+        "status": 402,
         "type": "https://paymentauth.org/problems/invalid-challenge",
       }
     `)
@@ -94,7 +94,7 @@ describe('InvalidChallengeError', () => {
         {
           "message": "Challenge "abc123" is invalid: already used.",
           "name": "InvalidChallengeError",
-          "status": 400,
+          "status": 402,
           "type": "https://paymentauth.org/problems/invalid-challenge",
         }
       `)
@@ -434,7 +434,7 @@ describe('toProblemDetails', () => {
     expect(error.toProblemDetails()).toMatchInlineSnapshot(`
       {
         "detail": "Credential is malformed: invalid JSON.",
-        "status": 400,
+        "status": 402,
         "title": "Malformed Credential",
         "type": "https://paymentauth.org/problems/malformed-credential",
       }
@@ -447,7 +447,7 @@ describe('toProblemDetails', () => {
       {
         "challengeId": "abc123",
         "detail": "Challenge "abc123" is invalid: expired.",
-        "status": 400,
+        "status": 402,
         "title": "Invalid Challenge",
         "type": "https://paymentauth.org/problems/invalid-challenge",
       }

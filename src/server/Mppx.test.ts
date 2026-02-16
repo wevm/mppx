@@ -87,7 +87,7 @@ describe('request handler', () => {
         "challengeId": "[challengeId]",
         "detail": "Credential is malformed: Invalid base64url or JSON..",
         "instance": "[instance]",
-        "status": 400,
+        "status": 402,
         "title": "Malformed Credential",
         "type": "https://paymentauth.org/problems/malformed-credential",
       }
@@ -131,7 +131,7 @@ describe('request handler', () => {
         "challengeId": "[challengeId]",
         "detail": "Challenge "wrong-id" is invalid: challenge was not issued by this server.",
         "instance": "[instance]",
-        "status": 400,
+        "status": 402,
         "title": "Invalid Challenge",
         "type": "https://paymentauth.org/problems/invalid-challenge",
       }
