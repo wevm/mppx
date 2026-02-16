@@ -142,6 +142,7 @@ async function collectPaymentMethod(options: {
 const mppx = Mppx.create({
   methods: [
     stripe.charge({
+      client: stripeJs,
       createToken: async ({ amount, currency, expiresAt, metadata, networkId, paymentMethod }) => {
         log('Creating SPT...')
         const response = await fetch('/api/create-spt', {

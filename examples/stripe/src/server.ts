@@ -1,12 +1,14 @@
 import { Mppx, stripe } from 'mppx/server'
+import Stripe from 'stripe'
 
 const secretKey = process.env.VITE_STRIPE_SECRET_KEY!
+const stripeClient = new Stripe(secretKey)
 
 //
 const mppx = Mppx.create({
   methods: [
     stripe.charge({
-      secretKey,
+      client: stripeClient,
       // Stripe Business Network profile ID.
       networkId: 'internal',
       // Ensure only card is supported.

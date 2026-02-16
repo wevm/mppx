@@ -4,20 +4,34 @@ import {
   PaymentExpiredError,
   VerificationFailedError,
 } from '../../Errors.js'
-import type { LooseOmit } from '../../internal/types.js'
+import type { LooseOmit, OneOf } from '../../internal/types.js'
 import * as MethodIntent from '../../MethodIntent.js'
 import * as Intents from '../Intents.js'
+import type { StripeClient } from '../internal/types.js'
 
 /**
  * Creates a Stripe charge method intent for usage on the server.
  *
  * Verifies payment by creating a Stripe PaymentIntent with the provided SPT.
  *
+ * Accepts either a `client` (a pre-configured Stripe SDK instance) or a raw
+ * `secretKey`. Using `client` is recommended—it lets you configure retries,
+ * API version, and other options on the Stripe instance you control.
+ *
+ * @example
+ * ```ts
+ * import Stripe from 'stripe'
+ * import { stripe } from 'mppx/server'
+ *
+ * const stripeClient = new Stripe(process.env.STRIPE_SECRET_KEY!)
+ * const charge = stripe.charge({ client: stripeClient, networkId: 'internal', paymentMethodTypes: ['card'] })
+ * ```
+ *
  * @example
  * ```ts
  * import { stripe } from 'mppx/server'
  *
- * const charge = stripe.charge({ secretKey: 'sk_...' })
+ * const charge = stripe.charge({ secretKey: 'sk_...', networkId: 'internal', paymentMethodTypes: ['card'] })
  * ```
  */
 export function charge<const parameters extends charge.Parameters>(parameters: parameters) {
@@ -30,8 +44,10 @@ export function charge<const parameters extends charge.Parameters>(parameters: p
     metadata,
     networkId,
     paymentMethodTypes,
-    secretKey,
   } = parameters
+
+  const client = 'client' in parameters ? parameters.client : undefined
+  const secretKey = 'secretKey' in parameters ? parameters.secretKey : undefined
 
   type Defaults = charge.DeriveDefaults<parameters>
   return MethodIntent.toServer<typeof Intents.charge, Defaults>(Intents.charge, {
@@ -60,33 +76,18 @@ export function charge<const parameters extends charge.Parameters>(parameters: p
         externalId?: string
       }
 
-      const body = new URLSearchParams({
-        amount: request.amount as string,
-        currency: request.currency as string,
-        shared_payment_granted_token: spt,
-        confirm: 'true',
-        'automatic_payment_methods[enabled]': 'true',
-        'automatic_payment_methods[allow_redirects]': 'never',
-      })
       const userMetadata = request.methodDetails?.metadata as Record<string, string> | undefined
       const resolvedMetadata = { ...buildAnalytics({ credential }), ...userMetadata }
-      for (const [key, value] of Object.entries(resolvedMetadata)) {
-        body.set(`metadata[${key}]`, value)
-      }
 
-      const response = await fetch('https://api.stripe.com/v1/payment_intents', {
-        method: 'POST',
-        headers: {
-          Authorization: `Basic ${btoa(`${secretKey}:`)}`,
-          'Content-Type': 'application/x-www-form-urlencoded',
-          'Idempotency-Key': `mppx_${challenge.id}_${spt}`,
-        },
-        body,
-      })
-
-      if (!response.ok) throw new VerificationFailedError({ reason: 'Stripe PaymentIntent failed' })
-
-      const pi = (await response.json()) as { id: string; status: string }
+      const pi = client
+        ? await createWithClient({ client, challenge, request, spt, metadata: resolvedMetadata })
+        : await createWithSecretKey({
+            secretKey: secretKey!,
+            challenge,
+            request,
+            spt,
+            metadata: resolvedMetadata,
+          })
 
       if (pi.status === 'requires_action') {
         throw new PaymentActionRequiredError({ reason: 'Stripe PaymentIntent requires action' })
@@ -108,16 +109,87 @@ export declare namespace charge {
   type Defaults = LooseOmit<MethodIntent.RequestDefaults<typeof Intents.charge>, 'recipient'>
 
   type Parameters = {
-    /** Stripe secret API key. */
-    secretKey: string
     /** Optional metadata to include in SPT creation requests. */
     metadata?: Record<string, string> | undefined
-  } & Defaults
+  } & Defaults &
+    OneOf<
+      | {
+          /** Pre-configured Stripe SDK instance. Any object matching the duck-typed `StripeClient` shape works. */
+          client: StripeClient
+        }
+      | {
+          /** Stripe secret API key. */
+          secretKey: string
+        }
+    >
 
   type DeriveDefaults<parameters extends Parameters> = Pick<
     parameters,
     Extract<keyof parameters, keyof Defaults>
   > & { decimals: number }
+}
+
+/** Creates a PaymentIntent using the Stripe SDK client. */
+async function createWithClient(parameters: {
+  client: StripeClient
+  challenge: { id: string }
+  metadata: Record<string, string>
+  request: { amount: unknown; currency: unknown }
+  spt: string
+}): Promise<{ id: string; status: string }> {
+  const { client, challenge, metadata, request, spt } = parameters
+  try {
+    const result = await client.paymentIntents.create(
+      {
+        amount: Number(request.amount),
+        automatic_payment_methods: { allow_redirects: 'never', enabled: true },
+        confirm: true,
+        currency: request.currency as string,
+        metadata,
+        payment_method: spt,
+      },
+      { idempotencyKey: `mppx_${challenge.id}_${spt}` },
+    )
+    return { id: result.id, status: result.status }
+  } catch {
+    throw new VerificationFailedError({ reason: 'Stripe PaymentIntent failed' })
+  }
+}
+
+/** Creates a PaymentIntent using a raw secret key and fetch. */
+async function createWithSecretKey(parameters: {
+  secretKey: string
+  challenge: { id: string }
+  metadata: Record<string, string>
+  request: { amount: unknown; currency: unknown }
+  spt: string
+}): Promise<{ id: string; status: string }> {
+  const { secretKey, challenge, metadata, request, spt } = parameters
+
+  const body = new URLSearchParams({
+    amount: request.amount as string,
+    'automatic_payment_methods[allow_redirects]': 'never',
+    'automatic_payment_methods[enabled]': 'true',
+    confirm: 'true',
+    currency: request.currency as string,
+    shared_payment_granted_token: spt,
+  })
+  for (const [key, value] of Object.entries(metadata)) {
+    body.set(`metadata[${key}]`, value)
+  }
+
+  const response = await fetch('https://api.stripe.com/v1/payment_intents', {
+    method: 'POST',
+    headers: {
+      Authorization: `Basic ${btoa(`${secretKey}:`)}`,
+      'Content-Type': 'application/x-www-form-urlencoded',
+      'Idempotency-Key': `mppx_${challenge.id}_${spt}`,
+    },
+    body,
+  })
+
+  if (!response.ok) throw new VerificationFailedError({ reason: 'Stripe PaymentIntent failed' })
+  return (await response.json()) as { id: string; status: string }
 }
 
 /** @internal */
