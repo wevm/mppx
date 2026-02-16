@@ -121,9 +121,7 @@ export declare namespace charge {
 }
 
 /** @internal */
-function buildAnalytics(parameters: {
-  credential: Credential.Credential
-}): Record<string, string> {
+function buildAnalytics(parameters: { credential: Credential.Credential }): Record<string, string> {
   const { credential } = parameters
   const { challenge } = credential
   return {
