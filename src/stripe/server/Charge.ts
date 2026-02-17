@@ -146,6 +146,7 @@ async function createWithClient(parameters: {
         confirm: true,
         currency: request.currency as string,
         metadata,
+        // `shared_payment_granted_token` is not yet in the Stripe SDK types (SPTs are in private preview).
         shared_payment_granted_token: spt,
       } as any,
       { idempotencyKey: `mppx_${challenge.id}_${spt}` },
