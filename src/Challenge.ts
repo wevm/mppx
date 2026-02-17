@@ -410,9 +410,7 @@ function computeId(challenge: Omit<Challenge, 'id'>, options: { secretKey: strin
     PaymentRequest.serialize(challenge.request),
     challenge.expires ?? '',
     challenge.digest ?? '',
-  ]
-    .filter(Boolean)
-    .join('|')
+  ].join('|')
 
   const key = Bytes.fromString(options.secretKey)
   const data = Bytes.fromString(input)
