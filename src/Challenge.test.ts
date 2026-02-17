@@ -453,6 +453,12 @@ describe('deserialize', () => {
   test('error: missing required fields', () => {
     expect(() => Challenge.deserialize('Payment realm="test"')).toThrow()
   })
+
+  test('error: throws for duplicate parameters', () => {
+    expect(() =>
+      Challenge.deserialize('Payment id="a", realm="api", method="tempo", intent="charge", request="e30", id="b"'),
+    ).toThrow('Duplicate parameter: id')
+  })
 })
 
 describe('fromHeaders', () => {
