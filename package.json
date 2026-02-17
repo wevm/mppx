@@ -28,7 +28,7 @@
     "testcontainers": "^11.11.0",
     "tsx": "^4.21.0",
     "typescript": "~5.9.3",
-    "viem": "^2.46.1",
+    "viem": "^2.46.2",
     "vitest": "latest",
     "zile": "^0.0.19"
   },
@@ -37,7 +37,7 @@
     "overrides": {
       "mppx": "workspace:*",
       "ox": "^0.12.4",
-      "viem": "^2.46.1"
+      "viem": "^2.46.2"
     }
   },
   "[!start-pkg]": "",

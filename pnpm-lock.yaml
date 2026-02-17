@@ -7,7 +7,7 @@ settings:
 overrides:
   mppx: workspace:*
   ox: ^0.12.4
-  viem: ^2.46.1
+  viem: ^2.46.2
 
 importers:
 
@@ -72,8 +72,8 @@ importers:
         specifier: ~5.9.3
         version: 5.9.3
       viem:
-        specifier: ^2.46.1
-        version: 2.46.1(typescript@5.9.3)(zod@4.3.6)
+        specifier: ^2.46.2
+        version: 2.46.2(typescript@5.9.3)(zod@4.3.6)
       vitest:
         specifier: latest
         version: 4.0.18(@types/node@25.2.2)(tsx@4.21.0)(yaml@2.8.2)
@@ -96,8 +96,8 @@ importers:
         specifier: latest
         version: 5.9.3
       viem:
-        specifier: ^2.46.1
-        version: 2.46.1(typescript@5.9.3)(zod@4.3.6)
+        specifier: ^2.46.2
+        version: 2.46.2(typescript@5.9.3)(zod@4.3.6)
       vite:
         specifier: latest
         version: 7.3.1(@types/node@25.2.2)(tsx@4.21.0)(yaml@2.8.2)
@@ -120,8 +120,8 @@ importers:
         specifier: latest
         version: 5.9.3
       viem:
-        specifier: ^2.46.1
-        version: 2.46.1(typescript@5.9.3)(zod@4.3.6)
+        specifier: ^2.46.2
+        version: 2.46.2(typescript@5.9.3)(zod@4.3.6)
       vite:
         specifier: latest
         version: 7.3.1(@types/node@25.2.3)(tsx@4.21.0)(yaml@2.8.2)
@@ -144,8 +144,8 @@ importers:
         specifier: latest
         version: 5.9.3
       viem:
-        specifier: ^2.46.1
-        version: 2.46.1(typescript@5.9.3)(zod@4.3.6)
+        specifier: ^2.46.2
+        version: 2.46.2(typescript@5.9.3)(zod@4.3.6)
       vite:
         specifier: latest
         version: 7.3.1(@types/node@25.2.3)(tsx@4.21.0)(yaml@2.8.2)
@@ -2209,8 +2209,8 @@ packages:
     resolution: {integrity: sha512-BNGbWLfd0eUPabhkXUVm0j8uuvREyTh5ovRa/dyow/BqAbZJyC+5fU+IzQOzmAKzYqYRAISoRhdQr3eIZ/PXqg==}
     engines: {node: '>= 0.8'}
 
-  viem@2.46.1:
-    resolution: {integrity: sha512-c5YPQR/VueqoPG09Tp1JBw2iItKVRGVI0YkWekquRDZw0ciNBhO3muu2QjO9xFelOXh18q3d/kLbW83B2Oxf0g==}
+  viem@2.46.2:
+    resolution: {integrity: sha512-w8Qv5Vyo7TfXcH3vgmxRa1NRvzJCDy2aSGSRsJn3503nC/qVbgEQ+n3aj/CkqWXbloudZh97h5o5aQrQSVGy0w==}
     peerDependencies:
       typescript: '>=5.0.4'
     peerDependenciesMeta:
@@ -4444,7 +4444,7 @@ snapshots:
 
   vary@1.1.2: {}
 
-  viem@2.46.1(typescript@5.9.3)(zod@4.3.6):
+  viem@2.46.2(typescript@5.9.3)(zod@4.3.6):
     dependencies:
       '@noble/curves': 1.9.1
       '@noble/hashes': 1.8.0
