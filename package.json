@@ -28,7 +28,7 @@
     "testcontainers": "^11.11.0",
     "tsx": "^4.21.0",
     "typescript": "~5.9.3",
-    "viem": "^2.45.3",
+    "viem": "^2.46.1",
     "vitest": "latest",
     "zile": "^0.0.19"
   },
@@ -36,8 +36,8 @@
   "pnpm": {
     "overrides": {
       "mppx": "workspace:*",
-      "ox": "^0.12.2",
-      "viem": "^2.45.3"
+      "ox": "^0.12.4",
+      "viem": "^2.46.1"
     }
   },
   "[!start-pkg]": "",
@@ -147,7 +147,7 @@
     "@remix-run/fetch-proxy": "^0.7.1",
     "@remix-run/node-fetch-server": "^0.13.0",
     "cac": "^6.7.14",
-    "ox": "^0.12.2",
+    "ox": "^0.12.4",
     "zod": "^4.3.6"
   },
   "sideEffects": false,
