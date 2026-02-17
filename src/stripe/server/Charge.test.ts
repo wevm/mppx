@@ -69,8 +69,9 @@ describe('stripe.charge with client', () => {
       amount: 100,
       confirm: true,
       currency: 'usd',
-      payment_method: 'spt_test_token',
+      shared_payment_granted_token: 'spt_test_token',
     })
+    expect(params.payment_method).toBeUndefined()
     expect(params.automatic_payment_methods).toMatchObject({
       allow_redirects: 'never',
       enabled: true,
