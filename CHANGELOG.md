@@ -1,5 +1,11 @@
 # mppx
 
+## 0.2.2
+
+### Patch Changes
+
+- 360fc03: Added `Json.canonicalize` from `ox`
+
 ## 0.2.1
 
 ### Patch Changes
