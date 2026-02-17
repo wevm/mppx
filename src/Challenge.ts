@@ -308,7 +308,10 @@ export function deserialize<const methods extends readonly Method.Method[] | und
   for (const match of params.matchAll(/(\w+)="([^"]+)"/g)) {
     const key = match[1]
     const value = match[2]
-    if (key && value) result[key] = value
+    if (key && value) {
+      if (key in result) throw new Error(`Duplicate parameter: ${key}`)
+      result[key] = value
+    }
   }
 
   const { request, ...rest } = result
