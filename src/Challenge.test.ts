@@ -53,21 +53,160 @@ describe('from', () => {
     `)
   })
 
-  test('behavior: creates challenge with HMAC-bound id via secretKey', () => {
-    const challenge = Challenge.from({
+  // ---------------------------------------------------------------------------
+  // HMAC Challenge ID Test Vectors
+  //
+  // HMAC input: realm | method | intent | base64url(canonicalize(request)) | expires | digest
+  // HMAC key:   UTF-8 bytes of secretKey
+  // Output:     base64url(HMAC-SHA256(key, input), no padding)
+  //
+  // These vectors cover every combination of optional HMAC fields (expires, digest)
+  // and variations in each required field (realm, method, intent, request).
+  // Use them to verify HMAC challenge ID computation in other implementations.
+  // ---------------------------------------------------------------------------
+  const hmacVectors = [
+    {
+      label: 'required fields only',
+      params: {
+        realm: 'api.example.com',
+        method: 'tempo',
+        intent: 'charge',
+        request: { amount: '1000000' },
+      },
+      expectedId: 'SOfbA51LV3LCkGE7RbomqwXdbWVlrZwlW-Z9aOHolxw',
+    },
+    {
+      label: 'with expires',
+      params: {
+        realm: 'api.example.com',
+        method: 'tempo',
+        intent: 'charge',
+        request: { amount: '1000000' },
+        expires: '2025-01-06T12:00:00Z',
+      },
+      expectedId: 'R1ZSIwoIjkFhMCSzUGiCTesiigf5vV65EQ_3gVNtsNw',
+    },
+    {
+      label: 'with digest',
+      params: {
+        realm: 'api.example.com',
+        method: 'tempo',
+        intent: 'charge',
+        request: { amount: '1000000' },
+        digest: 'sha-256=X48E9qOokqqrvdts8nOJRJN3OWDUoyWxBf7kbu9DBPE',
+      },
+      expectedId: 'AiMmBdsSOkOYpXTupMnzVnrzZbqMY_P2i80vENRUSN4',
+    },
+    {
+      label: 'with expires and digest',
+      params: {
+        realm: 'api.example.com',
+        method: 'tempo',
+        intent: 'charge',
+        request: { amount: '1000000' },
+        expires: '2025-01-06T12:00:00Z',
+        digest: 'sha-256=X48E9qOokqqrvdts8nOJRJN3OWDUoyWxBf7kbu9DBPE',
+      },
+      expectedId: 'FMBGqN7MzpKagHsCcartZM09CnUqv7UgmaCy45Ozgug',
+    },
+    {
+      label: 'with description (not in HMAC input)',
+      params: {
+        realm: 'api.example.com',
+        method: 'tempo',
+        intent: 'charge',
+        request: { amount: '1000000' },
+        description: 'Test payment',
+      },
+      expectedId: 'SOfbA51LV3LCkGE7RbomqwXdbWVlrZwlW-Z9aOHolxw',
+    },
+    {
+      label: 'with multi-field request',
+      params: {
+        realm: 'api.example.com',
+        method: 'tempo',
+        intent: 'charge',
+        request: { amount: '1000000', currency: '0x1234', recipient: '0xabcd' },
+      },
+      expectedId: '5CXJi4bWMz2W54WjnlmoxnwTYe-JKwhw0z32ICQ65Es',
+    },
+    {
+      label: 'with nested methodDetails in request',
+      params: {
+        realm: 'api.example.com',
+        method: 'tempo',
+        intent: 'charge',
+        request: { amount: '1000000', currency: '0x1234', methodDetails: { chainId: 42431 } },
+      },
+      expectedId: 'eid66xXUZsj46Pb30AfAf7m5kPehgianI16rZ-QY8HU',
+    },
+    {
+      label: 'with empty request',
+      params: {
+        realm: 'api.example.com',
+        method: 'tempo',
+        intent: 'charge',
+        request: {},
+      },
+      expectedId: '6kq-PYTyXtaGAHTHCVUrc_hIsAwLeskeQFtDZerMYhM',
+    },
+    {
+      label: 'different realm',
+      params: {
+        realm: 'payments.other.com',
+        method: 'tempo',
+        intent: 'charge',
+        request: { amount: '1000000' },
+      },
+      expectedId: '-gMjd8UeUvBcqUaUzarVj6ikH_YoDowpaNbEwK1Tmx8',
+    },
+    {
+      label: 'different method',
+      params: {
+        realm: 'api.example.com',
+        method: 'stripe',
+        intent: 'charge',
+        request: { amount: '1000000' },
+      },
+      expectedId: 'DRH9ycmIlZ2lYUatIHCrxpm9K7ig5pniZ3ulleb7vl0',
+    },
+    {
+      label: 'different intent',
+      params: {
+        realm: 'api.example.com',
+        method: 'tempo',
+        intent: 'session',
+        request: { amount: '1000000' },
+      },
+      expectedId: 'INeBi93MhinvbwdUxeUUIaT5Q_ufgLKPYZb5Tg43A1o',
+    },
+  ] as const
+
+  test.each(hmacVectors)('hmac: $label', ({ params, expectedId }) => {
+    const challenge = Challenge.from({ ...params, secretKey: 'test-vector-secret' })
+    expect(challenge.id).toBe(expectedId)
+  })
+
+  test('hmac: description does not affect id', () => {
+    const withDesc = Challenge.from({
       realm: 'api.example.com',
       method: 'tempo',
       intent: 'charge',
-      request: { amount: '1000000', currency: '0x1234', recipient: '0xabcd' },
-      secretKey: 'my-secret',
+      request: { amount: '1000000' },
+      description: 'Test payment',
+      secretKey: 'test-vector-secret',
     })
-
-    expect(challenge.id).toMatchInlineSnapshot(`"okjPWig-KcWGvMWYEMdA_oVwySaHKV2q3D1po2xUXI4"`)
-    expect(challenge.realm).toBe('api.example.com')
-    expect(challenge.method).toBe('tempo')
+    const without = Challenge.from({
+      realm: 'api.example.com',
+      method: 'tempo',
+      intent: 'charge',
+      request: { amount: '1000000' },
+      secretKey: 'test-vector-secret',
+    })
+    expect(withDesc.id).toBe(without.id)
   })
 
-  test('behavior: same params with same secretKey produce same id', () => {
+  test('hmac: same params with same secretKey produce same id', () => {
     const challenge1 = Challenge.from({
       realm: 'api.example.com',
       method: 'tempo',
@@ -86,7 +225,7 @@ describe('from', () => {
     expect(challenge1.id).toBe(challenge2.id)
   })
 
-  test('behavior: different secretKey produces different id', () => {
+  test('hmac: different secretKey produces different id', () => {
     const challenge1 = Challenge.from({
       realm: 'api.example.com',
       method: 'tempo',
