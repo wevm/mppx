@@ -1,5 +1,13 @@
 # mppx
 
+## 0.2.1
+
+### Patch Changes
+
+- eb72c76: **Breaking:**
+  - Renamed `Challenge.fromIntent` to `Challenge.fromMethod`.
+  - Renamed `PaymentRequest.fromIntent` to `PaymentRequest.fromMethod`.
+
 ## 0.2.0
 
 ### Minor Changes
