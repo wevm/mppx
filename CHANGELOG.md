@@ -1,5 +1,12 @@
 # mppx
 
+## 0.2.3
+
+### Patch Changes
+
+- c0aa6ad: Fixed Stripe `createWithClient` to use `shared_payment_granted_token` instead of `payment_method` when creating a PaymentIntent with an SPT. This aligns the SDK client path with the raw fetch path and fixes 402 errors on credential retry.
+- e7f5985: Rejected keychain and non-secp256k1 signatures in `verifyVoucher`.
+
 ## 0.2.2
 
 ### Patch Changes
