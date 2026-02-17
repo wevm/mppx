@@ -73,9 +73,8 @@ export async function signVoucher(
 /**
  * Verify a voucher signature matches the expected signer.
  *
- * Supports both direct signatures (secp256k1/p256/webAuthn) and
- * Tempo access key (keychain) signatures. For keychain signatures,
- * the envelope's `userAddress` is compared to `expectedSigner`.
+ * Only accepts raw secp256k1 signatures — the escrow contract verifies
+ * via ecrecover. Keychain, p256, and webAuthn signatures are rejected.
  */
 export async function verifyVoucher(
   escrowContract: Address.Address,
@@ -90,9 +89,16 @@ export async function verifyVoucher(
       cumulativeAmount: voucher.cumulativeAmount,
     }
 
-    const envelope = SignatureEnvelope.from(voucher.signature as SignatureEnvelope.Serialized)
+    const envelope = SignatureEnvelope.from(voucher.signature)
 
-    if (envelope.type === 'keychain') return isAddressEqual(envelope.userAddress, expectedSigner)
+    // Reject keychain signatures — the escrow contract verifies raw ECDSA
+    // signatures against authorizedSigner, not keychain-wrapped ones.
+    if (envelope.type === 'keychain') return false
+
+    // Reject non-secp256k1 signatures (p256, webAuthn) — the escrow contract
+    // only supports ecrecover-based verification.
+    // TODO: remove this once TIP-1020 is implemented
+    if (envelope.type !== 'secp256k1') return false
 
     const signer = await recoverTypedDataAddress({
       domain,
