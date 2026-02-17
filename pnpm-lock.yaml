@@ -6,7 +6,7 @@ settings:
 
 overrides:
   mppx: workspace:*
-  ox: ^0.12.0
+  ox: ^0.12.2
   viem: ^2.45.3
 
 importers:
@@ -22,12 +22,9 @@ importers:
       cac:
         specifier: ^6.7.14
         version: 6.7.14
-      canonicalize:
-        specifier: ^2.1.0
-        version: 2.1.0
       ox:
-        specifier: ^0.12.0
-        version: 0.12.0(typescript@5.9.3)(zod@4.3.6)
+        specifier: ^0.12.2
+        version: 0.12.2(typescript@5.9.3)(zod@4.3.6)
       zod:
         specifier: ^4.3.6
         version: 4.3.6
@@ -1066,10 +1063,6 @@ packages:
     resolution: {integrity: sha512-+ys997U96po4Kx/ABpBCqhA9EuxJaQWDQg7295H4hBphv3IZg0boBKuwYpt4YXp6MZ5AmZQnU/tyMTlRpaSejg==}
     engines: {node: '>= 0.4'}
 
-  canonicalize@2.1.0:
-    resolution: {integrity: sha512-F705O3xrsUtgt98j7leetNhTWPe+5S72rlL5O4jA1pKqBVQ/dT1O1D6PFxmSXvc0SUOinWS57DKx0I3CHrXJHQ==}
-    hasBin: true
-
   chai@6.2.2:
     resolution: {integrity: sha512-NUPRluOfOiTKBKvWPtSD4PhFvWCqOi0BGStNWs57X9js7XGTprSmFoz5F0tWhR4WPjNeR9jXqdC7/UpSJTnlRg==}
     engines: {node: '>=18'}
@@ -1741,8 +1734,8 @@ packages:
   outdent@0.5.0:
     resolution: {integrity: sha512-/jHxFIzoMXdqPzTaCpFzAAWhpkSjZPF4Vsn6jAfNpmbH/ymsmd7Qc6VE9BGn0L6YMj6uwpQLxCECpus4ukKS9Q==}
 
-  ox@0.12.0:
-    resolution: {integrity: sha512-68ZJdl8woJYThN/E7GKJ9d8RCzPFm49BhrPFpSBPO1CGljupFzKhQopVkrmcudh/Cki7nEqAAR2w6xdizCNs3Q==}
+  ox@0.12.2:
+    resolution: {integrity: sha512-v67fcvGLx4iYYT08fzEpZcHrcC6/6pUPQpVNLGvzDOhaUUOyGJcU08Oq+84pZ6IdGwoy8TU9LRRknZuF61FXwg==}
     peerDependencies:
       typescript: '>=5.4.0'
     peerDependenciesMeta:
@@ -3257,8 +3250,6 @@ snapshots:
       call-bind-apply-helpers: 1.0.2
       get-intrinsic: 1.3.0
 
-  canonicalize@2.1.0: {}
-
   chai@6.2.2: {}
 
   change-case@5.4.4: {}
@@ -3905,7 +3896,7 @@ snapshots:
 
   outdent@0.5.0: {}
 
-  ox@0.12.0(typescript@5.9.3)(zod@4.3.6):
+  ox@0.12.2(typescript@5.9.3)(zod@4.3.6):
     dependencies:
       '@adraffy/ens-normalize': 1.11.1
       '@noble/ciphers': 1.3.0
@@ -4461,7 +4452,7 @@ snapshots:
       '@scure/bip39': 1.6.0
       abitype: 1.2.3(typescript@5.9.3)(zod@4.3.6)
       isows: 1.0.7(ws@8.18.3)
-      ox: 0.12.0(typescript@5.9.3)(zod@4.3.6)
+      ox: 0.12.2(typescript@5.9.3)(zod@4.3.6)
       ws: 8.18.3
     optionalDependencies:
       typescript: 5.9.3
