@@ -78,6 +78,9 @@ export function session(parameters: session.Parameters = {}) {
     rpcUrl: defaults.rpcUrl,
   })
   const getAccount = Account.getResolver({ account: parameters.account })
+  const getAuthorizedSigner = (account: viem_Account) =>
+    parameters.authorizedSigner ??
+    (account as unknown as { accessKeyAddress?: Address }).accessKeyAddress
 
   const maxDeposit =
     parameters.maxDeposit !== undefined ? parseUnits(parameters.maxDeposit, decimals) : undefined
@@ -137,6 +140,8 @@ export function session(parameters: session.Parameters = {}) {
       )
     })()
 
+    const authorizedSigner = getAuthorizedSigner(account)
+
     const key = channelKey(payee, currency, escrowContract)
     let entry = channels.get(key)
 
@@ -180,12 +185,12 @@ export function session(parameters: session.Parameters = {}) {
         entry.cumulativeAmount,
         escrowContract,
         chainId,
-        parameters.authorizedSigner,
+        authorizedSigner,
       )
       notifyUpdate(entry)
     } else {
       const result = await createOpenPayload(client, account, {
-        authorizedSigner: parameters.authorizedSigner,
+        authorizedSigner,
         escrowContract,
         payee,
         currency,
@@ -216,7 +221,12 @@ export function session(parameters: session.Parameters = {}) {
     const client = await getClient({ chainId })
 
     const action = context.action!
-    const { channelId: channelIdRaw, transaction, authorizedSigner } = context
+    const {
+      channelId: channelIdRaw,
+      transaction,
+      authorizedSigner: contextAuthorizedSigner,
+    } = context
+    const authorizedSigner = (contextAuthorizedSigner as Address) ?? getAuthorizedSigner(account)
     const channelId = channelIdRaw as Hex.Hex
     const cumulativeAmount = context.cumulativeAmountRaw
       ? BigInt(context.cumulativeAmountRaw)
@@ -245,14 +255,14 @@ export function session(parameters: session.Parameters = {}) {
           { channelId, cumulativeAmount },
           escrowContract,
           chainId,
-          parameters.authorizedSigner,
+          authorizedSigner,
         )
         payload = {
           action: 'open',
           type: 'transaction',
           channelId,
           transaction: transaction as Hex.Hex,
-          authorizedSigner: (authorizedSigner as Address) ?? account.address,
+          authorizedSigner: authorizedSigner ?? account.address,
           cumulativeAmount: cumulativeAmount.toString(),
           signature,
         }
@@ -282,7 +292,7 @@ export function session(parameters: session.Parameters = {}) {
           cumulativeAmount,
           escrowContract,
           chainId,
-          parameters.authorizedSigner,
+          authorizedSigner,
         )
         const key = channelIdToKey.get(channelId)
         if (key) {
@@ -305,7 +315,7 @@ export function session(parameters: session.Parameters = {}) {
           { channelId, cumulativeAmount },
           escrowContract,
           chainId,
-          parameters.authorizedSigner,
+          authorizedSigner,
         )
         payload = {
           action: 'close',
