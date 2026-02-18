@@ -44,7 +44,7 @@ export async function cosignFeePayer(
   // impossible, so this normalisation is always safe.
   //
   // TODO: Fix upstream in ox's `TxEnvelopeTempo.deserialize` to recognise
-  // the zero-tuple as a placeholder (https://github.com/wevm/ox/issues/XXX).
+  // the zero-tuple as a placeholder (https://github.com/wevm/ox/issues/174).
   if (
     envelope.feePayerSignature &&
     envelope.feePayerSignature.r === 0n &&
