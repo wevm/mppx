@@ -1,5 +1,11 @@
 # mppx
 
+## 0.2.4
+
+### Patch Changes
+
+- 83d0175: Bumped `viem` peer dependency to `>=2.46.2`.
+
 ## 0.2.3
 
 ### Patch Changes
