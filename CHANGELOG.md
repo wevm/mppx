@@ -1,5 +1,11 @@
 # mppx
 
+## 0.2.5
+
+### Patch Changes
+
+- 01fa8ba: Added fallback `authorizedSigner` to `account.accessKeyAddress` when not explicitly provided.
+
 ## 0.2.4
 
 ### Patch Changes
