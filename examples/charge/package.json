@@ -1,5 +1,5 @@
 {
-  "name": "basic",
+  "name": "charge",
   "type": "module",
   "private": true,
   "scripts": {
@@ -10,6 +10,7 @@
   "dependencies": {
     "@remix-run/node-fetch-server": "latest",
     "@types/node": "latest",
+    "bun": "latest",
     "mppx": "latest",
     "typescript": "latest",
     "viem": "latest",

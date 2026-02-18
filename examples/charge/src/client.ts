@@ -3,32 +3,29 @@ import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts'
 
 const account = privateKeyToAccount(generatePrivateKey())
 
-Mppx.create({
+const mppx = Mppx.create({
   methods: [tempo({ account })],
 })
 
 document.getElementById('button')!.addEventListener('click', async () => {
   const output = document.getElementById('output')!
+  const button = document.getElementById('button') as HTMLButtonElement
 
-  output.textContent = loadingMessages[Math.floor(Math.random() * loadingMessages.length)]!
+  button.disabled = true
+  output.innerHTML = '<div class="placeholder"></div>'
 
   try {
-    const { fortune } = await fetch('/api/fortune').then((r) => r.json())
-    output.textContent = fortune
+    const res = await mppx.fetch('/api/photo')
+    if (!res.ok) throw new Error('Request failed')
+    const { url } = (await res.json()) as { url: string }
+    output.innerHTML = `<a href="${url}" target="_blank" rel="noopener noreferrer"><img src="${url}" alt="Random photo" /></a>`
     await updateBalance()
   } catch (err) {
-    output.textContent = String(err)
+    output.innerHTML = `<span class="error">${String(err)}</span>`
+  } finally {
+    button.disabled = false
   }
 })
-
-const loadingMessages = [
-  'Consulting the oracle...',
-  'Gazing into the crystal ball...',
-  'Reading your palm...',
-  'The spirits are speaking...',
-  'Shaking the magic 8-ball...',
-  'Paying the seer...',
-]
 
 ////////////////////////////////////////////////////////////////////
 // Internal

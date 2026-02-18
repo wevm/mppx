@@ -25,31 +25,22 @@ export async function handler(request: Request): Promise<Response | null> {
   if (url.pathname === '/api/health') return Response.json({ status: 'ok' })
 
   // Paid
-  if (url.pathname === '/api/fortune') {
-    const result = await mppx.charge({ amount: '1' })(request)
+  if (url.pathname === '/api/photo') {
+    const result = await mppx.charge({
+      amount: '0.01',
+      description: 'Random stock photo',
+    })(request)
 
     if (result.status === 402) return result.challenge
 
-    const fortune = fortunes[Math.floor(Math.random() * fortunes.length)]!
+    const res = await fetch('https://picsum.photos/1024/1024')
+    const photoUrl = res.url
 
-    return result.withReceipt(Response.json({ fortune }))
+    return result.withReceipt(Response.json({ url: photoUrl }))
   }
 
   return null
 }
-
-const fortunes = [
-  'A beautiful, smart, and loving person will come into your life.',
-  'A dubious friend may be an enemy in camouflage.',
-  'A faithful friend is a strong defense.',
-  'A fresh start will put you on your way.',
-  'A golden egg of opportunity falls into your lap this month.',
-  'A good time to finish up old tasks.',
-  'A hunch is creativity trying to tell you something.',
-  'A lifetime of happiness lies ahead of you.',
-  'A light heart carries you through all the hard times.',
-  'A new perspective will come with the new year.',
-]
 
 const client = createClient({
   chain: tempoModerato,
