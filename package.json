@@ -127,7 +127,7 @@
     "elysia": ">=1",
     "express": ">=5",
     "hono": ">=4",
-    "viem": ">=2.44.4"
+    "viem": ">=2.46.2"
   },
   "peerDependenciesMeta": {
     "@modelcontextprotocol/sdk": {
