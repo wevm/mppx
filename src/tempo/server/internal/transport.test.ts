@@ -2,7 +2,7 @@ import { Challenge, Credential } from 'mppx'
 import type { Address, Hex } from 'viem'
 import { describe, expect, test } from 'vitest'
 import * as Store from '../../../Store.js'
-import * as ChannelStore from '../../stream/ChannelStore.js'
+import * as ChannelStore from '../../session/ChannelStore.js'
 import { sse } from './transport.js'
 
 const channelId = '0x0000000000000000000000000000000000000000000000000000000000000001' as Hex
