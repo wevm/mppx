@@ -22,8 +22,6 @@ import { signVoucher } from './Voucher.js'
 
 const UINT128_MAX = 2n ** 128n - 1n
 
-// ---------- Pure validation (no network needed) ----------
-
 describe('assertUint128 (via settleOnChain / closeOnChain)', () => {
   const mockClient = { chain: { id: 42431 } } as any
   const dummyEscrow = '0x0000000000000000000000000000000000000001' as Address
@@ -69,8 +67,6 @@ describe('assertUint128 (via settleOnChain / closeOnChain)', () => {
     ).rejects.toThrow('no account available')
   })
 })
-
-// ---------- On-chain state tests ----------
 
 describe('on-chain', () => {
   const payer = accounts[2]
@@ -193,8 +189,6 @@ describe('on-chain', () => {
       expect(result.deposit).toBe(initialDeposit + topUpAmount)
     })
   })
-
-  // ---------- broadcastOpenTransaction ----------
 
   describe('broadcastOpenTransaction', () => {
     test('rejects when payee does not match recipient', async () => {
@@ -353,8 +347,6 @@ describe('on-chain', () => {
       expect(result.onChain.deposit).toBe(deposit)
     })
   })
-
-  // ---------- broadcastTopUpTransaction ----------
 
   describe('broadcastTopUpTransaction', () => {
     test('rejects channelId mismatch', async () => {

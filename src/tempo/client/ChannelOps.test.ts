@@ -17,10 +17,6 @@ import {
   tryRecoverChannel,
 } from './ChannelOps.js'
 
-// ---------------------------------------------------------------------------
-// Shared fixtures
-// ---------------------------------------------------------------------------
-
 const escrow42431 = '0x542831e3E4Ace07559b7C8787395f4Fb99F70787' as Address
 
 const localAccount = privateKeyToAccount(
@@ -45,10 +41,6 @@ function makeChallenge(overrides?: Partial<Challenge>): Challenge {
     ...overrides,
   }
 }
-
-// ---------------------------------------------------------------------------
-// Pure functions – no network, no mocks
-// ---------------------------------------------------------------------------
 
 describe('resolveEscrow', () => {
   test('prefers challenge.request.methodDetails.escrowContract', () => {
@@ -115,10 +107,6 @@ describe('serializeCredential', () => {
   })
 })
 
-// ---------------------------------------------------------------------------
-// Signing functions – real signTypedData via privateKeyToAccount, no network
-// ---------------------------------------------------------------------------
-
 describe('createVoucherPayload', () => {
   test('returns voucher payload with valid signature', async () => {
     const result = await createVoucherPayload(
@@ -172,10 +160,6 @@ describe('createClosePayload', () => {
     expect(valid).toBe(true)
   })
 })
-
-// ---------------------------------------------------------------------------
-// On-chain functions – real local node
-// ---------------------------------------------------------------------------
 
 describe('createOpenPayload', () => {
   const payer = accounts[2]

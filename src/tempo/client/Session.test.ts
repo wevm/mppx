@@ -14,10 +14,6 @@ function deserializePayload(result: string) {
   return cred
 }
 
-// ---------------------------------------------------------------------------
-// Pure-test account + client (no real node needed)
-// ---------------------------------------------------------------------------
-
 const pureAccount = privateKeyToAccount(
   '0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80',
 )
@@ -49,10 +45,6 @@ function makeChallenge(overrides?: Record<string, unknown>) {
     },
   }) as any
 }
-
-// ---------------------------------------------------------------------------
-// Pure validation tests (no network)
-// ---------------------------------------------------------------------------
 
 describe('session (pure)', () => {
   describe('error: no action and no deposit/maxDeposit', () => {
@@ -206,10 +198,6 @@ describe('session (pure)', () => {
     })
   })
 })
-
-// ---------------------------------------------------------------------------
-// On-chain tests (local node)
-// ---------------------------------------------------------------------------
 
 describe('session (on-chain)', () => {
   const payer = accounts[2]
