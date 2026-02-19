@@ -8,8 +8,8 @@ import * as Client from '../../viem/Client.js'
 import * as z from '../../zod.js'
 import * as defaults from '../internal/defaults.js'
 import * as Methods from '../Methods.js'
-import type { StreamCredentialPayload } from '../stream/Types.js'
-import { signVoucher } from '../stream/Voucher.js'
+import type { SessionCredentialPayload } from '../session/Types.js'
+import { signVoucher } from '../session/Voucher.js'
 import {
   type ChannelEntry,
   createOpenPayload,
@@ -19,7 +19,7 @@ import {
   tryRecoverChannel,
 } from './ChannelOps.js'
 
-export const streamContextSchema = z.object({
+export const sessionContextSchema = z.object({
   account: z.optional(z.custom<Account.getResolver.Parameters['account']>()),
   action: z.optional(z.enum(['open', 'topUp', 'voucher', 'close'])),
   channelId: z.optional(z.string()),
@@ -32,7 +32,7 @@ export const streamContextSchema = z.object({
   depositRaw: z.optional(z.string()),
 })
 
-export type StreamContext = z.infer<typeof streamContextSchema>
+export type SessionContext = z.infer<typeof sessionContextSchema>
 
 /**
  * Creates a session payment method for use with `Mppx.create()`.
@@ -112,7 +112,7 @@ export function session(parameters: session.Parameters = {}) {
   async function autoManageCredential(
     challenge: Challenge.Challenge,
     account: viem_Account,
-    context?: StreamContext,
+    context?: SessionContext,
   ): Promise<string> {
     const md = challenge.request.methodDetails as
       | { chainId?: number; escrowContract?: string; channelId?: string; feePayer?: boolean }
@@ -174,7 +174,7 @@ export function session(parameters: session.Parameters = {}) {
       }
     }
 
-    let payload: StreamCredentialPayload
+    let payload: SessionCredentialPayload
 
     if (entry?.opened) {
       entry.cumulativeAmount += amount
@@ -212,7 +212,7 @@ export function session(parameters: session.Parameters = {}) {
   async function manualCredential(
     challenge: Challenge.Challenge,
     account: viem_Account,
-    context: StreamContext,
+    context: SessionContext,
   ): Promise<string> {
     const md = challenge.request.methodDetails as
       | { chainId?: number; escrowContract?: string; channelId?: string }
@@ -242,7 +242,7 @@ export function session(parameters: session.Parameters = {}) {
     const escrowContract = resolveEscrowCached(challenge, chainId, channelId)
     escrowContractMap.set(channelId, escrowContract)
 
-    let payload: StreamCredentialPayload
+    let payload: SessionCredentialPayload
 
     switch (action) {
       case 'open': {
@@ -341,7 +341,7 @@ export function session(parameters: session.Parameters = {}) {
   }
 
   return Method.toClient(Methods.session, {
-    context: streamContextSchema,
+    context: sessionContextSchema,
 
     async createCredential({ challenge, context }) {
       const chainId = challenge.request.methodDetails?.chainId ?? 0

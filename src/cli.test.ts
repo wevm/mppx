@@ -6,7 +6,7 @@ import { Addresses } from 'viem/tempo'
 import { afterAll, describe, expect, test } from 'vitest'
 import * as Http from '~test/Http.js'
 import { rpcUrl } from '~test/tempo/prool.js'
-import { deployEscrow } from '~test/tempo/stream.js'
+import { deployEscrow } from '~test/tempo/session.js'
 import { accounts, asset, client, fundAccount } from '~test/tempo/viem.js'
 import * as Store from './Store.js'
 import * as Mppx_server from './server/Mppx.js'
@@ -517,9 +517,9 @@ test('mppx --help', () => {
       -H, --header <header>  Add header (repeatable) 
       -L, --location         Follow redirects 
       -X, --method <method>  HTTP method 
-      --channel <id>         Reuse existing stream channel ID 
+      --channel <id>         Reuse existing session channel ID 
       --confirm              Show confirmation prompts 
-      --deposit <amount>     Deposit amount for stream payments (human-readable units) 
+      --deposit <amount>     Deposit amount for session payments (human-readable units) 
       --json <json>          Send JSON body (sets Content-Type and Accept, implies POST) 
       -V, --version          Display version number 
       -h, --help             Display this message 

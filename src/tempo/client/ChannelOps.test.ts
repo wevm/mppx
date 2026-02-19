@@ -3,11 +3,11 @@ import { type Address, createClient } from 'viem'
 import { privateKeyToAccount } from 'viem/accounts'
 import { Addresses } from 'viem/tempo'
 import { beforeAll, describe, expect, test } from 'vitest'
-import { deployEscrow, openChannel } from '~test/tempo/stream.js'
+import { deployEscrow, openChannel } from '~test/tempo/session.js'
 import { accounts, asset, chain, client, fundAccount, http } from '~test/tempo/viem.js'
 import type { Challenge } from '../../Challenge.js'
 import * as Credential from '../../Credential.js'
-import { verifyVoucher } from '../stream/Voucher.js'
+import { verifyVoucher } from '../session/Voucher.js'
 import {
   createClosePayload,
   createOpenPayload,

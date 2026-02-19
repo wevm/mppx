@@ -2,14 +2,14 @@ import type { Address, Hex } from 'viem'
 import { describe, expect, test } from 'vitest'
 import type * as ChannelStore from './ChannelStore.js'
 import { formatNeedVoucherEvent, formatReceiptEvent, parseEvent, serve } from './Sse.js'
-import type { NeedVoucherEvent, StreamReceipt } from './Types.js'
+import type { NeedVoucherEvent, SessionReceipt } from './Types.js'
 
 const channelId = '0x0000000000000000000000000000000000000000000000000000000000000001' as Hex
 const challengeId = 'challenge-1'
 
 describe('formatReceiptEvent', () => {
   test('produces valid SSE format', () => {
-    const receipt: StreamReceipt = {
+    const receipt: SessionReceipt = {
       method: 'tempo',
       intent: 'session',
       status: 'success',
@@ -30,7 +30,7 @@ describe('formatReceiptEvent', () => {
   })
 
   test('includes txHash when present', () => {
-    const receipt: StreamReceipt = {
+    const receipt: SessionReceipt = {
       method: 'tempo',
       intent: 'session',
       status: 'success',
@@ -112,7 +112,7 @@ describe('parseEvent', () => {
   })
 
   test('parses payment-receipt event', () => {
-    const receipt: StreamReceipt = {
+    const receipt: SessionReceipt = {
       method: 'tempo',
       intent: 'session',
       status: 'success',
@@ -136,7 +136,7 @@ describe('parseEvent', () => {
   })
 
   test('round-trips formatReceiptEvent', () => {
-    const receipt: StreamReceipt = {
+    const receipt: SessionReceipt = {
       method: 'tempo',
       intent: 'session',
       status: 'success',

@@ -4,9 +4,9 @@ import type * as Challenge from '../../Challenge.js'
 import * as Fetch from '../../client/internal/Fetch.js'
 import type * as Account from '../../viem/Account.js'
 import type * as Client from '../../viem/Client.js'
-import { deserializeStreamReceipt } from '../stream/Receipt.js'
-import { parseEvent } from '../stream/Sse.js'
-import type { StreamReceipt } from '../stream/Types.js'
+import { deserializeSessionReceipt } from '../session/Receipt.js'
+import { parseEvent } from '../session/Sse.js'
+import type { SessionReceipt } from '../session/Types.js'
 import type { ChannelEntry } from './ChannelOps.js'
 import { session as sessionPlugin } from './Session.js'
 
@@ -20,15 +20,15 @@ export type SessionManager = {
   sse(
     input: RequestInfo | URL,
     init?: RequestInit & {
-      onReceipt?: ((receipt: StreamReceipt) => void) | undefined
+      onReceipt?: ((receipt: SessionReceipt) => void) | undefined
       signal?: AbortSignal | undefined
     },
   ): Promise<AsyncIterable<string>>
-  close(): Promise<StreamReceipt | undefined>
+  close(): Promise<SessionReceipt | undefined>
 }
 
 export type PaymentResponse = Response & {
-  receipt: StreamReceipt | null
+  receipt: SessionReceipt | null
   challenge: Challenge.Challenge | null
   channelId: Hex.Hex | null
   cumulative: bigint
@@ -83,7 +83,7 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
 
   function toPaymentResponse(response: Response): PaymentResponse {
     const receiptHeader = response.headers.get('Payment-Receipt')
-    const receipt = receiptHeader ? deserializeStreamReceipt(receiptHeader) : null
+    const receipt = receiptHeader ? deserializeSessionReceipt(receiptHeader) : null
     return Object.assign(response, {
       receipt,
       challenge: lastChallenge,
@@ -241,14 +241,14 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
         },
       })
 
-      let receipt: StreamReceipt | undefined
+      let receipt: SessionReceipt | undefined
       if (lastUrl) {
         const response = await fetchFn(lastUrl, {
           method: 'POST',
           headers: { Authorization: credential },
         })
         const receiptHeader = response.headers.get('Payment-Receipt')
-        if (receiptHeader) receipt = deserializeStreamReceipt(receiptHeader)
+        if (receiptHeader) receipt = deserializeSessionReceipt(receiptHeader)
       }
 
       return receipt

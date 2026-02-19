@@ -1,18 +1,18 @@
 import { Base64 } from 'ox'
 import type { Hex } from 'viem'
-import type { StreamReceipt } from './Types.js'
+import type { SessionReceipt } from './Types.js'
 
 /**
- * Create a stream receipt.
+ * Create a session receipt.
  */
-export function createStreamReceipt(params: {
+export function createSessionReceipt(params: {
   challengeId: string
   channelId: Hex
   acceptedCumulative: bigint
   spent: bigint
   units?: number | undefined
   txHash?: Hex | undefined
-}): StreamReceipt {
+}): SessionReceipt {
   return {
     method: 'tempo',
     intent: 'session',
@@ -29,17 +29,17 @@ export function createStreamReceipt(params: {
 }
 
 /**
- * Serialize a stream receipt to the Payment-Receipt header format.
+ * Serialize a session receipt to the Payment-Receipt header format.
  */
-export function serializeStreamReceipt(receipt: StreamReceipt): string {
+export function serializeSessionReceipt(receipt: SessionReceipt): string {
   const json = JSON.stringify(receipt)
   return Base64.fromString(json, { pad: false, url: true })
 }
 
 /**
- * Deserialize a Payment-Receipt header value to a stream receipt.
+ * Deserialize a Payment-Receipt header value to a session receipt.
  */
-export function deserializeStreamReceipt(encoded: string): StreamReceipt {
+export function deserializeSessionReceipt(encoded: string): SessionReceipt {
   const json = Base64.toString(encoded)
-  return JSON.parse(json) as StreamReceipt
+  return JSON.parse(json) as SessionReceipt
 }

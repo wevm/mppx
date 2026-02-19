@@ -67,7 +67,7 @@ export function charge<const parameters extends charge.Parameters>(
       recipient,
     } as unknown as Defaults,
 
-    // TODO: dedupe `{charge,stream}.request`
+    // TODO: dedupe `{charge,session}.request`
     async request({ credential, request }) {
       const chainId = await (async () => {
         if (request.chainId) return request.chainId

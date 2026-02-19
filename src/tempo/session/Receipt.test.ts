@@ -1,12 +1,12 @@
 import type { Hex } from 'viem'
 import { describe, expect, test } from 'vitest'
-import { createStreamReceipt, deserializeStreamReceipt, serializeStreamReceipt } from './Receipt.js'
+import { createSessionReceipt, deserializeSessionReceipt, serializeSessionReceipt } from './Receipt.js'
 
 const channelId = '0x0000000000000000000000000000000000000000000000000000000000000001' as Hex
 
 describe('Receipt', () => {
-  test('createStreamReceipt', () => {
-    const receipt = createStreamReceipt({
+  test('createSessionReceipt', () => {
+    const receipt = createSessionReceipt({
       challengeId: 'test-challenge-id',
       channelId,
       acceptedCumulative: 5000000n,
@@ -27,9 +27,9 @@ describe('Receipt', () => {
     expect(receipt.txHash).toBeUndefined()
   })
 
-  test('createStreamReceipt with txHash', () => {
+  test('createSessionReceipt with txHash', () => {
     const txHash = '0xabcdef' as Hex
-    const receipt = createStreamReceipt({
+    const receipt = createSessionReceipt({
       challengeId: 'test-challenge-id',
       channelId,
       acceptedCumulative: 5000000n,
@@ -41,8 +41,8 @@ describe('Receipt', () => {
     expect(receipt.units).toBeUndefined()
   })
 
-  test('createStreamReceipt omits optional fields when undefined', () => {
-    const receipt = createStreamReceipt({
+  test('createSessionReceipt omits optional fields when undefined', () => {
+    const receipt = createSessionReceipt({
       challengeId: 'test-challenge-id',
       channelId,
       acceptedCumulative: 1000n,
@@ -54,7 +54,7 @@ describe('Receipt', () => {
   })
 
   test('serialize and deserialize round-trip', () => {
-    const receipt = createStreamReceipt({
+    const receipt = createSessionReceipt({
       challengeId: 'test-challenge-id',
       channelId,
       acceptedCumulative: 5000000n,
@@ -62,22 +62,22 @@ describe('Receipt', () => {
       units: 42,
     })
 
-    const encoded = serializeStreamReceipt(receipt)
+    const encoded = serializeSessionReceipt(receipt)
     expect(typeof encoded).toBe('string')
 
-    const decoded = deserializeStreamReceipt(encoded)
+    const decoded = deserializeSessionReceipt(encoded)
     expect(decoded).toEqual(receipt)
   })
 
   test('serialize produces base64url without padding', () => {
-    const receipt = createStreamReceipt({
+    const receipt = createSessionReceipt({
       challengeId: 'test-challenge-id',
       channelId,
       acceptedCumulative: 1n,
       spent: 0n,
     })
 
-    const encoded = serializeStreamReceipt(receipt)
+    const encoded = serializeSessionReceipt(receipt)
     // base64url uses - and _ instead of + and /, no = padding
     expect(encoded).not.toMatch(/[+/=]/)
   })

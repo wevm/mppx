@@ -9,16 +9,16 @@
 import type { Hex } from 'viem'
 import * as Credential from '../../Credential.js'
 import * as ChannelStore from './ChannelStore.js'
-import { createStreamReceipt } from './Receipt.js'
-import type { NeedVoucherEvent, StreamCredentialPayload, StreamReceipt } from './Types.js'
+import { createSessionReceipt } from './Receipt.js'
+import type { NeedVoucherEvent, SessionCredentialPayload, SessionReceipt } from './Types.js'
 
 /**
- * Format a stream receipt as a Server-Sent Event.
+ * Format a session receipt as a Server-Sent Event.
  *
  * Produces a valid SSE event string with `event: payment-receipt`
  * and the receipt JSON as the `data` field.
  */
-export function formatReceiptEvent(receipt: StreamReceipt): string {
+export function formatReceiptEvent(receipt: SessionReceipt): string {
   return `event: payment-receipt\ndata: ${JSON.stringify(receipt)}\n\n`
 }
 
@@ -39,7 +39,7 @@ export function formatNeedVoucherEvent(params: NeedVoucherEvent): string {
 export type SseEvent =
   | { type: 'message'; data: string }
   | { type: 'payment-need-voucher'; data: NeedVoucherEvent }
-  | { type: 'payment-receipt'; data: StreamReceipt }
+  | { type: 'payment-receipt'; data: SessionReceipt }
 
 /**
  * Parse a raw SSE event string into a typed event.
@@ -72,13 +72,13 @@ export function parseEvent(raw: string): SseEvent | null {
     case 'payment-need-voucher':
       return { type: 'payment-need-voucher', data: JSON.parse(data) as NeedVoucherEvent }
     case 'payment-receipt':
-      return { type: 'payment-receipt', data: JSON.parse(data) as StreamReceipt }
+      return { type: 'payment-receipt', data: JSON.parse(data) as SessionReceipt }
     default:
       return { type: 'message', data }
   }
 }
 
-export type StreamController = {
+export type SessionController = {
   charge(): Promise<void>
 }
 
@@ -88,7 +88,7 @@ export type StreamController = {
  * `generate` may be either:
  * - An `AsyncIterable<string>` — each yielded value is automatically charged
  *   (one `tickCost` per value).
- * - A callback `(stream: StreamController) => AsyncIterable<string>` — the
+ * - A callback `(stream: SessionController) => AsyncIterable<string>` — the
  *   generator controls when charges happen by calling `stream.charge()`.
  *
  * For each emitted value the stream:
@@ -143,7 +143,7 @@ export function serve(options: serve.Options): ReadableStream<Uint8Array> {
         if (!aborted()) {
           const channel = await store.getChannel(channelId)
           if (channel) {
-            const receipt = createStreamReceipt({
+            const receipt = createSessionReceipt({
               challengeId,
               channelId,
               acceptedCumulative: channel.highestVoucherAmount,
@@ -168,7 +168,7 @@ export declare namespace serve {
     channelId: Hex
     challengeId: string
     tickCost: bigint
-    generate: AsyncIterable<string> | ((stream: StreamController) => AsyncIterable<string>)
+    generate: AsyncIterable<string> | ((stream: SessionController) => AsyncIterable<string>)
     pollIntervalMs?: number | undefined
     signal?: AbortSignal | undefined
   }
@@ -203,7 +203,7 @@ export function fromRequest(request: Request): fromRequest.Context {
   if (!payment) throw new Error('Missing Payment credential in Authorization header.')
 
   const credential = Credential.deserialize(payment)
-  const payload = credential.payload as StreamCredentialPayload
+  const payload = credential.payload as SessionCredentialPayload
   return {
     challengeId: credential.challenge.id,
     channelId: payload.channelId,

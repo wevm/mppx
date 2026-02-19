@@ -305,7 +305,7 @@ describe('InsufficientBalanceError', () => {
         "message": "Insufficient balance.",
         "name": "InsufficientBalanceError",
         "status": 402,
-        "type": "https://paymentauth.org/problems/stream/insufficient-balance",
+        "type": "https://paymentauth.org/problems/session/insufficient-balance",
       }
     `)
   })
@@ -318,7 +318,7 @@ describe('InsufficientBalanceError', () => {
           "message": "Insufficient balance: requested 500, available 100.",
           "name": "InsufficientBalanceError",
           "status": 402,
-          "type": "https://paymentauth.org/problems/stream/insufficient-balance",
+          "type": "https://paymentauth.org/problems/session/insufficient-balance",
         }
       `)
   })
@@ -331,7 +331,7 @@ describe('InvalidSignatureError', () => {
         "message": "Invalid signature.",
         "name": "InvalidSignatureError",
         "status": 402,
-        "type": "https://paymentauth.org/problems/stream/invalid-signature",
+        "type": "https://paymentauth.org/problems/session/invalid-signature",
       }
     `)
   })
@@ -344,7 +344,7 @@ describe('InvalidSignatureError', () => {
           "message": "Invalid signature: ECDSA recovery failed.",
           "name": "InvalidSignatureError",
           "status": 402,
-          "type": "https://paymentauth.org/problems/stream/invalid-signature",
+          "type": "https://paymentauth.org/problems/session/invalid-signature",
         }
       `)
   })
@@ -357,7 +357,7 @@ describe('SignerMismatchError', () => {
         "message": "Signer is not authorized for this channel.",
         "name": "SignerMismatchError",
         "status": 402,
-        "type": "https://paymentauth.org/problems/stream/signer-mismatch",
+        "type": "https://paymentauth.org/problems/session/signer-mismatch",
       }
     `)
   })
@@ -370,7 +370,7 @@ describe('AmountExceedsDepositError', () => {
         "message": "Voucher amount exceeds channel deposit.",
         "name": "AmountExceedsDepositError",
         "status": 402,
-        "type": "https://paymentauth.org/problems/stream/amount-exceeds-deposit",
+        "type": "https://paymentauth.org/problems/session/amount-exceeds-deposit",
       }
     `)
   })
@@ -383,7 +383,7 @@ describe('DeltaTooSmallError', () => {
         "message": "Amount increase below minimum voucher delta.",
         "name": "DeltaTooSmallError",
         "status": 402,
-        "type": "https://paymentauth.org/problems/stream/delta-too-small",
+        "type": "https://paymentauth.org/problems/session/delta-too-small",
       }
     `)
   })
@@ -396,7 +396,7 @@ describe('ChannelNotFoundError', () => {
         "message": "No channel with this ID exists.",
         "name": "ChannelNotFoundError",
         "status": 410,
-        "type": "https://paymentauth.org/problems/stream/channel-not-found",
+        "type": "https://paymentauth.org/problems/session/channel-not-found",
       }
     `)
   })
@@ -409,7 +409,7 @@ describe('ChannelClosedError', () => {
         "message": "Channel is closed.",
         "name": "ChannelClosedError",
         "status": 410,
-        "type": "https://paymentauth.org/problems/stream/channel-finalized",
+        "type": "https://paymentauth.org/problems/session/channel-finalized",
       }
     `)
   })
@@ -422,7 +422,7 @@ describe('ChannelClosedError', () => {
           "message": "Channel closed: channel is finalized on-chain.",
           "name": "ChannelClosedError",
           "status": 410,
-          "type": "https://paymentauth.org/problems/stream/channel-finalized",
+          "type": "https://paymentauth.org/problems/session/channel-finalized",
         }
       `)
   })

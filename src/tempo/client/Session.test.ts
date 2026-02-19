@@ -2,15 +2,15 @@ import { type Address, createClient, type Hex, http } from 'viem'
 import { privateKeyToAccount } from 'viem/accounts'
 import { Addresses } from 'viem/tempo'
 import { beforeAll, describe, expect, test } from 'vitest'
-import { deployEscrow, openChannel } from '~test/tempo/stream.js'
+import { deployEscrow, openChannel } from '~test/tempo/session.js'
 import { accounts, asset, chain, client, fundAccount } from '~test/tempo/viem.js'
 import * as Challenge from '../../Challenge.js'
 import * as Credential from '../../Credential.js'
-import type { StreamCredentialPayload } from '../stream/Types.js'
+import type { SessionCredentialPayload } from '../session/Types.js'
 import { session } from './Session.js'
 
 function deserializePayload(result: string) {
-  const cred = Credential.deserialize<StreamCredentialPayload>(result)
+  const cred = Credential.deserialize<SessionCredentialPayload>(result)
   return cred
 }
 

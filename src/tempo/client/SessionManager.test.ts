@@ -1,8 +1,8 @@
 import type { Hex } from 'viem'
 import { describe, expect, test, vi } from 'vitest'
 import * as Challenge from '../../Challenge.js'
-import { formatNeedVoucherEvent, parseEvent } from '../stream/Sse.js'
-import type { NeedVoucherEvent, StreamReceipt } from '../stream/Types.js'
+import { formatNeedVoucherEvent, parseEvent } from '../session/Sse.js'
+import type { NeedVoucherEvent, SessionReceipt } from '../session/Types.js'
 import { sessionManager } from './SessionManager.js'
 
 const channelId = '0x0000000000000000000000000000000000000000000000000000000000000001' as Hex
@@ -139,7 +139,7 @@ describe('Session', () => {
           acceptedCumulative: '2000000',
           spent: '2000000',
           units: 2,
-        } satisfies StreamReceipt)}\n\n`,
+        } satisfies SessionReceipt)}\n\n`,
       ]
 
       let callCount = 0

@@ -13,8 +13,8 @@ import {
   waitForTransactionReceipt,
   writeContractSync,
 } from 'viem/actions'
-import { escrowAbi } from '../../src/tempo/stream/Chain.js'
-import * as Channel from '../../src/tempo/stream/Channel.js'
+import { escrowAbi } from '../../src/tempo/session/Chain.js'
+import * as Channel from '../../src/tempo/session/Channel.js'
 import artifact from '../fixtures/TempoStreamChannel.json' with { type: 'json' }
 import { chain, client } from './viem.js'
 

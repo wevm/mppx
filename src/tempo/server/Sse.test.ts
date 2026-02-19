@@ -1,7 +1,7 @@
 import type { Address, Hex } from 'viem'
 import { describe, expect, test } from 'vitest'
-import type * as ChannelStore from '../stream/ChannelStore.js'
-import { serve, toResponse } from '../stream/Sse.js'
+import type * as ChannelStore from '../session/ChannelStore.js'
+import { serve, toResponse } from '../session/Sse.js'
 
 const channelId = '0x0000000000000000000000000000000000000000000000000000000000000001' as Hex
 const challengeId = 'test-challenge-id'
@@ -58,7 +58,7 @@ async function readStream(stream: ReadableStream<Uint8Array>): Promise<string> {
 }
 
 describe('Sse.serve', () => {
-  test('emits message events for each yielded value (StreamController)', async () => {
+  test('emits message events for each yielded value (SessionController)', async () => {
     const store = memoryStore()
     await seedChannel(store, 3000000n)
 

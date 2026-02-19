@@ -8,7 +8,7 @@ import {
   signOpenChannel,
   signTopUpChannel,
   topUpChannel,
-} from '~test/tempo/stream.js'
+} from '~test/tempo/session.js'
 import { accounts, asset, chain, client, fundAccount } from '~test/tempo/viem.js'
 import {
   broadcastOpenTransaction,

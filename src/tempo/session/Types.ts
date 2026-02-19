@@ -17,9 +17,9 @@ export interface SignedVoucher extends Voucher {
 }
 
 /**
- * Stream credential payload (discriminated union).
+ * Session credential payload (discriminated union).
  */
-export type StreamCredentialPayload =
+export type SessionCredentialPayload =
   | {
       action: 'open'
       type: 'transaction'
@@ -68,9 +68,9 @@ export interface NeedVoucherEvent {
 }
 
 /**
- * Stream receipt returned in Payment-Receipt header.
+ * Session receipt returned in Payment-Receipt header.
  */
-export interface StreamReceipt {
+export interface SessionReceipt {
   method: 'tempo'
   intent: 'session'
   status: 'success'

@@ -124,7 +124,7 @@ describe('http', () => {
 
       expect(response.status).toBe(410)
       const body = await response.json()
-      expect(body.type).toBe('https://paymentauth.org/problems/stream/channel-finalized')
+      expect(body.type).toBe('https://paymentauth.org/problems/session/channel-finalized')
       expect(body.status).toBe(410)
     })
   })

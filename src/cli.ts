@@ -16,8 +16,8 @@ import * as Challenge from './Challenge.js'
 import * as Credential from './Credential.js'
 import * as Mppx from './client/Mppx.js'
 import { tempo } from './tempo/client/index.js'
-import type { StreamCredentialPayload } from './tempo/stream/Types.js'
-import { signVoucher } from './tempo/stream/Voucher.js'
+import type { SessionCredentialPayload } from './tempo/session/Types.js'
+import { signVoucher } from './tempo/session/Voucher.js'
 
 const require = createRequire(import.meta.url)
 const { name, version } = require('../package.json') as { name: string; version: string }
@@ -41,9 +41,9 @@ cli
   .option('-H, --header <header>', 'Add header (repeatable)')
   .option('-L, --location', 'Follow redirects')
   .option('-X, --method <method>', 'HTTP method')
-  .option('--channel <id>', 'Reuse existing stream channel ID')
+  .option('--channel <id>', 'Reuse existing session channel ID')
   .option('--confirm', 'Show confirmation prompts')
-  .option('--deposit <amount>', 'Deposit amount for stream payments (human-readable units)')
+  .option('--deposit <amount>', 'Deposit amount for session payments (human-readable units)')
   .option('--json <json>', 'Send JSON body (sets Content-Type and Accept, implies POST)')
   .example(`${name} example.com/content`)
   .example(`${name} example.com/api --json '{"key":"value"}'`)
@@ -289,7 +289,7 @@ cli
               suggestedDeposit ?? cliDeposit ?? (isTestnet(client.chain!) ? '10' : undefined)
             if (!resolved) {
               console.error(
-                'Stream payment requires a deposit. Use --deposit <amount> or connect to testnet.',
+                'Session payment requires a deposit. Use --deposit <amount> or connect to testnet.',
               )
               process.exit(1)
             }
@@ -313,21 +313,21 @@ cli
         })(),
       )
 
-      const streamMd = challenge.request.methodDetails as
+      const sessionMd = challenge.request.methodDetails as
         | { escrowContract?: string; chainId?: number }
         | undefined
-      let streamChannelId: `0x${string}` | undefined
-      let streamEscrowContract: Address | undefined
-      let streamChainId = 0
-      let streamCumulativeAmount = 0n
+      let sessionChannelId: `0x${string}` | undefined
+      let sessionEscrowContract: Address | undefined
+      let sessionChainId = 0
+      let sessionCumulativeAmount = 0n
 
       if (challenge.intent === 'session') {
-        const parsed = Credential.deserialize<StreamCredentialPayload>(credential)
-        streamChannelId = parsed.payload.channelId
-        streamChainId = streamMd?.chainId ?? client.chain?.id ?? 0
-        streamEscrowContract = streamMd?.escrowContract as Address | undefined
+        const parsed = Credential.deserialize<SessionCredentialPayload>(credential)
+        sessionChannelId = parsed.payload.channelId
+        sessionChainId = sessionMd?.chainId ?? client.chain?.id ?? 0
+        sessionEscrowContract = sessionMd?.escrowContract as Address | undefined
         if ('cumulativeAmount' in parsed.payload && parsed.payload.cumulativeAmount)
-          streamCumulativeAmount = BigInt(parsed.payload.cumulativeAmount)
+          sessionCumulativeAmount = BigInt(parsed.payload.cumulativeAmount)
 
         if (parsed.payload.action === 'open') {
           const depositRaw =
@@ -379,8 +379,8 @@ cli
               typeof receiptJson.acceptedCumulative === 'string' &&
               receiptJson.acceptedCumulative
             ) {
-              streamCumulativeAmount = BigInt(receiptJson.acceptedCumulative)
-              if (streamChannelId) writeChannelCumulative(streamChannelId, streamCumulativeAmount)
+              sessionCumulativeAmount = BigInt(receiptJson.acceptedCumulative)
+              if (sessionChannelId) writeChannelCumulative(sessionChannelId, sessionCumulativeAmount)
             }
             info(`\n${pc.bold(pc.green('Payment Receipt'))}\n`)
             const rows: [string, string][] = []
@@ -421,21 +421,21 @@ cli
           let buffer = ''
           let currentEvent = ''
 
-          const streamCred =
+          const sessionCred =
             challenge.intent === 'session'
-              ? Credential.deserialize<StreamCredentialPayload>(credential)
+              ? Credential.deserialize<SessionCredentialPayload>(credential)
               : undefined
-          const channelId = streamCred?.payload.channelId
+          const channelId = sessionCred?.payload.channelId
           const md = challenge.request.methodDetails as
             | { escrowContract?: string; chainId?: number }
             | undefined
-          const streamChainId = md?.chainId ?? client.chain?.id ?? 0
+          const sessionChainId = md?.chainId ?? client.chain?.id ?? 0
           const escrowContract = md?.escrowContract as Address | undefined
           let cumulativeAmount =
-            streamCred?.payload &&
-            'cumulativeAmount' in streamCred.payload &&
-            streamCred.payload.cumulativeAmount
-              ? BigInt(streamCred.payload.cumulativeAmount)
+            sessionCred?.payload &&
+            'cumulativeAmount' in sessionCred.payload &&
+            sessionCred.payload.cumulativeAmount
+              ? BigInt(sessionCred.payload.cumulativeAmount)
               : 0n
           let _voucherSeq = 0
 
@@ -481,7 +481,7 @@ cli
                 currentEvent === 'payment-need-voucher' &&
                 channelId &&
                 escrowContract &&
-                streamChainId
+                sessionChainId
               ) {
                 try {
                   const event = JSON.parse(data) as {
@@ -496,7 +496,7 @@ cli
                     account,
                     { channelId, cumulativeAmount },
                     escrowContract,
-                    streamChainId,
+                    sessionChainId,
                   )
                   const voucherCred = Credential.serialize({
                     challenge,
@@ -506,7 +506,7 @@ cli
                       cumulativeAmount: cumulativeAmount.toString(),
                       signature,
                     },
-                    source: `did:pkh:eip155:${streamChainId}:${account.address}`,
+                    source: `did:pkh:eip155:${sessionChainId}:${account.address}`,
                   })
                   await globalThis.fetch(url, {
                     method: 'POST',
@@ -583,15 +583,15 @@ cli
           }
           if (buffer.trim()) await processLines([buffer])
 
-          if (channelId && escrowContract && streamChainId) {
+          if (channelId && escrowContract && sessionChainId) {
             const signature = await signVoucher(
               client,
               account,
               { channelId, cumulativeAmount },
               escrowContract,
-              streamChainId,
+              sessionChainId,
             )
-            const closePayload: StreamCredentialPayload = {
+            const closePayload: SessionCredentialPayload = {
               action: 'close',
               channelId,
               cumulativeAmount: cumulativeAmount.toString(),
@@ -600,7 +600,7 @@ cli
             const closeCred = Credential.serialize({
               challenge,
               payload: closePayload,
-              source: `did:pkh:eip155:${streamChainId}:${account.address}`,
+              source: `did:pkh:eip155:${sessionChainId}:${account.address}`,
             })
             const closeRes = await globalThis.fetch(url, {
               method: 'POST',
@@ -638,9 +638,9 @@ cli
           const shouldClose =
             challenge.intent === 'session' &&
             credentialResponse.ok &&
-            streamChannelId &&
-            streamEscrowContract &&
-            streamChainId
+            sessionChannelId &&
+            sessionEscrowContract &&
+            sessionChainId
           if (shouldClose && options.confirm) {
             info('\n')
           }
@@ -650,20 +650,20 @@ cli
             const signature = await signVoucher(
               client,
               account,
-              { channelId: streamChannelId!, cumulativeAmount: streamCumulativeAmount },
-              streamEscrowContract!,
-              streamChainId,
+              { channelId: sessionChannelId!, cumulativeAmount: sessionCumulativeAmount },
+              sessionEscrowContract!,
+              sessionChainId,
             )
-            const closePayload: StreamCredentialPayload = {
+            const closePayload: SessionCredentialPayload = {
               action: 'close',
-              channelId: streamChannelId!,
-              cumulativeAmount: streamCumulativeAmount.toString(),
+              channelId: sessionChannelId!,
+              cumulativeAmount: sessionCumulativeAmount.toString(),
               signature,
             }
             const closeCred = Credential.serialize({
               challenge,
               payload: closePayload,
-              source: `did:pkh:eip155:${streamChainId}:${account.address}`,
+              source: `did:pkh:eip155:${sessionChainId}:${account.address}`,
             })
             const closeRes = await globalThis.fetch(url, {
               ...fetchInit,
@@ -673,7 +673,7 @@ cli
               },
             })
             if (closeRes.ok) {
-              deleteChannelState(streamChannelId!)
+              deleteChannelState(sessionChannelId!)
               const closeReceiptHeader = closeRes.headers.get('Payment-Receipt')
               let closeTxHash: string | undefined
               if (closeReceiptHeader) {
@@ -690,7 +690,7 @@ cli
                   ? ` ${pc.dim(pc.link(`${explorerUrl}/tx/${closeTxHash}`, closeTxHash))}`
                   : ''
               info(
-                `\n${pc.dim('Channel closed.')} ${pc.dim(`Spent ${fmtBalance(streamCumulativeAmount, tokenSymbol, tokenDecimals)}.`)}${txInfo}\n`,
+                `\n${pc.dim('Channel closed.')} ${pc.dim(`Spent ${fmtBalance(sessionCumulativeAmount, tokenSymbol, tokenDecimals)}.`)}${txInfo}\n`,
               )
             } else {
               const closeBody = await closeRes.text().catch(() => '')
@@ -698,10 +698,10 @@ cli
                 `${pc.dim(pc.yellow('Channel close failed'))} ${pc.dim(`(${closeRes.status})`)}\n`,
               )
               info(
-                `${pc.dim(`  channelId:          ${streamChannelId}`)}\n` +
-                  `${pc.dim(`  cumulativeAmount:   ${streamCumulativeAmount}`)}\n` +
-                  `${pc.dim(`  escrowContract:     ${streamEscrowContract}`)}\n` +
-                  `${pc.dim(`  chainId:            ${streamChainId}`)}\n` +
+                `${pc.dim(`  channelId:          ${sessionChannelId}`)}\n` +
+                  `${pc.dim(`  cumulativeAmount:   ${sessionCumulativeAmount}`)}\n` +
+                  `${pc.dim(`  escrowContract:     ${sessionEscrowContract}`)}\n` +
+                  `${pc.dim(`  chainId:            ${sessionChainId}`)}\n` +
                   `${pc.dim(`  account:            ${account.address}`)}\n` +
                   `${pc.dim(`  response:           ${closeBody || '(empty)'}`)}\n`,
               )
