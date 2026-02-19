@@ -1,3 +1,4 @@
+import type { Challenge, z } from 'mppx'
 import { Mppx as Mppx_server, tempo as tempo_server } from 'mppx/server'
 import { type Address, createClient, type Hex } from 'viem'
 import { Addresses } from 'viem/tempo'
@@ -7,7 +8,7 @@ import {
   signOpenChannel,
   signTopUpChannel,
   topUpChannel,
-} from '~test/tempo/stream.js'
+} from '~test/tempo/session.js'
 import { accounts, asset, chain, client, fundAccount, http } from '~test/tempo/viem.js'
 import {
   ChannelClosedError,
@@ -16,9 +17,10 @@ import {
   InvalidSignatureError,
 } from '../../Errors.js'
 import * as Store from '../../Store.js'
-import * as ChannelStore from '../stream/ChannelStore.js'
-import type { StreamReceipt } from '../stream/Types.js'
-import { signVoucher } from '../stream/Voucher.js'
+import type * as Methods from '../Methods.js'
+import * as ChannelStore from '../session/ChannelStore.js'
+import type { SessionReceipt } from '../session/Types.js'
+import { signVoucher } from '../session/Voucher.js'
 import { charge, session, settle } from './Session.js'
 
 const payer = accounts[2]
@@ -365,7 +367,7 @@ describe('session', () => {
       })
 
       expect(receipt.status).toBe('success')
-      expect((receipt as StreamReceipt).acceptedCumulative).toBe('1000000')
+      expect((receipt as SessionReceipt).acceptedCumulative).toBe('1000000')
     })
 
     test('rejects voucher exceeding deposit', async () => {
@@ -518,7 +520,7 @@ describe('session', () => {
           },
         },
         request: makeRequest(),
-      })) as StreamReceipt
+      })) as SessionReceipt
 
       expect(receipt.status).toBe('success')
       expect(receipt.spent).toBe('800000')
@@ -746,7 +748,7 @@ describe('session', () => {
       })
 
       expect(receipt.status).toBe('success')
-      expect((receipt as StreamReceipt).txHash).toMatch(/^0x/)
+      expect((receipt as SessionReceipt).txHash).toMatch(/^0x/)
 
       const ch = await store.getChannel(channelId)
       expect(ch!.finalized).toBe(true)
@@ -1108,7 +1110,7 @@ describe('session', () => {
             currency: asset,
             escrowContract,
             getClient: () => client,
-            stream: true,
+            sse: true,
           }),
         ],
         realm: 'api.example.com',
@@ -1145,7 +1147,7 @@ describe('session', () => {
       }
     })
 
-    test('behavior: non-stream session withReceipt only accepts Response', async () => {
+    test('behavior: non-SSE session withReceipt only accepts Response', async () => {
       const handler = Mppx_server.create({
         methods: [
           tempo_server.session({
@@ -1295,18 +1297,13 @@ function makeChallenge(opts: { id?: string; channelId: Hex }) {
       amount: '1000000',
       unitType: 'token',
       currency: currency as string,
-      decimals: 6,
       recipient: recipient as string,
-      suggestedDeposit: undefined as string | undefined,
       methodDetails: {
         escrowContract: escrowContract as string,
-        channelId: undefined as string | undefined,
-        minVoucherDelta: undefined as string | undefined,
-        chainId: chain.id as number | undefined,
-        feePayer: undefined as boolean | undefined,
+        chainId: chain.id,
       },
     },
-  }
+  } as Challenge.Challenge<z.output<typeof Methods.session.schema.request>, 'session', 'tempo'>
 }
 
 function makeRequest() {

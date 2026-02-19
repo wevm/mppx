@@ -2,13 +2,13 @@
  * Server-side session payment method for request/response flows.
  *
  * Handles the full channel lifecycle (open, voucher, top-up, close) and
- * one-shot settlement. Each incoming request carries a stream credential
+ * one-shot settlement. Each incoming request carries a session credential
  * with a cumulative voucher that the server validates and records.
  *
  * Use `session()` for standard HTTP request/response patterns where each
  * request is a discrete paid unit (for example, a page scrape or API call).
  * For long-lived connections that emit multiple paid events over a single
- * request, use {@link ../stream/Sse} instead.
+ * request, use {@link ../session/Sse} instead.
  */
 import {
   type Address,
@@ -30,13 +30,13 @@ import {
 } from '../../Errors.js'
 import type { Challenge, Credential } from '../../index.js'
 import type { LooseOmit } from '../../internal/types.js'
-import * as MethodIntent from '../../MethodIntent.js'
+import * as Method from '../../Method.js'
 import * as Store from '../../Store.js'
 import * as Client from '../../viem/Client.js'
-import * as Intents from '../Intents.js'
 import * as Account from '../internal/account.js'
 import * as defaults from '../internal/defaults.js'
 import type * as types from '../internal/types.js'
+import * as Methods from '../Methods.js'
 import {
   broadcastOpenTransaction,
   broadcastTopUpTransaction,
@@ -44,15 +44,15 @@ import {
   getOnChainChannel,
   type OnChainChannel,
   settleOnChain,
-} from '../stream/Chain.js'
-import * as ChannelStore from '../stream/ChannelStore.js'
-import { createStreamReceipt } from '../stream/Receipt.js'
-import type { SignedVoucher, StreamCredentialPayload, StreamReceipt } from '../stream/Types.js'
-import { parseVoucherFromPayload, verifyVoucher } from '../stream/Voucher.js'
+} from '../session/Chain.js'
+import * as ChannelStore from '../session/ChannelStore.js'
+import { createSessionReceipt } from '../session/Receipt.js'
+import type { SessionCredentialPayload, SessionReceipt, SignedVoucher } from '../session/Types.js'
+import { parseVoucherFromPayload, verifyVoucher } from '../session/Voucher.js'
 import * as Transport from './internal/transport.js'
 
-/** Challenge methodDetails shape for stream intents. */
-type StreamMethodDetails = {
+/** Challenge methodDetails shape for session methods. */
+type SessionMethodDetails = {
   escrowContract: Address
   chainId: number
   channelId?: Hex | undefined
@@ -61,7 +61,7 @@ type StreamMethodDetails = {
 }
 
 /**
- * Creates a stream payment server using the mppx Method.toServer() pattern.
+ * Creates a session payment server using the Method.toServer() pattern.
  *
  * @example
  * ```ts
@@ -101,16 +101,16 @@ export function session<const parameters extends session.Parameters>(p?: paramet
   })
   const { account, recipient, feePayer } = Account.resolve(parameters)
 
-  type Transport = parameters['stream'] extends false | undefined ? undefined : Transport.Sse
-  const transport = parameters.stream
+  type Transport = parameters['sse'] extends false | undefined ? undefined : Transport.Sse
+  const transport = parameters.sse
     ? Transport.sse({
         store,
-        ...(typeof parameters.stream === 'object' ? parameters.stream : undefined),
+        ...(typeof parameters.sse === 'object' ? parameters.sse : undefined),
       })
     : undefined
 
   type Defaults = session.DeriveDefaults<parameters>
-  return MethodIntent.toServer<typeof Intents.session, Defaults, Transport>(Intents.session, {
+  return Method.toServer<typeof Methods.session, Defaults, Transport>(Methods.session, {
     defaults: {
       amount,
       currency,
@@ -122,7 +122,7 @@ export function session<const parameters extends session.Parameters>(p?: paramet
 
     transport: transport as never,
 
-    // TODO: dedupe `{charge,stream}.request`
+    // TODO: dedupe `{charge,session}.request`
     async request({ credential, request }) {
       // Extract chainId from request or default.
       const chainId = await (async () => {
@@ -160,9 +160,9 @@ export function session<const parameters extends session.Parameters>(p?: paramet
     },
 
     async verify({ credential }) {
-      const { challenge, payload } = credential as Credential.Credential<StreamCredentialPayload>
+      const { challenge, payload } = credential as Credential.Credential<SessionCredentialPayload>
 
-      const methodDetails = challenge.request.methodDetails as StreamMethodDetails
+      const methodDetails = challenge.request.methodDetails as SessionMethodDetails
       const client = await getClient({ chainId: methodDetails.chainId })
 
       const resolvedFeePayer = methodDetails.feePayer === true ? feePayer : undefined
@@ -171,11 +171,11 @@ export function session<const parameters extends session.Parameters>(p?: paramet
         ? BigInt(methodDetails.minVoucherDelta)
         : minVoucherDelta
 
-      let streamReceipt: StreamReceipt
+      let sessionReceipt: SessionReceipt
 
       switch (payload.action) {
         case 'open':
-          streamReceipt = await handleOpen(
+          sessionReceipt = await handleOpen(
             store,
             client,
             challenge,
@@ -186,7 +186,7 @@ export function session<const parameters extends session.Parameters>(p?: paramet
           break
 
         case 'topUp':
-          streamReceipt = await handleTopUp(
+          sessionReceipt = await handleTopUp(
             store,
             client,
             challenge,
@@ -197,7 +197,7 @@ export function session<const parameters extends session.Parameters>(p?: paramet
           break
 
         case 'voucher':
-          streamReceipt = await handleVoucher(
+          sessionReceipt = await handleVoucher(
             store,
             client,
             effectiveMinVoucherDelta,
@@ -208,7 +208,7 @@ export function session<const parameters extends session.Parameters>(p?: paramet
           break
 
         case 'close':
-          streamReceipt = await handleClose(
+          sessionReceipt = await handleClose(
             store,
             client,
             challenge,
@@ -224,7 +224,7 @@ export function session<const parameters extends session.Parameters>(p?: paramet
           })
       }
 
-      return streamReceipt
+      return sessionReceipt
     },
 
     // This hook acts as a gate: when it returns a Response, `withReceipt()`
@@ -236,14 +236,14 @@ export function session<const parameters extends session.Parameters>(p?: paramet
     // return 204 regardless of request method.
     //
     // Voucher POSTs are gated only when they have no request body, which
-    // signals a mid-stream voucher update (the client is just topping up
+    // signals a mid-session voucher update (the client is just topping up
     // the channel balance). Voucher POSTs WITH a body are content requests
     // (e.g., an API call to a POST endpoint) and fall through to the
     // user's handler. GET requests with vouchers always fall through so
     // auto-mode clients (whose fetch wrapper bundles open+voucher into a
     // single GET retry) receive content as expected.
     respond({ credential, input }) {
-      const { payload } = credential as Credential.Credential<StreamCredentialPayload>
+      const { payload } = credential as Credential.Credential<SessionCredentialPayload>
 
       if (payload.action === 'close') return new Response(null, { status: 204 })
 
@@ -253,7 +253,7 @@ export function session<const parameters extends session.Parameters>(p?: paramet
       const isVoucher = payload.action === 'voucher'
       if (!isVoucher) return undefined
 
-      // Only gate voucher POSTs with no body (mid-stream balance updates).
+      // Only gate voucher POSTs with no body (mid-session balance updates).
       // POSTs with a body are content requests that should reach the handler.
       if (input.method !== 'POST') return undefined
       const contentLength = input.headers.get('content-length')
@@ -266,7 +266,7 @@ export function session<const parameters extends session.Parameters>(p?: paramet
 
 export declare namespace session {
   type Defaults = LooseOmit<
-    MethodIntent.RequestDefaults<typeof Intents.session>,
+    Method.RequestDefaults<typeof Methods.session>,
     'feePayer' | 'recipient'
   >
 
@@ -279,10 +279,10 @@ export declare namespace session {
      * Enable SSE streaming.
      *
      * Pass `true` to enable with defaults, or an options object
-     * to configure the stream (e.g. `{ poll: true }` for
+     * to configure SSE (e.g. `{ poll: true }` for
      * Cloudflare Workers compatibility).
      */
-    stream?: boolean | Transport.sse.Options | undefined
+    sse?: boolean | Transport.sse.Options | undefined
     /** Testnet mode. */
     testnet?: boolean | undefined
   } & Account.resolve.Parameters &
@@ -332,7 +332,7 @@ export async function settle(
 /**
  * Charge against a channel's balance.
  *
- * Exported so consumers can deduct from a channel outside the `stream()`
+ * Exported so consumers can deduct from a channel outside the `session()`
  * handler (e.g., custom middleware, the SSE `serve()` loop, or direct tests).
  *
  * Delegates to the shared `deductFromChannel` atomic helper and translates
@@ -403,8 +403,8 @@ async function verifyAndAcceptVoucher(parameters: {
   channelId: Hex
   voucher: SignedVoucher
   onChain: OnChainChannel
-  methodDetails: StreamMethodDetails
-}): Promise<StreamReceipt> {
+  methodDetails: SessionMethodDetails
+}): Promise<SessionReceipt> {
   const { store, minVoucherDelta, challenge, channel, channelId, voucher, onChain, methodDetails } =
     parameters
 
@@ -426,7 +426,7 @@ async function verifyAndAcceptVoucher(parameters: {
   }
 
   if (voucher.cumulativeAmount <= channel.highestVoucherAmount) {
-    return createStreamReceipt({
+    return createSessionReceipt({
       challengeId: challenge.id,
       channelId,
       acceptedCumulative: channel.highestVoucherAmount,
@@ -467,7 +467,7 @@ async function verifyAndAcceptVoucher(parameters: {
   })
   if (!updated) throw new ChannelNotFoundError({ reason: 'channel not found' })
 
-  return createStreamReceipt({
+  return createSessionReceipt({
     challengeId: challenge.id,
     channelId,
     acceptedCumulative: updated.highestVoucherAmount,
@@ -483,10 +483,10 @@ async function handleOpen(
   store: ChannelStore.ChannelStore,
   client: viem_Client,
   challenge: Challenge.Challenge,
-  payload: StreamCredentialPayload & { action: 'open' },
-  methodDetails: StreamMethodDetails,
+  payload: SessionCredentialPayload & { action: 'open' },
+  methodDetails: SessionMethodDetails,
   feePayer: viem_Account | undefined,
-): Promise<StreamReceipt> {
+): Promise<SessionReceipt> {
   const voucher = parseVoucherFromPayload(
     payload.channelId,
     payload.cumulativeAmount,
@@ -579,7 +579,7 @@ async function handleOpen(
 
   if (!updated) throw new VerificationFailedError({ reason: 'failed to create channel' })
 
-  return createStreamReceipt({
+  return createSessionReceipt({
     challengeId: challenge.id,
     channelId: payload.channelId,
     acceptedCumulative: updated.highestVoucherAmount,
@@ -600,10 +600,10 @@ async function handleTopUp(
   store: ChannelStore.ChannelStore,
   client: viem_Client,
   challenge: Challenge.Challenge,
-  payload: StreamCredentialPayload & { action: 'topUp' },
-  methodDetails: StreamMethodDetails,
+  payload: SessionCredentialPayload & { action: 'topUp' },
+  methodDetails: SessionMethodDetails,
   feePayer: viem_Account | undefined,
-): Promise<StreamReceipt> {
+): Promise<SessionReceipt> {
   const channel = await store.getChannel(payload.channelId)
   if (!channel) {
     throw new ChannelNotFoundError({ reason: 'channel not found' })
@@ -626,7 +626,7 @@ async function handleTopUp(
     return { ...current, deposit: onChainDeposit }
   })
 
-  return createStreamReceipt({
+  return createSessionReceipt({
     challengeId: challenge.id,
     channelId: payload.channelId,
     acceptedCumulative: updated?.highestVoucherAmount ?? channel.highestVoucherAmount,
@@ -643,9 +643,9 @@ async function handleVoucher(
   _client: viem_Client,
   minVoucherDelta: bigint,
   challenge: Challenge.Challenge,
-  payload: StreamCredentialPayload & { action: 'voucher' },
-  methodDetails: StreamMethodDetails,
-): Promise<StreamReceipt> {
+  payload: SessionCredentialPayload & { action: 'voucher' },
+  methodDetails: SessionMethodDetails,
+): Promise<SessionReceipt> {
   const channel = await store.getChannel(payload.channelId)
   if (!channel) {
     throw new ChannelNotFoundError({ reason: 'channel not found' })
@@ -696,10 +696,10 @@ async function handleClose(
   store: ChannelStore.ChannelStore,
   client: viem_Client,
   challenge: Challenge.Challenge,
-  payload: StreamCredentialPayload & { action: 'close' },
-  methodDetails: StreamMethodDetails,
+  payload: SessionCredentialPayload & { action: 'close' },
+  methodDetails: SessionMethodDetails,
   account?: viem_Account,
-): Promise<StreamReceipt> {
+): Promise<SessionReceipt> {
   const channel = await store.getChannel(payload.channelId)
   if (!channel) {
     throw new ChannelNotFoundError({ reason: 'channel not found' })
@@ -762,7 +762,7 @@ async function handleClose(
     }
   })
 
-  return createStreamReceipt({
+  return createSessionReceipt({
     challengeId: challenge.id,
     channelId: payload.channelId,
     acceptedCumulative: voucher.cumulativeAmount,

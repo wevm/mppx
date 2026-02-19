@@ -3,13 +3,13 @@ import { prepareTransactionRequest, signTransaction } from 'viem/actions'
 import { tempo as tempo_chain } from 'viem/chains'
 import { Actions } from 'viem/tempo'
 import * as Credential from '../../Credential.js'
-import * as MethodIntent from '../../MethodIntent.js'
+import * as Method from '../../Method.js'
 import * as Account from '../../viem/Account.js'
 import * as Client from '../../viem/Client.js'
 import * as z from '../../zod.js'
 import * as Attribution from '../Attribution.js'
-import * as Intents from '../Intents.js'
 import * as defaults from '../internal/defaults.js'
+import * as Methods from '../Methods.js'
 
 /**
  * Creates a Tempo charge method intent for usage on the client.
@@ -33,7 +33,7 @@ export function charge(parameters: charge.Parameters = {}) {
   })
   const getAccount = Account.getResolver({ account: parameters.account })
 
-  return MethodIntent.toClient(Intents.charge, {
+  return Method.toClient(Methods.charge, {
     context: z.object({
       account: z.optional(z.custom<Account.getResolver.Parameters['account']>()),
     }),

@@ -1,7 +1,7 @@
-import { Challenge, Credential, Intent, Mcp, MethodIntent, Receipt } from 'mppx'
+import { Challenge, Credential, Mcp, Method, Receipt } from 'mppx'
 import { Mppx, Transport, tempo } from 'mppx/client'
 import { Mppx as Mppx_server, tempo as tempo_server } from 'mppx/server'
-import { MethodIntents } from 'mppx/tempo'
+import { Methods } from 'mppx/tempo'
 import { afterEach, describe, expect, test } from 'vitest'
 import * as Http from '~test/Http.js'
 import { accounts, asset, client } from '~test/tempo/viem.js'
@@ -21,10 +21,10 @@ describe('Mppx.create', () => {
     })
 
     expect(mppx.methods).toHaveLength(2)
-    expect(mppx.methods[0]?.method).toBe('tempo')
-    expect(mppx.methods[0]?.name).toBe('charge')
-    expect(mppx.methods[1]?.method).toBe('tempo')
-    expect(mppx.methods[1]?.name).toBe('session')
+    expect(mppx.methods[0]?.name).toBe('tempo')
+    expect(mppx.methods[0]?.intent).toBe('charge')
+    expect(mppx.methods[1]?.name).toBe('tempo')
+    expect(mppx.methods[1]?.intent).toBe('session')
     expect(mppx.transport.name).toBe('http')
     expect(typeof mppx.createCredential).toBe('function')
     expect(typeof mppx.fetch).toBe('function')
@@ -41,15 +41,17 @@ describe('Mppx.create', () => {
   })
 
   test('behavior: with multiple methods', () => {
-    const stripeCharge = MethodIntent.fromIntent(Intent.charge, {
-      method: 'stripe',
+    const stripeCharge = Method.from({
+      name: 'stripe',
+      intent: 'charge',
       schema: {
         credential: {
-          payload: MethodIntents.charge.schema.credential.payload,
+          payload: Methods.charge.schema.credential.payload,
         },
+        request: Methods.charge.schema.request,
       },
     })
-    const stripeMethod = MethodIntent.toClient(stripeCharge, {
+    const stripeMethod = Method.toClient(stripeCharge, {
       async createCredential({ challenge }) {
         return Credential.serialize({
           challenge,
@@ -64,9 +66,9 @@ describe('Mppx.create', () => {
     })
 
     expect(mppx.methods).toHaveLength(3)
-    expect(mppx.methods[0]?.method).toBe('tempo')
-    expect(mppx.methods[1]?.method).toBe('tempo')
-    expect(mppx.methods[2]?.method).toBe('stripe')
+    expect(mppx.methods[0]?.name).toBe('tempo')
+    expect(mppx.methods[1]?.name).toBe('tempo')
+    expect(mppx.methods[2]?.name).toBe('stripe')
   })
 })
 
@@ -77,7 +79,7 @@ describe('createCredential', () => {
       methods: [tempo({ account: accounts[1], getClient: () => client })],
     })
 
-    const challenge = Challenge.fromIntent(MethodIntents.charge, {
+    const challenge = Challenge.fromMethod(Methods.charge, {
       realm,
       secretKey,
       request: {
@@ -127,21 +129,23 @@ describe('createCredential', () => {
     })
 
     await expect(mppx.createCredential(response)).rejects.toThrow(
-      'No method intent found for "unknown.charge". Available: tempo.charge, tempo.session',
+      'No method found for "unknown.charge". Available: tempo.charge, tempo.session',
     )
   })
 
   test('behavior: routes to correct method with multiple methods', async () => {
-    const stripeCharge = MethodIntent.fromIntent(Intent.charge, {
-      method: 'stripe',
+    const stripeCharge = Method.from({
+      name: 'stripe',
+      intent: 'charge',
       schema: {
         credential: {
-          payload: MethodIntents.charge.schema.credential.payload,
+          payload: Methods.charge.schema.credential.payload,
         },
+        request: Methods.charge.schema.request,
       },
     })
 
-    const stripe = MethodIntent.toClient(stripeCharge, {
+    const stripe = Method.toClient(stripeCharge, {
       async createCredential({ challenge }) {
         return Credential.serialize({
           challenge,
@@ -188,7 +192,7 @@ describe('createCredential', () => {
       methods: [tempo({ getClient: () => client })],
     })
 
-    const challenge = Challenge.fromIntent(MethodIntents.charge, {
+    const challenge = Challenge.fromMethod(Methods.charge, {
       realm,
       secretKey,
       request: {
@@ -220,7 +224,7 @@ describe('createCredential', () => {
       methods: [tempo({ account: accounts[1], getClient: () => client })],
     })
 
-    const challenge = Challenge.fromIntent(MethodIntents.charge, {
+    const challenge = Challenge.fromMethod(Methods.charge, {
       realm,
       secretKey,
       request: {
@@ -251,7 +255,7 @@ describe('createCredential', () => {
       transport: Transport.mcp(),
     })
 
-    const challenge = Challenge.fromIntent(MethodIntents.charge, {
+    const challenge = Challenge.fromMethod(Methods.charge, {
       realm,
       secretKey,
       request: {

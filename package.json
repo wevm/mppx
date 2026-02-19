@@ -5,9 +5,8 @@
     "changeset:version": "changeset version",
     "check": "biome check --fix --unsafe",
     "check:ci": "biome check",
-    "check:examples": "pnpm -r --filter ./examples/stripe run check",
     "check:types": "tsc -b",
-    "check:types:examples": "pnpm -r --filter ./examples/stripe run check:types",
+    "check:types:examples": "pnpm -r --filter './examples/*' run check:types",
     "deps:ci": "pnpx actions-up",
     "dev": "zile dev",
     "dev:example": "node scripts/dev:example.ts",
@@ -29,7 +28,7 @@
     "testcontainers": "^11.11.0",
     "tsx": "^4.21.0",
     "typescript": "~5.9.3",
-    "viem": "^2.45.3",
+    "viem": "^2.46.2",
     "vitest": "latest",
     "zile": "^0.0.19"
   },
@@ -37,14 +36,14 @@
   "pnpm": {
     "overrides": {
       "mppx": "workspace:*",
-      "ox": "^0.12.0",
-      "viem": "^2.45.3"
+      "ox": "^0.12.4",
+      "viem": "^2.46.2"
     }
   },
   "[!start-pkg]": "",
   "name": "mppx",
   "type": "module",
-  "version": "0.1.1",
+  "version": "0.3.3",
   "main": "./dist/index.js",
   "license": "MIT",
   "files": [
@@ -128,7 +127,7 @@
     "elysia": ">=1",
     "express": ">=5",
     "hono": ">=4",
-    "viem": ">=2.44.4"
+    "viem": ">=2.46.2"
   },
   "peerDependenciesMeta": {
     "@modelcontextprotocol/sdk": {
@@ -148,7 +147,7 @@
     "@remix-run/fetch-proxy": "^0.7.1",
     "@remix-run/node-fetch-server": "^0.13.0",
     "cac": "^6.7.14",
-    "ox": "^0.12.0",
+    "ox": "^0.12.4",
     "zod": "^4.3.6"
   },
   "sideEffects": false,

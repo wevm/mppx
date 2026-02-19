@@ -2,29 +2,32 @@ import { tempo } from 'mppx/server'
 import { createClient, http } from 'viem'
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts'
 import { describe, expectTypeOf, test } from 'vitest'
-import * as Intent from '../Intent.js'
-import * as MethodIntent from '../MethodIntent.js'
+import * as Method from '../Method.js'
 import * as z from '../zod.js'
 import * as Mppx from './Mppx.js'
 
 const account = privateKeyToAccount(generatePrivateKey())
 const getClient = () => createClient({ account, transport: http() })
 
-const fooCharge = MethodIntent.fromIntent(Intent.charge, {
-  method: 'test',
+const fooCharge = Method.from({
+  name: 'test',
+  intent: 'charge',
   schema: {
     credential: {
       payload: z.object({ signature: z.string() }),
     },
-    request: {
-      requires: ['recipient'],
-    },
+    request: z.object({
+      amount: z.string(),
+      currency: z.string(),
+      decimals: z.number(),
+      recipient: z.string(),
+    }),
   },
 })
 
 describe('Mppx', () => {
   test('has methods and realm properties', () => {
-    const method = MethodIntent.toServer(fooCharge, {
+    const method = Method.toServer(fooCharge, {
       async verify() {
         return {
           method: 'test',
@@ -45,8 +48,8 @@ describe('Mppx', () => {
     expectTypeOf(handler.realm).toBeString()
   })
 
-  test('has intent functions matching method intents', () => {
-    const method = MethodIntent.toServer(fooCharge, {
+  test('has method functions matching methods', () => {
+    const method = Method.toServer(fooCharge, {
       async verify() {
         return {
           method: 'test',
@@ -66,8 +69,8 @@ describe('Mppx', () => {
     expectTypeOf(handler.charge).toBeFunction()
   })
 
-  test('intent function options include request', () => {
-    const method = MethodIntent.toServer(fooCharge, {
+  test('method function options include request', () => {
+    const method = Method.toServer(fooCharge, {
       async verify() {
         return {
           method: 'test',
@@ -93,8 +96,8 @@ describe('Mppx', () => {
     })
   })
 
-  test('intent function returns handler that accepts Request', async () => {
-    const method = MethodIntent.toServer(fooCharge, {
+  test('method function returns handler that accepts Request', async () => {
+    const method = Method.toServer(fooCharge, {
       async verify() {
         return {
           method: 'test',
@@ -128,10 +131,14 @@ describe('Mppx', () => {
     }
   })
 
-  test('multiple method intents', () => {
-    const authorize = Intent.from({
-      name: 'authorize',
+  test('multiple methods', () => {
+    const fooAuthorize = Method.from({
+      name: 'test',
+      intent: 'authorize',
       schema: {
+        credential: {
+          payload: z.object({ token: z.string() }),
+        },
         request: z.object({
           scope: z.string(),
           duration: z.number(),
@@ -139,16 +146,7 @@ describe('Mppx', () => {
       },
     })
 
-    const fooAuthorize = MethodIntent.fromIntent(authorize, {
-      method: 'test',
-      schema: {
-        credential: {
-          payload: z.object({ token: z.string() }),
-        },
-      },
-    })
-
-    const chargeMethod = MethodIntent.toServer(fooCharge, {
+    const chargeMethod = Method.toServer(fooCharge, {
       defaults: {
         currency: '0x1234',
         recipient: '0xabc',
@@ -163,7 +161,7 @@ describe('Mppx', () => {
       },
     })
 
-    const authorizeMethod = MethodIntent.toServer(fooAuthorize, {
+    const authorizeMethod = Method.toServer(fooAuthorize, {
       async verify() {
         return {
           method: 'test',
@@ -194,7 +192,7 @@ describe('Mppx', () => {
   })
 
   describe('defaults', () => {
-    test('defaulted fields are optional in intent options', () => {
+    test('defaulted fields are optional in method options', () => {
       const handler = Mppx.create({
         methods: [tempo({ currency: '0x1234', recipient: '0xabc', getClient })],
         realm: 'api.example.com',

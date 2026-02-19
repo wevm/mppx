@@ -3,10 +3,10 @@ import type { McpError } from '@modelcontextprotocol/sdk/types.js'
 import type * as Challenge from '../../Challenge.js'
 import * as Credential from '../../Credential.js'
 import * as core_Mcp from '../../Mcp.js'
-import type * as MethodIntent from '../../MethodIntent.js'
+import type * as Method from '../../Method.js'
 import type * as z from '../../zod.js'
 
-type AnyClient = MethodIntent.Client<any, any>
+type AnyClient = Method.Client<any, any>
 
 /**
  * Result of a tool call with payment handling.
@@ -47,7 +47,7 @@ export type CallToolResult = Awaited<ReturnType<Client['callTool']>> & {
  */
 export function wrap<
   const client extends Pick<Client, 'callTool'>,
-  const methods extends readonly MethodIntent.AnyClient[],
+  const methods extends readonly Method.AnyClient[],
 >(client: client, config: wrap.Config<methods>): wrap.McpClient<client, methods> {
   const { methods } = config
 
@@ -77,11 +77,11 @@ export function wrap<
 
         // Select first challenge that matches an installed method intent
         const challenge = challenges.find((c) =>
-          methods.some((m) => m.method === c.method && m.name === c.intent),
+          methods.some((m) => m.name === c.method && m.intent === c.intent),
         )
         if (!challenge) {
           const available = challenges.map((c) => `${c.method}.${c.intent}`).join(', ')
-          const installed = methods.map((m) => `${m.method}.${m.name}`).join(', ')
+          const installed = methods.map((m) => `${m.name}.${m.intent}`).join(', ')
           throw new Error(
             `No compatible payment method. Server offers: ${available}. Client has: ${installed}`,
           )
@@ -113,7 +113,7 @@ export function wrap<
 
 /** Union of all context types from all methods that have context schemas. */
 type AnyContextFor<methods extends readonly AnyClient[]> = {
-  [key in keyof methods]: methods[key] extends MethodIntent.Client<any, infer context>
+  [key in keyof methods]: methods[key] extends Method.Client<any, infer context>
     ? context extends z.ZodMiniType
       ? z.input<context>
       : undefined
@@ -121,10 +121,8 @@ type AnyContextFor<methods extends readonly AnyClient[]> = {
 }[number]
 
 export declare namespace wrap {
-  type Config<
-    methods extends readonly MethodIntent.AnyClient[] = readonly MethodIntent.AnyClient[],
-  > = {
-    /** Array of method intents to use. */
+  type Config<methods extends readonly Method.AnyClient[] = readonly Method.AnyClient[]> = {
+    /** Array of methods to use. */
     methods: methods
   }
 
@@ -165,7 +163,7 @@ export function isPaymentRequiredError(
 }
 
 /** @internal */
-async function createCredential<methods extends readonly MethodIntent.AnyClient[]>(
+async function createCredential<methods extends readonly Method.AnyClient[]>(
   challenge: Challenge.Challenge,
   config: {
     context?: unknown
@@ -174,10 +172,10 @@ async function createCredential<methods extends readonly MethodIntent.AnyClient[
 ): Promise<string> {
   const { context, methods } = config
 
-  const mi = methods.find((m) => m.method === challenge.method && m.name === challenge.intent)
+  const mi = methods.find((m) => m.name === challenge.method && m.intent === challenge.intent)
   if (!mi)
     throw new Error(
-      `No method intent found for "${challenge.method}.${challenge.intent}". Available: ${methods.map((m) => `${m.method}.${m.name}`).join(', ')}`,
+      `No method found for "${challenge.method}.${challenge.intent}". Available: ${methods.map((m) => `${m.name}.${m.intent}`).join(', ')}`,
     )
 
   const parsedContext = mi.context && context !== undefined ? mi.context.parse(context) : undefined

@@ -2,14 +2,14 @@ import type { Hex } from 'ox'
 import { type Address, parseUnits, type Account as viem_Account } from 'viem'
 import { tempo as tempo_chain } from 'viem/chains'
 import type * as Challenge from '../../Challenge.js'
-import * as MethodIntent from '../../MethodIntent.js'
+import * as Method from '../../Method.js'
 import * as Account from '../../viem/Account.js'
 import * as Client from '../../viem/Client.js'
 import * as z from '../../zod.js'
-import * as Intents from '../Intents.js'
 import * as defaults from '../internal/defaults.js'
-import type { StreamCredentialPayload } from '../stream/Types.js'
-import { signVoucher } from '../stream/Voucher.js'
+import * as Methods from '../Methods.js'
+import type { SessionCredentialPayload } from '../session/Types.js'
+import { signVoucher } from '../session/Voucher.js'
 import {
   type ChannelEntry,
   createOpenPayload,
@@ -19,7 +19,7 @@ import {
   tryRecoverChannel,
 } from './ChannelOps.js'
 
-export const streamContextSchema = z.object({
+export const sessionContextSchema = z.object({
   account: z.optional(z.custom<Account.getResolver.Parameters['account']>()),
   action: z.optional(z.enum(['open', 'topUp', 'voucher', 'close'])),
   channelId: z.optional(z.string()),
@@ -32,10 +32,10 @@ export const streamContextSchema = z.object({
   depositRaw: z.optional(z.string()),
 })
 
-export type StreamContext = z.infer<typeof streamContextSchema>
+export type SessionContext = z.infer<typeof sessionContextSchema>
 
 /**
- * Creates a session payment MethodIntent plugin for use with `Mppx.create()`.
+ * Creates a session payment method for use with `Mppx.create()`.
  *
  * Supports both auto mode (set `deposit` to manage channels automatically)
  * and manual mode (pass `context.action` to control each step).
@@ -78,6 +78,9 @@ export function session(parameters: session.Parameters = {}) {
     rpcUrl: defaults.rpcUrl,
   })
   const getAccount = Account.getResolver({ account: parameters.account })
+  const getAuthorizedSigner = (account: viem_Account) =>
+    parameters.authorizedSigner ??
+    (account as unknown as { accessKeyAddress?: Address }).accessKeyAddress
 
   const maxDeposit =
     parameters.maxDeposit !== undefined ? parseUnits(parameters.maxDeposit, decimals) : undefined
@@ -109,7 +112,7 @@ export function session(parameters: session.Parameters = {}) {
   async function autoManageCredential(
     challenge: Challenge.Challenge,
     account: viem_Account,
-    context?: StreamContext,
+    context?: SessionContext,
   ): Promise<string> {
     const md = challenge.request.methodDetails as
       | { chainId?: number; escrowContract?: string; channelId?: string; feePayer?: boolean }
@@ -136,6 +139,8 @@ export function session(parameters: session.Parameters = {}) {
         'No deposit amount available. Set `deposit`, `maxDeposit`, or ensure the server challenge includes `suggestedDeposit`.',
       )
     })()
+
+    const authorizedSigner = getAuthorizedSigner(account)
 
     const key = channelKey(payee, currency, escrowContract)
     let entry = channels.get(key)
@@ -169,7 +174,7 @@ export function session(parameters: session.Parameters = {}) {
       }
     }
 
-    let payload: StreamCredentialPayload
+    let payload: SessionCredentialPayload
 
     if (entry?.opened) {
       entry.cumulativeAmount += amount
@@ -180,12 +185,12 @@ export function session(parameters: session.Parameters = {}) {
         entry.cumulativeAmount,
         escrowContract,
         chainId,
-        parameters.authorizedSigner,
+        authorizedSigner,
       )
       notifyUpdate(entry)
     } else {
       const result = await createOpenPayload(client, account, {
-        authorizedSigner: parameters.authorizedSigner,
+        authorizedSigner,
         escrowContract,
         payee,
         currency,
@@ -207,7 +212,7 @@ export function session(parameters: session.Parameters = {}) {
   async function manualCredential(
     challenge: Challenge.Challenge,
     account: viem_Account,
-    context: StreamContext,
+    context: SessionContext,
   ): Promise<string> {
     const md = challenge.request.methodDetails as
       | { chainId?: number; escrowContract?: string; channelId?: string }
@@ -216,7 +221,12 @@ export function session(parameters: session.Parameters = {}) {
     const client = await getClient({ chainId })
 
     const action = context.action!
-    const { channelId: channelIdRaw, transaction, authorizedSigner } = context
+    const {
+      channelId: channelIdRaw,
+      transaction,
+      authorizedSigner: contextAuthorizedSigner,
+    } = context
+    const authorizedSigner = (contextAuthorizedSigner as Address) ?? getAuthorizedSigner(account)
     const channelId = channelIdRaw as Hex.Hex
     const cumulativeAmount = context.cumulativeAmountRaw
       ? BigInt(context.cumulativeAmountRaw)
@@ -232,7 +242,7 @@ export function session(parameters: session.Parameters = {}) {
     const escrowContract = resolveEscrowCached(challenge, chainId, channelId)
     escrowContractMap.set(channelId, escrowContract)
 
-    let payload: StreamCredentialPayload
+    let payload: SessionCredentialPayload
 
     switch (action) {
       case 'open': {
@@ -245,14 +255,14 @@ export function session(parameters: session.Parameters = {}) {
           { channelId, cumulativeAmount },
           escrowContract,
           chainId,
-          parameters.authorizedSigner,
+          authorizedSigner,
         )
         payload = {
           action: 'open',
           type: 'transaction',
           channelId,
           transaction: transaction as Hex.Hex,
-          authorizedSigner: (authorizedSigner as Address) ?? account.address,
+          authorizedSigner: authorizedSigner ?? account.address,
           cumulativeAmount: cumulativeAmount.toString(),
           signature,
         }
@@ -282,7 +292,7 @@ export function session(parameters: session.Parameters = {}) {
           cumulativeAmount,
           escrowContract,
           chainId,
-          parameters.authorizedSigner,
+          authorizedSigner,
         )
         const key = channelIdToKey.get(channelId)
         if (key) {
@@ -305,7 +315,7 @@ export function session(parameters: session.Parameters = {}) {
           { channelId, cumulativeAmount },
           escrowContract,
           chainId,
-          parameters.authorizedSigner,
+          authorizedSigner,
         )
         payload = {
           action: 'close',
@@ -330,8 +340,8 @@ export function session(parameters: session.Parameters = {}) {
     return serializeCredential(challenge, payload, chainId, account)
   }
 
-  return MethodIntent.toClient(Intents.session, {
-    context: streamContextSchema,
+  return Method.toClient(Methods.session, {
+    context: sessionContextSchema,
 
     async createCredential({ challenge, context }) {
       const chainId = challenge.request.methodDetails?.chainId ?? 0

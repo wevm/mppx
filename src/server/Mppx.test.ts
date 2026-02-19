@@ -1,4 +1,4 @@
-import { Challenge, Credential, Intent, MethodIntent, z } from 'mppx'
+import { Challenge, Credential, Method, z } from 'mppx'
 import { Mppx, Transport, tempo } from 'mppx/server'
 import { describe, expect, test } from 'vitest'
 import * as Http from '~test/Http.js'
@@ -87,7 +87,7 @@ describe('request handler', () => {
         "challengeId": "[challengeId]",
         "detail": "Credential is malformed: Invalid base64url or JSON..",
         "instance": "[instance]",
-        "status": 400,
+        "status": 402,
         "title": "Malformed Credential",
         "type": "https://paymentauth.org/problems/malformed-credential",
       }
@@ -131,7 +131,7 @@ describe('request handler', () => {
         "challengeId": "[challengeId]",
         "detail": "Challenge "wrong-id" is invalid: challenge was not issued by this server.",
         "instance": "[instance]",
-        "status": 400,
+        "status": 402,
         "title": "Invalid Challenge",
         "type": "https://paymentauth.org/problems/invalid-challenge",
       }
@@ -283,19 +283,23 @@ describe('request handler (node)', () => {
 
 describe('receipt handling', () => {
   test('returns 200 when verify returns a success receipt', async () => {
-    const mockCharge = MethodIntent.fromIntent(Intent.charge, {
-      method: 'mock',
+    const mockCharge = Method.from({
+      name: 'mock',
+      intent: 'charge',
       schema: {
         credential: {
           payload: z.object({ token: z.string() }),
         },
-        request: {
-          requires: ['recipient'],
-        },
+        request: z.object({
+          amount: z.string(),
+          currency: z.string(),
+          decimals: z.number(),
+          recipient: z.string(),
+        }),
       },
     })
 
-    const mockMethod = MethodIntent.toServer(mockCharge, {
+    const mockMethod = Method.toServer(mockCharge, {
       async verify() {
         return {
           method: 'mock',

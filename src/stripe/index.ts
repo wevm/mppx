@@ -1,1 +1,1 @@
-export * as MethodIntents from './Intents.js'
+export * as Methods from './Methods.js'

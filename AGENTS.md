@@ -4,29 +4,27 @@ TypeScript implementation of the "Payment" HTTP Authentication Scheme (402 Proto
 
 ## Vision
 
-mppx provides abstractions for the complete HTTP 402 payment flow — both client and server. The architecture has three layers:
+mppx provides abstractions for the complete HTTP 402 payment flow — both client and server. The architecture has two layers:
 
 ### Core Abstractions
 
-1. **`PaymentHandler`** — Top-level abstraction over a payment method. Groups related `MethodIntent`s and handles the HTTP 402 flow (challenge/credential parsing, header serialization, verification).
+1. **`Mppx`** — Top-level payment handler. Groups related `Method`s and handles the HTTP 402 flow (challenge/credential parsing, header serialization, verification).
 
-2. **`Intent`** — Method-agnostic action definitions. Standard intents include `charge` and `session`. Each intent defines what the server requests and validates the request schema.
-
-3. **`MethodIntent`** — Method-specific intent extensions. Each method intent adds credential payload schemas, method-specific details, and can require optional base fields.
+2. **`Method`** — A payment method definition. Each method has a `name` (e.g., `charge`, `session`), a `method` (e.g., `tempo`, `stripe`), and schemas for request validation and credential payloads.
 
 ```
-┌────────────────────┐       ┌────────────────┐       ┌─────────────────┐
-│   PaymentHandler   │ 1   * │  MethodIntent  │ *   1 │     Intent      │
-│     (method)       ├───────┤   (adapter)    ├───────┤    (action)     │
-└────────────────────┘ has   └────────────────┘extends└─────────────────┘
-│ tempo              │       │ tempo/charge   │       │ charge          │
-│ stripe             │       │ tempo/session  │       │ session         │
-│ x402               │       │ stripe/charge  │       │                 │
-└────────────────────┘       └────────────────┘       └─────────────────┘
+┌────────────────────┐       ┌────────────────┐
+│       Mppx         │ 1   * │     Method     │
+│    (handler)       ├───────┤  (definition)  │
+└────────────────────┘ has   └────────────────┘
+│ payment            │       │ tempo/charge   │
+│                    │       │ tempo/session  │
+│                    │       │ stripe/charge  │
+└────────────────────┘       └────────────────┘
 ```
 
 ```
-Client (PaymentHandler)                             Server (PaymentHandler)
+Client (Mppx)                                       Server (Mppx)
    │                                                   │
    │  (1) GET /resource                                │
    ├──────────────────────────────────────────────────>│
@@ -55,49 +53,52 @@ Low-level data structures that compose into the core abstractions:
 
 - **`Challenge`** — Server-issued payment request (appears in `WWW-Authenticate` header). Contains `id`, `realm`, `method`, `intent`, `request`, and optional `expires`/`digest`.
 - **`Credential`** — Client-submitted payment proof (appears in `Authorization` header). Contains `challenge` echo, `payload` (method-specific proof), and optional `source` (payer identity).
-- **`Intent`** — Method-agnostic action definition (e.g., `charge`, `session`). Contains `name` and validated `request` schema.
-- **`MethodIntent`** — Method-specific intent extension. Adds `methodDetails`, `requires` constraints, and `credential.payload` schema to a base `Intent`.
-- **`PaymentHandler`** — Top-level abstraction over a payment method. Groups related `MethodIntent`s and handles the HTTP 402 flow.
+- **`Method`** — Payment method definition (e.g., `tempo/charge`, `stripe/charge`). Contains `method`, `name`, and validated `schema` (credential payload + request).
+- **`Mppx`** — Top-level payment handler. Groups related `Method`s and handles the HTTP 402 flow.
 - **`Receipt`** — Server-issued settlement confirmation (appears in `Payment-Receipt` header). Contains `status`, `method`, `timestamp`, and `reference`.
-- **`Request`** — Intent-specific payment parameters (e.g., `amount`, `currency`, `recipient`). Validated by the intent's schema and serialized in the challenge.
+- **`Request`** — Method-specific payment parameters (e.g., `amount`, `currency`, `recipient`). Validated by the method's schema and serialized in the challenge.
 
-### Intent Architecture
+### Method Architecture
 
-Intents follow a two-layer design:
-
-1. **Base Intents** (`Intent.ts`) — Method-agnostic intent definitions. Define the core request schema with optional fields where methods may vary.
-
-2. **Method Intents** (`MethodIntent.ts`) — Method-specific extensions via `MethodIntent.fromIntent()`. Can:
-   - Add `methodDetails` (extra fields like `chainId`, `feePayer`)
-   - Use `requires` to make optional base fields mandatory
-   - Define method-specific `credential.payload` schemas
+Methods are flat structural types with `method`, `name`, and `schema`:
 
 ```ts
-// Base intent with validated fields
-const charge = Intent.from({
+const tempoCharge = Method.from({
+  method: 'tempo',
   name: 'charge',
   schema: {
-    request: z.object({
-      amount,                             // required: numeric string
-      currency: z.string(),               // required
-      description: z.optional(z.string()),
-      expires: z.optional(datetime),      // ISO 8601
-      externalId: z.optional(z.string()),
-      recipient: z.optional(z.string()),
-    }),
+    credential: {
+      payload: z.object({ signature: z.string(), type: z.literal('transaction') }),
+    },
+    request: z.pipe(
+      z.object({
+        amount: z.amount(),
+        chainId: z.optional(z.number()),
+        currency: z.string(),
+        decimals: z.number(),
+        recipient: z.optional(z.string()),
+        // ...
+      }),
+      z.transform(({ amount, decimals, chainId, ... }) => ({
+        amount: parseUnits(amount, decimals).toString(),
+        ...(chainId !== undefined ? { methodDetails: { chainId } } : {}),
+      })),
+    ),
   },
 })
+```
 
-// Tempo requires recipient, adds chainId
-const tempoCharge = MethodIntent.fromIntent(charge, {
-  method: 'tempo',
-  schema: {
-    credential: { payload: z.object({ ... }) },
-    request: {
-      methodDetails: z.object({ chainId: z.optional(z.number()) }),
-      requires: ['recipient'],  // Makes recipient non-optional
-    },
-  },
+Methods are extended with client or server logic via `Method.toClient()` and `Method.toServer()`:
+
+```ts
+// Client-side: adds credential creation
+const client = Method.toClient(Methods.charge, {
+  async createCredential({ challenge }) { ... },
+})
+
+// Server-side: adds verification
+const server = Method.toServer(Methods.charge, {
+  async verify({ credential }) { ... },
 })
 ```
 
@@ -112,8 +113,8 @@ Canonical specs live at [tempoxyz/payment-auth-spec](https://github.com/tempoxyz
 | **Core** | [draft-httpauth-payment-00](https://github.com/tempoxyz/payment-auth-spec/blob/main/specs/core/draft-httpauth-payment-00.md) | 402 flow, `WWW-Authenticate`/`Authorization` headers, `Payment-Receipt` |
 | **Intent** | [draft-payment-intent-charge-00](https://github.com/tempoxyz/payment-auth-spec/blob/main/specs/intents/draft-payment-intent-charge-00.md) | One-time immediate payment |
 | **Intent** | [draft-payment-intent-session-00](https://github.com/tempoxyz/payment-auth-spec/blob/main/specs/intents/draft-payment-intent-session-00.md) | Pay-as-you-go streaming payments |
-| **MethodIntent** | [draft-tempo-charge-00](https://github.com/tempoxyz/payment-auth-spec/blob/main/specs/methods/tempo/draft-tempo-charge-00.md) | TIP-20 token transfers on Tempo |
-| **MethodIntent** | [draft-tempo-session-00](https://github.com/tempoxyz/payment-auth-spec/blob/main/specs/methods/tempo/draft-tempo-session-00.md) | Tempo payment channels for streaming |
+| **Method** | [draft-tempo-charge-00](https://github.com/tempoxyz/payment-auth-spec/blob/main/specs/methods/tempo/draft-tempo-charge-00.md) | TIP-20 token transfers on Tempo |
+| **Method** | [draft-tempo-session-00](https://github.com/tempoxyz/payment-auth-spec/blob/main/specs/methods/tempo/draft-tempo-session-00.md) | Tempo payment channels for streaming |
 | **Extension** | [draft-payment-discovery-00](https://github.com/tempoxyz/payment-auth-spec/blob/main/specs/extensions/draft-payment-discovery-00.md) | `/.well-known/payment` discovery |
 
 ### Key Protocol Details
@@ -156,7 +157,7 @@ Load these skills for specialized guidance:
 
 ### `payment-auth-scheme-author`
 
-**Use when**: Implementing payment intents, understanding the 402 protocol flow, working with Tempo/Stripe payment method schemas, or referencing the IETF spec.
+**Use when**: Implementing payment methods, understanding the 402 protocol flow, working with Tempo/Stripe payment method schemas, or referencing the IETF spec.
 
 ### `typescript-library-best-practices`
 

@@ -18,14 +18,8 @@ jobs:
       - name: Lint & format
         run: pnpm check:ci
 
-      - name: Lint & format (examples)
-        run: pnpm check:examples
-
       - name: Check types
-        run: pnpm check:types
-
-      - name: Check types (examples)
-        run: pnpm check:types:examples
+        run: pnpm check:types && pnpm check:types:examples
 
   test:
     name: Test Runtime
@@ -54,3 +48,4 @@ jobs:
           pnpm run test --bail=1
         env:
           CI: true
+          VITE_TEMPO_TAG: sha-4e57b5a

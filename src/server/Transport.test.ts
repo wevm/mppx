@@ -1,13 +1,13 @@
 import { Challenge, Credential, Mcp, Receipt } from 'mppx'
 import { Transport } from 'mppx/server'
-import { MethodIntents as Intents } from 'mppx/tempo'
+import { Methods } from 'mppx/tempo'
 import { describe, expect, test } from 'vitest'
 import { BadRequestError, ChannelClosedError } from '../Errors.js'
 
 const realm = 'api.example.com'
 const secretKey = 'test-secret-key'
 
-const challenge = Challenge.fromIntent(Intents.charge, {
+const challenge = Challenge.fromMethod(Methods.charge, {
   realm,
   secretKey,
   request: {
@@ -43,7 +43,7 @@ describe('http', () => {
         {
           "challenge": {
             "expires": "2025-01-01T00:00:00.000Z",
-            "id": "jIuTUdphF_TyhJ-NT1lK2r5YzPXw4tuELfslOVa3nls",
+            "id": "N_Q_IM9V5tO3JMcOTniz7anX81m7MdEp4aLW9q5KNK0",
             "intent": "charge",
             "method": "tempo",
             "realm": "api.example.com",
@@ -93,7 +93,7 @@ describe('http', () => {
         {
           "headers": {
             "cache-control": "no-store",
-            "www-authenticate": "Payment id="jIuTUdphF_TyhJ-NT1lK2r5YzPXw4tuELfslOVa3nls", realm="api.example.com", method="tempo", intent="charge", request="eyJjdXJyZW5jeSI6IjB4MjBjMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMSIsImV4cGlyZXMiOiIyMDI1LTAxLTAxVDAwOjAwOjAwLjAwMFoiLCJyZWNpcGllbnQiOiIweDc0MmQzNUNjNjYzNEMwNTMyOTI1YTNiODQ0QmM5ZTc1OTVmOGZFMDAiLCJhbW91bnQiOiIxMDAwMDAwMDAwIn0", expires="2025-01-01T00:00:00.000Z"",
+            "www-authenticate": "Payment id="N_Q_IM9V5tO3JMcOTniz7anX81m7MdEp4aLW9q5KNK0", realm="api.example.com", method="tempo", intent="charge", request="eyJhbW91bnQiOiIxMDAwMDAwMDAwIiwiY3VycmVuY3kiOiIweDIwYzAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDEiLCJleHBpcmVzIjoiMjAyNS0wMS0wMVQwMDowMDowMC4wMDBaIiwicmVjaXBpZW50IjoiMHg3NDJkMzVDYzY2MzRDMDUzMjkyNWEzYjg0NEJjOWU3NTk1ZjhmRTAwIn0", expires="2025-01-01T00:00:00.000Z"",
           },
           "status": 402,
         }
@@ -124,7 +124,7 @@ describe('http', () => {
 
       expect(response.status).toBe(410)
       const body = await response.json()
-      expect(body.type).toBe('https://paymentauth.org/problems/stream/channel-finalized')
+      expect(body.type).toBe('https://paymentauth.org/problems/session/channel-finalized')
       expect(body.status).toBe(410)
     })
   })
@@ -183,7 +183,7 @@ describe('mcp', () => {
         {
           "challenge": {
             "expires": "2025-01-01T00:00:00.000Z",
-            "id": "jIuTUdphF_TyhJ-NT1lK2r5YzPXw4tuELfslOVa3nls",
+            "id": "N_Q_IM9V5tO3JMcOTniz7anX81m7MdEp4aLW9q5KNK0",
             "intent": "charge",
             "method": "tempo",
             "realm": "api.example.com",
@@ -221,7 +221,7 @@ describe('mcp', () => {
               "challenges": [
                 {
                   "expires": "2025-01-01T00:00:00.000Z",
-                  "id": "jIuTUdphF_TyhJ-NT1lK2r5YzPXw4tuELfslOVa3nls",
+                  "id": "N_Q_IM9V5tO3JMcOTniz7anX81m7MdEp4aLW9q5KNK0",
                   "intent": "charge",
                   "method": "tempo",
                   "realm": "api.example.com",
@@ -262,7 +262,7 @@ describe('mcp', () => {
           "result": {
             "_meta": {
               "org.paymentauth/receipt": {
-                "challengeId": "jIuTUdphF_TyhJ-NT1lK2r5YzPXw4tuELfslOVa3nls",
+                "challengeId": "N_Q_IM9V5tO3JMcOTniz7anX81m7MdEp4aLW9q5KNK0",
                 "method": "tempo",
                 "reference": "0xtxhash",
                 "status": "success",

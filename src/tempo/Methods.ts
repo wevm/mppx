@@ -1,0 +1,148 @@
+import type { Account } from 'viem'
+import { parseUnits } from 'viem'
+import * as Expires from '../Expires.js'
+import * as Method from '../Method.js'
+import * as z from '../zod.js'
+
+/**
+ * Tempo charge intent for one-time TIP-20 token transfers.
+ *
+ * @see https://github.com/tempoxyz/payment-auth-spec/blob/main/specs/methods/tempo/draft-tempo-charge-00.md
+ */
+export const charge = Method.from({
+  name: 'tempo',
+  intent: 'charge',
+  schema: {
+    credential: {
+      payload: z.discriminatedUnion('type', [
+        z.object({ hash: z.hash(), type: z.literal('hash') }),
+        z.object({ signature: z.signature(), type: z.literal('transaction') }),
+      ]),
+    },
+    request: z.pipe(
+      z.object({
+        amount: z.amount(),
+        chainId: z.optional(z.number()),
+        currency: z.string(),
+        decimals: z.number(),
+        description: z.optional(z.string()),
+        expires: z._default(z.datetime(), () => Expires.minutes(5)),
+        externalId: z.optional(z.string()),
+        feePayer: z.optional(
+          z.pipe(
+            z.union([z.boolean(), z.custom<Account>()]),
+            z.transform((v): boolean => (typeof v === 'object' ? true : v)),
+          ),
+        ),
+        memo: z.optional(z.hash()),
+        recipient: z.optional(z.string()),
+      }),
+      z.transform(({ amount, chainId, decimals, feePayer, memo, ...rest }) => ({
+        ...rest,
+        amount: parseUnits(amount, decimals).toString(),
+        ...(chainId !== undefined || feePayer !== undefined || memo !== undefined
+          ? {
+              methodDetails: {
+                ...(chainId !== undefined && { chainId }),
+                ...(feePayer !== undefined && { feePayer }),
+                ...(memo !== undefined && { memo }),
+              },
+            }
+          : {}),
+      })),
+    ),
+  },
+})
+
+/**
+ * Tempo session intent for pay-as-you-go streaming payments.
+ *
+ * Uses cumulative vouchers over a payment channel. Credential payloads
+ * are a discriminated union on `action`: open, topUp, voucher, close.
+ */
+export const session = Method.from({
+  name: 'tempo',
+  intent: 'session',
+  schema: {
+    credential: {
+      payload: z.discriminatedUnion('action', [
+        z.object({
+          action: z.literal('open'),
+          authorizedSigner: z.optional(z.string()),
+          channelId: z.hash(),
+          cumulativeAmount: z.amount(),
+          signature: z.signature(),
+          transaction: z.signature(),
+          type: z.literal('transaction'),
+        }),
+        z.object({
+          action: z.literal('topUp'),
+          additionalDeposit: z.amount(),
+          channelId: z.hash(),
+          transaction: z.signature(),
+          type: z.literal('transaction'),
+        }),
+        z.object({
+          action: z.literal('voucher'),
+          channelId: z.hash(),
+          cumulativeAmount: z.amount(),
+          signature: z.signature(),
+        }),
+        z.object({
+          action: z.literal('close'),
+          channelId: z.hash(),
+          cumulativeAmount: z.amount(),
+          signature: z.signature(),
+        }),
+      ]),
+    },
+    request: z.pipe(
+      z.object({
+        amount: z.amount(),
+        chainId: z.optional(z.number()),
+        channelId: z.optional(z.hash()),
+        currency: z.string(),
+        decimals: z.number(),
+        escrowContract: z.optional(z.string()),
+        feePayer: z.optional(
+          z.pipe(
+            z.union([z.boolean(), z.custom<Account>()]),
+            z.transform((v): boolean => (typeof v === 'object' ? true : v)),
+          ),
+        ),
+        minVoucherDelta: z.optional(z.amount()),
+        recipient: z.optional(z.string()),
+        suggestedDeposit: z.optional(z.amount()),
+        unitType: z.string(),
+      }),
+      z.transform(
+        ({
+          amount,
+          chainId,
+          channelId,
+          decimals,
+          escrowContract,
+          feePayer,
+          minVoucherDelta,
+          suggestedDeposit,
+          ...rest
+        }) => ({
+          ...rest,
+          amount: parseUnits(amount, decimals).toString(),
+          ...(suggestedDeposit
+            ? {
+                suggestedDeposit: parseUnits(suggestedDeposit, decimals).toString(),
+              }
+            : {}),
+          methodDetails: {
+            escrowContract,
+            ...(channelId !== undefined && { channelId }),
+            ...(minVoucherDelta !== undefined && { minVoucherDelta }),
+            ...(chainId !== undefined && { chainId }),
+            ...(feePayer !== undefined && { feePayer }),
+          },
+        }),
+      ),
+    ),
+  },
+})

@@ -2,16 +2,22 @@ import { Value } from 'ox'
 
 /** A proxied upstream service with route definitions and optional request/response hooks. */
 export type Service = {
-  /** Unique identifier used as the URL prefix (e.g. `'openai'` → `/{id}/...`). */
-  id: string
   /** Base URL of the upstream service (e.g. `'https://api.openai.com'`). */
   baseUrl: string
-  /** Map of route patterns to endpoint handlers. */
-  routes: EndpointMap
+  /** Short description of the service. */
+  description?: string | undefined
+  /** Unique identifier used as the URL prefix (e.g. `'openai'` → `/{id}/...`). */
+  id: string
+  /** Returns a documentation URL. Called with no argument for the service root, or with a route pattern for per-endpoint docs. */
+  docsLlmsUrl?: ((options: { route?: string | undefined }) => string | undefined) | undefined
   /** Hook to modify the upstream request before sending (e.g. inject auth headers). */
   rewriteRequest?: ((req: Request, ctx: Context) => Request | Promise<Request>) | undefined
   /** Hook to modify the upstream response before returning to the client. */
   rewriteResponse?: ((res: Response, ctx: Context) => Response | Promise<Response>) | undefined
+  /** Map of route patterns to endpoint handlers. */
+  routes: EndpointMap
+  /** Human-readable title for the service (e.g. `'OpenAI'`). */
+  title?: string | undefined
 }
 
 /**
@@ -73,9 +79,12 @@ export type From<
 export function from<options = unknown>(id: string, config: from.Config<options>): Service {
   const rewriteFromConfig = resolveRewriteRequest(config)
   return {
-    id,
     baseUrl: config.baseUrl,
+    description: config.description,
+    id,
+    docsLlmsUrl: resolveLlmsUrl(config.docsLlmsUrl),
     routes: config.routes,
+    title: config.title,
     rewriteRequest: config.rewriteRequest
       ? rewriteFromConfig
         ? async (req, ctx) => {
@@ -93,8 +102,15 @@ export declare namespace from {
     baseUrl: string
     /** Shorthand: inject `Authorization: Bearer {token}` header. */
     bearer?: string | undefined
+    /** Short description of the service. */
+    description?: string | undefined
     /** Shorthand: inject custom headers. */
     headers?: Record<string, string> | undefined
+    /** Documentation URL for the service. String for a static base URL, or a function receiving an optional endpoint pattern. */
+    docsLlmsUrl?:
+      | string
+      | ((options: { route?: string | undefined }) => string | undefined)
+      | undefined
     /** Shorthand: full request mutation function. Takes priority over `bearer`/`headers`. */
     mutate?: ((req: Request) => Request | Promise<Request>) | undefined
     /** Hook to modify the upstream request. Receives typed per-endpoint options via `ctx`. */
@@ -103,6 +119,8 @@ export declare namespace from {
       | undefined
     /** Map of route patterns to endpoint definitions. */
     routes: EndpointMap
+    /** Human-readable title for the service. */
+    title?: string | undefined
   }
 }
 
@@ -142,29 +160,34 @@ function resolveRewriteRequest(
 /** Serializes a service for discovery responses. */
 export function serialize(s: Service) {
   return {
+    description: s.description,
     id: s.id,
-    baseUrl: s.baseUrl,
+    docsLlmsUrl: s.docsLlmsUrl?.({}),
     routes: Object.entries(s.routes).map(([pattern, endpoint]) => {
       const tokens = pattern.trim().split(/\s+/)
       const hasMethod = tokens.length >= 2
+      const path = hasMethod ? tokens.slice(1).join(' ') : tokens[0]
       return {
+        docsLlmsUrl: s.docsLlmsUrl?.({ route: pattern }),
         method: hasMethod ? tokens[0] : undefined,
-        path: hasMethod ? tokens.slice(1).join(' ') : tokens[0],
-        pattern,
+        path: `/${s.id}${path}`,
+        pattern: hasMethod ? `${tokens[0]} /${s.id}${path}` : `/${s.id}${path}`,
         payment: endpoint ? resolvePayment(endpoint) : null,
       }
     }),
+    title: s.title,
   }
 }
 
 /** Renders an llms.txt markdown string for a list of services. */
-export function toLlmsTxt(services: Service[]): string {
+export function toLlmsTxt(
+  services: Service[],
+  options?: { title?: string | undefined; description?: string | undefined },
+): string {
   const lines: string[] = [
-    '# API Proxy',
+    `# ${options?.title ?? 'API Proxy'}`,
     '',
-    '> Paid API proxy powered by [Machine Payments Protocol](https://mpp.tempo.xyz).',
-    '',
-    'For machine-readable service data, use `GET /services` (JSON).',
+    `> ${options?.description ?? 'Paid API proxy powered by [Machine Payments Protocol](https://mpp.tempo.xyz).'}`,
     '',
   ]
 
@@ -172,38 +195,65 @@ export function toLlmsTxt(services: Service[]): string {
 
   lines.push('## Services', '')
   for (const s of services) {
-    const serialized = serialize(s)
-    const free = serialized.routes.filter((r) => r.payment === null).length
-    const paid = serialized.routes.length - free
-    const parts = [paid && `${paid} paid`, free && `${free} free`].filter(Boolean).join(', ')
-    lines.push(`- [${s.id}](${s.baseUrl}): ${parts}`)
+    const label = s.title ?? s.id
+    const desc = s.description ? `: ${s.description}` : ''
+    lines.push(`- [${label}](/discover/${s.id}.md)${desc}`)
   }
+  lines.push('', '[See all service definitions](/discover/all.md)')
+
+  return lines.join('\n')
+}
+
+/** Renders a full markdown listing of all services with their routes. */
+export function toServicesMarkdown(services: Service[]): string {
+  const lines: string[] = ['# Services', '']
+
+  if (services.length === 0) return lines.join('\n')
 
   for (const s of services) {
-    const serialized = serialize(s)
-    lines.push('', `## ${s.id}`, '')
-    for (const route of serialized.routes) {
-      if (!route.payment) {
-        lines.push(`- \`${route.pattern}\`: Free`)
-        continue
-      }
-      const p = route.payment as Record<string, unknown>
-      const parts = [`${p.intent}`]
-      if (p.amount) {
-        const unit = `${p.amount} units`
-        parts.push(p.unitType ? `${unit} per ${p.unitType}` : unit)
-      }
-      if (p.description) parts.push(`"${p.description}"`)
-      const meta = [
-        p.currency && `currency: ${p.currency}`,
-        p.decimals !== undefined && `decimals: ${p.decimals}`,
-      ].filter(Boolean)
-      if (meta.length) parts.push(`(${meta.join(', ')})`)
-      lines.push(`- \`${route.pattern}\`: ${parts.join(' — ')}`)
-    }
+    lines.push(`## [${s.title ?? s.id}](/discover/${s.id}.md)`, '')
+    if (s.description) lines.push(s.description, '')
+    pushRoutes(lines, s)
   }
 
   return lines.join('\n')
+}
+
+/** Renders a markdown string for a single service. */
+export function toMarkdown(s: Service): string {
+  const docsLlmsUrl = s.docsLlmsUrl?.({})
+  const lines: string[] = [`# ${s.title ?? s.id}`, '']
+  if (docsLlmsUrl) lines.push(`> Documentation: ${docsLlmsUrl}`, '')
+  if (s.description) lines.push(s.description, '')
+  pushRoutes(lines, s, '##')
+  return lines.join('\n')
+}
+
+function pushRoutes(lines: string[], s: Service, heading: '##' | '###' = '###') {
+  lines.push(`${heading} Routes`, '')
+  const serialized = serialize(s)
+  for (const route of serialized.routes) {
+    const p = route.payment as Record<string, unknown> | null
+    const desc = p?.description ? `: ${p.description}` : ''
+    lines.push(`- \`${route.pattern}\`${desc}`)
+    if (!p) {
+      lines.push('  - Type: free')
+    } else {
+      lines.push(`  - Type: ${p.intent}`)
+      if (p.amount) {
+        const perUnit = p.unitType ? `/${p.unitType}` : ''
+        if (p.decimals !== undefined) {
+          const price = Number(p.amount) / 10 ** Number(p.decimals)
+          lines.push(`  - Price: ${price}${perUnit} (${p.amount} units, ${p.decimals} decimals)`)
+        } else {
+          lines.push(`  - Units: ${p.amount}${perUnit}`)
+        }
+      }
+      if (p.currency) lines.push(`  - Currency: ${p.currency}`)
+    }
+    if (route.docsLlmsUrl) lines.push(`  - Docs: ${route.docsLlmsUrl}`)
+    lines.push('')
+  }
 }
 
 /** Extracts per-endpoint options from an endpoint definition. */
@@ -217,11 +267,19 @@ function resolvePayment(endpoint: Endpoint): Record<string, unknown> | null {
   if (endpoint === true) return null
   const handler = typeof endpoint === 'function' ? endpoint : endpoint.pay
   if (!('_internal' in handler)) return {}
-  const { name, method, defaults, schema, ...rest } = handler._internal as Record<string, unknown>
+  const { name, intent, defaults, schema, ...rest } = handler._internal as Record<string, unknown>
   const amount = (() => {
     if (typeof rest.amount === 'string' && typeof rest.decimals === 'number')
       return String(Value.from(rest.amount, rest.decimals))
     return rest.amount
   })()
-  return { intent: name, method, ...rest, ...(amount !== undefined && { amount }) }
+  return { intent, method: name, ...rest, ...(amount !== undefined && { amount }) }
+}
+
+function resolveLlmsUrl(
+  input: string | ((options: { route?: string | undefined }) => string | undefined) | undefined,
+): Service['docsLlmsUrl'] {
+  if (!input) return undefined
+  if (typeof input === 'function') return input
+  return ({ route }) => (route ? undefined : input)
 }

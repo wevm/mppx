@@ -1,6 +1,6 @@
 import { Base64, Bytes, Hash } from 'ox'
 import type { OneOf } from './internal/types.js'
-import type * as MethodIntent from './MethodIntent.js'
+import type * as Method from './Method.js'
 import * as PaymentRequest from './PaymentRequest.js'
 import * as z from './zod.js'
 
@@ -60,13 +60,13 @@ export type Challenge<
 }
 
 /**
- * Extracts a union of challenge types from an array of method intents.
+ * Extracts a union of challenge types from an array of methods.
  */
-export type FromMethods<methods extends readonly MethodIntent.AnyMethodIntent[]> = {
+export type FromMethods<methods extends readonly Method.Method[]> = {
   [method in keyof methods]: Challenge<
     z.output<methods[method]['schema']['request']>,
-    methods[method]['name'],
-    methods[method]['method']
+    methods[method]['intent'],
+    methods[method]['name']
   >
 }[number]
 
@@ -108,7 +108,7 @@ export type FromMethods<methods extends readonly MethodIntent.AnyMethodIntent[]>
  */
 export function from<
   const parameters extends from.Parameters,
-  const methods extends readonly MethodIntent.AnyMethodIntent[] | undefined = undefined,
+  const methods extends readonly Method.Method[] | undefined = undefined,
 >(parameters: parameters, options?: from.Options<methods>): from.ReturnType<parameters, methods> {
   void options
   const { description, digest, method: methodName, intent, realm, request, secretKey } = parameters
@@ -131,7 +131,7 @@ export function from<
 }
 
 export declare namespace from {
-  type Options<methods extends readonly MethodIntent.AnyMethodIntent[] | undefined = undefined> = {
+  type Options<methods extends readonly Method.Method[] | undefined = undefined> = {
     methods?: methods
   }
 
@@ -163,8 +163,8 @@ export declare namespace from {
 
   type ReturnType<
     parameters extends Parameters,
-    methods extends readonly MethodIntent.AnyMethodIntent[] | undefined = undefined,
-  > = methods extends readonly MethodIntent.AnyMethodIntent[]
+    methods extends readonly Method.Method[] | undefined = undefined,
+  > = methods extends readonly Method.Method[]
     ? FromMethods<methods>
     : Challenge<parameters['request']>
 }
@@ -183,11 +183,11 @@ export declare namespace from {
  * @example
  * ```ts
  * import { Challenge } from 'mppx'
- * import { Intents } from 'mppx/tempo'
+ * import { Methods } from 'mppx/tempo'
  *
  * // With HMAC-bound ID (recommended for servers)
- * const challenge = Challenge.fromIntent(
- *   Intents.charge,
+ * const challenge = Challenge.fromMethod(
+ *   Methods.charge,
  *   {
  *     realm: 'api.example.com',
  *     request: {
@@ -201,29 +201,29 @@ export declare namespace from {
  * )
  * ```
  */
-export function fromIntent<const intent extends MethodIntent.MethodIntent>(
-  intent: intent,
-  parameters: fromIntent.Parameters<intent>,
-): fromIntent.ReturnType<intent> {
-  const { method, name } = intent
+export function fromMethod<const method extends Method.Method>(
+  method: method,
+  parameters: fromMethod.Parameters<method>,
+): fromMethod.ReturnType<method> {
+  const { name: methodName, intent } = method
   const { description, digest, expires, id, realm, secretKey } = parameters
 
-  const request = PaymentRequest.fromIntent(intent, parameters.request)
+  const request = PaymentRequest.fromMethod(method, parameters.request)
 
   return from({
     ...(id ? { id } : { secretKey }),
     realm,
-    method,
-    intent: name,
+    method: methodName,
+    intent: intent,
     request,
     description,
     digest,
     expires,
-  } as from.Parameters) as fromIntent.ReturnType<intent>
+  } as from.Parameters) as fromMethod.ReturnType<method>
 }
 
-export declare namespace fromIntent {
-  type Parameters<intent extends MethodIntent.MethodIntent> = OneOf<
+export declare namespace fromMethod {
+  type Parameters<method extends Method.Method> = OneOf<
     | {
         /** Explicit challenge ID. */
         id: string
@@ -242,12 +242,10 @@ export declare namespace fromIntent {
     /** Server realm (e.g., hostname). */
     realm: string
     /** Method-specific request data. */
-    request: z.input<intent['schema']['request']>
+    request: z.input<method['schema']['request']>
   }
 
-  type ReturnType<intent extends MethodIntent.MethodIntent> = Challenge<
-    z.output<intent['schema']['request']>
-  >
+  type ReturnType<method extends Method.Method> = Challenge<z.output<method['schema']['request']>>
 }
 
 /**
@@ -297,9 +295,10 @@ export function serialize(challenge: Challenge): string {
  * @param options - Optional settings to narrow the challenge type.
  * @returns The deserialized challenge.
  */
-export function deserialize<
-  const methods extends readonly MethodIntent.AnyMethodIntent[] | undefined = undefined,
->(value: string, options?: from.Options<methods>): from.ReturnType<from.Parameters, methods> {
+export function deserialize<const methods extends readonly Method.Method[] | undefined = undefined>(
+  value: string,
+  options?: from.Options<methods>,
+): from.ReturnType<from.Parameters, methods> {
   const prefixMatch = value.match(/^Payment\s+(.+)$/i)
   if (!prefixMatch?.[1]) throw new Error('Missing Payment scheme.')
 
@@ -309,7 +308,10 @@ export function deserialize<
   for (const match of params.matchAll(/(\w+)="([^"]+)"/g)) {
     const key = match[1]
     const value = match[2]
-    if (key && value) result[key] = value
+    if (key && value) {
+      if (key in result) throw new Error(`Duplicate parameter: ${key}`)
+      result[key] = value
+    }
   }
 
   const { request, ...rest } = result
@@ -341,9 +343,10 @@ export function deserialize<
  * const challenge = Challenge.fromHeaders(response.headers, { methods })
  * ```
  */
-export function fromHeaders<
-  const methods extends readonly MethodIntent.AnyMethodIntent[] | undefined = undefined,
->(headers: Headers, options?: from.Options<methods>): from.ReturnType<from.Parameters, methods> {
+export function fromHeaders<const methods extends readonly Method.Method[] | undefined = undefined>(
+  headers: Headers,
+  options?: from.Options<methods>,
+): from.ReturnType<from.Parameters, methods> {
   const header = headers.get('WWW-Authenticate')
   if (!header) throw new Error('Missing WWW-Authenticate header.')
   return deserialize(header, options)
@@ -369,7 +372,7 @@ export function fromHeaders<
  * ```
  */
 export function fromResponse<
-  const methods extends readonly MethodIntent.AnyMethodIntent[] | undefined = undefined,
+  const methods extends readonly Method.Method[] | undefined = undefined,
 >(response: Response, options?: from.Options<methods>): from.ReturnType<from.Parameters, methods> {
   if (response.status !== 402) throw new Error('Response status is not 402.')
   return fromHeaders(response.headers, options)
@@ -410,9 +413,7 @@ function computeId(challenge: Omit<Challenge, 'id'>, options: { secretKey: strin
     PaymentRequest.serialize(challenge.request),
     challenge.expires ?? '',
     challenge.digest ?? '',
-  ]
-    .filter(Boolean)
-    .join('|')
+  ].join('|')
 
   const key = Bytes.fromString(options.secretKey)
   const data = Bytes.fromString(input)

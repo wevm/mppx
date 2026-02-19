@@ -20,12 +20,14 @@ import * as Service from '../Service.js'
 export function anthropic(config: anthropic.Config) {
   return Service.from<anthropic.Config>('anthropic', {
     baseUrl: config.baseUrl ?? 'https://api.anthropic.com',
+    description: 'Claude language models for messages and completions.',
     rewriteRequest(request, ctx) {
       const apiKey = ctx.apiKey ?? config.apiKey
       request.headers.set('x-api-key', apiKey)
       return request
     },
     routes: config.routes,
+    title: 'Anthropic',
   })
 }
 

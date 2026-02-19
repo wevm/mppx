@@ -61,18 +61,63 @@ export function create(config: create.Config): Proxy {
     if (!pathname) return new Response('Not Found', { status: 404 })
 
     if (request.method === 'GET' && pathname === '/llms.txt')
-      return new Response(Service.toLlmsTxt(config.services), {
-        headers: { 'Content-Type': 'text/plain; charset=utf-8' },
+      return new Response(
+        Service.toLlmsTxt(config.services, {
+          title: config.title,
+          description: config.description,
+        }),
+        { headers: { 'Content-Type': 'text/plain; charset=utf-8' } },
+      )
+
+    if (request.method === 'GET' && pathname === '/discover.md')
+      return new Response(
+        Service.toLlmsTxt(config.services, {
+          title: config.title,
+          description: config.description,
+        }),
+        { headers: { 'Content-Type': 'text/plain; charset=utf-8' } },
+      )
+
+    if (request.method === 'GET' && (pathname === '/discover' || pathname === '/discover/')) {
+      if (wantsMarkdown(request))
+        return new Response(
+          Service.toLlmsTxt(config.services, {
+            title: config.title,
+            description: config.description,
+          }),
+          { headers: { 'Content-Type': 'text/plain; charset=utf-8' } },
+        )
+      return Response.json(config.services.map(Service.serialize))
+    }
+
+    if (
+      request.method === 'GET' &&
+      (pathname === '/discover/all' || pathname === '/discover/all/')
+    ) {
+      if (wantsMarkdown(request))
+        return new Response(Service.toServicesMarkdown(config.services), {
+          headers: { 'Content-Type': 'text/markdown; charset=utf-8' },
+        })
+      return Response.json(config.services.map(Service.serialize))
+    }
+
+    if (request.method === 'GET' && pathname === '/discover/all.md')
+      return new Response(Service.toServicesMarkdown(config.services), {
+        headers: { 'Content-Type': 'text/markdown; charset=utf-8' },
       })
 
-    if (request.method === 'GET' && (pathname === '/services' || pathname === '/services/'))
-      return Response.json(config.services.map(Service.serialize))
-
     {
-      const match = pathname.match(/^\/services\/([^/]+)\/?$/)
+      // List service
+      const match =
+        pathname.match(/^\/discover\/([^/]+)\.md$/) ?? pathname.match(/^\/discover\/([^/]+)\/?$/)
       if (request.method === 'GET' && match) {
         const service = config.services.find((s) => s.id === match[1])
         if (!service) return new Response('Not Found', { status: 404 })
+        const wantsText = pathname.endsWith('.md') || wantsMarkdown(request)
+        if (wantsText)
+          return new Response(Service.toMarkdown(service), {
+            headers: { 'Content-Type': 'text/markdown; charset=utf-8' },
+          })
         return Response.json(Service.serialize(service))
       }
     }
@@ -125,10 +170,14 @@ export declare namespace create {
   export type Config = {
     /** Base path prefix to strip before routing (e.g. `'/api/proxy'`). */
     basePath?: string | undefined
+    /** Short description of the proxy shown in `llms.txt`. */
+    description?: string | undefined
     /** Custom `fetch` implementation. Defaults to `globalThis.fetch`. */
     fetch?: typeof globalThis.fetch | undefined
     /** Services to proxy. Each service is mounted at `/{serviceId}/`. */
     services: Service.Service[]
+    /** Human-readable title for the proxy shown in `llms.txt`. */
+    title?: string | undefined
   }
 }
 
@@ -172,4 +221,43 @@ async function proxyUpstream(options: proxyUpstream.Options): Promise<Response> 
   if (service.rewriteResponse) upstreamRes = await service.rewriteResponse(upstreamRes, ctx)
 
   return upstreamRes
+}
+
+const aiUserAgents = [
+  'GPTBot',
+  'OAI-SearchBot',
+  'ChatGPT-User',
+  'anthropic-ai',
+  'ClaudeBot',
+  'claude-web',
+  'PerplexityBot',
+  'Perplexity-User',
+  'Google-Extended',
+  'Googlebot',
+  'Bingbot',
+  'Amazonbot',
+  'Applebot',
+  'Applebot-Extended',
+  'FacebookBot',
+  'meta-externalagent',
+  'Bytespider',
+  'DuckAssistBot',
+  'cohere-ai',
+  'AI2Bot',
+  'CCBot',
+  'Diffbot',
+  'YouBot',
+  'MistralAI-User',
+  'GoogleAgent-Mariner',
+]
+
+const terminalUserAgents = ['curl', 'Wget', 'HTTPie', 'httpie-go', 'mppx', 'presto', 'xh']
+
+function wantsMarkdown(request: globalThis.Request): boolean {
+  const accept = request.headers.get('accept')
+  if (accept && (accept.includes('text/markdown') || accept.includes('text/plain'))) return true
+  const ua = request.headers.get('user-agent') ?? ''
+  if (aiUserAgents.some((agent) => ua.includes(agent))) return true
+  if (terminalUserAgents.some((agent) => ua.includes(agent))) return true
+  return false
 }

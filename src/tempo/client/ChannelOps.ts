@@ -1,7 +1,7 @@
 /**
  * Shared client-side channel operations.
  *
- * Provides the low-level helpers that both `session()` (MethodIntent plugin)
+ * Provides the low-level helpers that both `session()`
  * and `sessionManager()` (orchestrator) rely on: escrow resolution, channel
  * ID computation, on-chain open/voucher/close payload construction, channel
  * recovery from on-chain state, and credential serialization.
@@ -18,10 +18,10 @@ import { Abis } from 'viem/tempo'
 import type { Challenge } from '../../Challenge.js'
 import * as Credential from '../../Credential.js'
 import * as defaults from '../internal/defaults.js'
-import { escrowAbi, getOnChainChannel } from '../stream/Chain.js'
-import * as Channel from '../stream/Channel.js'
-import type { StreamCredentialPayload } from '../stream/Types.js'
-import { signVoucher } from '../stream/Voucher.js'
+import { escrowAbi, getOnChainChannel } from '../session/Chain.js'
+import * as Channel from '../session/Channel.js'
+import type { SessionCredentialPayload } from '../session/Types.js'
+import { signVoucher } from '../session/Voucher.js'
 
 export type ChannelEntry = {
   channelId: Hex.Hex
@@ -57,7 +57,7 @@ export function resolveEscrow(
 
 export function serializeCredential(
   challenge: Challenge,
-  payload: StreamCredentialPayload,
+  payload: SessionCredentialPayload,
   chainId: number,
   account: viem_Account,
 ): string {
@@ -76,7 +76,7 @@ export async function createVoucherPayload(
   escrowContract: Address,
   chainId: number,
   authorizedSigner?: Address | undefined,
-): Promise<StreamCredentialPayload> {
+): Promise<SessionCredentialPayload> {
   const signature = await signVoucher(
     client,
     account,
@@ -101,7 +101,7 @@ export async function createClosePayload(
   escrowContract: Address,
   chainId: number,
   authorizedSigner?: Address | undefined,
-): Promise<StreamCredentialPayload> {
+): Promise<SessionCredentialPayload> {
   const signature = await signVoucher(
     client,
     account,
@@ -131,7 +131,7 @@ export async function createOpenPayload(
     chainId: number
     feePayer?: boolean | undefined
   },
-): Promise<{ entry: ChannelEntry; payload: StreamCredentialPayload }> {
+): Promise<{ entry: ChannelEntry; payload: SessionCredentialPayload }> {
   const { escrowContract, payee, currency, deposit, initialAmount, chainId, feePayer } = options
   const authorizedSigner = options.authorizedSigner ?? account.address
 

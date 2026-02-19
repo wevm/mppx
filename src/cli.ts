@@ -17,8 +17,8 @@ import * as Credential from './Credential.js'
 import * as Mppx from './client/Mppx.js'
 import { stripe } from './stripe/client/index.js'
 import { tempo } from './tempo/client/index.js'
-import type { StreamCredentialPayload } from './tempo/stream/Types.js'
-import { signVoucher } from './tempo/stream/Voucher.js'
+import type { SessionCredentialPayload } from './tempo/session/Types.js'
+import { signVoucher } from './tempo/session/Voucher.js'
 
 const require = createRequire(import.meta.url)
 const { name, version } = require('../package.json') as { name: string; version: string }
@@ -314,7 +314,7 @@ cli
                 suggestedDeposit ?? cliDeposit ?? (isTestnet(client!.chain!) ? '10' : undefined)
               if (!resolved) {
                 console.error(
-                  'Stream payment requires a deposit. Use -M deposit=<amount> or connect to testnet.',
+                  'Session payment requires a deposit. Use -M deposit=<amount> or connect to testnet.',
                 )
                 process.exit(1)
               }
@@ -399,21 +399,21 @@ cli
         process.exit(1)
       }
 
-      const streamMd = challenge.request.methodDetails as
+      const sessionMd = challenge.request.methodDetails as
         | { escrowContract?: string; chainId?: number }
         | undefined
-      let streamChannelId: `0x${string}` | undefined
-      let streamEscrowContract: Address | undefined
-      let streamChainId = 0
-      let streamCumulativeAmount = 0n
+      let sessionChannelId: `0x${string}` | undefined
+      let sessionEscrowContract: Address | undefined
+      let sessionChainId = 0
+      let sessionCumulativeAmount = 0n
 
       if (challenge.intent === 'session') {
-        const parsed = Credential.deserialize<StreamCredentialPayload>(credential)
-        streamChannelId = parsed.payload.channelId
-        streamChainId = streamMd?.chainId ?? client?.chain?.id ?? 0
-        streamEscrowContract = streamMd?.escrowContract as Address | undefined
+        const parsed = Credential.deserialize<SessionCredentialPayload>(credential)
+        sessionChannelId = parsed.payload.channelId
+        sessionChainId = sessionMd?.chainId ?? client?.chain?.id ?? 0
+        sessionEscrowContract = sessionMd?.escrowContract as Address | undefined
         if ('cumulativeAmount' in parsed.payload && parsed.payload.cumulativeAmount)
-          streamCumulativeAmount = BigInt(parsed.payload.cumulativeAmount)
+          sessionCumulativeAmount = BigInt(parsed.payload.cumulativeAmount)
 
         if (parsed.payload.action === 'open') {
           const depositRaw = challengeRequest.suggestedDeposit as string | undefined
@@ -470,8 +470,9 @@ cli
               typeof receiptJson.acceptedCumulative === 'string' &&
               receiptJson.acceptedCumulative
             ) {
-              streamCumulativeAmount = BigInt(receiptJson.acceptedCumulative)
-              if (streamChannelId) writeChannelCumulative(streamChannelId, streamCumulativeAmount)
+              sessionCumulativeAmount = BigInt(receiptJson.acceptedCumulative)
+              if (sessionChannelId)
+                writeChannelCumulative(sessionChannelId, sessionCumulativeAmount)
             }
             info(`\n${pc.bold(pc.green('Payment Receipt'))}\n`)
             const rows: [string, string][] = []
@@ -512,21 +513,21 @@ cli
           let buffer = ''
           let currentEvent = ''
 
-          const streamCred =
+          const sessionCred =
             challenge.intent === 'session'
-              ? Credential.deserialize<StreamCredentialPayload>(credential)
+              ? Credential.deserialize<SessionCredentialPayload>(credential)
               : undefined
-          const channelId = streamCred?.payload.channelId
+          const channelId = sessionCred?.payload.channelId
           const md = challenge.request.methodDetails as
             | { escrowContract?: string; chainId?: number }
             | undefined
-          const streamChainId = md?.chainId ?? client?.chain?.id ?? 0
+          const sessionChainId = md?.chainId ?? client?.chain?.id ?? 0
           const escrowContract = md?.escrowContract as Address | undefined
           let cumulativeAmount =
-            streamCred?.payload &&
-            'cumulativeAmount' in streamCred.payload &&
-            streamCred.payload.cumulativeAmount
-              ? BigInt(streamCred.payload.cumulativeAmount)
+            sessionCred?.payload &&
+            'cumulativeAmount' in sessionCred.payload &&
+            sessionCred.payload.cumulativeAmount
+              ? BigInt(sessionCred.payload.cumulativeAmount)
               : 0n
           let _voucherSeq = 0
 
@@ -572,7 +573,7 @@ cli
                 currentEvent === 'payment-need-voucher' &&
                 channelId &&
                 escrowContract &&
-                streamChainId
+                sessionChainId
               ) {
                 try {
                   const event = JSON.parse(data) as {
@@ -587,7 +588,7 @@ cli
                     account!,
                     { channelId, cumulativeAmount },
                     escrowContract,
-                    streamChainId,
+                    sessionChainId,
                   )
                   const voucherCred = Credential.serialize({
                     challenge,
@@ -597,7 +598,7 @@ cli
                       cumulativeAmount: cumulativeAmount.toString(),
                       signature,
                     },
-                    source: `did:pkh:eip155:${streamChainId}:${account!.address}`,
+                    source: `did:pkh:eip155:${sessionChainId}:${account!.address}`,
                   })
                   await globalThis.fetch(url, {
                     method: 'POST',
@@ -674,15 +675,15 @@ cli
           }
           if (buffer.trim()) await processLines([buffer])
 
-          if (channelId && escrowContract && streamChainId) {
+          if (channelId && escrowContract && sessionChainId) {
             const signature = await signVoucher(
               client!,
               account!,
               { channelId, cumulativeAmount },
               escrowContract,
-              streamChainId,
+              sessionChainId,
             )
-            const closePayload: StreamCredentialPayload = {
+            const closePayload: SessionCredentialPayload = {
               action: 'close',
               channelId,
               cumulativeAmount: cumulativeAmount.toString(),
@@ -691,7 +692,7 @@ cli
             const closeCred = Credential.serialize({
               challenge,
               payload: closePayload,
-              source: `did:pkh:eip155:${streamChainId}:${account!.address}`,
+              source: `did:pkh:eip155:${sessionChainId}:${account!.address}`,
             })
             const closeRes = await globalThis.fetch(url, {
               method: 'POST',
@@ -729,9 +730,9 @@ cli
           const shouldClose =
             challenge.intent === 'session' &&
             credentialResponse.ok &&
-            streamChannelId &&
-            streamEscrowContract &&
-            streamChainId
+            sessionChannelId &&
+            sessionEscrowContract &&
+            sessionChainId
           if (shouldClose && options.confirm) {
             info('\n')
           }
@@ -741,20 +742,20 @@ cli
             const signature = await signVoucher(
               client!,
               account!,
-              { channelId: streamChannelId!, cumulativeAmount: streamCumulativeAmount },
-              streamEscrowContract!,
-              streamChainId,
+              { channelId: sessionChannelId!, cumulativeAmount: sessionCumulativeAmount },
+              sessionEscrowContract!,
+              sessionChainId,
             )
-            const closePayload: StreamCredentialPayload = {
+            const closePayload: SessionCredentialPayload = {
               action: 'close',
-              channelId: streamChannelId!,
-              cumulativeAmount: streamCumulativeAmount.toString(),
+              channelId: sessionChannelId!,
+              cumulativeAmount: sessionCumulativeAmount.toString(),
               signature,
             }
             const closeCred = Credential.serialize({
               challenge,
               payload: closePayload,
-              source: `did:pkh:eip155:${streamChainId}:${account!.address}`,
+              source: `did:pkh:eip155:${sessionChainId}:${account!.address}`,
             })
             const closeRes = await globalThis.fetch(url, {
               ...fetchInit,
@@ -764,7 +765,7 @@ cli
               },
             })
             if (closeRes.ok) {
-              deleteChannelState(streamChannelId!)
+              deleteChannelState(sessionChannelId!)
               const closeReceiptHeader = closeRes.headers.get('Payment-Receipt')
               let closeTxHash: string | undefined
               if (closeReceiptHeader) {
@@ -782,7 +783,7 @@ cli
                   : ''
               const closePrefix = options.confirm ? '' : '\n'
               info(
-                `${closePrefix}${pc.dim('Channel closed.')} ${pc.dim(`Spent ${fmtBalance(streamCumulativeAmount, tokenSymbol, tokenDecimals)}.`)}${txInfo}\n`,
+                `${closePrefix}${pc.dim('Channel closed.')} ${pc.dim(`Spent ${fmtBalance(sessionCumulativeAmount, tokenSymbol, tokenDecimals)}.`)}${txInfo}\n`,
               )
             } else {
               const closeBody = await closeRes.text().catch(() => '')
@@ -790,10 +791,10 @@ cli
                 `\n${pc.dim(pc.yellow('Channel close failed'))} ${pc.dim(`(${closeRes.status})`)}\n`,
               )
               info(
-                `${pc.dim(`  channelId:          ${streamChannelId}`)}\n` +
-                  `${pc.dim(`  cumulativeAmount:   ${streamCumulativeAmount}`)}\n` +
-                  `${pc.dim(`  escrowContract:     ${streamEscrowContract}`)}\n` +
-                  `${pc.dim(`  chainId:            ${streamChainId}`)}\n` +
+                `${pc.dim(`  channelId:          ${sessionChannelId}`)}\n` +
+                  `${pc.dim(`  cumulativeAmount:   ${sessionCumulativeAmount}`)}\n` +
+                  `${pc.dim(`  escrowContract:     ${sessionEscrowContract}`)}\n` +
+                  `${pc.dim(`  chainId:            ${sessionChainId}`)}\n` +
                   `${pc.dim(`  account:            ${account?.address}`)}\n` +
                   `${pc.dim(`  response:           ${closeBody || '(empty)'}`)}\n`,
               )
@@ -876,7 +877,11 @@ cli
         const accounts = await createKeychain().list()
         if (accounts.length === 1) createDefaultStore().set(resolvedName)
         console.log(`Account "${resolvedName}" saved to keychain.`)
-        console.log(pc.dim(`Address ${account.address}`))
+        const explorerUrl = tempoMainnet.blockExplorers?.default?.url
+        const addrDisplay = explorerUrl
+          ? pc.link(`${explorerUrl}/address/${account.address}`, account.address)
+          : account.address
+        console.log(pc.dim(`Address ${addrDisplay}`))
         resolveChain(options)
           .then((chain) => createClient({ chain, transport: http(options.rpcUrl) }))
           .then((client) =>
@@ -915,8 +920,12 @@ cli
         const account = privateKeyToAccount(key as `0x${string}`)
         const balanceLines = await fetchBalanceLines(account.address, { includeTestnet: false })
         if (!options.yes) {
+          const explorerUrl = tempoMainnet.blockExplorers?.default?.url
+          const addrDisplay = explorerUrl
+            ? pc.link(`${explorerUrl}/address/${account.address}`, account.address)
+            : account.address
           process.stderr.write(pc.dim(`Delete account "${options.account}"\n`))
-          process.stderr.write(pc.dim(`  Address  ${account.address}\n`))
+          process.stderr.write(pc.dim(`  Address  ${addrDisplay}\n`))
           for (let i = 0; i < balanceLines.length; i++)
             process.stderr.write(
               pc.dim(`  ${i === 0 ? 'Balance' : '       '}  ${balanceLines[i]}\n`),
@@ -989,6 +998,7 @@ cli
           }),
         )
         const resolved = entries.filter((e) => e !== undefined)
+        const explorerUrl = tempoMainnet.blockExplorers?.default?.url
         const maxWidth = Math.max(
           ...resolved.map((e) => e.name.length + (e.name === currentDefault ? 1 : 0)),
         )
@@ -996,7 +1006,10 @@ cli
           const isDefault = entry.name === currentDefault
           const label = isDefault ? `${entry.name}${pc.dim('*')}` : entry.name
           const width = entry.name.length + (isDefault ? 1 : 0)
-          console.log(`${label}${' '.repeat(maxWidth - width + 2)}${pc.dim(entry.address)}`)
+          const addrDisplay = explorerUrl
+            ? pc.link(`${explorerUrl}/address/${entry.address}`, entry.address)
+            : entry.address
+          console.log(`${label}${' '.repeat(maxWidth - width + 2)}${pc.dim(addrDisplay)}`)
         }
         return
       }
@@ -1010,10 +1023,14 @@ cli
           process.exit(1)
         }
         const account = privateKeyToAccount(key as `0x${string}`)
-        console.log(`${pc.dim('Address')}  ${account.address}`)
+        const rpcUrl = options.rpcUrl ?? (process.env.MPPX_RPC_URL || undefined)
+        const chain = rpcUrl ? await resolveChain({ rpcUrl }) : tempoMainnet
+        const explorerUrl = chain.blockExplorers?.default?.url
+        const addrDisplay = explorerUrl
+          ? pc.link(`${explorerUrl}/address/${account.address}`, account.address)
+          : account.address
+        console.log(`${pc.dim('Address')}  ${addrDisplay}`)
 
-        const rpcUrl = options.rpcUrl ?? process.env.RPC_URL
-        const chain = rpcUrl ? await resolveChain({ rpcUrl }) : undefined
         const balanceLines = await fetchBalanceLines(
           account.address,
           chain && rpcUrl ? { chain, rpcUrl } : undefined,
@@ -1161,7 +1178,7 @@ function createDefaultStore() {
 
 function resolveAccountName(explicit?: string): string {
   if (explicit) return explicit
-  if (process.env.MPPX_ACCOUNT) return process.env.MPPX_ACCOUNT
+  if (process.env.MPPX_ACCOUNT?.trim()) return process.env.MPPX_ACCOUNT
   return createDefaultStore().get()
 }
 
@@ -1345,9 +1362,9 @@ const pc = (() => {
     bgMagentaBright: f('\x1b[105m', '\x1b[49m'),
     bgCyanBright: f('\x1b[106m', '\x1b[49m'),
     bgWhiteBright: f('\x1b[107m', '\x1b[49m'),
-    link(url: string, text: string) {
+    link(url: string, text: string, noUnderline?: boolean) {
       if (!isColorSupported) return text
-      return `\x1b]8;;${url}\x07${pc.underline(text)}\x1b]8;;\x07`
+      return `\x1b]8;;${url}\x07${noUnderline ? text : pc.underline(text)}\x1b]8;;\x07`
     },
   }
 })()
@@ -1375,6 +1392,8 @@ function chainName(chain: { id: number; name: string }) {
 }
 
 const pathUsd = '0x20c0000000000000000000000000000000000000' as Address
+const usdcE = '0x20C000000000000000000000b9537d11c60E8b50' as Address
+const mainnetTokens = [pathUsd, usdcE] as const
 const testnetTokens = [
   '0x20c0000000000000000000000000000000000000',
   '0x20c0000000000000000000000000000000000001',
@@ -1382,11 +1401,20 @@ const testnetTokens = [
   '0x20c0000000000000000000000000000000000003',
 ] as const
 
-function fmtBalance(b: bigint, symbol: string, decimals = 6) {
+function fmtBalance(
+  b: bigint,
+  symbol: string,
+  decimals = 6,
+  opts?: { explorerUrl?: string | undefined; token?: string | undefined },
+) {
   const value = Number(b) / 10 ** decimals
   const [int, dec] = value.toString().split('.')
   const formatted = int!.replace(/\B(?=(\d{3})+(?!\d))/g, '_')
-  return `${dec ? `${formatted}.${dec}` : formatted} ${pc.dim(symbol)}`
+  const sym =
+    opts?.explorerUrl && opts.token
+      ? pc.dim(pc.link(`${opts.explorerUrl}/token/${opts.token}`, symbol, true))
+      : pc.dim(symbol)
+  return `${dec ? `${formatted}.${dec}` : formatted} ${sym}`
 }
 
 function isTestnet(chain: Chain) {
@@ -1403,9 +1431,13 @@ async function fetchTokenInfo(
     Actions.token.getBalance(client, { account, token }).catch(() => 0n),
     Actions.token.getMetadata(client, { token }).catch(() => ({ symbol: token as string })),
   ])
-  const symbol = token === pathUsd ? 'PathUSD' : metadata.symbol
+  const knownSymbols: Record<string, string> = {
+    [pathUsd]: 'PathUSD',
+    [usdcE]: 'USDC.e',
+  }
+  const symbol = knownSymbols[token] ?? metadata.symbol
   const decimals = 'decimals' in metadata ? metadata.decimals : 6
-  return { balance, symbol, decimals }
+  return { balance, symbol, decimals, token }
 }
 
 function detectTerminalBg(
@@ -1447,6 +1479,7 @@ async function fetchBalanceLines(
 ): Promise<string[]> {
   if (opts?.chain) {
     const client = createClient({ chain: opts.chain, transport: http(opts.rpcUrl) })
+    const explorerUrl = opts.chain.blockExplorers?.default?.url
     const label = pc.dim(`(${chainName(opts.chain)})`)
     if (isTestnet(opts.chain)) {
       const results = await Promise.all(
@@ -1454,24 +1487,46 @@ async function fetchBalanceLines(
       )
       return results
         .filter((t) => t.balance > 0n)
-        .map((t) => `${fmtBalance(t.balance, t.symbol, t.decimals)} ${label}`)
+        .map(
+          (t) =>
+            `${fmtBalance(t.balance, t.symbol, t.decimals, { explorerUrl, token: t.token })} ${label}`,
+        )
     }
-    const { balance, symbol, decimals } = await fetchTokenInfo(client, pathUsd, address)
-    return [`${fmtBalance(balance, symbol, decimals)} ${label}`]
+    const results = await Promise.all(
+      mainnetTokens.map((token) => fetchTokenInfo(client, token, address)),
+    )
+    return results.map(
+      (t) =>
+        `${fmtBalance(t.balance, t.symbol, t.decimals, { explorerUrl, token: t.token })} ${label}`,
+    )
   }
 
-  const mainnetClient = createClient({ chain: tempoMainnet, transport: http() })
-  const mainnetInfo = await fetchTokenInfo(mainnetClient, pathUsd, address)
-  const lines = [fmtBalance(mainnetInfo.balance, mainnetInfo.symbol, mainnetInfo.decimals)]
+  const mainnetClient = createClient({
+    chain: tempoMainnet,
+    transport: http(process.env.MPPX_RPC_URL || undefined),
+  })
+  const mainnetExplorerUrl = tempoMainnet.blockExplorers?.default?.url
+  const mainnetResults = await Promise.all(
+    mainnetTokens.map((token) => fetchTokenInfo(mainnetClient, token, address)),
+  )
+  const lines = mainnetResults.map((t) =>
+    fmtBalance(t.balance, t.symbol, t.decimals, {
+      explorerUrl: mainnetExplorerUrl,
+      token: t.token,
+    }),
+  )
 
   if (opts?.includeTestnet !== false) {
     const testnetClient = createClient({ chain: tempoModerato, transport: http() })
+    const testnetExplorerUrl = tempoModerato.blockExplorers?.default?.url
     const testnetResults = await Promise.all(
       testnetTokens.map((token) => fetchTokenInfo(testnetClient, token, address)),
     )
     for (const t of testnetResults) {
       if (t.balance > 0n)
-        lines.push(`${fmtBalance(t.balance, t.symbol, t.decimals)} ${pc.dim('(testnet)')}`)
+        lines.push(
+          `${fmtBalance(t.balance, t.symbol, t.decimals, { explorerUrl: testnetExplorerUrl, token: t.token })} ${pc.dim('(testnet)')}`,
+        )
     }
   }
 

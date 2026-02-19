@@ -2,14 +2,15 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import * as Challenge from '../Challenge.js'
 import type * as Credential from '../Credential.js'
 import * as Errors from '../Errors.js'
-import type * as MethodIntent from '../MethodIntent.js'
+import * as Env from '../internal/env.js'
+import type * as Method from '../Method.js'
 import type * as Receipt from '../Receipt.js'
 import type * as z from '../zod.js'
 import * as NodeListener from './NodeListener.js'
 import * as Request from './Request.js'
 import * as Transport from './Transport.js'
 
-export type Methods = readonly (MethodIntent.AnyServer | readonly MethodIntent.AnyServer[])[]
+export type Methods = readonly (Method.AnyServer | readonly Method.AnyServer[])[]
 
 /**
  * Payment handler.
@@ -26,14 +27,14 @@ export type Mppx<
   transport: transport
 } & Handlers<FlattenMethods<methods>, transport>
 
-/** Extracts the transport override from a method intent, if any. */
+/** Extracts the transport override from a method, if any. */
 type TransportOverrideOf<mi> = mi extends { transport?: infer transport }
   ? Exclude<transport, undefined> extends Transport.AnyTransport
     ? Exclude<transport, undefined>
     : never
   : never
 
-/** Resolves the effective transport for an intent: override if present, else global default. */
+/** Resolves the effective transport for a method: override if present, else global default. */
 type EffectiveTransportOf<mi, defaultTransport extends Transport.AnyTransport> = [
   TransportOverrideOf<mi>,
 ] extends [never]
@@ -41,18 +42,18 @@ type EffectiveTransportOf<mi, defaultTransport extends Transport.AnyTransport> =
   : TransportOverrideOf<mi>
 
 type Handlers<
-  methods extends readonly MethodIntent.AnyServer[],
+  methods extends readonly Method.AnyServer[],
   transport extends Transport.AnyTransport,
 > = {
-  [intent in methods[number]['name']]: IntentFn<
-    Extract<methods[number], { name: intent }>,
-    EffectiveTransportOf<Extract<methods[number], { name: intent }>, transport>,
-    NonNullable<Extract<methods[number], { name: intent }>['defaults']>
+  [method_name in methods[number]['intent']]: MethodFn<
+    Extract<methods[number], { intent: method_name }>,
+    EffectiveTransportOf<Extract<methods[number], { intent: method_name }>, transport>,
+    NonNullable<Extract<methods[number], { intent: method_name }>['defaults']>
   >
 }
 
 /**
- * Creates a server-side payment handler from method intents.
+ * Creates a server-side payment handler from methods.
  *
  * It is highly recommended to set a `secretKey` to bind challenges to their contents,
  * and allow the server to verify that incoming credentials match challenges it issued.
@@ -72,8 +73,8 @@ export function create<
   const transport extends Transport.AnyTransport = Transport.Http,
 >(config: create.Config<methods, transport>): Mppx<methods, transport> {
   const {
-    realm = 'MPP Payment',
-    secretKey = 'tmp',
+    realm = Env.get('realm'),
+    secretKey = Env.get('secretKey'),
     transport = Transport.http() as transport,
   } = config
 
@@ -82,9 +83,9 @@ export function create<
   const handlers: Record<string, unknown> = {}
 
   for (const mi of methods) {
-    handlers[mi.name] = createIntentFn({
+    handlers[mi.intent] = createMethodFn({
       defaults: mi.defaults,
-      intent: mi,
+      method: mi,
       realm,
       request: mi.request as never,
       respond: mi.respond as never,
@@ -104,34 +105,34 @@ export declare namespace create {
   > = {
     /** Array of configured methods. @example [tempo()] */
     methods: methods
-    /** Server realm (e.g., hostname). @default "MPP Payment". */
+    /** Server realm (e.g., hostname). Auto-detected from environment variables (`MPP_REALM`, `VERCEL_URL`, `RAILWAY_PUBLIC_DOMAIN`, `RENDER_EXTERNAL_HOSTNAME`, `HOST`, `HOSTNAME`), falling back to `"localhost"`. */
     realm?: string | undefined
-    /** Secret key for HMAC-bound challenge IDs for stateless verification. */
+    /** Secret key for HMAC-bound challenge IDs for stateless verification. Auto-detected from `MPP_SECRET_KEY` environment variable, falling back to a random key. */
     secretKey?: string | undefined
     /** Transport to use. @default Transport.http() */
     transport?: transport | undefined
   }
 }
 
-function createIntentFn<
-  intent extends MethodIntent.MethodIntent,
+function createMethodFn<
+  method extends Method.Method,
   transport extends Transport.AnyTransport,
   defaults extends Record<string, unknown>,
 >(
-  parameters: createIntentFn.Parameters<intent, transport, defaults>,
-): createIntentFn.ReturnType<intent, transport, defaults>
+  parameters: createMethodFn.Parameters<method, transport, defaults>,
+): createMethodFn.ReturnType<method, transport, defaults>
 // biome-ignore lint/correctness/noUnusedVariables: _
-function createIntentFn(parameters: createIntentFn.Parameters): createIntentFn.ReturnType {
-  const { defaults, intent, realm, respond, secretKey, transport, verify } = parameters
+function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.ReturnType {
+  const { defaults, method, realm, respond, secretKey, transport, verify } = parameters
 
   return (options) => {
     const meta = {
-      ...intent,
+      ...method,
       ...defaults,
       ...options,
     }
     return Object.assign(
-      async (input: Transport.InputOf): Promise<IntentFn.Response> => {
+      async (input: Transport.InputOf): Promise<MethodFn.Response> => {
         const { description, ...rest } = options
         const expires = 'expires' in options ? (options.expires as string | undefined) : undefined
 
@@ -160,7 +161,7 @@ function createIntentFn(parameters: createIntentFn.Parameters): createIntentFn.R
         // Recompute challenge from options. The HMAC-bound ID means we don't need to
         // store challenges server-side—if the client echoes back a credential with
         // a matching ID, we know it was issued by us with these exact parameters.
-        const challenge = Challenge.fromIntent(intent, {
+        const challenge = Challenge.fromMethod(method, {
           description,
           expires,
           realm,
@@ -202,9 +203,9 @@ function createIntentFn(parameters: createIntentFn.Parameters): createIntentFn.R
           return { challenge: response, status: 402 }
         }
 
-        // Validate payload structure against intent schema
+        // Validate payload structure against method schema
         try {
-          intent.schema.credential.payload.parse(credential.payload)
+          method.schema.credential.payload.parse(credential.payload)
         } catch (e) {
           const response = await transport.respondChallenge({
             challenge,
@@ -265,50 +266,50 @@ function createIntentFn(parameters: createIntentFn.Parameters): createIntentFn.R
   }
 }
 
-declare namespace createIntentFn {
+declare namespace createMethodFn {
   type Parameters<
-    intent extends MethodIntent.MethodIntent = MethodIntent.MethodIntent,
+    method extends Method.Method = Method.Method,
     transport extends Transport.AnyTransport = Transport.Http,
     defaults extends Record<string, unknown> = Record<string, unknown>,
   > = {
     defaults?: defaults
-    intent: intent
+    method: method
     realm: string
-    request?: MethodIntent.RequestFn<intent>
-    respond?: MethodIntent.RespondFn<intent>
+    request?: Method.RequestFn<method>
+    respond?: Method.RespondFn<method>
     secretKey: string
     transport: transport
-    verify: MethodIntent.VerifyFn<intent>
+    verify: Method.VerifyFn<method>
   }
 
   type ReturnType<
-    intent extends MethodIntent.MethodIntent = MethodIntent.MethodIntent,
+    method extends Method.Method = Method.Method,
     transport extends Transport.AnyTransport = Transport.Http,
     defaults extends Record<string, unknown> = Record<string, unknown>,
-  > = IntentFn<intent, transport, defaults>
+  > = MethodFn<method, transport, defaults>
 }
 
-export type IntentFn<
-  intent extends MethodIntent.MethodIntent,
+export type MethodFn<
+  method extends Method.Method,
   transport extends Transport.AnyTransport,
   defaults extends Record<string, unknown>,
 > = (
-  options: IntentFn.Options<intent, defaults>,
-) => (input: Transport.InputOf<transport>) => Promise<IntentFn.Response<transport>>
+  options: MethodFn.Options<method, defaults>,
+) => (input: Transport.InputOf<transport>) => Promise<MethodFn.Response<transport>>
 /** @internal */
-export type AnyIntentFn = (options: any) => (input: any) => Promise<any>
+export type AnyMethodFn = (options: any) => (input: any) => Promise<any>
 
 /** @internal */
-declare namespace IntentFn {
+declare namespace MethodFn {
   export type Options<
-    intent extends MethodIntent.MethodIntent,
+    method extends Method.Method,
     defaults extends Record<string, unknown> = Record<string, unknown>,
   > = {
     /** Optional human-readable description of the payment. */
     description?: string | undefined
     /** Optional challenge expiration timestamp (ISO 8601). */
     expires?: string | undefined
-  } & MethodIntent.WithDefaults<z.input<intent['schema']['request']>, defaults>
+  } & Method.WithDefaults<z.input<method['schema']['request']>, defaults>
 
   export type Response<transport extends Transport.AnyTransport = Transport.Http> =
     | {
@@ -346,8 +347,8 @@ declare namespace IntentFn {
  * ```
  */
 export function toNodeListener(
-  handler: (input: globalThis.Request) => Promise<IntentFn.Response<Transport.Http>>,
-): (req: IncomingMessage, res: ServerResponse) => Promise<IntentFn.Response<Transport.Http>> {
+  handler: (input: globalThis.Request) => Promise<MethodFn.Response<Transport.Http>>,
+): (req: IncomingMessage, res: ServerResponse) => Promise<MethodFn.Response<Transport.Http>> {
   return async (req, res) => {
     const result = await handler(Request.fromNodeListener(req, res))
 
@@ -370,9 +371,9 @@ type FlattenMethods<methods extends Methods> = methods extends readonly [
   infer head,
   ...infer tail extends Methods,
 ]
-  ? head extends readonly MethodIntent.AnyServer[]
+  ? head extends readonly Method.AnyServer[]
     ? readonly [...head, ...FlattenMethods<tail>]
-    : head extends MethodIntent.AnyServer
+    : head extends Method.AnyServer
       ? readonly [head, ...FlattenMethods<tail>]
       : never
   : readonly []

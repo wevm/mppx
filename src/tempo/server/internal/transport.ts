@@ -6,11 +6,11 @@
  * @internal
  */
 import * as Transport from '../../../server/Transport.js'
-import type * as ChannelStore from '../../stream/ChannelStore.js'
-import * as Sse_core from '../../stream/Sse.js'
+import type * as ChannelStore from '../../session/ChannelStore.js'
+import * as Sse_core from '../../session/Sse.js'
 
-/** SSE transport with Tempo stream controller. */
-export type Sse = Transport.Sse<Sse_core.StreamController>
+/** SSE transport with Tempo session controller. */
+export type Sse = Transport.Sse<Sse_core.SessionController>
 
 /**
  * Creates a Tempo-metered SSE transport.
@@ -46,7 +46,7 @@ export function sse(options: sse.Options & { store: ChannelStore.ChannelStore })
           const ctx = Sse_core.fromRequest(request)
           contextMap.set(ctx.challengeId, { ...ctx, signal: request.signal })
         } catch {
-          // ignore — non-SSE credentials won't have stream context
+          // ignore — non-SSE credentials won't have session context
         }
       }
       return credential
@@ -72,7 +72,7 @@ export function sse(options: sse.Options & { store: ChannelStore.ChannelStore })
         contextMap.delete(challengeId)
 
         // Pass async generator functions directly so Sse.serve gives them
-        // a StreamController for manual charge(). Pass raw AsyncIterables
+        // a SessionController for manual charge(). Pass raw AsyncIterables
         // as-is so Sse.serve auto-charges per yielded value.
         const generate: Sse_core.serve.Options['generate'] = isAsyncGeneratorFunction(resolved)
           ? (resolved as Sse_core.serve.Options['generate'])

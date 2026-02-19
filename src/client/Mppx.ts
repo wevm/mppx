@@ -1,10 +1,10 @@
 import type * as Challenge from '../Challenge.js'
-import type * as MethodIntent from '../MethodIntent.js'
+import type * as Method from '../Method.js'
 import type * as z from '../zod.js'
 import * as Fetch from './internal/Fetch.js'
 import * as Transport from './Transport.js'
 
-export type Methods = readonly (MethodIntent.AnyClient | readonly MethodIntent.AnyClient[])[]
+export type Methods = readonly (Method.AnyClient | readonly Method.AnyClient[])[]
 
 /**
  * Client-side payment handler.
@@ -27,7 +27,7 @@ export type Mppx<
 }
 
 /**
- * Creates a client-side payment handler from an array of method intents.
+ * Creates a client-side payment handler from an array of methods.
  *
  * Returns a payment handler with a `fetch` function that automatically handles
  * 402 Payment Required responses. By default, also polyfills `globalThis.fetch`.
@@ -76,10 +76,10 @@ export function create<
     async createCredential(response: Transport.ResponseOf<transport>, context?: unknown) {
       const challenge = transport.getChallenge(response as never) as Challenge.Challenge
 
-      const mi = methods.find((m) => m.method === challenge.method && m.name === challenge.intent)
+      const mi = methods.find((m) => m.name === challenge.method && m.intent === challenge.intent)
       if (!mi)
         throw new Error(
-          `No method intent found for "${challenge.method}.${challenge.intent}". Available: ${methods.map((m) => `${m.method}.${m.name}`).join(', ')}`,
+          `No method found for "${challenge.method}.${challenge.intent}". Available: ${methods.map((m) => `${m.name}.${m.intent}`).join(', ')}`,
         )
 
       const parsedContext =
@@ -128,7 +128,7 @@ export declare namespace create {
           },
         ) => Promise<string | undefined>)
       | undefined
-    /** Array of method intents to use. Accepts individual clients or tuples (e.g. from `tempo()`). */
+    /** Array of methods to use. Accepts individual clients or tuples (e.g. from `tempo()`). */
     methods: methods
     /** Whether to polyfill `globalThis.fetch` with the payment-aware wrapper. @default true */
     polyfill?: boolean | undefined
@@ -141,8 +141,8 @@ export declare namespace create {
  * Union of all context types from all methods that have context schemas.
  * @internal
  */
-type AnyContextFor<methods extends readonly MethodIntent.AnyClient[]> = {
-  [method in keyof methods]: methods[method] extends MethodIntent.Client<any, infer context>
+type AnyContextFor<methods extends readonly Method.AnyClient[]> = {
+  [method in keyof methods]: methods[method] extends Method.Client<any, infer context>
     ? context extends z.ZodMiniType
       ? z.input<context>
       : undefined
@@ -157,9 +157,9 @@ type FlattenMethods<methods extends Methods> = methods extends readonly [
   infer head,
   ...infer tail extends Methods,
 ]
-  ? head extends readonly MethodIntent.AnyClient[]
+  ? head extends readonly Method.AnyClient[]
     ? readonly [...head, ...FlattenMethods<tail>]
-    : head extends MethodIntent.AnyClient
+    : head extends Method.AnyClient
       ? readonly [head, ...FlattenMethods<tail>]
       : never
   : readonly []

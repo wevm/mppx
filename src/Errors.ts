@@ -44,7 +44,7 @@ export declare namespace PaymentError {
 export class MalformedCredentialError extends PaymentError {
   override readonly name = 'MalformedCredentialError'
   readonly title = 'Malformed Credential'
-  override readonly status = 400
+  override readonly status = 402
   readonly type = 'https://paymentauth.org/problems/malformed-credential'
 
   constructor(options: MalformedCredentialError.Options = {}) {
@@ -66,7 +66,7 @@ export declare namespace MalformedCredentialError {
 export class InvalidChallengeError extends PaymentError {
   override readonly name = 'InvalidChallengeError'
   readonly title = 'Invalid Challenge'
-  override readonly status = 400
+  override readonly status = 402
   readonly type = 'https://paymentauth.org/problems/invalid-challenge'
 
   constructor(options: InvalidChallengeError.Options = {}) {
@@ -270,7 +270,7 @@ export class InsufficientBalanceError extends PaymentError {
   override readonly name = 'InsufficientBalanceError'
   readonly title = 'Insufficient Balance'
   override readonly status = 402
-  readonly type = 'https://paymentauth.org/problems/stream/insufficient-balance'
+  readonly type = 'https://paymentauth.org/problems/session/insufficient-balance'
 
   constructor(options: InsufficientBalanceError.Options = {}) {
     const { reason } = options
@@ -292,7 +292,7 @@ export class InvalidSignatureError extends PaymentError {
   override readonly name = 'InvalidSignatureError'
   readonly title = 'Invalid Signature'
   override readonly status = 402
-  readonly type = 'https://paymentauth.org/problems/stream/invalid-signature'
+  readonly type = 'https://paymentauth.org/problems/session/invalid-signature'
 
   constructor(options: InvalidSignatureError.Options = {}) {
     const { reason } = options
@@ -313,7 +313,7 @@ export class SignerMismatchError extends PaymentError {
   override readonly name = 'SignerMismatchError'
   readonly title = 'Signer Mismatch'
   override readonly status = 402
-  readonly type = 'https://paymentauth.org/problems/stream/signer-mismatch'
+  readonly type = 'https://paymentauth.org/problems/session/signer-mismatch'
 
   constructor(options: SignerMismatchError.Options = {}) {
     const { reason } = options
@@ -334,7 +334,7 @@ export class AmountExceedsDepositError extends PaymentError {
   override readonly name = 'AmountExceedsDepositError'
   readonly title = 'Amount Exceeds Deposit'
   override readonly status = 402
-  readonly type = 'https://paymentauth.org/problems/stream/amount-exceeds-deposit'
+  readonly type = 'https://paymentauth.org/problems/session/amount-exceeds-deposit'
 
   constructor(options: AmountExceedsDepositError.Options = {}) {
     const { reason } = options
@@ -355,7 +355,7 @@ export class DeltaTooSmallError extends PaymentError {
   override readonly name = 'DeltaTooSmallError'
   readonly title = 'Delta Too Small'
   override readonly status = 402
-  readonly type = 'https://paymentauth.org/problems/stream/delta-too-small'
+  readonly type = 'https://paymentauth.org/problems/session/delta-too-small'
 
   constructor(options: DeltaTooSmallError.Options = {}) {
     const { reason } = options
@@ -376,7 +376,7 @@ export class ChannelNotFoundError extends PaymentError {
   override readonly name = 'ChannelNotFoundError'
   readonly title = 'Channel Not Found'
   override readonly status = 410
-  readonly type = 'https://paymentauth.org/problems/stream/channel-not-found'
+  readonly type = 'https://paymentauth.org/problems/session/channel-not-found'
 
   constructor(options: ChannelNotFoundError.Options = {}) {
     const { reason } = options
@@ -397,7 +397,7 @@ export class ChannelClosedError extends PaymentError {
   override readonly name = 'ChannelClosedError'
   readonly title = 'Channel Closed'
   override readonly status = 410
-  readonly type = 'https://paymentauth.org/problems/stream/channel-finalized'
+  readonly type = 'https://paymentauth.org/problems/session/channel-finalized'
 
   constructor(options: ChannelClosedError.Options = {}) {
     const { reason } = options

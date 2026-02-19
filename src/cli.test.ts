@@ -6,13 +6,13 @@ import { Addresses } from 'viem/tempo'
 import { afterAll, describe, expect, test } from 'vitest'
 import * as Http from '~test/Http.js'
 import { rpcUrl } from '~test/tempo/prool.js'
-import { deployEscrow } from '~test/tempo/stream.js'
+import { deployEscrow } from '~test/tempo/session.js'
 import { accounts, asset, client, fundAccount } from '~test/tempo/viem.js'
 import * as Store from './Store.js'
 import * as Mppx_server from './server/Mppx.js'
 import { toNodeListener } from './server/Mppx.js'
-import { stripe as stripe_server } from './stripe/server/MethodIntents.js'
-import { tempo } from './tempo/server/MethodIntents.js'
+import { stripe as stripe_server } from './stripe/server/Methods.js'
+import { tempo } from './tempo/server/Methods.js'
 
 const cliPath = path.resolve(import.meta.dirname, 'cli.ts')
 const cwd = path.resolve(import.meta.dirname, '..')

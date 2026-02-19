@@ -1,6 +1,6 @@
-import { Base64 } from 'ox'
+import { Base64, Json } from 'ox'
 import type { Compute } from './internal/types.js'
-import type * as MethodIntent from './MethodIntent.js'
+import type * as Method from './Method.js'
 import type * as z from './zod.js'
 
 /**
@@ -62,16 +62,16 @@ export function from<const request extends Request>(request: request): request {
 /**
  * Creates a validated request from a method intent.
  *
- * @param intent - The method intent to validate against.
+ * @param method - The method to validate against.
  * @param request - Request parameters.
  * @returns A validated request.
  *
  * @example
  * ```ts
  * import { Request } from 'mppx'
- * import { Intents } from 'mppx/tempo'
+ * import { Methods } from 'mppx/tempo'
  *
- * const request = Request.fromIntent(Intents.charge, {
+ * const request = Request.fromMethod(Methods.charge, {
  *   amount: '1000000',
  *   currency: '0x20c0000000000000000000000000000000000001',
  *   recipient: '0x742d35Cc6634C0532925a3b844Bc9e7595f8fE00',
@@ -80,11 +80,11 @@ export function from<const request extends Request>(request: request): request {
  * })
  * ```
  */
-export function fromIntent<const intent extends MethodIntent.MethodIntent>(
-  intent: intent,
-  request: z.input<intent['schema']['request']>,
-): Request<z.output<intent['schema']['request']>> {
-  return intent.schema.request.parse(request) as Request<z.output<intent['schema']['request']>>
+export function fromMethod<const method extends Method.Method>(
+  method: method,
+  request: z.input<method['schema']['request']>,
+): Request<z.output<method['schema']['request']>> {
+  return method.schema.request.parse(request) as Request<z.output<method['schema']['request']>>
 }
 
 /**
@@ -102,6 +102,6 @@ export function fromIntent<const intent extends MethodIntent.MethodIntent>(
  * ```
  */
 export function serialize(request: Request): string {
-  const json = JSON.stringify(request)
+  const json = Json.canonicalize(request)
   return Base64.fromString(json, { pad: false, url: true })
 }

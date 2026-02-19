@@ -10,12 +10,12 @@ import { tempo as tempo_chain } from 'viem/chains'
 import { Abis, Transaction } from 'viem/tempo'
 import { PaymentExpiredError } from '../../Errors.js'
 import type { LooseOmit } from '../../internal/types.js'
-import * as MethodIntent from '../../MethodIntent.js'
+import * as Method from '../../Method.js'
 import * as Client from '../../viem/Client.js'
-import * as Intents from '../Intents.js'
 import * as Account from '../internal/account.js'
 import * as defaults from '../internal/defaults.js'
 import type * as types from '../internal/types.js'
+import * as Methods from '../Methods.js'
 
 const transferSelector = /*#__PURE__*/ toFunctionSelector(
   'function transfer(address to, uint256 amount)',
@@ -56,7 +56,7 @@ export function charge<const parameters extends charge.Parameters>(
   })
 
   type Defaults = charge.DeriveDefaults<parameters>
-  return MethodIntent.toServer<typeof Intents.charge, Defaults>(Intents.charge, {
+  return Method.toServer<typeof Methods.charge, Defaults>(Methods.charge, {
     defaults: {
       amount,
       currency,
@@ -67,7 +67,7 @@ export function charge<const parameters extends charge.Parameters>(
       recipient,
     } as unknown as Defaults,
 
-    // TODO: dedupe `{charge,stream}.request`
+    // TODO: dedupe `{charge,session}.request`
     async request({ credential, request }) {
       const chainId = await (async () => {
         if (request.chainId) return request.chainId
@@ -265,10 +265,7 @@ export function charge<const parameters extends charge.Parameters>(
 }
 
 export declare namespace charge {
-  type Defaults = LooseOmit<
-    MethodIntent.RequestDefaults<typeof Intents.charge>,
-    'feePayer' | 'recipient'
-  >
+  type Defaults = LooseOmit<Method.RequestDefaults<typeof Methods.charge>, 'feePayer' | 'recipient'>
 
   type Parameters = {
     /** Testnet mode. */

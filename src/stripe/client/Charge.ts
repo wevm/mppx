@@ -1,8 +1,9 @@
 import type * as Challenge from '../../Challenge.js'
 import * as Credential from '../../Credential.js'
-import * as MethodIntent from '../../MethodIntent.js'
+import * as Method from '../../Method.js'
 import * as z from '../../zod.js'
-import * as Intents from '../Intents.js'
+import type { StripeJs } from '../internal/types.js'
+import * as Methods from '../Methods.js'
 
 /**
  * Creates a Stripe charge method intent for usage on the client.
@@ -14,11 +15,18 @@ import * as Intents from '../Intents.js'
  * The `paymentMethod` (e.g. from Stripe Elements) can be provided at
  * initialization or at credential-creation time via `context`.
  *
+ * Optionally accepts a `client` (a Stripe.js instance from `@stripe/stripe-js`)
+ * which is forwarded to the `createToken` callback for use with Elements.
+ *
  * @example
  * ```ts
+ * import { loadStripe } from '@stripe/stripe-js'
  * import { stripe } from 'mppx/client'
  *
+ * const stripeJs = await loadStripe('pk_...')
+ *
  * const charge = stripe.charge({
+ *   client: stripeJs,
  *   createToken: async ({ amount, currency, expiresAt, metadata, networkId, paymentMethod }) => {
  *     const res = await fetch('/api/create-spt', {
  *       method: 'POST',
@@ -32,9 +40,9 @@ import * as Intents from '../Intents.js'
  * ```
  */
 export function charge(parameters: charge.Parameters) {
-  const { createToken, externalId, paymentMethod: defaultPaymentMethod } = parameters
+  const { client, createToken, externalId, paymentMethod: defaultPaymentMethod } = parameters
 
-  return MethodIntent.toClient(Intents.charge, {
+  return Method.toClient(Methods.charge, {
     context: z.object({
       paymentMethod: z.optional(z.string()),
     }),
@@ -63,13 +71,14 @@ export function charge(parameters: charge.Parameters) {
         : Math.floor(Date.now() / 1000) + 3600
 
       const spt = await createToken({
-        challenge,
-        paymentMethod,
         amount,
+        challenge,
+        client,
         currency,
-        networkId,
         expiresAt,
         metadata,
+        networkId,
+        paymentMethod,
       })
 
       return Credential.serialize({
@@ -85,6 +94,8 @@ export function charge(parameters: charge.Parameters) {
 
 export declare namespace charge {
   type Parameters = {
+    /** Stripe.js instance from `@stripe/stripe-js`. Forwarded to `createToken` for use with Elements. */
+    client?: StripeJs | undefined
     /** Called when a Stripe challenge is received. Create an SPT to retry. */
     createToken: (parameters: OnChallengeParameters) => Promise<string>
     /** Optional client-side external reference ID for the credential payload. */
@@ -94,22 +105,24 @@ export declare namespace charge {
   }
 
   type OnChallengeParameters = {
-    challenge: Challenge.Challenge<
-      z.output<typeof Intents.charge.schema.request>,
-      typeof Intents.charge.name,
-      typeof Intents.charge.method
-    >
-    /** Stripe payment method ID (e.g. from Stripe Elements). */
-    paymentMethod?: string | undefined
     /** Payment amount (in smallest currency unit). */
     amount: string
+    challenge: Challenge.Challenge<
+      z.output<typeof Methods.charge.schema.request>,
+      typeof Methods.charge.intent,
+      typeof Methods.charge.name
+    >
+    /** Stripe.js instance, if provided to `stripe.charge()`. */
+    client?: StripeJs | undefined
     /** Three-letter ISO currency code. */
     currency: string
-    /** Stripe Business Network profile ID. */
-    networkId: string | undefined
     /** SPT expiration as a Unix timestamp (seconds). */
     expiresAt: number
     /** Optional metadata to associate with the SPT. */
     metadata?: Record<string, string> | undefined
+    /** Stripe Business Network profile ID. */
+    networkId: string | undefined
+    /** Stripe payment method ID (e.g. from Stripe Elements). */
+    paymentMethod?: string | undefined
   }
 }

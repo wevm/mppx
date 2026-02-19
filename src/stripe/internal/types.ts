@@ -1,0 +1,22 @@
+/**
+ * Duck-typed interface for the Stripe Node SDK (`stripe` npm package).
+ * Matches the subset of the API used by mppx for server-side payment verification.
+ *
+ * Uses loose signatures so any Stripe SDK version is assignable.
+ */
+export type StripeClient = {
+  paymentIntents: {
+    create(...args: any[]): Promise<{ id: string; status: string }>
+  }
+}
+
+/**
+ * Duck-typed interface for Stripe.js (`@stripe/stripe-js`).
+ * Matches the subset of the API used by mppx for client-side payment method creation.
+ *
+ * Uses loose signatures so any Stripe.js version is assignable.
+ */
+export type StripeJs = {
+  createPaymentMethod(...args: any[]): Promise<Record<string, unknown>>
+  elements(...args: any[]): unknown
+}

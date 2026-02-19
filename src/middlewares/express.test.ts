@@ -6,7 +6,7 @@ import { tempo as tempo_server } from 'mppx/server'
 import type { Address } from 'viem'
 import { Addresses } from 'viem/tempo'
 import { beforeAll, describe, expect, test } from 'vitest'
-import { deployEscrow } from '~test/tempo/stream.js'
+import { deployEscrow } from '~test/tempo/session.js'
 import { accounts, asset, client, fundAccount } from '~test/tempo/viem.js'
 
 function createServer(app: express.Express) {
