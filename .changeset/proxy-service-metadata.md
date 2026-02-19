@@ -29,7 +29,7 @@ Service.from('my-api', {
   baseUrl: 'https://api.example.com',
   docsLlmsUrl: (endpoint) =>
     endpoint
-      ? `https://context7.com/my-org/my-api/llms.txt?topic=${encodeURIComponent(endpoint)}`
+      ? `https://example.com/api/${encodeURIComponent(endpoint)}.md`
       : undefined,
   routes: { ... },
 })
