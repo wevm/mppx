@@ -42,12 +42,12 @@ export function get(key: keyof typeof variables): string {
 /** Reads a single environment variable, probing available runtime APIs. */
 function read(name: string): string | undefined {
   try {
-    if (typeof process !== 'undefined' && process?.env) return process.env[name]
+    if (typeof process !== 'undefined' && process?.env) return process.env[name] || undefined
   } catch {}
 
   try {
     const deno = (globalThis as any).Deno
-    if (deno?.env?.get) return deno.env.get(name)
+    if (deno?.env?.get) return deno.env.get(name) || undefined
   } catch {}
 
   return undefined
