@@ -13,6 +13,7 @@ const proxy = Proxy.create({
 ```
 
 - Added `title`, `description`, and `docsLlmsUrl` properties to `Service` type and `Service.from` config.
+
 ```ts
 Service.from('my-api', {
   baseUrl: 'https://api.example.com',
