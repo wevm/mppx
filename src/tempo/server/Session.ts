@@ -236,7 +236,7 @@ export function session<const parameters extends session.Parameters>(p?: paramet
     // return 204 regardless of request method.
     //
     // Voucher POSTs are gated only when they have no request body, which
-    // signals a mid-stream voucher update (the client is just topping up
+    // signals a mid-session voucher update (the client is just topping up
     // the channel balance). Voucher POSTs WITH a body are content requests
     // (e.g., an API call to a POST endpoint) and fall through to the
     // user's handler. GET requests with vouchers always fall through so
