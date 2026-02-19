@@ -173,7 +173,7 @@ describe('create', () => {
 
       > A paid proxy for LLM and AI services.
 
-      ## [Services](/discover)
+      ## Services
 
       - [OpenAI](/discover/openai.md): Chat completions, embeddings, image generation, and audio transcription.
       - [Anthropic](/discover/anthropic.md): Claude language models for messages and completions.

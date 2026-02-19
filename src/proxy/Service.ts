@@ -193,7 +193,7 @@ export function toLlmsTxt(
 
   if (services.length === 0) return lines.join('\n')
 
-  lines.push('## [Services](/discover)', '')
+  lines.push('## Services', '')
   for (const s of services) {
     const label = s.title ?? s.id
     const desc = s.description ? `: ${s.description}` : ''
