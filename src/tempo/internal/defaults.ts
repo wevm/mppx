@@ -10,8 +10,23 @@ export const escrowContract = {
 
 export const testnetChainId = 42431
 
+/** USDC (USDC.e) token address on Tempo. */
+export const usdc = '0x20C000000000000000000000b9537d11c60E8b50'
+
+/** pathUSD token address on Tempo. */
+export const pathUsd = '0x20c0000000000000000000000000000000000000'
+
 /**
- * Default token decimals for TIP-20 stablecoins (e.g. pathUSD).
+ * Default currency per chain ID.
+ * Mainnet defaults to USDC, testnet defaults to pathUSD.
+ */
+export const currency = {
+  4217: usdc,
+  42431: pathUsd,
+} as const
+
+/**
+ * Default token decimals for TIP-20 stablecoins (e.g. pathUSD, USDC).
  *
  * All TIP-20 tokens on Tempo use 6 decimals, so there is no risk of
  * client/server mismatch within the Tempo ecosystem. Other chains and
