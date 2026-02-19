@@ -22,25 +22,16 @@ function fakeKv(): Store.cloudflare.Parameters {
   }
 }
 
-function fakeRedis(): Store.upstash.Parameters {
-  const map = new Map<string, unknown>()
-  return {
-    async get(key) {
-      return map.get(key) ?? null
-    },
-    async set(key, value) {
-      map.set(key, value)
-    },
-    async del(key) {
-      map.delete(key)
-    },
-  }
-}
-
 describe.each([
   { label: 'memory', create: () => Store.memory() },
   { label: 'cloudflare', create: () => Store.cloudflare(fakeKv()) },
-  { label: 'upstash', create: () => Store.upstash(fakeRedis()) },
+  {
+    label: 'upstash',
+    create: () => {
+      const kv = fakeKv()
+      return Store.upstash({ get: kv.get, set: kv.put, del: kv.delete })
+    },
+  },
 ])('$label', ({ create }) => {
   test('roundtrip', async () => {
     const store = create()
@@ -84,11 +75,11 @@ describe('json roundtrip behavior', () => {
   })
 
   test('upstash passes values through without json serialization', async () => {
-    const redis = fakeRedis()
-    const store = Store.upstash(redis)
+    const kv = fakeKv()
+    const store = Store.upstash({ get: kv.get, set: kv.put, del: kv.delete })
     const value = { a: 1 }
     await store.put('k', value)
     // upstash store does not JSON-serialize; the fake map holds the original reference
-    expect(await redis.get('k')).toBe(value)
+    expect(await kv.get('k')).toBe(value)
   })
 })

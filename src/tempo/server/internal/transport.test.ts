@@ -1,25 +1,15 @@
 import { Challenge, Credential } from 'mppx'
 import type { Address, Hex } from 'viem'
 import { describe, expect, test } from 'vitest'
-import type * as ChannelStore from '../../stream/ChannelStore.js'
+import * as Store from '../../../Store.js'
+import * as ChannelStore from '../../stream/ChannelStore.js'
 import { sse } from './transport.js'
 
 const channelId = '0x0000000000000000000000000000000000000000000000000000000000000001' as Hex
 const challengeId = 'challenge-1'
 
-function memoryStore(): ChannelStore.ChannelStore {
-  const channels = new Map()
-  return {
-    async getChannel(id) {
-      return channels.get(id) ?? null
-    },
-    async updateChannel(id, fn) {
-      const result = fn(channels.get(id) ?? null)
-      if (result) channels.set(id, result)
-      else channels.delete(id)
-      return result
-    },
-  }
+function memoryStore() {
+  return ChannelStore.fromStore(Store.memory())
 }
 
 function seedChannel(
@@ -75,7 +65,7 @@ function makeCredential() {
 function makeAuthorizedRequest(): Request {
   const credential = makeCredential()
   const header = Credential.serialize(credential)
-  return new Request('https://test.example.com/stream', {
+  return new Request('https://test.example.com/session', {
     headers: { Authorization: header },
   })
 }
@@ -93,7 +83,7 @@ describe('sse transport', () => {
   test('getCredential returns null when no Authorization header', () => {
     const store = memoryStore()
     const transport = sse({ store })
-    const request = new Request('https://test.example.com/stream')
+    const request = new Request('https://test.example.com/session')
     expect(transport.getCredential(request)).toBeNull()
   })
 
@@ -134,7 +124,7 @@ describe('sse transport', () => {
 
     const response = transport.respondChallenge({
       challenge,
-      input: new Request('https://test.example.com/stream'),
+      input: new Request('https://test.example.com/session'),
     })
     expect(response).toBeInstanceOf(Response)
     expect(response.status).toBe(402)
