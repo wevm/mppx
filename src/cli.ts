@@ -156,10 +156,10 @@ cli
       const currency = challengeRequest.currency as string | undefined
       const shownKeys = new Set<string>()
 
-      let tokenSymbol = challenge.method === 'stripe' ? (currency?.toUpperCase() ?? '') : (currency ?? '')
+      let tokenSymbol =
+        challenge.method === 'stripe' ? (currency?.toUpperCase() ?? '') : (currency ?? '')
       let tokenDecimals =
-        (challengeRequest.decimals as number | undefined) ??
-        (challenge.method === 'stripe' ? 2 : 6)
+        (challengeRequest.decimals as number | undefined) ?? (challenge.method === 'stripe' ? 2 : 6)
       let explorerUrl: string | undefined
 
       // Tempo-specific setup (private key, viem account/client, token info)
@@ -346,7 +346,9 @@ cli
         )
         const stripeSecretKey = process.env.MPPX_STRIPE_SECRET_KEY
         if (!stripeSecretKey) {
-          console.error('\nMPPX_STRIPE_SECRET_KEY environment variable is required for Stripe payments.')
+          console.error(
+            '\nMPPX_STRIPE_SECRET_KEY environment variable is required for Stripe payments.',
+          )
           process.exit(1)
         }
         if (!stripeSecretKey.startsWith('sk_test_')) {
@@ -380,6 +382,7 @@ cli
                   }
                 }
                 const sptUrl =
+                  process.env.MPPX_STRIPE_SPT_URL ??
                   'https://api.stripe.com/v1/test_helpers/shared_payment/granted_tokens'
                 const sptHeaders = {
                   Authorization: `Basic ${btoa(`${stripeSecretKey}:`)}`,
@@ -391,10 +394,10 @@ cli
                   body,
                 })
                 if (!response.ok) {
-                  const error = (await response.json()) as { error: { message: string } }
+                  const errorBody = (await response.json()) as { error: { message: string } }
                   if (
                     (metadata || networkId) &&
-                    error.error.message.includes('Received unknown parameter')
+                    errorBody.error.message.includes('Received unknown parameter')
                   ) {
                     const fallbackBody = new URLSearchParams({
                       payment_method: paymentMethod!,
@@ -407,10 +410,14 @@ cli
                       headers: sptHeaders,
                       body: fallbackBody,
                     })
-                  }
-                  if (!response.ok) {
-                    const error = (await response.json()) as { error: { message: string } }
-                    throw new Error(`Failed to create SPT: ${error.error.message}`)
+                    if (!response.ok) {
+                      const fallbackError = (await response.json()) as {
+                        error: { message: string }
+                      }
+                      throw new Error(`Failed to create SPT: ${fallbackError.error.message}`)
+                    }
+                  } else {
+                    throw new Error(`Failed to create SPT: ${errorBody.error.message}`)
                   }
                 }
                 const { id } = (await response.json()) as { id: string }

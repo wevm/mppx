@@ -22,3 +22,12 @@ In a separate terminal, run the client:
 ```bash
 pnpm client
 ```
+
+## Test with mppx CLI
+
+With the server running, use the `mppx` CLI to make a paid request:
+
+```bash
+pnpm mppx localhost:5173/api/scrape
+pnpm mppx localhost:5173/api/scrape?url=https://example.com
+```

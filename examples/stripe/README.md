@@ -24,6 +24,15 @@ pnpm dev
 
 3. Click **Get Fortune** — the 402 handshake happens automatically.
 
+## Test with mppx CLI
+
+With the server running, use the `mppx` CLI to make a paid request:
+
+```bash
+MPPX_STRIPE_SECRET_KEY=sk_test_...
+pnpm mppx localhost:5173/api/fortune
+```
+
 ## Flow
 
 ```

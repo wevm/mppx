@@ -23,3 +23,12 @@ In a separate terminal, run the client:
 pnpm client
 pnpm client "What is the meaning of life?"
 ```
+
+## Test with mppx CLI
+
+With the server running, use the `mppx` CLI to make a paid request:
+
+```bash
+pnpm mppx localhost:5173/api/chat
+pnpm mppx localhost:5173/api/chat?prompt=What+is+the+meaning+of+life?
+```

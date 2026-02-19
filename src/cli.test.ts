@@ -293,8 +293,8 @@ describe('session multi-fetch (examples/session/multi-fetch)', () => {
   })
 })
 
-describe.skipIf(!process.env.VITE_STRIPE_SECRET_KEY)('stripe charge', () => {
-  test('happy path: makes Stripe payment and receives response', { timeout: 120_000 }, async () => {
+describe.skipIf(!process.env.VITE_STRIPE_SECRET_KEY)('stripe charge (integration)', () => {
+  test('happy path: makes Stripe payment via real API', { timeout: 120_000 }, async () => {
     const stripeSecretKey = process.env.VITE_STRIPE_SECRET_KEY!
 
     const server = Mppx_server.create({
@@ -328,7 +328,7 @@ describe.skipIf(!process.env.VITE_STRIPE_SECRET_KEY)('stripe charge', () => {
           input: '',
           env: {
             ...env,
-            STRIPE_SECRET_KEY: stripeSecretKey,
+            MPPX_STRIPE_SECRET_KEY: stripeSecretKey,
             MPPX_PRIVATE_KEY: undefined as unknown as string,
           },
         },
@@ -407,6 +407,129 @@ describe('session sse (examples/session/sse)', () => {
       ).rejects.toThrow()
     } finally {
       httpServer.close()
+    }
+  })
+})
+
+describe('stripe charge', () => {
+  test('happy path: makes Stripe payment and receives response', { timeout: 60_000 }, async () => {
+    const mockStripeClient = {
+      paymentIntents: { create: async () => ({ id: 'pi_mock_cli_123', status: 'succeeded' }) },
+    }
+
+    const server = Mppx_server.create({
+      methods: [
+        stripe_server.charge({
+          client: mockStripeClient,
+          networkId: 'internal',
+          paymentMethodTypes: ['card'],
+        }),
+      ],
+      realm: 'cli-test-stripe',
+      secretKey: 'cli-test-secret',
+    })
+
+    const sptServer = await Http.createServer(async (_req, res) => {
+      res.writeHead(200, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify({ id: 'spt_mock_cli_test' }))
+    })
+
+    const appServer = await Http.createServer(async (req, res) => {
+      const result = await Mppx_server.toNodeListener(
+        server.charge({ amount: '1', currency: 'usd', decimals: 2 }),
+      )(req, res)
+      if (result.status === 402) return
+      res.end('paid')
+    })
+
+    try {
+      const { stdout } = await runAsync([appServer.url, '-s', '-M', 'paymentMethod=pm_card_visa'], {
+        input: '',
+        env: {
+          ...process.env,
+          NODE_NO_WARNINGS: '1',
+          MPPX_STRIPE_SECRET_KEY: 'sk_test_mock',
+          MPPX_STRIPE_SPT_URL: sptServer.url,
+        },
+      })
+      expect(stdout).toContain('paid')
+    } finally {
+      appServer.close()
+      sptServer.close()
+    }
+  })
+
+  test('error: missing MPPX_STRIPE_SECRET_KEY', { timeout: 60_000 }, async () => {
+    const server = Mppx_server.create({
+      methods: [
+        stripe_server.charge({
+          secretKey: 'sk_test_mock',
+          networkId: 'internal',
+          paymentMethodTypes: ['card'],
+        }),
+      ],
+      realm: 'cli-test-stripe-nokey',
+      secretKey: 'cli-test-secret',
+    })
+
+    const appServer = await Http.createServer(async (req, res) => {
+      const result = await Mppx_server.toNodeListener(
+        server.charge({ amount: '1', currency: 'usd', decimals: 2 }),
+      )(req, res)
+      if (result.status === 402) return
+      res.end('paid')
+    })
+
+    try {
+      const result = await runAsync([appServer.url, '-s', '-M', 'paymentMethod=pm_card_visa'], {
+        input: '',
+        env: {
+          ...process.env,
+          NODE_NO_WARNINGS: '1',
+          MPPX_STRIPE_SECRET_KEY: '',
+        },
+      }).catch((err) => err as Error)
+      expect(result).toBeInstanceOf(Error)
+      expect((result as Error).message).toContain('MPPX_STRIPE_SECRET_KEY')
+    } finally {
+      appServer.close()
+    }
+  })
+
+  test('error: production key rejected', { timeout: 60_000 }, async () => {
+    const server = Mppx_server.create({
+      methods: [
+        stripe_server.charge({
+          secretKey: 'sk_test_mock',
+          networkId: 'internal',
+          paymentMethodTypes: ['card'],
+        }),
+      ],
+      realm: 'cli-test-stripe-live',
+      secretKey: 'cli-test-secret',
+    })
+
+    const appServer = await Http.createServer(async (req, res) => {
+      const result = await Mppx_server.toNodeListener(
+        server.charge({ amount: '1', currency: 'usd', decimals: 2 }),
+      )(req, res)
+      if (result.status === 402) return
+      res.end('paid')
+    })
+
+    try {
+      const result = await runAsync([appServer.url, '-s', '-M', 'paymentMethod=pm_card_visa'], {
+        input: '',
+        env: {
+          ...process.env,
+          NODE_NO_WARNINGS: '1',
+          MPPX_STRIPE_SECRET_KEY: 'sk_live_fake',
+        },
+      }).catch((err) => err as Error)
+      expect(result).toBeInstanceOf(Error)
+      expect((result as Error).message).toContain('test mode')
+    } finally {
+      appServer.close()
     }
   })
 })
