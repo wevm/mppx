@@ -96,7 +96,7 @@ export function charge<const parameters extends charge.Parameters>(
       const resolvedCurrency =
         request.currency ??
         defaults.currency[chainId as keyof typeof defaults.currency] ??
-        defaults.usdc
+        defaults.pathUsd
 
       return {
         ...request,
