@@ -156,11 +156,18 @@ export function session<const parameters extends session.Parameters>(p?: paramet
         return undefined
       })()
 
-      const resolvedCurrency = request.currency ??
+      const resolvedCurrency =
+        request.currency ??
         defaults.currency[chainId as keyof typeof defaults.currency] ??
         defaults.usdc
 
-      return { ...request, chainId, currency: resolvedCurrency, escrowContract: resolvedEscrow, feePayer: resolvedFeePayer }
+      return {
+        ...request,
+        chainId,
+        currency: resolvedCurrency,
+        escrowContract: resolvedEscrow,
+        feePayer: resolvedFeePayer,
+      }
     },
 
     async verify({ credential }) {
