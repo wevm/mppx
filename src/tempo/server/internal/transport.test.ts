@@ -117,12 +117,12 @@ describe('sse transport', () => {
     expect(response.headers.get('Content-Type')).toContain('text/event-stream')
   })
 
-  test('respondChallenge delegates to base http transport', () => {
+  test('respondChallenge delegates to base http transport', async () => {
     const store = memoryStore()
     const transport = sse({ store })
     const challenge = makeChallenge()
 
-    const response = transport.respondChallenge({
+    const response = await transport.respondChallenge({
       challenge,
       input: new Request('https://test.example.com/session'),
     })

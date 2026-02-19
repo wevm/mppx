@@ -29,7 +29,11 @@ describe.each([
     label: 'upstash',
     create: () => {
       const kv = fakeKv()
-      return Store.upstash({ get: kv.get, set: kv.put, del: kv.delete })
+      return Store.upstash({
+        get: kv.get,
+        set: (key, value) => kv.put(key, value as string),
+        del: (key) => kv.delete(key),
+      })
     },
   },
 ])('$label', ({ create }) => {
@@ -76,7 +80,11 @@ describe('json roundtrip behavior', () => {
 
   test('upstash passes values through without json serialization', async () => {
     const kv = fakeKv()
-    const store = Store.upstash({ get: kv.get, set: kv.put, del: kv.delete })
+    const store = Store.upstash({
+      get: kv.get,
+      set: (key, value) => kv.put(key, value as string),
+      del: (key) => kv.delete(key),
+    })
     const value = { a: 1 }
     await store.put('k', value)
     // upstash store does not JSON-serialize; the fake map holds the original reference
