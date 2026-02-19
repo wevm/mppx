@@ -78,58 +78,6 @@ mppx account create
 mppx example.com
 ```
 
-<details>
-<summary><code>mppx --help</code></summary>
-
-```
-mppx/0.1.1
-
-Usage:
-  $ mppx [url]
-
-Commands:
-  [url]             Make HTTP request with automatic payment
-  account [action]  Manage accounts (create, default, delete, fund, list, view)
-
-For more info, run any command with the `--help` flag:
-  $ mppx --help
-  $ mppx account --help
-
-Actions:
-  create   Create new account
-  default  Set default account
-  delete   Delete account
-  fund     Fund account with testnet tokens
-  list     List all accounts
-  view     View account address
-
-Options:
-  -a, --account <name>   Account name (env: MPPX_ACCOUNT)
-  -d, --data <data>      Send request body (implies POST unless -X is set)
-  -f, --fail             Fail silently on HTTP errors (exit 22)
-  -i, --include          Include response headers in output
-  -k, --insecure         Skip TLS certificate verification (true for localhost/.local)
-  -r, --rpc-url <url>    RPC endpoint, defaults to public RPC for chain (env: MPPX_RPC_URL)
-  -s, --silent           Silent mode (suppress progress and info)
-  -v, --verbose          Show request/response headers
-  -A, --user-agent <ua>  Set User-Agent header
-  -H, --header <header>  Add header (repeatable)
-  -L, --location         Follow redirects
-  -X, --method <method>  HTTP method
-  --channel <id>         Reuse existing stream channel ID
-  --deposit <amount>     Deposit amount for stream payments (human-readable units)
-  --json <json>          Send JSON body (sets Content-Type and Accept, implies POST)
-  --confirm              Show confirmation prompts
-  -V, --version          Display version number
-  -h, --help             Display this message
-
-Examples:
-mppx example.com/content
-mppx example.com/api --json '{"key":"value"}'
-```
-
-</details>
-
 You can also install globally to use the `mppx` CLI from anywhere:
 
 ```bash
