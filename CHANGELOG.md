@@ -1,5 +1,12 @@
 # mppx
 
+## 0.3.4
+
+### Patch Changes
+
+- 9cf4943: Added USDC.e to account view mainnet token list and use `MPPX_RPC_URL` for default mainnet balance fetching.
+- 11c0422: Renamed internal `stream` terminology to `session` to align with the MPP spec. This includes renaming the `src/tempo/stream/` directory to `src/tempo/session/`, updating all problem type URIs from `…/problems/stream/…` to `…/problems/session/…`, and renaming associated types (e.g., `StreamCredentialPayload` → `SessionCredentialPayload`). No public API changes.
+
 ## 0.3.3
 
 ### Patch Changes
