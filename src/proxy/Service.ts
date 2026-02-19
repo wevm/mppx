@@ -165,7 +165,7 @@ export function serialize(s: Service) {
       const tokens = pattern.trim().split(/\s+/)
       const hasMethod = tokens.length >= 2
       return {
-        docsUrl: s.docsLlmsUrl?.(pattern),
+        docsLlmsUrl: s.docsLlmsUrl?.(pattern),
         method: hasMethod ? tokens[0] : undefined,
         path: hasMethod ? tokens.slice(1).join(' ') : tokens[0],
         pattern,
@@ -228,7 +228,7 @@ export function toLlmsTxt(
         }
         if (p.currency) lines.push(`  - Currency: ${p.currency}`)
       }
-      if (route.docsUrl) lines.push(`  - Docs: ${route.docsUrl}`)
+      if (route.docsLlmsUrl) lines.push(`  - Docs: ${route.docsLlmsUrl}`)
     }
   }
 
