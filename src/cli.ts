@@ -1361,7 +1361,10 @@ async function fetchBalanceLines(
     return results.map((t) => `${fmtBalance(t.balance, t.symbol, t.decimals)} ${label}`)
   }
 
-  const mainnetClient = createClient({ chain: tempoMainnet, transport: http(process.env.MPPX_RPC_URL) })
+  const mainnetClient = createClient({
+    chain: tempoMainnet,
+    transport: http(process.env.MPPX_RPC_URL),
+  })
   const mainnetResults = await Promise.all(
     mainnetTokens.map((token) => fetchTokenInfo(mainnetClient, token, address)),
   )
