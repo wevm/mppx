@@ -131,6 +131,8 @@ describe('create', () => {
 
   test('behavior: GET /llms.txt returns markdown', async () => {
     const proxy = ApiProxy.create({
+      title: 'My AI Gateway',
+      description: 'A paid proxy for LLM and AI services.',
       services: [
         openai({
           apiKey: 'sk-test',
@@ -167,26 +169,50 @@ describe('create', () => {
     expect(res.status).toBe(200)
     expect(res.headers.get('content-type')).toBe('text/plain; charset=utf-8')
     expect(await res.text()).toMatchInlineSnapshot(`
-      "# API Proxy
+      "# My AI Gateway
 
-      > Paid API proxy powered by [Machine Payments Protocol](https://mpp.tempo.xyz).
+      > A paid proxy for LLM and AI services.
 
       For machine-readable service data, use \`GET /services\` (JSON).
 
       ## Services
 
-      - [openai](https://api.openai.com): 2 paid
-      - [anthropic](https://api.anthropic.com): 2 paid
+      - [OpenAI](https://api.openai.com): Chat completions, embeddings, image generation, and audio transcription. (2 paid)
+      - [Anthropic](https://api.anthropic.com): Claude language models for messages and completions. (2 paid)
 
-      ## openai
+      ## OpenAI
 
-      - \`POST /v1/chat/completions\`: charge — 50000 units — "Chat completion" — (currency: 0x20c0000000000000000000000000000000000001, decimals: 6)
-      - \`POST /v1/embeddings\`: charge — 10000 units — "Generate embeddings" — (currency: 0x20c0000000000000000000000000000000000001, decimals: 6)
+      Chat completions, embeddings, image generation, and audio transcription.
 
-      ## anthropic
+      Documentation: https://context7.com/openai/openai-node/llms.txt
 
-      - \`POST /v1/messages\`: charge — 30000 units — "Send message" — (currency: 0x20c0000000000000000000000000000000000001, decimals: 6)
-      - \`POST /v1/messages/stream\`: session — 10000 units per token — "Stream message" — (currency: 0x20c0000000000000000000000000000000000001, decimals: 6)"
+      - \`POST /v1/chat/completions\` - Chat completion
+        - Type: charge
+        - Price: 0.05 (50000 units, 6 decimals)
+        - Currency: 0x20c0000000000000000000000000000000000001
+        - Docs: https://context7.com/openai/openai-node/llms.txt?topic=POST%20%2Fv1%2Fchat%2Fcompletions
+      - \`POST /v1/embeddings\` - Generate embeddings
+        - Type: charge
+        - Price: 0.01 (10000 units, 6 decimals)
+        - Currency: 0x20c0000000000000000000000000000000000001
+        - Docs: https://context7.com/openai/openai-node/llms.txt?topic=POST%20%2Fv1%2Fembeddings
+
+      ## Anthropic
+
+      Claude language models for messages and completions.
+
+      Documentation: https://context7.com/anthropics/anthropic-sdk-typescript/llms.txt
+
+      - \`POST /v1/messages\` - Send message
+        - Type: charge
+        - Price: 0.03 (30000 units, 6 decimals)
+        - Currency: 0x20c0000000000000000000000000000000000001
+        - Docs: https://context7.com/anthropics/anthropic-sdk-typescript/llms.txt?topic=POST%20%2Fv1%2Fmessages
+      - \`POST /v1/messages/stream\` - Stream message
+        - Type: session
+        - Price: 0.01/token (10000 units, 6 decimals)
+        - Currency: 0x20c0000000000000000000000000000000000001
+        - Docs: https://context7.com/anthropics/anthropic-sdk-typescript/llms.txt?topic=POST%20%2Fv1%2Fmessages%2Fstream"
     `)
   })
 

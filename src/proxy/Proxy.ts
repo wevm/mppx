@@ -61,7 +61,12 @@ export function create(config: create.Config): Proxy {
     if (!pathname) return new Response('Not Found', { status: 404 })
 
     if (request.method === 'GET' && pathname === '/llms.txt')
-      return new Response(Service.toLlmsTxt(config.services), {
+      return new Response(
+        Service.toLlmsTxt(config.services, {
+          title: config.title,
+          description: config.description,
+        }),
+        {
         headers: { 'Content-Type': 'text/plain; charset=utf-8' },
       })
 
@@ -125,10 +130,14 @@ export declare namespace create {
   export type Config = {
     /** Base path prefix to strip before routing (e.g. `'/api/proxy'`). */
     basePath?: string | undefined
+    /** Short description of the proxy shown in `llms.txt`. */
+    description?: string | undefined
     /** Custom `fetch` implementation. Defaults to `globalThis.fetch`. */
     fetch?: typeof globalThis.fetch | undefined
     /** Services to proxy. Each service is mounted at `/{serviceId}/`. */
     services: Service.Service[]
+    /** Human-readable title for the proxy shown in `llms.txt`. */
+    title?: string | undefined
   }
 }
 
