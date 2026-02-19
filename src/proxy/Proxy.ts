@@ -227,7 +227,7 @@ const aiUserAgents = [
   'GoogleAgent-Mariner',
 ]
 
-const terminalUserAgents = ['curl/', 'Wget/', 'HTTPie/', 'httpie-go/', 'xh/']
+const terminalUserAgents = ['curl', 'Wget', 'HTTPie', 'httpie-go', 'mppx', 'presto', 'xh']
 
 function wantsMarkdown(request: globalThis.Request): boolean {
   const accept = request.headers.get('accept')
