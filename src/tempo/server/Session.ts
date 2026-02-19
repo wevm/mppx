@@ -85,7 +85,7 @@ export function session<const parameters extends session.Parameters>(p?: paramet
   const parameters = p as parameters
   const {
     amount,
-    currency = parameters.testnet ? defaults.pathUsd : defaults.usdc,
+    currency = parameters.testnet === false ? defaults.usdc : defaults.pathUsd,
     decimals = defaults.decimals,
     store: rawStore = Store.memory(),
     suggestedDeposit,

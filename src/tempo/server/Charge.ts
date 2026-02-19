@@ -40,7 +40,7 @@ export function charge<const parameters extends charge.Parameters>(
 ) {
   const {
     amount,
-    currency = parameters.testnet ? defaults.pathUsd : defaults.usdc,
+    currency = parameters.testnet === false ? defaults.usdc : defaults.pathUsd,
     decimals = defaults.decimals,
     description,
     externalId,
