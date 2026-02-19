@@ -16,7 +16,7 @@ const variables = {
 
 /** Fallback values when no environment variable is set. */
 const defaults = {
-  realm: 'localhost',
+  realm: 'MPP Payment',
   secretKey: 'tmp',
 } as const satisfies Record<keyof typeof variables, string>
 
