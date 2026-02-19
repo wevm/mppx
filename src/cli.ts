@@ -156,8 +156,10 @@ cli
       const currency = challengeRequest.currency as string | undefined
       const shownKeys = new Set<string>()
 
-      let tokenSymbol = currency ?? ''
-      let tokenDecimals = (challengeRequest.decimals as number | undefined) ?? 6
+      let tokenSymbol = challenge.method === 'stripe' ? (currency?.toUpperCase() ?? '') : (currency ?? '')
+      let tokenDecimals =
+        (challengeRequest.decimals as number | undefined) ??
+        (challenge.method === 'stripe' ? 2 : 6)
       let explorerUrl: string | undefined
 
       // Tempo-specific setup (private key, viem account/client, token info)
@@ -342,9 +344,15 @@ cli
           }),
           methodOpts,
         )
-        const stripeSecretKey = process.env.STRIPE_SECRET_KEY
+        const stripeSecretKey = process.env.MPPX_STRIPE_SECRET_KEY
         if (!stripeSecretKey) {
-          console.error('STRIPE_SECRET_KEY environment variable is required for Stripe payments.')
+          console.error('\nMPPX_STRIPE_SECRET_KEY environment variable is required for Stripe payments.')
+          process.exit(1)
+        }
+        if (!stripeSecretKey.startsWith('sk_test_')) {
+          console.error(
+            '\nStripe CLI payments are currently only supported in test mode (sk_test_... keys).',
+          )
           process.exit(1)
         }
         const mppx = Mppx.create({
@@ -371,20 +379,39 @@ cli
                     body.set(`metadata[${key}]`, value)
                   }
                 }
-                const response = await globalThis.fetch(
-                  'https://api.stripe.com/v1/test_helpers/shared_payment/granted_tokens',
-                  {
-                    method: 'POST',
-                    headers: {
-                      Authorization: `Basic ${btoa(`${stripeSecretKey}:`)}`,
-                      'Content-Type': 'application/x-www-form-urlencoded',
-                    },
-                    body,
-                  },
-                )
+                const sptUrl =
+                  'https://api.stripe.com/v1/test_helpers/shared_payment/granted_tokens'
+                const sptHeaders = {
+                  Authorization: `Basic ${btoa(`${stripeSecretKey}:`)}`,
+                  'Content-Type': 'application/x-www-form-urlencoded',
+                }
+                let response = await globalThis.fetch(sptUrl, {
+                  method: 'POST',
+                  headers: sptHeaders,
+                  body,
+                })
                 if (!response.ok) {
                   const error = (await response.json()) as { error: { message: string } }
-                  throw new Error(`Failed to create SPT: ${error.error.message}`)
+                  if (
+                    (metadata || networkId) &&
+                    error.error.message.includes('Received unknown parameter')
+                  ) {
+                    const fallbackBody = new URLSearchParams({
+                      payment_method: paymentMethod!,
+                      'usage_limits[currency]': currency,
+                      'usage_limits[max_amount]': amount,
+                      'usage_limits[expires_at]': expiresAt.toString(),
+                    })
+                    response = await globalThis.fetch(sptUrl, {
+                      method: 'POST',
+                      headers: sptHeaders,
+                      body: fallbackBody,
+                    })
+                  }
+                  if (!response.ok) {
+                    const error = (await response.json()) as { error: { message: string } }
+                    throw new Error(`Failed to create SPT: ${error.error.message}`)
+                  }
                 }
                 const { id } = (await response.json()) as { id: string }
                 return id
@@ -494,6 +521,15 @@ cli
                 explorerUrl
               ) {
                 rows.push([key, pc.link(`${explorerUrl}/tx/${value}`, value)])
+              } else if (
+                key === 'reference' &&
+                typeof value === 'string' &&
+                challenge.method === 'stripe' &&
+                value.startsWith('pi_')
+              ) {
+                const isTest = process.env.MPPX_STRIPE_SECRET_KEY?.startsWith('sk_test_')
+                const dashboardUrl = `https://dashboard.stripe.com${isTest ? '/test' : ''}/payments/${value}`
+                rows.push([key, pc.link(dashboardUrl, value)])
               } else rows.push([key, String(value)])
             }
             rows.sort(([a], [b]) => a.localeCompare(b))
