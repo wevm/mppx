@@ -258,7 +258,16 @@ describe('session multi-fetch (examples/session/multi-fetch)', () => {
 
         // Second request: reuse the channel via -M channel=<id>
         const second = await runAsync(
-          [httpServer.url, '--rpc-url', rpcUrl, '-s', '-M', `channel=${channelId}`, '-M', 'deposit=10'],
+          [
+            httpServer.url,
+            '--rpc-url',
+            rpcUrl,
+            '-s',
+            '-M',
+            `channel=${channelId}`,
+            '-M',
+            'deposit=10',
+          ],
           { input: '' },
         )
         expect(second.stdout).toContain('scraped-content')
