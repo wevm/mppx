@@ -5,7 +5,14 @@ import { beforeAll, describe, expect, test } from 'vitest'
 import { deployEscrow, openChannel } from '~test/tempo/stream.js'
 import { accounts, asset, chain, client, fundAccount } from '~test/tempo/viem.js'
 import * as Challenge from '../../Challenge.js'
+import * as Credential from '../../Credential.js'
+import type { StreamCredentialPayload } from '../stream/Types.js'
 import { session } from './Session.js'
+
+function deserializePayload(result: string) {
+  const cred = Credential.deserialize<StreamCredentialPayload>(result)
+  return cred
+}
 
 // ---------------------------------------------------------------------------
 // Pure-test account + client (no real node needed)
@@ -138,7 +145,18 @@ describe('session (pure)', () => {
         context: { action: 'voucher', channelId, cumulativeAmount: '5' },
       })
 
-      expect(result).toMatch(/^Payment /)
+      const cred = deserializePayload(result)
+      expect(cred.challenge.id).toBe('test-challenge-id')
+      expect(cred.challenge.realm).toBe('test.com')
+      expect(cred.challenge.method).toBe('tempo')
+      expect(cred.challenge.intent).toBe('session')
+      expect(cred.payload.action).toBe('voucher')
+      expect(cred.payload.channelId).toBe(channelId)
+      if (cred.payload.action === 'voucher') {
+        expect(cred.payload.cumulativeAmount).toBe('5000000')
+        expect(cred.payload.signature).toMatch(/^0x[0-9a-f]+$/)
+      }
+      expect(cred.source).toBe(`did:pkh:eip155:42431:${pureAccount.address}`)
     })
 
     test('manual open produces valid credential', async () => {
@@ -154,7 +172,18 @@ describe('session (pure)', () => {
         },
       })
 
-      expect(result).toMatch(/^Payment /)
+      const cred = deserializePayload(result)
+      expect(cred.challenge.id).toBe('test-challenge-id')
+      expect(cred.payload.action).toBe('open')
+      expect(cred.payload.channelId).toBe(channelId)
+      if (cred.payload.action === 'open') {
+        expect(cred.payload.type).toBe('transaction')
+        expect(cred.payload.transaction).toBe('0xdeadbeef')
+        expect(cred.payload.cumulativeAmount).toBe('5000000')
+        expect(cred.payload.signature).toMatch(/^0x[0-9a-f]+$/)
+        expect(cred.payload.authorizedSigner).toBe(pureAccount.address)
+      }
+      expect(cred.source).toBe(`did:pkh:eip155:42431:${pureAccount.address}`)
     })
 
     test('manual close produces valid credential', async () => {
@@ -165,7 +194,15 @@ describe('session (pure)', () => {
         context: { action: 'close', channelId, cumulativeAmount: '5' },
       })
 
-      expect(result).toMatch(/^Payment /)
+      const cred = deserializePayload(result)
+      expect(cred.challenge.id).toBe('test-challenge-id')
+      expect(cred.payload.action).toBe('close')
+      expect(cred.payload.channelId).toBe(channelId)
+      if (cred.payload.action === 'close') {
+        expect(cred.payload.cumulativeAmount).toBe('5000000')
+        expect(cred.payload.signature).toMatch(/^0x[0-9a-f]+$/)
+      }
+      expect(cred.source).toBe(`did:pkh:eip155:42431:${pureAccount.address}`)
     })
   })
 })
@@ -225,7 +262,15 @@ describe('session (on-chain)', () => {
         context: { depositRaw: '5000000' },
       })
 
-      expect(result).toMatch(/^Payment /)
+      const cred = deserializePayload(result)
+      expect(cred.payload.action).toBe('open')
+      expect(cred.payload.channelId).toMatch(/^0x[0-9a-f]{64}$/)
+      if (cred.payload.action === 'open') {
+        expect(cred.payload.type).toBe('transaction')
+        expect(cred.payload.cumulativeAmount).toBe('1000000')
+        expect(cred.payload.signature).toMatch(/^0x[0-9a-f]+$/)
+      }
+      expect(cred.source).toContain(`did:pkh:eip155:${chain.id}:`)
     })
 
     test('suggestedDeposit capped by maxDeposit', async () => {
@@ -239,7 +284,14 @@ describe('session (on-chain)', () => {
       const challenge = makeLiveChallenge({ suggestedDeposit: '10000000' })
 
       const result = await method.createCredential({ challenge, context: {} })
-      expect(result).toMatch(/^Payment /)
+
+      const cred = deserializePayload(result)
+      expect(cred.payload.action).toBe('open')
+      if (cred.payload.action === 'open') {
+        expect(cred.payload.type).toBe('transaction')
+        expect(cred.payload.cumulativeAmount).toBe('1000000')
+      }
+      expect(cred.source).toContain(`did:pkh:eip155:${chain.id}:`)
     })
 
     test('suggestedDeposit alone', async () => {
@@ -253,7 +305,12 @@ describe('session (on-chain)', () => {
       const challenge = makeLiveChallenge({ suggestedDeposit: '7000000' })
 
       const result = await method.createCredential({ challenge, context: {} })
-      expect(result).toMatch(/^Payment /)
+
+      const cred = deserializePayload(result)
+      expect(cred.payload.action).toBe('open')
+      if (cred.payload.action === 'open') {
+        expect(cred.payload.cumulativeAmount).toBe('1000000')
+      }
     })
 
     test('maxDeposit alone', async () => {
@@ -268,7 +325,12 @@ describe('session (on-chain)', () => {
         challenge: makeLiveChallenge(),
         context: {},
       })
-      expect(result).toMatch(/^Payment /)
+
+      const cred = deserializePayload(result)
+      expect(cred.payload.action).toBe('open')
+      if (cred.payload.action === 'open') {
+        expect(cred.payload.cumulativeAmount).toBe('1000000')
+      }
     })
 
     test('parameters.deposit as last resort', async () => {
@@ -283,7 +345,12 @@ describe('session (on-chain)', () => {
         challenge: makeLiveChallenge(),
         context: {},
       })
-      expect(result).toMatch(/^Payment /)
+
+      const cred = deserializePayload(result)
+      expect(cred.payload.action).toBe('open')
+      if (cred.payload.action === 'open') {
+        expect(cred.payload.cumulativeAmount).toBe('1000000')
+      }
     })
 
     test('throws when no deposit source available', async () => {
@@ -327,7 +394,15 @@ describe('session (on-chain)', () => {
       })
 
       const result = await method.createCredential({ challenge, context: {} })
-      expect(result).toMatch(/^Payment /)
+
+      const cred = deserializePayload(result)
+      expect(cred.payload.action).toBe('voucher')
+      if (cred.payload.action === 'voucher') {
+        expect(cred.payload.channelId).toBe(channelId)
+        expect(cred.payload.cumulativeAmount).toBe('1000000')
+        expect(cred.payload.signature).toMatch(/^0x[0-9a-f]+$/)
+      }
+      expect(cred.source).toContain(`did:pkh:eip155:${chain.id}:`)
     })
 
     test('throws when explicit channelId cannot be recovered', async () => {
@@ -350,7 +425,7 @@ describe('session (on-chain)', () => {
   })
 
   describe('cumulative tracking in auto mode', () => {
-    test('cumulative amount increases across vouchers', async () => {
+    test('first call opens channel, second issues voucher with increased cumulative', async () => {
       const updates: { cumulativeAmount: bigint }[] = []
       const method = session({
         getClient: () => client,
@@ -362,10 +437,25 @@ describe('session (on-chain)', () => {
 
       const challenge = makeLiveChallenge()
 
-      await method.createCredential({ challenge, context: {} })
-      await method.createCredential({ challenge, context: {} })
+      const first = await method.createCredential({ challenge, context: {} })
+      const firstCred = deserializePayload(first)
+      expect(firstCred.payload.action).toBe('open')
+      if (firstCred.payload.action === 'open') {
+        expect(firstCred.payload.type).toBe('transaction')
+        expect(firstCred.payload.cumulativeAmount).toBe('1000000')
+      }
+
+      const second = await method.createCredential({ challenge, context: {} })
+      const secondCred = deserializePayload(second)
+      expect(secondCred.payload.action).toBe('voucher')
+      if (secondCred.payload.action === 'voucher') {
+        expect(secondCred.payload.channelId).toBe(firstCred.payload.channelId)
+        expect(secondCred.payload.cumulativeAmount).toBe('2000000')
+        expect(secondCred.payload.signature).toMatch(/^0x[0-9a-f]+$/)
+      }
 
       expect(updates.length).toBe(2)
+      expect(updates[0]!.cumulativeAmount).toBe(1_000_000n)
       expect(updates[1]!.cumulativeAmount).toBe(2_000_000n)
     })
   })
