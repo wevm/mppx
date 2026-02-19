@@ -1,5 +1,5 @@
 ---
-"mppx": minor
+"mppx": patch
 ---
 
 Added auto-detection of `realm` and `secretKey` from environment variables in `Mppx.create()`.
