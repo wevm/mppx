@@ -1,5 +1,5 @@
 ---
-"mppx": minor
+"mppx": patch
 ---
 
 - Added `title` and `description` options to `Proxy.create` config, used to populate the `llms.txt` heading and description.
