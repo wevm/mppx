@@ -1,5 +1,11 @@
 # mppx
 
+## 0.3.1
+
+### Patch Changes
+
+- e6c9f85: Fixed `/discover.md` route returning 404.
+
 ## 0.3.0
 
 ### Minor Changes
