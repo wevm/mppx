@@ -20,7 +20,7 @@ Service.from('my-api', {
   baseUrl: 'https://api.example.com',
   title: 'My API',
   description: 'A custom API service.',
-  docsLlmsUrl: 'https://context7.com/my-org/my-api/llms.txt',
+  docsLlmsUrl: 'https://example.com/llms.txt',
   routes: { ... },
 })
 
