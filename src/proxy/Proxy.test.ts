@@ -85,19 +85,18 @@ describe('create', () => {
     expect(await res.json()).toMatchInlineSnapshot(`
       [
         {
-          "baseUrl": "https://api.example.com",
           "id": "api",
           "routes": [
             {
               "method": "GET",
-              "path": "/v1/models",
-              "pattern": "GET /v1/models",
+              "path": "/api/v1/models",
+              "pattern": "GET /api/v1/models",
               "payment": null,
             },
             {
               "method": "POST",
-              "path": "/v1/generate",
-              "pattern": "POST /v1/generate",
+              "path": "/api/v1/generate",
+              "pattern": "POST /api/v1/generate",
               "payment": {
                 "amount": "1000000",
                 "currency": "0x20c0000000000000000000000000000000000001",
@@ -110,8 +109,8 @@ describe('create', () => {
             },
             {
               "method": "POST",
-              "path": "/v1/stream",
-              "pattern": "POST /v1/stream",
+              "path": "/api/v1/stream",
+              "pattern": "POST /api/v1/stream",
               "payment": {
                 "amount": "1000000",
                 "currency": "0x20c0000000000000000000000000000000000001",
@@ -220,19 +219,18 @@ describe('create', () => {
     expect(res.status).toBe(200)
     expect(await res.json()).toMatchInlineSnapshot(`
       {
-        "baseUrl": "https://api.example.com",
         "id": "api",
         "routes": [
           {
             "method": "GET",
-            "path": "/v1/models",
-            "pattern": "GET /v1/models",
+            "path": "/api/v1/models",
+            "pattern": "GET /api/v1/models",
             "payment": null,
           },
           {
             "method": "POST",
-            "path": "/v1/generate",
-            "pattern": "POST /v1/generate",
+            "path": "/api/v1/generate",
+            "pattern": "POST /api/v1/generate",
             "payment": {
               "amount": "1000000",
               "currency": "0x20c0000000000000000000000000000000000001",
@@ -286,13 +284,13 @@ describe('create', () => {
 
       ### Routes
 
-      - \`POST /v1/chat/completions\`: Chat completion
+      - \`POST /openai/v1/chat/completions\`: Chat completion
         - Type: charge
         - Price: 0.05 (50000 units, 6 decimals)
         - Currency: 0x20c0000000000000000000000000000000000001
         - Docs: https://context7.com/websites/platform_openai/llms.txt?topic=POST%20%2Fv1%2Fchat%2Fcompletions
 
-      - \`GET /v1/models\`
+      - \`GET /openai/v1/models\`
         - Type: free
         - Docs: https://context7.com/websites/platform_openai/llms.txt?topic=GET%20%2Fv1%2Fmodels
 
@@ -302,7 +300,7 @@ describe('create', () => {
 
       ### Routes
 
-      - \`POST /v1/messages\`: Send message
+      - \`POST /anthropic/v1/messages\`: Send message
         - Type: charge
         - Price: 0.03 (30000 units, 6 decimals)
         - Currency: 0x20c0000000000000000000000000000000000001
@@ -345,13 +343,13 @@ describe('create', () => {
 
       ## Routes
 
-      - \`POST /v1/chat/completions\`: Chat completion
+      - \`POST /openai/v1/chat/completions\`: Chat completion
         - Type: charge
         - Price: 0.05 (50000 units, 6 decimals)
         - Currency: 0x20c0000000000000000000000000000000000001
         - Docs: https://context7.com/websites/platform_openai/llms.txt?topic=POST%20%2Fv1%2Fchat%2Fcompletions
 
-      - \`GET /v1/models\`
+      - \`GET /openai/v1/models\`
         - Type: free
         - Docs: https://context7.com/websites/platform_openai/llms.txt?topic=GET%20%2Fv1%2Fmodels
       "

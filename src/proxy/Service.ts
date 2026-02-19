@@ -160,18 +160,18 @@ function resolveRewriteRequest(
 /** Serializes a service for discovery responses. */
 export function serialize(s: Service) {
   return {
-    baseUrl: s.baseUrl,
     description: s.description,
     id: s.id,
     docsLlmsUrl: s.docsLlmsUrl?.({}),
     routes: Object.entries(s.routes).map(([pattern, endpoint]) => {
       const tokens = pattern.trim().split(/\s+/)
       const hasMethod = tokens.length >= 2
+      const path = hasMethod ? tokens.slice(1).join(' ') : tokens[0]
       return {
         docsLlmsUrl: s.docsLlmsUrl?.({ route: pattern }),
         method: hasMethod ? tokens[0] : undefined,
-        path: hasMethod ? tokens.slice(1).join(' ') : tokens[0],
-        pattern,
+        path: `/${s.id}${path}`,
+        pattern: hasMethod ? `${tokens[0]} /${s.id}${path}` : `/${s.id}${path}`,
         payment: endpoint ? resolvePayment(endpoint) : null,
       }
     }),
