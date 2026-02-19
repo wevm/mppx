@@ -85,7 +85,7 @@ export function session<const parameters extends session.Parameters>(p?: paramet
   const parameters = p as parameters
   const {
     amount,
-    currency,
+    currency = parameters.testnet ? defaults.pathUsd : defaults.usdc,
     decimals = defaults.decimals,
     store: rawStore = Store.memory(),
     suggestedDeposit,
@@ -156,15 +156,9 @@ export function session<const parameters extends session.Parameters>(p?: paramet
         return undefined
       })()
 
-      const resolvedCurrency =
-        request.currency ??
-        defaults.currency[chainId as keyof typeof defaults.currency] ??
-        defaults.pathUsd
-
       return {
         ...request,
         chainId,
-        currency: resolvedCurrency,
         escrowContract: resolvedEscrow,
         feePayer: resolvedFeePayer,
       }

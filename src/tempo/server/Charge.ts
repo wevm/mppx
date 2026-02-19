@@ -40,7 +40,7 @@ export function charge<const parameters extends charge.Parameters>(
 ) {
   const {
     amount,
-    currency,
+    currency = parameters.testnet ? defaults.pathUsd : defaults.usdc,
     decimals = defaults.decimals,
     description,
     externalId,
@@ -93,15 +93,9 @@ export function charge<const parameters extends charge.Parameters>(
         return undefined
       })()
 
-      const resolvedCurrency =
-        request.currency ??
-        defaults.currency[chainId as keyof typeof defaults.currency] ??
-        defaults.pathUsd
-
       return {
         ...request,
         chainId,
-        currency: resolvedCurrency,
         feePayer: resolvedFeePayer,
         memo: request.memo || undefined,
       }
