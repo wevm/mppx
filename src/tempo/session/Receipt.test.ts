@@ -1,6 +1,10 @@
 import type { Hex } from 'viem'
 import { describe, expect, test } from 'vitest'
-import { createSessionReceipt, deserializeSessionReceipt, serializeSessionReceipt } from './Receipt.js'
+import {
+  createSessionReceipt,
+  deserializeSessionReceipt,
+  serializeSessionReceipt,
+} from './Receipt.js'
 
 const channelId = '0x0000000000000000000000000000000000000000000000000000000000000001' as Hex
 

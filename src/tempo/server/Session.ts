@@ -47,7 +47,7 @@ import {
 } from '../session/Chain.js'
 import * as ChannelStore from '../session/ChannelStore.js'
 import { createSessionReceipt } from '../session/Receipt.js'
-import type { SignedVoucher, SessionCredentialPayload, SessionReceipt } from '../session/Types.js'
+import type { SessionCredentialPayload, SessionReceipt, SignedVoucher } from '../session/Types.js'
 import { parseVoucherFromPayload, verifyVoucher } from '../session/Voucher.js'
 import * as Transport from './internal/transport.js'
 

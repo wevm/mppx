@@ -380,7 +380,8 @@ cli
               receiptJson.acceptedCumulative
             ) {
               sessionCumulativeAmount = BigInt(receiptJson.acceptedCumulative)
-              if (sessionChannelId) writeChannelCumulative(sessionChannelId, sessionCumulativeAmount)
+              if (sessionChannelId)
+                writeChannelCumulative(sessionChannelId, sessionCumulativeAmount)
             }
             info(`\n${pc.bold(pc.green('Payment Receipt'))}\n`)
             const rows: [string, string][] = []
