@@ -42,12 +42,10 @@ export function get(key: keyof typeof variables): string {
 
 /** Reads a single environment variable, probing available runtime APIs. */
 function read(name: string): string | undefined {
-  // Node/Bun/Vercel Edge
   try {
     if (typeof process !== 'undefined' && process?.env) return process.env[name]
   } catch {}
 
-  // Deno
   try {
     const deno = (globalThis as any).Deno
     if (deno?.env?.get) return deno.env.get(name)
