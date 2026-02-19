@@ -9,7 +9,7 @@ export type Service = {
   /** Unique identifier used as the URL prefix (e.g. `'openai'` → `/{id}/...`). */
   id: string
   /** Returns a documentation URL. Called with no argument for the service root, or with a route pattern for per-endpoint docs. */
-  docsLlmsUrl?: ((endpoint?: string | undefined) => string | undefined) | undefined
+  docsLlmsUrl?: ((options: { endpoint?: string | undefined }) => string | undefined) | undefined
   /** Hook to modify the upstream request before sending (e.g. inject auth headers). */
   rewriteRequest?: ((req: Request, ctx: Context) => Request | Promise<Request>) | undefined
   /** Hook to modify the upstream response before returning to the client. */
@@ -107,7 +107,7 @@ export declare namespace from {
     /** Shorthand: inject custom headers. */
     headers?: Record<string, string> | undefined
     /** Documentation URL for the service. String for a static base URL, or a function receiving an optional endpoint pattern. */
-    docsLlmsUrl?: string | ((endpoint?: string | undefined) => string | undefined) | undefined
+    docsLlmsUrl?: string | ((options: { endpoint?: string | undefined }) => string | undefined) | undefined
     /** Shorthand: full request mutation function. Takes priority over `bearer`/`headers`. */
     mutate?: ((req: Request) => Request | Promise<Request>) | undefined
     /** Hook to modify the upstream request. Receives typed per-endpoint options via `ctx`. */
@@ -160,12 +160,12 @@ export function serialize(s: Service) {
     baseUrl: s.baseUrl,
     description: s.description,
     id: s.id,
-    docsLlmsUrl: s.docsLlmsUrl?.(),
+    docsLlmsUrl: s.docsLlmsUrl?.({}),
     routes: Object.entries(s.routes).map(([pattern, endpoint]) => {
       const tokens = pattern.trim().split(/\s+/)
       const hasMethod = tokens.length >= 2
       return {
-        docsLlmsUrl: s.docsLlmsUrl?.(pattern),
+        docsLlmsUrl: s.docsLlmsUrl?.({ endpoint: pattern }),
         method: hasMethod ? tokens[0] : undefined,
         path: hasMethod ? tokens.slice(1).join(' ') : tokens[0],
         pattern,
@@ -205,7 +205,7 @@ export function toLlmsTxt(
 
   for (const s of services) {
     const serialized = serialize(s)
-    const docsLlmsUrl = s.docsLlmsUrl?.()
+    const docsLlmsUrl = s.docsLlmsUrl?.({})
     lines.push('', `## ${s.title ?? s.id}`, '')
     if (s.description) lines.push(s.description, '')
     if (docsLlmsUrl) lines.push(`Documentation: ${docsLlmsUrl}`, '')
@@ -256,9 +256,9 @@ function resolvePayment(endpoint: Endpoint): Record<string, unknown> | null {
 }
 
 function resolveLlmsUrl(
-  input: string | ((endpoint?: string | undefined) => string | undefined) | undefined,
+  input: string | ((options: { endpoint?: string | undefined }) => string | undefined) | undefined,
 ): Service['docsLlmsUrl'] {
   if (!input) return undefined
   if (typeof input === 'function') return input
-  return (endpoint) => (endpoint ? undefined : input)
+  return ({ endpoint }) => (endpoint ? undefined : input)
 }

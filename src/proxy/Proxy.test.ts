@@ -184,35 +184,29 @@ describe('create', () => {
 
       Chat completions, embeddings, image generation, and audio transcription.
 
-      Documentation: https://context7.com/openai/openai-node/llms.txt
-
       - \`POST /v1/chat/completions\` - Chat completion
         - Type: charge
         - Price: 0.05 (50000 units, 6 decimals)
         - Currency: 0x20c0000000000000000000000000000000000001
-        - Docs: https://context7.com/openai/openai-node/llms.txt?topic=POST%20%2Fv1%2Fchat%2Fcompletions
+        - Docs: https://context7.com/websites/platform_openai/llms.txt?topic=POST%20%2Fv1%2Fchat%2Fcompletions
       - \`POST /v1/embeddings\` - Generate embeddings
         - Type: charge
         - Price: 0.01 (10000 units, 6 decimals)
         - Currency: 0x20c0000000000000000000000000000000000001
-        - Docs: https://context7.com/openai/openai-node/llms.txt?topic=POST%20%2Fv1%2Fembeddings
+        - Docs: https://context7.com/websites/platform_openai/llms.txt?topic=POST%20%2Fv1%2Fembeddings
 
       ## Anthropic
 
       Claude language models for messages and completions.
 
-      Documentation: https://context7.com/anthropics/anthropic-sdk-typescript/llms.txt
-
       - \`POST /v1/messages\` - Send message
         - Type: charge
         - Price: 0.03 (30000 units, 6 decimals)
         - Currency: 0x20c0000000000000000000000000000000000001
-        - Docs: https://context7.com/anthropics/anthropic-sdk-typescript/llms.txt?topic=POST%20%2Fv1%2Fmessages
       - \`POST /v1/messages/stream\` - Stream message
         - Type: session
         - Price: 0.01/token (10000 units, 6 decimals)
-        - Currency: 0x20c0000000000000000000000000000000000001
-        - Docs: https://context7.com/anthropics/anthropic-sdk-typescript/llms.txt?topic=POST%20%2Fv1%2Fmessages%2Fstream"
+        - Currency: 0x20c0000000000000000000000000000000000001"
     `)
   })
 
