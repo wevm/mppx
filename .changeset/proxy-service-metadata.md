@@ -28,7 +28,7 @@ Service.from('my-api', {
   docsLlmsUrl: (endpoint) =>
     endpoint
       ? `https://example.com/api/${encodeURIComponent(endpoint)}.md`
-      : undefined,
+      : 'https://example.com/llms.txt',
   routes: { ... },
 })
 ```
