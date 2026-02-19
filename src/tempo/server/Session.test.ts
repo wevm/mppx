@@ -1099,6 +1099,58 @@ describe('session', () => {
       } as any)
       expect(result).toBeUndefined()
     })
+
+    test('returns undefined for voucher POST with content-length > 0 (content request)', () => {
+      const server = createServer()
+      const result = server.respond!({
+        credential: {
+          challenge: makeChallenge({
+            channelId: '0x0000000000000000000000000000000000000000000000000000000000000001' as Hex,
+          }),
+          payload: { action: 'voucher' },
+        },
+        input: new Request('http://localhost', {
+          method: 'POST',
+          headers: { 'content-length': '42' },
+        }),
+      } as any)
+      expect(result).toBeUndefined()
+    })
+
+    test('returns undefined for voucher POST with transfer-encoding header (content request)', () => {
+      const server = createServer()
+      const result = server.respond!({
+        credential: {
+          challenge: makeChallenge({
+            channelId: '0x0000000000000000000000000000000000000000000000000000000000000001' as Hex,
+          }),
+          payload: { action: 'voucher' },
+        },
+        input: new Request('http://localhost', {
+          method: 'POST',
+          headers: { 'transfer-encoding': 'chunked' },
+        }),
+      } as any)
+      expect(result).toBeUndefined()
+    })
+
+    test('returns 204 for voucher POST with content-length: 0', () => {
+      const server = createServer()
+      const result = server.respond!({
+        credential: {
+          challenge: makeChallenge({
+            channelId: '0x0000000000000000000000000000000000000000000000000000000000000001' as Hex,
+          }),
+          payload: { action: 'voucher' },
+        },
+        input: new Request('http://localhost', {
+          method: 'POST',
+          headers: { 'content-length': '0' },
+        }),
+      } as any)
+      expect(result).toBeInstanceOf(Response)
+      expect((result as Response).status).toBe(204)
+    })
   })
 
   describe('SSE', () => {

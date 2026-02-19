@@ -344,3 +344,176 @@ describe('receipt handling', () => {
     expect(result.status).toBe(200)
   })
 })
+
+describe('withReceipt', () => {
+  const mockCharge = Method.from({
+    name: 'mock',
+    intent: 'charge',
+    schema: {
+      credential: {
+        payload: z.object({ token: z.string() }),
+      },
+      request: z.object({
+        amount: z.string(),
+        currency: z.string(),
+        decimals: z.number(),
+        recipient: z.string(),
+      }),
+    },
+  })
+
+  function mockReceipt() {
+    return {
+      method: 'mock',
+      reference: 'tx-ref',
+      status: 'success' as const,
+      timestamp: new Date().toISOString(),
+    }
+  }
+
+  test('attaches Payment-Receipt header to response', async () => {
+    const mockMethod = Method.toServer(mockCharge, {
+      async verify() {
+        return mockReceipt()
+      },
+    })
+
+    const handler = Mppx.create({ methods: [mockMethod], realm, secretKey })
+    const handle = handler.charge({
+      amount: '1000',
+      currency: '0x0000000000000000000000000000000000000001',
+      decimals: 6,
+      expires: new Date(Date.now() + 60_000).toISOString(),
+      recipient: '0x0000000000000000000000000000000000000002',
+    })
+
+    const firstResult = await handle(new Request('https://example.com/resource'))
+    expect(firstResult.status).toBe(402)
+    if (firstResult.status !== 402) throw new Error()
+
+    const challenge = Challenge.fromResponse(firstResult.challenge)
+    const credential = Credential.from({ challenge, payload: { token: 'valid' } })
+
+    const result = await handle(
+      new Request('https://example.com/resource', {
+        headers: { Authorization: Credential.serialize(credential) },
+      }),
+    )
+    expect(result.status).toBe(200)
+    if (result.status !== 200) throw new Error()
+
+    const response = result.withReceipt(Response.json({ data: 'ok' }))
+    expect(response.headers.get('Payment-Receipt')).toBeTruthy()
+    const body = await response.json()
+    expect(body).toEqual({ data: 'ok' })
+  })
+
+  test('throws when called without response arg and no management response', async () => {
+    const mockMethod = Method.toServer(mockCharge, {
+      async verify() {
+        return mockReceipt()
+      },
+    })
+
+    const handler = Mppx.create({ methods: [mockMethod], realm, secretKey })
+    const handle = handler.charge({
+      amount: '1000',
+      currency: '0x0000000000000000000000000000000000000001',
+      decimals: 6,
+      expires: new Date(Date.now() + 60_000).toISOString(),
+      recipient: '0x0000000000000000000000000000000000000002',
+    })
+
+    const firstResult = await handle(new Request('https://example.com/resource'))
+    if (firstResult.status !== 402) throw new Error()
+
+    const challenge = Challenge.fromResponse(firstResult.challenge)
+    const credential = Credential.from({ challenge, payload: { token: 'valid' } })
+
+    const result = await handle(
+      new Request('https://example.com/resource', {
+        headers: { Authorization: Credential.serialize(credential) },
+      }),
+    )
+    expect(result.status).toBe(200)
+    if (result.status !== 200) throw new Error()
+
+    expect(() => result.withReceipt()).toThrow('withReceipt() requires a response argument')
+  })
+
+  test('returns management response when respond hook returns Response', async () => {
+    const mockMethodWithRespond = Method.toServer(mockCharge, {
+      async verify() {
+        return mockReceipt()
+      },
+      respond() {
+        return new Response(null, { status: 204 })
+      },
+    })
+
+    const handler = Mppx.create({ methods: [mockMethodWithRespond], realm, secretKey })
+    const handle = handler.charge({
+      amount: '1000',
+      currency: '0x0000000000000000000000000000000000000001',
+      decimals: 6,
+      expires: new Date(Date.now() + 60_000).toISOString(),
+      recipient: '0x0000000000000000000000000000000000000002',
+    })
+
+    const firstResult = await handle(new Request('https://example.com/resource'))
+    if (firstResult.status !== 402) throw new Error()
+
+    const challenge = Challenge.fromResponse(firstResult.challenge)
+    const credential = Credential.from({ challenge, payload: { token: 'valid' } })
+
+    const result = await handle(
+      new Request('https://example.com/resource', {
+        headers: { Authorization: Credential.serialize(credential) },
+      }),
+    )
+    expect(result.status).toBe(200)
+    if (result.status !== 200) throw new Error()
+
+    const response = result.withReceipt()
+    expect(response.status).toBe(204)
+    expect(response.headers.get('Payment-Receipt')).toBeTruthy()
+  })
+
+  test('toNodeListener sets Payment-Receipt header on 200', async () => {
+    const mockMethod = Method.toServer(mockCharge, {
+      async verify() {
+        return mockReceipt()
+      },
+    })
+
+    const handler = Mppx.create({ methods: [mockMethod], realm, secretKey })
+
+    const server = await Http.createServer(async (req, res) => {
+      const result = await Mppx.toNodeListener(
+        handler.charge({
+          amount: '1000',
+          currency: '0x0000000000000000000000000000000000000001',
+          decimals: 6,
+          expires: new Date(Date.now() + 60_000).toISOString(),
+          recipient: '0x0000000000000000000000000000000000000002',
+        }),
+      )(req, res)
+      if (result.status === 402) return
+      res.end('OK')
+    })
+
+    const firstResponse = await fetch(server.url)
+    expect(firstResponse.status).toBe(402)
+
+    const challenge = Challenge.fromResponse(firstResponse)
+    const credential = Credential.from({ challenge, payload: { token: 'valid' } })
+
+    const response = await fetch(server.url, {
+      headers: { Authorization: Credential.serialize(credential) },
+    })
+    expect(response.status).toBe(200)
+    expect(response.headers.get('Payment-Receipt')).toBeTruthy()
+
+    server.close()
+  })
+})
