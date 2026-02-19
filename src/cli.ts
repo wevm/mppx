@@ -1268,6 +1268,8 @@ function chainName(chain: { id: number; name: string }) {
 }
 
 const pathUsd = '0x20c0000000000000000000000000000000000000' as Address
+const usdcE = '0x20C000000000000000000000b9537d11c60E8b50' as Address
+const mainnetTokens = [pathUsd, usdcE] as const
 const testnetTokens = [
   '0x20c0000000000000000000000000000000000000',
   '0x20c0000000000000000000000000000000000001',
@@ -1296,7 +1298,11 @@ async function fetchTokenInfo(
     Actions.token.getBalance(client, { account, token }).catch(() => 0n),
     Actions.token.getMetadata(client, { token }).catch(() => ({ symbol: token as string })),
   ])
-  const symbol = token === pathUsd ? 'PathUSD' : metadata.symbol
+  const knownSymbols: Record<string, string> = {
+    [pathUsd]: 'PathUSD',
+    [usdcE]: 'USDC.e',
+  }
+  const symbol = knownSymbols[token] ?? metadata.symbol
   const decimals = 'decimals' in metadata ? metadata.decimals : 6
   return { balance, symbol, decimals }
 }
@@ -1349,13 +1355,17 @@ async function fetchBalanceLines(
         .filter((t) => t.balance > 0n)
         .map((t) => `${fmtBalance(t.balance, t.symbol, t.decimals)} ${label}`)
     }
-    const { balance, symbol, decimals } = await fetchTokenInfo(client, pathUsd, address)
-    return [`${fmtBalance(balance, symbol, decimals)} ${label}`]
+    const results = await Promise.all(
+      mainnetTokens.map((token) => fetchTokenInfo(client, token, address)),
+    )
+    return results.map((t) => `${fmtBalance(t.balance, t.symbol, t.decimals)} ${label}`)
   }
 
-  const mainnetClient = createClient({ chain: tempoMainnet, transport: http() })
-  const mainnetInfo = await fetchTokenInfo(mainnetClient, pathUsd, address)
-  const lines = [fmtBalance(mainnetInfo.balance, mainnetInfo.symbol, mainnetInfo.decimals)]
+  const mainnetClient = createClient({ chain: tempoMainnet, transport: http(process.env.MPPX_RPC_URL) })
+  const mainnetResults = await Promise.all(
+    mainnetTokens.map((token) => fetchTokenInfo(mainnetClient, token, address)),
+  )
+  const lines = mainnetResults.map((t) => fmtBalance(t.balance, t.symbol, t.decimals))
 
   if (opts?.includeTestnet !== false) {
     const testnetClient = createClient({ chain: tempoModerato, transport: http() })
