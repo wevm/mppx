@@ -17,14 +17,13 @@ const variables = {
 /** Fallback values when no environment variable is set. */
 const defaults = {
   realm: 'localhost',
-  secretKey: crypto.randomUUID(),
+  secretKey: 'tmp',
 } as const satisfies Record<keyof typeof variables, string>
 
 /**
  * Resolves a configuration value from environment variables.
  *
  * Checks platform-specific env vars in order, falling back to a default.
- * Works across Node.js, Bun, Vercel Edge, and Deno runtimes.
  *
  * @example
  * ```ts
