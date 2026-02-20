@@ -73,7 +73,7 @@ describe('from', () => {
         intent: 'charge',
         request: { amount: '1000000' },
       },
-      expectedId: 'SOfbA51LV3LCkGE7RbomqwXdbWVlrZwlW-Z9aOHolxw',
+      expectedId: 'X6v1eo7fJ76gAxqY0xN9Jd__4lUyDDYmriryOM-5FO4',
     },
     {
       label: 'with expires',
@@ -84,7 +84,7 @@ describe('from', () => {
         request: { amount: '1000000' },
         expires: '2025-01-06T12:00:00Z',
       },
-      expectedId: 'R1ZSIwoIjkFhMCSzUGiCTesiigf5vV65EQ_3gVNtsNw',
+      expectedId: 'ChPX33RkKSZoSUyZcu8ai4hhkvjZJFkZVnvWs5s0iXI',
     },
     {
       label: 'with digest',
@@ -95,7 +95,7 @@ describe('from', () => {
         request: { amount: '1000000' },
         digest: 'sha-256=X48E9qOokqqrvdts8nOJRJN3OWDUoyWxBf7kbu9DBPE',
       },
-      expectedId: 'AiMmBdsSOkOYpXTupMnzVnrzZbqMY_P2i80vENRUSN4',
+      expectedId: 'JHB7EFsPVb-xsYCo8LHcOzeX1gfXWVoUSzQsZhKAfKM',
     },
     {
       label: 'with expires and digest',
@@ -107,7 +107,7 @@ describe('from', () => {
         expires: '2025-01-06T12:00:00Z',
         digest: 'sha-256=X48E9qOokqqrvdts8nOJRJN3OWDUoyWxBf7kbu9DBPE',
       },
-      expectedId: 'FMBGqN7MzpKagHsCcartZM09CnUqv7UgmaCy45Ozgug',
+      expectedId: 'm39jbWWCIfmfJZSwCfvKFFtBl0Qwf9X4nOmDb21peLA',
     },
     {
       label: 'with description (not in HMAC input)',
@@ -118,7 +118,7 @@ describe('from', () => {
         request: { amount: '1000000' },
         description: 'Test payment',
       },
-      expectedId: 'SOfbA51LV3LCkGE7RbomqwXdbWVlrZwlW-Z9aOHolxw',
+      expectedId: 'X6v1eo7fJ76gAxqY0xN9Jd__4lUyDDYmriryOM-5FO4',
     },
     {
       label: 'with multi-field request',
@@ -128,7 +128,7 @@ describe('from', () => {
         intent: 'charge',
         request: { amount: '1000000', currency: '0x1234', recipient: '0xabcd' },
       },
-      expectedId: '5CXJi4bWMz2W54WjnlmoxnwTYe-JKwhw0z32ICQ65Es',
+      expectedId: '_H5TOnnlW0zduQ5OhQ3EyLVze_TqxLDPda2CGZPZxOc',
     },
     {
       label: 'with nested methodDetails in request',
@@ -138,7 +138,7 @@ describe('from', () => {
         intent: 'charge',
         request: { amount: '1000000', currency: '0x1234', methodDetails: { chainId: 42431 } },
       },
-      expectedId: 'eid66xXUZsj46Pb30AfAf7m5kPehgianI16rZ-QY8HU',
+      expectedId: 'TqujwpuDDg_zsWGINAd5XObO2rRe6uYufpqvtDmr6N8',
     },
     {
       label: 'with empty request',
@@ -148,7 +148,7 @@ describe('from', () => {
         intent: 'charge',
         request: {},
       },
-      expectedId: '6kq-PYTyXtaGAHTHCVUrc_hIsAwLeskeQFtDZerMYhM',
+      expectedId: 'yLN7yChAejW9WNmb54HpJIWpdb1WWXeA3_aCx4dxmkU',
     },
     {
       label: 'different realm',
@@ -158,7 +158,7 @@ describe('from', () => {
         intent: 'charge',
         request: { amount: '1000000' },
       },
-      expectedId: '-gMjd8UeUvBcqUaUzarVj6ikH_YoDowpaNbEwK1Tmx8',
+      expectedId: '3F5bOo2a9RUihdwKk4hGRvBvzQmVPBMDvW0YM-8GD00',
     },
     {
       label: 'different method',
@@ -168,7 +168,7 @@ describe('from', () => {
         intent: 'charge',
         request: { amount: '1000000' },
       },
-      expectedId: 'DRH9ycmIlZ2lYUatIHCrxpm9K7ig5pniZ3ulleb7vl0',
+      expectedId: 'o0ra2sd7HcB4Ph0Vns69gRDUhSj5WNOnUopcDqKPLz4',
     },
     {
       label: 'different intent',
@@ -178,7 +178,7 @@ describe('from', () => {
         intent: 'session',
         request: { amount: '1000000' },
       },
-      expectedId: 'INeBi93MhinvbwdUxeUUIaT5Q_ufgLKPYZb5Tg43A1o',
+      expectedId: 'aAY7_IEDzsznNYplhOSE8cERQxvjFcT4Lcn-7FHjLVE',
     },
   ] as const
 
@@ -557,5 +557,195 @@ describe('verifyId', () => {
 
     const tampered = { ...challenge, request: { amount: '2000000' } }
     expect(Challenge.verify(tampered, { secretKey: 'my-secret' })).toBe(false)
+  })
+})
+
+describe('opaque', () => {
+  test('behavior: meta sets opaque on challenge via from()', () => {
+    const challenge = Challenge.from({
+      id: 'abc123',
+      realm: 'api.example.com',
+      method: 'tempo',
+      intent: 'charge',
+      request: { amount: '1000000' },
+      meta: { pi: 'pi_3abc123XYZ' },
+    })
+
+    expect(challenge.opaque).toEqual({ pi: 'pi_3abc123XYZ' })
+    expect((challenge.request as Record<string, unknown>).opaque).toBeUndefined()
+  })
+
+  test('behavior: meta sets opaque on challenge via fromMethod()', () => {
+    const challenge = Challenge.fromMethod(Methods.charge, {
+      id: 'abc123',
+      realm: 'api.example.com',
+      request: {
+        amount: '1',
+        currency: '0x20c0000000000000000000000000000000000001',
+        decimals: 6,
+        recipient: '0x742d35Cc6634C0532925a3b844Bc9e7595f8fE00',
+        expires: '2025-01-06T12:00:00Z',
+      },
+      meta: { payment_intent: 'pi_3abc123XYZ' },
+    })
+
+    expect(challenge.opaque).toEqual({ payment_intent: 'pi_3abc123XYZ' })
+  })
+
+  test('behavior: challenge.opaque is undefined when no meta', () => {
+    const challenge = Challenge.from({
+      id: 'abc123',
+      realm: 'api.example.com',
+      method: 'tempo',
+      intent: 'charge',
+      request: { amount: '1000000' },
+    })
+
+    expect(challenge.opaque).toBeUndefined()
+  })
+
+  test('behavior: opaque roundtrips through serialize/deserialize', () => {
+    const original = Challenge.from({
+      id: 'abc123',
+      realm: 'api.example.com',
+      method: 'tempo',
+      intent: 'charge',
+      request: { amount: '1000000' },
+      meta: { pi: 'pi_3abc123XYZ', deposit: 'dep_456' },
+    })
+
+    const header = Challenge.serialize(original)
+    const deserialized = Challenge.deserialize(header)
+
+    expect(deserialized.opaque).toEqual({ pi: 'pi_3abc123XYZ', deposit: 'dep_456' })
+  })
+
+  test('behavior: meta with empty object produces opaque: {}', () => {
+    const challenge = Challenge.from({
+      id: 'abc123',
+      realm: 'api.example.com',
+      method: 'tempo',
+      intent: 'charge',
+      request: { amount: '1000000' },
+      meta: {},
+    })
+
+    expect(challenge.opaque).toEqual({})
+  })
+
+  test('hmac: opaque affects challenge ID', () => {
+    const withMeta = Challenge.from({
+      realm: 'api.example.com',
+      method: 'tempo',
+      intent: 'charge',
+      request: { amount: '1000000' },
+      meta: { pi: 'pi_3abc123XYZ' },
+      secretKey: 'test-secret',
+    })
+
+    const withoutMeta = Challenge.from({
+      realm: 'api.example.com',
+      method: 'tempo',
+      intent: 'charge',
+      request: { amount: '1000000' },
+      secretKey: 'test-secret',
+    })
+
+    expect(withMeta.id).not.toBe(withoutMeta.id)
+  })
+
+  test('hmac: different opaque values produce different IDs', () => {
+    const meta1 = Challenge.from({
+      realm: 'api.example.com',
+      method: 'tempo',
+      intent: 'charge',
+      request: { amount: '1000000' },
+      meta: { pi: 'pi_111' },
+      secretKey: 'test-secret',
+    })
+
+    const meta2 = Challenge.from({
+      realm: 'api.example.com',
+      method: 'tempo',
+      intent: 'charge',
+      request: { amount: '1000000' },
+      meta: { pi: 'pi_222' },
+      secretKey: 'test-secret',
+    })
+
+    expect(meta1.id).not.toBe(meta2.id)
+  })
+
+  test('hmac: same opaque produces same ID', () => {
+    const challenge1 = Challenge.from({
+      realm: 'api.example.com',
+      method: 'tempo',
+      intent: 'charge',
+      request: { amount: '1000000' },
+      meta: { pi: 'pi_3abc123XYZ' },
+      secretKey: 'test-secret',
+    })
+
+    const challenge2 = Challenge.from({
+      realm: 'api.example.com',
+      method: 'tempo',
+      intent: 'charge',
+      request: { amount: '1000000' },
+      meta: { pi: 'pi_3abc123XYZ' },
+      secretKey: 'test-secret',
+    })
+
+    expect(challenge1.id).toBe(challenge2.id)
+  })
+
+  test('hmac: verify succeeds with opaque', () => {
+    const challenge = Challenge.from({
+      realm: 'api.example.com',
+      method: 'tempo',
+      intent: 'charge',
+      request: { amount: '1000000' },
+      meta: { pi: 'pi_3abc123XYZ' },
+      secretKey: 'my-secret',
+    })
+
+    expect(Challenge.verify(challenge, { secretKey: 'my-secret' })).toBe(true)
+  })
+
+  test('hmac: verify detects tampered opaque', () => {
+    const challenge = Challenge.from({
+      realm: 'api.example.com',
+      method: 'tempo',
+      intent: 'charge',
+      request: { amount: '1000000' },
+      meta: { pi: 'pi_3abc123XYZ' },
+      secretKey: 'my-secret',
+    })
+
+    const tampered = {
+      ...challenge,
+      opaque: { pi: 'pi_TAMPERED' },
+    }
+    expect(Challenge.verify(tampered, { secretKey: 'my-secret' })).toBe(false)
+  })
+
+  test('behavior: multiple key-value pairs in opaque', () => {
+    const challenge = Challenge.from({
+      id: 'abc123',
+      realm: 'api.example.com',
+      method: 'tempo',
+      intent: 'charge',
+      request: { amount: '1000000' },
+      meta: {
+        payment_intent: 'pi_3abc123XYZ',
+        customer: 'cus_xyz',
+        session_id: 'sess_abc',
+      },
+    })
+
+    expect(challenge.opaque).toEqual({
+      payment_intent: 'pi_3abc123XYZ',
+      customer: 'cus_xyz',
+      session_id: 'sess_abc',
+    })
   })
 })

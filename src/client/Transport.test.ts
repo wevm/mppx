@@ -60,7 +60,7 @@ describe('http', () => {
       expect(transport.getChallenge(response)).toMatchInlineSnapshot(`
         {
           "expires": "2025-01-01T00:00:00.000Z",
-          "id": "i1474pQ7BtfAx76cLch6u8_AQkcp3akMkerEYrL5Rwo",
+          "id": "z8dUi61lViOj6cwh_ISb_5X8nBJF2OjTydcEap8wX0o",
           "intent": "charge",
           "method": "tempo",
           "realm": "api.example.com",
@@ -91,7 +91,7 @@ describe('http', () => {
       const headers = result.headers as Headers
 
       expect(headers.get('Authorization')).toMatchInlineSnapshot(
-        `"Payment eyJjaGFsbGVuZ2UiOnsiZXhwaXJlcyI6IjIwMjUtMDEtMDFUMDA6MDA6MDAuMDAwWiIsImlkIjoiaTE0NzRwUTdCdGZBeDc2Y0xjaDZ1OF9BUWtjcDNha01rZXJFWXJMNVJ3byIsImludGVudCI6ImNoYXJnZSIsIm1ldGhvZCI6InRlbXBvIiwicmVhbG0iOiJhcGkuZXhhbXBsZS5jb20iLCJyZXF1ZXN0IjoiZXlKaGJXOTFiblFpT2lJeE1EQXdJaXdpWTNWeWNtVnVZM2tpT2lJd2VESXdZekF3TURBd01EQXdNREF3TURBd01EQXdNREF3TURBd01EQXdNREF3TURBd01EQXdNREVpTENKbGVIQnBjbVZ6SWpvaU1qQXlOUzB3TVMwd01WUXdNRG93TURvd01DNHdNREJhSWl3aWNtVmphWEJwWlc1MElqb2lNSGczTkRKa016VkRZelkyTXpSRE1EVXpNamt5TldFellqZzBORUpqT1dVM05UazFaamhtUlRBd0luMCJ9LCJwYXlsb2FkIjp7InNpZ25hdHVyZSI6IjB4YWJjMTIzIiwidHlwZSI6InRyYW5zYWN0aW9uIn19"`,
+        `"Payment eyJjaGFsbGVuZ2UiOnsiZXhwaXJlcyI6IjIwMjUtMDEtMDFUMDA6MDA6MDAuMDAwWiIsImlkIjoiejhkVWk2MWxWaU9qNmN3aF9JU2JfNVg4bkJKRjJPalR5ZGNFYXA4d1gwbyIsImludGVudCI6ImNoYXJnZSIsIm1ldGhvZCI6InRlbXBvIiwicmVhbG0iOiJhcGkuZXhhbXBsZS5jb20iLCJyZXF1ZXN0IjoiZXlKaGJXOTFiblFpT2lJeE1EQXdJaXdpWTNWeWNtVnVZM2tpT2lJd2VESXdZekF3TURBd01EQXdNREF3TURBd01EQXdNREF3TURBd01EQXdNREF3TURBd01EQXdNREVpTENKbGVIQnBjbVZ6SWpvaU1qQXlOUzB3TVMwd01WUXdNRG93TURvd01DNHdNREJhSWl3aWNtVmphWEJwWlc1MElqb2lNSGczTkRKa016VkRZelkyTXpSRE1EVXpNamt5TldFellqZzBORUpqT1dVM05UazFaamhtUlRBd0luMCJ9LCJwYXlsb2FkIjp7InNpZ25hdHVyZSI6IjB4YWJjMTIzIiwidHlwZSI6InRyYW5zYWN0aW9uIn19"`,
       )
     })
 
@@ -182,7 +182,7 @@ describe('mcp', () => {
       expect(transport.getChallenge(response)).toMatchInlineSnapshot(`
         {
           "expires": "2025-01-01T00:00:00.000Z",
-          "id": "i1474pQ7BtfAx76cLch6u8_AQkcp3akMkerEYrL5Rwo",
+          "id": "z8dUi61lViOj6cwh_ISb_5X8nBJF2OjTydcEap8wX0o",
           "intent": "charge",
           "method": "tempo",
           "realm": "api.example.com",
@@ -239,7 +239,7 @@ describe('mcp', () => {
               "org.paymentauth/credential": {
                 "challenge": {
                   "expires": "2025-01-01T00:00:00.000Z",
-                  "id": "i1474pQ7BtfAx76cLch6u8_AQkcp3akMkerEYrL5Rwo",
+                  "id": "z8dUi61lViOj6cwh_ISb_5X8nBJF2OjTydcEap8wX0o",
                   "intent": "charge",
                   "method": "tempo",
                   "realm": "api.example.com",

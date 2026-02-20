@@ -27,6 +27,8 @@ export const Schema = z.object({
   intent: z.string(),
   /** Payment method (e.g., "tempo", "stripe"). */
   method: z.string(),
+  /** Optional server-defined correlation data. Flat string-to-string map; clients MUST NOT modify. */
+  opaque: z.optional(z.record(z.string(), z.string())),
   /** Server realm (e.g., hostname). */
   realm: z.string(),
   /** Method-specific request data. */
@@ -111,11 +113,20 @@ export function from<
   const methods extends readonly Method.Method[] | undefined = undefined,
 >(parameters: parameters, options?: from.Options<methods>): from.ReturnType<parameters, methods> {
   void options
-  const { description, digest, method: methodName, intent, realm, request, secretKey } = parameters
+  const {
+    description,
+    digest,
+    meta,
+    method: methodName,
+    intent,
+    realm,
+    request,
+    secretKey,
+  } = parameters
 
   const expires = (parameters.expires ?? request.expires) as string
   const id = secretKey
-    ? computeId({ ...parameters, expires }, { secretKey })
+    ? computeId({ ...parameters, expires, ...(meta && { opaque: meta }) }, { secretKey })
     : (parameters as { id: string }).id
 
   return Schema.parse({
@@ -127,6 +138,7 @@ export function from<
     ...(description && { description }),
     ...(digest && { digest }),
     ...(expires && { expires }),
+    ...(meta && { opaque: meta }),
   }) as from.ReturnType<parameters, methods>
 }
 
@@ -153,6 +165,8 @@ export declare namespace from {
     expires?: string | undefined
     /** Intent type (e.g., "charge", "session"). */
     intent: string
+    /** Optional server-defined correlation data (serialized as `opaque` on the challenge). Flat string-to-string map; clients MUST NOT modify. */
+    meta?: Record<string, string> | undefined
     /** Payment method (e.g., "tempo", "stripe"). */
     method: string
     /** Server realm (e.g., hostname). */
@@ -206,7 +220,7 @@ export function fromMethod<const method extends Method.Method>(
   parameters: fromMethod.Parameters<method>,
 ): fromMethod.ReturnType<method> {
   const { name: methodName, intent } = method
-  const { description, digest, expires, id, realm, secretKey } = parameters
+  const { description, digest, expires, id, meta, realm, secretKey } = parameters
 
   const request = PaymentRequest.fromMethod(method, parameters.request)
 
@@ -219,6 +233,7 @@ export function fromMethod<const method extends Method.Method>(
     description,
     digest,
     expires,
+    meta,
   } as from.Parameters) as fromMethod.ReturnType<method>
 }
 
@@ -239,6 +254,8 @@ export declare namespace fromMethod {
     digest?: string | undefined
     /** Optional expiration timestamp (ISO 8601). */
     expires?: string | undefined
+    /** Optional server-defined correlation data (serialized as `opaque` on the challenge). Flat string-to-string map; clients MUST NOT modify. */
+    meta?: Record<string, string> | undefined
     /** Server realm (e.g., hostname). */
     realm: string
     /** Method-specific request data. */
@@ -274,6 +291,8 @@ export function serialize(challenge: Challenge): string {
   if (challenge.description !== undefined) parts.push(`description="${challenge.description}"`)
   if (challenge.digest !== undefined) parts.push(`digest="${challenge.digest}"`)
   if (challenge.expires !== undefined) parts.push(`expires="${challenge.expires}"`)
+  if (challenge.opaque !== undefined)
+    parts.push(`opaque="${PaymentRequest.serialize(challenge.opaque)}"`)
 
   return `Payment ${parts.join(', ')}`
 }
@@ -314,13 +333,14 @@ export function deserialize<const methods extends readonly Method.Method[] | und
     }
   }
 
-  const { request, ...rest } = result
+  const { request, opaque, ...rest } = result
   if (!request) throw new Error('Missing request parameter.')
 
   return from(
     {
       ...rest,
       request: PaymentRequest.deserialize(request),
+      ...(opaque && { meta: PaymentRequest.deserialize(opaque) as Record<string, string> }),
     } as from.Parameters,
     options,
   )
@@ -404,8 +424,17 @@ export declare namespace verify {
   }
 }
 
+/** Alias for `challenge.opaque`. Extracts server-defined correlation data from a challenge. */
+export function meta(challenge: Challenge): Record<string, string> | undefined {
+  return challenge.opaque
+}
+
 /** @internal Computes HMAC-SHA256 challenge ID from parameters. */
 function computeId(challenge: Omit<Challenge, 'id'>, options: { secretKey: string }): string {
+  // Each field occupies a fixed positional slot joined by '|'. Optional fields
+  // use an empty string when absent so the slot count is stable — this avoids
+  // ambiguity between e.g. (expires set, no digest) vs (no expires, digest set)
+  // and means adding a new optional field changes all HMACs exactly once.
   const input = [
     challenge.realm,
     challenge.method,
@@ -413,6 +442,7 @@ function computeId(challenge: Omit<Challenge, 'id'>, options: { secretKey: strin
     PaymentRequest.serialize(challenge.request),
     challenge.expires ?? '',
     challenge.digest ?? '',
+    challenge.opaque ? PaymentRequest.serialize(challenge.opaque) : '',
   ].join('|')
 
   const key = Bytes.fromString(options.secretKey)

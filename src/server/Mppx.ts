@@ -126,14 +126,14 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
   const { defaults, method, realm, respond, secretKey, transport, verify } = parameters
 
   return (options) => {
-    const meta = {
+    const methodMeta = {
       ...method,
       ...defaults,
       ...options,
     }
     return Object.assign(
       async (input: Transport.InputOf): Promise<MethodFn.Response> => {
-        const { description, ...rest } = options
+        const { description, meta, ...rest } = options
         const expires = 'expires' in options ? (options.expires as string | undefined) : undefined
 
         // Merge defaults with per-request options
@@ -164,6 +164,7 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
         const challenge = Challenge.fromMethod(method, {
           description,
           expires,
+          meta,
           realm,
           request,
           secretKey,
@@ -261,7 +262,7 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
           },
         }
       },
-      { _internal: meta },
+      { _internal: methodMeta },
     )
   }
 }
@@ -309,6 +310,8 @@ declare namespace MethodFn {
     description?: string | undefined
     /** Optional challenge expiration timestamp (ISO 8601). */
     expires?: string | undefined
+    /** Optional server-defined correlation data (serialized as `opaque` in the request). Flat string-to-string map; clients MUST NOT modify. */
+    meta?: Record<string, string> | undefined
   } & Method.WithDefaults<z.input<method['schema']['request']>, defaults>
 
   export type Response<transport extends Transport.AnyTransport = Transport.Http> =
