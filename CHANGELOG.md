@@ -1,5 +1,31 @@
 # mppx
 
+## 0.3.5
+
+### Patch Changes
+
+- 6e2be11: Replaced `--channel <id>` and `--deposit <amount>` CLI flags with `-M`/`--method-opt` for passing method-specific options.
+
+  ```diff
+  # Before
+  - mppx example.com/content --channel 0x123 --deposit 1000000
+
+  # After
+  + mppx example.com/content -M channel=0x123 -M deposit=1000000
+  ```
+
+- 6e2be11: Added Stripe payment method support to the CLI.
+
+  ```bash
+  # Set your Stripe test-mode secret key
+  export MPPX_STRIPE_SECRET_KEY=sk_test_...
+
+  # Make a request to a Stripe-enabled endpoint
+  mppx https://example.com/content
+  ```
+
+- 955deb2: Renamed USDC.e to USDC in account view token list.
+
 ## 0.3.4
 
 ### Patch Changes
