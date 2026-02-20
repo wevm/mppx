@@ -307,8 +307,23 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
 
           if (msg.mpp === 'need-voucher' && channel && wsChallenge) {
             const required = BigInt(msg.data.requiredCumulative)
+            const accepted = BigInt(msg.data.acceptedCumulative ?? '0')
+            const deposit = BigInt(msg.data.deposit ?? '0')
+
+            // Pre-authorize a batch of chunks to reduce round-trips.
+            // On first need-voucher (accepted=0), use `required` as the unit price
+            // since the server tells us exactly what one unit costs.
+            // On subsequent vouchers, derive unit price from the delta.
+            const unitPrice = accepted === 0n
+              ? (required > 0n ? required : 1n)
+              : (required > accepted ? required - accepted : 1n)
+            const batchTarget = required + unitPrice * 99n // ~100 chunks total
+            // Cap at deposit to avoid exceeding on-chain balance
+            const capped = deposit > 0n && batchTarget > deposit ? deposit : batchTarget
+            const newCumulative = capped > required ? capped : required
+
             channel.cumulativeAmount =
-              channel.cumulativeAmount > required ? channel.cumulativeAmount : required
+              channel.cumulativeAmount > newCumulative ? channel.cumulativeAmount : newCumulative
 
             try {
               const credential = await method.createCredential({
@@ -322,7 +337,8 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
               ws.send(
                 JSON.stringify({ mpp: 'voucher', mppVersion: '1', authorization: credential }),
               )
-            } catch {
+            } catch (err) {
+              console.error('[mppx] ws voucher creation failed:', err)
               ws.close(1011, 'Failed to create payment credential')
             }
           } else if (msg.mpp === 'receipt') {
