@@ -313,7 +313,7 @@ function pushRoutes(lines: string[], s: Service, heading: '##' | '###' = '###') 
   for (const route of serialized.routes) {
     const p = route.payment as ReadonlyArray<Record<string, unknown>> | null
     const first = Array.isArray(p) && p.length > 0 ? (p[0] as any) : null
-    const desc = first && first.description ? `: ${first.description}` : ''
+    const desc = first?.description ? `: ${first.description}` : ''
     lines.push(`- \`${route.pattern}\`${desc}`)
     if (!p) {
       lines.push('  - Type: free')
@@ -326,7 +326,9 @@ function pushRoutes(lines: string[], s: Service, heading: '##' | '###' = '###') 
         const perUnit = single.unitType ? `/${single.unitType}` : ''
         if (single.decimals !== undefined) {
           const price = Number(single.amount) / 10 ** Number(single.decimals)
-          lines.push(`  - Price: ${price}${perUnit} (${single.amount} units, ${single.decimals} decimals)`)
+          lines.push(
+            `  - Price: ${price}${perUnit} (${single.amount} units, ${single.decimals} decimals)`,
+          )
         } else {
           lines.push(`  - Units: ${single.amount}${perUnit}`)
         }
