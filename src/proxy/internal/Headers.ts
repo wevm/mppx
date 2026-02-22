@@ -9,6 +9,7 @@ const hopByHopHeaders = new Set([
   'trailer',
 ])
 
+/** Strips hop-by-hop, auth, encoding, cookie, and forwarding headers from a request before proxying upstream. */
 export function scrub(headers: Headers): Headers {
   const scrubbed = new Headers()
 
@@ -28,6 +29,7 @@ export function scrub(headers: Headers): Headers {
   return scrubbed
 }
 
+/** Strips `content-encoding` and `content-length` from an upstream response so the proxy can re-stream it. */
 export function scrubResponse(response: Response): Response {
   const headers = new Headers(response.headers)
   headers.delete('content-encoding')
