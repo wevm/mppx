@@ -698,6 +698,107 @@ describe('tempo', () => {
       })
       expect(method.defaults?.currency).toBe('0xcustom')
     })
+
+    test('challenge contains USDC currency when testnet: false', async () => {
+      const handler = Mppx_server.create({
+        methods: [
+          tempo_server.charge({
+            getClient: () => client,
+            account: accounts[0].address,
+            testnet: false,
+          }),
+        ],
+        realm,
+        secretKey,
+      })
+
+      const result = await (handler.charge as Function)({ amount: '1' })(
+        new Request('https://example.com'),
+      )
+      expect(result.status).toBe(402)
+      if (result.status !== 402) throw new Error()
+
+      const challenge = Challenge.fromResponse(result.challenge, {
+        methods: [tempo_client.charge()],
+      })
+      expect(challenge.request.currency).toBe('0x20C000000000000000000000b9537d11c60E8b50')
+    })
+
+    test('challenge contains pathUSD currency when testnet: true', async () => {
+      const handler = Mppx_server.create({
+        methods: [
+          tempo_server.charge({
+            getClient: () => client,
+            account: accounts[0].address,
+            testnet: true,
+            chainId: chain.id,
+          }),
+        ],
+        realm,
+        secretKey,
+      })
+
+      const result = await (handler.charge as Function)({ amount: '1', chainId: chain.id })(
+        new Request('https://example.com'),
+      )
+      expect(result.status).toBe(402)
+      if (result.status !== 402) throw new Error()
+
+      const challenge = Challenge.fromResponse(result.challenge, {
+        methods: [tempo_client.charge()],
+      })
+      expect(challenge.request.currency).toBe('0x20c0000000000000000000000000000000000000')
+    })
+
+    test('challenge contains pathUSD currency when testnet is omitted', async () => {
+      const handler = Mppx_server.create({
+        methods: [
+          tempo_server.charge({
+            getClient: () => client,
+            account: accounts[0].address,
+          }),
+        ],
+        realm,
+        secretKey,
+      })
+
+      const result = await (handler.charge as Function)({ amount: '1' })(
+        new Request('https://example.com'),
+      )
+      expect(result.status).toBe(402)
+      if (result.status !== 402) throw new Error()
+
+      const challenge = Challenge.fromResponse(result.challenge, {
+        methods: [tempo_client.charge()],
+      })
+      expect(challenge.request.currency).toBe('0x20c0000000000000000000000000000000000000')
+    })
+
+    test('explicit currency in challenge overrides testnet default', async () => {
+      const handler = Mppx_server.create({
+        methods: [
+          tempo_server.charge({
+            getClient: () => client,
+            account: accounts[0].address,
+            testnet: false,
+            currency: asset,
+          }),
+        ],
+        realm,
+        secretKey,
+      })
+
+      const result = await handler.charge({ amount: '1' })(
+        new Request('https://example.com'),
+      )
+      expect(result.status).toBe(402)
+      if (result.status !== 402) throw new Error()
+
+      const challenge = Challenge.fromResponse(result.challenge, {
+        methods: [tempo_client.charge()],
+      })
+      expect(challenge.request.currency).toBe(asset)
+    })
   })
 
   describe('attribution memo', () => {

@@ -1442,6 +1442,7 @@ describe('session default currency resolution', () => {
     } as session.Parameters)
     expect(server.defaults?.currency).toBe('0xcustom')
   })
+
 })
 
 function nextSalt(): Hex {
