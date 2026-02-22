@@ -11,6 +11,7 @@ import {
 } from '~test/tempo/session.js'
 import { accounts, asset, chain, client, fundAccount, http } from '~test/tempo/viem.js'
 import {
+  BadRequestError,
   ChannelClosedError,
   ChannelNotFoundError,
   InsufficientBalanceError,
@@ -945,6 +946,31 @@ describe('session', () => {
   })
 
   describe('structured errors', () => {
+    test('BadRequestError on unknown action', async () => {
+      const unknownChannelId =
+        '0x0000000000000000000000000000000000000000000000000000000000000001' as Hex
+      const server = createServer()
+
+      try {
+        await server.verify({
+          credential: {
+            challenge: makeChallenge({ channelId: unknownChannelId }),
+            payload: {
+              action: 'unexpected-action',
+              channelId: unknownChannelId,
+              cumulativeAmount: '1000000',
+              signature: '0xdeadbeef',
+            },
+          },
+          request: makeRequest(),
+        } as any)
+        expect.unreachable()
+      } catch (e) {
+        expect(e).toBeInstanceOf(BadRequestError)
+        expect((e as BadRequestError).status).toBe(400)
+      }
+    })
+
     test('ChannelNotFoundError on unknown channel', async () => {
       const { channelId } = await createSignedOpenTransaction(10000000n)
       const server = createServer()
@@ -997,6 +1023,38 @@ describe('session', () => {
   })
 
   describe('respond', () => {
+    test('request enables feePayer sentinel when requested and credential absent', async () => {
+      const server = createServer()
+
+      const request = await server.request!({
+        request: { ...makeRequest(), feePayer: true },
+      } as any)
+
+      expect(request.feePayer).toBe(true)
+    })
+
+    test('request resolves feePayer account object when credential present', async () => {
+      const server = createServer()
+      const knownChannelId =
+        '0x0000000000000000000000000000000000000000000000000000000000000001' as Hex
+
+      const request = await server.request!({
+        credential: {
+          challenge: makeChallenge({ channelId: knownChannelId }),
+          payload: {
+            action: 'voucher',
+            channelId: knownChannelId,
+            cumulativeAmount: '1000000',
+            signature: '0xdeadbeef',
+          },
+        },
+        request: makeRequest(),
+      } as any)
+
+      expect(typeof request.feePayer).toBe('object')
+      expect((request.feePayer as { address?: string }).address).toBe(accounts[0].address)
+    })
+
     test('returns 204 for POST with open action', () => {
       const server = createServer()
       const result = server.respond!({
@@ -1150,6 +1208,56 @@ describe('session', () => {
       } as any)
       expect(result).toBeInstanceOf(Response)
       expect((result as Response).status).toBe(204)
+    })
+  })
+
+  describe('default currency resolution', () => {
+    test('testnet: true defaults to pathUSD', () => {
+      const server = session({
+        store: Store.memory(),
+        getClient: () => client,
+        account: recipient,
+        escrowContract,
+        chainId: chain.id,
+        testnet: true,
+      } as session.Parameters)
+      expect(server.defaults?.currency).toBe('0x20c0000000000000000000000000000000000000')
+    })
+
+    test('testnet: false (explicit mainnet) defaults to USDC', () => {
+      const server = session({
+        store: Store.memory(),
+        getClient: () => client,
+        account: recipient,
+        escrowContract,
+        chainId: chain.id,
+        testnet: false,
+      } as session.Parameters)
+      expect(server.defaults?.currency).toBe('0x20C000000000000000000000b9537d11c60E8b50')
+    })
+
+    test('testnet: undefined defaults to pathUSD', () => {
+      const server = session({
+        store: Store.memory(),
+        getClient: () => client,
+        account: recipient,
+        escrowContract,
+        chainId: chain.id,
+      } as session.Parameters)
+      expect(server.defaults?.currency).toBe('0x20c0000000000000000000000000000000000000')
+    })
+
+    test('explicit currency overrides default', () => {
+      const server = session({
+        store: Store.memory(),
+        getClient: () => client,
+        account: recipient,
+        currency: '0xcustom',
+        escrowContract,
+        chainId: chain.id,
+        testnet: false,
+      } as session.Parameters)
+      expect(server.defaults?.currency).toBe('0xcustom')
     })
   })
 

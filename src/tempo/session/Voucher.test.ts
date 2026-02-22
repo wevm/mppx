@@ -1,3 +1,4 @@
+import { SignatureEnvelope } from 'ox/tempo'
 import { createClient, http } from 'viem'
 import { privateKeyToAccount } from 'viem/accounts'
 import { describe, expect, test } from 'vitest'
@@ -120,6 +121,83 @@ describe('Voucher', () => {
       { channelId, cumulativeAmount, signature: '0xdeadbeef' },
       account.address,
     )
+    expect(isValid).toBe(false)
+  })
+
+  test('verifyVoucher rejects keychain-wrapped signatures', async () => {
+    const signature = SignatureEnvelope.serialize({
+      type: 'keychain',
+      userAddress: account.address,
+      inner: {
+        type: 'secp256k1',
+        signature: {
+          r: 1n,
+          s: 2n,
+          yParity: 0,
+        },
+      },
+    })
+
+    const isValid = await verifyVoucher(
+      escrowContract,
+      chainId,
+      { channelId, cumulativeAmount, signature },
+      account.address,
+    )
+
+    expect(isValid).toBe(false)
+  })
+
+  test('verifyVoucher rejects p256 signatures', async () => {
+    const signature = SignatureEnvelope.serialize({
+      type: 'p256',
+      prehash: false,
+      publicKey: {
+        prefix: 4,
+        x: 3n,
+        y: 4n,
+      },
+      signature: {
+        r: 5n,
+        s: 6n,
+      },
+    })
+
+    const isValid = await verifyVoucher(
+      escrowContract,
+      chainId,
+      { channelId, cumulativeAmount, signature },
+      account.address,
+    )
+
+    expect(isValid).toBe(false)
+  })
+
+  test('verifyVoucher rejects webauthn signatures', async () => {
+    const signature = SignatureEnvelope.serialize({
+      type: 'webAuthn',
+      metadata: {
+        authenticatorData: '0x00',
+        clientDataJSON: '{}',
+      },
+      publicKey: {
+        prefix: 4,
+        x: 7n,
+        y: 8n,
+      },
+      signature: {
+        r: 9n,
+        s: 10n,
+      },
+    })
+
+    const isValid = await verifyVoucher(
+      escrowContract,
+      chainId,
+      { channelId, cumulativeAmount, signature },
+      account.address,
+    )
+
     expect(isValid).toBe(false)
   })
 
