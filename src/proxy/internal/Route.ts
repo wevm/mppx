@@ -1,5 +1,6 @@
 const httpMethods = new Set(['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'HEAD', 'OPTIONS'])
 
+/** Extracts the pathname from a URL, stripping the optional `basePath` prefix. Returns `null` if the path doesn't match. */
 export function pathname(url: URL, basePath?: string): string | null {
   let pathname = url.pathname
   if (basePath) {
@@ -10,6 +11,7 @@ export function pathname(url: URL, basePath?: string): string | null {
   return pathname
 }
 
+/** Splits a `/{serviceId}/rest/of/path` pathname into its service ID and upstream path. */
 export function parse(pathname: string): { serviceId: string; upstreamPath: string } | null {
   const segments = pathname.split('/').filter(Boolean)
   const serviceId = segments[0]
@@ -19,6 +21,7 @@ export function parse(pathname: string): { serviceId: string; upstreamPath: stri
   return { serviceId, upstreamPath }
 }
 
+/** Finds the first route matching both the HTTP method and path (via `URLPattern`). */
 export function match(
   routes: Record<string, unknown>,
   method: string,
@@ -33,6 +36,7 @@ export function match(
   return null
 }
 
+/** Finds the first route matching just the path, ignoring the HTTP method. Used for management POST fallback. */
 export function matchPath(
   routes: Record<string, unknown>,
   path: string,
