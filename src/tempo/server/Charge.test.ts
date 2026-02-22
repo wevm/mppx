@@ -656,6 +656,50 @@ describe('tempo', () => {
     })
   })
 
+  describe('default currency resolution', () => {
+    test('testnet: true defaults to pathUSD', () => {
+      const method = tempo_server.charge({
+        getClient: () => client,
+        account: accounts[0].address,
+        testnet: true,
+      })
+      expect((method.defaults as Record<string, unknown>)?.currency).toBe(
+        '0x20c0000000000000000000000000000000000000',
+      )
+    })
+
+    test('testnet: false (explicit mainnet) defaults to USDC', () => {
+      const method = tempo_server.charge({
+        getClient: () => client,
+        account: accounts[0].address,
+        testnet: false,
+      })
+      expect((method.defaults as Record<string, unknown>)?.currency).toBe(
+        '0x20C000000000000000000000b9537d11c60E8b50',
+      )
+    })
+
+    test('testnet: undefined defaults to pathUSD', () => {
+      const method = tempo_server.charge({
+        getClient: () => client,
+        account: accounts[0].address,
+      })
+      expect((method.defaults as Record<string, unknown>)?.currency).toBe(
+        '0x20c0000000000000000000000000000000000000',
+      )
+    })
+
+    test('explicit currency overrides default', () => {
+      const method = tempo_server.charge({
+        getClient: () => client,
+        account: accounts[0].address,
+        testnet: false,
+        currency: '0xcustom',
+      })
+      expect(method.defaults?.currency).toBe('0xcustom')
+    })
+  })
+
   describe('attribution memo', () => {
     test('client always generates attribution memo (hash credential)', async () => {
       const httpServer = await Http.createServer(async (req, res) => {

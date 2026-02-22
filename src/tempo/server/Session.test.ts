@@ -1211,56 +1211,6 @@ describe('session', () => {
     })
   })
 
-  describe('default currency resolution', () => {
-    test('testnet: true defaults to pathUSD', () => {
-      const server = session({
-        store: Store.memory(),
-        getClient: () => client,
-        account: recipient,
-        escrowContract,
-        chainId: chain.id,
-        testnet: true,
-      } as session.Parameters)
-      expect(server.defaults?.currency).toBe('0x20c0000000000000000000000000000000000000')
-    })
-
-    test('testnet: false (explicit mainnet) defaults to USDC', () => {
-      const server = session({
-        store: Store.memory(),
-        getClient: () => client,
-        account: recipient,
-        escrowContract,
-        chainId: chain.id,
-        testnet: false,
-      } as session.Parameters)
-      expect(server.defaults?.currency).toBe('0x20C000000000000000000000b9537d11c60E8b50')
-    })
-
-    test('testnet: undefined defaults to pathUSD', () => {
-      const server = session({
-        store: Store.memory(),
-        getClient: () => client,
-        account: recipient,
-        escrowContract,
-        chainId: chain.id,
-      } as session.Parameters)
-      expect(server.defaults?.currency).toBe('0x20c0000000000000000000000000000000000000')
-    })
-
-    test('explicit currency overrides default', () => {
-      const server = session({
-        store: Store.memory(),
-        getClient: () => client,
-        account: recipient,
-        currency: '0xcustom',
-        escrowContract,
-        chainId: chain.id,
-        testnet: false,
-      } as session.Parameters)
-      expect(server.defaults?.currency).toBe('0xcustom')
-    })
-  })
-
   describe('SSE', () => {
     test('behavior: withReceipt accepts async generator and returns Response', async () => {
       const handler = Mppx_server.create({
@@ -1439,6 +1389,58 @@ describe('monotonicity and TOCTOU (unit tests)', () => {
     expect(channel!.highestVoucherAmount).toBe(5000000n)
     expect(channel!.spent).toBe(2000000n)
     expect(channel!.units).toBe(3)
+  })
+})
+
+describe('session default currency resolution', () => {
+  const mockClient = createClient({ transport: http('http://localhost:1') })
+
+  test('testnet: true defaults to pathUSD', () => {
+    const server = session({
+      store: Store.memory(),
+      getClient: () => mockClient,
+      account: '0x0000000000000000000000000000000000000001',
+      escrowContract: '0x0000000000000000000000000000000000000002',
+      chainId: 42431,
+      testnet: true,
+    } as session.Parameters)
+    expect(server.defaults?.currency).toBe('0x20c0000000000000000000000000000000000000')
+  })
+
+  test('testnet: false (explicit mainnet) defaults to USDC', () => {
+    const server = session({
+      store: Store.memory(),
+      getClient: () => mockClient,
+      account: '0x0000000000000000000000000000000000000001',
+      escrowContract: '0x0000000000000000000000000000000000000002',
+      chainId: 4217,
+      testnet: false,
+    } as session.Parameters)
+    expect(server.defaults?.currency).toBe('0x20C000000000000000000000b9537d11c60E8b50')
+  })
+
+  test('testnet: undefined defaults to pathUSD', () => {
+    const server = session({
+      store: Store.memory(),
+      getClient: () => mockClient,
+      account: '0x0000000000000000000000000000000000000001',
+      escrowContract: '0x0000000000000000000000000000000000000002',
+      chainId: 42431,
+    } as session.Parameters)
+    expect(server.defaults?.currency).toBe('0x20c0000000000000000000000000000000000000')
+  })
+
+  test('explicit currency overrides default', () => {
+    const server = session({
+      store: Store.memory(),
+      getClient: () => mockClient,
+      account: '0x0000000000000000000000000000000000000001',
+      currency: '0xcustom',
+      escrowContract: '0x0000000000000000000000000000000000000002',
+      chainId: 4217,
+      testnet: false,
+    } as session.Parameters)
+    expect(server.defaults?.currency).toBe('0xcustom')
   })
 })
 
