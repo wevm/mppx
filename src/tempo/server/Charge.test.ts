@@ -699,6 +699,14 @@ describe('tempo', () => {
       expect(method.defaults?.currency).toBe('0xcustom')
     })
 
+    test('decimals defaults to 6', () => {
+      const method = tempo_server.charge({
+        getClient: () => client,
+        account: accounts[0].address,
+      })
+      expect((method.defaults as Record<string, unknown>)?.decimals).toBe(6)
+    })
+
     test('challenge contains USDC currency when testnet: false', async () => {
       const handler = Mppx_server.create({
         methods: [

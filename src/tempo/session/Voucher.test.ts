@@ -209,4 +209,50 @@ describe('Voucher', () => {
     expect(voucher.cumulativeAmount).toBe(5000000n)
     expect(voucher.signature).toBe(sig)
   })
+
+  test('parseVoucherFromPayload with zero amount', () => {
+    const sig =
+      '0xabcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890ab' as const
+    const voucher = parseVoucherFromPayload(channelId, '0', sig)
+    expect(voucher.cumulativeAmount).toBe(0n)
+  })
+
+  test('verifyVoucher rejects wrong escrow contract', async () => {
+    const signature = await signVoucher(
+      client,
+      account,
+      { channelId, cumulativeAmount },
+      escrowContract,
+      chainId,
+    )
+
+    const wrongEscrow = '0xabcdefabcdefabcdefabcdefabcdefabcdefabcd' as const
+    const isValid = await verifyVoucher(
+      wrongEscrow,
+      chainId,
+      { channelId, cumulativeAmount, signature },
+      account.address,
+    )
+    expect(isValid).toBe(false)
+  })
+
+  test('signVoucher and verifyVoucher round-trip with zero amount', async () => {
+    const zeroAmount = 0n
+    const signature = await signVoucher(
+      client,
+      account,
+      { channelId, cumulativeAmount: zeroAmount },
+      escrowContract,
+      chainId,
+    )
+    expect(signature).toMatch(/^0x/)
+
+    const isValid = await verifyVoucher(
+      escrowContract,
+      chainId,
+      { channelId, cumulativeAmount: zeroAmount, signature },
+      account.address,
+    )
+    expect(isValid).toBe(true)
+  })
 })

@@ -1,4 +1,5 @@
-import type { Challenge, z } from 'mppx'
+import { Challenge } from 'mppx'
+import type { z } from 'mppx'
 import { Mppx as Mppx_server, tempo as tempo_server } from 'mppx/server'
 import { type Address, createClient, type Hex } from 'viem'
 import { Addresses } from 'viem/tempo'
@@ -1443,6 +1444,126 @@ describe('session default currency resolution', () => {
     expect(server.defaults?.currency).toBe('0xcustom')
   })
 
+  test('decimals defaults to 6', () => {
+    const server = session({
+      store: Store.memory(),
+      getClient: () => mockClient,
+      account: '0x0000000000000000000000000000000000000001',
+      escrowContract: '0x0000000000000000000000000000000000000002',
+      chainId: 42431,
+    } as session.Parameters)
+    expect(server.defaults?.decimals).toBe(6)
+  })
+
+  test('challenge contains USDC currency when testnet: false', async () => {
+    const handler = Mppx_server.create({
+      methods: [
+        tempo_server.session({
+          store: Store.memory(),
+          getClient: () => mockClient,
+          account: '0x0000000000000000000000000000000000000001',
+          escrowContract: '0x0000000000000000000000000000000000000002',
+          chainId: 4217,
+          testnet: false,
+        }),
+      ],
+      realm: 'api.example.com',
+      secretKey: 'secret',
+    })
+
+    const result = await (handler.session as Function)({
+      amount: '1',
+      decimals: 6,
+      unitType: 'token',
+    })(new Request('https://example.com'))
+    expect(result.status).toBe(402)
+
+    const challenge = Challenge.fromResponse(result.challenge)
+    expect(challenge.request.currency).toBe('0x20C000000000000000000000b9537d11c60E8b50')
+  })
+
+  test('challenge contains pathUSD currency when testnet: true', async () => {
+    const handler = Mppx_server.create({
+      methods: [
+        tempo_server.session({
+          store: Store.memory(),
+          getClient: () => mockClient,
+          account: '0x0000000000000000000000000000000000000001',
+          escrowContract: '0x0000000000000000000000000000000000000002',
+          chainId: 42431,
+          testnet: true,
+        }),
+      ],
+      realm: 'api.example.com',
+      secretKey: 'secret',
+    })
+
+    const result = await (handler.session as Function)({
+      amount: '1',
+      decimals: 6,
+      unitType: 'token',
+      chainId: 42431,
+    })(new Request('https://example.com'))
+    expect(result.status).toBe(402)
+
+    const challenge = Challenge.fromResponse(result.challenge)
+    expect(challenge.request.currency).toBe('0x20c0000000000000000000000000000000000000')
+  })
+
+  test('challenge contains pathUSD currency when testnet is omitted', async () => {
+    const handler = Mppx_server.create({
+      methods: [
+        tempo_server.session({
+          store: Store.memory(),
+          getClient: () => mockClient,
+          account: '0x0000000000000000000000000000000000000001',
+          escrowContract: '0x0000000000000000000000000000000000000002',
+          chainId: 42431,
+        }),
+      ],
+      realm: 'api.example.com',
+      secretKey: 'secret',
+    })
+
+    const result = await (handler.session as Function)({
+      amount: '1',
+      decimals: 6,
+      unitType: 'token',
+    })(new Request('https://example.com'))
+    expect(result.status).toBe(402)
+
+    const challenge = Challenge.fromResponse(result.challenge)
+    expect(challenge.request.currency).toBe('0x20c0000000000000000000000000000000000000')
+  })
+
+  test('explicit currency in challenge overrides testnet default', async () => {
+    const handler = Mppx_server.create({
+      methods: [
+        tempo_server.session({
+          store: Store.memory(),
+          getClient: () => mockClient,
+          account: '0x0000000000000000000000000000000000000001',
+          currency: '0xcustom',
+          escrowContract: '0x0000000000000000000000000000000000000002',
+          chainId: 4217,
+          testnet: false,
+        }),
+      ],
+      realm: 'api.example.com',
+      secretKey: 'secret',
+    })
+
+    const result = await handler.session({
+      amount: '1',
+      decimals: 6,
+      unitType: 'token',
+    })(new Request('https://example.com'))
+    expect(result.status).toBe(402)
+    if (result.status !== 402) throw new Error()
+
+    const challenge = Challenge.fromResponse(result.challenge)
+    expect(challenge.request.currency).toBe('0xcustom')
+  })
 })
 
 function nextSalt(): Hex {

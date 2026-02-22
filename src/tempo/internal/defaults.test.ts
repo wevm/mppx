@@ -82,4 +82,16 @@ describe('defaultCurrencyForChain', () => {
   test('negative chain ID returns pathUSD', () => {
     expect(defaultCurrencyForChain(-1)).toBe(pathUsd)
   })
+
+  test('returns consistent values across repeated calls', () => {
+    const first = defaultCurrencyForChain(mainnetChainId)
+    const second = defaultCurrencyForChain(mainnetChainId)
+    expect(first).toBe(second)
+  })
+
+  test('mainnet and testnet return different currencies', () => {
+    expect(defaultCurrencyForChain(mainnetChainId)).not.toBe(
+      defaultCurrencyForChain(testnetChainId),
+    )
+  })
 })
