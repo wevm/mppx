@@ -1,4 +1,5 @@
 import { Base64, Bytes, Hash } from 'ox'
+import { constantTimeEqual } from './internal/constantTimeEqual.js'
 
 /**
  * A body digest string in the format "algorithm=base64hash".
@@ -49,5 +50,5 @@ export function compute(body: Record<string, unknown> | string): BodyDigest {
  * ```
  */
 export function verify(digest: BodyDigest, body: Record<string, unknown> | string): boolean {
-  return compute(body) === digest
+  return constantTimeEqual(compute(body), digest)
 }
