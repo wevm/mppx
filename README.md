@@ -1,13 +1,13 @@
 # mppx
 
-TypeScript SDK for the [**Machine Payments Protocol**](https://machinepayments.dev)
+TypeScript SDK for the [**Machine Payments Protocol**](https://mpp.sh)
 
 [![npm](https://img.shields.io/npm/v/mppx.svg)](https://www.npmjs.com/package/mppx)
 [![License](https://img.shields.io/npm/l/mppx.svg)](LICENSE)
 
 ## Documentation
 
-Full documentation, API reference, and guides are available at **[machinepayments.dev/sdk/typescript](https://machinepayments.dev/sdk/typescript)**.
+Full documentation, API reference, and guides are available at **[mpp.sh/sdk/typescript](https://mpp.sh/sdk/typescript)**.
 
 ## Install
 
@@ -51,7 +51,7 @@ Mppx.create({
 })
 
 // Global fetch now handles 402 automatically
-const res = await fetch('https://api.example.com/resource')
+const res = await fetch('https://mpp.sh/api/ping/paid')
 ```
 
 ## Examples
@@ -136,7 +136,7 @@ This exposes the following routes:
 
 ## Protocol
 
-Built on the ["Payment" HTTP Authentication Scheme](https://datatracker.ietf.org/doc/draft-ietf-httpauth-payment/). See [payment-auth-spec](https://github.com/tempoxyz/payment-auth-spec) for the full specification.
+Built on the ["Payment" HTTP Authentication Scheme](https://datatracker.ietf.org/doc/draft-ryan-httpauth-payment/). See [mpp-specs](https://github.com/tempoxyz/mpp-specs) for the full specification.
 
 ## License
 
