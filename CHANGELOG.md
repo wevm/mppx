@@ -1,5 +1,11 @@
 # mppx
 
+## 0.3.7
+
+### Patch Changes
+
+- e4f0138: Added `nonceKey: 'expiring'` to tempo charge transactions to avoid nonce collisions on parallel requests.
+
 ## 0.3.6
 
 ### Patch Changes
