@@ -1,5 +1,11 @@
 # mppx
 
+## 0.3.6
+
+### Patch Changes
+
+- d2fb5e3: Fixed issue where mainnet would not default to USDC unless `testnet: false` was explicitly passed.
+
 ## 0.3.5
 
 ### Patch Changes
