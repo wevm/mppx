@@ -451,5 +451,3 @@ function computeId(challenge: Omit<Challenge, 'id'>, options: { secretKey: strin
   const mac = Hash.hmac256(key, data, { as: 'Bytes' })
   return Base64.fromBytes(mac, { url: true, pad: false })
 }
-
-
