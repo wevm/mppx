@@ -1,4 +1,5 @@
 import { Base64, Bytes, Hash } from 'ox'
+import { constantTimeEqual } from './internal/constantTimeEqual.js'
 import type { OneOf } from './internal/types.js'
 import type * as Method from './Method.js'
 import * as PaymentRequest from './PaymentRequest.js'
@@ -451,10 +452,4 @@ function computeId(challenge: Omit<Challenge, 'id'>, options: { secretKey: strin
   return Base64.fromBytes(mac, { url: true, pad: false })
 }
 
-/** @internal Constant-time string comparison to prevent timing attacks. */
-function constantTimeEqual(a: string, b: string): boolean {
-  if (a.length !== b.length) return false
-  let result = 0
-  for (let i = 0; i < a.length; i++) result |= a.charCodeAt(i) ^ b.charCodeAt(i)
-  return result === 0
-}
+
