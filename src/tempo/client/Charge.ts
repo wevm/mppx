@@ -34,6 +34,7 @@ export async function resolveSettlement(options: {
   account: { address: `0x${string}` }
   amount: bigint
   settlementCurrencies: string[]
+  knownUsdTokens?: readonly string[]
 }): Promise<SettlementResolution> {
   const { client, account, amount, settlementCurrencies } = options
 
@@ -50,7 +51,7 @@ export async function resolveSettlement(options: {
 
   // 2. Swap path: check known USD tokens for a balance to swap from
   const targetToken = settlementCurrencies[0] as `0x${string}`
-  const knownUsdTokens = [defaults.tokens.usdc, defaults.tokens.pathUsd] as const
+  const knownUsdTokens = options.knownUsdTokens ?? [defaults.tokens.usdc, defaults.tokens.pathUsd]
   for (const token of knownUsdTokens) {
     // Skip tokens already checked above
     if (settlementCurrencies.some((sc) => sc.toLowerCase() === token.toLowerCase())) continue
@@ -132,25 +133,16 @@ export function charge(parameters: charge.Parameters = {}) {
         ? (methodDetails.memo as Hex.Hex)
         : Attribution.encode({ serverId: challenge.realm, clientId })
 
-      // Legacy mode: currency is a token address — direct transfer (existing behavior)
-      if (Currency.isTokenAddress(request.currency)) {
+      const signAndSerialize = async (calls: unknown[]) => {
         const prepared = await prepareTransactionRequest(client, {
           account,
-          calls: [
-            Actions.token.transfer.call({
-              amount: BigInt(amount),
-              memo,
-              to: recipient as Hex.Hex,
-              token: request.currency as Hex.Hex,
-            }),
-          ],
+          calls,
           ...(methodDetails?.feePayer && { feePayer: true }),
           nonceKey: 'expiring',
         } as never)
         // FIXME: figure out gas estimation issue for fee payer tx
         prepared.gas = prepared.gas! + 5_000n
         const signature = await signTransaction(client, prepared as never)
-
         return Credential.serialize({
           challenge,
           payload: { signature, type: 'transaction' },
@@ -158,20 +150,21 @@ export function charge(parameters: charge.Parameters = {}) {
         })
       }
 
+      // Legacy mode: currency is a token address — direct transfer (existing behavior)
+      if (Currency.isTokenAddress(request.currency)) {
+        return signAndSerialize([
+          Actions.token.transfer.call({
+            amount: BigInt(amount),
+            memo,
+            to: recipient as Hex.Hex,
+            token: request.currency as Hex.Hex,
+          }),
+        ])
+      }
+
       // Base currency mode: resolve settlement token
       if (!settlementCurrencies?.length)
         throw new Error('settlementCurrencies required when currency is a base currency code')
-
-      // Verify settlement tokens match the declared base currency
-      const declaredCurrency = request.currency.toLowerCase()
-      const tokenToUseForVerification = settlementCurrencies[0] as Hex.Hex
-      const metadata = await Actions.token.getMetadata(client, {
-        token: tokenToUseForVerification,
-      })
-      if (metadata.currency?.toLowerCase() !== declaredCurrency)
-        throw new Error(
-          `Settlement token ${tokenToUseForVerification} currency "${metadata.currency}" does not match declared currency "${declaredCurrency}"`,
-        )
 
       const resolution = await resolveSettlement({
         client,
@@ -180,59 +173,43 @@ export function charge(parameters: charge.Parameters = {}) {
         settlementCurrencies,
       })
 
+      // Verify the chosen settlement token matches the declared base currency
+      const chosenToken = (
+        resolution.type === 'direct' ? resolution.token : resolution.targetToken
+      ) as Hex.Hex
+      const declaredCurrency = request.currency.toLowerCase()
+      const metadata = await Actions.token.getMetadata(client, { token: chosenToken })
+      if (metadata.currency?.toLowerCase() !== declaredCurrency)
+        throw new Error(
+          `Settlement token ${chosenToken} currency "${metadata.currency}" does not match declared currency "${declaredCurrency}"`,
+        )
+
       if (resolution.type === 'direct') {
-        // Like-for-like: plain transfer of the matched settlement token
-        const prepared = await prepareTransactionRequest(client, {
-          account,
-          calls: [
-            Actions.token.transfer.call({
-              amount: BigInt(amount),
-              memo,
-              to: recipient as Hex.Hex,
-              token: resolution.token,
-            }),
-          ],
-          ...(methodDetails?.feePayer && { feePayer: true }),
-          nonceKey: 'expiring',
-        } as never)
-        prepared.gas = prepared.gas! + 5_000n
-        const signature = await signTransaction(client, prepared as never)
-
-        return Credential.serialize({
-          challenge,
-          payload: { signature, type: 'transaction' },
-          source: `did:pkh:eip155:${chainId}:${account.address}`,
-        })
-      }
-
-      // Swap path: atomic swap + transfer via 7702 batch
-      const prepared = await prepareTransactionRequest(client, {
-        account,
-        calls: [
-          Actions.dex.buy.call({
-            tokenIn: resolution.heldToken,
-            tokenOut: resolution.targetToken,
-            amountOut: BigInt(amount),
-            maxAmountIn: resolution.maxAmountIn,
-          }),
+        return signAndSerialize([
           Actions.token.transfer.call({
             amount: BigInt(amount),
             memo,
             to: recipient as Hex.Hex,
-            token: resolution.targetToken,
+            token: resolution.token,
           }),
-        ],
-        ...(methodDetails?.feePayer && { feePayer: true }),
-        nonceKey: 'expiring',
-      } as never)
-      prepared.gas = prepared.gas! + 5_000n
-      const signature = await signTransaction(client, prepared as never)
+        ])
+      }
 
-      return Credential.serialize({
-        challenge,
-        payload: { signature, type: 'transaction' },
-        source: `did:pkh:eip155:${chainId}:${account.address}`,
-      })
+      // Swap path: atomic swap + transfer via 7702 batch
+      return signAndSerialize([
+        Actions.dex.buy.call({
+          tokenIn: resolution.heldToken,
+          tokenOut: resolution.targetToken,
+          amountOut: BigInt(amount),
+          maxAmountIn: resolution.maxAmountIn,
+        }),
+        Actions.token.transfer.call({
+          amount: BigInt(amount),
+          memo,
+          to: recipient as Hex.Hex,
+          token: resolution.targetToken,
+        }),
+      ])
     },
   })
 }

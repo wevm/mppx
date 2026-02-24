@@ -173,6 +173,8 @@ export function charge<const parameters extends charge.Parameters>(
 
   // Validate: if currency is a code, settlementCurrencies must be provided
   if (!Currency.isTokenAddress(currency ?? '') && currency !== undefined) {
+    if (!Currency.isCurrencyCode(currency))
+      throw new Error(`Unsupported currency code: ${currency}`)
     if (!settlementCurrencies?.length)
       throw new Error('settlementCurrencies required when currency is a base currency code')
   }
@@ -315,7 +317,7 @@ export function charge<const parameters extends charge.Parameters>(
             })
 
           const serializedTransaction_final = await (async () => {
-            if (feePayer && methodDetails?.feePayer !== false) {
+            if (feePayer && methodDetails?.feePayer === true) {
               if (transaction.gas && transaction.gas > MAX_FEE_PAYER_GAS)
                 throw new Error(
                   `Transaction gas ${transaction.gas} exceeds fee payer limit ${MAX_FEE_PAYER_GAS}`,

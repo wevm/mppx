@@ -1320,5 +1320,265 @@ describe('tempo', () => {
 
       httpServer.close()
     })
+
+    test('constructor: throws on unsupported currency code', () => {
+      expect(() =>
+        tempo_server.charge({
+          getClient: () => client,
+          account: accounts[0].address,
+          currency: 'eur',
+          settlementCurrencies: [asset],
+        }),
+      ).toThrow('Unsupported currency code: eur')
+    })
+
+    test('hash: rejects wrong amount', async () => {
+      const settlementCurrencies = [asset]
+
+      const baseCurrencyServer = Mppx_server.create({
+        methods: [
+          tempo_server.charge({
+            getClient: () => client,
+            currency: 'usd',
+            settlementCurrencies,
+            account: accounts[0],
+          }),
+        ],
+        realm,
+        secretKey,
+      })
+
+      const httpServer = await Http.createServer(async (req, res) => {
+        const result = await Mppx_server.toNodeListener(
+          baseCurrencyServer.charge({ amount: '1', decimals: 6 }),
+        )(req, res)
+        if (result.status === 402) return
+        res.end('OK')
+      })
+
+      const response = await fetch(httpServer.url)
+      expect(response.status).toBe(402)
+
+      const challenge = Challenge.fromResponse(response, {
+        methods: [tempo_client.charge()],
+      })
+
+      // Transfer wrong amount (10x the requested)
+      const { receipt } = await Actions.token.transferSync(client, {
+        account: accounts[1],
+        amount: BigInt(challenge.request.amount) * 10n,
+        to: challenge.request.recipient as Hex.Hex,
+        token: asset as Hex.Hex,
+      })
+
+      const credential = Credential.from({
+        challenge,
+        payload: { hash: receipt.transactionHash, type: 'hash' as const },
+      })
+
+      {
+        const response = await fetch(httpServer.url, {
+          headers: { Authorization: Credential.serialize(credential) },
+        })
+        expect(response.status).toBe(402)
+        const body = (await response.json()) as { detail: string }
+        expect(body.detail).toContain('Payment verification failed: no matching transfer found.')
+      }
+
+      httpServer.close()
+    })
+
+    test('hash: accepts second settlement token', async () => {
+      const otherToken = '0xABC0000000000000000000000000000000000000'
+      const settlementCurrencies = [otherToken, asset]
+
+      const baseCurrencyServer = Mppx_server.create({
+        methods: [
+          tempo_server.charge({
+            getClient: () => client,
+            currency: 'usd',
+            settlementCurrencies,
+            account: accounts[0],
+          }),
+        ],
+        realm,
+        secretKey,
+      })
+
+      const httpServer = await Http.createServer(async (req, res) => {
+        const result = await Mppx_server.toNodeListener(
+          baseCurrencyServer.charge({ amount: '1', decimals: 6 }),
+        )(req, res)
+        if (result.status === 402) return
+        res.end('OK')
+      })
+
+      const response = await fetch(httpServer.url)
+      expect(response.status).toBe(402)
+
+      const challenge = Challenge.fromResponse(response, {
+        methods: [tempo_client.charge()],
+      })
+
+      const memo = Attribution.encode({ serverId: challenge.realm })
+
+      // Pay with `asset` which is the SECOND token in settlementCurrencies
+      const { receipt } = await Actions.token.transferSync(client, {
+        account: accounts[1],
+        amount: BigInt(challenge.request.amount),
+        memo: memo as Hex.Hex,
+        to: challenge.request.recipient as Hex.Hex,
+        token: asset as Hex.Hex,
+      })
+
+      const credential = Credential.from({
+        challenge,
+        payload: { hash: receipt.transactionHash, type: 'hash' as const },
+      })
+
+      {
+        const response = await fetch(httpServer.url, {
+          headers: { Authorization: Credential.serialize(credential) },
+        })
+        expect(response.status).toBe(200)
+
+        const paymentReceipt = Receipt.fromResponse(response)
+        expect(paymentReceipt.status).toBe('success')
+      }
+
+      httpServer.close()
+    })
+
+    test('hash: rejects memo mismatch', async () => {
+      const serverMemo = '0xdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef' as const
+
+      const memoServer = Mppx_server.create({
+        methods: [
+          tempo_server.charge({
+            getClient: () => client,
+            currency: asset,
+            account: accounts[0],
+            memo: serverMemo,
+          }),
+        ],
+        realm,
+        secretKey,
+      })
+
+      const httpServer = await Http.createServer(async (req, res) => {
+        const result = await Mppx_server.toNodeListener(
+          memoServer.charge({ amount: '1', decimals: 6 }),
+        )(req, res)
+        if (result.status === 402) return
+        res.end('OK')
+      })
+
+      const response = await fetch(httpServer.url)
+      expect(response.status).toBe(402)
+
+      const challenge = Challenge.fromResponse(response, {
+        methods: [tempo_client.charge()],
+      })
+
+      // Transfer with a DIFFERENT memo
+      const wrongMemo = '0x1111111111111111111111111111111111111111111111111111111111111111' as const
+      const { receipt } = await Actions.token.transferSync(client, {
+        account: accounts[1],
+        amount: BigInt(challenge.request.amount),
+        memo: wrongMemo,
+        to: challenge.request.recipient as Hex.Hex,
+        token: asset as Hex.Hex,
+      })
+
+      const credential = Credential.from({
+        challenge,
+        payload: { hash: receipt.transactionHash, type: 'hash' as const },
+      })
+
+      {
+        const response = await fetch(httpServer.url, {
+          headers: { Authorization: Credential.serialize(credential) },
+        })
+        expect(response.status).toBe(402)
+        const body = (await response.json()) as { detail: string }
+        expect(body.detail).toContain('no matching transfer with memo found')
+      }
+
+      httpServer.close()
+    })
+
+    test('transaction: server with feePayer does not co-sign when not requested', async () => {
+      // Server has feePayer configured...
+      const feePayerServer = Mppx_server.create({
+        methods: [
+          tempo_server.charge({
+            getClient: () => client,
+            currency: asset,
+            account: accounts[0].address,
+            feePayer: accounts[0],
+          }),
+        ],
+        realm,
+        secretKey,
+      })
+
+      const httpServer = await Http.createServer(async (req, res) => {
+        const result = await Mppx_server.toNodeListener(
+          // ...but does NOT pass feePayer in per-request charge options
+          feePayerServer.charge({
+            amount: '1',
+            decimals: 6,
+            recipient: accounts[0].address,
+          }),
+        )(req, res)
+        if (result.status === 402) return
+        res.end('OK')
+      })
+
+      const response = await fetch(httpServer.url)
+      expect(response.status).toBe(402)
+
+      const challenge = Challenge.fromResponse(response, {
+        methods: [tempo_client.charge()],
+      })
+
+      // Verify that feePayer is NOT in the challenge request
+      expect(challenge.request.methodDetails?.feePayer).toBeFalsy()
+
+      // Client builds and sends their own transaction (no fee payer)
+      const { prepareTransactionRequest, signTransaction } = await import('viem/actions')
+
+      const prepared = await prepareTransactionRequest(client, {
+        account: accounts[1],
+        calls: [
+          Actions.token.transfer.call({
+            amount: BigInt(challenge.request.amount),
+            to: challenge.request.recipient as Hex.Hex,
+            token: asset as Hex.Hex,
+          }),
+        ],
+        nonceKey: 'expiring',
+      } as never)
+
+      const signature = await signTransaction(client, {
+        ...prepared,
+        account: accounts[1],
+      } as never)
+
+      const credential = Credential.from({
+        challenge,
+        payload: { signature, type: 'transaction' as const },
+      })
+
+      {
+        const response = await fetch(httpServer.url, {
+          headers: { Authorization: Credential.serialize(credential) },
+        })
+        // Should succeed — server processes the tx directly without co-signing
+        expect(response.status).toBe(200)
+      }
+
+      httpServer.close()
+    })
   })
 })

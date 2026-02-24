@@ -243,4 +243,80 @@ describe('charge', () => {
       expect(result.data.settlementCurrencies).toBeUndefined()
     }
   })
+
+  // ---------------------------------------------------------------------------
+  // Schema transform behavior
+  // ---------------------------------------------------------------------------
+
+  test('schema: transform converts amount with parseUnits', () => {
+    const result = Methods.charge.schema.request.safeParse({
+      amount: '1.5',
+      currency: '0x20c0000000000000000000000000000000000001',
+      decimals: 6,
+      expires: '2025-02-05T12:05:00Z',
+      recipient: '0x1234567890abcdef1234567890abcdef12345678',
+    })
+    expect(result.success).toBe(true)
+    if (result.success) {
+      expect(result.data.amount).toBe('1500000')
+    }
+  })
+
+  test('schema: transform omits methodDetails when not needed', () => {
+    const result = Methods.charge.schema.request.safeParse({
+      amount: '1',
+      currency: '0x20c0000000000000000000000000000000000001',
+      decimals: 6,
+      expires: '2025-02-05T12:05:00Z',
+      recipient: '0x1234567890abcdef1234567890abcdef12345678',
+    })
+    expect(result.success).toBe(true)
+    if (result.success) {
+      expect(result.data.methodDetails).toBeUndefined()
+    }
+  })
+
+  test('schema: transform includes methodDetails when memo provided', () => {
+    const memo = '0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef'
+    const result = Methods.charge.schema.request.safeParse({
+      amount: '1',
+      currency: '0x20c0000000000000000000000000000000000001',
+      decimals: 6,
+      expires: '2025-02-05T12:05:00Z',
+      recipient: '0x1234567890abcdef1234567890abcdef12345678',
+      memo,
+    })
+    expect(result.success).toBe(true)
+    if (result.success) {
+      expect(result.data.methodDetails).toBeDefined()
+      expect(result.data.methodDetails?.memo).toBe(memo)
+    }
+  })
+
+  test('schema: transform converts feePayer Account to boolean', () => {
+    const result = Methods.charge.schema.request.safeParse({
+      amount: '1',
+      currency: '0x20c0000000000000000000000000000000000001',
+      decimals: 6,
+      expires: '2025-02-05T12:05:00Z',
+      recipient: '0x1234567890abcdef1234567890abcdef12345678',
+      feePayer: { address: '0x0000000000000000000000000000000000000001' },
+    })
+    expect(result.success).toBe(true)
+    if (result.success) {
+      expect(result.data.methodDetails?.feePayer).toBe(true)
+    }
+  })
+
+  test('schema: token address with empty settlementCurrencies rejected', () => {
+    const result = Methods.charge.schema.request.safeParse({
+      amount: '1',
+      currency: '0x20c0000000000000000000000000000000000001',
+      decimals: 6,
+      expires: '2025-02-05T12:05:00Z',
+      recipient: '0x1234567890abcdef1234567890abcdef12345678',
+      settlementCurrencies: [],
+    })
+    expect(result.success).toBe(false)
+  })
 })
