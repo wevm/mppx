@@ -12,7 +12,6 @@ import { PaymentExpiredError } from '../../Errors.js'
 import type { LooseOmit } from '../../internal/types.js'
 import * as Method from '../../Method.js'
 import * as Client from '../../viem/Client.js'
-import * as Currency from '../Currency.js'
 import * as Account from '../internal/account.js'
 import * as defaults from '../internal/defaults.js'
 import type * as types from '../internal/types.js'
@@ -33,29 +32,6 @@ const transferWithMemoSelector = /*#__PURE__*/ toFunctionSelector(
 // Shared verification helpers
 // ---------------------------------------------------------------------------
 
-/**
- * Resolves the set of acceptable token addresses from a challenge request.
- *
- * - Legacy mode (`currency` is `0x...`): returns `[currency]`.
- * - Base-currency mode (`settlementCurrencies` present): returns the array as-is.
- */
-function resolveAcceptableTokens(challengeRequest: {
-  currency: string
-  settlementCurrencies?: string[]
-}): `0x${string}`[] {
-  if (challengeRequest.settlementCurrencies)
-    return challengeRequest.settlementCurrencies as `0x${string}`[]
-  return [challengeRequest.currency as `0x${string}`]
-}
-
-/** Returns true if `tokenAddress` is in the set of acceptable tokens. */
-function isAcceptableToken(
-  tokenAddress: `0x${string}`,
-  acceptableTokens: `0x${string}`[],
-): boolean {
-  return acceptableTokens.some((t) => isAddressEqual(tokenAddress, t))
-}
-
 /** Checks whether a Transfer/TransferWithMemo log matches the expected payment. */
 function matchTransferLog(
   log: {
@@ -63,13 +39,13 @@ function matchTransferLog(
     args: { to: `0x${string}`; amount: bigint; memo?: `0x${string}` }
   },
   options: {
-    acceptableTokens: `0x${string}`[]
+    currency: `0x${string}`
     amount: string
     memo: `0x${string}` | undefined
     recipient: `0x${string}`
   },
 ): boolean {
-  if (!isAcceptableToken(log.address as `0x${string}`, options.acceptableTokens)) return false
+  if (!isAddressEqual(log.address, options.currency)) return false
   if (!isAddressEqual(log.args.to, options.recipient)) return false
   if (log.args.amount.toString() !== options.amount) return false
   if (options.memo && log.args.memo?.toLowerCase() !== options.memo.toLowerCase()) return false
@@ -80,13 +56,13 @@ function matchTransferLog(
 function matchTransferCall(
   call: { to?: `0x${string}` | null; data?: `0x${string}` },
   options: {
-    acceptableTokens: `0x${string}`[]
+    currency: `0x${string}`
     amount: string
     memo: `0x${string}` | undefined
     recipient: `0x${string}`
   },
 ): boolean {
-  if (!call.to || !isAcceptableToken(call.to, options.acceptableTokens)) return false
+  if (!call.to || !isAddressEqual(call.to, options.currency)) return false
   if (!call.data) return false
 
   const selector = call.data.slice(0, 10)
@@ -140,14 +116,7 @@ function matchTransferCall(
  * ```ts
  * import { tempo } from 'mppx/server'
  *
- * // Legacy — exact token
  * const charge = tempo.charge({ currency: '0x20c0...' })
- *
- * // Base currency — server accepts multiple USD tokens
- * const charge = tempo.charge({
- *   currency: 'usd',
- *   settlementCurrencies: ['0x20c0...', '0xABC0...'],
- * })
  * ```
  */
 export function charge<const parameters extends charge.Parameters>(
@@ -160,7 +129,6 @@ export function charge<const parameters extends charge.Parameters>(
     description,
     externalId,
     memo,
-    settlementCurrencies,
   } = parameters
 
   const { recipient, feePayer } = Account.resolve(parameters)
@@ -170,17 +138,6 @@ export function charge<const parameters extends charge.Parameters>(
     getClient: parameters.getClient,
     rpcUrl: defaults.rpcUrl,
   })
-
-  // Validate: if currency is a code, settlementCurrencies must be provided
-  if (!Currency.isTokenAddress(currency ?? '') && currency !== undefined) {
-    if (!Currency.isCurrencyCode(currency))
-      throw new Error(`Unsupported currency code: ${currency}`)
-    if (!settlementCurrencies?.length)
-      throw new Error('settlementCurrencies required when currency is a base currency code')
-  }
-  if (Currency.isTokenAddress(currency ?? '') && settlementCurrencies) {
-    throw new Error('settlementCurrencies must not be provided when currency is a token address')
-  }
 
   type Defaults = charge.DeriveDefaults<parameters>
   return Method.toServer<typeof Methods.charge, Defaults>(Methods.charge, {
@@ -192,7 +149,6 @@ export function charge<const parameters extends charge.Parameters>(
       externalId,
       memo,
       recipient,
-      ...(settlementCurrencies && { settlementCurrencies }),
     } as unknown as Defaults,
 
     // TODO: dedupe `{charge,session}.request`
@@ -238,14 +194,14 @@ export function charge<const parameters extends charge.Parameters>(
       const { request: challengeRequest } = challenge
       const { amount, expires, methodDetails } = challengeRequest
 
+      const currency = challengeRequest.currency as `0x${string}`
       const recipient = challengeRequest.recipient as `0x${string}`
-      const acceptableTokens = resolveAcceptableTokens(challengeRequest)
 
       if (expires && new Date(expires) < new Date()) throw new PaymentExpiredError({ expires })
 
       const memo = methodDetails?.memo as `0x${string}` | undefined
 
-      const matchOptions = { acceptableTokens, amount, memo, recipient }
+      const matchOptions = { currency, amount, memo, recipient }
 
       const payload = credential.payload
 
@@ -268,7 +224,7 @@ export function charge<const parameters extends charge.Parameters>(
                 'Payment verification failed: no matching transfer with memo found.',
                 {
                   amount,
-                  acceptableTokens: acceptableTokens.join(', '),
+                  currency,
                   memo,
                   recipient,
                 },
@@ -293,7 +249,7 @@ export function charge<const parameters extends charge.Parameters>(
             if (!match)
               throw new MismatchError('Payment verification failed: no matching transfer found.', {
                 amount,
-                acceptableTokens: acceptableTokens.join(', '),
+                currency,
                 recipient,
               })
           }
@@ -312,7 +268,7 @@ export function charge<const parameters extends charge.Parameters>(
           if (!call)
             throw new MismatchError('Invalid transaction: no matching payment call found', {
               amount,
-              acceptableTokens: acceptableTokens.join(', '),
+              currency,
               recipient,
             })
 
@@ -349,8 +305,6 @@ export declare namespace charge {
   type Defaults = LooseOmit<Method.RequestDefaults<typeof Methods.charge>, 'feePayer' | 'recipient'>
 
   type Parameters = {
-    /** Ordered array of TIP-20 addresses the server will accept. Required when `currency` is a base currency code. */
-    settlementCurrencies?: string[] | undefined
     /** Testnet mode. */
     testnet?: boolean | undefined
   } & Client.getResolver.Parameters &

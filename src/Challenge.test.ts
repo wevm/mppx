@@ -180,37 +180,6 @@ describe('from', () => {
       },
       expectedId: 'aAY7_IEDzsznNYplhOSE8cERQxvjFcT4Lcn-7FHjLVE',
     },
-    {
-      label: 'with settlementCurrencies in request',
-      params: {
-        realm: 'api.example.com',
-        method: 'tempo',
-        intent: 'charge',
-        request: {
-          amount: '1000000',
-          currency: 'usd',
-          settlementCurrencies: [
-            '0x20c0000000000000000000000000000000000000',
-            '0xABC0000000000000000000000000000000000000',
-          ],
-        },
-      },
-      expectedId: 'XyPucr2_j44Wj18RpDrfgjQ0WFLLB8iGWRWk4Lob_Xk',
-    },
-    {
-      label: 'with different settlementCurrencies produces different id',
-      params: {
-        realm: 'api.example.com',
-        method: 'tempo',
-        intent: 'charge',
-        request: {
-          amount: '1000000',
-          currency: 'usd',
-          settlementCurrencies: ['0x20c0000000000000000000000000000000000000'],
-        },
-      },
-      expectedId: 'zIXZua0K9_1BJDfW3hKjnMzPhHg8zZHghg9fshP2xBo',
-    },
   ] as const
 
   test.each(hmacVectors)('hmac: $label', ({ params, expectedId }) => {

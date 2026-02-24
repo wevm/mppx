@@ -995,362 +995,11 @@ describe('tempo', () => {
     })
   })
 
-  describe('base currency settlement', () => {
-    test('constructor: throws when currency code without settlementCurrencies', () => {
-      expect(() =>
-        tempo_server.charge({
-          getClient: () => client,
-          account: accounts[0].address,
-          currency: 'usd',
-        }),
-      ).toThrow('settlementCurrencies required when currency is a base currency code')
-    })
-
-    test('constructor: throws when token address with settlementCurrencies', () => {
-      expect(() =>
-        tempo_server.charge({
-          getClient: () => client,
-          account: accounts[0].address,
-          currency: asset,
-          settlementCurrencies: [asset],
-        }),
-      ).toThrow('settlementCurrencies must not be provided when currency is a token address')
-    })
-
-    test('constructor: accepts currency code with settlementCurrencies', () => {
-      expect(() =>
-        tempo_server.charge({
-          getClient: () => client,
-          account: accounts[0].address,
-          currency: 'usd',
-          settlementCurrencies: [asset, '0xABC0000000000000000000000000000000000000'],
-        }),
-      ).not.toThrow()
-    })
-
-    test('challenge contains base currency and settlementCurrencies', async () => {
-      const settlementCurrencies = [asset, '0xABC0000000000000000000000000000000000000']
-      const handler = Mppx_server.create({
-        methods: [
-          tempo_server.charge({
-            getClient: () => client,
-            account: accounts[0].address,
-            currency: 'usd',
-            settlementCurrencies,
-          }),
-        ],
-        realm,
-        secretKey,
-      })
-
-      const result = await handler.charge({ amount: '1' })(new Request('https://example.com'))
-      expect(result.status).toBe(402)
-      if (result.status !== 402) throw new Error()
-
-      const challenge = Challenge.fromResponse(result.challenge, {
-        methods: [tempo_client.charge()],
-      })
-      expect(challenge.request.currency).toBe('usd')
-      expect(challenge.request.settlementCurrencies).toEqual(settlementCurrencies)
-    })
-
-    test('hash: verifies transfer of first settlement token', async () => {
-      const settlementCurrencies = [asset, '0xABC0000000000000000000000000000000000000'] as const
-
-      const baseCurrencyServer = Mppx_server.create({
-        methods: [
-          tempo_server.charge({
-            getClient: () => client,
-            currency: 'usd',
-            settlementCurrencies: [...settlementCurrencies],
-            account: accounts[0],
-          }),
-        ],
-        realm,
-        secretKey,
-      })
-
-      const httpServer = await Http.createServer(async (req, res) => {
-        const result = await Mppx_server.toNodeListener(
-          baseCurrencyServer.charge({ amount: '1', decimals: 6 }),
-        )(req, res)
-        if (result.status === 402) return
-        res.end('OK')
-      })
-
-      const response = await fetch(httpServer.url)
-      expect(response.status).toBe(402)
-
-      const challenge = Challenge.fromResponse(response, {
-        methods: [tempo_client.charge()],
-      })
-      expect(challenge.request.currency).toBe('usd')
-      expect(challenge.request.settlementCurrencies).toEqual([...settlementCurrencies])
-
-      const memo = Attribution.encode({ serverId: challenge.realm })
-
-      const { receipt } = await Actions.token.transferSync(client, {
-        account: accounts[1],
-        amount: BigInt(challenge.request.amount),
-        memo: memo as Hex.Hex,
-        to: challenge.request.recipient as Hex.Hex,
-        token: settlementCurrencies[0] as Hex.Hex,
-      })
-
-      const credential = Credential.from({
-        challenge,
-        payload: { hash: receipt.transactionHash, type: 'hash' as const },
-      })
-
-      {
-        const response = await fetch(httpServer.url, {
-          headers: { Authorization: Credential.serialize(credential) },
-        })
-        expect(response.status).toBe(200)
-
-        const paymentReceipt = Receipt.fromResponse(response)
-        expect(paymentReceipt.status).toBe('success')
-      }
-
-      httpServer.close()
-    })
-
-    test('hash: rejects transfer of unlisted token', async () => {
-      const settlementCurrencies = ['0xABC0000000000000000000000000000000000000'] as const
-
-      const baseCurrencyServer = Mppx_server.create({
-        methods: [
-          tempo_server.charge({
-            getClient: () => client,
-            currency: 'usd',
-            settlementCurrencies: [...settlementCurrencies],
-            account: accounts[0],
-          }),
-        ],
-        realm,
-        secretKey,
-      })
-
-      const httpServer = await Http.createServer(async (req, res) => {
-        const result = await Mppx_server.toNodeListener(
-          baseCurrencyServer.charge({ amount: '1', decimals: 6 }),
-        )(req, res)
-        if (result.status === 402) return
-        res.end('OK')
-      })
-
-      const response = await fetch(httpServer.url)
-      expect(response.status).toBe(402)
-
-      const challenge = Challenge.fromResponse(response, {
-        methods: [tempo_client.charge()],
-      })
-
-      // Transfer `asset` which is NOT in settlementCurrencies
-      const { receipt } = await Actions.token.transferSync(client, {
-        account: accounts[1],
-        amount: BigInt(challenge.request.amount),
-        to: challenge.request.recipient as Hex.Hex,
-        token: asset as Hex.Hex,
-      })
-
-      const credential = Credential.from({
-        challenge,
-        payload: { hash: receipt.transactionHash, type: 'hash' as const },
-      })
-
-      {
-        const response = await fetch(httpServer.url, {
-          headers: { Authorization: Credential.serialize(credential) },
-        })
-        expect(response.status).toBe(402)
-        const body = (await response.json()) as { detail: string }
-        expect(body.detail).toContain('Payment verification failed: no matching transfer found.')
-      }
-
-      httpServer.close()
-    })
-
-    test('transaction via Mppx: legacy token still works', async () => {
-      const mppx = Mppx_client.create({
-        polyfill: false,
-        methods: [
-          tempo_client({
-            account: accounts[1],
-            getClient: () => client,
-          }),
-        ],
-      })
-
-      const httpServer = await Http.createServer(async (req, res) => {
-        const result = await Mppx_server.toNodeListener(
-          server.charge({
-            amount: '1',
-            currency: asset,
-            recipient: accounts[0].address,
-          }),
-        )(req, res)
-        if (result.status === 402) return
-        res.end('OK')
-      })
-
-      const response = await mppx.fetch(httpServer.url)
-      expect(response.status).toBe(200)
-
-      httpServer.close()
-    })
-
-    test('transaction via Mppx: base currency with like-for-like settlement', async () => {
-      const settlementCurrencies = [asset]
-
-      const baseCurrencyServer = Mppx_server.create({
-        methods: [
-          tempo_server.charge({
-            getClient: () => client,
-            currency: 'usd',
-            settlementCurrencies,
-            account: accounts[0],
-          }),
-        ],
-        realm,
-        secretKey,
-      })
-
-      const mppx = Mppx_client.create({
-        polyfill: false,
-        methods: [
-          tempo_client({
-            account: accounts[1],
-            getClient: () => client,
-          }),
-        ],
-      })
-
-      const httpServer = await Http.createServer(async (req, res) => {
-        const result = await Mppx_server.toNodeListener(
-          baseCurrencyServer.charge({
-            amount: '1',
-            decimals: 6,
-            recipient: accounts[0].address,
-          }),
-        )(req, res)
-        if (result.status === 402) return
-        res.end('OK')
-      })
-
-      const response = await mppx.fetch(httpServer.url)
-      expect(response.status).toBe(200)
-
-      const receipt = Receipt.fromResponse(response)
-      expect(receipt.status).toBe('success')
-
-      httpServer.close()
-    })
-
-    test('transaction: fee payer rejects gas exceeding limit', async () => {
-      const { prepareTransactionRequest, signTransaction } = await import('viem/actions')
-
-      const baseCurrencyServer = Mppx_server.create({
-        methods: [
-          tempo_server.charge({
-            getClient: () => client,
-            currency: asset,
-            account: accounts[0].address,
-            feePayer: accounts[0],
-          }),
-        ],
-        realm,
-        secretKey,
-      })
-
-      const httpServer = await Http.createServer(async (req, res) => {
-        const result = await Mppx_server.toNodeListener(
-          baseCurrencyServer.charge({
-            amount: '1',
-            decimals: 6,
-            recipient: accounts[0].address,
-          }),
-        )(req, res)
-        if (result.status === 402) return
-        res.end('OK')
-      })
-
-      const response = await fetch(httpServer.url)
-      expect(response.status).toBe(402)
-
-      const challenge = Challenge.fromResponse(response, {
-        methods: [tempo_client.charge()],
-      })
-      const { amount, recipient, methodDetails } = challenge.request
-
-      // Build a transaction with excessively high gas
-      const prepared = await prepareTransactionRequest(client, {
-        account: accounts[1],
-        calls: [
-          Actions.token.transfer.call({
-            amount: BigInt(amount),
-            to: recipient as Hex.Hex,
-            token: asset as Hex.Hex,
-          }),
-        ],
-        ...(methodDetails?.feePayer && { feePayer: true }),
-        nonceKey: 'expiring',
-      } as never)
-
-      // Override gas to exceed the 500k limit
-      prepared.gas = 1_000_000n
-      const signature = await signTransaction(client, {
-        ...prepared,
-        account: accounts[1],
-      } as never)
-
-      const credential = Credential.from({
-        challenge,
-        payload: { signature, type: 'transaction' as const },
-      })
-
-      {
-        const response = await fetch(httpServer.url, {
-          headers: { Authorization: Credential.serialize(credential) },
-        })
-        expect(response.status).toBe(402)
-        const body = (await response.json()) as { detail: string }
-        expect(body.detail).toContain('exceeds fee payer limit')
-      }
-
-      httpServer.close()
-    })
-
-    test('constructor: throws on unsupported currency code', () => {
-      expect(() =>
-        tempo_server.charge({
-          getClient: () => client,
-          account: accounts[0].address,
-          currency: 'eur',
-          settlementCurrencies: [asset],
-        }),
-      ).toThrow('Unsupported currency code: eur')
-    })
-
+  describe('verification', () => {
     test('hash: rejects wrong amount', async () => {
-      const settlementCurrencies = [asset]
-
-      const baseCurrencyServer = Mppx_server.create({
-        methods: [
-          tempo_server.charge({
-            getClient: () => client,
-            currency: 'usd',
-            settlementCurrencies,
-            account: accounts[0],
-          }),
-        ],
-        realm,
-        secretKey,
-      })
-
       const httpServer = await Http.createServer(async (req, res) => {
         const result = await Mppx_server.toNodeListener(
-          baseCurrencyServer.charge({ amount: '1', decimals: 6 }),
+          server.charge({ amount: '1', decimals: 6 }),
         )(req, res)
         if (result.status === 402) return
         res.end('OK')
@@ -1383,67 +1032,6 @@ describe('tempo', () => {
         expect(response.status).toBe(402)
         const body = (await response.json()) as { detail: string }
         expect(body.detail).toContain('Payment verification failed: no matching transfer found.')
-      }
-
-      httpServer.close()
-    })
-
-    test('hash: accepts second settlement token', async () => {
-      const otherToken = '0xABC0000000000000000000000000000000000000'
-      const settlementCurrencies = [otherToken, asset]
-
-      const baseCurrencyServer = Mppx_server.create({
-        methods: [
-          tempo_server.charge({
-            getClient: () => client,
-            currency: 'usd',
-            settlementCurrencies,
-            account: accounts[0],
-          }),
-        ],
-        realm,
-        secretKey,
-      })
-
-      const httpServer = await Http.createServer(async (req, res) => {
-        const result = await Mppx_server.toNodeListener(
-          baseCurrencyServer.charge({ amount: '1', decimals: 6 }),
-        )(req, res)
-        if (result.status === 402) return
-        res.end('OK')
-      })
-
-      const response = await fetch(httpServer.url)
-      expect(response.status).toBe(402)
-
-      const challenge = Challenge.fromResponse(response, {
-        methods: [tempo_client.charge()],
-      })
-
-      const memo = Attribution.encode({ serverId: challenge.realm })
-
-      // Pay with `asset` which is the SECOND token in settlementCurrencies
-      const { receipt } = await Actions.token.transferSync(client, {
-        account: accounts[1],
-        amount: BigInt(challenge.request.amount),
-        memo: memo as Hex.Hex,
-        to: challenge.request.recipient as Hex.Hex,
-        token: asset as Hex.Hex,
-      })
-
-      const credential = Credential.from({
-        challenge,
-        payload: { hash: receipt.transactionHash, type: 'hash' as const },
-      })
-
-      {
-        const response = await fetch(httpServer.url, {
-          headers: { Authorization: Credential.serialize(credential) },
-        })
-        expect(response.status).toBe(200)
-
-        const paymentReceipt = Receipt.fromResponse(response)
-        expect(paymentReceipt.status).toBe('success')
       }
 
       httpServer.close()
@@ -1507,8 +1095,9 @@ describe('tempo', () => {
       httpServer.close()
     })
 
-    test('transaction: server with feePayer does not co-sign when not requested', async () => {
-      // Server has feePayer configured...
+    test('transaction: fee payer rejects gas exceeding limit', async () => {
+      const { prepareTransactionRequest, signTransaction } = await import('viem/actions')
+
       const feePayerServer = Mppx_server.create({
         methods: [
           tempo_server.charge({
@@ -1524,7 +1113,78 @@ describe('tempo', () => {
 
       const httpServer = await Http.createServer(async (req, res) => {
         const result = await Mppx_server.toNodeListener(
-          // ...but does NOT pass feePayer in per-request charge options
+          feePayerServer.charge({
+            amount: '1',
+            decimals: 6,
+            recipient: accounts[0].address,
+          }),
+        )(req, res)
+        if (result.status === 402) return
+        res.end('OK')
+      })
+
+      const response = await fetch(httpServer.url)
+      expect(response.status).toBe(402)
+
+      const challenge = Challenge.fromResponse(response, {
+        methods: [tempo_client.charge()],
+      })
+      const { amount, recipient, methodDetails } = challenge.request
+
+      // Build a transaction with excessively high gas
+      const prepared = await prepareTransactionRequest(client, {
+        account: accounts[1],
+        calls: [
+          Actions.token.transfer.call({
+            amount: BigInt(amount),
+            to: recipient as Hex.Hex,
+            token: asset as Hex.Hex,
+          }),
+        ],
+        ...(methodDetails?.feePayer && { feePayer: true }),
+        nonceKey: 'expiring',
+      } as never)
+
+      // Override gas to exceed the 500k limit
+      prepared.gas = 1_000_000n
+      const signature = await signTransaction(client, {
+        ...prepared,
+        account: accounts[1],
+      } as never)
+
+      const credential = Credential.from({
+        challenge,
+        payload: { signature, type: 'transaction' as const },
+      })
+
+      {
+        const response = await fetch(httpServer.url, {
+          headers: { Authorization: Credential.serialize(credential) },
+        })
+        expect(response.status).toBe(402)
+        const body = (await response.json()) as { detail: string }
+        expect(body.detail).toContain('exceeds fee payer limit')
+      }
+
+      httpServer.close()
+    })
+
+    test('transaction: server with feePayer does not co-sign when not requested', async () => {
+      const feePayerServer = Mppx_server.create({
+        methods: [
+          tempo_server.charge({
+            getClient: () => client,
+            currency: asset,
+            account: accounts[0].address,
+            feePayer: accounts[0],
+          }),
+        ],
+        realm,
+        secretKey,
+      })
+
+      const httpServer = await Http.createServer(async (req, res) => {
+        const result = await Mppx_server.toNodeListener(
           feePayerServer.charge({
             amount: '1',
             decimals: 6,
@@ -1542,10 +1202,6 @@ describe('tempo', () => {
         methods: [tempo_client.charge()],
       })
 
-      // Verify that feePayer is NOT in the challenge request
-      expect(challenge.request.methodDetails?.feePayer).toBeFalsy()
-
-      // Client builds and sends their own transaction (no fee payer)
       const { prepareTransactionRequest, signTransaction } = await import('viem/actions')
 
       const prepared = await prepareTransactionRequest(client, {
@@ -1574,7 +1230,6 @@ describe('tempo', () => {
         const response = await fetch(httpServer.url, {
           headers: { Authorization: Credential.serialize(credential) },
         })
-        // Should succeed — server processes the tx directly without co-signing
         expect(response.status).toBe(200)
       }
 

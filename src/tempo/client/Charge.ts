@@ -9,7 +9,6 @@ import * as Account from '../../viem/Account.js'
 import * as Client from '../../viem/Client.js'
 import * as z from '../../zod.js'
 import * as Attribution from '../Attribution.js'
-import * as Currency from '../Currency.js'
 import * as defaults from '../internal/defaults.js'
 import * as Methods from '../Methods.js'
 
@@ -23,70 +22,60 @@ export type SettlementResolution =
   | { type: 'swap'; heldToken: `0x${string}`; targetToken: `0x${string}`; maxAmountIn: bigint }
 
 /**
- * Resolves which settlement token to use by checking client balances.
+ * Resolves how the client will settle the payment by checking balances.
  *
- * 1. Scans `settlementCurrencies` for a token the client already holds with sufficient balance (like-for-like).
- * 2. If no direct match, finds any USD token the client holds and targets the first
- *    settlement currency for an atomic swap, using a DEX quote for `maxAmountIn`.
+ * 1. Checks if the client holds sufficient balance of the target `token`.
+ * 2. If not, scans known USD tokens for one the client holds and uses a DEX
+ *    quote to determine the swap cost.
  */
 export async function resolveSettlement(options: {
   client: ViemClient
   account: { address: `0x${string}` }
   amount: bigint
-  settlementCurrencies: string[]
+  token: `0x${string}`
   knownUsdTokens?: readonly string[]
 }): Promise<SettlementResolution> {
-  const { client, account, amount, settlementCurrencies } = options
+  const { client, account, amount, token } = options
 
-  // 1. Like-for-like: scan settlementCurrencies for a token the client holds with sufficient balance
-  for (const token of settlementCurrencies) {
-    const balance = await Actions.token.getBalance(client, {
-      token: token as Hex.Hex,
-      account: account.address,
-    })
-    if (balance >= amount) {
-      return { type: 'direct', token: token as `0x${string}` }
-    }
+  // 1. Direct: check if client holds the target token with sufficient balance
+  const balance = await Actions.token.getBalance(client, {
+    token,
+    account: account.address,
+  })
+  if (balance >= amount) {
+    return { type: 'direct', token }
   }
 
   // 2. Swap path: check known USD tokens for a balance to swap from
-  const targetToken = settlementCurrencies[0] as `0x${string}`
   const knownUsdTokens = options.knownUsdTokens ?? [defaults.tokens.usdc, defaults.tokens.pathUsd]
-  for (const token of knownUsdTokens) {
-    // Skip tokens already checked above
-    if (settlementCurrencies.some((sc) => sc.toLowerCase() === token.toLowerCase())) continue
-    const balance = await Actions.token.getBalance(client, {
-      token: token as Hex.Hex,
+  for (const heldToken of knownUsdTokens) {
+    // Skip the target token (already checked above)
+    if (heldToken.toLowerCase() === token.toLowerCase()) continue
+    const heldBalance = await Actions.token.getBalance(client, {
+      token: heldToken as Hex.Hex,
       account: account.address,
     })
-    if (balance > 0n) {
-      // Quote the swap to get required input amount
-      const quotedAmountIn = await Actions.dex
-        .getBuyQuote(client, {
-          tokenIn: token as Hex.Hex,
-          tokenOut: targetToken,
+    if (heldBalance > 0n) {
+      try {
+        const quotedAmountIn = await Actions.dex.getBuyQuote(client, {
+          tokenIn: heldToken as Hex.Hex,
+          tokenOut: token,
           amountOut: amount,
         })
-        .catch(() => {
-          throw new Error(
-            `Insufficient DEX liquidity to swap ${token} → ${targetToken} for amount ${amount}`,
-          )
-        })
-      if (balance < quotedAmountIn)
-        throw new Error(
-          `Insufficient balance: have ${balance} of ${token}, need ${quotedAmountIn} to swap for ${amount} of ${targetToken}`,
-        )
-      return {
-        type: 'swap',
-        heldToken: token as `0x${string}`,
-        targetToken,
-        maxAmountIn: quotedAmountIn,
-      }
+        if (heldBalance >= quotedAmountIn) {
+          return {
+            type: 'swap',
+            heldToken: heldToken as `0x${string}`,
+            targetToken: token,
+            maxAmountIn: quotedAmountIn,
+          }
+        }
+      } catch {}
     }
   }
 
   throw new Error(
-    `No USD tokens available for settlement. Checked: ${[...settlementCurrencies, ...knownUsdTokens].join(', ')}`,
+    `No USD tokens available for settlement. Checked: ${[token, ...knownUsdTokens].join(', ')}`,
   )
 }
 
@@ -127,7 +116,7 @@ export function charge(parameters: charge.Parameters = {}) {
       const account = getAccount(client, context)
 
       const { request } = challenge
-      const { amount, recipient, methodDetails, settlementCurrencies } = request
+      const { amount, currency, recipient, methodDetails } = request
 
       const memo = methodDetails?.memo
         ? (methodDetails.memo as Hex.Hex)
@@ -150,39 +139,12 @@ export function charge(parameters: charge.Parameters = {}) {
         })
       }
 
-      // Legacy mode: currency is a token address — direct transfer (existing behavior)
-      if (Currency.isTokenAddress(request.currency)) {
-        return signAndSerialize([
-          Actions.token.transfer.call({
-            amount: BigInt(amount),
-            memo,
-            to: recipient as Hex.Hex,
-            token: request.currency as Hex.Hex,
-          }),
-        ])
-      }
-
-      // Base currency mode: resolve settlement token
-      if (!settlementCurrencies?.length)
-        throw new Error('settlementCurrencies required when currency is a base currency code')
-
       const resolution = await resolveSettlement({
         client,
         account,
         amount: BigInt(amount),
-        settlementCurrencies,
+        token: currency as `0x${string}`,
       })
-
-      // Verify the chosen settlement token matches the declared base currency
-      const chosenToken = (
-        resolution.type === 'direct' ? resolution.token : resolution.targetToken
-      ) as Hex.Hex
-      const declaredCurrency = request.currency.toLowerCase()
-      const metadata = await Actions.token.getMetadata(client, { token: chosenToken })
-      if (metadata.currency?.toLowerCase() !== declaredCurrency)
-        throw new Error(
-          `Settlement token ${chosenToken} currency "${metadata.currency}" does not match declared currency "${declaredCurrency}"`,
-        )
 
       if (resolution.type === 'direct') {
         return signAndSerialize([

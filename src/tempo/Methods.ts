@@ -3,14 +3,9 @@ import { parseUnits } from 'viem'
 import * as Expires from '../Expires.js'
 import * as Method from '../Method.js'
 import * as z from '../zod.js'
-import * as Currency from './Currency.js'
 
 /**
  * Tempo charge intent for one-time TIP-20 token transfers.
- *
- * Supports two modes:
- * - **Legacy**: `currency` is a `0x`-prefixed token address. `settlementCurrencies` MUST NOT be present.
- * - **Base currency**: `currency` is an ISO 4217 code (e.g. `"usd"`). `settlementCurrencies` MUST be present.
  *
  * @see https://github.com/tempoxyz/payment-auth-spec/blob/main/specs/methods/tempo/draft-tempo-charge-00.md
  */
@@ -25,58 +20,36 @@ export const charge = Method.from({
       ]),
     },
     request: z.pipe(
-      z
-        .object({
-          amount: z.amount(),
-          chainId: z.optional(z.number()),
-          currency: z.string(),
-          decimals: z.number(),
-          description: z.optional(z.string()),
-          expires: z._default(z.datetime(), () => Expires.minutes(5)),
-          externalId: z.optional(z.string()),
-          feePayer: z.optional(
-            z.pipe(
-              z.union([z.boolean(), z.custom<Account>()]),
-              z.transform((v): boolean => (typeof v === 'object' ? true : v)),
-            ),
+      z.object({
+        amount: z.amount(),
+        chainId: z.optional(z.number()),
+        currency: z.string(),
+        decimals: z.number(),
+        description: z.optional(z.string()),
+        expires: z._default(z.datetime(), () => Expires.minutes(5)),
+        externalId: z.optional(z.string()),
+        feePayer: z.optional(
+          z.pipe(
+            z.union([z.boolean(), z.custom<Account>()]),
+            z.transform((v): boolean => (typeof v === 'object' ? true : v)),
           ),
-          memo: z.optional(z.hash()),
-          recipient: z.optional(z.string()),
-          settlementCurrencies: z.optional(z.array(z.string())),
-        })
-        .check(
-          z.refine((v) => {
-            return Currency.isTokenAddress(v.currency) || Currency.isCurrencyCode(v.currency)
-          }, 'currency must be a valid token address (0x...) or supported currency code'),
-        )
-        .check(
-          z.refine((v) => {
-            if (Currency.isTokenAddress(v.currency)) return !v.settlementCurrencies
-            return Array.isArray(v.settlementCurrencies) && v.settlementCurrencies.length > 0
-          }, 'settlementCurrencies required for currency codes, forbidden for token addresses'),
-        )
-        .check(
-          z.refine((v) => {
-            if (!v.settlementCurrencies) return true
-            return v.settlementCurrencies.every((sc) => /^0x[0-9a-fA-F]{40}$/.test(sc))
-          }, 'settlementCurrencies entries must be valid token addresses'),
         ),
-      z.transform(
-        ({ amount, chainId, decimals, feePayer, memo, settlementCurrencies, ...rest }) => ({
-          ...rest,
-          amount: parseUnits(amount, decimals).toString(),
-          ...(settlementCurrencies && { settlementCurrencies }),
-          ...(chainId !== undefined || feePayer !== undefined || memo !== undefined
-            ? {
-                methodDetails: {
-                  ...(chainId !== undefined && { chainId }),
-                  ...(feePayer !== undefined && { feePayer }),
-                  ...(memo !== undefined && { memo }),
-                },
-              }
-            : {}),
-        }),
-      ),
+        memo: z.optional(z.hash()),
+        recipient: z.optional(z.string()),
+      }),
+      z.transform(({ amount, chainId, decimals, feePayer, memo, ...rest }) => ({
+        ...rest,
+        amount: parseUnits(amount, decimals).toString(),
+        ...(chainId !== undefined || feePayer !== undefined || memo !== undefined
+          ? {
+              methodDetails: {
+                ...(chainId !== undefined && { chainId }),
+                ...(feePayer !== undefined && { feePayer }),
+                ...(memo !== undefined && { memo }),
+              },
+            }
+          : {}),
+      })),
     ),
   },
 })

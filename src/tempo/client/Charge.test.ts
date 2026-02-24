@@ -1,5 +1,5 @@
 import { describe, expect, test, vi } from 'vitest'
-import type { resolveSettlement as resolveSettlementType, SettlementResolution, charge as chargeType } from './Charge.js'
+import type { resolveSettlement as resolveSettlementType, SettlementResolution } from './Charge.js'
 
 // ---------------------------------------------------------------------------
 // Mock viem/tempo Actions so we can test resolveSettlement without a network.
@@ -7,13 +7,11 @@ import type { resolveSettlement as resolveSettlementType, SettlementResolution, 
 
 const mockGetBalance = vi.fn<() => Promise<bigint>>()
 const mockGetBuyQuote = vi.fn<() => Promise<bigint>>()
-const mockGetMetadata = vi.fn<() => Promise<{ currency?: string }>>()
 
 vi.mock('viem/tempo', () => ({
   Actions: {
     token: {
       getBalance: (..._args: unknown[]) => mockGetBalance(),
-      getMetadata: (..._args: unknown[]) => mockGetMetadata(),
       transfer: { call: (args: unknown) => ({ type: 'transfer', ...args as object }) },
     },
     dex: {
@@ -42,17 +40,16 @@ const account = { address: '0x1111111111111111111111111111111111111111' as `0x${
 const client = {} as Parameters<typeof resolveSettlementType>[0]['client']
 
 const tokenA = '0xAAAA000000000000000000000000000000000000' as const
-const tokenB = '0xBBBB000000000000000000000000000000000000' as const
 
 describe('resolveSettlement', () => {
-  test('direct: picks first settlement token with sufficient balance', async () => {
-    mockGetBalance.mockResolvedValueOnce(1_000_000n) // tokenA balance
+  test('direct: client holds target token with sufficient balance', async () => {
+    mockGetBalance.mockResolvedValueOnce(1_000_000n)
 
     const result = await resolveSettlement({
       client,
       account,
       amount: 1_000_000n,
-      settlementCurrencies: [tokenA, tokenB],
+      token: tokenA,
     })
 
     expect(result).toEqual<SettlementResolution>({
@@ -61,38 +58,18 @@ describe('resolveSettlement', () => {
     })
   })
 
-  test('direct: skips token with insufficient balance', async () => {
+  test('swap: falls back when target token balance insufficient', async () => {
     mockGetBalance
-      .mockResolvedValueOnce(500n) // tokenA: insufficient
-      .mockResolvedValueOnce(1_000_000n) // tokenB: sufficient
-
-    const result = await resolveSettlement({
-      client,
-      account,
-      amount: 1_000_000n,
-      settlementCurrencies: [tokenA, tokenB],
-    })
-
-    expect(result).toEqual<SettlementResolution>({
-      type: 'direct',
-      token: tokenB,
-    })
-  })
-
-  test('direct: skips token with dust balance (less than amount)', async () => {
-    mockGetBalance
-      .mockResolvedValueOnce(1n) // tokenA: dust
-      .mockResolvedValueOnce(0n) // tokenB: zero
-      // Falls through to swap path — known USD tokens
+      .mockResolvedValueOnce(1n) // tokenA: insufficient
       .mockResolvedValueOnce(2_000_000n) // usdc: sufficient
 
-    mockGetBuyQuote.mockResolvedValueOnce(1_000_000n) // quoted amount
+    mockGetBuyQuote.mockResolvedValueOnce(1_000_000n)
 
     const result = await resolveSettlement({
       client,
       account,
       amount: 1_000_000n,
-      settlementCurrencies: [tokenA, tokenB],
+      token: tokenA,
     })
 
     expect(result.type).toBe('swap')
@@ -103,13 +80,13 @@ describe('resolveSettlement', () => {
       .mockResolvedValueOnce(0n) // tokenA: zero
       .mockResolvedValueOnce(5_000_000n) // usdc: sufficient
 
-    mockGetBuyQuote.mockResolvedValueOnce(1_000_500n) // quoted: slightly above 1:1
+    mockGetBuyQuote.mockResolvedValueOnce(1_000_500n)
 
     const result = await resolveSettlement({
       client,
       account,
       amount: 1_000_000n,
-      settlementCurrencies: [tokenA],
+      token: tokenA,
     })
 
     expect(result).toEqual<SettlementResolution>({
@@ -120,38 +97,54 @@ describe('resolveSettlement', () => {
     })
   })
 
-  test('swap: throws on insufficient balance for quoted amount', async () => {
+  test('swap: skips token with insufficient balance for quote, tries next', async () => {
     mockGetBalance
       .mockResolvedValueOnce(0n) // tokenA: zero
       .mockResolvedValueOnce(500n) // usdc: less than quote
+      .mockResolvedValueOnce(5_000_000n) // pathUsd: sufficient
 
-    mockGetBuyQuote.mockResolvedValueOnce(1_000_000n) // need 1M but only have 500
+    mockGetBuyQuote
+      .mockResolvedValueOnce(1_000_000n) // usdc quote: too expensive
+      .mockResolvedValueOnce(900_000n) // pathUsd quote: affordable
 
-    await expect(
-      resolveSettlement({
-        client,
-        account,
-        amount: 1_000_000n,
-        settlementCurrencies: [tokenA],
-      }),
-    ).rejects.toThrow('Insufficient balance')
+    const result = await resolveSettlement({
+      client,
+      account,
+      amount: 1_000_000n,
+      token: tokenA,
+    })
+
+    expect(result).toEqual<SettlementResolution>({
+      type: 'swap',
+      heldToken: expect.stringMatching(/^0x/) as `0x${string}`,
+      targetToken: tokenA,
+      maxAmountIn: 900_000n,
+    })
   })
 
-  test('swap: throws on DEX liquidity failure', async () => {
+  test('swap: skips token on DEX quote failure, tries next', async () => {
     mockGetBalance
       .mockResolvedValueOnce(0n) // tokenA: zero
       .mockResolvedValueOnce(5_000_000n) // usdc: has balance
+      .mockResolvedValueOnce(5_000_000n) // pathUsd: has balance
 
-    mockGetBuyQuote.mockRejectedValueOnce(new Error('INSUFFICIENT_LIQUIDITY'))
+    mockGetBuyQuote
+      .mockRejectedValueOnce(new Error('INSUFFICIENT_LIQUIDITY')) // usdc: no route
+      .mockResolvedValueOnce(1_000_000n) // pathUsd: works
 
-    await expect(
-      resolveSettlement({
-        client,
-        account,
-        amount: 1_000_000n,
-        settlementCurrencies: [tokenA],
-      }),
-    ).rejects.toThrow('Insufficient DEX liquidity')
+    const result = await resolveSettlement({
+      client,
+      account,
+      amount: 1_000_000n,
+      token: tokenA,
+    })
+
+    expect(result).toEqual<SettlementResolution>({
+      type: 'swap',
+      heldToken: expect.stringMatching(/^0x/) as `0x${string}`,
+      targetToken: tokenA,
+      maxAmountIn: 1_000_000n,
+    })
   })
 
   test('throws when no USD tokens available', async () => {
@@ -165,18 +158,16 @@ describe('resolveSettlement', () => {
         client,
         account,
         amount: 1_000_000n,
-        settlementCurrencies: [tokenA],
+        token: tokenA,
       }),
     ).rejects.toThrow('No USD tokens available for settlement')
   })
 
-  test('swap: skips known tokens already in settlementCurrencies', async () => {
-    // pathUsd is in settlementCurrencies, so it's already checked in the direct pass.
-    // It should not be checked again in the swap pass.
+  test('swap: skips target token in knownUsdTokens', async () => {
     const pathUsd = '0x20c0000000000000000000000000000000000000'
 
     mockGetBalance
-      .mockResolvedValueOnce(0n) // pathUsd in settlement: insufficient
+      .mockResolvedValueOnce(0n) // pathUsd (target): insufficient
       .mockResolvedValueOnce(5_000_000n) // usdc (known): sufficient
 
     mockGetBuyQuote.mockResolvedValueOnce(1_000_000n)
@@ -185,10 +176,9 @@ describe('resolveSettlement', () => {
       client,
       account,
       amount: 1_000_000n,
-      settlementCurrencies: [pathUsd],
+      token: pathUsd as `0x${string}`,
     })
 
-    // Should pick usdc for swap (pathUsd was already checked in direct pass)
     expect(result.type).toBe('swap')
     expect((result as { heldToken: string }).heldToken.toLowerCase()).toBe(
       '0x20C000000000000000000000b9537d11c60E8b50'.toLowerCase(),
@@ -199,7 +189,7 @@ describe('resolveSettlement', () => {
     const customUsd = '0xCCCC000000000000000000000000000000000000' as const
 
     mockGetBalance
-      .mockResolvedValueOnce(0n) // tokenA: zero (direct pass)
+      .mockResolvedValueOnce(0n) // tokenA: zero
       .mockResolvedValueOnce(5_000_000n) // customUsd: sufficient
 
     mockGetBuyQuote.mockResolvedValueOnce(1_000_000n)
@@ -208,7 +198,7 @@ describe('resolveSettlement', () => {
       client,
       account,
       amount: 1_000_000n,
-      settlementCurrencies: [tokenA],
+      token: tokenA,
       knownUsdTokens: [customUsd],
     })
 
@@ -225,17 +215,15 @@ describe('resolveSettlement', () => {
 
     mockGetBalance.mockReset()
     mockGetBalance
-      .mockResolvedValueOnce(0n) // tokenA: zero (direct pass)
+      .mockResolvedValueOnce(0n) // tokenA: zero
       .mockResolvedValueOnce(0n) // customUsd: zero
 
-    // With custom list containing only 1 token, and that token has no balance,
-    // should throw immediately without checking default tokens
     await expect(
       resolveSettlement({
         client,
         account,
         amount: 1_000_000n,
-        settlementCurrencies: [tokenA],
+        token: tokenA,
         knownUsdTokens: [customUsd],
       }),
     ).rejects.toThrow('No USD tokens available for settlement')
@@ -258,14 +246,14 @@ describe('createCredential', () => {
     mockSign.mockReset()
     mockGetBalance.mockReset()
     mockGetBuyQuote.mockReset()
-    mockGetMetadata.mockReset()
 
     mockPrepare.mockResolvedValue({ gas: 100n })
     mockSign.mockResolvedValue('0xsigned')
   }
 
-  test('legacy: builds single transfer call', async () => {
+  test('direct: builds single transfer call', async () => {
     setup()
+    mockGetBalance.mockResolvedValueOnce(1_000_000n) // sufficient balance
 
     const method = charge({ account: account as never, getClient: () => client })
     const credential = await method.createCredential({
@@ -276,7 +264,6 @@ describe('createCredential', () => {
           currency: '0xAAAA000000000000000000000000000000000000',
           expires: '2099-01-01T00:00:00Z',
           recipient: '0x2222222222222222222222222222222222222222',
-
         },
       },
       context: {},
@@ -285,46 +272,14 @@ describe('createCredential', () => {
     expect(credential).toContain('Payment ')
     expect(mockPrepare).toHaveBeenCalledTimes(1)
     expect(mockSign).toHaveBeenCalledTimes(1)
-    // Should NOT call getMetadata for legacy mode
-    expect(mockGetMetadata).not.toHaveBeenCalled()
   })
 
-  test('base currency direct: verifies metadata on chosen token', async () => {
+  test('swap: builds dex buy + transfer calls', async () => {
     setup()
-    // resolveSettlement: tokenA has sufficient balance
-    mockGetBalance.mockResolvedValueOnce(1_000_000n)
-    // getMetadata for chosen token
-    mockGetMetadata.mockResolvedValueOnce({ currency: 'usd' })
-
-    const method = charge({ account: account as never, getClient: () => client })
-    const credential = await method.createCredential({
-      challenge: {
-        ...challengeBase,
-        request: {
-          amount: '1000000',
-          currency: 'usd',
-          expires: '2099-01-01T00:00:00Z',
-          recipient: '0x2222222222222222222222222222222222222222',
-          settlementCurrencies: [tokenA, tokenB],
-
-        },
-      },
-      context: {},
-    })
-
-    expect(credential).toContain('Payment ')
-    expect(mockGetMetadata).toHaveBeenCalledTimes(1)
-  })
-
-  test('base currency swap: verifies metadata on targetToken', async () => {
-    setup()
-    // resolveSettlement: no direct match, swap via known USD
     mockGetBalance
-      .mockResolvedValueOnce(0n) // tokenA: insufficient
+      .mockResolvedValueOnce(0n) // target token: insufficient
       .mockResolvedValueOnce(5_000_000n) // usdc: sufficient
     mockGetBuyQuote.mockResolvedValueOnce(1_000_000n)
-    // getMetadata for targetToken (tokenA)
-    mockGetMetadata.mockResolvedValueOnce({ currency: 'usd' })
 
     const method = charge({ account: account as never, getClient: () => client })
     const credential = await method.createCredential({
@@ -332,61 +287,17 @@ describe('createCredential', () => {
         ...challengeBase,
         request: {
           amount: '1000000',
-          currency: 'usd',
+          currency: '0xAAAA000000000000000000000000000000000000',
           expires: '2099-01-01T00:00:00Z',
           recipient: '0x2222222222222222222222222222222222222222',
-          settlementCurrencies: [tokenA],
-
         },
       },
       context: {},
     })
 
     expect(credential).toContain('Payment ')
-    expect(mockGetMetadata).toHaveBeenCalledTimes(1)
-  })
-
-  test('base currency: metadata mismatch throws', async () => {
-    setup()
-    mockGetBalance.mockResolvedValueOnce(1_000_000n) // direct match
-    mockGetMetadata.mockResolvedValueOnce({ currency: 'eur' }) // wrong!
-
-    const method = charge({ account: account as never, getClient: () => client })
-    await expect(
-      method.createCredential({
-        challenge: {
-          ...challengeBase,
-          request: {
-            amount: '1000000',
-            currency: 'usd',
-            expires: '2099-01-01T00:00:00Z',
-            recipient: '0x2222222222222222222222222222222222222222',
-            settlementCurrencies: [tokenA],
-          },
-        },
-        context: {},
-      }),
-    ).rejects.toThrow('does not match declared currency')
-  })
-
-  test('base currency: missing settlementCurrencies throws', async () => {
-    setup()
-
-    const method = charge({ account: account as never, getClient: () => client })
-    await expect(
-      method.createCredential({
-        challenge: {
-          ...challengeBase,
-          request: {
-            amount: '1000000',
-            currency: 'usd',
-            expires: '2099-01-01T00:00:00Z',
-            recipient: '0x2222222222222222222222222222222222222222',
-  
-          },
-        },
-        context: {},
-      }),
-    ).rejects.toThrow('settlementCurrencies required when currency is a base currency code')
+    expect(mockPrepare).toHaveBeenCalledTimes(1)
+    expect(mockSign).toHaveBeenCalledTimes(1)
+    expect(mockGetBuyQuote).toHaveBeenCalledTimes(1)
   })
 })
