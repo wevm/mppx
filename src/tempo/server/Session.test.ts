@@ -758,6 +758,7 @@ describe('session', () => {
     test('close throws when client has no account', async () => {
       const { channelId, serializedTransaction } = await createSignedOpenTransaction(10000000n)
       const server = createServer({
+        account: undefined,
         getClient: () => createClient({ chain, transport: http() }),
       })
       await openServerChannel(server, channelId, serializedTransaction)
@@ -776,6 +777,35 @@ describe('session', () => {
           request: makeRequest(),
         }),
       ).rejects.toThrow('Cannot close channel: no account available')
+    })
+
+    test('close uses feePayer when account is not set', async () => {
+      const { channelId, serializedTransaction } = await createSignedOpenTransaction(10000000n)
+      const server = createServer({
+        account: undefined,
+        feePayer: accounts[0],
+        getClient: () => createClient({ chain, transport: http() }),
+      })
+      await openServerChannel(server, channelId, serializedTransaction)
+
+      const receipt = await server.verify({
+        credential: {
+          challenge: makeChallenge({ id: 'challenge-2', channelId }),
+          payload: {
+            action: 'close' as const,
+            channelId,
+            cumulativeAmount: '1000000',
+            signature: await signTestVoucher(channelId, 1000000n),
+          },
+        },
+        request: makeRequest(),
+      })
+
+      expect(receipt.status).toBe('success')
+      expect((receipt as SessionReceipt).txHash).toMatch(/^0x/)
+
+      const ch = await store.getChannel(channelId)
+      expect(ch!.finalized).toBe(true)
     })
   })
 

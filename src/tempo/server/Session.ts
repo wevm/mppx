@@ -219,7 +219,7 @@ export function session<const parameters extends session.Parameters>(p?: paramet
             challenge,
             payload,
             methodDetails,
-            account,
+            account ?? feePayer,
           )
           break
 
