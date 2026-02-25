@@ -3,13 +3,20 @@ import {
   type Address,
   type Client,
   decodeFunctionData,
+  encodeFunctionData,
   getAbiItem,
   type Hex,
   isAddressEqual,
   type ReadContractReturnType,
   toFunctionSelector,
 } from 'viem'
-import { readContract, sendRawTransactionSync, signTransaction, writeContract } from 'viem/actions'
+import {
+  prepareTransactionRequest,
+  readContract,
+  sendRawTransactionSync,
+  signTransaction,
+  writeContract,
+} from 'viem/actions'
 import { Transaction } from 'viem/tempo'
 import { BadRequestError, ChannelClosedError, VerificationFailedError } from '../../Errors.js'
 import { escrowAbi } from './escrow.abi.js'
@@ -69,7 +76,9 @@ function assertUint128(amount: bigint): void {
 }
 
 /**
- * Submit a settle transaction on-chain.
+ * Submit a settle transaction on-chain as a Tempo type-0x76 transaction.
+ *
+ * Uses `feePayer` so the account does not need native token for gas.
  */
 export async function settleOnChain(
   client: Client,
@@ -77,18 +86,49 @@ export async function settleOnChain(
   voucher: SignedVoucher,
 ): Promise<Hex> {
   assertUint128(voucher.cumulativeAmount)
-  return writeContract(client, {
-    account: client.account!,
-    chain: client.chain,
-    address: escrowContract,
+
+  const account = client.account
+  if (!account)
+    throw new Error(
+      'Cannot settle channel: no account available. Provide an `account` in the session config or a `getClient` that returns an account-bearing client.',
+    )
+
+  const data = encodeFunctionData({
     abi: escrowAbi,
     functionName: 'settle',
     args: [voucher.channelId, voucher.cumulativeAmount, voucher.signature],
   })
+
+  const prepared = await prepareTransactionRequest(client, {
+    account,
+    calls: [{ to: escrowContract, data }],
+    feePayer: true,
+  } as never)
+  prepared.gas = prepared.gas! + 5_000n
+
+  const serialized = await signTransaction(client, {
+    ...prepared,
+    account,
+    feePayer: account,
+  } as never)
+
+  const receipt = await sendRawTransactionSync(client, {
+    serializedTransaction: serialized as Transaction.TransactionSerializedTempo,
+  })
+
+  if (receipt.status !== 'success') {
+    throw new VerificationFailedError({
+      reason: `settle transaction reverted: ${receipt.transactionHash}`,
+    })
+  }
+
+  return receipt.transactionHash
 }
 
 /**
- * Submit a close transaction on-chain.
+ * Submit a close transaction on-chain as a Tempo type-0x76 transaction.
+ *
+ * Uses `feePayer` so the account does not need native token for gas.
  */
 export async function closeOnChain(
   client: Client,
@@ -102,14 +142,37 @@ export async function closeOnChain(
     throw new Error(
       'Cannot close channel: no account available. Provide an `account` in the session config or a `getClient` that returns an account-bearing client.',
     )
-  return writeContract(client, {
-    account: resolved,
-    chain: client.chain,
-    address: escrowContract,
+
+  const data = encodeFunctionData({
     abi: escrowAbi,
     functionName: 'close',
     args: [voucher.channelId, voucher.cumulativeAmount, voucher.signature],
   })
+
+  const prepared = await prepareTransactionRequest(client, {
+    account: resolved,
+    calls: [{ to: escrowContract, data }],
+    feePayer: true,
+  } as never)
+  prepared.gas = prepared.gas! + 5_000n
+
+  const serialized = await signTransaction(client, {
+    ...prepared,
+    account: resolved,
+    feePayer: resolved,
+  } as never)
+
+  const receipt = await sendRawTransactionSync(client, {
+    serializedTransaction: serialized as Transaction.TransactionSerializedTempo,
+  })
+
+  if (receipt.status !== 'success') {
+    throw new VerificationFailedError({
+      reason: `close transaction reverted: ${receipt.transactionHash}`,
+    })
+  }
+
+  return receipt.transactionHash
 }
 
 const escrowOpenSelector = /*#__PURE__*/ toFunctionSelector(
