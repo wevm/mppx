@@ -1,4 +1,5 @@
 import { type Address, encodeFunctionData, erc20Abi, type Hex } from 'viem'
+import { waitForTransactionReceipt } from 'viem/actions'
 import { Addresses, Transaction } from 'viem/tempo'
 import { beforeAll, describe, expect, test } from 'vitest'
 import {
@@ -541,6 +542,7 @@ describe('on-chain', () => {
       })
 
       expect(txHash).toBeDefined()
+      await waitForTransactionReceipt(client, { hash: txHash })
       const channel = await getOnChainChannel(client, escrowContract, channelId)
       expect(channel.settled).toBe(settleAmount)
       expect(channel.finalized).toBe(false)
@@ -580,6 +582,7 @@ describe('on-chain', () => {
       )
 
       expect(txHash).toBeDefined()
+      await waitForTransactionReceipt(client, { hash: txHash })
       const channel = await getOnChainChannel(client, escrowContract, channelId)
       expect(channel.settled).toBe(settleAmount)
       expect(channel.finalized).toBe(false)
@@ -616,6 +619,7 @@ describe('on-chain', () => {
       })
 
       expect(txHash).toBeDefined()
+      await waitForTransactionReceipt(client, { hash: txHash })
       const channel = await getOnChainChannel(client, escrowContract, channelId)
       expect(channel.finalized).toBe(true)
     })
@@ -655,6 +659,7 @@ describe('on-chain', () => {
       )
 
       expect(txHash).toBeDefined()
+      await waitForTransactionReceipt(client, { hash: txHash })
       const channel = await getOnChainChannel(client, escrowContract, channelId)
       expect(channel.finalized).toBe(true)
     })
