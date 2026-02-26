@@ -568,11 +568,16 @@ describe('on-chain', () => {
         chain.id,
       )
 
-      const txHash = await settleOnChain(client, escrowContract, {
-        channelId,
-        cumulativeAmount: settleAmount,
-        signature,
-      }, feePayerAccount)
+      const txHash = await settleOnChain(
+        client,
+        escrowContract,
+        {
+          channelId,
+          cumulativeAmount: settleAmount,
+          signature,
+        },
+        feePayerAccount,
+      )
 
       expect(txHash).toBeDefined()
       const channel = await getOnChainChannel(client, escrowContract, channelId)
@@ -637,11 +642,17 @@ describe('on-chain', () => {
         chain.id,
       )
 
-      const txHash = await closeOnChain(client, escrowContract, {
-        channelId,
-        cumulativeAmount: closeAmount,
-        signature,
-      }, undefined, feePayerAccount)
+      const txHash = await closeOnChain(
+        client,
+        escrowContract,
+        {
+          channelId,
+          cumulativeAmount: closeAmount,
+          signature,
+        },
+        undefined,
+        feePayerAccount,
+      )
 
       expect(txHash).toBeDefined()
       const channel = await getOnChainChannel(client, escrowContract, channelId)
