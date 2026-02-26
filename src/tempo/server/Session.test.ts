@@ -929,7 +929,7 @@ describe('session', () => {
         request: makeRequest(),
       })
 
-      const settleTxHash = await settle(store, client, channelId, escrowContract)
+      const settleTxHash = await settle(store, client, channelId, { escrowContract })
       expect(settleTxHash).toMatch(/^0x/)
 
       const ch = await store.getChannel(channelId)
@@ -939,7 +939,7 @@ describe('session', () => {
     test('settle rejects when no channel found', async () => {
       const fakeChannelId =
         '0x0000000000000000000000000000000000000000000000000000000000000000' as Hex
-      await expect(settle(store, client, fakeChannelId, escrowContract)).rejects.toThrow(
+      await expect(settle(store, client, fakeChannelId, { escrowContract })).rejects.toThrow(
         ChannelNotFoundError,
       )
     })
