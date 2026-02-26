@@ -71,7 +71,6 @@ describe('assertUint128 (via settleOnChain / closeOnChain)', () => {
 
 describe('on-chain', () => {
   const payer = accounts[2]
-  const feePayerAccount = accounts[1]
   const recipient = accounts[0].address
   const currency = asset
 
@@ -82,7 +81,6 @@ describe('on-chain', () => {
     escrowContract = await deployEscrow()
     await fundAccount({ address: payer.address, token: Addresses.pathUsd })
     await fundAccount({ address: payer.address, token: currency })
-    await fundAccount({ address: feePayerAccount.address, token: Addresses.pathUsd })
   })
 
   function nextSalt(): Hex {
@@ -578,7 +576,7 @@ describe('on-chain', () => {
           cumulativeAmount: settleAmount,
           signature,
         },
-        feePayerAccount,
+        accounts[0],
       )
 
       expect(txHash).toBeDefined()
@@ -655,7 +653,7 @@ describe('on-chain', () => {
           signature,
         },
         undefined,
-        feePayerAccount,
+        accounts[0],
       )
 
       expect(txHash).toBeDefined()
