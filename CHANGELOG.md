@@ -1,5 +1,11 @@
 # mppx
 
+## 0.3.9
+
+### Patch Changes
+
+- a016e1f: Added fee payer support to `settleOnChain` and `closeOnChain` for server-originated transactions on chains where the server EOA has no native tokens. Transactions are built using `prepareTransactionRequest` → dual-sign → `sendRawTransactionSync` with an explicitly resolved fee token.
+
 ## 0.3.8
 
 ### Patch Changes
