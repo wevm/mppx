@@ -220,6 +220,7 @@ export function session<const parameters extends session.Parameters>(p?: paramet
             payload,
             methodDetails,
             account,
+            resolvedFeePayer,
           )
           break
 
@@ -310,7 +311,10 @@ export async function settle(
   store: ChannelStore.ChannelStore,
   client: viem_Client,
   channelId: Hex,
+  options?: {
   escrowContract?: Address | undefined,
+  feePayer?: viem_Account | undefined,
+  }
 ): Promise<Hex> {
   const channel = await store.getChannel(channelId)
   if (!channel) throw new ChannelNotFoundError({ reason: 'channel not found' })
@@ -318,11 +322,11 @@ export async function settle(
 
   const chainId = client.chain?.id
   const resolvedEscrow =
-    escrowContract ?? defaults.escrowContract[chainId as keyof typeof defaults.escrowContract]
+    options?.escrowContract ?? defaults.escrowContract[chainId as keyof typeof defaults.escrowContract]
   if (!resolvedEscrow) throw new Error(`No escrow contract for chainId ${chainId}.`)
 
   const settledAmount = channel.highestVoucher.cumulativeAmount
-  const txHash = await settleOnChain(client, resolvedEscrow, channel.highestVoucher)
+  const txHash = await settleOnChain(client, resolvedEscrow, channel.highestVoucher, options?.feePayer)
 
   await store.updateChannel(channelId, (current) => {
     if (!current) return null
@@ -704,6 +708,7 @@ async function handleClose(
   payload: SessionCredentialPayload & { action: 'close' },
   methodDetails: SessionMethodDetails,
   account?: viem_Account,
+  feePayer?: viem_Account,
 ): Promise<SessionReceipt> {
   const channel = await store.getChannel(payload.channelId)
   if (!channel) {
@@ -754,7 +759,7 @@ async function handleClose(
     throw new InvalidSignatureError({ reason: 'invalid voucher signature' })
   }
 
-  const txHash = await closeOnChain(client, methodDetails.escrowContract, voucher, account)
+  const txHash = await closeOnChain(client, methodDetails.escrowContract, voucher, account, feePayer)
 
   const updated = await store.updateChannel(payload.channelId, (current) => {
     if (!current) return null

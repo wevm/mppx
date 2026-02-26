@@ -70,6 +70,7 @@ describe('assertUint128 (via settleOnChain / closeOnChain)', () => {
 
 describe('on-chain', () => {
   const payer = accounts[2]
+  const feePayerAccount = accounts[1]
   const recipient = accounts[0].address
   const currency = asset
 
@@ -80,6 +81,7 @@ describe('on-chain', () => {
     escrowContract = await deployEscrow()
     await fundAccount({ address: payer.address, token: Addresses.pathUsd })
     await fundAccount({ address: payer.address, token: currency })
+    await fundAccount({ address: feePayerAccount.address, token: Addresses.pathUsd })
   })
 
   function nextSalt(): Hex {
@@ -506,6 +508,144 @@ describe('on-chain', () => {
           feePayer: accounts[0],
         }),
       ).rejects.toThrow('fee-sponsored topUp transaction contains an unauthorized call')
+    })
+  })
+
+  describe('settleOnChain', () => {
+    test('settles a channel', async () => {
+      const salt = nextSalt()
+      const deposit = 10_000_000n
+      const settleAmount = 5_000_000n
+
+      const { channelId } = await openChannel({
+        escrow: escrowContract,
+        payer,
+        payee: recipient,
+        token: currency,
+        deposit,
+        salt,
+      })
+
+      const signature = await signVoucher(
+        client,
+        payer,
+        { channelId, cumulativeAmount: settleAmount },
+        escrowContract,
+        chain.id,
+      )
+
+      const txHash = await settleOnChain(client, escrowContract, {
+        channelId,
+        cumulativeAmount: settleAmount,
+        signature,
+      })
+
+      expect(txHash).toBeDefined()
+      const channel = await getOnChainChannel(client, escrowContract, channelId)
+      expect(channel.settled).toBe(settleAmount)
+      expect(channel.finalized).toBe(false)
+    })
+
+    test('settles a channel with fee payer', async () => {
+      const salt = nextSalt()
+      const deposit = 10_000_000n
+      const settleAmount = 5_000_000n
+
+      const { channelId } = await openChannel({
+        escrow: escrowContract,
+        payer,
+        payee: recipient,
+        token: currency,
+        deposit,
+        salt,
+      })
+
+      const signature = await signVoucher(
+        client,
+        payer,
+        { channelId, cumulativeAmount: settleAmount },
+        escrowContract,
+        chain.id,
+      )
+
+      const txHash = await settleOnChain(client, escrowContract, {
+        channelId,
+        cumulativeAmount: settleAmount,
+        signature,
+      }, feePayerAccount)
+
+      expect(txHash).toBeDefined()
+      const channel = await getOnChainChannel(client, escrowContract, channelId)
+      expect(channel.settled).toBe(settleAmount)
+      expect(channel.finalized).toBe(false)
+    })
+  })
+
+  describe('closeOnChain', () => {
+    test('closes a channel', async () => {
+      const salt = nextSalt()
+      const deposit = 10_000_000n
+      const closeAmount = 5_000_000n
+
+      const { channelId } = await openChannel({
+        escrow: escrowContract,
+        payer,
+        payee: recipient,
+        token: currency,
+        deposit,
+        salt,
+      })
+
+      const signature = await signVoucher(
+        client,
+        payer,
+        { channelId, cumulativeAmount: closeAmount },
+        escrowContract,
+        chain.id,
+      )
+
+      const txHash = await closeOnChain(client, escrowContract, {
+        channelId,
+        cumulativeAmount: closeAmount,
+        signature,
+      })
+
+      expect(txHash).toBeDefined()
+      const channel = await getOnChainChannel(client, escrowContract, channelId)
+      expect(channel.finalized).toBe(true)
+    })
+
+    test('closes a channel with fee payer', async () => {
+      const salt = nextSalt()
+      const deposit = 10_000_000n
+      const closeAmount = 5_000_000n
+
+      const { channelId } = await openChannel({
+        escrow: escrowContract,
+        payer,
+        payee: recipient,
+        token: currency,
+        deposit,
+        salt,
+      })
+
+      const signature = await signVoucher(
+        client,
+        payer,
+        { channelId, cumulativeAmount: closeAmount },
+        escrowContract,
+        chain.id,
+      )
+
+      const txHash = await closeOnChain(client, escrowContract, {
+        channelId,
+        cumulativeAmount: closeAmount,
+        signature,
+      }, undefined, feePayerAccount)
+
+      expect(txHash).toBeDefined()
+      const channel = await getOnChainChannel(client, escrowContract, channelId)
+      expect(channel.finalized).toBe(true)
     })
   })
 }) // end describe('on-chain')

@@ -3,15 +3,23 @@ import {
   type Address,
   type Client,
   decodeFunctionData,
+  encodeFunctionData,
   getAbiItem,
   type Hex,
   isAddressEqual,
   type ReadContractReturnType,
   toFunctionSelector,
 } from 'viem'
-import { readContract, sendRawTransactionSync, signTransaction, writeContract } from 'viem/actions'
+import {
+  prepareTransactionRequest,
+  readContract,
+  sendRawTransactionSync,
+  signTransaction,
+  writeContract,
+} from 'viem/actions'
 import { Transaction } from 'viem/tempo'
 import { BadRequestError, ChannelClosedError, VerificationFailedError } from '../../Errors.js'
+import * as defaults from '../internal/defaults.js'
 import { escrowAbi } from './escrow.abi.js'
 import type { SignedVoucher } from './Types.js'
 
@@ -75,15 +83,21 @@ export async function settleOnChain(
   client: Client,
   escrowContract: Address,
   voucher: SignedVoucher,
+  feePayer?: Account | undefined,
 ): Promise<Hex> {
   assertUint128(voucher.cumulativeAmount)
+  const args = [voucher.channelId, voucher.cumulativeAmount, voucher.signature] as const
+  if (feePayer) {
+    const data = encodeFunctionData({ abi: escrowAbi, functionName: 'settle', args })
+    return sendFeePayerTx(client, feePayer, escrowContract, data, 'settle')
+  }
   return writeContract(client, {
     account: client.account!,
     chain: client.chain,
     address: escrowContract,
     abi: escrowAbi,
     functionName: 'settle',
-    args: [voucher.channelId, voucher.cumulativeAmount, voucher.signature],
+    args,
   })
 }
 
@@ -95,6 +109,7 @@ export async function closeOnChain(
   escrowContract: Address,
   voucher: SignedVoucher,
   account?: Account,
+  feePayer?: Account | undefined,
 ): Promise<Hex> {
   assertUint128(voucher.cumulativeAmount)
   const resolved = account ?? client.account
@@ -102,14 +117,67 @@ export async function closeOnChain(
     throw new Error(
       'Cannot close channel: no account available. Provide an `account` in the session config or a `getClient` that returns an account-bearing client.',
     )
+  const args = [voucher.channelId, voucher.cumulativeAmount, voucher.signature] as const
+  if (feePayer) {
+    const data = encodeFunctionData({ abi: escrowAbi, functionName: 'close', args })
+    return sendFeePayerTx(client, feePayer, escrowContract, data, 'close')
+  }
   return writeContract(client, {
     account: resolved,
     chain: client.chain,
     address: escrowContract,
     abi: escrowAbi,
     functionName: 'close',
-    args: [voucher.channelId, voucher.cumulativeAmount, voucher.signature],
+    args,
   })
+}
+
+/**
+ * Build, sign, and broadcast a fee-sponsored type-0x76 transaction.
+ *
+ * Follows the same signTransaction + sendRawTransactionSync pattern used
+ * by broadcastOpenTransaction / broadcastTopUpTransaction, but originates
+ * the transaction server-side (estimating gas and fees first).
+ */
+async function sendFeePayerTx(
+  client: Client,
+  feePayer: Account,
+  to: Address,
+  data: Hex,
+  label: string,
+): Promise<Hex> {
+  // Resolve the fee token for this chain so the tx pays gas in the correct
+  // token.  `feePayer: true` tells the prepare hook to use expiring nonces but
+  // does NOT set feeToken automatically, so we must provide it explicitly.
+  const chainId = client.chain?.id
+  const feeToken = chainId
+    ? defaults.currency[chainId as keyof typeof defaults.currency]
+    : undefined
+
+  const prepared = await prepareTransactionRequest(client, {
+    account: feePayer,
+    calls: [{ to, data }],
+    feePayer: true,
+    ...(feeToken ? { feeToken } : {}),
+  } as never)
+
+  const serialized = (await signTransaction(client, {
+    ...prepared,
+    account: feePayer,
+    feePayer,
+  } as never)) as Hex
+
+  const receipt = await sendRawTransactionSync(client, {
+    serializedTransaction: serialized as Transaction.TransactionSerializedTempo,
+  })
+
+  if (receipt.status !== 'success') {
+    throw new VerificationFailedError({
+      reason: `${label} transaction reverted: ${receipt.transactionHash}`,
+    })
+  }
+
+  return receipt.transactionHash
 }
 
 const escrowOpenSelector = /*#__PURE__*/ toFunctionSelector(
