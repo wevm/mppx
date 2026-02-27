@@ -85,12 +85,15 @@ export function session<const parameters extends session.Parameters>(p?: paramet
   const parameters = p as parameters
   const {
     amount,
+    channelStateTtl = 60_000,
     currency = defaults.resolveCurrency(parameters),
     decimals = defaults.decimals,
     store: rawStore = Store.memory(),
     suggestedDeposit,
     unitType,
   } = parameters
+
+  const lastOnChainVerified = new Map<Hex, number>()
 
   const store = ChannelStore.fromStore(rawStore)
 
@@ -188,6 +191,7 @@ export function session<const parameters extends session.Parameters>(p?: paramet
             methodDetails,
             resolvedFeePayer,
           )
+          lastOnChainVerified.set(payload.channelId, Date.now())
           break
 
         case 'topUp':
@@ -199,6 +203,7 @@ export function session<const parameters extends session.Parameters>(p?: paramet
             methodDetails,
             resolvedFeePayer,
           )
+          lastOnChainVerified.set(payload.channelId, Date.now())
           break
 
         case 'voucher':
@@ -209,6 +214,8 @@ export function session<const parameters extends session.Parameters>(p?: paramet
             challenge,
             payload,
             methodDetails,
+            channelStateTtl,
+            lastOnChainVerified,
           )
           break
 
@@ -277,6 +284,8 @@ export declare namespace session {
   >
 
   type Parameters = {
+    /** TTL in milliseconds for cached on-chain channel state. After this duration, the server re-queries on-chain state during voucher handling to detect forced close requests. @default 60_000 */
+    channelStateTtl?: number | undefined
     /** Minimum voucher delta to accept (numeric string, default: "0"). */
     minVoucherDelta?: string | undefined
     /** Store backend for channel state. */
@@ -655,11 +664,13 @@ async function handleTopUp(
  */
 async function handleVoucher(
   store: ChannelStore.ChannelStore,
-  _client: viem_Client,
+  client: viem_Client,
   minVoucherDelta: bigint,
   challenge: Challenge.Challenge,
   payload: SessionCredentialPayload & { action: 'voucher' },
   methodDetails: SessionMethodDetails,
+  channelStateTtl: number,
+  lastOnChainVerified: Map<Hex, number>,
 ): Promise<SessionReceipt> {
   const channel = await store.getChannel(payload.channelId)
   if (!channel) {
@@ -681,15 +692,32 @@ async function handleVoucher(
   // same session can safely use the cached deposit/signer values.
   // This avoids an RPC round-trip per voucher, which is critical for
   // high-frequency SSE streaming where vouchers arrive per-token.
-  const cachedOnChain: OnChainChannel = {
-    payer: channel.payer,
-    payee: channel.payee,
-    token: channel.token,
-    deposit: channel.deposit,
-    settled: channel.settledOnChain,
-    finalized: channel.finalized,
-    authorizedSigner: channel.authorizedSigner,
-    closeRequestedAt: 0n,
+  //
+  // To guard against the payer initiating a forced close while vouchers
+  // are still being accepted, re-query on-chain state when the cache
+  // exceeds the configured staleness TTL.
+  const lastVerified = lastOnChainVerified.get(payload.channelId) ?? 0
+  const isStale = Date.now() - lastVerified > channelStateTtl
+
+  let cachedOnChain: OnChainChannel
+  if (isStale) {
+    cachedOnChain = await getOnChainChannel(
+      client,
+      methodDetails.escrowContract,
+      payload.channelId,
+    )
+    lastOnChainVerified.set(payload.channelId, Date.now())
+  } else {
+    cachedOnChain = {
+      payer: channel.payer,
+      payee: channel.payee,
+      token: channel.token,
+      deposit: channel.deposit,
+      settled: channel.settledOnChain,
+      finalized: channel.finalized,
+      authorizedSigner: channel.authorizedSigner,
+      closeRequestedAt: 0n,
+    }
   }
 
   return verifyAndAcceptVoucher({
