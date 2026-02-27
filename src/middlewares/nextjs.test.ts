@@ -33,6 +33,8 @@ function createServer(handler: (request: Request) => Promise<Response> | Respons
   })
 }
 
+const secretKey = 'test-secret-key'
+
 describe('charge', () => {
   const mppx = Mppx.create({
     methods: [
@@ -42,6 +44,7 @@ describe('charge', () => {
         recipient: accounts[0].address,
       }),
     ],
+    secretKey,
   })
 
   const { fetch } = Mppx_client.create({
@@ -106,6 +109,7 @@ describe('session', () => {
           escrowContract,
         }),
       ],
+      secretKey,
     })
 
     const handler = mppx.session({ amount: '1', unitType: 'token' })(() =>
@@ -131,6 +135,7 @@ describe('session', () => {
           feePayer: accounts[0],
         }),
       ],
+      secretKey,
     })
 
     const { fetch } = Mppx_client.create({

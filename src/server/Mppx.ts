@@ -73,10 +73,16 @@ export function create<
   const transport extends Transport.AnyTransport = Transport.Http,
 >(config: create.Config<methods, transport>): Mppx<methods, transport> {
   const {
-    realm = Env.get('realm'),
+    realm = Env.get('realm') ?? 'MPP Payment',
     secretKey = Env.get('secretKey'),
     transport = Transport.http() as transport,
   } = config
+
+  if (!secretKey) {
+    throw new Error(
+      'Missing secret key. Set the MPP_SECRET_KEY environment variable or pass `secretKey` to Mppx.create().',
+    )
+  }
 
   const methods = config.methods.flat() as unknown as FlattenMethods<methods>
 
@@ -107,7 +113,7 @@ export declare namespace create {
     methods: methods
     /** Server realm (e.g., hostname). Auto-detected from environment variables (`MPP_REALM`, `VERCEL_URL`, `RAILWAY_PUBLIC_DOMAIN`, `RENDER_EXTERNAL_HOSTNAME`, `HOST`, `HOSTNAME`), falling back to `"localhost"`. */
     realm?: string | undefined
-    /** Secret key for HMAC-bound challenge IDs for stateless verification. Auto-detected from `MPP_SECRET_KEY` environment variable, falling back to a random key. */
+    /** Secret key for HMAC-bound challenge IDs for stateless verification. Auto-detected from `MPP_SECRET_KEY` environment variable. Throws if neither provided nor set. */
     secretKey?: string | undefined
     /** Transport to use. @default Transport.http() */
     transport?: transport | undefined
