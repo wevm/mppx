@@ -5,13 +5,12 @@ import { createRequire } from 'node:module'
 import * as os from 'node:os'
 import * as path from 'node:path'
 import * as readline from 'node:readline'
-import { cac } from 'cac'
+import { Cli, z } from 'incur'
 import { Base64 } from 'ox'
 import type { Chain } from 'viem'
 import { type Address, createClient, http } from 'viem'
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts'
 import { tempo as tempoMainnet, tempoModerato } from 'viem/chains'
-import { type ZodMiniType, z } from 'zod/mini'
 import * as Challenge from './Challenge.js'
 import * as Credential from './Credential.js'
 import * as Mppx from './client/Mppx.js'
@@ -23,67 +22,66 @@ import { signVoucher } from './tempo/session/Voucher.js'
 const require = createRequire(import.meta.url)
 const { name, version } = require('../package.json') as { name: string; version: string }
 
-const cli = cac(name)
+const cli = Cli.create('mppx', {
+  version,
+  description: 'Make HTTP requests with automatic payment',
+})
 
-cli
-  .command('[url]', 'Make HTTP request with automatic payment')
-  .option('-a, --account <name>', 'Account name (env: MPPX_ACCOUNT)')
-  .option('-d, --data <data>', 'Send request body (implies POST unless -X is set)')
-  .option('-f, --fail', 'Fail silently on HTTP errors (exit 22)')
-  .option('-i, --include', 'Include response headers in output')
-  .option('-k, --insecure', 'Skip TLS certificate verification (true for localhost/.local)')
-  .option(
-    '-r, --rpc-url <url>',
-    'RPC endpoint, defaults to public RPC for chain (env: MPPX_RPC_URL)',
-  )
-  .option('-s, --silent', 'Silent mode (suppress progress and info)')
-  .option('-v, --verbose', 'Show request/response headers')
-  .option('-A, --user-agent <ua>', 'Set User-Agent header')
-  .option('-H, --header <header>', 'Add header (repeatable)')
-  .option('-L, --location', 'Follow redirects')
-  .option('-X, --method <method>', 'HTTP method')
-  .option('-M, --method-opt <opt>', 'Method-specific option (key=value, repeatable)')
-  .option('--confirm', 'Show confirmation prompts')
-  .option('--json <json>', 'Send JSON body (sets Content-Type and Accept, implies POST)')
-  .example(`${name} example.com/content`)
-  .example(`${name} example.com/api --json '{"key":"value"}'`)
-  .action(async (rawUrl: string | undefined, rawOptions: unknown) => {
-    const options = parseOptions(
-      z.object({
-        account: z.optional(z.string()),
-        confirm: z.optional(z.boolean()),
-        data: z.optional(z.string()),
-        fail: z.optional(z.boolean()),
-        header: z.optional(z.union([z.string(), z.array(z.string())])),
-        include: z.optional(z.boolean()),
-        insecure: z.optional(z.boolean()),
-        json: z.optional(z.string()),
-        location: z.optional(z.boolean()),
-        method: z.optional(z.string()),
-        methodOpt: z.optional(z.union([z.string(), z.array(z.string())])),
-        rpcUrl: z.optional(z.string()),
-        silent: z.optional(z.boolean()),
-        userAgent: z.optional(z.string()),
-        verbose: z.optional(z.boolean()),
-      }),
-      rawOptions,
-    )
+cli.command('fetch', {
+  description: 'Make HTTP request with automatic payment',
+  args: z.object({
+    url: z.string().describe('URL to make payment request to'),
+  }),
+  options: z.object({
+    account: z.string().optional().describe('Account name (env: MPPX_ACCOUNT)'),
+    confirm: z.boolean().optional().describe('Show confirmation prompts'),
+    data: z.string().optional().describe('Send request body (implies POST unless -X is set)'),
+    fail: z.boolean().optional().describe('Fail silently on HTTP errors (exit 22)'),
+    header: z.array(z.string()).optional().describe('Add header (repeatable)'),
+    include: z.boolean().optional().describe('Include response headers in output'),
+    insecure: z.boolean().optional().describe('Skip TLS certificate verification (true for localhost/.local)'),
+    jsonBody: z.string().optional().describe('Send JSON body (sets Content-Type and Accept, implies POST)'),
+    location: z.boolean().optional().describe('Follow redirects'),
+    method: z.string().optional().describe('HTTP method'),
+    methodOpt: z.array(z.string()).optional().describe('Method-specific option (key=value, repeatable)'),
+    rpcUrl: z.string().optional().describe('RPC endpoint, defaults to public RPC for chain (env: MPPX_RPC_URL)'),
+    silent: z.boolean().optional().describe('Silent mode (suppress progress and info)'),
+    userAgent: z.string().optional().describe('Set User-Agent header'),
+    verbose: z.boolean().optional().describe('Show request/response headers'),
+  }),
+  alias: {
+    account: 'a',
+    data: 'd',
+    fail: 'f',
+    header: 'H',
+    include: 'i',
+    insecure: 'k',
+    jsonBody: 'J',
+    location: 'L',
+    method: 'X',
+    methodOpt: 'M',
+    rpcUrl: 'r',
+    silent: 's',
+    userAgent: 'A',
+    verbose: 'v',
+  },
+  examples: [
+    { args: { url: 'example.com/content' }, description: 'Make a payment request' },
+    { args: { url: 'example.com/api' }, options: { jsonBody: '{"key":"value"}' }, description: 'POST JSON with payment' },
+  ],
+  async run({ args, options }) {
     const methodOpts = parseMethodOpts(options.methodOpt)
-    if (!rawUrl) {
-      cli.outputHelp()
-      return
-    }
 
     const silent = options.silent ?? false
     const info = silent ? (_msg: string) => {} : (msg: string) => process.stderr.write(msg)
-    if (silent) options.confirm = false
+    let confirmEnabled = options.confirm ?? false
+    if (silent) confirmEnabled = false
 
     const accountName = resolveAccountName(options.account)
 
     const headers: Record<string, string> = {}
     if (options.header) {
-      const headerList = Array.isArray(options.header) ? options.header : [options.header]
-      for (const header of headerList) {
+      for (const header of options.header) {
         const index = header.indexOf(':')
         if (index === -1) {
           console.error(`Invalid header format: ${header}`)
@@ -94,6 +92,7 @@ cli
     }
     headers['User-Agent'] = options.userAgent ?? `${name}/${version}`
 
+    const rawUrl = args.url
     const url = (() => {
       const hasProtocol = /^https?:\/\//.test(rawUrl)
       const isLocal = /^(localhost|127\.0\.0\.1|\[::1\])(:\d+)?/.test(rawUrl)
@@ -107,8 +106,8 @@ cli
 
     try {
       const fetchInit: RequestInit = { redirect: options.location ? 'follow' : 'manual' }
-      if (options.json) {
-        fetchInit.body = options.json
+      if (options.jsonBody) {
+        fetchInit.body = options.jsonBody
         headers['Content-Type'] ??= 'application/json'
         headers.Accept ??= 'application/json'
       } else if (options.data) {
@@ -280,7 +279,7 @@ cli
             for (const line of rest) info(`${indent}${line}\n`)
           }
         }
-        if (options.confirm) {
+        if (confirmEnabled) {
           info('\n')
           const ok = await confirm(`Proceed with ${challenge.intent}?`, true)
           if (!ok) {
@@ -455,12 +454,12 @@ cli
           const depositDisplay = depositRaw
             ? ` ${pc.dim(`(deposit ${depositRaw} ${tokenSymbol})`)}`
             : ''
-          const prefix = options.confirm ? '' : '\n'
+          const prefix = confirmEnabled ? '' : '\n'
           info(
-            `${prefix}${pc.dim(`Channel opened ${parsed.payload.channelId}`)}${depositDisplay}\n`,
+          `${prefix}${pc.dim(`Channel opened ${parsed.payload.channelId}`)}${depositDisplay}\n`,
           )
-        } else {
-          const prefix = options.confirm ? '' : '\n'
+          } else {
+          const prefix = confirmEnabled ? '' : '\n'
           info(`${prefix}${pc.dim(`Channel reused ${parsed.payload.channelId}`)}\n`)
         }
       }
@@ -777,10 +776,10 @@ cli
             sessionChannelId &&
             sessionEscrowContract &&
             sessionChainId
-          if (shouldClose && options.confirm) {
+          if (shouldClose && confirmEnabled) {
             info('\n')
           }
-          if (shouldClose && options.confirm && !(await confirm('Close channel?', true))) {
+          if (shouldClose && confirmEnabled && !(await confirm('Close channel?', true))) {
             info(`${pc.dim('Kept channel open.')}\n`)
           } else if (shouldClose) {
             const signature = await signVoucher(
@@ -825,7 +824,7 @@ cli
                 closeTxHash && explorerUrl
                   ? ` ${pc.dim(pc.link(`${explorerUrl}/tx/${closeTxHash}`, closeTxHash))}`
                   : ''
-              const closePrefix = options.confirm ? '' : '\n'
+              const closePrefix = confirmEnabled ? '' : '\n'
               info(
                 `${closePrefix}${pc.dim('Channel closed.')} ${pc.dim(`Spent ${fmtBalance(sessionCumulativeAmount, tokenSymbol, tokenDecimals)}.`)}${txInfo}\n`,
               )
@@ -873,254 +872,241 @@ cli
       }
       process.exit(1)
     }
-  })
-
-const accountOptionsSchema = z.object({
-  account: z.optional(z.string()),
-  rpcUrl: z.optional(z.string()),
-  yes: z.optional(z.boolean()),
+  },
 })
 
-cli
-  .command('account [action]', 'Manage accounts (create, default, delete, fund, list, view)')
-  .option('-a, --account <name>', 'Account name (env: MPPX_ACCOUNT)')
-  .option(
-    '-r, --rpc-url <url>',
-    'RPC endpoint, defaults to public RPC for chain (env: MPPX_RPC_URL)',
-  )
-  .option('--yes', 'DANGER!! Skip confirmation prompts')
-  .action(async (action: string | undefined, rawOptions: unknown) => {
-    if (!action) {
-      cli.outputHelp()
+const account = Cli.create('account', {
+  description: 'Manage accounts (create, default, delete, fund, list, view)',
+})
+
+account.command('create', {
+  description: 'Create new account',
+  options: z.object({
+    account: z.string().optional().describe('Account name (env: MPPX_ACCOUNT)'),
+    rpcUrl: z.string().optional().describe('RPC endpoint (env: MPPX_RPC_URL)'),
+  }),
+  alias: { account: 'a', rpcUrl: 'r' },
+  async run({ options }) {
+    let resolvedName = options.account
+    if (!resolvedName) {
+      const existing = await createKeychain().list()
+      if (existing.length === 0) resolvedName = 'main'
+      else {
+        const input = await prompt('Account name')
+        if (!input) return
+        resolvedName = input
+      }
+    }
+    let keychain = createKeychain(resolvedName)
+    while (await keychain.get()) {
+      process.stderr.write(`${pc.dim(`Account "${resolvedName}" already exists.`)}\n\n`)
+      const input = await prompt('Enter different name')
+      if (!input) return
+      resolvedName = input
+      keychain = createKeychain(resolvedName)
+    }
+    const privateKey = generatePrivateKey()
+    const acct = privateKeyToAccount(privateKey)
+    await keychain.set(privateKey)
+    const accounts = await createKeychain().list()
+    if (accounts.length === 1) createDefaultStore().set(resolvedName)
+    console.log(`Account "${resolvedName}" saved to keychain.`)
+    const explorerUrl = tempoMainnet.blockExplorers?.default?.url
+    const addrDisplay = explorerUrl
+      ? pc.link(`${explorerUrl}/address/${acct.address}`, acct.address)
+      : acct.address
+    console.log(pc.dim(`Address ${addrDisplay}`))
+    resolveChain(options)
+      .then((chain) => createClient({ chain, transport: http(options.rpcUrl) }))
+      .then((client) =>
+        import('viem/tempo').then(({ Actions }) =>
+          Actions.faucet.fund(client, { account: acct }).catch(() => {}),
+        ),
+      )
+  },
+})
+
+account.command('default', {
+  description: 'Set default account',
+  options: z.object({
+    account: z.string().describe('Account name'),
+  }),
+  alias: { account: 'a' },
+  async run({ options }) {
+    const accountName = options.account
+    const key = await createKeychain(accountName).get()
+    if (!key) {
+      console.log(`Account "${accountName}" not found.`)
+      process.exit(1)
+    }
+    createDefaultStore().set(accountName)
+    console.log(`Default account set to "${accountName}"`)
+  },
+})
+
+account.command('delete', {
+  description: 'Delete account',
+  options: z.object({
+    account: z.string().describe('Account name'),
+    yes: z.boolean().optional().describe('DANGER!! Skip confirmation prompts'),
+  }),
+  alias: { account: 'a' },
+  async run({ options }) {
+    const keychain = createKeychain(options.account)
+    const key = await keychain.get()
+    if (!key) {
+      console.log(`Account "${options.account}" not found.`)
+      process.exit(1)
+    }
+    const acct = privateKeyToAccount(key as `0x${string}`)
+    const balanceLines = await fetchBalanceLines(acct.address, { includeTestnet: false })
+    if (!options.yes) {
+      const explorerUrl = tempoMainnet.blockExplorers?.default?.url
+      const addrDisplay = explorerUrl
+        ? pc.link(`${explorerUrl}/address/${acct.address}`, acct.address)
+        : acct.address
+      process.stderr.write(pc.dim(`Delete account "${options.account}"\n`))
+      process.stderr.write(pc.dim(`  Address  ${addrDisplay}\n`))
+      for (let i = 0; i < balanceLines.length; i++)
+        process.stderr.write(
+          pc.dim(`  ${i === 0 ? 'Balance' : '       '}  ${balanceLines[i]}\n`),
+        )
+      process.stderr.write(pc.dim('This action cannot be undone\n\n'))
+      const confirmed = await confirm('Confirm delete?')
+      if (!confirmed) {
+        console.log('Canceled')
+        return
+      }
+    }
+    await keychain.delete()
+    const currentDefault = createDefaultStore().get()
+    if (currentDefault === options.account) {
+      const remaining = await createKeychain().list()
+      if (remaining.length > 0) {
+        createDefaultStore().set(remaining[0]!)
+        console.log(`Default account set to "${remaining[0]}"`)
+      } else {
+        createDefaultStore().clear()
+      }
+    }
+    console.log(`Account "${options.account}" deleted`)
+  },
+})
+
+account.command('fund', {
+  description: 'Fund account with testnet tokens',
+  options: z.object({
+    account: z.string().optional().describe('Account name (env: MPPX_ACCOUNT)'),
+    rpcUrl: z.string().optional().describe('RPC endpoint (env: MPPX_RPC_URL)'),
+  }),
+  alias: { account: 'a', rpcUrl: 'r' },
+  async run({ options }) {
+    const accountName = resolveAccountName(options.account)
+    const keychain = createKeychain(accountName)
+    const key = await keychain.get()
+    if (!key) {
+      if (options.account) console.log(`Account "${accountName}" not found.`)
+      else console.log(`No account found.`)
+      process.exit(1)
+    }
+    const acct = privateKeyToAccount(key as `0x${string}`)
+    const chain = await resolveChain(options)
+    const client = createClient({ chain, transport: http(options.rpcUrl) })
+    console.log(`Funding "${accountName}" on ${chainName(chain)}`)
+    try {
+      const { Actions } = await import('viem/tempo')
+      const hashes = await Actions.faucet.fund(client, { account: acct })
+      const explorerUrl = chain.blockExplorers?.default?.url
+      for (const hash of hashes) {
+        const label = explorerUrl ? pc.link(`${explorerUrl}/tx/${hash}`, pc.gray(hash)) : hash
+        console.log(`  ${label}`)
+      }
+      const { waitForTransactionReceipt } = await import('viem/actions')
+      await Promise.all(hashes.map((hash) => waitForTransactionReceipt(client, { hash })))
+      console.log('Funded successfully')
+    } catch (err) {
+      console.error('Funding failed:', err instanceof Error ? err.message : err)
+    }
+  },
+})
+
+account.command('list', {
+  description: 'List all accounts',
+  async run() {
+    const currentDefault = createDefaultStore().get()
+    const accounts = (await createKeychain().list()).sort()
+    if (accounts.length === 0) {
+      console.log(`No accounts found.`)
       return
     }
-    const options = parseOptions(accountOptionsSchema, rawOptions)
-    switch (action) {
-      case 'create': {
-        let resolvedName = options.account
-        if (!resolvedName) {
-          const existing = await createKeychain().list()
-          if (existing.length === 0) resolvedName = 'main'
-          else {
-            const input = await prompt('Account name')
-            if (!input) return
-            resolvedName = input
-          }
-        }
-        let keychain = createKeychain(resolvedName)
-        while (await keychain.get()) {
-          process.stderr.write(`${pc.dim(`Account "${resolvedName}" already exists.`)}\n\n`)
-          const input = await prompt('Enter different name')
-          if (!input) return
-          resolvedName = input
-          keychain = createKeychain(resolvedName)
-        }
-        const privateKey = generatePrivateKey()
-        const account = privateKeyToAccount(privateKey)
-        await keychain.set(privateKey)
-        const accounts = await createKeychain().list()
-        if (accounts.length === 1) createDefaultStore().set(resolvedName)
-        console.log(`Account "${resolvedName}" saved to keychain.`)
-        const explorerUrl = tempoMainnet.blockExplorers?.default?.url
-        const addrDisplay = explorerUrl
-          ? pc.link(`${explorerUrl}/address/${account.address}`, account.address)
-          : account.address
-        console.log(pc.dim(`Address ${addrDisplay}`))
-        resolveChain(options)
-          .then((chain) => createClient({ chain, transport: http(options.rpcUrl) }))
-          .then((client) =>
-            import('viem/tempo').then(({ Actions }) =>
-              Actions.faucet.fund(client, { account }).catch(() => {}),
-            ),
-          )
-        return
-      }
-      case 'default': {
-        const accountName = options.account
-        if (!accountName) {
-          console.error('-a, --account <name> is required for default.')
-          process.exit(1)
-        }
+    const entries = await Promise.all(
+      accounts.map(async (accountName) => {
         const key = await createKeychain(accountName).get()
-        if (!key) {
-          console.log(`Account "${accountName}" not found.`)
-          process.exit(1)
+        if (!key) return undefined
+        return {
+          name: accountName,
+          address: privateKeyToAccount(key as `0x${string}`).address,
         }
-        createDefaultStore().set(accountName)
-        console.log(`Default account set to "${accountName}"`)
-        return
-      }
-      case 'delete': {
-        if (!options.account) {
-          console.error('-a, --account <name> is required for delete.')
-          process.exit(1)
-        }
-        const keychain = createKeychain(options.account)
-        const key = await keychain.get()
-        if (!key) {
-          console.log(`Account "${options.account}" not found.`)
-          process.exit(1)
-        }
-        const account = privateKeyToAccount(key as `0x${string}`)
-        const balanceLines = await fetchBalanceLines(account.address, { includeTestnet: false })
-        if (!options.yes) {
-          const explorerUrl = tempoMainnet.blockExplorers?.default?.url
-          const addrDisplay = explorerUrl
-            ? pc.link(`${explorerUrl}/address/${account.address}`, account.address)
-            : account.address
-          process.stderr.write(pc.dim(`Delete account "${options.account}"\n`))
-          process.stderr.write(pc.dim(`  Address  ${addrDisplay}\n`))
-          for (let i = 0; i < balanceLines.length; i++)
-            process.stderr.write(
-              pc.dim(`  ${i === 0 ? 'Balance' : '       '}  ${balanceLines[i]}\n`),
-            )
-          process.stderr.write(pc.dim('This action cannot be undone\n\n'))
-          const confirmed = await confirm('Confirm delete?')
-          if (!confirmed) {
-            console.log('Canceled')
-            return
-          }
-        }
-        await keychain.delete()
-        const currentDefault = createDefaultStore().get()
-        if (currentDefault === options.account) {
-          const remaining = await createKeychain().list()
-          if (remaining.length > 0) {
-            createDefaultStore().set(remaining[0]!)
-            console.log(`Default account set to "${remaining[0]}"`)
-          } else {
-            createDefaultStore().clear()
-          }
-        }
-        console.log(`Account "${options.account}" deleted`)
-        return
-      }
-      case 'fund': {
-        const accountName = resolveAccountName(options.account)
-        const keychain = createKeychain(accountName)
-        const key = await keychain.get()
-        if (!key) {
-          if (options.account) console.log(`Account "${accountName}" not found.`)
-          else console.log(`No account found.`)
-          process.exit(1)
-        }
-        const account = privateKeyToAccount(key as `0x${string}`)
-        const chain = await resolveChain(options)
-        const client = createClient({ chain, transport: http(options.rpcUrl) })
-        console.log(`Funding "${accountName}" on ${chainName(chain)}`)
-        try {
-          const { Actions } = await import('viem/tempo')
-          const hashes = await Actions.faucet.fund(client, { account })
-          const explorerUrl = chain.blockExplorers?.default?.url
-          for (const hash of hashes) {
-            const label = explorerUrl ? pc.link(`${explorerUrl}/tx/${hash}`, pc.gray(hash)) : hash
-            console.log(`  ${label}`)
-          }
-          const { waitForTransactionReceipt } = await import('viem/actions')
-          await Promise.all(hashes.map((hash) => waitForTransactionReceipt(client, { hash })))
-          console.log('Funded successfully')
-        } catch (err) {
-          console.error('Funding failed:', err instanceof Error ? err.message : err)
-        }
-        return
-      }
-      case 'list': {
-        const currentDefault = createDefaultStore().get()
-        const accounts = (await createKeychain().list()).sort()
-        if (accounts.length === 0) {
-          console.log(`No accounts found.`)
-          return
-        }
-        const entries = await Promise.all(
-          accounts.map(async (accountName) => {
-            const key = await createKeychain(accountName).get()
-            if (!key) return undefined
-            return {
-              name: accountName,
-              address: privateKeyToAccount(key as `0x${string}`).address,
-            }
-          }),
-        )
-        const resolved = entries.filter((e) => e !== undefined)
-        const explorerUrl = tempoMainnet.blockExplorers?.default?.url
-        const maxWidth = Math.max(
-          ...resolved.map((e) => e.name.length + (e.name === currentDefault ? 1 : 0)),
-        )
-        for (const entry of resolved) {
-          const isDefault = entry.name === currentDefault
-          const label = isDefault ? `${entry.name}${pc.dim('*')}` : entry.name
-          const width = entry.name.length + (isDefault ? 1 : 0)
-          const addrDisplay = explorerUrl
-            ? pc.link(`${explorerUrl}/address/${entry.address}`, entry.address)
-            : entry.address
-          console.log(`${label}${' '.repeat(maxWidth - width + 2)}${pc.dim(addrDisplay)}`)
-        }
-        return
-      }
-      case 'view': {
-        const accountName = resolveAccountName(options.account)
-        const keychain = createKeychain(accountName)
-        const key = await keychain.get()
-        if (!key) {
-          if (options.account) console.log(`Account "${accountName}" not found.`)
-          else console.log(`No account found.`)
-          process.exit(1)
-        }
-        const account = privateKeyToAccount(key as `0x${string}`)
-        const rpcUrl = options.rpcUrl ?? (process.env.MPPX_RPC_URL || undefined)
-        const chain = rpcUrl ? await resolveChain({ rpcUrl }) : tempoMainnet
-        const explorerUrl = chain.blockExplorers?.default?.url
-        const addrDisplay = explorerUrl
-          ? pc.link(`${explorerUrl}/address/${account.address}`, account.address)
-          : account.address
-        console.log(`${pc.dim('Address')}  ${addrDisplay}`)
-
-        const balanceLines = await fetchBalanceLines(
-          account.address,
-          chain && rpcUrl ? { chain, rpcUrl } : undefined,
-        )
-        for (let i = 0; i < balanceLines.length; i++)
-          console.log(`${pc.dim(i === 0 ? 'Balance' : '       ')}  ${balanceLines[i]}`)
-
-        console.log(`${pc.dim('Name')}     ${accountName}`)
-        return
-      }
-      default:
-        console.error(`Unknown action: ${action}`)
-        console.error('Available: create, default, delete, fund, list, view')
-        process.exit(1)
+      }),
+    )
+    const resolved = entries.filter((e) => e !== undefined)
+    const explorerUrl = tempoMainnet.blockExplorers?.default?.url
+    const maxWidth = Math.max(
+      ...resolved.map((e) => e.name.length + (e.name === currentDefault ? 1 : 0)),
+    )
+    for (const entry of resolved) {
+      const isDefault = entry.name === currentDefault
+      const label = isDefault ? `${entry.name}${pc.dim('*')}` : entry.name
+      const width = entry.name.length + (isDefault ? 1 : 0)
+      const addrDisplay = explorerUrl
+        ? pc.link(`${explorerUrl}/address/${entry.address}`, entry.address)
+        : entry.address
+      console.log(`${label}${' '.repeat(maxWidth - width + 2)}${pc.dim(addrDisplay)}`)
     }
-  })
-
-cli.version(version, '-V, --version')
-
-cli.help((sections) => {
-  const isAccount = sections.some((s: { body?: string }) => s.body?.includes('$ mppx account'))
-  if (isAccount) {
-    const actionsSection = {
-      title: 'Actions',
-      body: [
-        '  create   Create new account',
-        '  default  Set default account',
-        '  delete   Delete account',
-        '  fund     Fund account with testnet tokens',
-        '  list     List all accounts',
-        '  view     View account address',
-      ].join('\n'),
-    }
-    const optionsIndex = sections.findIndex((s: { title?: string }) => s.title === 'Options')
-    if (optionsIndex !== -1) sections.splice(optionsIndex, 0, actionsSection)
-    else sections.push(actionsSection)
-  }
-  return sections
+  },
 })
 
-try {
-  cli.parse()
-} catch (err) {
-  console.error(err instanceof Error ? err.message : err)
-  process.exit(1)
-}
+account.command('view', {
+  description: 'View account address',
+  options: z.object({
+    account: z.string().optional().describe('Account name (env: MPPX_ACCOUNT)'),
+    rpcUrl: z.string().optional().describe('RPC endpoint (env: MPPX_RPC_URL)'),
+  }),
+  alias: { account: 'a', rpcUrl: 'r' },
+  async run({ options }) {
+    const accountName = resolveAccountName(options.account)
+    const keychain = createKeychain(accountName)
+    const key = await keychain.get()
+    if (!key) {
+      if (options.account) console.log(`Account "${accountName}" not found.`)
+      else console.log(`No account found.`)
+      process.exit(1)
+    }
+    const acct = privateKeyToAccount(key as `0x${string}`)
+    const rpcUrl = options.rpcUrl ?? (process.env.MPPX_RPC_URL || undefined)
+    const chain = rpcUrl ? await resolveChain({ rpcUrl }) : tempoMainnet
+    const explorerUrl = chain.blockExplorers?.default?.url
+    const addrDisplay = explorerUrl
+      ? pc.link(`${explorerUrl}/address/${acct.address}`, acct.address)
+      : acct.address
+    console.log(`${pc.dim('Address')}  ${addrDisplay}`)
+
+    const balanceLines = await fetchBalanceLines(
+      acct.address,
+      chain && rpcUrl ? { chain, rpcUrl } : undefined,
+    )
+    for (let i = 0; i < balanceLines.length; i++)
+      console.log(`${pc.dim(i === 0 ? 'Balance' : '       ')}  ${balanceLines[i]}`)
+
+    console.log(`${pc.dim('Name')}     ${accountName}`)
+  },
+})
+
+cli.command(account)
+
+cli.serve()
+
+export default cli
 
 /////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -1139,7 +1125,7 @@ function parseMethodOpts(raw: string | string[] | undefined): Record<string, str
   return result
 }
 
-function parseOptions<const schema extends ZodMiniType>(
+function parseOptions<const schema extends z.ZodType>(
   schema: schema,
   rawOptions: unknown,
 ): z.output<schema> {
