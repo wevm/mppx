@@ -10,6 +10,8 @@ import { openai } from './openai.js'
 const apiKey = process.env.VITE_OPENAI_API_KEY
 if (!apiKey) console.warn('OPENAI_API_KEY not set — openai proxy tests will be skipped')
 
+const secretKey = 'test-secret-key'
+
 const mppx_server = Mppx_server.create({
   methods: [
     tempo_server({
@@ -18,6 +20,7 @@ const mppx_server = Mppx_server.create({
       getClient: () => client,
     }),
   ],
+  secretKey,
 })
 
 const mppx_client = Mppx_client.create({
