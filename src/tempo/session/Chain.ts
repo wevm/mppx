@@ -307,6 +307,7 @@ export async function broadcastTopUpTransaction(parameters: {
   serializedTransaction: Hex
   escrowContract: Address
   channelId: Hex
+  currency: Address
   declaredDeposit: bigint
   previousDeposit: bigint
   feePayer?: Account | undefined
@@ -316,6 +317,7 @@ export async function broadcastTopUpTransaction(parameters: {
     serializedTransaction,
     escrowContract,
     channelId,
+    currency,
     declaredDeposit,
     previousDeposit,
     feePayer,
@@ -347,7 +349,7 @@ export async function broadcastTopUpTransaction(parameters: {
       const selector = call.data.slice(0, 10)
       const isEscrowTopUp =
         isAddressEqual(call.to, escrowContract) && selector === escrowTopUpSelector
-      const isTokenApprove = selector === erc20ApproveSelector
+      const isTokenApprove = isAddressEqual(call.to, currency) && selector === erc20ApproveSelector
       if (!isEscrowTopUp && !isTokenApprove) {
         throw new BadRequestError({
           reason: 'fee-sponsored topUp transaction contains an unauthorized call',
