@@ -138,6 +138,56 @@ describe('request handler', () => {
     `)
   })
 
+  test('returns 402 when credential challenge is expired', async () => {
+    const pastExpires = new Date(Date.now() - 60_000).toISOString()
+
+    const handle = Mppx.create({ methods: [method], realm, secretKey }).charge({
+      amount: '1000',
+      currency: asset,
+      expires: pastExpires,
+      recipient: accounts[0].address,
+    })
+
+    // Get a fresh challenge (which has the expired timestamp baked in)
+    const firstResult = await handle(new Request('https://example.com/resource'))
+    expect(firstResult.status).toBe(402)
+    if (firstResult.status !== 402) throw new Error()
+
+    const challenge = Challenge.fromResponse(firstResult.challenge)
+
+    const credential = Credential.from({
+      challenge,
+      payload: { signature: '0x123', type: 'transaction' },
+    })
+
+    const result = await handle(
+      new Request('https://example.com/resource', {
+        headers: { Authorization: Credential.serialize(credential) },
+      }),
+    )
+
+    expect(result.status).toBe(402)
+    if (result.status !== 402) throw new Error()
+
+    const body = (await result.challenge.json()) as object
+    expect({
+      ...body,
+      challengeId: '[challengeId]',
+      detail: '[detail]',
+      instance: '[instance]',
+    }).toMatchInlineSnapshot(`
+      {
+        "challengeId": "[challengeId]",
+        "detail": "[detail]",
+        "instance": "[instance]",
+        "status": 402,
+        "title": "Payment Expired",
+        "type": "https://paymentauth.org/problems/payment-expired",
+      }
+    `)
+    expect((body as { detail: string }).detail).toContain('Payment expired at')
+  })
+
   test('returns 402 when payload schema validation fails', async () => {
     const handle = Mppx.create({ methods: [method], realm, secretKey }).charge({
       amount: '1000',

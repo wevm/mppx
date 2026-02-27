@@ -204,6 +204,18 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
           return { challenge: response, status: 402 }
         }
 
+        // Reject expired credentials
+        if (credential.challenge.expires && new Date(credential.challenge.expires) < new Date()) {
+          const response = await transport.respondChallenge({
+            challenge,
+            input,
+            error: new Errors.PaymentExpiredError({
+              expires: credential.challenge.expires,
+            }),
+          })
+          return { challenge: response, status: 402 }
+        }
+
         // Validate payload structure against method schema
         try {
           method.schema.credential.payload.parse(credential.payload)
