@@ -210,6 +210,31 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
           return { challenge: response, status: 402 }
         }
 
+        // Verify the credential's challenge matches this route's configured
+        // request. Prevents cross-route scope confusion where a credential
+        // issued for a cheap route is presented at an expensive route.
+        {
+          const routeReq = challenge.request as Record<string, unknown>
+          const echoedReq = credential.challenge.request as Record<string, unknown>
+          for (const field of ['amount', 'currency', 'recipient'] as const) {
+            if (
+              routeReq[field] !== undefined &&
+              echoedReq[field] !== undefined &&
+              String(routeReq[field]) !== String(echoedReq[field])
+            ) {
+              const response = await transport.respondChallenge({
+                challenge,
+                input,
+                error: new Errors.InvalidChallengeError({
+                  id: credential.challenge.id,
+                  reason: `credential ${field} does not match this route's requirements`,
+                }),
+              })
+              return { challenge: response, status: 402 }
+            }
+          }
+        }
+
         // Reject expired credentials
         if (credential.challenge.expires && new Date(credential.challenge.expires) < new Date()) {
           const response = await transport.respondChallenge({
@@ -221,7 +246,6 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
           })
           return { challenge: response, status: 402 }
         }
-
         // Validate payload structure against method schema
         try {
           method.schema.credential.payload.parse(credential.payload)
