@@ -702,11 +702,7 @@ async function handleVoucher(
 
   let cachedOnChain: OnChainChannel
   if (isStale) {
-    cachedOnChain = await getOnChainChannel(
-      client,
-      methodDetails.escrowContract,
-      payload.channelId,
-    )
+    cachedOnChain = await getOnChainChannel(client, methodDetails.escrowContract, payload.channelId)
     lastOnChainVerified.set(payload.channelId, Date.now())
   } else {
     cachedOnChain = {
