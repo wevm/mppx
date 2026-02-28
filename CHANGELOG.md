@@ -1,5 +1,16 @@
 # mppx
 
+## 0.3.10
+
+### Patch Changes
+
+- 558279e: Added `closeRequestedAt` check in session voucher handler with configurable `channelStateTtl` (default: 60s). Prevented payers from using a channel after initiating a forced close.
+- 558279e: Added expiration check on credentials in the core handler. Expired credentials are now rejected with `PaymentExpiredError` instead of being processed.
+- 558279e: Added token address validation in `broadcastTopUpTransaction` fee-payer logic. Prevented approve calls to arbitrary contracts in fee-sponsored topUp transactions.
+- 558279e: Bound credential verification to the route's configured request. Prevented cross-route scope confusion where a credential issued for one route could be presented at another.
+- 558279e: Removed insecure hardcoded `'tmp'` fallback for `secretKey`. `Mppx.create()` now throws a clear error if neither `MPP_SECRET_KEY` env var nor explicit `secretKey` is provided.
+- 5d4bb93: Removed `realm` from `PaymentRequiredError` detail message to avoid leaking deployment URLs and hostnames in error responses.
+
 ## 0.3.9
 
 ### Patch Changes
