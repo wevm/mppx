@@ -120,6 +120,11 @@
       "types": "./dist/middlewares/elysia.d.ts",
       "src": "./src/middlewares/elysia.ts",
       "default": "./dist/middlewares/elysia.js"
+    },
+    "./utils": {
+      "types": "./dist/utils/index.d.ts",
+      "src": "./src/utils/index.ts",
+      "default": "./dist/utils/index.js"
     }
   },
   "peerDependencies": {
