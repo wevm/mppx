@@ -53,7 +53,7 @@ describe('request handler', () => {
     }).toMatchInlineSnapshot(`
       {
         "challengeId": "[challengeId]",
-        "detail": "Payment is required for "api.example.com".",
+        "detail": "Payment is required.",
         "instance": "[instance]",
         "status": 402,
         "title": "Payment Required",
@@ -215,7 +215,7 @@ describe('request handler (node)', () => {
     }).toMatchInlineSnapshot(`
       {
         "challengeId": "[challengeId]",
-        "detail": "Payment is required for "api.example.com".",
+        "detail": "Payment is required.",
         "instance": "[instance]",
         "status": 402,
         "title": "Payment Required",
