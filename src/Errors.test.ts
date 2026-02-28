@@ -165,27 +165,12 @@ describe('PaymentRequiredError', () => {
     `)
   })
 
-  test('with realm', () => {
+  test('with description', () => {
     expect(
-      errorSnapshot(new PaymentRequiredError({ realm: 'api.example.com' })),
+      errorSnapshot(new PaymentRequiredError({ description: 'API access fee' })),
     ).toMatchInlineSnapshot(`
         {
-          "message": "Payment is required for "api.example.com".",
-          "name": "PaymentRequiredError",
-          "status": 402,
-          "type": "https://paymentauth.org/problems/payment-required",
-        }
-      `)
-  })
-
-  test('with realm and description', () => {
-    expect(
-      errorSnapshot(
-        new PaymentRequiredError({ realm: 'api.example.com', description: 'API access fee' }),
-      ),
-    ).toMatchInlineSnapshot(`
-        {
-          "message": "Payment is required for "api.example.com" (API access fee).",
+          "message": "Payment is required (API access fee).",
           "name": "PaymentRequiredError",
           "status": 402,
           "type": "https://paymentauth.org/problems/payment-required",

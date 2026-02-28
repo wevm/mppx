@@ -185,7 +185,7 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
           const response = await transport.respondChallenge({
             challenge,
             input,
-            error: new Errors.PaymentRequiredError({ realm, description }),
+            error: new Errors.PaymentRequiredError({ description }),
           })
           return { challenge: response, status: 402 }
         }

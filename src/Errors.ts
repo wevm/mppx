@@ -158,9 +158,8 @@ export class PaymentRequiredError extends PaymentError {
   readonly type = 'https://paymentauth.org/problems/payment-required'
 
   constructor(options: PaymentRequiredError.Options = {}) {
-    const { description, realm } = options
+    const { description } = options
     const parts = ['Payment is required']
-    if (realm) parts.push(`for "${realm}"`)
     if (description) parts.push(`(${description})`)
     super(`${parts.join(' ')}.`)
   }
@@ -170,8 +169,6 @@ export declare namespace PaymentRequiredError {
   type Options = {
     /** Human-readable description of the payment. */
     description?: string | undefined
-    /** Server realm (e.g., hostname). */
-    realm?: string | undefined
   }
 }
 
