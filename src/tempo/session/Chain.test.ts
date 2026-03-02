@@ -82,6 +82,7 @@ describe('on-chain', () => {
     await fundAccount({ address: payer.address, token: Addresses.pathUsd })
     await fundAccount({ address: payer.address, token: currency })
     await fundAccount({ address: accounts[3].address, token: Addresses.pathUsd })
+    await fundAccount({ address: accounts[3].address, token: currency })
   })
 
   function nextSalt(): Hex {
