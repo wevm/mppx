@@ -1,5 +1,12 @@
 # mppx
 
+## 0.3.11
+
+### Patch Changes
+
+- fd466c3: Added `waitForConfirmation` option to `session()` and `charge()` payment methods. When `false`, transactions are simulated via `eth_estimateGas` and broadcast without waiting for on-chain confirmation, reducing latency.
+- ddb7057: Fixed `Handlers` type to omit shorthand intent keys when multiple methods share the same intent, matching runtime behavior and preventing `TypeError` on collision.
+
 ## 0.3.10
 
 ### Patch Changes
