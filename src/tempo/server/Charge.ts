@@ -294,7 +294,12 @@ export function charge<const parameters extends charge.Parameters>(
           const hash = await sendRawTransaction(client, {
             serializedTransaction: serializedTransaction_final,
           })
-          return paymentResult(hash)
+          return {
+            method: 'tempo',
+            status: 'success',
+            timestamp: new Date().toISOString(),
+            reference: hash,
+          } as const
         }
 
         default:
@@ -335,16 +340,6 @@ function toReceipt(receipt: TransactionReceipt) {
     status: 'success',
     timestamp: new Date().toISOString(),
     reference: transactionHash,
-  } as const
-}
-
-/** @internal */
-function paymentResult(hash: string) {
-  return {
-    method: 'tempo',
-    status: 'success',
-    timestamp: new Date().toISOString(),
-    reference: hash,
   } as const
 }
 
