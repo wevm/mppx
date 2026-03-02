@@ -263,8 +263,9 @@ export function charge<const parameters extends charge.Parameters>(
             })
             return toReceipt(receipt)
           } else {
-            // Simulate via eth_estimateGas to catch reverts (e.g. insufficient
-            // balance) before broadcasting without confirmation.
+            // Optimistic path: simulate to catch obvious reverts, then broadcast
+            // without waiting for on-chain confirmation. The returned receipt
+            // assumes success — callers opt into this risk via waitForConfirmation: false.
             await simulateTransaction(client, {
               ...transaction,
               from: transaction.from as `0x${string}`,
@@ -295,7 +296,17 @@ export declare namespace charge {
   type Parameters = {
     /** Testnet mode. */
     testnet?: boolean | undefined
-    /** Whether to wait for the charge transaction to confirm on-chain before responding. When `false`, the transaction is simulated and broadcast without waiting for confirmation. @default true */
+    /**
+     * Whether to wait for the charge transaction to confirm on-chain before
+     * responding. @default true
+     *
+     * When `false`, the transaction is simulated via `eth_estimateGas` and
+     * broadcast without waiting for inclusion. The receipt will optimistically
+     * report `status: 'success'` based on simulation alone — if the
+     * transaction reverts on-chain after broadcast (e.g. due to a state
+     * change between simulation and inclusion), the receipt will not reflect
+     * the failure.
+     */
     waitForConfirmation?: boolean | undefined
   } & Client.getResolver.Parameters &
     Account.resolve.Parameters &

@@ -286,7 +286,17 @@ export declare namespace session {
     channelStateTtl?: number | undefined
     /** Minimum voucher delta to accept (numeric string, default: "0"). */
     minVoucherDelta?: string | undefined
-    /** Whether to wait for the open transaction to confirm on-chain before responding. When `false`, the transaction is simulated and broadcast in the background. @default true */
+    /**
+     * Whether to wait for the open transaction to confirm on-chain before
+     * responding. @default true
+     *
+     * When `false`, the transaction is simulated via `eth_estimateGas` and
+     * broadcast without waiting for inclusion. The receipt will optimistically
+     * report `status: 'success'` based on simulation alone — if the
+     * transaction reverts on-chain after broadcast (e.g. due to a state
+     * change between simulation and inclusion), the receipt will not reflect
+     * the failure.
+     */
     waitForConfirmation?: boolean | undefined
     /** Store backend for channel state. */
     store?: Store.Store | undefined
