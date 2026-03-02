@@ -528,23 +528,19 @@ async function handleOpen(
   const currency = challenge.request.currency as Address
   const amount = challenge.request.amount ? BigInt(challenge.request.amount as string) : undefined
 
-  const broadcastArgs = {
-    client,
-    serializedTransaction: payload.transaction,
-    escrowContract: methodDetails.escrowContract,
-    channelId: payload.channelId,
-    recipient,
-    currency,
-    feePayer,
-  }
-
-  // Resolve on-chain state: either from the confirmed broadcast or by
-  // validating + simulating the transaction and deriving state from its args.
   let onChain: OnChainChannel
   let txHash: Hex | undefined
 
   if (waitForConfirmation) {
-    const result = await broadcastOpenTransaction(broadcastArgs)
+    const result = await broadcastOpenTransaction({
+      client,
+      serializedTransaction: payload.transaction,
+      escrowContract: methodDetails.escrowContract,
+      channelId: payload.channelId,
+      recipient,
+      currency,
+      feePayer,
+    })
     onChain = result.onChain
     txHash = result.txHash
   } else {
@@ -643,7 +639,15 @@ async function handleOpen(
   if (!waitForConfirmation) {
     // Simulation already confirmed the tx will succeed — broadcast in the
     // background and return the receipt immediately.
-    broadcastOpenTransaction(broadcastArgs).then(
+    broadcastOpenTransaction({
+      client,
+      serializedTransaction: payload.transaction,
+      escrowContract: methodDetails.escrowContract,
+      channelId: payload.channelId,
+      recipient,
+      currency,
+      feePayer,
+    }).then(
       ({ txHash }) => {
         if (txHash) console.log(`[session] channel ${payload.channelId} open tx: ${txHash}`)
       },
