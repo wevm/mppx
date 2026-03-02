@@ -81,6 +81,7 @@ describe('on-chain', () => {
     escrowContract = await deployEscrow()
     await fundAccount({ address: payer.address, token: Addresses.pathUsd })
     await fundAccount({ address: payer.address, token: currency })
+    await fundAccount({ address: accounts[0].address, token: Addresses.pathUsd })
   })
 
   function nextSalt(): Hex {
