@@ -45,6 +45,12 @@ type Handlers<
   methods extends readonly Method.AnyServer[],
   transport extends Transport.AnyTransport,
 > = {
+  [mi in methods[number] as `${mi['name']}/${mi['intent']}`]: MethodFn<
+    mi,
+    EffectiveTransportOf<mi, transport>,
+    NonNullable<mi['defaults']>
+  >
+} & {
   [method_name in methods[number]['intent']]: MethodFn<
     Extract<methods[number], { intent: method_name }>,
     EffectiveTransportOf<Extract<methods[number], { intent: method_name }>, transport>,
@@ -87,9 +93,11 @@ export function create<
   const methods = config.methods.flat() as unknown as FlattenMethods<methods>
 
   const handlers: Record<string, unknown> = {}
+  const intentCount: Record<string, number> = {}
 
   for (const mi of methods) {
-    handlers[mi.intent] = createMethodFn({
+    intentCount[mi.intent] = (intentCount[mi.intent] ?? 0) + 1
+    handlers[`${mi.name}/${mi.intent}`] = createMethodFn({
       defaults: mi.defaults,
       method: mi,
       realm,
@@ -99,6 +107,11 @@ export function create<
       transport: (mi.transport ?? transport) as never,
       verify: mi.verify as never,
     })
+  }
+
+  // Also set shorthand intent key when there's no collision
+  for (const mi of methods) {
+    if (intentCount[mi.intent] === 1) handlers[mi.intent] = handlers[`${mi.name}/${mi.intent}`]
   }
 
   return { methods, realm: realm as string, transport, ...handlers } as never

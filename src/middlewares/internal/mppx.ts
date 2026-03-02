@@ -23,8 +23,11 @@ export function wrap<mppx extends Mppx.Mppx<any, any>, handler>(
 ): Wrap<mppx, handler> {
   const result: Record<string, unknown> = { ...mppx }
   for (const mi of mppx.methods as readonly Method.AnyServer[]) {
-    const methodFn = (mppx as any)[mi.intent]
-    result[mi.intent] = (options: any) => wrapper(methodFn, options)
+    const key = `${mi.name}/${mi.intent}`
+    const methodFn = (mppx as any)[key]
+    result[key] = (options: any) => wrapper(methodFn, options)
+    // Also set shorthand intent key if Mppx registered it (no collision)
+    if ((mppx as any)[mi.intent]) result[mi.intent] = (options: any) => wrapper(methodFn, options)
   }
   return result as never
 }
