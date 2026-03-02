@@ -374,7 +374,6 @@ describe('on-chain', () => {
       expect(result.txHash).toBeUndefined()
       expect(result.onChain.deposit).toBe(deposit)
     })
-  })
 
     test('waitForConfirmation: false returns derived on-chain state', async () => {
       const salt = nextSalt()
@@ -407,6 +406,7 @@ describe('on-chain', () => {
       expect(result.onChain.settled).toBe(0n)
       expect(result.onChain.finalized).toBe(false)
     })
+  })
 
   describe('broadcastTopUpTransaction', () => {
     test('rejects channelId mismatch', async () => {
