@@ -105,7 +105,7 @@ export type VerifyFn<method extends Method> = (parameters: {
     Challenge.Challenge<z.output<method['schema']['request']>, method['intent'], method['name']>
   >
   request: z.input<method['schema']['request']>
-}) => Promise<Receipt.Receipt & { backgroundWork?: Promise<void> | undefined }>
+}) => Promise<Receipt.Receipt>
 
 /**
  * Optional respond function for a server-side method.

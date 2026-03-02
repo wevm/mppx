@@ -498,11 +498,10 @@ async function verifyAndAcceptVoucher(parameters: {
 }
 
 /**
- * Handle 'open' action - validate, simulate, verify voucher, create channel,
- * and start the on-chain broadcast in the background.
+ * Handle 'open' action - validate, simulate, verify voucher, and create channel.
  *
- * Returns the receipt and a `_broadcastPromise` that the framework surfaces
- * so the broadcast runs in parallel with the upstream proxy request.
+ * The on-chain broadcast fires in the background after the receipt is returned,
+ * since the simulation already confirmed the transaction will succeed.
  */
 async function handleOpen(
   store: ChannelStore.ChannelStore,
@@ -511,7 +510,7 @@ async function handleOpen(
   payload: SessionCredentialPayload & { action: 'open' },
   methodDetails: SessionMethodDetails,
   feePayer: viem_Account | undefined,
-): Promise<SessionReceipt & { backgroundWork?: Promise<void> }> {
+): Promise<SessionReceipt> {
   const voucher = parseVoucherFromPayload(
     payload.channelId,
     payload.cumulativeAmount,
@@ -612,10 +611,10 @@ async function handleOpen(
 
   if (!updated) throw new VerificationFailedError({ reason: 'failed to create channel' })
 
-  // Start the on-chain broadcast in the background. The simulation already
-  // confirmed the tx will succeed; this runs in parallel with the upstream
-  // proxy request via the framework's backgroundWork plumbing.
-  const broadcastPromise = broadcastOpenTransaction({
+  // Broadcast in the background — the simulation already confirmed the tx
+  // will succeed, so we return the receipt immediately and let the on-chain
+  // confirmation happen asynchronously.
+  broadcastOpenTransaction({
     client,
     serializedTransaction: payload.transaction,
     escrowContract: methodDetails.escrowContract,
@@ -632,16 +631,13 @@ async function handleOpen(
     },
   )
 
-  return {
-    ...createSessionReceipt({
-      challengeId: challenge.id,
-      channelId: payload.channelId,
-      acceptedCumulative: updated.highestVoucherAmount,
-      spent: updated.spent,
-      units: updated.units,
-    }),
-    backgroundWork: broadcastPromise,
-  }
+  return createSessionReceipt({
+    challengeId: challenge.id,
+    channelId: payload.channelId,
+    acceptedCumulative: updated.highestVoucherAmount,
+    spent: updated.spent,
+    units: updated.units,
+  })
 }
 
 /**

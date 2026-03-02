@@ -151,7 +151,6 @@ export function create(config: create.Config): Proxy {
     if (result.status === 402) return result.challenge
 
     const options = Service.getOptions(endpoint)
-    if (result.backgroundWork) result.backgroundWork.catch(() => {})
     const upstreamRes = await proxyUpstream({
       request,
       service,
