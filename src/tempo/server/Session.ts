@@ -44,6 +44,7 @@ import {
   getOnChainChannel,
   type OnChainChannel,
   settleOnChain,
+  validateAndSimulateOpen,
 } from '../session/Chain.js'
 import * as ChannelStore from '../session/ChannelStore.js'
 import { createSessionReceipt } from '../session/Receipt.js'
@@ -245,34 +246,30 @@ export function session<const parameters extends session.Parameters>(p?: paramet
     // invoking the user's route handler. When it returns undefined, the
     // user's handler runs normally and serves content.
     //
-    // Management actions (open, topUp, close) are always gated — they
-    // return 204 regardless of request method.
+    // close and topUp are always gated (204) — they are pure management.
     //
-    // Voucher POSTs are gated only when they have no request body, which
-    // signals a mid-session voucher update (the client is just topping up
-    // the channel balance). Voucher POSTs WITH a body are content requests
-    // (e.g., an API call to a POST endpoint) and fall through to the
-    // user's handler. GET requests with vouchers always fall through so
-    // auto-mode clients (whose fetch wrapper bundles open+voucher into a
-    // single GET retry) receive content as expected.
+    // open and voucher are gated only for bodyless POSTs (management
+    // updates). POSTs with a body are content requests — the client's
+    // original request piggybacked on the credential — so they fall
+    // through to serve content. GETs always fall through so auto-mode
+    // clients (whose fetch wrapper bundles open+voucher into a single
+    // GET retry) receive content as expected.
     respond({ credential, input }) {
       const { payload } = credential as Credential.Credential<SessionCredentialPayload>
 
       if (payload.action === 'close') return new Response(null, { status: 204 })
+      if (payload.action === 'topUp') return new Response(null, { status: 204 })
 
-      const isManagement = payload.action === 'open' || payload.action === 'topUp'
-      if (isManagement && input.method === 'POST') return new Response(null, { status: 204 })
-
-      const isVoucher = payload.action === 'voucher'
-      if (!isVoucher) return undefined
-
-      // Only gate voucher POSTs with no body (mid-session balance updates).
-      // POSTs with a body are content requests that should reach the handler.
-      if (input.method !== 'POST') return undefined
-      const contentLength = input.headers.get('content-length')
-      if (contentLength !== null && contentLength !== '0') return undefined
-      if (input.headers.has('transfer-encoding')) return undefined
-      return new Response(null, { status: 204 })
+      // open and voucher: gate only bodyless POSTs (management updates).
+      // POSTs with a body are content requests — fall through so the
+      // upstream response is returned to the client.
+      if (input.method === 'POST') {
+        const contentLength = input.headers.get('content-length')
+        if (contentLength !== null && contentLength !== '0') return undefined
+        if (input.headers.has('transfer-encoding')) return undefined
+        return new Response(null, { status: 204 })
+      }
+      return undefined
     },
   })
 }
@@ -501,7 +498,11 @@ async function verifyAndAcceptVoucher(parameters: {
 }
 
 /**
- * Handle 'open' action - broadcast open transaction, verify voucher, and create channel.
+ * Handle 'open' action - validate, simulate, verify voucher, create channel,
+ * and start the on-chain broadcast in the background.
+ *
+ * Returns the receipt and a `_broadcastPromise` that the framework surfaces
+ * so the broadcast runs in parallel with the upstream proxy request.
  */
 async function handleOpen(
   store: ChannelStore.ChannelStore,
@@ -510,7 +511,7 @@ async function handleOpen(
   payload: SessionCredentialPayload & { action: 'open' },
   methodDetails: SessionMethodDetails,
   feePayer: viem_Account | undefined,
-): Promise<SessionReceipt> {
+): Promise<SessionReceipt & { _broadcastPromise?: Promise<void> }> {
   const voucher = parseVoucherFromPayload(
     payload.channelId,
     payload.cumulativeAmount,
@@ -521,31 +522,39 @@ async function handleOpen(
   const currency = challenge.request.currency as Address
   const amount = challenge.request.amount ? BigInt(challenge.request.amount as string) : undefined
 
-  const { onChain, txHash } = await broadcastOpenTransaction({
+  // Validate the transaction and simulate via eth_estimateGas to catch
+  // reverts before committing to proxy the upstream request.
+  const { payer, openArgs } = await validateAndSimulateOpen({
     client,
     serializedTransaction: payload.transaction,
     escrowContract: methodDetails.escrowContract,
-    channelId: payload.channelId,
     recipient,
     currency,
     feePayer,
   })
 
-  validateOnChainChannel(onChain, recipient, currency, amount)
+  // Derive expected on-chain state from the decoded transaction args.
+  // For a new channel: settled=0, finalized=false, no close request.
+  const derivedOnChain: OnChainChannel = {
+    payer,
+    payee: openArgs.payee,
+    token: openArgs.token,
+    authorizedSigner: openArgs.authorizedSigner,
+    deposit: openArgs.deposit,
+    settled: 0n,
+    closeRequestedAt: 0n,
+    finalized: false,
+  } as OnChainChannel
+
+  validateOnChainChannel(derivedOnChain, recipient, currency, amount)
 
   const authorizedSigner =
-    onChain.authorizedSigner === '0x0000000000000000000000000000000000000000'
-      ? onChain.payer
-      : onChain.authorizedSigner
+    derivedOnChain.authorizedSigner === '0x0000000000000000000000000000000000000000'
+      ? derivedOnChain.payer
+      : derivedOnChain.authorizedSigner
 
-  if (voucher.cumulativeAmount > onChain.deposit) {
+  if (voucher.cumulativeAmount > derivedOnChain.deposit) {
     throw new AmountExceedsDepositError({ reason: 'voucher amount exceeds on-chain deposit' })
-  }
-
-  if (voucher.cumulativeAmount < onChain.settled) {
-    throw new VerificationFailedError({
-      reason: 'voucher cumulativeAmount is below on-chain settled amount',
-    })
   }
 
   const isValid = await verifyVoucher(
@@ -570,7 +579,7 @@ async function handleOpen(
       if (voucher.cumulativeAmount > existing.highestVoucherAmount) {
         return {
           ...existing,
-          deposit: onChain.deposit,
+          deposit: derivedOnChain.deposit,
           highestVoucherAmount: voucher.cumulativeAmount,
           highestVoucher: voucher,
           authorizedSigner,
@@ -578,7 +587,7 @@ async function handleOpen(
       }
       return {
         ...existing,
-        deposit: onChain.deposit,
+        deposit: derivedOnChain.deposit,
         authorizedSigner,
       }
     }
@@ -586,11 +595,11 @@ async function handleOpen(
       channelId: payload.channelId,
       chainId: methodDetails.chainId,
       escrowContract: methodDetails.escrowContract,
-      payer: onChain.payer,
-      payee: onChain.payee,
-      token: onChain.token,
+      payer: derivedOnChain.payer,
+      payee: derivedOnChain.payee,
+      token: derivedOnChain.token,
       authorizedSigner,
-      deposit: onChain.deposit,
+      deposit: derivedOnChain.deposit,
       settledOnChain: 0n,
       highestVoucherAmount: voucher.cumulativeAmount,
       highestVoucher: voucher,
@@ -603,14 +612,36 @@ async function handleOpen(
 
   if (!updated) throw new VerificationFailedError({ reason: 'failed to create channel' })
 
-  return createSessionReceipt({
-    challengeId: challenge.id,
+  // Start the on-chain broadcast in the background. The simulation already
+  // confirmed the tx will succeed; this runs in parallel with the upstream
+  // proxy request via the framework's backgroundWork plumbing.
+  const broadcastPromise = broadcastOpenTransaction({
+    client,
+    serializedTransaction: payload.transaction,
+    escrowContract: methodDetails.escrowContract,
     channelId: payload.channelId,
-    acceptedCumulative: updated.highestVoucherAmount,
-    spent: updated.spent,
-    units: updated.units,
-    txHash,
-  })
+    recipient,
+    currency,
+    feePayer,
+  }).then(
+    ({ txHash }) => {
+      if (txHash) console.log(`[session] channel ${payload.channelId} open tx: ${txHash}`)
+    },
+    (error) => {
+      console.error(`[session] background broadcast failed for channel ${payload.channelId}:`, error)
+    },
+  )
+
+  return {
+    ...createSessionReceipt({
+      challengeId: challenge.id,
+      channelId: payload.channelId,
+      acceptedCumulative: updated.highestVoucherAmount,
+      spent: updated.spent,
+      units: updated.units,
+    }),
+    _broadcastPromise: broadcastPromise,
+  }
 }
 
 /**

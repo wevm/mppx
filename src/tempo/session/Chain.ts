@@ -197,24 +197,20 @@ export type BroadcastResult = {
   onChain: OnChainChannel
 }
 
-export async function broadcastOpenTransaction(parameters: {
-  client: Client
+/**
+ * Validate and decode an open transaction's calls, returning the decoded
+ * escrow open arguments plus the deserialized transaction.
+ *
+ * Shared by {@link broadcastOpenTransaction} and {@link validateAndSimulateOpen}.
+ */
+function validateOpenCalls(parameters: {
   serializedTransaction: Hex
   escrowContract: Address
-  channelId: Hex
   recipient: Address
   currency: Address
   feePayer?: Account | undefined
-}): Promise<BroadcastResult> {
-  const {
-    client,
-    serializedTransaction,
-    escrowContract,
-    channelId,
-    recipient,
-    currency,
-    feePayer,
-  } = parameters
+}) {
+  const { serializedTransaction, escrowContract, recipient, currency, feePayer } = parameters
 
   const transaction = Transaction.deserialize(
     serializedTransaction as Transaction.TransactionSerializedTempo,
@@ -252,7 +248,13 @@ export async function broadcastOpenTransaction(parameters: {
   }
 
   const { args: openArgs } = decodeFunctionData({ abi: escrowAbi, data: openCall.data! })
-  const [payee, token] = openArgs as readonly [Address, Address, ...unknown[]]
+  const [payee, token, deposit, , authorizedSigner] = openArgs as readonly [
+    Address,
+    Address,
+    bigint,
+    Hex,
+    Address,
+  ]
 
   if (!isAddressEqual(payee, recipient)) {
     throw new VerificationFailedError({
@@ -265,6 +267,27 @@ export async function broadcastOpenTransaction(parameters: {
     })
   }
 
+  return {
+    transaction,
+    calls,
+    openArgs: { payee, token, deposit, authorizedSigner },
+  }
+}
+
+export async function broadcastOpenTransaction(parameters: {
+  client: Client
+  serializedTransaction: Hex
+  escrowContract: Address
+  channelId: Hex
+  recipient: Address
+  currency: Address
+  feePayer?: Account | undefined
+}): Promise<BroadcastResult> {
+  const { client, serializedTransaction, escrowContract, channelId, feePayer } = parameters
+  const { transaction } = validateOpenCalls(parameters)
+
+  // Per spec §7.1, when feePayer is set the server adds a 0x78
+  // fee-payer signature before broadcasting.
   const serializedTransaction_final = await (async () => {
     if (feePayer) {
       return signTransaction(client, {
@@ -300,6 +323,71 @@ export async function broadcastOpenTransaction(parameters: {
   const onChain = await getOnChainChannel(client, escrowContract, channelId)
 
   return { txHash, onChain }
+}
+
+/**
+ * Result of validating and simulating an open transaction.
+ * Contains the decoded call arguments needed to derive expected on-chain
+ * state without waiting for broadcast confirmation.
+ */
+export type ValidatedOpen = {
+  payer: Address
+  openArgs: {
+    payee: Address
+    token: Address
+    deposit: bigint
+    authorizedSigner: Address
+  }
+}
+
+/**
+ * Validate an open transaction and simulate it via `eth_estimateGas` to
+ * catch reverts (e.g. insufficient balance) before committing to proxy
+ * the upstream request.
+ *
+ * Returns the decoded open call arguments so the caller can derive the
+ * expected on-chain channel state without waiting for block confirmation.
+ */
+export async function validateAndSimulateOpen(parameters: {
+  client: Client
+  serializedTransaction: Hex
+  escrowContract: Address
+  recipient: Address
+  currency: Address
+  feePayer?: Account | undefined
+}): Promise<ValidatedOpen> {
+  const { client } = parameters
+  const { transaction, calls, openArgs } = validateOpenCalls(parameters)
+
+  const from = transaction.from as Address
+  const simCalls = calls.map(
+    (c: { to?: string; value?: bigint; data?: string }) => ({
+      to: c.to,
+      value: c.value ? `0x${c.value.toString(16)}` : '0x0',
+      input: c.data ?? '0x',
+    }),
+  )
+  await client.request({
+    method: 'eth_estimateGas' as never,
+    params: [
+      {
+        from,
+        chainId: `0x${transaction.chainId.toString(16)}`,
+        nonce: `0x${(transaction.nonce ?? 0n).toString(16)}`,
+        gas: '0x2dc6c0', // 3M cap
+        maxFeePerGas: `0x${(transaction.maxFeePerGas ?? 0n).toString(16)}`,
+        maxPriorityFeePerGas: `0x${(transaction.maxPriorityFeePerGas ?? 0n).toString(16)}`,
+        feeToken: transaction.feeToken,
+        nonceKey: `0x${(transaction.nonceKey ?? 0n).toString(16)}`,
+        calls: simCalls,
+        ...(transaction.validBefore
+          ? { validBefore: `0x${transaction.validBefore.toString(16)}` }
+          : {}),
+      },
+    ] as never,
+  })
+
+  return { payer: from, openArgs }
 }
 
 export async function broadcastTopUpTransaction(parameters: {

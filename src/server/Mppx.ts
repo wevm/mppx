@@ -294,8 +294,14 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
         // User-provided verification (e.g., check signature, submit tx, verify payment).
         // If verification fails, re-issue the challenge so the client can retry.
         let receiptData: Receipt.Receipt
+        let backgroundWork: Promise<void> | undefined
         try {
-          receiptData = await verify({ credential, request } as never)
+          const result = await verify({ credential, request } as never)
+          const { _broadcastPromise, ...receipt } = result as Receipt.Receipt & {
+            _broadcastPromise?: Promise<void>
+          }
+          receiptData = receipt
+          backgroundWork = _broadcastPromise
         } catch (e) {
           const error =
             e instanceof Errors.PaymentError
@@ -320,6 +326,7 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
 
         return {
           status: 200,
+          backgroundWork,
           withReceipt<response>(response?: response) {
             if (managementResponse) {
               return transport.respondReceipt({
@@ -396,6 +403,7 @@ declare namespace MethodFn {
       }
     | {
         status: 200
+        backgroundWork?: Promise<void> | undefined
         withReceipt: Transport.WithReceipt<transport>
       }
 }

@@ -5,7 +5,11 @@ import {
   type TransactionReceipt,
   toFunctionSelector,
 } from 'viem'
-import { getTransactionReceipt, sendRawTransactionSync, signTransaction } from 'viem/actions'
+import {
+  getTransactionReceipt,
+  sendRawTransaction,
+  signTransaction,
+} from 'viem/actions'
 import { tempo as tempo_chain } from 'viem/chains'
 import { Abis, Transaction } from 'viem/tempo'
 import { PaymentExpiredError } from '../../Errors.js'
@@ -122,9 +126,7 @@ export function charge<const parameters extends charge.Parameters>(
       switch (payload.type) {
         case 'hash': {
           const hash = payload.hash as `0x${string}`
-          const receipt = await getTransactionReceipt(client, {
-            hash,
-          })
+          const receipt = await getTransactionReceipt(client, { hash })
 
           if (memo) {
             const memoLogs = parseEventLogs({
@@ -179,7 +181,7 @@ export function charge<const parameters extends charge.Parameters>(
               })
           }
 
-          return toReceipt(receipt)
+          return receiptToResult(receipt)
         }
 
         case 'transaction': {
@@ -250,11 +252,41 @@ export function charge<const parameters extends charge.Parameters>(
             return serializedTransaction
           })()
 
-          const receipt = await sendRawTransactionSync(client, {
+          // Simulate via eth_estimateGas to catch reverts (e.g. insufficient
+          // balance) before broadcasting.
+          await (async () => {
+            const from = transaction.from as `0x${string}`
+            const simCalls = calls.map(
+              (c: { to?: string; value?: bigint; data?: string }) => ({
+                to: c.to,
+                value: c.value ? `0x${c.value.toString(16)}` : '0x0',
+                input: c.data ?? '0x',
+              }),
+            )
+            await client.request({
+              method: 'eth_estimateGas' as never,
+              params: [
+                {
+                  from,
+                  chainId: `0x${transaction.chainId.toString(16)}`,
+                  nonce: `0x${(transaction.nonce ?? 0n).toString(16)}`,
+                  gas: '0x2dc6c0', // 3M cap (same as client-side)
+                  maxFeePerGas: `0x${(transaction.maxFeePerGas ?? 0n).toString(16)}`,
+                  maxPriorityFeePerGas: `0x${(transaction.maxPriorityFeePerGas ?? 0n).toString(16)}`,
+                  feeToken: transaction.feeToken,
+                  nonceKey: `0x${(transaction.nonceKey ?? 0n).toString(16)}`,
+                  calls: simCalls,
+                  ...(transaction.validBefore ? { validBefore: `0x${transaction.validBefore.toString(16)}` } : {}),
+                },
+              ] as never,
+            })
+          })()
+
+          const hash = await sendRawTransaction(client, {
             serializedTransaction: serializedTransaction_final,
           })
 
-          return toReceipt(receipt)
+          return paymentResult(hash)
         }
 
         default:
@@ -283,17 +315,21 @@ export declare namespace charge {
 }
 
 /** @internal */
-function toReceipt(receipt: TransactionReceipt) {
-  const { status, transactionHash } = receipt
-  if (status !== 'success') {
-    throw new Error(`Transaction reverted: ${transactionHash}`)
-  }
+function paymentResult(reference: string) {
   return {
     method: 'tempo',
     status: 'success',
     timestamp: new Date().toISOString(),
-    reference: transactionHash,
+    reference,
   } as const
+}
+
+/** @internal */
+function receiptToResult(receipt: TransactionReceipt) {
+  if (receipt.status !== 'success') {
+    throw new Error(`Transaction reverted: ${receipt.transactionHash}`)
+  }
+  return paymentResult(receipt.transactionHash)
 }
 
 /** @internal */
