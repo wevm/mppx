@@ -42,10 +42,10 @@ type EffectiveTransportOf<mi, defaultTransport extends Transport.AnyTransport> =
   : TransportOverrideOf<mi>
 
 /** True when exactly one method has the given intent (no name collision). */
-type IsUniqueIntent<
-  methods extends readonly Method.AnyServer[],
-  intent extends string,
-> = Extract<methods[number], { intent: intent }> extends infer M
+type IsUniqueIntent<methods extends readonly Method.AnyServer[], intent extends string> = Extract<
+  methods[number],
+  { intent: intent }
+> extends infer M
   ? M extends M
     ? [Exclude<Extract<methods[number], { intent: intent }>, M>] extends [never]
       ? true
