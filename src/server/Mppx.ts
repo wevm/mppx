@@ -41,6 +41,32 @@ type EffectiveTransportOf<mi, defaultTransport extends Transport.AnyTransport> =
   ? defaultTransport
   : TransportOverrideOf<mi>
 
+/** True when exactly one method has the given intent (no name collision). */
+type IsUniqueIntent<
+  methods extends readonly Method.AnyServer[],
+  intent extends string,
+> = Extract<methods[number], { intent: intent }> extends infer M
+  ? M extends M
+    ? [Exclude<Extract<methods[number], { intent: intent }>, M>] extends [never]
+      ? true
+      : false
+    : never
+  : never
+
+/** Only includes shorthand intent keys when the intent is unique across methods. */
+type UniqueIntentHandlers<
+  methods extends readonly Method.AnyServer[],
+  transport extends Transport.AnyTransport,
+> = {
+  [method_name in methods[number]['intent'] as IsUniqueIntent<methods, method_name> extends true
+    ? method_name
+    : never]: MethodFn<
+    Extract<methods[number], { intent: method_name }>,
+    EffectiveTransportOf<Extract<methods[number], { intent: method_name }>, transport>,
+    NonNullable<Extract<methods[number], { intent: method_name }>['defaults']>
+  >
+}
+
 type Handlers<
   methods extends readonly Method.AnyServer[],
   transport extends Transport.AnyTransport,
@@ -50,13 +76,7 @@ type Handlers<
     EffectiveTransportOf<mi, transport>,
     NonNullable<mi['defaults']>
   >
-} & {
-  [method_name in methods[number]['intent']]: MethodFn<
-    Extract<methods[number], { intent: method_name }>,
-    EffectiveTransportOf<Extract<methods[number], { intent: method_name }>, transport>,
-    NonNullable<Extract<methods[number], { intent: method_name }>['defaults']>
-  >
-}
+} & UniqueIntentHandlers<methods, transport>
 
 /**
  * Creates a server-side payment handler from methods.
