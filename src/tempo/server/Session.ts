@@ -511,7 +511,7 @@ async function handleOpen(
   payload: SessionCredentialPayload & { action: 'open' },
   methodDetails: SessionMethodDetails,
   feePayer: viem_Account | undefined,
-): Promise<SessionReceipt & { _broadcastPromise?: Promise<void> }> {
+): Promise<SessionReceipt & { backgroundWork?: Promise<void> }> {
   const voucher = parseVoucherFromPayload(
     payload.channelId,
     payload.cumulativeAmount,
@@ -640,7 +640,7 @@ async function handleOpen(
       spent: updated.spent,
       units: updated.units,
     }),
-    _broadcastPromise: broadcastPromise,
+    backgroundWork: broadcastPromise,
   }
 }
 

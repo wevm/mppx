@@ -296,12 +296,9 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
         let receiptData: Receipt.Receipt
         let backgroundWork: Promise<void> | undefined
         try {
-          const result = await verify({ credential, request } as never)
-          const { _broadcastPromise, ...receipt } = result as Receipt.Receipt & {
-            _broadcastPromise?: Promise<void>
-          }
+          const { backgroundWork: bg, ...receipt } = await verify({ credential, request } as never)
           receiptData = receipt
-          backgroundWork = _broadcastPromise
+          backgroundWork = bg
         } catch (e) {
           const error =
             e instanceof Errors.PaymentError
