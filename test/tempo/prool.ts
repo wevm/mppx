@@ -9,7 +9,7 @@ const id =
     Number(import.meta.env.VITEST_POOL_ID ?? 1) + Math.floor(Math.random() * 10_000)) ||
   1 + Math.floor(Math.random() * 10_000)
 
-export const rpcUrl = `http://localhost:${port}/${id}`
+export const rpcUrl = import.meta.env.VITE_RPC_URL ?? `http://localhost:${port}/${id}`
 
 export async function createServer() {
   const tag = await (async () => {

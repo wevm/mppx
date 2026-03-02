@@ -524,6 +524,68 @@ describe('tempo', () => {
     })
   })
 
+  describe('intent: charge; type: transaction; waitForConfirmation: false', () => {
+    test('returns receipt without waiting for confirmation', async () => {
+      const serverNoWait = Mppx_server.create({
+        methods: [
+          tempo_server.charge({
+            getClient() {
+              return client
+            },
+            currency: asset,
+            account: accounts[0],
+            waitForConfirmation: false,
+          }),
+        ],
+        realm,
+        secretKey,
+      })
+
+      const mppx = Mppx_client.create({
+        polyfill: false,
+        methods: [
+          tempo_client({
+            account: accounts[1],
+            getClient() {
+              return client
+            },
+          }),
+        ],
+      })
+
+      const httpServer = await Http.createServer(async (req, res) => {
+        const result = await Mppx_server.toNodeListener(
+          serverNoWait.charge({
+            amount: '1',
+            currency: asset,
+            recipient: accounts[0].address,
+          }),
+        )(req, res)
+        if (result.status === 402) return
+        res.end('OK')
+      })
+
+      const response = await fetch(httpServer.url)
+      expect(response.status).toBe(402)
+
+      const credential = await mppx.createCredential(response)
+
+      {
+        const response = await fetch(httpServer.url, {
+          headers: { Authorization: credential },
+        })
+        expect(response.status).toBe(200)
+
+        const receipt = Receipt.fromResponse(response)
+        expect(receipt.status).toBe('success')
+        expect(receipt.method).toBe('tempo')
+        expect(receipt.reference).toBeDefined()
+      }
+
+      httpServer.close()
+    })
+  })
+
   describe('intent: unknown', () => {
     test('behavior: returns 402 for invalid payload schema', async () => {
       const httpServer = await Http.createServer(async (req, res) => {

@@ -5,6 +5,7 @@ import {
   decodeFunctionData,
   encodeFunctionData,
   getAbiItem,
+  getAddress,
   type Hex,
   isAddressEqual,
   type ReadContractReturnType,
@@ -288,7 +289,7 @@ export async function broadcastOpenTransaction(parameters: {
   })()
 
   if (!waitForConfirmation) {
-    const from = transaction.from as Address
+    const from = getAddress(transaction.from as Address)
     await simulateTransaction(client, { ...transaction, from, calls })
     const txHash = await sendRawTransaction(client, {
       serializedTransaction: serializedTransaction_final as Transaction.TransactionSerializedTempo,

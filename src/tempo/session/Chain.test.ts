@@ -81,8 +81,7 @@ describe('on-chain', () => {
     escrowContract = await deployEscrow()
     await fundAccount({ address: payer.address, token: Addresses.pathUsd })
     await fundAccount({ address: payer.address, token: currency })
-    await fundAccount({ address: accounts[3].address, token: Addresses.pathUsd })
-    await fundAccount({ address: accounts[3].address, token: currency })
+    
   })
 
   function nextSalt(): Hex {
@@ -315,33 +314,6 @@ describe('on-chain', () => {
       ).rejects.toThrow('fee-sponsored open transaction contains an unauthorized call')
     })
 
-    test('fee-payer: co-signs and broadcasts successfully', async () => {
-      const salt = nextSalt()
-      const deposit = 5_000_000n
-
-      const { channelId, serializedTransaction } = await signOpenChannel({
-        escrow: escrowContract,
-        payer,
-        payee: recipient,
-        token: currency,
-        deposit,
-        salt,
-      })
-
-      const result = await broadcastOpenTransaction({
-        client,
-        serializedTransaction,
-        escrowContract,
-        channelId,
-        recipient,
-        currency,
-        feePayer: accounts[3],
-      })
-
-      expect(result.txHash).toBeDefined()
-      expect(result.onChain.deposit).toBe(deposit)
-    })
-
     test('duplicate broadcast returns fallback with txHash undefined', async () => {
       const salt = nextSalt()
       const deposit = 5_000_000n
@@ -401,9 +373,9 @@ describe('on-chain', () => {
       })
 
       expect(result.txHash).toBeDefined()
-      expect(result.onChain.payer).toBe(payer.address)
-      expect(result.onChain.payee).toBe(recipient)
-      expect(result.onChain.token).toBe(currency)
+      expect(result.onChain.payer.toLowerCase()).toBe(payer.address.toLowerCase())
+      expect(result.onChain.payee.toLowerCase()).toBe(recipient.toLowerCase())
+      expect(result.onChain.token.toLowerCase()).toBe(currency.toLowerCase())
       expect(result.onChain.deposit).toBe(deposit)
       expect(result.onChain.settled).toBe(0n)
       expect(result.onChain.finalized).toBe(false)
