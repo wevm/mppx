@@ -92,6 +92,7 @@ export function session<const parameters extends session.Parameters>(p?: paramet
     store: rawStore = Store.memory(),
     suggestedDeposit,
     unitType,
+    waitForConfirmation = true,
   } = parameters
 
   const lastOnChainVerified = new Map<Hex, number>()
@@ -191,6 +192,7 @@ export function session<const parameters extends session.Parameters>(p?: paramet
             payload,
             methodDetails,
             resolvedFeePayer,
+            waitForConfirmation,
           )
           lastOnChainVerified.set(payload.channelId, Date.now())
           break
@@ -285,6 +287,8 @@ export declare namespace session {
     channelStateTtl?: number | undefined
     /** Minimum voucher delta to accept (numeric string, default: "0"). */
     minVoucherDelta?: string | undefined
+    /** Whether to wait for the open transaction to confirm on-chain before responding. When `false`, the transaction is simulated and broadcast in the background. @default true */
+    waitForConfirmation?: boolean | undefined
     /** Store backend for channel state. */
     store?: Store.Store | undefined
     /**
@@ -500,8 +504,9 @@ async function verifyAndAcceptVoucher(parameters: {
 /**
  * Handle 'open' action - validate, simulate, verify voucher, and create channel.
  *
- * The on-chain broadcast fires in the background after the receipt is returned,
- * since the simulation already confirmed the transaction will succeed.
+ * When `waitForConfirmation` is true (default), the broadcast is awaited and
+ * the receipt includes the transaction hash. When false, the simulation gates
+ * acceptance and the broadcast runs in the background.
  */
 async function handleOpen(
   store: ChannelStore.ChannelStore,
@@ -510,6 +515,7 @@ async function handleOpen(
   payload: SessionCredentialPayload & { action: 'open' },
   methodDetails: SessionMethodDetails,
   feePayer: viem_Account | undefined,
+  waitForConfirmation: boolean,
 ): Promise<SessionReceipt> {
   const voucher = parseVoucherFromPayload(
     payload.channelId,
@@ -611,10 +617,7 @@ async function handleOpen(
 
   if (!updated) throw new VerificationFailedError({ reason: 'failed to create channel' })
 
-  // Broadcast in the background — the simulation already confirmed the tx
-  // will succeed, so we return the receipt immediately and let the on-chain
-  // confirmation happen asynchronously.
-  broadcastOpenTransaction({
+  const broadcastArgs = {
     client,
     serializedTransaction: payload.transaction,
     escrowContract: methodDetails.escrowContract,
@@ -622,7 +625,23 @@ async function handleOpen(
     recipient,
     currency,
     feePayer,
-  }).then(
+  }
+
+  if (waitForConfirmation) {
+    const { txHash } = await broadcastOpenTransaction(broadcastArgs)
+    return createSessionReceipt({
+      challengeId: challenge.id,
+      channelId: payload.channelId,
+      acceptedCumulative: updated.highestVoucherAmount,
+      spent: updated.spent,
+      units: updated.units,
+      txHash,
+    })
+  }
+
+  // Simulation already confirmed the tx will succeed — broadcast in the
+  // background and return the receipt immediately.
+  broadcastOpenTransaction(broadcastArgs).then(
     ({ txHash }) => {
       if (txHash) console.log(`[session] channel ${payload.channelId} open tx: ${txHash}`)
     },
