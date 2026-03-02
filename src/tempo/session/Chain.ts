@@ -198,20 +198,27 @@ export type BroadcastResult = {
   onChain: OnChainChannel
 }
 
-/**
- * Validate and decode an open transaction's calls, returning the decoded
- * escrow open arguments plus the deserialized transaction.
- *
- * Shared by {@link broadcastOpenTransaction} and {@link validateAndSimulateOpen}.
- */
-function validateOpenCalls(parameters: {
+export async function broadcastOpenTransaction(parameters: {
+  client: Client
   serializedTransaction: Hex
   escrowContract: Address
+  channelId: Hex
   recipient: Address
   currency: Address
   feePayer?: Account | undefined
-}) {
-  const { serializedTransaction, escrowContract, recipient, currency, feePayer } = parameters
+  /** When false, simulates instead of waiting for confirmation and returns derived on-chain state. @default true */
+  waitForConfirmation?: boolean | undefined
+}): Promise<BroadcastResult> {
+  const {
+    client,
+    serializedTransaction,
+    escrowContract,
+    channelId,
+    recipient,
+    currency,
+    feePayer,
+    waitForConfirmation = true,
+  } = parameters
 
   const transaction = Transaction.deserialize(
     serializedTransaction as Transaction.TransactionSerializedTempo,
@@ -268,27 +275,6 @@ function validateOpenCalls(parameters: {
     })
   }
 
-  return {
-    transaction,
-    calls,
-    openArgs: { payee, token, deposit, authorizedSigner },
-  }
-}
-
-export async function broadcastOpenTransaction(parameters: {
-  client: Client
-  serializedTransaction: Hex
-  escrowContract: Address
-  channelId: Hex
-  recipient: Address
-  currency: Address
-  feePayer?: Account | undefined
-  /** When false, simulates instead of waiting for confirmation and returns derived on-chain state. @default true */
-  waitForConfirmation?: boolean | undefined
-}): Promise<BroadcastResult> {
-  const { client, serializedTransaction, escrowContract, channelId, feePayer, waitForConfirmation = true } = parameters
-  const { transaction, calls, openArgs } = validateOpenCalls(parameters)
-
   // Per spec §7.1, when feePayer is set the server adds a 0x78
   // fee-payer signature before broadcasting.
   const serializedTransaction_final = await (async () => {
@@ -341,10 +327,10 @@ export async function broadcastOpenTransaction(parameters: {
       txHash: undefined,
       onChain: {
         payer: from,
-        payee: openArgs.payee,
-        token: openArgs.token,
-        authorizedSigner: openArgs.authorizedSigner,
-        deposit: openArgs.deposit,
+        payee,
+        token,
+        authorizedSigner,
+        deposit,
         settled: 0n,
         closeRequestedAt: 0n,
         finalized: false,

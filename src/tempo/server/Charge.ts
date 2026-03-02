@@ -185,7 +185,7 @@ export function charge<const parameters extends charge.Parameters>(
               })
           }
 
-          return receiptToResult(receipt)
+          return toReceipt(receipt)
         }
 
         case 'transaction': {
@@ -260,7 +260,7 @@ export function charge<const parameters extends charge.Parameters>(
             const receipt = await sendRawTransactionSync(client, {
               serializedTransaction: serializedTransaction_final,
             })
-            return receiptToResult(receipt)
+            return toReceipt(receipt)
           }
 
           // Simulate via eth_estimateGas to catch reverts (e.g. insufficient
@@ -325,21 +325,27 @@ export declare namespace charge {
 }
 
 /** @internal */
-function paymentResult(reference: string) {
+function toReceipt(receipt: TransactionReceipt) {
+  const { status, transactionHash } = receipt
+  if (status !== 'success') {
+    throw new Error(`Transaction reverted: ${transactionHash}`)
+  }
   return {
     method: 'tempo',
     status: 'success',
     timestamp: new Date().toISOString(),
-    reference,
+    reference: transactionHash,
   } as const
 }
 
 /** @internal */
-function receiptToResult(receipt: TransactionReceipt) {
-  if (receipt.status !== 'success') {
-    throw new Error(`Transaction reverted: ${receipt.transactionHash}`)
-  }
-  return paymentResult(receipt.transactionHash)
+function paymentResult(hash: string) {
+  return {
+    method: 'tempo',
+    status: 'success',
+    timestamp: new Date().toISOString(),
+    reference: hash,
+  } as const
 }
 
 /** @internal */
