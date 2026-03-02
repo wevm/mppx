@@ -15,7 +15,11 @@ export async function simulateTransaction(
     feeToken?: string | bigint | undefined
     nonceKey?: bigint | undefined
     validBefore?: number | undefined
-    calls?: readonly { to?: string | undefined; value?: bigint | undefined; data?: string | undefined }[]
+    calls?: readonly {
+      to?: string | undefined
+      value?: bigint | undefined
+      data?: string | undefined
+    }[]
   },
 ): Promise<void> {
   const simCalls = (transaction.calls ?? []).map((c) => ({
