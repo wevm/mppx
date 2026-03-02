@@ -276,8 +276,6 @@ export async function broadcastOpenTransaction(parameters: {
     })
   }
 
-  // Per spec §7.1, when feePayer is set the server adds a 0x78
-  // fee-payer signature before broadcasting.
   const serializedTransaction_final = await (async () => {
     if (feePayer) {
       return signTransaction(client, {
@@ -292,14 +290,12 @@ export async function broadcastOpenTransaction(parameters: {
   if (!waitForConfirmation) {
     const from = transaction.from as Address
     await simulateTransaction(client, { ...transaction, from, calls })
-
-    // Fire-and-forget the actual broadcast.
-    sendRawTransaction(client, {
+    const txHash = await sendRawTransaction(client, {
       serializedTransaction: serializedTransaction_final as Transaction.TransactionSerializedTempo,
-    }).catch(() => {})
+    })
 
     return {
-      txHash: undefined,
+      txHash,
       onChain: {
         payer: from,
         payee,

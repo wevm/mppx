@@ -262,22 +262,20 @@ export function charge<const parameters extends charge.Parameters>(
               serializedTransaction: serializedTransaction_final,
             })
             return toReceipt(receipt)
+          } else {
+            // Simulate via eth_estimateGas to catch reverts (e.g. insufficient
+            // balance) before broadcasting without confirmation.
+            await simulateTransaction(client, { ...transaction, from: transaction.from as `0x${string}`, calls })
+            const hash = await sendRawTransaction(client, {
+              serializedTransaction: serializedTransaction_final,
+            })
+            return {
+              method: 'tempo',
+              status: 'success',
+              timestamp: new Date().toISOString(),
+              reference: hash,
+            } as const
           }
-
-          // Simulate via eth_estimateGas to catch reverts (e.g. insufficient
-          // balance) before broadcasting without confirmation.
-          const from = transaction.from as `0x${string}`
-          await simulateTransaction(client, { ...transaction, from, calls })
-
-          const hash = await sendRawTransaction(client, {
-            serializedTransaction: serializedTransaction_final,
-          })
-          return {
-            method: 'tempo',
-            status: 'success',
-            timestamp: new Date().toISOString(),
-            reference: hash,
-          } as const
         }
 
         default:

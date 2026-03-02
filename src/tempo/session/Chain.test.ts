@@ -398,7 +398,7 @@ describe('on-chain', () => {
         waitForConfirmation: false,
       })
 
-      expect(result.txHash).toBeUndefined()
+      expect(result.txHash).toBeDefined()
       expect(result.onChain.payer).toBe(payer.address)
       expect(result.onChain.payee).toBe(recipient)
       expect(result.onChain.token).toBe(currency)
