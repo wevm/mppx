@@ -13,6 +13,7 @@ import {
 import {
   prepareTransactionRequest,
   readContract,
+  sendRawTransaction,
   sendRawTransactionSync,
   signTransaction,
   writeContract,
@@ -282,9 +283,11 @@ export async function broadcastOpenTransaction(parameters: {
   recipient: Address
   currency: Address
   feePayer?: Account | undefined
+  /** When false, simulates instead of waiting for confirmation and returns derived on-chain state. @default true */
+  waitForConfirmation?: boolean | undefined
 }): Promise<BroadcastResult> {
-  const { client, serializedTransaction, escrowContract, channelId, feePayer } = parameters
-  const { transaction } = validateOpenCalls(parameters)
+  const { client, serializedTransaction, escrowContract, channelId, feePayer, waitForConfirmation = true } = parameters
+  const { transaction, calls, openArgs } = validateOpenCalls(parameters)
 
   // Per spec §7.1, when feePayer is set the server adds a 0x78
   // fee-payer signature before broadcasting.
@@ -298,6 +301,56 @@ export async function broadcastOpenTransaction(parameters: {
     }
     return serializedTransaction
   })()
+
+  if (!waitForConfirmation) {
+    // Simulate via eth_estimateGas to catch reverts before committing.
+    const from = transaction.from as Address
+    const simCalls = calls.map(
+      (c: { to?: string; value?: bigint; data?: string }) => ({
+        to: c.to,
+        value: c.value ? `0x${c.value.toString(16)}` : '0x0',
+        input: c.data ?? '0x',
+      }),
+    )
+    await client.request({
+      method: 'eth_estimateGas' as never,
+      params: [
+        {
+          from,
+          chainId: `0x${transaction.chainId.toString(16)}`,
+          nonce: `0x${(transaction.nonce ?? 0n).toString(16)}`,
+          gas: '0x2dc6c0', // 3M cap
+          maxFeePerGas: `0x${(transaction.maxFeePerGas ?? 0n).toString(16)}`,
+          maxPriorityFeePerGas: `0x${(transaction.maxPriorityFeePerGas ?? 0n).toString(16)}`,
+          feeToken: transaction.feeToken,
+          nonceKey: `0x${(transaction.nonceKey ?? 0n).toString(16)}`,
+          calls: simCalls,
+          ...(transaction.validBefore
+            ? { validBefore: `0x${transaction.validBefore.toString(16)}` }
+            : {}),
+        },
+      ] as never,
+    })
+
+    // Fire-and-forget the actual broadcast.
+    sendRawTransaction(client, {
+      serializedTransaction: serializedTransaction_final as Transaction.TransactionSerializedTempo,
+    }).catch(() => {})
+
+    return {
+      txHash: undefined,
+      onChain: {
+        payer: from,
+        payee: openArgs.payee,
+        token: openArgs.token,
+        authorizedSigner: openArgs.authorizedSigner,
+        deposit: openArgs.deposit,
+        settled: 0n,
+        closeRequestedAt: 0n,
+        finalized: false,
+      } as OnChainChannel,
+    }
+  }
 
   let txHash: Hex | undefined
   try {
@@ -323,65 +376,6 @@ export async function broadcastOpenTransaction(parameters: {
   const onChain = await getOnChainChannel(client, escrowContract, channelId)
 
   return { txHash, onChain }
-}
-
-/**
- * Validate an open transaction and simulate it via `eth_estimateGas` to
- * catch reverts (e.g. insufficient balance) before committing to proxy
- * the upstream request.
- *
- * Returns the expected on-chain channel state derived from the decoded
- * transaction args, without waiting for block confirmation.
- */
-export async function validateAndSimulateOpen(parameters: {
-  client: Client
-  serializedTransaction: Hex
-  escrowContract: Address
-  recipient: Address
-  currency: Address
-  feePayer?: Account | undefined
-}): Promise<OnChainChannel> {
-  const { client } = parameters
-  const { transaction, calls, openArgs } = validateOpenCalls(parameters)
-
-  const from = transaction.from as Address
-  const simCalls = calls.map(
-    (c: { to?: string; value?: bigint; data?: string }) => ({
-      to: c.to,
-      value: c.value ? `0x${c.value.toString(16)}` : '0x0',
-      input: c.data ?? '0x',
-    }),
-  )
-  await client.request({
-    method: 'eth_estimateGas' as never,
-    params: [
-      {
-        from,
-        chainId: `0x${transaction.chainId.toString(16)}`,
-        nonce: `0x${(transaction.nonce ?? 0n).toString(16)}`,
-        gas: '0x2dc6c0', // 3M cap
-        maxFeePerGas: `0x${(transaction.maxFeePerGas ?? 0n).toString(16)}`,
-        maxPriorityFeePerGas: `0x${(transaction.maxPriorityFeePerGas ?? 0n).toString(16)}`,
-        feeToken: transaction.feeToken,
-        nonceKey: `0x${(transaction.nonceKey ?? 0n).toString(16)}`,
-        calls: simCalls,
-        ...(transaction.validBefore
-          ? { validBefore: `0x${transaction.validBefore.toString(16)}` }
-          : {}),
-      },
-    ] as never,
-  })
-
-  return {
-    payer: from,
-    payee: openArgs.payee,
-    token: openArgs.token,
-    authorizedSigner: openArgs.authorizedSigner,
-    deposit: openArgs.deposit,
-    settled: 0n,
-    closeRequestedAt: 0n,
-    finalized: false,
-  } as OnChainChannel
 }
 
 export async function broadcastTopUpTransaction(parameters: {

@@ -17,7 +17,6 @@ import {
   closeOnChain,
   getOnChainChannel,
   settleOnChain,
-  validateAndSimulateOpen,
   verifyTopUpTransaction,
 } from './Chain.js'
 import { signVoucher } from './Voucher.js'
@@ -377,12 +376,11 @@ describe('on-chain', () => {
     })
   })
 
-  describe('validateAndSimulateOpen', () => {
-    test('returns derived on-chain channel state', async () => {
+    test('waitForConfirmation: false returns derived on-chain state', async () => {
       const salt = nextSalt()
       const deposit = 10_000_000n
 
-      const { serializedTransaction } = await signOpenChannel({
+      const { channelId, serializedTransaction } = await signOpenChannel({
         escrow: escrowContract,
         payer,
         payee: recipient,
@@ -391,70 +389,24 @@ describe('on-chain', () => {
         salt,
       })
 
-      const onChain = await validateAndSimulateOpen({
+      const result = await broadcastOpenTransaction({
         client,
         serializedTransaction,
         escrowContract,
+        channelId,
         recipient,
         currency,
+        waitForConfirmation: false,
       })
 
-      expect(onChain.payer).toBe(payer.address)
-      expect(onChain.payee).toBe(recipient)
-      expect(onChain.token).toBe(currency)
-      expect(onChain.deposit).toBe(deposit)
-      expect(onChain.settled).toBe(0n)
-      expect(onChain.finalized).toBe(false)
+      expect(result.txHash).toBeUndefined()
+      expect(result.onChain.payer).toBe(payer.address)
+      expect(result.onChain.payee).toBe(recipient)
+      expect(result.onChain.token).toBe(currency)
+      expect(result.onChain.deposit).toBe(deposit)
+      expect(result.onChain.settled).toBe(0n)
+      expect(result.onChain.finalized).toBe(false)
     })
-
-    test('rejects payee mismatch', async () => {
-      const wrongPayee = accounts[3].address
-      const salt = nextSalt()
-
-      const { serializedTransaction } = await signOpenChannel({
-        escrow: escrowContract,
-        payer,
-        payee: wrongPayee,
-        token: currency,
-        deposit: 5_000_000n,
-        salt,
-      })
-
-      await expect(
-        validateAndSimulateOpen({
-          client,
-          serializedTransaction,
-          escrowContract,
-          recipient,
-          currency,
-        }),
-      ).rejects.toThrow('open transaction payee does not match server recipient')
-    })
-
-    test('rejects token mismatch', async () => {
-      const wrongToken = Addresses.pathUsd
-      const salt = nextSalt()
-
-      const { serializedTransaction } = await signOpenChannel({
-        escrow: escrowContract,
-        payer,
-        payee: recipient,
-        token: wrongToken,
-        deposit: 5_000_000n,
-        salt,
-      })
-
-      await expect(
-        validateAndSimulateOpen({
-          client,
-          serializedTransaction,
-          escrowContract,
-          recipient,
-          currency,
-        }),
-      ).rejects.toThrow('open transaction token does not match server currency')
-    })
-  })
 
   describe('broadcastTopUpTransaction', () => {
     test('rejects channelId mismatch', async () => {

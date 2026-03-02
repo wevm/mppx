@@ -44,7 +44,6 @@ import {
   getOnChainChannel,
   type OnChainChannel,
   settleOnChain,
-  validateAndSimulateOpen,
 } from '../session/Chain.js'
 import * as ChannelStore from '../session/ChannelStore.js'
 import { createSessionReceipt } from '../session/Receipt.js'
@@ -528,42 +527,16 @@ async function handleOpen(
   const currency = challenge.request.currency as Address
   const amount = challenge.request.amount ? BigInt(challenge.request.amount as string) : undefined
 
-  let onChain: OnChainChannel
-  let txHash: Hex | undefined
-
-  if (waitForConfirmation) {
-    const result = await broadcastOpenTransaction({
-      client,
-      serializedTransaction: payload.transaction,
-      escrowContract: methodDetails.escrowContract,
-      channelId: payload.channelId,
-      recipient,
-      currency,
-      feePayer,
-    })
-    onChain = result.onChain
-    txHash = result.txHash
-  } else {
-    onChain = await validateAndSimulateOpen({
-      client,
-      serializedTransaction: payload.transaction,
-      escrowContract: methodDetails.escrowContract,
-      recipient,
-      currency,
-      feePayer,
-    })
-    // Simulation confirmed the tx will succeed — start the broadcast
-    // immediately while we verify the voucher and update the store.
-    broadcastOpenTransaction({
-      client,
-      serializedTransaction: payload.transaction,
-      escrowContract: methodDetails.escrowContract,
-      channelId: payload.channelId,
-      recipient,
-      currency,
-      feePayer,
-    }).catch(() => {})
-  }
+  const { onChain, txHash } = await broadcastOpenTransaction({
+    client,
+    serializedTransaction: payload.transaction,
+    escrowContract: methodDetails.escrowContract,
+    channelId: payload.channelId,
+    recipient,
+    currency,
+    feePayer,
+    waitForConfirmation,
+  })
 
   validateOnChainChannel(onChain, recipient, currency, amount)
 
