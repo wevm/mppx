@@ -502,11 +502,12 @@ async function verifyAndAcceptVoucher(parameters: {
 }
 
 /**
- * Handle 'open' action - validate, simulate, verify voucher, and create channel.
+ * Handle 'open' action - verify voucher, create channel, and broadcast.
  *
- * When `waitForConfirmation` is true (default), the broadcast is awaited and
- * the receipt includes the transaction hash. When false, the simulation gates
- * acceptance and the broadcast runs in the background.
+ * When `waitForConfirmation` is true (default), the open transaction is
+ * broadcast and confirmed on-chain before responding. When false, the
+ * transaction is validated and simulated via `eth_estimateGas`; the receipt
+ * is returned immediately and the broadcast runs in the background.
  */
 async function handleOpen(
   store: ChannelStore.ChannelStore,
@@ -527,39 +528,61 @@ async function handleOpen(
   const currency = challenge.request.currency as Address
   const amount = challenge.request.amount ? BigInt(challenge.request.amount as string) : undefined
 
-  // Validate the transaction and simulate via eth_estimateGas to catch
-  // reverts before committing to proxy the upstream request.
-  const { payer, openArgs } = await validateAndSimulateOpen({
+  const broadcastArgs = {
     client,
     serializedTransaction: payload.transaction,
     escrowContract: methodDetails.escrowContract,
+    channelId: payload.channelId,
     recipient,
     currency,
     feePayer,
-  })
+  }
 
-  // Derive expected on-chain state from the decoded transaction args.
-  // For a new channel: settled=0, finalized=false, no close request.
-  const derivedOnChain: OnChainChannel = {
-    payer,
-    payee: openArgs.payee,
-    token: openArgs.token,
-    authorizedSigner: openArgs.authorizedSigner,
-    deposit: openArgs.deposit,
-    settled: 0n,
-    closeRequestedAt: 0n,
-    finalized: false,
-  } as OnChainChannel
+  // Resolve on-chain state: either from the confirmed broadcast or by
+  // validating + simulating the transaction and deriving state from its args.
+  let onChain: OnChainChannel
+  let txHash: Hex | undefined
 
-  validateOnChainChannel(derivedOnChain, recipient, currency, amount)
+  if (waitForConfirmation) {
+    const result = await broadcastOpenTransaction(broadcastArgs)
+    onChain = result.onChain
+    txHash = result.txHash
+  } else {
+    const { payer, openArgs } = await validateAndSimulateOpen({
+      client,
+      serializedTransaction: payload.transaction,
+      escrowContract: methodDetails.escrowContract,
+      recipient,
+      currency,
+      feePayer,
+    })
+    onChain = {
+      payer,
+      payee: openArgs.payee,
+      token: openArgs.token,
+      authorizedSigner: openArgs.authorizedSigner,
+      deposit: openArgs.deposit,
+      settled: 0n,
+      closeRequestedAt: 0n,
+      finalized: false,
+    } as OnChainChannel
+  }
+
+  validateOnChainChannel(onChain, recipient, currency, amount)
 
   const authorizedSigner =
-    derivedOnChain.authorizedSigner === '0x0000000000000000000000000000000000000000'
-      ? derivedOnChain.payer
-      : derivedOnChain.authorizedSigner
+    onChain.authorizedSigner === '0x0000000000000000000000000000000000000000'
+      ? onChain.payer
+      : onChain.authorizedSigner
 
-  if (voucher.cumulativeAmount > derivedOnChain.deposit) {
+  if (voucher.cumulativeAmount > onChain.deposit) {
     throw new AmountExceedsDepositError({ reason: 'voucher amount exceeds on-chain deposit' })
+  }
+
+  if (voucher.cumulativeAmount < onChain.settled) {
+    throw new VerificationFailedError({
+      reason: 'voucher cumulativeAmount is below on-chain settled amount',
+    })
   }
 
   const isValid = await verifyVoucher(
@@ -584,7 +607,7 @@ async function handleOpen(
       if (voucher.cumulativeAmount > existing.highestVoucherAmount) {
         return {
           ...existing,
-          deposit: derivedOnChain.deposit,
+          deposit: onChain.deposit,
           highestVoucherAmount: voucher.cumulativeAmount,
           highestVoucher: voucher,
           authorizedSigner,
@@ -592,7 +615,7 @@ async function handleOpen(
       }
       return {
         ...existing,
-        deposit: derivedOnChain.deposit,
+        deposit: onChain.deposit,
         authorizedSigner,
       }
     }
@@ -600,11 +623,11 @@ async function handleOpen(
       channelId: payload.channelId,
       chainId: methodDetails.chainId,
       escrowContract: methodDetails.escrowContract,
-      payer: derivedOnChain.payer,
-      payee: derivedOnChain.payee,
-      token: derivedOnChain.token,
+      payer: onChain.payer,
+      payee: onChain.payee,
+      token: onChain.token,
       authorizedSigner,
-      deposit: derivedOnChain.deposit,
+      deposit: onChain.deposit,
       settledOnChain: 0n,
       highestVoucherAmount: voucher.cumulativeAmount,
       highestVoucher: voucher,
@@ -617,38 +640,18 @@ async function handleOpen(
 
   if (!updated) throw new VerificationFailedError({ reason: 'failed to create channel' })
 
-  const broadcastArgs = {
-    client,
-    serializedTransaction: payload.transaction,
-    escrowContract: methodDetails.escrowContract,
-    channelId: payload.channelId,
-    recipient,
-    currency,
-    feePayer,
+  if (!waitForConfirmation) {
+    // Simulation already confirmed the tx will succeed — broadcast in the
+    // background and return the receipt immediately.
+    broadcastOpenTransaction(broadcastArgs).then(
+      ({ txHash }) => {
+        if (txHash) console.log(`[session] channel ${payload.channelId} open tx: ${txHash}`)
+      },
+      (error) => {
+        console.error(`[session] background broadcast failed for channel ${payload.channelId}:`, error)
+      },
+    )
   }
-
-  if (waitForConfirmation) {
-    const { txHash } = await broadcastOpenTransaction(broadcastArgs)
-    return createSessionReceipt({
-      challengeId: challenge.id,
-      channelId: payload.channelId,
-      acceptedCumulative: updated.highestVoucherAmount,
-      spent: updated.spent,
-      units: updated.units,
-      txHash,
-    })
-  }
-
-  // Simulation already confirmed the tx will succeed — broadcast in the
-  // background and return the receipt immediately.
-  broadcastOpenTransaction(broadcastArgs).then(
-    ({ txHash }) => {
-      if (txHash) console.log(`[session] channel ${payload.channelId} open tx: ${txHash}`)
-    },
-    (error) => {
-      console.error(`[session] background broadcast failed for channel ${payload.channelId}:`, error)
-    },
-  )
 
   return createSessionReceipt({
     challengeId: challenge.id,
@@ -656,6 +659,7 @@ async function handleOpen(
     acceptedCumulative: updated.highestVoucherAmount,
     spent: updated.spent,
     units: updated.units,
+    txHash,
   })
 }
 

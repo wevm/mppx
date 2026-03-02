@@ -8,6 +8,7 @@ import {
 import {
   getTransactionReceipt,
   sendRawTransaction,
+  sendRawTransactionSync,
   signTransaction,
 } from 'viem/actions'
 import { tempo as tempo_chain } from 'viem/chains'
@@ -49,6 +50,7 @@ export function charge<const parameters extends charge.Parameters>(
     description,
     externalId,
     memo,
+    waitForConfirmation = true,
   } = parameters
 
   const { recipient, feePayer } = Account.resolve(parameters)
@@ -252,40 +254,44 @@ export function charge<const parameters extends charge.Parameters>(
             return serializedTransaction
           })()
 
-          // Simulate via eth_estimateGas to catch reverts (e.g. insufficient
-          // balance) before broadcasting.
-          await (async () => {
-            const from = transaction.from as `0x${string}`
-            const simCalls = calls.map(
-              (c: { to?: string; value?: bigint; data?: string }) => ({
-                to: c.to,
-                value: c.value ? `0x${c.value.toString(16)}` : '0x0',
-                input: c.data ?? '0x',
-              }),
-            )
-            await client.request({
-              method: 'eth_estimateGas' as never,
-              params: [
-                {
-                  from,
-                  chainId: `0x${transaction.chainId.toString(16)}`,
-                  nonce: `0x${(transaction.nonce ?? 0n).toString(16)}`,
-                  gas: '0x2dc6c0', // 3M cap (same as client-side)
-                  maxFeePerGas: `0x${(transaction.maxFeePerGas ?? 0n).toString(16)}`,
-                  maxPriorityFeePerGas: `0x${(transaction.maxPriorityFeePerGas ?? 0n).toString(16)}`,
-                  feeToken: transaction.feeToken,
-                  nonceKey: `0x${(transaction.nonceKey ?? 0n).toString(16)}`,
-                  calls: simCalls,
-                  ...(transaction.validBefore ? { validBefore: `0x${transaction.validBefore.toString(16)}` } : {}),
-                },
-              ] as never,
+          if (waitForConfirmation) {
+            const receipt = await sendRawTransactionSync(client, {
+              serializedTransaction: serializedTransaction_final,
             })
-          })()
+            return receiptToResult(receipt)
+          }
+
+          // Simulate via eth_estimateGas to catch reverts (e.g. insufficient
+          // balance) before broadcasting without confirmation.
+          const from = transaction.from as `0x${string}`
+          const simCalls = calls.map(
+            (c: { to?: string; value?: bigint; data?: string }) => ({
+              to: c.to,
+              value: c.value ? `0x${c.value.toString(16)}` : '0x0',
+              input: c.data ?? '0x',
+            }),
+          )
+          await client.request({
+            method: 'eth_estimateGas' as never,
+            params: [
+              {
+                from,
+                chainId: `0x${transaction.chainId.toString(16)}`,
+                nonce: `0x${(transaction.nonce ?? 0n).toString(16)}`,
+                gas: '0x2dc6c0', // 3M cap
+                maxFeePerGas: `0x${(transaction.maxFeePerGas ?? 0n).toString(16)}`,
+                maxPriorityFeePerGas: `0x${(transaction.maxPriorityFeePerGas ?? 0n).toString(16)}`,
+                feeToken: transaction.feeToken,
+                nonceKey: `0x${(transaction.nonceKey ?? 0n).toString(16)}`,
+                calls: simCalls,
+                ...(transaction.validBefore ? { validBefore: `0x${transaction.validBefore.toString(16)}` } : {}),
+              },
+            ] as never,
+          })
 
           const hash = await sendRawTransaction(client, {
             serializedTransaction: serializedTransaction_final,
           })
-
           return paymentResult(hash)
         }
 
@@ -302,6 +308,8 @@ export declare namespace charge {
   type Parameters = {
     /** Testnet mode. */
     testnet?: boolean | undefined
+    /** Whether to wait for the charge transaction to confirm on-chain before responding. When `false`, the transaction is simulated and broadcast without waiting for confirmation. @default true */
+    waitForConfirmation?: boolean | undefined
   } & Client.getResolver.Parameters &
     Account.resolve.Parameters &
     Defaults
