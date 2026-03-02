@@ -378,7 +378,7 @@ describe('on-chain', () => {
   })
 
   describe('validateAndSimulateOpen', () => {
-    test('returns payer and decoded open args', async () => {
+    test('returns derived on-chain channel state', async () => {
       const salt = nextSalt()
       const deposit = 10_000_000n
 
@@ -391,7 +391,7 @@ describe('on-chain', () => {
         salt,
       })
 
-      const result = await validateAndSimulateOpen({
+      const onChain = await validateAndSimulateOpen({
         client,
         serializedTransaction,
         escrowContract,
@@ -399,10 +399,12 @@ describe('on-chain', () => {
         currency,
       })
 
-      expect(result.payer).toBe(payer.address)
-      expect(result.openArgs.payee).toBe(recipient)
-      expect(result.openArgs.token).toBe(currency)
-      expect(result.openArgs.deposit).toBe(deposit)
+      expect(onChain.payer).toBe(payer.address)
+      expect(onChain.payee).toBe(recipient)
+      expect(onChain.token).toBe(currency)
+      expect(onChain.deposit).toBe(deposit)
+      expect(onChain.settled).toBe(0n)
+      expect(onChain.finalized).toBe(false)
     })
 
     test('rejects payee mismatch', async () => {

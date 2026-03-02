@@ -544,7 +544,7 @@ async function handleOpen(
     onChain = result.onChain
     txHash = result.txHash
   } else {
-    const { payer, openArgs } = await validateAndSimulateOpen({
+    onChain = await validateAndSimulateOpen({
       client,
       serializedTransaction: payload.transaction,
       escrowContract: methodDetails.escrowContract,
@@ -552,16 +552,17 @@ async function handleOpen(
       currency,
       feePayer,
     })
-    onChain = {
-      payer,
-      payee: openArgs.payee,
-      token: openArgs.token,
-      authorizedSigner: openArgs.authorizedSigner,
-      deposit: openArgs.deposit,
-      settled: 0n,
-      closeRequestedAt: 0n,
-      finalized: false,
-    } as OnChainChannel
+    // Simulation confirmed the tx will succeed — start the broadcast
+    // immediately while we verify the voucher and update the store.
+    broadcastOpenTransaction({
+      client,
+      serializedTransaction: payload.transaction,
+      escrowContract: methodDetails.escrowContract,
+      channelId: payload.channelId,
+      recipient,
+      currency,
+      feePayer,
+    }).catch(() => {})
   }
 
   validateOnChainChannel(onChain, recipient, currency, amount)
@@ -635,27 +636,6 @@ async function handleOpen(
   })
 
   if (!updated) throw new VerificationFailedError({ reason: 'failed to create channel' })
-
-  if (!waitForConfirmation) {
-    // Simulation already confirmed the tx will succeed — broadcast in the
-    // background and return the receipt immediately.
-    broadcastOpenTransaction({
-      client,
-      serializedTransaction: payload.transaction,
-      escrowContract: methodDetails.escrowContract,
-      channelId: payload.channelId,
-      recipient,
-      currency,
-      feePayer,
-    }).then(
-      ({ txHash }) => {
-        if (txHash) console.log(`[session] channel ${payload.channelId} open tx: ${txHash}`)
-      },
-      (error) => {
-        console.error(`[session] background broadcast failed for channel ${payload.channelId}:`, error)
-      },
-    )
-  }
 
   return createSessionReceipt({
     challengeId: challenge.id,

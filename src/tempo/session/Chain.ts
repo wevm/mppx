@@ -326,27 +326,12 @@ export async function broadcastOpenTransaction(parameters: {
 }
 
 /**
- * Result of validating and simulating an open transaction.
- * Contains the decoded call arguments needed to derive expected on-chain
- * state without waiting for broadcast confirmation.
- */
-export type ValidatedOpen = {
-  payer: Address
-  openArgs: {
-    payee: Address
-    token: Address
-    deposit: bigint
-    authorizedSigner: Address
-  }
-}
-
-/**
  * Validate an open transaction and simulate it via `eth_estimateGas` to
  * catch reverts (e.g. insufficient balance) before committing to proxy
  * the upstream request.
  *
- * Returns the decoded open call arguments so the caller can derive the
- * expected on-chain channel state without waiting for block confirmation.
+ * Returns the expected on-chain channel state derived from the decoded
+ * transaction args, without waiting for block confirmation.
  */
 export async function validateAndSimulateOpen(parameters: {
   client: Client
@@ -355,7 +340,7 @@ export async function validateAndSimulateOpen(parameters: {
   recipient: Address
   currency: Address
   feePayer?: Account | undefined
-}): Promise<ValidatedOpen> {
+}): Promise<OnChainChannel> {
   const { client } = parameters
   const { transaction, calls, openArgs } = validateOpenCalls(parameters)
 
@@ -387,7 +372,16 @@ export async function validateAndSimulateOpen(parameters: {
     ] as never,
   })
 
-  return { payer: from, openArgs }
+  return {
+    payer: from,
+    payee: openArgs.payee,
+    token: openArgs.token,
+    authorizedSigner: openArgs.authorizedSigner,
+    deposit: openArgs.deposit,
+    settled: 0n,
+    closeRequestedAt: 0n,
+    finalized: false,
+  } as OnChainChannel
 }
 
 export async function broadcastTopUpTransaction(parameters: {

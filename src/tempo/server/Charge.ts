@@ -128,7 +128,9 @@ export function charge<const parameters extends charge.Parameters>(
       switch (payload.type) {
         case 'hash': {
           const hash = payload.hash as `0x${string}`
-          const receipt = await getTransactionReceipt(client, { hash })
+          const receipt = await getTransactionReceipt(client, {
+            hash,
+          })
 
           if (memo) {
             const memoLogs = parseEventLogs({
