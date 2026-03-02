@@ -81,7 +81,7 @@ describe('on-chain', () => {
     escrowContract = await deployEscrow()
     await fundAccount({ address: payer.address, token: Addresses.pathUsd })
     await fundAccount({ address: payer.address, token: currency })
-    await fundAccount({ address: accounts[0].address, token: Addresses.pathUsd })
+    await fundAccount({ address: accounts[3].address, token: Addresses.pathUsd })
   })
 
   function nextSalt(): Hex {
@@ -334,7 +334,7 @@ describe('on-chain', () => {
         channelId,
         recipient,
         currency,
-        feePayer: accounts[0],
+        feePayer: accounts[3],
       })
 
       expect(result.txHash).toBeDefined()
