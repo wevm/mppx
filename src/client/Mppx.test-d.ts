@@ -2,6 +2,8 @@ import type { Account } from 'viem'
 import { describe, expectTypeOf, test } from 'vitest'
 import * as Method from '../Method.js'
 import { charge } from '../tempo/client/Charge.js'
+import { tempo } from '../tempo/client/Methods.js'
+import type * as Swap from '../tempo/internal/swap.js'
 import * as Methods from '../tempo/Methods.js'
 import * as z from '../zod.js'
 import * as Mppx from './Mppx.js'
@@ -86,5 +88,31 @@ describe('Mppx with context', () => {
 
     expectTypeOf(mppx.createCredential).toBeFunction()
     expectTypeOf(mppx.createCredential).returns.toMatchTypeOf<Promise<string>>()
+  })
+})
+
+describe('fetch context', () => {
+  test('context has typed account and autoSwap for tempo charge', () => {
+    const mppx = Mppx.create({ methods: [charge()] })
+
+    type FetchInit = NonNullable<Parameters<typeof mppx.fetch>[1]>
+    type Context = NonNullable<FetchInit['context']>
+
+    expectTypeOf<Context>().toHaveProperty('account')
+    expectTypeOf<Context>().toHaveProperty('autoSwap')
+
+    expectTypeOf<Context['autoSwap']>().toEqualTypeOf<Swap.resolveAutoSwap.Value | undefined>()
+  })
+
+  test('context has typed account and autoSwap for tempo()', () => {
+    const mppx = Mppx.create({ methods: [tempo()] })
+
+    type FetchInit = NonNullable<Parameters<typeof mppx.fetch>[1]>
+    type Context = NonNullable<FetchInit['context']>
+
+    // Context is a union of charge and session contexts.
+    // `account` exists on both; `autoSwap` only on charge.
+    expectTypeOf<Context>().toHaveProperty('account')
+    expectTypeOf<Extract<Context, { autoSwap?: unknown }>>().toHaveProperty('autoSwap')
   })
 })

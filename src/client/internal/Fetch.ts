@@ -64,9 +64,9 @@ export function from<const methods extends readonly Method.AnyClient[]>(
 
 /** Union of all context types from all methods that have context schemas. */
 type AnyContextFor<methods extends readonly Method.AnyClient[]> = {
-  [K in keyof methods]: methods[K] extends Method.Client<any, infer contextSchema>
-    ? contextSchema extends z.ZodMiniType
-      ? z.input<contextSchema>
+  [K in keyof methods]: NonNullable<methods[K]['context']> extends infer ctx
+    ? ctx extends z.ZodMiniType
+      ? z.input<ctx>
       : undefined
     : undefined
 }[number]

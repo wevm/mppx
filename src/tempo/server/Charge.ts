@@ -1,10 +1,4 @@
-import {
-  decodeFunctionData,
-  isAddressEqual,
-  parseEventLogs,
-  type TransactionReceipt,
-  toFunctionSelector,
-} from 'viem'
+import { decodeFunctionData, isAddressEqual, parseEventLogs, type TransactionReceipt } from 'viem'
 import {
   getTransactionReceipt,
   sendRawTransaction,
@@ -19,17 +13,11 @@ import * as Method from '../../Method.js'
 import * as Client from '../../viem/Client.js'
 import * as Account from '../internal/account.js'
 import * as defaults from '../internal/defaults.js'
+import * as FeePayer from '../internal/fee-payer.js'
+import * as Selectors from '../internal/selectors.js'
 import { simulateTransaction } from '../internal/simulate.js'
 import type * as types from '../internal/types.js'
 import * as Methods from '../Methods.js'
-
-const transferSelector = /*#__PURE__*/ toFunctionSelector(
-  'function transfer(address to, uint256 amount)',
-)
-
-const transferWithMemoSelector = /*#__PURE__*/ toFunctionSelector(
-  'function transferWithMemo(address to, uint256 amount, bytes32 memo)',
-)
 
 /**
  * Creates a Tempo charge method intent for usage on the server.
@@ -202,7 +190,7 @@ export function charge<const parameters extends charge.Parameters>(
             const selector = call.data.slice(0, 10)
 
             if (memo) {
-              if (selector !== transferWithMemoSelector) return false
+              if (selector !== Selectors.transferWithMemo) return false
               try {
                 const { args } = decodeFunctionData({ abi: Abis.tip20, data: call.data })
                 const [to, amount_, memo_] = args as [`0x${string}`, bigint, `0x${string}`]
@@ -216,7 +204,7 @@ export function charge<const parameters extends charge.Parameters>(
               }
             }
 
-            if (selector === transferSelector) {
+            if (selector === Selectors.transfer) {
               try {
                 const { args } = decodeFunctionData({ abi: Abis.tip20, data: call.data })
                 const [to, amount_] = args as [`0x${string}`, bigint]
@@ -226,7 +214,7 @@ export function charge<const parameters extends charge.Parameters>(
               }
             }
 
-            if (selector === transferWithMemoSelector) {
+            if (selector === Selectors.transferWithMemo) {
               try {
                 const { args } = decodeFunctionData({ abi: Abis.tip20, data: call.data })
                 const [to, amount_] = args as [`0x${string}`, bigint, `0x${string}`]
@@ -245,6 +233,9 @@ export function charge<const parameters extends charge.Parameters>(
               currency,
               recipient,
             })
+
+          if (feePayer && methodDetails?.feePayer !== false)
+            FeePayer.validateCalls(calls, { amount, currency, recipient })
 
           const serializedTransaction_final = await (async () => {
             if (feePayer && methodDetails?.feePayer !== false) {
