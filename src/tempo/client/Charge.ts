@@ -9,8 +9,8 @@ import * as Account from '../../viem/Account.js'
 import * as Client from '../../viem/Client.js'
 import * as z from '../../zod.js'
 import * as Attribution from '../Attribution.js'
-import * as defaults from '../internal/defaults.js'
 import * as AutoSwap from '../internal/auto-swap.js'
+import * as defaults from '../internal/defaults.js'
 import * as Methods from '../Methods.js'
 
 /**
