@@ -59,7 +59,7 @@ export function from<const methods extends readonly Method.AnyClient[]>(
     return fetch(input, {
       ...fetchInit,
       headers: {
-        ...(fetchInit.headers as Record<string, string> | undefined),
+        ...normalizeHeaders(fetchInit.headers),
         Authorization: credential,
       },
     })
@@ -127,7 +127,7 @@ export declare namespace from {
 export function polyfill<const methods extends readonly Method.AnyClient[]>(
   config: polyfill.Config<methods>,
 ): void {
-  originalFetch = globalThis.fetch
+  if (!originalFetch) originalFetch = globalThis.fetch
   globalThis.fetch = from(config) as typeof globalThis.fetch
 }
 
@@ -155,6 +155,14 @@ export function restore(): void {
     globalThis.fetch = originalFetch
     originalFetch = undefined
   }
+}
+
+/** @internal Normalizes headers to a plain object for spreading. */
+function normalizeHeaders(headers: unknown): Record<string, string> {
+  if (!headers) return {}
+  if (headers instanceof Headers) return Object.fromEntries(headers.entries())
+  if (Array.isArray(headers)) return Object.fromEntries(headers)
+  return headers as Record<string, string>
 }
 
 /** @internal */
