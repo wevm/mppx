@@ -1,5 +1,12 @@
 # mppx
 
+## 0.3.12
+
+### Patch Changes
+
+- c28944e: Added `autoSwap` flag to `tempo` method. When enabled, the client automatically swaps from supported currencies via the DEX if the payer lacks the target token.
+- 9c23cb7: Fixed fetch polyfill to pass `init` through unmodified for non-402 responses. Previously, every request eagerly destructured `init` to strip the `context` property, creating a new object that could break libraries relying on object identity (e.g. WebSocket upgrade handshakes).
+
 ## 0.3.11
 
 ### Patch Changes
