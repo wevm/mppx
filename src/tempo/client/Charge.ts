@@ -1,4 +1,5 @@
 import type * as Hex from 'ox/Hex'
+import type { Address } from 'viem'
 import { prepareTransactionRequest, signTransaction } from 'viem/actions'
 import { tempo as tempo_chain } from 'viem/chains'
 import { Actions } from 'viem/tempo'
@@ -9,6 +10,7 @@ import * as Client from '../../viem/Client.js'
 import * as z from '../../zod.js'
 import * as Attribution from '../Attribution.js'
 import * as defaults from '../internal/defaults.js'
+import * as Swap from '../internal/swap.js'
 import * as Methods from '../Methods.js'
 
 /**
@@ -36,6 +38,7 @@ export function charge(parameters: charge.Parameters = {}) {
   return Method.toClient(Methods.charge, {
     context: z.object({
       account: z.optional(z.custom<Account.getResolver.Parameters['account']>()),
+      autoSwap: z.optional(z.custom<charge.AutoSwap>()),
     }),
 
     async createCredential({ challenge, context }) {
@@ -44,22 +47,41 @@ export function charge(parameters: charge.Parameters = {}) {
       const account = getAccount(client, context)
 
       const { request } = challenge
-      const { amount, currency, recipient, methodDetails } = request
+      const { amount, methodDetails } = request
+      const currency = request.currency as Address
+      const recipient = request.recipient as Address
 
       const memo = methodDetails?.memo
         ? (methodDetails.memo as Hex.Hex)
         : Attribution.encode({ serverId: challenge.realm, clientId })
 
+      const transferCall = Actions.token.transfer.call({
+        amount: BigInt(amount),
+        memo,
+        to: recipient,
+        token: currency,
+      })
+
+      const autoSwap = Swap.resolveAutoSwap(
+        context?.autoSwap ?? parameters.autoSwap,
+        Swap.defaultCurrencies,
+      )
+
+      const swapCalls = autoSwap
+        ? await Swap.findCalls(client, {
+            account: account.address,
+            amountOut: BigInt(amount),
+            tokenOut: currency,
+            tokenIn: autoSwap.tokenIn,
+            slippage: autoSwap.slippage,
+          })
+        : undefined
+
+      const calls = [...(swapCalls ?? []), transferCall]
+
       const prepared = await prepareTransactionRequest(client, {
         account,
-        calls: [
-          Actions.token.transfer.call({
-            amount: BigInt(amount),
-            memo,
-            to: recipient as Hex.Hex,
-            token: currency as Hex.Hex,
-          }),
-        ],
+        calls,
         ...(methodDetails?.feePayer && { feePayer: true }),
         nonceKey: 'expiring',
       } as never)
@@ -77,7 +99,16 @@ export function charge(parameters: charge.Parameters = {}) {
 }
 
 export declare namespace charge {
+  type AutoSwap = Swap.resolveAutoSwap.Value
+
   type Parameters = {
+    /**
+     * Automatically swap from a fallback currency (pathUsd, USDC.e) via the
+     * Tempo DEX when the user lacks sufficient balance of the target currency.
+     *
+     * @default false
+     */
+    autoSwap?: AutoSwap | undefined
     /** Client identifier used to derive the client fingerprint in attribution memos. */
     clientId?: string | undefined
   } & Account.getResolver.Parameters &
