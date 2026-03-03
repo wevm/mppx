@@ -610,6 +610,34 @@ describe('Fetch.from: 402 retry headers normalization', () => {
     expect(retryHeaders.Accept).toBe('application/json')
     expect(retryHeaders.Authorization).toBe('credential')
   })
+
+  test('replaces existing authorization header case-insensitively', async () => {
+    let callCount = 0
+    const calls: { init: RequestInit | undefined }[] = []
+    const mockFetch: typeof globalThis.fetch = async (_input, init) => {
+      calls.push({ init })
+      callCount++
+      if (callCount === 1) return make402()
+      return new Response('OK', { status: 200 })
+    }
+
+    const fetch = Fetch.from({
+      fetch: mockFetch,
+      methods: [noopMethod],
+    })
+
+    await fetch('https://example.com/api', {
+      headers: { authorization: 'Bearer stale-token', 'X-Custom': 'value' },
+    })
+
+    const retryHeaders = (calls[1]!.init as Record<string, unknown>).headers as Record<
+      string,
+      string
+    >
+    expect(retryHeaders.authorization).toBeUndefined()
+    expect(retryHeaders.Authorization).toBe('credential')
+    expect(retryHeaders['X-Custom']).toBe('value')
+  })
 })
 
 describe('Fetch.from: input passthrough', () => {
@@ -721,5 +749,21 @@ describe('Fetch.polyfill / restore', () => {
 
     Fetch.restore()
     expect(globalThis.fetch).toBe(originalFetch)
+  })
+
+  test('restore is a no-op when fetch was replaced externally after polyfill', () => {
+    const originalFetch = globalThis.fetch
+    const externalFetch = vi.fn(
+      async (_input: RequestInfo | URL, _init?: RequestInit) =>
+        new Response('external', { status: 200 }),
+    ) as unknown as typeof globalThis.fetch
+
+    Fetch.polyfill({ methods: [noopMethod] })
+    globalThis.fetch = externalFetch
+
+    Fetch.restore()
+    expect(globalThis.fetch).toBe(externalFetch)
+
+    globalThis.fetch = originalFetch
   })
 })
