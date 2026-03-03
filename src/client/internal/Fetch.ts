@@ -31,10 +31,14 @@ export function from<const methods extends readonly Method.AnyClient[]>(
   const { fetch = globalThis.fetch, methods, onChallenge } = config
 
   return async (input, init) => {
-    const { context, ...fetchInit } = init ?? {}
-    const response = await fetch(input, fetchInit)
+    // Pass init through untouched to preserve object identity for non-402 responses.
+    const response = await fetch(input, init)
 
     if (response.status !== 402) return response
+
+    // Only extract context for payment handling after confirming 402.
+    const context = (init as Record<string, unknown> | undefined)?.context
+    const { context: _, ...fetchInit } = (init ?? {}) as Record<string, unknown>
 
     const challenge = Challenge.fromResponse(response)
 
@@ -55,7 +59,7 @@ export function from<const methods extends readonly Method.AnyClient[]>(
     return fetch(input, {
       ...fetchInit,
       headers: {
-        ...fetchInit.headers,
+        ...(fetchInit.headers as Record<string, string> | undefined),
         Authorization: credential,
       },
     })
