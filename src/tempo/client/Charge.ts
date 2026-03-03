@@ -10,7 +10,7 @@ import * as Client from '../../viem/Client.js'
 import * as z from '../../zod.js'
 import * as Attribution from '../Attribution.js'
 import * as defaults from '../internal/defaults.js'
-import * as Swap from '../internal/swap.js'
+import * as AutoSwap from '../internal/auto-swap.js'
 import * as Methods from '../Methods.js'
 
 /**
@@ -62,13 +62,13 @@ export function charge(parameters: charge.Parameters = {}) {
         token: currency,
       })
 
-      const autoSwap = Swap.resolveAutoSwap(
+      const autoSwap = AutoSwap.resolve(
         context?.autoSwap ?? parameters.autoSwap,
-        Swap.defaultCurrencies,
+        AutoSwap.defaultCurrencies,
       )
 
       const swapCalls = autoSwap
-        ? await Swap.findCalls(client, {
+        ? await AutoSwap.findCalls(client, {
             account: account.address,
             amountOut: BigInt(amount),
             tokenOut: currency,
@@ -99,7 +99,7 @@ export function charge(parameters: charge.Parameters = {}) {
 }
 
 export declare namespace charge {
-  type AutoSwap = Swap.resolveAutoSwap.Value
+  type AutoSwap = AutoSwap.resolve.Value
 
   type Parameters = {
     /**

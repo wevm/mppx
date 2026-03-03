@@ -1,6 +1,6 @@
 import type { Address } from 'viem'
 import { describe, expect, test } from 'vitest'
-import { defaultCurrencies, InsufficientFundsError, resolveAutoSwap } from './swap.js'
+import { defaultCurrencies, InsufficientFundsError, resolve } from './auto-swap.js'
 
 describe('defaultCurrencies', () => {
   test('default', () => {
@@ -13,19 +13,19 @@ describe('defaultCurrencies', () => {
   })
 })
 
-describe('resolveAutoSwap', () => {
+describe('resolve', () => {
   const defaults = defaultCurrencies
 
   test('returns false for undefined', () => {
-    expect(resolveAutoSwap(undefined, defaults)).toMatchInlineSnapshot(`false`)
+    expect(resolve(undefined, defaults)).toMatchInlineSnapshot(`false`)
   })
 
   test('returns false for false', () => {
-    expect(resolveAutoSwap(false, defaults)).toMatchInlineSnapshot(`false`)
+    expect(resolve(false, defaults)).toMatchInlineSnapshot(`false`)
   })
 
   test('true resolves to defaults with 1% slippage', () => {
-    expect(resolveAutoSwap(true, defaults)).toMatchInlineSnapshot(`
+    expect(resolve(true, defaults)).toMatchInlineSnapshot(`
       {
         "slippage": 1,
         "tokenIn": [
@@ -37,7 +37,7 @@ describe('resolveAutoSwap', () => {
   })
 
   test('empty options resolves to defaults with 1% slippage', () => {
-    expect(resolveAutoSwap({}, defaults)).toMatchInlineSnapshot(`
+    expect(resolve({}, defaults)).toMatchInlineSnapshot(`
       {
         "slippage": 1,
         "tokenIn": [
@@ -49,7 +49,7 @@ describe('resolveAutoSwap', () => {
   })
 
   test('custom slippage', () => {
-    expect(resolveAutoSwap({ slippage: 5 }, defaults)).toMatchInlineSnapshot(`
+    expect(resolve({ slippage: 5 }, defaults)).toMatchInlineSnapshot(`
       {
         "slippage": 5,
         "tokenIn": [
@@ -62,7 +62,7 @@ describe('resolveAutoSwap', () => {
 
   test('custom tokenIn prepends to defaults', () => {
     const custom = '0x0000000000000000000000000000000000000099' as Address
-    expect(resolveAutoSwap({ tokenIn: [custom] }, defaults)).toMatchInlineSnapshot(`
+    expect(resolve({ tokenIn: [custom] }, defaults)).toMatchInlineSnapshot(`
       {
         "slippage": 1,
         "tokenIn": [
@@ -75,7 +75,7 @@ describe('resolveAutoSwap', () => {
   })
 
   test('custom tokenIn deduplicates against defaults', () => {
-    expect(resolveAutoSwap({ tokenIn: [defaults[0]!] }, defaults)).toMatchInlineSnapshot(`
+    expect(resolve({ tokenIn: [defaults[0]!] }, defaults)).toMatchInlineSnapshot(`
       {
         "slippage": 1,
         "tokenIn": [
@@ -88,7 +88,7 @@ describe('resolveAutoSwap', () => {
 
   test('custom tokenIn + custom slippage', () => {
     const custom = '0x0000000000000000000000000000000000000099' as Address
-    expect(resolveAutoSwap({ tokenIn: [custom], slippage: 3 }, defaults)).toMatchInlineSnapshot(`
+    expect(resolve({ tokenIn: [custom], slippage: 3 }, defaults)).toMatchInlineSnapshot(`
       {
         "slippage": 3,
         "tokenIn": [

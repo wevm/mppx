@@ -99,10 +99,10 @@ export declare namespace findCalls {
 }
 
 /** Resolves an auto-swap configuration value into concrete currencies and slippage. */
-export function resolveAutoSwap(
-  value: resolveAutoSwap.Value | undefined,
+export function resolve(
+  value: resolve.Value | undefined,
   defaultCurrencies: readonly Address[],
-): resolveAutoSwap.Resolved | false {
+): resolve.Resolved | false {
   if (!value) return false
   if (value === true) return { tokenIn: defaultCurrencies, slippage: 1 }
   const tokenIn = value.tokenIn
@@ -117,7 +117,7 @@ export function resolveAutoSwap(
   }
 }
 
-export declare namespace resolveAutoSwap {
+export declare namespace resolve {
   type Options = {
     /** Fallback tokens to try swapping from, in priority order. */
     tokenIn?: Address[] | undefined
