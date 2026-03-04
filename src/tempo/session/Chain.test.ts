@@ -347,6 +347,38 @@ describe('on-chain', () => {
       expect(result.txHash).toBeUndefined()
       expect(result.onChain.deposit).toBe(deposit)
     })
+
+    test('waitForConfirmation: false returns derived on-chain state', async () => {
+      const salt = nextSalt()
+      const deposit = 10_000_000n
+
+      const { channelId, serializedTransaction } = await signOpenChannel({
+        escrow: escrowContract,
+        payer,
+        payee: recipient,
+        token: currency,
+        deposit,
+        salt,
+      })
+
+      const result = await broadcastOpenTransaction({
+        client,
+        serializedTransaction,
+        escrowContract,
+        channelId,
+        recipient,
+        currency,
+        waitForConfirmation: false,
+      })
+
+      expect(result.txHash).toBeDefined()
+      expect(result.onChain.payer.toLowerCase()).toBe(payer.address.toLowerCase())
+      expect(result.onChain.payee.toLowerCase()).toBe(recipient.toLowerCase())
+      expect(result.onChain.token.toLowerCase()).toBe(currency.toLowerCase())
+      expect(result.onChain.deposit).toBe(deposit)
+      expect(result.onChain.settled).toBe(0n)
+      expect(result.onChain.finalized).toBe(false)
+    })
   })
 
   describe('broadcastTopUpTransaction', () => {
@@ -381,6 +413,7 @@ describe('on-chain', () => {
           serializedTransaction,
           escrowContract,
           channelId: wrongChannelId,
+          currency: asset,
           declaredDeposit: topUpAmount,
           previousDeposit: deposit,
         }),
@@ -415,6 +448,7 @@ describe('on-chain', () => {
           serializedTransaction,
           escrowContract,
           channelId,
+          currency: asset,
           declaredDeposit: 9_999_999n,
           previousDeposit: deposit,
         }),
@@ -448,6 +482,7 @@ describe('on-chain', () => {
         serializedTransaction,
         escrowContract,
         channelId,
+        currency: asset,
         declaredDeposit: topUpAmount,
         previousDeposit: deposit,
       })
@@ -502,6 +537,7 @@ describe('on-chain', () => {
           serializedTransaction: tampered,
           escrowContract,
           channelId,
+          currency: asset,
           declaredDeposit: topUpAmount,
           previousDeposit: deposit,
           feePayer: accounts[0],

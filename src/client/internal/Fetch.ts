@@ -2,6 +2,15 @@ import * as Challenge from '../../Challenge.js'
 import type * as Method from '../../Method.js'
 import type * as z from '../../zod.js'
 
+// We tag wrappers with a global symbol so we can recognize wrappers created by mppx,
+// even across multiple module instances/bundles. This lets restore() avoid clobbering
+// an unrelated fetch installed by user code or another library.
+const MPPX_FETCH_WRAPPER = Symbol.for('mppx.fetch.wrapper')
+
+type WrappedFetch = typeof globalThis.fetch & {
+  [MPPX_FETCH_WRAPPER]?: typeof globalThis.fetch
+}
+
 let originalFetch: typeof globalThis.fetch | undefined
 
 /**
@@ -29,12 +38,19 @@ export function from<const methods extends readonly Method.AnyClient[]>(
   config: from.Config<methods>,
 ): from.Fetch<methods> {
   const { fetch = globalThis.fetch, methods, onChallenge } = config
+  // Always operate on the true underlying fetch to avoid wrapper-on-wrapper stacking,
+  // which can duplicate retries and make restore semantics fragile.
+  const baseFetch = unwrapFetch(fetch)
 
-  return async (input, init) => {
-    const { context, ...fetchInit } = init ?? {}
-    const response = await fetch(input, fetchInit)
+  const wrappedFetch = async (input: RequestInfo | URL, init?: from.RequestInit<methods>) => {
+    // Pass init through untouched to preserve object identity for non-402 responses.
+    const response = await baseFetch(input, init)
 
     if (response.status !== 402) return response
+
+    // Only extract context for payment handling after confirming 402.
+    const context = (init as Record<string, unknown> | undefined)?.context
+    const { context: _, ...fetchInit } = (init ?? {}) as Record<string, unknown>
 
     const challenge = Challenge.fromResponse(response)
 
@@ -51,22 +67,25 @@ export function from<const methods extends readonly Method.AnyClient[]>(
         })
       : undefined
     const credential = onChallengeCredential ?? (await resolveCredential(challenge, mi, context))
+    validateCredentialHeaderValue(credential)
 
-    return fetch(input, {
+    return baseFetch(input, {
       ...fetchInit,
-      headers: {
-        ...fetchInit.headers,
-        Authorization: credential,
-      },
+      headers: withAuthorizationHeader(fetchInit.headers, credential),
     })
   }
+
+  // Record the wrapped target so future polyfill() / restore() calls can detect origin
+  // and safely unwrap only mppx-installed wrappers.
+  ;(wrappedFetch as WrappedFetch)[MPPX_FETCH_WRAPPER] = baseFetch
+  return wrappedFetch as from.Fetch<methods>
 }
 
 /** Union of all context types from all methods that have context schemas. */
 type AnyContextFor<methods extends readonly Method.AnyClient[]> = {
-  [K in keyof methods]: methods[K] extends Method.Client<any, infer contextSchema>
-    ? contextSchema extends z.ZodMiniType
-      ? z.input<contextSchema>
+  [K in keyof methods]: NonNullable<methods[K]['context']> extends infer ctx
+    ? ctx extends z.ZodMiniType
+      ? z.input<ctx>
       : undefined
     : undefined
 }[number]
@@ -123,8 +142,14 @@ export declare namespace from {
 export function polyfill<const methods extends readonly Method.AnyClient[]>(
   config: polyfill.Config<methods>,
 ): void {
-  originalFetch = globalThis.fetch
-  globalThis.fetch = from(config) as typeof globalThis.fetch
+  // Defensive guard for runtimes/tests where fetch might be non-configurable.
+  const descriptor = Object.getOwnPropertyDescriptor(globalThis, 'fetch')
+  if (!descriptor || (!descriptor.writable && !descriptor.set)) {
+    throw new Error('globalThis.fetch is not writable')
+  }
+
+  if (!originalFetch) originalFetch = globalThis.fetch
+  globalThis.fetch = from({ ...config, fetch: globalThis.fetch }) as typeof globalThis.fetch
 }
 
 export declare namespace polyfill {
@@ -147,9 +172,59 @@ export declare namespace polyfill {
  * ```
  */
 export function restore(): void {
-  if (originalFetch) {
+  // Only restore if the current fetch is still an mppx wrapper.
+  // If app code replaced fetch after polyfill(), we must not overwrite it.
+  if (originalFetch && isWrappedFetch(globalThis.fetch)) {
     globalThis.fetch = originalFetch
     originalFetch = undefined
+  }
+}
+
+/** @internal Normalizes headers to a plain object for spreading. */
+function normalizeHeaders(headers: unknown): Record<string, string> {
+  if (!headers) return {}
+  if (headers instanceof Headers) {
+    const result: Record<string, string> = {}
+    headers.forEach((value, key) => {
+      result[key] = value
+    })
+    return result
+  }
+  if (Array.isArray(headers)) return Object.fromEntries(headers)
+  return headers as Record<string, string>
+}
+
+/** @internal */
+function withAuthorizationHeader(headers: unknown, credential: string): Record<string, string> {
+  const normalized = normalizeHeaders(headers)
+  // Remove any existing Authorization header regardless of casing to avoid
+  // duplicate/conflicting credentials on retry.
+  for (const key of Object.keys(normalized)) {
+    if (key.toLowerCase() === 'authorization') delete normalized[key]
+  }
+  normalized.Authorization = credential
+  return normalized
+}
+
+/** @internal */
+function unwrapFetch(fetch: typeof globalThis.fetch): typeof globalThis.fetch {
+  let current = fetch as WrappedFetch
+  while (current[MPPX_FETCH_WRAPPER]) {
+    current = current[MPPX_FETCH_WRAPPER] as WrappedFetch
+  }
+  return current as typeof globalThis.fetch
+}
+
+/** @internal */
+function isWrappedFetch(fetch: typeof globalThis.fetch): fetch is WrappedFetch {
+  return Boolean((fetch as WrappedFetch)[MPPX_FETCH_WRAPPER])
+}
+
+/** @internal */
+function validateCredentialHeaderValue(credential: string): void {
+  if (!credential.trim()) throw new Error('Credential header value must be non-empty')
+  if (credential.includes('\r') || credential.includes('\n')) {
+    throw new Error('Credential header value contains illegal newline characters')
   }
 }
 

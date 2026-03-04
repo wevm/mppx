@@ -3,6 +3,7 @@ import { createServer, port } from './tempo/prool.js'
 
 export default async function () {
   if (nodeEnv !== 'localnet') return
+  if (process.env.VITE_RPC_URL) return
 
   const server = await createServer()
 

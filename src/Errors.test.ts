@@ -10,6 +10,7 @@ import {
   InvalidPayloadError,
   InvalidSignatureError,
   MalformedCredentialError,
+  PaymentActionRequiredError,
   PaymentExpiredError,
   PaymentInsufficientError,
   PaymentMethodUnsupportedError,
@@ -165,27 +166,12 @@ describe('PaymentRequiredError', () => {
     `)
   })
 
-  test('with realm', () => {
+  test('with description', () => {
     expect(
-      errorSnapshot(new PaymentRequiredError({ realm: 'api.example.com' })),
+      errorSnapshot(new PaymentRequiredError({ description: 'API access fee' })),
     ).toMatchInlineSnapshot(`
         {
-          "message": "Payment is required for "api.example.com".",
-          "name": "PaymentRequiredError",
-          "status": 402,
-          "type": "https://paymentauth.org/problems/payment-required",
-        }
-      `)
-  })
-
-  test('with realm and description', () => {
-    expect(
-      errorSnapshot(
-        new PaymentRequiredError({ realm: 'api.example.com', description: 'API access fee' }),
-      ),
-    ).toMatchInlineSnapshot(`
-        {
-          "message": "Payment is required for "api.example.com" (API access fee).",
+          "message": "Payment is required (API access fee).",
           "name": "PaymentRequiredError",
           "status": 402,
           "type": "https://paymentauth.org/problems/payment-required",
@@ -425,6 +411,45 @@ describe('ChannelClosedError', () => {
           "type": "https://paymentauth.org/problems/session/channel-finalized",
         }
       `)
+  })
+})
+
+describe('PaymentActionRequiredError', () => {
+  test('default', () => {
+    expect(errorSnapshot(new PaymentActionRequiredError())).toMatchInlineSnapshot(`
+      {
+        "message": "Payment requires action.",
+        "name": "PaymentActionRequiredError",
+        "status": 402,
+        "type": "https://paymentauth.org/problems/payment-action-required",
+      }
+    `)
+  })
+
+  test('with reason', () => {
+    expect(
+      errorSnapshot(new PaymentActionRequiredError({ reason: 'requires_action' })),
+    ).toMatchInlineSnapshot(`
+        {
+          "message": "Payment requires action: requires_action.",
+          "name": "PaymentActionRequiredError",
+          "status": 402,
+          "type": "https://paymentauth.org/problems/payment-action-required",
+        }
+      `)
+  })
+
+  test('toProblemDetails', () => {
+    const error = new PaymentActionRequiredError({ reason: 'Stripe PaymentIntent requires action' })
+    expect(error.toProblemDetails('ch_123')).toMatchInlineSnapshot(`
+      {
+        "challengeId": "ch_123",
+        "detail": "Payment requires action: Stripe PaymentIntent requires action.",
+        "status": 402,
+        "title": "Payment Action Required",
+        "type": "https://paymentauth.org/problems/payment-action-required",
+      }
+    `)
   })
 })
 

@@ -17,13 +17,12 @@ const variables = {
 /** Fallback values when no environment variable is set. */
 const defaults = {
   realm: 'MPP Payment',
-  secretKey: 'tmp',
-} as const satisfies Record<keyof typeof variables, string>
+} as const satisfies Partial<Record<keyof typeof variables, string>>
 
 /**
  * Resolves a configuration value from environment variables.
  *
- * Checks platform-specific env vars in order, falling back to a default.
+ * Checks platform-specific env vars in order, falling back to a default if one exists.
  *
  * @example
  * ```ts
@@ -31,12 +30,12 @@ const defaults = {
  * Env.get('secretKey') // e.g. value of MPP_SECRET_KEY
  * ```
  */
-export function get(key: keyof typeof variables): string {
+export function get(key: keyof typeof variables): string | undefined {
   for (const name of variables[key]) {
     const value = read(name)
     if (value) return value
   }
-  return defaults[key]
+  return (defaults as Record<string, string | undefined>)[key]
 }
 
 /** Reads a single environment variable, probing available runtime APIs. */

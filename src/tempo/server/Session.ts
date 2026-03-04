@@ -85,12 +85,16 @@ export function session<const parameters extends session.Parameters>(p?: paramet
   const parameters = p as parameters
   const {
     amount,
+    channelStateTtl = 60_000,
     currency = defaults.resolveCurrency(parameters),
     decimals = defaults.decimals,
     store: rawStore = Store.memory(),
     suggestedDeposit,
     unitType,
+    waitForConfirmation = true,
   } = parameters
+
+  const lastOnChainVerified = new Map<Hex, number>()
 
   const store = ChannelStore.fromStore(rawStore)
 
@@ -187,7 +191,9 @@ export function session<const parameters extends session.Parameters>(p?: paramet
             payload,
             methodDetails,
             resolvedFeePayer,
+            waitForConfirmation,
           )
+          lastOnChainVerified.set(payload.channelId, Date.now())
           break
 
         case 'topUp':
@@ -199,6 +205,7 @@ export function session<const parameters extends session.Parameters>(p?: paramet
             methodDetails,
             resolvedFeePayer,
           )
+          lastOnChainVerified.set(payload.channelId, Date.now())
           break
 
         case 'voucher':
@@ -209,6 +216,8 @@ export function session<const parameters extends session.Parameters>(p?: paramet
             challenge,
             payload,
             methodDetails,
+            channelStateTtl,
+            lastOnChainVerified,
           )
           break
 
@@ -238,34 +247,30 @@ export function session<const parameters extends session.Parameters>(p?: paramet
     // invoking the user's route handler. When it returns undefined, the
     // user's handler runs normally and serves content.
     //
-    // Management actions (open, topUp, close) are always gated — they
-    // return 204 regardless of request method.
+    // close and topUp are always gated (204) — they are pure management.
     //
-    // Voucher POSTs are gated only when they have no request body, which
-    // signals a mid-session voucher update (the client is just topping up
-    // the channel balance). Voucher POSTs WITH a body are content requests
-    // (e.g., an API call to a POST endpoint) and fall through to the
-    // user's handler. GET requests with vouchers always fall through so
-    // auto-mode clients (whose fetch wrapper bundles open+voucher into a
-    // single GET retry) receive content as expected.
+    // open and voucher are gated only for bodyless POSTs (management
+    // updates). POSTs with a body are content requests — the client's
+    // original request piggybacked on the credential — so they fall
+    // through to serve content. GETs always fall through so auto-mode
+    // clients (whose fetch wrapper bundles open+voucher into a single
+    // GET retry) receive content as expected.
     respond({ credential, input }) {
       const { payload } = credential as Credential.Credential<SessionCredentialPayload>
 
       if (payload.action === 'close') return new Response(null, { status: 204 })
+      if (payload.action === 'topUp') return new Response(null, { status: 204 })
 
-      const isManagement = payload.action === 'open' || payload.action === 'topUp'
-      if (isManagement && input.method === 'POST') return new Response(null, { status: 204 })
-
-      const isVoucher = payload.action === 'voucher'
-      if (!isVoucher) return undefined
-
-      // Only gate voucher POSTs with no body (mid-session balance updates).
-      // POSTs with a body are content requests that should reach the handler.
-      if (input.method !== 'POST') return undefined
-      const contentLength = input.headers.get('content-length')
-      if (contentLength !== null && contentLength !== '0') return undefined
-      if (input.headers.has('transfer-encoding')) return undefined
-      return new Response(null, { status: 204 })
+      // open and voucher: gate only bodyless POSTs (management updates).
+      // POSTs with a body are content requests — fall through so the
+      // upstream response is returned to the client.
+      if (input.method === 'POST') {
+        const contentLength = input.headers.get('content-length')
+        if (contentLength !== null && contentLength !== '0') return undefined
+        if (input.headers.has('transfer-encoding')) return undefined
+        return new Response(null, { status: 204 })
+      }
+      return undefined
     },
   })
 }
@@ -277,8 +282,22 @@ export declare namespace session {
   >
 
   type Parameters = {
+    /** TTL in milliseconds for cached on-chain channel state. After this duration, the server re-queries on-chain state during voucher handling to detect forced close requests. @default 60_000 */
+    channelStateTtl?: number | undefined
     /** Minimum voucher delta to accept (numeric string, default: "0"). */
     minVoucherDelta?: string | undefined
+    /**
+     * Whether to wait for the open transaction to confirm on-chain before
+     * responding. @default true
+     *
+     * When `false`, the transaction is simulated via `eth_estimateGas` and
+     * broadcast without waiting for inclusion. The receipt will optimistically
+     * report `status: 'success'` based on simulation alone — if the
+     * transaction reverts on-chain after broadcast (e.g. due to a state
+     * change between simulation and inclusion), the receipt will not reflect
+     * the failure.
+     */
+    waitForConfirmation?: boolean | undefined
     /** Store backend for channel state. */
     store?: Store.Store | undefined
     /**
@@ -492,7 +511,12 @@ async function verifyAndAcceptVoucher(parameters: {
 }
 
 /**
- * Handle 'open' action - broadcast open transaction, verify voucher, and create channel.
+ * Handle 'open' action - verify voucher, create channel, and broadcast.
+ *
+ * When `waitForConfirmation` is true (default), the open transaction is
+ * broadcast and confirmed on-chain before responding. When false, the
+ * transaction is validated and simulated via `eth_estimateGas`; the receipt
+ * is returned immediately and the broadcast runs in the background.
  */
 async function handleOpen(
   store: ChannelStore.ChannelStore,
@@ -501,6 +525,7 @@ async function handleOpen(
   payload: SessionCredentialPayload & { action: 'open' },
   methodDetails: SessionMethodDetails,
   feePayer: viem_Account | undefined,
+  waitForConfirmation: boolean,
 ): Promise<SessionReceipt> {
   const voucher = parseVoucherFromPayload(
     payload.channelId,
@@ -520,6 +545,7 @@ async function handleOpen(
     recipient,
     currency,
     feePayer,
+    waitForConfirmation,
   })
 
   validateOnChainChannel(onChain, recipient, currency, amount)
@@ -631,6 +657,7 @@ async function handleTopUp(
     serializedTransaction: payload.transaction,
     escrowContract: methodDetails.escrowContract,
     channelId: payload.channelId,
+    currency: challenge.request.currency as Address,
     declaredDeposit,
     previousDeposit: channel.deposit,
     feePayer,
@@ -655,11 +682,13 @@ async function handleTopUp(
  */
 async function handleVoucher(
   store: ChannelStore.ChannelStore,
-  _client: viem_Client,
+  client: viem_Client,
   minVoucherDelta: bigint,
   challenge: Challenge.Challenge,
   payload: SessionCredentialPayload & { action: 'voucher' },
   methodDetails: SessionMethodDetails,
+  channelStateTtl: number,
+  lastOnChainVerified: Map<Hex, number>,
 ): Promise<SessionReceipt> {
   const channel = await store.getChannel(payload.channelId)
   if (!channel) {
@@ -681,15 +710,28 @@ async function handleVoucher(
   // same session can safely use the cached deposit/signer values.
   // This avoids an RPC round-trip per voucher, which is critical for
   // high-frequency SSE streaming where vouchers arrive per-token.
-  const cachedOnChain: OnChainChannel = {
-    payer: channel.payer,
-    payee: channel.payee,
-    token: channel.token,
-    deposit: channel.deposit,
-    settled: channel.settledOnChain,
-    finalized: channel.finalized,
-    authorizedSigner: channel.authorizedSigner,
-    closeRequestedAt: 0n,
+  //
+  // To guard against the payer initiating a forced close while vouchers
+  // are still being accepted, re-query on-chain state when the cache
+  // exceeds the configured staleness TTL.
+  const lastVerified = lastOnChainVerified.get(payload.channelId) ?? 0
+  const isStale = Date.now() - lastVerified > channelStateTtl
+
+  let cachedOnChain: OnChainChannel
+  if (isStale) {
+    cachedOnChain = await getOnChainChannel(client, methodDetails.escrowContract, payload.channelId)
+    lastOnChainVerified.set(payload.channelId, Date.now())
+  } else {
+    cachedOnChain = {
+      payer: channel.payer,
+      payee: channel.payee,
+      token: channel.token,
+      deposit: channel.deposit,
+      settled: channel.settledOnChain,
+      finalized: channel.finalized,
+      authorizedSigner: channel.authorizedSigner,
+      closeRequestedAt: 0n,
+    }
   }
 
   return verifyAndAcceptVoucher({

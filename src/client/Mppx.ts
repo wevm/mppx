@@ -142,9 +142,9 @@ export declare namespace create {
  * @internal
  */
 type AnyContextFor<methods extends readonly Method.AnyClient[]> = {
-  [method in keyof methods]: methods[method] extends Method.Client<any, infer context>
-    ? context extends z.ZodMiniType
-      ? z.input<context>
+  [method in keyof methods]: NonNullable<methods[method]['context']> extends infer ctx
+    ? ctx extends z.ZodMiniType
+      ? z.input<ctx>
       : undefined
     : undefined
 }[number]

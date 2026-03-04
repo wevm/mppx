@@ -2,10 +2,12 @@ import { Challenge, Credential, Receipt } from 'mppx'
 import { Mppx as Mppx_client, tempo as tempo_client } from 'mppx/client'
 import { Mppx as Mppx_server, tempo as tempo_server } from 'mppx/server'
 import type { Hex } from 'ox'
-import { Actions } from 'viem/tempo'
-import { describe, expect, test } from 'vitest'
+import { encodeFunctionData, parseUnits } from 'viem'
+import { prepareTransactionRequest, signTransaction } from 'viem/actions'
+import { Abis, Actions, Addresses, Tick } from 'viem/tempo'
+import { beforeAll, describe, expect, test } from 'vitest'
 import * as Http from '~test/Http.js'
-import { accounts, asset, chain, client } from '~test/tempo/viem.js'
+import { accounts, asset, chain, client, fundAccount } from '~test/tempo/viem.js'
 import * as Attribution from '../Attribution.js'
 
 const realm = 'api.example.com'
@@ -522,6 +524,133 @@ describe('tempo', () => {
 
       httpServer.close()
     })
+
+    test('error: rejects fee-payer transaction with unauthorized calls', async () => {
+      const httpServer = await Http.createServer(async (req, res) => {
+        const result = await Mppx_server.toNodeListener(
+          server.charge({
+            feePayer: accounts[0],
+            amount: '1',
+            currency: asset,
+            recipient: accounts[0].address,
+          }),
+        )(req, res)
+        if (result.status === 402) return
+        res.end('OK')
+      })
+
+      const response = await fetch(httpServer.url)
+      expect(response.status).toBe(402)
+
+      const challenge = Challenge.fromResponse(response, {
+        methods: [tempo_client.charge()],
+      })
+      const request = challenge.request
+
+      const memo = Attribution.encode({ serverId: challenge.realm })
+
+      // Build a transaction with the valid transfer + a rogue extra call
+      const transferCall = Actions.token.transfer.call({
+        amount: BigInt(request.amount),
+        memo,
+        to: request.recipient as Hex.Hex,
+        token: request.currency as Hex.Hex,
+      })
+
+      const rogueCall = {
+        to: request.currency as `0x${string}`,
+        data: encodeFunctionData({
+          abi: Abis.tip20,
+          functionName: 'transfer',
+          args: [accounts[2]!.address, 1n],
+        }),
+      }
+
+      const prepared = await prepareTransactionRequest(client, {
+        account: accounts[1]!,
+        calls: [transferCall, rogueCall],
+        nonceKey: 'expiring',
+      } as never)
+      prepared.gas = prepared.gas! + 5_000n
+      const signature = await signTransaction(client, prepared as never)
+
+      const credential = Credential.from({
+        challenge,
+        payload: { signature, type: 'transaction' as const },
+      })
+
+      {
+        const response = await fetch(httpServer.url, {
+          headers: { Authorization: Credential.serialize(credential) },
+        })
+        // Server rejects the transaction — returns 402 (error caught by handler)
+        expect(response.status).toBe(402)
+      }
+
+      httpServer.close()
+    })
+  })
+
+  describe('intent: charge; type: transaction; waitForConfirmation: false', () => {
+    test('returns receipt without waiting for confirmation', async () => {
+      const serverNoWait = Mppx_server.create({
+        methods: [
+          tempo_server.charge({
+            getClient() {
+              return client
+            },
+            currency: asset,
+            account: accounts[0],
+            waitForConfirmation: false,
+          }),
+        ],
+        realm,
+        secretKey,
+      })
+
+      const mppx = Mppx_client.create({
+        polyfill: false,
+        methods: [
+          tempo_client({
+            account: accounts[1],
+            getClient() {
+              return client
+            },
+          }),
+        ],
+      })
+
+      const httpServer = await Http.createServer(async (req, res) => {
+        const result = await Mppx_server.toNodeListener(
+          serverNoWait.charge({
+            amount: '1',
+            currency: asset,
+            recipient: accounts[0].address,
+          }),
+        )(req, res)
+        if (result.status === 402) return
+        res.end('OK')
+      })
+
+      const response = await fetch(httpServer.url)
+      expect(response.status).toBe(402)
+
+      const credential = await mppx.createCredential(response)
+
+      {
+        const response = await fetch(httpServer.url, {
+          headers: { Authorization: credential },
+        })
+        expect(response.status).toBe(200)
+
+        const receipt = Receipt.fromResponse(response)
+        expect(receipt.status).toBe('success')
+        expect(receipt.method).toBe('tempo')
+        expect(receipt.reference).toBeDefined()
+      }
+
+      httpServer.close()
+    })
   })
 
   describe('intent: unknown', () => {
@@ -990,6 +1119,310 @@ describe('tempo', () => {
       const memo = challenge.request.methodDetails?.memo as `0x${string}` | undefined
       expect(memo).toBe(userMemo)
       expect(Attribution.isMppMemo(memo!)).toBe(false)
+
+      httpServer.close()
+    })
+  })
+
+  describe('auto-swap', () => {
+    // Use accounts[3] as payer with pathUsd only (no asset).
+    // Use accounts[4] as payer with zero balance.
+    const swapPayer = accounts[3]!
+    const brokePayer = accounts[4]!
+
+    beforeAll(async () => {
+      // Fund swap payer with pathUsd only
+      await fundAccount({ address: swapPayer.address, token: Addresses.pathUsd as Hex.Hex })
+
+      // Seed DEX liquidity: create pair, then place a sell order for `asset`.
+      await Actions.dex.createPair(client, {
+        account: accounts[0]!,
+        base: asset,
+      })
+      await fundAccount({ address: accounts[0]!.address, token: asset })
+      await Actions.token.approveSync(client, {
+        account: accounts[0]!,
+        token: asset,
+        spender: Addresses.stablecoinDex,
+        amount: parseUnits('1000', 6),
+      })
+      await Actions.dex.placeSync(client, {
+        account: accounts[0]!,
+        token: asset,
+        amount: parseUnits('1000', 6),
+        type: 'sell',
+        tick: Tick.fromPrice('1.001'),
+      })
+    })
+
+    test('swaps via DEX when user lacks target currency', async () => {
+      const mppx = Mppx_client.create({
+        polyfill: false,
+        methods: [
+          tempo_client({
+            account: swapPayer,
+            autoSwap: true,
+            getClient() {
+              return client
+            },
+          }),
+        ],
+      })
+
+      const httpServer = await Http.createServer(async (req, res) => {
+        const result = await Mppx_server.toNodeListener(
+          server.charge({
+            amount: '1',
+            currency: asset,
+            recipient: accounts[0]!.address,
+          }),
+        )(req, res)
+        if (result.status === 402) return
+        res.end('OK')
+      })
+
+      const response = await mppx.fetch(httpServer.url)
+      expect(response.status).toBe(200)
+
+      const receipt = Receipt.fromResponse(response)
+      expect(receipt.status).toBe('success')
+      expect(receipt.method).toBe('tempo')
+
+      httpServer.close()
+    })
+
+    test('direct transfer when user has target currency', async () => {
+      const mppx = Mppx_client.create({
+        polyfill: false,
+        methods: [
+          tempo_client({
+            account: accounts[1]!,
+            autoSwap: true,
+            getClient() {
+              return client
+            },
+          }),
+        ],
+      })
+
+      const httpServer = await Http.createServer(async (req, res) => {
+        const result = await Mppx_server.toNodeListener(
+          server.charge({
+            amount: '1',
+            currency: asset,
+            recipient: accounts[0]!.address,
+          }),
+        )(req, res)
+        if (result.status === 402) return
+        res.end('OK')
+      })
+
+      const response = await mppx.fetch(httpServer.url)
+      expect(response.status).toBe(200)
+
+      const receipt = Receipt.fromResponse(response)
+      expect(receipt.status).toBe('success')
+
+      httpServer.close()
+    })
+
+    test('custom slippage and tokenIn', async () => {
+      const mppx = Mppx_client.create({
+        polyfill: false,
+        methods: [
+          tempo_client({
+            account: swapPayer,
+            autoSwap: {
+              slippage: 2,
+              tokenIn: [Addresses.pathUsd],
+            },
+            getClient() {
+              return client
+            },
+          }),
+        ],
+      })
+
+      const httpServer = await Http.createServer(async (req, res) => {
+        const result = await Mppx_server.toNodeListener(
+          server.charge({
+            amount: '1',
+            currency: asset,
+            recipient: accounts[0]!.address,
+          }),
+        )(req, res)
+        if (result.status === 402) return
+        res.end('OK')
+      })
+
+      const response = await mppx.fetch(httpServer.url)
+      expect(response.status).toBe(200)
+
+      httpServer.close()
+    })
+
+    test('autoSwap enabled via fetch context', async () => {
+      const mppx = Mppx_client.create({
+        polyfill: false,
+        methods: [
+          tempo_client({
+            account: swapPayer,
+            getClient() {
+              return client
+            },
+          }),
+        ],
+      })
+
+      const httpServer = await Http.createServer(async (req, res) => {
+        const result = await Mppx_server.toNodeListener(
+          server.charge({
+            amount: '1',
+            currency: asset,
+            recipient: accounts[0]!.address,
+          }),
+        )(req, res)
+        if (result.status === 402) return
+        res.end('OK')
+      })
+
+      const response = await mppx.fetch(httpServer.url, {
+        context: { autoSwap: true },
+      })
+      expect(response.status).toBe(200)
+
+      const receipt = Receipt.fromResponse(response)
+      expect(receipt.status).toBe('success')
+
+      httpServer.close()
+    })
+
+    test('autoSwap with custom options via fetch context', async () => {
+      const mppx = Mppx_client.create({
+        polyfill: false,
+        methods: [
+          tempo_client({
+            account: swapPayer,
+            getClient() {
+              return client
+            },
+          }),
+        ],
+      })
+
+      const httpServer = await Http.createServer(async (req, res) => {
+        const result = await Mppx_server.toNodeListener(
+          server.charge({
+            amount: '1',
+            currency: asset,
+            recipient: accounts[0]!.address,
+          }),
+        )(req, res)
+        if (result.status === 402) return
+        res.end('OK')
+      })
+
+      const response = await mppx.fetch(httpServer.url, {
+        context: {
+          autoSwap: { slippage: 2, tokenIn: [Addresses.pathUsd] },
+        },
+      })
+      expect(response.status).toBe(200)
+
+      httpServer.close()
+    })
+
+    test('error: throws when no fallback currency has sufficient balance', async () => {
+      const mppx = Mppx_client.create({
+        polyfill: false,
+        methods: [
+          tempo_client({
+            account: brokePayer,
+            autoSwap: true,
+            getClient() {
+              return client
+            },
+          }),
+        ],
+      })
+
+      const httpServer = await Http.createServer(async (req, res) => {
+        const result = await Mppx_server.toNodeListener(
+          server.charge({
+            amount: '1',
+            currency: asset,
+            recipient: accounts[0]!.address,
+          }),
+        )(req, res)
+        if (result.status === 402) return
+        res.end('OK')
+      })
+
+      await expect(mppx.fetch(httpServer.url)).rejects.toThrow('Insufficient funds')
+
+      httpServer.close()
+    })
+
+    test('error: throws when amount exceeds swap liquidity', async () => {
+      const mppx = Mppx_client.create({
+        polyfill: false,
+        methods: [
+          tempo_client({
+            account: swapPayer,
+            autoSwap: true,
+            getClient() {
+              return client
+            },
+          }),
+        ],
+      })
+
+      const httpServer = await Http.createServer(async (req, res) => {
+        const result = await Mppx_server.toNodeListener(
+          server.charge({
+            amount: '999999999',
+            currency: asset,
+            recipient: accounts[0]!.address,
+          }),
+        )(req, res)
+        if (result.status === 402) return
+        res.end('OK')
+      })
+
+      await expect(mppx.fetch(httpServer.url)).rejects.toThrow('Insufficient funds')
+
+      httpServer.close()
+    })
+
+    test('error: throws when tokenIn list has no viable candidates', async () => {
+      const bogusToken = '0x0000000000000000000000000000000000099999' as const
+
+      const mppx = Mppx_client.create({
+        polyfill: false,
+        methods: [
+          tempo_client({
+            account: brokePayer,
+            autoSwap: { tokenIn: [bogusToken] },
+            getClient() {
+              return client
+            },
+          }),
+        ],
+      })
+
+      const httpServer = await Http.createServer(async (req, res) => {
+        const result = await Mppx_server.toNodeListener(
+          server.charge({
+            amount: '1',
+            currency: asset,
+            recipient: accounts[0]!.address,
+          }),
+        )(req, res)
+        if (result.status === 402) return
+        res.end('OK')
+      })
+
+      await expect(mppx.fetch(httpServer.url)).rejects.toThrow('Insufficient funds')
 
       httpServer.close()
     })

@@ -9,6 +9,8 @@ import * as Service from './Service.js'
 import { anthropic } from './services/anthropic.js'
 import { openai } from './services/openai.js'
 
+const secretKey = 'test-secret-key'
+
 const mppx_server = Mppx_server.create({
   methods: [
     tempo_server({
@@ -18,6 +20,7 @@ const mppx_server = Mppx_server.create({
       feePayer: true,
     }),
   ],
+  secretKey,
 })
 
 const mppx_client = Mppx_client.create({

@@ -336,6 +336,8 @@ export function deserialize<const methods extends readonly Method.Method[] | und
 
   const { request, opaque, ...rest } = result
   if (!request) throw new Error('Missing request parameter.')
+  if (rest.method && !/^[a-z][a-z0-9:_-]*$/.test(rest.method))
+    throw new Error(`Invalid method: "${rest.method}". Must be lowercase per spec.`)
 
   return from(
     {

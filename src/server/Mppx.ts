@@ -41,16 +41,42 @@ type EffectiveTransportOf<mi, defaultTransport extends Transport.AnyTransport> =
   ? defaultTransport
   : TransportOverrideOf<mi>
 
-type Handlers<
+/** True when exactly one method has the given intent (no name collision). */
+type IsUniqueIntent<methods extends readonly Method.AnyServer[], intent extends string> = Extract<
+  methods[number],
+  { intent: intent }
+> extends infer M
+  ? M extends M
+    ? [Exclude<Extract<methods[number], { intent: intent }>, M>] extends [never]
+      ? true
+      : false
+    : never
+  : never
+
+/** Only includes shorthand intent keys when the intent is unique across methods. */
+type UniqueIntentHandlers<
   methods extends readonly Method.AnyServer[],
   transport extends Transport.AnyTransport,
 > = {
-  [method_name in methods[number]['intent']]: MethodFn<
+  [method_name in methods[number]['intent'] as IsUniqueIntent<methods, method_name> extends true
+    ? method_name
+    : never]: MethodFn<
     Extract<methods[number], { intent: method_name }>,
     EffectiveTransportOf<Extract<methods[number], { intent: method_name }>, transport>,
     NonNullable<Extract<methods[number], { intent: method_name }>['defaults']>
   >
 }
+
+type Handlers<
+  methods extends readonly Method.AnyServer[],
+  transport extends Transport.AnyTransport,
+> = {
+  [mi in methods[number] as `${mi['name']}/${mi['intent']}`]: MethodFn<
+    mi,
+    EffectiveTransportOf<mi, transport>,
+    NonNullable<mi['defaults']>
+  >
+} & UniqueIntentHandlers<methods, transport>
 
 /**
  * Creates a server-side payment handler from methods.
@@ -73,17 +99,25 @@ export function create<
   const transport extends Transport.AnyTransport = Transport.Http,
 >(config: create.Config<methods, transport>): Mppx<methods, transport> {
   const {
-    realm = Env.get('realm'),
+    realm = Env.get('realm') ?? 'MPP Payment',
     secretKey = Env.get('secretKey'),
     transport = Transport.http() as transport,
   } = config
 
+  if (!secretKey) {
+    throw new Error(
+      'Missing secret key. Set the MPP_SECRET_KEY environment variable or pass `secretKey` to Mppx.create().',
+    )
+  }
+
   const methods = config.methods.flat() as unknown as FlattenMethods<methods>
 
   const handlers: Record<string, unknown> = {}
+  const intentCount: Record<string, number> = {}
 
   for (const mi of methods) {
-    handlers[mi.intent] = createMethodFn({
+    intentCount[mi.intent] = (intentCount[mi.intent] ?? 0) + 1
+    handlers[`${mi.name}/${mi.intent}`] = createMethodFn({
       defaults: mi.defaults,
       method: mi,
       realm,
@@ -93,6 +127,11 @@ export function create<
       transport: (mi.transport ?? transport) as never,
       verify: mi.verify as never,
     })
+  }
+
+  // Also set shorthand intent key when there's no collision
+  for (const mi of methods) {
+    if (intentCount[mi.intent] === 1) handlers[mi.intent] = handlers[`${mi.name}/${mi.intent}`]
   }
 
   return { methods, realm: realm as string, transport, ...handlers } as never
@@ -107,7 +146,7 @@ export declare namespace create {
     methods: methods
     /** Server realm (e.g., hostname). Auto-detected from environment variables (`MPP_REALM`, `VERCEL_URL`, `RAILWAY_PUBLIC_DOMAIN`, `RENDER_EXTERNAL_HOSTNAME`, `HOST`, `HOSTNAME`), falling back to `"localhost"`. */
     realm?: string | undefined
-    /** Secret key for HMAC-bound challenge IDs for stateless verification. Auto-detected from `MPP_SECRET_KEY` environment variable, falling back to a random key. */
+    /** Secret key for HMAC-bound challenge IDs for stateless verification. Auto-detected from `MPP_SECRET_KEY` environment variable. Throws if neither provided nor set. */
     secretKey?: string | undefined
     /** Transport to use. @default Transport.http() */
     transport?: transport | undefined
@@ -185,7 +224,7 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
           const response = await transport.respondChallenge({
             challenge,
             input,
-            error: new Errors.PaymentRequiredError({ realm, description }),
+            error: new Errors.PaymentRequiredError({ description }),
           })
           return { challenge: response, status: 402 }
         }
@@ -204,6 +243,42 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
           return { challenge: response, status: 402 }
         }
 
+        // Verify the credential's challenge matches this route's configured
+        // request. Prevents cross-route scope confusion where a credential
+        // issued for a cheap route is presented at an expensive route.
+        {
+          const routeReq = challenge.request as Record<string, unknown>
+          const echoedReq = credential.challenge.request as Record<string, unknown>
+          for (const field of ['amount', 'currency', 'recipient'] as const) {
+            if (
+              routeReq[field] !== undefined &&
+              echoedReq[field] !== undefined &&
+              String(routeReq[field]) !== String(echoedReq[field])
+            ) {
+              const response = await transport.respondChallenge({
+                challenge,
+                input,
+                error: new Errors.InvalidChallengeError({
+                  id: credential.challenge.id,
+                  reason: `credential ${field} does not match this route's requirements`,
+                }),
+              })
+              return { challenge: response, status: 402 }
+            }
+          }
+        }
+
+        // Reject expired credentials
+        if (credential.challenge.expires && new Date(credential.challenge.expires) < new Date()) {
+          const response = await transport.respondChallenge({
+            challenge,
+            input,
+            error: new Errors.PaymentExpiredError({
+              expires: credential.challenge.expires,
+            }),
+          })
+          return { challenge: response, status: 402 }
+        }
         // Validate payload structure against method schema
         try {
           method.schema.credential.payload.parse(credential.payload)

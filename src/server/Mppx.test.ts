@@ -53,7 +53,7 @@ describe('request handler', () => {
     }).toMatchInlineSnapshot(`
       {
         "challengeId": "[challengeId]",
-        "detail": "Payment is required for "api.example.com".",
+        "detail": "Payment is required.",
         "instance": "[instance]",
         "status": 402,
         "title": "Payment Required",
@@ -138,6 +138,97 @@ describe('request handler', () => {
     `)
   })
 
+  test('returns 402 when credential is from a different route (cross-route scope confusion)', async () => {
+    const handler = Mppx.create({ methods: [method], realm, secretKey })
+
+    // Get a challenge from the "cheap" route
+    const cheapHandle = handler.charge({
+      amount: '1',
+      currency: asset,
+      expires: new Date(Date.now() + 60_000).toISOString(),
+      recipient: accounts[0].address,
+    })
+    const cheapResult = await cheapHandle(new Request('https://example.com/cheap'))
+    expect(cheapResult.status).toBe(402)
+    if (cheapResult.status !== 402) throw new Error()
+
+    const cheapChallenge = Challenge.fromResponse(cheapResult.challenge)
+
+    // Build a credential from the cheap challenge
+    const credential = Credential.from({
+      challenge: cheapChallenge,
+      payload: { signature: '0x123', type: 'transaction' },
+    })
+
+    // Present it at the "expensive" route
+    const expensiveHandle = handler.charge({
+      amount: '1000000',
+      currency: asset,
+      expires: new Date(Date.now() + 60_000).toISOString(),
+      recipient: accounts[0].address,
+    })
+    const result = await expensiveHandle(
+      new Request('https://example.com/expensive', {
+        headers: { Authorization: Credential.serialize(credential) },
+      }),
+    )
+
+    expect(result.status).toBe(402)
+    if (result.status !== 402) throw new Error()
+
+    const body = (await result.challenge.json()) as { detail: string }
+    expect(body.detail).toContain('does not match')
+  })
+
+  test('returns 402 when credential challenge is expired', async () => {
+    const pastExpires = new Date(Date.now() - 60_000).toISOString()
+
+    const handle = Mppx.create({ methods: [method], realm, secretKey }).charge({
+      amount: '1000',
+      currency: asset,
+      expires: pastExpires,
+      recipient: accounts[0].address,
+    })
+
+    // Get a fresh challenge (which has the expired timestamp baked in)
+    const firstResult = await handle(new Request('https://example.com/resource'))
+    expect(firstResult.status).toBe(402)
+    if (firstResult.status !== 402) throw new Error()
+
+    const challenge = Challenge.fromResponse(firstResult.challenge)
+
+    const credential = Credential.from({
+      challenge,
+      payload: { signature: '0x123', type: 'transaction' },
+    })
+
+    const result = await handle(
+      new Request('https://example.com/resource', {
+        headers: { Authorization: Credential.serialize(credential) },
+      }),
+    )
+
+    expect(result.status).toBe(402)
+    if (result.status !== 402) throw new Error()
+
+    const body = (await result.challenge.json()) as object
+    expect({
+      ...body,
+      challengeId: '[challengeId]',
+      detail: '[detail]',
+      instance: '[instance]',
+    }).toMatchInlineSnapshot(`
+      {
+        "challengeId": "[challengeId]",
+        "detail": "[detail]",
+        "instance": "[instance]",
+        "status": 402,
+        "title": "Payment Expired",
+        "type": "https://paymentauth.org/problems/payment-expired",
+      }
+    `)
+    expect((body as { detail: string }).detail).toContain('Payment expired at')
+  })
   test('returns 402 when payload schema validation fails', async () => {
     const handle = Mppx.create({ methods: [method], realm, secretKey }).charge({
       amount: '1000',
@@ -215,7 +306,7 @@ describe('request handler (node)', () => {
     }).toMatchInlineSnapshot(`
       {
         "challengeId": "[challengeId]",
-        "detail": "Payment is required for "api.example.com".",
+        "detail": "Payment is required.",
         "instance": "[instance]",
         "status": 402,
         "title": "Payment Required",

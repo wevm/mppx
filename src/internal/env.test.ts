@@ -9,8 +9,8 @@ describe('Env.get', () => {
     expect(Env.get('realm')).toBe('MPP Payment')
   })
 
-  test('returns default secretKey when MPP_SECRET_KEY is not set', () => {
-    expect(Env.get('secretKey')).toBe('tmp')
+  test('returns undefined when MPP_SECRET_KEY is not set', () => {
+    expect(Env.get('secretKey')).toBeUndefined()
   })
 
   test('returns MPP_SECRET_KEY when set', () => {

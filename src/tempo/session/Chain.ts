@@ -5,6 +5,7 @@ import {
   decodeFunctionData,
   encodeFunctionData,
   getAbiItem,
+  getAddress,
   type Hex,
   isAddressEqual,
   type ReadContractReturnType,
@@ -13,6 +14,7 @@ import {
 import {
   prepareTransactionRequest,
   readContract,
+  sendRawTransaction,
   sendRawTransactionSync,
   signTransaction,
   writeContract,
@@ -20,6 +22,7 @@ import {
 import { Transaction } from 'viem/tempo'
 import { BadRequestError, ChannelClosedError, VerificationFailedError } from '../../Errors.js'
 import * as defaults from '../internal/defaults.js'
+import { simulateTransaction } from '../internal/simulate.js'
 import { escrowAbi } from './escrow.abi.js'
 import type { SignedVoucher } from './Types.js'
 
@@ -205,6 +208,8 @@ export async function broadcastOpenTransaction(parameters: {
   recipient: Address
   currency: Address
   feePayer?: Account | undefined
+  /** When false, simulates instead of waiting for confirmation and returns derived on-chain state. @default true */
+  waitForConfirmation?: boolean | undefined
 }): Promise<BroadcastResult> {
   const {
     client,
@@ -214,6 +219,7 @@ export async function broadcastOpenTransaction(parameters: {
     recipient,
     currency,
     feePayer,
+    waitForConfirmation = true,
   } = parameters
 
   const transaction = Transaction.deserialize(
@@ -252,7 +258,13 @@ export async function broadcastOpenTransaction(parameters: {
   }
 
   const { args: openArgs } = decodeFunctionData({ abi: escrowAbi, data: openCall.data! })
-  const [payee, token] = openArgs as readonly [Address, Address, ...unknown[]]
+  const [payee, token, deposit, , authorizedSigner] = openArgs as readonly [
+    Address,
+    Address,
+    bigint,
+    Hex,
+    Address,
+  ]
 
   if (!isAddressEqual(payee, recipient)) {
     throw new VerificationFailedError({
@@ -275,6 +287,28 @@ export async function broadcastOpenTransaction(parameters: {
     }
     return serializedTransaction
   })()
+
+  if (!waitForConfirmation) {
+    const from = getAddress(transaction.from as Address)
+    await simulateTransaction(client, { ...transaction, from, calls })
+    const txHash = await sendRawTransaction(client, {
+      serializedTransaction: serializedTransaction_final as Transaction.TransactionSerializedTempo,
+    })
+
+    return {
+      txHash,
+      onChain: {
+        payer: from,
+        payee,
+        token,
+        authorizedSigner,
+        deposit,
+        settled: 0n,
+        closeRequestedAt: 0n,
+        finalized: false,
+      } as OnChainChannel,
+    }
+  }
 
   let txHash: Hex | undefined
   try {
@@ -307,6 +341,7 @@ export async function broadcastTopUpTransaction(parameters: {
   serializedTransaction: Hex
   escrowContract: Address
   channelId: Hex
+  currency: Address
   declaredDeposit: bigint
   previousDeposit: bigint
   feePayer?: Account | undefined
@@ -316,6 +351,7 @@ export async function broadcastTopUpTransaction(parameters: {
     serializedTransaction,
     escrowContract,
     channelId,
+    currency,
     declaredDeposit,
     previousDeposit,
     feePayer,
@@ -347,7 +383,7 @@ export async function broadcastTopUpTransaction(parameters: {
       const selector = call.data.slice(0, 10)
       const isEscrowTopUp =
         isAddressEqual(call.to, escrowContract) && selector === escrowTopUpSelector
-      const isTokenApprove = selector === erc20ApproveSelector
+      const isTokenApprove = isAddressEqual(call.to, currency) && selector === erc20ApproveSelector
       if (!isEscrowTopUp && !isTokenApprove) {
         throw new BadRequestError({
           reason: 'fee-sponsored topUp transaction contains an unauthorized call',

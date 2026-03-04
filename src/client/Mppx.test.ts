@@ -295,6 +295,7 @@ const server = Mppx_server.create({
       recipient: accounts[0].address,
     }),
   ],
+  secretKey,
 })
 
 describe('fetch', () => {
