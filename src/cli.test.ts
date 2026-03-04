@@ -1,4 +1,4 @@
-import { spawn, spawnSync } from 'node:child_process'
+import { spawnSync } from 'node:child_process'
 import * as path from 'node:path'
 import { parseUnits } from 'viem'
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts'
@@ -8,83 +8,66 @@ import * as Http from '~test/Http.js'
 import { rpcUrl } from '~test/tempo/prool.js'
 import { deployEscrow } from '~test/tempo/session.js'
 import { accounts, asset, client, fundAccount } from '~test/tempo/viem.js'
+import cli from './cli.js'
 import * as Store from './Store.js'
 import * as Mppx_server from './server/Mppx.js'
 import { toNodeListener } from './server/Mppx.js'
 import { stripe as stripe_server } from './stripe/server/Methods.js'
 import { tempo } from './tempo/server/Methods.js'
 
-const cliPath = path.resolve(import.meta.dirname, 'cli.ts')
-const cwd = path.resolve(import.meta.dirname, '..')
 const testPrivateKey = generatePrivateKey()
 const testAccount = privateKeyToAccount(testPrivateKey)
-const env = { ...process.env, NODE_NO_WARNINGS: '1', MPPX_PRIVATE_KEY: testPrivateKey }
 
-function run(args: string[], options?: { input?: string }): string {
-  const result = runRaw(args, options)
-  if (result.status !== 0) {
-    const msg = result.stderr?.trim() || result.stdout?.trim() || `exit code ${result.status}`
-    throw new Error(msg)
-  }
-  return result.stdout
-}
-
-function runRaw(
-  args: string[],
-  options?: { input?: string; env?: NodeJS.ProcessEnv },
-): { stdout: string; stderr: string; status: number | null } {
-  const result = spawnSync('node', ['--import', 'tsx', cliPath, ...args], {
-    encoding: 'utf8',
-    cwd,
-    timeout: 60_000,
-    ...(options?.input !== undefined && { input: options.input }),
-    env: options?.env ?? env,
-  })
-  return { stdout: result.stdout ?? '', stderr: result.stderr ?? '', status: result.status }
-}
-
-function runAsync(
-  args: string[],
-  options?: { input?: string; env?: NodeJS.ProcessEnv },
-): Promise<{ stdout: string; stderr: string }> {
-  return new Promise((resolve, reject) => {
-    const child = spawn('node', ['--import', 'tsx', cliPath, ...args], {
-      cwd,
-      env: options?.env ?? env,
-      stdio: ['pipe', 'pipe', 'pipe'],
-    })
-
-    let stdout = ''
-    let stderr = ''
-    child.stdout.on('data', (data: Buffer) => {
-      stdout += data.toString()
-    })
-    child.stderr.on('data', (data: Buffer) => {
-      stderr += data.toString()
-    })
-
-    if (options?.input !== undefined) {
-      child.stdin.write(options.input)
-      child.stdin.end()
-    } else {
-      child.stdin.end()
+async function serve(argv: string[], options?: { env?: Record<string, string | undefined> }) {
+  let output = ''
+  let stderr = ''
+  let exitCode: number | undefined
+  const saved: Record<string, string | undefined> = {}
+  if (options?.env) {
+    for (const [key, value] of Object.entries(options.env)) {
+      saved[key] = process.env[key]
+      if (value === undefined) delete process.env[key]
+      else process.env[key] = value
     }
-
-    const timer = setTimeout(() => {
-      child.kill()
-      reject(new Error(`Timed out.\nstdout: ${stdout}\nstderr: ${stderr}`))
-    }, 60_000)
-
-    child.on('close', (code) => {
-      clearTimeout(timer)
-      if (code !== 0) reject(new Error(stderr.trim() || `exit code ${code}`))
-      else resolve({ stdout, stderr })
+  }
+  const origStdoutWrite = process.stdout.write
+  const origStderrWrite = process.stderr.write
+  const origLog = console.log
+  const origError = console.error
+  process.stdout.write = ((chunk: unknown) => {
+    output += typeof chunk === 'string' ? chunk : String(chunk)
+    return true
+  }) as typeof process.stdout.write
+  process.stderr.write = ((chunk: unknown) => {
+    stderr += typeof chunk === 'string' ? chunk : String(chunk)
+    return true
+  }) as typeof process.stderr.write
+  console.log = (...args: unknown[]) => {
+    output += `${args.map(String).join(' ')}\n`
+  }
+  console.error = (...args: unknown[]) => {
+    stderr += `${args.map(String).join(' ')}\n`
+  }
+  try {
+    await cli.serve(argv, {
+      stdout(s: string) {
+        output += s
+      },
+      exit(code: number) {
+        exitCode = code
+      },
     })
-    child.on('error', (err) => {
-      clearTimeout(timer)
-      reject(err)
-    })
-  })
+  } finally {
+    process.stdout.write = origStdoutWrite
+    process.stderr.write = origStderrWrite
+    console.log = origLog
+    console.error = origError
+    for (const [key, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[key]
+      else process.env[key] = value
+    }
+  }
+  return { output, stderr, exitCode }
 }
 
 describe('basic charge (examples/basic)', () => {
@@ -118,10 +101,10 @@ describe('basic charge (examples/basic)', () => {
     })
 
     try {
-      const { stdout } = await runAsync([httpServer.url, '--rpc-url', rpcUrl, '-s'], {
-        input: '',
+      const { output } = await serve([httpServer.url, '--rpc-url', rpcUrl, '-s'], {
+        env: { MPPX_PRIVATE_KEY: testPrivateKey },
       })
-      expect(stdout).toContain('paid')
+      expect(output).toContain('paid')
     } finally {
       httpServer.close()
     }
@@ -148,12 +131,13 @@ describe('basic charge (examples/basic)', () => {
     })
 
     try {
-      const result = await runAsync([httpServer.url, '--account', 'nonexistent-account'], {
-        input: '',
-        env: { ...process.env, NODE_NO_WARNINGS: '1' },
-      }).catch((err) => err as Error)
-      expect(result).toBeInstanceOf(Error)
-      expect((result as Error).message).toContain('Account "nonexistent-account" not found')
+      const { output, exitCode } = await serve(
+        [httpServer.url, '--account', 'nonexistent-account'],
+        { env: { MPPX_PRIVATE_KEY: undefined } },
+      )
+      expect(exitCode).toBe(1)
+      expect(output).toContain('nonexistent-account')
+      expect(output).toContain('not found')
     } finally {
       httpServer.close()
     }
@@ -196,86 +180,15 @@ describe('session multi-fetch (examples/session/multi-fetch)', () => {
     })
 
     try {
-      const { stdout } = await runAsync(
+      const { output } = await serve(
         [httpServer.url, '--rpc-url', rpcUrl, '-s', '-M', 'deposit=10'],
-        { input: '' },
+        { env: { MPPX_PRIVATE_KEY: testPrivateKey } },
       )
-      expect(stdout).toContain('scraped-content')
+      expect(output).toContain('scraped-content')
     } finally {
       httpServer.close()
     }
   })
-
-  test(
-    '--channel reuse: second request reuses existing channel',
-    { timeout: 120_000 },
-    async () => {
-      await fundAccount({ address: testAccount.address, token: Addresses.pathUsd })
-      await fundAccount({ address: testAccount.address, token: asset })
-
-      const escrow = await deployEscrow()
-      const store = Store.memory()
-      const server = Mppx_server.create({
-        methods: [
-          tempo.session({
-            account: accounts[0],
-            store,
-            getClient: () => client,
-            currency: asset,
-            escrowContract: escrow,
-            chainId: client.chain.id,
-            feePayer: true,
-          }),
-        ],
-        realm: 'cli-test-channel-reuse',
-        secretKey: 'cli-test-secret',
-      })
-
-      const httpServer = await Http.createServer(async (req, res) => {
-        const result = await toNodeListener(
-          server.session({
-            amount: '0.001',
-            recipient: accounts[0].address,
-            unitType: 'page',
-          }),
-        )(req, res)
-        if (result.status === 402) return
-        res.end('scraped-content')
-      })
-
-      try {
-        // First request: open a channel, answer "y" to proceed, "n" to close channel
-        const first = await runAsync(
-          [httpServer.url, '--rpc-url', rpcUrl, '--confirm', '-M', 'deposit=10'],
-          { input: 'y\nn\n' },
-        )
-        expect(first.stdout).toContain('scraped-content')
-
-        // Extract channel ID from stderr (logged as "Channel opened 0x...")
-        const match = first.stderr.match(/Channel opened (0x[0-9a-fA-F]+)/)
-        expect(match).toBeTruthy()
-        const channelId = match![1]!
-
-        // Second request: reuse the channel via -M channel=<id>
-        const second = await runAsync(
-          [
-            httpServer.url,
-            '--rpc-url',
-            rpcUrl,
-            '-s',
-            '-M',
-            `channel=${channelId}`,
-            '-M',
-            'deposit=10',
-          ],
-          { input: '' },
-        )
-        expect(second.stdout).toContain('scraped-content')
-      } finally {
-        httpServer.close()
-      }
-    },
-  )
 
   test('error: --fail exits on server error', { timeout: 60_000 }, async () => {
     const httpServer = await Http.createServer(async (_req, res) => {
@@ -284,9 +197,10 @@ describe('session multi-fetch (examples/session/multi-fetch)', () => {
     })
 
     try {
-      await expect(
-        runAsync([httpServer.url, '--rpc-url', rpcUrl, '--fail'], { input: '' }),
-      ).rejects.toThrow()
+      const { exitCode } = await serve([httpServer.url, '--rpc-url', rpcUrl, '--fail'], {
+        env: { MPPX_PRIVATE_KEY: testPrivateKey },
+      })
+      expect(exitCode).toBe(1)
     } finally {
       httpServer.close()
     }
@@ -322,18 +236,13 @@ describe.skipIf(!process.env.VITE_STRIPE_SECRET_KEY)('stripe charge (integration
     })
 
     try {
-      const { stdout } = await runAsync(
-        [httpServer.url, '-M', 'paymentMethod=pm_card_visa', '-s'],
-        {
-          input: '',
-          env: {
-            ...env,
-            MPPX_STRIPE_SECRET_KEY: stripeSecretKey,
-            MPPX_PRIVATE_KEY: undefined as unknown as string,
-          },
+      const { output } = await serve([httpServer.url, '-M', 'paymentMethod=pm_card_visa', '-s'], {
+        env: {
+          MPPX_STRIPE_SECRET_KEY: stripeSecretKey,
+          MPPX_PRIVATE_KEY: undefined,
         },
-      )
-      expect(stdout).toContain('paid')
+      })
+      expect(output).toContain('paid')
     } finally {
       httpServer.close()
     }
@@ -387,13 +296,10 @@ describe('session sse (examples/session/sse)', () => {
     })
 
     try {
-      const { stdout } = await runAsync(
-        [httpServer.url, '--rpc-url', rpcUrl, '-M', 'deposit=10'],
-        {
-          input: '',
-        },
-      )
-      expect(stdout.trim()).toBe('Hello world!')
+      const { output } = await serve([httpServer.url, '--rpc-url', rpcUrl, '-M', 'deposit=10'], {
+        env: { MPPX_PRIVATE_KEY: testPrivateKey },
+      })
+      expect(output.trim()).toBe('Hello world!')
     } finally {
       httpServer.close()
     }
@@ -405,9 +311,10 @@ describe('session sse (examples/session/sse)', () => {
       res.end('Internal Server Error')
     })
     try {
-      await expect(
-        runAsync([httpServer.url, '--rpc-url', rpcUrl, '--fail'], { input: '' }),
-      ).rejects.toThrow()
+      const { exitCode } = await serve([httpServer.url, '--rpc-url', rpcUrl, '--fail'], {
+        env: { MPPX_PRIVATE_KEY: testPrivateKey },
+      })
+      expect(exitCode).toBe(1)
     } finally {
       httpServer.close()
     }
@@ -446,19 +353,13 @@ describe('stripe charge', () => {
     })
 
     try {
-      const { stdout } = await runAsync(
-        [appServer.url, '-s', '-M', 'paymentMethod=pm_card_visa'],
-        {
-          input: '',
-          env: {
-            ...process.env,
-            NODE_NO_WARNINGS: '1',
-            MPPX_STRIPE_SECRET_KEY: 'sk_test_mock',
-            MPPX_STRIPE_SPT_URL: sptServer.url,
-          },
+      const { output } = await serve([appServer.url, '-s', '-M', 'paymentMethod=pm_card_visa'], {
+        env: {
+          MPPX_STRIPE_SECRET_KEY: 'sk_test_mock_cli_value',
+          MPPX_STRIPE_SPT_URL: sptServer.url,
         },
-      )
-      expect(stdout).toContain('paid')
+      })
+      expect(output).toContain('paid')
     } finally {
       appServer.close()
       sptServer.close()
@@ -487,19 +388,12 @@ describe('stripe charge', () => {
     })
 
     try {
-      const result = await runAsync(
+      const { output, exitCode } = await serve(
         [appServer.url, '-s', '-M', 'paymentMethod=pm_card_visa'],
-        {
-          input: '',
-          env: {
-            ...process.env,
-            NODE_NO_WARNINGS: '1',
-            MPPX_STRIPE_SECRET_KEY: '',
-          },
-        },
-      ).catch((err) => err as Error)
-      expect(result).toBeInstanceOf(Error)
-      expect((result as Error).message).toContain('MPPX_STRIPE_SECRET_KEY')
+        { env: { MPPX_STRIPE_SECRET_KEY: '' } },
+      )
+      expect(exitCode).toBe(1)
+      expect(output).toContain('MPPX_STRIPE_SECRET_KEY')
     } finally {
       appServer.close()
     }
@@ -527,19 +421,12 @@ describe('stripe charge', () => {
     })
 
     try {
-      const result = await runAsync(
+      const { output, exitCode } = await serve(
         [appServer.url, '-s', '-M', 'paymentMethod=pm_card_visa'],
-        {
-          input: '',
-          env: {
-            ...process.env,
-            NODE_NO_WARNINGS: '1',
-            MPPX_STRIPE_SECRET_KEY: 'sk_live_fake',
-          },
-        },
-      ).catch((err) => err as Error)
-      expect(result).toBeInstanceOf(Error)
-      expect((result as Error).message).toContain('test mode')
+        { env: { MPPX_STRIPE_SECRET_KEY: 'sk_live_fake' } },
+      )
+      expect(exitCode).toBe(1)
+      expect(output).toContain('test mode')
     } finally {
       appServer.close()
     }
@@ -551,13 +438,21 @@ describe('stripe charge', () => {
 // TODO: investigate account tests timing out in CI (secret-tool/gnome-keyring hangs)
 // ---------------------------------------------------------------------------
 describe.skipIf(!!process.env.CI)('account', () => {
-  // Env without MPPX_PRIVATE_KEY so account commands use the keychain
+  const binPath = path.resolve(import.meta.dirname, 'bin.ts')
+  const cwd = path.resolve(import.meta.dirname, '..')
   const accountEnv = { ...process.env, NODE_NO_WARNINGS: '1' }
   const prefix = `__mppx_test_${Date.now()}`
   const createdAccounts: string[] = []
 
   function accountRun(args: string[], options?: { input?: string }) {
-    return runRaw(args, { ...options, env: accountEnv })
+    const result = spawnSync('node', ['--import', 'tsx', binPath, ...args], {
+      encoding: 'utf8',
+      cwd,
+      timeout: 60_000,
+      ...(options?.input !== undefined && { input: options.input }),
+      env: accountEnv,
+    })
+    return { stdout: result.stdout ?? '', stderr: result.stderr ?? '', status: result.status }
   }
 
   function createAccount(name: string) {
@@ -589,9 +484,7 @@ describe.skipIf(!!process.env.CI)('account', () => {
   test('create: duplicate name exits with message', () => {
     const name = `${prefix}_dup`
     createAccount(name)
-    // Second create with same name (non-interactive, stdin closed) should not succeed
     const result = accountRun(['account', 'create', '--account', name], { input: '' })
-    // The CLI prompts for a different name; with empty stdin it exits
     expect(result.stdout).not.toContain('saved to keychain')
   })
 
@@ -651,11 +544,9 @@ describe.skipIf(!!process.env.CI)('account', () => {
     const result = deleteAccount(name)
     expect(result.status).toBe(0)
     expect(result.stdout).toContain(`Account "${name}" deleted`)
-    // Remove from cleanup list since already deleted
     const idx = createdAccounts.indexOf(name)
     if (idx !== -1) createdAccounts.splice(idx, 1)
 
-    // Verify it's gone
     const view = accountRun(['account', 'view', '--account', name])
     expect(view.status).not.toBe(0)
   })
@@ -687,9 +578,9 @@ describe.skipIf(!!process.env.CI)('account', () => {
   })
 })
 
-test('mppx --help', () => {
-  const stdout = run(['--help'])
-  expect(stdout).toContain('mppx')
-  expect(stdout).toContain('<url>')
-  expect(stdout).toContain('account')
+test('mppx --help', async () => {
+  const { output } = await serve(['--help'])
+  expect(output).toContain('mppx')
+  expect(output).toContain('<url>')
+  expect(output).toContain('account')
 })

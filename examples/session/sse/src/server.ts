@@ -135,7 +135,7 @@ const mppx = Mppx.create({
       // SSE transport for streaming. The session method detects the SSE
       // transport and wires up Tempo metering (per-token charging, voucher
       // handling) automatically using the shared storage.
-      stream: true,
+      sse: true,
       // Enable testnet mode (relaxes certain validation constraints).
       testnet: true,
     }),

@@ -3,7 +3,7 @@
   "type": "module",
   "private": true,
   "scripts": {
-    "dev": "vite",
+    "dev": "portless mppx-charge vite",
     "build": "vite build",
     "preview": "vite preview"
   },
