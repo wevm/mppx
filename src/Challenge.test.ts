@@ -250,12 +250,12 @@ describe('fromMethod', () => {
     const challenge = Challenge.fromMethod(Methods.charge, {
       id: 'abc123',
       realm: 'api.example.com',
+      expires: '2025-01-06T12:00:00Z',
       request: {
         amount: '1',
         currency: '0x20c0000000000000000000000000000000000001',
         decimals: 6,
         recipient: '0x742d35Cc6634C0532925a3b844Bc9e7595f8fE00',
-        expires: '2025-01-06T12:00:00Z',
       },
     })
 
@@ -269,7 +269,6 @@ describe('fromMethod', () => {
         "request": {
           "amount": "1000000",
           "currency": "0x20c0000000000000000000000000000000000001",
-          "expires": "2025-01-06T12:00:00Z",
           "recipient": "0x742d35Cc6634C0532925a3b844Bc9e7595f8fE00",
         },
       }
@@ -280,12 +279,12 @@ describe('fromMethod', () => {
     const challenge = Challenge.fromMethod(Methods.charge, {
       id: 'abc123',
       realm: 'api.example.com',
+      expires: '2025-01-06T12:00:00Z',
       request: {
         amount: '1',
         currency: '0x20c0000000000000000000000000000000000001',
         decimals: 6,
         recipient: '0x742d35Cc6634C0532925a3b844Bc9e7595f8fE00',
-        expires: '2025-01-06T12:00:00Z',
         chainId: 42431,
         feePayer: true,
       },
@@ -301,7 +300,6 @@ describe('fromMethod', () => {
         "request": {
           "amount": "1000000",
           "currency": "0x20c0000000000000000000000000000000000001",
-          "expires": "2025-01-06T12:00:00Z",
           "methodDetails": {
             "chainId": 42431,
             "feePayer": true,
@@ -321,7 +319,6 @@ describe('fromMethod', () => {
         currency: '0x20c0000000000000000000000000000000000001',
         decimals: 6,
         recipient: '0x742d35Cc6634C0532925a3b844Bc9e7595f8fE00',
-        expires: '2025-01-06T12:00:00Z',
       },
       digest: 'sha-256=abc',
       expires: '2025-01-06T12:00:00Z',
@@ -334,12 +331,12 @@ describe('fromMethod', () => {
   test('behavior: creates challenge with HMAC-bound id via secretKey', () => {
     const challenge = Challenge.fromMethod(Methods.charge, {
       realm: 'api.example.com',
+      expires: '2025-01-06T12:00:00Z',
       request: {
         amount: '1',
         currency: '0x20c0000000000000000000000000000000000001',
         decimals: 6,
         recipient: '0x742d35Cc6634C0532925a3b844Bc9e7595f8fE00',
-        expires: '2025-01-06T12:00:00Z',
       },
       secretKey: 'my-secret',
     })
@@ -358,7 +355,6 @@ describe('fromMethod', () => {
           amount: 123,
           currency: '0x20c0000000000000000000000000000000000001',
           recipient: '0x742d35Cc6634C0532925a3b844Bc9e7595f8fE00',
-          expires: '2025-01-06T12:00:00Z',
         } as any,
       }),
     ).toThrow()
@@ -584,7 +580,6 @@ describe('opaque', () => {
         currency: '0x20c0000000000000000000000000000000000001',
         decimals: 6,
         recipient: '0x742d35Cc6634C0532925a3b844Bc9e7595f8fE00',
-        expires: '2025-01-06T12:00:00Z',
       },
       meta: { payment_intent: 'pi_3abc123XYZ' },
     })

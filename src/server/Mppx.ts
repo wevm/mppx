@@ -2,6 +2,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import * as Challenge from '../Challenge.js'
 import type * as Credential from '../Credential.js'
 import * as Errors from '../Errors.js'
+import * as Expires from '../Expires.js'
 import * as Env from '../internal/env.js'
 import type * as Method from '../Method.js'
 import type * as Receipt from '../Receipt.js'
@@ -173,7 +174,8 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
     return Object.assign(
       async (input: Transport.InputOf): Promise<MethodFn.Response> => {
         const { description, meta, ...rest } = options
-        const expires = 'expires' in options ? (options.expires as string | undefined) : undefined
+        const expires =
+          'expires' in options ? (options.expires as string | undefined) : Expires.minutes(5)
 
         // Merge defaults with per-request options
         const merged = { ...defaults, ...rest }

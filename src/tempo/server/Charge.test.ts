@@ -114,7 +114,7 @@ describe('tempo', () => {
       const request = challenge.request
       expect(request.recipient).toBe(overrideRecipient)
       expect(request.currency).toBe(overrideCurrency)
-      expect(request.expires).toBe(overrideExpires)
+      expect(challenge.expires).toBe(overrideExpires)
 
       const memo = Attribution.encode({ serverId: challenge.realm })
 

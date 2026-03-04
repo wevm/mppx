@@ -9,12 +9,12 @@ const secretKey = 'test-secret-key'
 const challenge = Challenge.fromMethod(Methods.charge, {
   realm,
   secretKey,
+  expires: '2025-01-01T00:00:00.000Z',
   request: {
     amount: '0.001',
     currency: '0x20c0000000000000000000000000000000000001',
     decimals: 6,
     recipient: '0x742d35Cc6634C0532925a3b844Bc9e7595f8fE00',
-    expires: '2025-01-01T00:00:00.000Z',
   },
 })
 
@@ -60,14 +60,13 @@ describe('http', () => {
       expect(transport.getChallenge(response)).toMatchInlineSnapshot(`
         {
           "expires": "2025-01-01T00:00:00.000Z",
-          "id": "z8dUi61lViOj6cwh_ISb_5X8nBJF2OjTydcEap8wX0o",
+          "id": "0hnrySRDqWfttlDIJpuxV4mJsRJIS7d7RjnufuonJOE",
           "intent": "charge",
           "method": "tempo",
           "realm": "api.example.com",
           "request": {
             "amount": "1000",
             "currency": "0x20c0000000000000000000000000000000000001",
-            "expires": "2025-01-01T00:00:00.000Z",
             "recipient": "0x742d35Cc6634C0532925a3b844Bc9e7595f8fE00",
           },
         }
@@ -91,7 +90,7 @@ describe('http', () => {
       const headers = result.headers as Headers
 
       expect(headers.get('Authorization')).toMatchInlineSnapshot(
-        `"Payment eyJjaGFsbGVuZ2UiOnsiZXhwaXJlcyI6IjIwMjUtMDEtMDFUMDA6MDA6MDAuMDAwWiIsImlkIjoiejhkVWk2MWxWaU9qNmN3aF9JU2JfNVg4bkJKRjJPalR5ZGNFYXA4d1gwbyIsImludGVudCI6ImNoYXJnZSIsIm1ldGhvZCI6InRlbXBvIiwicmVhbG0iOiJhcGkuZXhhbXBsZS5jb20iLCJyZXF1ZXN0IjoiZXlKaGJXOTFiblFpT2lJeE1EQXdJaXdpWTNWeWNtVnVZM2tpT2lJd2VESXdZekF3TURBd01EQXdNREF3TURBd01EQXdNREF3TURBd01EQXdNREF3TURBd01EQXdNREVpTENKbGVIQnBjbVZ6SWpvaU1qQXlOUzB3TVMwd01WUXdNRG93TURvd01DNHdNREJhSWl3aWNtVmphWEJwWlc1MElqb2lNSGczTkRKa016VkRZelkyTXpSRE1EVXpNamt5TldFellqZzBORUpqT1dVM05UazFaamhtUlRBd0luMCJ9LCJwYXlsb2FkIjp7InNpZ25hdHVyZSI6IjB4YWJjMTIzIiwidHlwZSI6InRyYW5zYWN0aW9uIn19"`,
+        `"Payment eyJjaGFsbGVuZ2UiOnsiZXhwaXJlcyI6IjIwMjUtMDEtMDFUMDA6MDA6MDAuMDAwWiIsImlkIjoiMGhucnlTUkRxV2Z0dGxESUpwdXhWNG1Kc1JKSVM3ZDdSam51ZnVvbkpPRSIsImludGVudCI6ImNoYXJnZSIsIm1ldGhvZCI6InRlbXBvIiwicmVhbG0iOiJhcGkuZXhhbXBsZS5jb20iLCJyZXF1ZXN0IjoiZXlKaGJXOTFiblFpT2lJeE1EQXdJaXdpWTNWeWNtVnVZM2tpT2lJd2VESXdZekF3TURBd01EQXdNREF3TURBd01EQXdNREF3TURBd01EQXdNREF3TURBd01EQXdNREVpTENKeVpXTnBjR2xsYm5RaU9pSXdlRGMwTW1Rek5VTmpOall6TkVNd05UTXlPVEkxWVROaU9EUTBRbU01WlRjMU9UVm1PR1pGTURBaWZRIn0sInBheWxvYWQiOnsic2lnbmF0dXJlIjoiMHhhYmMxMjMiLCJ0eXBlIjoidHJhbnNhY3Rpb24ifX0"`,
       )
     })
 
@@ -182,14 +181,13 @@ describe('mcp', () => {
       expect(transport.getChallenge(response)).toMatchInlineSnapshot(`
         {
           "expires": "2025-01-01T00:00:00.000Z",
-          "id": "z8dUi61lViOj6cwh_ISb_5X8nBJF2OjTydcEap8wX0o",
+          "id": "0hnrySRDqWfttlDIJpuxV4mJsRJIS7d7RjnufuonJOE",
           "intent": "charge",
           "method": "tempo",
           "realm": "api.example.com",
           "request": {
             "amount": "1000",
             "currency": "0x20c0000000000000000000000000000000000001",
-            "expires": "2025-01-01T00:00:00.000Z",
             "recipient": "0x742d35Cc6634C0532925a3b844Bc9e7595f8fE00",
           },
         }
@@ -239,14 +237,13 @@ describe('mcp', () => {
               "org.paymentauth/credential": {
                 "challenge": {
                   "expires": "2025-01-01T00:00:00.000Z",
-                  "id": "z8dUi61lViOj6cwh_ISb_5X8nBJF2OjTydcEap8wX0o",
+                  "id": "0hnrySRDqWfttlDIJpuxV4mJsRJIS7d7RjnufuonJOE",
                   "intent": "charge",
                   "method": "tempo",
                   "realm": "api.example.com",
                   "request": {
                     "amount": "1000",
                     "currency": "0x20c0000000000000000000000000000000000001",
-                    "expires": "2025-01-01T00:00:00.000Z",
                     "recipient": "0x742d35Cc6634C0532925a3b844Bc9e7595f8fE00",
                   },
                 },

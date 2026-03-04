@@ -125,7 +125,7 @@ export function from<
     secretKey,
   } = parameters
 
-  const expires = (parameters.expires ?? request.expires) as string
+  const expires = parameters.expires as string
   const id = secretKey
     ? computeId({ ...parameters, expires, ...(meta && { opaque: meta }) }, { secretKey })
     : (parameters as { id: string }).id
@@ -205,11 +205,11 @@ export declare namespace from {
  *   Methods.charge,
  *   {
  *     realm: 'api.example.com',
+ *     expires: '2025-01-06T12:00:00Z',
  *     request: {
  *       amount: '1000000',
  *       currency: '0x20c0000000000000000000000000000000000001',
  *       recipient: '0x742d35Cc6634C0532925a3b844Bc9e7595f8fE00',
- *       expires: '2025-01-06T12:00:00Z',
  *     },
  *   },
  *   { secretKey: 'my-secret' },
