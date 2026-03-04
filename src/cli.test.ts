@@ -118,7 +118,7 @@ describe('basic charge (examples/basic)', () => {
     })
 
     try {
-      const { stdout } = await runAsync(['fetch', httpServer.url, '--rpc-url', rpcUrl, '-s'], {
+      const { stdout } = await runAsync([httpServer.url, '--rpc-url', rpcUrl, '-s'], {
         input: '',
       })
       expect(stdout).toContain('paid')
@@ -148,7 +148,7 @@ describe('basic charge (examples/basic)', () => {
     })
 
     try {
-      const result = await runAsync(['fetch', httpServer.url, '--account', 'nonexistent-account'], {
+      const result = await runAsync([httpServer.url, '--account', 'nonexistent-account'], {
         input: '',
         env: { ...process.env, NODE_NO_WARNINGS: '1' },
       }).catch((err) => err as Error)
@@ -197,7 +197,7 @@ describe('session multi-fetch (examples/session/multi-fetch)', () => {
 
     try {
       const { stdout } = await runAsync(
-        ['fetch', httpServer.url, '--rpc-url', rpcUrl, '-s', '-M', 'deposit=10'],
+        [httpServer.url, '--rpc-url', rpcUrl, '-s', '-M', 'deposit=10'],
         { input: '' },
       )
       expect(stdout).toContain('scraped-content')
@@ -246,7 +246,7 @@ describe('session multi-fetch (examples/session/multi-fetch)', () => {
       try {
         // First request: open a channel, answer "y" to proceed, "n" to close channel
         const first = await runAsync(
-          ['fetch', httpServer.url, '--rpc-url', rpcUrl, '--confirm', '-M', 'deposit=10'],
+          [httpServer.url, '--rpc-url', rpcUrl, '--confirm', '-M', 'deposit=10'],
           { input: 'y\nn\n' },
         )
         expect(first.stdout).toContain('scraped-content')
@@ -259,7 +259,6 @@ describe('session multi-fetch (examples/session/multi-fetch)', () => {
         // Second request: reuse the channel via -M channel=<id>
         const second = await runAsync(
           [
-            'fetch',
             httpServer.url,
             '--rpc-url',
             rpcUrl,
@@ -286,7 +285,7 @@ describe('session multi-fetch (examples/session/multi-fetch)', () => {
 
     try {
       await expect(
-        runAsync(['fetch', httpServer.url, '--rpc-url', rpcUrl, '--fail'], { input: '' }),
+        runAsync([httpServer.url, '--rpc-url', rpcUrl, '--fail'], { input: '' }),
       ).rejects.toThrow()
     } finally {
       httpServer.close()
@@ -324,7 +323,7 @@ describe.skipIf(!process.env.VITE_STRIPE_SECRET_KEY)('stripe charge (integration
 
     try {
       const { stdout } = await runAsync(
-        ['fetch', httpServer.url, '-M', 'paymentMethod=pm_card_visa', '-s'],
+        [httpServer.url, '-M', 'paymentMethod=pm_card_visa', '-s'],
         {
           input: '',
           env: {
@@ -388,9 +387,12 @@ describe('session sse (examples/session/sse)', () => {
     })
 
     try {
-      const { stdout } = await runAsync(['fetch', httpServer.url, '--rpc-url', rpcUrl, '-M', 'deposit=10'], {
-        input: '',
-      })
+      const { stdout } = await runAsync(
+        [httpServer.url, '--rpc-url', rpcUrl, '-M', 'deposit=10'],
+        {
+          input: '',
+        },
+      )
       expect(stdout.trim()).toBe('Hello world!')
     } finally {
       httpServer.close()
@@ -404,7 +406,7 @@ describe('session sse (examples/session/sse)', () => {
     })
     try {
       await expect(
-        runAsync(['fetch', httpServer.url, '--rpc-url', rpcUrl, '--fail'], { input: '' }),
+        runAsync([httpServer.url, '--rpc-url', rpcUrl, '--fail'], { input: '' }),
       ).rejects.toThrow()
     } finally {
       httpServer.close()
@@ -444,15 +446,18 @@ describe('stripe charge', () => {
     })
 
     try {
-      const { stdout } = await runAsync(['fetch', appServer.url, '-s', '-M', 'paymentMethod=pm_card_visa'], {
-        input: '',
-        env: {
-          ...process.env,
-          NODE_NO_WARNINGS: '1',
-          MPPX_STRIPE_SECRET_KEY: 'sk_test_mock',
-          MPPX_STRIPE_SPT_URL: sptServer.url,
+      const { stdout } = await runAsync(
+        [appServer.url, '-s', '-M', 'paymentMethod=pm_card_visa'],
+        {
+          input: '',
+          env: {
+            ...process.env,
+            NODE_NO_WARNINGS: '1',
+            MPPX_STRIPE_SECRET_KEY: 'sk_test_mock',
+            MPPX_STRIPE_SPT_URL: sptServer.url,
+          },
         },
-      })
+      )
       expect(stdout).toContain('paid')
     } finally {
       appServer.close()
@@ -482,14 +487,17 @@ describe('stripe charge', () => {
     })
 
     try {
-      const result = await runAsync(['fetch', appServer.url, '-s', '-M', 'paymentMethod=pm_card_visa'], {
-        input: '',
-        env: {
-          ...process.env,
-          NODE_NO_WARNINGS: '1',
-          MPPX_STRIPE_SECRET_KEY: '',
+      const result = await runAsync(
+        [appServer.url, '-s', '-M', 'paymentMethod=pm_card_visa'],
+        {
+          input: '',
+          env: {
+            ...process.env,
+            NODE_NO_WARNINGS: '1',
+            MPPX_STRIPE_SECRET_KEY: '',
+          },
         },
-      }).catch((err) => err as Error)
+      ).catch((err) => err as Error)
       expect(result).toBeInstanceOf(Error)
       expect((result as Error).message).toContain('MPPX_STRIPE_SECRET_KEY')
     } finally {
@@ -519,14 +527,17 @@ describe('stripe charge', () => {
     })
 
     try {
-      const result = await runAsync(['fetch', appServer.url, '-s', '-M', 'paymentMethod=pm_card_visa'], {
-        input: '',
-        env: {
-          ...process.env,
-          NODE_NO_WARNINGS: '1',
-          MPPX_STRIPE_SECRET_KEY: 'sk_live_fake',
+      const result = await runAsync(
+        [appServer.url, '-s', '-M', 'paymentMethod=pm_card_visa'],
+        {
+          input: '',
+          env: {
+            ...process.env,
+            NODE_NO_WARNINGS: '1',
+            MPPX_STRIPE_SECRET_KEY: 'sk_live_fake',
+          },
         },
-      }).catch((err) => err as Error)
+      ).catch((err) => err as Error)
       expect(result).toBeInstanceOf(Error)
       expect((result as Error).message).toContain('test mode')
     } finally {
@@ -679,6 +690,6 @@ describe.skipIf(!!process.env.CI)('account', () => {
 test('mppx --help', () => {
   const stdout = run(['--help'])
   expect(stdout).toContain('mppx')
-  expect(stdout).toContain('fetch')
+  expect(stdout).toContain('<url>')
   expect(stdout).toContain('account')
 })

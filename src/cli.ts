@@ -25,10 +25,7 @@ const { name, version } = require('../package.json') as { name: string; version:
 const cli = Cli.create('mppx', {
   version,
   description: 'Make HTTP requests with automatic payment',
-})
-
-cli.command('fetch', {
-  description: 'Make HTTP request with automatic payment',
+  usage: [{ suffix: '<url> [options]' }],
   args: z.object({
     url: z.string().describe('URL to make payment request to'),
   }),
@@ -39,12 +36,24 @@ cli.command('fetch', {
     fail: z.boolean().optional().describe('Fail silently on HTTP errors (exit 22)'),
     header: z.array(z.string()).optional().describe('Add header (repeatable)'),
     include: z.boolean().optional().describe('Include response headers in output'),
-    insecure: z.boolean().optional().describe('Skip TLS certificate verification (true for localhost/.local)'),
-    jsonBody: z.string().optional().describe('Send JSON body (sets Content-Type and Accept, implies POST)'),
+    insecure: z
+      .boolean()
+      .optional()
+      .describe('Skip TLS certificate verification (true for localhost/.local)'),
+    jsonBody: z
+      .string()
+      .optional()
+      .describe('Send JSON body (sets Content-Type and Accept, implies POST)'),
     location: z.boolean().optional().describe('Follow redirects'),
     method: z.string().optional().describe('HTTP method'),
-    methodOpt: z.array(z.string()).optional().describe('Method-specific option (key=value, repeatable)'),
-    rpcUrl: z.string().optional().describe('RPC endpoint, defaults to public RPC for chain (env: MPPX_RPC_URL)'),
+    methodOpt: z
+      .array(z.string())
+      .optional()
+      .describe('Method-specific option (key=value, repeatable)'),
+    rpcUrl: z
+      .string()
+      .optional()
+      .describe('RPC endpoint, defaults to public RPC for chain (env: MPPX_RPC_URL)'),
     silent: z.boolean().optional().describe('Silent mode (suppress progress and info)'),
     userAgent: z.string().optional().describe('Set User-Agent header'),
     verbose: z.boolean().optional().describe('Show request/response headers'),
@@ -67,7 +76,11 @@ cli.command('fetch', {
   },
   examples: [
     { args: { url: 'example.com/content' }, description: 'Make a payment request' },
-    { args: { url: 'example.com/api' }, options: { jsonBody: '{"key":"value"}' }, description: 'POST JSON with payment' },
+    {
+      args: { url: 'example.com/api' },
+      options: { jsonBody: '{"key":"value"}' },
+      description: 'POST JSON with payment',
+    },
   ],
   async run({ args, options }) {
     const methodOpts = parseMethodOpts(options.methodOpt)
@@ -456,9 +469,9 @@ cli.command('fetch', {
             : ''
           const prefix = confirmEnabled ? '' : '\n'
           info(
-          `${prefix}${pc.dim(`Channel opened ${parsed.payload.channelId}`)}${depositDisplay}\n`,
+            `${prefix}${pc.dim(`Channel opened ${parsed.payload.channelId}`)}${depositDisplay}\n`,
           )
-          } else {
+        } else {
           const prefix = confirmEnabled ? '' : '\n'
           info(`${prefix}${pc.dim(`Channel reused ${parsed.payload.channelId}`)}\n`)
         }
@@ -968,9 +981,7 @@ account.command('delete', {
       process.stderr.write(pc.dim(`Delete account "${options.account}"\n`))
       process.stderr.write(pc.dim(`  Address  ${addrDisplay}\n`))
       for (let i = 0; i < balanceLines.length; i++)
-        process.stderr.write(
-          pc.dim(`  ${i === 0 ? 'Balance' : '       '}  ${balanceLines[i]}\n`),
-        )
+        process.stderr.write(pc.dim(`  ${i === 0 ? 'Balance' : '       '}  ${balanceLines[i]}\n`))
       process.stderr.write(pc.dim('This action cannot be undone\n\n'))
       const confirmed = await confirm('Confirm delete?')
       if (!confirmed) {
