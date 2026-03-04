@@ -461,7 +461,45 @@ describe('deserialize', () => {
       ),
     ).toThrow('Duplicate parameter: id')
   })
-})
+
+    test('behavior: extracts Payment challenge when WWW-Authenticate has multiple schemes', () => {
+      const original = Challenge.from({
+        id: 'abc123',
+        realm: 'api.example.com',
+        method: 'tempo',
+        intent: 'charge',
+        request: { amount: '1000000', currency: 'USD' },
+      })
+
+      const challenge = Challenge.deserialize(
+        `Bearer realm="api", ${Challenge.serialize(original)}`,
+      )
+
+      expect(challenge.id).toBe('abc123')
+      expect(challenge.method).toBe('tempo')
+    })
+
+    test('behavior: deserializes escaped quoted-string values', () => {
+      const base = Challenge.serialize(
+        Challenge.from({
+          id: 'abc123',
+          realm: 'api.example.com',
+          method: 'tempo',
+          intent: 'charge',
+          request: { amount: '1000000', currency: 'USD' },
+        }),
+      )
+      const request = /request="([^"]+)"/.exec(base)?.[1]
+      if (!request) throw new Error('request missing from serialized challenge')
+      const header =
+        'Payment id="abc123", realm="api.example.com", method="tempo", intent="charge", request="' +
+        request +
+        '", description="premium \\"access\\""'
+
+      const challenge = Challenge.deserialize(header)
+      expect(challenge.description).toBe('premium "access"')
+    })
+  })
 
 describe('fromHeaders', () => {
   test('behavior: extracts challenge from Headers object', () => {

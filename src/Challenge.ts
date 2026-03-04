@@ -319,20 +319,11 @@ export function deserialize<const methods extends readonly Method.Method[] | und
   value: string,
   options?: from.Options<methods>,
 ): from.ReturnType<from.Parameters, methods> {
-  const prefixMatch = value.match(/^Payment\s+(.+)$/i)
-  if (!prefixMatch?.[1]) throw new Error('Missing Payment scheme.')
+  const scheme = extractPaymentScheme(value)
+  if (!scheme) throw new Error('Missing Payment scheme.')
 
-  const params = prefixMatch[1]
-  const result: Record<string, string> = {}
-
-  for (const match of params.matchAll(/(\w+)="([^"]+)"/g)) {
-    const key = match[1]
-    const value = match[2]
-    if (key && value) {
-      if (key in result) throw new Error(`Duplicate parameter: ${key}`)
-      result[key] = value
-    }
-  }
+  const params = scheme.replace(/^Payment\s+/i, '')
+  const result = parseAuthParams(params)
 
   const { request, opaque, ...rest } = result
   if (!request) throw new Error('Missing request parameter.')
@@ -347,6 +338,101 @@ export function deserialize<const methods extends readonly Method.Method[] | und
     } as from.Parameters,
     options,
   )
+}
+
+/** @internal Extracts the `Payment` scheme from a WWW-Authenticate value that may contain multiple schemes. */
+function extractPaymentScheme(header: string): string | null {
+  let inQuotes = false
+  let escaped = false
+
+  for (let i = 0; i < header.length; i++) {
+    const char = header[i]
+
+    if (inQuotes) {
+      if (escaped) escaped = false
+      else if (char === '\\') escaped = true
+      else if (char === '"') inQuotes = false
+      continue
+    }
+
+    if (char === '"') {
+      inQuotes = true
+      continue
+    }
+
+    if (!startsWithSchemeToken(header, i, 'Payment')) continue
+
+    const prefix = header.slice(0, i)
+    if (prefix.trim() && !prefix.trimEnd().endsWith(',')) continue
+
+    return header.slice(i)
+  }
+
+  return null
+}
+
+/** @internal Parses auth-params with support for escaped quoted-string values. */
+function parseAuthParams(input: string): Record<string, string> {
+  const result: Record<string, string> = {}
+  let i = 0
+
+  while (i < input.length) {
+    while (i < input.length && /[\s,]/.test(input[i] ?? '')) i++
+    if (i >= input.length) break
+
+    const keyStart = i
+    while (i < input.length && /[A-Za-z0-9_-]/.test(input[i] ?? '')) i++
+    const key = input.slice(keyStart, i)
+    if (!key) throw new Error('Malformed auth-param.')
+
+    while (i < input.length && /\s/.test(input[i] ?? '')) i++
+
+    // If there is no '=' after a token, this is likely another auth scheme.
+    if (input[i] !== '=') break
+    i++
+
+    while (i < input.length && /\s/.test(input[i] ?? '')) i++
+
+    let value = ''
+    if (input[i] === '"') {
+      i++
+      let escaped = false
+      while (i < input.length) {
+        const char = input[i]!
+        i++
+
+        if (escaped) {
+          value += char
+          escaped = false
+          continue
+        }
+
+        if (char === '\\') {
+          escaped = true
+          continue
+        }
+
+        if (char === '"') break
+        value += char
+      }
+    } else {
+      const valueStart = i
+      while (i < input.length && input[i] !== ',') i++
+      value = input.slice(valueStart, i).trim()
+    }
+
+    if (key in result) throw new Error(`Duplicate parameter: ${key}`)
+    result[key] = value
+  }
+
+  return result
+}
+
+/** @internal */
+function startsWithSchemeToken(value: string, index: number, token: string): boolean {
+  if (!value.slice(index).toLowerCase().startsWith(token.toLowerCase())) return false
+  const next = value[index + token.length]
+  return Boolean(next && /\s/.test(next))
 }
 
 /**
