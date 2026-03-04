@@ -319,10 +319,9 @@ export function deserialize<const methods extends readonly Method.Method[] | und
   value: string,
   options?: from.Options<methods>,
 ): from.ReturnType<from.Parameters, methods> {
-  const scheme = extractPaymentScheme(value)
-  if (!scheme) throw new Error('Missing Payment scheme.')
+  const params = extractPaymentAuthParams(value)
+  if (!params) throw new Error('Missing Payment scheme.')
 
-  const params = scheme.replace(/^Payment\s+/i, '')
   const result = parseAuthParams(params)
 
   const { request, opaque, ...rest } = result
@@ -341,7 +340,8 @@ export function deserialize<const methods extends readonly Method.Method[] | und
 }
 
 /** @internal Extracts the `Payment` scheme from a WWW-Authenticate value that may contain multiple schemes. */
-function extractPaymentScheme(header: string): string | null {
+function extractPaymentAuthParams(header: string): string | null {
+  const token = 'Payment'
   let inQuotes = false
   let escaped = false
 
@@ -360,12 +360,14 @@ function extractPaymentScheme(header: string): string | null {
       continue
     }
 
-    if (!startsWithSchemeToken(header, i, 'Payment')) continue
+    if (!startsWithSchemeToken(header, i, token)) continue
 
     const prefix = header.slice(0, i)
     if (prefix.trim() && !prefix.trimEnd().endsWith(',')) continue
 
-    return header.slice(i)
+    let paramsStart = i + token.length
+    while (paramsStart < header.length && /\s/.test(header[paramsStart] ?? '')) paramsStart++
+    return header.slice(paramsStart)
   }
 
   return null
@@ -393,39 +395,54 @@ function parseAuthParams(input: string): Record<string, string> {
 
     while (i < input.length && /\s/.test(input[i] ?? '')) i++
 
-    let value = ''
-    if (input[i] === '"') {
-      i++
-      let escaped = false
-      while (i < input.length) {
-        const char = input[i]!
-        i++
-
-        if (escaped) {
-          value += char
-          escaped = false
-          continue
-        }
-
-        if (char === '\\') {
-          escaped = true
-          continue
-        }
-
-        if (char === '"') break
-        value += char
-      }
-    } else {
-      const valueStart = i
-      while (i < input.length && input[i] !== ',') i++
-      value = input.slice(valueStart, i).trim()
-    }
+    const [value, nextIndex] = readAuthParamValue(input, i)
+    i = nextIndex
 
     if (key in result) throw new Error(`Duplicate parameter: ${key}`)
     result[key] = value
   }
 
   return result
+}
+
+/** @internal */
+function readAuthParamValue(input: string, start: number): [value: string, nextIndex: number] {
+  if (input[start] === '"') return readQuotedAuthParamValue(input, start + 1)
+
+  let i = start
+  while (i < input.length && input[i] !== ',') i++
+  return [input.slice(start, i).trim(), i]
+}
+
+/** @internal */
+function readQuotedAuthParamValue(
+  input: string,
+  start: number,
+): [value: string, nextIndex: number] {
+  let i = start
+  let value = ''
+  let escaped = false
+
+  while (i < input.length) {
+    const char = input[i]!
+    i++
+
+    if (escaped) {
+      value += char
+      escaped = false
+      continue
+    }
+
+    if (char === '\\') {
+      escaped = true
+      continue
+    }
+
+    if (char === '"') return [value, i]
+    value += char
+  }
+
+  throw new Error('Unterminated quoted-string.')
 }
 
 /** @internal */

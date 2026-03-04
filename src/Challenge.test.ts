@@ -402,17 +402,18 @@ describe('serialize', () => {
 })
 
 describe('deserialize', () => {
-  test('behavior: deserializes WWW-Authenticate header', () => {
-    const original = Challenge.from({
+  const paymentHeader = Challenge.serialize(
+    Challenge.from({
       id: 'abc123',
       realm: 'api.example.com',
       method: 'tempo',
       intent: 'charge',
       request: { amount: '1000000', currency: 'USD' },
-    })
+    }),
+  )
 
-    const header = Challenge.serialize(original)
-    const challenge = Challenge.deserialize(header)
+  test('behavior: deserializes WWW-Authenticate header', () => {
+    const challenge = Challenge.deserialize(paymentHeader)
 
     expect(challenge).toMatchInlineSnapshot(`
       {
@@ -446,56 +447,100 @@ describe('deserialize', () => {
     expect(challenge?.expires).toBe('2025-01-06T12:00:00Z')
   })
 
-  test('error: throws for missing Payment scheme', () => {
-    expect(() => Challenge.deserialize('Bearer token')).toThrow('Missing Payment scheme.')
+  test.each([
+    { name: 'single Payment scheme', header: paymentHeader },
+    { name: 'Payment after another scheme', header: `Bearer realm="api", ${paymentHeader}` },
+    {
+      name: 'scheme token is case-insensitive',
+      header: paymentHeader.replace(/^Payment /, 'payment '),
+    },
+    {
+      name: 'quoted values in previous schemes do not interfere',
+      header: `Bearer error_description="retry with Payment challenge", ${paymentHeader}`,
+    },
+    {
+      name: 'parses Payment params before the next scheme token',
+      header: `${paymentHeader}, Bearer realm="fallback"`,
+    },
+  ])('behavior: extracts challenge for $name', ({ header }) => {
+    const challenge = Challenge.deserialize(header)
+
+    expect(challenge.id).toBe('abc123')
+    expect(challenge.method).toBe('tempo')
+    expect(challenge.intent).toBe('charge')
+  })
+
+  const request = /request="([^"]+)"/.exec(paymentHeader)?.[1]
+  if (!request) throw new Error('request missing from serialized challenge')
+
+  test.each([
+    {
+      name: 'escaped quotes',
+      headerValue: 'premium \\"access\\"',
+      expected: 'premium "access"',
+    },
+    {
+      name: 'escaped comma',
+      headerValue: 'tier\\,premium',
+      expected: 'tier,premium',
+    },
+    {
+      name: 'escaped backslash',
+      headerValue: 'path\\\\alpha',
+      expected: 'path\\alpha',
+    },
+  ])('behavior: deserializes $name in quoted-string values', ({ headerValue, expected }) => {
+    const header =
+      'Payment id="abc123", realm="api.example.com", method="tempo", intent="charge", request="' +
+      request +
+      `", description="${headerValue}"`
+
+    const challenge = Challenge.deserialize(header)
+    expect(challenge.description).toBe(expected)
+  })
+
+  test.each([
+    {
+      name: 'missing Payment scheme',
+      header: 'Bearer token',
+      error: 'Missing Payment scheme.',
+    },
+    {
+      name: 'duplicate parameters',
+      header: 'Payment id="a", realm="api", method="tempo", intent="charge", request="e30", id="b"',
+      error: 'Duplicate parameter: id',
+    },
+    {
+      name: 'unterminated quoted-string',
+      header:
+        'Payment id="a", realm="api", method="tempo", intent="charge", request="e30", description="oops',
+      error: 'Unterminated quoted-string.',
+    },
+    {
+      name: 'invalid method casing',
+      header: 'Payment id="a", realm="api", method="Tempo", intent="charge", request="e30"',
+      error: 'Invalid method: "Tempo". Must be lowercase per spec.',
+    },
+    {
+      name: 'malformed auth-param',
+      header:
+        'Payment id="a", realm="api", method="tempo", intent="charge", request="e30", ="value"',
+      error: 'Malformed auth-param.',
+    },
+  ])('error: throws for $name', ({ header, error }) => {
+    expect(() => Challenge.deserialize(header)).toThrow(error)
   })
 
   test('error: missing required fields', () => {
     expect(() => Challenge.deserialize('Payment realm="test"')).toThrow()
   })
 
-  test('error: throws for duplicate parameters', () => {
+  test('error: missing request parameter after valid Payment scheme', () => {
     expect(() =>
       Challenge.deserialize(
-        'Payment id="a", realm="api", method="tempo", intent="charge", request="e30", id="b"',
+        'Bearer realm="api", Payment id="a", realm="api", method="tempo", intent="charge"',
       ),
-    ).toThrow('Duplicate parameter: id')
-  })
-
-  test('behavior: extracts Payment challenge when WWW-Authenticate has multiple schemes', () => {
-    const original = Challenge.from({
-      id: 'abc123',
-      realm: 'api.example.com',
-      method: 'tempo',
-      intent: 'charge',
-      request: { amount: '1000000', currency: 'USD' },
-    })
-
-    const challenge = Challenge.deserialize(`Bearer realm="api", ${Challenge.serialize(original)}`)
-
-    expect(challenge.id).toBe('abc123')
-    expect(challenge.method).toBe('tempo')
-  })
-
-  test('behavior: deserializes escaped quoted-string values', () => {
-    const base = Challenge.serialize(
-      Challenge.from({
-        id: 'abc123',
-        realm: 'api.example.com',
-        method: 'tempo',
-        intent: 'charge',
-        request: { amount: '1000000', currency: 'USD' },
-      }),
-    )
-    const request = /request="([^"]+)"/.exec(base)?.[1]
-    if (!request) throw new Error('request missing from serialized challenge')
-    const header =
-      'Payment id="abc123", realm="api.example.com", method="tempo", intent="charge", request="' +
-      request +
-      '", description="premium \\"access\\""'
-
-    const challenge = Challenge.deserialize(header)
-    expect(challenge.description).toBe('premium "access"')
+    ).toThrow('Missing request parameter.')
   })
 })
 
