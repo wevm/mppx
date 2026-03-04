@@ -82,3 +82,25 @@ describe('charge', () => {
     expect(result.success).toBe(false)
   })
 })
+
+describe('session', () => {
+  test('has correct name and intent', () => {
+    expect(Methods.session.intent).toBe('session')
+    expect(Methods.session.name).toBe('tempo')
+  })
+
+  test('schema: encodes minVoucherDelta in base units', () => {
+    const request = Methods.session.schema.request.parse({
+      amount: '1',
+      currency: '0x20c0000000000000000000000000000000000001',
+      decimals: 6,
+      escrowContract: '0x1234567890abcdef1234567890abcdef12345678',
+      minVoucherDelta: '0.1',
+      recipient: '0x1234567890abcdef1234567890abcdef12345678',
+      unitType: 'token',
+    })
+
+    expect(request.amount).toBe('1000000')
+    expect(request.methodDetails?.minVoucherDelta).toBe('100000')
+  })
+})

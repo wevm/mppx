@@ -137,7 +137,9 @@ export const session = Method.from({
           methodDetails: {
             escrowContract,
             ...(channelId !== undefined && { channelId }),
-            ...(minVoucherDelta !== undefined && { minVoucherDelta }),
+            ...(minVoucherDelta !== undefined && {
+              minVoucherDelta: parseUnits(minVoucherDelta, decimals).toString(),
+            }),
             ...(chainId !== undefined && { chainId }),
             ...(feePayer !== undefined && { feePayer }),
           },
