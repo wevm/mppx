@@ -1,5 +1,12 @@
 # mppx
 
+## 0.3.14
+
+### Patch Changes
+
+- 345425f: Removed `expires` from charge request schemas (tempo, stripe). Expiry is now conveyed exclusively via the `expires` auth-param on the Challenge, not duplicated in the request body. Server handlers default to `Expires.minutes(5)` when `expires` is not explicitly provided.
+- eb19f32: Added `mode` parameter to `tempo.charge()` client — `'push'` (client broadcasts tx, sends hash) and `'pull'` (client signs tx, server broadcasts). Defaults to `'push'` for JSON-RPC accounts, `'pull'` otherwise.
+
 ## 0.3.13
 
 ### Patch Changes
