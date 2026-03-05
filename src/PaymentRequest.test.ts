@@ -26,13 +26,11 @@ describe('fromMethod', () => {
       currency: '0x20c0000000000000000000000000000000000001',
       decimals: 6,
       recipient: '0x742d35Cc6634C0532925a3b844Bc9e7595f8fE00',
-      expires: '2025-01-06T12:00:00Z',
     })
     expect(request).toMatchInlineSnapshot(`
       {
         "amount": "1000000",
         "currency": "0x20c0000000000000000000000000000000000001",
-        "expires": "2025-01-06T12:00:00Z",
         "recipient": "0x742d35Cc6634C0532925a3b844Bc9e7595f8fE00",
       }
     `)
@@ -44,14 +42,12 @@ describe('fromMethod', () => {
       currency: '0x20c0000000000000000000000000000000000001',
       decimals: 6,
       recipient: '0x742d35Cc6634C0532925a3b844Bc9e7595f8fE00',
-      expires: '2025-01-06T12:00:00Z',
       chainId: 42431,
     })
     expect(request).toMatchInlineSnapshot(`
       {
         "amount": "1000000",
         "currency": "0x20c0000000000000000000000000000000000001",
-        "expires": "2025-01-06T12:00:00Z",
         "methodDetails": {
           "chainId": 42431,
         },
@@ -66,7 +62,6 @@ describe('fromMethod', () => {
         amount: 123,
         currency: '0x20c0000000000000000000000000000000000001',
         recipient: '0x742d35Cc6634C0532925a3b844Bc9e7595f8fE00',
-        expires: '2025-01-06T12:00:00Z',
       } as any),
     ).toThrowErrorMatchingInlineSnapshot(`
       [$ZodError: [

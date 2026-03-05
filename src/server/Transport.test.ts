@@ -10,12 +10,12 @@ const secretKey = 'test-secret-key'
 const challenge = Challenge.fromMethod(Methods.charge, {
   realm,
   secretKey,
+  expires: '2025-01-01T00:00:00.000Z',
   request: {
     amount: '1000',
     currency: '0x20c0000000000000000000000000000000000001',
     decimals: 6,
     recipient: '0x742d35Cc6634C0532925a3b844Bc9e7595f8fE00',
-    expires: '2025-01-01T00:00:00.000Z',
   },
 })
 
@@ -43,14 +43,13 @@ describe('http', () => {
         {
           "challenge": {
             "expires": "2025-01-01T00:00:00.000Z",
-            "id": "4XKyFaMO73Ypu-wOofzu3F8pRIt8vb7zxmWB2GgHAsE",
+            "id": "QNLtjAvrKKR0VlEGSIowhULqcGlCDU4fjrP-O7js8XE",
             "intent": "charge",
             "method": "tempo",
             "realm": "api.example.com",
             "request": {
               "amount": "1000000000",
               "currency": "0x20c0000000000000000000000000000000000001",
-              "expires": "2025-01-01T00:00:00.000Z",
               "recipient": "0x742d35Cc6634C0532925a3b844Bc9e7595f8fE00",
             },
           },
@@ -93,7 +92,7 @@ describe('http', () => {
         {
           "headers": {
             "cache-control": "no-store",
-            "www-authenticate": "Payment id="4XKyFaMO73Ypu-wOofzu3F8pRIt8vb7zxmWB2GgHAsE", realm="api.example.com", method="tempo", intent="charge", request="eyJhbW91bnQiOiIxMDAwMDAwMDAwIiwiY3VycmVuY3kiOiIweDIwYzAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDEiLCJleHBpcmVzIjoiMjAyNS0wMS0wMVQwMDowMDowMC4wMDBaIiwicmVjaXBpZW50IjoiMHg3NDJkMzVDYzY2MzRDMDUzMjkyNWEzYjg0NEJjOWU3NTk1ZjhmRTAwIn0", expires="2025-01-01T00:00:00.000Z"",
+            "www-authenticate": "Payment id="QNLtjAvrKKR0VlEGSIowhULqcGlCDU4fjrP-O7js8XE", realm="api.example.com", method="tempo", intent="charge", request="eyJhbW91bnQiOiIxMDAwMDAwMDAwIiwiY3VycmVuY3kiOiIweDIwYzAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDEiLCJyZWNpcGllbnQiOiIweDc0MmQzNUNjNjYzNEMwNTMyOTI1YTNiODQ0QmM5ZTc1OTVmOGZFMDAifQ", expires="2025-01-01T00:00:00.000Z"",
           },
           "status": 402,
         }
@@ -183,14 +182,13 @@ describe('mcp', () => {
         {
           "challenge": {
             "expires": "2025-01-01T00:00:00.000Z",
-            "id": "4XKyFaMO73Ypu-wOofzu3F8pRIt8vb7zxmWB2GgHAsE",
+            "id": "QNLtjAvrKKR0VlEGSIowhULqcGlCDU4fjrP-O7js8XE",
             "intent": "charge",
             "method": "tempo",
             "realm": "api.example.com",
             "request": {
               "amount": "1000000000",
               "currency": "0x20c0000000000000000000000000000000000001",
-              "expires": "2025-01-01T00:00:00.000Z",
               "recipient": "0x742d35Cc6634C0532925a3b844Bc9e7595f8fE00",
             },
           },
@@ -221,14 +219,13 @@ describe('mcp', () => {
               "challenges": [
                 {
                   "expires": "2025-01-01T00:00:00.000Z",
-                  "id": "4XKyFaMO73Ypu-wOofzu3F8pRIt8vb7zxmWB2GgHAsE",
+                  "id": "QNLtjAvrKKR0VlEGSIowhULqcGlCDU4fjrP-O7js8XE",
                   "intent": "charge",
                   "method": "tempo",
                   "realm": "api.example.com",
                   "request": {
                     "amount": "1000000000",
                     "currency": "0x20c0000000000000000000000000000000000001",
-                    "expires": "2025-01-01T00:00:00.000Z",
                     "recipient": "0x742d35Cc6634C0532925a3b844Bc9e7595f8fE00",
                   },
                 },
@@ -262,7 +259,7 @@ describe('mcp', () => {
           "result": {
             "_meta": {
               "org.paymentauth/receipt": {
-                "challengeId": "4XKyFaMO73Ypu-wOofzu3F8pRIt8vb7zxmWB2GgHAsE",
+                "challengeId": "QNLtjAvrKKR0VlEGSIowhULqcGlCDU4fjrP-O7js8XE",
                 "method": "tempo",
                 "reference": "0xtxhash",
                 "status": "success",

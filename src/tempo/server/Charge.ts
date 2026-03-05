@@ -103,7 +103,8 @@ export function charge<const parameters extends charge.Parameters>(
       const client = await getClient({ chainId })
 
       const { request: challengeRequest } = challenge
-      const { amount, expires, methodDetails } = challengeRequest
+      const { amount, methodDetails } = challengeRequest
+      const expires = challenge.expires
 
       const currency = challengeRequest.currency as `0x${string}`
       const recipient = challengeRequest.recipient as `0x${string}`

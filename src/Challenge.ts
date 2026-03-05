@@ -125,7 +125,7 @@ export function from<
     secretKey,
   } = parameters
 
-  const expires = (parameters.expires ?? request.expires) as string
+  const expires = parameters.expires as string
   const id = secretKey
     ? computeId({ ...parameters, expires, ...(meta && { opaque: meta }) }, { secretKey })
     : (parameters as { id: string }).id
@@ -205,11 +205,11 @@ export declare namespace from {
  *   Methods.charge,
  *   {
  *     realm: 'api.example.com',
+ *     expires: '2025-01-06T12:00:00Z',
  *     request: {
  *       amount: '1000000',
  *       currency: '0x20c0000000000000000000000000000000000001',
  *       recipient: '0x742d35Cc6634C0532925a3b844Bc9e7595f8fE00',
- *       expires: '2025-01-06T12:00:00Z',
  *     },
  *   },
  *   { secretKey: 'my-secret' },
@@ -319,20 +319,10 @@ export function deserialize<const methods extends readonly Method.Method[] | und
   value: string,
   options?: from.Options<methods>,
 ): from.ReturnType<from.Parameters, methods> {
-  const prefixMatch = value.match(/^Payment\s+(.+)$/i)
-  if (!prefixMatch?.[1]) throw new Error('Missing Payment scheme.')
+  const params = extractPaymentAuthParams(value)
+  if (!params) throw new Error('Missing Payment scheme.')
 
-  const params = prefixMatch[1]
-  const result: Record<string, string> = {}
-
-  for (const match of params.matchAll(/(\w+)="([^"]+)"/g)) {
-    const key = match[1]
-    const value = match[2]
-    if (key && value) {
-      if (key in result) throw new Error(`Duplicate parameter: ${key}`)
-      result[key] = value
-    }
-  }
+  const result = parseAuthParams(params)
 
   const { request, opaque, ...rest } = result
   if (!request) throw new Error('Missing request parameter.')
@@ -347,6 +337,119 @@ export function deserialize<const methods extends readonly Method.Method[] | und
     } as from.Parameters,
     options,
   )
+}
+
+/** @internal Extracts the `Payment` scheme from a WWW-Authenticate value that may contain multiple schemes. */
+function extractPaymentAuthParams(header: string): string | null {
+  const token = 'Payment'
+  let inQuotes = false
+  let escaped = false
+
+  for (let i = 0; i < header.length; i++) {
+    const char = header[i]
+
+    if (inQuotes) {
+      if (escaped) escaped = false
+      else if (char === '\\') escaped = true
+      else if (char === '"') inQuotes = false
+      continue
+    }
+
+    if (char === '"') {
+      inQuotes = true
+      continue
+    }
+
+    if (!startsWithSchemeToken(header, i, token)) continue
+
+    const prefix = header.slice(0, i)
+    if (prefix.trim() && !prefix.trimEnd().endsWith(',')) continue
+
+    let paramsStart = i + token.length
+    while (paramsStart < header.length && /\s/.test(header[paramsStart] ?? '')) paramsStart++
+    return header.slice(paramsStart)
+  }
+
+  return null
+}
+
+/** @internal Parses auth-params with support for escaped quoted-string values. */
+function parseAuthParams(input: string): Record<string, string> {
+  const result: Record<string, string> = {}
+  let i = 0
+
+  while (i < input.length) {
+    while (i < input.length && /[\s,]/.test(input[i] ?? '')) i++
+    if (i >= input.length) break
+
+    const keyStart = i
+    while (i < input.length && /[A-Za-z0-9_-]/.test(input[i] ?? '')) i++
+    const key = input.slice(keyStart, i)
+    if (!key) throw new Error('Malformed auth-param.')
+
+    while (i < input.length && /\s/.test(input[i] ?? '')) i++
+
+    // If there is no '=' after a token, this is likely another auth scheme.
+    if (input[i] !== '=') break
+    i++
+
+    while (i < input.length && /\s/.test(input[i] ?? '')) i++
+
+    const [value, nextIndex] = readAuthParamValue(input, i)
+    i = nextIndex
+
+    if (key in result) throw new Error(`Duplicate parameter: ${key}`)
+    result[key] = value
+  }
+
+  return result
+}
+
+/** @internal */
+function readAuthParamValue(input: string, start: number): [value: string, nextIndex: number] {
+  if (input[start] === '"') return readQuotedAuthParamValue(input, start + 1)
+
+  let i = start
+  while (i < input.length && input[i] !== ',') i++
+  return [input.slice(start, i).trim(), i]
+}
+
+/** @internal */
+function readQuotedAuthParamValue(
+  input: string,
+  start: number,
+): [value: string, nextIndex: number] {
+  let i = start
+  let value = ''
+  let escaped = false
+
+  while (i < input.length) {
+    const char = input[i]!
+    i++
+
+    if (escaped) {
+      value += char
+      escaped = false
+      continue
+    }
+
+    if (char === '\\') {
+      escaped = true
+      continue
+    }
+
+    if (char === '"') return [value, i]
+    value += char
+  }
+
+  throw new Error('Unterminated quoted-string.')
+}
+
+/** @internal */
+function startsWithSchemeToken(value: string, index: number, token: string): boolean {
+  if (!value.slice(index).toLowerCase().startsWith(token.toLowerCase())) return false
+  const next = value[index + token.length]
+  return Boolean(next && /\s/.test(next))
 }
 
 /**

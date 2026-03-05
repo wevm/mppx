@@ -1,6 +1,5 @@
 import type { Account } from 'viem'
 import { parseUnits } from 'viem'
-import * as Expires from '../Expires.js'
 import * as Method from '../Method.js'
 import * as z from '../zod.js'
 
@@ -26,7 +25,6 @@ export const charge = Method.from({
         currency: z.string(),
         decimals: z.number(),
         description: z.optional(z.string()),
-        expires: z._default(z.datetime(), () => Expires.minutes(5)),
         externalId: z.optional(z.string()),
         feePayer: z.optional(
           z.pipe(
@@ -137,7 +135,9 @@ export const session = Method.from({
           methodDetails: {
             escrowContract,
             ...(channelId !== undefined && { channelId }),
-            ...(minVoucherDelta !== undefined && { minVoucherDelta }),
+            ...(minVoucherDelta !== undefined && {
+              minVoucherDelta: parseUnits(minVoucherDelta, decimals).toString(),
+            }),
             ...(chainId !== undefined && { chainId }),
             ...(feePayer !== undefined && { feePayer }),
           },

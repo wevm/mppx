@@ -66,8 +66,8 @@ export function charge(parameters: charge.Parameters) {
         )
       }
 
-      const expiresAt = challenge.request.expires
-        ? Math.floor(new Date(challenge.request.expires as string).getTime() / 1000)
+      const expiresAt = challenge.expires
+        ? Math.floor(new Date(challenge.expires).getTime() / 1000)
         : Math.floor(Date.now() / 1000) + 3600
 
       const spt = await createToken({

@@ -66,8 +66,8 @@ export function charge<const parameters extends charge.Parameters>(parameters: p
       const { challenge } = credential
       const { request } = challenge
 
-      if (request.expires && new Date(request.expires) < new Date())
-        throw new PaymentExpiredError({ expires: request.expires })
+      if (challenge.expires && new Date(challenge.expires) < new Date())
+        throw new PaymentExpiredError({ expires: challenge.expires })
 
       const parsed = Methods.charge.schema.credential.payload.safeParse(credential.payload)
       if (!parsed.success) throw new Error('Invalid credential payload: missing or malformed spt')

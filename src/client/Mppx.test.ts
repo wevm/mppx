@@ -82,12 +82,12 @@ describe('createCredential', () => {
     const challenge = Challenge.fromMethod(Methods.charge, {
       realm,
       secretKey,
+      expires: new Date(Date.now() + 60_000).toISOString(),
       request: {
         amount: '1000',
         currency: '0x1234567890123456789012345678901234567890',
         decimals: 6,
         recipient: '0x1234567890123456789012345678901234567890',
-        expires: new Date(Date.now() + 60_000).toISOString(),
       },
     })
 
@@ -164,11 +164,11 @@ describe('createCredential', () => {
       realm,
       method: 'stripe',
       intent: 'charge',
+      expires: new Date(Date.now() + 60_000).toISOString(),
       request: {
         amount: '2000',
         currency: '0xabcd',
         recipient: '0xefgh',
-        expires: new Date(Date.now() + 60_000).toISOString(),
       },
     })
 
@@ -195,12 +195,12 @@ describe('createCredential', () => {
     const challenge = Challenge.fromMethod(Methods.charge, {
       realm,
       secretKey,
+      expires: new Date(Date.now() + 60_000).toISOString(),
       request: {
         amount: '1000',
         currency: '0x1234567890123456789012345678901234567890',
         decimals: 6,
         recipient: '0x1234567890123456789012345678901234567890',
-        expires: new Date(Date.now() + 60_000).toISOString(),
       },
     })
 
@@ -227,12 +227,12 @@ describe('createCredential', () => {
     const challenge = Challenge.fromMethod(Methods.charge, {
       realm,
       secretKey,
+      expires: new Date(Date.now() + 60_000).toISOString(),
       request: {
         amount: '1000',
         currency: '0x1234567890123456789012345678901234567890',
         decimals: 6,
         recipient: '0x1234567890123456789012345678901234567890',
-        expires: new Date(Date.now() + 60_000).toISOString(),
       },
     })
 
@@ -258,12 +258,12 @@ describe('createCredential', () => {
     const challenge = Challenge.fromMethod(Methods.charge, {
       realm,
       secretKey,
+      expires: new Date(Date.now() + 60_000).toISOString(),
       request: {
         amount: '1000',
         currency: '0x1234567890123456789012345678901234567890',
         decimals: 6,
         recipient: '0x1234567890123456789012345678901234567890',
-        expires: new Date(Date.now() + 60_000).toISOString(),
       },
     })
 
