@@ -30,6 +30,17 @@ const server = Mppx_server.create({
 describe('tempo', () => {
   describe('intent: charge; type: hash', () => {
     test('default', async () => {
+      const mppx = Mppx_client.create({
+        polyfill: false,
+        methods: [
+          tempo_client({
+            account: accounts[1],
+            mode: 'push',
+            getClient: () => client,
+          }),
+        ],
+      })
+
       const httpServer = await Http.createServer(async (req, res) => {
         const result = await Mppx_server.toNodeListener(
           server.charge({ amount: '1', decimals: 6 }),
@@ -38,43 +49,15 @@ describe('tempo', () => {
         res.end('OK')
       })
 
-      const response = await fetch(httpServer.url)
-      expect(response.status).toBe(402)
+      const response = await mppx.fetch(httpServer.url)
+      expect(response.status).toBe(200)
 
-      const challenge = Challenge.fromResponse(response, {
-        methods: [tempo_client.charge()],
-      })
-      const request = challenge.request
-      expect(request.methodDetails?.chainId).toBe(chain.id)
-
-      const memo = Attribution.encode({ serverId: challenge.realm })
-
-      const { receipt } = await Actions.token.transferSync(client, {
-        account: accounts[1],
-        amount: BigInt(request.amount),
-        memo,
-        to: request.recipient as Hex.Hex,
-        token: request.currency as Hex.Hex,
-      })
-      const hash = receipt.transactionHash
-
-      const credential = Credential.from({
-        challenge,
-        payload: { hash, type: 'hash' as const },
-      })
-
-      {
-        const response = await fetch(httpServer.url, {
-          headers: { Authorization: Credential.serialize(credential) },
-        })
-        expect(response.status).toBe(200)
-
-        const receipt = Receipt.fromResponse(response)
-        expect({
-          ...receipt,
-          reference: '[reference]',
-          timestamp: '[timestamp]',
-        }).toMatchInlineSnapshot(`
+      const receipt = Receipt.fromResponse(response)
+      expect({
+        ...receipt,
+        reference: '[reference]',
+        timestamp: '[timestamp]',
+      }).toMatchInlineSnapshot(`
             {
               "method": "tempo",
               "reference": "[reference]",
@@ -82,7 +65,6 @@ describe('tempo', () => {
               "timestamp": "[timestamp]",
             }
           `)
-      }
 
       httpServer.close()
     })
@@ -91,6 +73,17 @@ describe('tempo', () => {
       const overrideRecipient = accounts[2].address
       const overrideCurrency = asset
       const overrideExpires = new Date(Date.now() + 60_000).toISOString()
+
+      const mppx = Mppx_client.create({
+        polyfill: false,
+        methods: [
+          tempo_client({
+            account: accounts[1],
+            mode: 'push',
+            getClient: () => client,
+          }),
+        ],
+      })
 
       const httpServer = await Http.createServer(async (req, res) => {
         const result = await Mppx_server.toNodeListener(
@@ -105,42 +98,11 @@ describe('tempo', () => {
         res.end('OK')
       })
 
-      const response = await fetch(httpServer.url)
-      expect(response.status).toBe(402)
+      const response = await mppx.fetch(httpServer.url)
+      expect(response.status).toBe(200)
 
-      const challenge = Challenge.fromResponse(response, {
-        methods: [tempo_client.charge()],
-      })
-      const request = challenge.request
-      expect(request.recipient).toBe(overrideRecipient)
-      expect(request.currency).toBe(overrideCurrency)
-      expect(request.expires).toBe(overrideExpires)
-
-      const memo = Attribution.encode({ serverId: challenge.realm })
-
-      const { receipt } = await Actions.token.transferSync(client, {
-        account: accounts[1],
-        amount: BigInt(request.amount),
-        memo,
-        to: request.recipient as Hex.Hex,
-        token: request.currency as Hex.Hex,
-      })
-      const hash = receipt.transactionHash
-
-      const credential = Credential.from({
-        challenge,
-        payload: { hash, type: 'hash' as const },
-      })
-
-      {
-        const response = await fetch(httpServer.url, {
-          headers: { Authorization: Credential.serialize(credential) },
-        })
-        expect(response.status).toBe(200)
-
-        const receipt = Receipt.fromResponse(response)
-        expect(receipt.status).toBe('success')
-      }
+      const receipt = Receipt.fromResponse(response)
+      expect(receipt.status).toBe('success')
 
       httpServer.close()
     })

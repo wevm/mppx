@@ -1,6 +1,6 @@
 import type * as Hex from 'ox/Hex'
 import type { Address } from 'viem'
-import { prepareTransactionRequest, signTransaction } from 'viem/actions'
+import { prepareTransactionRequest, sendCallsSync, signTransaction } from 'viem/actions'
 import { tempo as tempo_chain } from 'viem/chains'
 import { Actions } from 'viem/tempo'
 import * as Credential from '../../Credential.js'
@@ -39,12 +39,15 @@ export function charge(parameters: charge.Parameters = {}) {
     context: z.object({
       account: z.optional(z.custom<Account.getResolver.Parameters['account']>()),
       autoSwap: z.optional(z.custom<charge.AutoSwap>()),
+      mode: z.optional(z.enum(['push', 'pull'])),
     }),
 
     async createCredential({ challenge, context }) {
       const chainId = challenge.request.methodDetails?.chainId
       const client = await getClient({ chainId })
       const account = getAccount(client, context)
+
+      const mode = context?.mode ?? parameters.mode ?? (account.type === 'local' ? 'pull' : 'push')
 
       const { request } = challenge
       const { amount, methodDetails } = request
@@ -79,6 +82,21 @@ export function charge(parameters: charge.Parameters = {}) {
 
       const calls = [...(swapCalls ?? []), transferCall]
 
+      if (mode === 'push') {
+        const { receipts } = await sendCallsSync(client, {
+          account,
+          calls: calls as never,
+          experimental_fallback: true,
+        })
+        const hash = receipts?.[0]?.transactionHash
+        if (!hash) throw new Error('No transaction receipt returned.')
+        return Credential.serialize({
+          challenge,
+          payload: { hash, type: 'hash' },
+          source: `did:pkh:eip155:${chainId}:${account.address}`,
+        })
+      }
+
       const prepared = await prepareTransactionRequest(client, {
         account,
         calls,
@@ -111,6 +129,15 @@ export declare namespace charge {
     autoSwap?: AutoSwap | undefined
     /** Client identifier used to derive the client fingerprint in attribution memos. */
     clientId?: string | undefined
+    /**
+     * Controls how the charge transaction is submitted.
+     *
+     * - `'push'`: Client broadcasts the transaction and sends the tx hash to the server.
+     * - `'pull'`: Client signs the transaction and sends the serialized tx to the server for broadcast.
+     *
+     * @default `'push'` for JSON-RPC accounts, `'pull'` for local accounts.
+     */
+    mode?: 'push' | 'pull' | undefined
   } & Account.getResolver.Parameters &
     Client.getResolver.Parameters
 }
