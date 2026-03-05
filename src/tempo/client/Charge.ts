@@ -47,7 +47,7 @@ export function charge(parameters: charge.Parameters = {}) {
       const client = await getClient({ chainId })
       const account = getAccount(client, context)
 
-      const mode = context?.mode ?? parameters.mode ?? (account.type === 'local' ? 'pull' : 'push')
+      const mode = context?.mode ?? parameters.mode ?? (account.type === 'json-rpc' ? 'push' : 'pull')
 
       const { request } = challenge
       const { amount, methodDetails } = request
