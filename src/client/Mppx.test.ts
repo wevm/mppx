@@ -28,6 +28,7 @@ describe('Mppx.create', () => {
     expect(mppx.transport.name).toBe('http')
     expect(typeof mppx.createCredential).toBe('function')
     expect(typeof mppx.fetch).toBe('function')
+    expect(typeof mppx.rawFetch).toBe('function')
   })
 
   test('behavior: with mcp transport', () => {
@@ -469,5 +470,82 @@ describe('restore', () => {
     Mppx.restore()
 
     expect(globalThis.fetch).toBe(originalFetch)
+  })
+})
+
+describe('rawFetch', () => {
+  test('default: returns the original fetch when polyfill is enabled', () => {
+    const originalFetch = globalThis.fetch
+
+    const mppx = Mppx.create({
+      methods: [
+        tempo({
+          account: accounts[1],
+          getClient: () => client,
+        }),
+      ],
+    })
+
+    expect(globalThis.fetch).not.toBe(originalFetch)
+    expect(mppx.rawFetch).toBe(originalFetch)
+  })
+
+  test('behavior: returns the original fetch when polyfill is disabled', () => {
+    const originalFetch = globalThis.fetch
+
+    const mppx = Mppx.create({
+      polyfill: false,
+      methods: [
+        tempo({
+          account: accounts[1],
+          getClient: () => client,
+        }),
+      ],
+    })
+
+    expect(mppx.rawFetch).toBe(originalFetch)
+  })
+
+  test('behavior: returns custom fetch when provided', () => {
+    const customFetch = async () => new Response('custom')
+
+    const mppx = Mppx.create({
+      polyfill: false,
+      fetch: customFetch as typeof globalThis.fetch,
+      methods: [
+        tempo({
+          account: accounts[1],
+          getClient: () => client,
+        }),
+      ],
+    })
+
+    expect(mppx.rawFetch).toBe(customFetch)
+  })
+
+  test('behavior: rawFetch does not intercept 402 responses', async () => {
+    const mppx = Mppx.create({
+      methods: [
+        tempo({
+          account: accounts[1],
+          getClient: () => client,
+        }),
+      ],
+    })
+
+    const httpServer = await Http.createServer(async (req, res) => {
+      const result = await Mppx_server.toNodeListener(
+        server.charge({
+          amount: '1',
+        }),
+      )(req, res)
+      if (result.status === 402) return
+      res.end('OK')
+    })
+
+    const response = await mppx.rawFetch(httpServer.url)
+    expect(response.status).toBe(402)
+
+    httpServer.close()
   })
 })
