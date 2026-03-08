@@ -15,6 +15,8 @@ export type Mppx<
 > = {
   /** Payment-aware fetch function that automatically handles 402 responses. */
   fetch: Fetch.from.Fetch<FlattenMethods<methods>>
+  /** The original, unwrapped fetch function (pre-polyfill). Useful when you need to make requests that should not be intercepted (e.g. 402 probes for websocket auth). */
+  rawFetch: typeof globalThis.fetch
   /** Methods to configure. */
   methods: FlattenMethods<methods>
   /** The transport used. */
@@ -56,6 +58,8 @@ export function create<
 >(config: create.Config<methods, transport>): Mppx<methods, transport> {
   const { onChallenge, polyfill = true, transport = Transport.http() as transport } = config
 
+  const rawFetch = config.fetch ?? globalThis.fetch
+
   const methods = config.methods.flat() as unknown as FlattenMethods<methods>
 
   const resolvedOnChallenge = onChallenge as Fetch.from.Config<
@@ -71,6 +75,7 @@ export function create<
   if (polyfill) Fetch.polyfill(config_fetch)
   return {
     fetch,
+    rawFetch,
     methods,
     transport,
     async createCredential(response: Transport.ResponseOf<transport>, context?: unknown) {
