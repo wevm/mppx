@@ -52,18 +52,30 @@ export function from<const methods extends readonly Method.AnyClient[]>(
     const context = (init as Record<string, unknown> | undefined)?.context
     const { context: _, ...fetchInit } = (init ?? {}) as Record<string, unknown>
 
-    const challenge = Challenge.fromResponse(response)
+    // Parse all challenges from the response (supports merged WWW-Authenticate headers).
+    // Match in client preference order: iterate the client's methods array and pick the
+    // first method that has a matching challenge, so the client controls priority.
+    const challenges = Challenge.fromResponseList(response)
 
-    const mi = methods.find((m) => m.name === challenge.method && m.intent === challenge.intent)
-    if (!mi)
+    let challenge: Challenge.Challenge | undefined
+    let mi: (typeof methods)[number] | undefined
+    for (const m of methods) {
+      const match = challenges.find((c) => c.method === m.name && c.intent === m.intent)
+      if (match) {
+        challenge = match
+        mi = m
+        break
+      }
+    }
+    if (!challenge || !mi)
       throw new Error(
-        `No method found for "${challenge.method}.${challenge.intent}". Available: ${methods.map((m) => `${m.name}.${m.intent}`).join(', ')}`,
+        `No method found for challenges: ${challenges.map((c) => `${c.method}.${c.intent}`).join(', ')}. Available: ${methods.map((m) => `${m.name}.${m.intent}`).join(', ')}`,
       )
 
     const onChallengeCredential = onChallenge
       ? await onChallenge(challenge, {
           createCredential: async (overrideContext?: AnyContextFor<methods>) =>
-            resolveCredential(challenge, mi, overrideContext ?? context),
+            resolveCredential(challenge, mi!, overrideContext ?? context),
         })
       : undefined
     const credential = onChallengeCredential ?? (await resolveCredential(challenge, mi, context))

@@ -5,6 +5,9 @@ export type AnyMethodFn = Mppx.AnyMethodFn
 export type AnyServer = Method.AnyServer
 
 export type Wrap<mppx, handler> = {
+  // `challenge` is passed through unwrapped because it's a multi-method
+  // combinator (takes `[method, options]` tuples), not a per-method handler.
+  // `methods`, `realm`, `transport` are data properties — not handlers.
   [key in keyof mppx]: key extends 'challenge' | 'methods' | 'realm' | 'transport'
     ? mppx[key]
     : mppx[key] extends (options: infer options) => any

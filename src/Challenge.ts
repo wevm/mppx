@@ -402,6 +402,84 @@ export function fromResponse<
 }
 
 /**
+ * Extracts all Payment challenges from a Response with potentially merged
+ * `WWW-Authenticate` headers (multiple challenges in a single header value).
+ *
+ * @param response - The HTTP response (must be 402 status).
+ * @param options - Optional settings to narrow the challenge type.
+ * @returns An array of deserialized challenges.
+ *
+ * @example
+ * ```ts
+ * import { Challenge } from 'mppx'
+ *
+ * const response = await fetch('/resource')
+ * if (response.status === 402) {
+ *   const challenges = Challenge.fromResponseList(response)
+ *   // challenges[0] => tempo/charge, challenges[1] => stripe/charge
+ * }
+ * ```
+ */
+export function fromResponseList<
+  const methods extends readonly Method.Method[] | undefined = undefined,
+>(
+  response: Response,
+  options?: from.Options<methods>,
+): from.ReturnType<from.Parameters, methods>[] {
+  if (response.status !== 402) throw new Error('Response status is not 402.')
+  return fromHeadersList(response.headers, options)
+}
+
+/**
+ * Extracts all Payment challenges from a Headers object with potentially
+ * merged `WWW-Authenticate` values.
+ *
+ * @param headers - The HTTP headers.
+ * @param options - Optional settings to narrow the challenge type.
+ * @returns An array of deserialized challenges.
+ */
+export function fromHeadersList<
+  const methods extends readonly Method.Method[] | undefined = undefined,
+>(
+  headers: Headers,
+  options?: from.Options<methods>,
+): from.ReturnType<from.Parameters, methods>[] {
+  const header = headers.get('WWW-Authenticate')
+  if (!header) throw new Error('Missing WWW-Authenticate header.')
+  return deserializeList(header, options)
+}
+
+/**
+ * Deserializes a `WWW-Authenticate` header value that may contain multiple
+ * Payment challenges (comma-separated per RFC 9110 §11.6.1).
+ *
+ * @param value - The raw WWW-Authenticate header value.
+ * @param options - Optional settings to narrow the challenge type.
+ * @returns An array of deserialized challenges.
+ */
+export function deserializeList<
+  const methods extends readonly Method.Method[] | undefined = undefined,
+>(
+  value: string,
+  options?: from.Options<methods>,
+): from.ReturnType<from.Parameters, methods>[] {
+  // Find the start index of each `Payment ` scheme prefix.
+  const starts: number[] = []
+  for (const match of value.matchAll(/Payment\s+/gi)) {
+    starts.push(match.index!)
+  }
+  if (starts.length === 0) throw new Error('No Payment schemes found.')
+
+  // Slice each scheme from its `Payment ` prefix up to the next scheme boundary,
+  // trimming any trailing comma/whitespace between schemes.
+  return starts.map((start, i) => {
+    const end = i + 1 < starts.length ? starts[i + 1]! : value.length
+    const chunk = value.slice(start, end).replace(/,\s*$/, '')
+    return deserialize(chunk, options)
+  })
+}
+
+/**
  * Verifies that a challenge ID matches the expected HMAC for the given parameters.
  *
  * @param challenge - The challenge to verify.

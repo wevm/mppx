@@ -22,7 +22,7 @@ export type Mppx<
   /** Methods to configure. */
   methods: FlattenMethods<methods>
   /**
-   * Combines multiple method handlers into a single route handler that offers
+   * Combines multiple method handlers into a single route handler that presents
    * all methods to the client via multiple `WWW-Authenticate` headers.
    *
    * Each entry is a `[method, options]` tuple where `method` is one of the
@@ -47,7 +47,7 @@ export type Mppx<
    * ```
    */
   challenge(
-    ...entries: OfferEntry<FlattenMethods<methods>>[]
+    ...entries: ChallengeEntry<FlattenMethods<methods>>[]
   ): (input: Request) => Promise<MethodFn.Response<Transport.Http>>
   /** Server realm (e.g., hostname). */
   realm: string
@@ -162,8 +162,8 @@ export function create<
     if (intentCount[mi.intent] === 1) handlers[mi.intent] = handlers[`${mi.name}/${mi.intent}`]
   }
 
-  function offerFn(...entries: readonly [Method.AnyServer, Record<string, unknown>][]) {
-    if (entries.length === 0) throw new Error('offer() requires at least one entry')
+  function challengeFn(...entries: readonly [Method.AnyServer, Record<string, unknown>][]) {
+    if (entries.length === 0) throw new Error('challenge() requires at least one entry')
     const configured = entries.map(([method, options]) => {
       const key = `${method.name}/${method.intent}`
       const handlerFn = handlers[key] as AnyMethodFn | undefined
@@ -171,10 +171,10 @@ export function create<
         throw new Error(`No handler for "${key}". Is this method in your methods array?`)
       return handlerFn(options)
     })
-    return offer(...(configured as ConfiguredHandler[]))
+    return challenge(...(configured as ConfiguredHandler[]))
   }
 
-  return { methods, challenge: offerFn, realm: realm as string, transport, ...handlers } as never
+  return { methods, challenge: challengeFn, realm: realm as string, transport, ...handlers } as never
 }
 
 export declare namespace create {
@@ -205,11 +205,6 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
   const { defaults, method, realm, respond, secretKey, transport, verify } = parameters
 
   return (options) => {
-    const methodMeta = {
-      ...method,
-      ...defaults,
-      ...options,
-    }
     return Object.assign(
       async (input: Transport.InputOf): Promise<MethodFn.Response> => {
         const { description, meta, ...rest } = options
@@ -286,6 +281,9 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
         // Verify the credential's challenge matches this route's configured
         // request. Prevents cross-route scope confusion where a credential
         // issued for a cheap route is presented at an expensive route.
+        // Note: we compare specific payment parameters rather than the full
+        // request because the `request` hook may produce credential-dependent
+        // output (e.g. `feePayer` differs between 402 and credential calls).
         {
           const routeReq = challenge.request as Record<string, unknown>
           const echoedReq = credential.challenge.request as Record<string, unknown>
@@ -377,7 +375,7 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
           },
         }
       },
-      { _internal: methodMeta },
+      { _internal: { ...method, ...defaults, ...options, name: method.name, intent: method.intent } },
     )
   }
 }
@@ -445,8 +443,8 @@ type ConfiguredHandler = ((input: Request) => Promise<MethodFn.Response<Transpor
   _internal: { name: string; intent: string }
 }
 
-/** An entry for `offer()`: a method reference paired with its options. */
-type OfferEntry<methods extends readonly Method.AnyServer[]> = {
+/** An entry for `challenge()`: a method reference paired with its options. */
+type ChallengeEntry<methods extends readonly Method.AnyServer[]> = {
   [i in keyof methods]: readonly [
     methods[i],
     MethodFn.Options<methods[i], NonNullable<methods[i]['defaults']>>,
@@ -455,7 +453,7 @@ type OfferEntry<methods extends readonly Method.AnyServer[]> = {
 
 /**
  * Combines multiple configured payment handlers into a single route handler
- * that offers all methods to the client via multiple `WWW-Authenticate` headers.
+ * that presents all methods to the client via multiple `WWW-Authenticate` headers.
  *
  * When no credential is present, all handlers are called and their challenges
  * are merged into a single 402 response. When a credential is present, it is
@@ -471,7 +469,7 @@ type OfferEntry<methods extends readonly Method.AnyServer[]> = {
  * })
  *
  * app.get('/api/resource', async (req) => {
- *   const result = await Mppx.offer(
+ *   const result = await Mppx.challenge(
  *     mppx['tempo/charge']({ amount: '100', currency: USDC, recipient: '0x...' }),
  *     mppx['stripe/charge']({ amount: '100', currency: 'usd' }),
  *   )(req)
@@ -480,10 +478,10 @@ type OfferEntry<methods extends readonly Method.AnyServer[]> = {
  * })
  * ```
  */
-export function offer(
+export function challenge(
   ...handlers: readonly ((input: Request) => Promise<MethodFn.Response<Transport.Http>>)[]
 ): (input: Request) => Promise<MethodFn.Response<Transport.Http>> {
-  if (handlers.length === 0) throw new Error('offer() requires at least one handler')
+  if (handlers.length === 0) throw new Error('challenge() requires at least one handler')
 
   return async (input: Request) => {
     // Try to extract a credential to decide whether to dispatch or challenge.
@@ -500,7 +498,25 @@ export function offer(
 
       if (credential) {
         const { method: credMethod, intent: credIntent } = credential.challenge
-        const match = handlers.find((h) => {
+        const credReq = credential.challenge.request as Record<string, unknown>
+
+        // Filter by name+intent, then narrow by comparing stable request fields
+        // from the echoed challenge against each handler's configured options.
+        // This disambiguates handlers with the same name/intent but different
+        // currencies, recipients, etc. without invoking any handler.
+        const candidates = handlers.filter((h) => {
+          const meta = (h as ConfiguredHandler)._internal
+          if (!meta || meta.name !== credMethod || meta.intent !== credIntent) return false
+          // Compare stable fields that don't change between 402 and credential calls.
+          for (const field of ['currency', 'recipient'] as const) {
+            const metaVal = (meta as Record<string, unknown>)[field]
+            if (metaVal !== undefined && credReq[field] !== undefined && String(metaVal) !== String(credReq[field]))
+              return false
+          }
+          return true
+        })
+
+        const match = candidates[0] ?? handlers.find((h) => {
           const meta = (h as ConfiguredHandler)._internal
           return meta?.name === credMethod && meta?.intent === credIntent
         })

@@ -530,7 +530,7 @@ describe('Fetch.from: 402 retry path', () => {
     })
 
     await expect(fetch('https://example.com/api')).rejects.toThrow(
-      'No method found for "stripe.charge"',
+      'No method found for challenges: stripe.charge',
     )
   })
 
