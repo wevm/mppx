@@ -1,6 +1,6 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import * as Challenge from '../Challenge.js'
-import type * as Credential from '../Credential.js'
+import * as Credential from '../Credential.js'
 import * as Errors from '../Errors.js'
 import * as Env from '../internal/env.js'
 import type * as Method from '../Method.js'
@@ -21,6 +21,34 @@ export type Mppx<
 > = {
   /** Methods to configure. */
   methods: FlattenMethods<methods>
+  /**
+   * Combines multiple method handlers into a single route handler that offers
+   * all methods to the client via multiple `WWW-Authenticate` headers.
+   *
+   * Each entry is a `[method, options]` tuple where `method` is one of the
+   * server methods passed to `Mppx.create()`, looked up by `name`+`intent`.
+   *
+   * @example
+   * ```ts
+   * import { Mppx, tempo, stripe } from 'mppx/server'
+   *
+   * const tempoCharge = tempo.charge({ currency: USDC, recipient: '0x...' })
+   * const stripeCharge = stripe.charge({ currency: 'usd' })
+   * const mppx = Mppx.create({ methods: [tempoCharge, stripeCharge], secretKey })
+   *
+   * app.get('/api/resource', async (req) => {
+   *   const result = await mppx.challenge(
+   *     [tempoCharge, { amount: '100' }],
+   *     [stripeCharge, { amount: '100' }],
+   *   )(req)
+   *   if (result.status === 402) return result.challenge
+   *   return result.withReceipt(new Response('OK'))
+   * })
+   * ```
+   */
+  challenge(
+    ...entries: OfferEntry<FlattenMethods<methods>>[]
+  ): (input: Request) => Promise<MethodFn.Response<Transport.Http>>
   /** Server realm (e.g., hostname). */
   realm: string
   /** The transport used. */
@@ -134,7 +162,19 @@ export function create<
     if (intentCount[mi.intent] === 1) handlers[mi.intent] = handlers[`${mi.name}/${mi.intent}`]
   }
 
-  return { methods, realm: realm as string, transport, ...handlers } as never
+  function offerFn(...entries: readonly [Method.AnyServer, Record<string, unknown>][]) {
+    if (entries.length === 0) throw new Error('offer() requires at least one entry')
+    const configured = entries.map(([method, options]) => {
+      const key = `${method.name}/${method.intent}`
+      const handlerFn = handlers[key] as AnyMethodFn | undefined
+      if (!handlerFn)
+        throw new Error(`No handler for "${key}". Is this method in your methods array?`)
+      return handlerFn(options)
+    })
+    return offer(...(configured as ConfiguredHandler[]))
+  }
+
+  return { methods, challenge: offerFn, realm: realm as string, transport, ...handlers } as never
 }
 
 export declare namespace create {
@@ -398,6 +438,106 @@ declare namespace MethodFn {
         status: 200
         withReceipt: Transport.WithReceipt<transport>
       }
+}
+
+/** A configured handler — the return value of e.g. `mppx.charge({ ... })`. @internal */
+type ConfiguredHandler = ((input: Request) => Promise<MethodFn.Response<Transport.Http>>) & {
+  _internal: { name: string; intent: string }
+}
+
+/** An entry for `offer()`: a method reference paired with its options. */
+type OfferEntry<methods extends readonly Method.AnyServer[]> = {
+  [i in keyof methods]: readonly [
+    methods[i],
+    MethodFn.Options<methods[i], NonNullable<methods[i]['defaults']>>,
+  ]
+}[number]
+
+/**
+ * Combines multiple configured payment handlers into a single route handler
+ * that offers all methods to the client via multiple `WWW-Authenticate` headers.
+ *
+ * When no credential is present, all handlers are called and their challenges
+ * are merged into a single 402 response. When a credential is present, it is
+ * dispatched to the handler matching the credential's `method`+`intent`.
+ *
+ * @example
+ * ```ts
+ * import { Mppx, tempo, stripe } from 'mppx/server'
+ *
+ * const mppx = Mppx.create({
+ *   methods: [tempo(), stripe()],
+ *   secretKey: process.env.PAYMENT_SECRET_KEY,
+ * })
+ *
+ * app.get('/api/resource', async (req) => {
+ *   const result = await Mppx.offer(
+ *     mppx['tempo/charge']({ amount: '100', currency: USDC, recipient: '0x...' }),
+ *     mppx['stripe/charge']({ amount: '100', currency: 'usd' }),
+ *   )(req)
+ *   if (result.status === 402) return result.challenge
+ *   return result.withReceipt(new Response('OK'))
+ * })
+ * ```
+ */
+export function offer(
+  ...handlers: readonly ((input: Request) => Promise<MethodFn.Response<Transport.Http>>)[]
+): (input: Request) => Promise<MethodFn.Response<Transport.Http>> {
+  if (handlers.length === 0) throw new Error('offer() requires at least one handler')
+
+  return async (input: Request) => {
+    // Try to extract a credential to decide whether to dispatch or challenge.
+    const header = input.headers.get('Authorization')
+    const hasCredential = header !== null
+
+    if (hasCredential) {
+      // Parse the credential to find method+intent for dispatch.
+      let credential: Credential.Credential | undefined
+      try {
+        const payment = Credential.extractPaymentScheme(header)
+        if (payment) credential = Credential.deserialize(payment)
+      } catch {}
+
+      if (credential) {
+        const { method: credMethod, intent: credIntent } = credential.challenge
+        const match = handlers.find((h) => {
+          const meta = (h as ConfiguredHandler)._internal
+          return meta?.name === credMethod && meta?.intent === credIntent
+        })
+        if (match) return match(input)
+      }
+
+      // Credential present but no matching handler — dispatch to first handler
+      // which will reject with an appropriate error (invalid challenge, etc.).
+      return handlers[0]!(input)
+    }
+
+    // No credential — call all handlers and merge 402 challenges.
+    const results = await Promise.all(handlers.map((h) => h(input)))
+
+    // Merge WWW-Authenticate headers from all 402 responses.
+    const mergedHeaders = new Headers()
+    mergedHeaders.set('Cache-Control', 'no-store')
+
+    let body: string | null = null
+    for (const result of results) {
+      if (result.status !== 402) continue
+      const response = result.challenge as Response
+      const wwwAuth = response.headers.get('WWW-Authenticate')
+      if (wwwAuth) mergedHeaders.append('WWW-Authenticate', wwwAuth)
+      // Use the first handler's body for the problem details response.
+      if (!body) {
+        const contentType = response.headers.get('Content-Type')
+        if (contentType) mergedHeaders.set('Content-Type', contentType)
+        body = await response.text()
+      }
+    }
+
+    return {
+      status: 402,
+      challenge: new Response(body, { status: 402, headers: mergedHeaders }),
+    }
+  }
 }
 
 /**

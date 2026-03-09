@@ -5,9 +5,11 @@ export type AnyMethodFn = Mppx.AnyMethodFn
 export type AnyServer = Method.AnyServer
 
 export type Wrap<mppx, handler> = {
-  [key in keyof mppx]: mppx[key] extends (options: infer options) => any
-    ? (o: options) => handler
-    : mppx[key]
+  [key in keyof mppx]: key extends 'challenge' | 'methods' | 'realm' | 'transport'
+    ? mppx[key]
+    : mppx[key] extends (options: infer options) => any
+      ? (o: options) => handler
+      : mppx[key]
 }
 
 /**

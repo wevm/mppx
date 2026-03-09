@@ -436,6 +436,235 @@ describe('receipt handling', () => {
   })
 })
 
+describe('offer', () => {
+  const mockChargeA = Method.from({
+    name: 'alpha',
+    intent: 'charge',
+    schema: {
+      credential: {
+        payload: z.object({ token: z.string() }),
+      },
+      request: z.object({
+        amount: z.string(),
+        currency: z.string(),
+        decimals: z.number(),
+        recipient: z.string(),
+      }),
+    },
+  })
+
+  const mockChargeB = Method.from({
+    name: 'beta',
+    intent: 'charge',
+    schema: {
+      credential: {
+        payload: z.object({ token: z.string() }),
+      },
+      request: z.object({
+        amount: z.string(),
+        currency: z.string(),
+        decimals: z.number(),
+        recipient: z.string(),
+      }),
+    },
+  })
+
+  function mockReceipt(name: string) {
+    return {
+      method: name,
+      reference: `tx-${name}`,
+      status: 'success' as const,
+      timestamp: new Date().toISOString(),
+    }
+  }
+
+  const alphaMethod = Method.toServer(mockChargeA, {
+    async verify() {
+      return mockReceipt('alpha')
+    },
+  })
+
+  const betaMethod = Method.toServer(mockChargeB, {
+    async verify() {
+      return mockReceipt('beta')
+    },
+  })
+
+  const offerOpts = {
+    amount: '1000',
+    currency: '0x0000000000000000000000000000000000000001',
+    decimals: 6,
+    expires: new Date(Date.now() + 60_000).toISOString(),
+    recipient: '0x0000000000000000000000000000000000000002',
+  }
+
+  test('returns 402 with multiple WWW-Authenticate headers when no credential', async () => {
+    const mppx = Mppx.create({ methods: [alphaMethod, betaMethod], realm, secretKey })
+
+    const result = await mppx.challenge(
+      [alphaMethod, offerOpts],
+      [betaMethod, offerOpts],
+    )(new Request('https://example.com/resource'))
+
+    expect(result.status).toBe(402)
+    if (result.status !== 402) throw new Error()
+
+    const wwwAuth = result.challenge.headers.get('WWW-Authenticate')!
+    expect(wwwAuth).toContain('method="alpha"')
+    expect(wwwAuth).toContain('method="beta"')
+  })
+
+  test('dispatches to matching handler when credential matches alpha', async () => {
+    const mppx = Mppx.create({ methods: [alphaMethod, betaMethod], realm, secretKey })
+
+    const handle = mppx.challenge([alphaMethod, offerOpts], [betaMethod, offerOpts])
+
+    // Get challenges
+    const firstResult = await handle(new Request('https://example.com/resource'))
+    expect(firstResult.status).toBe(402)
+    if (firstResult.status !== 402) throw new Error()
+
+    // Parse the alpha challenge from the response
+    const wwwAuth = firstResult.challenge.headers.get('WWW-Authenticate')!
+    const alphaChallenge = Challenge.deserialize(
+      wwwAuth.split(', Payment ').map((s, i) => (i === 0 ? s : `Payment ${s}`))[0]!,
+    )
+
+    const credential = Credential.from({
+      challenge: alphaChallenge,
+      payload: { token: 'valid' },
+    })
+
+    const result = await handle(
+      new Request('https://example.com/resource', {
+        headers: { Authorization: Credential.serialize(credential) },
+      }),
+    )
+
+    expect(result.status).toBe(200)
+  })
+
+  test('dispatches to matching handler when credential matches beta', async () => {
+    const mppx = Mppx.create({ methods: [alphaMethod, betaMethod], realm, secretKey })
+
+    const handle = mppx.challenge([alphaMethod, offerOpts], [betaMethod, offerOpts])
+
+    // Get challenges
+    const firstResult = await handle(new Request('https://example.com/resource'))
+    expect(firstResult.status).toBe(402)
+    if (firstResult.status !== 402) throw new Error()
+
+    // Parse the beta challenge from the merged header
+    const wwwAuth = firstResult.challenge.headers.get('WWW-Authenticate')!
+    const parts = wwwAuth.split(', Payment ').map((s, i) => (i === 0 ? s : `Payment ${s}`))
+    const betaChallenge = Challenge.deserialize(parts[1]!)
+
+    const credential = Credential.from({
+      challenge: betaChallenge,
+      payload: { token: 'valid' },
+    })
+
+    const result = await handle(
+      new Request('https://example.com/resource', {
+        headers: { Authorization: Credential.serialize(credential) },
+      }),
+    )
+
+    expect(result.status).toBe(200)
+  })
+
+  test('returns 402 when credential method does not match any handler', async () => {
+    const mppx = Mppx.create({ methods: [alphaMethod], realm, secretKey })
+
+    const handle = mppx.challenge([alphaMethod, offerOpts])
+
+    const wrongChallenge = Challenge.from({
+      id: 'wrong-id',
+      intent: 'charge',
+      method: 'unknown',
+      realm,
+      request: { amount: '1000', currency: '0x01', recipient: '0x02' },
+    })
+    const credential = Credential.from({
+      challenge: wrongChallenge,
+      payload: { token: 'test' },
+    })
+
+    const result = await handle(
+      new Request('https://example.com/resource', {
+        headers: { Authorization: Credential.serialize(credential) },
+      }),
+    )
+
+    expect(result.status).toBe(402)
+  })
+
+  test('cross-route protection works through offer()', async () => {
+    const mppx = Mppx.create({ methods: [alphaMethod], realm, secretKey })
+
+    // Get a challenge from a cheap route
+    const cheapHandle = mppx.challenge([alphaMethod, { ...offerOpts, amount: '1' }])
+    const cheapResult = await cheapHandle(new Request('https://example.com/cheap'))
+    expect(cheapResult.status).toBe(402)
+    if (cheapResult.status !== 402) throw new Error()
+
+    const cheapChallenge = Challenge.fromResponse(cheapResult.challenge)
+    const credential = Credential.from({
+      challenge: cheapChallenge,
+      payload: { token: 'valid' },
+    })
+
+    // Present it at an expensive route
+    const expensiveHandle = mppx.challenge([alphaMethod, { ...offerOpts, amount: '1000000' }])
+    const result = await expensiveHandle(
+      new Request('https://example.com/expensive', {
+        headers: { Authorization: Credential.serialize(credential) },
+      }),
+    )
+
+    expect(result.status).toBe(402)
+    if (result.status !== 402) throw new Error()
+    const body = (await result.challenge.json()) as { detail: string }
+    expect(body.detail).toContain('does not match')
+  })
+
+  test('withReceipt works through offer()', async () => {
+    const mppx = Mppx.create({ methods: [alphaMethod], realm, secretKey })
+
+    const handle = mppx.challenge([alphaMethod, offerOpts])
+
+    const firstResult = await handle(new Request('https://example.com/resource'))
+    expect(firstResult.status).toBe(402)
+    if (firstResult.status !== 402) throw new Error()
+
+    const challenge = Challenge.fromResponse(firstResult.challenge)
+    const credential = Credential.from({ challenge, payload: { token: 'valid' } })
+
+    const result = await handle(
+      new Request('https://example.com/resource', {
+        headers: { Authorization: Credential.serialize(credential) },
+      }),
+    )
+    expect(result.status).toBe(200)
+    if (result.status !== 200) throw new Error()
+
+    const response = result.withReceipt(Response.json({ data: 'ok' }))
+    expect(response.headers.get('Payment-Receipt')).toBeTruthy()
+  })
+
+  test('throws when called with no entries', () => {
+    const mppx = Mppx.create({ methods: [alphaMethod], realm, secretKey })
+    expect(() => mppx.challenge()).toThrow('offer() requires at least one entry')
+  })
+
+  test('throws when method is not in the methods array', () => {
+    const mppx = Mppx.create({ methods: [alphaMethod], realm, secretKey })
+    expect(() => mppx.challenge([betaMethod, offerOpts] as never)).toThrow(
+      'No handler for "beta/charge"',
+    )
+  })
+})
+
 describe('withReceipt', () => {
   const mockCharge = Method.from({
     name: 'mock',
