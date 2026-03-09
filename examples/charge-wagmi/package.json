@@ -1,0 +1,28 @@
+{
+  "name": "charge-wagmi",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@metamask/sdk": "~0.33.1",
+    "@remix-run/node-fetch-server": "latest",
+    "@tanstack/react-query": "latest",
+    "@types/node": "latest",
+    "mppx": "latest",
+    "react": "latest",
+    "react-dom": "latest",
+    "viem": "latest",
+    "wagmi": "latest"
+  },
+  "devDependencies": {
+    "@types/react": "latest",
+    "@types/react-dom": "latest",
+    "@vitejs/plugin-react": "latest",
+    "typescript": "latest",
+    "vite": "latest"
+  }
+}

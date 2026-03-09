@@ -157,11 +157,11 @@ describe('McpClient.wrap', () => {
     const challenge = Challenge.fromMethod(tempo_server.charge({ getClient: () => testClient }), {
       realm,
       secretKey,
+      expires: new Date(Date.now() + 60_000).toISOString(),
       request: {
         amount: '1',
         currency: asset,
         decimals: 6,
-        expires: new Date(Date.now() + 60_000).toISOString(),
         recipient: accounts[0].address,
       },
     })

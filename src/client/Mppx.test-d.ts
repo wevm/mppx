@@ -28,6 +28,15 @@ describe('Mppx', () => {
     expectTypeOf(mppx.createCredential).toBeFunction()
     expectTypeOf(mppx.createCredential).returns.toMatchTypeOf<Promise<string>>()
   })
+
+  test('has rawFetch with standard fetch signature', () => {
+    const method = charge({
+      account: {} as Account,
+    })
+    const mppx = Mppx.create({ methods: [method] })
+
+    expectTypeOf(mppx.rawFetch).toEqualTypeOf<typeof globalThis.fetch>()
+  })
 })
 
 describe('create.Config', () => {

@@ -110,7 +110,12 @@ const cli = Cli.create('mppx', {
       return hasProtocol ? rawUrl : `${isLocal ? 'http' : 'https'}://${rawUrl}`
     })()
     const { hostname } = new URL(url)
-    if (options.insecure || hostname === 'localhost' || hostname.endsWith('.localhost') || hostname.endsWith('.local')) {
+    if (
+      options.insecure ||
+      hostname === 'localhost' ||
+      hostname.endsWith('.localhost') ||
+      hostname.endsWith('.local')
+    ) {
       process.removeAllListeners('warning')
       process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0'
     }
@@ -119,9 +124,7 @@ const cli = Cli.create('mppx', {
     // browsers per RFC 6761). Rewrite the URL to 127.0.0.1 and set the
     // Host header so reverse proxies (e.g. portless) can route correctly.
     const isSubLocalhost = hostname.endsWith('.localhost') && hostname !== 'localhost'
-    const fetchUrl = isSubLocalhost
-      ? url.replace(hostname, '127.0.0.1')
-      : url
+    const fetchUrl = isSubLocalhost ? url.replace(hostname, '127.0.0.1') : url
     if (isSubLocalhost) {
       const { host } = new URL(url)
       headers.Host = host
@@ -192,7 +195,11 @@ const cli = Cli.create('mppx', {
         const privateKey =
           process.env.MPPX_PRIVATE_KEY?.trim() || (await createKeychain(accountName).get())
         if (!privateKey) {
-          if (options.account) return error({ code: 'ACCOUNT_NOT_FOUND', message: `Account "${accountName}" not found.` })
+          if (options.account)
+            return error({
+              code: 'ACCOUNT_NOT_FOUND',
+              message: `Account "${accountName}" not found.`,
+            })
           else return error({ code: 'ACCOUNT_NOT_FOUND', message: 'No account found.' })
         }
         account = privateKeyToAccount(privateKey as `0x${string}`)
@@ -315,7 +322,10 @@ const cli = Cli.create('mppx', {
       let credential: string
       if (challenge.method === 'tempo') {
         if (!account || !client) {
-          return error({ code: 'ACCOUNT_NOT_FOUND', message: 'Tempo requires a configured account.' })
+          return error({
+            code: 'ACCOUNT_NOT_FOUND',
+            message: 'Tempo requires a configured account.',
+          })
         }
         const tempoOpts = parseOptions(
           z.object({
@@ -337,7 +347,11 @@ const cli = Cli.create('mppx', {
               const resolved =
                 suggestedDeposit ?? cliDeposit ?? (isTestnet(client!.chain!) ? '10' : undefined)
               if (!resolved) {
-                return error({ code: 'MISSING_DEPOSIT', message: 'Session payment requires a deposit. Use -M deposit=<amount> or connect to testnet.' })
+                return error({
+                  code: 'MISSING_DEPOSIT',
+                  message:
+                    'Session payment requires a deposit. Use -M deposit=<amount> or connect to testnet.',
+                })
               }
               return resolved
             })(),
@@ -365,10 +379,17 @@ const cli = Cli.create('mppx', {
         )
         const stripeSecretKey = process.env.MPPX_STRIPE_SECRET_KEY
         if (!stripeSecretKey) {
-          return error({ code: 'MISSING_ENV', message: 'MPPX_STRIPE_SECRET_KEY environment variable is required for Stripe payments.' })
+          return error({
+            code: 'MISSING_ENV',
+            message: 'MPPX_STRIPE_SECRET_KEY environment variable is required for Stripe payments.',
+          })
         }
         if (!stripeSecretKey.startsWith('sk_test_')) {
-          return error({ code: 'UNSUPPORTED_MODE', message: 'Stripe CLI payments are currently only supported in test mode (sk_test_... keys).' })
+          return error({
+            code: 'UNSUPPORTED_MODE',
+            message:
+              'Stripe CLI payments are currently only supported in test mode (sk_test_... keys).',
+          })
         }
         const mppx = Mppx.create({
           methods: [
@@ -427,10 +448,16 @@ const cli = Cli.create('mppx', {
                       const fallbackError = (await response.json()) as {
                         error: { message: string }
                       }
-                      return error({ code: 'STRIPE_ERROR', message: `Failed to create SPT: ${fallbackError.error.message}` })
+                      return error({
+                        code: 'STRIPE_ERROR',
+                        message: `Failed to create SPT: ${fallbackError.error.message}`,
+                      })
                     }
                   } else {
-                    return error({ code: 'STRIPE_ERROR', message: `Failed to create SPT: ${errorBody.error.message}` })
+                    return error({
+                      code: 'STRIPE_ERROR',
+                      message: `Failed to create SPT: ${errorBody.error.message}`,
+                    })
                   }
                 }
                 const { id } = (await response.json()) as { id: string }
@@ -442,7 +469,10 @@ const cli = Cli.create('mppx', {
         })
         credential = await mppx.createCredential(challengeResponse)
       } else {
-        return error({ code: 'UNSUPPORTED_METHOD', message: `Unsupported payment method: ${challenge.method}` })
+        return error({
+          code: 'UNSUPPORTED_METHOD',
+          message: `Unsupported payment method: ${challenge.method}`,
+        })
       }
 
       const sessionMd = challenge.request.methodDetails as
@@ -911,17 +941,46 @@ const cli = Cli.create('mppx', {
       if (cause && 'code' in cause) {
         const code = cause.code as string
         if (code === 'ENOTFOUND')
-          return error({ code: 'DNS_ERROR', message: `Could not resolve host "${hostname}". Check the URL and try again.` })
+          return error({
+            code: 'DNS_ERROR',
+            message: `Could not resolve host "${hostname}". Check the URL and try again.`,
+          })
         else if (code === 'ECONNREFUSED')
-          return error({ code: 'CONNECTION_REFUSED', message: `Connection refused by "${hostname}". Is the server running?`, retryable: true })
-        else if (code === 'ECONNRESET') return error({ code: 'CONNECTION_RESET', message: `Connection to "${hostname}" was reset.`, retryable: true })
-        else if (code === 'ETIMEDOUT') return error({ code: 'CONNECTION_TIMEOUT', message: `Connection to "${hostname}" timed out.`, retryable: true })
+          return error({
+            code: 'CONNECTION_REFUSED',
+            message: `Connection refused by "${hostname}". Is the server running?`,
+            retryable: true,
+          })
+        else if (code === 'ECONNRESET')
+          return error({
+            code: 'CONNECTION_RESET',
+            message: `Connection to "${hostname}" was reset.`,
+            retryable: true,
+          })
+        else if (code === 'ETIMEDOUT')
+          return error({
+            code: 'CONNECTION_TIMEOUT',
+            message: `Connection to "${hostname}" timed out.`,
+            retryable: true,
+          })
         else if (code === 'CERT_HAS_EXPIRED' || code === 'UNABLE_TO_VERIFY_LEAF_SIGNATURE')
-          return error({ code: 'TLS_ERROR', message: `TLS certificate error for "${hostname}". Use --insecure to skip verification.` })
-        else return error({ code: 'REQUEST_FAILED', message: `Request to "${hostname}" failed: ${cause.message}` })
+          return error({
+            code: 'TLS_ERROR',
+            message: `TLS certificate error for "${hostname}". Use --insecure to skip verification.`,
+          })
+        else
+          return error({
+            code: 'REQUEST_FAILED',
+            message: `Request to "${hostname}" failed: ${cause.message}`,
+          })
       } else {
         const msg = err instanceof Error ? err.message : String(err)
-        return error({ code: 'REQUEST_FAILED', message: cause ? `Request failed: ${msg} (Cause: ${cause.message})` : `Request failed: ${msg}` })
+        return error({
+          code: 'REQUEST_FAILED',
+          message: cause
+            ? `Request failed: ${msg} (Cause: ${cause.message})`
+            : `Request failed: ${msg}`,
+        })
       }
     }
   },
@@ -1006,7 +1065,10 @@ account.command('delete', {
     const keychain = createKeychain(options.account)
     const key = await keychain.get()
     if (!key) {
-      return error({ code: 'ACCOUNT_NOT_FOUND', message: `Account "${options.account}" not found.` })
+      return error({
+        code: 'ACCOUNT_NOT_FOUND',
+        message: `Account "${options.account}" not found.`,
+      })
     }
     const acct = privateKeyToAccount(key as `0x${string}`)
     const balanceLines = await fetchBalanceLines(acct.address, { includeTestnet: false })
@@ -1053,7 +1115,8 @@ account.command('fund', {
     const keychain = createKeychain(accountName)
     const key = await keychain.get()
     if (!key) {
-      if (options.account) return error({ code: 'ACCOUNT_NOT_FOUND', message: `Account "${accountName}" not found.` })
+      if (options.account)
+        return error({ code: 'ACCOUNT_NOT_FOUND', message: `Account "${accountName}" not found.` })
       else return error({ code: 'ACCOUNT_NOT_FOUND', message: 'No account found.' })
     }
     const acct = privateKeyToAccount(key as `0x${string}`)
@@ -1125,7 +1188,8 @@ account.command('view', {
     const keychain = createKeychain(accountName)
     const key = await keychain.get()
     if (!key) {
-      if (options.account) return error({ code: 'ACCOUNT_NOT_FOUND', message: `Account "${accountName}" not found.` })
+      if (options.account)
+        return error({ code: 'ACCOUNT_NOT_FOUND', message: `Account "${accountName}" not found.` })
       else return error({ code: 'ACCOUNT_NOT_FOUND', message: 'No account found.' })
     }
     const acct = privateKeyToAccount(key as `0x${string}`)

@@ -1,5 +1,4 @@
 import { parseUnits } from 'viem'
-import * as Expires from '../Expires.js'
 import * as Method from '../Method.js'
 import * as z from '../zod.js'
 
@@ -24,7 +23,6 @@ export const charge = Method.from({
         currency: z.string(),
         decimals: z.number(),
         description: z.optional(z.string()),
-        expires: z._default(z.datetime(), () => Expires.minutes(5)),
         externalId: z.optional(z.string()),
         metadata: z.optional(z.record(z.string(), z.string())),
         networkId: z.string(),
