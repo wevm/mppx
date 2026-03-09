@@ -617,8 +617,7 @@ describe('sign', () => {
   })
 
   test('error: unsupported method', async () => {
-    const challenge =
-      'Payment id="x", realm="x", method="unknown", intent="charge", request="e30"'
+    const challenge = 'Payment id="x", realm="x", method="unknown", intent="charge", request="e30"'
     const { exitCode, output } = await serve(['sign', '--challenge', challenge])
     expect(exitCode).toBe(2)
     expect(output).toContain('Unsupported payment method')

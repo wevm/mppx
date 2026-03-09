@@ -67,7 +67,11 @@ const cli = Cli.create('mppx', {
       .describe('RPC endpoint, defaults to public RPC for chain (env: MPPX_RPC_URL)'),
     silent: z.boolean().optional().describe('Silent mode (suppress progress and info)'),
     userAgent: z.string().optional().describe('Set User-Agent header'),
-    verbose: z.number().default(0).meta({ count: true }).describe('Verbosity (-v details, -vv headers)'),
+    verbose: z
+      .number()
+      .default(0)
+      .meta({ count: true })
+      .describe('Verbosity (-v details, -vv headers)'),
   }),
   alias: {
     account: 'a',
