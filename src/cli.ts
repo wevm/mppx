@@ -96,7 +96,11 @@ const cli = Cli.create('mppx', {
       for (const header of options.header) {
         const index = header.indexOf(':')
         if (index === -1) {
-          return error({ code: 'INVALID_HEADER', message: `Invalid header format: ${header}` })
+          return error({
+            code: 'INVALID_HEADER',
+            message: `Invalid header format: ${header}`,
+            exitCode: 2,
+          })
         }
         headers[header.slice(0, index).trim()] = header.slice(index + 1).trim()
       }
@@ -171,7 +175,11 @@ const cli = Cli.create('mppx', {
       const challengeResponse = await globalThis.fetch(fetchUrl, fetchInit)
       if (challengeResponse.status !== 402) {
         if (options.fail && challengeResponse.status >= 400)
-          return error({ code: 'HTTP_ERROR', message: `HTTP error ${challengeResponse.status}` })
+          return error({
+            code: 'HTTP_ERROR',
+            message: `HTTP error ${challengeResponse.status}`,
+            exitCode: 22,
+          })
         printResponseHeaders(challengeResponse)
         console.log((await challengeResponse.text()).replace(/\n+$/, ''))
         return
@@ -199,8 +207,10 @@ const cli = Cli.create('mppx', {
             return error({
               code: 'ACCOUNT_NOT_FOUND',
               message: `Account "${accountName}" not found.`,
+              exitCode: 69,
             })
-          else return error({ code: 'ACCOUNT_NOT_FOUND', message: 'No account found.' })
+          else
+            return error({ code: 'ACCOUNT_NOT_FOUND', message: 'No account found.', exitCode: 69 })
         }
         account = privateKeyToAccount(privateKey as `0x${string}`)
         const rpcUrl = options.rpcUrl ?? process.env.RPC_URL
@@ -325,6 +335,7 @@ const cli = Cli.create('mppx', {
           return error({
             code: 'ACCOUNT_NOT_FOUND',
             message: 'Tempo requires a configured account.',
+            exitCode: 69,
           })
         }
         const tempoOpts = parseOptions(
@@ -351,6 +362,7 @@ const cli = Cli.create('mppx', {
                   code: 'MISSING_DEPOSIT',
                   message:
                     'Session payment requires a deposit. Use -M deposit=<amount> or connect to testnet.',
+                  exitCode: 2,
                 })
               }
               return resolved
@@ -382,6 +394,7 @@ const cli = Cli.create('mppx', {
           return error({
             code: 'MISSING_ENV',
             message: 'MPPX_STRIPE_SECRET_KEY environment variable is required for Stripe payments.',
+            exitCode: 2,
           })
         }
         if (!stripeSecretKey.startsWith('sk_test_')) {
@@ -389,6 +402,7 @@ const cli = Cli.create('mppx', {
             code: 'UNSUPPORTED_MODE',
             message:
               'Stripe CLI payments are currently only supported in test mode (sk_test_... keys).',
+            exitCode: 2,
           })
         }
         const mppx = Mppx.create({
@@ -451,12 +465,14 @@ const cli = Cli.create('mppx', {
                       return error({
                         code: 'STRIPE_ERROR',
                         message: `Failed to create SPT: ${fallbackError.error.message}`,
+                        exitCode: 77,
                       })
                     }
                   } else {
                     return error({
                       code: 'STRIPE_ERROR',
                       message: `Failed to create SPT: ${errorBody.error.message}`,
+                      exitCode: 77,
                     })
                   }
                 }
@@ -472,6 +488,7 @@ const cli = Cli.create('mppx', {
         return error({
           code: 'UNSUPPORTED_METHOD',
           message: `Unsupported payment method: ${challenge.method}`,
+          exitCode: 2,
         })
       }
 
@@ -559,7 +576,11 @@ const cli = Cli.create('mppx', {
       }
 
       if (options.fail && credentialResponse.status >= 400)
-        return error({ code: 'HTTP_ERROR', message: `HTTP error ${credentialResponse.status}` })
+        return error({
+          code: 'HTTP_ERROR',
+          message: `HTTP error ${credentialResponse.status}`,
+          exitCode: 22,
+        })
 
       if (credentialResponse.status === 402) {
         const body = await credentialResponse.text()
@@ -577,7 +598,7 @@ const cli = Cli.create('mppx', {
         } catch {
           if (body) info(`  ${body}\n`)
         }
-        return error({ code: 'PAYMENT_REJECTED', message: 'Payment rejected' })
+        return error({ code: 'PAYMENT_REJECTED', message: 'Payment rejected', exitCode: 75 })
       } else {
         printResponseHeaders(credentialResponse)
 
@@ -944,29 +965,34 @@ const cli = Cli.create('mppx', {
           return error({
             code: 'DNS_ERROR',
             message: `Could not resolve host "${hostname}". Check the URL and try again.`,
+            exitCode: 6,
           })
         else if (code === 'ECONNREFUSED')
           return error({
             code: 'CONNECTION_REFUSED',
             message: `Connection refused by "${hostname}". Is the server running?`,
             retryable: true,
+            exitCode: 7,
           })
         else if (code === 'ECONNRESET')
           return error({
             code: 'CONNECTION_RESET',
             message: `Connection to "${hostname}" was reset.`,
             retryable: true,
+            exitCode: 56,
           })
         else if (code === 'ETIMEDOUT')
           return error({
             code: 'CONNECTION_TIMEOUT',
             message: `Connection to "${hostname}" timed out.`,
             retryable: true,
+            exitCode: 28,
           })
         else if (code === 'CERT_HAS_EXPIRED' || code === 'UNABLE_TO_VERIFY_LEAF_SIGNATURE')
           return error({
             code: 'TLS_ERROR',
             message: `TLS certificate error for "${hostname}". Use --insecure to skip verification.`,
+            exitCode: 60,
           })
         else
           return error({
@@ -1047,7 +1073,11 @@ account.command('default', {
     const accountName = options.account
     const key = await createKeychain(accountName).get()
     if (!key) {
-      return error({ code: 'ACCOUNT_NOT_FOUND', message: `Account "${accountName}" not found.` })
+      return error({
+        code: 'ACCOUNT_NOT_FOUND',
+        message: `Account "${accountName}" not found.`,
+        exitCode: 69,
+      })
     }
     createDefaultStore().set(accountName)
     console.log(`Default account set to "${accountName}"`)
@@ -1068,6 +1098,7 @@ account.command('delete', {
       return error({
         code: 'ACCOUNT_NOT_FOUND',
         message: `Account "${options.account}" not found.`,
+        exitCode: 69,
       })
     }
     const acct = privateKeyToAccount(key as `0x${string}`)
@@ -1116,8 +1147,12 @@ account.command('fund', {
     const key = await keychain.get()
     if (!key) {
       if (options.account)
-        return error({ code: 'ACCOUNT_NOT_FOUND', message: `Account "${accountName}" not found.` })
-      else return error({ code: 'ACCOUNT_NOT_FOUND', message: 'No account found.' })
+        return error({
+          code: 'ACCOUNT_NOT_FOUND',
+          message: `Account "${accountName}" not found.`,
+          exitCode: 69,
+        })
+      else return error({ code: 'ACCOUNT_NOT_FOUND', message: 'No account found.', exitCode: 69 })
     }
     const acct = privateKeyToAccount(key as `0x${string}`)
     const chain = await resolveChain(options)
@@ -1189,8 +1224,12 @@ account.command('view', {
     const key = await keychain.get()
     if (!key) {
       if (options.account)
-        return error({ code: 'ACCOUNT_NOT_FOUND', message: `Account "${accountName}" not found.` })
-      else return error({ code: 'ACCOUNT_NOT_FOUND', message: 'No account found.' })
+        return error({
+          code: 'ACCOUNT_NOT_FOUND',
+          message: `Account "${accountName}" not found.`,
+          exitCode: 69,
+        })
+      else return error({ code: 'ACCOUNT_NOT_FOUND', message: 'No account found.', exitCode: 69 })
     }
     const acct = privateKeyToAccount(key as `0x${string}`)
     const rpcUrl = options.rpcUrl ?? (process.env.MPPX_RPC_URL || undefined)
