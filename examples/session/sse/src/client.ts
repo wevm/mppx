@@ -37,7 +37,7 @@ import { tempoModerato } from 'viem/chains'
 import { Actions } from 'viem/tempo'
 
 // The server URL. Defaults to localhost for local development.
-const BASE_URL = process.env.BASE_URL ?? 'http://mppx-session-sse.localhost:1355'
+const BASE_URL = process.env.BASE_URL ?? 'http://localhost:5173'
 
 // pathUSD is a TIP-20 token on Tempo's testnet (Moderato).
 // This is the contract address for pathUSD — `0x20c0...` is the well-known

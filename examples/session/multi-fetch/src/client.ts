@@ -37,7 +37,7 @@ import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts'
 import { tempoModerato } from 'viem/chains'
 import { Actions } from 'viem/tempo'
 
-const BASE_URL = process.env.BASE_URL ?? 'http://mppx-session-multi-fetch.localhost:1355'
+const BASE_URL = process.env.BASE_URL ?? 'http://localhost:5173'
 
 // pathUSD is the testnet TIP-20 token on Tempo Moderato (testnet).
 // Address 0x20c0...0000 is the well-known pathUSD contract address.

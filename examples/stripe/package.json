@@ -3,7 +3,7 @@
   "type": "module",
   "private": true,
   "scripts": {
-    "dev": "portless mppx-stripe vite",
+    "dev": "vite",
     "check": "biome check --fix --unsafe",
     "check:types": "tsc -b",
     "build": "vite build",

@@ -20,8 +20,8 @@ importers:
         specifier: ^0.13.0
         version: 0.13.0
       incur:
-        specifier: ^0.3.0
-        version: 0.3.0(openapi-types@12.1.3)
+        specifier: ^0.3.1
+        version: 0.3.1(openapi-types@12.1.3)
       ox:
         specifier: ^0.12.4
         version: 0.12.4(typescript@5.9.3)(zod@4.3.6)
@@ -2322,8 +2322,8 @@ packages:
     resolution: {integrity: sha512-JmXMZ6wuvDmLiHEml9ykzqO6lwFbof0GG4IkcGaENdCRDDmMVnny7s5HsIgHCbaq0w2MyPhDqkhTUgS2LU2PHA==}
     engines: {node: '>=0.8.19'}
 
-  incur@0.3.0:
-    resolution: {integrity: sha512-KVzNCTS2DSKkHOlCCL7koqDDs0/exWnjFWo+g4qOuJzv03YUQKdbPegyOu1M4acgIJpnWULB67KvsCIOEPElaw==}
+  incur@0.3.1:
+    resolution: {integrity: sha512-Qbx+LI55wzHSTpSS8XcyzUDiHS2DinM8rSonw/Ri3t3KuPimwbbGUfoyPrIjxciBQxjAaL2Nkv0RKJIVp0b5iA==}
     hasBin: true
 
   inherits@2.0.4:
@@ -5816,7 +5816,7 @@ snapshots:
 
   imurmurhash@0.1.4: {}
 
-  incur@0.3.0(openapi-types@12.1.3):
+  incur@0.3.1(openapi-types@12.1.3):
     dependencies:
       '@modelcontextprotocol/sdk': 1.27.1(zod@4.3.6)
       '@readme/openapi-parser': 6.0.0(openapi-types@12.1.3)

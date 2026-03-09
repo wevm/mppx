@@ -18,6 +18,18 @@ import { tempo } from './tempo/client/index.js'
 import type { SessionCredentialPayload } from './tempo/session/Types.js'
 import { signVoucher } from './tempo/session/Voucher.js'
 
+function readStdin(): Promise<string> {
+  return new Promise((resolve, reject) => {
+    let data = ''
+    process.stdin.setEncoding('utf-8')
+    process.stdin.on('data', (chunk) => {
+      data += chunk
+    })
+    process.stdin.on('end', () => resolve(data.trim()))
+    process.stdin.on('error', reject)
+  })
+}
+
 const require = createRequire(import.meta.url)
 const { name, version } = require('../package.json') as { name: string; version: string }
 
@@ -55,7 +67,7 @@ const cli = Cli.create('mppx', {
       .describe('RPC endpoint, defaults to public RPC for chain (env: MPPX_RPC_URL)'),
     silent: z.boolean().optional().describe('Silent mode (suppress progress and info)'),
     userAgent: z.string().optional().describe('Set User-Agent header'),
-    verbose: z.boolean().optional().describe('Show request/response headers'),
+    verbose: z.number().default(0).meta({ count: true }).describe('Verbosity (-v details, -vv headers)'),
   }),
   alias: {
     account: 'a',
@@ -126,7 +138,7 @@ const cli = Cli.create('mppx', {
 
     // Node.js doesn't resolve *.localhost subdomains to loopback (unlike
     // browsers per RFC 6761). Rewrite the URL to 127.0.0.1 and set the
-    // Host header so reverse proxies (e.g. portless) can route correctly.
+    // Host header so reverse proxies can route correctly.
     const isSubLocalhost = hostname.endsWith('.localhost') && hostname !== 'localhost'
     const fetchUrl = isSubLocalhost ? url.replace(hostname, '127.0.0.1') : url
     if (isSubLocalhost) {
@@ -147,10 +159,10 @@ const cli = Cli.create('mppx', {
       else if (fetchInit.body) fetchInit.method = 'POST'
       if (Object.keys(headers).length > 0) fetchInit.headers = headers
 
-      const verbose = options.verbose ?? false
+      const verbose = options.verbose
 
       const printRequestHeaders = (reqUrl: string, init: RequestInit) => {
-        if (!verbose) return
+        if (verbose < 2) return
         const { pathname, host } = new URL(reqUrl)
         const method = (init.method ?? 'GET').toUpperCase()
         info(`> ${method} ${pathname} HTTP/1.1\n`)
@@ -161,14 +173,14 @@ const cli = Cli.create('mppx', {
       }
 
       const printResponseHeaders = (res: Response) => {
-        if (!options.include && !verbose) return
+        if (!options.include && verbose < 2) return
         if (silent) return
         const status = `HTTP/1.1 ${res.status} ${res.statusText}`
-        const out = verbose ? process.stderr : process.stdout
-        const prefix = verbose ? '< ' : ''
+        const out = verbose >= 2 ? process.stderr : process.stdout
+        const prefix = verbose >= 2 ? '< ' : ''
         out.write(`${prefix}${status}\n`)
         for (const [k, v] of res.headers) out.write(`${prefix}${k}: ${v}\n`)
-        out.write(verbose ? '<\n' : '\n')
+        out.write(verbose >= 2 ? '<\n' : '\n')
       }
 
       printRequestHeaders(url, fetchInit)
@@ -199,34 +211,75 @@ const cli = Cli.create('mppx', {
       // Tempo-specific setup (private key, viem account/client, token info)
       let account: ReturnType<typeof privateKeyToAccount> | undefined
       let client: ReturnType<typeof createClient> | undefined
+      let useTempoCliSign = false
       if (challenge.method === 'tempo') {
         const privateKey =
-          process.env.MPPX_PRIVATE_KEY?.trim() || (await createKeychain(accountName).get())
-        if (!privateKey) {
-          if (options.account)
-            return error({
-              code: 'ACCOUNT_NOT_FOUND',
-              message: `Account "${accountName}" not found.`,
-              exitCode: 69,
+          process.env.MPPX_PRIVATE_KEY?.trim() ||
+          (isTempoAccount(accountName) ? undefined : await createKeychain(accountName).get())
+        if (!privateKey && isTempoAccount(accountName) && hasTempoCliSync()) {
+          useTempoCliSign = true
+          // Resolve wallet address from keys.toml for display/balance
+          const tempoEntry = resolveTempoAccount(accountName)
+          if (tempoEntry) {
+            const rpcUrl = options.rpcUrl ?? process.env.RPC_URL
+            client = createClient({
+              chain: await resolveChain({ ...options, rpcUrl }),
+              transport: http(rpcUrl),
             })
-          else
-            return error({ code: 'ACCOUNT_NOT_FOUND', message: 'No account found.', exitCode: 69 })
+            explorerUrl = client.chain?.blockExplorers?.default?.url
+            const tokenInfo = currency
+              ? await fetchTokenInfo(
+                  client,
+                  currency as Address,
+                  tempoEntry.wallet_address as Address,
+                ).catch(() => undefined)
+              : undefined
+            tokenSymbol = tokenInfo?.symbol ?? currency ?? ''
+            tokenDecimals =
+              tokenInfo?.decimals ?? (challengeRequest.decimals as number | undefined) ?? 6
+          }
+        } else if (!privateKey) {
+          // tempo CLI not available — try silent fallback
+          const fallback = fallbackFromTempo()
+          if (fallback) {
+            const fallbackKey = await createKeychain(fallback).get()
+            if (fallbackKey) {
+              account = privateKeyToAccount(fallbackKey as `0x${string}`)
+            }
+          }
+          if (!account) {
+            if (options.account)
+              return error({
+                code: 'ACCOUNT_NOT_FOUND',
+                message: `Account "${accountName}" not found.`,
+                exitCode: 69,
+              })
+            else
+              return error({
+                code: 'ACCOUNT_NOT_FOUND',
+                message: 'No account found.',
+                exitCode: 69,
+              })
+          }
+        } else {
+          account = privateKeyToAccount(privateKey as `0x${string}`)
         }
-        account = privateKeyToAccount(privateKey as `0x${string}`)
-        const rpcUrl = options.rpcUrl ?? process.env.RPC_URL
-        client = createClient({
-          chain: await resolveChain({ ...options, rpcUrl }),
-          transport: http(rpcUrl),
-        })
-        explorerUrl = client.chain?.blockExplorers?.default?.url
-        const tokenInfo = currency
-          ? await fetchTokenInfo(client, currency as Address, account.address).catch(
-              () => undefined,
-            )
-          : undefined
-        tokenSymbol = tokenInfo?.symbol ?? currency ?? ''
-        tokenDecimals =
-          tokenInfo?.decimals ?? (challengeRequest.decimals as number | undefined) ?? 6
+        if (!useTempoCliSign && account) {
+          const rpcUrl = options.rpcUrl ?? process.env.RPC_URL
+          client = createClient({
+            chain: await resolveChain({ ...options, rpcUrl }),
+            transport: http(rpcUrl),
+          })
+          explorerUrl = client.chain?.blockExplorers?.default?.url
+          const tokenInfo = currency
+            ? await fetchTokenInfo(client, currency as Address, account.address).catch(
+                () => undefined,
+              )
+            : undefined
+          tokenSymbol = tokenInfo?.symbol ?? currency ?? ''
+          tokenDecimals =
+            tokenInfo?.decimals ?? (challengeRequest.decimals as number | undefined) ?? 6
+        }
       }
 
       {
@@ -310,13 +363,15 @@ const cli = Cli.create('mppx', {
         const pad = Math.max(...sections.flatMap(([, rows]) => rows.map(([k]) => k.length)))
         const indent = `  ${''.padEnd(pad)}  `
 
-        info(`${pc.bold(pc.yellow('Payment Required'))}\n`)
-        for (const [title, rows] of sections) {
-          info(`${pc.bold(title)}\n`)
-          for (const [label, value] of rows) {
-            const [first, ...rest] = value.split('\n')
-            info(`  ${pc.dim(label.padEnd(pad))}  ${first}\n`)
-            for (const line of rest) info(`${indent}${line}\n`)
+        if (verbose >= 1 || confirmEnabled) {
+          info(`${pc.bold(pc.yellow('Payment Required'))}\n`)
+          for (const [title, rows] of sections) {
+            info(`${pc.bold(title)}\n`)
+            for (const [label, value] of rows) {
+              const [first, ...rest] = value.split('\n')
+              info(`  ${pc.dim(label.padEnd(pad))}  ${first}\n`)
+              for (const line of rest) info(`${indent}${line}\n`)
+            }
           }
         }
         if (confirmEnabled) {
@@ -330,7 +385,17 @@ const cli = Cli.create('mppx', {
       }
 
       let credential: string
-      if (challenge.method === 'tempo') {
+      if (challenge.method === 'tempo' && useTempoCliSign) {
+        const wwwAuth = challengeResponse.headers.get('www-authenticate')
+        if (!wwwAuth) {
+          return error({
+            code: 'MISSING_CHALLENGE',
+            message: 'No WWW-Authenticate header in 402 response.',
+            exitCode: 2,
+          })
+        }
+        credential = await tempoCliSign(wwwAuth)
+      } else if (challenge.method === 'tempo') {
         if (!account || !client) {
           return error({
             code: 'ACCOUNT_NOT_FOUND',
@@ -508,18 +573,20 @@ const cli = Cli.create('mppx', {
         if ('cumulativeAmount' in parsed.payload && parsed.payload.cumulativeAmount)
           sessionCumulativeAmount = BigInt(parsed.payload.cumulativeAmount)
 
-        if (parsed.payload.action === 'open') {
-          const depositRaw = challengeRequest.suggestedDeposit as string | undefined
-          const depositDisplay = depositRaw
-            ? ` ${pc.dim(`(deposit ${depositRaw} ${tokenSymbol})`)}`
-            : ''
-          const prefix = confirmEnabled ? '' : '\n'
-          info(
-            `${prefix}${pc.dim(`Channel opened ${parsed.payload.channelId}`)}${depositDisplay}\n`,
-          )
-        } else {
-          const prefix = confirmEnabled ? '' : '\n'
-          info(`${prefix}${pc.dim(`Channel reused ${parsed.payload.channelId}`)}\n`)
+        if (verbose >= 1) {
+          if (parsed.payload.action === 'open') {
+            const depositRaw = challengeRequest.suggestedDeposit as string | undefined
+            const depositDisplay = depositRaw
+              ? ` ${pc.dim(`(deposit ${depositRaw} ${tokenSymbol})`)}`
+              : ''
+            const prefix = confirmEnabled ? '' : '\n'
+            info(
+              `${prefix}${pc.dim(`Channel opened ${parsed.payload.channelId}`)}${depositDisplay}\n`,
+            )
+          } else {
+            const prefix = confirmEnabled ? '' : '\n'
+            info(`${prefix}${pc.dim(`Channel reused ${parsed.payload.channelId}`)}\n`)
+          }
         }
       }
 
@@ -617,41 +684,43 @@ const cli = Cli.create('mppx', {
               if (sessionChannelId)
                 writeChannelCumulative(sessionChannelId, sessionCumulativeAmount)
             }
-            info(`\n${pc.bold(pc.green('Payment Receipt'))}\n`)
-            const rows: [string, string][] = []
-            const channelId = receiptJson.channelId
-            const reference = receiptJson.reference
-            const skipReference = channelId && reference && channelId === reference
-            const receiptBalanceKeys = new Set(['acceptedCumulative', 'spent'])
-            for (const [key, value] of Object.entries(receiptJson)) {
-              if (value === undefined || shownKeys.has(key)) continue
-              if (key === 'reference' && skipReference) continue
-              if (receiptBalanceKeys.has(key) && typeof value === 'string') {
-                rows.push([
-                  key,
-                  `${value} ${pc.dim(`(${fmtBalance(BigInt(value), tokenSymbol, tokenDecimals)})`)}`,
-                ])
-              } else if (
-                (key === 'reference' || key === 'txHash') &&
-                typeof value === 'string' &&
-                explorerUrl
-              ) {
-                rows.push([key, pc.link(`${explorerUrl}/tx/${value}`, value)])
-              } else if (
-                key === 'reference' &&
-                typeof value === 'string' &&
-                challenge.method === 'stripe' &&
-                value.startsWith('pi_')
-              ) {
-                const isTest = process.env.MPPX_STRIPE_SECRET_KEY?.startsWith('sk_test_')
-                const dashboardUrl = `https://dashboard.stripe.com${isTest ? '/test' : ''}/payments/${value}`
-                rows.push([key, pc.link(dashboardUrl, value)])
-              } else rows.push([key, String(value)])
+            if (verbose >= 1) {
+              info(`\n${pc.bold(pc.green('Payment Receipt'))}\n`)
+              const rows: [string, string][] = []
+              const channelId = receiptJson.channelId
+              const reference = receiptJson.reference
+              const skipReference = channelId && reference && channelId === reference
+              const receiptBalanceKeys = new Set(['acceptedCumulative', 'spent'])
+              for (const [key, value] of Object.entries(receiptJson)) {
+                if (value === undefined || shownKeys.has(key)) continue
+                if (key === 'reference' && skipReference) continue
+                if (receiptBalanceKeys.has(key) && typeof value === 'string') {
+                  rows.push([
+                    key,
+                    `${value} ${pc.dim(`(${fmtBalance(BigInt(value), tokenSymbol, tokenDecimals)})`)}`,
+                  ])
+                } else if (
+                  (key === 'reference' || key === 'txHash') &&
+                  typeof value === 'string' &&
+                  explorerUrl
+                ) {
+                  rows.push([key, pc.link(`${explorerUrl}/tx/${value}`, value)])
+                } else if (
+                  key === 'reference' &&
+                  typeof value === 'string' &&
+                  challenge.method === 'stripe' &&
+                  value.startsWith('pi_')
+                ) {
+                  const isTest = process.env.MPPX_STRIPE_SECRET_KEY?.startsWith('sk_test_')
+                  const dashboardUrl = `https://dashboard.stripe.com${isTest ? '/test' : ''}/payments/${value}`
+                  rows.push([key, pc.link(dashboardUrl, value)])
+                } else rows.push([key, String(value)])
+              }
+              rows.sort(([a], [b]) => a.localeCompare(b))
+              const pad = Math.max(...rows.map(([k]) => k.length))
+              for (const [label, value] of rows) info(`  ${pc.dim(label.padEnd(pad))}  ${value}\n`)
+              info('\n')
             }
-            rows.sort(([a], [b]) => a.localeCompare(b))
-            const pad = Math.max(...rows.map(([k]) => k.length))
-            for (const [label, value] of rows) info(`  ${pc.dim(label.padEnd(pad))}  ${value}\n`)
-            info('\n')
           } catch {}
         }
         const contentType = credentialResponse.headers.get('Content-Type') ?? ''
@@ -765,36 +834,38 @@ const cli = Cli.create('mppx', {
                 continue
               }
               if (currentEvent === 'payment-receipt') {
-                try {
-                  const receipt = JSON.parse(data) as Record<string, unknown>
-                  info(`\n\n${pc.bold(pc.green('Payment Receipt'))}\n`)
-                  const rows: [string, string][] = []
-                  const skipRef =
-                    receipt.channelId &&
-                    receipt.reference &&
-                    receipt.channelId === receipt.reference
-                  for (const [key, value] of Object.entries(receipt)) {
-                    if (value === undefined || shownKeys.has(key)) continue
-                    if (key === 'reference' && skipRef) continue
-                    const receiptBalanceKeys = ['acceptedCumulative', 'spent']
-                    if (receiptBalanceKeys.includes(key) && typeof value === 'string') {
-                      rows.push([
-                        key,
-                        `${value} ${pc.dim(`(${fmtBalance(BigInt(value), tokenSymbol, tokenDecimals)})`)}`,
-                      ])
-                    } else if (
-                      (key === 'reference' || key === 'txHash') &&
-                      typeof value === 'string' &&
-                      explorerUrl
-                    ) {
-                      rows.push([key, pc.link(`${explorerUrl}/tx/${value}`, value)])
-                    } else rows.push([key, String(value)])
-                  }
-                  rows.sort(([a], [b]) => a.localeCompare(b))
-                  const rpad = Math.max(...rows.map(([k]) => k.length))
-                  for (const [label, value] of rows)
-                    info(`  ${pc.dim(label.padEnd(rpad))}  ${value}\n`)
-                } catch {}
+                if (verbose >= 1) {
+                  try {
+                    const receipt = JSON.parse(data) as Record<string, unknown>
+                    info(`\n\n${pc.bold(pc.green('Payment Receipt'))}\n`)
+                    const rows: [string, string][] = []
+                    const skipRef =
+                      receipt.channelId &&
+                      receipt.reference &&
+                      receipt.channelId === receipt.reference
+                    for (const [key, value] of Object.entries(receipt)) {
+                      if (value === undefined || shownKeys.has(key)) continue
+                      if (key === 'reference' && skipRef) continue
+                      const receiptBalanceKeys = ['acceptedCumulative', 'spent']
+                      if (receiptBalanceKeys.includes(key) && typeof value === 'string') {
+                        rows.push([
+                          key,
+                          `${value} ${pc.dim(`(${fmtBalance(BigInt(value), tokenSymbol, tokenDecimals)})`)}`,
+                        ])
+                      } else if (
+                        (key === 'reference' || key === 'txHash') &&
+                        typeof value === 'string' &&
+                        explorerUrl
+                      ) {
+                        rows.push([key, pc.link(`${explorerUrl}/tx/${value}`, value)])
+                      } else rows.push([key, String(value)])
+                    }
+                    rows.sort(([a], [b]) => a.localeCompare(b))
+                    const rpad = Math.max(...rows.map(([k]) => k.length))
+                    for (const [label, value] of rows)
+                      info(`  ${pc.dim(label.padEnd(rpad))}  ${value}\n`)
+                  } catch {}
+                }
                 currentEvent = ''
                 continue
               }
@@ -850,24 +921,26 @@ const cli = Cli.create('mppx', {
               headers: { Authorization: closeCred },
             })
             if (closeRes.ok) {
-              const closeReceiptHeader = closeRes.headers.get('Payment-Receipt')
-              let closeTxHash: string | undefined
-              if (closeReceiptHeader) {
-                try {
-                  const r = JSON.parse(Base64.toString(closeReceiptHeader)) as Record<
-                    string,
-                    unknown
-                  >
-                  if (typeof r.txHash === 'string') closeTxHash = r.txHash
-                } catch {}
+              if (verbose >= 1) {
+                const closeReceiptHeader = closeRes.headers.get('Payment-Receipt')
+                let closeTxHash: string | undefined
+                if (closeReceiptHeader) {
+                  try {
+                    const r = JSON.parse(Base64.toString(closeReceiptHeader)) as Record<
+                      string,
+                      unknown
+                    >
+                    if (typeof r.txHash === 'string') closeTxHash = r.txHash
+                  } catch {}
+                }
+                const txInfo =
+                  closeTxHash && explorerUrl
+                    ? ` ${pc.dim(pc.link(`${explorerUrl}/tx/${closeTxHash}`, closeTxHash))}`
+                    : ''
+                info(
+                  `\n${pc.dim('Channel closed.')} ${pc.dim(`Spent ${fmtBalance(cumulativeAmount, tokenSymbol, tokenDecimals)}.`)}${txInfo}\n`,
+                )
               }
-              const txInfo =
-                closeTxHash && explorerUrl
-                  ? ` ${pc.dim(pc.link(`${explorerUrl}/tx/${closeTxHash}`, closeTxHash))}`
-                  : ''
-              info(
-                `\n${pc.dim('Channel closed.')} ${pc.dim(`Spent ${fmtBalance(cumulativeAmount, tokenSymbol, tokenDecimals)}.`)}${txInfo}\n`,
-              )
             } else {
               info(
                 `\n${pc.dim(pc.yellow('Channel close failed'))} ${pc.dim(`(${closeRes.status})`)}\n`,
@@ -888,7 +961,7 @@ const cli = Cli.create('mppx', {
             info('\n')
           }
           if (shouldClose && confirmEnabled && !(await confirm('Close channel?', true))) {
-            info(`${pc.dim('Kept channel open.')}\n`)
+            if (verbose >= 1) info(`${pc.dim('Kept channel open.')}\n`)
           } else if (shouldClose) {
             const signature = await signVoucher(
               client!,
@@ -917,25 +990,27 @@ const cli = Cli.create('mppx', {
             })
             if (closeRes.ok) {
               deleteChannelState(sessionChannelId!)
-              const closeReceiptHeader = closeRes.headers.get('Payment-Receipt')
-              let closeTxHash: string | undefined
-              if (closeReceiptHeader) {
-                try {
-                  const r = JSON.parse(Base64.toString(closeReceiptHeader)) as Record<
-                    string,
-                    unknown
-                  >
-                  if (typeof r.txHash === 'string') closeTxHash = r.txHash
-                } catch {}
+              if (verbose >= 1) {
+                const closeReceiptHeader = closeRes.headers.get('Payment-Receipt')
+                let closeTxHash: string | undefined
+                if (closeReceiptHeader) {
+                  try {
+                    const r = JSON.parse(Base64.toString(closeReceiptHeader)) as Record<
+                      string,
+                      unknown
+                    >
+                    if (typeof r.txHash === 'string') closeTxHash = r.txHash
+                  } catch {}
+                }
+                const txInfo =
+                  closeTxHash && explorerUrl
+                    ? ` ${pc.dim(pc.link(`${explorerUrl}/tx/${closeTxHash}`, closeTxHash))}`
+                    : ''
+                const closePrefix = confirmEnabled ? '' : '\n'
+                info(
+                  `${closePrefix}${pc.dim('Channel closed.')} ${pc.dim(`Spent ${fmtBalance(sessionCumulativeAmount, tokenSymbol, tokenDecimals)}.`)}${txInfo}\n`,
+                )
               }
-              const txInfo =
-                closeTxHash && explorerUrl
-                  ? ` ${pc.dim(pc.link(`${explorerUrl}/tx/${closeTxHash}`, closeTxHash))}`
-                  : ''
-              const closePrefix = confirmEnabled ? '' : '\n'
-              info(
-                `${closePrefix}${pc.dim('Channel closed.')} ${pc.dim(`Spent ${fmtBalance(sessionCumulativeAmount, tokenSymbol, tokenDecimals)}.`)}${txInfo}\n`,
-              )
             } else {
               const closeBody = await closeRes.text().catch(() => '')
               info(
@@ -1071,6 +1146,19 @@ account.command('default', {
   alias: { account: 'a' },
   async run({ options, error }) {
     const accountName = options.account
+    if (isTempoAccount(accountName)) {
+      const tempoEntry = resolveTempoAccount(accountName)
+      if (!tempoEntry) {
+        return error({
+          code: 'ACCOUNT_NOT_FOUND',
+          message: `Account "${accountName}" not found. Is Tempo wallet configured?`,
+          exitCode: 69,
+        })
+      }
+      createDefaultStore().set(accountName)
+      console.log(`Default account set to "${accountName}"`)
+      return
+    }
     const key = await createKeychain(accountName).get()
     if (!key) {
       return error({
@@ -1180,21 +1268,26 @@ account.command('list', {
   async run() {
     const currentDefault = createDefaultStore().get()
     const accounts = (await createKeychain().list()).sort()
-    if (accounts.length === 0) {
+    const resolved: { name: string; address: string; source?: string }[] = []
+    for (const accountName of accounts) {
+      const key = await createKeychain(accountName).get()
+      if (!key) continue
+      resolved.push({
+        name: accountName,
+        address: privateKeyToAccount(key as `0x${string}`).address,
+      })
+    }
+    const tempoEntries = readTempoKeystore()
+    for (let i = 0; i < tempoEntries.length; i++) {
+      const entry = tempoEntries[i]!
+      const tempoName = i === 0 ? 'tempo:default' : `tempo:${i}`
+      if (entry.wallet_address)
+        resolved.push({ name: tempoName, address: entry.wallet_address, source: 'tempo wallet' })
+    }
+    if (resolved.length === 0) {
       console.log(`No accounts found.`)
       return
     }
-    const entries = await Promise.all(
-      accounts.map(async (accountName) => {
-        const key = await createKeychain(accountName).get()
-        if (!key) return undefined
-        return {
-          name: accountName,
-          address: privateKeyToAccount(key as `0x${string}`).address,
-        }
-      }),
-    )
-    const resolved = entries.filter((e) => e !== undefined)
     const explorerUrl = tempoMainnet.blockExplorers?.default?.url
     const maxWidth = Math.max(
       ...resolved.map((e) => e.name.length + (e.name === currentDefault ? 1 : 0)),
@@ -1206,7 +1299,8 @@ account.command('list', {
       const addrDisplay = explorerUrl
         ? pc.link(`${explorerUrl}/address/${entry.address}`, entry.address)
         : entry.address
-      console.log(`${label}${' '.repeat(maxWidth - width + 2)}${pc.dim(addrDisplay)}`)
+      const sourceLabel = entry.source ? `  ${pc.dim(`(${entry.source})`)}` : ''
+      console.log(`${label}${' '.repeat(maxWidth - width + 2)}${pc.dim(addrDisplay)}${sourceLabel}`)
     }
   },
 })
@@ -1220,6 +1314,37 @@ account.command('view', {
   alias: { account: 'a', rpcUrl: 'r' },
   async run({ options, error }) {
     const accountName = resolveAccountName(options.account)
+
+    if (isTempoAccount(accountName)) {
+      const tempoEntry = resolveTempoAccount(accountName)
+      if (!tempoEntry) {
+        return error({
+          code: 'ACCOUNT_NOT_FOUND',
+          message: `Account "${accountName}" not found. Is Tempo wallet configured?`,
+          exitCode: 69,
+        })
+      }
+      const address = tempoEntry.wallet_address as Address
+      const rpcUrl = options.rpcUrl ?? (process.env.MPPX_RPC_URL || undefined)
+      const chain = rpcUrl ? await resolveChain({ rpcUrl }) : tempoMainnet
+      const explorerUrl = chain.blockExplorers?.default?.url
+      const addrDisplay = explorerUrl
+        ? pc.link(`${explorerUrl}/address/${address}`, address)
+        : address
+      console.log(`${pc.dim('Address')}  ${addrDisplay}`)
+
+      const balanceLines = await fetchBalanceLines(
+        address,
+        chain && rpcUrl ? { chain, rpcUrl } : undefined,
+      )
+      for (let i = 0; i < balanceLines.length; i++)
+        console.log(`${pc.dim(i === 0 ? 'Balance' : '       ')}  ${balanceLines[i]}`)
+
+      console.log(`${pc.dim('Name')}     ${accountName}`)
+      console.log(`${pc.dim('Type')}     ${tempoEntry.wallet_type} ${pc.dim('(tempo wallet)')}`)
+      return
+    }
+
     const keychain = createKeychain(accountName)
     const key = await keychain.get()
     if (!key) {
@@ -1252,6 +1377,230 @@ account.command('view', {
 })
 
 cli.command(account)
+
+const sign = Cli.create('sign', {
+  description: 'Sign a payment challenge and output the Authorization header',
+  usage: [
+    { suffix: '--challenge <value> [options]' },
+    { prefix: 'echo <challenge> |', suffix: '[options]' },
+  ],
+  options: z.object({
+    account: z.string().optional().describe('Account name (env: MPPX_ACCOUNT)'),
+    challenge: z.string().optional().describe('WWW-Authenticate challenge value'),
+    dryRun: z.boolean().optional().describe('Validate and parse the challenge without signing'),
+    methodOpt: z
+      .array(z.string())
+      .optional()
+      .describe('Method-specific option (key=value, repeatable)'),
+    rpcUrl: z
+      .string()
+      .optional()
+      .describe('RPC endpoint, defaults to public RPC for chain (env: MPPX_RPC_URL)'),
+  }),
+  alias: {
+    account: 'a',
+    challenge: 'c',
+    methodOpt: 'M',
+    rpcUrl: 'r',
+  },
+  async run({ options, format, error }) {
+    const raw = options.challenge || (process.stdin.isTTY === false ? await readStdin() : undefined)
+    if (!raw) {
+      return error({
+        code: 'NO_CHALLENGE',
+        message: 'No challenge provided. Use --challenge or pipe via stdin.',
+        exitCode: 2,
+      })
+    }
+
+    let challenge: Challenge.Challenge
+    try {
+      challenge = Challenge.deserialize(raw)
+    } catch (err) {
+      return error({
+        code: 'INVALID_CHALLENGE',
+        message: `Failed to parse challenge: ${err instanceof Error ? err.message : err}`,
+        exitCode: 2,
+      })
+    }
+
+    if (options.dryRun) {
+      process.stderr.write('Challenge is valid.\n')
+      return
+    }
+
+    if (challenge.method === 'tempo') {
+      const accountName = resolveAccountName(options.account)
+
+      // Delegate to tempo CLI for tempo wallet accounts
+      if (isTempoAccount(accountName) && hasTempoCliSync()) {
+        const wwwAuth = Challenge.serialize(challenge)
+        const result = await tempoCliSign(wwwAuth)
+        if (format === 'json') {
+          const tempoEntry = resolveTempoAccount(accountName)
+          console.log(JSON.stringify({ authorization: result, from: tempoEntry?.wallet_address }))
+        } else {
+          console.log(result)
+        }
+        return
+      }
+
+      let privateKey =
+        process.env.MPPX_PRIVATE_KEY?.trim() ||
+        (isTempoAccount(accountName) ? undefined : await createKeychain(accountName).get())
+      if (!privateKey) {
+        const fallback = fallbackFromTempo()
+        if (fallback) privateKey = await createKeychain(fallback).get()
+      }
+      if (!privateKey) {
+        if (options.account)
+          return error({
+            code: 'ACCOUNT_NOT_FOUND',
+            message: `Account "${accountName}" not found.`,
+            exitCode: 69,
+          })
+        else return error({ code: 'ACCOUNT_NOT_FOUND', message: 'No account found.', exitCode: 69 })
+      }
+      const account = privateKeyToAccount(privateKey as `0x${string}`)
+      const rpcUrl = options.rpcUrl ?? process.env.RPC_URL
+      const client = createClient({
+        chain: await resolveChain({ rpcUrl }),
+        transport: http(rpcUrl),
+      })
+
+      const methodOpts = parseMethodOpts(options.methodOpt)
+      const tempoOpts = parseOptions(
+        z.object({
+          channel: z.optional(z.coerce.string()),
+          deposit: z.optional(z.union([z.string(), z.number()])),
+        }),
+        methodOpts,
+      )
+
+      const mppx = Mppx.create({
+        methods: tempo({
+          account,
+          getClient: () => client,
+          deposit: (() => {
+            if (challenge.intent !== 'session') return undefined
+            const suggestedDeposit = (challenge.request as Record<string, unknown>)
+              .suggestedDeposit as string | undefined
+            const cliDeposit =
+              tempoOpts.deposit !== undefined ? String(tempoOpts.deposit) : undefined
+            return suggestedDeposit ?? cliDeposit
+          })(),
+        }),
+        polyfill: false,
+      })
+
+      const wwwAuth = Challenge.serialize(challenge)
+      const fakeResponse = new Response(null, {
+        status: 402,
+        headers: { 'WWW-Authenticate': wwwAuth },
+      })
+      const credential = await mppx.createCredential(
+        fakeResponse,
+        (() => {
+          if (!tempoOpts.channel) return undefined
+          const channelId = tempoOpts.channel
+          const saved = readChannelCumulative(channelId)
+          return {
+            channelId,
+            ...(saved !== undefined && { cumulativeAmountRaw: saved.toString() }),
+          }
+        })(),
+      )
+
+      if (format === 'json') {
+        console.log(JSON.stringify({ authorization: credential, from: account.address }))
+      } else {
+        console.log(credential)
+      }
+    } else if (challenge.method === 'stripe') {
+      const stripeSecretKey = process.env.MPPX_STRIPE_SECRET_KEY
+      if (!stripeSecretKey) {
+        return error({
+          code: 'MISSING_ENV',
+          message: 'MPPX_STRIPE_SECRET_KEY environment variable is required for Stripe payments.',
+          exitCode: 2,
+        })
+      }
+      const methodOpts = parseMethodOpts(options.methodOpt)
+      const stripeOpts = parseOptions(z.object({ paymentMethod: z.string() }), methodOpts)
+
+      const mppx = Mppx.create({
+        methods: [
+          stripe.charge({
+            paymentMethod: stripeOpts.paymentMethod,
+            createToken: async ({
+              paymentMethod,
+              amount,
+              currency,
+              networkId,
+              expiresAt,
+              metadata,
+            }) => {
+              const body = new URLSearchParams({
+                payment_method: paymentMethod!,
+                'usage_limits[currency]': currency,
+                'usage_limits[max_amount]': amount,
+                'usage_limits[expires_at]': expiresAt.toString(),
+              })
+              if (networkId) body.set('seller_details[network_id]', networkId)
+              if (metadata) {
+                for (const [key, value] of Object.entries(metadata))
+                  body.set(`metadata[${key}]`, value)
+              }
+              const sptUrl =
+                process.env.MPPX_STRIPE_SPT_URL ??
+                'https://api.stripe.com/v1/test_helpers/shared_payment/granted_tokens'
+              const response = await globalThis.fetch(sptUrl, {
+                method: 'POST',
+                headers: {
+                  Authorization: `Basic ${btoa(`${stripeSecretKey}:`)}`,
+                  'Content-Type': 'application/x-www-form-urlencoded',
+                },
+                body,
+              })
+              if (!response.ok) {
+                const errorBody = (await response.json()) as { error: { message: string } }
+                return error({
+                  code: 'STRIPE_ERROR',
+                  message: `Failed to create SPT: ${errorBody.error.message}`,
+                  exitCode: 77,
+                })
+              }
+              const { id } = (await response.json()) as { id: string }
+              return id
+            },
+          }),
+        ],
+        polyfill: false,
+      })
+
+      const wwwAuth = Challenge.serialize(challenge)
+      const fakeResponse = new Response(null, {
+        status: 402,
+        headers: { 'WWW-Authenticate': wwwAuth },
+      })
+      const credential = await mppx.createCredential(fakeResponse)
+
+      if (format === 'json') {
+        console.log(JSON.stringify({ authorization: credential }))
+      } else {
+        console.log(credential)
+      }
+    } else {
+      return error({
+        code: 'UNSUPPORTED_METHOD',
+        message: `Unsupported payment method: ${challenge.method}`,
+        exitCode: 2,
+      })
+    }
+  },
+})
+
+cli.command(sign)
 
 export default cli
 
@@ -1356,6 +1705,121 @@ function resolveAccountName(explicit?: string): string {
   if (explicit) return explicit
   if (process.env.MPPX_ACCOUNT?.trim()) return process.env.MPPX_ACCOUNT
   return createDefaultStore().get()
+}
+
+function isTempoAccount(accountName: string): boolean {
+  return accountName.startsWith('tempo:')
+}
+
+function tempoKeystorePath(): string {
+  const platform = os.platform()
+  if (platform === 'darwin')
+    return path.join(os.homedir(), 'Library', 'Application Support', 'tempo', 'wallet', 'keys.toml')
+  return path.join(
+    process.env.XDG_DATA_HOME || path.join(os.homedir(), '.local', 'share'),
+    'tempo',
+    'wallet',
+    'keys.toml',
+  )
+}
+
+interface TempoKeyEntry {
+  wallet_type: string
+  wallet_address: string
+  chain_id: number
+}
+
+function readTempoKeystore(): TempoKeyEntry[] {
+  try {
+    const raw = fs.readFileSync(tempoKeystorePath(), 'utf-8')
+    const entries: TempoKeyEntry[] = []
+    let current: Partial<TempoKeyEntry> | undefined
+    for (const line of raw.split('\n')) {
+      const trimmed = line.trim()
+      if (trimmed === '[[keys]]') {
+        if (current?.wallet_address) entries.push(current as TempoKeyEntry)
+        current = { wallet_type: 'local', wallet_address: '', chain_id: 0 }
+        continue
+      }
+      if (!current) continue
+      const m = trimmed.match(/^(\w+)\s*=\s*"?([^"]*)"?$/)
+      if (!m) continue
+      const [, key, value] = m
+      if (key === 'wallet_type') current.wallet_type = value!
+      else if (key === 'wallet_address') current.wallet_address = value!
+      else if (key === 'chain_id') current.chain_id = Number.parseInt(value!, 10)
+    }
+    if (current?.wallet_address) entries.push(current as TempoKeyEntry)
+    return entries
+  } catch {
+    return []
+  }
+}
+
+function resolveTempoAccount(accountName: string): TempoKeyEntry | undefined {
+  const entries = readTempoKeystore()
+  if (entries.length === 0) return undefined
+  const suffix = accountName.slice('tempo:'.length)
+  if (suffix === 'default' || suffix === '') return entries[0]
+  const idx = Number.parseInt(suffix, 10)
+  if (!Number.isNaN(idx) && idx >= 0 && idx < entries.length) return entries[idx]
+  return undefined
+}
+
+let _tempoCliAvailable: boolean | undefined
+function hasTempoCliSync(): boolean {
+  if (_tempoCliAvailable !== undefined) return _tempoCliAvailable
+  try {
+    child.execFileSync('which', ['tempo'], { stdio: 'ignore' })
+    _tempoCliAvailable = true
+  } catch {
+    _tempoCliAvailable = false
+  }
+  return _tempoCliAvailable
+}
+
+async function tempoCliSign(wwwAuth: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    child.execFile('tempo', ['mpp', 'sign', '--challenge', wwwAuth], (error, stdout, stderr) => {
+      if (error) {
+        const msg = stderr?.trim() || error.message
+        reject(new Error(`tempo mpp sign failed: ${msg}`))
+        return
+      }
+      const trimmed = stdout.trim()
+      if (!trimmed) {
+        reject(new Error('tempo mpp sign returned empty output'))
+        return
+      }
+      resolve(trimmed)
+    })
+  })
+}
+
+function fallbackFromTempo(): string | undefined {
+  const store = createDefaultStore()
+  const currentDefault = store.get()
+  if (!isTempoAccount(currentDefault)) return undefined
+  if (hasTempoCliSync()) return undefined
+  // tempo CLI not installed, fall back to first mppx account
+  // (sync list via security dump-keychain to avoid async in hot path)
+  const platform = os.platform()
+  if (platform === 'darwin') {
+    try {
+      const stdout = child.execFileSync('security', ['dump-keychain'], { encoding: 'utf-8' })
+      const mppxAccounts: string[] = []
+      for (const block of stdout.split('keychain:')) {
+        const serviceMatch = block.match(/"svce"<blob>="([^"]*)"/)
+        const accountMatch = block.match(/"acct"<blob>="([^"]*)"/)
+        if (serviceMatch?.[1] === name && accountMatch?.[1]) mppxAccounts.push(accountMatch[1])
+      }
+      if (mppxAccounts.length > 0) {
+        store.set(mppxAccounts[0]!)
+        return mppxAccounts[0]!
+      }
+    } catch {}
+  }
+  return undefined
 }
 
 // biome-ignore format: compact shell commands

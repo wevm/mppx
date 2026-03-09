@@ -135,7 +135,7 @@ describe('basic charge (examples/basic)', () => {
         [httpServer.url, '--account', 'nonexistent-account'],
         { env: { MPPX_PRIVATE_KEY: undefined } },
       )
-      expect(exitCode).toBe(1)
+      expect(exitCode).toBe(69)
       expect(output).toContain('nonexistent-account')
       expect(output).toContain('not found')
     } finally {
@@ -200,7 +200,7 @@ describe('session multi-fetch (examples/session/multi-fetch)', () => {
       const { exitCode } = await serve([httpServer.url, '--rpc-url', rpcUrl, '--fail'], {
         env: { MPPX_PRIVATE_KEY: testPrivateKey },
       })
-      expect(exitCode).toBe(1)
+      expect(exitCode).toBe(22)
     } finally {
       httpServer.close()
     }
@@ -314,7 +314,7 @@ describe('session sse (examples/session/sse)', () => {
       const { exitCode } = await serve([httpServer.url, '--rpc-url', rpcUrl, '--fail'], {
         env: { MPPX_PRIVATE_KEY: testPrivateKey },
       })
-      expect(exitCode).toBe(1)
+      expect(exitCode).toBe(22)
     } finally {
       httpServer.close()
     }
@@ -392,7 +392,7 @@ describe('stripe charge', () => {
         [appServer.url, '-s', '-M', 'paymentMethod=pm_card_visa'],
         { env: { MPPX_STRIPE_SECRET_KEY: '' } },
       )
-      expect(exitCode).toBe(1)
+      expect(exitCode).toBe(2)
       expect(output).toContain('MPPX_STRIPE_SECRET_KEY')
     } finally {
       appServer.close()
@@ -425,7 +425,7 @@ describe('stripe charge', () => {
         [appServer.url, '-s', '-M', 'paymentMethod=pm_card_visa'],
         { env: { MPPX_STRIPE_SECRET_KEY: 'sk_live_fake' } },
       )
-      expect(exitCode).toBe(1)
+      expect(exitCode).toBe(2)
       expect(output).toContain('test mode')
     } finally {
       appServer.close()
@@ -583,4 +583,75 @@ test('mppx --help', async () => {
   expect(output).toContain('mppx')
   expect(output).toContain('<url>')
   expect(output).toContain('account')
+  expect(output).toContain('sign')
+})
+
+// ---------------------------------------------------------------------------
+// sign
+// ---------------------------------------------------------------------------
+describe('sign', () => {
+  const validChallenge =
+    'Payment id="test", realm="test", method="tempo", intent="charge", request="eyJhbW91bnQiOiIxMDAwIiwiY3VycmVuY3kiOiIweDIwYzAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDEiLCJyZWNpcGllbnQiOiIweDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDEiLCJtZXRob2REZXRhaWxzIjp7ImNoYWluSWQiOjEzMzd9fQ"'
+
+  test('--dry-run: validates a valid challenge', async () => {
+    const { exitCode, stderr } = await serve(['sign', '--dry-run', '--challenge', validChallenge])
+    expect(exitCode).toBeUndefined()
+    expect(stderr).toContain('Challenge is valid')
+  })
+
+  test('--dry-run: rejects an invalid challenge', async () => {
+    const { exitCode, output } = await serve([
+      'sign',
+      '--dry-run',
+      '--challenge',
+      'not a valid challenge',
+    ])
+    expect(exitCode).toBe(2)
+    expect(output).toContain('INVALID_CHALLENGE')
+  })
+
+  test('error: no challenge provided', async () => {
+    const { exitCode, output } = await serve(['sign'])
+    expect(exitCode).toBe(2)
+    expect(output).toContain('No challenge provided')
+  })
+
+  test('error: unsupported method', async () => {
+    const challenge =
+      'Payment id="x", realm="x", method="unknown", intent="charge", request="e30"'
+    const { exitCode, output } = await serve(['sign', '--challenge', challenge])
+    expect(exitCode).toBe(2)
+    expect(output).toContain('Unsupported payment method')
+  })
+
+  test('error: no account for tempo', async () => {
+    const { exitCode, output } = await serve(
+      ['sign', '--challenge', validChallenge, '--account', 'nonexistent-sign-test'],
+      { env: { MPPX_PRIVATE_KEY: undefined } },
+    )
+    expect(exitCode).toBe(69)
+    expect(output).toContain('not found')
+  })
+
+  test('happy path: signs a tempo charge challenge', { timeout: 120_000 }, async () => {
+    const { output, stderr, exitCode } = await serve(
+      ['sign', '--challenge', validChallenge, '--rpc-url', rpcUrl],
+      { env: { MPPX_PRIVATE_KEY: testPrivateKey } },
+    )
+    if (exitCode) console.info('SIGN DEBUG output:', output, 'stderr:', stderr)
+    expect(exitCode).toBeUndefined()
+    expect(output.trim()).toMatch(/^Payment\s+\S+/)
+  })
+
+  test('happy path: --json outputs authorization and from', { timeout: 120_000 }, async () => {
+    const { output, stderr, exitCode } = await serve(
+      ['sign', '--challenge', validChallenge, '--rpc-url', rpcUrl, '--json'],
+      { env: { MPPX_PRIVATE_KEY: testPrivateKey } },
+    )
+    if (exitCode) console.info('SIGN JSON DEBUG output:', output, 'stderr:', stderr)
+    expect(exitCode).toBeUndefined()
+    const parsed = JSON.parse(output.trim())
+    expect(parsed.authorization).toMatch(/^Payment\s+\S+/)
+    expect(parsed.from).toMatch(/^0x[0-9a-fA-F]{40}$/)
+  })
 })

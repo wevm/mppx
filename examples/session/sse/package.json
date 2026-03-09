@@ -3,7 +3,7 @@
   "type": "module",
   "private": true,
   "scripts": {
-    "dev": "portless mppx-session-sse vite",
+    "dev": "vite",
     "client": "tsx src/client.ts"
   },
   "dependencies": {
