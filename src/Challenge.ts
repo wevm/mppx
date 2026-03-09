@@ -440,10 +440,7 @@ export function fromResponseList<
  */
 export function fromHeadersList<
   const methods extends readonly Method.Method[] | undefined = undefined,
->(
-  headers: Headers,
-  options?: from.Options<methods>,
-): from.ReturnType<from.Parameters, methods>[] {
+>(headers: Headers, options?: from.Options<methods>): from.ReturnType<from.Parameters, methods>[] {
   const header = headers.get('WWW-Authenticate')
   if (!header) throw new Error('Missing WWW-Authenticate header.')
   return deserializeList(header, options)
@@ -459,10 +456,7 @@ export function fromHeadersList<
  */
 export function deserializeList<
   const methods extends readonly Method.Method[] | undefined = undefined,
->(
-  value: string,
-  options?: from.Options<methods>,
-): from.ReturnType<from.Parameters, methods>[] {
+>(value: string, options?: from.Options<methods>): from.ReturnType<from.Parameters, methods>[] {
   // Find the start index of each `Payment ` scheme prefix.
   const starts: number[] = []
   for (const match of value.matchAll(/Payment\s+/gi)) {

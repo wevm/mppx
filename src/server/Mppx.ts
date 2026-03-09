@@ -174,7 +174,13 @@ export function create<
     return challenge(...(configured as ConfiguredHandler[]))
   }
 
-  return { methods, challenge: challengeFn, realm: realm as string, transport, ...handlers } as never
+  return {
+    methods,
+    challenge: challengeFn,
+    realm: realm as string,
+    transport,
+    ...handlers,
+  } as never
 }
 
 export declare namespace create {
@@ -375,7 +381,9 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
           },
         }
       },
-      { _internal: { ...method, ...defaults, ...options, name: method.name, intent: method.intent } },
+      {
+        _internal: { ...method, ...defaults, ...options, name: method.name, intent: method.intent },
+      },
     )
   }
 }
@@ -510,16 +518,22 @@ export function challenge(
           // Compare stable fields that don't change between 402 and credential calls.
           for (const field of ['currency', 'recipient'] as const) {
             const metaVal = (meta as Record<string, unknown>)[field]
-            if (metaVal !== undefined && credReq[field] !== undefined && String(metaVal) !== String(credReq[field]))
+            if (
+              metaVal !== undefined &&
+              credReq[field] !== undefined &&
+              String(metaVal) !== String(credReq[field])
+            )
               return false
           }
           return true
         })
 
-        const match = candidates[0] ?? handlers.find((h) => {
-          const meta = (h as ConfiguredHandler)._internal
-          return meta?.name === credMethod && meta?.intent === credIntent
-        })
+        const match =
+          candidates[0] ??
+          handlers.find((h) => {
+            const meta = (h as ConfiguredHandler)._internal
+            return meta?.name === credMethod && meta?.intent === credIntent
+          })
         if (match) return match(input)
       }
 
