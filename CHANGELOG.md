@@ -1,5 +1,12 @@
 # mppx
 
+## 0.3.15
+
+### Patch Changes
+
+- cd42c28: Added `rawFetch` property to the client `Mppx` instance, exposing the original unwrapped fetch function for requests that should bypass 402 payment interception.
+- 230ef16: Moved CLI payment logs (Payment Required, Payment Receipt, channel open/close) behind `-v` flag. Added `-vv` for full HTTP headers.
+
 ## 0.3.14
 
 ### Patch Changes
