@@ -1,5 +1,12 @@
 # mppx
 
+## 0.3.16
+
+### Patch Changes
+
+- 79bbfc6: Added multi-challenge `mppx.challenge()` combinator for presenting multiple payment methods in a single 402 response, nested accessors (`mppx.tempo.charge(...)`), `Mppx.challenge()` static, `Challenge.fromResponseList()`, and automatic client preference-based challenge selection.
+- b4f3c92: Migrated to use `call` instead of manual `eth_estimateGas`.
+
 ## 0.3.15
 
 ### Patch Changes
