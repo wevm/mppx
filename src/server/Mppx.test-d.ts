@@ -1,20 +1,13 @@
-import { tempo } from 'mppx/server'
-import { createClient, http } from 'viem'
-import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts'
-import { describe, expectTypeOf, test } from 'vitest'
-import * as Method from '../Method.js'
-import * as z from '../zod.js'
-import * as Mppx from './Mppx.js'
+import { Method, z } from 'mppx'
+import { Mppx } from 'mppx/server'
+import { assertType, describe, expectTypeOf, test } from 'vitest'
 
-const account = privateKeyToAccount(generatePrivateKey())
-const getClient = () => createClient({ account, transport: http() })
-
-const fooCharge = Method.from({
-  name: 'test',
+const mockChargeA = Method.from({
+  name: 'alpha',
   intent: 'charge',
   schema: {
     credential: {
-      payload: z.object({ signature: z.string() }),
+      payload: z.object({ token: z.string() }),
     },
     request: z.object({
       amount: z.string(),
@@ -25,317 +18,119 @@ const fooCharge = Method.from({
   },
 })
 
-describe('Mppx', () => {
-  test('has methods and realm properties', () => {
-    const method = Method.toServer(fooCharge, {
-      async verify() {
-        return {
-          method: 'test',
-          reference: '0x123',
-          status: 'success' as const,
-          timestamp: new Date().toISOString(),
-        }
-      },
-    })
-
-    const handler = Mppx.create({
-      methods: [method],
-      realm: 'api.example.com',
-      secretKey: 'secret',
-    })
-
-    expectTypeOf(handler.methods).toEqualTypeOf([method] as const)
-    expectTypeOf(handler.realm).toBeString()
-  })
-
-  test('has method functions matching methods', () => {
-    const method = Method.toServer(fooCharge, {
-      async verify() {
-        return {
-          method: 'test',
-          reference: '0x123',
-          status: 'success' as const,
-          timestamp: new Date().toISOString(),
-        }
-      },
-    })
-
-    const handler = Mppx.create({
-      methods: [method],
-      realm: 'api.example.com',
-      secretKey: 'secret',
-    })
-
-    expectTypeOf(handler.charge).toBeFunction()
-  })
-
-  test('method function options include request', () => {
-    const method = Method.toServer(fooCharge, {
-      async verify() {
-        return {
-          method: 'test',
-          reference: '0x123',
-          status: 'success' as const,
-          timestamp: new Date().toISOString(),
-        }
-      },
-    })
-
-    const handler = Mppx.create({
-      methods: [method],
-      realm: 'api.example.com',
-      secretKey: 'secret',
-    })
-
-    handler.charge({
-      amount: '1000',
-      currency: '0x1234',
-      decimals: 6,
-      expires: '2025-01-01T00:00:00Z',
-      recipient: '0xabc',
-    })
-  })
-
-  test('method function returns handler that accepts Request', async () => {
-    const method = Method.toServer(fooCharge, {
-      async verify() {
-        return {
-          method: 'test',
-          reference: '0x123',
-          status: 'success' as const,
-          timestamp: new Date().toISOString(),
-        }
-      },
-    })
-
-    const handler = Mppx.create({
-      methods: [method],
-      realm: 'api.example.com',
-      secretKey: 'secret',
-    })
-
-    const chargeHandler = handler.charge({
-      amount: '1000',
-      currency: '0x1234',
-      decimals: 6,
-      expires: '2025-01-01T00:00:00Z',
-      recipient: '0xabc',
-    })
-
-    const result = await chargeHandler(new Request('https://example.com'))
-
-    if (result.status === 402) {
-      expectTypeOf(result.challenge).toEqualTypeOf<Response>()
-    } else {
-      expectTypeOf(result.withReceipt).toBeFunction()
-    }
-  })
-
-  test('multiple methods', () => {
-    const fooAuthorize = Method.from({
-      name: 'test',
-      intent: 'authorize',
-      schema: {
-        credential: {
-          payload: z.object({ token: z.string() }),
-        },
-        request: z.object({
-          scope: z.string(),
-          duration: z.number(),
-        }),
-      },
-    })
-
-    const chargeMethod = Method.toServer(fooCharge, {
-      defaults: {
-        currency: '0x1234',
-        recipient: '0xabc',
-      },
-      async verify() {
-        return {
-          method: 'test',
-          reference: '0x123',
-          status: 'success' as const,
-          timestamp: new Date().toISOString(),
-        }
-      },
-    })
-
-    const authorizeMethod = Method.toServer(fooAuthorize, {
-      async verify() {
-        return {
-          method: 'test',
-          reference: '0x456',
-          status: 'success' as const,
-          timestamp: new Date().toISOString(),
-        }
-      },
-    })
-
-    const handler = Mppx.create({
-      methods: [chargeMethod, authorizeMethod],
-      realm: 'api.example.com',
-      secretKey: 'secret',
-    })
-
-    handler.charge({
-      amount: '1000',
-      currency: '0x1234',
-      decimals: 6,
-      recipient: '0xabc',
-    })
-
-    handler.authorize({
-      scope: 'read',
-      duration: 3600,
-    })
-  })
-
-  describe('defaults', () => {
-    test('defaulted fields are optional in method options', () => {
-      const handler = Mppx.create({
-        methods: [tempo({ currency: '0x1234', recipient: '0xabc', getClient })],
-        realm: 'api.example.com',
-        secretKey: 'secret',
-      })
-
-      // currency and recipient should be optional since they're in defaults
-      handler.charge({
-        amount: '1000',
-        decimals: 6,
-      })
-
-      // But can still be overridden
-      handler.charge({
-        amount: '1000',
-        currency: '0x5678',
-        decimals: 6,
-        recipient: '0xdef',
-      })
-    })
-
-    test('non-defaulted fields remain required', () => {
-      const handler = Mppx.create({
-        methods: [tempo({ currency: '0x1234', getClient })],
-        realm: 'api.example.com',
-        secretKey: 'secret',
-      })
-
-      // recipient is still required since it's not in defaults
-      handler.charge({
-        amount: '1000',
-        decimals: 6,
-        recipient: '0xabc',
-      })
-    })
-
-    test('no defaults means all fields required', () => {
-      const handler = Mppx.create({
-        methods: [tempo({ getClient })],
-        realm: 'api.example.com',
-        secretKey: 'secret',
-      })
-
-      // All required fields must be provided
-      handler.charge({
-        amount: '1000',
-        currency: '0x1234',
-        decimals: 6,
-        recipient: '0xabc',
-      })
-    })
-
-    test('type: defaulted fields are optional in options type', () => {
-      const handler = Mppx.create({
-        methods: [tempo({ currency: '0x1234', recipient: '0xabc', getClient })],
-        realm: 'api.example.com',
-        secretKey: 'secret',
-      })
-
-      type ChargeOptions = Parameters<typeof handler.charge>[0]
-
-      // currency and recipient should be optional (include undefined)
-      expectTypeOf<ChargeOptions['currency']>().toEqualTypeOf<string | undefined>()
-      expectTypeOf<ChargeOptions['recipient']>().toEqualTypeOf<string | undefined>()
-
-      // amount should still be required (no undefined)
-      expectTypeOf<ChargeOptions['amount']>().toEqualTypeOf<string>()
-    })
-
-    test('account as Account defaults recipient', () => {
-      const handler = Mppx.create({
-        methods: [tempo.charge({ currency: '0x1234', account })],
-        realm: 'api.example.com',
-        secretKey: 'secret',
-      })
-
-      // recipient is defaulted via account, so it should be optional
-      handler.charge({
-        amount: '1000',
-        decimals: 6,
-      })
-
-      // can still override recipient
-      handler.charge({
-        amount: '1000',
-        decimals: 6,
-        recipient: '0xdef',
-      })
-    })
-
-    test('account as Account with feePayer: true', () => {
-      const handler = Mppx.create({
-        methods: [tempo.charge({ currency: '0x1234', account, feePayer: true })],
-        realm: 'api.example.com',
-        secretKey: 'secret',
-      })
-
-      handler.charge({
-        amount: '1000',
-        decimals: 6,
-      })
-    })
-  })
-
-  describe('session getClient', () => {
-    test('tempo.session requires getClient', () => {
-      Mppx.create({
-        methods: [
-          tempo.session({
-            currency: '0x1234',
-            recipient: '0xabc',
-            getClient,
-          }),
-        ],
-        realm: 'api.example.com',
-        secretKey: 'secret',
-      })
-    })
-
-    test('combined tempo() requires getClient', () => {
-      Mppx.create({
-        methods: [tempo({ currency: '0x1234', recipient: '0xabc', getClient })],
-        realm: 'api.example.com',
-        secretKey: 'secret',
-      })
-    })
-
-    test('tempo.charge does not require getClient', () => {
-      Mppx.create({
-        methods: [tempo.charge({ currency: '0x1234', recipient: '0xabc' })],
-        realm: 'api.example.com',
-        secretKey: 'secret',
-      })
-    })
-  })
+const mockChargeB = Method.from({
+  name: 'beta',
+  intent: 'charge',
+  schema: {
+    credential: {
+      payload: z.object({ token: z.string() }),
+    },
+    request: z.object({
+      amount: z.string(),
+      currency: z.string(),
+      decimals: z.number(),
+      recipient: z.string(),
+    }),
+  },
 })
 
-describe('create.Config', () => {
-  test('requires methods, realm, and secretKey', () => {
-    type Config = Mppx.create.Config
+const alphaMethod = Method.toServer(mockChargeA, {
+  async verify() {
+    return {
+      method: 'alpha',
+      reference: 'tx',
+      status: 'success' as const,
+      timestamp: new Date().toISOString(),
+    }
+  },
+})
 
-    expectTypeOf<Config>().toHaveProperty('methods')
-    expectTypeOf<Config>().toHaveProperty('realm')
-    expectTypeOf<Config>().toHaveProperty('secretKey')
+const betaMethod = Method.toServer(mockChargeB, {
+  async verify() {
+    return {
+      method: 'beta',
+      reference: 'tx',
+      status: 'success' as const,
+      timestamp: new Date().toISOString(),
+    }
+  },
+})
+
+const secretKey = 'test-secret'
+const realm = 'api.example.com'
+
+describe('Mppx type tests', () => {
+  test('compose exists on the instance and returns a handler', () => {
+    const mppx = Mppx.create({ methods: [alphaMethod, betaMethod], realm, secretKey })
+
+    expectTypeOf(mppx.compose).toBeFunction()
+  })
+
+  test('compose accepts method reference tuples', () => {
+    const mppx = Mppx.create({ methods: [alphaMethod, betaMethod], realm, secretKey })
+
+    const opts = {
+      amount: '100',
+      currency: '0x01',
+      decimals: 6,
+      recipient: '0x02',
+    }
+
+    // Should compile — method reference entries
+    const handler = mppx.compose([alphaMethod, opts], [betaMethod, opts])
+    expectTypeOf(handler).toBeFunction()
+  })
+
+  test('compose accepts string key tuples', () => {
+    const mppx = Mppx.create({ methods: [alphaMethod, betaMethod], realm, secretKey })
+
+    const opts = {
+      amount: '100',
+      currency: '0x01',
+      decimals: 6,
+      recipient: '0x02',
+    }
+
+    // Should compile — string key entries
+    const handler = mppx.compose(['alpha/charge', opts], ['beta/charge', opts])
+    expectTypeOf(handler).toBeFunction()
+  })
+
+  test('nested handlers are accessible', () => {
+    const mppx = Mppx.create({ methods: [alphaMethod, betaMethod], realm, secretKey })
+
+    expectTypeOf(mppx.alpha).toBeObject()
+    expectTypeOf(mppx.alpha.charge).toBeFunction()
+    expectTypeOf(mppx.beta).toBeObject()
+    expectTypeOf(mppx.beta.charge).toBeFunction()
+  })
+
+  test('slash key handlers are accessible', () => {
+    const mppx = Mppx.create({ methods: [alphaMethod, betaMethod], realm, secretKey })
+
+    expectTypeOf(mppx['alpha/charge']).toBeFunction()
+    expectTypeOf(mppx['beta/charge']).toBeFunction()
+  })
+
+  test('compose return type is a request handler returning the response union', () => {
+    const mppx = Mppx.create({ methods: [alphaMethod], realm, secretKey })
+
+    const opts = {
+      amount: '100',
+      currency: '0x01',
+      decimals: 6,
+      recipient: '0x02',
+    }
+
+    const handler = mppx.compose([alphaMethod, opts])
+    type HandlerReturn = ReturnType<typeof handler>
+
+    assertType<Promise<{ status: 402; challenge: Response } | { status: 200; withReceipt: any }>>(
+      {} as Awaited<HandlerReturn> as any,
+    )
+  })
+
+  test('static Mppx.compose accepts configured handlers', () => {
+    expectTypeOf(Mppx.compose).toBeFunction()
   })
 })

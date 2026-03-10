@@ -41,7 +41,7 @@ export type Mppx<
    * })
    *
    * app.get('/api/resource', async (req) => {
-   *   const result = await Mppx.challenge(
+   *   const result = await mppx.compose(
    *     mppx.tempo.charge({ amount: '100' }),
    *     mppx.stripe.charge({ amount: '100' }),
    *   )(req)
@@ -50,8 +50,8 @@ export type Mppx<
    * })
    * ```
    */
-  challenge(
-    ...entries: ChallengeEntry<FlattenMethods<methods>>[]
+  compose(
+    ...entries: ComposeEntry<FlattenMethods<methods>>[]
   ): (input: Request) => Promise<MethodFn.Response<Transport.Http>>
   /** Server realm (e.g., hostname). */
   realm: string
@@ -187,10 +187,10 @@ export function create<
     ;(handlers[mi.name] as Record<string, unknown>)[mi.intent] = handlers[`${mi.name}/${mi.intent}`]
   }
 
-  function challengeFn(
+  function composeFn(
     ...entries: readonly [Method.AnyServer | string, Record<string, unknown>][]
   ) {
-    if (entries.length === 0) throw new Error('challenge() requires at least one entry')
+    if (entries.length === 0) throw new Error('compose() requires at least one entry')
     const configured = entries.map(([methodOrKey, options]) => {
       const key =
         typeof methodOrKey === 'string' ? methodOrKey : `${methodOrKey.name}/${methodOrKey.intent}`
@@ -199,12 +199,12 @@ export function create<
         throw new Error(`No handler for "${key}". Is this method in your methods array?`)
       return handlerFn(options)
     })
-    return challenge(...(configured as ConfiguredHandler[]))
+    return compose(...(configured as ConfiguredHandler[]))
   }
 
   return {
     methods,
-    challenge: challengeFn,
+    compose: composeFn,
     realm: realm as string,
     transport,
     ...handlers,
@@ -479,8 +479,8 @@ type ConfiguredHandler = ((input: Request) => Promise<MethodFn.Response<Transpor
   _internal: { name: string; intent: string }
 }
 
-/** An entry for `challenge()`: a method reference (or string key) paired with its options. */
-type ChallengeEntry<methods extends readonly Method.AnyServer[]> =
+/** An entry for `compose()`: a method reference (or string key) paired with its options. */
+type ComposeEntry<methods extends readonly Method.AnyServer[]> =
   | {
       [i in keyof methods]: readonly [
         methods[i],
@@ -512,7 +512,7 @@ type ChallengeEntry<methods extends readonly Method.AnyServer[]> =
  * })
  *
  * app.get('/api/resource', async (req) => {
- *   const result = await Mppx.challenge(
+ *   const result = await Mppx.compose(
  *     mppx['tempo/charge']({ amount: '100', currency: USDC, recipient: '0x...' }),
  *     mppx['stripe/charge']({ amount: '100', currency: 'usd' }),
  *   )(req)
@@ -521,10 +521,10 @@ type ChallengeEntry<methods extends readonly Method.AnyServer[]> =
  * })
  * ```
  */
-export function challenge(
+export function compose(
   ...handlers: readonly ((input: Request) => Promise<MethodFn.Response<Transport.Http>>)[]
 ): (input: Request) => Promise<MethodFn.Response<Transport.Http>> {
-  if (handlers.length === 0) throw new Error('challenge() requires at least one handler')
+  if (handlers.length === 0) throw new Error('compose() requires at least one handler')
 
   return async (input: Request) => {
     // Try to extract a Payment credential to decide whether to dispatch or challenge.

@@ -436,7 +436,7 @@ describe('receipt handling', () => {
   })
 })
 
-describe('challenge', () => {
+describe('compose', () => {
   const mockChargeA = Method.from({
     name: 'alpha',
     intent: 'charge',
@@ -501,7 +501,7 @@ describe('challenge', () => {
   test('returns 402 with multiple WWW-Authenticate headers when no credential', async () => {
     const mppx = Mppx.create({ methods: [alphaMethod, betaMethod], realm, secretKey })
 
-    const result = await mppx.challenge(
+    const result = await mppx.compose(
       [alphaMethod, challengeOpts],
       [betaMethod, challengeOpts],
     )(new Request('https://example.com/resource'))
@@ -517,7 +517,7 @@ describe('challenge', () => {
   test('dispatches to matching handler when credential matches alpha', async () => {
     const mppx = Mppx.create({ methods: [alphaMethod, betaMethod], realm, secretKey })
 
-    const handle = mppx.challenge([alphaMethod, challengeOpts], [betaMethod, challengeOpts])
+    const handle = mppx.compose([alphaMethod, challengeOpts], [betaMethod, challengeOpts])
 
     // Get challenges
     const firstResult = await handle(new Request('https://example.com/resource'))
@@ -545,7 +545,7 @@ describe('challenge', () => {
   test('dispatches to matching handler when credential matches beta', async () => {
     const mppx = Mppx.create({ methods: [alphaMethod, betaMethod], realm, secretKey })
 
-    const handle = mppx.challenge([alphaMethod, challengeOpts], [betaMethod, challengeOpts])
+    const handle = mppx.compose([alphaMethod, challengeOpts], [betaMethod, challengeOpts])
 
     // Get challenges
     const firstResult = await handle(new Request('https://example.com/resource'))
@@ -573,7 +573,7 @@ describe('challenge', () => {
   test('returns 402 when credential method does not match any handler', async () => {
     const mppx = Mppx.create({ methods: [alphaMethod], realm, secretKey })
 
-    const handle = mppx.challenge([alphaMethod, challengeOpts])
+    const handle = mppx.compose([alphaMethod, challengeOpts])
 
     const wrongChallenge = Challenge.from({
       id: 'wrong-id',
@@ -596,11 +596,11 @@ describe('challenge', () => {
     expect(result.status).toBe(402)
   })
 
-  test('cross-route protection works through challenge()', async () => {
+  test('cross-route protection works through compose()', async () => {
     const mppx = Mppx.create({ methods: [alphaMethod], realm, secretKey })
 
     // Get a challenge from a cheap route
-    const cheapHandle = mppx.challenge([alphaMethod, { ...challengeOpts, amount: '1' }])
+    const cheapHandle = mppx.compose([alphaMethod, { ...challengeOpts, amount: '1' }])
     const cheapResult = await cheapHandle(new Request('https://example.com/cheap'))
     expect(cheapResult.status).toBe(402)
     if (cheapResult.status !== 402) throw new Error()
@@ -612,7 +612,7 @@ describe('challenge', () => {
     })
 
     // Present it at an expensive route
-    const expensiveHandle = mppx.challenge([alphaMethod, { ...challengeOpts, amount: '1000000' }])
+    const expensiveHandle = mppx.compose([alphaMethod, { ...challengeOpts, amount: '1000000' }])
     const result = await expensiveHandle(
       new Request('https://example.com/expensive', {
         headers: { Authorization: Credential.serialize(credential) },
@@ -625,10 +625,10 @@ describe('challenge', () => {
     expect(body.detail).toContain('does not match')
   })
 
-  test('withReceipt works through challenge()', async () => {
+  test('withReceipt works through compose()', async () => {
     const mppx = Mppx.create({ methods: [alphaMethod], realm, secretKey })
 
-    const handle = mppx.challenge([alphaMethod, challengeOpts])
+    const handle = mppx.compose([alphaMethod, challengeOpts])
 
     const firstResult = await handle(new Request('https://example.com/resource'))
     expect(firstResult.status).toBe(402)
@@ -651,12 +651,12 @@ describe('challenge', () => {
 
   test('throws when called with no entries', () => {
     const mppx = Mppx.create({ methods: [alphaMethod], realm, secretKey })
-    expect(() => mppx.challenge()).toThrow('challenge() requires at least one entry')
+    expect(() => mppx.compose()).toThrow('compose() requires at least one entry')
   })
 
   test('throws when method is not in the methods array', () => {
     const mppx = Mppx.create({ methods: [alphaMethod], realm, secretKey })
-    expect(() => mppx.challenge([betaMethod, challengeOpts] as never)).toThrow(
+    expect(() => mppx.compose([betaMethod, challengeOpts] as never)).toThrow(
       'No handler for "beta/charge"',
     )
   })
@@ -664,7 +664,7 @@ describe('challenge', () => {
   test('accepts string keys instead of method references', async () => {
     const mppx = Mppx.create({ methods: [alphaMethod, betaMethod], realm, secretKey })
 
-    const handle = mppx.challenge(['alpha/charge', challengeOpts], ['beta/charge', challengeOpts])
+    const handle = mppx.compose(['alpha/charge', challengeOpts], ['beta/charge', challengeOpts])
 
     const firstResult = await handle(new Request('https://example.com/resource'))
     expect(firstResult.status).toBe(402)
@@ -691,7 +691,7 @@ describe('challenge', () => {
 
   test('throws when string key does not match any registered method', () => {
     const mppx = Mppx.create({ methods: [alphaMethod], realm, secretKey })
-    expect(() => mppx.challenge(['unknown/charge' as never, challengeOpts])).toThrow(
+    expect(() => mppx.compose(['unknown/charge' as never, challengeOpts])).toThrow(
       'No handler for "unknown/charge"',
     )
   })
@@ -699,7 +699,7 @@ describe('challenge', () => {
   test('mixes string keys and method references', async () => {
     const mppx = Mppx.create({ methods: [alphaMethod, betaMethod], realm, secretKey })
 
-    const handle = mppx.challenge(['alpha/charge', challengeOpts], [betaMethod, challengeOpts])
+    const handle = mppx.compose(['alpha/charge', challengeOpts], [betaMethod, challengeOpts])
 
     const firstResult = await handle(new Request('https://example.com/resource'))
     expect(firstResult.status).toBe(402)
@@ -715,7 +715,7 @@ describe('challenge', () => {
     const currencyA = '0x0000000000000000000000000000000000000001'
     const currencyB = '0x0000000000000000000000000000000000000099'
 
-    const handle = mppx.challenge(
+    const handle = mppx.compose(
       [alphaMethod, { ...challengeOpts, currency: currencyA }],
       [alphaMethod, { ...challengeOpts, currency: currencyB }],
     )
@@ -752,7 +752,7 @@ describe('challenge', () => {
     const recipientA = '0x0000000000000000000000000000000000000002'
     const recipientB = '0x0000000000000000000000000000000000000088'
 
-    const handle = mppx.challenge(
+    const handle = mppx.compose(
       [alphaMethod, { ...challengeOpts, recipient: recipientA }],
       [alphaMethod, { ...challengeOpts, recipient: recipientB }],
     )
@@ -781,7 +781,7 @@ describe('challenge', () => {
   })
 })
 
-describe('challenge: pre-dispatch narrowing edge cases', () => {
+describe('compose: pre-dispatch narrowing edge cases', () => {
   const mockCharge = Method.from({
     name: 'alpha',
     intent: 'charge',
@@ -824,7 +824,7 @@ describe('challenge: pre-dispatch narrowing edge cases', () => {
   test('dispatches correctly when handlers differ only in amount', async () => {
     const mppx = Mppx.create({ methods: [alphaMethod], realm, secretKey })
 
-    const handle = mppx.challenge(
+    const handle = mppx.compose(
       [alphaMethod, { ...challengeOpts, amount: '100' }],
       [alphaMethod, { ...challengeOpts, amount: '999' }],
     )
@@ -857,7 +857,7 @@ describe('challenge: pre-dispatch narrowing edge cases', () => {
   test('first handler succeeds when handlers differ only in amount and credential matches first', async () => {
     const mppx = Mppx.create({ methods: [alphaMethod], realm, secretKey })
 
-    const handle = mppx.challenge(
+    const handle = mppx.compose(
       [alphaMethod, { ...challengeOpts, amount: '100' }],
       [alphaMethod, { ...challengeOpts, amount: '999' }],
     )
@@ -886,7 +886,7 @@ describe('challenge: pre-dispatch narrowing edge cases', () => {
   test('dispatches when credential method/intent does not match — falls back to first handler with 402', async () => {
     const mppx = Mppx.create({ methods: [alphaMethod], realm, secretKey })
 
-    const handle = mppx.challenge([alphaMethod, challengeOpts])
+    const handle = mppx.compose([alphaMethod, challengeOpts])
 
     // Forge a credential with a non-existent method
     const wrongChallenge = Challenge.from({
@@ -911,9 +911,9 @@ describe('challenge: pre-dispatch narrowing edge cases', () => {
     expect(result.status).toBe(402)
   })
 
-  test('handles malformed Authorization header in challenge() gracefully', async () => {
+  test('handles malformed Authorization header in compose() gracefully', async () => {
     const mppx = Mppx.create({ methods: [alphaMethod], realm, secretKey })
-    const handle = mppx.challenge([alphaMethod, challengeOpts])
+    const handle = mppx.compose([alphaMethod, challengeOpts])
 
     const result = await handle(
       new Request('https://example.com/resource', {
@@ -925,9 +925,9 @@ describe('challenge: pre-dispatch narrowing edge cases', () => {
     expect(result.status).toBe(402)
   })
 
-  test('single handler in challenge() returns 402 and then 200', async () => {
+  test('single handler in compose() returns 402 and then 200', async () => {
     const mppx = Mppx.create({ methods: [alphaMethod], realm, secretKey })
-    const handle = mppx.challenge([alphaMethod, challengeOpts])
+    const handle = mppx.compose([alphaMethod, challengeOpts])
 
     const firstResult = await handle(new Request('https://example.com/resource'))
     expect(firstResult.status).toBe(402)
@@ -1057,10 +1057,10 @@ describe('nested accessors', () => {
     expect(mppx.alpha.charge).toBe(mppx['alpha/charge'])
   })
 
-  test('nested accessors work with Mppx.challenge() static function', async () => {
+  test('nested accessors work with Mppx.compose() static function', async () => {
     const mppx = Mppx.create({ methods: [alphaMethod, betaMethod], realm, secretKey })
 
-    const handle = Mppx.challenge(mppx.alpha.charge(challengeOpts), mppx.beta.charge(challengeOpts))
+    const handle = Mppx.compose(mppx.alpha.charge(challengeOpts), mppx.beta.charge(challengeOpts))
 
     const firstResult = await handle(new Request('https://example.com/resource'))
     expect(firstResult.status).toBe(402)
