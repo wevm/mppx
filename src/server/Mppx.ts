@@ -32,14 +32,18 @@ export type Mppx<
    * ```ts
    * import { Mppx, tempo, stripe } from 'mppx/server'
    *
-   * const tempoCharge = tempo.charge({ currency: USDC, recipient: '0x...' })
-   * const stripeCharge = stripe.charge({ currency: 'usd' })
-   * const mppx = Mppx.create({ methods: [tempoCharge, stripeCharge], secretKey })
+   * const mppx = Mppx.create({
+   *   methods: [
+   *     tempo.charge({ currency: USDC, recipient: '0x...' }),
+   *     stripe.charge({ currency: 'usd' }),
+   *   ],
+   *   secretKey,
+   * })
    *
    * app.get('/api/resource', async (req) => {
-   *   const result = await mppx.challenge(
-   *     [tempoCharge, { amount: '100' }],
-   *     [stripeCharge, { amount: '100' }],
+   *   const result = await Mppx.challenge(
+   *     mppx.tempo.charge({ amount: '100' }),
+   *     mppx.stripe.charge({ amount: '100' }),
    *   )(req)
    *   if (result.status === 402) return result.challenge
    *   return result.withReceipt(new Response('OK'))
@@ -95,6 +99,20 @@ type UniqueIntentHandlers<
   >
 }
 
+/** Nested handlers: `mppx.tempo.charge(...)`, grouped by method name then intent. */
+type NestedHandlers<
+  methods extends readonly Method.AnyServer[],
+  transport extends Transport.AnyTransport,
+> = {
+  [name in methods[number]['name']]: {
+    [mi in Extract<methods[number], { name: name }> as mi['intent']]: MethodFn<
+      mi,
+      EffectiveTransportOf<mi, transport>,
+      NonNullable<mi['defaults']>
+    >
+  }
+}
+
 type Handlers<
   methods extends readonly Method.AnyServer[],
   transport extends Transport.AnyTransport,
@@ -104,7 +122,8 @@ type Handlers<
     EffectiveTransportOf<mi, transport>,
     NonNullable<mi['defaults']>
   >
-} & UniqueIntentHandlers<methods, transport>
+} & UniqueIntentHandlers<methods, transport> &
+  NestedHandlers<methods, transport>
 
 /**
  * Creates a server-side payment handler from methods.
@@ -162,10 +181,19 @@ export function create<
     if (intentCount[mi.intent] === 1) handlers[mi.intent] = handlers[`${mi.name}/${mi.intent}`]
   }
 
-  function challengeFn(...entries: readonly [Method.AnyServer, Record<string, unknown>][]) {
+  // Build nested handlers: mppx.tempo.charge(...)
+  for (const mi of methods) {
+    if (!handlers[mi.name]) handlers[mi.name] = {}
+    ;(handlers[mi.name] as Record<string, unknown>)[mi.intent] = handlers[`${mi.name}/${mi.intent}`]
+  }
+
+  function challengeFn(
+    ...entries: readonly [Method.AnyServer | string, Record<string, unknown>][]
+  ) {
     if (entries.length === 0) throw new Error('challenge() requires at least one entry')
-    const configured = entries.map(([method, options]) => {
-      const key = `${method.name}/${method.intent}`
+    const configured = entries.map(([methodOrKey, options]) => {
+      const key =
+        typeof methodOrKey === 'string' ? methodOrKey : `${methodOrKey.name}/${methodOrKey.intent}`
       const handlerFn = handlers[key] as AnyMethodFn | undefined
       if (!handlerFn)
         throw new Error(`No handler for "${key}". Is this method in your methods array?`)
@@ -451,13 +479,20 @@ type ConfiguredHandler = ((input: Request) => Promise<MethodFn.Response<Transpor
   _internal: { name: string; intent: string }
 }
 
-/** An entry for `challenge()`: a method reference paired with its options. */
-type ChallengeEntry<methods extends readonly Method.AnyServer[]> = {
-  [i in keyof methods]: readonly [
-    methods[i],
-    MethodFn.Options<methods[i], NonNullable<methods[i]['defaults']>>,
-  ]
-}[number]
+/** An entry for `challenge()`: a method reference (or string key) paired with its options. */
+type ChallengeEntry<methods extends readonly Method.AnyServer[]> =
+  | {
+      [i in keyof methods]: readonly [
+        methods[i],
+        MethodFn.Options<methods[i], NonNullable<methods[i]['defaults']>>,
+      ]
+    }[number]
+  | {
+      [i in keyof methods]: readonly [
+        `${methods[i]['name']}/${methods[i]['intent']}`,
+        MethodFn.Options<methods[i], NonNullable<methods[i]['defaults']>>,
+      ]
+    }[number]
 
 /**
  * Combines multiple configured payment handlers into a single route handler
@@ -492,16 +527,17 @@ export function challenge(
   if (handlers.length === 0) throw new Error('challenge() requires at least one handler')
 
   return async (input: Request) => {
-    // Try to extract a credential to decide whether to dispatch or challenge.
+    // Try to extract a Payment credential to decide whether to dispatch or challenge.
+    // Only gate on the Payment scheme — other auth schemes (Bearer, Basic, etc.)
+    // should fall through to the merged-402 path so all offers are presented.
     const header = input.headers.get('Authorization')
-    const hasCredential = header !== null
+    const paymentHeader = header ? Credential.extractPaymentScheme(header) : null
 
-    if (hasCredential) {
+    if (paymentHeader) {
       // Parse the credential to find method+intent for dispatch.
       let credential: Credential.Credential | undefined
       try {
-        const payment = Credential.extractPaymentScheme(header)
-        if (payment) credential = Credential.deserialize(payment)
+        credential = Credential.deserialize(paymentHeader)
       } catch {}
 
       if (credential) {
@@ -511,12 +547,12 @@ export function challenge(
         // Filter by name+intent, then narrow by comparing stable request fields
         // from the echoed challenge against each handler's configured options.
         // This disambiguates handlers with the same name/intent but different
-        // currencies, recipients, etc. without invoking any handler.
+        // amounts, currencies, recipients, etc. without invoking any handler.
         const candidates = handlers.filter((h) => {
           const meta = (h as ConfiguredHandler)._internal
           if (!meta || meta.name !== credMethod || meta.intent !== credIntent) return false
           // Compare stable fields that don't change between 402 and credential calls.
-          for (const field of ['currency', 'recipient'] as const) {
+          for (const field of ['amount', 'currency', 'recipient'] as const) {
             const metaVal = (meta as Record<string, unknown>)[field]
             if (
               metaVal !== undefined &&
@@ -537,8 +573,8 @@ export function challenge(
         if (match) return match(input)
       }
 
-      // Credential present but no matching handler — dispatch to first handler
-      // which will reject with an appropriate error (invalid challenge, etc.).
+      // Payment credential present but no matching handler — dispatch to first
+      // handler which will reject with an appropriate error (invalid challenge, etc.).
       return handlers[0]!(input)
     }
 
