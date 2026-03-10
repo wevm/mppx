@@ -164,6 +164,7 @@ export async function createOpenPayload(
       { to: escrowContract, data: openData },
     ],
     ...(feePayer && { feePayer: true }),
+    feeToken: currency,
   } as never)
   prepared.gas = prepared.gas! + 5_000n
   const transaction = (await signTransaction(client, prepared as never)) as Hex.Hex
