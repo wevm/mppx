@@ -117,7 +117,7 @@ type NestedHandlers<
       mi,
       EffectiveTransportOf<mi, transport>,
       NonNullable<mi['defaults']>
-    >
+    > & { _method: mi }
   }
 }
 
