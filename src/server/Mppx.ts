@@ -5,6 +5,7 @@ import * as Errors from '../Errors.js'
 import * as Expires from '../Expires.js'
 import * as Env from '../internal/env.js'
 import type * as Method from '../Method.js'
+import * as PaymentRequest from '../PaymentRequest.js'
 import type * as Receipt from '../Receipt.js'
 import type * as z from '../zod.js'
 import * as NodeListener from './NodeListener.js'
@@ -22,43 +23,49 @@ export type Mppx<
 > = {
   /** Methods to configure. */
   methods: FlattenMethods<methods>
-  /**
-   * Combines multiple method handlers into a single route handler that presents
-   * all methods to the client via multiple `WWW-Authenticate` headers.
-   *
-   * Each entry is a `[method, options]` tuple where `method` is one of the
-   * server methods passed to `Mppx.create()`, looked up by `name`+`intent`.
-   *
-   * @example
-   * ```ts
-   * import { Mppx, tempo, stripe } from 'mppx/server'
-   *
-   * const mppx = Mppx.create({
-   *   methods: [
-   *     tempo.charge({ currency: USDC, recipient: '0x...' }),
-   *     stripe.charge({ currency: 'usd' }),
-   *   ],
-   *   secretKey,
-   * })
-   *
-   * app.get('/api/resource', async (req) => {
-   *   const result = await mppx.compose(
-   *     mppx.tempo.charge({ amount: '100' }),
-   *     mppx.stripe.charge({ amount: '100' }),
-   *   )(req)
-   *   if (result.status === 402) return result.challenge
-   *   return result.withReceipt(new Response('OK'))
-   * })
-   * ```
-   */
-  compose(
-    ...entries: ComposeEntry<FlattenMethods<methods>>[]
-  ): (input: Request) => Promise<MethodFn.Response<Transport.Http>>
   /** Server realm (e.g., hostname). */
   realm: string
   /** The transport used. */
   transport: transport
-} & Handlers<FlattenMethods<methods>, transport>
+} & (transport extends Transport.Http
+  ? {
+      /**
+       * Combines multiple method handlers into a single route handler that presents
+       * all methods to the client via multiple `WWW-Authenticate` headers.
+       *
+       * Each entry is a `[method, options]` tuple where `method` is one of the
+       * server methods passed to `Mppx.create()`, looked up by `name`+`intent`.
+       *
+       * Only available on HTTP transports.
+       *
+       * @example
+       * ```ts
+       * import { Mppx, tempo, stripe } from 'mppx/server'
+       *
+       * const mppx = Mppx.create({
+       *   methods: [
+       *     tempo.charge({ currency: USDC, recipient: '0x...' }),
+       *     stripe.charge({ currency: 'usd' }),
+       *   ],
+       *   secretKey,
+       * })
+       *
+       * app.get('/api/resource', async (req) => {
+       *   const result = await mppx.compose(
+       *     mppx.tempo.charge({ amount: '100' }),
+       *     mppx.stripe.charge({ amount: '100' }),
+       *   )(req)
+       *   if (result.status === 402) return result.challenge
+       *   return result.withReceipt(new Response('OK'))
+       * })
+       * ```
+       */
+      compose(
+        ...entries: ComposeEntry<FlattenMethods<methods>>[]
+      ): (input: Request) => Promise<MethodFn.Response<Transport.Http>>
+    }
+  : {}) &
+  Handlers<FlattenMethods<methods>, transport>
 
 /** Extracts the transport override from a method, if any. */
 type TransportOverrideOf<mi> = mi extends { transport?: infer transport }
@@ -189,6 +196,8 @@ export function create<
   }
 
   function composeFn(...entries: readonly [Method.AnyServer | string, Record<string, unknown>][]) {
+    if (transport.name !== 'http')
+      throw new Error('compose() only supports HTTP transport')
     if (entries.length === 0) throw new Error('compose() requires at least one entry')
     const configured = entries.map(([methodOrKey, options]) => {
       const key =
@@ -238,14 +247,13 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
   const { defaults, method, realm, respond, secretKey, transport, verify } = parameters
 
   return (options) => {
+    const { description, meta, ...rest } = options
+    const merged = { ...defaults, ...rest }
+
     return Object.assign(
       async (input: Transport.InputOf): Promise<MethodFn.Response> => {
-        const { description, meta, ...rest } = options
         const expires =
           'expires' in options ? (options.expires as string | undefined) : Expires.minutes(5)
-
-        // Merge defaults with per-request options
-        const merged = { ...defaults, ...rest }
 
         // Extract credential once — getCredential may have side effects (e.g. SSE transports).
         const [credential, credentialError] = (() => {
@@ -410,7 +418,11 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
         }
       },
       {
-        _internal: { ...method, ...defaults, ...options, name: method.name, intent: method.intent },
+        _internal: {
+          name: method.name,
+          intent: method.intent,
+          _canonicalRequest: PaymentRequest.fromMethod(method, { ...defaults, ...rest }),
+        },
       },
     )
   }
@@ -476,7 +488,11 @@ declare namespace MethodFn {
 
 /** A configured handler — the return value of e.g. `mppx.charge({ ... })`. @internal */
 type ConfiguredHandler = ((input: Request) => Promise<MethodFn.Response<Transport.Http>>) & {
-  _internal: { name: string; intent: string }
+  _internal: {
+    name: string
+    intent: string
+    _canonicalRequest: Record<string, unknown>
+  }
 }
 
 /** An entry for `compose()`: a method reference (or string key) paired with its options. */
@@ -545,19 +561,20 @@ export function compose(
         const credReq = credential.challenge.request as Record<string, unknown>
 
         // Filter by name+intent, then narrow by comparing stable request fields
-        // from the echoed challenge against each handler's configured options.
-        // This disambiguates handlers with the same name/intent but different
-        // amounts, currencies, recipients, etc. without invoking any handler.
+        // from the echoed challenge against each handler's canonical request.
+        // Uses the schema-parsed canonical form (not raw options) so that
+        // transformed fields (e.g. amount with decimals) match correctly.
         const candidates = handlers.filter((h) => {
           const meta = (h as ConfiguredHandler)._internal
           if (!meta || meta.name !== credMethod || meta.intent !== credIntent) return false
-          // Compare stable fields that don't change between 402 and credential calls.
-          for (const field of ['amount', 'currency', 'recipient'] as const) {
-            const metaVal = (meta as Record<string, unknown>)[field]
+          const canonical = meta._canonicalRequest
+          if (!canonical) return true
+          for (const field of ['amount', 'currency', 'recipient', 'chainId'] as const) {
+            const canonicalVal = canonical[field]
             if (
-              metaVal !== undefined &&
+              canonicalVal !== undefined &&
               credReq[field] !== undefined &&
-              String(metaVal) !== String(credReq[field])
+              String(canonicalVal) !== String(credReq[field])
             )
               return false
           }

@@ -133,12 +133,12 @@ describe('wrap: nested handlers', () => {
     expect(nestedResult.options).toEqual(slashResult.options)
   })
 
-  test('compose is passed through unwrapped', () => {
+  test('compose is omitted from wrapped object', () => {
     const mppx = Mppx.create({ methods: [alphaMethod], realm, secretKey }) as any
 
     const wrapped = wrap(mppx, (_methodFn, _options) => 'wrapped')
 
-    expect(wrapped.compose).toBe(mppx.compose)
+    expect(wrapped.compose).toBeUndefined()
   })
 
   test('realm and transport are passed through', () => {

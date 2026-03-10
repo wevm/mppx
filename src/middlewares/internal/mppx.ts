@@ -12,10 +12,13 @@ type WrapNested<obj, handler> = {
 }
 
 export type Wrap<mppx, handler> = {
-  // `compose` is passed through unwrapped because it's a multi-method
-  // combinator (takes `[method, options]` tuples), not a per-method handler.
+  // `compose` is omitted — it returns a raw HTTP handler, not a
+  // middleware-shaped result. Use `Mppx.compose()` static instead.
   // `methods`, `realm`, `transport` are data properties — not handlers.
-  [key in keyof mppx]: key extends 'compose' | 'methods' | 'realm' | 'transport'
+  [key in keyof mppx as key extends 'compose' ? never : key]: key extends
+    | 'methods'
+    | 'realm'
+    | 'transport'
     ? mppx[key]
     : mppx[key] extends (options: infer options) => any
       ? (o: options) => handler
@@ -35,7 +38,8 @@ export function wrap<mppx extends Mppx.Mppx<any, any>, handler>(
   mppx: mppx,
   wrapper: (method: AnyMethodFn, options: any) => handler,
 ): Wrap<mppx, handler> {
-  const result: Record<string, unknown> = { ...mppx }
+  const { compose: _, ...rest } = mppx as any
+  const result: Record<string, unknown> = { ...rest }
   for (const mi of mppx.methods as readonly Method.AnyServer[]) {
     const key = `${mi.name}/${mi.intent}`
     const methodFn = (mppx as any)[key]
