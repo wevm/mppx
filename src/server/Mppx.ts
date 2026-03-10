@@ -117,7 +117,7 @@ type NestedHandlers<
       mi,
       EffectiveTransportOf<mi, transport>,
       NonNullable<mi['defaults']>
-    >
+    > & { _method: mi }
   }
 }
 
@@ -192,15 +192,26 @@ export function create<
   // Build nested handlers: mppx.tempo.charge(...)
   for (const mi of methods) {
     if (!handlers[mi.name]) handlers[mi.name] = {}
-    ;(handlers[mi.name] as Record<string, unknown>)[mi.intent] = handlers[`${mi.name}/${mi.intent}`]
+    const fn = handlers[`${mi.name}/${mi.intent}`] as AnyMethodFn & { _method?: Method.AnyServer }
+    fn._method = mi
+    ;(handlers[mi.name] as Record<string, unknown>)[mi.intent] = fn
   }
 
-  function composeFn(...entries: readonly [Method.AnyServer | string, Record<string, unknown>][]) {
+  function composeFn(
+    ...entries: readonly [
+      Method.AnyServer | AnyMethodFnWithMethod | string,
+      Record<string, unknown>,
+    ][]
+  ) {
     if (transport.name !== 'http') throw new Error('compose() only supports HTTP transport')
     if (entries.length === 0) throw new Error('compose() requires at least one entry')
     const configured = entries.map(([methodOrKey, options]) => {
       const key =
-        typeof methodOrKey === 'string' ? methodOrKey : `${methodOrKey.name}/${methodOrKey.intent}`
+        typeof methodOrKey === 'string'
+          ? methodOrKey
+          : typeof methodOrKey === 'function' && '_method' in methodOrKey
+            ? `${(methodOrKey._method as Method.AnyServer).name}/${(methodOrKey._method as Method.AnyServer).intent}`
+            : `${(methodOrKey as Method.AnyServer).name}/${(methodOrKey as Method.AnyServer).intent}`
       const handlerFn = handlers[key] as AnyMethodFn | undefined
       if (!handlerFn)
         throw new Error(`No handler for "${key}". Is this method in your methods array?`)
@@ -462,6 +473,8 @@ export type MethodFn<
 ) => (input: Transport.InputOf<transport>) => Promise<MethodFn.Response<transport>>
 /** @internal */
 export type AnyMethodFn = (options: any) => (input: any) => Promise<any>
+/** A MethodFn tagged with its source Method (set by `create()`). @internal */
+type AnyMethodFnWithMethod = AnyMethodFn & { _method: Method.AnyServer }
 
 /** @internal */
 declare namespace MethodFn {
@@ -497,7 +510,7 @@ type ConfiguredHandler = ((input: Request) => Promise<MethodFn.Response<Transpor
   }
 }
 
-/** An entry for `compose()`: a method reference (or string key) paired with its options. */
+/** An entry for `compose()`: a method reference, handler function ref, or string key paired with its options. */
 type ComposeEntry<methods extends readonly Method.AnyServer[]> =
   | {
       [i in keyof methods]: readonly [
@@ -508,6 +521,12 @@ type ComposeEntry<methods extends readonly Method.AnyServer[]> =
   | {
       [i in keyof methods]: readonly [
         `${methods[i]['name']}/${methods[i]['intent']}`,
+        MethodFn.Options<methods[i], NonNullable<methods[i]['defaults']>>,
+      ]
+    }[number]
+  | {
+      [i in keyof methods]: readonly [
+        MethodFn<methods[i], any, any> & { _method: methods[i] },
         MethodFn.Options<methods[i], NonNullable<methods[i]['defaults']>>,
       ]
     }[number]

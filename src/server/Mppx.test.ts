@@ -709,6 +709,50 @@ describe('compose', () => {
     expect(challenges).toHaveLength(2)
   })
 
+  test('accepts handler function refs (mppx.alpha.charge syntax)', async () => {
+    const mppx = Mppx.create({ methods: [alphaMethod, betaMethod], realm, secretKey })
+
+    const handle = mppx.compose(
+      [mppx.alpha.charge, challengeOpts],
+      [mppx.beta.charge, challengeOpts],
+    )
+
+    const firstResult = await handle(new Request('https://example.com/resource'))
+    expect(firstResult.status).toBe(402)
+    if (firstResult.status !== 402) throw new Error()
+
+    const challenges = Challenge.fromResponseList(firstResult.challenge)
+    expect(challenges).toHaveLength(2)
+    expect(challenges[0]!.method).toBe('alpha')
+    expect(challenges[1]!.method).toBe('beta')
+
+    // Dispatch with a credential for alpha
+    const credential = Credential.from({
+      challenge: challenges[0]!,
+      payload: { token: 'valid' },
+    })
+
+    const result = await handle(
+      new Request('https://example.com/resource', {
+        headers: { Authorization: Credential.serialize(credential) },
+      }),
+    )
+    expect(result.status).toBe(200)
+  })
+
+  test('mixes handler function refs with method references and string keys', async () => {
+    const mppx = Mppx.create({ methods: [alphaMethod, betaMethod], realm, secretKey })
+
+    const handle = mppx.compose([mppx.alpha.charge, challengeOpts], ['beta/charge', challengeOpts])
+
+    const firstResult = await handle(new Request('https://example.com/resource'))
+    expect(firstResult.status).toBe(402)
+    if (firstResult.status !== 402) throw new Error()
+
+    const challenges = Challenge.fromResponseList(firstResult.challenge)
+    expect(challenges).toHaveLength(2)
+  })
+
   test('dispatches correctly with same name/intent but different currencies', async () => {
     const mppx = Mppx.create({ methods: [alphaMethod], realm, secretKey })
 
