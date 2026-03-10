@@ -7,6 +7,7 @@ import {
 } from 'viem/actions'
 import { tempo as tempo_chain } from 'viem/chains'
 import { Abis, Transaction } from 'viem/tempo'
+import { call as viem_call } from 'viem/actions'
 import { PaymentExpiredError } from '../../Errors.js'
 import type { LooseOmit } from '../../internal/types.js'
 import * as Method from '../../Method.js'
@@ -15,7 +16,6 @@ import * as Account from '../internal/account.js'
 import * as defaults from '../internal/defaults.js'
 import * as FeePayer from '../internal/fee-payer.js'
 import * as Selectors from '../internal/selectors.js'
-import { simulateTransaction } from '../internal/simulate.js'
 import type * as types from '../internal/types.js'
 import * as Methods from '../Methods.js'
 
@@ -258,9 +258,10 @@ export function charge<const parameters extends charge.Parameters>(
             // Optimistic path: simulate to catch obvious reverts, then broadcast
             // without waiting for on-chain confirmation. The returned receipt
             // assumes success — callers opt into this risk via waitForConfirmation: false.
-            await simulateTransaction(client, {
+            await viem_call(client, {
               ...transaction,
-              from: transaction.from as `0x${string}`,
+              account: transaction.from,
+              // @ts-expect-error
               calls,
             })
             const hash = await sendRawTransaction(client, {

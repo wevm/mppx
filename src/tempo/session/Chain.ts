@@ -12,6 +12,7 @@ import {
   toFunctionSelector,
 } from 'viem'
 import {
+  call,
   prepareTransactionRequest,
   readContract,
   sendRawTransaction,
@@ -22,7 +23,6 @@ import {
 import { Transaction } from 'viem/tempo'
 import { BadRequestError, ChannelClosedError, VerificationFailedError } from '../../Errors.js'
 import * as defaults from '../internal/defaults.js'
-import { simulateTransaction } from '../internal/simulate.js'
 import { escrowAbi } from './escrow.abi.js'
 import type { SignedVoucher } from './Types.js'
 
@@ -289,8 +289,12 @@ export async function broadcastOpenTransaction(parameters: {
   })()
 
   if (!waitForConfirmation) {
-    const from = getAddress(transaction.from as Address)
-    await simulateTransaction(client, { ...transaction, from, calls })
+    await call(client, {
+      ...transaction,
+      account: transaction.from,
+      // @ts-expect-error
+      calls,
+    })
     const txHash = await sendRawTransaction(client, {
       serializedTransaction: serializedTransaction_final as Transaction.TransactionSerializedTempo,
     })
@@ -298,7 +302,7 @@ export async function broadcastOpenTransaction(parameters: {
     return {
       txHash,
       onChain: {
-        payer: from,
+        payer: transaction.from,
         payee,
         token,
         authorizedSigner,
