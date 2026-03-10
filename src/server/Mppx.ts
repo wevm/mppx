@@ -196,8 +196,7 @@ export function create<
   }
 
   function composeFn(...entries: readonly [Method.AnyServer | string, Record<string, unknown>][]) {
-    if (transport.name !== 'http')
-      throw new Error('compose() only supports HTTP transport')
+    if (transport.name !== 'http') throw new Error('compose() only supports HTTP transport')
     if (entries.length === 0) throw new Error('compose() requires at least one entry')
     const configured = entries.map(([methodOrKey, options]) => {
       const key =
@@ -419,9 +418,12 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
       },
       {
         _internal: {
+          ...method,
+          ...defaults,
+          ...options,
           name: method.name,
           intent: method.intent,
-          _canonicalRequest: PaymentRequest.fromMethod(method, { ...defaults, ...rest }),
+          _canonicalRequest: PaymentRequest.fromMethod(method, merged),
         },
       },
     )
