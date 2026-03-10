@@ -187,9 +187,7 @@ export function create<
     ;(handlers[mi.name] as Record<string, unknown>)[mi.intent] = handlers[`${mi.name}/${mi.intent}`]
   }
 
-  function composeFn(
-    ...entries: readonly [Method.AnyServer | string, Record<string, unknown>][]
-  ) {
+  function composeFn(...entries: readonly [Method.AnyServer | string, Record<string, unknown>][]) {
     if (entries.length === 0) throw new Error('compose() requires at least one entry')
     const configured = entries.map(([methodOrKey, options]) => {
       const key =
