@@ -1,4 +1,5 @@
 import type { Address, Client } from 'viem'
+import { estimateGas } from 'viem/actions'
 
 /**
  * Simulate a Tempo transaction via `eth_estimateGas` to catch reverts
@@ -22,28 +23,15 @@ export async function simulateTransaction(
     }[]
   },
 ): Promise<void> {
-  const simCalls = (transaction.calls ?? []).map((c) => ({
-    to: c.to,
-    value: c.value ? `0x${c.value.toString(16)}` : '0x0',
-    input: c.data ?? '0x',
-  }))
-  await client.request({
-    method: 'eth_estimateGas' as never,
-    params: [
-      {
-        from: transaction.from,
-        chainId: `0x${transaction.chainId.toString(16)}`,
-        nonce: `0x${BigInt(transaction.nonce ?? 0).toString(16)}`,
-        gas: '0x2dc6c0', // 3M cap
-        maxFeePerGas: `0x${(transaction.maxFeePerGas ?? 0n).toString(16)}`,
-        maxPriorityFeePerGas: `0x${(transaction.maxPriorityFeePerGas ?? 0n).toString(16)}`,
-        feeToken: transaction.feeToken,
-        nonceKey: `0x${(transaction.nonceKey ?? 0n).toString(16)}`,
-        calls: simCalls,
-        ...(transaction.validBefore
-          ? { validBefore: `0x${transaction.validBefore.toString(16)}` }
-          : {}),
-      },
-    ] as never,
-  })
+  await estimateGas(client, {
+    account: transaction.from,
+    calls: transaction.calls,
+    nonce: transaction.nonce !== undefined ? Number(transaction.nonce) : undefined,
+    maxFeePerGas: transaction.maxFeePerGas,
+    maxPriorityFeePerGas: transaction.maxPriorityFeePerGas,
+    feeToken: transaction.feeToken,
+    nonceKey: transaction.nonceKey,
+    ...(transaction.validBefore ? { validBefore: transaction.validBefore } : {}),
+    prepare: false,
+  } as never)
 }
