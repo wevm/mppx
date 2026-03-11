@@ -8,5 +8,5 @@
     "lib": ["ESNext", "DOM"],
     "noEmit": true
   },
-  "include": ["src/**/*"]
+  "include": ["src/**/*", "mppx.config.ts"]
 }

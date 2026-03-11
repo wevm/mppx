@@ -10,13 +10,16 @@ import type { Chain } from 'viem'
 import { type Address, createClient, http } from 'viem'
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts'
 import { tempo as tempoMainnet, tempoModerato } from 'viem/chains'
-import * as Challenge from './Challenge.js'
-import * as Credential from './Credential.js'
-import * as Mppx from './client/Mppx.js'
-import { stripe } from './stripe/client/index.js'
-import { tempo } from './tempo/client/index.js'
-import type { SessionCredentialPayload } from './tempo/session/Types.js'
-import { signVoucher } from './tempo/session/Voucher.js'
+import { createDefaultStore, createKeychain, resolveAccountName } from './account.js'
+import * as Challenge from '../Challenge.js'
+import * as Credential from '../Credential.js'
+import * as Mppx from '../client/Mppx.js'
+import { loadConfig } from './config.js'
+import type * as Method from '../Method.js'
+import { stripe } from '../stripe/client/index.js'
+import { tempo } from '../tempo/client/index.js'
+import type { SessionCredentialPayload } from '../tempo/session/Types.js'
+import { signVoucher } from '../tempo/session/Voucher.js'
 
 function readStdin(): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -31,7 +34,7 @@ function readStdin(): Promise<string> {
 }
 
 const require = createRequire(import.meta.url)
-const { name, version } = require('../package.json') as { name: string; version: string }
+const { name, version } = require('../../package.json') as { name: string; version: string }
 
 const cli = Cli.create('mppx', {
   version,
@@ -202,6 +205,12 @@ const cli = Cli.create('mppx', {
       }
 
       const challenge = Challenge.fromResponse(challengeResponse)
+
+      // Load config early so we can log before challenge display
+      const loaded = await loadConfig()
+      if (loaded && verbose >= 1)
+        info(`${pc.dim('Using config')} ${pc.blue(path.relative(process.cwd(), loaded.path))}\n`)
+
       const challengeRequest = challenge.request as Record<string, unknown>
       const currency = challengeRequest.currency as string | undefined
       const shownKeys = new Set<string>()
@@ -389,7 +398,14 @@ const cli = Cli.create('mppx', {
       }
 
       let credential: string
-      if (challenge.method === 'tempo' && useTempoCliSign) {
+      const configMethods = loaded?.config.methods?.flat() as Method.AnyClient[] | undefined
+      const configOverride = configMethods?.find(
+        (m) => m.name === challenge.method && m.intent === challenge.intent,
+      )
+      if (configOverride) {
+        const mppx = Mppx.create({ methods: [configOverride], polyfill: false })
+        credential = await mppx.createCredential(challengeResponse)
+      } else if (challenge.method === 'tempo' && useTempoCliSign) {
         const wwwAuth = challengeResponse.headers.get('www-authenticate')
         if (!wwwAuth) {
           return error({
@@ -554,11 +570,20 @@ const cli = Cli.create('mppx', {
         })
         credential = await mppx.createCredential(challengeResponse)
       } else {
-        return error({
-          code: 'UNSUPPORTED_METHOD',
-          message: `Unsupported payment method: ${challenge.method}`,
-          exitCode: 2,
-        })
+        // Try loading methods from mppx.config.ts
+        const matched = configMethods?.find(
+          (m) => m.name === challenge.method && m.intent === challenge.intent,
+        )
+        if (matched) {
+          const mppx = Mppx.create({ methods: [matched], polyfill: false })
+          credential = await mppx.createCredential(challengeResponse)
+        } else {
+          return error({
+            code: 'UNSUPPORTED_METHOD',
+            message: `Unsupported payment method: ${challenge.method}/${challenge.intent}. Add it to mppx.config.ts using defineConfig().`,
+            exitCode: 2,
+          })
+        }
       }
 
       const sessionMd = challenge.request.methodDetails as
@@ -1433,7 +1458,26 @@ const sign = Cli.create('sign', {
       return
     }
 
-    if (challenge.method === 'tempo') {
+    // Check if config overrides built-in method
+    const loaded = await loadConfig()
+    const configMethods = loaded?.config.methods?.flat() as Method.AnyClient[] | undefined
+    const configOverride = configMethods?.find(
+      (m) => m.name === challenge.method && m.intent === challenge.intent,
+    )
+    if (configOverride) {
+      const mppx = Mppx.create({ methods: [configOverride], polyfill: false })
+      const wwwAuth = Challenge.serialize(challenge)
+      const fakeResponse = new Response(null, {
+        status: 402,
+        headers: { 'WWW-Authenticate': wwwAuth },
+      })
+      const credential = await mppx.createCredential(fakeResponse)
+      if (format === 'json') {
+        console.log(JSON.stringify({ authorization: credential }))
+      } else {
+        console.log(credential)
+      }
+    } else if (challenge.method === 'tempo') {
       const accountName = resolveAccountName(options.account)
 
       // Delegate to tempo CLI for tempo wallet accounts
@@ -1595,16 +1639,83 @@ const sign = Cli.create('sign', {
         console.log(credential)
       }
     } else {
-      return error({
-        code: 'UNSUPPORTED_METHOD',
-        message: `Unsupported payment method: ${challenge.method}`,
-        exitCode: 2,
-      })
+      const matched = configMethods?.find(
+        (m) => m.name === challenge.method && m.intent === challenge.intent,
+      )
+      if (matched) {
+        const mppx = Mppx.create({ methods: [matched], polyfill: false })
+        const wwwAuth = Challenge.serialize(challenge)
+        const fakeResponse = new Response(null, {
+          status: 402,
+          headers: { 'WWW-Authenticate': wwwAuth },
+        })
+        const credential = await mppx.createCredential(fakeResponse)
+        if (format === 'json') {
+          console.log(JSON.stringify({ authorization: credential }))
+        } else {
+          console.log(credential)
+        }
+      } else {
+        return error({
+          code: 'UNSUPPORTED_METHOD',
+          message: `Unsupported payment method: ${challenge.method}/${challenge.intent}. Add it to mppx.config.ts using defineConfig().`,
+          exitCode: 2,
+        })
+      }
     }
   },
 })
 
 cli.command(sign)
+
+const init = Cli.create('init', {
+  description: 'Create an mppx.config.ts file in the current directory',
+  options: z.object({
+    force: z.boolean().optional().describe('Overwrite existing config file'),
+  }),
+  alias: { force: 'f' },
+  async run({ options, error }) {
+    const cwd = process.cwd()
+
+    // Determine file extension: .ts if tsconfig exists, .mjs if type:module, else .js
+    const ext = (() => {
+      if (fs.existsSync(path.join(cwd, 'tsconfig.json'))) return '.ts'
+      try {
+        const pkg = JSON.parse(fs.readFileSync(path.join(cwd, 'package.json'), 'utf-8'))
+        if (pkg.type === 'module') return '.mjs'
+      } catch {}
+      return '.js'
+    })()
+
+    const filename = `mppx.config${ext}`
+    const dest = path.join(cwd, filename)
+
+    if (fs.existsSync(dest) && !options.force) {
+      return error({
+        code: 'CONFIG_EXISTS',
+        message: `${filename} already exists. Use --force to overwrite.`,
+        exitCode: 1,
+      })
+    }
+
+    const template = `import { defineConfig } from 'mppx/cli'
+// import { tempo } from 'mppx/client'
+// import { stripe } from 'mppx/stripe/client'
+
+export default defineConfig({
+  methods: [
+    // tempo({ account }),
+    // stripe.charge({ ... }),
+  ],
+})
+`
+
+    fs.writeFileSync(dest, template)
+    console.log(`Created ${filename}`)
+  },
+})
+
+cli.command(init)
 
 export default cli
 
@@ -1639,17 +1750,6 @@ function parseOptions<const schema extends z.ZodType>(
   throw new Error(`Invalid CLI options (${summary})`)
 }
 
-function execCommand(
-  command: string,
-  args: string[],
-): Promise<{ stdout: string; stderr: string; error: Error | null }> {
-  return new Promise((resolve) => {
-    child.execFile(command, args, (error, stdout, stderr) => {
-      resolve({ stdout: stdout.trim(), stderr: stderr.trim(), error })
-    })
-  })
-}
-
 function channelStateDir() {
   return path.join(
     process.env.XDG_CONFIG_HOME || path.join(os.homedir(), '.config'),
@@ -1679,37 +1779,6 @@ function deleteChannelState(channelId: string): void {
   } catch {}
 }
 
-function createDefaultStore() {
-  const configPath = path.join(
-    process.env.XDG_CONFIG_HOME || path.join(os.homedir(), '.config'),
-    'mppx',
-    'default',
-  )
-  return {
-    get(): string {
-      try {
-        return fs.readFileSync(configPath, 'utf-8').trim() || 'main'
-      } catch {
-        return 'main'
-      }
-    },
-    set(value: string): void {
-      fs.mkdirSync(path.dirname(configPath), { recursive: true })
-      fs.writeFileSync(configPath, value, 'utf-8')
-    },
-    clear(): void {
-      try {
-        fs.unlinkSync(configPath)
-      } catch {}
-    },
-  }
-}
-
-function resolveAccountName(explicit?: string): string {
-  if (explicit) return explicit
-  if (process.env.MPPX_ACCOUNT?.trim()) return process.env.MPPX_ACCOUNT
-  return createDefaultStore().get()
-}
 
 function isTempoAccount(accountName: string): boolean {
   return accountName.startsWith('tempo:')
@@ -1824,84 +1893,6 @@ function fallbackFromTempo(): string | undefined {
     } catch {}
   }
   return undefined
-}
-
-// biome-ignore format: compact shell commands
-function createKeychain(account = 'main') {
-  const service = name
-  return {
-    async list(): Promise<string[]> {
-      const platform = os.platform()
-      if (platform === 'darwin') {
-          const { stdout, error } = await execCommand('security', ['dump-keychain'])
-          if (error) return []
-          const accounts: string[] = []
-          const blocks = stdout.split('keychain:')
-          for (const block of blocks) {
-            const serviceMatch = block.match(/"svce"<blob>="([^"]*)"/)
-            const accountMatch = block.match(/"acct"<blob>="([^"]*)"/)
-            if (serviceMatch?.[1] === service && accountMatch?.[1]) accounts.push(accountMatch[1])
-          }
-          return accounts
-      }
-      if (platform === 'linux') {
-          const { stdout, stderr, error } = await execCommand('secret-tool', ['search', '--all', '--unlock', 'service', service])
-          if (error) return []
-          const combined = `${stdout}\n${stderr}`
-          const accounts: string[] = []
-          const matches = combined.matchAll(/\baccount = (.+)/g)
-          for (const match of matches) if (match[1]) accounts.push(match[1])
-          return accounts
-      }
-      throw new Error(`Unsupported platform: ${platform}`)
-    },
-    async get(): Promise<string | undefined> {
-      const platform = os.platform()
-      if (platform === 'darwin') {
-          const { stdout, error } = await execCommand('security', ['find-generic-password', '-s', service, '-a', account, '-w'])
-          return error ? undefined : stdout
-      }
-      if (platform === 'linux') {
-          const { stdout, error } = await execCommand('secret-tool', ['lookup', 'service', service, 'account', account])
-          return error ? undefined : stdout || undefined
-      }
-      throw new Error(`Unsupported platform: ${platform}`)
-    },
-    async set(value: string): Promise<void> {
-      const platform = os.platform()
-      if (platform === 'darwin') {
-          await execCommand('security', ['delete-generic-password', '-s', service, '-a', account])
-          const { error } = await execCommand('security', ['add-generic-password', '-s', service, '-a', account, '-w', value])
-          if (error) throw error
-          return
-      }
-      if (platform === 'linux') {
-        const proc = child.execFile('secret-tool', ['store', '--label', `${service} ${account}`, 'service', service, 'account', account])
-        proc.stdin?.write(value)
-        proc.stdin?.end()
-        return new Promise((resolve, reject) => {
-          proc.on('close', (code) => {
-            if (code === 0) resolve()
-            else reject(new Error(`secret-tool exited with code ${code}`))
-          })
-          proc.on('error', reject)
-        })
-      }
-      throw new Error(`Unsupported platform: ${platform}`)
-    },
-    async delete(): Promise<void> {
-      const platform = os.platform()
-      if (platform === 'darwin') {
-          await execCommand('security', ['delete-generic-password', '-s', service, '-a', account])
-          return
-      }
-      if (platform === 'linux') {
-          await execCommand('secret-tool', ['clear', 'service', service, 'account', account])
-          return
-      }
-      throw new Error(`Unsupported platform: ${platform}`)
-    },
-  }
 }
 
 function prompt(message: string): Promise<string | undefined> {

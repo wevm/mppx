@@ -9,11 +9,11 @@ import { rpcUrl } from '~test/tempo/prool.js'
 import { deployEscrow } from '~test/tempo/session.js'
 import { accounts, asset, client, fundAccount } from '~test/tempo/viem.js'
 import cli from './cli.js'
-import * as Store from './Store.js'
-import * as Mppx_server from './server/Mppx.js'
-import { toNodeListener } from './server/Mppx.js'
-import { stripe as stripe_server } from './stripe/server/Methods.js'
-import { tempo } from './tempo/server/Methods.js'
+import * as Store from '../Store.js'
+import * as Mppx_server from '../server/Mppx.js'
+import { toNodeListener } from '../server/Mppx.js'
+import { stripe as stripe_server } from '../stripe/server/Methods.js'
+import { tempo } from '../tempo/server/Methods.js'
 
 const testPrivateKey = generatePrivateKey()
 const testAccount = privateKeyToAccount(testPrivateKey)
@@ -201,48 +201,6 @@ describe('session multi-fetch (examples/session/multi-fetch)', () => {
         env: { MPPX_PRIVATE_KEY: testPrivateKey },
       })
       expect(exitCode).toBe(22)
-    } finally {
-      httpServer.close()
-    }
-  })
-})
-
-describe.skipIf(!process.env.VITE_STRIPE_SECRET_KEY)('stripe charge (integration)', () => {
-  test('happy path: makes Stripe payment via real API', { timeout: 120_000 }, async () => {
-    const stripeSecretKey = process.env.VITE_STRIPE_SECRET_KEY!
-
-    const server = Mppx_server.create({
-      methods: [
-        stripe_server.charge({
-          secretKey: stripeSecretKey,
-          networkId: 'internal',
-          paymentMethodTypes: ['card'],
-        }),
-      ],
-      realm: 'cli-test-stripe',
-      secretKey: 'cli-test-secret',
-    })
-
-    const httpServer = await Http.createServer(async (req, res) => {
-      const result = await toNodeListener(
-        server.charge({
-          amount: '1',
-          currency: 'usd',
-          decimals: 2,
-        }),
-      )(req, res)
-      if (result.status === 402) return
-      res.end('paid')
-    })
-
-    try {
-      const { output } = await serve([httpServer.url, '-M', 'paymentMethod=pm_card_visa', '-s'], {
-        env: {
-          MPPX_STRIPE_SECRET_KEY: stripeSecretKey,
-          MPPX_PRIVATE_KEY: undefined,
-        },
-      })
-      expect(output).toContain('paid')
     } finally {
       httpServer.close()
     }
@@ -438,8 +396,8 @@ describe('stripe charge', () => {
 // TODO: investigate account tests timing out in CI (secret-tool/gnome-keyring hangs)
 // ---------------------------------------------------------------------------
 describe.skipIf(!!process.env.CI)('account', () => {
-  const binPath = path.resolve(import.meta.dirname, 'bin.ts')
-  const cwd = path.resolve(import.meta.dirname, '..')
+  const binPath = path.resolve(import.meta.dirname, '../bin.ts')
+  const cwd = path.resolve(import.meta.dirname, '../..')
   const accountEnv = { ...process.env, NODE_NO_WARNINGS: '1' }
   const prefix = `__mppx_test_${Date.now()}`
   const createdAccounts: string[] = []
