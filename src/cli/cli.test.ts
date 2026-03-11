@@ -1,4 +1,6 @@
 import { spawnSync } from 'node:child_process'
+import * as fs from 'node:fs'
+import * as os from 'node:os'
 import * as path from 'node:path'
 import { parseUnits } from 'viem'
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts'
@@ -8,12 +10,12 @@ import * as Http from '~test/Http.js'
 import { rpcUrl } from '~test/tempo/prool.js'
 import { deployEscrow } from '~test/tempo/session.js'
 import { accounts, asset, client, fundAccount } from '~test/tempo/viem.js'
-import cli from './cli.js'
 import * as Store from '../Store.js'
 import * as Mppx_server from '../server/Mppx.js'
 import { toNodeListener } from '../server/Mppx.js'
 import { stripe as stripe_server } from '../stripe/server/Methods.js'
 import { tempo } from '../tempo/server/Methods.js'
+import cli from './cli.js'
 
 const testPrivateKey = generatePrivateKey()
 const testAccount = privateKeyToAccount(testPrivateKey)
@@ -533,6 +535,103 @@ describe.skipIf(!!process.env.CI)('account', () => {
     const result = accountRun(['account'])
     expect(result.status).toBe(0)
     expect(result.stdout).toContain('account')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// init
+// ---------------------------------------------------------------------------
+describe('init', () => {
+  let tmpDir: string
+
+  function setup(files?: Record<string, string>) {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mppx-init-'))
+    if (files) {
+      for (const [name, content] of Object.entries(files))
+        fs.writeFileSync(path.join(tmpDir, name), content)
+    }
+  }
+
+  function teardown() {
+    fs.rmSync(tmpDir, { recursive: true, force: true })
+  }
+
+  test('creates mppx.config.ts when tsconfig.json exists', async () => {
+    setup({ 'tsconfig.json': '{}' })
+    const origCwd = process.cwd()
+    process.chdir(tmpDir)
+    try {
+      const { output, exitCode } = await serve(['init'])
+      expect(exitCode).toBeUndefined()
+      expect(output).toContain('Created mppx.config.ts')
+      const content = fs.readFileSync(path.join(tmpDir, 'mppx.config.ts'), 'utf-8')
+      expect(content).toContain("import { defineConfig } from 'mppx/cli'")
+      expect(content).toContain('methods:')
+    } finally {
+      process.chdir(origCwd)
+      teardown()
+    }
+  })
+
+  test('creates mppx.config.mjs when package.json has type:module', async () => {
+    setup({ 'package.json': '{"type":"module"}' })
+    const origCwd = process.cwd()
+    process.chdir(tmpDir)
+    try {
+      const { output, exitCode } = await serve(['init'])
+      expect(exitCode).toBeUndefined()
+      expect(output).toContain('Created mppx.config.mjs')
+      expect(fs.existsSync(path.join(tmpDir, 'mppx.config.mjs'))).toBe(true)
+    } finally {
+      process.chdir(origCwd)
+      teardown()
+    }
+  })
+
+  test('creates mppx.config.js as fallback', async () => {
+    setup()
+    const origCwd = process.cwd()
+    process.chdir(tmpDir)
+    try {
+      const { output, exitCode } = await serve(['init'])
+      expect(exitCode).toBeUndefined()
+      expect(output).toContain('Created mppx.config.js')
+      expect(fs.existsSync(path.join(tmpDir, 'mppx.config.js'))).toBe(true)
+    } finally {
+      process.chdir(origCwd)
+      teardown()
+    }
+  })
+
+  test('errors when config already exists', async () => {
+    setup({ 'tsconfig.json': '{}', 'mppx.config.ts': 'existing' })
+    const origCwd = process.cwd()
+    process.chdir(tmpDir)
+    try {
+      const { output, exitCode } = await serve(['init'])
+      expect(exitCode).toBe(1)
+      expect(output).toContain('already exists')
+      expect(fs.readFileSync(path.join(tmpDir, 'mppx.config.ts'), 'utf-8')).toBe('existing')
+    } finally {
+      process.chdir(origCwd)
+      teardown()
+    }
+  })
+
+  test('--force overwrites existing config', async () => {
+    setup({ 'tsconfig.json': '{}', 'mppx.config.ts': 'existing' })
+    const origCwd = process.cwd()
+    process.chdir(tmpDir)
+    try {
+      const { output, exitCode } = await serve(['init', '--force'])
+      expect(exitCode).toBeUndefined()
+      expect(output).toContain('Created mppx.config.ts')
+      const content = fs.readFileSync(path.join(tmpDir, 'mppx.config.ts'), 'utf-8')
+      expect(content).toContain('defineConfig')
+    } finally {
+      process.chdir(origCwd)
+      teardown()
+    }
   })
 })
 

@@ -23,19 +23,31 @@ const alias = {
 
 export default defineConfig({
   test: {
+    coverage: {
+      exclude: ['test/**'],
+    },
     projects: [
       {
         test: {
           name: 'node',
           alias,
-          coverage: {
-            exclude: ['test/**'],
-          },
           include: ['src/**/*.test.ts'],
-          exclude: ['src/**/*.browser.test.ts'],
+          exclude: ['src/**/*.browser.test.ts', 'src/cli/**/*.test.ts'],
           typecheck: {
             include: ['src/**/*.test-d.ts'],
           },
+          globals: true,
+          retry: 3,
+          globalSetup: ['./test/setup.global.ts'],
+          setupFiles: ['./test/setup.ts'],
+          hookTimeout: 60_000,
+        },
+      },
+      {
+        test: {
+          name: 'cli',
+          alias,
+          include: ['src/cli/**/*.test.ts'],
           globals: true,
           retry: 3,
           globalSetup: ['./test/setup.global.ts'],

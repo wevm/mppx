@@ -84,10 +84,7 @@ describe('loadConfig', () => {
   })
 
   test('MPPX_CONFIG takes priority over cwd config', async () => {
-    fs.writeFileSync(
-      path.join(tmpDir, 'mppx.config.mjs'),
-      'export default { methods: ["cwd"] }',
-    )
+    fs.writeFileSync(path.join(tmpDir, 'mppx.config.mjs'), 'export default { methods: ["cwd"] }')
     const envConfig = path.join(tmpDir, 'env.mjs')
     fs.writeFileSync(envConfig, 'export default { methods: ["env"] }')
     vi.stubEnv('MPPX_CONFIG', envConfig)
@@ -99,10 +96,7 @@ describe('loadConfig', () => {
   })
 
   test('cwd config takes priority over XDG config', async () => {
-    fs.writeFileSync(
-      path.join(tmpDir, 'mppx.config.mjs'),
-      'export default { methods: ["cwd"] }',
-    )
+    fs.writeFileSync(path.join(tmpDir, 'mppx.config.mjs'), 'export default { methods: ["cwd"] }')
     const xdgDir = path.join(tmpDir, 'xdg')
     const mppxDir = path.join(xdgDir, 'mppx')
     fs.mkdirSync(mppxDir, { recursive: true })

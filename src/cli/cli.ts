@@ -10,16 +10,16 @@ import type { Chain } from 'viem'
 import { type Address, createClient, http } from 'viem'
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts'
 import { tempo as tempoMainnet, tempoModerato } from 'viem/chains'
-import { createDefaultStore, createKeychain, resolveAccountName } from './account.js'
 import * as Challenge from '../Challenge.js'
 import * as Credential from '../Credential.js'
 import * as Mppx from '../client/Mppx.js'
-import { loadConfig } from './config.js'
 import type * as Method from '../Method.js'
 import { stripe } from '../stripe/client/index.js'
 import { tempo } from '../tempo/client/index.js'
 import type { SessionCredentialPayload } from '../tempo/session/Types.js'
 import { signVoucher } from '../tempo/session/Voucher.js'
+import { createDefaultStore, createKeychain, resolveAccountName } from './account.js'
+import { loadConfig } from './config.js'
 
 function readStdin(): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -1778,7 +1778,6 @@ function deleteChannelState(channelId: string): void {
     fs.unlinkSync(path.join(channelStateDir(), channelId))
   } catch {}
 }
-
 
 function isTempoAccount(accountName: string): boolean {
   return accountName.startsWith('tempo:')
