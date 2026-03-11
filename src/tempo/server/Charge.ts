@@ -238,12 +238,17 @@ export function charge<const parameters extends charge.Parameters>(
           if (feePayer && methodDetails?.feePayer !== false)
             FeePayer.validateCalls(calls, { amount, currency, recipient })
 
+          const resolvedFeeToken =
+            transaction.feeToken ??
+            defaults.currency[chainId as keyof typeof defaults.currency]
+
           const serializedTransaction_final = await (async () => {
             if (feePayer && methodDetails?.feePayer !== false) {
               return signTransaction(client, {
                 ...transaction,
                 account: feePayer,
                 feePayer,
+                feeToken: resolvedFeeToken,
               } as never)
             }
             return serializedTransaction
@@ -261,9 +266,9 @@ export function charge<const parameters extends charge.Parameters>(
             await viem_call(client, {
               ...transaction,
               account: transaction.from,
-              // @ts-expect-error
+              feeToken: resolvedFeeToken,
               calls,
-            })
+            } as never)
             const hash = await sendRawTransaction(client, {
               serializedTransaction: serializedTransaction_final,
             })
