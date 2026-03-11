@@ -12,12 +12,11 @@ import type { CliHandler } from './Handler.js'
  * @example
  * ```ts
  * // mppx.config.ts
- * import { defineConfig } from 'mppx/cli'
+ * import { defineConfig, resolveAccount } from 'mppx/cli'
  * import { tempo } from 'mppx/client'
  *
  * export default defineConfig({
- *   methods: [tempo({ account })],
- *   handlers: [tempoHandler()],
+ *   methods: [tempo({ account: await resolveAccount() })],
  * })
  * ```
  */
