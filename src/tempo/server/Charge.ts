@@ -239,8 +239,7 @@ export function charge<const parameters extends charge.Parameters>(
             FeePayer.validateCalls(calls, { amount, currency, recipient })
 
           const resolvedFeeToken =
-            transaction.feeToken ??
-            defaults.currency[chainId as keyof typeof defaults.currency]
+            transaction.feeToken ?? defaults.currency[chainId as keyof typeof defaults.currency]
 
           const serializedTransaction_final = await (async () => {
             if (feePayer && methodDetails?.feePayer !== false) {

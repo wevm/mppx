@@ -277,8 +277,7 @@ export async function broadcastOpenTransaction(parameters: {
   }
 
   const resolvedFeeToken =
-    transaction.feeToken ??
-    defaults.currency[client.chain?.id as keyof typeof defaults.currency]
+    transaction.feeToken ?? defaults.currency[client.chain?.id as keyof typeof defaults.currency]
 
   const serializedTransaction_final = await (async () => {
     if (feePayer) {
