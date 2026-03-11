@@ -253,11 +253,9 @@ export async function handler(request: Request): Promise<Response | null> {
           //   - Only returns once payment is confirmed, ensuring the server
           //     never gives away content for free
           await stream.charge()
-        } catch (e) {
-          // Charge errors occur if the client disconnects mid-stream,
-          // the abort signal fires, or the channel is in an invalid state.
-          console.error('[server] charge error:', e)
-          throw e
+        } catch {
+          // Client disconnected or abort signal fired — stop streaming.
+          break
         }
         // Yield the token — this becomes an `event: message\ndata: <token>`
         // in the SSE stream. The client's async iterator surfaces this as

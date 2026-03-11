@@ -1,13 +1,10 @@
 import type * as Challenge from '../Challenge.js'
 import type * as Method from '../Method.js'
 
-/**
- * CLI handler for a payment method.
- *
- * Provides method-specific setup (account resolution, display info),
- * credential creation methods, response lifecycle hooks,
- * and receipt formatting.
- */
+export function createHandler(handler: CliHandler): CliHandler {
+  return handler
+}
+
 export interface CliHandler {
   /** Payment method name (e.g., 'tempo', 'stripe') */
   method: string
@@ -57,11 +54,6 @@ export interface CliHandler {
   formatReceiptField?(key: string, value: unknown): string | undefined
 }
 
-/** Create a CLI handler with type inference (avoids manual `: CliHandler` annotation). */
-export function createHandler(handler: CliHandler): CliHandler {
-  return handler
-}
-
 /** Context passed to handleResponse */
 export interface ResponseContext {
   challenge: Challenge.Challenge
@@ -69,7 +61,7 @@ export interface ResponseContext {
   response: Response
   fetchUrl: string
   fetchInit: RequestInit
-  info: (msg: string) => void
+  silent: boolean
   verbose: number
   confirmEnabled: boolean
   confirm: (msg: string, defaultYes?: boolean) => Promise<boolean>
@@ -78,6 +70,4 @@ export interface ResponseContext {
   explorerUrl?: string | undefined
   /** Keys already shown in the challenge display (to avoid duplicating in receipts) */
   shownKeys: Set<string>
-  /** Format a balance for display */
-  fmtBalance: (b: bigint, symbol: string, decimals?: number) => string
 }

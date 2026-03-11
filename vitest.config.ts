@@ -26,6 +26,7 @@ export default defineConfig({
     coverage: {
       exclude: ['test/**'],
     },
+    globalSetup: ['./test/setup.global.ts'],
     projects: [
       {
         test: {
@@ -38,7 +39,6 @@ export default defineConfig({
           },
           globals: true,
           retry: 3,
-          globalSetup: ['./test/setup.global.ts'],
           setupFiles: ['./test/setup.ts'],
           hookTimeout: 60_000,
         },
@@ -50,7 +50,6 @@ export default defineConfig({
           include: ['src/cli/**/*.test.ts'],
           globals: true,
           retry: 3,
-          globalSetup: ['./test/setup.global.ts'],
           setupFiles: ['./test/setup.ts'],
           hookTimeout: 60_000,
         },

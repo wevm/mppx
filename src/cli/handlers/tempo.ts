@@ -5,17 +5,23 @@ import * as os from 'node:os'
 import * as path from 'node:path'
 import { Errors, z } from 'incur'
 import { Base64 } from 'ox'
-import type { Address, Chain } from 'viem'
+import type { Address } from 'viem'
 import { createClient, http } from 'viem'
 import { privateKeyToAccount } from 'viem/accounts'
-import { tempo as tempoMainnet, tempoModerato } from 'viem/chains'
 import * as Credential from '../../Credential.js'
 import { tempo as tempoMethods } from '../../tempo/client/index.js'
 import type { SessionCredentialPayload } from '../../tempo/session/Types.js'
 import { signVoucher } from '../../tempo/session/Voucher.js'
 import { createDefaultStore, createKeychain, resolveAccountName } from '../account.js'
 import { type CliHandler, createHandler } from '../Handler.js'
-import { pc } from '../_pc.js'
+import {
+  fetchTokenInfo,
+  fmtBalance,
+  isTempoAccount,
+  isTestnet,
+  pc,
+  resolveChain,
+} from '../utils.js'
 
 const require = createRequire(import.meta.url)
 const { name } = require('../../../package.json') as { name: string }
@@ -223,8 +229,9 @@ export function tempo() {
       if (ctx.challenge.intent !== 'session') return false
       if (!_session) return false
 
-      const { challenge, credential, response, fetchUrl, fetchInit, info, verbose } = ctx
-      const { confirmEnabled, tokenSymbol, tokenDecimals, explorerUrl, shownKeys, fmtBalance } = ctx
+      const { challenge, credential, response, fetchUrl, fetchInit, verbose } = ctx
+      const { silent, confirmEnabled, tokenSymbol, tokenDecimals, explorerUrl, shownKeys } = ctx
+      const info = silent ? (_msg: string) => {} : (msg: string) => process.stderr.write(msg)
 
       const parsed = Credential.deserialize<SessionCredentialPayload>(credential)
       const challengeRequest = challenge.request as Record<string, unknown>
@@ -299,12 +306,10 @@ export function tempo() {
           if (verbose >= 1) {
             printReceipt(receiptJson, {
               info,
-              pc,
               shownKeys,
               tokenSymbol,
               tokenDecimals,
               explorerUrl,
-              fmtBalance,
               handler: this,
               prefix: '\n',
             })
@@ -325,12 +330,10 @@ export function tempo() {
           session: _session,
           info,
           verbose,
-          pc,
           shownKeys,
           tokenSymbol,
           tokenDecimals,
           explorerUrl,
-          fmtBalance,
           handler: this,
         })
       } else {
@@ -353,11 +356,9 @@ export function tempo() {
               session: _session,
               info,
               verbose,
-              pc,
               tokenSymbol,
               tokenDecimals,
               explorerUrl,
-              fmtBalance,
               confirmEnabled,
             })
           }
@@ -380,24 +381,19 @@ export function tempo() {
 
 // --- Session helpers ---
 
-type Pc = typeof pc
-
 function printReceipt(
   receiptJson: Record<string, unknown>,
   opts: {
     info: (msg: string) => void
-    pc: Pc
     shownKeys: Set<string>
     tokenSymbol: string
     tokenDecimals: number
     explorerUrl?: string | undefined
-    fmtBalance: (b: bigint, symbol: string, decimals?: number) => string
     handler: CliHandler
     prefix?: string | undefined
   },
 ) {
-  const { info, pc, shownKeys, tokenSymbol, tokenDecimals, explorerUrl, fmtBalance, handler } = opts
-  info(`${opts.prefix ?? ''}${pc.bold(pc.green('Payment Receipt'))}\n`)
+  opts.info(`${opts.prefix ?? ''}${pc.bold(pc.green('Payment Receipt'))}\n`)
   const rows: [string, string][] = []
   const skipRef =
     receiptJson.channelId &&
@@ -405,28 +401,28 @@ function printReceipt(
     receiptJson.channelId === receiptJson.reference
   const receiptBalanceKeys = new Set(['acceptedCumulative', 'spent'])
   for (const [key, value] of Object.entries(receiptJson)) {
-    if (value === undefined || shownKeys.has(key)) continue
+    if (value === undefined || opts.shownKeys.has(key)) continue
     if (key === 'reference' && skipRef) continue
-    const formatted = handler.formatReceiptField?.(key, value)
+    const formatted = opts.handler.formatReceiptField?.(key, value)
     if (formatted !== undefined) {
       rows.push([key, formatted])
     } else if (receiptBalanceKeys.has(key) && typeof value === 'string') {
       rows.push([
         key,
-        `${value} ${pc.dim(`(${fmtBalance(BigInt(value), tokenSymbol, tokenDecimals)})`)}`,
+        `${value} ${pc.dim(`(${fmtBalance(BigInt(value), opts.tokenSymbol, opts.tokenDecimals)})`)}`,
       ])
     } else if (
       (key === 'reference' || key === 'txHash') &&
       typeof value === 'string' &&
-      explorerUrl
+      opts.explorerUrl
     ) {
-      rows.push([key, pc.link(`${explorerUrl}/tx/${value}`, value)])
+      rows.push([key, pc.link(`${opts.explorerUrl}/tx/${value}`, value)])
     } else rows.push([key, String(value)])
   }
   rows.sort(([a], [b]) => a.localeCompare(b))
   const pad = Math.max(...rows.map(([k]) => k.length))
-  for (const [label, value] of rows) info(`  ${pc.dim(label.padEnd(pad))}  ${value}\n`)
-  if (opts.prefix) info('\n')
+  for (const [label, value] of rows) opts.info(`  ${pc.dim(label.padEnd(pad))}  ${value}\n`)
+  if (opts.prefix) opts.info('\n')
 }
 
 async function handleSseStream(
@@ -449,33 +445,14 @@ async function handleSseStream(
     }
     info: (msg: string) => void
     verbose: number
-    pc: Pc
     shownKeys: Set<string>
     tokenSymbol: string
     tokenDecimals: number
     explorerUrl?: string | undefined
-    fmtBalance: (b: bigint, symbol: string, decimals?: number) => string
     handler: CliHandler
   },
 ) {
-  const {
-    channelId,
-    escrowContract,
-    chainId,
-    fetchUrl,
-    fetchInit,
-    session,
-    info,
-    verbose,
-    pc,
-    shownKeys,
-    tokenSymbol,
-    tokenDecimals,
-    explorerUrl,
-    fmtBalance,
-    handler,
-  } = opts
-  let { cumulativeAmount } = opts
+  let cumulativeAmount = opts.cumulativeAmount
 
   const reader = response.body?.getReader()
   if (!reader) throw new Error('No response body')
@@ -484,7 +461,7 @@ async function handleSseStream(
   let buffer = ''
   let currentEvent = ''
 
-  const termBg = verbose ? await detectTerminalBg() : undefined
+  const termBg = opts.verbose ? await detectTerminalBg() : undefined
   const chunkBgs = (() => {
     if (!termBg || !pc.isColorSupported) return undefined
     const clamp = (n: number) => Math.max(0, Math.min(255, Math.round(n)))
@@ -522,7 +499,12 @@ async function handleSseStream(
       }
       const data = line.slice(6)
       if (data.trim() === '[DONE]') continue
-      if (currentEvent === 'payment-need-voucher' && channelId && escrowContract && chainId) {
+      if (
+        currentEvent === 'payment-need-voucher' &&
+        opts.channelId &&
+        opts.escrowContract &&
+        opts.chainId
+      ) {
         try {
           const event = JSON.parse(data) as {
             channelId: string
@@ -531,35 +513,33 @@ async function handleSseStream(
           const required = BigInt(event.requiredCumulative)
           cumulativeAmount = cumulativeAmount > required ? cumulativeAmount : required
 
-          const voucherCred = await session.signVoucher({
-            channelId,
+          const voucherCred = await opts.session.signVoucher({
+            channelId: opts.channelId,
             cumulativeAmount,
-            escrowContract,
-            chainId,
+            escrowContract: opts.escrowContract,
+            chainId: opts.chainId,
           })
-          await globalThis.fetch(fetchUrl, {
+          await globalThis.fetch(opts.fetchUrl, {
             method: 'POST',
             headers: { Authorization: voucherCred },
           })
         } catch (e) {
-          info(pc.dim(pc.yellow(` [voucher failed: ${e instanceof Error ? e.message : e}]`)))
+          opts.info(pc.dim(pc.yellow(` [voucher failed: ${e instanceof Error ? e.message : e}]`)))
         }
         currentEvent = ''
         continue
       }
       if (currentEvent === 'payment-receipt') {
-        if (verbose >= 1) {
+        if (opts.verbose >= 1) {
           try {
             const receipt = JSON.parse(data) as Record<string, unknown>
             printReceipt(receipt, {
-              info,
-              pc,
-              shownKeys,
-              tokenSymbol,
-              tokenDecimals,
-              explorerUrl,
-              fmtBalance,
-              handler,
+              info: opts.info,
+              shownKeys: opts.shownKeys,
+              tokenSymbol: opts.tokenSymbol,
+              tokenDecimals: opts.tokenDecimals,
+              explorerUrl: opts.explorerUrl,
+              handler: opts.handler,
               prefix: '\n\n',
             })
           } catch {}
@@ -595,22 +575,20 @@ async function handleSseStream(
   if (buffer.trim()) await processLines([buffer])
 
   // Close channel after SSE stream ends
-  if (channelId && escrowContract && chainId) {
+  if (opts.channelId && opts.escrowContract && opts.chainId) {
     await closeChannel({
-      channelId,
+      channelId: opts.channelId,
       cumulativeAmount,
-      escrowContract,
-      chainId,
-      fetchUrl,
-      fetchInit,
-      session,
-      info,
-      verbose,
-      pc,
-      tokenSymbol,
-      tokenDecimals,
-      explorerUrl,
-      fmtBalance,
+      escrowContract: opts.escrowContract,
+      chainId: opts.chainId,
+      fetchUrl: opts.fetchUrl,
+      fetchInit: opts.fetchInit,
+      session: opts.session,
+      info: opts.info,
+      verbose: opts.verbose,
+      tokenSymbol: opts.tokenSymbol,
+      tokenDecimals: opts.tokenDecimals,
+      explorerUrl: opts.explorerUrl,
       confirmEnabled: false,
     })
   }
@@ -633,47 +611,27 @@ async function closeChannel(opts: {
   }
   info: (msg: string) => void
   verbose: number
-  pc: Pc
   tokenSymbol: string
   tokenDecimals: number
   explorerUrl?: string | undefined
-  fmtBalance: (b: bigint, symbol: string, decimals?: number) => string
   confirmEnabled: boolean
 }) {
-  const {
-    channelId,
-    cumulativeAmount,
-    escrowContract,
-    chainId,
-    fetchUrl,
-    fetchInit,
-    session,
-    info,
-    verbose,
-    pc,
-    tokenSymbol,
-    tokenDecimals,
-    explorerUrl,
-    fmtBalance,
-    confirmEnabled,
-  } = opts
-
-  const closeCred = await session.signVoucher({
-    channelId,
-    cumulativeAmount,
-    escrowContract,
-    chainId,
+  const closeCred = await opts.session.signVoucher({
+    channelId: opts.channelId,
+    cumulativeAmount: opts.cumulativeAmount,
+    escrowContract: opts.escrowContract,
+    chainId: opts.chainId,
   })
-  const closeRes = await globalThis.fetch(fetchUrl, {
-    ...fetchInit,
+  const closeRes = await globalThis.fetch(opts.fetchUrl, {
+    ...opts.fetchInit,
     headers: {
-      ...(fetchInit.headers as Record<string, string>),
+      ...(opts.fetchInit.headers as Record<string, string>),
       Authorization: closeCred,
     },
   })
   if (closeRes.ok) {
-    deleteChannelState(channelId)
-    if (verbose >= 1) {
+    deleteChannelState(opts.channelId)
+    if (opts.verbose >= 1) {
       const closeReceiptHeader = closeRes.headers.get('Payment-Receipt')
       let closeTxHash: string | undefined
       if (closeReceiptHeader) {
@@ -683,22 +641,21 @@ async function closeChannel(opts: {
         } catch {}
       }
       const txInfo =
-        closeTxHash && explorerUrl
-          ? ` ${pc.dim(pc.link(`${explorerUrl}/tx/${closeTxHash}`, closeTxHash))}`
+        closeTxHash && opts.explorerUrl
+          ? ` ${pc.dim(pc.link(`${opts.explorerUrl}/tx/${closeTxHash}`, closeTxHash))}`
           : ''
-      const closePrefix = confirmEnabled ? '' : '\n'
-      info(
-        `${closePrefix}${pc.dim('Channel closed.')} ${pc.dim(`Spent ${fmtBalance(cumulativeAmount, tokenSymbol, tokenDecimals)}.`)}${txInfo}\n`,
+      opts.info(
+        `${pc.dim('Channel closed.')} ${pc.dim(`Spent ${fmtBalance(opts.cumulativeAmount, opts.tokenSymbol, opts.tokenDecimals)}.`)}${txInfo}\n`,
       )
     }
   } else {
     const closeBody = await closeRes.text().catch(() => '')
-    info(`\n${pc.dim(pc.yellow('Channel close failed'))} ${pc.dim(`(${closeRes.status})`)}\n`)
-    info(
-      `${pc.dim(`  channelId:          ${channelId}`)}\n` +
-        `${pc.dim(`  cumulativeAmount:   ${cumulativeAmount}`)}\n` +
-        `${pc.dim(`  escrowContract:     ${escrowContract}`)}\n` +
-        `${pc.dim(`  chainId:            ${chainId}`)}\n` +
+    opts.info(`\n${pc.dim(pc.yellow('Channel close failed'))} ${pc.dim(`(${closeRes.status})`)}\n`)
+    opts.info(
+      `${pc.dim(`  channelId:          ${opts.channelId}`)}\n` +
+        `${pc.dim(`  cumulativeAmount:   ${opts.cumulativeAmount}`)}\n` +
+        `${pc.dim(`  escrowContract:     ${opts.escrowContract}`)}\n` +
+        `${pc.dim(`  chainId:            ${opts.chainId}`)}\n` +
         `${pc.dim(`  response:           ${closeBody || '(empty)'}`)}\n`,
     )
   }
@@ -781,10 +738,6 @@ function deleteChannelState(channelId: string): void {
   try {
     fs.unlinkSync(path.join(channelStateDir(), channelId))
   } catch {}
-}
-
-function isTempoAccount(accountName: string): boolean {
-  return accountName.startsWith('tempo:')
 }
 
 function tempoKeystorePath(): string {
@@ -898,44 +851,4 @@ function fallbackFromTempo(): string | undefined {
     } catch {}
   }
   return undefined
-}
-
-async function resolveChain(opts: { rpcUrl?: string | undefined } = {}): Promise<Chain> {
-  if (!opts.rpcUrl) return tempoModerato
-  const { getChainId } = await import('viem/actions')
-  const chainId = await getChainId(createClient({ transport: http(opts.rpcUrl) }))
-  const allExports = Object.values(await import('viem/chains')) as unknown[]
-  const candidates = allExports.filter(
-    (c): c is Chain =>
-      typeof c === 'object' && c !== null && 'id' in c && (c as Chain).id === chainId,
-  )
-  const found = candidates.find((c) => 'serializers' in c && c.serializers) ?? candidates[0]
-  if (!found) throw new Error(`Unknown chain ID ${chainId} from RPC ${opts.rpcUrl}`)
-  return found
-}
-
-function isTestnet(chain: Chain) {
-  return chain.id !== tempoMainnet.id
-}
-
-const pathUsd = '0x20c0000000000000000000000000000000000000' as Address
-const usdc = '0x20C000000000000000000000b9537d11c60E8b50' as Address
-
-async function fetchTokenInfo(
-  client: ReturnType<typeof createClient>,
-  token: Address,
-  account: Address,
-) {
-  const { Actions } = await import('viem/tempo')
-  const [balance, metadata] = await Promise.all([
-    Actions.token.getBalance(client, { account, token }).catch(() => 0n),
-    Actions.token.getMetadata(client, { token }).catch(() => ({ symbol: token as string })),
-  ])
-  const knownSymbols: Record<string, string> = {
-    [pathUsd]: 'PathUSD',
-    [usdc]: 'USDC',
-  }
-  const symbol = knownSymbols[token] ?? metadata.symbol
-  const decimals = 'decimals' in metadata ? metadata.decimals : 6
-  return { balance, symbol, decimals, token }
 }

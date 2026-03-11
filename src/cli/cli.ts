@@ -1,22 +1,30 @@
 import * as fs from 'node:fs'
 import { createRequire } from 'node:module'
 import * as path from 'node:path'
-import * as readline from 'node:readline'
 import { Cli, Errors, z } from 'incur'
 import { Base64 } from 'ox'
-import type { Chain } from 'viem'
 import { type Address, createClient, http } from 'viem'
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts'
-import { tempo as tempoMainnet, tempoModerato } from 'viem/chains'
+import { tempo as tempoMainnet } from 'viem/chains'
 import * as Challenge from '../Challenge.js'
 import * as Mppx from '../client/Mppx.js'
 import type * as Method from '../Method.js'
-import { pc } from './_pc.js'
 import { createDefaultStore, createKeychain, resolveAccountName } from './account.js'
 import { loadConfig } from './config.js'
 import type { CliHandler } from './Handler.js'
 import { stripe as stripeHandler, tempo as tempoHandler } from './handlers/index.js'
 import { readTempoKeystore, resolveTempoAccount } from './handlers/tempo.js'
+import {
+  chainName,
+  confirm,
+  fetchBalanceLines,
+  fmtBalance,
+  isTempoAccount,
+  parseMethodOpts,
+  pc,
+  prompt,
+  resolveChain,
+} from './utils.js'
 
 function readStdin(): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -418,7 +426,7 @@ const cli = Cli.create('mppx', {
         response: credentialResponse,
         fetchUrl,
         fetchInit,
-        info,
+        silent,
         verbose,
         confirmEnabled,
         confirm,
@@ -426,7 +434,6 @@ const cli = Cli.create('mppx', {
         tokenDecimals,
         explorerUrl,
         shownKeys,
-        fmtBalance: (b, sym, dec) => fmtBalance(b, sym, dec),
       })
 
       if (!handled) {
@@ -538,293 +545,289 @@ const cli = Cli.create('mppx', {
 const account = Cli.create('account', {
   description: 'Manage accounts (create, default, delete, fund, list, view)',
 })
-
-account.command('create', {
-  description: 'Create new account',
-  options: z.object({
-    account: z.string().optional().describe('Account name (env: MPPX_ACCOUNT)'),
-    rpcUrl: z.string().optional().describe('RPC endpoint (env: MPPX_RPC_URL)'),
-  }),
-  alias: { account: 'a', rpcUrl: 'r' },
-  async run(c) {
-    let resolvedName = c.options.account
-    if (!resolvedName) {
-      const existing = await createKeychain().list()
-      if (existing.length === 0) resolvedName = 'main'
-      else {
-        const input = await prompt('Account name')
+  .command('create', {
+    description: 'Create new account',
+    options: z.object({
+      account: z.string().optional().describe('Account name (env: MPPX_ACCOUNT)'),
+      rpcUrl: z.string().optional().describe('RPC endpoint (env: MPPX_RPC_URL)'),
+    }),
+    alias: { account: 'a', rpcUrl: 'r' },
+    async run(c) {
+      let resolvedName = c.options.account
+      if (!resolvedName) {
+        const existing = await createKeychain().list()
+        if (existing.length === 0) resolvedName = 'main'
+        else {
+          const input = await prompt('Account name')
+          if (!input) return
+          resolvedName = input
+        }
+      }
+      let keychain = createKeychain(resolvedName)
+      while (await keychain.get()) {
+        process.stderr.write(`${pc.dim(`Account "${resolvedName}" already exists.`)}\n\n`)
+        const input = await prompt('Enter different name')
         if (!input) return
         resolvedName = input
+        keychain = createKeychain(resolvedName)
       }
-    }
-    let keychain = createKeychain(resolvedName)
-    while (await keychain.get()) {
-      process.stderr.write(`${pc.dim(`Account "${resolvedName}" already exists.`)}\n\n`)
-      const input = await prompt('Enter different name')
-      if (!input) return
-      resolvedName = input
-      keychain = createKeychain(resolvedName)
-    }
-    const privateKey = generatePrivateKey()
-    const acct = privateKeyToAccount(privateKey)
-    await keychain.set(privateKey)
-    const accounts = await createKeychain().list()
-    if (accounts.length === 1) createDefaultStore().set(resolvedName)
-    console.log(`Account "${resolvedName}" saved to keychain.`)
-    const explorerUrl = tempoMainnet.blockExplorers?.default?.url
-    const addrDisplay = explorerUrl
-      ? pc.link(`${explorerUrl}/address/${acct.address}`, acct.address)
-      : acct.address
-    console.log(pc.dim(`Address ${addrDisplay}`))
-    resolveChain(c.options)
-      .then((chain) => createClient({ chain, transport: http(c.options.rpcUrl) }))
-      .then((client) =>
-        import('viem/tempo').then(({ Actions }) =>
-          Actions.faucet.fund(client, { account: acct }).catch(() => {}),
-        ),
-      )
-  },
-})
-
-account.command('default', {
-  description: 'Set default account',
-  options: z.object({
-    account: z.string().describe('Account name'),
-  }),
-  alias: { account: 'a' },
-  async run(c) {
-    const accountName = c.options.account
-    if (isTempoAccount(accountName)) {
-      const tempoEntry = resolveTempoAccount(accountName)
-      if (!tempoEntry) {
-        return c.error({
-          code: 'ACCOUNT_NOT_FOUND',
-          message: `Account "${accountName}" not found. Is Tempo wallet configured?`,
-          exitCode: 69,
-        })
-      }
-      createDefaultStore().set(accountName)
-      console.log(`Default account set to "${accountName}"`)
-      return
-    }
-    const key = await createKeychain(accountName).get()
-    if (!key) {
-      return c.error({
-        code: 'ACCOUNT_NOT_FOUND',
-        message: `Account "${accountName}" not found.`,
-        exitCode: 69,
-      })
-    }
-    createDefaultStore().set(accountName)
-    console.log(`Default account set to "${accountName}"`)
-  },
-})
-
-account.command('delete', {
-  description: 'Delete account',
-  options: z.object({
-    account: z.string().describe('Account name'),
-    yes: z.boolean().optional().describe('DANGER!! Skip confirmation prompts'),
-  }),
-  alias: { account: 'a' },
-  async run(c) {
-    const keychain = createKeychain(c.options.account)
-    const key = await keychain.get()
-    if (!key) {
-      return c.error({
-        code: 'ACCOUNT_NOT_FOUND',
-        message: `Account "${c.options.account}" not found.`,
-        exitCode: 69,
-      })
-    }
-    const acct = privateKeyToAccount(key as `0x${string}`)
-    const balanceLines = await fetchBalanceLines(acct.address, { includeTestnet: false })
-    if (!c.options.yes) {
+      const privateKey = generatePrivateKey()
+      const acct = privateKeyToAccount(privateKey)
+      await keychain.set(privateKey)
+      const accounts = await createKeychain().list()
+      if (accounts.length === 1) createDefaultStore().set(resolvedName)
+      console.log(`Account "${resolvedName}" saved to keychain.`)
       const explorerUrl = tempoMainnet.blockExplorers?.default?.url
       const addrDisplay = explorerUrl
         ? pc.link(`${explorerUrl}/address/${acct.address}`, acct.address)
         : acct.address
-      process.stderr.write(pc.dim(`Delete account "${c.options.account}"\n`))
-      process.stderr.write(pc.dim(`  Address  ${addrDisplay}\n`))
-      for (let i = 0; i < balanceLines.length; i++)
-        process.stderr.write(pc.dim(`  ${i === 0 ? 'Balance' : '       '}  ${balanceLines[i]}\n`))
-      process.stderr.write(pc.dim('This action cannot be undone\n\n'))
-      const confirmed = await confirm('Confirm delete?')
-      if (!confirmed) {
-        console.log('Canceled')
+      console.log(pc.dim(`Address ${addrDisplay}`))
+      resolveChain(c.options)
+        .then((chain) => createClient({ chain, transport: http(c.options.rpcUrl) }))
+        .then((client) =>
+          import('viem/tempo').then(({ Actions }) =>
+            Actions.faucet.fund(client, { account: acct }).catch(() => {}),
+          ),
+        )
+    },
+  })
+  .command('default', {
+    description: 'Set default account',
+    options: z.object({
+      account: z.string().describe('Account name'),
+    }),
+    alias: { account: 'a' },
+    async run(c) {
+      const accountName = c.options.account
+      if (isTempoAccount(accountName)) {
+        const tempoEntry = resolveTempoAccount(accountName)
+        if (!tempoEntry) {
+          return c.error({
+            code: 'ACCOUNT_NOT_FOUND',
+            message: `Account "${accountName}" not found. Is Tempo wallet configured?`,
+            exitCode: 69,
+          })
+        }
+        createDefaultStore().set(accountName)
+        console.log(`Default account set to "${accountName}"`)
         return
       }
-    }
-    await keychain.delete()
-    const currentDefault = createDefaultStore().get()
-    if (currentDefault === c.options.account) {
-      const remaining = await createKeychain().list()
-      if (remaining.length > 0) {
-        createDefaultStore().set(remaining[0]!)
-        console.log(`Default account set to "${remaining[0]}"`)
-      } else {
-        createDefaultStore().clear()
-      }
-    }
-    console.log(`Account "${c.options.account}" deleted`)
-  },
-})
-
-account.command('fund', {
-  description: 'Fund account with testnet tokens',
-  options: z.object({
-    account: z.string().optional().describe('Account name (env: MPPX_ACCOUNT)'),
-    rpcUrl: z.string().optional().describe('RPC endpoint (env: MPPX_RPC_URL)'),
-  }),
-  alias: { account: 'a', rpcUrl: 'r' },
-  async run(c) {
-    const accountName = resolveAccountName(c.options.account)
-    const keychain = createKeychain(accountName)
-    const key = await keychain.get()
-    if (!key) {
-      if (c.options.account)
+      const key = await createKeychain(accountName).get()
+      if (!key) {
         return c.error({
           code: 'ACCOUNT_NOT_FOUND',
           message: `Account "${accountName}" not found.`,
           exitCode: 69,
         })
-      else return c.error({ code: 'ACCOUNT_NOT_FOUND', message: 'No account found.', exitCode: 69 })
-    }
-    const acct = privateKeyToAccount(key as `0x${string}`)
-    const chain = await resolveChain(c.options)
-    const client = createClient({ chain, transport: http(c.options.rpcUrl) })
-    console.log(`Funding "${accountName}" on ${chainName(chain)}`)
-    try {
-      const { Actions } = await import('viem/tempo')
-      const hashes = await Actions.faucet.fund(client, { account: acct })
-      const explorerUrl = chain.blockExplorers?.default?.url
-      for (const hash of hashes) {
-        const label = explorerUrl ? pc.link(`${explorerUrl}/tx/${hash}`, pc.gray(hash)) : hash
-        console.log(`  ${label}`)
       }
-      const { waitForTransactionReceipt } = await import('viem/actions')
-      await Promise.all(hashes.map((hash) => waitForTransactionReceipt(client, { hash })))
-      console.log('Funded successfully')
-    } catch (err) {
-      console.error('Funding failed:', err instanceof Error ? err.message : err)
-    }
-  },
-})
-
-account.command('list', {
-  description: 'List all accounts',
-  async run() {
-    const currentDefault = createDefaultStore().get()
-    const accounts = (await createKeychain().list()).sort()
-    const resolved: { name: string; address: string; source?: string }[] = []
-    for (const accountName of accounts) {
-      const key = await createKeychain(accountName).get()
-      if (!key) continue
-      resolved.push({
-        name: accountName,
-        address: privateKeyToAccount(key as `0x${string}`).address,
-      })
-    }
-    const tempoEntries = readTempoKeystore()
-    for (let i = 0; i < tempoEntries.length; i++) {
-      const entry = tempoEntries[i]!
-      const tempoName = i === 0 ? 'tempo:default' : `tempo:${i}`
-      if (entry.wallet_address)
-        resolved.push({ name: tempoName, address: entry.wallet_address, source: 'tempo wallet' })
-    }
-    if (resolved.length === 0) {
-      console.log(`No accounts found.`)
-      return
-    }
-    const explorerUrl = tempoMainnet.blockExplorers?.default?.url
-    const maxWidth = Math.max(
-      ...resolved.map((e) => e.name.length + (e.name === currentDefault ? 1 : 0)),
-    )
-    for (const entry of resolved) {
-      const isDefault = entry.name === currentDefault
-      const label = isDefault ? `${entry.name}${pc.dim('*')}` : entry.name
-      const width = entry.name.length + (isDefault ? 1 : 0)
-      const addrDisplay = explorerUrl
-        ? pc.link(`${explorerUrl}/address/${entry.address}`, entry.address)
-        : entry.address
-      const sourceLabel = entry.source ? `  ${pc.dim(`(${entry.source})`)}` : ''
-      console.log(`${label}${' '.repeat(maxWidth - width + 2)}${pc.dim(addrDisplay)}${sourceLabel}`)
-    }
-  },
-})
-
-account.command('view', {
-  description: 'View account address',
-  options: z.object({
-    account: z.string().optional().describe('Account name (env: MPPX_ACCOUNT)'),
-    rpcUrl: z.string().optional().describe('RPC endpoint (env: MPPX_RPC_URL)'),
-  }),
-  alias: { account: 'a', rpcUrl: 'r' },
-  async run(c) {
-    const accountName = resolveAccountName(c.options.account)
-
-    if (isTempoAccount(accountName)) {
-      const tempoEntry = resolveTempoAccount(accountName)
-      if (!tempoEntry) {
+      createDefaultStore().set(accountName)
+      console.log(`Default account set to "${accountName}"`)
+    },
+  })
+  .command('delete', {
+    description: 'Delete account',
+    options: z.object({
+      account: z.string().describe('Account name'),
+      yes: z.boolean().optional().describe('DANGER!! Skip confirmation prompts'),
+    }),
+    alias: { account: 'a' },
+    async run(c) {
+      const keychain = createKeychain(c.options.account)
+      const key = await keychain.get()
+      if (!key) {
         return c.error({
           code: 'ACCOUNT_NOT_FOUND',
-          message: `Account "${accountName}" not found. Is Tempo wallet configured?`,
+          message: `Account "${c.options.account}" not found.`,
           exitCode: 69,
         })
       }
-      const address = tempoEntry.wallet_address as Address
+      const acct = privateKeyToAccount(key as `0x${string}`)
+      const balanceLines = await fetchBalanceLines(acct.address, { includeTestnet: false })
+      if (!c.options.yes) {
+        const explorerUrl = tempoMainnet.blockExplorers?.default?.url
+        const addrDisplay = explorerUrl
+          ? pc.link(`${explorerUrl}/address/${acct.address}`, acct.address)
+          : acct.address
+        process.stderr.write(pc.dim(`Delete account "${c.options.account}"\n`))
+        process.stderr.write(pc.dim(`  Address  ${addrDisplay}\n`))
+        for (let i = 0; i < balanceLines.length; i++)
+          process.stderr.write(pc.dim(`  ${i === 0 ? 'Balance' : '       '}  ${balanceLines[i]}\n`))
+        process.stderr.write(pc.dim('This action cannot be undone\n\n'))
+        const confirmed = await confirm('Confirm delete?')
+        if (!confirmed) {
+          console.log('Canceled')
+          return
+        }
+      }
+      await keychain.delete()
+      const currentDefault = createDefaultStore().get()
+      if (currentDefault === c.options.account) {
+        const remaining = await createKeychain().list()
+        if (remaining.length > 0) {
+          createDefaultStore().set(remaining[0]!)
+          console.log(`Default account set to "${remaining[0]}"`)
+        } else {
+          createDefaultStore().clear()
+        }
+      }
+      console.log(`Account "${c.options.account}" deleted`)
+    },
+  })
+  .command('fund', {
+    description: 'Fund account with testnet tokens',
+    options: z.object({
+      account: z.string().optional().describe('Account name (env: MPPX_ACCOUNT)'),
+      rpcUrl: z.string().optional().describe('RPC endpoint (env: MPPX_RPC_URL)'),
+    }),
+    alias: { account: 'a', rpcUrl: 'r' },
+    async run(c) {
+      const accountName = resolveAccountName(c.options.account)
+      const keychain = createKeychain(accountName)
+      const key = await keychain.get()
+      if (!key) {
+        if (c.options.account)
+          return c.error({
+            code: 'ACCOUNT_NOT_FOUND',
+            message: `Account "${accountName}" not found.`,
+            exitCode: 69,
+          })
+        else
+          return c.error({ code: 'ACCOUNT_NOT_FOUND', message: 'No account found.', exitCode: 69 })
+      }
+      const acct = privateKeyToAccount(key as `0x${string}`)
+      const chain = await resolveChain(c.options)
+      const client = createClient({ chain, transport: http(c.options.rpcUrl) })
+      console.log(`Funding "${accountName}" on ${chainName(chain)}`)
+      try {
+        const { Actions } = await import('viem/tempo')
+        const hashes = await Actions.faucet.fund(client, { account: acct })
+        const explorerUrl = chain.blockExplorers?.default?.url
+        for (const hash of hashes) {
+          const label = explorerUrl ? pc.link(`${explorerUrl}/tx/${hash}`, pc.gray(hash)) : hash
+          console.log(`  ${label}`)
+        }
+        const { waitForTransactionReceipt } = await import('viem/actions')
+        await Promise.all(hashes.map((hash) => waitForTransactionReceipt(client, { hash })))
+        console.log('Funded successfully')
+      } catch (err) {
+        console.error('Funding failed:', err instanceof Error ? err.message : err)
+      }
+    },
+  })
+  .command('list', {
+    description: 'List all accounts',
+    async run() {
+      const currentDefault = createDefaultStore().get()
+      const accounts = (await createKeychain().list()).sort()
+      const resolved: { name: string; address: string; source?: string }[] = []
+      for (const accountName of accounts) {
+        const key = await createKeychain(accountName).get()
+        if (!key) continue
+        resolved.push({
+          name: accountName,
+          address: privateKeyToAccount(key as `0x${string}`).address,
+        })
+      }
+      const tempoEntries = readTempoKeystore()
+      for (let i = 0; i < tempoEntries.length; i++) {
+        const entry = tempoEntries[i]!
+        const tempoName = i === 0 ? 'tempo:default' : `tempo:${i}`
+        if (entry.wallet_address)
+          resolved.push({ name: tempoName, address: entry.wallet_address, source: 'tempo wallet' })
+      }
+      if (resolved.length === 0) {
+        console.log(`No accounts found.`)
+        return
+      }
+      const explorerUrl = tempoMainnet.blockExplorers?.default?.url
+      const maxWidth = Math.max(
+        ...resolved.map((e) => e.name.length + (e.name === currentDefault ? 1 : 0)),
+      )
+      for (const entry of resolved) {
+        const isDefault = entry.name === currentDefault
+        const label = isDefault ? `${entry.name}${pc.dim('*')}` : entry.name
+        const width = entry.name.length + (isDefault ? 1 : 0)
+        const addrDisplay = explorerUrl
+          ? pc.link(`${explorerUrl}/address/${entry.address}`, entry.address)
+          : entry.address
+        const sourceLabel = entry.source ? `  ${pc.dim(`(${entry.source})`)}` : ''
+        console.log(
+          `${label}${' '.repeat(maxWidth - width + 2)}${pc.dim(addrDisplay)}${sourceLabel}`,
+        )
+      }
+    },
+  })
+  .command('view', {
+    description: 'View account address',
+    options: z.object({
+      account: z.string().optional().describe('Account name (env: MPPX_ACCOUNT)'),
+      rpcUrl: z.string().optional().describe('RPC endpoint (env: MPPX_RPC_URL)'),
+    }),
+    alias: { account: 'a', rpcUrl: 'r' },
+    async run(c) {
+      const accountName = resolveAccountName(c.options.account)
+
+      if (isTempoAccount(accountName)) {
+        const tempoEntry = resolveTempoAccount(accountName)
+        if (!tempoEntry) {
+          return c.error({
+            code: 'ACCOUNT_NOT_FOUND',
+            message: `Account "${accountName}" not found. Is Tempo wallet configured?`,
+            exitCode: 69,
+          })
+        }
+        const address = tempoEntry.wallet_address as Address
+        const rpcUrl = c.options.rpcUrl ?? (process.env.MPPX_RPC_URL || undefined)
+        const chain = rpcUrl ? await resolveChain({ rpcUrl }) : tempoMainnet
+        const explorerUrl = chain.blockExplorers?.default?.url
+        const addrDisplay = explorerUrl
+          ? pc.link(`${explorerUrl}/address/${address}`, address)
+          : address
+        console.log(`${pc.dim('Address')}  ${addrDisplay}`)
+
+        const balanceLines = await fetchBalanceLines(
+          address,
+          chain && rpcUrl ? { chain, rpcUrl } : undefined,
+        )
+        for (let i = 0; i < balanceLines.length; i++)
+          console.log(`${pc.dim(i === 0 ? 'Balance' : '       ')}  ${balanceLines[i]}`)
+
+        console.log(`${pc.dim('Name')}     ${accountName}`)
+        console.log(`${pc.dim('Type')}     ${tempoEntry.wallet_type} ${pc.dim('(tempo wallet)')}`)
+        return
+      }
+
+      const keychain = createKeychain(accountName)
+      const key = await keychain.get()
+      if (!key) {
+        if (c.options.account)
+          return c.error({
+            code: 'ACCOUNT_NOT_FOUND',
+            message: `Account "${accountName}" not found.`,
+            exitCode: 69,
+          })
+        else
+          return c.error({ code: 'ACCOUNT_NOT_FOUND', message: 'No account found.', exitCode: 69 })
+      }
+      const acct = privateKeyToAccount(key as `0x${string}`)
       const rpcUrl = c.options.rpcUrl ?? (process.env.MPPX_RPC_URL || undefined)
       const chain = rpcUrl ? await resolveChain({ rpcUrl }) : tempoMainnet
       const explorerUrl = chain.blockExplorers?.default?.url
       const addrDisplay = explorerUrl
-        ? pc.link(`${explorerUrl}/address/${address}`, address)
-        : address
+        ? pc.link(`${explorerUrl}/address/${acct.address}`, acct.address)
+        : acct.address
       console.log(`${pc.dim('Address')}  ${addrDisplay}`)
 
       const balanceLines = await fetchBalanceLines(
-        address,
+        acct.address,
         chain && rpcUrl ? { chain, rpcUrl } : undefined,
       )
       for (let i = 0; i < balanceLines.length; i++)
         console.log(`${pc.dim(i === 0 ? 'Balance' : '       ')}  ${balanceLines[i]}`)
 
       console.log(`${pc.dim('Name')}     ${accountName}`)
-      console.log(`${pc.dim('Type')}     ${tempoEntry.wallet_type} ${pc.dim('(tempo wallet)')}`)
-      return
-    }
-
-    const keychain = createKeychain(accountName)
-    const key = await keychain.get()
-    if (!key) {
-      if (c.options.account)
-        return c.error({
-          code: 'ACCOUNT_NOT_FOUND',
-          message: `Account "${accountName}" not found.`,
-          exitCode: 69,
-        })
-      else return c.error({ code: 'ACCOUNT_NOT_FOUND', message: 'No account found.', exitCode: 69 })
-    }
-    const acct = privateKeyToAccount(key as `0x${string}`)
-    const rpcUrl = c.options.rpcUrl ?? (process.env.MPPX_RPC_URL || undefined)
-    const chain = rpcUrl ? await resolveChain({ rpcUrl }) : tempoMainnet
-    const explorerUrl = chain.blockExplorers?.default?.url
-    const addrDisplay = explorerUrl
-      ? pc.link(`${explorerUrl}/address/${acct.address}`, acct.address)
-      : acct.address
-    console.log(`${pc.dim('Address')}  ${addrDisplay}`)
-
-    const balanceLines = await fetchBalanceLines(
-      acct.address,
-      chain && rpcUrl ? { chain, rpcUrl } : undefined,
-    )
-    for (let i = 0; i < balanceLines.length; i++)
-      console.log(`${pc.dim(i === 0 ? 'Balance' : '       ')}  ${balanceLines[i]}`)
-
-    console.log(`${pc.dim('Name')}     ${accountName}`)
-  },
-})
-
-cli.command(account)
+    },
+  })
 
 const sign = Cli.create('sign', {
   description: 'Sign a payment challenge and output the Authorization header',
@@ -852,7 +855,8 @@ const sign = Cli.create('sign', {
     rpcUrl: 'r',
   },
   async run(c) {
-    const raw = c.options.challenge || (process.stdin.isTTY === false ? await readStdin() : undefined)
+    const raw =
+      c.options.challenge || (process.stdin.isTTY === false ? await readStdin() : undefined)
     if (!raw) {
       return c.error({
         code: 'NO_CHALLENGE',
@@ -922,8 +926,6 @@ const sign = Cli.create('sign', {
   },
 })
 
-cli.command(sign)
-
 const init = Cli.create('init', {
   description: 'Create an mppx.config.ts file in the current directory',
   options: z.object({
@@ -969,181 +971,8 @@ export default defineConfig({
   },
 })
 
+cli.command(account)
 cli.command(init)
+cli.command(sign)
 
 export default cli
-
-/////////////////////////////////////////////////////////////////////////////////////////////////
-
-function parseMethodOpts(raw: string | string[] | undefined): Record<string, string> {
-  if (!raw) return {}
-  const list = Array.isArray(raw) ? raw : [raw]
-  const result: Record<string, string> = {}
-  for (const item of list) {
-    const idx = item.indexOf('=')
-    if (idx === -1) {
-      throw new Error(`Invalid method option format: ${item} (expected key=value)`)
-    }
-    result[item.slice(0, idx)] = item.slice(idx + 1)
-  }
-  return result
-}
-
-function isTempoAccount(accountName: string): boolean {
-  return accountName.startsWith('tempo:')
-}
-
-function prompt(message: string): Promise<string | undefined> {
-  const reader = readline.createInterface({ input: process.stdin, output: process.stderr })
-  return new Promise((resolve) => {
-    reader.on('close', () => resolve(undefined))
-    reader.question(`${pc.bold(`▸ ${message}:`)} `, (answer) => {
-      reader.close()
-      const value = answer.trim()
-      resolve(value || undefined)
-    })
-  })
-}
-
-function confirm(prompt: string, defaultYes = false): Promise<boolean> {
-  const reader = readline.createInterface({ input: process.stdin, output: process.stderr })
-  return new Promise((resolve) => {
-    const hint = defaultYes ? '(Y/n)' : '(y/N)'
-    reader.question(`${pc.bold(`▸ ${prompt}`)} ${pc.dim(hint)} `, (answer) => {
-      reader.close()
-      const trimmed = answer.trim().toLowerCase()
-      resolve(trimmed === '' ? defaultYes : trimmed === 'y')
-    })
-  })
-}
-
-async function resolveChain(opts: { rpcUrl?: string | undefined } = {}): Promise<Chain> {
-  if (!opts.rpcUrl) return tempoModerato
-  const { getChainId } = await import('viem/actions')
-  const chainId = await getChainId(createClient({ transport: http(opts.rpcUrl) }))
-  const allExports = Object.values(await import('viem/chains')) as unknown[]
-  const candidates = allExports.filter(
-    (c): c is Chain =>
-      typeof c === 'object' && c !== null && 'id' in c && (c as Chain).id === chainId,
-  )
-  const found = candidates.find((c) => 'serializers' in c && c.serializers) ?? candidates[0]
-  if (!found) throw new Error(`Unknown chain ID ${chainId} from RPC ${opts.rpcUrl}`)
-  return found
-}
-
-function chainName(chain: { id: number; name: string }) {
-  const chainNames: Record<number, string> = {
-    [tempoMainnet.id]: 'mainnet',
-    [tempoModerato.id]: 'testnet',
-  }
-  return chainNames[chain.id] ?? chain.name
-}
-
-const pathUsd = '0x20c0000000000000000000000000000000000000' as Address
-const usdc = '0x20C000000000000000000000b9537d11c60E8b50' as Address
-const mainnetTokens = [pathUsd, usdc] as const
-const testnetTokens = [
-  '0x20c0000000000000000000000000000000000000',
-  '0x20c0000000000000000000000000000000000001',
-  '0x20c0000000000000000000000000000000000002',
-  '0x20c0000000000000000000000000000000000003',
-] as const
-
-function fmtBalance(
-  b: bigint,
-  symbol: string,
-  decimals = 6,
-  opts?: { explorerUrl?: string | undefined; token?: string | undefined },
-) {
-  const value = Number(b) / 10 ** decimals
-  const [int, dec] = value.toString().split('.')
-  const formatted = int!.replace(/\B(?=(\d{3})+(?!\d))/g, '_')
-  const sym =
-    opts?.explorerUrl && opts.token
-      ? pc.dim(pc.link(`${opts.explorerUrl}/token/${opts.token}`, symbol, true))
-      : pc.dim(symbol)
-  return `${dec ? `${formatted}.${dec}` : formatted} ${sym}`
-}
-
-function isTestnet(chain: Chain) {
-  return chain.id !== tempoMainnet.id
-}
-
-async function fetchTokenInfo(
-  client: ReturnType<typeof createClient>,
-  token: Address,
-  account: Address,
-) {
-  const { Actions } = await import('viem/tempo')
-  const [balance, metadata] = await Promise.all([
-    Actions.token.getBalance(client, { account, token }).catch(() => 0n),
-    Actions.token.getMetadata(client, { token }).catch(() => ({ symbol: token as string })),
-  ])
-  const knownSymbols: Record<string, string> = {
-    [pathUsd]: 'PathUSD',
-    [usdc]: 'USDC',
-  }
-  const symbol = knownSymbols[token] ?? metadata.symbol
-  const decimals = 'decimals' in metadata ? metadata.decimals : 6
-  return { balance, symbol, decimals, token }
-}
-
-async function fetchBalanceLines(
-  address: Address,
-  opts?: { chain?: Chain; rpcUrl?: string; includeTestnet?: boolean },
-): Promise<string[]> {
-  if (opts?.chain) {
-    const client = createClient({ chain: opts.chain, transport: http(opts.rpcUrl) })
-    const explorerUrl = opts.chain.blockExplorers?.default?.url
-    const label = pc.dim(`(${chainName(opts.chain)})`)
-    if (isTestnet(opts.chain)) {
-      const results = await Promise.all(
-        testnetTokens.map((token) => fetchTokenInfo(client, token, address)),
-      )
-      return results
-        .filter((t) => t.balance > 0n)
-        .map(
-          (t) =>
-            `${fmtBalance(t.balance, t.symbol, t.decimals, { explorerUrl, token: t.token })} ${label}`,
-        )
-    }
-    const results = await Promise.all(
-      mainnetTokens.map((token) => fetchTokenInfo(client, token, address)),
-    )
-    return results.map(
-      (t) =>
-        `${fmtBalance(t.balance, t.symbol, t.decimals, { explorerUrl, token: t.token })} ${label}`,
-    )
-  }
-
-  const mainnetClient = createClient({
-    chain: tempoMainnet,
-    transport: http(process.env.MPPX_RPC_URL || undefined),
-  })
-  const mainnetExplorerUrl = tempoMainnet.blockExplorers?.default?.url
-  const mainnetResults = await Promise.all(
-    mainnetTokens.map((token) => fetchTokenInfo(mainnetClient, token, address)),
-  )
-  const lines = mainnetResults.map((t) =>
-    fmtBalance(t.balance, t.symbol, t.decimals, {
-      explorerUrl: mainnetExplorerUrl,
-      token: t.token,
-    }),
-  )
-
-  if (opts?.includeTestnet !== false) {
-    const testnetClient = createClient({ chain: tempoModerato, transport: http() })
-    const testnetExplorerUrl = tempoModerato.blockExplorers?.default?.url
-    const testnetResults = await Promise.all(
-      testnetTokens.map((token) => fetchTokenInfo(testnetClient, token, address)),
-    )
-    for (const t of testnetResults) {
-      if (t.balance > 0n)
-        lines.push(
-          `${fmtBalance(t.balance, t.symbol, t.decimals, { explorerUrl: testnetExplorerUrl, token: t.token })} ${pc.dim('(testnet)')}`,
-        )
-    }
-  }
-
-  return lines
-}
