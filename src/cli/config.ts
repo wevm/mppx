@@ -4,6 +4,7 @@ import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
 import type * as Mppx from '../client/Mppx.js'
+import type { CliHandler } from './Handler.js'
 
 /**
  * Define an mppx configuration file
@@ -16,6 +17,7 @@ import type * as Mppx from '../client/Mppx.js'
  *
  * export default defineConfig({
  *   methods: [tempo({ account })],
+ *   handlers: [tempoHandler()],
  * })
  * ```
  */
@@ -24,7 +26,9 @@ export function defineConfig(config: defineConfig.Config): defineConfig.Config {
 }
 
 export declare namespace defineConfig {
-  type Config = Pick<Mppx.create.Config, 'methods'>
+  type Config = Pick<Mppx.create.Config, 'methods'> & {
+    handlers?: CliHandler[] | undefined
+  }
 }
 
 export type Config = defineConfig.Config

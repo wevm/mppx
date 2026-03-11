@@ -699,7 +699,7 @@ describe('sign', () => {
     expect(output.trim()).toMatch(/^Payment\s+\S+/)
   })
 
-  test('happy path: --json outputs authorization and from', { timeout: 120_000 }, async () => {
+  test('happy path: --json outputs authorization', { timeout: 120_000 }, async () => {
     const { output, stderr, exitCode } = await serve(
       ['sign', '--challenge', validChallenge, '--rpc-url', rpcUrl, '--json'],
       { env: { MPPX_PRIVATE_KEY: testPrivateKey } },
@@ -708,6 +708,5 @@ describe('sign', () => {
     expect(exitCode).toBeUndefined()
     const parsed = JSON.parse(output.trim())
     expect(parsed.authorization).toMatch(/^Payment\s+\S+/)
-    expect(parsed.from).toMatch(/^0x[0-9a-fA-F]{40}$/)
   })
 })

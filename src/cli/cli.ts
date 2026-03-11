@@ -1,25 +1,22 @@
-import * as child from 'node:child_process'
 import * as fs from 'node:fs'
 import { createRequire } from 'node:module'
-import * as os from 'node:os'
 import * as path from 'node:path'
 import * as readline from 'node:readline'
-import { Cli, z } from 'incur'
+import { Cli, Errors, z } from 'incur'
 import { Base64 } from 'ox'
 import type { Chain } from 'viem'
 import { type Address, createClient, http } from 'viem'
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts'
 import { tempo as tempoMainnet, tempoModerato } from 'viem/chains'
 import * as Challenge from '../Challenge.js'
-import * as Credential from '../Credential.js'
 import * as Mppx from '../client/Mppx.js'
 import type * as Method from '../Method.js'
-import { stripe } from '../stripe/client/index.js'
-import { tempo } from '../tempo/client/index.js'
-import type { SessionCredentialPayload } from '../tempo/session/Types.js'
-import { signVoucher } from '../tempo/session/Voucher.js'
+import { pc } from './_pc.js'
 import { createDefaultStore, createKeychain, resolveAccountName } from './account.js'
 import { loadConfig } from './config.js'
+import type { CliHandler } from './Handler.js'
+import { stripe as stripeHandler, tempo as tempoHandler } from './handlers/index.js'
+import { readTempoKeystore, resolveTempoAccount } from './handlers/tempo.js'
 
 function readStdin(): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -35,6 +32,27 @@ function readStdin(): Promise<string> {
 
 const require = createRequire(import.meta.url)
 const { name, version } = require('../../package.json') as { name: string; version: string }
+
+const builtinHandlers: CliHandler[] = [tempoHandler(), stripeHandler()]
+
+function resolveHandler(
+  challenge: Challenge.Challenge,
+  config?: { handlers?: CliHandler[] | undefined; methods?: any },
+): { handler?: CliHandler | undefined; method?: Method.AnyClient | undefined } {
+  const configHandler = config?.handlers?.find((h) => h.method === challenge.method)
+  if (configHandler) return { handler: configHandler }
+
+  const builtin = builtinHandlers.find((h) => h.method === challenge.method)
+  if (builtin) return { handler: builtin }
+
+  const configMethods = config?.methods?.flat() as Method.AnyClient[] | undefined
+  const matched = configMethods?.find(
+    (m) => m.name === challenge.method && m.intent === challenge.intent,
+  )
+  if (matched) return { method: matched }
+
+  return {}
+}
 
 const cli = Cli.create('mppx', {
   version,
@@ -100,22 +118,20 @@ const cli = Cli.create('mppx', {
       description: 'POST JSON with payment',
     },
   ],
-  async run({ args, options, error }) {
-    const methodOpts = parseMethodOpts(options.methodOpt)
+  async run(c) {
+    const methodOpts = parseMethodOpts(c.options.methodOpt)
 
-    const silent = options.silent ?? false
+    const silent = c.options.silent ?? false
     const info = silent ? (_msg: string) => {} : (msg: string) => process.stderr.write(msg)
-    let confirmEnabled = options.confirm ?? false
+    let confirmEnabled = c.options.confirm ?? false
     if (silent) confirmEnabled = false
 
-    const accountName = resolveAccountName(options.account)
-
     const headers: Record<string, string> = {}
-    if (options.header) {
-      for (const header of options.header) {
+    if (c.options.header) {
+      for (const header of c.options.header) {
         const index = header.indexOf(':')
         if (index === -1) {
-          return error({
+          return c.error({
             code: 'INVALID_HEADER',
             message: `Invalid header format: ${header}`,
             exitCode: 2,
@@ -124,9 +140,9 @@ const cli = Cli.create('mppx', {
         headers[header.slice(0, index).trim()] = header.slice(index + 1).trim()
       }
     }
-    headers['User-Agent'] = options.userAgent ?? `${name}/${version}`
+    headers['User-Agent'] = c.options.userAgent ?? `${name}/${version}`
 
-    const rawUrl = args.url
+    const rawUrl = c.args.url
     const url = (() => {
       const hasProtocol = /^https?:\/\//.test(rawUrl)
       const isLocal = /^(localhost|.*\.localhost|127\.0\.0\.1|\[::1\])(:\d+)?/.test(rawUrl)
@@ -134,7 +150,7 @@ const cli = Cli.create('mppx', {
     })()
     const { hostname } = new URL(url)
     if (
-      options.insecure ||
+      c.options.insecure ||
       hostname === 'localhost' ||
       hostname.endsWith('.localhost') ||
       hostname.endsWith('.local')
@@ -154,19 +170,19 @@ const cli = Cli.create('mppx', {
     }
 
     try {
-      const fetchInit: RequestInit = { redirect: options.location ? 'follow' : 'manual' }
-      if (options.jsonBody) {
-        fetchInit.body = options.jsonBody
+      const fetchInit: RequestInit = { redirect: c.options.location ? 'follow' : 'manual' }
+      if (c.options.jsonBody) {
+        fetchInit.body = c.options.jsonBody
         headers['Content-Type'] ??= 'application/json'
         headers.Accept ??= 'application/json'
-      } else if (options.data) {
-        fetchInit.body = options.data
+      } else if (c.options.data) {
+        fetchInit.body = c.options.data
       }
-      if (options.method) fetchInit.method = options.method.toUpperCase()
+      if (c.options.method) fetchInit.method = c.options.method.toUpperCase()
       else if (fetchInit.body) fetchInit.method = 'POST'
       if (Object.keys(headers).length > 0) fetchInit.headers = headers
 
-      const verbose = options.verbose
+      const verbose = c.options.verbose
 
       const printRequestHeaders = (reqUrl: string, init: RequestInit) => {
         if (verbose < 2) return
@@ -180,7 +196,7 @@ const cli = Cli.create('mppx', {
       }
 
       const printResponseHeaders = (res: Response) => {
-        if (!options.include && verbose < 2) return
+        if (!c.options.include && verbose < 2) return
         if (silent) return
         const status = `HTTP/1.1 ${res.status} ${res.statusText}`
         const out = verbose >= 2 ? process.stderr : process.stdout
@@ -193,8 +209,8 @@ const cli = Cli.create('mppx', {
       printRequestHeaders(url, fetchInit)
       const challengeResponse = await globalThis.fetch(fetchUrl, fetchInit)
       if (challengeResponse.status !== 402) {
-        if (options.fail && challengeResponse.status >= 400)
-          return error({
+        if (c.options.fail && challengeResponse.status >= 400)
+          return c.error({
             code: 'HTTP_ERROR',
             message: `HTTP error ${challengeResponse.status}`,
             exitCode: 22,
@@ -212,89 +228,27 @@ const cli = Cli.create('mppx', {
         info(`${pc.dim('Using config')} ${pc.blue(path.relative(process.cwd(), loaded.path))}\n`)
 
       const challengeRequest = challenge.request as Record<string, unknown>
-      const currency = challengeRequest.currency as string | undefined
       const shownKeys = new Set<string>()
 
-      let tokenSymbol =
-        challenge.method === 'stripe' ? (currency?.toUpperCase() ?? '') : (currency ?? '')
-      let tokenDecimals =
-        (challengeRequest.decimals as number | undefined) ?? (challenge.method === 'stripe' ? 2 : 6)
-      let explorerUrl: string | undefined
+      const { handler, method: configMethod } = resolveHandler(challenge, loaded?.config)
 
-      // Tempo-specific setup (private key, viem account/client, token info)
-      let account: ReturnType<typeof privateKeyToAccount> | undefined
-      let client: ReturnType<typeof createClient> | undefined
-      let useTempoCliSign = false
-      if (challenge.method === 'tempo') {
-        const privateKey =
-          process.env.MPPX_PRIVATE_KEY?.trim() ||
-          (isTempoAccount(accountName) ? undefined : await createKeychain(accountName).get())
-        if (!privateKey && isTempoAccount(accountName) && hasTempoCliSync()) {
-          useTempoCliSign = true
-          // Resolve wallet address from keys.toml for display/balance
-          const tempoEntry = resolveTempoAccount(accountName)
-          if (tempoEntry) {
-            const rpcUrl = options.rpcUrl ?? process.env.RPC_URL
-            client = createClient({
-              chain: await resolveChain({ ...options, rpcUrl }),
-              transport: http(rpcUrl),
-            })
-            explorerUrl = client.chain?.blockExplorers?.default?.url
-            const tokenInfo = currency
-              ? await fetchTokenInfo(
-                  client,
-                  currency as Address,
-                  tempoEntry.wallet_address as Address,
-                ).catch(() => undefined)
-              : undefined
-            tokenSymbol = tokenInfo?.symbol ?? currency ?? ''
-            tokenDecimals =
-              tokenInfo?.decimals ?? (challengeRequest.decimals as number | undefined) ?? 6
-          }
-        } else if (!privateKey) {
-          // tempo CLI not available — try silent fallback
-          const fallback = fallbackFromTempo()
-          if (fallback) {
-            const fallbackKey = await createKeychain(fallback).get()
-            if (fallbackKey) {
-              account = privateKeyToAccount(fallbackKey as `0x${string}`)
-            }
-          }
-          if (!account) {
-            if (options.account)
-              return error({
-                code: 'ACCOUNT_NOT_FOUND',
-                message: `Account "${accountName}" not found.`,
-                exitCode: 69,
-              })
-            else
-              return error({
-                code: 'ACCOUNT_NOT_FOUND',
-                message: 'No account found.',
-                exitCode: 69,
-              })
-          }
-        } else {
-          account = privateKeyToAccount(privateKey as `0x${string}`)
-        }
-        if (!useTempoCliSign && account) {
-          const rpcUrl = options.rpcUrl ?? process.env.RPC_URL
-          client = createClient({
-            chain: await resolveChain({ ...options, rpcUrl }),
-            transport: http(rpcUrl),
-          })
-          explorerUrl = client.chain?.blockExplorers?.default?.url
-          const tokenInfo = currency
-            ? await fetchTokenInfo(client, currency as Address, account.address).catch(
-                () => undefined,
-              )
-            : undefined
-          tokenSymbol = tokenInfo?.symbol ?? currency ?? ''
-          tokenDecimals =
-            tokenInfo?.decimals ?? (challengeRequest.decimals as number | undefined) ?? 6
-        }
+      let tokenSymbol = (challengeRequest.currency as string | undefined) ?? ''
+      let tokenDecimals = (challengeRequest.decimals as number | undefined) ?? 6
+      let explorerUrl: string | undefined
+      let handlerResult: Awaited<ReturnType<CliHandler['setup']>> | undefined
+
+      if (handler) {
+        handlerResult = await handler.setup({
+          challenge,
+          options: { account: c.options.account, rpcUrl: c.options.rpcUrl },
+          methodOpts,
+        })
+        tokenSymbol = handlerResult.tokenSymbol
+        tokenDecimals = handlerResult.tokenDecimals
+        explorerUrl = handlerResult.explorerUrl
       }
 
+      // Display challenge
       {
         printResponseHeaders(challengeResponse)
         const request = challengeRequest
@@ -397,282 +351,40 @@ const cli = Cli.create('mppx', {
         }
       }
 
+      // Create credential
       let credential: string
-      const configMethods = loaded?.config.methods?.flat() as Method.AnyClient[] | undefined
-      const configOverride = configMethods?.find(
-        (m) => m.name === challenge.method && m.intent === challenge.intent,
-      )
-      if (configOverride) {
-        const mppx = Mppx.create({ methods: [configOverride], polyfill: false })
-        credential = await mppx.createCredential(challengeResponse)
-      } else if (challenge.method === 'tempo' && useTempoCliSign) {
-        const wwwAuth = challengeResponse.headers.get('www-authenticate')
-        if (!wwwAuth) {
-          return error({
-            code: 'MISSING_CHALLENGE',
-            message: 'No WWW-Authenticate header in 402 response.',
-            exitCode: 2,
-          })
-        }
-        credential = await tempoCliSign(wwwAuth)
-      } else if (challenge.method === 'tempo') {
-        if (!account || !client) {
-          return error({
-            code: 'ACCOUNT_NOT_FOUND',
-            message: 'Tempo requires a configured account.',
-            exitCode: 69,
-          })
-        }
-        const tempoOpts = parseOptions(
-          z.object({
-            channel: z.optional(z.coerce.string()),
-            deposit: z.optional(z.union([z.string(), z.number()])),
-          }),
-          methodOpts,
-        )
-        const mppx = Mppx.create({
-          methods: tempo({
-            account,
-            getClient: () => client!,
-            deposit: (() => {
-              if (challenge.intent !== 'session') return undefined
-              const suggestedDeposit = (challenge.request as Record<string, unknown>)
-                .suggestedDeposit as string | undefined
-              const cliDeposit =
-                tempoOpts.deposit !== undefined ? String(tempoOpts.deposit) : undefined
-              const resolved =
-                suggestedDeposit ?? cliDeposit ?? (isTestnet(client!.chain!) ? '10' : undefined)
-              if (!resolved) {
-                return error({
-                  code: 'MISSING_DEPOSIT',
-                  message:
-                    'Session payment requires a deposit. Use -M deposit=<amount> or connect to testnet.',
-                  exitCode: 2,
-                })
-              }
-              return resolved
-            })(),
-          }),
-          polyfill: false,
-        })
+      if (handlerResult?.createCredential) {
+        credential = await handlerResult.createCredential(challengeResponse)
+      } else if (handlerResult) {
+        const mppx = Mppx.create({ methods: handlerResult.methods, polyfill: false })
         credential = await mppx.createCredential(
           challengeResponse,
-          (() => {
-            if (!tempoOpts.channel) return undefined
-            const channelId = tempoOpts.channel
-            const saved = readChannelCumulative(channelId)
-            return {
-              channelId,
-              ...(saved !== undefined && { cumulativeAmountRaw: saved.toString() }),
-            }
-          })(),
+          handlerResult.credentialContext as undefined,
         )
-      } else if (challenge.method === 'stripe') {
-        const stripeOpts = parseOptions(
-          z.object({
-            paymentMethod: z.string(),
-          }),
-          methodOpts,
-        )
-        const stripeSecretKey = process.env.MPPX_STRIPE_SECRET_KEY
-        if (!stripeSecretKey) {
-          return error({
-            code: 'MISSING_ENV',
-            message: 'MPPX_STRIPE_SECRET_KEY environment variable is required for Stripe payments.',
-            exitCode: 2,
-          })
-        }
-        if (!stripeSecretKey.startsWith('sk_test_')) {
-          return error({
-            code: 'UNSUPPORTED_MODE',
-            message:
-              'Stripe CLI payments are currently only supported in test mode (sk_test_... keys).',
-            exitCode: 2,
-          })
-        }
-        const mppx = Mppx.create({
-          methods: [
-            stripe.charge({
-              paymentMethod: stripeOpts.paymentMethod,
-              createToken: async ({
-                paymentMethod,
-                amount,
-                currency,
-                networkId,
-                expiresAt,
-                metadata,
-              }) => {
-                const body = new URLSearchParams({
-                  payment_method: paymentMethod!,
-                  'usage_limits[currency]': currency,
-                  'usage_limits[max_amount]': amount,
-                  'usage_limits[expires_at]': expiresAt.toString(),
-                })
-                if (networkId) body.set('seller_details[network_id]', networkId)
-                if (metadata) {
-                  for (const [key, value] of Object.entries(metadata)) {
-                    body.set(`metadata[${key}]`, value)
-                  }
-                }
-                const sptUrl =
-                  process.env.MPPX_STRIPE_SPT_URL ??
-                  'https://api.stripe.com/v1/test_helpers/shared_payment/granted_tokens'
-                const sptHeaders = {
-                  Authorization: `Basic ${btoa(`${stripeSecretKey}:`)}`,
-                  'Content-Type': 'application/x-www-form-urlencoded',
-                }
-                let response = await globalThis.fetch(sptUrl, {
-                  method: 'POST',
-                  headers: sptHeaders,
-                  body,
-                })
-                if (!response.ok) {
-                  const errorBody = (await response.json()) as { error: { message: string } }
-                  if (
-                    (metadata || networkId) &&
-                    errorBody.error.message.includes('Received unknown parameter')
-                  ) {
-                    const fallbackBody = new URLSearchParams({
-                      payment_method: paymentMethod!,
-                      'usage_limits[currency]': currency,
-                      'usage_limits[max_amount]': amount,
-                      'usage_limits[expires_at]': expiresAt.toString(),
-                    })
-                    response = await globalThis.fetch(sptUrl, {
-                      method: 'POST',
-                      headers: sptHeaders,
-                      body: fallbackBody,
-                    })
-                    if (!response.ok) {
-                      const fallbackError = (await response.json()) as {
-                        error: { message: string }
-                      }
-                      return error({
-                        code: 'STRIPE_ERROR',
-                        message: `Failed to create SPT: ${fallbackError.error.message}`,
-                        exitCode: 77,
-                      })
-                    }
-                  } else {
-                    return error({
-                      code: 'STRIPE_ERROR',
-                      message: `Failed to create SPT: ${errorBody.error.message}`,
-                      exitCode: 77,
-                    })
-                  }
-                }
-                const { id } = (await response.json()) as { id: string }
-                return id
-              },
-            }),
-          ],
-          polyfill: false,
-        })
+      } else if (configMethod) {
+        const mppx = Mppx.create({ methods: [configMethod], polyfill: false })
         credential = await mppx.createCredential(challengeResponse)
       } else {
-        // Try loading methods from mppx.config.ts
-        const matched = configMethods?.find(
-          (m) => m.name === challenge.method && m.intent === challenge.intent,
-        )
-        if (matched) {
-          const mppx = Mppx.create({ methods: [matched], polyfill: false })
-          credential = await mppx.createCredential(challengeResponse)
-        } else {
-          return error({
-            code: 'UNSUPPORTED_METHOD',
-            message: `Unsupported payment method: ${challenge.method}/${challenge.intent}. Add it to mppx.config.ts using defineConfig().`,
-            exitCode: 2,
-          })
-        }
+        return c.error({
+          code: 'UNSUPPORTED_METHOD',
+          message: `Unsupported payment method: ${challenge.method}/${challenge.intent}. Add it to mppx.config.ts using defineConfig().`,
+          exitCode: 2,
+        })
       }
 
-      const sessionMd = challenge.request.methodDetails as
-        | { escrowContract?: string; chainId?: number }
-        | undefined
-      let sessionChannelId: `0x${string}` | undefined
-      let sessionEscrowContract: Address | undefined
-      let sessionChainId = 0
-      let sessionCumulativeAmount = 0n
-
-      if (challenge.intent === 'session') {
-        const parsed = Credential.deserialize<SessionCredentialPayload>(credential)
-        sessionChannelId = parsed.payload.channelId
-        sessionChainId = sessionMd?.chainId ?? client?.chain?.id ?? 0
-        sessionEscrowContract = sessionMd?.escrowContract as Address | undefined
-        if ('cumulativeAmount' in parsed.payload && parsed.payload.cumulativeAmount)
-          sessionCumulativeAmount = BigInt(parsed.payload.cumulativeAmount)
-
-        if (verbose >= 1) {
-          if (parsed.payload.action === 'open') {
-            const depositRaw = challengeRequest.suggestedDeposit as string | undefined
-            const depositDisplay = depositRaw
-              ? ` ${pc.dim(`(deposit ${depositRaw} ${tokenSymbol})`)}`
-              : ''
-            const prefix = confirmEnabled ? '' : '\n'
-            info(
-              `${prefix}${pc.dim(`Channel opened ${parsed.payload.channelId}`)}${depositDisplay}\n`,
-            )
-          } else {
-            const prefix = confirmEnabled ? '' : '\n'
-            info(`${prefix}${pc.dim(`Channel reused ${parsed.payload.channelId}`)}\n`)
-          }
-        }
+      // Send credential and get response
+      const credentialHeaders = {
+        ...(fetchInit.headers as Record<string, string>),
+        Authorization: credential,
       }
+      handler?.prepareCredentialRequest?.({ challenge, credential, headers: credentialHeaders })
 
-      const credentialFetchInit = {
-        ...fetchInit,
-        headers: {
-          ...(fetchInit.headers as Record<string, string>),
-          ...(challenge.intent === 'session' ? { Accept: 'text/event-stream' } : {}),
-          Authorization: credential,
-        },
-      }
+      const credentialFetchInit = { ...fetchInit, headers: credentialHeaders }
       printRequestHeaders(url, credentialFetchInit)
-      let credentialResponse = await globalThis.fetch(fetchUrl, credentialFetchInit)
+      const credentialResponse = await globalThis.fetch(fetchUrl, credentialFetchInit)
 
-      if (
-        challenge.intent === 'session' &&
-        credentialResponse.ok &&
-        !credentialResponse.headers.get('Content-Type')?.includes('text/event-stream')
-      ) {
-        const parsed = Credential.deserialize<SessionCredentialPayload>(credential)
-        if (parsed.payload.action === 'open' && 'cumulativeAmount' in parsed.payload) {
-          const tickAmount = BigInt(challenge.request.amount as string)
-          sessionCumulativeAmount = BigInt(parsed.payload.cumulativeAmount) + tickAmount
-
-          if (sessionEscrowContract && account && client) {
-            const signature = await signVoucher(
-              client,
-              account,
-              { channelId: sessionChannelId!, cumulativeAmount: sessionCumulativeAmount },
-              sessionEscrowContract,
-              sessionChainId,
-            )
-            const voucherPayload: SessionCredentialPayload = {
-              action: 'voucher',
-              channelId: sessionChannelId!,
-              cumulativeAmount: sessionCumulativeAmount.toString(),
-              signature,
-            }
-            const voucherCred = Credential.serialize({
-              challenge,
-              payload: voucherPayload,
-              source: `did:pkh:eip155:${sessionChainId}:${account.address}`,
-            })
-            credentialResponse = await globalThis.fetch(fetchUrl, {
-              ...fetchInit,
-              headers: {
-                ...(fetchInit.headers as Record<string, string>),
-                Accept: 'text/event-stream',
-                Authorization: voucherCred,
-              },
-            })
-          }
-        }
-      }
-
-      if (options.fail && credentialResponse.status >= 400)
-        return error({
+      if (c.options.fail && credentialResponse.status >= 400)
+        return c.error({
           code: 'HTTP_ERROR',
           message: `HTTP error ${credentialResponse.status}`,
           exitCode: 22,
@@ -694,370 +406,77 @@ const cli = Cli.create('mppx', {
         } catch {
           if (body) info(`  ${body}\n`)
         }
-        return error({ code: 'PAYMENT_REJECTED', message: 'Payment rejected', exitCode: 75 })
-      } else {
-        printResponseHeaders(credentialResponse)
+        return c.error({ code: 'PAYMENT_REJECTED', message: 'Payment rejected', exitCode: 75 })
+      }
 
+      printResponseHeaders(credentialResponse)
+
+      // Let handler own the response lifecycle if it wants to
+      const handled = await handler?.handleResponse?.({
+        challenge,
+        credential,
+        response: credentialResponse,
+        fetchUrl,
+        fetchInit,
+        info,
+        verbose,
+        confirmEnabled,
+        confirm,
+        tokenSymbol,
+        tokenDecimals,
+        explorerUrl,
+        shownKeys,
+        fmtBalance: (b, sym, dec) => fmtBalance(b, sym, dec),
+      })
+
+      if (!handled) {
+        // Default: print receipt + body
         const receiptHeader = credentialResponse.headers.get('Payment-Receipt')
-        if (receiptHeader) {
+        if (receiptHeader && verbose >= 1) {
           try {
             const receiptJson = JSON.parse(Base64.toString(receiptHeader)) as Record<
               string,
               unknown
             >
-            if (
-              typeof receiptJson.acceptedCumulative === 'string' &&
-              receiptJson.acceptedCumulative
-            ) {
-              sessionCumulativeAmount = BigInt(receiptJson.acceptedCumulative)
-              if (sessionChannelId)
-                writeChannelCumulative(sessionChannelId, sessionCumulativeAmount)
+            info(`\n${pc.bold(pc.green('Payment Receipt'))}\n`)
+            const rows: [string, string][] = []
+            const channelId = receiptJson.channelId
+            const reference = receiptJson.reference
+            const skipReference = channelId && reference && channelId === reference
+            const receiptBalanceKeys = new Set(['acceptedCumulative', 'spent'])
+            for (const [key, value] of Object.entries(receiptJson)) {
+              if (value === undefined || shownKeys.has(key)) continue
+              if (key === 'reference' && skipReference) continue
+              const formatted = handler?.formatReceiptField?.(key, value)
+              if (formatted !== undefined) {
+                rows.push([key, formatted])
+              } else if (receiptBalanceKeys.has(key) && typeof value === 'string') {
+                rows.push([
+                  key,
+                  `${value} ${pc.dim(`(${fmtBalance(BigInt(value), tokenSymbol, tokenDecimals)})`)}`,
+                ])
+              } else if (
+                (key === 'reference' || key === 'txHash') &&
+                typeof value === 'string' &&
+                explorerUrl
+              ) {
+                rows.push([key, pc.link(`${explorerUrl}/tx/${value}`, value)])
+              } else rows.push([key, String(value)])
             }
-            if (verbose >= 1) {
-              info(`\n${pc.bold(pc.green('Payment Receipt'))}\n`)
-              const rows: [string, string][] = []
-              const channelId = receiptJson.channelId
-              const reference = receiptJson.reference
-              const skipReference = channelId && reference && channelId === reference
-              const receiptBalanceKeys = new Set(['acceptedCumulative', 'spent'])
-              for (const [key, value] of Object.entries(receiptJson)) {
-                if (value === undefined || shownKeys.has(key)) continue
-                if (key === 'reference' && skipReference) continue
-                if (receiptBalanceKeys.has(key) && typeof value === 'string') {
-                  rows.push([
-                    key,
-                    `${value} ${pc.dim(`(${fmtBalance(BigInt(value), tokenSymbol, tokenDecimals)})`)}`,
-                  ])
-                } else if (
-                  (key === 'reference' || key === 'txHash') &&
-                  typeof value === 'string' &&
-                  explorerUrl
-                ) {
-                  rows.push([key, pc.link(`${explorerUrl}/tx/${value}`, value)])
-                } else if (
-                  key === 'reference' &&
-                  typeof value === 'string' &&
-                  challenge.method === 'stripe' &&
-                  value.startsWith('pi_')
-                ) {
-                  const isTest = process.env.MPPX_STRIPE_SECRET_KEY?.startsWith('sk_test_')
-                  const dashboardUrl = `https://dashboard.stripe.com${isTest ? '/test' : ''}/payments/${value}`
-                  rows.push([key, pc.link(dashboardUrl, value)])
-                } else rows.push([key, String(value)])
-              }
-              rows.sort(([a], [b]) => a.localeCompare(b))
-              const pad = Math.max(...rows.map(([k]) => k.length))
-              for (const [label, value] of rows) info(`  ${pc.dim(label.padEnd(pad))}  ${value}\n`)
-              info('\n')
-            }
+            rows.sort(([a], [b]) => a.localeCompare(b))
+            const pad = Math.max(...rows.map(([k]) => k.length))
+            for (const [label, value] of rows) info(`  ${pc.dim(label.padEnd(pad))}  ${value}\n`)
+            info('\n')
           } catch {}
         }
-        const contentType = credentialResponse.headers.get('Content-Type') ?? ''
-        if (contentType.includes('text/event-stream')) {
-          const reader = credentialResponse.body?.getReader()
-          if (!reader) {
-            return error({ code: 'NO_RESPONSE_BODY', message: 'No response body' })
-          }
-          const decoder = new TextDecoder()
-          let buffer = ''
-          let currentEvent = ''
 
-          const sessionCred =
-            challenge.intent === 'session'
-              ? Credential.deserialize<SessionCredentialPayload>(credential)
-              : undefined
-          const channelId = sessionCred?.payload.channelId
-          const md = challenge.request.methodDetails as
-            | { escrowContract?: string; chainId?: number }
-            | undefined
-          const sessionChainId = md?.chainId ?? client?.chain?.id ?? 0
-          const escrowContract = md?.escrowContract as Address | undefined
-          let cumulativeAmount =
-            sessionCred?.payload &&
-            'cumulativeAmount' in sessionCred.payload &&
-            sessionCred.payload.cumulativeAmount
-              ? BigInt(sessionCred.payload.cumulativeAmount)
-              : 0n
-          let _voucherSeq = 0
-
-          const termBg = verbose ? await detectTerminalBg() : undefined
-          const chunkBgs = (() => {
-            if (!termBg || !pc.isColorSupported) return undefined
-            const clamp = (n: number) => Math.max(0, Math.min(255, Math.round(n)))
-            const isDark = 0.299 * termBg.r + 0.587 * termBg.g + 0.114 * termBg.b < 128
-            const offset = isDark ? 1 : -1
-            const bgRgb = (d: number) => (s: string) => {
-              const r = clamp(termBg.r + d * offset)
-              const g = clamp(termBg.g + d * offset)
-              const b = clamp(termBg.b + d * offset)
-              return `\x1b[48;2;${r};${g};${b}m${s}\x1b[49m`
-            }
-            return [bgRgb(12), bgRgb(24)] as const
-          })()
-          let chunkIdx = 0
-
-          const writeContent = (chunk: string) => {
-            if (chunkBgs) {
-              const bgFn = chunkBgs[chunkIdx % chunkBgs.length]!
-              process.stdout.write(chunk.replace(/[^\n]+/g, (m) => bgFn(m)))
-              chunkIdx++
-            } else {
-              process.stdout.write(chunk)
-            }
-          }
-
-          const processLines = async (lines: string[]) => {
-            for (const line of lines) {
-              if (line.startsWith('event: ')) {
-                currentEvent = line.slice(7).trim()
-                continue
-              }
-              if (!line.startsWith('data: ')) {
-                if (line === '') currentEvent = ''
-                continue
-              }
-              const data = line.slice(6)
-              if (data.trim() === '[DONE]') continue
-              if (
-                currentEvent === 'payment-need-voucher' &&
-                channelId &&
-                escrowContract &&
-                sessionChainId
-              ) {
-                try {
-                  const event = JSON.parse(data) as {
-                    channelId: string
-                    requiredCumulative: string
-                  }
-                  const required = BigInt(event.requiredCumulative)
-                  cumulativeAmount = cumulativeAmount > required ? cumulativeAmount : required
-
-                  const signature = await signVoucher(
-                    client!,
-                    account!,
-                    { channelId, cumulativeAmount },
-                    escrowContract,
-                    sessionChainId,
-                  )
-                  const voucherCred = Credential.serialize({
-                    challenge,
-                    payload: {
-                      action: 'voucher',
-                      channelId,
-                      cumulativeAmount: cumulativeAmount.toString(),
-                      signature,
-                    },
-                    source: `did:pkh:eip155:${sessionChainId}:${account!.address}`,
-                  })
-                  await globalThis.fetch(fetchUrl, {
-                    method: 'POST',
-                    headers: { Authorization: voucherCred },
-                  })
-                  _voucherSeq++
-                } catch (e) {
-                  info(
-                    pc.dim(pc.yellow(` [voucher failed: ${e instanceof Error ? e.message : e}]`)),
-                  )
-                }
-                currentEvent = ''
-                continue
-              }
-              if (currentEvent === 'payment-receipt') {
-                if (verbose >= 1) {
-                  try {
-                    const receipt = JSON.parse(data) as Record<string, unknown>
-                    info(`\n\n${pc.bold(pc.green('Payment Receipt'))}\n`)
-                    const rows: [string, string][] = []
-                    const skipRef =
-                      receipt.channelId &&
-                      receipt.reference &&
-                      receipt.channelId === receipt.reference
-                    for (const [key, value] of Object.entries(receipt)) {
-                      if (value === undefined || shownKeys.has(key)) continue
-                      if (key === 'reference' && skipRef) continue
-                      const receiptBalanceKeys = ['acceptedCumulative', 'spent']
-                      if (receiptBalanceKeys.includes(key) && typeof value === 'string') {
-                        rows.push([
-                          key,
-                          `${value} ${pc.dim(`(${fmtBalance(BigInt(value), tokenSymbol, tokenDecimals)})`)}`,
-                        ])
-                      } else if (
-                        (key === 'reference' || key === 'txHash') &&
-                        typeof value === 'string' &&
-                        explorerUrl
-                      ) {
-                        rows.push([key, pc.link(`${explorerUrl}/tx/${value}`, value)])
-                      } else rows.push([key, String(value)])
-                    }
-                    rows.sort(([a], [b]) => a.localeCompare(b))
-                    const rpad = Math.max(...rows.map(([k]) => k.length))
-                    for (const [label, value] of rows)
-                      info(`  ${pc.dim(label.padEnd(rpad))}  ${value}\n`)
-                  } catch {}
-                }
-                currentEvent = ''
-                continue
-              }
-              if (data.length === 0) {
-                writeContent('\n')
-              } else {
-                try {
-                  const parsed = JSON.parse(data) as {
-                    token?: string
-                    choices?: { delta?: { content?: string } }[]
-                  }
-
-                  writeContent(parsed.token ?? parsed.choices?.[0]?.delta?.content ?? data)
-                } catch {
-                  writeContent(data)
-                }
-              }
-              currentEvent = ''
-            }
-          }
-
-          while (true) {
-            const { done, value } = await reader.read()
-            if (done) break
-            buffer += decoder.decode(value, { stream: true })
-            const lines = buffer.split('\n')
-            buffer = lines.pop()!
-            await processLines(lines)
-          }
-          if (buffer.trim()) await processLines([buffer])
-
-          if (channelId && escrowContract && sessionChainId) {
-            const signature = await signVoucher(
-              client!,
-              account!,
-              { channelId, cumulativeAmount },
-              escrowContract,
-              sessionChainId,
-            )
-            const closePayload: SessionCredentialPayload = {
-              action: 'close',
-              channelId,
-              cumulativeAmount: cumulativeAmount.toString(),
-              signature,
-            }
-            const closeCred = Credential.serialize({
-              challenge,
-              payload: closePayload,
-              source: `did:pkh:eip155:${sessionChainId}:${account!.address}`,
-            })
-            const closeRes = await globalThis.fetch(fetchUrl, {
-              method: 'POST',
-              headers: { Authorization: closeCred },
-            })
-            if (closeRes.ok) {
-              if (verbose >= 1) {
-                const closeReceiptHeader = closeRes.headers.get('Payment-Receipt')
-                let closeTxHash: string | undefined
-                if (closeReceiptHeader) {
-                  try {
-                    const r = JSON.parse(Base64.toString(closeReceiptHeader)) as Record<
-                      string,
-                      unknown
-                    >
-                    if (typeof r.txHash === 'string') closeTxHash = r.txHash
-                  } catch {}
-                }
-                const txInfo =
-                  closeTxHash && explorerUrl
-                    ? ` ${pc.dim(pc.link(`${explorerUrl}/tx/${closeTxHash}`, closeTxHash))}`
-                    : ''
-                info(
-                  `\n${pc.dim('Channel closed.')} ${pc.dim(`Spent ${fmtBalance(cumulativeAmount, tokenSymbol, tokenDecimals)}.`)}${txInfo}\n`,
-                )
-              }
-            } else {
-              info(
-                `\n${pc.dim(pc.yellow('Channel close failed'))} ${pc.dim(`(${closeRes.status})`)}\n`,
-              )
-            }
-          }
-        } else {
-          const body = (await credentialResponse.text()).replace(/\n+$/, '')
-          console.log(body)
-
-          const shouldClose =
-            challenge.intent === 'session' &&
-            credentialResponse.ok &&
-            sessionChannelId &&
-            sessionEscrowContract &&
-            sessionChainId
-          if (shouldClose && confirmEnabled) {
-            info('\n')
-          }
-          if (shouldClose && confirmEnabled && !(await confirm('Close channel?', true))) {
-            if (verbose >= 1) info(`${pc.dim('Kept channel open.')}\n`)
-          } else if (shouldClose) {
-            const signature = await signVoucher(
-              client!,
-              account!,
-              { channelId: sessionChannelId!, cumulativeAmount: sessionCumulativeAmount },
-              sessionEscrowContract!,
-              sessionChainId,
-            )
-            const closePayload: SessionCredentialPayload = {
-              action: 'close',
-              channelId: sessionChannelId!,
-              cumulativeAmount: sessionCumulativeAmount.toString(),
-              signature,
-            }
-            const closeCred = Credential.serialize({
-              challenge,
-              payload: closePayload,
-              source: `did:pkh:eip155:${sessionChainId}:${account!.address}`,
-            })
-            const closeRes = await globalThis.fetch(fetchUrl, {
-              ...fetchInit,
-              headers: {
-                ...(fetchInit.headers as Record<string, string>),
-                Authorization: closeCred,
-              },
-            })
-            if (closeRes.ok) {
-              deleteChannelState(sessionChannelId!)
-              if (verbose >= 1) {
-                const closeReceiptHeader = closeRes.headers.get('Payment-Receipt')
-                let closeTxHash: string | undefined
-                if (closeReceiptHeader) {
-                  try {
-                    const r = JSON.parse(Base64.toString(closeReceiptHeader)) as Record<
-                      string,
-                      unknown
-                    >
-                    if (typeof r.txHash === 'string') closeTxHash = r.txHash
-                  } catch {}
-                }
-                const txInfo =
-                  closeTxHash && explorerUrl
-                    ? ` ${pc.dim(pc.link(`${explorerUrl}/tx/${closeTxHash}`, closeTxHash))}`
-                    : ''
-                const closePrefix = confirmEnabled ? '' : '\n'
-                info(
-                  `${closePrefix}${pc.dim('Channel closed.')} ${pc.dim(`Spent ${fmtBalance(sessionCumulativeAmount, tokenSymbol, tokenDecimals)}.`)}${txInfo}\n`,
-                )
-              }
-            } else {
-              const closeBody = await closeRes.text().catch(() => '')
-              info(
-                `\n${pc.dim(pc.yellow('Channel close failed'))} ${pc.dim(`(${closeRes.status})`)}\n`,
-              )
-              info(
-                `${pc.dim(`  channelId:          ${sessionChannelId}`)}\n` +
-                  `${pc.dim(`  cumulativeAmount:   ${sessionCumulativeAmount}`)}\n` +
-                  `${pc.dim(`  escrowContract:     ${sessionEscrowContract}`)}\n` +
-                  `${pc.dim(`  chainId:            ${sessionChainId}`)}\n` +
-                  `${pc.dim(`  account:            ${account?.address}`)}\n` +
-                  `${pc.dim(`  response:           ${closeBody || '(empty)'}`)}\n`,
-              )
-            }
-          }
-        }
+        const body = (await credentialResponse.text()).replace(/\n+$/, '')
+        console.log(body)
       }
     } catch (err) {
+      // Re-throw IncurError so incur's error handler formats it properly
+      if (err instanceof Errors.IncurError) throw err
+
       // TODO: revert cast when https://github.com/wevm/zile/pull/26 is merged
       const errCause =
         err instanceof Error ? (err as unknown as Record<string, unknown>).cause : undefined
@@ -1066,46 +485,46 @@ const cli = Cli.create('mppx', {
       if (cause && 'code' in cause) {
         const code = cause.code as string
         if (code === 'ENOTFOUND')
-          return error({
+          return c.error({
             code: 'DNS_ERROR',
             message: `Could not resolve host "${hostname}". Check the URL and try again.`,
             exitCode: 6,
           })
         else if (code === 'ECONNREFUSED')
-          return error({
+          return c.error({
             code: 'CONNECTION_REFUSED',
             message: `Connection refused by "${hostname}". Is the server running?`,
             retryable: true,
             exitCode: 7,
           })
         else if (code === 'ECONNRESET')
-          return error({
+          return c.error({
             code: 'CONNECTION_RESET',
             message: `Connection to "${hostname}" was reset.`,
             retryable: true,
             exitCode: 56,
           })
         else if (code === 'ETIMEDOUT')
-          return error({
+          return c.error({
             code: 'CONNECTION_TIMEOUT',
             message: `Connection to "${hostname}" timed out.`,
             retryable: true,
             exitCode: 28,
           })
         else if (code === 'CERT_HAS_EXPIRED' || code === 'UNABLE_TO_VERIFY_LEAF_SIGNATURE')
-          return error({
+          return c.error({
             code: 'TLS_ERROR',
             message: `TLS certificate error for "${hostname}". Use --insecure to skip verification.`,
             exitCode: 60,
           })
         else
-          return error({
+          return c.error({
             code: 'REQUEST_FAILED',
             message: `Request to "${hostname}" failed: ${cause.message}`,
           })
       } else {
         const msg = err instanceof Error ? err.message : String(err)
-        return error({
+        return c.error({
           code: 'REQUEST_FAILED',
           message: cause
             ? `Request failed: ${msg} (Cause: ${cause.message})`
@@ -1127,8 +546,8 @@ account.command('create', {
     rpcUrl: z.string().optional().describe('RPC endpoint (env: MPPX_RPC_URL)'),
   }),
   alias: { account: 'a', rpcUrl: 'r' },
-  async run({ options }) {
-    let resolvedName = options.account
+  async run(c) {
+    let resolvedName = c.options.account
     if (!resolvedName) {
       const existing = await createKeychain().list()
       if (existing.length === 0) resolvedName = 'main'
@@ -1157,8 +576,8 @@ account.command('create', {
       ? pc.link(`${explorerUrl}/address/${acct.address}`, acct.address)
       : acct.address
     console.log(pc.dim(`Address ${addrDisplay}`))
-    resolveChain(options)
-      .then((chain) => createClient({ chain, transport: http(options.rpcUrl) }))
+    resolveChain(c.options)
+      .then((chain) => createClient({ chain, transport: http(c.options.rpcUrl) }))
       .then((client) =>
         import('viem/tempo').then(({ Actions }) =>
           Actions.faucet.fund(client, { account: acct }).catch(() => {}),
@@ -1173,12 +592,12 @@ account.command('default', {
     account: z.string().describe('Account name'),
   }),
   alias: { account: 'a' },
-  async run({ options, error }) {
-    const accountName = options.account
+  async run(c) {
+    const accountName = c.options.account
     if (isTempoAccount(accountName)) {
       const tempoEntry = resolveTempoAccount(accountName)
       if (!tempoEntry) {
-        return error({
+        return c.error({
           code: 'ACCOUNT_NOT_FOUND',
           message: `Account "${accountName}" not found. Is Tempo wallet configured?`,
           exitCode: 69,
@@ -1190,7 +609,7 @@ account.command('default', {
     }
     const key = await createKeychain(accountName).get()
     if (!key) {
-      return error({
+      return c.error({
         code: 'ACCOUNT_NOT_FOUND',
         message: `Account "${accountName}" not found.`,
         exitCode: 69,
@@ -1208,24 +627,24 @@ account.command('delete', {
     yes: z.boolean().optional().describe('DANGER!! Skip confirmation prompts'),
   }),
   alias: { account: 'a' },
-  async run({ options, error }) {
-    const keychain = createKeychain(options.account)
+  async run(c) {
+    const keychain = createKeychain(c.options.account)
     const key = await keychain.get()
     if (!key) {
-      return error({
+      return c.error({
         code: 'ACCOUNT_NOT_FOUND',
-        message: `Account "${options.account}" not found.`,
+        message: `Account "${c.options.account}" not found.`,
         exitCode: 69,
       })
     }
     const acct = privateKeyToAccount(key as `0x${string}`)
     const balanceLines = await fetchBalanceLines(acct.address, { includeTestnet: false })
-    if (!options.yes) {
+    if (!c.options.yes) {
       const explorerUrl = tempoMainnet.blockExplorers?.default?.url
       const addrDisplay = explorerUrl
         ? pc.link(`${explorerUrl}/address/${acct.address}`, acct.address)
         : acct.address
-      process.stderr.write(pc.dim(`Delete account "${options.account}"\n`))
+      process.stderr.write(pc.dim(`Delete account "${c.options.account}"\n`))
       process.stderr.write(pc.dim(`  Address  ${addrDisplay}\n`))
       for (let i = 0; i < balanceLines.length; i++)
         process.stderr.write(pc.dim(`  ${i === 0 ? 'Balance' : '       '}  ${balanceLines[i]}\n`))
@@ -1238,7 +657,7 @@ account.command('delete', {
     }
     await keychain.delete()
     const currentDefault = createDefaultStore().get()
-    if (currentDefault === options.account) {
+    if (currentDefault === c.options.account) {
       const remaining = await createKeychain().list()
       if (remaining.length > 0) {
         createDefaultStore().set(remaining[0]!)
@@ -1247,7 +666,7 @@ account.command('delete', {
         createDefaultStore().clear()
       }
     }
-    console.log(`Account "${options.account}" deleted`)
+    console.log(`Account "${c.options.account}" deleted`)
   },
 })
 
@@ -1258,22 +677,22 @@ account.command('fund', {
     rpcUrl: z.string().optional().describe('RPC endpoint (env: MPPX_RPC_URL)'),
   }),
   alias: { account: 'a', rpcUrl: 'r' },
-  async run({ options, error }) {
-    const accountName = resolveAccountName(options.account)
+  async run(c) {
+    const accountName = resolveAccountName(c.options.account)
     const keychain = createKeychain(accountName)
     const key = await keychain.get()
     if (!key) {
-      if (options.account)
-        return error({
+      if (c.options.account)
+        return c.error({
           code: 'ACCOUNT_NOT_FOUND',
           message: `Account "${accountName}" not found.`,
           exitCode: 69,
         })
-      else return error({ code: 'ACCOUNT_NOT_FOUND', message: 'No account found.', exitCode: 69 })
+      else return c.error({ code: 'ACCOUNT_NOT_FOUND', message: 'No account found.', exitCode: 69 })
     }
     const acct = privateKeyToAccount(key as `0x${string}`)
-    const chain = await resolveChain(options)
-    const client = createClient({ chain, transport: http(options.rpcUrl) })
+    const chain = await resolveChain(c.options)
+    const client = createClient({ chain, transport: http(c.options.rpcUrl) })
     console.log(`Funding "${accountName}" on ${chainName(chain)}`)
     try {
       const { Actions } = await import('viem/tempo')
@@ -1341,20 +760,20 @@ account.command('view', {
     rpcUrl: z.string().optional().describe('RPC endpoint (env: MPPX_RPC_URL)'),
   }),
   alias: { account: 'a', rpcUrl: 'r' },
-  async run({ options, error }) {
-    const accountName = resolveAccountName(options.account)
+  async run(c) {
+    const accountName = resolveAccountName(c.options.account)
 
     if (isTempoAccount(accountName)) {
       const tempoEntry = resolveTempoAccount(accountName)
       if (!tempoEntry) {
-        return error({
+        return c.error({
           code: 'ACCOUNT_NOT_FOUND',
           message: `Account "${accountName}" not found. Is Tempo wallet configured?`,
           exitCode: 69,
         })
       }
       const address = tempoEntry.wallet_address as Address
-      const rpcUrl = options.rpcUrl ?? (process.env.MPPX_RPC_URL || undefined)
+      const rpcUrl = c.options.rpcUrl ?? (process.env.MPPX_RPC_URL || undefined)
       const chain = rpcUrl ? await resolveChain({ rpcUrl }) : tempoMainnet
       const explorerUrl = chain.blockExplorers?.default?.url
       const addrDisplay = explorerUrl
@@ -1377,16 +796,16 @@ account.command('view', {
     const keychain = createKeychain(accountName)
     const key = await keychain.get()
     if (!key) {
-      if (options.account)
-        return error({
+      if (c.options.account)
+        return c.error({
           code: 'ACCOUNT_NOT_FOUND',
           message: `Account "${accountName}" not found.`,
           exitCode: 69,
         })
-      else return error({ code: 'ACCOUNT_NOT_FOUND', message: 'No account found.', exitCode: 69 })
+      else return c.error({ code: 'ACCOUNT_NOT_FOUND', message: 'No account found.', exitCode: 69 })
     }
     const acct = privateKeyToAccount(key as `0x${string}`)
-    const rpcUrl = options.rpcUrl ?? (process.env.MPPX_RPC_URL || undefined)
+    const rpcUrl = c.options.rpcUrl ?? (process.env.MPPX_RPC_URL || undefined)
     const chain = rpcUrl ? await resolveChain({ rpcUrl }) : tempoMainnet
     const explorerUrl = chain.blockExplorers?.default?.url
     const addrDisplay = explorerUrl
@@ -1432,10 +851,10 @@ const sign = Cli.create('sign', {
     methodOpt: 'M',
     rpcUrl: 'r',
   },
-  async run({ options, format, error }) {
-    const raw = options.challenge || (process.stdin.isTTY === false ? await readStdin() : undefined)
+  async run(c) {
+    const raw = c.options.challenge || (process.stdin.isTTY === false ? await readStdin() : undefined)
     if (!raw) {
-      return error({
+      return c.error({
         code: 'NO_CHALLENGE',
         message: 'No challenge provided. Use --challenge or pipe via stdin.',
         exitCode: 2,
@@ -1446,222 +865,59 @@ const sign = Cli.create('sign', {
     try {
       challenge = Challenge.deserialize(raw)
     } catch (err) {
-      return error({
+      return c.error({
         code: 'INVALID_CHALLENGE',
         message: `Failed to parse challenge: ${err instanceof Error ? err.message : err}`,
         exitCode: 2,
       })
     }
 
-    if (options.dryRun) {
+    if (c.options.dryRun) {
       process.stderr.write('Challenge is valid.\n')
       return
     }
 
-    // Check if config overrides built-in method
     const loaded = await loadConfig()
-    const configMethods = loaded?.config.methods?.flat() as Method.AnyClient[] | undefined
-    const configOverride = configMethods?.find(
-      (m) => m.name === challenge.method && m.intent === challenge.intent,
-    )
-    if (configOverride) {
-      const mppx = Mppx.create({ methods: [configOverride], polyfill: false })
-      const wwwAuth = Challenge.serialize(challenge)
-      const fakeResponse = new Response(null, {
-        status: 402,
-        headers: { 'WWW-Authenticate': wwwAuth },
-      })
-      const credential = await mppx.createCredential(fakeResponse)
-      if (format === 'json') {
-        console.log(JSON.stringify({ authorization: credential }))
-      } else {
-        console.log(credential)
-      }
-    } else if (challenge.method === 'tempo') {
-      const accountName = resolveAccountName(options.account)
+    const { handler, method: configMethod } = resolveHandler(challenge, loaded?.config)
+    const methodOpts = parseMethodOpts(c.options.methodOpt)
 
-      // Delegate to tempo CLI for tempo wallet accounts
-      if (isTempoAccount(accountName) && hasTempoCliSync()) {
-        const wwwAuth = Challenge.serialize(challenge)
-        const result = await tempoCliSign(wwwAuth)
-        if (format === 'json') {
-          const tempoEntry = resolveTempoAccount(accountName)
-          console.log(JSON.stringify({ authorization: result, from: tempoEntry?.wallet_address }))
-        } else {
-          console.log(result)
-        }
-        return
-      }
+    const wwwAuth = Challenge.serialize(challenge)
+    const fakeResponse = new Response(null, {
+      status: 402,
+      headers: { 'WWW-Authenticate': wwwAuth },
+    })
 
-      let privateKey =
-        process.env.MPPX_PRIVATE_KEY?.trim() ||
-        (isTempoAccount(accountName) ? undefined : await createKeychain(accountName).get())
-      if (!privateKey) {
-        const fallback = fallbackFromTempo()
-        if (fallback) privateKey = await createKeychain(fallback).get()
-      }
-      if (!privateKey) {
-        if (options.account)
-          return error({
-            code: 'ACCOUNT_NOT_FOUND',
-            message: `Account "${accountName}" not found.`,
-            exitCode: 69,
-          })
-        else return error({ code: 'ACCOUNT_NOT_FOUND', message: 'No account found.', exitCode: 69 })
-      }
-      const account = privateKeyToAccount(privateKey as `0x${string}`)
-      const rpcUrl = options.rpcUrl ?? process.env.RPC_URL
-      const client = createClient({
-        chain: await resolveChain({ rpcUrl }),
-        transport: http(rpcUrl),
-      })
-
-      const methodOpts = parseMethodOpts(options.methodOpt)
-      const tempoOpts = parseOptions(
-        z.object({
-          channel: z.optional(z.coerce.string()),
-          deposit: z.optional(z.union([z.string(), z.number()])),
-        }),
+    let credential: string
+    if (handler) {
+      const result = await handler.setup({
+        challenge,
+        options: { account: c.options.account, rpcUrl: c.options.rpcUrl },
         methodOpts,
-      )
-
-      const mppx = Mppx.create({
-        methods: tempo({
-          account,
-          getClient: () => client,
-          deposit: (() => {
-            if (challenge.intent !== 'session') return undefined
-            const suggestedDeposit = (challenge.request as Record<string, unknown>)
-              .suggestedDeposit as string | undefined
-            const cliDeposit =
-              tempoOpts.deposit !== undefined ? String(tempoOpts.deposit) : undefined
-            return suggestedDeposit ?? cliDeposit
-          })(),
-        }),
-        polyfill: false,
       })
-
-      const wwwAuth = Challenge.serialize(challenge)
-      const fakeResponse = new Response(null, {
-        status: 402,
-        headers: { 'WWW-Authenticate': wwwAuth },
-      })
-      const credential = await mppx.createCredential(
-        fakeResponse,
-        (() => {
-          if (!tempoOpts.channel) return undefined
-          const channelId = tempoOpts.channel
-          const saved = readChannelCumulative(channelId)
-          return {
-            channelId,
-            ...(saved !== undefined && { cumulativeAmountRaw: saved.toString() }),
-          }
-        })(),
-      )
-
-      if (format === 'json') {
-        console.log(JSON.stringify({ authorization: credential, from: account.address }))
+      if (result.createCredential) {
+        credential = await result.createCredential(fakeResponse)
       } else {
-        console.log(credential)
+        const mppx = Mppx.create({ methods: result.methods, polyfill: false })
+        credential = await mppx.createCredential(
+          fakeResponse,
+          result.credentialContext as undefined,
+        )
       }
-    } else if (challenge.method === 'stripe') {
-      const stripeSecretKey = process.env.MPPX_STRIPE_SECRET_KEY
-      if (!stripeSecretKey) {
-        return error({
-          code: 'MISSING_ENV',
-          message: 'MPPX_STRIPE_SECRET_KEY environment variable is required for Stripe payments.',
-          exitCode: 2,
-        })
-      }
-      const methodOpts = parseMethodOpts(options.methodOpt)
-      const stripeOpts = parseOptions(z.object({ paymentMethod: z.string() }), methodOpts)
-
-      const mppx = Mppx.create({
-        methods: [
-          stripe.charge({
-            paymentMethod: stripeOpts.paymentMethod,
-            createToken: async ({
-              paymentMethod,
-              amount,
-              currency,
-              networkId,
-              expiresAt,
-              metadata,
-            }) => {
-              const body = new URLSearchParams({
-                payment_method: paymentMethod!,
-                'usage_limits[currency]': currency,
-                'usage_limits[max_amount]': amount,
-                'usage_limits[expires_at]': expiresAt.toString(),
-              })
-              if (networkId) body.set('seller_details[network_id]', networkId)
-              if (metadata) {
-                for (const [key, value] of Object.entries(metadata))
-                  body.set(`metadata[${key}]`, value)
-              }
-              const sptUrl =
-                process.env.MPPX_STRIPE_SPT_URL ??
-                'https://api.stripe.com/v1/test_helpers/shared_payment/granted_tokens'
-              const response = await globalThis.fetch(sptUrl, {
-                method: 'POST',
-                headers: {
-                  Authorization: `Basic ${btoa(`${stripeSecretKey}:`)}`,
-                  'Content-Type': 'application/x-www-form-urlencoded',
-                },
-                body,
-              })
-              if (!response.ok) {
-                const errorBody = (await response.json()) as { error: { message: string } }
-                return error({
-                  code: 'STRIPE_ERROR',
-                  message: `Failed to create SPT: ${errorBody.error.message}`,
-                  exitCode: 77,
-                })
-              }
-              const { id } = (await response.json()) as { id: string }
-              return id
-            },
-          }),
-        ],
-        polyfill: false,
-      })
-
-      const wwwAuth = Challenge.serialize(challenge)
-      const fakeResponse = new Response(null, {
-        status: 402,
-        headers: { 'WWW-Authenticate': wwwAuth },
-      })
-      const credential = await mppx.createCredential(fakeResponse)
-
-      if (format === 'json') {
-        console.log(JSON.stringify({ authorization: credential }))
-      } else {
-        console.log(credential)
-      }
+    } else if (configMethod) {
+      const mppx = Mppx.create({ methods: [configMethod], polyfill: false })
+      credential = await mppx.createCredential(fakeResponse)
     } else {
-      const matched = configMethods?.find(
-        (m) => m.name === challenge.method && m.intent === challenge.intent,
-      )
-      if (matched) {
-        const mppx = Mppx.create({ methods: [matched], polyfill: false })
-        const wwwAuth = Challenge.serialize(challenge)
-        const fakeResponse = new Response(null, {
-          status: 402,
-          headers: { 'WWW-Authenticate': wwwAuth },
-        })
-        const credential = await mppx.createCredential(fakeResponse)
-        if (format === 'json') {
-          console.log(JSON.stringify({ authorization: credential }))
-        } else {
-          console.log(credential)
-        }
-      } else {
-        return error({
-          code: 'UNSUPPORTED_METHOD',
-          message: `Unsupported payment method: ${challenge.method}/${challenge.intent}. Add it to mppx.config.ts using defineConfig().`,
-          exitCode: 2,
-        })
-      }
+      return c.error({
+        code: 'UNSUPPORTED_METHOD',
+        message: `Unsupported payment method: ${challenge.method}/${challenge.intent}. Add it to mppx.config.ts using defineConfig().`,
+        exitCode: 2,
+      })
+    }
+
+    if (c.format === 'json') {
+      console.log(JSON.stringify({ authorization: credential }))
+    } else {
+      console.log(credential)
     }
   },
 })
@@ -1674,7 +930,7 @@ const init = Cli.create('init', {
     force: z.boolean().optional().describe('Overwrite existing config file'),
   }),
   alias: { force: 'f' },
-  async run({ options, error }) {
+  async run(c) {
     const cwd = process.cwd()
 
     // Determine file extension: .ts if tsconfig exists, .mjs if type:module, else .js
@@ -1690,8 +946,8 @@ const init = Cli.create('init', {
     const filename = `mppx.config${ext}`
     const dest = path.join(cwd, filename)
 
-    if (fs.existsSync(dest) && !options.force) {
-      return error({
+    if (fs.existsSync(dest) && !c.options.force) {
+      return c.error({
         code: 'CONFIG_EXISTS',
         message: `${filename} already exists. Use --force to overwrite.`,
         exitCode: 1,
@@ -1699,14 +955,12 @@ const init = Cli.create('init', {
     }
 
     const template = `import { defineConfig } from 'mppx/cli'
-// import { tempo } from 'mppx/client'
-// import { stripe } from 'mppx/stripe/client'
+// import { tempo, stripe } from 'mppx/cli/handlers'
+// import { myMethod } from 'my-mppx-method'
 
 export default defineConfig({
-  methods: [
-    // tempo({ account }),
-    // stripe.charge({ ... }),
-  ],
+  // handlers: [tempo(), stripe()],
+  // methods: [myMethod({ ... })],
 })
 `
 
@@ -1735,163 +989,8 @@ function parseMethodOpts(raw: string | string[] | undefined): Record<string, str
   return result
 }
 
-function parseOptions<const schema extends z.ZodType>(
-  schema: schema,
-  rawOptions: unknown,
-): z.output<schema> {
-  const result = schema.safeParse(rawOptions ?? {})
-  if (result.success) return result.data
-  const summary = result.error.issues
-    .map((issue) => {
-      const path = issue.path.length ? issue.path.join('.') : 'options'
-      return `${path}: ${issue.message}`
-    })
-    .join(', ')
-  throw new Error(`Invalid CLI options (${summary})`)
-}
-
-function channelStateDir() {
-  return path.join(
-    process.env.XDG_CONFIG_HOME || path.join(os.homedir(), '.config'),
-    'mppx',
-    'channels',
-  )
-}
-
-function readChannelCumulative(channelId: string): bigint | undefined {
-  try {
-    const raw = fs.readFileSync(path.join(channelStateDir(), channelId), 'utf-8').trim()
-    return raw ? BigInt(raw) : undefined
-  } catch {
-    return undefined
-  }
-}
-
-function writeChannelCumulative(channelId: string, cumulative: bigint): void {
-  const dir = channelStateDir()
-  fs.mkdirSync(dir, { recursive: true })
-  fs.writeFileSync(path.join(dir, channelId), cumulative.toString(), 'utf-8')
-}
-
-function deleteChannelState(channelId: string): void {
-  try {
-    fs.unlinkSync(path.join(channelStateDir(), channelId))
-  } catch {}
-}
-
 function isTempoAccount(accountName: string): boolean {
   return accountName.startsWith('tempo:')
-}
-
-function tempoKeystorePath(): string {
-  const platform = os.platform()
-  if (platform === 'darwin')
-    return path.join(os.homedir(), 'Library', 'Application Support', 'tempo', 'wallet', 'keys.toml')
-  return path.join(
-    process.env.XDG_DATA_HOME || path.join(os.homedir(), '.local', 'share'),
-    'tempo',
-    'wallet',
-    'keys.toml',
-  )
-}
-
-interface TempoKeyEntry {
-  wallet_type: string
-  wallet_address: string
-  chain_id: number
-}
-
-function readTempoKeystore(): TempoKeyEntry[] {
-  try {
-    const raw = fs.readFileSync(tempoKeystorePath(), 'utf-8')
-    const entries: TempoKeyEntry[] = []
-    let current: Partial<TempoKeyEntry> | undefined
-    for (const line of raw.split('\n')) {
-      const trimmed = line.trim()
-      if (trimmed === '[[keys]]') {
-        if (current?.wallet_address) entries.push(current as TempoKeyEntry)
-        current = { wallet_type: 'local', wallet_address: '', chain_id: 0 }
-        continue
-      }
-      if (!current) continue
-      const m = trimmed.match(/^(\w+)\s*=\s*"?([^"]*)"?$/)
-      if (!m) continue
-      const [, key, value] = m
-      if (key === 'wallet_type') current.wallet_type = value!
-      else if (key === 'wallet_address') current.wallet_address = value!
-      else if (key === 'chain_id') current.chain_id = Number.parseInt(value!, 10)
-    }
-    if (current?.wallet_address) entries.push(current as TempoKeyEntry)
-    return entries
-  } catch {
-    return []
-  }
-}
-
-function resolveTempoAccount(accountName: string): TempoKeyEntry | undefined {
-  const entries = readTempoKeystore()
-  if (entries.length === 0) return undefined
-  const suffix = accountName.slice('tempo:'.length)
-  if (suffix === 'default' || suffix === '') return entries[0]
-  const idx = Number.parseInt(suffix, 10)
-  if (!Number.isNaN(idx) && idx >= 0 && idx < entries.length) return entries[idx]
-  return undefined
-}
-
-let _tempoCliAvailable: boolean | undefined
-function hasTempoCliSync(): boolean {
-  if (_tempoCliAvailable !== undefined) return _tempoCliAvailable
-  try {
-    child.execFileSync('which', ['tempo'], { stdio: 'ignore' })
-    _tempoCliAvailable = true
-  } catch {
-    _tempoCliAvailable = false
-  }
-  return _tempoCliAvailable
-}
-
-async function tempoCliSign(wwwAuth: string): Promise<string> {
-  return new Promise((resolve, reject) => {
-    child.execFile('tempo', ['mpp', 'sign', '--challenge', wwwAuth], (error, stdout, stderr) => {
-      if (error) {
-        const msg = stderr?.trim() || error.message
-        reject(new Error(`tempo mpp sign failed: ${msg}`))
-        return
-      }
-      const trimmed = stdout.trim()
-      if (!trimmed) {
-        reject(new Error('tempo mpp sign returned empty output'))
-        return
-      }
-      resolve(trimmed)
-    })
-  })
-}
-
-function fallbackFromTempo(): string | undefined {
-  const store = createDefaultStore()
-  const currentDefault = store.get()
-  if (!isTempoAccount(currentDefault)) return undefined
-  if (hasTempoCliSync()) return undefined
-  // tempo CLI not installed, fall back to first mppx account
-  // (sync list via security dump-keychain to avoid async in hot path)
-  const platform = os.platform()
-  if (platform === 'darwin') {
-    try {
-      const stdout = child.execFileSync('security', ['dump-keychain'], { encoding: 'utf-8' })
-      const mppxAccounts: string[] = []
-      for (const block of stdout.split('keychain:')) {
-        const serviceMatch = block.match(/"svce"<blob>="([^"]*)"/)
-        const accountMatch = block.match(/"acct"<blob>="([^"]*)"/)
-        if (serviceMatch?.[1] === name && accountMatch?.[1]) mppxAccounts.push(accountMatch[1])
-      }
-      if (mppxAccounts.length > 0) {
-        store.set(mppxAccounts[0]!)
-        return mppxAccounts[0]!
-      }
-    } catch {}
-  }
-  return undefined
 }
 
 function prompt(message: string): Promise<string | undefined> {
@@ -1917,91 +1016,6 @@ function confirm(prompt: string, defaultYes = false): Promise<boolean> {
     })
   })
 }
-
-// Inlined from https://github.com/alexeyraspopov/picocolors (ISC License)
-const pc = (() => {
-  const p = process || ({} as NodeJS.Process)
-  const argv = p.argv || []
-  const env = p.env || {}
-  const isColorSupported =
-    !(!!env.NO_COLOR || argv.includes('--no-color')) &&
-    (!!env.FORCE_COLOR ||
-      argv.includes('--color') ||
-      ((p.stdout || ({} as NodeJS.WriteStream)).isTTY && env.TERM !== 'dumb') ||
-      !!env.CI)
-
-  const replaceClose = (string: string, close: string, replace: string, index: number): string => {
-    let result = ''
-    let cursor = 0
-    let i = index
-    do {
-      result += string.substring(cursor, i) + replace
-      cursor = i + close.length
-      i = string.indexOf(close, cursor)
-    } while (~i)
-    return result + string.substring(cursor)
-  }
-
-  const formatter =
-    (open: string, close: string, replace = open) =>
-    (input: unknown) => {
-      const string = `${input}`
-      const index = string.indexOf(close, open.length)
-      return ~index
-        ? open + replaceClose(string, close, replace, index) + close
-        : open + string + close
-    }
-
-  const f = isColorSupported ? formatter : () => String
-  return {
-    isColorSupported,
-    reset: f('\x1b[0m', '\x1b[0m'),
-    bold: f('\x1b[1m', '\x1b[22m', '\x1b[22m\x1b[1m'),
-    dim: f('\x1b[2m', '\x1b[22m', '\x1b[22m\x1b[2m'),
-    italic: f('\x1b[3m', '\x1b[23m'),
-    underline: f('\x1b[4m', '\x1b[24m'),
-    inverse: f('\x1b[7m', '\x1b[27m'),
-    hidden: f('\x1b[8m', '\x1b[28m'),
-    strikethrough: f('\x1b[9m', '\x1b[29m'),
-    black: f('\x1b[30m', '\x1b[39m'),
-    red: f('\x1b[31m', '\x1b[39m'),
-    green: f('\x1b[32m', '\x1b[39m'),
-    yellow: f('\x1b[33m', '\x1b[39m'),
-    blue: f('\x1b[34m', '\x1b[39m'),
-    magenta: f('\x1b[35m', '\x1b[39m'),
-    cyan: f('\x1b[36m', '\x1b[39m'),
-    white: f('\x1b[37m', '\x1b[39m'),
-    gray: f('\x1b[90m', '\x1b[39m'),
-    bgBlack: f('\x1b[40m', '\x1b[49m'),
-    bgRed: f('\x1b[41m', '\x1b[49m'),
-    bgGreen: f('\x1b[42m', '\x1b[49m'),
-    bgYellow: f('\x1b[43m', '\x1b[49m'),
-    bgBlue: f('\x1b[44m', '\x1b[49m'),
-    bgMagenta: f('\x1b[45m', '\x1b[49m'),
-    bgCyan: f('\x1b[46m', '\x1b[49m'),
-    bgWhite: f('\x1b[47m', '\x1b[49m'),
-    blackBright: f('\x1b[90m', '\x1b[39m'),
-    redBright: f('\x1b[91m', '\x1b[39m'),
-    greenBright: f('\x1b[92m', '\x1b[39m'),
-    yellowBright: f('\x1b[93m', '\x1b[39m'),
-    blueBright: f('\x1b[94m', '\x1b[39m'),
-    magentaBright: f('\x1b[95m', '\x1b[39m'),
-    cyanBright: f('\x1b[96m', '\x1b[39m'),
-    whiteBright: f('\x1b[97m', '\x1b[39m'),
-    bgBlackBright: f('\x1b[100m', '\x1b[49m'),
-    bgRedBright: f('\x1b[101m', '\x1b[49m'),
-    bgGreenBright: f('\x1b[102m', '\x1b[49m'),
-    bgYellowBright: f('\x1b[103m', '\x1b[49m'),
-    bgBlueBright: f('\x1b[104m', '\x1b[49m'),
-    bgMagentaBright: f('\x1b[105m', '\x1b[49m'),
-    bgCyanBright: f('\x1b[106m', '\x1b[49m'),
-    bgWhiteBright: f('\x1b[107m', '\x1b[49m'),
-    link(url: string, text: string, noUnderline?: boolean) {
-      if (!isColorSupported) return text
-      return `\x1b]8;;${url}\x07${noUnderline ? text : pc.underline(text)}\x1b]8;;\x07`
-    },
-  }
-})()
 
 async function resolveChain(opts: { rpcUrl?: string | undefined } = {}): Promise<Chain> {
   if (!opts.rpcUrl) return tempoModerato
@@ -2072,39 +1086,6 @@ async function fetchTokenInfo(
   const symbol = knownSymbols[token] ?? metadata.symbol
   const decimals = 'decimals' in metadata ? metadata.decimals : 6
   return { balance, symbol, decimals, token }
-}
-
-function detectTerminalBg(
-  timeoutMs = 100,
-): Promise<{ r: number; g: number; b: number } | undefined> {
-  if (!process.stdin.isTTY || !process.stdout.isTTY) return Promise.resolve(undefined)
-  return new Promise((resolve) => {
-    const wasRaw = process.stdin.isRaw
-    let buf = ''
-    const cleanup = () => {
-      clearTimeout(timer)
-      process.stdin.removeListener('data', onData)
-      if (process.stdin.isTTY) process.stdin.setRawMode(wasRaw ?? false)
-      process.stdin.pause()
-    }
-    const timer = setTimeout(() => {
-      cleanup()
-      resolve(undefined)
-    }, timeoutMs)
-    const onData = (data: Buffer) => {
-      buf += data.toString()
-      // biome-ignore lint/suspicious/noControlCharactersInRegex: ANSI escape sequence for terminal background detection
-      const match = buf.match(/\x1b\]11;rgb:([0-9a-f]+)\/([0-9a-f]+)\/([0-9a-f]+)/i)
-      if (!match) return
-      cleanup()
-      const parse = (hex: string) => Number.parseInt(hex.slice(0, 2), 16)
-      resolve({ r: parse(match[1]!), g: parse(match[2]!), b: parse(match[3]!) })
-    }
-    process.stdin.setRawMode(true)
-    process.stdin.resume()
-    process.stdin.on('data', onData)
-    process.stdout.write('\x1b]11;?\x07')
-  })
 }
 
 async function fetchBalanceLines(
