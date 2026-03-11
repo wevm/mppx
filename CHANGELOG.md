@@ -1,5 +1,20 @@
 # mppx
 
+## 0.4.0
+
+### Minor Changes
+
+- 143ebc9: Support handler function refs in `compose()`.
+
+  - **`[mppx.tempo.charge, { amount: '1' }]` syntax** — `compose()` now accepts handler function references (e.g. `mppx.tempo.charge`) as the first element of entry tuples, in addition to `Method.AnyServer` objects and `"name/intent"` string keys.
+  - **`_method` metadata on nested handlers** — nested handler functions are tagged with their source `Method.AnyServer`, enabling `compose()` to resolve the correct handler.
+
+### Patch Changes
+
+- db2033c: Set `feeToken` during server co-sign and simulation for fee-payer transactions.
+
+  When the client sends a fee-payer (0x78) envelope, `feeToken` is intentionally omitted. The server must set it at co-sign time, but previously never did — causing "Fee token spending limit exceeded" errors. Now resolves `feeToken` from the deserialized transaction or falls back to the chain's default currency.
+
 ## 0.3.16
 
 ### Patch Changes
