@@ -1,3 +1,4 @@
+import type { GenerateConfig, RouteConfig } from '../discovery/OpenApi.js'
 import * as Mppx_core from '../server/Mppx.js'
 import * as Mppx_internal from './internal/mppx.js'
 
@@ -62,5 +63,37 @@ export function payment<const intent extends Mppx_internal.AnyMethodFn>(
     if (result.status === 402) return result.challenge
     const response = await handler(request)
     return result.withReceipt(response)
+  }
+}
+
+export type DiscoveryConfig = Omit<GenerateConfig, 'routes'> & {
+  routes?: RouteConfig[]
+}
+
+/**
+ * Creates a Next.js route handler that serves an OpenAPI discovery
+ * document annotated with `x-service-info` and `x-payment-info`.
+ *
+ * @example
+ * ```ts
+ * // app/openapi.json/route.ts
+ * import { Mppx, discovery } from 'mppx/nextjs'
+ *
+ * const mppx = Mppx.create({ methods: [tempo()] })
+ *
+ * export const GET = discovery(mppx, { routes: [...] })
+ * ```
+ */
+export function discovery(
+  mppx: { methods: readonly Mppx_internal.AnyServer[]; realm: string },
+  config: DiscoveryConfig = {},
+): RouteHandler {
+  return async () => {
+    const { generate } = await import('../discovery/OpenApi.js')
+    const doc = generate(mppx, {
+      ...(config.serviceInfo && { serviceInfo: config.serviceInfo }),
+      routes: config.routes ?? [],
+    })
+    return Response.json(doc)
   }
 }

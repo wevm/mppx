@@ -1,9 +1,11 @@
 import type {
+  Express,
   Request as ExpressRequest,
   Response as ExpressResponse,
   NextFunction,
   RequestHandler,
 } from 'express'
+import type { GenerateConfig, RouteConfig } from '../discovery/OpenApi.js'
 import * as Mppx_core from '../server/Mppx.js'
 import * as Request from '../server/Request.js'
 import * as Mppx_internal from './internal/mppx.js'
@@ -79,4 +81,41 @@ export function payment<const intent extends Mppx_internal.AnyMethodFn>(
 
     next()
   }
+}
+
+export type DiscoveryConfig = Omit<GenerateConfig, 'routes'> & {
+  routes?: RouteConfig[]
+  path?: string
+}
+
+/**
+ * Mounts a `GET /openapi.json` route that serves an OpenAPI discovery
+ * document annotated with `x-service-info` and `x-payment-info`.
+ *
+ * @example
+ * ```ts
+ * import express from 'express'
+ * import { Mppx, discovery } from 'mppx/express'
+ *
+ * const app = express()
+ * const mppx = Mppx.create({ methods: [tempo()] })
+ *
+ * discovery(app, mppx, { routes: [...] })
+ * ```
+ */
+export function discovery(
+  app: Express,
+  mppx: { methods: readonly Mppx_internal.AnyServer[]; realm: string },
+  config: DiscoveryConfig = {},
+): void {
+  const mountPath = config.path ?? '/openapi.json'
+
+  app.get(mountPath, async (_req: ExpressRequest, res: ExpressResponse) => {
+    const { generate } = await import('../discovery/OpenApi.js')
+    const doc = generate(mppx, {
+      ...(config.serviceInfo && { serviceInfo: config.serviceInfo }),
+      routes: config.routes ?? [],
+    })
+    res.json(doc)
+  })
 }

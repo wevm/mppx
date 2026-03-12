@@ -1606,6 +1606,81 @@ const sign = Cli.create('sign', {
 
 cli.command(sign)
 
+// ---------------------------------------------------------------------------
+// discover validate <url-or-file>
+// ---------------------------------------------------------------------------
+const discover = Cli.create('discover', {
+  description: 'Service discovery utilities',
+})
+
+const discoverValidate = Cli.create('validate', {
+  description: 'Validate an OpenAPI discovery document',
+  usage: [{ suffix: '<url-or-file>' }],
+  args: z.object({
+    target: z.string().describe('URL or local file path to an OpenAPI document'),
+  }),
+  async run({ args, error }) {
+    const { validate } = await import('./discovery/Validate.js')
+    const target = args.target
+
+    let raw: string
+    if (/^https?:\/\//.test(target)) {
+      const res = await globalThis.fetch(target)
+      if (!res.ok) {
+        return error({
+          code: 'FETCH_ERROR',
+          message: `Failed to fetch ${target}: ${res.status} ${res.statusText}`,
+          exitCode: 1,
+        })
+      }
+      raw = await res.text()
+    } else {
+      const fsModule = await import('node:fs')
+      if (!fsModule.existsSync(target)) {
+        return error({
+          code: 'FILE_NOT_FOUND',
+          message: `File not found: ${target}`,
+          exitCode: 1,
+        })
+      }
+      raw = fsModule.readFileSync(target, 'utf-8')
+    }
+
+    let doc: unknown
+    try {
+      doc = JSON.parse(raw)
+    } catch {
+      return error({
+        code: 'INVALID_JSON',
+        message: 'Failed to parse document as JSON',
+        exitCode: 1,
+      })
+    }
+
+    const errors = validate(doc)
+    if (errors.length === 0) {
+      console.log('✓ Document is valid')
+      return
+    }
+
+    for (const err of errors) {
+      const prefix = err.severity === 'error' ? '✗' : '⚠'
+      console.log(`${prefix} [${err.path}] ${err.message}`)
+    }
+
+    if (errors.some((e) => e.severity === 'error')) {
+      return error({
+        code: 'VALIDATION_FAILED',
+        message: `${errors.filter((e) => e.severity === 'error').length} error(s) found`,
+        exitCode: 1,
+      })
+    }
+  },
+})
+
+discover.command(discoverValidate)
+cli.command(discover)
+
 export default cli
 
 /////////////////////////////////////////////////////////////////////////////////////////////////
