@@ -54,7 +54,7 @@
   "pnpm": {
     "overrides": {
       "mppx": "workspace:*",
-      "ox": "^0.12.4",
+      "ox": "^0.14.1",
       "viem": "^2.46.2"
     }
   },
@@ -165,7 +165,7 @@
     "@remix-run/fetch-proxy": "^0.7.1",
     "@remix-run/node-fetch-server": "^0.13.0",
     "incur": "^0.3.1",
-    "ox": "^0.12.4",
+    "ox": "^0.14.1",
     "zod": "^4.3.6"
   },
   "sideEffects": false,
