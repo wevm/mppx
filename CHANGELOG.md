@@ -1,5 +1,11 @@
 # mppx
 
+## 0.4.1
+
+### Patch Changes
+
+- f2bc051: Support keychain V2 (`0x04`) signatures via ox 0.14 upgrade
+
 ## 0.4.0
 
 ### Minor Changes
