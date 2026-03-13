@@ -88,6 +88,78 @@ export const pc = (() => {
   }
 })()
 
+export function printRequestHeaders(
+  reqUrl: string,
+  init: RequestInit,
+  info: (msg: string) => void,
+) {
+  const { pathname, host } = new URL(reqUrl)
+  const method = (init.method ?? 'GET').toUpperCase()
+  info(`> ${method} ${pathname} HTTP/1.1\n`)
+  info(`> Host: ${host}\n`)
+  for (const [k, v] of Object.entries((init.headers ?? {}) as Record<string, string>))
+    info(`> ${k}: ${v}\n`)
+  info('>\n')
+}
+
+export function printResponseHeaders(
+  res: Response,
+  opts: { include: boolean; verbose: number; silent: boolean },
+) {
+  if (!opts.include && opts.verbose < 2) return
+  if (opts.silent) return
+  const status = `HTTP/1.1 ${res.status} ${res.statusText}`
+  const out = opts.verbose >= 2 ? process.stderr : process.stdout
+  const prefix = opts.verbose >= 2 ? '< ' : ''
+  out.write(`${prefix}${status}\n`)
+  for (const [k, v] of res.headers) out.write(`${prefix}${k}: ${v}\n`)
+  out.write(opts.verbose >= 2 ? '<\n' : '\n')
+}
+
+const balanceKeys = new Set(['amount', 'suggestedDeposit', 'minVoucherDelta'])
+
+export function fmtRequestValue(
+  key: string,
+  value: unknown,
+  ctx: { tokenSymbol: string; tokenDecimals: number; explorerUrl?: string | undefined },
+): string {
+  if (balanceKeys.has(key) && typeof value === 'string') {
+    return `${value} ${pc.dim(`(${fmtBalance(BigInt(value), ctx.tokenSymbol, ctx.tokenDecimals)})`)}`
+  }
+  if (key === 'chainId' && typeof value === 'number') {
+    const name = chainName({ id: value, name: '' })
+    return name ? `${value} ${pc.dim(`(${name})`)}` : String(value)
+  }
+  if (typeof value === 'string' && /^0x[0-9a-fA-F]{40}$/.test(value))
+    return ctx.explorerUrl ? pc.link(`${ctx.explorerUrl}/address/${value}`, value) : value
+  if (typeof value === 'string' && /^https?:\/\//.test(value)) return pc.link(value, value)
+  return String(value)
+}
+
+export function decodeMemo(hex: string): string | undefined {
+  try {
+    const stripped = hex.replace(/^0x0*/, '')
+    if (!stripped) return undefined
+    const bytes = Uint8Array.from(
+      stripped.match(/.{1,2}/g)!.map((b) => Number.parseInt(b, 16)),
+    )
+    const decoded = new TextDecoder().decode(bytes)
+    return /^[\x20-\x7e]+$/.test(decoded) ? decoded : undefined
+  } catch {
+    return undefined
+  }
+}
+
+export function fmtChallengeValue(key: string, value: unknown): string {
+  if (key === 'realm' && typeof value === 'string') {
+    try {
+      const realmUrl = new URL(value.includes('://') ? value : `https://${value}`)
+      return pc.link(realmUrl.href, value)
+    } catch {}
+  }
+  return String(value)
+}
+
 export function parseMethodOpts(raw: string | string[] | undefined): Record<string, string> {
   if (!raw) return {}
   const list = Array.isArray(raw) ? raw : [raw]

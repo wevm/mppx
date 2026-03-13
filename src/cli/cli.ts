@@ -8,70 +8,43 @@ import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts'
 import { tempo as tempoMainnet } from 'viem/chains'
 import * as Challenge from '../Challenge.js'
 import * as Mppx from '../client/Mppx.js'
-import type * as Method from '../Method.js'
 import { createDefaultStore, createKeychain, resolveAccountName } from './account.js'
-import { loadConfig } from './config.js'
+import { loadConfig, resolveHandler } from './config.js'
 import type { CliHandler } from './Handler.js'
-import { stripe as stripeHandler, tempo as tempoHandler } from './handlers/index.js'
 import { readTempoKeystore, resolveTempoAccount } from './handlers/tempo.js'
 import {
   chainName,
   confirm,
+  decodeMemo,
   fetchBalanceLines,
   fmtBalance,
+  fmtChallengeValue,
+  fmtRequestValue,
   isTempoAccount,
   parseMethodOpts,
   pc,
+  printRequestHeaders,
+  printResponseHeaders,
   prompt,
   resolveChain,
 } from './utils.js'
 
-function readStdin(): Promise<string> {
-  return new Promise((resolve, reject) => {
-    let data = ''
-    process.stdin.setEncoding('utf-8')
-    process.stdin.on('data', (chunk) => {
-      data += chunk
-    })
-    process.stdin.on('end', () => resolve(data.trim()))
-    process.stdin.on('error', reject)
-  })
-}
-
-const require = createRequire(import.meta.url)
-const { name, version } = require('../../package.json') as { name: string; version: string }
-
-const builtinHandlers: CliHandler[] = [tempoHandler(), stripeHandler()]
-
-function resolveHandler(
-  challenge: Challenge.Challenge,
-  config?: { handlers?: CliHandler[] | undefined; methods?: any },
-): { handler?: CliHandler | undefined; method?: Method.AnyClient | undefined } {
-  const configHandler = config?.handlers?.find((h) => h.method === challenge.method)
-  if (configHandler) return { handler: configHandler }
-
-  const builtin = builtinHandlers.find((h) => h.method === challenge.method)
-  if (builtin) return { handler: builtin }
-
-  const configMethods = config?.methods?.flat() as Method.AnyClient[] | undefined
-  const matched = configMethods?.find(
-    (m) => m.name === challenge.method && m.intent === challenge.intent,
-  )
-  if (matched) return { method: matched }
-
-  return {}
+const packageJson = createRequire(import.meta.url)('../../package.json') as {
+  name: string
+  version: string
 }
 
 const cli = Cli.create('mppx', {
-  version,
-  description: 'Make HTTP requests with automatic payment',
+  version: packageJson.version,
+  description: 'Make HTTP requests with automatic payment handling',
   usage: [{ suffix: '<url> [options]' }],
   args: z.object({
-    url: z.string().describe('URL to make payment request to'),
+    url: z.string().describe('URL to make request to'),
   }),
   options: z.object({
     account: z.string().optional().describe('Account name (env: MPPX_ACCOUNT)'),
-    confirm: z.boolean().optional().describe('Show confirmation prompts'),
+    config: z.string().optional().describe('Path to config file'),
+    confirm: z.boolean().optional().default(false).describe('Show confirmation prompts'),
     data: z.string().optional().describe('Send request body (implies POST unless -X is set)'),
     fail: z.boolean().optional().describe('Fail silently on HTTP errors (exit 22)'),
     header: z.array(z.string()).optional().describe('Add header (repeatable)'),
@@ -94,8 +67,12 @@ const cli = Cli.create('mppx', {
       .string()
       .optional()
       .describe('RPC endpoint, defaults to public RPC for chain (env: MPPX_RPC_URL)'),
-    silent: z.boolean().optional().describe('Silent mode (suppress progress and info)'),
-    userAgent: z.string().optional().describe('Set User-Agent header'),
+    silent: z.boolean().default(false).describe('Silent mode (suppress progress and info)'),
+    userAgent: z
+      .string()
+      .optional()
+      .default(`${packageJson.name}/${packageJson.version}`)
+      .describe('Set User-Agent header'),
     verbose: z
       .number()
       .default(0)
@@ -104,6 +81,7 @@ const cli = Cli.create('mppx', {
   }),
   alias: {
     account: 'a',
+    config: 'c',
     data: 'd',
     fail: 'f',
     header: 'H',
@@ -118,23 +96,19 @@ const cli = Cli.create('mppx', {
     userAgent: 'A',
     verbose: 'v',
   },
-  examples: [
-    { args: { url: 'example.com/content' }, description: 'Make a payment request' },
-    {
-      args: { url: 'example.com/api' },
-      options: { jsonBody: '{"key":"value"}' },
-      description: 'POST JSON with payment',
-    },
-  ],
+  examples: [{ args: { url: 'mpp.dev/api/ping/paid' }, description: 'Make a payment request' }],
   async run(c) {
-    const methodOpts = parseMethodOpts(c.options.methodOpt)
+    const info = c.options.silent
+      ? (_msg: string) => {}
+      : (msg: string) => process.stderr.write(msg)
 
-    const silent = c.options.silent ?? false
-    const info = silent ? (_msg: string) => {} : (msg: string) => process.stderr.write(msg)
-    let confirmEnabled = c.options.confirm ?? false
-    if (silent) confirmEnabled = false
+    const loaded = await loadConfig(c.options.config)
+    if (loaded && c.options.verbose >= 1)
+      info(`${pc.dim('Using config')} ${pc.blue(path.relative(process.cwd(), loaded.path))}\n`)
 
-    const headers: Record<string, string> = {}
+    const headers: Record<string, string> = {
+      'User-Agent': c.options.userAgent,
+    }
     if (c.options.header) {
       for (const header of c.options.header) {
         const index = header.indexOf(':')
@@ -148,13 +122,11 @@ const cli = Cli.create('mppx', {
         headers[header.slice(0, index).trim()] = header.slice(index + 1).trim()
       }
     }
-    headers['User-Agent'] = c.options.userAgent ?? `${name}/${version}`
 
-    const rawUrl = c.args.url
     const url = (() => {
-      const hasProtocol = /^https?:\/\//.test(rawUrl)
-      const isLocal = /^(localhost|.*\.localhost|127\.0\.0\.1|\[::1\])(:\d+)?/.test(rawUrl)
-      return hasProtocol ? rawUrl : `${isLocal ? 'http' : 'https'}://${rawUrl}`
+      const hasProtocol = /^https?:\/\//.test(c.args.url)
+      const isLocal = /^(localhost|.*\.localhost|127\.0\.0\.1|\[::1\])(:\d+)?/.test(c.args.url)
+      return hasProtocol ? c.args.url : `${isLocal ? 'http' : 'https'}://${c.args.url}`
     })()
     const { hostname } = new URL(url)
     if (
@@ -178,44 +150,26 @@ const cli = Cli.create('mppx', {
     }
 
     try {
-      const fetchInit: RequestInit = { redirect: c.options.location ? 'follow' : 'manual' }
+      const init: RequestInit = { redirect: c.options.location ? 'follow' : 'manual' }
       if (c.options.jsonBody) {
-        fetchInit.body = c.options.jsonBody
+        init.body = c.options.jsonBody
         headers['Content-Type'] ??= 'application/json'
         headers.Accept ??= 'application/json'
       } else if (c.options.data) {
-        fetchInit.body = c.options.data
+        init.body = c.options.data
       }
-      if (c.options.method) fetchInit.method = c.options.method.toUpperCase()
-      else if (fetchInit.body) fetchInit.method = 'POST'
-      if (Object.keys(headers).length > 0) fetchInit.headers = headers
+      if (c.options.method) init.method = c.options.method.toUpperCase()
+      else if (init.body) init.method = 'POST'
+      if (Object.keys(headers).length > 0) init.headers = headers
 
-      const verbose = c.options.verbose
-
-      const printRequestHeaders = (reqUrl: string, init: RequestInit) => {
-        if (verbose < 2) return
-        const { pathname, host } = new URL(reqUrl)
-        const method = (init.method ?? 'GET').toUpperCase()
-        info(`> ${method} ${pathname} HTTP/1.1\n`)
-        info(`> Host: ${host}\n`)
-        for (const [k, v] of Object.entries((init.headers ?? {}) as Record<string, string>))
-          info(`> ${k}: ${v}\n`)
-        info('>\n')
+      const headerOpts = {
+        include: c.options.include ?? false,
+        verbose: c.options.verbose,
+        silent: c.options.silent,
       }
 
-      const printResponseHeaders = (res: Response) => {
-        if (!c.options.include && verbose < 2) return
-        if (silent) return
-        const status = `HTTP/1.1 ${res.status} ${res.statusText}`
-        const out = verbose >= 2 ? process.stderr : process.stdout
-        const prefix = verbose >= 2 ? '< ' : ''
-        out.write(`${prefix}${status}\n`)
-        for (const [k, v] of res.headers) out.write(`${prefix}${k}: ${v}\n`)
-        out.write(verbose >= 2 ? '<\n' : '\n')
-      }
-
-      printRequestHeaders(url, fetchInit)
-      const challengeResponse = await globalThis.fetch(fetchUrl, fetchInit)
+      if (c.options.verbose >= 2) printRequestHeaders(url, init, info)
+      const challengeResponse = await globalThis.fetch(fetchUrl, init)
       if (challengeResponse.status !== 402) {
         if (c.options.fail && challengeResponse.status >= 400)
           return c.error({
@@ -223,111 +177,74 @@ const cli = Cli.create('mppx', {
             message: `HTTP error ${challengeResponse.status}`,
             exitCode: 22,
           })
-        printResponseHeaders(challengeResponse)
+        printResponseHeaders(challengeResponse, headerOpts)
         console.log((await challengeResponse.text()).replace(/\n+$/, ''))
         return
       }
 
       const challenge = Challenge.fromResponse(challengeResponse)
-
-      // Load config early so we can log before challenge display
-      const loaded = await loadConfig()
-      if (loaded && verbose >= 1)
-        info(`${pc.dim('Using config')} ${pc.blue(path.relative(process.cwd(), loaded.path))}\n`)
-
-      const challengeRequest = challenge.request as Record<string, unknown>
-      const shownKeys = new Set<string>()
-
       const { handler, method: configMethod } = resolveHandler(challenge, loaded?.config)
 
-      let tokenSymbol = (challengeRequest.currency as string | undefined) ?? ''
-      let tokenDecimals = (challengeRequest.decimals as number | undefined) ?? 6
+      let tokenSymbol = (challenge.request.currency as string | undefined) ?? ''
+      let tokenDecimals = (challenge.request.decimals as number | undefined) ?? 6
       let explorerUrl: string | undefined
       let handlerResult: Awaited<ReturnType<CliHandler['setup']>> | undefined
-
       if (handler) {
         handlerResult = await handler.setup({
           challenge,
           options: { account: c.options.account, rpcUrl: c.options.rpcUrl },
-          methodOpts,
+          methodOpts: parseMethodOpts(c.options.methodOpt),
         })
         tokenSymbol = handlerResult.tokenSymbol
         tokenDecimals = handlerResult.tokenDecimals
         explorerUrl = handlerResult.explorerUrl
       }
 
+      const confirmEnabled = c.options.silent ? false : c.options.confirm
+
       // Display challenge
+      const shownKeys = new Set<string>()
       {
-        printResponseHeaders(challengeResponse)
-        const request = challengeRequest
+        printResponseHeaders(challengeResponse, headerOpts)
 
-        const balanceKeys = new Set(['amount', 'suggestedDeposit', 'minVoucherDelta'])
-        const skipKeys = new Set(['decimals', 'currency', 'methodDetails'])
-        const fmtRequestValue = (key: string, value: unknown): string => {
-          if (balanceKeys.has(key) && typeof value === 'string') {
-            return `${value} ${pc.dim(`(${fmtBalance(BigInt(value), tokenSymbol, tokenDecimals)})`)}`
+        const challengeRows = (() => {
+          const skip = new Set(['id', 'request'])
+          const rows: [string, string][] = []
+          for (const [key, value] of Object.entries(challenge)) {
+            if (skip.has(key) || value === undefined) continue
+            rows.push([key, fmtChallengeValue(key, value)])
           }
-          if (key === 'chainId' && typeof value === 'number') {
-            const name = chainName({ id: value, name: '' })
-            return name ? `${value} ${pc.dim(`(${name})`)}` : String(value)
-          }
-          if (typeof value === 'string' && /^0x[0-9a-fA-F]{40}$/.test(value))
-            return explorerUrl ? pc.link(`${explorerUrl}/address/${value}`, value) : value
-          if (typeof value === 'string' && /^https?:\/\//.test(value)) return pc.link(value, value)
-          return String(value)
-        }
-        const decodeMemo = (hex: string): string | undefined => {
-          try {
-            const stripped = hex.replace(/^0x0*/, '')
-            if (!stripped) return undefined
-            const bytes = Uint8Array.from(
-              stripped.match(/.{1,2}/g)!.map((b) => Number.parseInt(b, 16)),
-            )
-            const decoded = new TextDecoder().decode(bytes)
-            return /^[\x20-\x7e]+$/.test(decoded) ? decoded : undefined
-          } catch {
-            return undefined
-          }
-        }
+          return rows.sort(([a], [b]) => a.localeCompare(b))
+        })()
 
-        const skipChallengeKeys = new Set(['id', 'request'])
-        const fmtChallengeValue = (key: string, value: unknown): string => {
-          if (key === 'realm' && typeof value === 'string') {
-            try {
-              const realmUrl = new URL(value.includes('://') ? value : `https://${value}`)
-              return pc.link(realmUrl.href, value)
-            } catch {}
+        const fmtCtx = { tokenSymbol, tokenDecimals, explorerUrl }
+        const requestRows = (() => {
+          const skip = new Set(['decimals', 'currency', 'methodDetails'])
+          const rows: [string, string][] = []
+          for (const [key, value] of Object.entries(challenge.request)) {
+            if (skip.has(key) || value === undefined) continue
+            rows.push([key, fmtRequestValue(key, value, fmtCtx)])
           }
-          return String(value)
-        }
-        const challengeRows: [string, string][] = []
-        for (const [key, value] of Object.entries(challenge)) {
-          if (skipChallengeKeys.has(key) || value === undefined) continue
-          challengeRows.push([key, fmtChallengeValue(key, value)])
-        }
-        challengeRows.sort(([a], [b]) => a.localeCompare(b))
+          return rows.sort(([a], [b]) => a.localeCompare(b))
+        })()
 
-        const requestRows: [string, string][] = []
-        for (const [key, value] of Object.entries(request)) {
-          if (skipKeys.has(key) || value === undefined) continue
-          requestRows.push([key, fmtRequestValue(key, value)])
-        }
-        requestRows.sort(([a], [b]) => a.localeCompare(b))
-
-        const detailRows: [string, string, string?][] = []
-        const methodDetails = request.methodDetails as Record<string, unknown> | undefined
-        if (methodDetails) {
+        const detailRows = (() => {
+          const methodDetails = challenge.request.methodDetails as
+            | Record<string, unknown>
+            | undefined
+          if (!methodDetails) return []
+          const rows: [string, string][] = []
           for (const [key, value] of Object.entries(methodDetails)) {
             if (value === undefined) continue
             if (key === 'memo' && typeof value === 'string') {
               const decoded = decodeMemo(value)
-              detailRows.push([key, decoded ? `${decoded}\n${pc.dim(value)}` : value])
+              rows.push([key, decoded ? `${decoded}\n${pc.dim(value)}` : value])
             } else {
-              detailRows.push([key, fmtRequestValue(key, value)])
+              rows.push([key, fmtRequestValue(key, value, fmtCtx)])
             }
           }
-          detailRows.sort(([a], [b]) => a.localeCompare(b))
-        }
+          return rows.sort(([a], [b]) => a.localeCompare(b))
+        })()
 
         const sections: [string, [string, string][]][] = [
           ['Challenge', challengeRows],
@@ -338,7 +255,7 @@ const cli = Cli.create('mppx', {
         const pad = Math.max(...sections.flatMap(([, rows]) => rows.map(([k]) => k.length)))
         const indent = `  ${''.padEnd(pad)}  `
 
-        if (verbose >= 1 || confirmEnabled) {
+        if (c.options.verbose >= 1 || confirmEnabled) {
           info(`${pc.bold(pc.yellow('Payment Required'))}\n`)
           for (const [title, rows] of sections) {
             info(`${pc.bold(title)}\n`)
@@ -361,9 +278,9 @@ const cli = Cli.create('mppx', {
 
       // Create credential
       let credential: string
-      if (handlerResult?.createCredential) {
+      if (handlerResult?.createCredential)
         credential = await handlerResult.createCredential(challengeResponse)
-      } else if (handlerResult) {
+      else if (handlerResult) {
         const mppx = Mppx.create({ methods: handlerResult.methods, polyfill: false })
         credential = await mppx.createCredential(
           challengeResponse,
@@ -382,13 +299,13 @@ const cli = Cli.create('mppx', {
 
       // Send credential and get response
       const credentialHeaders = {
-        ...(fetchInit.headers as Record<string, string>),
+        ...(init.headers as Record<string, string>),
         Authorization: credential,
       }
       handler?.prepareCredentialRequest?.({ challenge, credential, headers: credentialHeaders })
 
-      const credentialFetchInit = { ...fetchInit, headers: credentialHeaders }
-      printRequestHeaders(url, credentialFetchInit)
+      const credentialFetchInit = { ...init, headers: credentialHeaders }
+      if (c.options.verbose >= 2) printRequestHeaders(url, credentialFetchInit, info)
       const credentialResponse = await globalThis.fetch(fetchUrl, credentialFetchInit)
 
       if (c.options.fail && credentialResponse.status >= 400)
@@ -417,7 +334,7 @@ const cli = Cli.create('mppx', {
         return c.error({ code: 'PAYMENT_REJECTED', message: 'Payment rejected', exitCode: 75 })
       }
 
-      printResponseHeaders(credentialResponse)
+      printResponseHeaders(credentialResponse, headerOpts)
 
       // Let handler own the response lifecycle if it wants to
       const handled = await handler?.handleResponse?.({
@@ -425,9 +342,9 @@ const cli = Cli.create('mppx', {
         credential,
         response: credentialResponse,
         fetchUrl,
-        fetchInit,
-        silent,
-        verbose,
+        fetchInit: init,
+        silent: c.options.silent,
+        verbose: c.options.verbose,
         confirmEnabled,
         confirm,
         tokenSymbol,
@@ -439,7 +356,7 @@ const cli = Cli.create('mppx', {
       if (!handled) {
         // Default: print receipt + body
         const receiptHeader = credentialResponse.headers.get('Payment-Receipt')
-        if (receiptHeader && verbose >= 1) {
+        if (receiptHeader && c.options.verbose >= 1) {
           try {
             const receiptJson = JSON.parse(Base64.toString(receiptHeader)) as Record<
               string,
@@ -838,6 +755,7 @@ const sign = Cli.create('sign', {
   options: z.object({
     account: z.string().optional().describe('Account name (env: MPPX_ACCOUNT)'),
     challenge: z.string().optional().describe('WWW-Authenticate challenge value'),
+    config: z.string().optional().describe('Path to config file'),
     dryRun: z.boolean().optional().describe('Validate and parse the challenge without signing'),
     methodOpt: z
       .array(z.string())
@@ -850,13 +768,25 @@ const sign = Cli.create('sign', {
   }),
   alias: {
     account: 'a',
-    challenge: 'c',
+    challenge: 'C',
+    config: 'c',
     methodOpt: 'M',
     rpcUrl: 'r',
   },
   async run(c) {
     const raw =
-      c.options.challenge || (process.stdin.isTTY === false ? await readStdin() : undefined)
+      c.options.challenge ||
+      (process.stdin.isTTY === false
+        ? await new Promise<string>((resolve, reject) => {
+            let data = ''
+            process.stdin.setEncoding('utf-8')
+            process.stdin.on('data', (chunk) => {
+              data += chunk
+            })
+            process.stdin.on('end', () => resolve(data.trim()))
+            process.stdin.on('error', reject)
+          })
+        : undefined)
     if (!raw) {
       return c.error({
         code: 'NO_CHALLENGE',
@@ -881,7 +811,7 @@ const sign = Cli.create('sign', {
       return
     }
 
-    const loaded = await loadConfig()
+    const loaded = await loadConfig(c.options.config)
     const { handler, method: configMethod } = resolveHandler(challenge, loaded?.config)
     const methodOpts = parseMethodOpts(c.options.methodOpt)
 

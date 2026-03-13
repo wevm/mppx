@@ -13,5 +13,5 @@ pnpm dev
 With the server running, use the `mppx` CLI to make a paid request:
 
 ```bash
-mppx localhost:5173/api/photo
+pnpm mppx localhost:5173/api/photo
 ```
