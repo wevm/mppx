@@ -1,7 +1,7 @@
 export { resolveAccount } from './account.js'
 
 import type * as Mppx from '../client/Mppx.js'
-import type { CliPlugin } from './plugins/plugin.js'
+import type { Plugin } from './plugins/plugin.js'
 
 /**
  * Define mppx configuration file
@@ -37,7 +37,7 @@ export declare namespace defineConfig {
     /** Array of methods to use. */
     methods?: Mppx.create.Config['methods'] | undefined
     /** Array of plugins to use. */
-    plugins?: CliPlugin[] | undefined
+    plugins?: Plugin[] | undefined
   }
 }
 

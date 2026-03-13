@@ -10,7 +10,7 @@ import * as Challenge from '../Challenge.js'
 import * as Mppx from '../client/Mppx.js'
 import { createDefaultStore, createKeychain, resolveAccountName } from './account.js'
 import { loadConfig, resolvePlugin } from './internal.js'
-import type { CliPlugin } from './plugins/plugin.js'
+import type { Plugin } from './plugins/plugin.js'
 import { readTempoKeystore, resolveTempoAccount } from './plugins/tempo.js'
 import {
   chainName,
@@ -189,7 +189,7 @@ const cli = Cli.create('mppx', {
       let tokenSymbol = (challenge.request.currency as string | undefined) ?? ''
       let tokenDecimals = (challenge.request.decimals as number | undefined) ?? 6
       let explorerUrl: string | undefined
-      let pluginResult: Awaited<ReturnType<CliPlugin['setup']>> | undefined
+      let pluginResult: Awaited<ReturnType<Plugin['setup']>> | undefined
       if (plugin) {
         pluginResult = await plugin.setup({
           challenge,

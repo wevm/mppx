@@ -21,7 +21,8 @@ export default defineConfig(({ mode }) => {
             const addr = server.httpServer!.address()
             const host =
               typeof addr === 'object' && addr ? `localhost:${addr.port}` : 'localhost:5173'
-            setTimeout(() => console.log(`\n  mppx ${host}/api/fortune\n`), 100)
+            const pm = process.env.npm_config_user_agent?.split('/')[0] ?? 'npx'
+            setTimeout(() => console.log(`\n  ${pm === 'npm' ? 'npx' : pm} mppx ${host}/api/fortune\n`), 100)
           })
         },
       },

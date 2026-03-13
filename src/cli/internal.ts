@@ -3,15 +3,15 @@ import * as path from 'node:path'
 import type * as Challenge from '../Challenge.js'
 import type * as Method from '../Method.js'
 import type { Config } from './config.js'
-import type { CliPlugin } from './plugins/plugin.js'
 import { stripe as stripePlugin, tempo as tempoPlugin } from './plugins/index.js'
+import type { Plugin } from './plugins/plugin.js'
 
-const builtinPlugins: CliPlugin[] = [tempoPlugin(), stripePlugin()]
+const builtinPlugins: Plugin[] = [tempoPlugin(), stripePlugin()]
 
 export function resolvePlugin(
   challenge: Challenge.Challenge,
-  config?: { plugins?: CliPlugin[] | undefined; methods?: any },
-): { plugin?: CliPlugin | undefined; method?: Method.AnyClient | undefined } {
+  config?: { plugins?: Plugin[] | undefined; methods?: any },
+): { plugin?: Plugin | undefined; method?: Method.AnyClient | undefined } {
   const configPlugin = config?.plugins?.find((p) => p.method === challenge.method)
   if (configPlugin) return { plugin: configPlugin }
 

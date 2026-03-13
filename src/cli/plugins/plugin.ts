@@ -1,11 +1,11 @@
 import type * as Challenge from '../../Challenge.js'
 import type * as Method from '../../Method.js'
 
-export function createPlugin(plugin: CliPlugin): CliPlugin {
+export function createPlugin(plugin: Plugin): Plugin {
   return plugin
 }
 
-export interface CliPlugin {
+export interface Plugin {
   /** Payment method name (e.g., 'tempo', 'stripe') */
   method: string
 

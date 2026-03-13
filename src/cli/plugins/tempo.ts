@@ -22,7 +22,7 @@ import {
   pc,
   resolveChain,
 } from '../utils.js'
-import { type CliPlugin, createPlugin } from './plugin.js'
+import { createPlugin, type Plugin } from './plugin.js'
 
 const packageJson = createRequire(import.meta.url)('../../../package.json') as { name: string }
 
@@ -380,7 +380,7 @@ function printReceipt(
     tokenSymbol: string
     tokenDecimals: number
     explorerUrl?: string | undefined
-    handler: CliPlugin
+    handler: Plugin
     prefix?: string | undefined
   },
 ) {
@@ -440,7 +440,7 @@ async function handleSseStream(
     tokenSymbol: string
     tokenDecimals: number
     explorerUrl?: string | undefined
-    handler: CliPlugin
+    handler: Plugin
   },
 ) {
   let cumulativeAmount = opts.cumulativeAmount

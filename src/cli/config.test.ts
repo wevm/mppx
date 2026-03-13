@@ -79,6 +79,4 @@ describe('loadConfig', () => {
     expect(result?.path).toBe(envConfig)
     vi.mocked(process.cwd).mockRestore()
   })
-
-
 })
