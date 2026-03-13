@@ -13,18 +13,18 @@ import { tempo as tempoMethods } from '../../tempo/client/index.js'
 import type { SessionCredentialPayload } from '../../tempo/session/Types.js'
 import { signVoucher } from '../../tempo/session/Voucher.js'
 import { createDefaultStore, createKeychain, resolveAccountName } from '../account.js'
-import { type CliHandler, createHandler } from '../Handler.js'
 import {
   fetchTokenInfo,
   fmtBalance,
   isTempoAccount,
   isTestnet,
+  link,
   pc,
   resolveChain,
 } from '../utils.js'
+import { type CliPlugin, createPlugin } from './plugin.js'
 
-const require = createRequire(import.meta.url)
-const { name } = require('../../../package.json') as { name: string }
+const packageJson = createRequire(import.meta.url)('../../../package.json') as { name: string }
 
 export function tempo() {
   let _session:
@@ -39,7 +39,7 @@ export function tempo() {
       }
     | undefined
 
-  return createHandler({
+  return createPlugin({
     method: 'tempo',
 
     async setup({ challenge, options, methodOpts }) {
@@ -84,9 +84,7 @@ export function tempo() {
         const fallback = fallbackFromTempo()
         if (fallback) {
           const fallbackKey = await createKeychain(fallback).get()
-          if (fallbackKey) {
-            account = privateKeyToAccount(fallbackKey as `0x${string}`)
-          }
+          if (fallbackKey) account = privateKeyToAccount(fallbackKey as `0x${string}`)
         }
         if (!account) {
           if (options.account)
@@ -102,9 +100,7 @@ export function tempo() {
               exitCode: 69,
             })
         }
-      } else {
-        account = privateKeyToAccount(privateKey as `0x${string}`)
-      }
+      } else account = privateKeyToAccount(privateKey as `0x${string}`)
 
       if (!useTempoCliSign && account) {
         const rpcUrl = options.rpcUrl ?? process.env.RPC_URL
@@ -123,7 +119,7 @@ export function tempo() {
           tokenInfo?.decimals ?? (challengeRequest.decimals as number | undefined) ?? 6
       }
 
-      if (useTempoCliSign) {
+      if (useTempoCliSign)
         return {
           tokenSymbol,
           tokenDecimals,
@@ -135,15 +131,13 @@ export function tempo() {
             return tempoCliSign(wwwAuth)
           },
         }
-      }
 
-      if (!account || !client) {
+      if (!account || !client)
         throw new Errors.IncurError({
           code: 'ACCOUNT_NOT_FOUND',
           message: 'Tempo requires a configured account.',
           exitCode: 69,
         })
-      }
 
       const tempoOpts = parseOptions(
         z.object({
@@ -220,9 +214,7 @@ export function tempo() {
     },
 
     prepareCredentialRequest({ challenge, headers }) {
-      if (challenge.intent === 'session') {
-        headers.Accept = 'text/event-stream'
-      }
+      if (challenge.intent === 'session') headers.Accept = 'text/event-stream'
     },
 
     async handleResponse(ctx) {
@@ -303,7 +295,7 @@ export function tempo() {
             cumulativeAmount = BigInt(receiptJson.acceptedCumulative)
             writeChannelCumulative(channelId, cumulativeAmount)
           }
-          if (verbose >= 1) {
+          if (verbose >= 1)
             printReceipt(receiptJson, {
               info,
               shownKeys,
@@ -313,7 +305,6 @@ export function tempo() {
               handler: this,
               prefix: '\n',
             })
-          }
         } catch {}
       }
 
@@ -389,7 +380,7 @@ function printReceipt(
     tokenSymbol: string
     tokenDecimals: number
     explorerUrl?: string | undefined
-    handler: CliHandler
+    handler: CliPlugin
     prefix?: string | undefined
   },
 ) {
@@ -416,7 +407,7 @@ function printReceipt(
       typeof value === 'string' &&
       opts.explorerUrl
     ) {
-      rows.push([key, pc.link(`${opts.explorerUrl}/tx/${value}`, value)])
+      rows.push([key, link(`${opts.explorerUrl}/tx/${value}`, value)])
     } else rows.push([key, String(value)])
   }
   rows.sort(([a], [b]) => a.localeCompare(b))
@@ -449,7 +440,7 @@ async function handleSseStream(
     tokenSymbol: string
     tokenDecimals: number
     explorerUrl?: string | undefined
-    handler: CliHandler
+    handler: CliPlugin
   },
 ) {
   let cumulativeAmount = opts.cumulativeAmount
@@ -642,7 +633,7 @@ async function closeChannel(opts: {
       }
       const txInfo =
         closeTxHash && opts.explorerUrl
-          ? ` ${pc.dim(pc.link(`${opts.explorerUrl}/tx/${closeTxHash}`, closeTxHash))}`
+          ? ` ${pc.dim(link(`${opts.explorerUrl}/tx/${closeTxHash}`, closeTxHash))}`
           : ''
       opts.info(
         `${pc.dim('Channel closed.')} ${pc.dim(`Spent ${fmtBalance(opts.cumulativeAmount, opts.tokenSymbol, opts.tokenDecimals)}.`)}${txInfo}\n`,
@@ -758,7 +749,7 @@ interface TempoKeyEntry {
   chain_id: number
 }
 
-function readTempoKeystore(): TempoKeyEntry[] {
+export function readTempoKeystore(): TempoKeyEntry[] {
   try {
     const raw = fs.readFileSync(tempoKeystorePath(), 'utf-8')
     const entries: TempoKeyEntry[] = []
@@ -795,8 +786,6 @@ export function resolveTempoAccount(accountName: string): TempoKeyEntry | undefi
   return undefined
 }
 
-export { readTempoKeystore }
-
 let _tempoCliAvailable: boolean | undefined
 function hasTempoCliSync(): boolean {
   if (_tempoCliAvailable !== undefined) return _tempoCliAvailable
@@ -808,8 +797,6 @@ function hasTempoCliSync(): boolean {
   }
   return _tempoCliAvailable
 }
-
-export { hasTempoCliSync }
 
 async function tempoCliSign(wwwAuth: string): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -842,7 +829,8 @@ function fallbackFromTempo(): string | undefined {
       for (const block of stdout.split('keychain:')) {
         const serviceMatch = block.match(/"svce"<blob>="([^"]*)"/)
         const accountMatch = block.match(/"acct"<blob>="([^"]*)"/)
-        if (serviceMatch?.[1] === name && accountMatch?.[1]) mppxAccounts.push(accountMatch[1])
+        if (serviceMatch?.[1] === packageJson.name && accountMatch?.[1])
+          mppxAccounts.push(accountMatch[1])
       }
       if (mppxAccounts.length > 0) {
         store.set(mppxAccounts[0]!)

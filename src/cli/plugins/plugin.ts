@@ -1,11 +1,11 @@
-import type * as Challenge from '../Challenge.js'
-import type * as Method from '../Method.js'
+import type * as Challenge from '../../Challenge.js'
+import type * as Method from '../../Method.js'
 
-export function createHandler(handler: CliHandler): CliHandler {
-  return handler
+export function createPlugin(plugin: CliPlugin): CliPlugin {
+  return plugin
 }
 
-export interface CliHandler {
+export interface CliPlugin {
   /** Payment method name (e.g., 'tempo', 'stripe') */
   method: string
 
@@ -35,7 +35,7 @@ export interface CliHandler {
   /**
    * Modify the credential request before sending.
    * Called after credential creation, before the fetch with Authorization header.
-   * Handlers can add headers (e.g., Accept: text/event-stream for sessions).
+   * Plugins can add headers (e.g., Accept: text/event-stream for sessions).
    */
   prepareCredentialRequest?(ctx: {
     challenge: Challenge.Challenge

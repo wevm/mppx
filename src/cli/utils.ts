@@ -131,7 +131,7 @@ export function fmtRequestValue(
     return name ? `${value} ${pc.dim(`(${name})`)}` : String(value)
   }
   if (typeof value === 'string' && /^0x[0-9a-fA-F]{40}$/.test(value))
-    return ctx.explorerUrl ? pc.link(`${ctx.explorerUrl}/address/${value}`, value) : value
+    return ctx.explorerUrl ? link(`${ctx.explorerUrl}/address/${value}`, value) : value
   if (typeof value === 'string' && /^https?:\/\//.test(value)) return pc.link(value, value)
   return String(value)
 }
@@ -140,9 +140,7 @@ export function decodeMemo(hex: string): string | undefined {
   try {
     const stripped = hex.replace(/^0x0*/, '')
     if (!stripped) return undefined
-    const bytes = Uint8Array.from(
-      stripped.match(/.{1,2}/g)!.map((b) => Number.parseInt(b, 16)),
-    )
+    const bytes = Uint8Array.from(stripped.match(/.{1,2}/g)!.map((b) => Number.parseInt(b, 16)))
     const decoded = new TextDecoder().decode(bytes)
     return /^[\x20-\x7e]+$/.test(decoded) ? decoded : undefined
   } catch {
@@ -158,6 +156,10 @@ export function fmtChallengeValue(key: string, value: unknown): string {
     } catch {}
   }
   return String(value)
+}
+
+export function link(url: string, text: string): string {
+  return pc.link(url, text)
 }
 
 export function parseMethodOpts(raw: string | string[] | undefined): Record<string, string> {

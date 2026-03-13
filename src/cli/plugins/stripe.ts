@@ -1,9 +1,10 @@
 import { Errors, z } from 'incur'
 import { stripe as stripeMethods } from '../../stripe/client/index.js'
-import { createHandler } from '../Handler.js'
+import { pc } from '../utils.js'
+import { createPlugin } from './plugin.js'
 
 export function stripe() {
-  return createHandler({
+  return createPlugin({
     method: 'stripe',
 
     async setup({ challenge, methodOpts }) {
@@ -18,21 +19,19 @@ export function stripe() {
       )
 
       const stripeSecretKey = process.env.MPPX_STRIPE_SECRET_KEY
-      if (!stripeSecretKey) {
+      if (!stripeSecretKey)
         throw new Errors.IncurError({
           code: 'MISSING_ENV',
           message: 'MPPX_STRIPE_SECRET_KEY environment variable is required for Stripe payments.',
           exitCode: 2,
         })
-      }
-      if (!stripeSecretKey.startsWith('sk_test_')) {
+      if (!stripeSecretKey.startsWith('sk_test_'))
         throw new Errors.IncurError({
           code: 'UNSUPPORTED_MODE',
           message:
             'Stripe CLI payments are currently only supported in test mode (sk_test_... keys).',
           exitCode: 2,
         })
-      }
 
       return {
         tokenSymbol: currency?.toUpperCase() ?? '',
@@ -101,13 +100,12 @@ export function stripe() {
                       exitCode: 77,
                     })
                   }
-                } else {
+                } else
                   throw new Errors.IncurError({
                     code: 'STRIPE_ERROR',
                     message: `Failed to create SPT: ${errorBody.error.message}`,
                     exitCode: 77,
                   })
-                }
               }
               const { id } = (await response.json()) as { id: string }
               return id
@@ -121,7 +119,7 @@ export function stripe() {
       if (key === 'reference' && typeof value === 'string' && value.startsWith('pi_')) {
         const isTest = process.env.MPPX_STRIPE_SECRET_KEY?.startsWith('sk_test_')
         const url = `https://dashboard.stripe.com${isTest ? '/test' : ''}/payments/${value}`
-        return link(url, value)
+        return pc.link(url, value, true)
       }
     },
   })
@@ -142,8 +140,4 @@ function parseOptions<const schema extends z.ZodType>(
     })
     .join(', ')
   throw new Error(`Invalid CLI options (${summary})`)
-}
-
-function link(url: string, text: string) {
-  return `\x1b]8;;${url}\x07\x1b[4m${text}\x1b[24m\x1b]8;;\x07`
 }

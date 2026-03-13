@@ -9,9 +9,9 @@ import { tempo as tempoMainnet } from 'viem/chains'
 import * as Challenge from '../Challenge.js'
 import * as Mppx from '../client/Mppx.js'
 import { createDefaultStore, createKeychain, resolveAccountName } from './account.js'
-import { loadConfig, resolveHandler } from './config.js'
-import type { CliHandler } from './Handler.js'
-import { readTempoKeystore, resolveTempoAccount } from './handlers/tempo.js'
+import { loadConfig, resolvePlugin } from './internal.js'
+import type { CliPlugin } from './plugins/plugin.js'
+import { readTempoKeystore, resolveTempoAccount } from './plugins/tempo.js'
 import {
   chainName,
   confirm,
@@ -21,6 +21,7 @@ import {
   fmtChallengeValue,
   fmtRequestValue,
   isTempoAccount,
+  link,
   parseMethodOpts,
   pc,
   printRequestHeaders,
@@ -183,21 +184,21 @@ const cli = Cli.create('mppx', {
       }
 
       const challenge = Challenge.fromResponse(challengeResponse)
-      const { handler, method: configMethod } = resolveHandler(challenge, loaded?.config)
+      const { plugin, method: configMethod } = resolvePlugin(challenge, loaded?.config)
 
       let tokenSymbol = (challenge.request.currency as string | undefined) ?? ''
       let tokenDecimals = (challenge.request.decimals as number | undefined) ?? 6
       let explorerUrl: string | undefined
-      let handlerResult: Awaited<ReturnType<CliHandler['setup']>> | undefined
-      if (handler) {
-        handlerResult = await handler.setup({
+      let pluginResult: Awaited<ReturnType<CliPlugin['setup']>> | undefined
+      if (plugin) {
+        pluginResult = await plugin.setup({
           challenge,
           options: { account: c.options.account, rpcUrl: c.options.rpcUrl },
           methodOpts: parseMethodOpts(c.options.methodOpt),
         })
-        tokenSymbol = handlerResult.tokenSymbol
-        tokenDecimals = handlerResult.tokenDecimals
-        explorerUrl = handlerResult.explorerUrl
+        tokenSymbol = pluginResult.tokenSymbol
+        tokenDecimals = pluginResult.tokenDecimals
+        explorerUrl = pluginResult.explorerUrl
       }
 
       const confirmEnabled = c.options.silent ? false : c.options.confirm
@@ -278,13 +279,13 @@ const cli = Cli.create('mppx', {
 
       // Create credential
       let credential: string
-      if (handlerResult?.createCredential)
-        credential = await handlerResult.createCredential(challengeResponse)
-      else if (handlerResult) {
-        const mppx = Mppx.create({ methods: handlerResult.methods, polyfill: false })
+      if (pluginResult?.createCredential)
+        credential = await pluginResult.createCredential(challengeResponse)
+      else if (pluginResult) {
+        const mppx = Mppx.create({ methods: pluginResult.methods, polyfill: false })
         credential = await mppx.createCredential(
           challengeResponse,
-          handlerResult.credentialContext as undefined,
+          pluginResult.credentialContext as undefined,
         )
       } else if (configMethod) {
         const mppx = Mppx.create({ methods: [configMethod], polyfill: false })
@@ -302,7 +303,7 @@ const cli = Cli.create('mppx', {
         ...(init.headers as Record<string, string>),
         Authorization: credential,
       }
-      handler?.prepareCredentialRequest?.({ challenge, credential, headers: credentialHeaders })
+      plugin?.prepareCredentialRequest?.({ challenge, credential, headers: credentialHeaders })
 
       const credentialFetchInit = { ...init, headers: credentialHeaders }
       if (c.options.verbose >= 2) printRequestHeaders(url, credentialFetchInit, info)
@@ -336,8 +337,8 @@ const cli = Cli.create('mppx', {
 
       printResponseHeaders(credentialResponse, headerOpts)
 
-      // Let handler own the response lifecycle if it wants to
-      const handled = await handler?.handleResponse?.({
+      // Let plugin own the response lifecycle if it wants to
+      const handled = await plugin?.handleResponse?.({
         challenge,
         credential,
         response: credentialResponse,
@@ -371,7 +372,7 @@ const cli = Cli.create('mppx', {
             for (const [key, value] of Object.entries(receiptJson)) {
               if (value === undefined || shownKeys.has(key)) continue
               if (key === 'reference' && skipReference) continue
-              const formatted = handler?.formatReceiptField?.(key, value)
+              const formatted = plugin?.formatReceiptField?.(key, value)
               if (formatted !== undefined) {
                 rows.push([key, formatted])
               } else if (receiptBalanceKeys.has(key) && typeof value === 'string') {
@@ -384,7 +385,7 @@ const cli = Cli.create('mppx', {
                 typeof value === 'string' &&
                 explorerUrl
               ) {
-                rows.push([key, pc.link(`${explorerUrl}/tx/${value}`, value)])
+                rows.push([key, link(`${explorerUrl}/tx/${value}`, value)])
               } else rows.push([key, String(value)])
             }
             rows.sort(([a], [b]) => a.localeCompare(b))
@@ -496,7 +497,7 @@ const account = Cli.create('account', {
       console.log(`Account "${resolvedName}" saved to keychain.`)
       const explorerUrl = tempoMainnet.blockExplorers?.default?.url
       const addrDisplay = explorerUrl
-        ? pc.link(`${explorerUrl}/address/${acct.address}`, acct.address)
+        ? link(`${explorerUrl}/address/${acct.address}`, acct.address)
         : acct.address
       console.log(pc.dim(`Address ${addrDisplay}`))
       resolveChain(c.options)
@@ -563,7 +564,7 @@ const account = Cli.create('account', {
       if (!c.options.yes) {
         const explorerUrl = tempoMainnet.blockExplorers?.default?.url
         const addrDisplay = explorerUrl
-          ? pc.link(`${explorerUrl}/address/${acct.address}`, acct.address)
+          ? link(`${explorerUrl}/address/${acct.address}`, acct.address)
           : acct.address
         process.stderr.write(pc.dim(`Delete account "${c.options.account}"\n`))
         process.stderr.write(pc.dim(`  Address  ${addrDisplay}\n`))
@@ -620,7 +621,7 @@ const account = Cli.create('account', {
         const hashes = await Actions.faucet.fund(client, { account: acct })
         const explorerUrl = chain.blockExplorers?.default?.url
         for (const hash of hashes) {
-          const label = explorerUrl ? pc.link(`${explorerUrl}/tx/${hash}`, pc.gray(hash)) : hash
+          const label = explorerUrl ? link(`${explorerUrl}/tx/${hash}`, pc.gray(hash)) : hash
           console.log(`  ${label}`)
         }
         const { waitForTransactionReceipt } = await import('viem/actions')
@@ -665,7 +666,7 @@ const account = Cli.create('account', {
         const label = isDefault ? `${entry.name}${pc.dim('*')}` : entry.name
         const width = entry.name.length + (isDefault ? 1 : 0)
         const addrDisplay = explorerUrl
-          ? pc.link(`${explorerUrl}/address/${entry.address}`, entry.address)
+          ? link(`${explorerUrl}/address/${entry.address}`, entry.address)
           : entry.address
         const sourceLabel = entry.source ? `  ${pc.dim(`(${entry.source})`)}` : ''
         console.log(
@@ -698,7 +699,7 @@ const account = Cli.create('account', {
         const chain = rpcUrl ? await resolveChain({ rpcUrl }) : tempoMainnet
         const explorerUrl = chain.blockExplorers?.default?.url
         const addrDisplay = explorerUrl
-          ? pc.link(`${explorerUrl}/address/${address}`, address)
+          ? link(`${explorerUrl}/address/${address}`, address)
           : address
         console.log(`${pc.dim('Address')}  ${addrDisplay}`)
 
@@ -731,7 +732,7 @@ const account = Cli.create('account', {
       const chain = rpcUrl ? await resolveChain({ rpcUrl }) : tempoMainnet
       const explorerUrl = chain.blockExplorers?.default?.url
       const addrDisplay = explorerUrl
-        ? pc.link(`${explorerUrl}/address/${acct.address}`, acct.address)
+        ? link(`${explorerUrl}/address/${acct.address}`, acct.address)
         : acct.address
       console.log(`${pc.dim('Address')}  ${addrDisplay}`)
 
@@ -812,7 +813,7 @@ const sign = Cli.create('sign', {
     }
 
     const loaded = await loadConfig(c.options.config)
-    const { handler, method: configMethod } = resolveHandler(challenge, loaded?.config)
+    const { plugin, method: configMethod } = resolvePlugin(challenge, loaded?.config)
     const methodOpts = parseMethodOpts(c.options.methodOpt)
 
     const wwwAuth = Challenge.serialize(challenge)
@@ -822,8 +823,8 @@ const sign = Cli.create('sign', {
     })
 
     let credential: string
-    if (handler) {
-      const result = await handler.setup({
+    if (plugin) {
+      const result = await plugin.setup({
         challenge,
         options: { account: c.options.account, rpcUrl: c.options.rpcUrl },
         methodOpts,
@@ -887,12 +888,10 @@ const init = Cli.create('init', {
     }
 
     const template = `import { defineConfig } from 'mppx/cli'
-// import { tempo, stripe } from 'mppx/cli/handlers'
-// import { myMethod } from 'my-mppx-method'
 
 export default defineConfig({
-  // handlers: [tempo(), stripe()],
-  // methods: [myMethod({ ... })],
+  methods: [],
+  plugins: [],
 })
 `
 

@@ -79,6 +79,11 @@
       "src": "./src/cli/config.ts",
       "default": "./dist/cli/config.js"
     },
+    "./cli/plugins": {
+      "types": "./dist/cli/plugins/index.d.ts",
+      "src": "./src/cli/plugins/index.ts",
+      "default": "./dist/cli/plugins/index.js"
+    },
     "./client": {
       "types": "./dist/client/index.d.ts",
       "src": "./src/client/index.ts",

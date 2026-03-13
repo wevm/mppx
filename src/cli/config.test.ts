@@ -1,7 +1,8 @@
 import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
-import { defineConfig, loadConfig } from './config.js'
+import { defineConfig } from './config.js'
+import { loadConfig } from './internal.js'
 
 let tmpDir: string
 
