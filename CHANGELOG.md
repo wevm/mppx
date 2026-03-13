@@ -1,5 +1,11 @@
 # mppx
 
+## 0.4.2
+
+### Patch Changes
+
+- c089da5: Added CLI config via `mppx.config.(js|mjs|ts)`. Allows for extending `mppx` CLI to support non-built-in methods.
+
 ## 0.4.1
 
 ### Patch Changes
