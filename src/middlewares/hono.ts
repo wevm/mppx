@@ -117,7 +117,10 @@ export function discovery(
  * Walks Hono's `app.routes` and matches them to mppx handlers,
  * building `RouteConfig[]` automatically.
  */
-function introspectRoutes(app: Hono<any>, _mppx: { methods: readonly Mppx_internal.AnyServer[]; realm: string }): RouteConfig[] {
+function introspectRoutes(
+  app: Hono<any>,
+  _mppx: { methods: readonly Mppx_internal.AnyServer[]; realm: string },
+): RouteConfig[] {
   const routes: RouteConfig[] = []
   const appRoutes = (app as any).routes as
     | { method: string; path: string; handler: any }[]

@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'vitest'
-import * as z from '../zod.js'
 import * as Method from '../Method.js'
 import * as Mppx from '../server/Mppx.js'
+import * as z from '../zod.js'
 import { generate } from './OpenApi.js'
 
 const charge = Method.toServer(
@@ -17,7 +17,14 @@ const charge = Method.toServer(
       }),
     },
   }),
-  { verify: async () => ({ status: 'success' as const, method: 'tempo', timestamp: '', reference: '' }) },
+  {
+    verify: async () => ({
+      status: 'success' as const,
+      method: 'tempo',
+      timestamp: '',
+      reference: '',
+    }),
+  },
 )
 
 const session = Method.toServer(
@@ -32,7 +39,14 @@ const session = Method.toServer(
       }),
     },
   }),
-  { verify: async () => ({ status: 'success' as const, method: 'tempo', timestamp: '', reference: '' }) },
+  {
+    verify: async () => ({
+      status: 'success' as const,
+      method: 'tempo',
+      timestamp: '',
+      reference: '',
+    }),
+  },
 )
 
 function createMppx(methods: Mppx.Methods) {
