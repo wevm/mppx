@@ -161,7 +161,8 @@ export function create<
 
   if (!secretKey) {
     throw new Error(
-      'Missing secret key. Set the MPP_SECRET_KEY environment variable or pass `secretKey` to Mppx.create().',
+      'Missing secret key — this is an arbitrary random string used as an HMAC secret for stateless challenge verification. ' +
+        'Set the MPP_SECRET_KEY environment variable or pass `secretKey` to Mppx.create().',
     )
   }
 
