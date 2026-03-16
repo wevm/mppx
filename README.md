@@ -1,7 +1,7 @@
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset=".github/logo-dark.svg">
   <source media="(prefers-color-scheme: light)" srcset=".github/logo-light.svg">
-  <img alt="mppx" src=".github/logo-light.svg" width="100%">
+  <img alt="mppx" src=".github/logo-light.svg" width="100%" height="100px">
 </picture>
 
 <p></p>
