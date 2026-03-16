@@ -27,6 +27,9 @@ jobs:
       - name: Install dependencies
         uses: ./.github/actions/install-dependencies
 
+      - name: Audit dependencies
+        run: pnpm audit
+
       - name: Lint & format
         run: pnpm check:ci
 
