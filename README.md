@@ -12,6 +12,23 @@
   <a href="https://mpp.dev/sdk/typescript">Documentation</a> · <a href="#install">Install</a> · <a href="#quick-start">Quick Start</a> · <a href="#examples">Examples</a> · <a href="#cli">CLI</a> · <a href="#payments-proxy">Payments Proxy</a> · <a href="https://github.com/tempoxyz/mpp-specs">Protocol</a>
 </p>
 
+<p align="center">
+  <a href="https://www.npmjs.com/package/mppx">
+    <picture>
+      <source media="(prefers-color-scheme: dark)" srcset="https://img.shields.io/npm/v/mppx?colorA=21262d&colorB=21262d&style=flat">
+      <img src="https://img.shields.io/npm/v/mppx?colorA=f6f8fa&colorB=f6f8fa&style=flat" alt="Version">
+    </picture>
+  </a>
+  <a href="https://github.com/wevm/mppx/blob/main/LICENSE">
+    <picture>
+      <source media="(prefers-color-scheme: dark)" srcset="https://img.shields.io/npm/l/mppx?colorA=21262d&colorB=21262d&style=flat">
+      <img src="https://img.shields.io/npm/l/mppx?colorA=f6f8fa&colorB=f6f8fa&style=flat" alt="MIT License">
+    </picture>
+  </a>
+</p>
+
+---
+
 ## Documentation
 
 Full documentation, API reference, and guides are available at **[mpp.dev/sdk/typescript](https://mpp.dev/sdk/typescript)**.
