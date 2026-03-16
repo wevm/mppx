@@ -8,30 +8,19 @@ overrides:
   mppx: workspace:*
   ox: ^0.14.1
   viem: ^2.46.2
-  tar@<7.5.7: 7.5.7
+  tar@<=7.5.10: 7.5.11
   '@modelcontextprotocol/sdk@>=1.10.0 <=1.25.3': 1.26.0
   qs@>=6.7.0 <=6.14.1: 6.14.2
-  tar@<=7.5.2: 7.5.3
-  hono@<4.11.10: 4.11.10
-  tar@<7.5.8: 7.5.8
-  minimatch@>=5.0.0 <5.1.7: 5.1.7
-  minimatch@>=9.0.0 <9.0.6: 9.0.6
-  rollup@>=4.0.0 <4.59.0: 4.59.0
+  hono@<4.12.7: 4.12.7
   minimatch@>=5.0.0 <5.1.8: 5.1.8
   minimatch@>=9.0.0 <9.0.7: 9.0.7
+  rollup@>=4.0.0 <4.59.0: 4.59.0
   ajv@>=7.0.0-alpha.0 <8.18.0: 8.18.0
-  hono@<4.12.4: 4.12.4
   '@hono/node-server@<1.19.10': 1.19.10
-  tar@<=7.5.9: 7.5.10
   elysia@<1.4.26: 1.4.26
-  file-type@>=13.0.0 <21.3.1: 21.3.1
-  tar@<=7.5.10: 7.5.11
-  hono@<4.12.7: 4.12.7
+  file-type: 21.3.2
   flatted@<3.4.0: 3.4.0
   undici@>=7.0.0 <7.24.0: 7.24.0
-  file-type@>=20.0.0 <=21.3.1: 21.3.2
-  undici@>=7.17.0 <7.24.0: 7.24.0
-  tar@<=7.5.3: 7.5.4
 
 importers:
 
@@ -85,7 +74,7 @@ importers:
         version: 4.28.1
       elysia:
         specifier: 1.4.26
-        version: 1.4.26(@sinclair/typebox@0.34.48)(exact-mirror@0.2.7(@sinclair/typebox@0.34.48))(file-type@21.3.0)(openapi-types@12.1.3)(typescript@5.9.3)
+        version: 1.4.26(@sinclair/typebox@0.34.48)(exact-mirror@0.2.7(@sinclair/typebox@0.34.48))(file-type@21.3.2)(openapi-types@12.1.3)(typescript@5.9.3)
       eslint:
         specifier: ^9.28.0
         version: 9.39.3
@@ -95,6 +84,9 @@ importers:
       express:
         specifier: ^5.2.1
         version: 5.2.1
+      file-type:
+        specifier: 21.3.2
+        version: 21.3.2
       hono:
         specifier: 4.12.7
         version: 4.12.7
@@ -2137,8 +2129,8 @@ packages:
     resolution: {integrity: sha512-XXTUwCvisa5oacNGRP9SfNtYBNAMi+RPwBFmblZEF7N7swHYQS6/Zfk7SRwx4D5j3CH211YNRco1DEMNVfZCnQ==}
     engines: {node: '>=16.0.0'}
 
-  file-type@21.3.0:
-    resolution: {integrity: sha512-8kPJMIGz1Yt/aPEwOsrR97ZyZaD1Iqm8PClb1nYFclUCkBi0Ma5IsYNQzvSFS9ib51lWyIw5mIT9rWzI/xjpzA==}
+  file-type@21.3.2:
+    resolution: {integrity: sha512-DLkUvGwep3poOV2wpzbHCOnSKGk1LzyXTv+aHFgN2VFl96wnp8YA9YjO2qPzg5PuL8q/SW9Pdi6WTkYOIh995w==}
     engines: {node: '>=20'}
 
   fill-range@7.1.1:
@@ -3169,10 +3161,9 @@ packages:
   tar-stream@3.1.7:
     resolution: {integrity: sha512-qJj60CXt7IU1Ffyc3NJMjh6EkuCFej46zUqJ4J7pqYlThyd9bO0XBTmcOIhSzZJVWfsLks0+nle/j538YAW9RQ==}
 
-  tar@7.5.4:
-    resolution: {integrity: sha512-AN04xbWGrSTDmVwlI4/GTlIIwMFk/XEv7uL8aa57zuvRy6s4hdBed+lVq2fAZ89XDa7Us3ANXcE3Tvqvja1kTA==}
+  tar@7.5.11:
+    resolution: {integrity: sha512-ChjMH33/KetonMTAtpYdgUFr0tbz69Fp2v7zWxQfYZX4g5ZN2nOBXm1R2xyA+lMIKrLKIoKAwFj93jE/avX9cQ==}
     engines: {node: '>=18'}
-    deprecated: Old versions of tar are not supported, and contain widely publicized security vulnerabilities, which have been fixed in the current version. Please update. Support for old versions may be purchased (at exorbitant rates) by contacting i@izs.me
 
   term-size@2.2.1:
     resolution: {integrity: sha512-wK0Ri4fOGjv/XPy8SBHZChl8CM7uMc5VML7SqiQ0zG7+J5Vr+RMQDoHa2CNT6KHUnTGIXH34UDMkPzAUyapBZg==}
@@ -5294,13 +5285,13 @@ snapshots:
 
   electron-to-chromium@1.5.302: {}
 
-  elysia@1.4.26(@sinclair/typebox@0.34.48)(exact-mirror@0.2.7(@sinclair/typebox@0.34.48))(file-type@21.3.0)(openapi-types@12.1.3)(typescript@5.9.3):
+  elysia@1.4.26(@sinclair/typebox@0.34.48)(exact-mirror@0.2.7(@sinclair/typebox@0.34.48))(file-type@21.3.2)(openapi-types@12.1.3)(typescript@5.9.3):
     dependencies:
       '@sinclair/typebox': 0.34.48
       cookie: 1.1.1
       exact-mirror: 0.2.7(@sinclair/typebox@0.34.48)
       fast-decode-uri-component: 1.0.1
-      file-type: 21.3.0
+      file-type: 21.3.2
       memoirist: 0.4.0
       openapi-types: 12.1.3
     optionalDependencies:
@@ -5606,7 +5597,7 @@ snapshots:
     dependencies:
       flat-cache: 4.0.1
 
-  file-type@21.3.0:
+  file-type@21.3.2:
     dependencies:
       '@tokenizer/inflate': 0.4.1
       strtok3: 10.3.4
@@ -6243,7 +6234,7 @@ snapshots:
       execa: 9.6.1
       get-port: 7.1.0
       http-proxy: 1.18.1
-      tar: 7.5.4
+      tar: 7.5.11
     optionalDependencies:
       testcontainers: 11.11.0
     transitivePeerDependencies:
@@ -6652,7 +6643,7 @@ snapshots:
       - bare-abort-controller
       - react-native-b4a
 
-  tar@7.5.4:
+  tar@7.5.11:
     dependencies:
       '@isaacs/fs-minipass': 4.0.1
       chownr: 3.0.0
