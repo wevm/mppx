@@ -9,7 +9,7 @@
 <p align="center"><b>TypeScript SDK for the <a href="https://mpp.dev">Machine Payments Protocol</a></b></p>
 
 <p align="center">
-  <a href="#documentation">Documentation</a> · <a href="#install">Install</a> · <a href="#quick-start">Quick Start</a> · <a href="#examples">Examples</a> · <a href="#cli">CLI</a> · <a href="#payments-proxy">Payments Proxy</a> · <a href="#protocol">Protocol</a>
+  <a href="https://mpp.dev/sdk/typescript">Documentation</a> · <a href="#install">Install</a> · <a href="#quick-start">Quick Start</a> · <a href="#examples">Examples</a> · <a href="#cli">CLI</a> · <a href="#payments-proxy">Payments Proxy</a> · <a href="https://github.com/tempoxyz/mpp-specs">Protocol</a>
 </p>
 
 ## Documentation
