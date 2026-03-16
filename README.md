@@ -1,9 +1,16 @@
-# mppx
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset=".github/logo-dark.svg">
+  <source media="(prefers-color-scheme: light)" srcset=".github/logo-light.svg">
+  <img alt="mppx" src=".github/logo-light.svg" width="100%" height="100px">
+</picture>
 
-TypeScript SDK for the [**Machine Payments Protocol**](https://mpp.dev)
+<p></p>
 
-[![npm](https://img.shields.io/npm/v/mppx.svg)](https://www.npmjs.com/package/mppx)
-[![License](https://img.shields.io/npm/l/mppx.svg)](LICENSE)
+<p align="center"><b>TypeScript SDK for the <a href="https://mpp.dev">Machine Payments Protocol</a></b></p>
+
+<p align="center">
+  <a href="https://mpp.dev/sdk/typescript">Documentation</a> · <a href="#install">Install</a> · <a href="#quick-start">Quick Start</a> · <a href="#examples">Examples</a> · <a href="#cli">CLI</a> · <a href="#payments-proxy">Payments Proxy</a> · <a href="https://github.com/tempoxyz/mpp-specs">Protocol</a>
+</p>
 
 ## Documentation
 
