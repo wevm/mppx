@@ -1,5 +1,13 @@
 # mppx
 
+## 0.4.4
+
+### Patch Changes
+
+- b09a35a: fix: update getChannel ABI field order to match new escrow contract
+- c520705: Fixed `Client.getResolver` to inject Tempo serializers onto clients missing them, preventing the default serializer from rejecting Tempo-specific transaction fields.
+- b09a35a: chore: update mainnet escrow contract address
+
 ## 0.4.3
 
 ### Patch Changes
