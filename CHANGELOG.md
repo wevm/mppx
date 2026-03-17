@@ -1,5 +1,11 @@
 # mppx
 
+## 0.4.3
+
+### Patch Changes
+
+- 7f8d103: chore: update mainnet escrow contract address
+
 ## 0.4.2
 
 ### Patch Changes
