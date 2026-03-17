@@ -37,6 +37,16 @@ export const escrowAbi = [
     ],
     outputs: [
       {
+        name: 'finalized',
+        type: 'bool',
+        internalType: 'bool',
+      },
+      {
+        name: 'closeRequestedAt',
+        type: 'uint64',
+        internalType: 'uint64',
+      },
+      {
         name: 'payer',
         type: 'address',
         internalType: 'address',
@@ -65,16 +75,6 @@ export const escrowAbi = [
         name: 'settled',
         type: 'uint128',
         internalType: 'uint128',
-      },
-      {
-        name: 'closeRequestedAt',
-        type: 'uint64',
-        internalType: 'uint64',
-      },
-      {
-        name: 'finalized',
-        type: 'bool',
-        internalType: 'bool',
       },
     ],
     stateMutability: 'view',
@@ -214,6 +214,16 @@ export const escrowAbi = [
         internalType: 'struct TempoStreamChannel.Channel',
         components: [
           {
+            name: 'finalized',
+            type: 'bool',
+            internalType: 'bool',
+          },
+          {
+            name: 'closeRequestedAt',
+            type: 'uint64',
+            internalType: 'uint64',
+          },
+          {
             name: 'payer',
             type: 'address',
             internalType: 'address',
@@ -242,16 +252,6 @@ export const escrowAbi = [
             name: 'settled',
             type: 'uint128',
             internalType: 'uint128',
-          },
-          {
-            name: 'closeRequestedAt',
-            type: 'uint64',
-            internalType: 'uint64',
-          },
-          {
-            name: 'finalized',
-            type: 'bool',
-            internalType: 'bool',
           },
         ],
       },
@@ -275,6 +275,16 @@ export const escrowAbi = [
         internalType: 'struct TempoStreamChannel.Channel[]',
         components: [
           {
+            name: 'finalized',
+            type: 'bool',
+            internalType: 'bool',
+          },
+          {
+            name: 'closeRequestedAt',
+            type: 'uint64',
+            internalType: 'uint64',
+          },
+          {
             name: 'payer',
             type: 'address',
             internalType: 'address',
@@ -303,16 +313,6 @@ export const escrowAbi = [
             name: 'settled',
             type: 'uint128',
             internalType: 'uint128',
-          },
-          {
-            name: 'closeRequestedAt',
-            type: 'uint64',
-            internalType: 'uint64',
-          },
-          {
-            name: 'finalized',
-            type: 'bool',
-            internalType: 'bool',
           },
         ],
       },

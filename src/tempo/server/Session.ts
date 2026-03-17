@@ -723,14 +723,14 @@ async function handleVoucher(
     lastOnChainVerified.set(payload.channelId, Date.now())
   } else {
     cachedOnChain = {
+      finalized: channel.finalized,
+      closeRequestedAt: 0n,
       payer: channel.payer,
       payee: channel.payee,
       token: channel.token,
+      authorizedSigner: channel.authorizedSigner,
       deposit: channel.deposit,
       settled: channel.settledOnChain,
-      finalized: channel.finalized,
-      authorizedSigner: channel.authorizedSigner,
-      closeRequestedAt: 0n,
     }
   }
 
