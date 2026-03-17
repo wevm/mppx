@@ -49,7 +49,7 @@ describe('rpcUrl', () => {
 
 describe('escrowContract', () => {
   test('mainnet escrow contract', () => {
-    expect(escrowContract[chainId.mainnet]).toBe('0x0901aED692C755b870F9605E56BAA66C35BEfF69')
+    expect(escrowContract[chainId.mainnet]).toBe('0x33b901018174DDabE4841042ab76ba85D4e24f25')
   })
 
   test('testnet escrow contract', () => {
