@@ -1,9 +1,10 @@
 import { Receipt } from 'mppx'
 import { tempo } from 'mppx/client'
 import { Mppx as Mppx_server, tempo as tempo_server } from 'mppx/server'
-import { createClient } from 'viem'
+import { createClient, defineChain } from 'viem'
 import { describe, expect, test, vi } from 'vitest'
 import * as Http from '~test/Http.js'
+import { rpcUrl } from '~test/tempo/prool.js'
 import { accounts, asset, chain, client, http } from '~test/tempo/viem.js'
 import * as Fetch from './Fetch.js'
 
@@ -229,6 +230,61 @@ describe('Fetch.from', () => {
         "timestamp": "[timestamp]",
       }
     `)
+
+    httpServer.close()
+  })
+
+  test('behavior: fee payer with plain chain client (no Tempo serializers)', async () => {
+    const plainChain = defineChain({
+      id: chain.id,
+      name: chain.name,
+      nativeCurrency: chain.nativeCurrency,
+      rpcUrls: chain.rpcUrls,
+    })
+    const plainClient = createClient({
+      account: accounts[1],
+      chain: plainChain,
+      transport: http(rpcUrl),
+    })
+
+    const serverWithFeePayer = Mppx_server.create({
+      methods: [
+        tempo_server.charge({
+          feePayer: accounts[0],
+          getClient: () => client,
+        }),
+      ],
+      realm,
+      secretKey,
+    })
+
+    const fetch = Fetch.from({
+      methods: [
+        tempo.charge({
+          account: accounts[1],
+          getClient: () => plainClient,
+        }),
+      ],
+    })
+
+    const httpServer = await Http.createServer(async (req, res) => {
+      const result = await Mppx_server.toNodeListener(
+        serverWithFeePayer.charge({
+          amount: '1',
+          currency: asset,
+          expires: new Date(Date.now() + 60_000).toISOString(),
+          recipient: accounts[0].address,
+        }),
+      )(req, res)
+      if (result.status === 402) return
+      res.end('OK')
+    })
+
+    const response = await fetch(httpServer.url)
+    expect(response.status).toBe(200)
+
+    const receipt = Receipt.fromResponse(response)
+    expect(receipt.status).toBe('success')
 
     httpServer.close()
   })
