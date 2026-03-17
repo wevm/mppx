@@ -47,9 +47,9 @@ describe('Fetch.from', () => {
 
 describe('Fetch.from.RequestInit', () => {
   test('behavior: has context property typed to method context', () => {
-    const _method = charge()
+    const method = charge()
 
-    type Methods = [typeof _method]
+    type Methods = [typeof method]
     type Init = Fetch.from.RequestInit<Methods>
 
     expectTypeOf<Init>().toHaveProperty('context')

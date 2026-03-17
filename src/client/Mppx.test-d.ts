@@ -102,9 +102,9 @@ describe('Mppx with context', () => {
 
 describe('fetch context', () => {
   test('context has typed account and autoSwap for tempo charge', () => {
-    const _mppx = Mppx.create({ methods: [charge()] })
+    const mppx = Mppx.create({ methods: [charge()] })
 
-    type FetchInit = NonNullable<Parameters<typeof _mppx.fetch>[1]>
+    type FetchInit = NonNullable<Parameters<typeof mppx.fetch>[1]>
     type Context = NonNullable<FetchInit['context']>
 
     expectTypeOf<Context>().toHaveProperty('account')
@@ -114,9 +114,9 @@ describe('fetch context', () => {
   })
 
   test('context has typed account and autoSwap for tempo()', () => {
-    const _mppx = Mppx.create({ methods: [tempo()] })
+    const mppx = Mppx.create({ methods: [tempo()] })
 
-    type FetchInit = NonNullable<Parameters<typeof _mppx.fetch>[1]>
+    type FetchInit = NonNullable<Parameters<typeof mppx.fetch>[1]>
     type Context = NonNullable<FetchInit['context']>
 
     // Context is a union of charge and session contexts.

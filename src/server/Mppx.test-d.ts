@@ -122,8 +122,8 @@ describe('Mppx type tests', () => {
       recipient: '0x02',
     }
 
-    const _handler = mppx.compose([alphaMethod, opts])
-    type HandlerReturn = ReturnType<typeof _handler>
+    const handler = mppx.compose([alphaMethod, opts])
+    type HandlerReturn = ReturnType<typeof handler>
 
     assertType<Promise<{ status: 402; challenge: Response } | { status: 200; withReceipt: any }>>(
       {} as Awaited<HandlerReturn> as any,
