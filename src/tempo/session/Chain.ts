@@ -305,14 +305,14 @@ export async function broadcastOpenTransaction(parameters: {
     return {
       txHash,
       onChain: {
+        finalized: false,
+        closeRequestedAt: 0n,
         payer: transaction.from,
         payee,
         token,
         authorizedSigner,
         deposit,
         settled: 0n,
-        closeRequestedAt: 0n,
-        finalized: false,
       } as OnChainChannel,
     }
   }

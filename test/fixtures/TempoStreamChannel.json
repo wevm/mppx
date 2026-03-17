@@ -38,6 +38,16 @@
       ],
       "outputs": [
         {
+          "name": "finalized",
+          "type": "bool",
+          "internalType": "bool"
+        },
+        {
+          "name": "closeRequestedAt",
+          "type": "uint64",
+          "internalType": "uint64"
+        },
+        {
           "name": "payer",
           "type": "address",
           "internalType": "address"
@@ -66,16 +76,6 @@
           "name": "settled",
           "type": "uint128",
           "internalType": "uint128"
-        },
-        {
-          "name": "closeRequestedAt",
-          "type": "uint64",
-          "internalType": "uint64"
-        },
-        {
-          "name": "finalized",
-          "type": "bool",
-          "internalType": "bool"
         }
       ],
       "stateMutability": "view"
@@ -215,6 +215,16 @@
           "internalType": "struct TempoStreamChannel.Channel",
           "components": [
             {
+              "name": "finalized",
+              "type": "bool",
+              "internalType": "bool"
+            },
+            {
+              "name": "closeRequestedAt",
+              "type": "uint64",
+              "internalType": "uint64"
+            },
+            {
               "name": "payer",
               "type": "address",
               "internalType": "address"
@@ -243,16 +253,6 @@
               "name": "settled",
               "type": "uint128",
               "internalType": "uint128"
-            },
-            {
-              "name": "closeRequestedAt",
-              "type": "uint64",
-              "internalType": "uint64"
-            },
-            {
-              "name": "finalized",
-              "type": "bool",
-              "internalType": "bool"
             }
           ]
         }
@@ -276,6 +276,16 @@
           "internalType": "struct TempoStreamChannel.Channel[]",
           "components": [
             {
+              "name": "finalized",
+              "type": "bool",
+              "internalType": "bool"
+            },
+            {
+              "name": "closeRequestedAt",
+              "type": "uint64",
+              "internalType": "uint64"
+            },
+            {
               "name": "payer",
               "type": "address",
               "internalType": "address"
@@ -304,16 +314,6 @@
               "name": "settled",
               "type": "uint128",
               "internalType": "uint128"
-            },
-            {
-              "name": "closeRequestedAt",
-              "type": "uint64",
-              "internalType": "uint64"
-            },
-            {
-              "name": "finalized",
-              "type": "bool",
-              "internalType": "bool"
             }
           ]
         }
