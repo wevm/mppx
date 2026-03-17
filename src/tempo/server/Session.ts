@@ -98,12 +98,14 @@ export function session<const parameters extends session.Parameters>(p?: paramet
 
   const store = ChannelStore.fromStore(rawStore)
 
+  const { account, recipient, feePayer, feePayerUrl } = Account.resolve(parameters)
+
   const getClient = Client.getResolver({
     chain: tempo_chain,
+    feePayerUrl,
     getClient: parameters.getClient,
     rpcUrl: defaults.rpcUrl,
   })
-  const { account, recipient, feePayer } = Account.resolve(parameters)
 
   type Transport = parameters['sse'] extends false | undefined ? undefined : Transport.Sse
   const transport = parameters.sse
@@ -154,7 +156,7 @@ export function session<const parameters extends session.Parameters>(p?: paramet
       // Extract feePayer.
       const resolvedFeePayer = (() => {
         const account = typeof request.feePayer === 'object' ? request.feePayer : feePayer
-        const requested = request.feePayer !== false && (account ?? feePayer)
+        const requested = request.feePayer !== false && (account ?? feePayer ?? feePayerUrl)
         if (credential) return account
         if (requested) return true
         return undefined

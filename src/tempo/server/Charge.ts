@@ -42,10 +42,11 @@ export function charge<const parameters extends charge.Parameters>(
     waitForConfirmation = true,
   } = parameters
 
-  const { recipient, feePayer } = Account.resolve(parameters)
+  const { recipient, feePayer, feePayerUrl } = Account.resolve(parameters)
 
   const getClient = Client.getResolver({
     chain: { ...tempo_chain, experimental_preconfirmationTime: 500 },
+    feePayerUrl,
     getClient: parameters.getClient,
     rpcUrl: defaults.rpcUrl,
   })
@@ -82,7 +83,7 @@ export function charge<const parameters extends charge.Parameters>(
 
       const resolvedFeePayer = (() => {
         const account = typeof request.feePayer === 'object' ? request.feePayer : feePayer
-        const requested = request.feePayer !== false && (account ?? feePayer)
+        const requested = request.feePayer !== false && (account ?? feePayer ?? feePayerUrl)
         if (credential) return account
         if (requested) return true
         return undefined
@@ -235,7 +236,7 @@ export function charge<const parameters extends charge.Parameters>(
               recipient,
             })
 
-          if (feePayer && methodDetails?.feePayer !== false)
+          if ((feePayer || feePayerUrl) && methodDetails?.feePayer !== false)
             FeePayer.validateCalls(calls, { amount, currency, recipient })
 
           const resolvedFeeToken =

@@ -96,6 +96,9 @@ importers:
       prool:
         specifier: ^0.2.2
         version: 0.2.2(testcontainers@11.11.0)
+      tempo.ts:
+        specifier: ^0.14.2
+        version: 0.14.2(typescript@5.9.3)(viem@2.46.2(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.3.6))(zod@4.3.6)
       testcontainers:
         specifier: ^11.11.0
         version: 11.11.0
@@ -966,11 +969,20 @@ packages:
   '@remix-run/fetch-proxy@0.7.1':
     resolution: {integrity: sha512-rPLfOpAaCXtm1dLI45uIPKERNbXbrh0P9AJc1sliz8pWd/McaFYjdr5KzB4QrFSfPvEt/Wmy6F2521qB1kK0ug==}
 
+  '@remix-run/fetch-router@0.17.0':
+    resolution: {integrity: sha512-3FeJGrTqrKKCvZdQWijbCXTEHKcdttkLFbI2ogfpZ+iDYSNZ9036wgDXuuoZqg6d+D0E8Unhk5ZwrLKDCd/hOw==}
+
   '@remix-run/headers@0.19.0':
     resolution: {integrity: sha512-+62NbkXuXm9r/NdG6KfH9OCKofCWm8VjkrVPICiHKtRl8Gf2Vi6eFTN4mGgBlZRhd5mmEVRV4hTIn/JUSHDAOw==}
 
   '@remix-run/node-fetch-server@0.13.0':
     resolution: {integrity: sha512-1EsNo0ZpgXu/90AWoRZf/oE3RVTUS80tiTUpt+hv5pjtAkw7icN4WskDwz/KdAw5ARbJLMhZBrO1NqThmy/McA==}
+
+  '@remix-run/route-pattern@0.19.0':
+    resolution: {integrity: sha512-RXKaIJ2Lx01uyZc0iw+yLzowFCa1/NuB8jN7QTo4QUe2CaUGtvPGdhgrTUp75lyNNCSJIrM9SaAJ6c1pjZdmoA==}
+
+  '@remix-run/session@0.4.1':
+    resolution: {integrity: sha512-Bm6aKYgutb/raHZ3laloz8g/Qu7f3CeK3o4gUVDMxtEiAdWCzJamwHoTpGOc5+g1Kuy7z85v4M6nGrF06MFDSg==}
 
   '@rolldown/binding-android-arm64@1.0.0-rc.9':
     resolution: {integrity: sha512-lcJL0bN5hpgJfSIz/8PIf02irmyL43P+j1pTCfbD1DbLkmGRuFIA4DD3B3ZOvGqG0XiVvRznbKtN0COQVaKUTg==}
@@ -3139,6 +3151,14 @@ packages:
     resolution: {integrity: sha512-ChjMH33/KetonMTAtpYdgUFr0tbz69Fp2v7zWxQfYZX4g5ZN2nOBXm1R2xyA+lMIKrLKIoKAwFj93jE/avX9cQ==}
     engines: {node: '>=18'}
 
+  tempo.ts@0.14.2:
+    resolution: {integrity: sha512-N4UkP2X/KDLmYUEIEWUDAk1m/USbKMzTjjUz1m0LwrIEVfoDlcSbBRc9jp14gLZcJVDlnq+fWHFVcH+GdrySgQ==}
+    peerDependencies:
+      viem: ^2.46.2
+    peerDependenciesMeta:
+      viem:
+        optional: true
+
   term-size@2.2.1:
     resolution: {integrity: sha512-wK0Ri4fOGjv/XPy8SBHZChl8CM7uMc5VML7SqiQ0zG7+J5Vr+RMQDoHa2CNT6KHUnTGIXH34UDMkPzAUyapBZg==}
     engines: {node: '>=8'}
@@ -4305,9 +4325,18 @@ snapshots:
     dependencies:
       '@remix-run/headers': 0.19.0
 
+  '@remix-run/fetch-router@0.17.0':
+    dependencies:
+      '@remix-run/route-pattern': 0.19.0
+      '@remix-run/session': 0.4.1
+
   '@remix-run/headers@0.19.0': {}
 
   '@remix-run/node-fetch-server@0.13.0': {}
+
+  '@remix-run/route-pattern@0.19.0': {}
+
+  '@remix-run/session@0.4.1': {}
 
   '@rolldown/binding-android-arm64@1.0.0-rc.9':
     optional: true
@@ -6529,6 +6558,16 @@ snapshots:
       minipass: 7.1.2
       minizlib: 3.1.0
       yallist: 5.0.0
+
+  tempo.ts@0.14.2(typescript@5.9.3)(viem@2.46.2(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.3.6))(zod@4.3.6):
+    dependencies:
+      '@remix-run/fetch-router': 0.17.0
+      ox: 0.14.1(typescript@5.9.3)(zod@4.3.6)
+    optionalDependencies:
+      viem: 2.46.2(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.3.6)
+    transitivePeerDependencies:
+      - typescript
+      - zod
 
   term-size@2.2.1: {}
 

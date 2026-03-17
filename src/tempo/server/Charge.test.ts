@@ -2,8 +2,9 @@ import { Challenge, Credential, Receipt } from 'mppx'
 import { Mppx as Mppx_client, tempo as tempo_client } from 'mppx/client'
 import { Mppx as Mppx_server, tempo as tempo_server } from 'mppx/server'
 import type { Hex } from 'ox'
+import { Handler } from 'tempo.ts/server'
 import { encodeFunctionData, parseUnits } from 'viem'
-import { prepareTransactionRequest, signTransaction } from 'viem/actions'
+import { getTransactionReceipt, prepareTransactionRequest, signTransaction } from 'viem/actions'
 import { Abis, Actions, Addresses, Tick } from 'viem/tempo'
 import { beforeAll, describe, expect, test } from 'vitest'
 import * as Http from '~test/Http.js'
@@ -485,6 +486,62 @@ describe('tempo', () => {
       }
 
       httpServer.close()
+    })
+
+    test('behavior: fee payer URL (withFeePayer transport)', async () => {
+      const feePayerHandler = Handler.feePayer({
+        account: accounts[0] as any,
+        client,
+      })
+      const feePayerServer = await Http.createServer(feePayerHandler.listener)
+
+      const serverWithFeePayer = Mppx_server.create({
+        methods: [
+          tempo_server.charge({
+            feePayer: feePayerServer.url,
+            getClient: () => client,
+            currency: asset,
+          }),
+        ],
+        realm,
+        secretKey,
+      })
+
+      const mppx = Mppx_client.create({
+        polyfill: false,
+        methods: [
+          tempo_client({
+            account: accounts[1],
+            getClient: () => client,
+          }),
+        ],
+      })
+
+      const httpServer = await Http.createServer(async (req, res) => {
+        const result = await Mppx_server.toNodeListener(
+          serverWithFeePayer.charge({
+            amount: '1',
+            currency: asset,
+            recipient: accounts[0].address,
+          }),
+        )(req, res)
+        if (result.status === 402) return
+        res.end('OK')
+      })
+
+      const response = await mppx.fetch(httpServer.url)
+      expect(response.status).toBe(200)
+
+      const receipt = Receipt.fromResponse(response)
+      expect(receipt.status).toBe('success')
+
+      const txReceipt = await getTransactionReceipt(client, {
+        hash: receipt.reference as Hex.Hex,
+      })
+      expect((txReceipt as any).feePayer).toBe(accounts[0].address.toLowerCase())
+
+      httpServer.close()
+      feePayerServer.close()
     })
 
     test('error: rejects fee-payer transaction with unauthorized calls', async () => {
