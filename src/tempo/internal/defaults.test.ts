@@ -53,7 +53,7 @@ describe('escrowContract', () => {
   })
 
   test('testnet escrow contract', () => {
-    expect(escrowContract[chainId.testnet]).toBe('0x542831e3E4Ace07559b7C8787395f4Fb99F70787')
+    expect(escrowContract[chainId.testnet]).toBe('0xe1c4d3dce17bc111181ddf716f75bae49e61a336')
   })
 })
 

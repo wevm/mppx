@@ -6,6 +6,7 @@ import { deployEscrow, openChannel } from '~test/tempo/session.js'
 import { accounts, asset, chain, client, fundAccount } from '~test/tempo/viem.js'
 import * as Challenge from '../../Challenge.js'
 import * as Credential from '../../Credential.js'
+import { chainId, escrowContract as escrowContractDefaults } from '../internal/defaults.js'
 import type { SessionCredentialPayload } from '../session/Types.js'
 import { session } from './Session.js'
 
@@ -22,7 +23,7 @@ const pureClient = createClient({
   transport: http('http://127.0.0.1'),
 })
 
-const escrowAddress = '0x542831e3E4Ace07559b7C8787395f4Fb99F70787' as Address
+const escrowAddress = escrowContractDefaults[chainId.testnet] as Address
 const recipient = '0x2222222222222222222222222222222222222222' as Address
 const currency = '0x3333333333333333333333333333333333333333' as Address
 

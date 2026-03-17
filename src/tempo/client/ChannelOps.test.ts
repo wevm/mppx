@@ -7,6 +7,10 @@ import { deployEscrow, openChannel } from '~test/tempo/session.js'
 import { accounts, asset, chain, client, fundAccount, http } from '~test/tempo/viem.js'
 import type { Challenge } from '../../Challenge.js'
 import * as Credential from '../../Credential.js'
+import {
+  chainId as chainIdDefaults,
+  escrowContract as escrowContractDefaults,
+} from '../internal/defaults.js'
 import { verifyVoucher } from '../session/Voucher.js'
 import {
   createClosePayload,
@@ -17,7 +21,7 @@ import {
   tryRecoverChannel,
 } from './ChannelOps.js'
 
-const escrow42431 = '0x542831e3E4Ace07559b7C8787395f4Fb99F70787' as Address
+const escrow42431 = escrowContractDefaults[chainIdDefaults.testnet] as Address
 
 const localAccount = privateKeyToAccount(
   '0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80',

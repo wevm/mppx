@@ -1,5 +1,6 @@
 import type { Address, Hex } from 'viem'
 import { describe, expect, test } from 'vitest'
+import { chainId, escrowContract as escrowContractDefaults } from '../internal/defaults.js'
 import type * as ChannelStore from './ChannelStore.js'
 import { formatNeedVoucherEvent, formatReceiptEvent, parseEvent, serve } from './Sse.js'
 import type { NeedVoucherEvent, SessionReceipt } from './Types.js'
@@ -218,7 +219,7 @@ describe('serve', () => {
       token: '0x0000000000000000000000000000000000000003' as Address,
       authorizedSigner: '0x0000000000000000000000000000000000000004' as Address,
       chainId: 42431,
-      escrowContract: '0x542831e3E4Ace07559b7C8787395f4Fb99F70787' as Address,
+      escrowContract: escrowContractDefaults[chainId.testnet] as Address,
       deposit: balance,
       settledOnChain: 0n,
       highestVoucherAmount: balance,

@@ -32,7 +32,7 @@ export const decimals = 6
 /** Default payment-channel escrow contract addresses per chain. */
 export const escrowContract = {
   [chainId.mainnet]: '0x33b901018174DDabE4841042ab76ba85D4e24f25',
-  [chainId.testnet]: '0x542831e3E4Ace07559b7C8787395f4Fb99F70787',
+  [chainId.testnet]: '0xe1c4d3dce17bc111181ddf716f75bae49e61a336',
 } as const satisfies Record<ChainId, string>
 
 /** Default RPC URLs for each Tempo chain. */
