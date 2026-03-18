@@ -83,9 +83,16 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
     },
   })
 
+  function updateSpentFromReceipt(receipt: SessionReceipt | null | undefined) {
+    if (!receipt || receipt.channelId !== channel?.channelId) return
+    const next = BigInt(receipt.spent)
+    spent = spent > next ? spent : next
+  }
+
   function toPaymentResponse(response: Response): PaymentResponse {
     const receiptHeader = response.headers.get('Payment-Receipt')
     const receipt = receiptHeader ? deserializeSessionReceipt(receiptHeader) : null
+    updateSpentFromReceipt(receipt)
     return Object.assign(response, {
       receipt,
       challenge: lastChallenge,
@@ -218,10 +225,7 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
                 }
 
                 case 'payment-receipt':
-                  if (event.data.spent) {
-                    const next = BigInt(event.data.spent)
-                    spent = spent > next ? spent : next
-                  }
+                  updateSpentFromReceipt(event.data)
                   onReceipt?.(event.data)
                   break
               }
