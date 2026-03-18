@@ -1,5 +1,11 @@
 # mppx
 
+## 0.4.6
+
+### Patch Changes
+
+- 281005c: Added support for `feePayer` as a URL string on `tempo` method.
+
 ## 0.4.5
 
 ### Patch Changes
