@@ -1,5 +1,11 @@
 # mppx
 
+## 0.4.7
+
+### Patch Changes
+
+- 2a0b88e: Fixed cooperative close to sign the server-reported spent amount instead of the high-water mark (`cumulativeAmount`), preventing overcharging when actual usage was below the pre-authorized voucher amount.
+
 ## 0.4.6
 
 ### Patch Changes
