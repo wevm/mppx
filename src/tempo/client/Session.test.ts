@@ -1,5 +1,6 @@
 import { type Address, createClient, type Hex, http } from 'viem'
 import { privateKeyToAccount } from 'viem/accounts'
+import { waitForTransactionReceipt } from 'viem/actions'
 import { Addresses } from 'viem/tempo'
 import { beforeAll, describe, expect, test } from 'vitest'
 import { deployEscrow, openChannel } from '~test/tempo/session.js'
@@ -7,7 +8,9 @@ import { accounts, asset, chain, client, fundAccount } from '~test/tempo/viem.js
 import * as Challenge from '../../Challenge.js'
 import * as Credential from '../../Credential.js'
 import { chainId, escrowContract as escrowContractDefaults } from '../internal/defaults.js'
+import { settleOnChain } from '../session/Chain.js'
 import type { SessionCredentialPayload } from '../session/Types.js'
+import { signVoucher } from '../session/Voucher.js'
 import { session } from './Session.js'
 
 function deserializePayload(result: string) {
@@ -410,6 +413,53 @@ describe('session (on-chain)', () => {
           },
         }),
       ).rejects.toThrow('cannot be reused')
+    })
+
+    test('opens a new channel when suggestedChannelId lacks available balance', async () => {
+      const salt = nextSalt()
+      const deposit = 1_500_000n
+      const settled = 1_000_000n
+      const { channelId } = await openChannel({
+        escrow: escrowContract,
+        payer,
+        payee,
+        token: asset,
+        deposit,
+        salt,
+      })
+      const signature = await signVoucher(
+        client,
+        payer,
+        { channelId, cumulativeAmount: settled },
+        escrowContract,
+        chain.id,
+      )
+      const txHash = await settleOnChain(client, escrowContract, {
+        channelId,
+        cumulativeAmount: settled,
+        signature,
+      })
+      await waitForTransactionReceipt(client, { hash: txHash })
+
+      const method = session({
+        getClient: () => client,
+        account: payer,
+        deposit: '10',
+        escrowContract,
+      })
+      const challenge = makeLiveChallenge({
+        methodDetails: {
+          chainId: chain.id,
+          escrowContract,
+          channelId,
+        },
+      })
+
+      const result = await method.createCredential({ challenge, context: {} })
+
+      const cred = deserializePayload(result)
+      expect(cred.payload.action).toBe('open')
+      expect(cred.payload.channelId).not.toBe(channelId)
     })
   })
 

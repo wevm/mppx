@@ -207,18 +207,22 @@ export async function createOpenPayload(
  * amount (the safe starting point for new vouchers).
  *
  * Returns `undefined` if the channel doesn't exist, has zero deposit,
- * or is already finalized.
+ * is already finalized, or lacks enough available balance.
  */
 export async function tryRecoverChannel(
   client: viem_Client,
   escrowContract: Address,
   channelId: Hex.Hex,
   chainId: number,
+  minAvailable?: bigint,
 ): Promise<ChannelEntry | undefined> {
   try {
     const onChain = await getOnChainChannel(client, escrowContract, channelId)
 
     if (onChain.deposit > 0n && !onChain.finalized) {
+      if (minAvailable !== undefined && onChain.deposit - onChain.settled < minAvailable)
+        return undefined
+
       return {
         channelId,
         salt: '0x' as Hex.Hex,

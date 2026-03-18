@@ -1,6 +1,7 @@
 import { Hex } from 'ox'
 import { type Address, createClient } from 'viem'
 import { privateKeyToAccount } from 'viem/accounts'
+import { waitForTransactionReceipt } from 'viem/actions'
 import { Addresses } from 'viem/tempo'
 import { beforeAll, describe, expect, test } from 'vitest'
 import { deployEscrow, openChannel } from '~test/tempo/session.js'
@@ -11,7 +12,8 @@ import {
   chainId as chainIdDefaults,
   escrowContract as escrowContractDefaults,
 } from '../internal/defaults.js'
-import { verifyVoucher } from '../session/Voucher.js'
+import { settleOnChain } from '../session/Chain.js'
+import { signVoucher, verifyVoucher } from '../session/Voucher.js'
 import {
   createClosePayload,
   createOpenPayload,
@@ -289,6 +291,37 @@ describe('tryRecoverChannel', () => {
     const fakeChannelId =
       '0x0000000000000000000000000000000000000000000000000000000000000099' as `0x${string}`
     const result = await tryRecoverChannel(client, escrow, fakeChannelId, chain.id)
+    expect(result).toBeUndefined()
+  })
+
+  test('returns undefined when available balance is below the requested amount', async () => {
+    const salt = Hex.random(32) as `0x${string}`
+    const deposit = 10_000_000n
+    const settled = 9_500_000n
+    const { channelId } = await openChannel({
+      escrow,
+      payer,
+      payee,
+      token: currency,
+      deposit,
+      salt,
+    })
+
+    const signature = await signVoucher(
+      client,
+      payer,
+      { channelId, cumulativeAmount: settled },
+      escrow,
+      chain.id,
+    )
+    const txHash = await settleOnChain(client, escrow, {
+      channelId,
+      cumulativeAmount: settled,
+      signature,
+    })
+    await waitForTransactionReceipt(client, { hash: txHash })
+
+    const result = await tryRecoverChannel(client, escrow, channelId, chain.id, 1_000_000n)
     expect(result).toBeUndefined()
   })
 })
