@@ -15,6 +15,9 @@
       "mppx/elysia": ["../src/middlewares/elysia.ts"],
       "mppx/stripe": ["../src/stripe/index.ts"],
       "mppx/stripe/client": ["../src/stripe/client/index.ts"],
+      "mppx/radius": ["../src/radius/index.ts"],
+      "mppx/radius/client": ["../src/radius/client/index.ts"],
+      "mppx/radius/server": ["../src/radius/server/index.ts"],
       "mppx/stripe/server": ["../src/stripe/server/index.ts"],
       "mppx/mcp-sdk/client": ["../src/mcp-sdk/client/index.ts"],
       "mppx/mcp-sdk/server": ["../src/mcp-sdk/server/index.ts"]

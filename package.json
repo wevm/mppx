@@ -140,6 +140,21 @@
       "src": "./src/stripe/server/index.ts",
       "default": "./dist/stripe/server/index.js"
     },
+    "./radius": {
+      "types": "./dist/radius/index.d.ts",
+      "src": "./src/radius/index.ts",
+      "default": "./dist/radius/index.js"
+    },
+    "./radius/client": {
+      "types": "./dist/radius/client/index.d.ts",
+      "src": "./src/radius/client/index.ts",
+      "default": "./dist/radius/client/index.js"
+    },
+    "./radius/server": {
+      "types": "./dist/radius/server/index.d.ts",
+      "src": "./src/radius/server/index.ts",
+      "default": "./dist/radius/server/index.js"
+    },
     "./tempo": {
       "types": "./dist/tempo/index.d.ts",
       "src": "./src/tempo/index.ts",
