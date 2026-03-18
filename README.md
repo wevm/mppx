@@ -164,6 +164,12 @@ This exposes the following routes:
 
 Built on the ["Payment" HTTP Authentication Scheme](https://datatracker.ietf.org/doc/draft-ryan-httpauth-payment/). See [mpp-specs](https://github.com/tempoxyz/mpp-specs) for the full specification.
 
+## Community Methods
+
+| Package | Chain | Description |
+|---------|-------|-------------|
+| [mppx-solana](https://www.npmjs.com/package/mppx-solana) | Solana | SOL and SPL token payments on Solana |
+
 ## License
 
 MIT
