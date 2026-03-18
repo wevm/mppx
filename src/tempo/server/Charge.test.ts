@@ -490,7 +490,7 @@ describe('tempo', () => {
 
     test('behavior: fee payer URL (withFeePayer transport)', async () => {
       const feePayerHandler = Handler.feePayer({
-        account: accounts[0] as any,
+        account: accounts[0],
         client,
       })
       const feePayerServer = await Http.createServer(feePayerHandler.listener)

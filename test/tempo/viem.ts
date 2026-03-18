@@ -1,6 +1,6 @@
 import type * as Hex from 'ox/Hex'
 import { createClient, defineChain, type HttpTransportConfig, http as viem_http } from 'viem'
-import { type Account, english, generateMnemonic, mnemonicToAccount } from 'viem/accounts'
+import { type Account, english, generateMnemonic, type LocalAccount, mnemonicToAccount } from 'viem/accounts'
 import { tempo, tempoDevnet, tempoLocalnet, tempoModerato } from 'viem/chains'
 import { Actions } from 'viem/tempo'
 import { nodeEnv } from '../config.js'
@@ -17,7 +17,7 @@ export const accounts = Array.from({ length: 20 }, (_, i) =>
   mnemonicToAccount(accountsMnemonic, {
     accountIndex: i,
   }),
-) as unknown as FixedArray<Account, 20>
+) as unknown as FixedArray<LocalAccount, 20>
 
 export const chain = (() => {
   switch (nodeEnv) {
