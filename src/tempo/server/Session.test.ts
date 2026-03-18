@@ -630,7 +630,7 @@ describe('session', () => {
       expect(ch!.highestVoucherAmount).toBe(5000000n)
     })
 
-    test('rejects close with voucher below highest', async () => {
+    test('accepts close at spent amount (below highestVoucherAmount)', async () => {
       const { channelId, serializedTransaction } = await createSignedOpenTransaction(10000000n)
       const server = createServer()
       await openServerChannel(server, channelId, serializedTransaction)
@@ -648,20 +648,50 @@ describe('session', () => {
         request: makeRequest(),
       })
 
+      await charge(store, channelId, 500000n)
+
+      const receipt = await server.verify({
+        credential: {
+          challenge: makeChallenge({ id: 'challenge-3', channelId }),
+          payload: {
+            action: 'close' as const,
+            channelId,
+            cumulativeAmount: '500000',
+            signature: await signTestVoucher(channelId, 500000n),
+          },
+        },
+        request: makeRequest(),
+      })
+
+      expect(receipt.status).toBe('success')
+
+      const ch = await store.getChannel(channelId)
+      expect(ch).not.toBeNull()
+      expect(ch!.highestVoucherAmount).toBe(3000000n)
+      expect(ch!.finalized).toBe(true)
+    })
+
+    test('rejects close below spent amount', async () => {
+      const { channelId, serializedTransaction } = await createSignedOpenTransaction(10000000n)
+      const server = createServer()
+      await openServerChannel(server, channelId, serializedTransaction)
+
+      await charge(store, channelId, 500000n)
+
       await expect(
         server.verify({
           credential: {
-            challenge: makeChallenge({ id: 'challenge-3', channelId }),
+            challenge: makeChallenge({ id: 'challenge-2', channelId }),
             payload: {
               action: 'close' as const,
               channelId,
-              cumulativeAmount: '2000000',
-              signature: await signTestVoucher(channelId, 2000000n),
+              cumulativeAmount: '100000',
+              signature: await signTestVoucher(channelId, 100000n),
             },
           },
           request: makeRequest(),
         }),
-      ).rejects.toThrow('close voucher amount must be >= highest accepted voucher')
+      ).rejects.toThrow('close voucher amount must be >=')
     })
 
     test('rejects close exceeding on-chain deposit', async () => {

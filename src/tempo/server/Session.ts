@@ -774,21 +774,16 @@ async function handleClose(
     payload.signature,
   )
 
-  if (voucher.cumulativeAmount < channel.highestVoucherAmount) {
-    throw new VerificationFailedError({
-      reason: 'close voucher amount must be >= highest accepted voucher',
-    })
-  }
-
   const onChain = await getOnChainChannel(client, methodDetails.escrowContract, payload.channelId)
 
   if (onChain.finalized) {
     throw new ChannelClosedError({ reason: 'channel is finalized on-chain' })
   }
 
-  if (voucher.cumulativeAmount < onChain.settled) {
+  const minCloseAmount = channel.spent > onChain.settled ? channel.spent : onChain.settled
+  if (voucher.cumulativeAmount < minCloseAmount) {
     throw new VerificationFailedError({
-      reason: 'close voucher cumulativeAmount is below on-chain settled amount',
+      reason: `close voucher amount must be >= ${minCloseAmount} (max of spent and on-chain settled)`,
     })
   }
 
@@ -819,11 +814,14 @@ async function handleClose(
 
   const updated = await store.updateChannel(payload.channelId, (current) => {
     if (!current) return null
+    const updateVoucher = voucher.cumulativeAmount > current.highestVoucherAmount
     return {
       ...current,
       deposit: onChain.deposit,
-      highestVoucherAmount: voucher.cumulativeAmount,
-      highestVoucher: voucher,
+      ...(updateVoucher && {
+        highestVoucherAmount: voucher.cumulativeAmount,
+        highestVoucher: voucher,
+      }),
       finalized: true,
     }
   })
