@@ -11,7 +11,7 @@ import { tempo as tempo_chain } from 'viem/chains'
 import { Abis, Transaction } from 'viem/tempo'
 
 import { PaymentExpiredError } from '../../Errors.js'
-import type { LooseOmit } from '../../internal/types.js'
+import type { LooseOmit, NoExtraKeys } from '../../internal/types.js'
 import * as Method from '../../Method.js'
 import * as Store from '../../Store.js'
 import * as Client from '../../viem/Client.js'
@@ -33,6 +33,10 @@ import * as Methods from '../Methods.js'
  * const charge = tempo.charge()
  * ```
  */
+export function charge<const parameters extends charge.Parameters>(
+  parameters?: NoExtraKeys<parameters, charge.Parameters>,
+): Method.Server<typeof Methods.charge, charge.DeriveDefaults<parameters>>
+/** @internal */
 export function charge<const parameters extends charge.Parameters>(
   parameters: parameters = {} as parameters,
 ) {

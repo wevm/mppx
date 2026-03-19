@@ -33,18 +33,11 @@ export function resolve(parameters: resolve.Parameters) {
 }
 
 export declare namespace resolve {
-  type Parameters = { recipient?: Address | undefined } & (
-    | {
-        /** Account that performs payment operations. */
-        account?: Account | undefined
-        /** When true, the account also sponsors (pays) transaction fees. */
-        feePayer?: true | undefined
-      }
-    | {
-        /** Address that receives payment. */
-        account?: Address | undefined
-        /** Optional fee payer account or fee payer URL for covering transaction fees. */
-        feePayer?: Account | string | undefined
-      }
-  )
+  type Parameters = {
+    recipient?: Address | undefined
+    /** Account or address that performs payment operations / receives payment. */
+    account?: Account | Address | undefined
+    /** When `true`, the account also sponsors fees. An `Account` object or URL string can also be provided as a dedicated fee payer. */
+    feePayer?: Account | string | true | undefined
+  }
 }
