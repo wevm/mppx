@@ -11,6 +11,7 @@ import { Abis, Transaction } from 'viem/tempo'
 import { PaymentExpiredError } from '../../Errors.js'
 import type { LooseOmit } from '../../internal/types.js'
 import * as Method from '../../Method.js'
+import * as Store from '../../Store.js'
 import * as Client from '../../viem/Client.js'
 import * as Account from '../internal/account.js'
 import * as defaults from '../internal/defaults.js'
@@ -41,6 +42,7 @@ export function charge<const parameters extends charge.Parameters>(
     memo,
     waitForConfirmation = true,
   } = parameters
+  const store = parameters.store ?? Store.memory()
 
   const { recipient, feePayer, feePayerUrl } = Account.resolve(parameters)
 
@@ -119,6 +121,8 @@ export function charge<const parameters extends charge.Parameters>(
       switch (payload.type) {
         case 'hash': {
           const hash = payload.hash as `0x${string}`
+          await assertHashUnused(store, hash)
+
           const receipt = await getTransactionReceipt(client, {
             hash,
           })
@@ -175,6 +179,8 @@ export function charge<const parameters extends charge.Parameters>(
                 recipient,
               })
           }
+
+          await markHashUsed(store, hash)
 
           return toReceipt(receipt)
         }
@@ -258,6 +264,7 @@ export function charge<const parameters extends charge.Parameters>(
             const receipt = await sendRawTransactionSync(client, {
               serializedTransaction: serializedTransaction_final,
             })
+            await markHashUsed(store, receipt.transactionHash)
             return toReceipt(receipt)
           } else {
             // Optimistic path: simulate to catch obvious reverts, then broadcast
@@ -272,6 +279,7 @@ export function charge<const parameters extends charge.Parameters>(
             const hash = await sendRawTransaction(client, {
               serializedTransaction: serializedTransaction_final,
             })
+            await markHashUsed(store, hash)
             return {
               method: 'tempo',
               status: 'success',
@@ -289,11 +297,20 @@ export function charge<const parameters extends charge.Parameters>(
 }
 
 export declare namespace charge {
+  type StoreItemMap = { [key: `mppx:charge:${string}`]: number }
+
   type Defaults = LooseOmit<Method.RequestDefaults<typeof Methods.charge>, 'feePayer' | 'recipient'>
 
   type Parameters = {
     /** Testnet mode. */
     testnet?: boolean | undefined
+    /**
+     * Store for transaction hash replay protection.
+     *
+     * Use a shared store in multi-instance deployments so consumed hashes are
+     * visible across all server instances.
+     */
+    store?: Store.Store | undefined
     /**
      * Whether to wait for the charge transaction to confirm on-chain before
      * responding. @default true
@@ -316,6 +333,24 @@ export declare namespace charge {
   > & {
     decimals: number
   }
+}
+
+/** @internal */
+function getHashStoreKey(hash: `0x${string}`): `mppx:charge:${string}` {
+  return `mppx:charge:${hash.toLowerCase()}`
+}
+
+/** @internal */
+async function assertHashUnused(store: Store.Store, hash: `0x${string}`): Promise<void> {
+  const seen = await store.get<charge.StoreItemMap[keyof charge.StoreItemMap]>(
+    getHashStoreKey(hash),
+  )
+  if (seen !== null) throw new Error('Transaction hash has already been used.')
+}
+
+/** @internal */
+async function markHashUsed(store: Store.Store, hash: `0x${string}`): Promise<void> {
+  await store.put(getHashStoreKey(hash), Date.now())
 }
 
 /** @internal */
