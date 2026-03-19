@@ -291,7 +291,7 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
             cumulativeAmountRaw: channel.cumulativeAmount.toString(),
           },
         })
-        ws.send(JSON.stringify({ mpp: 'credential', mppVersion: '1', authorization: credential }))
+        ws.send(JSON.stringify({ mpp: WsMessageType.credential, mppVersion: WS_MPP_VERSION, authorization: credential }))
       }
 
       // Intercept payment messages (need-voucher, receipt)
@@ -305,7 +305,7 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
 
           event.stopImmediatePropagation()
 
-          if (msg.mpp === 'need-voucher' && channel && wsChallenge) {
+          if (msg.mpp === WsMessageType.needVoucher && channel && wsChallenge) {
             const required = BigInt(msg.data.requiredCumulative)
             const accepted = BigInt(msg.data.acceptedCumulative ?? '0')
             const deposit = BigInt(msg.data.deposit ?? '0')
@@ -335,13 +335,13 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
                 },
               })
               ws.send(
-                JSON.stringify({ mpp: 'voucher', mppVersion: '1', authorization: credential }),
+                JSON.stringify({ mpp: WsMessageType.voucher, mppVersion: WS_MPP_VERSION, authorization: credential }),
               )
             } catch (err) {
               console.error('[mppx] ws voucher creation failed:', err)
               ws.close(1011, 'Failed to create payment credential')
             }
-          } else if (msg.mpp === 'receipt') {
+          } else if (msg.mpp === WsMessageType.receipt) {
             updateSpentFromReceipt(msg.data)
             onReceipt?.(msg.data)
           }

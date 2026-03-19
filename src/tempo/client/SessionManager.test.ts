@@ -3,7 +3,7 @@ import { describe, expect, test, vi } from 'vitest'
 import * as Challenge from '../../Challenge.js'
 import { formatNeedVoucherEvent, parseEvent } from '../session/Sse.js'
 import type { NeedVoucherEvent, SessionReceipt } from '../session/Types.js'
-import { sessionManager } from './SessionManager.js'
+import { WS_MPP_VERSION, WsMessageType, sessionManager } from './SessionManager.js'
 
 const channelId = '0x0000000000000000000000000000000000000000000000000000000000000001' as Hex
 const challengeId = 'test-challenge-1'
@@ -204,6 +204,79 @@ describe('Session', () => {
 
       expect(messages).toEqual(['chunk1', 'chunk2'])
       expect(mockFetch).toHaveBeenCalledOnce()
+    })
+  })
+
+  describe('.ws()', () => {
+    function createMockWebSocket() {
+      const listeners = new Map<string, ((...args: any[]) => void)[]>()
+      const sent: string[] = []
+      const ws = {
+        send: vi.fn((data: string) => sent.push(data)),
+        close: vi.fn(),
+        addEventListener: vi.fn((type: string, fn: (...args: any[]) => void, opts?: any) => {
+          if (!listeners.has(type)) listeners.set(type, [])
+          listeners.get(type)!.push(fn)
+          if (type === 'open') setTimeout(() => fn(), 0)
+        }),
+        removeEventListener: vi.fn(),
+      }
+      return { ws, sent, listeners, dispatch: (type: string, data: any) => {
+        for (const fn of listeners.get(type) ?? []) fn(data)
+      }}
+    }
+
+    test('throws when no challenge received from HTTP endpoint', async () => {
+      const mockFetch = vi.fn().mockResolvedValue(makeOkResponse())
+
+      const s = sessionManager({
+        account: '0x0000000000000000000000000000000000000001',
+        fetch: mockFetch as typeof globalThis.fetch,
+      })
+
+      await expect(s.ws('ws://api.example.com/stream')).rejects.toThrow(
+        'No payment challenge received',
+      )
+    })
+
+    test('converts ws:// to http:// for the 402 handshake', async () => {
+      const mockFetch = vi.fn().mockResolvedValue(make402Response())
+
+      const s = sessionManager({
+        account: '0x0000000000000000000000000000000000000001',
+        fetch: mockFetch as typeof globalThis.fetch,
+      })
+
+      // Will throw because no maxDeposit — but we can verify the URL was converted
+      await expect(s.ws('ws://api.example.com/stream')).rejects.toThrow()
+      const calledUrl = mockFetch.mock.calls[0]?.[0]
+      expect(calledUrl).toContain('http://api.example.com/stream')
+    })
+
+    test('converts wss:// to https:// for the 402 handshake', async () => {
+      const mockFetch = vi.fn().mockResolvedValue(make402Response())
+
+      const s = sessionManager({
+        account: '0x0000000000000000000000000000000000000001',
+        fetch: mockFetch as typeof globalThis.fetch,
+      })
+
+      await expect(s.ws('wss://api.example.com/stream')).rejects.toThrow()
+      const calledUrl = mockFetch.mock.calls[0]?.[0]
+      expect(calledUrl).toContain('https://api.example.com/stream')
+    })
+  })
+
+  describe('WsMessageType constants', () => {
+    test('has expected values', () => {
+      expect(WsMessageType.credential).toBe('credential')
+      expect(WsMessageType.voucher).toBe('voucher')
+      expect(WsMessageType.needVoucher).toBe('need-voucher')
+      expect(WsMessageType.receipt).toBe('receipt')
+    })
+
+    test('WS_MPP_VERSION is "1"', () => {
+      expect(WS_MPP_VERSION).toBe('1')
     })
   })
 
