@@ -20,6 +20,7 @@ mppx provides abstractions for the complete HTTP 402 payment flow — both clien
 │ payment            │       │ tempo/charge   │
 │                    │       │ tempo/session  │
 │                    │       │ stripe/charge  │
+│                    │       │ whop/charge    │
 └────────────────────┘       └────────────────┘
 ```
 
@@ -115,6 +116,7 @@ Canonical specs live at [tempoxyz/payment-auth-spec](https://github.com/tempoxyz
 | **Intent** | [draft-payment-intent-session-00](https://github.com/tempoxyz/payment-auth-spec/blob/main/specs/intents/draft-payment-intent-session-00.md) | Pay-as-you-go streaming payments |
 | **Method** | [draft-tempo-charge-00](https://github.com/tempoxyz/payment-auth-spec/blob/main/specs/methods/tempo/draft-tempo-charge-00.md) | TIP-20 token transfers on Tempo |
 | **Method** | [draft-tempo-session-00](https://github.com/tempoxyz/payment-auth-spec/blob/main/specs/methods/tempo/draft-tempo-session-00.md) | Tempo payment channels for streaming |
+| **Method** | N/A (uses Whop public API) | Whop checkout-based fiat payments |
 | **Extension** | [draft-payment-discovery-00](https://github.com/tempoxyz/payment-auth-spec/blob/main/specs/extensions/draft-payment-discovery-00.md) | `/.well-known/payment` discovery |
 
 ### Key Protocol Details
@@ -141,6 +143,66 @@ id = base64url(HMAC-SHA256(server_secret, input))
 ```
 
 **Verification:** Server recomputes HMAC from echoed challenge parameters and compares to `id`. If mismatch, reject credential.
+
+### Whop Method (`whop/charge`)
+
+The `whop/charge` method uses Whop's existing public API for fiat payments — no Whop backend changes required.
+
+**Flow:**
+1. Server creates a Whop checkout configuration via `checkoutConfigurations.create()` and embeds the `purchase_url` in the challenge `meta`
+2. Client opens the checkout URL (popup/new tab), user enters card and pays
+3. Client sends the Whop payment ID as the credential payload
+4. Server verifies via `payments.retrieve()` on the Whop API
+
+**Server setup:**
+```ts
+import { Mppx, whop } from 'mppx/server'
+
+const mppx = Mppx.create({
+  methods: [
+    whop({
+      apiKey: process.env.WHOP_API_KEY!,  // or client: whopSdkInstance
+      companyId: 'biz_xxx',
+      currency: 'usd',
+    }),
+  ],
+})
+
+// In handler: create checkout config, pass purchase_url via meta
+const checkout = await createCheckout({ apiKey, companyId, amount: 5.0 })
+const result = await mppx.charge({
+  amount: 5.0,
+  meta: { purchase_url: checkout.purchase_url },
+})(request)
+```
+
+**Client setup:**
+```ts
+import { Mppx, whop } from 'mppx/client'
+
+const mppx = Mppx.create({
+  methods: [
+    whop({
+      completeCheckout: async ({ purchaseUrl }) => {
+        window.open(purchaseUrl, '_blank')
+        // wait for payment completion, return payment ID
+        return paymentId
+      },
+    }),
+  ],
+})
+```
+
+**Key files:**
+- `src/whop/Methods.ts` — method definition (name: `whop`, intent: `charge`)
+- `src/whop/client/Charge.ts` — client credential creation via `completeCheckout` callback
+- `src/whop/server/Charge.ts` — server verification via Whop `payments.retrieve()`, plus `createCheckout` utility
+- `src/whop/internal/types.ts` — duck-typed `WhopClient` interface
+- `src/cli/plugins/whop.ts` — CLI plugin (opens browser, prompts for payment ID)
+- `src/proxy/services/whop.ts` — Whop proxy service definition
+
+**Environment variables:**
+- `WHOP_API_KEY` — Whop Company or App API key (needs `checkout_configuration:create`, `payment:basic:read`)
 
 ## Commands
 

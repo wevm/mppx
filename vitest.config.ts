@@ -17,6 +17,9 @@ const alias = {
   'mppx/stripe': path.resolve(import.meta.dirname, 'src/stripe'),
   'mppx/stripe/client': path.resolve(import.meta.dirname, 'src/stripe/client'),
   'mppx/stripe/server': path.resolve(import.meta.dirname, 'src/stripe/server'),
+  'mppx/whop': path.resolve(import.meta.dirname, 'src/whop'),
+  'mppx/whop/client': path.resolve(import.meta.dirname, 'src/whop/client'),
+  'mppx/whop/server': path.resolve(import.meta.dirname, 'src/whop/server'),
   mppx: path.resolve(import.meta.dirname, 'src'),
   '~test': path.resolve(import.meta.dirname, 'test'),
 }

@@ -141,6 +141,21 @@
       "src": "./src/stripe/server/index.ts",
       "default": "./dist/stripe/server/index.js"
     },
+    "./whop": {
+      "types": "./dist/whop/index.d.ts",
+      "src": "./src/whop/index.ts",
+      "default": "./dist/whop/index.js"
+    },
+    "./whop/client": {
+      "types": "./dist/whop/client/index.d.ts",
+      "src": "./src/whop/client/index.ts",
+      "default": "./dist/whop/client/index.js"
+    },
+    "./whop/server": {
+      "types": "./dist/whop/server/index.d.ts",
+      "src": "./src/whop/server/index.ts",
+      "default": "./dist/whop/server/index.js"
+    },
     "./tempo": {
       "types": "./dist/tempo/index.d.ts",
       "src": "./src/tempo/index.ts",

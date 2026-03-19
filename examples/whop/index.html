@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>mppx + Whop Checkout Example</title>
+    <style>
+      * { box-sizing: border-box; margin: 0; padding: 0; }
+      body {
+        font-family: system-ui, -apple-system, sans-serif;
+        background: #0a0a0a;
+        color: #fafafa;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        min-height: 100vh;
+      }
+      .container { text-align: center; max-width: 520px; padding: 2rem; width: 100%; }
+      h1 { font-size: 1.5rem; margin-bottom: 0.5rem; }
+      .subtitle { color: #888; margin-bottom: 2rem; font-size: 0.9rem; }
+      button {
+        background: #6c5ce7; color: white; border: none;
+        padding: 12px 32px; border-radius: 8px; font-size: 1rem;
+        cursor: pointer; transition: opacity 0.2s;
+      }
+      button:hover { opacity: 0.9; }
+      button:disabled { opacity: 0.5; cursor: not-allowed; }
+      #output { margin-top: 1.5rem; min-height: 60px; }
+      .fortune {
+        background: #1a1a2e; border: 1px solid #333; border-radius: 8px;
+        padding: 1.5rem; font-style: italic; line-height: 1.6;
+      }
+      .placeholder { color: #666; }
+      .error { color: #e74c3c; }
+      #setup { color: #888; }
+      #ready { display: none; }
+      .price { color: #6c5ce7; font-weight: bold; }
+      .payment-form {
+        background: #1a1a2e; border: 1px solid #333; border-radius: 8px;
+        padding: 1.5rem; margin-top: 1.5rem; display: none;
+      }
+      .payment-form.visible { display: block; }
+      .status-text { font-size: 0.9rem; color: #aaa; margin-bottom: 1rem; }
+      .spinner { display: inline-block; width: 16px; height: 16px;
+        border: 2px solid #444; border-top-color: #6c5ce7;
+        border-radius: 50%; animation: spin 0.8s linear infinite;
+        vertical-align: middle; margin-right: 8px;
+      }
+      @keyframes spin { to { transform: rotate(360deg); } }
+      .checkout-link { margin-bottom: 1rem; }
+      .checkout-link a { color: #6c5ce7; text-decoration: none; font-size: 0.9rem; }
+      .checkout-link a:hover { text-decoration: underline; }
+      .manual-input { margin-top: 1rem; padding-top: 1rem; border-top: 1px solid #333; display: none; }
+      .manual-input label { display: block; font-size: 0.8rem; color: #888; margin-bottom: 0.5rem; text-align: left; }
+      .input-row { display: flex; gap: 0.5rem; }
+      .manual-input input {
+        flex: 1; background: #0a0a0a; border: 1px solid #444; border-radius: 6px;
+        padding: 10px 12px; color: #fafafa; font-family: monospace; font-size: 0.9rem;
+      }
+      .manual-input input:focus { outline: none; border-color: #6c5ce7; }
+      .manual-input input::placeholder { color: #555; }
+      .manual-input button { padding: 10px 20px; font-size: 0.9rem; }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <h1>Fortune Cookie</h1>
+      <p class="subtitle">Pay <span class="price">$1.00</span> via Whop Checkout for a fortune</p>
+      <div id="setup">Loading...</div>
+      <div id="ready">
+        <button id="button">Get Fortune ($1.00)</button>
+        <div id="payment-form" class="payment-form">
+          <div id="checkout-status" class="status-text">
+            <span class="spinner"></span> Waiting for payment...
+          </div>
+          <div id="checkout-link" class="checkout-link"></div>
+          <div id="manual-input" class="manual-input">
+            <label for="payment-id-input">Or paste your payment ID manually</label>
+            <div class="input-row">
+              <input type="text" id="payment-id-input" placeholder="pay_xxxxxxxxxxxxx" autocomplete="off" spellcheck="false" />
+              <button id="submit-payment">Submit</button>
+            </div>
+          </div>
+        </div>
+        <div id="output"></div>
+      </div>
+    </div>
+    <script type="module" src="/src/client.ts"></script>
+  </body>
+</html>
