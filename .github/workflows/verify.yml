@@ -69,4 +69,4 @@ jobs:
           pnpm run test --bail=1
         env:
           CI: true
-          VITE_TEMPO_TAG: sha-4e57b5a
+          VITE_TEMPO_TAG: latest

@@ -6,7 +6,7 @@ packages:
 overrides:
   mppx: "workspace:*"
   ox: "^0.14.1"
-  viem: "^2.46.2"
+  viem: "^2.47.5"
   tar@<=7.5.10: "7.5.11"
   "@modelcontextprotocol/sdk@>=1.10.0 <=1.25.3": "1.26.0"
   qs@>=6.7.0 <=6.14.1: "6.14.2"

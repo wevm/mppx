@@ -43,12 +43,12 @@
     "file-type": "^21.3.2",
     "hono": "^4.11.9",
     "playwright": "^1.58.2",
-    "prool": "^0.2.2",
+    "prool": "^0.2.3",
     "tempo.ts": "^0.14.2",
     "testcontainers": "^11.11.0",
     "tsx": "^4.21.0",
     "typescript": "~5.9.3",
-    "viem": "^2.46.2",
+    "viem": "^2.47.5",
     "vitest": "latest",
     "zile": "^0.0.19"
   },
@@ -152,7 +152,7 @@
     "elysia": ">=1",
     "express": ">=5",
     "hono": ">=4",
-    "viem": ">=2.46.2"
+    "viem": ">=2.47.5"
   },
   "peerDependenciesMeta": {
     "@modelcontextprotocol/sdk": {

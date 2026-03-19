@@ -4,9 +4,13 @@ import { afterAll, beforeAll } from 'vitest'
 import { nodeEnv } from './config.js'
 import { rpcUrl } from './tempo/prool.js'
 import { accounts, asset, client, fundAccount } from './tempo/viem.js'
+import { sendTransactionSync } from 'viem/actions'
 
 beforeAll(async () => {
   if (nodeEnv !== 'localnet') return
+
+  // Send noop tx to trigger block.
+  await sendTransactionSync(client, {})
 
   // Mint liquidity for fee tokens.
   await Promise.all(
