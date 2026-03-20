@@ -163,8 +163,7 @@ async function sendFeePayerTx(
   label: string,
 ): Promise<Hex> {
   // Resolve the fee token for this chain so the tx pays gas in the correct
-  // token.  `feePayer: true` tells the prepare hook to use expiring nonces but
-  // does NOT set feeToken automatically, so we must provide it explicitly.
+  // token.  Use expiring nonces for replay protection.
   const chainId = client.chain?.id
   const feeToken = chainId
     ? defaults.currency[chainId as keyof typeof defaults.currency]
@@ -173,14 +172,13 @@ async function sendFeePayerTx(
   const prepared = await prepareTransactionRequest(client, {
     account: feePayer,
     calls: [{ to, data }],
-    feePayer: true,
+    nonceKey: 'expiring',
     ...(feeToken ? { feeToken } : {}),
   } as never)
 
   const serialized = (await signTransaction(client, {
     ...prepared,
     account: feePayer,
-    feePayer,
   } as never)) as Hex
 
   const receipt = await sendRawTransactionSync(client, {
