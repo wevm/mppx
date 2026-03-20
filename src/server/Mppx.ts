@@ -335,6 +335,13 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
         // Note: we compare specific payment parameters rather than the full
         // request because the `request` hook may produce credential-dependent
         // output (e.g. `feePayer` differs between 402 and credential calls).
+        //
+        // Skip this check for topUp and voucher actions: the route's
+        // `request` hook may produce a different amount because these
+        // requests carry no application body (e.g. no model field for
+        // dynamic pricing). The credential echoes a challenge obtained
+        // from the original request which had the correct amount; the
+        // on-chain voucher signature is the real validation.
         {
           for (const field of ['method', 'intent', 'realm'] as const) {
             if (credential.challenge[field] !== challenge[field]) {
@@ -350,25 +357,28 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
             }
           }
 
-          const routeReq = challenge.request as Record<string, unknown>
-          const echoedReq = credential.challenge.request as Record<string, unknown>
-          const routeDetails = (routeReq.methodDetails ?? {}) as Record<string, unknown>
-          const echoedDetails = (echoedReq.methodDetails ?? {}) as Record<string, unknown>
-          for (const field of ['amount', 'currency', 'recipient'] as const) {
-            const routeVal = routeReq[field] ?? routeDetails[field]
-            if (
-              routeVal !== undefined &&
-              String(routeVal) !== String(echoedReq[field] ?? echoedDetails[field])
-            ) {
-              const response = await transport.respondChallenge({
-                challenge,
-                input,
-                error: new Errors.InvalidChallengeError({
-                  id: credential.challenge.id,
-                  reason: `credential ${field} does not match this route's requirements`,
-                }),
-              })
-              return { challenge: response, status: 402 }
+          const action = (credential.payload as Record<string, unknown>)?.action
+          if (action !== 'topUp' && action !== 'voucher') {
+            const routeReq = challenge.request as Record<string, unknown>
+            const echoedReq = credential.challenge.request as Record<string, unknown>
+            const routeDetails = (routeReq.methodDetails ?? {}) as Record<string, unknown>
+            const echoedDetails = (echoedReq.methodDetails ?? {}) as Record<string, unknown>
+            for (const field of ['amount', 'currency', 'recipient'] as const) {
+              const routeVal = routeReq[field] ?? routeDetails[field]
+              if (
+                routeVal !== undefined &&
+                String(routeVal) !== String(echoedReq[field] ?? echoedDetails[field])
+              ) {
+                const response = await transport.respondChallenge({
+                  challenge,
+                  input,
+                  error: new Errors.InvalidChallengeError({
+                    id: credential.challenge.id,
+                    reason: `credential ${field} does not match this route's requirements`,
+                  }),
+                })
+                return { challenge: response, status: 402 }
+              }
             }
           }
         }
