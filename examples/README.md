@@ -10,6 +10,7 @@ Standalone, runnable examples demonstrating the mppx HTTP 402 payment flow.
 | [session/multi-fetch](./session/multi-fetch/) | Multiple paid requests over a single payment channel |
 | [session/sse](./session/sse/) | Pay-per-token LLM streaming with SSE |
 | [stripe](./stripe/) | Stripe SPT charge with automatic client |
+| [xquik](./xquik/) | X (Twitter) data lookups — charge + session intents on a real API |
 
 ## Running Examples
 

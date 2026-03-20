@@ -1,0 +1,14 @@
+{
+  "name": "xquik",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "dev": "tsx src/client.ts"
+  },
+  "dependencies": {
+    "mppx": "latest",
+    "tsx": "latest",
+    "typescript": "latest",
+    "viem": "latest"
+  }
+}
