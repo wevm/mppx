@@ -154,10 +154,18 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
     async sse(input, init) {
       const { onReceipt, signal, ...fetchInit } = init ?? {}
 
+      // Normalize headers to a plain object so that Headers instances
+      // (whose properties are not enumerable) are not lost when spread.
+      const normalized: Record<string, string> = {}
+      const h = fetchInit.headers
+      if (h instanceof Headers) h.forEach((v, k) => (normalized[k] = v))
+      else if (Array.isArray(h)) for (const [k, v] of h) normalized[k] = v
+      else if (h) Object.assign(normalized, h)
+
       const sseInit = {
         ...fetchInit,
         headers: {
-          ...fetchInit.headers,
+          ...normalized,
           Accept: 'text/event-stream',
         },
         ...(signal ? { signal } : {}),
