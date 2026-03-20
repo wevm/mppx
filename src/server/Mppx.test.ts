@@ -180,6 +180,50 @@ describe('request handler', () => {
     expect(body.detail).toContain('does not match')
   })
 
+  test('topUp credential bypasses cross-route amount validation', async () => {
+    const handler = Mppx.create({ methods: [method], realm, secretKey })
+
+    // Get a challenge from the "cheap" route (simulates HEAD-obtained challenge)
+    const cheapHandle = handler.charge({
+      amount: '1',
+      currency: asset,
+      expires: new Date(Date.now() + 60_000).toISOString(),
+      recipient: accounts[0].address,
+    })
+    const cheapResult = await cheapHandle(new Request('https://example.com/cheap'))
+    expect(cheapResult.status).toBe(402)
+    if (cheapResult.status !== 402) throw new Error()
+
+    const cheapChallenge = Challenge.fromResponse(cheapResult.challenge)
+
+    // Build a topUp credential from the cheap challenge (echoed from HEAD)
+    const credential = Credential.from({
+      challenge: cheapChallenge,
+      payload: { action: 'topUp', signature: '0x123', type: 'transaction' },
+    })
+
+    // Present it at the "expensive" route — topUp should bypass amount check
+    const expensiveHandle = handler.charge({
+      amount: '1000000',
+      currency: asset,
+      expires: new Date(Date.now() + 60_000).toISOString(),
+      recipient: accounts[0].address,
+    })
+    const result = await expensiveHandle(
+      new Request('https://example.com/expensive', {
+        headers: { Authorization: Credential.serialize(credential) },
+      }),
+    )
+
+    // Should NOT get 402 for amount mismatch — topUp bypasses the check.
+    // It will fail at a later stage (payload validation), but not with
+    // "does not match this route's requirements".
+    if (result.status === 402) {
+      const body = (await result.challenge.json()) as { detail?: string }
+      expect(body.detail).not.toContain('does not match')
+    }
+  })
+
   test('returns 402 when credential challenge is expired', async () => {
     const pastExpires = new Date(Date.now() - 60_000).toISOString()
 
