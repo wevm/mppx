@@ -26,6 +26,17 @@ describe.each([
   { label: 'memory', create: () => Store.memory() },
   { label: 'cloudflare', create: () => Store.cloudflare(fakeKv()) },
   {
+    label: 'redis',
+    create: () => {
+      const kv = fakeKv()
+      return Store.redis({
+        get: kv.get,
+        set: kv.put,
+        del: (key) => kv.delete(key),
+      })
+    },
+  },
+  {
     label: 'upstash',
     create: () => {
       const kv = fakeKv()
@@ -74,6 +85,30 @@ describe('json roundtrip behavior', () => {
   test('cloudflare json-roundtrips nested objects', async () => {
     const store = Store.cloudflare(fakeKv())
     const value = { a: [1, { b: 'c' }], d: null }
+    await store.put('k', value)
+    expect(await store.get('k')).toEqual(value)
+  })
+
+  test('redis json-roundtrips nested objects', async () => {
+    const kv = fakeKv()
+    const store = Store.redis({
+      get: kv.get,
+      set: kv.put,
+      del: (key) => kv.delete(key),
+    })
+    const value = { a: [1, { b: 'c' }], d: null }
+    await store.put('k', value)
+    expect(await store.get('k')).toEqual(value)
+  })
+
+  test('redis roundtrips BigInt values', async () => {
+    const kv = fakeKv()
+    const store = Store.redis({
+      get: kv.get,
+      set: kv.put,
+      del: (key) => kv.delete(key),
+    })
+    const value = { amount: 1000000000000000000n, nested: { big: 42n } }
     await store.put('k', value)
     expect(await store.get('k')).toEqual(value)
   })
