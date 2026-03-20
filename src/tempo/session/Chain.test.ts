@@ -726,7 +726,7 @@ describe('on-chain', () => {
       expect(channel.finalized).toBe(false)
     })
 
-    test.todo('settles a channel with fee payer', async () => {
+    test('settles a channel with fee payer', async () => {
       const salt = nextSalt()
       const deposit = 10_000_000n
       const settleAmount = 5_000_000n
