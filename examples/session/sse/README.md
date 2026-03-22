@@ -2,6 +2,27 @@
 
 Pay-per-token LLM streaming using the SSE handler API. The server uses `tempo.Sse.from()` to create an SSE response that charges per token via `stream.charge()`. The client uses `session.sse()` to consume tokens as an async iterable, automatically handling voucher top-ups and receipts.
 
+## Restore after restart
+
+Session persistence is caller-owned. If the client restarts, save the latest
+`channelId`, cumulative amount, and optionally `spent`, then pass them back via
+`restore` when constructing the next `sessionManager` instance.
+
+```ts
+const manager = tempo.sessionManager({
+  account,
+  maxDeposit: '10',
+  restore: {
+    channelId: saved.channelId,
+    cumulativeAmount: saved.cumulativeAmount,
+    spent: saved.spent,
+  },
+})
+```
+
+After restart, `.close()` still needs one fresh paid request first so the
+manager can receive a new challenge and remember the request URL.
+
 ## Setup
 
 ```bash

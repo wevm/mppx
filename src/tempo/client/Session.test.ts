@@ -1,7 +1,7 @@
 import { type Address, createClient, type Hex, http } from 'viem'
 import { privateKeyToAccount } from 'viem/accounts'
 import { Addresses } from 'viem/tempo'
-import { beforeAll, describe, expect, test } from 'vp/test'
+import { beforeAll, describe, expect, test, vi } from 'vitest'
 import { nodeEnv } from '~test/config.js'
 import { deployEscrow, openChannel } from '~test/tempo/session.js'
 import { accounts, asset, chain, client, fundAccount } from '~test/tempo/viem.js'
@@ -202,9 +202,126 @@ describe('session (pure)', () => {
       expect(cred.source).toBe(`did:pkh:eip155:42431:${pureAccount.address}`)
     })
   })
+
+  describe('channel recovery', () => {
+    const channelId = '0x0000000000000000000000000000000000000000000000000000000000000001' as Hex
+
+    test('recovers explicit channel before requiring deposit configuration', async () => {
+      vi.resetModules()
+
+      const createVoucherPayload = vi.fn(
+        async (_client, _account, channelId, cumulativeAmount) => ({
+          action: 'voucher' as const,
+          channelId,
+          cumulativeAmount: cumulativeAmount.toString(),
+          signature: '0xabc',
+        }),
+      )
+
+      vi.doMock('./ChannelOps.js', async () => {
+        const actual = await vi.importActual<typeof import('./ChannelOps.js')>('./ChannelOps.js')
+        return {
+          ...actual,
+          createVoucherPayload,
+          tryRecoverChannel: vi.fn().mockResolvedValue({
+            channelId,
+            salt: '0x' as Hex,
+            cumulativeAmount: 3_000_000n,
+            escrowContract: escrowAddress,
+            chainId: 42431,
+            opened: true,
+          }),
+        }
+      })
+
+      try {
+        const { session: isolatedSession } = await import('./Session.js')
+        const method = isolatedSession({
+          getClient: () => pureClient,
+          account: pureAccount,
+          escrowContract: escrowAddress,
+        })
+
+        const result = await method.createCredential({
+          challenge: makeChallenge(),
+          context: {
+            channelId,
+            cumulativeAmountRaw: '1000000',
+          },
+        })
+
+        const cred = deserializePayload(result)
+        expect(cred.payload.action).toBe('voucher')
+        if (cred.payload.action === 'voucher') {
+          expect(cred.payload.channelId).toBe(channelId)
+          expect(cred.payload.cumulativeAmount).toBe('4000000')
+        }
+      } finally {
+        vi.doUnmock('./ChannelOps.js')
+        vi.resetModules()
+      }
+    })
+
+    test('keeps higher recovered cumulative than stale restore context', async () => {
+      vi.resetModules()
+
+      const createVoucherPayload = vi.fn(
+        async (_client, _account, channelId, cumulativeAmount) => ({
+          action: 'voucher' as const,
+          channelId,
+          cumulativeAmount: cumulativeAmount.toString(),
+          signature: '0xabc',
+        }),
+      )
+
+      vi.doMock('./ChannelOps.js', async () => {
+        const actual = await vi.importActual<typeof import('./ChannelOps.js')>('./ChannelOps.js')
+        return {
+          ...actual,
+          createVoucherPayload,
+          tryRecoverChannel: vi.fn().mockResolvedValue({
+            channelId,
+            salt: '0x' as Hex,
+            cumulativeAmount: 3_000_000n,
+            escrowContract: escrowAddress,
+            chainId: 42431,
+            opened: true,
+          }),
+        }
+      })
+
+      try {
+        const { session: isolatedSession } = await import('./Session.js')
+        const method = isolatedSession({
+          getClient: () => pureClient,
+          account: pureAccount,
+          deposit: '10',
+          escrowContract: escrowAddress,
+        })
+
+        const result = await method.createCredential({
+          challenge: makeChallenge(),
+          context: {
+            channelId,
+            cumulativeAmountRaw: '1000000',
+          },
+        })
+
+        const cred = deserializePayload(result)
+        expect(cred.payload.action).toBe('voucher')
+        if (cred.payload.action === 'voucher') {
+          expect(cred.payload.channelId).toBe(channelId)
+          expect(cred.payload.cumulativeAmount).toBe('4000000')
+        }
+      } finally {
+        vi.doUnmock('./ChannelOps.js')
+        vi.resetModules()
+      }
+    })
+  })
 })
 
-describe.runIf(isLocalnet)('session (on-chain)', () => {
+describe.skipIf(nodeEnv !== 'localnet')('session (on-chain)', () => {
   const payer = accounts[2]
   const payee = accounts[1].address
   let escrowContract: Address

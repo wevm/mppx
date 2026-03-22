@@ -20,6 +20,16 @@ import {
   tryRecoverChannel,
 } from './ChannelOps.js'
 
+export class UnrecoverableRestoreError extends Error {
+  readonly channelId: Hex.Hex
+
+  constructor(channelId: Hex.Hex, reason = 'closed or not found on-chain') {
+    super(`Channel ${channelId} cannot be reused (${reason}).`)
+    this.name = 'UnrecoverableRestoreError'
+    this.channelId = channelId
+  }
+}
+
 export const sessionContextSchema = z.object({
   account: z.optional(z.custom<Account.getResolver.Parameters['account']>()),
   action: z.optional(z.enum(['open', 'topUp', 'voucher', 'close'])),
@@ -129,18 +139,6 @@ export function session(parameters: session.Parameters = {}) {
       .suggestedDeposit
     const suggestedDeposit = suggestedDepositRaw ? BigInt(suggestedDepositRaw) : undefined
 
-    const deposit = (() => {
-      if (context?.depositRaw) return BigInt(context.depositRaw)
-      if (suggestedDeposit !== undefined && maxDeposit !== undefined)
-        return suggestedDeposit < maxDeposit ? suggestedDeposit : maxDeposit
-      if (suggestedDeposit !== undefined) return suggestedDeposit
-      if (maxDeposit !== undefined) return maxDeposit
-      if (parameters.deposit !== undefined) return parseUnits(parameters.deposit, decimals)
-      throw new Error(
-        'No deposit amount available. Set `deposit`, `maxDeposit`, or ensure the server challenge includes `suggestedDeposit`.',
-      )
-    })()
-
     const authorizedSigner = getAuthorizedSigner(account)
 
     const key = channelKey(payee, currency, escrowContract)
@@ -161,16 +159,19 @@ export function session(parameters: session.Parameters = {}) {
             : context?.cumulativeAmount
               ? parseUnits(context.cumulativeAmount, decimals)
               : undefined
-          if (contextCumulative !== undefined) recovered.cumulativeAmount = contextCumulative
+          if (contextCumulative !== undefined) {
+            recovered.cumulativeAmount =
+              recovered.cumulativeAmount > contextCumulative
+                ? recovered.cumulativeAmount
+                : contextCumulative
+          }
           channels.set(key, recovered)
           channelIdToKey.set(recovered.channelId, key)
           escrowContractMap.set(recovered.channelId, escrowContract)
           entry = recovered
           notifyUpdate(entry)
         } else if (context?.channelId) {
-          throw new Error(
-            `Channel ${context.channelId} cannot be reused (closed or not found on-chain).`,
-          )
+          throw new UnrecoverableRestoreError(context.channelId as Hex.Hex)
         }
       }
     }
@@ -190,6 +191,18 @@ export function session(parameters: session.Parameters = {}) {
       )
       notifyUpdate(entry)
     } else {
+      const deposit = (() => {
+        if (context?.depositRaw) return BigInt(context.depositRaw)
+        if (suggestedDeposit !== undefined && maxDeposit !== undefined)
+          return suggestedDeposit < maxDeposit ? suggestedDeposit : maxDeposit
+        if (suggestedDeposit !== undefined) return suggestedDeposit
+        if (maxDeposit !== undefined) return maxDeposit
+        if (parameters.deposit !== undefined) return parseUnits(parameters.deposit, decimals)
+        throw new Error(
+          'No deposit amount available. Set `deposit`, `maxDeposit`, or ensure the server challenge includes `suggestedDeposit`.',
+        )
+      })()
+
       const result = await createOpenPayload(client, account, {
         authorizedSigner,
         escrowContract,
@@ -349,7 +362,13 @@ export function session(parameters: session.Parameters = {}) {
       const client = await getClient({ chainId })
       const account = getAccount(client, context)
 
-      if (!context?.action && (parameters.deposit !== undefined || maxDeposit !== undefined))
+      const shouldAutoManage =
+        parameters.deposit !== undefined ||
+        maxDeposit !== undefined ||
+        context?.channelId !== undefined ||
+        context?.depositRaw !== undefined
+
+      if (!context?.action && shouldAutoManage)
         return autoManageCredential(challenge, account, context)
 
       if (context?.action) return manualCredential(challenge, account, context)
