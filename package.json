@@ -122,6 +122,11 @@
       "src": "./src/tempo/index.ts",
       "default": "./dist/tempo/index.js"
     },
+    "./tempo/client": {
+      "types": "./dist/tempo/client/index.d.ts",
+      "src": "./src/tempo/client/index.ts",
+      "default": "./dist/tempo/client/index.js"
+    },
     "./hono": {
       "types": "./dist/middlewares/hono.d.ts",
       "src": "./src/middlewares/hono.ts",
