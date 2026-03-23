@@ -144,6 +144,11 @@
       "types": "./dist/middlewares/elysia.d.ts",
       "src": "./src/middlewares/elysia.ts",
       "default": "./dist/middlewares/elysia.js"
+    },
+    "./token-gate": {
+      "types": "./dist/token-gate.d.ts",
+      "src": "./src/token-gate.ts",
+      "default": "./dist/token-gate.js"
     }
   },
   "peerDependencies": {
