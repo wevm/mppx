@@ -1,5 +1,14 @@
 # mppx
 
+## 0.4.9
+
+### Patch Changes
+
+- d9b651d: Added `Store.redis()` adapter for standard Redis clients (ioredis, node-redis, Valkey) with BigInt-safe serialization.
+- b69bbee: Fixed Express middleware hanging by constructing a Fetch `Request` directly from Express's `req` API.
+- 7da6cfd: Fixed SSE header normalization.
+- a2c6cc9: Skipped route amount/currency/recipient validation for topUp and voucher credentials. These `POST`s carry no application body so the route's request hook may produce a different amount than the challenge echoed from the original request. The on-chain voucher signature is the real validation.
+
 ## 0.4.8
 
 ### Patch Changes
