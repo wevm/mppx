@@ -11,6 +11,7 @@ export default defineConfig(({ mode }) => {
         name: 'api',
         async configureServer(server) {
           const { handler } = await import('./src/server.ts')
+          // oxlint-disable-next-line no-async-endpoint-handlers
           server.middlewares.use(async (req, res, next) => {
             const request = createRequest(req, res)
             const response = await handler(request)

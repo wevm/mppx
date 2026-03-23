@@ -218,4 +218,3 @@ describe('payment', () => {
     server.close()
   })
 })
-
