@@ -358,7 +358,15 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
             }
           }
 
-          const action = (credential.payload as Record<string, unknown>)?.action
+          // Use safeParse (not raw payload) so only methods whose schema
+          // defines `action` can trigger the skip. Without this, a client
+          // could inject `action: 'topUp'` on a charge credential to bypass
+          // the amount check. Zod strips unknown keys, so charge payloads
+          // (which don't define `action`) will have it removed.
+          const parsed = method.schema.credential.payload.safeParse(credential.payload)
+          const action = parsed.success
+            ? (parsed.data as Record<string, unknown>)?.action
+            : undefined
           if (action !== 'topUp' && action !== 'voucher') {
             const routeReq = challenge.request as Record<string, unknown>
             const echoedReq = credential.challenge.request as Record<string, unknown>

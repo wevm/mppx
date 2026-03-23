@@ -181,10 +181,38 @@ describe('request handler', () => {
   })
 
   test('topUp credential bypasses cross-route amount validation', async () => {
-    const handler = Mppx.create({ methods: [method], realm, secretKey })
+    // Use a session method whose schema defines action: 'topUp'
+    const sessionMethod = Method.from({
+      name: 'mock',
+      intent: 'session',
+      schema: {
+        credential: {
+          payload: z.discriminatedUnion('action', [
+            z.object({ action: z.literal('open'), token: z.string() }),
+            z.object({ action: z.literal('topUp'), token: z.string() }),
+          ]),
+        },
+        request: z.object({
+          amount: z.string(),
+          currency: z.string(),
+          recipient: z.string(),
+        }),
+      },
+    })
+    const sessionServerMethod = Method.toServer(sessionMethod, {
+      async verify() {
+        return {
+          status: 'settled',
+          method: 'mock',
+          timestamp: new Date().toISOString(),
+          reference: 'ref',
+        } as any
+      },
+    })
+    const handler = Mppx.create({ methods: [sessionServerMethod], realm, secretKey })
 
     // Get a challenge from the "cheap" route (simulates HEAD-obtained challenge)
-    const cheapHandle = handler.charge({
+    const cheapHandle = handler['mock/session']({
       amount: '1',
       currency: asset,
       expires: new Date(Date.now() + 60_000).toISOString(),
@@ -199,11 +227,11 @@ describe('request handler', () => {
     // Build a topUp credential from the cheap challenge (echoed from HEAD)
     const credential = Credential.from({
       challenge: cheapChallenge,
-      payload: { action: 'topUp', signature: '0x123', type: 'transaction' },
+      payload: { action: 'topUp', token: 'valid' },
     })
 
     // Present it at the "expensive" route — topUp should bypass amount check
-    const expensiveHandle = handler.charge({
+    const expensiveHandle = handler['mock/session']({
       amount: '1000000',
       currency: asset,
       expires: new Date(Date.now() + 60_000).toISOString(),
@@ -222,6 +250,51 @@ describe('request handler', () => {
       const body = (await result.challenge.json()) as { detail?: string }
       expect(body.detail).not.toContain('does not match')
     }
+  })
+
+  test('rejects charge credential with injected action: topUp (cross-route bypass attempt)', async () => {
+    const handler = Mppx.create({ methods: [method], realm, secretKey })
+
+    // Get a challenge from the "cheap" route
+    const cheapHandle = handler.charge({
+      amount: '1',
+      currency: asset,
+      expires: new Date(Date.now() + 60_000).toISOString(),
+      recipient: accounts[0].address,
+    })
+    const cheapResult = await cheapHandle(new Request('https://example.com/cheap'))
+    expect(cheapResult.status).toBe(402)
+    if (cheapResult.status !== 402) throw new Error()
+
+    const cheapChallenge = Challenge.fromResponse(cheapResult.challenge)
+
+    // Malicious client injects action: 'topUp' into a regular charge credential
+    // to try to bypass the cross-route amount check
+    const credential = Credential.from({
+      challenge: cheapChallenge,
+      payload: { action: 'topUp', signature: '0x123', type: 'transaction' },
+    })
+
+    // Present it at the "expensive" route — should still be rejected
+    const expensiveHandle = handler.charge({
+      amount: '1000000',
+      currency: asset,
+      expires: new Date(Date.now() + 60_000).toISOString(),
+      recipient: accounts[0].address,
+    })
+    const result = await expensiveHandle(
+      new Request('https://example.com/expensive', {
+        headers: { Authorization: Credential.serialize(credential) },
+      }),
+    )
+
+    // Injecting action: 'topUp' on a charge credential must not bypass
+    // the cross-route amount check. The credential should be rejected
+    // with "does not match" just like a normal charge credential would be.
+    expect(result.status).toBe(402)
+    if (result.status !== 402) throw new Error()
+    const body = (await result.challenge.json()) as { detail: string }
+    expect(body.detail).toContain('does not match')
   })
 
   test('returns 402 when credential challenge is expired', async () => {
