@@ -40,10 +40,12 @@
     "express": "^5.2.1",
     "file-type": "^21.3.2",
     "hono": "^4.11.9",
+    "lint-staged": "^16.4.0",
     "oxfmt": "^0.41.0",
     "oxlint": "^1.56.0",
     "playwright": "^1.58.2",
     "prool": "^0.2.3",
+    "simple-git-hooks": "^2.13.1",
     "tempo.ts": "^0.14.2",
     "testcontainers": "^11.11.0",
     "tsx": "^4.21.0",
@@ -51,6 +53,14 @@
     "viem": "^2.47.5",
     "vitest": "^4.1.0",
     "zile": "^0.0.19"
+  },
+  "simple-git-hooks": {
+    "pre-commit": "pnpm exec lint-staged"
+  },
+  "lint-staged": {
+    "*": "oxfmt --write --no-error-on-unmatched-pattern",
+    "*.{js,jsx,ts,tsx,mjs,cjs}": "oxlint --fix",
+    "*.{ts,tsx}": "bash -c 'pnpm check:types'"
   },
   "packageManager": "pnpm@10.28.0",
   "[!start-pkg]": "",

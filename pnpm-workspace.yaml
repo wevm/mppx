@@ -3,6 +3,9 @@ packages:
   - examples/*
   - examples/session/*
 
+onlyBuiltDependencies:
+  - simple-git-hooks
+
 overrides:
   mppx: 'workspace:*'
   ox: '^0.14.1'

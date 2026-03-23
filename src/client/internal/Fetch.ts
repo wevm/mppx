@@ -193,7 +193,7 @@ export function restore(): void {
 }
 
 /** @internal Normalizes headers to a plain object for spreading. */
-function normalizeHeaders(headers: unknown): Record<string, string> {
+export function normalizeHeaders(headers: unknown): Record<string, string> {
   if (!headers) return {}
   if (headers instanceof Headers) {
     const result: Record<string, string> = {}
