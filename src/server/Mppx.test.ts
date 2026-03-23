@@ -252,6 +252,81 @@ describe('request handler', () => {
     }
   })
 
+  test('voucher credential bypasses cross-route amount validation', async () => {
+    const sessionMethod = Method.from({
+      name: 'mock',
+      intent: 'session',
+      schema: {
+        credential: {
+          payload: z.discriminatedUnion('action', [
+            z.object({ action: z.literal('open'), token: z.string() }),
+            z.object({
+              action: z.literal('voucher'),
+              cumulativeAmount: z.string(),
+              signature: z.string(),
+            }),
+          ]),
+        },
+        request: z.object({
+          amount: z.string(),
+          currency: z.string(),
+          recipient: z.string(),
+        }),
+      },
+    })
+    const sessionServerMethod = Method.toServer(sessionMethod, {
+      async verify() {
+        return {
+          status: 'settled',
+          method: 'mock',
+          timestamp: new Date().toISOString(),
+          reference: 'ref',
+        } as any
+      },
+    })
+    const handler = Mppx.create({ methods: [sessionServerMethod], realm, secretKey })
+
+    // Get a challenge from the "cheap" route (simulates initial SSE request)
+    const cheapHandle = handler['mock/session']({
+      amount: '1',
+      currency: asset,
+      expires: new Date(Date.now() + 60_000).toISOString(),
+      recipient: accounts[0].address,
+    })
+    const cheapResult = await cheapHandle(new Request('https://example.com/chat'))
+    expect(cheapResult.status).toBe(402)
+    if (cheapResult.status !== 402) throw new Error()
+
+    const cheapChallenge = Challenge.fromResponse(cheapResult.challenge)
+
+    // Build a voucher credential echoing the original challenge — mid-stream
+    // the server may re-price (dynamic pricing), so the route's amount differs
+    const credential = Credential.from({
+      challenge: cheapChallenge,
+      payload: { action: 'voucher', cumulativeAmount: '500', signature: '0xabc' },
+    })
+
+    // Present it at the same route but with a higher price — voucher should
+    // bypass the cross-route amount check just like topUp does
+    const expensiveHandle = handler['mock/session']({
+      amount: '1000000',
+      currency: asset,
+      expires: new Date(Date.now() + 60_000).toISOString(),
+      recipient: accounts[0].address,
+    })
+    const result = await expensiveHandle(
+      new Request('https://example.com/chat', {
+        headers: { Authorization: Credential.serialize(credential) },
+      }),
+    )
+
+    // Should NOT get 402 for amount mismatch — voucher bypasses the check.
+    if (result.status === 402) {
+      const body = (await result.challenge.json()) as { detail?: string }
+      expect(body.detail).not.toContain('does not match')
+    }
+  })
+
   test('rejects charge credential with injected action: topUp (cross-route bypass attempt)', async () => {
     const handler = Mppx.create({ methods: [method], realm, secretKey })
 
