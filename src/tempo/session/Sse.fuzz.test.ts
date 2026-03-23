@@ -42,7 +42,7 @@ async function collectData(response: Response): Promise<string[]> {
 }
 
 describe('parseEvent', () => {
-  test('fuzz: never throws on arbitrary message-type input', () => {
+  test('never throws on arbitrary message-type input', () => {
     fc.assert(
       fc.property(fc.string(), (input) => {
         const result = Sse.parseEvent(input)
@@ -55,7 +55,7 @@ describe('parseEvent', () => {
     )
   })
 
-  test('fuzz: parseEvent with valid SSE format', () => {
+  test('parseEvent with valid SSE format', () => {
     const sseMessageArb = fc
       .array(
         fc.string().filter((s) => !s.includes('\n')),
@@ -91,7 +91,7 @@ describe('iterateData', () => {
     .array(sseEventArb, { minLength: 1, maxLength: 5 })
     .map((events) => events.join('\n\n') + '\n\n')
 
-  test('fuzz: chunk boundary invariance', async () => {
+  test('chunk boundary invariance', async () => {
     await fc.assert(
       fc.asyncProperty(
         sseStreamArb,
@@ -114,7 +114,7 @@ describe('iterateData', () => {
     )
   })
 
-  test('fuzz: iterateData never throws on arbitrary chunked input', async () => {
+  test('iterateData never throws on arbitrary chunked input', async () => {
     await fc.assert(
       fc.asyncProperty(
         fc.array(fc.uint8Array({ minLength: 1, maxLength: 100 }), {

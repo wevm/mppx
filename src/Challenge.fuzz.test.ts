@@ -3,7 +3,7 @@ import { Challenge } from 'mppx'
 import { describe, expect, test } from 'vitest'
 
 describe('parseAuthParams robustness', () => {
-  test('fuzz: deserialize never throws unhandled exception on arbitrary input', () => {
+  test('deserialize never throws unhandled exception on arbitrary input', () => {
     fc.assert(
       fc.property(fc.string(), (input) => {
         try {
@@ -38,7 +38,7 @@ describe('adversarial header strings', () => {
       .map((arr) => `Payment id="${String.fromCharCode(...arr)}"`),
   )
 
-  test('fuzz: adversarial headers never cause unhandled exceptions', () => {
+  test('adversarial headers never cause unhandled exceptions', () => {
     fc.assert(
       fc.property(adversarialHeader, (input) => {
         try {
@@ -67,7 +67,7 @@ describe('serialize/deserialize roundtrip', () => {
     ),
   })
 
-  test('fuzz: serialize then deserialize produces equivalent challenge', () => {
+  test('serialize then deserialize produces equivalent challenge', () => {
     fc.assert(
       fc.property(challengeArb, (input) => {
         const serialized = Challenge.serialize(input as Challenge.Challenge)
@@ -98,7 +98,7 @@ describe('deserializeList roundtrip', () => {
     ),
   })
 
-  test('fuzz: serialize multiple then deserializeList returns all challenges', () => {
+  test('serialize multiple then deserializeList returns all challenges', () => {
     fc.assert(
       fc.property(fc.array(challengeArb, { minLength: 1, maxLength: 3 }), (challenges) => {
         const header = challenges

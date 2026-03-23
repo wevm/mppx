@@ -3,7 +3,7 @@ import { Challenge, Credential, Receipt } from 'mppx'
 import { describe, expect, test } from 'vitest'
 
 describe('Credential', () => {
-  test('fuzz: serialize → deserialize roundtrip', () => {
+  test('serialize → deserialize roundtrip', () => {
     const credentialArb = fc.record({
       challenge: fc.record({
         id: fc.string({ minLength: 1 }).filter((s) => /^[A-Za-z0-9_-]+$/.test(s)),
@@ -38,7 +38,7 @@ describe('Credential', () => {
 })
 
 describe('Receipt', () => {
-  test('fuzz: serialize → deserialize roundtrip', () => {
+  test('serialize → deserialize roundtrip', () => {
     const receiptArb = fc.record({
       method: fc.string({ minLength: 1 }).filter((s) => /^[a-z]+$/.test(s)),
       reference: fc.string({ minLength: 1 }),
