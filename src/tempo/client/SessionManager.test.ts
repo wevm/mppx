@@ -208,6 +208,48 @@ describe('Session', () => {
     })
   })
 
+  describe('.ws()', () => {
+    test('throws when no challenge received from HTTP endpoint', async () => {
+      const mockFetch = vi.fn().mockResolvedValue(makeOkResponse())
+
+      const s = sessionManager({
+        account: '0x0000000000000000000000000000000000000001',
+        fetch: mockFetch as typeof globalThis.fetch,
+      })
+
+      await expect(s.ws('ws://api.example.com/stream')).rejects.toThrow(
+        'No payment challenge received',
+      )
+    })
+
+    test('converts ws:// to http:// for the 402 handshake', async () => {
+      const mockFetch = vi.fn().mockResolvedValue(make402Response())
+
+      const s = sessionManager({
+        account: '0x0000000000000000000000000000000000000001',
+        fetch: mockFetch as typeof globalThis.fetch,
+      })
+
+      // Will throw because no maxDeposit — but we can verify the URL was converted
+      await expect(s.ws('ws://api.example.com/stream')).rejects.toThrow()
+      const calledUrl = mockFetch.mock.calls[0]?.[0]
+      expect(calledUrl).toContain('http://api.example.com/stream')
+    })
+
+    test('converts wss:// to https:// for the 402 handshake', async () => {
+      const mockFetch = vi.fn().mockResolvedValue(make402Response())
+
+      const s = sessionManager({
+        account: '0x0000000000000000000000000000000000000001',
+        fetch: mockFetch as typeof globalThis.fetch,
+      })
+
+      await expect(s.ws('wss://api.example.com/stream')).rejects.toThrow()
+      const calledUrl = mockFetch.mock.calls[0]?.[0]
+      expect(calledUrl).toContain('https://api.example.com/stream')
+    })
+  })
+
   describe('.close()', () => {
     test('is no-op when not opened', async () => {
       const mockFetch = vi.fn()
