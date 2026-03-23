@@ -62,6 +62,7 @@
   "files": [
     "CHANGELOG.md",
     "dist",
+    "skills",
     "src"
   ],
   "exports": {
