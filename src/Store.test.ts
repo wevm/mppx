@@ -8,16 +8,16 @@ const nested = {
   meta: { active: true, tags: ['a', 'b'] },
 }
 
-function fakeKv(): Store.cloudflare.Parameters {
+function fakeKv() {
   const map = new Map<string, string>()
   return {
-    async get(key) {
+    async get(key: string) {
       return map.get(key) ?? null
     },
-    async put(key, value) {
+    async put(key: string, value: string) {
       map.set(key, value)
     },
-    async delete(key) {
+    async delete(key: string) {
       map.delete(key)
     },
   }
@@ -76,6 +76,20 @@ describe.each([
 })
 
 describe('json roundtrip behavior', () => {
+  test('cloudflare json-roundtrips nested objects', async () => {
+    const store = Store.cloudflare(fakeKv())
+    const value = { a: [1, { b: 'c' }], d: null }
+    await store.put('k', value)
+    expect(await store.get('k')).toEqual(value)
+  })
+
+  test('cloudflare roundtrips BigInt values', async () => {
+    const store = Store.cloudflare(fakeKv())
+    const value = { amount: 1000000000000000000n, nested: { big: 42n } }
+    await store.put('k', value)
+    expect(await store.get('k')).toEqual(value)
+  })
+
   test('memory json-roundtrips nested objects', async () => {
     const store = Store.memory()
     const value = { a: [1, { b: 'c' }], d: null }
@@ -83,9 +97,9 @@ describe('json roundtrip behavior', () => {
     expect(await store.get('k')).toEqual(value)
   })
 
-  test('cloudflare json-roundtrips nested objects', async () => {
-    const store = Store.cloudflare(fakeKv())
-    const value = { a: [1, { b: 'c' }], d: null }
+  test('memory roundtrips BigInt values', async () => {
+    const store = Store.memory()
+    const value = { amount: 1000000000000000000n, nested: { big: 42n } }
     await store.put('k', value)
     expect(await store.get('k')).toEqual(value)
   })
