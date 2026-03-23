@@ -1,8 +1,8 @@
 import express from 'express'
 import { Receipt } from 'mppx'
 import { Mppx as Mppx_client, session as sessionIntent, tempo as tempo_client } from 'mppx/client'
-import { Mppx } from 'mppx/express'
-import { tempo as tempo_server } from 'mppx/server'
+import { Mppx, payment } from 'mppx/express'
+import { Mppx as Mppx_server, tempo as tempo_server } from 'mppx/server'
 import type { Address } from 'viem'
 import { Addresses } from 'viem/tempo'
 import { beforeAll, describe, expect, test } from 'vitest'
@@ -154,6 +154,66 @@ describe('session', () => {
 
     const body = await response.json()
     expect(body).toEqual({ data: 'streamed' })
+
+    server.close()
+  })
+})
+
+describe('payment', () => {
+  const mppx = Mppx_server.create({
+    methods: [
+      tempo_server({
+        getClient: () => client,
+        currency: asset,
+        recipient: accounts[0].address,
+      }),
+    ],
+    secretKey,
+  })
+
+  const { fetch } = Mppx_client.create({
+    polyfill: false,
+    methods: [
+      tempo_client({
+        account: accounts[1],
+        getClient: () => client,
+      }),
+    ],
+  })
+
+  test('returns 402 when no credential', async () => {
+    const app = express()
+    app.get('/', payment(mppx.charge, { amount: '1' }), (_req, res) => {
+      res.json({ fortune: 'You will be rich' })
+    })
+
+    const server = await createServer(app)
+    const response = await globalThis.fetch(server.url)
+    expect(response.status).toBe(402)
+    expect(response.headers.get('WWW-Authenticate')).toContain('Payment')
+
+    server.close()
+  })
+
+  test('returns 200 with receipt on valid payment', async () => {
+    const app = express()
+    app.get('/', payment(mppx.charge, { amount: '1' }), (_req, res) => {
+      res.json({ fortune: 'You will be rich' })
+    })
+
+    const server = await createServer(app)
+    const response = await fetch(server.url)
+    expect(response.status).toBe(200)
+
+    const body = await response.json()
+    expect(body).toEqual({ fortune: 'You will be rich' })
+
+    const receiptHeader = response.headers.get('Payment-Receipt')
+    expect(receiptHeader).toBeTruthy()
+
+    const receipt = Receipt.fromResponse(response)
+    expect(receipt.status).toBe('success')
+    expect(receipt.method).toBe('tempo')
 
     server.close()
   })
