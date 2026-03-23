@@ -1,4 +1,5 @@
-import { decodeFunctionData, parseEventLogs, type TransactionReceipt } from 'viem'
+import type { TempoAddress as TempoAddress_types } from 'ox/tempo'
+import { decodeFunctionData, keccak256, parseEventLogs, type TransactionReceipt } from 'viem'
 import {
   getTransactionReceipt,
   sendRawTransaction,
@@ -8,9 +9,11 @@ import {
 } from 'viem/actions'
 import { tempo as tempo_chain } from 'viem/chains'
 import { Abis, Transaction } from 'viem/tempo'
+
 import { PaymentExpiredError } from '../../Errors.js'
 import type { LooseOmit } from '../../internal/types.js'
 import * as Method from '../../Method.js'
+import * as Store from '../../Store.js'
 import * as Client from '../../viem/Client.js'
 import * as Account from '../internal/account.js'
 import * as TempoAddress from '../internal/address.js'
@@ -42,6 +45,7 @@ export function charge<const parameters extends charge.Parameters>(
     memo,
     waitForConfirmation = true,
   } = parameters
+  const store = (parameters.store ?? Store.memory()) as Store.Store<charge.StoreItemMap>
 
   const { recipient, feePayer, feePayerUrl } = Account.resolve(parameters)
 
@@ -120,73 +124,44 @@ export function charge<const parameters extends charge.Parameters>(
       switch (payload.type) {
         case 'hash': {
           const hash = payload.hash as `0x${string}`
+          await assertHashUnused(store, hash)
+
           const receipt = await getTransactionReceipt(client, {
             hash,
           })
 
-          if (memo) {
-            const memoLogs = parseEventLogs({
-              abi: Abis.tip20,
-              eventName: 'TransferWithMemo',
-              logs: receipt.logs,
-            })
+          assertTransferLog(receipt, {
+            amount,
+            currency,
+            from: receipt.from,
+            memo,
+            recipient,
+          })
 
-            const match = memoLogs.find(
-              (log) =>
-                TempoAddress.isEqual(log.address, currency) &&
-                TempoAddress.isEqual(log.args.to, recipient) &&
-                log.args.amount.toString() === amount &&
-                log.args.memo.toLowerCase() === memo.toLowerCase(),
-            )
-
-            if (!match)
-              throw new MismatchError(
-                'Payment verification failed: no matching transfer with memo found.',
-                {
-                  amount,
-                  currency,
-                  memo,
-                  recipient,
-                },
-              )
-          } else {
-            const transferLogs = parseEventLogs({
-              abi: Abis.tip20,
-              eventName: 'Transfer',
-              logs: receipt.logs,
-            })
-
-            const memoLogs = parseEventLogs({
-              abi: Abis.tip20,
-              eventName: 'TransferWithMemo',
-              logs: receipt.logs,
-            })
-
-            const match = [...transferLogs, ...memoLogs].find(
-              (log) =>
-                TempoAddress.isEqual(log.address, currency) &&
-                TempoAddress.isEqual(log.args.to, recipient) &&
-                log.args.amount.toString() === amount,
-            )
-
-            if (!match)
-              throw new MismatchError('Payment verification failed: no matching transfer found.', {
-                amount,
-                currency,
-                recipient,
-              })
-          }
+          await markHashUsed(store, hash)
 
           return toReceipt(receipt)
         }
 
         case 'transaction': {
           const serializedTransaction = payload.signature as Transaction.TransactionSerializedTempo
+
+          // Pre-broadcast dedup: catch exact byte-for-byte replays early.
+          const hash = keccak256(serializedTransaction)
+          await assertHashUnused(store, hash)
+          await markHashUsed(store, hash)
+
+          if (!FeePayer.isTempoTransaction(serializedTransaction))
+            throw new MismatchError('Only Tempo (0x76/0x78) transactions are supported.', {})
+
           const transaction = Transaction.deserialize(serializedTransaction)
+          if (!transaction.signature || !transaction.from)
+            throw new MismatchError(
+              'Transaction must be signed by the sender before fee payer co-signing.',
+              {},
+            )
 
-          const calls = transaction.calls ?? []
-
-          const call = calls.find((call) => {
+          const call = transaction.calls.find((call) => {
             if (!call.to || !TempoAddress.isEqual(call.to, currency)) return false
             if (!call.data) return false
 
@@ -238,7 +213,7 @@ export function charge<const parameters extends charge.Parameters>(
             })
 
           if ((feePayer || feePayerUrl) && methodDetails?.feePayer !== false)
-            FeePayer.validateCalls(calls, { amount, currency, recipient })
+            FeePayer.validateCalls(transaction.calls, { amount, currency, recipient })
 
           const resolvedFeeToken =
             transaction.feeToken ?? defaults.currency[chainId as keyof typeof defaults.currency]
@@ -259,6 +234,21 @@ export function charge<const parameters extends charge.Parameters>(
             const receipt = await sendRawTransactionSync(client, {
               serializedTransaction: serializedTransaction_final,
             })
+            assertTransferLog(receipt, {
+              amount,
+              currency,
+              from: transaction.from,
+              memo,
+              recipient,
+            })
+            // Post-broadcast dedup: catch malleable input variants
+            // (different serialized bytes, same underlying tx) that
+            // bypass the pre-broadcast check. Skip if the broadcast
+            // hash matches the input hash (already stored above).
+            if (receipt.transactionHash.toLowerCase() !== hash.toLowerCase()) {
+              await assertHashUnused(store, receipt.transactionHash)
+              await markHashUsed(store, receipt.transactionHash)
+            }
             return toReceipt(receipt)
           } else {
             // Optimistic path: simulate to catch obvious reverts, then broadcast
@@ -268,16 +258,21 @@ export function charge<const parameters extends charge.Parameters>(
               ...transaction,
               account: transaction.from,
               feeToken: resolvedFeeToken,
-              calls,
+              calls: transaction.calls,
             } as never)
-            const hash = await sendRawTransaction(client, {
+            const reference = await sendRawTransaction(client, {
               serializedTransaction: serializedTransaction_final,
             })
+            // Post-broadcast dedup: same
+            if (reference.toLowerCase() !== hash.toLowerCase()) {
+              await assertHashUnused(store, reference)
+              await markHashUsed(store, reference)
+            }
             return {
               method: 'tempo',
               status: 'success',
               timestamp: new Date().toISOString(),
-              reference: hash,
+              reference,
             } as const
           }
         }
@@ -290,11 +285,20 @@ export function charge<const parameters extends charge.Parameters>(
 }
 
 export declare namespace charge {
+  type StoreItemMap = { [key: `mppx:charge:${string}`]: number }
+
   type Defaults = LooseOmit<Method.RequestDefaults<typeof Methods.charge>, 'feePayer' | 'recipient'>
 
   type Parameters = {
     /** Testnet mode. */
     testnet?: boolean | undefined
+    /**
+     * Store for transaction hash replay protection.
+     *
+     * Use a shared store in multi-instance deployments so consumed hashes are
+     * visible across all server instances.
+     */
+    store?: Store.Store | undefined
     /**
      * Whether to wait for the charge transaction to confirm on-chain before
      * responding. @default true
@@ -317,6 +321,97 @@ export declare namespace charge {
   > & {
     decimals: number
   }
+}
+
+/** @internal */
+function assertTransferLog(
+  receipt: TransactionReceipt,
+  parameters: {
+    amount: string
+    currency: TempoAddress_types.Address
+    from: TempoAddress_types.Address
+    memo: `0x${string}` | undefined
+    recipient: TempoAddress_types.Address
+  },
+): void {
+  const { amount, currency, from, memo, recipient } = parameters
+
+  if (memo) {
+    const memoLogs = parseEventLogs({
+      abi: Abis.tip20,
+      eventName: 'TransferWithMemo',
+      logs: receipt.logs,
+    })
+
+    const match = memoLogs.find(
+      (log) =>
+        TempoAddress.isEqual(log.address, currency) &&
+        TempoAddress.isEqual(log.args.from, from) &&
+        TempoAddress.isEqual(log.args.to, recipient) &&
+        log.args.amount.toString() === amount &&
+        log.args.memo.toLowerCase() === memo.toLowerCase(),
+    )
+
+    if (!match)
+      throw new MismatchError(
+        'Payment verification failed: no matching transfer with memo found.',
+        {
+          amount,
+          currency,
+          memo,
+          recipient,
+        },
+      )
+  } else {
+    const transferLogs = parseEventLogs({
+      abi: Abis.tip20,
+      eventName: 'Transfer',
+      logs: receipt.logs,
+    })
+
+    const memoLogs = parseEventLogs({
+      abi: Abis.tip20,
+      eventName: 'TransferWithMemo',
+      logs: receipt.logs,
+    })
+
+    const match = [...transferLogs, ...memoLogs].find(
+      (log) =>
+        TempoAddress.isEqual(log.address, currency) &&
+        TempoAddress.isEqual(log.args.from, from) &&
+        TempoAddress.isEqual(log.args.to, recipient) &&
+        log.args.amount.toString() === amount,
+    )
+
+    if (!match)
+      throw new MismatchError('Payment verification failed: no matching transfer found.', {
+        amount,
+        currency,
+        recipient,
+      })
+  }
+}
+
+/** @internal */
+function getHashStoreKey(hash: `0x${string}`): `mppx:charge:${string}` {
+  return `mppx:charge:${hash.toLowerCase()}`
+}
+
+/** @internal */
+async function assertHashUnused(
+  store: Store.Store<charge.StoreItemMap>,
+  hash: `0x${string}`,
+): Promise<void> {
+  const seen = await store.get(getHashStoreKey(hash))
+  if (seen !== null) throw new Error('Transaction hash has already been used.')
+}
+
+/** @internal */
+async function markHashUsed(
+  store: Store.Store<charge.StoreItemMap>,
+  hash: `0x${string}`,
+): Promise<void> {
+  await store.put(getHashStoreKey(hash), Date.now())
 }
 
 /** @internal */

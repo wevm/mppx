@@ -1,5 +1,6 @@
 import { createRequest, sendResponse } from '@remix-run/node-fetch-server'
 import { defineConfig } from 'vite'
+
 import { handler } from './src/server.ts'
 
 export default defineConfig({
@@ -7,6 +8,7 @@ export default defineConfig({
     {
       name: 'api',
       configureServer(server) {
+        // oxlint-disable-next-line no-async-endpoint-handlers
         server.middlewares.use(async (req, res, next) => {
           const request = createRequest(req, res)
           const response = await handler(request)

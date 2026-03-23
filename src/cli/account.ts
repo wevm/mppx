@@ -55,50 +55,85 @@ export function createKeychain(account = 'main') {
     async list(): Promise<string[]> {
       const platform = os.platform()
       if (platform === 'darwin') {
-          const { stdout, error } = await execCommand('security', ['dump-keychain'])
-          if (error) return []
-          const accounts: string[] = []
-          const blocks = stdout.split('keychain:')
-          for (const block of blocks) {
-            const serviceMatch = block.match(/"svce"<blob>="([^"]*)"/)
-            const accountMatch = block.match(/"acct"<blob>="([^"]*)"/)
-            if (serviceMatch?.[1] === service && accountMatch?.[1]) accounts.push(accountMatch[1])
-          }
-          return accounts
+        const { stdout, error } = await execCommand('security', ['dump-keychain'])
+        if (error) return []
+        const accounts: string[] = []
+        const blocks = stdout.split('keychain:')
+        for (const block of blocks) {
+          const serviceMatch = block.match(/"svce"<blob>="([^"]*)"/)
+          const accountMatch = block.match(/"acct"<blob>="([^"]*)"/)
+          if (serviceMatch?.[1] === service && accountMatch?.[1]) accounts.push(accountMatch[1])
+        }
+        return accounts
       }
       if (platform === 'linux') {
-          const { stdout, stderr, error } = await execCommand('secret-tool', ['search', '--all', '--unlock', 'service', service])
-          if (error) return []
-          const combined = `${stdout}\n${stderr}`
-          const accounts: string[] = []
-          const matches = combined.matchAll(/\baccount = (.+)/g)
-          for (const match of matches) if (match[1]) accounts.push(match[1])
-          return accounts
+        const { stdout, stderr, error } = await execCommand('secret-tool', [
+          'search',
+          '--all',
+          '--unlock',
+          'service',
+          service,
+        ])
+        if (error) return []
+        const combined = `${stdout}\n${stderr}`
+        const accounts: string[] = []
+        const matches = combined.matchAll(/\baccount = (.+)/g)
+        for (const match of matches) if (match[1]) accounts.push(match[1])
+        return accounts
       }
       throw new Error(`Unsupported platform: ${platform}`)
     },
     async get(): Promise<string | undefined> {
       const platform = os.platform()
       if (platform === 'darwin') {
-          const { stdout, error } = await execCommand('security', ['find-generic-password', '-s', service, '-a', account, '-w'])
-          return error ? undefined : stdout
+        const { stdout, error } = await execCommand('security', [
+          'find-generic-password',
+          '-s',
+          service,
+          '-a',
+          account,
+          '-w',
+        ])
+        return error ? undefined : stdout
       }
       if (platform === 'linux') {
-          const { stdout, error } = await execCommand('secret-tool', ['lookup', 'service', service, 'account', account])
-          return error ? undefined : stdout || undefined
+        const { stdout, error } = await execCommand('secret-tool', [
+          'lookup',
+          'service',
+          service,
+          'account',
+          account,
+        ])
+        return error ? undefined : stdout || undefined
       }
       throw new Error(`Unsupported platform: ${platform}`)
     },
     async set(value: string): Promise<void> {
       const platform = os.platform()
       if (platform === 'darwin') {
-          await execCommand('security', ['delete-generic-password', '-s', service, '-a', account])
-          const { error } = await execCommand('security', ['add-generic-password', '-s', service, '-a', account, '-w', value])
-          if (error) throw error
-          return
+        await execCommand('security', ['delete-generic-password', '-s', service, '-a', account])
+        const { error } = await execCommand('security', [
+          'add-generic-password',
+          '-s',
+          service,
+          '-a',
+          account,
+          '-w',
+          value,
+        ])
+        if (error) throw error
+        return
       }
       if (platform === 'linux') {
-        const proc = child.execFile('secret-tool', ['store', '--label', `${service} ${account}`, 'service', service, 'account', account])
+        const proc = child.execFile('secret-tool', [
+          'store',
+          '--label',
+          `${service} ${account}`,
+          'service',
+          service,
+          'account',
+          account,
+        ])
         proc.stdin?.write(value)
         proc.stdin?.end()
         return new Promise((resolve, reject) => {
@@ -114,12 +149,12 @@ export function createKeychain(account = 'main') {
     async delete(): Promise<void> {
       const platform = os.platform()
       if (platform === 'darwin') {
-          await execCommand('security', ['delete-generic-password', '-s', service, '-a', account])
-          return
+        await execCommand('security', ['delete-generic-password', '-s', service, '-a', account])
+        return
       }
       if (platform === 'linux') {
-          await execCommand('secret-tool', ['clear', 'service', service, 'account', account])
-          return
+        await execCommand('secret-tool', ['clear', 'service', service, 'account', account])
+        return
       }
       throw new Error(`Unsupported platform: ${platform}`)
     },

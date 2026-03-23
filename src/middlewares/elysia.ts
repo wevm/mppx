@@ -1,4 +1,5 @@
 import type { Context } from 'elysia'
+
 import * as Mppx_core from '../server/Mppx.js'
 import * as Mppx_internal from './internal/mppx.js'
 
@@ -59,8 +60,11 @@ export function payment<const intent extends Mppx_internal.AnyMethodFn>(
   intent: intent,
   options: intent extends (options: infer options) => any ? options : never,
 ): ElysiaHook {
-  return async ({ request }) => {
+  return async ({ request, set }) => {
     const result = await intent(options)(request)
     if (result.status === 402) return result.challenge
+    const receipt = result.withReceipt(new Response())
+    const header = receipt.headers.get('Payment-Receipt')
+    if (header) set.headers['Payment-Receipt'] = header
   }
 }

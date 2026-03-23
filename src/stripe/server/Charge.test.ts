@@ -2,6 +2,7 @@ import { Challenge, Credential } from 'mppx'
 import { Mppx, stripe } from 'mppx/server'
 import { afterEach, describe, expect, test, vi } from 'vitest'
 import * as Http from '~test/Http.js'
+
 import type { StripeClient } from '../internal/types.js'
 
 const realm = 'api.example.com'

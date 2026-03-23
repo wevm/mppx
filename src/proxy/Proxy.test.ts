@@ -4,6 +4,7 @@ import { Mppx as Mppx_server, tempo as tempo_server } from 'mppx/server'
 import { afterEach, describe, expect, test } from 'vitest'
 import * as Http from '~test/Http.js'
 import { accounts, asset, client } from '~test/tempo/viem.js'
+
 import * as ApiProxy from './Proxy.js'
 import * as Service from './Service.js'
 import { anthropic } from './services/anthropic.js'
@@ -628,6 +629,62 @@ describe('create', () => {
       method: 'POST',
       body: { model: 'gpt-4', prompt: 'hello' },
     })
+  })
+
+  test('behavior: management POST falls back to paid route with different method', async () => {
+    upstream = await createUpstream(() => Response.json({ ok: true }))
+    const proxy = ApiProxy.create({
+      services: [
+        Service.from('api', {
+          baseUrl: upstream.url,
+          routes: {
+            // Registered as GET but management POSTs (e.g. session close)
+            // should still reach this paid endpoint via fallback.
+            'GET /v1/stream': mppx_server.charge({ amount: '1', decimals: 6 }),
+          },
+        }),
+      ],
+    })
+    proxyServer = await Http.createServer(proxy.listener)
+
+    const res = await fetch(`${proxyServer.url}/api/v1/stream`, {
+      method: 'POST',
+      headers: { Authorization: 'x' },
+    })
+    // Should hit the paid endpoint and get a 402 challenge, not 404
+    expect(res.status).toBe(402)
+  })
+
+  test('behavior: POST to unregistered method does not fall back to free GET route', async () => {
+    upstream = await createUpstream(() => Response.json({ ok: true }))
+    const proxy = ApiProxy.create({
+      services: [
+        Service.from('api', {
+          baseUrl: upstream.url,
+          routes: {
+            // GET is free, but there is no POST handler
+            'GET /v1beta/cachedContents': true,
+            'POST /v1beta/models/:model': mppx_server.charge({
+              amount: '1',
+              decimals: 6,
+            }),
+          },
+        }),
+      ],
+    })
+    proxyServer = await Http.createServer(proxy.listener)
+
+    // A POST with a bogus authorization header should NOT fall back
+    // to the free GET route — it must return 404.
+    const res = await fetch(`${proxyServer.url}/api/v1beta/cachedContents`, {
+      method: 'POST',
+      headers: {
+        Authorization: 'x',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ model: 'models/gemini-2.0-flash-001', contents: [] }),
+    })
+    expect(res.status).toBe(404)
   })
 
   test('behavior: forwards query params to upstream', async () => {

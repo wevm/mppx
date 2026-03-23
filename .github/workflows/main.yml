@@ -15,6 +15,7 @@ jobs:
 
   changesets:
     name: Changesets
+    if: github.repository == 'wevm/mppx'
     needs: verify
     permissions:
       contents: write

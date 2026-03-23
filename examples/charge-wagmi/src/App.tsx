@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useAccount, useCapabilities, useConnect, useConnectors, useDisconnect } from 'wagmi'
 import { Hooks } from 'wagmi/tempo'
+
 import { mppx } from './wagmi'
 
 const currency = '0x20c0000000000000000000000000000000000000' as const // pathUSD

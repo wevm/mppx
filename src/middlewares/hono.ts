@@ -1,4 +1,5 @@
 import type { MiddlewareHandler } from 'hono'
+
 import * as Mppx_core from '../server/Mppx.js'
 import * as Mppx_internal from './internal/mppx.js'
 

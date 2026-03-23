@@ -2,6 +2,7 @@ import { createClient, http } from 'viem'
 import { privateKeyToAccount } from 'viem/accounts'
 import { mainnet } from 'viem/chains'
 import { describe, expect, test } from 'vitest'
+
 import * as Account from './Account.js'
 
 const account = privateKeyToAccount(

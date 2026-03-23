@@ -1,7 +1,18 @@
+import type { TempoAddress } from 'ox/tempo'
+import { TxEnvelopeTempo } from 'ox/tempo'
 import { decodeFunctionData } from 'viem'
-import { Abis, Addresses, type TempoAddress } from 'viem/tempo'
+import { Abis, Addresses } from 'viem/tempo'
+
 import * as TempoAddress_internal from './address.js'
 import * as Selectors from './selectors.js'
+
+/** Returns true if the serialized transaction has a Tempo envelope prefix. */
+export function isTempoTransaction(serialized: string | undefined): boolean {
+  return (
+    serialized?.startsWith(TxEnvelopeTempo.serializedType) === true ||
+    serialized?.startsWith(TxEnvelopeTempo.feePayerMagic) === true
+  )
+}
 
 /**
  * Allowed call patterns for fee-payer sponsored transactions.

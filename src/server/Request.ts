@@ -1,4 +1,5 @@
 import type { IncomingMessage, RequestListener, ServerResponse } from 'node:http'
+
 import * as FetchServer from '@remix-run/node-fetch-server'
 
 export type FetchHandler = (request: Request) => Promise<Response> | Response

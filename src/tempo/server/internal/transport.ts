@@ -6,7 +6,7 @@
  * @internal
  */
 import * as Transport from '../../../server/Transport.js'
-import type * as ChannelStore from '../../session/ChannelStore.js'
+import * as ChannelStore from '../../session/ChannelStore.js'
 import * as Sse_core from '../../session/Sse.js'
 
 /** SSE transport with Tempo session controller. */
@@ -89,7 +89,46 @@ export function sse(options: sse.Options & { store: ChannelStore.ChannelStore })
         return Sse_core.toResponse(stream)
       }
 
-      return base.respondReceipt({ receipt, response: response as Response, challengeId })
+      const baseResponse = base.respondReceipt({
+        receipt,
+        response: response as Response,
+        challengeId,
+      })
+
+      // Non-SSE response (e.g. upstream returned JSON instead of event-stream).
+      // Need to deduct tickCost so request isn't free.
+      const ctx = contextMap.get(challengeId)
+      if (ctx) {
+        contextMap.delete(challengeId)
+        const stream = new ReadableStream<Uint8Array>({
+          async start(controller) {
+            // deduction completes before consumer reads
+            await ChannelStore.deductFromChannel(store, ctx.channelId, ctx.tickCost)
+            if (!baseResponse.body) {
+              controller.close()
+              return
+            }
+            const reader = baseResponse.body.getReader()
+            try {
+              while (true) {
+                const { done, value } = await reader.read()
+                if (done) break
+                controller.enqueue(value)
+              }
+            } finally {
+              reader.releaseLock()
+              controller.close()
+            }
+          },
+        })
+        return new Response(stream, {
+          status: baseResponse.status,
+          statusText: baseResponse.statusText,
+          headers: baseResponse.headers,
+        })
+      }
+
+      return baseResponse
     },
   })
 }

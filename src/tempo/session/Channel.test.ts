@@ -1,5 +1,6 @@
 import { AbiParameters, Hash } from 'ox'
 import { describe, expect, test } from 'vitest'
+
 import * as Channel from './Channel.js'
 
 describe('computeId', () => {

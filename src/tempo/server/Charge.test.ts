@@ -2,14 +2,19 @@ import { Challenge, Credential, Receipt } from 'mppx'
 import { Mppx as Mppx_client, tempo as tempo_client } from 'mppx/client'
 import { Mppx as Mppx_server, tempo as tempo_server } from 'mppx/server'
 import type { Hex } from 'ox'
+import { TxEnvelopeTempo } from 'ox/tempo'
 import { Handler } from 'tempo.ts/server'
-import { encodeFunctionData, parseUnits } from 'viem'
+import { createClient, custom, encodeFunctionData, parseUnits } from 'viem'
 import { getTransactionReceipt, prepareTransactionRequest, signTransaction } from 'viem/actions'
-import { Abis, Account, Actions, Addresses, Secp256k1, Tick } from 'viem/tempo'
+import { Abis, Account, Actions, Addresses, Secp256k1, Tick, Transaction } from 'viem/tempo'
 import { beforeAll, describe, expect, test } from 'vitest'
 import * as Http from '~test/Http.js'
+import { closeChannelOnChain, deployEscrow, openChannel } from '~test/tempo/session.js'
 import { accounts, asset, chain, client, fundAccount } from '~test/tempo/viem.js'
+
+import * as Store from '../../Store.js'
 import * as Attribution from '../Attribution.js'
+import { signVoucher } from '../session/Voucher.js'
 
 const realm = 'api.example.com'
 const secretKey = 'test-secret-key'
@@ -108,6 +113,222 @@ describe('tempo', () => {
       httpServer.close()
     })
 
+    test('behavior: rejects replayed transaction hash', async () => {
+      const dedupServer = Mppx_server.create({
+        methods: [
+          tempo_server.charge({
+            getClient() {
+              return client
+            },
+            currency: asset,
+            account: accounts[0],
+            store: Store.memory(),
+          }),
+        ],
+        realm,
+        secretKey,
+      })
+
+      const httpServer = await Http.createServer(async (req, res) => {
+        const result = await Mppx_server.toNodeListener(dedupServer.charge({ amount: '1' }))(
+          req,
+          res,
+        )
+        if (result.status === 402) return
+        res.end('OK')
+      })
+
+      const response1 = await fetch(httpServer.url)
+      expect(response1.status).toBe(402)
+
+      const challenge1 = Challenge.fromResponse(response1, {
+        methods: [tempo_client.charge()],
+      })
+
+      const { receipt } = await Actions.token.transferSync(client, {
+        account: accounts[1],
+        amount: BigInt(challenge1.request.amount),
+        to: challenge1.request.recipient as Hex.Hex,
+        token: challenge1.request.currency as Hex.Hex,
+      })
+
+      const credential1 = Credential.from({
+        challenge: challenge1,
+        payload: { hash: receipt.transactionHash, type: 'hash' as const },
+      })
+
+      {
+        const response = await fetch(httpServer.url, {
+          headers: { Authorization: Credential.serialize(credential1) },
+        })
+        expect(response.status).toBe(200)
+      }
+
+      const response2 = await fetch(httpServer.url)
+      expect(response2.status).toBe(402)
+
+      const challenge2 = Challenge.fromResponse(response2, {
+        methods: [tempo_client.charge()],
+      })
+
+      const mixedCaseHash = `0x${receipt.transactionHash.slice(2).toUpperCase()}` as Hex.Hex
+
+      const credential2 = Credential.from({
+        challenge: challenge2,
+        payload: { hash: mixedCaseHash, type: 'hash' as const },
+      })
+
+      {
+        const response = await fetch(httpServer.url, {
+          headers: { Authorization: Credential.serialize(credential2) },
+        })
+        expect(response.status).toBe(402)
+        const body = (await response.json()) as { detail: string }
+        expect(body.detail).toContain('Transaction hash has already been used.')
+      }
+
+      httpServer.close()
+    })
+
+    test('behavior: rejects replayed hash with alternating case', async () => {
+      const dedupServer = Mppx_server.create({
+        methods: [
+          tempo_server.charge({
+            getClient() {
+              return client
+            },
+            currency: asset,
+            account: accounts[0],
+            store: Store.memory(),
+          }),
+        ],
+        realm,
+        secretKey,
+      })
+
+      const httpServer = await Http.createServer(async (req, res) => {
+        const result = await Mppx_server.toNodeListener(dedupServer.charge({ amount: '1' }))(
+          req,
+          res,
+        )
+        if (result.status === 402) return
+        res.end('OK')
+      })
+
+      const response1 = await fetch(httpServer.url)
+      expect(response1.status).toBe(402)
+
+      const challenge1 = Challenge.fromResponse(response1, {
+        methods: [tempo_client.charge()],
+      })
+
+      const { receipt } = await Actions.token.transferSync(client, {
+        account: accounts[1],
+        amount: BigInt(challenge1.request.amount),
+        to: challenge1.request.recipient as Hex.Hex,
+        token: challenge1.request.currency as Hex.Hex,
+      })
+
+      // Submit original hash with alternating case (aB, not all upper or lower)
+      const hex = receipt.transactionHash.slice(2)
+      const alternating = `0x${hex
+        .split('')
+        .map((c, i) => (i % 2 === 0 ? c.toUpperCase() : c.toLowerCase()))
+        .join('')}` as Hex.Hex
+
+      const credential1 = Credential.from({
+        challenge: challenge1,
+        payload: { hash: alternating, type: 'hash' as const },
+      })
+
+      {
+        const response = await fetch(httpServer.url, {
+          headers: { Authorization: Credential.serialize(credential1) },
+        })
+        expect(response.status).toBe(200)
+      }
+
+      // Replay with lowercase — should be rejected
+      const response2 = await fetch(httpServer.url)
+      expect(response2.status).toBe(402)
+
+      const challenge2 = Challenge.fromResponse(response2, {
+        methods: [tempo_client.charge()],
+      })
+
+      const credential2 = Credential.from({
+        challenge: challenge2,
+        payload: { hash: receipt.transactionHash.toLowerCase() as Hex.Hex, type: 'hash' as const },
+      })
+
+      {
+        const response = await fetch(httpServer.url, {
+          headers: { Authorization: Credential.serialize(credential2) },
+        })
+        expect(response.status).toBe(402)
+        const body = (await response.json()) as { detail: string }
+        expect(body.detail).toContain('Transaction hash has already been used.')
+      }
+
+      httpServer.close()
+    })
+
+    test('behavior: accepts uppercase hash on first use', async () => {
+      const dedupServer = Mppx_server.create({
+        methods: [
+          tempo_server.charge({
+            getClient() {
+              return client
+            },
+            currency: asset,
+            account: accounts[0],
+            store: Store.memory(),
+          }),
+        ],
+        realm,
+        secretKey,
+      })
+
+      const httpServer = await Http.createServer(async (req, res) => {
+        const result = await Mppx_server.toNodeListener(dedupServer.charge({ amount: '1' }))(
+          req,
+          res,
+        )
+        if (result.status === 402) return
+        res.end('OK')
+      })
+
+      const response1 = await fetch(httpServer.url)
+      expect(response1.status).toBe(402)
+
+      const challenge1 = Challenge.fromResponse(response1, {
+        methods: [tempo_client.charge()],
+      })
+
+      const { receipt } = await Actions.token.transferSync(client, {
+        account: accounts[1],
+        amount: BigInt(challenge1.request.amount),
+        to: challenge1.request.recipient as Hex.Hex,
+        token: challenge1.request.currency as Hex.Hex,
+      })
+
+      const upperHash = `0x${receipt.transactionHash.slice(2).toUpperCase()}` as Hex.Hex
+
+      const credential1 = Credential.from({
+        challenge: challenge1,
+        payload: { hash: upperHash, type: 'hash' as const },
+      })
+
+      {
+        const response = await fetch(httpServer.url, {
+          headers: { Authorization: Credential.serialize(credential1) },
+        })
+        expect(response.status).toBe(200)
+      }
+
+      httpServer.close()
+    })
+
     test('behavior: rejects hash with non-matching Transfer log', async () => {
       const wrongRecipient = accounts[2].address
 
@@ -144,6 +365,286 @@ describe('tempo', () => {
         expect(response.status).toBe(402)
         const body = (await response.json()) as { detail: string }
         expect(body.detail).toContain('Payment verification failed: no matching transfer found.')
+      }
+
+      httpServer.close()
+    })
+
+    test('behavior: rejects session settlement tx hash used as charge credential', async () => {
+      const chargeAmount = parseUnits('1', 6)
+      const recipient = accounts[0].address
+      const external = accounts[3]
+
+      const escrow = await deployEscrow()
+
+      await fundAccount({ address: external.address, token: Addresses.pathUsd })
+      await fundAccount({ address: external.address, token: asset })
+
+      const salt = '0x0000000000000000000000000000000000000000000000000000000000000001' as Hex.Hex
+      const { channelId } = await openChannel({
+        escrow,
+        payer: external,
+        payee: recipient,
+        token: asset,
+        deposit: chargeAmount,
+        salt,
+      })
+
+      const voucherSig = await signVoucher(
+        client,
+        external,
+        { channelId, cumulativeAmount: chargeAmount },
+        escrow,
+        chain.id,
+      )
+
+      const { txHash: settleTxHash } = await closeChannelOnChain({
+        escrow,
+        payee: accounts[0],
+        channelId,
+        cumulativeAmount: chargeAmount,
+        signature: voucherSig,
+      })
+
+      const httpServer = await Http.createServer(async (req, res) => {
+        const result = await Mppx_server.toNodeListener(server.charge({ amount: '1' }))(req, res)
+        if (result.status === 402) return
+        res.end('OK')
+      })
+
+      const response = await fetch(httpServer.url)
+      expect(response.status).toBe(402)
+
+      const challenge = Challenge.fromResponse(response, {
+        methods: [tempo_client.charge()],
+      })
+
+      const credential = Credential.from({
+        challenge,
+        payload: { hash: settleTxHash, type: 'hash' as const },
+      })
+
+      {
+        const response = await fetch(httpServer.url, {
+          headers: { Authorization: Credential.serialize(credential) },
+        })
+        expect(response.status).toBe(402)
+        const body = (await response.json()) as { detail: string }
+        expect(body.detail).toContain('Payment verification failed: no matching transfer found.')
+      }
+
+      httpServer.close()
+    })
+
+    test('behavior: rejects replayed transaction hash', async () => {
+      const dedupServer = Mppx_server.create({
+        methods: [
+          tempo_server.charge({
+            getClient() {
+              return client
+            },
+            currency: asset,
+            account: accounts[0],
+            store: Store.memory(),
+          }),
+        ],
+        realm,
+        secretKey,
+      })
+
+      const httpServer = await Http.createServer(async (req, res) => {
+        const result = await Mppx_server.toNodeListener(dedupServer.charge({ amount: '1' }))(
+          req,
+          res,
+        )
+        if (result.status === 402) return
+        res.end('OK')
+      })
+
+      const response1 = await fetch(httpServer.url)
+      expect(response1.status).toBe(402)
+
+      const challenge1 = Challenge.fromResponse(response1, {
+        methods: [tempo_client.charge()],
+      })
+
+      const { receipt } = await Actions.token.transferSync(client, {
+        account: accounts[1],
+        amount: BigInt(challenge1.request.amount),
+        to: challenge1.request.recipient as Hex.Hex,
+        token: challenge1.request.currency as Hex.Hex,
+      })
+
+      const credential1 = Credential.from({
+        challenge: challenge1,
+        payload: { hash: receipt.transactionHash, type: 'hash' as const },
+      })
+
+      {
+        const response = await fetch(httpServer.url, {
+          headers: { Authorization: Credential.serialize(credential1) },
+        })
+        expect(response.status).toBe(200)
+      }
+
+      const response2 = await fetch(httpServer.url)
+      expect(response2.status).toBe(402)
+
+      const challenge2 = Challenge.fromResponse(response2, {
+        methods: [tempo_client.charge()],
+      })
+
+      const mixedCaseHash = `0x${receipt.transactionHash.slice(2).toUpperCase()}` as Hex.Hex
+
+      const credential2 = Credential.from({
+        challenge: challenge2,
+        payload: { hash: mixedCaseHash, type: 'hash' as const },
+      })
+
+      {
+        const response = await fetch(httpServer.url, {
+          headers: { Authorization: Credential.serialize(credential2) },
+        })
+        expect(response.status).toBe(402)
+        const body = (await response.json()) as { detail: string }
+        expect(body.detail).toContain('Transaction hash has already been used.')
+      }
+
+      httpServer.close()
+    })
+
+    test('behavior: rejects replayed hash with alternating case', async () => {
+      const dedupServer = Mppx_server.create({
+        methods: [
+          tempo_server.charge({
+            getClient() {
+              return client
+            },
+            currency: asset,
+            account: accounts[0],
+            store: Store.memory(),
+          }),
+        ],
+        realm,
+        secretKey,
+      })
+
+      const httpServer = await Http.createServer(async (req, res) => {
+        const result = await Mppx_server.toNodeListener(dedupServer.charge({ amount: '1' }))(
+          req,
+          res,
+        )
+        if (result.status === 402) return
+        res.end('OK')
+      })
+
+      const response1 = await fetch(httpServer.url)
+      expect(response1.status).toBe(402)
+
+      const challenge1 = Challenge.fromResponse(response1, {
+        methods: [tempo_client.charge()],
+      })
+
+      const { receipt } = await Actions.token.transferSync(client, {
+        account: accounts[1],
+        amount: BigInt(challenge1.request.amount),
+        to: challenge1.request.recipient as Hex.Hex,
+        token: challenge1.request.currency as Hex.Hex,
+      })
+
+      const hex = receipt.transactionHash.slice(2)
+      const alternating = `0x${hex
+        .split('')
+        .map((c, i) => (i % 2 === 0 ? c.toUpperCase() : c.toLowerCase()))
+        .join('')}` as Hex.Hex
+
+      const credential1 = Credential.from({
+        challenge: challenge1,
+        payload: { hash: alternating, type: 'hash' as const },
+      })
+
+      {
+        const response = await fetch(httpServer.url, {
+          headers: { Authorization: Credential.serialize(credential1) },
+        })
+        expect(response.status).toBe(200)
+      }
+
+      const response2 = await fetch(httpServer.url)
+      expect(response2.status).toBe(402)
+
+      const challenge2 = Challenge.fromResponse(response2, {
+        methods: [tempo_client.charge()],
+      })
+
+      const credential2 = Credential.from({
+        challenge: challenge2,
+        payload: { hash: receipt.transactionHash.toLowerCase() as Hex.Hex, type: 'hash' as const },
+      })
+
+      {
+        const response = await fetch(httpServer.url, {
+          headers: { Authorization: Credential.serialize(credential2) },
+        })
+        expect(response.status).toBe(402)
+        const body = (await response.json()) as { detail: string }
+        expect(body.detail).toContain('Transaction hash has already been used.')
+      }
+
+      httpServer.close()
+    })
+
+    test('behavior: accepts uppercase hash on first use', async () => {
+      const dedupServer = Mppx_server.create({
+        methods: [
+          tempo_server.charge({
+            getClient() {
+              return client
+            },
+            currency: asset,
+            account: accounts[0],
+            store: Store.memory(),
+          }),
+        ],
+        realm,
+        secretKey,
+      })
+
+      const httpServer = await Http.createServer(async (req, res) => {
+        const result = await Mppx_server.toNodeListener(dedupServer.charge({ amount: '1' }))(
+          req,
+          res,
+        )
+        if (result.status === 402) return
+        res.end('OK')
+      })
+
+      const response = await fetch(httpServer.url)
+      expect(response.status).toBe(402)
+
+      const challenge = Challenge.fromResponse(response, {
+        methods: [tempo_client.charge()],
+      })
+
+      const { receipt } = await Actions.token.transferSync(client, {
+        account: accounts[1],
+        amount: BigInt(challenge.request.amount),
+        to: challenge.request.recipient as Hex.Hex,
+        token: challenge.request.currency as Hex.Hex,
+      })
+
+      const upperHash = `0x${receipt.transactionHash.slice(2).toUpperCase()}` as Hex.Hex
+
+      const credential = Credential.from({
+        challenge,
+        payload: { hash: upperHash, type: 'hash' as const },
+      })
+
+      {
+        const response = await fetch(httpServer.url, {
+          headers: { Authorization: Credential.serialize(credential) },
+        })
+        expect(response.status).toBe(200)
       }
 
       httpServer.close()
@@ -262,6 +763,242 @@ describe('tempo', () => {
   })
 
   describe('intent: charge; type: transaction; via Mppx', () => {
+    test('behavior: rejects pull then push replay of the same transaction hash', async () => {
+      const dedupServer = Mppx_server.create({
+        methods: [
+          tempo_server.charge({
+            getClient() {
+              return client
+            },
+            currency: asset,
+            account: accounts[0],
+            store: Store.memory(),
+          }),
+        ],
+        realm,
+        secretKey,
+      })
+
+      const pullClient = Mppx_client.create({
+        polyfill: false,
+        methods: [
+          tempo_client({
+            account: accounts[1],
+            mode: 'pull',
+            getClient() {
+              return client
+            },
+          }),
+        ],
+      })
+
+      const httpServer = await Http.createServer(async (req, res) => {
+        const result = await Mppx_server.toNodeListener(
+          dedupServer.charge({ amount: '1', currency: asset, recipient: accounts[0].address }),
+        )(req, res)
+        if (result.status === 402) return
+        res.end('OK')
+      })
+
+      const challengeResponse = await fetch(httpServer.url)
+      expect(challengeResponse.status).toBe(402)
+
+      const pullCredentialSerialized = await pullClient.createCredential(challengeResponse)
+
+      const pullAuthResponse = await fetch(httpServer.url, {
+        headers: { Authorization: pullCredentialSerialized },
+      })
+      expect(pullAuthResponse.status).toBe(200)
+
+      const pullReceipt = Receipt.fromResponse(pullAuthResponse)
+
+      const replayChallengeResponse = await fetch(httpServer.url)
+      expect(replayChallengeResponse.status).toBe(402)
+
+      const replayChallenge = Challenge.fromResponse(replayChallengeResponse, {
+        methods: [tempo_client.charge()],
+      })
+
+      const replayCredential = Credential.from({
+        challenge: replayChallenge,
+        payload: { hash: pullReceipt.reference as Hex.Hex, type: 'hash' as const },
+      })
+
+      const replayResponse = await fetch(httpServer.url, {
+        headers: { Authorization: Credential.serialize(replayCredential) },
+      })
+      expect(replayResponse.status).toBe(402)
+      const replayBody = (await replayResponse.json()) as { detail: string }
+      expect(replayBody.detail).toContain('Transaction hash has already been used.')
+
+      httpServer.close()
+    })
+
+    test('behavior: rejects concurrent replay of same serialized transaction', async () => {
+      const dedupServer = Mppx_server.create({
+        methods: [
+          tempo_server.charge({
+            getClient() {
+              return client
+            },
+            currency: asset,
+            account: accounts[0],
+            store: Store.memory(),
+          }),
+        ],
+        realm,
+        secretKey,
+      })
+
+      const mppx = Mppx_client.create({
+        polyfill: false,
+        methods: [
+          tempo_client({
+            account: accounts[1],
+            getClient() {
+              return client
+            },
+          }),
+        ],
+      })
+
+      const httpServer = await Http.createServer(async (req, res) => {
+        const result = await Mppx_server.toNodeListener(
+          dedupServer.charge({ amount: '1', currency: asset, recipient: accounts[0].address }),
+        )(req, res)
+        if (result.status === 402) return
+        res.end('OK')
+      })
+
+      // Get two challenges concurrently
+      const [challengeResponse1, challengeResponse2] = await Promise.all([
+        fetch(httpServer.url),
+        fetch(httpServer.url),
+      ])
+      expect(challengeResponse1.status).toBe(402)
+      expect(challengeResponse2.status).toBe(402)
+
+      // Create credential from first challenge (signs transaction)
+      const credential1 = await mppx.createCredential(challengeResponse1)
+
+      // Extract the serialized tx and re-wrap it with the second challenge
+      const decoded1 = Credential.deserialize(credential1)
+      const challenge2 = Challenge.fromResponse(challengeResponse2, {
+        methods: [tempo_client.charge()],
+      })
+      const credential2 = Credential.serialize(
+        Credential.from({
+          challenge: challenge2,
+          payload: decoded1.payload,
+        }),
+      )
+
+      // Submit SAME signed tx to both challenges concurrently
+      const [resA, resB] = await Promise.all([
+        fetch(httpServer.url, { headers: { Authorization: credential1 } }),
+        fetch(httpServer.url, { headers: { Authorization: credential2 } }),
+      ])
+
+      const statuses = [resA.status, resB.status].sort()
+      // One should succeed (200), the other should be rejected (402)
+      expect(statuses).toEqual([200, 402])
+
+      httpServer.close()
+    })
+
+    test('behavior: rejects malleable variants with different feePayerSignature', async () => {
+      const dedupStore = Store.memory()
+      const dedupServer = Mppx_server.create({
+        methods: [
+          tempo_server.charge({
+            getClient() {
+              return client
+            },
+            currency: asset,
+            account: accounts[0],
+            store: dedupStore,
+          }),
+        ],
+        realm,
+        secretKey,
+      })
+
+      const mppx = Mppx_client.create({
+        polyfill: false,
+        methods: [
+          tempo_client({
+            account: accounts[1],
+            getClient() {
+              return client
+            },
+          }),
+        ],
+      })
+
+      const httpServer = await Http.createServer(async (req, res) => {
+        const result = await Mppx_server.toNodeListener(
+          dedupServer.charge({
+            feePayer: accounts[0],
+            amount: '1',
+            currency: asset,
+            recipient: accounts[0].address,
+          }),
+        )(req, res)
+        if (result.status === 402) return
+        res.end('OK')
+      })
+
+      // Get two challenges
+      const challengeResponse1 = await fetch(httpServer.url)
+      const challengeResponse2 = await fetch(httpServer.url)
+      expect(challengeResponse1.status).toBe(402)
+      expect(challengeResponse2.status).toBe(402)
+
+      // Sign a transaction via the first challenge (produces 0x78 fee
+      // payer format with sender address in feePayerSignatureOrSender).
+      const credential1 = await mppx.createCredential(challengeResponse1)
+
+      // Submit the original transaction, should succeed.
+      const res1 = await fetch(httpServer.url, {
+        headers: { Authorization: credential1 },
+      })
+      expect(res1.status).toBe(200)
+
+      // Create a malleable variant of the SAME signed tx by
+      // re-serializing in 0x76 format with feePayerSignature=null
+      // (0x00 marker). Both deserialize to the same transaction
+      // (same calls, signature, from), but the raw bytes differ so
+      // keccak256 produces different hashes.
+      const decoded1 = Credential.deserialize(credential1)
+      const serializedTx = (decoded1.payload as { signature: string }).signature
+      const deserialized = TxEnvelopeTempo.deserialize(serializedTx as TxEnvelopeTempo.Serialized)
+      const malleableVariant = TxEnvelopeTempo.serialize(
+        TxEnvelopeTempo.from({ ...deserialized, feePayerSignature: null }),
+      )
+      expect(malleableVariant).not.toEqual(serializedTx)
+
+      // Wrap the malleable variant into the second challenge's credential
+      const challenge2 = Challenge.fromResponse(challengeResponse2, {
+        methods: [tempo_client.charge()],
+      })
+      const credential2 = Credential.serialize(
+        Credential.from({
+          challenge: challenge2,
+          payload: { signature: malleableVariant, type: 'transaction' as const },
+        }),
+      )
+
+      // Submit the malleable variant. It bypasses the old
+      // keccak256(serializedTransaction) dedup (different raw bytes), but
+      // the post-broadcast dedup on the tx hash catches duplicates.
+      const res2 = await fetch(httpServer.url, {
+        headers: { Authorization: credential2 },
+      })
+      expect(res2.status).toBe(402)
+
+      httpServer.close()
+    })
+
     test('default', async () => {
       const mppx = Mppx_client.create({
         polyfill: false,
@@ -732,6 +1469,192 @@ describe('tempo', () => {
         // Server rejects the transaction — returns 402 (error caught by handler)
         expect(response.status).toBe(402)
       }
+
+      httpServer.close()
+    })
+
+    test('error: rejects unsigned transaction (fee payer becomes sender)', async () => {
+      const httpServer = await Http.createServer(async (req, res) => {
+        const result = await Mppx_server.toNodeListener(
+          server.charge({
+            feePayer: accounts[0],
+            amount: '1',
+            currency: asset,
+            recipient: accounts[0].address,
+          }),
+        )(req, res)
+        if (result.status === 402) return
+        res.end('OK')
+      })
+
+      const response = await fetch(httpServer.url)
+      expect(response.status).toBe(402)
+
+      const challenge = Challenge.fromResponse(response, {
+        methods: [tempo_client.charge()],
+      })
+      const request = challenge.request
+
+      // Craft an unsigned 0x76 transaction — no user signature.
+      // This is the exact attack vector from the fee payer POC: without a
+      // signature check the fee payer signs as both sender AND fee payer,
+      // letting the attacker control the tx content.
+      const unsignedTx = (await Transaction.serialize({
+        calls: [
+          {
+            to: request.currency as `0x${string}`,
+            data: encodeFunctionData({
+              abi: Abis.tip20,
+              functionName: 'transfer',
+              args: [request.recipient as `0x${string}`, BigInt(request.amount)],
+            }),
+          },
+        ],
+        chainId: chain.id,
+        gas: 100_000n,
+        maxFeePerGas: 1_000_000_000n,
+        maxPriorityFeePerGas: 1_000_000_000n,
+        nonce: 0,
+      } as never)) as string
+
+      const credential = Credential.from({
+        challenge,
+        payload: { signature: unsignedTx, type: 'transaction' as const },
+      })
+
+      {
+        const response = await fetch(httpServer.url, {
+          headers: { Authorization: Credential.serialize(credential) },
+        })
+        expect(response.status).toBe(402)
+        const body = (await response.json()) as { detail: string }
+        expect(body.detail).toContain(
+          'Transaction must be signed by the sender before fee payer co-signing.',
+        )
+      }
+
+      httpServer.close()
+    })
+
+    test('error: rejects non-Tempo transaction type', async () => {
+      const httpServer = await Http.createServer(async (req, res) => {
+        const result = await Mppx_server.toNodeListener(
+          server.charge({
+            feePayer: accounts[0],
+            amount: '1',
+            currency: asset,
+            recipient: accounts[0].address,
+          }),
+        )(req, res)
+        if (result.status === 402) return
+        res.end('OK')
+      })
+
+      const response = await fetch(httpServer.url)
+      expect(response.status).toBe(402)
+
+      const challenge = Challenge.fromResponse(response, {
+        methods: [tempo_client.charge()],
+      })
+
+      // Submit a non-0x76 serialized transaction (e.g. EIP-1559 0x02 prefix)
+      const fakeTx =
+        '0x02f8650182a5bf843b9aca00843b9aca008252089400000000000000000000000000000000000000008080c001a00000000000000000000000000000000000000000000000000000000000000000a00000000000000000000000000000000000000000000000000000000000000000'
+
+      const credential = Credential.from({
+        challenge,
+        payload: { signature: fakeTx, type: 'transaction' as const },
+      })
+
+      {
+        const response = await fetch(httpServer.url, {
+          headers: { Authorization: Credential.serialize(credential) },
+        })
+        expect(response.status).toBe(402)
+        const body = (await response.json()) as { detail: string }
+        expect(body.detail).toContain('Only Tempo (0x76/0x78) transactions are supported.')
+      }
+
+      httpServer.close()
+    })
+  })
+
+  describe('intent: charge; type: transaction; defense-in-depth', () => {
+    test('behavior: rejects pull transaction when receipt has no Transfer log', async () => {
+      // Even when calldata looks correct, the server should verify that a Transfer
+      // event actually appears in the on-chain receipt.
+      // This guards against edge cases where calldata validation passes but the
+      // transfer doesn't actually execute (e.g. contract upgrade, unexpected
+      // silent no-op, or a bug in calldata matching).
+      let interceptReceipt = false
+      const interceptingClient = createClient({
+        chain: client.chain,
+        transport: custom({
+          async request(args: any) {
+            const result = await client.transport.request(args)
+            if (interceptReceipt && args?.method === 'eth_sendRawTransactionSync') {
+              return { ...(result as any), logs: [] }
+            }
+            return result
+          },
+        }),
+      })
+
+      const serverProxy = Mppx_server.create({
+        methods: [
+          tempo_server.charge({
+            getClient() {
+              return interceptingClient
+            },
+            currency: asset,
+            account: accounts[0],
+          }),
+        ],
+        realm,
+        secretKey,
+      })
+
+      const mppx = Mppx_client.create({
+        polyfill: false,
+        methods: [
+          tempo_client({
+            account: accounts[1],
+            mode: 'pull',
+            getClient() {
+              return client
+            },
+          }),
+        ],
+      })
+
+      const httpServer = await Http.createServer(async (req, res) => {
+        const result = await Mppx_server.toNodeListener(
+          serverProxy.charge({
+            amount: '1',
+            currency: asset,
+            recipient: accounts[0].address,
+          }),
+        )(req, res)
+        if (result.status === 402) return
+        res.end('OK')
+      })
+
+      const response = await fetch(httpServer.url)
+      expect(response.status).toBe(402)
+
+      const credential = await mppx.createCredential(response)
+
+      // Enable interception so the receipt comes back with empty logs
+      interceptReceipt = true
+
+      const authResponse = await fetch(httpServer.url, {
+        headers: { Authorization: credential },
+      })
+
+      // Should reject: receipt has no Transfer log proving the payment occurred
+      expect(authResponse.status).toBe(402)
+      const body = (await authResponse.json()) as { detail: string }
+      expect(body.detail).toContain('no matching transfer found')
 
       httpServer.close()
     })

@@ -1,6 +1,7 @@
 import { createClient, http } from 'viem'
 import { privateKeyToAccount } from 'viem/accounts'
 import { describe, expect, test } from 'vitest'
+
 import { parseVoucherFromPayload, signVoucher, verifyVoucher } from './Voucher.js'
 
 const account = privateKeyToAccount(

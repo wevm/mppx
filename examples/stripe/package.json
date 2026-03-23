@@ -1,11 +1,11 @@
 {
   "name": "stripe",
-  "type": "module",
   "private": true,
+  "type": "module",
   "scripts": {
     "dev": "vite",
     "check": "biome check --fix --unsafe",
-    "check:types": "tsc -b",
+    "check:types": "tsgo -b",
     "build": "vite build",
     "preview": "vite preview"
   },
@@ -15,6 +15,7 @@
     "@types/node": "latest",
     "mppx": "latest",
     "stripe": "^17.7.0",
+    "@typescript/native-preview": "latest",
     "typescript": "latest",
     "vite": "latest"
   }

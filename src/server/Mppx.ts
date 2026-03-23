@@ -1,4 +1,5 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
+
 import * as Challenge from '../Challenge.js'
 import * as Credential from '../Credential.js'
 import * as Errors from '../Errors.js'
@@ -329,19 +330,36 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
         }
 
         // Verify the credential's challenge matches this route's configured
-        // request. Prevents cross-route scope confusion where a credential
-        // issued for a cheap route is presented at an expensive route.
+        // method, intent, realm, and request. Prevents cross-route scope
+        // confusion where a credential issued for a cheap route (or different
+        // method/intent) is presented at an expensive route.
         // Note: we compare specific payment parameters rather than the full
         // request because the `request` hook may produce credential-dependent
         // output (e.g. `feePayer` differs between 402 and credential calls).
         {
+          for (const field of ['method', 'intent', 'realm'] as const) {
+            if (credential.challenge[field] !== challenge[field]) {
+              const response = await transport.respondChallenge({
+                challenge,
+                input,
+                error: new Errors.InvalidChallengeError({
+                  id: credential.challenge.id,
+                  reason: `credential ${field} does not match this route's requirements`,
+                }),
+              })
+              return { challenge: response, status: 402 }
+            }
+          }
+
           const routeReq = challenge.request as Record<string, unknown>
           const echoedReq = credential.challenge.request as Record<string, unknown>
+          const routeDetails = (routeReq.methodDetails ?? {}) as Record<string, unknown>
+          const echoedDetails = (echoedReq.methodDetails ?? {}) as Record<string, unknown>
           for (const field of ['amount', 'currency', 'recipient'] as const) {
+            const routeVal = routeReq[field] ?? routeDetails[field]
             if (
-              routeReq[field] !== undefined &&
-              echoedReq[field] !== undefined &&
-              String(routeReq[field]) !== String(echoedReq[field])
+              routeVal !== undefined &&
+              String(routeVal) !== String(echoedReq[field] ?? echoedDetails[field])
             ) {
               const response = await transport.respondChallenge({
                 challenge,
@@ -578,22 +596,24 @@ export function compose(
       if (credential) {
         const { method: credMethod, intent: credIntent } = credential.challenge
         const credReq = credential.challenge.request as Record<string, unknown>
+        const credDetails = (credReq.methodDetails ?? {}) as Record<string, unknown>
 
         // Filter by name+intent, then narrow by comparing stable request fields
         // from the echoed challenge against each handler's canonical request.
         // Uses the schema-parsed canonical form (not raw options) so that
         // transformed fields (e.g. amount with decimals) match correctly.
+        // Also checks inside methodDetails for fields moved there by transforms.
         const candidates = handlers.filter((h) => {
           const meta = (h as ConfiguredHandler)._internal
           if (!meta || meta.name !== credMethod || meta.intent !== credIntent) return false
           const canonical = meta._canonicalRequest
           if (!canonical) return true
+          const canonicalDetails = (canonical.methodDetails ?? {}) as Record<string, unknown>
           for (const field of ['amount', 'currency', 'recipient', 'chainId'] as const) {
-            const canonicalVal = canonical[field]
+            const canonicalVal = canonical[field] ?? canonicalDetails[field]
             if (
               canonicalVal !== undefined &&
-              credReq[field] !== undefined &&
-              String(canonicalVal) !== String(credReq[field])
+              String(canonicalVal) !== String(credReq[field] ?? credDetails[field])
             )
               return false
           }

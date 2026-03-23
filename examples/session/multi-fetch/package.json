@@ -1,8 +1,9 @@
 {
   "name": "session-multi-fetch",
-  "type": "module",
   "private": true,
+  "type": "module",
   "scripts": {
+    "check:types": "tsgo -b",
     "dev": "vite",
     "client": "tsx src/client.ts"
   },
@@ -11,6 +12,7 @@
     "@types/node": "latest",
     "mppx": "latest",
     "tsx": "latest",
+    "@typescript/native-preview": "latest",
     "typescript": "latest",
     "viem": "latest",
     "vite": "latest"

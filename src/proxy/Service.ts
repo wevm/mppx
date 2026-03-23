@@ -267,8 +267,14 @@ function resolvePayment(endpoint: Endpoint): Record<string, unknown> | null {
   if (endpoint === true) return null
   const handler = typeof endpoint === 'function' ? endpoint : endpoint.pay
   if (!('_internal' in handler)) return {}
-  const { name, intent, defaults, schema, _canonicalRequest, ...rest } =
-    handler._internal as Record<string, unknown>
+  const {
+    name,
+    intent,
+    defaults: _,
+    schema: _s,
+    _canonicalRequest,
+    ...rest
+  } = handler._internal as Record<string, unknown>
   const amount = (() => {
     if (typeof rest.amount === 'string' && typeof rest.decimals === 'number')
       return String(Value.from(rest.amount, rest.decimals))

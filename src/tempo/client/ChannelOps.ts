@@ -15,6 +15,7 @@ import {
 } from 'viem'
 import { prepareTransactionRequest, signTransaction } from 'viem/actions'
 import { Abis } from 'viem/tempo'
+
 import type { Challenge } from '../../Challenge.js'
 import * as Credential from '../../Credential.js'
 import * as defaults from '../internal/defaults.js'

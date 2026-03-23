@@ -36,12 +36,14 @@ export function match(
   return null
 }
 
-/** Finds the first route matching just the path, ignoring the HTTP method. Used for management POST fallback. */
+/** Finds the first route matching the path, ignoring the HTTP method. Optional `filter` predicate can exclude routes. */
 export function matchPath(
   routes: Record<string, unknown>,
   path: string,
+  filter?: (value: unknown) => boolean,
 ): { key: string; value: unknown } | null {
   for (const [key, value] of Object.entries(routes)) {
+    if (filter && !filter(value)) continue
     const { pattern } = parseRouteKey(key)
     const urlPattern = new URLPattern({ pathname: pattern })
     if (urlPattern.test({ pathname: path })) return { key, value }

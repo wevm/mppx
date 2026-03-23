@@ -1,5 +1,6 @@
 import type { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import type { McpError } from '@modelcontextprotocol/sdk/types.js'
+
 import type * as Challenge from '../../Challenge.js'
 import * as Credential from '../../Credential.js'
 import * as core_Mcp from '../../Mcp.js'
@@ -84,6 +85,7 @@ export function wrap<
           const installed = methods.map((m) => `${m.name}.${m.intent}`).join(', ')
           throw new Error(
             `No compatible payment method. Server offers: ${available}. Client has: ${installed}`,
+            { cause: error },
           )
         }
 

@@ -1,5 +1,6 @@
 import type { Hex } from 'ox'
 import type { Address } from 'viem'
+
 import type * as Challenge from '../../Challenge.js'
 import * as Fetch from '../../client/internal/Fetch.js'
 import type * as Account from '../../viem/Account.js'

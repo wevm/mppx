@@ -1,5 +1,6 @@
 import { Bytes, Hash, Hex } from 'ox'
 import { describe, expect, test } from 'vitest'
+
 import * as Attribution from './Attribution.js'
 
 describe('Attribution', () => {

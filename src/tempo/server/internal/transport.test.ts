@@ -1,6 +1,7 @@
 import { Challenge, Credential } from 'mppx'
 import type { Address, Hex } from 'viem'
 import { describe, expect, test } from 'vitest'
+
 import * as Store from '../../../Store.js'
 import { chainId, escrowContract as escrowContractDefaults } from '../../internal/defaults.js'
 import * as ChannelStore from '../../session/ChannelStore.js'
@@ -31,6 +32,7 @@ function seedChannel(
     highestVoucher: null,
     spent: 0n,
     units: 0,
+    closeRequestedAt: 0n,
     finalized: false,
     createdAt: new Date().toISOString(),
   }))
@@ -260,6 +262,34 @@ describe('sse transport', () => {
         challengeId,
       }),
     ).toThrow('No SSE context available')
+  })
+
+  test('respondReceipt with non-SSE upstream Response still deducts from channel', async () => {
+    const store = memoryStore()
+    await seedChannel(store, 10000000n)
+    const transport = sse({ store })
+
+    transport.getCredential(makeAuthorizedRequest())
+
+    const plainResponse = new Response(JSON.stringify({ content: 'hello' }), {
+      headers: { 'Content-Type': 'application/json' },
+    })
+
+    const response = transport.respondReceipt({
+      receipt: makeReceipt(),
+      response: plainResponse,
+      challengeId,
+    })
+
+    const body = await response.text()
+
+    const channel = await store.getChannel(channelId)
+    expect(channel!.spent).toBe(1000000n)
+    expect(channel!.units).toBe(1)
+
+    expect(JSON.parse(body)).toEqual({ content: 'hello' })
+    expect(response.headers.get('Content-Type')).toBe('application/json')
+    expect(response.headers.get('Payment-Receipt')).toBeTruthy()
   })
 
   test('poll: true strips waitForUpdate from store', async () => {

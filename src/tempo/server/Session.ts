@@ -18,6 +18,7 @@ import {
   type Client as viem_Client,
 } from 'viem'
 import { tempo as tempo_chain } from 'viem/chains'
+
 import {
   AmountExceedsDepositError,
   BadRequestError,
@@ -85,7 +86,7 @@ export function session<const parameters extends session.Parameters>(p?: paramet
   const parameters = p as parameters
   const {
     amount,
-    channelStateTtl = 60_000,
+    channelStateTtl = 5_000,
     currency = defaults.resolveCurrency(parameters),
     decimals = defaults.decimals,
     store: rawStore = Store.memory(),
@@ -284,7 +285,7 @@ export declare namespace session {
   >
 
   type Parameters = {
-    /** TTL in milliseconds for cached on-chain channel state. After this duration, the server re-queries on-chain state during voucher handling to detect forced close requests. @default 60_000 */
+    /** TTL in milliseconds for cached on-chain channel state. After this duration, the server re-queries on-chain state during voucher handling to detect forced close requests. @default 5_000 */
     channelStateTtl?: number | undefined
     /** Minimum voucher delta to accept (numeric string, default: "0"). */
     minVoucherDelta?: string | undefined
@@ -451,7 +452,7 @@ async function verifyAndAcceptVoucher(parameters: {
     throw new ChannelClosedError({ reason: 'channel has a pending close request' })
   }
 
-  if (voucher.cumulativeAmount < onChain.settled) {
+  if (voucher.cumulativeAmount <= onChain.settled) {
     throw new VerificationFailedError({
       reason: 'voucher cumulativeAmount is below on-chain settled amount',
     })
@@ -462,12 +463,8 @@ async function verifyAndAcceptVoucher(parameters: {
   }
 
   if (voucher.cumulativeAmount <= channel.highestVoucherAmount) {
-    return createSessionReceipt({
-      challengeId: challenge.id,
-      channelId,
-      acceptedCumulative: channel.highestVoucherAmount,
-      spent: channel.spent,
-      units: channel.units,
+    throw new VerificationFailedError({
+      reason: 'voucher cumulativeAmount must be strictly greater than highest accepted voucher',
     })
   }
 
@@ -561,7 +558,7 @@ async function handleOpen(
     throw new AmountExceedsDepositError({ reason: 'voucher amount exceeds on-chain deposit' })
   }
 
-  if (voucher.cumulativeAmount < onChain.settled) {
+  if (voucher.cumulativeAmount <= onChain.settled) {
     throw new VerificationFailedError({
       reason: 'voucher cumulativeAmount is below on-chain settled amount',
     })
@@ -580,16 +577,22 @@ async function handleOpen(
 
   const updated = await store.updateChannel(payload.channelId, (existing) => {
     if (existing) {
-      if (voucher.cumulativeAmount < existing.settledOnChain) {
+      if (voucher.cumulativeAmount <= existing.settledOnChain) {
         throw new VerificationFailedError({
           reason: 'voucher amount is below settled on-chain amount',
         })
       }
 
+      const settledOnChain =
+        onChain.settled > existing.settledOnChain ? onChain.settled : existing.settledOnChain
+      const spent = settledOnChain > existing.spent ? settledOnChain : existing.spent
+
       if (voucher.cumulativeAmount > existing.highestVoucherAmount) {
         return {
           ...existing,
           deposit: onChain.deposit,
+          settledOnChain,
+          spent,
           highestVoucherAmount: voucher.cumulativeAmount,
           highestVoucher: voucher,
           authorizedSigner,
@@ -598,6 +601,8 @@ async function handleOpen(
       return {
         ...existing,
         deposit: onChain.deposit,
+        settledOnChain,
+        spent,
         authorizedSigner,
       }
     }
@@ -605,15 +610,16 @@ async function handleOpen(
       channelId: payload.channelId,
       chainId: methodDetails.chainId,
       escrowContract: methodDetails.escrowContract,
+      closeRequestedAt: onChain.closeRequestedAt,
       payer: onChain.payer,
       payee: onChain.payee,
       token: onChain.token,
       authorizedSigner,
       deposit: onChain.deposit,
-      settledOnChain: 0n,
+      settledOnChain: onChain.settled,
       highestVoucherAmount: voucher.cumulativeAmount,
       highestVoucher: voucher,
-      spent: 0n,
+      spent: onChain.settled,
       units: 0,
       finalized: false,
       createdAt: new Date().toISOString(),
@@ -715,18 +721,30 @@ async function handleVoucher(
   //
   // To guard against the payer initiating a forced close while vouchers
   // are still being accepted, re-query on-chain state when the cache
-  // exceeds the configured staleness TTL.
+  // exceeds the configured staleness TTL (default: 5s).
   const lastVerified = lastOnChainVerified.get(payload.channelId) ?? 0
   const isStale = Date.now() - lastVerified > channelStateTtl
 
-  let cachedOnChain: OnChainChannel
-  if (isStale) {
-    cachedOnChain = await getOnChainChannel(client, methodDetails.escrowContract, payload.channelId)
-    lastOnChainVerified.set(payload.channelId, Date.now())
-  } else {
-    cachedOnChain = {
+  const onChain = await (async () => {
+    if (isStale) {
+      const onChainChannel = await getOnChainChannel(
+        client,
+        methodDetails.escrowContract,
+        payload.channelId,
+      )
+      lastOnChainVerified.set(payload.channelId, Date.now())
+      // Persist closeRequestedAt so the cached path detects force-close
+      // between re-queries.
+      if (onChainChannel.closeRequestedAt !== 0n) {
+        await store.updateChannel(payload.channelId, (current) =>
+          current ? { ...current, closeRequestedAt: onChainChannel.closeRequestedAt } : current,
+        )
+      }
+      return onChainChannel
+    }
+    return {
       finalized: channel.finalized,
-      closeRequestedAt: 0n,
+      closeRequestedAt: channel.closeRequestedAt,
       payer: channel.payer,
       payee: channel.payee,
       token: channel.token,
@@ -734,7 +752,7 @@ async function handleVoucher(
       deposit: channel.deposit,
       settled: channel.settledOnChain,
     }
-  }
+  })()
 
   return verifyAndAcceptVoucher({
     store,
@@ -743,7 +761,7 @@ async function handleVoucher(
     channel,
     channelId: payload.channelId,
     voucher,
-    onChain: cachedOnChain,
+    onChain,
     methodDetails,
   })
 }

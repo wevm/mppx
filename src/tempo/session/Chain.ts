@@ -19,13 +19,28 @@ import {
   writeContract,
 } from 'viem/actions'
 import { Transaction } from 'viem/tempo'
+
 import { BadRequestError, ChannelClosedError, VerificationFailedError } from '../../Errors.js'
 import * as TempoAddress from '../internal/address.js'
 import * as defaults from '../internal/defaults.js'
+import { isTempoTransaction } from '../internal/fee-payer.js'
+import * as Channel from './Channel.js'
 import { escrowAbi } from './escrow.abi.js'
 import type { SignedVoucher } from './Types.js'
 
 export { escrowAbi }
+
+/**
+ * Asserts that a deserialized transaction has an existing sender signature —
+ * required before fee payer co-signing to prevent the fee payer from becoming
+ * the sender.
+ */
+function assertSenderSigned(transaction: any): void {
+  if (!transaction.signature || !transaction.from)
+    throw new BadRequestError({
+      reason: 'Transaction must be signed by the sender before fee payer co-signing',
+    })
+}
 
 const UINT128_MAX = 2n ** 128n - 1n
 
@@ -221,9 +236,17 @@ export async function broadcastOpenTransaction(parameters: {
     waitForConfirmation = true,
   } = parameters
 
+  if (feePayer && !isTempoTransaction(serializedTransaction))
+    throw new BadRequestError({
+      reason: 'Only Tempo (0x76/0x78) transactions are supported',
+    })
+
   const transaction = Transaction.deserialize(
     serializedTransaction as Transaction.TransactionSerializedTempo,
   )
+
+  if (feePayer) assertSenderSigned(transaction)
+
   const calls = transaction.calls ?? []
 
   const openCall = calls.find((call) => {
@@ -258,7 +281,7 @@ export async function broadcastOpenTransaction(parameters: {
   }
 
   const { args: openArgs } = decodeFunctionData({ abi: escrowAbi, data: openCall.data! })
-  const [payee, token, deposit, , authorizedSigner] = openArgs as readonly [
+  const [payee, token, deposit, salt, authorizedSigner] = openArgs as readonly [
     Address,
     Address,
     bigint,
@@ -276,6 +299,22 @@ export async function broadcastOpenTransaction(parameters: {
       reason: 'open transaction token does not match server currency',
     })
   }
+
+  if (!transaction.from) throw new BadRequestError({ reason: 'open transaction has no sender' })
+
+  const derivedChannelId = Channel.computeId({
+    payer: transaction.from as `0x${string}`,
+    payee,
+    token,
+    salt,
+    authorizedSigner,
+    escrowContract,
+    chainId: client.chain!.id,
+  })
+  if (derivedChannelId.toLowerCase() !== channelId.toLowerCase())
+    throw new VerificationFailedError({
+      reason: 'open transaction does not match claimed channelId',
+    })
 
   const resolvedFeeToken =
     transaction.feeToken ?? defaults.currency[client.chain?.id as keyof typeof defaults.currency]
@@ -365,9 +404,17 @@ export async function broadcastTopUpTransaction(parameters: {
     feePayer,
   } = parameters
 
+  if (feePayer && !isTempoTransaction(serializedTransaction))
+    throw new BadRequestError({
+      reason: 'Only Tempo (0x76/0x78) transactions are supported',
+    })
+
   const transaction = Transaction.deserialize(
     serializedTransaction as Transaction.TransactionSerializedTempo,
   )
+
+  if (feePayer) assertSenderSigned(transaction)
+
   const calls = transaction.calls ?? []
 
   const topUpCall = calls.find((call) => {

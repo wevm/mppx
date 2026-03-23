@@ -1,5 +1,6 @@
 import { Base64 } from 'ox'
 import type { Hex } from 'viem'
+
 import type { SessionReceipt } from './Types.js'
 
 /**

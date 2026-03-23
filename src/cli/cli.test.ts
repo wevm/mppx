@@ -2,6 +2,7 @@ import { spawnSync } from 'node:child_process'
 import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
+
 import { parseUnits } from 'viem'
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts'
 import { Addresses } from 'viem/tempo'
@@ -10,11 +11,14 @@ import * as Http from '~test/Http.js'
 import { rpcUrl } from '~test/tempo/prool.js'
 import { deployEscrow } from '~test/tempo/session.js'
 import { accounts, asset, client, fundAccount } from '~test/tempo/viem.js'
-import * as Store from '../Store.js'
+
+import * as Credential from '../Credential.js'
 import * as Mppx_server from '../server/Mppx.js'
 import { toNodeListener } from '../server/Mppx.js'
+import * as Store from '../Store.js'
 import { stripe as stripe_server } from '../stripe/server/Methods.js'
 import { tempo } from '../tempo/server/Methods.js'
+import type { SessionCredentialPayload } from '../tempo/session/Types.js'
 import cli from './cli.js'
 
 const testPrivateKey = generatePrivateKey()
@@ -187,6 +191,128 @@ describe('session multi-fetch (examples/session/multi-fetch)', () => {
         { env: { MPPX_PRIVATE_KEY: testPrivateKey } },
       )
       expect(output).toContain('scraped-content')
+    } finally {
+      httpServer.close()
+    }
+  })
+
+  test('bug: non-SSE open should not double-charge tick amount', { timeout: 120_000 }, async () => {
+    await fundAccount({ address: testAccount.address, token: Addresses.pathUsd })
+    await fundAccount({ address: testAccount.address, token: asset })
+
+    const escrow = await deployEscrow()
+    const store = Store.memory()
+    const tickAmount = '0.001'
+    const server = Mppx_server.create({
+      methods: [
+        tempo.session({
+          account: accounts[0],
+          store,
+          getClient: () => client,
+          currency: asset,
+          escrowContract: escrow,
+          chainId: client.chain.id,
+          feePayer: true,
+        }),
+      ],
+      realm: 'cli-test-double-charge',
+      secretKey: 'cli-test-secret',
+    })
+
+    // Track voucher cumulative amounts from credential payloads
+    const voucherAmounts: string[] = []
+
+    const httpServer = await Http.createServer(async (req, res) => {
+      const authHeader = req.headers.authorization
+      if (authHeader) {
+        try {
+          const cred = Credential.deserialize<SessionCredentialPayload>(authHeader)
+          if (cred.payload.action === 'voucher' && 'cumulativeAmount' in cred.payload) {
+            voucherAmounts.push(cred.payload.cumulativeAmount)
+          }
+        } catch {}
+      }
+
+      const result = await toNodeListener(
+        server.session({
+          amount: tickAmount,
+          recipient: accounts[0].address,
+          unitType: 'page',
+        }),
+      )(req, res)
+      if (result.status === 402) return
+      // Non-SSE: plain text response (not text/event-stream)
+      res.end('scraped-content')
+    })
+
+    try {
+      await serve([httpServer.url, '--rpc-url', rpcUrl, '-s', '-M', 'deposit=10'], {
+        env: { MPPX_PRIVATE_KEY: testPrivateKey },
+      })
+
+      // No follow-up voucher should be sent after a non-SSE open.
+      // The open credential already paid for this unit, so the CLI
+      // should NOT send a redundant voucher that would double-charge.
+      expect(voucherAmounts.length).toBe(0)
+    } finally {
+      httpServer.close()
+    }
+  })
+
+  test('bug: closeChannel sends action "close" not "voucher"', { timeout: 120_000 }, async () => {
+    await fundAccount({ address: testAccount.address, token: Addresses.pathUsd })
+    await fundAccount({ address: testAccount.address, token: asset })
+
+    const escrow = await deployEscrow()
+    const store = Store.memory()
+    const server = Mppx_server.create({
+      methods: [
+        tempo.session({
+          account: accounts[0],
+          store,
+          getClient: () => client,
+          currency: asset,
+          escrowContract: escrow,
+          chainId: client.chain.id,
+          feePayer: true,
+        }),
+      ],
+      realm: 'cli-test-close-action',
+      secretKey: 'cli-test-secret',
+    })
+
+    // Track the credential payload action from the close request
+    const credentialActions: string[] = []
+
+    const httpServer = await Http.createServer(async (req, res) => {
+      // Capture credential action from every request with Authorization header
+      const authHeader = req.headers.authorization
+      if (authHeader) {
+        try {
+          const cred = Credential.deserialize<SessionCredentialPayload>(authHeader)
+          credentialActions.push(cred.payload.action)
+        } catch {}
+      }
+
+      const result = await toNodeListener(
+        server.session({
+          amount: '0.001',
+          recipient: accounts[0].address,
+          unitType: 'page',
+        }),
+      )(req, res)
+      if (result.status === 402) return
+      res.end('scraped-content')
+    })
+
+    try {
+      await serve([httpServer.url, '--rpc-url', rpcUrl, '-s', '-M', 'deposit=10'], {
+        env: { MPPX_PRIVATE_KEY: testPrivateKey },
+      })
+
+      // The last credential sent should be the close request with action: 'close'
+      const lastAction = credentialActions[credentialActions.length - 1]
+      expect(lastAction).toBe('close')
     } finally {
       httpServer.close()
     }

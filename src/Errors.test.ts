@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'vitest'
+
 import {
   AmountExceedsDepositError,
   BadRequestError,
@@ -41,9 +42,8 @@ describe('MalformedCredentialError', () => {
   })
 
   test('with reason', () => {
-    expect(
-      errorSnapshot(new MalformedCredentialError({ reason: 'invalid base64url' })),
-    ).toMatchInlineSnapshot(`
+    expect(errorSnapshot(new MalformedCredentialError({ reason: 'invalid base64url' })))
+      .toMatchInlineSnapshot(`
         {
           "message": "Credential is malformed: invalid base64url.",
           "name": "MalformedCredentialError",
@@ -89,9 +89,8 @@ describe('InvalidChallengeError', () => {
   })
 
   test('with id and reason', () => {
-    expect(
-      errorSnapshot(new InvalidChallengeError({ id: 'abc123', reason: 'already used' })),
-    ).toMatchInlineSnapshot(`
+    expect(errorSnapshot(new InvalidChallengeError({ id: 'abc123', reason: 'already used' })))
+      .toMatchInlineSnapshot(`
         {
           "message": "Challenge "abc123" is invalid: already used.",
           "name": "InvalidChallengeError",
@@ -115,9 +114,8 @@ describe('VerificationFailedError', () => {
   })
 
   test('with reason', () => {
-    expect(
-      errorSnapshot(new VerificationFailedError({ reason: 'invalid signature' })),
-    ).toMatchInlineSnapshot(`
+    expect(errorSnapshot(new VerificationFailedError({ reason: 'invalid signature' })))
+      .toMatchInlineSnapshot(`
         {
           "message": "Payment verification failed: invalid signature.",
           "name": "VerificationFailedError",
@@ -141,9 +139,8 @@ describe('PaymentExpiredError', () => {
   })
 
   test('with expires', () => {
-    expect(
-      errorSnapshot(new PaymentExpiredError({ expires: '2025-01-26T12:00:00Z' })),
-    ).toMatchInlineSnapshot(`
+    expect(errorSnapshot(new PaymentExpiredError({ expires: '2025-01-26T12:00:00Z' })))
+      .toMatchInlineSnapshot(`
         {
           "message": "Payment expired at 2025-01-26T12:00:00Z.",
           "name": "PaymentExpiredError",
@@ -167,9 +164,8 @@ describe('PaymentRequiredError', () => {
   })
 
   test('with description', () => {
-    expect(
-      errorSnapshot(new PaymentRequiredError({ description: 'API access fee' })),
-    ).toMatchInlineSnapshot(`
+    expect(errorSnapshot(new PaymentRequiredError({ description: 'API access fee' })))
+      .toMatchInlineSnapshot(`
         {
           "message": "Payment is required (API access fee).",
           "name": "PaymentRequiredError",
@@ -193,9 +189,8 @@ describe('InvalidPayloadError', () => {
   })
 
   test('with reason', () => {
-    expect(
-      errorSnapshot(new InvalidPayloadError({ reason: 'missing signature field' })),
-    ).toMatchInlineSnapshot(`
+    expect(errorSnapshot(new InvalidPayloadError({ reason: 'missing signature field' })))
+      .toMatchInlineSnapshot(`
         {
           "message": "Credential payload is invalid: missing signature field.",
           "name": "InvalidPayloadError",
@@ -219,9 +214,8 @@ describe('BadRequestError', () => {
   })
 
   test('with reason', () => {
-    expect(
-      errorSnapshot(new BadRequestError({ reason: 'cannot combine hash type with feePayer' })),
-    ).toMatchInlineSnapshot(`
+    expect(errorSnapshot(new BadRequestError({ reason: 'cannot combine hash type with feePayer' })))
+      .toMatchInlineSnapshot(`
         {
           "message": "Bad request: cannot combine hash type with feePayer.",
           "name": "BadRequestError",
@@ -245,9 +239,8 @@ describe('PaymentInsufficientError', () => {
   })
 
   test('with reason', () => {
-    expect(
-      errorSnapshot(new PaymentInsufficientError({ reason: 'expected 1000, received 500' })),
-    ).toMatchInlineSnapshot(`
+    expect(errorSnapshot(new PaymentInsufficientError({ reason: 'expected 1000, received 500' })))
+      .toMatchInlineSnapshot(`
         {
           "message": "Payment insufficient: expected 1000, received 500.",
           "name": "PaymentInsufficientError",
@@ -271,9 +264,8 @@ describe('PaymentMethodUnsupportedError', () => {
   })
 
   test('with method', () => {
-    expect(
-      errorSnapshot(new PaymentMethodUnsupportedError({ method: 'bitcoin' })),
-    ).toMatchInlineSnapshot(`
+    expect(errorSnapshot(new PaymentMethodUnsupportedError({ method: 'bitcoin' })))
+      .toMatchInlineSnapshot(`
         {
           "message": "Payment method "bitcoin" is not supported.",
           "name": "PaymentMethodUnsupportedError",
@@ -297,9 +289,8 @@ describe('InsufficientBalanceError', () => {
   })
 
   test('with reason', () => {
-    expect(
-      errorSnapshot(new InsufficientBalanceError({ reason: 'requested 500, available 100' })),
-    ).toMatchInlineSnapshot(`
+    expect(errorSnapshot(new InsufficientBalanceError({ reason: 'requested 500, available 100' })))
+      .toMatchInlineSnapshot(`
         {
           "message": "Insufficient balance: requested 500, available 100.",
           "name": "InsufficientBalanceError",
@@ -323,9 +314,8 @@ describe('InvalidSignatureError', () => {
   })
 
   test('with reason', () => {
-    expect(
-      errorSnapshot(new InvalidSignatureError({ reason: 'ECDSA recovery failed' })),
-    ).toMatchInlineSnapshot(`
+    expect(errorSnapshot(new InvalidSignatureError({ reason: 'ECDSA recovery failed' })))
+      .toMatchInlineSnapshot(`
         {
           "message": "Invalid signature: ECDSA recovery failed.",
           "name": "InvalidSignatureError",
@@ -401,9 +391,8 @@ describe('ChannelClosedError', () => {
   })
 
   test('with reason', () => {
-    expect(
-      errorSnapshot(new ChannelClosedError({ reason: 'channel is finalized on-chain' })),
-    ).toMatchInlineSnapshot(`
+    expect(errorSnapshot(new ChannelClosedError({ reason: 'channel is finalized on-chain' })))
+      .toMatchInlineSnapshot(`
         {
           "message": "Channel closed: channel is finalized on-chain.",
           "name": "ChannelClosedError",
@@ -427,9 +416,8 @@ describe('PaymentActionRequiredError', () => {
   })
 
   test('with reason', () => {
-    expect(
-      errorSnapshot(new PaymentActionRequiredError({ reason: 'requires_action' })),
-    ).toMatchInlineSnapshot(`
+    expect(errorSnapshot(new PaymentActionRequiredError({ reason: 'requires_action' })))
+      .toMatchInlineSnapshot(`
         {
           "message": "Payment requires action: requires_action.",
           "name": "PaymentActionRequiredError",

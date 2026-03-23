@@ -26,7 +26,7 @@ body:
     id: reproduction
     attributes:
       label: Link to Minimal Reproducible Example
-      description: "Please provide a link that can reproduce the problem. For most issues, you will likely get asked to provide a minimal reproducible example so why not add one now :) If a report is vague (e.g. just snippets, generic error message, screenshot, etc.) and has no reproduction, it will receive a \"Needs Reproduction\" label and be auto-closed."
+      description: 'Please provide a link that can reproduce the problem. For most issues, you will likely get asked to provide a minimal reproducible example so why not add one now :) If a report is vague (e.g. just snippets, generic error message, screenshot, etc.) and has no reproduction, it will receive a "Needs Reproduction" label and be auto-closed.'
     validations:
       required: false
 

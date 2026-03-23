@@ -2,6 +2,7 @@ import { Challenge, Credential, Mcp, Receipt } from 'mppx'
 import { Transport } from 'mppx/server'
 import { Methods } from 'mppx/tempo'
 import { describe, expect, test } from 'vitest'
+
 import { BadRequestError, ChannelClosedError } from '../Errors.js'
 
 const realm = 'api.example.com'

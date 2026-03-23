@@ -1130,6 +1130,252 @@ describe('nested accessors', () => {
   })
 })
 
+describe('cross-route credential replay via scope binding flaw', () => {
+  // Method whose schema transform moves `amount`, `currency`, and `recipient`
+  // into `methodDetails`, removing them from the top-level request. This mirrors
+  // real-world methods (e.g. Tempo) that restructure fields via z.transform.
+  const transformingMethod = Method.from({
+    name: 'mock',
+    intent: 'charge',
+    schema: {
+      credential: {
+        payload: z.object({ token: z.string() }),
+      },
+      request: z.pipe(
+        z.object({
+          amount: z.string(),
+          currency: z.string(),
+          decimals: z.number(),
+          recipient: z.string(),
+        }),
+        z.transform(({ amount, currency, decimals, recipient }) => ({
+          methodDetails: { amount: String(Number(amount) * 10 ** decimals), currency, recipient },
+        })),
+      ),
+    },
+  })
+
+  function mockReceipt() {
+    return {
+      method: 'mock',
+      reference: 'tx-ref',
+      status: 'success' as const,
+      timestamp: new Date().toISOString(),
+    }
+  }
+
+  const serverMethod = Method.toServer(transformingMethod, {
+    async verify() {
+      return mockReceipt()
+    },
+  })
+
+  test('rejects cheap credential replayed at expensive route when schema transform moves scope fields', async () => {
+    const handler = Mppx.create({ methods: [serverMethod], realm, secretKey })
+
+    // Get a challenge from the "cheap" route ($0.01)
+    const cheapHandle = handler.charge({
+      amount: '0.01',
+      currency: '0x0000000000000000000000000000000000000001',
+      decimals: 6,
+      expires: new Date(Date.now() + 60_000).toISOString(),
+      recipient: '0x0000000000000000000000000000000000000002',
+    })
+    const cheapResult = await cheapHandle(new Request('https://example.com/cheap'))
+    expect(cheapResult.status).toBe(402)
+    if (cheapResult.status !== 402) throw new Error()
+
+    const cheapChallenge = Challenge.fromResponse(cheapResult.challenge)
+
+    // Build a credential from the cheap challenge
+    const credential = Credential.from({
+      challenge: cheapChallenge,
+      payload: { token: 'valid' },
+    })
+
+    // Present the cheap credential at the "expensive" route ($100)
+    const expensiveHandle = handler.charge({
+      amount: '100',
+      currency: '0x0000000000000000000000000000000000000001',
+      decimals: 6,
+      expires: new Date(Date.now() + 60_000).toISOString(),
+      recipient: '0x0000000000000000000000000000000000000002',
+    })
+    const result = await expensiveHandle(
+      new Request('https://example.com/expensive', {
+        headers: { Authorization: Credential.serialize(credential) },
+      }),
+    )
+
+    // Should be 402 (credential was for $0.01, not $100)
+    expect(result.status).toBe(402)
+  })
+
+  test('rejects credential with mismatched method field', async () => {
+    const otherMethod = Method.from({
+      name: 'other',
+      intent: 'charge',
+      schema: {
+        credential: { payload: z.object({ token: z.string() }) },
+        request: z.object({
+          amount: z.string(),
+          currency: z.string(),
+          decimals: z.number(),
+          recipient: z.string(),
+        }),
+      },
+    })
+
+    const otherServerMethod = Method.toServer(otherMethod, {
+      async verify() {
+        return mockReceipt()
+      },
+    })
+
+    const handler = Mppx.create({ methods: [serverMethod, otherServerMethod], realm, secretKey })
+
+    // Get challenge from mock/charge
+    const mockHandle = handler['mock/charge']({
+      amount: '1',
+      currency: '0x0000000000000000000000000000000000000001',
+      decimals: 6,
+      expires: new Date(Date.now() + 60_000).toISOString(),
+      recipient: '0x0000000000000000000000000000000000000002',
+    })
+    const mockResult = await mockHandle(new Request('https://example.com/mock'))
+    expect(mockResult.status).toBe(402)
+    if (mockResult.status !== 402) throw new Error()
+
+    const mockChallenge = Challenge.fromResponse(mockResult.challenge)
+    const credential = Credential.from({
+      challenge: mockChallenge,
+      payload: { token: 'valid' },
+    })
+
+    // Present mock/charge credential at other/charge route
+    const otherHandle = handler['other/charge']({
+      amount: '1',
+      currency: '0x0000000000000000000000000000000000000001',
+      decimals: 6,
+      expires: new Date(Date.now() + 60_000).toISOString(),
+      recipient: '0x0000000000000000000000000000000000000002',
+    })
+    const result = await otherHandle(
+      new Request('https://example.com/other', {
+        headers: { Authorization: Credential.serialize(credential) },
+      }),
+    )
+
+    // Should reject (credential was for method "mock", not "other")
+    expect(result.status).toBe(402)
+  })
+
+  test('rejects credential with mismatched intent field', async () => {
+    const sessionMethod = Method.from({
+      name: 'mock',
+      intent: 'session',
+      schema: {
+        credential: { payload: z.object({ token: z.string() }) },
+        request: z.object({
+          amount: z.string(),
+          currency: z.string(),
+          decimals: z.number(),
+          recipient: z.string(),
+        }),
+      },
+    })
+
+    const sessionServerMethod = Method.toServer(sessionMethod, {
+      async verify() {
+        return mockReceipt()
+      },
+    })
+
+    const handler = Mppx.create({ methods: [serverMethod, sessionServerMethod], realm, secretKey })
+
+    // Get challenge from mock/charge
+    const chargeHandle = handler['mock/charge']({
+      amount: '1',
+      currency: '0x0000000000000000000000000000000000000001',
+      decimals: 6,
+      expires: new Date(Date.now() + 60_000).toISOString(),
+      recipient: '0x0000000000000000000000000000000000000002',
+    })
+    const chargeResult = await chargeHandle(new Request('https://example.com/charge'))
+    expect(chargeResult.status).toBe(402)
+    if (chargeResult.status !== 402) throw new Error()
+
+    const chargeChallenge = Challenge.fromResponse(chargeResult.challenge)
+    const credential = Credential.from({
+      challenge: chargeChallenge,
+      payload: { token: 'valid' },
+    })
+
+    // Present charge credential at session route
+    const sessionHandle = handler['mock/session']({
+      amount: '1',
+      currency: '0x0000000000000000000000000000000000000001',
+      decimals: 6,
+      expires: new Date(Date.now() + 60_000).toISOString(),
+      recipient: '0x0000000000000000000000000000000000000002',
+    })
+    const result = await sessionHandle(
+      new Request('https://example.com/session', {
+        headers: { Authorization: Credential.serialize(credential) },
+      }),
+    )
+
+    // Should reject (credential was for intent "charge", not "session")
+    expect(result.status).toBe(402)
+  })
+
+  test('compose: rejects cheap credential replayed at expensive route when schema transform moves scope fields', async () => {
+    const handler = Mppx.create({ methods: [serverMethod], realm, secretKey })
+
+    const cheapHandle = handler.charge({
+      amount: '0.01',
+      currency: '0x0000000000000000000000000000000000000001',
+      decimals: 6,
+      expires: new Date(Date.now() + 60_000).toISOString(),
+      recipient: '0x0000000000000000000000000000000000000002',
+    })
+    const expensiveHandle = handler.charge({
+      amount: '100',
+      currency: '0x0000000000000000000000000000000000000001',
+      decimals: 6,
+      expires: new Date(Date.now() + 60_000).toISOString(),
+      recipient: '0x0000000000000000000000000000000000000002',
+    })
+
+    const composed = Mppx.compose(cheapHandle, expensiveHandle)
+
+    // Get challenge (pick the cheap one)
+    const firstResult = await composed(new Request('https://example.com/resource'))
+    expect(firstResult.status).toBe(402)
+    if (firstResult.status !== 402) throw new Error()
+
+    const challenges = Challenge.fromResponseList(firstResult.challenge)
+    const cheapChallenge = challenges[0]!
+
+    const credential = Credential.from({
+      challenge: cheapChallenge,
+      payload: { token: 'valid' },
+    })
+
+    // The composed handler should NOT route the cheap credential to the expensive handler
+    const result = await composed(
+      new Request('https://example.com/resource', {
+        headers: { Authorization: Credential.serialize(credential) },
+      }),
+    )
+
+    // If scope binding works, the credential should route to the cheap handler only.
+    // It should NOT match the expensive handler's canonical request.
+    // The result should be 200 (matched to cheap), not routed to expensive.
+    expect(result.status).toBe(200)
+  })
+})
+
 describe('withReceipt', () => {
   const mockCharge = Method.from({
     name: 'mock',

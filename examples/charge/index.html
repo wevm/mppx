@@ -1,40 +1,90 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Random Photo</title>
-  <style>
-    * { box-sizing: border-box; }
-    body { font-family: system-ui, sans-serif; max-width: 600px; margin: 2rem auto; padding: 1rem; }
-    h1 { margin-bottom: 0.5rem; }
-    p { color: #666; margin-top: 0; }
-    button { padding: 0.75rem 1.5rem; font-size: 1rem; background: #000; color: #fff; border: none; border-radius: 4px; cursor: pointer; }
-    button:hover { background: #333; }
-    button:disabled { background: #999; cursor: not-allowed; }
-    #output { margin-top: 1rem; }
-    #output:empty { display: none; }
-    #output img, .placeholder { width: 400px; height: 400px; border-radius: 8px; display: block; }
-    .placeholder { background: #f0f0f0; border-radius: 8px; animation: shimmer 1.5s infinite; }
-    @keyframes shimmer { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
-    .error { color: red; font-family: monospace; }
-  </style>
-</head>
-<body>
-  <h1>Random Photo</h1>
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Random Photo</title>
+    <style>
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        font-family: system-ui, sans-serif;
+        max-width: 600px;
+        margin: 2rem auto;
+        padding: 1rem;
+      }
+      h1 {
+        margin-bottom: 0.5rem;
+      }
+      p {
+        color: #666;
+        margin-top: 0;
+      }
+      button {
+        padding: 0.75rem 1.5rem;
+        font-size: 1rem;
+        background: #000;
+        color: #fff;
+        border: none;
+        border-radius: 4px;
+        cursor: pointer;
+      }
+      button:hover {
+        background: #333;
+      }
+      button:disabled {
+        background: #999;
+        cursor: not-allowed;
+      }
+      #output {
+        margin-top: 1rem;
+      }
+      #output:empty {
+        display: none;
+      }
+      #output img,
+      .placeholder {
+        width: 400px;
+        height: 400px;
+        border-radius: 8px;
+        display: block;
+      }
+      .placeholder {
+        background: #f0f0f0;
+        border-radius: 8px;
+        animation: shimmer 1.5s infinite;
+      }
+      @keyframes shimmer {
+        0%,
+        100% {
+          opacity: 1;
+        }
+        50% {
+          opacity: 0.5;
+        }
+      }
+      .error {
+        color: red;
+        font-family: monospace;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Random Photo</h1>
 
-  <p>Pay per photo.</p>
+    <p>Pay per photo.</p>
 
-  <p id="setup">Setting up ephemeral account...</p>
+    <p id="setup">Setting up ephemeral account...</p>
 
-  <div id="ready" style="display: none;">
-    <p>Balance: <span id="balance"></span></p>
+    <div id="ready" style="display: none">
+      <p>Balance: <span id="balance"></span></p>
 
-    <button type="button" id="button">Generate Photo ($0.01)</button>
-    
-    <div id="output"></div>
-  </div>
+      <button type="button" id="button">Generate Photo ($0.01)</button>
 
-  <script type="module" src="/src/client.ts"></script>
-</body>
+      <div id="output"></div>
+    </div>
+
+    <script type="module" src="/src/client.ts"></script>
+  </body>
 </html>

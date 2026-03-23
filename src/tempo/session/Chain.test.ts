@@ -11,6 +11,7 @@ import {
   topUpChannel,
 } from '~test/tempo/session.js'
 import { accounts, asset, chain, client, fundAccount } from '~test/tempo/viem.js'
+
 import {
   broadcastOpenTransaction,
   broadcastTopUpTransaction,
@@ -242,6 +243,33 @@ describe('on-chain', () => {
       ).rejects.toThrow('open transaction token does not match server currency')
     })
 
+    test('rejects when transaction channelId does not match claimed channelId', async () => {
+      const salt = nextSalt()
+
+      const { serializedTransaction } = await signOpenChannel({
+        escrow: escrowContract,
+        payer,
+        payee: recipient,
+        token: currency,
+        deposit: 5_000_000n,
+        salt,
+      })
+
+      const fakeChannelId =
+        '0x0000000000000000000000000000000000000000000000000000000000000001' as Hex
+
+      await expect(
+        broadcastOpenTransaction({
+          client,
+          serializedTransaction,
+          escrowContract,
+          channelId: fakeChannelId,
+          recipient,
+          currency,
+        }),
+      ).rejects.toThrow('open transaction does not match claimed channelId')
+    })
+
     test('successful broadcast returns txHash and onChain state', async () => {
       const salt = nextSalt()
       const deposit = 10_000_000n
@@ -311,6 +339,59 @@ describe('on-chain', () => {
           feePayer: accounts[0],
         }),
       ).rejects.toThrow('fee-sponsored open transaction contains an unauthorized call')
+    })
+
+    test('fee-payer: rejects unsigned transaction', async () => {
+      const salt = nextSalt()
+      const deposit = 5_000_000n
+
+      const { channelId, serializedTransaction } = await signOpenChannel({
+        escrow: escrowContract,
+        payer,
+        payee: recipient,
+        token: currency,
+        deposit,
+        salt,
+      })
+
+      // Strip the sender signature to simulate the POC attack
+      const deserialized = Transaction.deserialize(
+        serializedTransaction as Transaction.TransactionSerializedTempo,
+      )
+      const unsigned = await Transaction.serialize({
+        ...deserialized,
+        signature: undefined,
+        from: undefined,
+      })
+
+      await expect(
+        broadcastOpenTransaction({
+          client,
+          serializedTransaction: unsigned,
+          escrowContract,
+          channelId,
+          recipient,
+          currency,
+          feePayer: accounts[0],
+        }),
+      ).rejects.toThrow('Transaction must be signed by the sender before fee payer co-signing')
+    })
+
+    test('fee-payer: rejects non-Tempo transaction', async () => {
+      const fakeEip1559 =
+        '0x02f8650182a5bf843b9aca00843b9aca008252089400000000000000000000000000000000000000008080c001a00000000000000000000000000000000000000000000000000000000000000000a00000000000000000000000000000000000000000000000000000000000000000' as Hex
+
+      await expect(
+        broadcastOpenTransaction({
+          client,
+          serializedTransaction: fakeEip1559,
+          escrowContract,
+          channelId: '0x0000000000000000000000000000000000000000000000000000000000000000' as Hex,
+          recipient,
+          currency,
+          feePayer: accounts[0],
+        }),
+      ).rejects.toThrow('Only Tempo (0x76/0x78) transactions are supported')
     })
 
     test('duplicate broadcast returns fallback with txHash undefined', async () => {
@@ -543,6 +624,70 @@ describe('on-chain', () => {
           feePayer: accounts[0],
         }),
       ).rejects.toThrow('fee-sponsored topUp transaction contains an unauthorized call')
+    })
+
+    test('fee-payer: rejects unsigned transaction', async () => {
+      const salt = nextSalt()
+      const deposit = 5_000_000n
+      const topUpAmount = 3_000_000n
+
+      const { channelId } = await openChannel({
+        escrow: escrowContract,
+        payer,
+        payee: recipient,
+        token: currency,
+        deposit,
+        salt,
+      })
+
+      const { serializedTransaction } = await signTopUpChannel({
+        escrow: escrowContract,
+        payer,
+        channelId,
+        token: currency,
+        amount: topUpAmount,
+      })
+
+      // Strip the sender signature to simulate the POC attack
+      const deserialized = Transaction.deserialize(
+        serializedTransaction as Transaction.TransactionSerializedTempo,
+      )
+      const unsigned = await Transaction.serialize({
+        ...deserialized,
+        signature: undefined,
+        from: undefined,
+      })
+
+      await expect(
+        broadcastTopUpTransaction({
+          client,
+          serializedTransaction: unsigned,
+          escrowContract,
+          channelId,
+          currency: asset,
+          declaredDeposit: topUpAmount,
+          previousDeposit: deposit,
+          feePayer: accounts[0],
+        }),
+      ).rejects.toThrow('Transaction must be signed by the sender before fee payer co-signing')
+    })
+
+    test('fee-payer: rejects non-Tempo transaction', async () => {
+      const fakeEip1559 =
+        '0x02f8650182a5bf843b9aca00843b9aca008252089400000000000000000000000000000000000000008080c001a00000000000000000000000000000000000000000000000000000000000000000a00000000000000000000000000000000000000000000000000000000000000000' as Hex
+
+      await expect(
+        broadcastTopUpTransaction({
+          client,
+          serializedTransaction: fakeEip1559,
+          escrowContract,
+          channelId: '0x0000000000000000000000000000000000000000000000000000000000000000' as Hex,
+          currency: asset,
+          declaredDeposit: 1_000_000n,
+          previousDeposit: 0n,
+          feePayer: accounts[0],
+        }),
+      ).rejects.toThrow('Only Tempo (0x76/0x78) transactions are supported')
     })
   })
 

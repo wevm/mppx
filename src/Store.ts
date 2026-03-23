@@ -6,10 +6,12 @@
  */
 import { Json } from 'ox'
 
-export type Store = {
-  get: <value = unknown>(key: string) => Promise<value | null>
-  put: (key: string, value: unknown) => Promise<void>
-  delete: (key: string) => Promise<void>
+export type StoreItemMap = Record<string, unknown>
+
+export type Store<itemMap extends StoreItemMap = StoreItemMap> = {
+  get: <key extends keyof itemMap & string>(key: key) => Promise<itemMap[key] | null>
+  put: <key extends keyof itemMap & string>(key: key, value: itemMap[key]) => Promise<void>
+  delete: <key extends keyof itemMap & string>(key: key) => Promise<void>
 }
 
 /** Creates a {@link Store} from an existing implementation. */

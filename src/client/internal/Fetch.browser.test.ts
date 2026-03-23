@@ -1,4 +1,5 @@
 import { describe, expect, test, vi } from 'vitest'
+
 import * as Fetch from './Fetch.js'
 
 const noopMethod = {

@@ -141,3 +141,60 @@ describe('match', () => {
     expect(Route.match(routes, 'GET', '/v1/chat/completions')).toBeNull()
   })
 })
+
+describe('matchPath', () => {
+  const paidOnly = (v: unknown) => v !== true
+
+  test('behavior: matches route by path without filter', () => {
+    const routes = { 'GET /v1/models': true }
+    expect(Route.matchPath(routes, '/v1/models')).toMatchObject({
+      key: 'GET /v1/models',
+    })
+  })
+
+  test('behavior: matches paid endpoint by path', () => {
+    const routes = { 'GET /v1/generate': { pay: () => {} } }
+    expect(Route.matchPath(routes, '/v1/generate', paidOnly)).toMatchObject({
+      key: 'GET /v1/generate',
+    })
+  })
+
+  test('behavior: skips free passthrough routes with filter', () => {
+    const routes = {
+      'GET /v1/models': true,
+      'POST /v1/generate': { pay: () => {} },
+    }
+    expect(Route.matchPath(routes, '/v1/models', paidOnly)).toBeNull()
+  })
+
+  test('behavior: matches paid route even with different method', () => {
+    const routes = {
+      'GET /v1/stream': { pay: () => {} },
+    }
+    expect(Route.matchPath(routes, '/v1/stream', paidOnly)).toMatchObject({
+      key: 'GET /v1/stream',
+    })
+  })
+
+  test('behavior: skips free and matches next paid route', () => {
+    const routes = {
+      'GET /v1/*': true,
+      'POST /v1/*': { pay: () => {} },
+    }
+    const result = Route.matchPath(routes, '/v1/cachedContents', paidOnly)
+    expect(result).toMatchObject({ key: 'POST /v1/*' })
+  })
+
+  test('error: returns null when all routes are free', () => {
+    const routes = {
+      'GET /v1/models': true,
+      'GET /v1/status': true,
+    }
+    expect(Route.matchPath(routes, '/v1/models', paidOnly)).toBeNull()
+  })
+
+  test('error: returns null when no path match', () => {
+    const routes = { 'POST /v1/generate': { pay: () => {} } }
+    expect(Route.matchPath(routes, '/v2/unknown', paidOnly)).toBeNull()
+  })
+})

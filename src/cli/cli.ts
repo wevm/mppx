@@ -1,11 +1,13 @@
 import * as fs from 'node:fs'
 import { createRequire } from 'node:module'
 import * as path from 'node:path'
+
 import { Cli, Errors, z } from 'incur'
 import { Base64 } from 'ox'
 import { type Address, createClient, http } from 'viem'
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts'
 import { tempo as tempoMainnet } from 'viem/chains'
+
 import * as Challenge from '../Challenge.js'
 import * as Mppx from '../client/Mppx.js'
 import { createDefaultStore, createKeychain, resolveAccountName } from './account.js'
@@ -130,15 +132,27 @@ const cli = Cli.create('mppx', {
       return hasProtocol ? c.args.url : `${isLocal ? 'http' : 'https'}://${c.args.url}`
     })()
     const { hostname } = new URL(url)
-    if (
+    const insecure =
       c.options.insecure ||
       hostname === 'localhost' ||
       hostname.endsWith('.localhost') ||
       hostname.endsWith('.local')
-    ) {
-      process.removeAllListeners('warning')
-      process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0'
-    }
+
+    // Scoped fetch that temporarily disables TLS verification only for
+    // the target connection when `insecure` is true, then restores
+    // the original value so other HTTPS connections are unaffected.
+    const targetFetch: typeof globalThis.fetch = insecure
+      ? async (input, init) => {
+          const orig = process.env.NODE_TLS_REJECT_UNAUTHORIZED
+          process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0'
+          try {
+            return await globalThis.fetch(input, init)
+          } finally {
+            if (orig === undefined) delete process.env.NODE_TLS_REJECT_UNAUTHORIZED
+            else process.env.NODE_TLS_REJECT_UNAUTHORIZED = orig
+          }
+        }
+      : globalThis.fetch
 
     // Node.js doesn't resolve *.localhost subdomains to loopback (unlike
     // browsers per RFC 6761). Rewrite the URL to 127.0.0.1 and set the
@@ -170,7 +184,7 @@ const cli = Cli.create('mppx', {
       }
 
       if (c.options.verbose >= 2) printRequestHeaders(url, init, info)
-      const challengeResponse = await globalThis.fetch(fetchUrl, init)
+      const challengeResponse = await targetFetch(fetchUrl, init)
       if (challengeResponse.status !== 402) {
         if (c.options.fail && challengeResponse.status >= 400)
           return c.error({
@@ -307,7 +321,7 @@ const cli = Cli.create('mppx', {
 
       const credentialFetchInit = { ...init, headers: credentialHeaders }
       if (c.options.verbose >= 2) printRequestHeaders(url, credentialFetchInit, info)
-      const credentialResponse = await globalThis.fetch(fetchUrl, credentialFetchInit)
+      const credentialResponse = await targetFetch(fetchUrl, credentialFetchInit)
 
       if (c.options.fail && credentialResponse.status >= 400)
         return c.error({

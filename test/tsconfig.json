@@ -20,10 +20,5 @@
       "mppx/mcp-sdk/server": ["../src/mcp-sdk/server/index.ts"]
     }
   },
-  "include": [
-    "env.d.ts",
-    "./**/*.ts",
-    "../src/**/*.test.ts",
-    "../src/**/*.test-d.ts"
-  ]
+  "include": ["env.d.ts", "./**/*.ts", "../src/**/*.test.ts", "../src/**/*.test-d.ts"]
 }

@@ -13,6 +13,7 @@ import {
   waitForTransactionReceipt,
   writeContractSync,
 } from 'viem/actions'
+
 import { escrowAbi } from '../../src/tempo/session/Chain.js'
 import * as Channel from '../../src/tempo/session/Channel.js'
 import artifact from '../fixtures/TempoStreamChannel.json' with { type: 'json' }
@@ -114,6 +115,24 @@ export async function closeChannelOnChain(params: {
     abi: escrowAbi,
     functionName: 'close',
     args: [channelId, cumulativeAmount, signature],
+  })
+
+  return { txHash: txReceipt.transactionHash }
+}
+
+export async function requestCloseChannel(params: {
+  escrow: Address
+  payer: Account
+  channelId: Hex
+}): Promise<{ txHash: Hex }> {
+  const { escrow, payer, channelId } = params
+
+  const txReceipt = await writeContractSync(client, {
+    account: payer,
+    address: escrow,
+    abi: escrowAbi,
+    functionName: 'requestClose',
+    args: [channelId],
   })
 
   return { txHash: txReceipt.transactionHash }

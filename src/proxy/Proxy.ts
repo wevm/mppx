@@ -1,5 +1,7 @@
 import type * as http from 'node:http'
+
 import { createFetchProxy } from '@remix-run/fetch-proxy'
+
 import * as Request from '../server/Request.js'
 import * as Headers from './internal/Headers.js'
 import * as Route from './internal/Route.js'
@@ -137,7 +139,12 @@ export function create(config: create.Config): Proxy {
       // is registered for a different HTTP method (e.g. GET). Fall back to
       // path-only matching so the payment handler can process the action.
       (request.method === 'POST' && request.headers.has('authorization')
-        ? Route.matchPath(service.routes, upstreamPath)
+        ? Route.matchPath(
+            service.routes,
+            upstreamPath,
+            // skip free routes (e.g. `'GET /foo/bar': true`)
+            (endpoint) => endpoint !== true,
+          )
         : null)
     if (!matched) return new Response('Not Found', { status: 404 })
 

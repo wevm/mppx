@@ -3,6 +3,8 @@ on: [push, pull_request]
 
 jobs:
   build:
+    name: Build
+    if: github.repository == 'wevm/mppx'
     runs-on: ubuntu-latest
 
     steps:
@@ -16,6 +18,6 @@ jobs:
         run: pnpm install
 
       - name: Prerelease
-        run: | 
+        run: |
           pnpm run build
           pnpx pkg-pr-new publish --pnpm

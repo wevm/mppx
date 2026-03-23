@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'vitest'
+
 import type { Challenge } from '../../Challenge.js'
 import type { Credential } from '../../Credential.js'
 import { VerificationFailedError } from '../../Errors.js'
