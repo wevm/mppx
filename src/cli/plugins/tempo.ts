@@ -10,6 +10,7 @@ import type { Address } from 'viem'
 import { createClient, http } from 'viem'
 import { privateKeyToAccount } from 'viem/accounts'
 
+import { normalizeHeaders } from '../../client/internal/Fetch.js'
 import * as Credential from '../../Credential.js'
 import { tempo as tempoMethods } from '../../tempo/client/index.js'
 import type { SessionCredentialPayload } from '../../tempo/session/Types.js'
@@ -612,7 +613,7 @@ async function closeChannel(opts: {
   const closeRes = await globalThis.fetch(opts.fetchUrl, {
     ...opts.fetchInit,
     headers: {
-      ...(opts.fetchInit.headers as Record<string, string>),
+      ...normalizeHeaders(opts.fetchInit.headers),
       Authorization: closeCred,
     },
   })

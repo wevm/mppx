@@ -208,6 +208,30 @@ describe('Session', () => {
     })
   })
 
+  describe('.sse() headers normalization', () => {
+    test('preserves Headers instance properties when passed as headers', async () => {
+      const mockFetch = vi.fn().mockResolvedValue(makeSseResponse(['event: message\ndata: ok\n\n']))
+
+      const s = sessionManager({
+        account: '0x0000000000000000000000000000000000000001',
+        fetch: mockFetch as typeof globalThis.fetch,
+      })
+
+      const iterable = await s.sse('https://api.example.com/stream', {
+        headers: new Headers({ 'Content-Type': 'application/json', 'X-Custom': 'value' }),
+      })
+
+      for await (const _ of iterable) {
+        // drain
+      }
+
+      const calledHeaders = (mockFetch.mock.calls[0]![1] as RequestInit).headers as Record<string, string>
+      expect(calledHeaders['content-type']).toBe('application/json')
+      expect(calledHeaders['x-custom']).toBe('value')
+      expect(calledHeaders.Accept).toBe('text/event-stream')
+    })
+  })
+
   describe('.close()', () => {
     test('is no-op when not opened', async () => {
       const mockFetch = vi.fn()

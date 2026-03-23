@@ -9,6 +9,7 @@ import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts'
 import { tempo as tempoMainnet } from 'viem/chains'
 
 import * as Challenge from '../Challenge.js'
+import { normalizeHeaders } from '../client/internal/Fetch.js'
 import * as Mppx from '../client/Mppx.js'
 import { createDefaultStore, createKeychain, resolveAccountName } from './account.js'
 import { loadConfig, resolvePlugin } from './internal.js'
@@ -314,7 +315,7 @@ const cli = Cli.create('mppx', {
 
       // Send credential and get response
       const credentialHeaders = {
-        ...(init.headers as Record<string, string>),
+        ...normalizeHeaders(init.headers),
         Authorization: credential,
       }
       plugin?.prepareCredentialRequest?.({ challenge, credential, headers: credentialHeaders })

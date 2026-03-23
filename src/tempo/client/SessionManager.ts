@@ -158,7 +158,7 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
       const sseInit = {
         ...fetchInit,
         headers: {
-          ...fetchInit.headers,
+          ...Fetch.normalizeHeaders(fetchInit.headers),
           Accept: 'text/event-stream',
         },
         ...(signal ? { signal } : {}),
