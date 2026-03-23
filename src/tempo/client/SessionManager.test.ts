@@ -225,7 +225,10 @@ describe('Session', () => {
         // drain
       }
 
-      const calledHeaders = (mockFetch.mock.calls[0]![1] as RequestInit).headers as Record<string, string>
+      const calledHeaders = (mockFetch.mock.calls[0]![1] as RequestInit).headers as Record<
+        string,
+        string
+      >
       expect(calledHeaders['content-type']).toBe('application/json')
       expect(calledHeaders['x-custom']).toBe('value')
       expect(calledHeaders.Accept).toBe('text/event-stream')
