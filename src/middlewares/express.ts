@@ -6,7 +6,6 @@ import type {
 } from 'express'
 
 import * as Mppx_core from '../server/Mppx.js'
-import * as Request from '../server/Request.js'
 import * as Mppx_internal from './internal/mppx.js'
 
 export * from '../server/Methods.js'
@@ -61,7 +60,11 @@ export function payment<const intent extends Mppx_internal.AnyMethodFn>(
   options: intent extends (options: infer options) => any ? options : never,
 ): RequestHandler {
   return async (req: ExpressRequest, res: ExpressResponse, next: NextFunction) => {
-    const result = await intent(options)(Request.fromNodeListener(req, res))
+    const request = new Request(`${req.protocol}://${req.hostname}${req.originalUrl}`, {
+      method: req.method,
+      headers: req.headers as Record<string, string>,
+    })
+    const result = await intent(options)(request)
 
     if (result.status === 402) {
       const challenge = result.challenge as Response
