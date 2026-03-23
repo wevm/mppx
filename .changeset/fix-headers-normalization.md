@@ -2,4 +2,4 @@
 'mppx': patch
 ---
 
-Fixed header normalization across all spread sites.
+Fixed SSE header normalization.
