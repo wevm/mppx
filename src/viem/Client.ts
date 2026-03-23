@@ -1,5 +1,6 @@
 import { type Chain, type Client, createClient, http } from 'viem'
 import { withFeePayer } from 'viem/tempo'
+
 import type { MaybePromise } from '../internal/types.js'
 
 export function getResolver(

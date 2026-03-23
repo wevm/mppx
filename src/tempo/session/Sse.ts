@@ -7,6 +7,7 @@
  * building HTTP responses from the stream.
  */
 import type { Hex } from 'viem'
+
 import * as Credential from '../../Credential.js'
 import * as ChannelStore from './ChannelStore.js'
 import { createSessionReceipt } from './Receipt.js'

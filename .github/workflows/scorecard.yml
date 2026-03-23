@@ -8,7 +8,7 @@ on:
   schedule:
     - cron: '22 13 * * 0'
   push:
-    branches: [ "main" ]
+    branches: ['main']
 
 # Declare default permissions as read only.
 permissions: read-all
@@ -26,26 +26,26 @@ jobs:
       id-token: write
 
     steps:
-      - name: "Checkout code"
+      - name: 'Checkout code'
         uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
         with:
           persist-credentials: false
 
-      - name: "Run analysis"
+      - name: 'Run analysis'
         uses: ossf/scorecard-action@f49aabe0b5af0936a0987cfb85d86b75731b0186 # v2.4.1
         with:
           results_file: results.sarif
           results_format: sarif
           publish_results: true
 
-      - name: "Upload artifact"
+      - name: 'Upload artifact'
         uses: actions/upload-artifact@4cec3d8aa04e39d1a68397de0c4cd6fb9dce8ec1 # v4.6.1
         with:
           name: SARIF file
           path: results.sarif
           retention-days: 5
 
-      - name: "Upload to code-scanning"
+      - name: 'Upload to code-scanning'
         uses: github/codeql-action/upload-sarif@80cb6b56b93de3e779c7d476d9100d06fb87c877 # codeql-bundle-v2.23.2
         with:
           sarif_file: results.sarif

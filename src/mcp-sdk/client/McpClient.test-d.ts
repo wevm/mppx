@@ -2,6 +2,7 @@ import type { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { tempo } from 'mppx/client'
 import type { Account } from 'viem'
 import { describe, expectTypeOf, test } from 'vitest'
+
 import * as McpClient from './McpClient.js'
 
 describe('McpClient.wrap', () => {

@@ -11,6 +11,7 @@ import {
   topUpChannel,
 } from '~test/tempo/session.js'
 import { accounts, asset, chain, client, fundAccount } from '~test/tempo/viem.js'
+
 import {
   broadcastOpenTransaction,
   broadcastTopUpTransaction,

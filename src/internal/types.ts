@@ -256,9 +256,7 @@ export type LastInUnion<U> =
 
 /** @internal */
 export type UnionToIntersection<union> = (
-  union extends unknown
-    ? (arg: union) => 0
-    : never
+  union extends unknown ? (arg: union) => 0 : never
 ) extends (arg: infer i) => 0
   ? i
   : never

@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'vitest'
+
 import * as Service from './Service.js'
 
 describe('from', () => {

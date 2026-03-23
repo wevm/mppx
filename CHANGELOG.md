@@ -55,7 +55,6 @@
 ### Minor Changes
 
 - 143ebc9: Support handler function refs in `compose()`.
-
   - **`[mppx.tempo.charge, { amount: '1' }]` syntax** — `compose()` now accepts handler function references (e.g. `mppx.tempo.charge`) as the first element of entry tuples, in addition to `Method.AnyServer` objects and `"name/intent"` string keys.
   - **`_method` metadata on nested handlers** — nested handler functions are tagged with their source `Method.AnyServer`, enabling `compose()` to resolve the correct handler.
 
@@ -179,7 +178,6 @@
 ### Patch Changes
 
 - 04b04c9: Added auto-detection of `realm` and `secretKey` from environment variables in `Mppx.create()`.
-
   - **Realm**: checks `MPP_REALM`, `FLY_APP_NAME`, `HEROKU_APP_NAME`, `HOST`, `HOSTNAME`, `RAILWAY_PUBLIC_DOMAIN`, `RENDER_EXTERNAL_HOSTNAME`, `VERCEL_URL`, `WEBSITE_HOSTNAME`
   - **Secret key**: checks `MPP_SECRET_KEY`
 
@@ -279,7 +277,6 @@
 ### Minor Changes
 
 - 627f5ec: **Breaking:**
-
   - Renamed `Intent` and `MethodIntent` modules to `Method`.
   - Removed `Intent` export from `mppx`. Use `Method` instead.
   - Removed `MethodIntent` export from `mppx`. Use `Method` instead.

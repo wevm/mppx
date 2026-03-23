@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'vitest'
+
 import * as Headers from './Headers.js'
 
 describe('scrub', () => {

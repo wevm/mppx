@@ -1,6 +1,7 @@
 import { Challenge, Credential, Method, z } from 'mppx'
 import { Mppx } from 'mppx/server'
 import { describe, expect, test } from 'vitest'
+
 import { wrap } from './mppx.js'
 
 const realm = 'api.example.com'

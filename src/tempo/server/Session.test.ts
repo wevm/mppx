@@ -13,6 +13,7 @@ import {
   topUpChannel,
 } from '~test/tempo/session.js'
 import { accounts, asset, chain, client, fundAccount, http } from '~test/tempo/viem.js'
+
 import {
   ChannelClosedError,
   ChannelNotFoundError,

@@ -1,4 +1,5 @@
 import type { Address, Hex } from 'viem'
+
 import type * as Store from '../../Store.js'
 import type { SignedVoucher } from './Types.js'
 

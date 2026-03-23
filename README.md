@@ -80,13 +80,13 @@ const res = await fetch('https://mpp.dev/api/ping/paid')
 
 ## Examples
 
-| Example | Description |
-|---------|-------------|
-| [charge](./examples/charge/) | Payment-gated photo generation API |
-| [charge-wagmi](./examples/charge-wagmi/) | Payment-gated charge with Wagmi + React |
+| Example                                                | Description                                          |
+| ------------------------------------------------------ | ---------------------------------------------------- |
+| [charge](./examples/charge/)                           | Payment-gated photo generation API                   |
+| [charge-wagmi](./examples/charge-wagmi/)               | Payment-gated charge with Wagmi + React              |
 | [session/multi-fetch](./examples/session/multi-fetch/) | Multiple paid requests over a single payment channel |
-| [session/sse](./examples/session/sse/) | Pay-per-token LLM streaming with SSE |
-| [stripe](./examples/stripe/) | Stripe SPT charge with automatic client |
+| [session/sse](./examples/session/sse/)                 | Pay-per-token LLM streaming with SSE                 |
+| [stripe](./examples/stripe/)                           | Stripe SPT charge with automatic client              |
 
 ```bash
 npx gitpick wevm/mppx/examples/charge
@@ -152,13 +152,13 @@ export const POST = proxy.fetch // Next.js
 
 This exposes the following routes:
 
-| Route | Pricing |
-|-------|---------|
-| `POST /openai/v1/chat/completions` | charge **$0.005** |
-| `POST /openai/v1/completions` | stream **$0.0001 per token** |
-| `GET /openai/v1/models` | free |
-| `POST /stripe/v1/charges` | charge **$0.01** |
-| `GET /stripe/v1/customers/:id` | free |
+| Route                              | Pricing                      |
+| ---------------------------------- | ---------------------------- |
+| `POST /openai/v1/chat/completions` | charge **$0.005**            |
+| `POST /openai/v1/completions`      | stream **$0.0001 per token** |
+| `GET /openai/v1/models`            | free                         |
+| `POST /stripe/v1/charges`          | charge **$0.01**             |
+| `GET /stripe/v1/customers/:id`     | free                         |
 
 ## Protocol
 

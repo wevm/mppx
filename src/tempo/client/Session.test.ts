@@ -4,6 +4,7 @@ import { Addresses } from 'viem/tempo'
 import { beforeAll, describe, expect, test } from 'vitest'
 import { deployEscrow, openChannel } from '~test/tempo/session.js'
 import { accounts, asset, chain, client, fundAccount } from '~test/tempo/viem.js'
+
 import * as Challenge from '../../Challenge.js'
 import * as Credential from '../../Credential.js'
 import { chainId, escrowContract as escrowContractDefaults } from '../internal/defaults.js'

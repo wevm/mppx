@@ -1,4 +1,5 @@
 import { expectTypeOf, test } from 'vitest'
+
 import * as Store from './Store.js'
 
 test('default Store accepts any string key', () => {

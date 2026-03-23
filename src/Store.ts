@@ -62,6 +62,31 @@ export function memory(): Store {
   })
 }
 
+/** Wraps a standard Redis client (ioredis, node-redis, Valkey). */
+export function redis(client: redis.Parameters): Store {
+  return from({
+    async get(key) {
+      const raw = await client.get(key)
+      if (raw == null) return null as any
+      return Json.parse(raw)
+    },
+    async put(key, value) {
+      await client.set(key, Json.stringify(value))
+    },
+    async delete(key) {
+      await client.del(key)
+    },
+  })
+}
+
+export declare namespace redis {
+  export type Parameters = {
+    get: (key: string) => Promise<string | null>
+    set: (key: string, value: string) => Promise<unknown>
+    del: (key: string) => Promise<unknown>
+  }
+}
+
 /** Wraps an Upstash Redis instance (e.g. Vercel KV). */
 export function upstash(redis: upstash.Parameters): Store {
   return from({

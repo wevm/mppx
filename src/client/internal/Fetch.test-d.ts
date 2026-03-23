@@ -1,5 +1,6 @@
 import type { Account } from 'viem'
 import { describe, expectTypeOf, test } from 'vitest'
+
 import { charge } from '../../tempo/client/Charge.js'
 import * as Fetch from './Fetch.js'
 

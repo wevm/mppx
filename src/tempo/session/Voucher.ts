@@ -3,6 +3,7 @@ import { SignatureEnvelope } from 'ox/tempo'
 import type { Account, Client, Hex } from 'viem'
 import { recoverTypedDataAddress } from 'viem'
 import { signTypedData } from 'viem/actions'
+
 import * as TempoAddress from '../internal/address.js'
 import type { SignedVoucher, Voucher } from './Types.js'
 

@@ -1,8 +1,9 @@
 {
   "name": "charge",
-  "type": "module",
   "private": true,
+  "type": "module",
   "scripts": {
+    "check:types": "tsgo -b",
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview"
@@ -12,6 +13,7 @@
     "@types/node": "latest",
     "bun": "latest",
     "mppx": "latest",
+    "@typescript/native-preview": "latest",
     "typescript": "latest",
     "viem": "latest",
     "vite": "latest"

@@ -3,11 +3,13 @@ import * as fs from 'node:fs'
 import { createRequire } from 'node:module'
 import * as os from 'node:os'
 import * as path from 'node:path'
+
 import { Errors, z } from 'incur'
 import { Base64 } from 'ox'
 import type { Address } from 'viem'
 import { createClient, http } from 'viem'
 import { privateKeyToAccount } from 'viem/accounts'
+
 import * as Credential from '../../Credential.js'
 import { tempo as tempoMethods } from '../../tempo/client/index.js'
 import type { SessionCredentialPayload } from '../../tempo/session/Types.js'

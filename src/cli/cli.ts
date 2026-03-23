@@ -1,11 +1,13 @@
 import * as fs from 'node:fs'
 import { createRequire } from 'node:module'
 import * as path from 'node:path'
+
 import { Cli, Errors, z } from 'incur'
 import { Base64 } from 'ox'
 import { type Address, createClient, http } from 'viem'
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts'
 import { tempo as tempoMainnet } from 'viem/chains'
+
 import * as Challenge from '../Challenge.js'
 import * as Mppx from '../client/Mppx.js'
 import { createDefaultStore, createKeychain, resolveAccountName } from './account.js'

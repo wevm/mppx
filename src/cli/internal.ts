@@ -1,5 +1,6 @@
 import * as fs from 'node:fs'
 import * as path from 'node:path'
+
 import type * as Challenge from '../Challenge.js'
 import type * as Method from '../Method.js'
 import type { Config } from './config.js'

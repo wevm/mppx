@@ -2,6 +2,7 @@ import { parseUnits } from 'viem'
 import { sendTransactionSync } from 'viem/actions'
 import { Actions, Addresses } from 'viem/tempo'
 import { afterAll, beforeAll } from 'vitest'
+
 import { nodeEnv } from './config.js'
 import { rpcUrl } from './tempo/prool.js'
 import { accounts, asset, client, fundAccount } from './tempo/viem.js'

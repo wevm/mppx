@@ -1,4 +1,5 @@
 import { assertType, describe, expectTypeOf, test } from 'vitest'
+
 import * as Challenge from './Challenge.js'
 import { Method } from './index.js'
 import * as Methods from './tempo/Methods.js'
