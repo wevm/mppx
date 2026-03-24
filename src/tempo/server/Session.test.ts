@@ -618,7 +618,40 @@ describe('session', () => {
       ).rejects.toThrow(InvalidSignatureError)
     })
 
-    test('rejects exact replay of already-verified voucher (non-increasing)', async () => {
+    test('accepts exact replay of already-verified voucher as idempotent', async () => {
+      const { channelId, serializedTransaction } = await createSignedOpenTransaction(10000000n)
+      const server = createServer()
+      await openServerChannel(server, channelId, serializedTransaction)
+
+      const payload = {
+        action: 'voucher' as const,
+        channelId,
+        cumulativeAmount: '2000000',
+        signature: await signTestVoucher(channelId, 2000000n),
+      }
+
+      await server.verify({
+        credential: {
+          challenge: makeChallenge({ id: 'challenge-2', channelId }),
+          payload,
+        },
+        request: makeRequest(),
+      })
+
+      const replayReceipt = await server.verify({
+        credential: {
+          challenge: makeChallenge({ id: 'challenge-3', channelId }),
+          payload,
+        },
+        request: makeRequest(),
+      })
+
+      expect(replayReceipt.status).toBe('success')
+      const ch = await store.getChannel(channelId)
+      expect(ch!.highestVoucherAmount).toBe(2000000n)
+    })
+
+    test('rejects exact replay with invalid signature', async () => {
       const { channelId, serializedTransaction } = await createSignedOpenTransaction(10000000n)
       const server = createServer()
       await openServerChannel(server, channelId, serializedTransaction)
@@ -642,11 +675,14 @@ describe('session', () => {
         server.verify({
           credential: {
             challenge: makeChallenge({ id: 'challenge-3', channelId }),
-            payload,
+            payload: {
+              ...payload,
+              signature: `0x${'ab'.repeat(65)}` as Hex,
+            },
           },
           request: makeRequest(),
         }),
-      ).rejects.toThrow(VerificationFailedError)
+      ).rejects.toThrow(InvalidSignatureError)
     })
 
     test('rejects replayed voucher at settled amount after on-chain settlement', async () => {

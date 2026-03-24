@@ -100,6 +100,13 @@ export function sse(options: sse.Options & { store: ChannelStore.ChannelStore })
       const ctx = contextMap.get(challengeId)
       if (ctx) {
         contextMap.delete(challengeId)
+
+        // Null-body statuses (e.g. 204 from management actions) cannot carry a
+        // response body per Fetch/HTTP semantics.
+        if (isNullBodyStatus(baseResponse.status)) {
+          return baseResponse
+        }
+
         const stream = new ReadableStream<Uint8Array>({
           async start(controller) {
             // deduction completes before consumer reads
@@ -190,4 +197,8 @@ function isAsyncGeneratorFunction(
 
 function isAsyncIterable(value: unknown): value is AsyncIterable<string> {
   return value !== null && typeof value === 'object' && Symbol.asyncIterator in (value as object)
+}
+
+function isNullBodyStatus(status: number): boolean {
+  return status === 101 || status === 204 || status === 205 || status === 304
 }
