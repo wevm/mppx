@@ -17,10 +17,7 @@ function sleep(ms: number) {
 }
 
 async function warmTempoServer() {
-  const maxAttempts = parsePositiveInt(
-    process.env.MPPX_TEMPO_START_ATTEMPTS,
-    defaultStartAttempts,
-  )
+  const maxAttempts = parsePositiveInt(process.env.MPPX_TEMPO_START_ATTEMPTS, defaultStartAttempts)
   const requestTimeoutMs = parsePositiveInt(
     process.env.MPPX_TEMPO_START_REQUEST_TIMEOUT_MS,
     defaultStartRequestTimeoutMs,
