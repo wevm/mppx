@@ -2,7 +2,7 @@ import * as http from 'node:http'
 
 import { Receipt } from 'mppx'
 import { Mppx as Mppx_client, session as sessionIntent, tempo as tempo_client } from 'mppx/client'
-import { Mppx } from 'mppx/nextjs'
+import { Mppx, discovery } from 'mppx/nextjs'
 import { tempo as tempo_server } from 'mppx/server'
 import type { Address } from 'viem'
 import { Addresses } from 'viem/tempo'
@@ -86,6 +86,31 @@ describe('charge', () => {
     const receipt = Receipt.fromResponse(response)
     expect(receipt.status).toBe('success')
     expect(receipt.method).toBe('tempo')
+
+    server.close()
+  })
+
+  test('serves /openapi.json from a handler-derived route config', async () => {
+    const pay = mppx.charge({ amount: '1' })
+    const server = await createServer(
+      discovery(mppx, {
+        info: { title: 'Next API', version: '3.0.0' },
+        routes: [{ handler: pay as any, method: 'get', path: '/' }],
+      }),
+    )
+
+    const response = await globalThis.fetch(server.url)
+    expect(response.status).toBe(200)
+    expect(response.headers.get('cache-control')).toBe('public, max-age=300')
+
+    const body = (await response.json()) as Record<string, any>
+    expect(body.info).toEqual({ title: 'Next API', version: '3.0.0' })
+    expect(body.paths['/'].get['x-payment-info']).toEqual({
+      amount: '1000000',
+      currency: asset,
+      intent: 'charge',
+      method: 'tempo',
+    })
 
     server.close()
   })

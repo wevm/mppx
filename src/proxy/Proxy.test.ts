@@ -65,11 +65,19 @@ function createUpstream(handler: (req: Request) => Response | Promise<Response>)
 }
 
 describe('create', () => {
-  test('behavior: GET /discover/all returns service discovery JSON', async () => {
+  test('behavior: GET /openapi.json returns discovery JSON', async () => {
     const proxy = ApiProxy.create({
+      categories: ['gateway'],
+      docs: {
+        apiReference: 'https://gateway.example.com/reference',
+        homepage: 'https://gateway.example.com',
+      },
+      title: 'My AI Gateway',
+      version: '2.0.0',
       services: [
         Service.from('api', {
           baseUrl: 'https://api.example.com',
+          categories: ['compute'],
           routes: {
             'GET /v1/models': true,
             'POST /v1/generate': mppx_server.charge({ amount: '1', description: 'Generate text' }),
@@ -84,73 +92,40 @@ describe('create', () => {
     })
     proxyServer = await Http.createServer(proxy.listener)
 
-    const res = await fetch(`${proxyServer.url}/discover/all`)
+    const res = await fetch(`${proxyServer.url}/openapi.json`)
     expect(res.status).toBe(200)
-    expect(await res.json()).toMatchInlineSnapshot(`
-      [
-        {
-          "id": "api",
-          "routes": [
-            {
-              "method": "GET",
-              "path": "/api/v1/models",
-              "pattern": "GET /api/v1/models",
-              "payment": null,
-            },
-            {
-              "method": "POST",
-              "path": "/api/v1/generate",
-              "pattern": "POST /api/v1/generate",
-              "payment": {
-                "amount": "1000000",
-                "currency": "0x20c0000000000000000000000000000000000001",
-                "decimals": 6,
-                "description": "Generate text",
-                "intent": "charge",
-                "method": "tempo",
-                "recipient": "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266",
-              },
-            },
-            {
-              "method": "POST",
-              "path": "/api/v1/stream",
-              "pattern": "POST /api/v1/stream",
-              "payment": {
-                "amount": "1000000",
-                "currency": "0x20c0000000000000000000000000000000000001",
-                "decimals": 6,
-                "description": "Stream text",
-                "intent": "session",
-                "method": "tempo",
-                "recipient": "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266",
-                "unitType": "token",
-              },
-            },
-          ],
-        },
-      ]
-    `)
-  })
-
-  test('behavior: GET /discover returns JSON by default', async () => {
-    const proxy = ApiProxy.create({
-      services: [
-        Service.from('api', {
-          baseUrl: 'https://api.example.com',
-          routes: {
-            'GET /v1/models': true,
-          },
-        }),
-      ],
+    expect(res.headers.get('cache-control')).toBe('public, max-age=300')
+    const body = (await res.json()) as Record<string, any>
+    expect(body.openapi).toBe('3.1.0')
+    expect(body.info).toEqual({ title: 'My AI Gateway', version: '2.0.0' })
+    expect(body['x-service-info']).toEqual({
+      categories: ['gateway'],
+      docs: {
+        apiReference: 'https://gateway.example.com/reference',
+        homepage: 'https://gateway.example.com',
+        llms: `${proxyServer.url}/llms.txt`,
+      },
     })
-    proxyServer = await Http.createServer(proxy.listener)
-
-    const res = await fetch(`${proxyServer.url}/discover`)
-    expect(res.status).toBe(200)
-    expect(res.headers.get('content-type')).toMatchInlineSnapshot(`"application/json"`)
+    expect(body.paths['/api/v1/models'].get.responses['200']).toEqual({
+      description: 'Successful response',
+    })
+    expect(body.paths['/api/v1/generate'].post['x-payment-info']).toEqual({
+      amount: '1000000',
+      currency: asset,
+      description: 'Generate text',
+      intent: 'charge',
+      method: 'tempo',
+    })
+    expect(body.paths['/api/v1/stream'].post['x-payment-info']).toEqual({
+      amount: '1000000',
+      currency: asset,
+      description: 'Stream text',
+      intent: 'session',
+      method: 'tempo',
+    })
   })
 
-  test('behavior: GET /discover returns llms.txt for markdown clients', async () => {
+  test('behavior: GET /llms.txt returns text docs linked to OpenAPI discovery', async () => {
     const proxy = ApiProxy.create({
       title: 'My AI Gateway',
       description: 'A paid proxy for LLM and AI services.',
@@ -186,9 +161,7 @@ describe('create', () => {
     })
     proxyServer = await Http.createServer(proxy.listener)
 
-    const res = await fetch(`${proxyServer.url}/discover`, {
-      headers: { Accept: 'text/plain' },
-    })
+    const res = await fetch(`${proxyServer.url}/llms.txt`)
     expect(res.status).toBe(200)
     expect(res.headers.get('content-type')).toBe('text/plain; charset=utf-8')
     expect(await res.text()).toMatchInlineSnapshot(`
@@ -198,20 +171,20 @@ describe('create', () => {
 
       ## Services
 
-      - [OpenAI](/discover/openai.md): Chat completions, embeddings, image generation, and audio transcription.
-      - [Anthropic](/discover/anthropic.md): Claude language models for messages and completions.
+      - OpenAI: Chat completions, embeddings, image generation, and audio transcription.
+      - Anthropic: Claude language models for messages and completions.
 
-      [See all service definitions](/discover/all.md)"
+      [OpenAPI discovery](/openapi.json)"
     `)
   })
 
-  test('behavior: GET /discover/:id returns single service', async () => {
+  test('behavior: GET /openapi.json respects basePath', async () => {
     const proxy = ApiProxy.create({
+      basePath: '/proxy',
       services: [
         Service.from('api', {
           baseUrl: 'https://api.example.com',
           routes: {
-            'GET /v1/models': true,
             'POST /v1/generate': mppx_server.charge({ amount: '1', description: 'Generate text' }),
           },
         }),
@@ -219,205 +192,24 @@ describe('create', () => {
     })
     proxyServer = await Http.createServer(proxy.listener)
 
-    const res = await fetch(`${proxyServer.url}/discover/api`)
+    const res = await fetch(`${proxyServer.url}/proxy/openapi.json`)
     expect(res.status).toBe(200)
-    expect(await res.json()).toMatchInlineSnapshot(`
-      {
-        "id": "api",
-        "routes": [
-          {
-            "method": "GET",
-            "path": "/api/v1/models",
-            "pattern": "GET /api/v1/models",
-            "payment": null,
-          },
-          {
-            "method": "POST",
-            "path": "/api/v1/generate",
-            "pattern": "POST /api/v1/generate",
-            "payment": {
-              "amount": "1000000",
-              "currency": "0x20c0000000000000000000000000000000000001",
-              "decimals": 6,
-              "description": "Generate text",
-              "intent": "charge",
-              "method": "tempo",
-              "recipient": "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266",
-            },
-          },
-        ],
-      }
-    `)
+    const body = (await res.json()) as Record<string, any>
+    expect(body.paths['/proxy/api/v1/generate'].post['x-payment-info']).toEqual({
+      amount: '1000000',
+      currency: asset,
+      description: 'Generate text',
+      intent: 'charge',
+      method: 'tempo',
+    })
   })
 
-  test('behavior: GET /discover/all.md returns full markdown with routes', async () => {
-    const proxy = ApiProxy.create({
-      services: [
-        openai({
-          apiKey: 'sk-test',
-          routes: {
-            'POST /v1/chat/completions': mppx_server.charge({
-              amount: '0.05',
-              description: 'Chat completion',
-            }),
-            'GET /v1/models': true,
-          },
-        }),
-        anthropic({
-          apiKey: 'sk-ant-test',
-          routes: {
-            'POST /v1/messages': mppx_server.charge({
-              amount: '0.03',
-              description: 'Send message',
-            }),
-          },
-        }),
-      ],
-    })
-    proxyServer = await Http.createServer(proxy.listener)
-
-    const res = await fetch(`${proxyServer.url}/discover/all.md`)
-    expect(res.status).toBe(200)
-    expect(res.headers.get('content-type')).toBe('text/markdown; charset=utf-8')
-    expect(await res.text()).toMatchInlineSnapshot(`
-      "# Services
-
-      ## [OpenAI](/discover/openai.md)
-
-      Chat completions, embeddings, image generation, and audio transcription.
-
-      ### Routes
-
-      - \`POST /openai/v1/chat/completions\`: Chat completion
-        - Type: charge
-        - Price: 0.05 (50000 units, 6 decimals)
-        - Currency: 0x20c0000000000000000000000000000000000001
-        - Docs: https://context7.com/websites/platform_openai/llms.txt?topic=POST%20%2Fv1%2Fchat%2Fcompletions
-
-      - \`GET /openai/v1/models\`
-        - Type: free
-        - Docs: https://context7.com/websites/platform_openai/llms.txt?topic=GET%20%2Fv1%2Fmodels
-
-      ## [Anthropic](/discover/anthropic.md)
-
-      Claude language models for messages and completions.
-
-      ### Routes
-
-      - \`POST /anthropic/v1/messages\`: Send message
-        - Type: charge
-        - Price: 0.03 (30000 units, 6 decimals)
-        - Currency: 0x20c0000000000000000000000000000000000001
-      "
-    `)
-  })
-
-  test('behavior: GET /discover/:id.md returns markdown', async () => {
-    const proxy = ApiProxy.create({
-      services: [
-        openai({
-          apiKey: 'sk-test',
-          routes: {
-            'POST /v1/chat/completions': mppx_server.charge({
-              amount: '0.05',
-              description: 'Chat completion',
-            }),
-            'GET /v1/models': true,
-          },
-        }),
-        anthropic({
-          apiKey: 'sk-ant-test',
-          routes: {
-            'POST /v1/messages': mppx_server.charge({ amount: '0.03' }),
-          },
-        }),
-      ],
-    })
-    proxyServer = await Http.createServer(proxy.listener)
-
-    const res = await fetch(`${proxyServer.url}/discover/openai.md`)
-    expect(res.status).toBe(200)
-    expect(res.headers.get('content-type')).toBe('text/markdown; charset=utf-8')
-    expect(await res.text()).toMatchInlineSnapshot(`
-      "# OpenAI
-
-      > Documentation: https://context7.com/websites/platform_openai/llms.txt
-
-      Chat completions, embeddings, image generation, and audio transcription.
-
-      ## Routes
-
-      - \`POST /openai/v1/chat/completions\`: Chat completion
-        - Type: charge
-        - Price: 0.05 (50000 units, 6 decimals)
-        - Currency: 0x20c0000000000000000000000000000000000001
-        - Docs: https://context7.com/websites/platform_openai/llms.txt?topic=POST%20%2Fv1%2Fchat%2Fcompletions
-
-      - \`GET /openai/v1/models\`
-        - Type: free
-        - Docs: https://context7.com/websites/platform_openai/llms.txt?topic=GET%20%2Fv1%2Fmodels
-      "
-    `)
-  })
-
-  test('behavior: GET /discover/:id with Accept: text/markdown returns markdown', async () => {
-    const proxy = ApiProxy.create({
-      services: [
-        openai({
-          apiKey: 'sk-test',
-          routes: { 'GET /v1/models': true },
-        }),
-        anthropic({
-          apiKey: 'sk-ant-test',
-          routes: {
-            'POST /v1/messages': mppx_server.charge({ amount: '0.03' }),
-          },
-        }),
-      ],
-    })
-    proxyServer = await Http.createServer(proxy.listener)
-
-    const res = await fetch(`${proxyServer.url}/discover/anthropic`, {
-      headers: { Accept: 'text/markdown' },
-    })
-    expect(res.status).toBe(200)
-    expect(res.headers.get('content-type')).toBe('text/markdown; charset=utf-8')
-  })
-
-  test('behavior: GET /discover/:id without Accept returns JSON', async () => {
-    const proxy = ApiProxy.create({
-      services: [
-        openai({
-          apiKey: 'sk-test',
-          routes: { 'GET /v1/models': true },
-        }),
-        anthropic({
-          apiKey: 'sk-ant-test',
-          routes: {
-            'POST /v1/messages': mppx_server.charge({ amount: '0.03' }),
-          },
-        }),
-      ],
-    })
-    proxyServer = await Http.createServer(proxy.listener)
-
-    const res = await fetch(`${proxyServer.url}/discover/openai`)
-    expect(res.status).toBe(200)
-    expect(res.headers.get('content-type')).toMatchInlineSnapshot(`"application/json"`)
-  })
-
-  test('behavior: GET /discover/:id.md returns 404 for unknown', async () => {
+  test('behavior: GET /discover* returns 410', async () => {
     const proxy = ApiProxy.create({ services: [] })
     proxyServer = await Http.createServer(proxy.listener)
-    const res = await fetch(`${proxyServer.url}/discover/unknown.md`)
-    expect(res.status).toBe(404)
-  })
-
-  test('behavior: GET /discover/:id returns 404 for unknown', async () => {
-    const proxy = ApiProxy.create({ services: [] })
-    proxyServer = await Http.createServer(proxy.listener)
-    const res = await fetch(`${proxyServer.url}/discover/unknown`)
-    expect(res.status).toBe(404)
+    const res = await fetch(`${proxyServer.url}/discover/all`)
+    expect(res.status).toBe(410)
+    expect(await res.text()).toContain('/openapi.json')
   })
 
   test('behavior: returns 404 for unknown service', async () => {

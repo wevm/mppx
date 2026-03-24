@@ -11,6 +11,7 @@ import { tempo as tempoMainnet } from 'viem/chains'
 import * as Challenge from '../Challenge.js'
 import { normalizeHeaders } from '../client/internal/Fetch.js'
 import * as Mppx from '../client/Mppx.js'
+import { validate as validateDiscovery } from '../discovery/Validate.js'
 import { createDefaultStore, createKeychain, resolveAccountName } from './account.js'
 import { loadConfig, resolvePlugin } from './internal.js'
 import type { Plugin } from './plugins/plugin.js'
@@ -915,7 +916,76 @@ export default defineConfig({
   },
 })
 
+const discover = Cli.create('discover', {
+  description: 'Discovery tooling',
+}).command('validate', {
+  description: 'Validate an OpenAPI discovery document from a file or URL',
+  args: z.object({
+    input: z.string().describe('Path or URL to a discovery document'),
+  }),
+  async run(c) {
+    const input = c.args.input
+    const raw = await (async () => {
+      if (/^https?:\/\//.test(input)) {
+        const response = await globalThis.fetch(input)
+        if (!response.ok) {
+          return c.error({
+            code: 'DISCOVERY_FETCH_FAILED',
+            message: `Failed to fetch discovery document: HTTP ${response.status}`,
+            exitCode: 1,
+          })
+        }
+        return await response.text()
+      }
+
+      const resolved = path.resolve(input)
+      if (!fs.existsSync(resolved)) {
+        return c.error({
+          code: 'DISCOVERY_NOT_FOUND',
+          message: `Discovery document not found: ${resolved}`,
+          exitCode: 1,
+        })
+      }
+      return fs.readFileSync(resolved, 'utf-8')
+    })()
+
+    if (typeof raw !== 'string') return
+
+    let doc: unknown
+    try {
+      doc = JSON.parse(raw)
+    } catch (error) {
+      return c.error({
+        code: 'DISCOVERY_INVALID_JSON',
+        message: `Invalid discovery JSON: ${(error as Error).message}`,
+        exitCode: 1,
+      })
+    }
+
+    const issues = validateDiscovery(doc)
+    for (const issue of issues) console.log(`[${issue.severity}] ${issue.path}: ${issue.message}`)
+
+    const errorCount = issues.filter((issue) => issue.severity === 'error').length
+    const warningCount = issues.filter((issue) => issue.severity === 'warning').length
+
+    if (errorCount > 0) {
+      return c.error({
+        code: 'DISCOVERY_INVALID',
+        message: `Discovery document has ${errorCount} error(s) and ${warningCount} warning(s).`,
+        exitCode: 1,
+      })
+    }
+
+    console.log(
+      warningCount > 0
+        ? `Discovery document is valid with ${warningCount} warning(s).`
+        : 'Discovery document is valid.',
+    )
+  },
+})
+
 cli.command(account)
+cli.command(discover)
 cli.command(init)
 cli.command(sign)
 

@@ -2,6 +2,7 @@ import type * as http from 'node:http'
 
 import { createFetchProxy } from '@remix-run/fetch-proxy'
 
+import { generateProxy } from '../discovery/OpenApi.js'
 import * as Request from '../server/Request.js'
 import * as Headers from './internal/Headers.js'
 import * as Route from './internal/Route.js'
@@ -62,67 +63,40 @@ export function create(config: create.Config): Proxy {
 
     if (!pathname) return new Response('Not Found', { status: 404 })
 
+    if (
+      request.method === 'GET' &&
+      (pathname === '/openapi.json' || pathname === '/openapi.json/')
+    ) {
+      const doc = generateProxy({
+        basePath: config.basePath,
+        info: {
+          title: config.title ?? 'API Proxy',
+          version: config.version ?? '1.0.0',
+        },
+        routes: buildDiscoveryRoutes(config.services),
+        serviceInfo: buildServiceInfo(config, request),
+      })
+
+      return Response.json(doc, {
+        headers: { 'Cache-Control': 'public, max-age=300' },
+      })
+    }
+
     if (request.method === 'GET' && pathname === '/llms.txt')
       return new Response(
         Service.toLlmsTxt(config.services, {
           title: config.title,
           description: config.description,
+          openApiPath: withBasePath(config.basePath, '/openapi.json'),
         }),
         { headers: { 'Content-Type': 'text/plain; charset=utf-8' } },
       )
 
-    if (request.method === 'GET' && pathname === '/discover.md')
-      return new Response(
-        Service.toLlmsTxt(config.services, {
-          title: config.title,
-          description: config.description,
-        }),
-        { headers: { 'Content-Type': 'text/plain; charset=utf-8' } },
-      )
-
-    if (request.method === 'GET' && (pathname === '/discover' || pathname === '/discover/')) {
-      if (wantsMarkdown(request))
-        return new Response(
-          Service.toLlmsTxt(config.services, {
-            title: config.title,
-            description: config.description,
-          }),
-          { headers: { 'Content-Type': 'text/plain; charset=utf-8' } },
-        )
-      return Response.json(config.services.map(Service.serialize))
-    }
-
-    if (
-      request.method === 'GET' &&
-      (pathname === '/discover/all' || pathname === '/discover/all/')
-    ) {
-      if (wantsMarkdown(request))
-        return new Response(Service.toServicesMarkdown(config.services), {
-          headers: { 'Content-Type': 'text/markdown; charset=utf-8' },
-        })
-      return Response.json(config.services.map(Service.serialize))
-    }
-
-    if (request.method === 'GET' && pathname === '/discover/all.md')
-      return new Response(Service.toServicesMarkdown(config.services), {
-        headers: { 'Content-Type': 'text/markdown; charset=utf-8' },
+    if (request.method === 'GET' && pathname.startsWith('/discover'))
+      return new Response('Discovery moved to /openapi.json. Use /llms.txt for text docs.', {
+        status: 410,
+        headers: { 'Content-Type': 'text/plain; charset=utf-8' },
       })
-
-    {
-      // List service
-      const match =
-        pathname.match(/^\/discover\/([^/]+)\.md$/) ?? pathname.match(/^\/discover\/([^/]+)\/?$/)
-      if (request.method === 'GET' && match) {
-        const service = config.services.find((s) => s.id === match[1])
-        if (!service) return new Response('Not Found', { status: 404 })
-        const wantsText = pathname.endsWith('.md') || wantsMarkdown(request)
-        if (wantsText)
-          return new Response(Service.toMarkdown(service), {
-            headers: { 'Content-Type': 'text/markdown; charset=utf-8' },
-          })
-        return Response.json(Service.serialize(service))
-      }
-    }
 
     const parsed = Route.parse(pathname)
     if (!parsed) return new Response('Not Found', { status: 404 })
@@ -177,14 +151,20 @@ export declare namespace create {
   export type Config = {
     /** Base path prefix to strip before routing (e.g. `'/api/proxy'`). */
     basePath?: string | undefined
+    /** Free-form categories for root discovery metadata. */
+    categories?: string[] | undefined
     /** Short description of the proxy shown in `llms.txt`. */
     description?: string | undefined
+    /** Structured documentation links for root discovery metadata. */
+    docs?: Service.Docs | undefined
     /** Custom `fetch` implementation. Defaults to `globalThis.fetch`. */
     fetch?: typeof globalThis.fetch | undefined
     /** Services to proxy. Each service is mounted at `/{serviceId}/`. */
     services: Service.Service[]
     /** Human-readable title for the proxy shown in `llms.txt`. */
     title?: string | undefined
+    /** Version to include in the generated OpenAPI document. */
+    version?: string | undefined
   }
 }
 
@@ -230,41 +210,58 @@ async function proxyUpstream(options: proxyUpstream.Options): Promise<Response> 
   return upstreamRes
 }
 
-const aiUserAgents = [
-  'GPTBot',
-  'OAI-SearchBot',
-  'ChatGPT-User',
-  'anthropic-ai',
-  'ClaudeBot',
-  'claude-web',
-  'PerplexityBot',
-  'Perplexity-User',
-  'Google-Extended',
-  'Googlebot',
-  'Bingbot',
-  'Amazonbot',
-  'Applebot',
-  'Applebot-Extended',
-  'FacebookBot',
-  'meta-externalagent',
-  'Bytespider',
-  'DuckAssistBot',
-  'cohere-ai',
-  'AI2Bot',
-  'CCBot',
-  'Diffbot',
-  'YouBot',
-  'MistralAI-User',
-  'GoogleAgent-Mariner',
-]
+function buildDiscoveryRoutes(services: Service.Service[]) {
+  return services.flatMap((service) =>
+    Object.entries(service.routes).map(([pattern, endpoint]) => {
+      const tokens = pattern.trim().split(/\s+/)
+      const hasMethod = tokens.length >= 2
+      const path = hasMethod ? tokens.slice(1).join(' ') : tokens[0]
+      const payment = endpoint ? Service.paymentOf(endpoint) : null
+      return {
+        method: hasMethod ? tokens[0]! : 'GET',
+        path: `/${service.id}${path}`,
+        payment: payment
+          ? {
+              amount:
+                typeof payment.amount === 'string' || payment.amount === null
+                  ? payment.amount
+                  : null,
+              ...(typeof payment.currency === 'string' ? { currency: payment.currency } : {}),
+              ...(typeof payment.description === 'string'
+                ? { description: payment.description }
+                : {}),
+              intent: payment.intent,
+              method: payment.method,
+            }
+          : null,
+      }
+    }),
+  )
+}
 
-const terminalUserAgents = ['curl', 'Wget', 'HTTPie', 'httpie-go', 'mppx', 'presto', 'xh']
+function buildServiceInfo(
+  config: create.Config,
+  request: Request,
+): { categories?: string[]; docs?: Service.Docs } {
+  const categories =
+    config.categories ??
+    Array.from(new Set(config.services.flatMap((service) => service.categories ?? [])))
 
-function wantsMarkdown(request: globalThis.Request): boolean {
-  const accept = request.headers.get('accept')
-  if (accept && (accept.includes('text/markdown') || accept.includes('text/plain'))) return true
-  const ua = request.headers.get('user-agent') ?? ''
-  if (aiUserAgents.some((agent) => ua.includes(agent))) return true
-  if (terminalUserAgents.some((agent) => ua.includes(agent))) return true
-  return false
+  const llms = new URL(withBasePath(config.basePath, '/llms.txt'), request.url).toString()
+  const docs = {
+    ...(config.docs ?? {}),
+    llms: config.docs?.llms ?? llms,
+  }
+
+  return {
+    ...(categories.length > 0 ? { categories } : {}),
+    docs,
+  }
+}
+
+function withBasePath(basePath: string | undefined, path: string) {
+  if (!basePath) return path
+  const normalized = basePath.startsWith('/') ? basePath : `/${basePath}`
+  const trimmed = normalized.endsWith('/') ? normalized.slice(0, -1) : normalized
+  return `${trimmed}${path}`
 }

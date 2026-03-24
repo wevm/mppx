@@ -20,7 +20,12 @@ import * as Service from '../Service.js'
 export function openai(config: openai.Config) {
   return Service.from<openai.Config>('openai', {
     baseUrl: config.baseUrl ?? 'https://api.openai.com',
+    categories: ['ai'],
     description: 'Chat completions, embeddings, image generation, and audio transcription.',
+    docs: {
+      apiReference: 'https://platform.openai.com/docs/api-reference',
+      homepage: 'https://platform.openai.com/docs',
+    },
     docsLlmsUrl: ({ route }) =>
       route
         ? `https://context7.com/websites/platform_openai/llms.txt?topic=${encodeURIComponent(route)}`

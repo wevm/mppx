@@ -76,6 +76,113 @@ async function serve(argv: string[], options?: { env?: Record<string, string | u
   return { output, stderr, exitCode }
 }
 
+describe('discover validate', () => {
+  test('validates a local discovery document', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mppx-discovery-'))
+    const file = path.join(dir, 'openapi.json')
+    fs.writeFileSync(
+      file,
+      JSON.stringify({
+        info: { title: 'Test', version: '1.0.0' },
+        openapi: '3.1.0',
+        paths: {
+          '/search': {
+            post: {
+              'x-payment-info': {
+                amount: '100',
+                intent: 'charge',
+                method: 'tempo',
+              },
+              requestBody: {
+                content: { 'application/json': { schema: { type: 'object' } } },
+              },
+              responses: {
+                '200': { description: 'OK' },
+                '402': { description: 'Payment Required' },
+              },
+            },
+          },
+        },
+      }),
+    )
+
+    const { output, exitCode } = await serve(['discover', 'validate', file])
+    expect(exitCode).toBeUndefined()
+    expect(output).toContain('Discovery document is valid.')
+  })
+
+  test('returns non-zero for invalid discovery documents', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mppx-discovery-'))
+    const file = path.join(dir, 'openapi.json')
+    fs.writeFileSync(
+      file,
+      JSON.stringify({
+        info: { title: 'Test', version: '1.0.0' },
+        openapi: '3.1.0',
+        paths: {
+          '/search': {
+            post: {
+              'x-payment-info': {
+                amount: '100',
+                intent: 'charge',
+                method: 'tempo',
+              },
+              responses: {
+                '200': { description: 'OK' },
+              },
+            },
+          },
+        },
+      }),
+    )
+
+    const { output, exitCode } = await serve(['discover', 'validate', file])
+    expect(exitCode).toBe(1)
+    expect(output).toContain('[error]')
+    expect(output).toContain('402')
+  })
+
+  test(
+    'validates remote discovery documents and reports warnings',
+    { timeout: 20_000 },
+    async () => {
+      const body = JSON.stringify({
+        info: { title: 'Test', version: '1.0.0' },
+        openapi: '3.1.0',
+        paths: {
+          '/search': {
+            post: {
+              'x-payment-info': {
+                amount: '100',
+                intent: 'charge',
+                method: 'tempo',
+              },
+              responses: {
+                '200': { description: 'OK' },
+                '402': { description: 'Payment Required' },
+              },
+            },
+          },
+        },
+      })
+      const server = await Http.createServer((_req, res) => {
+        res.setHeader('Content-Type', 'application/json')
+        res.end(body)
+      })
+
+      try {
+        const { output, exitCode } = await serve(['discover', 'validate', server.url])
+        expect(exitCode).toBeUndefined()
+        expect(output).toContain('[warning]')
+        expect(output).toContain('requestBody')
+        expect(output).toContain('valid with 1 warning')
+      } finally {
+        server.close()
+      }
+    },
+  )
+})
+
 describe('basic charge (examples/basic)', () => {
   test('happy path: makes payment and receives response', { timeout: 120_000 }, async () => {
     const { Actions } = await import('viem/tempo')

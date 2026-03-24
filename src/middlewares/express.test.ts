@@ -1,7 +1,7 @@
 import express from 'express'
 import { Receipt } from 'mppx'
 import { Mppx as Mppx_client, session as sessionIntent, tempo as tempo_client } from 'mppx/client'
-import { Mppx, payment } from 'mppx/express'
+import { Mppx, discovery, payment } from 'mppx/express'
 import { Mppx as Mppx_server, tempo as tempo_server } from 'mppx/server'
 import type { Address } from 'viem'
 import { Addresses } from 'viem/tempo'
@@ -78,6 +78,34 @@ describe('charge', () => {
     const receipt = Receipt.fromResponse(response)
     expect(receipt.status).toBe('success')
     expect(receipt.method).toBe('tempo')
+
+    server.close()
+  })
+
+  test('serves /openapi.json from a handler-derived route config', async () => {
+    const app = express()
+    const pay = mppx.charge({ amount: '1' })
+    app.get('/', pay, (_req, res) => {
+      res.json({ fortune: 'You will be rich' })
+    })
+    discovery(app, mppx, {
+      info: { title: 'Express API', version: '1.2.3' },
+      routes: [{ handler: pay as any, method: 'get', path: '/' }],
+    })
+
+    const server = await createServer(app)
+    const response = await globalThis.fetch(`${server.url}/openapi.json`)
+    expect(response.status).toBe(200)
+    expect(response.headers.get('cache-control')).toBe('public, max-age=300')
+
+    const body = (await response.json()) as Record<string, any>
+    expect(body.info).toEqual({ title: 'Express API', version: '1.2.3' })
+    expect(body.paths['/'].get['x-payment-info']).toEqual({
+      amount: '1000000',
+      currency: asset,
+      intent: 'charge',
+      method: 'tempo',
+    })
 
     server.close()
   })

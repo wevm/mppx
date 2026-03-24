@@ -82,6 +82,11 @@
       "src": "./src/client/index.ts",
       "default": "./dist/client/index.js"
     },
+    "./discovery": {
+      "types": "./dist/discovery/index.d.ts",
+      "src": "./src/discovery/index.ts",
+      "default": "./dist/discovery/index.js"
+    },
     "./mcp-sdk/client": {
       "types": "./dist/mcp-sdk/client/index.d.ts",
       "src": "./src/mcp-sdk/client/index.ts",

@@ -2,7 +2,7 @@ import { serve } from '@hono/node-server'
 import { Hono } from 'hono'
 import { Receipt } from 'mppx'
 import { Mppx as Mppx_client, session as sessionIntent, tempo as tempo_client } from 'mppx/client'
-import { Mppx } from 'mppx/hono'
+import { Mppx, discovery } from 'mppx/hono'
 import { tempo as tempo_server } from 'mppx/server'
 import type { Address } from 'viem'
 import { Addresses } from 'viem/tempo'
@@ -71,6 +71,28 @@ describe('charge', () => {
     const receipt = Receipt.fromResponse(response)
     expect(receipt.status).toBe('success')
     expect(receipt.method).toBe('tempo')
+
+    server.close()
+  })
+
+  test('serves /openapi.json via auto discovery', async () => {
+    const app = new Hono()
+    app.get('/', mppx.charge({ amount: '1' }), (c) => c.json({ fortune: 'You will be rich' }))
+    discovery(app, mppx, { auto: true, info: { title: 'Auto API', version: '2.0.0' } })
+
+    const server = await createServer(app)
+    const response = await globalThis.fetch(`${server.url}/openapi.json`)
+    expect(response.status).toBe(200)
+    expect(response.headers.get('cache-control')).toBe('public, max-age=300')
+
+    const body = (await response.json()) as Record<string, any>
+    expect(body.info).toEqual({ title: 'Auto API', version: '2.0.0' })
+    expect(body.paths['/'].get['x-payment-info']).toEqual({
+      amount: '1000000',
+      currency: asset,
+      intent: 'charge',
+      method: 'tempo',
+    })
 
     server.close()
   })

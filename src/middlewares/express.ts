@@ -1,10 +1,12 @@
 import type {
+  Express,
   Request as ExpressRequest,
   Response as ExpressResponse,
   NextFunction,
   RequestHandler,
 } from 'express'
 
+import type { GenerateConfig, RouteConfig } from '../discovery/OpenApi.js'
 import * as Mppx_core from '../server/Mppx.js'
 import * as Mppx_internal from './internal/mppx.js'
 
@@ -83,4 +85,33 @@ export function payment<const intent extends Mppx_internal.AnyMethodFn>(
 
     next()
   }
+}
+
+export type DiscoveryConfig = Omit<GenerateConfig, 'routes'> & {
+  path?: string
+  routes?: RouteConfig[]
+}
+
+const discoveryHeaders = { 'Cache-Control': 'public, max-age=300' }
+
+/**
+ * Mounts a `GET /openapi.json` route that serves an OpenAPI discovery document.
+ */
+export function discovery(
+  app: Express,
+  mppx: { methods: readonly Mppx_internal.AnyServer[]; realm: string },
+  config: DiscoveryConfig = {},
+): void {
+  const mountPath = config.path ?? '/openapi.json'
+
+  app.get(mountPath, async (_req: ExpressRequest, res: ExpressResponse) => {
+    const { generate } = await import('../discovery/OpenApi.js')
+    const doc = generate(mppx, {
+      ...(config.info ? { info: config.info } : {}),
+      routes: config.routes ?? [],
+      ...(config.serviceInfo ? { serviceInfo: config.serviceInfo } : {}),
+    })
+    res.setHeader('Cache-Control', discoveryHeaders['Cache-Control'])
+    res.json(doc)
+  })
 }
