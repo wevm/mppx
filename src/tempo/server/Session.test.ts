@@ -639,13 +639,13 @@ describe('session', () => {
 
       const channelAfterFirstAccept = await store.getChannel(channelId)
 
-      const replayReceipt = await server.verify({
+      const replayReceipt = (await server.verify({
         credential: {
           challenge: makeChallenge({ id: 'challenge-3', channelId }),
           payload,
         },
         request: makeRequest(),
-      })
+      })) as SessionReceipt
 
       expect(replayReceipt.status).toBe('success')
       expect(replayReceipt.acceptedCumulative).toBe('2000000')
