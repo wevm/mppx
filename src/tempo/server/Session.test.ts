@@ -637,6 +637,8 @@ describe('session', () => {
         request: makeRequest(),
       })
 
+      const channelAfterFirstAccept = await store.getChannel(channelId)
+
       const replayReceipt = await server.verify({
         credential: {
           challenge: makeChallenge({ id: 'challenge-3', channelId }),
@@ -646,8 +648,10 @@ describe('session', () => {
       })
 
       expect(replayReceipt.status).toBe('success')
-      const ch = await store.getChannel(channelId)
-      expect(ch!.highestVoucherAmount).toBe(2000000n)
+
+      const channelAfterReplay = await store.getChannel(channelId)
+      expect(channelAfterReplay).toEqual(channelAfterFirstAccept)
+      expect(channelAfterReplay!.highestVoucherAmount).toBe(2000000n)
     })
 
     test('rejects exact replay with invalid signature', async () => {

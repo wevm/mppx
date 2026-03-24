@@ -200,5 +200,5 @@ function isAsyncIterable(value: unknown): value is AsyncIterable<string> {
 }
 
 function isNullBodyStatus(status: number): boolean {
-  return status === 101 || status === 204 || status === 205 || status === 304
+  return [101, 204, 205, 304].includes(status)
 }
