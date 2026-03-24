@@ -648,6 +648,9 @@ describe('session', () => {
       })
 
       expect(replayReceipt.status).toBe('success')
+      expect(replayReceipt.acceptedCumulative).toBe('2000000')
+      expect(replayReceipt.spent).toBe(channelAfterFirstAccept!.spent.toString())
+      expect(replayReceipt.units).toBe(channelAfterFirstAccept!.units)
 
       const channelAfterReplay = await store.getChannel(channelId)
       expect(channelAfterReplay).toEqual(channelAfterFirstAccept)
