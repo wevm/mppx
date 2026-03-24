@@ -296,7 +296,7 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
         const challenge = Challenge.fromMethod(method, {
           description,
           expires,
-          meta: { ...(meta ?? {}), [internalMetaKey]: crypto.randomUUID() },
+          meta: { ...(meta ?? {}), [internalMetaKey]: Array.from(crypto.getRandomValues(new Uint8Array(16)), (b) => b.toString(16).padStart(2, '0')).join('') },
           realm,
           request,
           secretKey,
