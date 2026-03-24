@@ -101,8 +101,8 @@ importers:
         specifier: ^1.58.2
         version: 1.58.2
       prool:
-        specifier: ^0.2.3
-        version: 0.2.3(testcontainers@11.11.0)
+        specifier: ^0.2.4
+        version: 0.2.4(testcontainers@11.11.0)
       simple-git-hooks:
         specifier: ^2.13.1
         version: 2.13.1
@@ -3051,8 +3051,8 @@ packages:
     resolution: {integrity: sha512-cdGef/drWFoydD1JsMzuFf8100nZl+GT+yacc2bEced5f9Rjk4z+WtFUTBu9PhOi9j/jfmBPu0mMEY4wIdAF8A==}
     engines: {node: '>= 0.6.0'}
 
-  prool@0.2.3:
-    resolution: {integrity: sha512-xoGAlwp2r599SLzBPbzFFHTKSsbdFI12p6jzDNIQcpsbeNP5secITeDb3rq7nsSw+ssj3lX5zrRl1Yp2XqFjQw==}
+  prool@0.2.4:
+    resolution: {integrity: sha512-KAGs6e++7MJNQ/vq8Xrk6akz0lRk6AmhuGzSHkluX3kwVj2XjNDDOYSINZwahRv3xfSD0rXYv3iA/2vXw7z47w==}
     engines: {node: '>=22'}
     peerDependencies:
       '@pimlico/alto': '*'
@@ -6492,7 +6492,7 @@ snapshots:
 
   process@0.11.10: {}
 
-  prool@0.2.3(testcontainers@11.11.0):
+  prool@0.2.4(testcontainers@11.11.0):
     dependencies:
       change-case: 5.4.4
       eventemitter3: 5.0.4
