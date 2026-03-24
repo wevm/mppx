@@ -53,6 +53,13 @@ function makeSseResponse(events: string[]): Response {
   })
 }
 
+function makeProblemResponse(status: number, body: Record<string, unknown>): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { 'Content-Type': 'application/problem+json' },
+  })
+}
+
 describe('Session', () => {
   describe('parseEvent round-trip via SSE', () => {
     test('parses message events from SSE stream', () => {
@@ -530,6 +537,84 @@ describe('Session', () => {
   })
 
   describe('.sse() event parsing', () => {
+    test('preserves headers instances while adding SSE accept header', async () => {
+      const mockFetch = vi.fn().mockResolvedValue(makeSseResponse([]))
+
+      const s = sessionManager({
+        account: '0x0000000000000000000000000000000000000001',
+        fetch: mockFetch as typeof globalThis.fetch,
+      })
+
+      const body = new TextEncoder().encode('{"stream":true}').buffer
+      await s.sse('https://api.example.com/stream', {
+        method: 'POST',
+        headers: new Headers({ 'Content-Type': 'application/json' }),
+        body,
+      })
+
+      const requestInit = mockFetch.mock.calls[0]?.[1]
+      const headers = new Headers(requestInit?.headers)
+
+      expect(headers.get('Accept')).toBe('text/event-stream')
+      expect(headers.get('Content-Type')).toBe('application/json')
+      expect(requestInit?.body).toBe(body)
+    })
+
+    test('rejects restored SSE when paid response remains a 402 problem response', async () => {
+      vi.resetModules()
+
+      const createCredential = vi.fn().mockResolvedValue('voucher')
+      const helperCreateCredential = vi.fn().mockResolvedValue('restore:5000000')
+
+      vi.doMock('./Session.js', () => ({
+        session: vi.fn(() => ({
+          createCredential,
+        })),
+        UnrecoverableRestoreError,
+      }))
+
+      vi.doMock('../../client/internal/Fetch.js', () => ({
+        from: ({
+          fetch,
+          onChallenge,
+        }: {
+          fetch: typeof globalThis.fetch
+          onChallenge: Function
+        }) => {
+          return async (input: RequestInfo | URL, init?: RequestInit) => {
+            await onChallenge(makeChallenge(), { createCredential: helperCreateCredential })
+            return fetch(input, init)
+          }
+        },
+      }))
+
+      try {
+        const { sessionManager: isolatedSessionManager } = await import('./SessionManager.js')
+        const mockFetch = vi.fn<typeof globalThis.fetch>().mockResolvedValue(
+          makeProblemResponse(402, {
+            type: 'https://example.com/problems/payment-required',
+            title: 'Payment Required',
+            detail: 'Session restore voucher was rejected',
+          }),
+        )
+
+        const s = isolatedSessionManager({
+          account: '0x0000000000000000000000000000000000000001',
+          fetch: mockFetch,
+          restore: {
+            channelId,
+            cumulativeAmount: 5_000_000n,
+          },
+        })
+
+        await expect(s.sse('https://api.example.com/stream')).rejects.toThrow(/status 402/i)
+      } finally {
+        vi.doUnmock('./Session.js')
+        vi.doUnmock('../../client/internal/Fetch.js')
+        vi.resetModules()
+      }
+    })
+
     test('restored sse resumes same channel when required cumulative exceeds current', async () => {
       vi.resetModules()
 

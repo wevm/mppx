@@ -157,6 +157,14 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
     })
   }
 
+  async function throwForBadSseResponse(response: PaymentResponse): Promise<never> {
+    const contentType = response.headers.get('Content-Type') ?? ''
+    const body = await response.text().catch(() => '')
+    throw new Error(
+      `SSE request failed with status ${response.status}${contentType ? ` (${contentType})` : ''}${body ? `: ${body}` : ''}`,
+    )
+  }
+
   async function doFetch(input: RequestInfo | URL, init?: RequestInit): Promise<PaymentResponse> {
     lastUrl = input
     const response = await wrappedFetch(input, init)
@@ -209,7 +217,6 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
 
     async sse(input, init) {
       const { onReceipt, signal, ...fetchInit } = init ?? {}
-
       const sseInit = {
         ...fetchInit,
         headers: {
@@ -220,6 +227,10 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
       }
 
       const response = await doFetch(input, sseInit)
+
+      if (!response.ok) {
+        await throwForBadSseResponse(response)
+      }
 
       // Snapshot the challenge at SSE open time so concurrent
       // calls don't overwrite it.
@@ -322,6 +333,13 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
         })
         const receiptHeader = response.headers.get('Payment-Receipt')
         if (receiptHeader) receipt = deserializeSessionReceipt(receiptHeader)
+      }
+
+      if (channel && activeChannelId === channel.channelId) {
+        channel = {
+          ...channel,
+          opened: false,
+        }
       }
 
       if (!channel && restored && activeChannelId === restored.channelId) {
