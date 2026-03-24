@@ -5,7 +5,12 @@ import type { Hex } from 'ox'
 import { TxEnvelopeTempo } from 'ox/tempo'
 import { Handler } from 'tempo.ts/server'
 import { createClient, custom, encodeFunctionData, parseUnits } from 'viem'
-import { getTransactionReceipt, prepareTransactionRequest, signTransaction } from 'viem/actions'
+import {
+  getTransactionReceipt,
+  prepareTransactionRequest,
+  sendCallsSync,
+  signTransaction,
+} from 'viem/actions'
 import { Abis, Account, Actions, Addresses, Secp256k1, Tick, Transaction } from 'viem/tempo'
 import { beforeAll, describe, expect, test } from 'vp/test'
 import * as Http from '~test/Http.js'
@@ -650,6 +655,112 @@ describe('tempo', () => {
       httpServer.close()
     })
 
+    test('behavior: accepts split payments', async () => {
+      const mppx = Mppx_client.create({
+        polyfill: false,
+        methods: [
+          tempo_client({
+            account: accounts[1],
+            mode: 'push',
+            getClient: () => client,
+          }),
+        ],
+      })
+
+      const httpServer = await Http.createServer(async (req, res) => {
+        const result = await Mppx_server.toNodeListener(
+          server.charge({
+            amount: '1',
+            currency: asset,
+            recipient: accounts[0].address,
+            splits: [
+              { amount: '0.2', recipient: accounts[2].address },
+              {
+                amount: '0.1',
+                memo: '0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef',
+                recipient: accounts[3].address,
+              },
+            ],
+          }),
+        )(req, res)
+        if (result.status === 402) return
+        res.end('OK')
+      })
+
+      const response = await mppx.fetch(httpServer.url)
+      expect(response.status).toBe(200)
+
+      httpServer.close()
+    })
+
+    test('behavior: rejects hash when split transfers are out of order', async () => {
+      const httpServer = await Http.createServer(async (req, res) => {
+        const result = await Mppx_server.toNodeListener(
+          server.charge({
+            amount: '1',
+            currency: asset,
+            recipient: accounts[0].address,
+            splits: [
+              { amount: '0.2', recipient: accounts[2].address },
+              { amount: '0.1', recipient: accounts[3].address },
+            ],
+          }),
+        )(req, res)
+        if (result.status === 402) return
+        res.end('OK')
+      })
+
+      const response = await fetch(httpServer.url)
+      expect(response.status).toBe(402)
+
+      const challenge = Challenge.fromResponse(response, {
+        methods: [tempo_client.charge()],
+      })
+      const splits = challenge.request.methodDetails?.splits ?? []
+      const primaryAmount =
+        BigInt(challenge.request.amount) - BigInt(splits[0]!.amount) - BigInt(splits[1]!.amount)
+
+      const calls = [
+        Actions.token.transfer.call({
+          amount: BigInt(splits[1]!.amount),
+          to: splits[1]!.recipient as Hex.Hex,
+          token: challenge.request.currency as Hex.Hex,
+        }),
+        Actions.token.transfer.call({
+          amount: primaryAmount,
+          to: challenge.request.recipient as Hex.Hex,
+          token: challenge.request.currency as Hex.Hex,
+        }),
+        Actions.token.transfer.call({
+          amount: BigInt(splits[0]!.amount),
+          to: splits[0]!.recipient as Hex.Hex,
+          token: challenge.request.currency as Hex.Hex,
+        }),
+      ]
+
+      const { receipts } = await sendCallsSync(client, {
+        account: accounts[1],
+        calls: calls as never,
+        experimental_fallback: true,
+      })
+      const hash = receipts?.[0]?.transactionHash
+      if (!hash) throw new Error('No transaction receipt returned.')
+
+      const credential = Credential.from({
+        challenge,
+        payload: { hash, type: 'hash' as const },
+      })
+
+      const authResponse = await fetch(httpServer.url, {
+        headers: { Authorization: Credential.serialize(credential) },
+      })
+      expect(authResponse.status).toBe(402)
+      const body = (await authResponse.json()) as { detail: string }
+      expect(body.detail).toContain('no matching payment call found')
+
+      httpServer.close()
+    })
+
     test('behavior: rejects expired request', async () => {
       const httpServer = await Http.createServer(async (req, res) => {
         const result = await Mppx_server.toNodeListener(
@@ -1156,6 +1267,39 @@ describe('tempo', () => {
       httpServer.close()
     })
 
+    test('behavior: fee payer with splits', async () => {
+      const mppx = Mppx_client.create({
+        polyfill: false,
+        methods: [
+          tempo_client({
+            account: accounts[1],
+            getClient() {
+              return client
+            },
+          }),
+        ],
+      })
+
+      const httpServer = await Http.createServer(async (req, res) => {
+        const result = await Mppx_server.toNodeListener(
+          server.charge({
+            feePayer: accounts[0],
+            amount: '1',
+            currency: asset,
+            recipient: accounts[0].address,
+            splits: [{ amount: '0.2', recipient: accounts[2].address }],
+          }),
+        )(req, res)
+        if (result.status === 402) return
+        res.end('OK')
+      })
+
+      const response = await mppx.fetch(httpServer.url)
+      expect(response.status).toBe(200)
+
+      httpServer.close()
+    })
+
     test('behavior: fee payer (hoisted)', async () => {
       const mppx = Mppx_client.create({
         polyfill: false,
@@ -1655,6 +1799,72 @@ describe('tempo', () => {
       expect(authResponse.status).toBe(402)
       const body = (await authResponse.json()) as { detail: string }
       expect(body.detail).toContain('no matching transfer found')
+
+      httpServer.close()
+    })
+
+    test('error: rejects split transaction when transfers are out of order', async () => {
+      const httpServer = await Http.createServer(async (req, res) => {
+        const result = await Mppx_server.toNodeListener(
+          server.charge({
+            amount: '1',
+            currency: asset,
+            recipient: accounts[0].address,
+            splits: [
+              { amount: '0.2', recipient: accounts[2].address },
+              { amount: '0.1', recipient: accounts[3].address },
+            ],
+          }),
+        )(req, res)
+        if (result.status === 402) return
+        res.end('OK')
+      })
+
+      const response = await fetch(httpServer.url)
+      expect(response.status).toBe(402)
+
+      const challenge = Challenge.fromResponse(response, {
+        methods: [tempo_client.charge()],
+      })
+      const splits = challenge.request.methodDetails?.splits ?? []
+      const primaryAmount =
+        BigInt(challenge.request.amount) - BigInt(splits[0]!.amount) - BigInt(splits[1]!.amount)
+
+      const prepared = await prepareTransactionRequest(client, {
+        account: accounts[1]!,
+        calls: [
+          Actions.token.transfer.call({
+            amount: BigInt(splits[0]!.amount),
+            to: splits[0]!.recipient as Hex.Hex,
+            token: challenge.request.currency as Hex.Hex,
+          }),
+          Actions.token.transfer.call({
+            amount: primaryAmount,
+            to: challenge.request.recipient as Hex.Hex,
+            token: challenge.request.currency as Hex.Hex,
+          }),
+          Actions.token.transfer.call({
+            amount: BigInt(splits[1]!.amount),
+            to: splits[1]!.recipient as Hex.Hex,
+            token: challenge.request.currency as Hex.Hex,
+          }),
+        ],
+        nonceKey: 'expiring',
+      } as never)
+      prepared.gas = prepared.gas! + 5_000n
+      const signature = await signTransaction(client, prepared as never)
+
+      const credential = Credential.from({
+        challenge,
+        payload: { signature, type: 'transaction' as const },
+      })
+
+      const authResponse = await fetch(httpServer.url, {
+        headers: { Authorization: Credential.serialize(credential) },
+      })
+      expect(authResponse.status).toBe(402)
+      const body = (await authResponse.json()) as { detail: string }
+      expect(body.detail).toContain('no matching payment call found')
 
       httpServer.close()
     })
@@ -2291,6 +2501,39 @@ describe('tempo', () => {
 
       const receipt = Receipt.fromResponse(response)
       expect(receipt.status).toBe('success')
+
+      httpServer.close()
+    })
+
+    test('swaps via DEX when user lacks target currency for split payments', async () => {
+      const mppx = Mppx_client.create({
+        polyfill: false,
+        methods: [
+          tempo_client({
+            account: swapPayer,
+            autoSwap: true,
+            getClient() {
+              return client
+            },
+          }),
+        ],
+      })
+
+      const httpServer = await Http.createServer(async (req, res) => {
+        const result = await Mppx_server.toNodeListener(
+          server.charge({
+            amount: '1',
+            currency: asset,
+            recipient: accounts[0]!.address,
+            splits: [{ amount: '0.2', recipient: accounts[2]!.address }],
+          }),
+        )(req, res)
+        if (result.status === 402) return
+        res.end('OK')
+      })
+
+      const response = await mppx.fetch(httpServer.url)
+      expect(response.status).toBe(200)
 
       httpServer.close()
     })

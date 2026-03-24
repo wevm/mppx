@@ -1,6 +1,7 @@
 import type { TempoAddress as TempoAddress_types } from 'ox/tempo'
 import { decodeFunctionData, keccak256, parseEventLogs, type TransactionReceipt } from 'viem'
 import {
+  getTransaction,
   getTransactionReceipt,
   sendRawTransaction,
   sendRawTransactionSync,
@@ -17,6 +18,7 @@ import * as Store from '../../Store.js'
 import * as Client from '../../viem/Client.js'
 import * as Account from '../internal/account.js'
 import * as TempoAddress from '../internal/address.js'
+import * as Charge_internal from '../internal/charge.js'
 import * as defaults from '../internal/defaults.js'
 import * as FeePayer from '../internal/fee-payer.js'
 import * as Selectors from '../internal/selectors.js'
@@ -126,16 +128,18 @@ export function charge<const parameters extends charge.Parameters>(
           const hash = payload.hash as `0x${string}`
           await assertHashUnused(store, hash)
 
+          const transaction = await getTransaction(client, { hash })
           const receipt = await getTransactionReceipt(client, {
             hash,
           })
 
-          assertTransferLog(receipt, {
-            amount,
+          const transfers = getExpectedTransfers({ amount, memo, methodDetails, recipient })
+          const calls = getTransferCallsFromTransaction(transaction)
+          assertTransferCalls(calls, { currency, transfers })
+          assertTransferLogs(receipt, {
             currency,
             from: receipt.from,
-            memo,
-            recipient,
+            transfers,
           })
 
           await markHashUsed(store, hash)
@@ -161,56 +165,9 @@ export function charge<const parameters extends charge.Parameters>(
               {},
             )
 
-          const call = transaction.calls.find((call) => {
-            if (!call.to || !TempoAddress.isEqual(call.to, currency)) return false
-            if (!call.data) return false
-
-            const selector = call.data.slice(0, 10)
-
-            if (memo) {
-              if (selector !== Selectors.transferWithMemo) return false
-              try {
-                const { args } = decodeFunctionData({ abi: Abis.tip20, data: call.data })
-                const [to, amount_, memo_] = args as [`0x${string}`, bigint, `0x${string}`]
-                return (
-                  TempoAddress.isEqual(to, recipient) &&
-                  amount_.toString() === amount &&
-                  memo_.toLowerCase() === memo.toLowerCase()
-                )
-              } catch {
-                return false
-              }
-            }
-
-            if (selector === Selectors.transfer) {
-              try {
-                const { args } = decodeFunctionData({ abi: Abis.tip20, data: call.data })
-                const [to, amount_] = args as [`0x${string}`, bigint]
-                return TempoAddress.isEqual(to, recipient) && amount_.toString() === amount
-              } catch {
-                return false
-              }
-            }
-
-            if (selector === Selectors.transferWithMemo) {
-              try {
-                const { args } = decodeFunctionData({ abi: Abis.tip20, data: call.data })
-                const [to, amount_] = args as [`0x${string}`, bigint, `0x${string}`]
-                return TempoAddress.isEqual(to, recipient) && amount_.toString() === amount
-              } catch {
-                return false
-              }
-            }
-
-            return false
-          })
-
-          if (!call)
-            throw new MismatchError('Invalid transaction: no matching payment call found', {
-              amount,
-              currency,
-              recipient,
-            })
+          const calls = transaction.calls ?? []
+          const transfers = getExpectedTransfers({ amount, memo, methodDetails, recipient })
+          assertTransferCalls(calls, { currency, transfers })
 
           if ((feePayer || feePayerUrl) && methodDetails?.feePayer !== false)
             FeePayer.validateCalls(transaction.calls, { amount, currency, recipient })
@@ -234,12 +191,10 @@ export function charge<const parameters extends charge.Parameters>(
             const receipt = await sendRawTransactionSync(client, {
               serializedTransaction: serializedTransaction_final,
             })
-            assertTransferLog(receipt, {
-              amount,
+            assertTransferLogs(receipt, {
               currency,
-              from: transaction.from,
-              memo,
-              recipient,
+              from: transaction.from!,
+              transfers,
             })
             // Post-broadcast dedup: catch malleable input variants
             // (different serialized bytes, same underlying tx) that
@@ -320,6 +275,177 @@ export declare namespace charge {
     Defaults
   > & {
     decimals: number
+  }
+}
+
+type ExpectedTransfer = {
+  amount: string
+  allowAnyMemo?: boolean | undefined
+  memo?: `0x${string}` | undefined
+  recipient: `0x${string}`
+}
+
+function getExpectedTransfers(parameters: {
+  amount: string
+  memo: `0x${string}` | undefined
+  methodDetails: { splits?: readonly Charge_internal.Split[] | undefined } | undefined
+  recipient: `0x${string}`
+}): ExpectedTransfer[] {
+  return Charge_internal.getTransfers({
+    amount: parameters.amount,
+    methodDetails: {
+      memo: parameters.memo,
+      splits: parameters.methodDetails?.splits,
+    },
+    recipient: parameters.recipient,
+  }).map((transfer, index) => ({
+    ...transfer,
+    ...(index === 0 && parameters.memo === undefined ? { allowAnyMemo: true } : {}),
+  })) as ExpectedTransfer[]
+}
+
+function assertTransferCalls(
+  calls: readonly { data?: `0x${string}` | undefined; to?: `0x${string}` | undefined }[],
+  parameters: {
+    currency: `0x${string}`
+    transfers: readonly ExpectedTransfer[]
+  },
+) {
+  const transferCalls = getTransferCalls(calls, parameters.transfers.length)
+
+  transferCalls.forEach((call, index) => {
+    const decoded = decodeTransferCall(call, parameters.currency)
+    const expected = parameters.transfers[index]
+
+    if (!decoded || !expected)
+      throw new MismatchError('Invalid transaction: no matching payment call found', {
+        currency: parameters.currency,
+      })
+
+    if (
+      !TempoAddress.isEqual(decoded.recipient, expected.recipient) ||
+      decoded.amount !== expected.amount ||
+      (expected.memo
+        ? decoded.memo?.toLowerCase() !== expected.memo.toLowerCase()
+        : expected.allowAnyMemo
+          ? false
+          : decoded.memo !== undefined)
+    ) {
+      throw new MismatchError('Invalid transaction: no matching payment call found', {
+        amount: expected.amount,
+        currency: parameters.currency,
+        recipient: expected.recipient,
+      })
+    }
+  })
+}
+
+function getTransferCalls(
+  calls: readonly { data?: `0x${string}` | undefined; to?: `0x${string}` | undefined }[],
+  expectedLength: number,
+) {
+  const selectors = calls.map((call) => call.data?.slice(0, 10))
+  const offset =
+    selectors[0] === Selectors.approve && selectors[1] === Selectors.swapExactAmountOut ? 2 : 0
+  const transferCalls = calls.slice(offset)
+
+  if (
+    transferCalls.length !== expectedLength ||
+    selectors
+      .slice(offset)
+      .some(
+        (selector) => selector !== Selectors.transfer && selector !== Selectors.transferWithMemo,
+      )
+  ) {
+    throw new MismatchError('Invalid transaction: no matching payment call found', {
+      expectedCalls: String(expectedLength),
+      actualCalls: String(transferCalls.length),
+    })
+  }
+
+  return transferCalls
+}
+
+function getTransferCallsFromTransaction(transaction: {
+  calls?:
+    | readonly { data?: `0x${string}` | undefined; to?: `0x${string}` | undefined }[]
+    | undefined
+  input?: `0x${string}` | undefined
+  to?: `0x${string}` | null | undefined
+}) {
+  if (transaction.calls?.length) return transaction.calls
+  if (transaction.to && transaction.input) return [{ data: transaction.input, to: transaction.to }]
+  return []
+}
+
+function decodeTransferCall(
+  call: { data?: `0x${string}` | undefined; to?: `0x${string}` | undefined },
+  currency: `0x${string}`,
+) {
+  if (!call.to || !TempoAddress.isEqual(call.to, currency) || !call.data) return null
+
+  const selector = call.data.slice(0, 10)
+  if (selector === Selectors.transfer) {
+    const { args } = decodeFunctionData({ abi: Abis.tip20, data: call.data })
+    const [recipient, amount] = args as [`0x${string}`, bigint]
+    return { amount: amount.toString(), recipient }
+  }
+
+  if (selector === Selectors.transferWithMemo) {
+    const { args } = decodeFunctionData({ abi: Abis.tip20, data: call.data })
+    const [recipient, amount, memo] = args as [`0x${string}`, bigint, `0x${string}`]
+    return { amount: amount.toString(), memo, recipient }
+  }
+
+  return null
+}
+
+function assertTransferLogs(
+  receipt: TransactionReceipt,
+  parameters: {
+    currency: `0x${string}`
+    from: `0x${string}`
+    transfers: readonly ExpectedTransfer[]
+  },
+) {
+  const transferLogs = parseEventLogs({
+    abi: Abis.tip20,
+    eventName: 'Transfer',
+    logs: receipt.logs,
+  }).map((log) => ({ ...log, kind: 'transfer' as const }))
+
+  const memoLogs = parseEventLogs({
+    abi: Abis.tip20,
+    eventName: 'TransferWithMemo',
+    logs: receipt.logs,
+  }).map((log) => ({ ...log, kind: 'memo' as const }))
+
+  const logs = [...transferLogs, ...memoLogs]
+  const used = new Set<number>()
+
+  for (const transfer of parameters.transfers) {
+    const matchIndex = logs.findIndex((log, index) => {
+      if (used.has(index)) return false
+      if (!TempoAddress.isEqual(log.address, parameters.currency)) return false
+      if (!TempoAddress.isEqual(log.args.from, parameters.from)) return false
+      if (!TempoAddress.isEqual(log.args.to, transfer.recipient)) return false
+      if (log.args.amount.toString() !== transfer.amount) return false
+      if (transfer.memo) {
+        return log.kind === 'memo' && log.args.memo.toLowerCase() === transfer.memo.toLowerCase()
+      }
+      if (transfer.allowAnyMemo) return log.kind === 'transfer' || log.kind === 'memo'
+      return log.kind === 'transfer'
+    })
+
+    if (matchIndex === -1) {
+      throw new MismatchError('Payment verification failed: no matching transfer found.', {
+        amount: transfer.amount,
+        currency: parameters.currency,
+        recipient: transfer.recipient,
+      })
+    }
+
+    used.add(matchIndex)
   }
 }
 

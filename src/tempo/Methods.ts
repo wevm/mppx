@@ -4,6 +4,12 @@ import { parseUnits } from 'viem'
 import * as Method from '../Method.js'
 import * as z from '../zod.js'
 
+const split = z.object({
+  amount: z.amount(),
+  memo: z.optional(z.hash()),
+  recipient: z.string(),
+})
+
 /**
  * Tempo charge intent for one-time TIP-20 token transfers.
  *
@@ -20,31 +26,58 @@ export const charge = Method.from({
       ]),
     },
     request: z.pipe(
-      z.object({
-        amount: z.amount(),
-        chainId: z.optional(z.number()),
-        currency: z.string(),
-        decimals: z.number(),
-        description: z.optional(z.string()),
-        externalId: z.optional(z.string()),
-        feePayer: z.optional(
-          z.pipe(
-            z.union([z.boolean(), z.custom<Account>()]),
-            z.transform((v): boolean => (typeof v === 'object' ? true : v)),
+      z
+        .object({
+          amount: z.amount(),
+          chainId: z.optional(z.number()),
+          currency: z.string(),
+          decimals: z.number(),
+          description: z.optional(z.string()),
+          externalId: z.optional(z.string()),
+          feePayer: z.optional(
+            z.pipe(
+              z.union([z.boolean(), z.custom<Account>()]),
+              z.transform((v): boolean => (typeof v === 'object' ? true : v)),
+            ),
           ),
+          memo: z.optional(z.hash()),
+          recipient: z.optional(z.string()),
+          splits: z.optional(z.array(split).check(z.minLength(1), z.maxLength(10))),
+        })
+        .check(
+          z.refine(({ amount, decimals, splits }) => {
+            if (!splits) return true
+
+            const totalAmount = parseUnits(amount, decimals)
+            const splitTotal = splits.reduce(
+              (sum, split) => sum + parseUnits(split.amount, decimals),
+              0n,
+            )
+
+            return (
+              splits.every((split) => parseUnits(split.amount, decimals) > 0n) &&
+              splitTotal < totalAmount
+            )
+          }, 'Invalid splits'),
         ),
-        memo: z.optional(z.hash()),
-        recipient: z.optional(z.string()),
-      }),
-      z.transform(({ amount, chainId, decimals, feePayer, memo, ...rest }) => ({
+      z.transform(({ amount, chainId, decimals, feePayer, memo, splits, ...rest }) => ({
         ...rest,
         amount: parseUnits(amount, decimals).toString(),
-        ...(chainId !== undefined || feePayer !== undefined || memo !== undefined
+        ...(chainId !== undefined ||
+        feePayer !== undefined ||
+        memo !== undefined ||
+        splits !== undefined
           ? {
               methodDetails: {
                 ...(chainId !== undefined && { chainId }),
                 ...(feePayer !== undefined && { feePayer }),
                 ...(memo !== undefined && { memo }),
+                ...(splits !== undefined && {
+                  splits: splits.map((split) => ({
+                    ...split,
+                    amount: parseUnits(split.amount, decimals).toString(),
+                  })),
+                }),
               },
             }
           : {}),

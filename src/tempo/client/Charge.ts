@@ -11,6 +11,7 @@ import * as Client from '../../viem/Client.js'
 import * as z from '../../zod.js'
 import * as Attribution from '../Attribution.js'
 import * as AutoSwap from '../internal/auto-swap.js'
+import * as Charge_internal from '../internal/charge.js'
 import * as defaults from '../internal/defaults.js'
 import * as Methods from '../Methods.js'
 
@@ -54,18 +55,26 @@ export function charge(parameters: charge.Parameters = {}) {
       const { request } = challenge
       const { amount, methodDetails } = request
       const currency = request.currency as Address
-      const recipient = request.recipient as Address
 
       const memo = methodDetails?.memo
         ? (methodDetails.memo as Hex.Hex)
         : Attribution.encode({ serverId: challenge.realm, clientId })
-
-      const transferCall = Actions.token.transfer.call({
-        amount: BigInt(amount),
-        memo,
-        to: recipient,
-        token: currency,
+      const transfers = Charge_internal.getTransfers({
+        amount,
+        methodDetails: {
+          ...methodDetails,
+          memo,
+        },
+        recipient: request.recipient as Address,
       })
+      const transferCalls = transfers.map((transfer) =>
+        Actions.token.transfer.call({
+          amount: BigInt(transfer.amount),
+          ...(transfer.memo && { memo: transfer.memo as Hex.Hex }),
+          to: transfer.recipient as Address,
+          token: currency,
+        }),
+      )
 
       const autoSwap = AutoSwap.resolve(
         context?.autoSwap ?? parameters.autoSwap,
@@ -82,7 +91,7 @@ export function charge(parameters: charge.Parameters = {}) {
           })
         : undefined
 
-      const calls = [...(swapCalls ?? []), transferCall]
+      const calls = [...(swapCalls ?? []), ...transferCalls]
 
       if (mode === 'push') {
         const { receipts } = await sendCallsSync(client, {
