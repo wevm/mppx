@@ -35,16 +35,21 @@ export const charge = Method.from({
         ),
         memo: z.optional(z.hash()),
         recipient: z.optional(z.string()),
+        _storeless: z.optional(z.boolean()),
       }),
-      z.transform(({ amount, chainId, decimals, feePayer, memo, ...rest }) => ({
+      z.transform(({ amount, chainId, decimals, feePayer, memo, _storeless, ...rest }) => ({
         ...rest,
         amount: parseUnits(amount, decimals).toString(),
-        ...(chainId !== undefined || feePayer !== undefined || memo !== undefined
+        ...(chainId !== undefined ||
+        feePayer !== undefined ||
+        memo !== undefined ||
+        _storeless !== undefined
           ? {
               methodDetails: {
                 ...(chainId !== undefined && { chainId }),
                 ...(feePayer !== undefined && { feePayer }),
                 ...(memo !== undefined && { memo }),
+                ...(_storeless !== undefined && { _storeless }),
               },
             }
           : {}),

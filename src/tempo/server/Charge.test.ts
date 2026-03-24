@@ -1,6 +1,7 @@
 import { Challenge, Credential, Receipt } from 'mppx'
 import { Mppx as Mppx_client, tempo as tempo_client } from 'mppx/client'
 import { Mppx as Mppx_server, tempo as tempo_server } from 'mppx/server'
+import { Base64 } from 'ox'
 import type { Hex } from 'ox'
 import { TxEnvelopeTempo } from 'ox/tempo'
 import { Handler } from 'tempo.ts/server'
@@ -148,6 +149,7 @@ describe('tempo', () => {
       const { receipt } = await Actions.token.transferSync(client, {
         account: accounts[1],
         amount: BigInt(challenge1.request.amount),
+        memo: Base64.toHex(challenge1.id) as Hex.Hex,
         to: challenge1.request.recipient as Hex.Hex,
         token: challenge1.request.currency as Hex.Hex,
       })
@@ -184,7 +186,7 @@ describe('tempo', () => {
         })
         expect(response.status).toBe(402)
         const body = (await response.json()) as { detail: string }
-        expect(body.detail).toContain('Transaction hash has already been used.')
+        expect(body.detail).toContain('Transaction hash has already been used')
       }
 
       httpServer.close()
@@ -225,6 +227,7 @@ describe('tempo', () => {
       const { receipt } = await Actions.token.transferSync(client, {
         account: accounts[1],
         amount: BigInt(challenge1.request.amount),
+        memo: Base64.toHex(challenge1.id) as Hex.Hex,
         to: challenge1.request.recipient as Hex.Hex,
         token: challenge1.request.currency as Hex.Hex,
       })
@@ -267,7 +270,7 @@ describe('tempo', () => {
         })
         expect(response.status).toBe(402)
         const body = (await response.json()) as { detail: string }
-        expect(body.detail).toContain('Transaction hash has already been used.')
+        expect(body.detail).toContain('Transaction hash has already been used')
       }
 
       httpServer.close()
@@ -308,6 +311,7 @@ describe('tempo', () => {
       const { receipt } = await Actions.token.transferSync(client, {
         account: accounts[1],
         amount: BigInt(challenge1.request.amount),
+        memo: Base64.toHex(challenge1.id) as Hex.Hex,
         to: challenge1.request.recipient as Hex.Hex,
         token: challenge1.request.currency as Hex.Hex,
       })
@@ -349,6 +353,7 @@ describe('tempo', () => {
       const { receipt } = await Actions.token.transferSync(client, {
         account: accounts[1],
         amount: BigInt(request.amount),
+        memo: Base64.toHex(challenge.id) as Hex.Hex,
         to: wrongRecipient,
         token: request.currency as Hex.Hex,
       })
@@ -364,7 +369,7 @@ describe('tempo', () => {
         })
         expect(response.status).toBe(402)
         const body = (await response.json()) as { detail: string }
-        expect(body.detail).toContain('Payment verification failed: no matching transfer found.')
+        expect(body.detail).toContain('no matching transfer with memo found')
       }
 
       httpServer.close()
@@ -430,7 +435,7 @@ describe('tempo', () => {
         })
         expect(response.status).toBe(402)
         const body = (await response.json()) as { detail: string }
-        expect(body.detail).toContain('Payment verification failed: no matching transfer found.')
+        expect(body.detail).toContain('no matching transfer with memo found')
       }
 
       httpServer.close()
@@ -471,6 +476,7 @@ describe('tempo', () => {
       const { receipt } = await Actions.token.transferSync(client, {
         account: accounts[1],
         amount: BigInt(challenge1.request.amount),
+        memo: Base64.toHex(challenge1.id) as Hex.Hex,
         to: challenge1.request.recipient as Hex.Hex,
         token: challenge1.request.currency as Hex.Hex,
       })
@@ -507,7 +513,7 @@ describe('tempo', () => {
         })
         expect(response.status).toBe(402)
         const body = (await response.json()) as { detail: string }
-        expect(body.detail).toContain('Transaction hash has already been used.')
+        expect(body.detail).toContain('Transaction hash has already been used')
       }
 
       httpServer.close()
@@ -548,6 +554,7 @@ describe('tempo', () => {
       const { receipt } = await Actions.token.transferSync(client, {
         account: accounts[1],
         amount: BigInt(challenge1.request.amount),
+        memo: Base64.toHex(challenge1.id) as Hex.Hex,
         to: challenge1.request.recipient as Hex.Hex,
         token: challenge1.request.currency as Hex.Hex,
       })
@@ -588,7 +595,7 @@ describe('tempo', () => {
         })
         expect(response.status).toBe(402)
         const body = (await response.json()) as { detail: string }
-        expect(body.detail).toContain('Transaction hash has already been used.')
+        expect(body.detail).toContain('Transaction hash has already been used')
       }
 
       httpServer.close()
@@ -629,6 +636,7 @@ describe('tempo', () => {
       const { receipt } = await Actions.token.transferSync(client, {
         account: accounts[1],
         amount: BigInt(challenge.request.amount),
+        memo: Base64.toHex(challenge.id) as Hex.Hex,
         to: challenge.request.recipient as Hex.Hex,
         token: challenge.request.currency as Hex.Hex,
       })
@@ -673,6 +681,7 @@ describe('tempo', () => {
       const { receipt } = await Actions.token.transferSync(client, {
         account: accounts[1],
         amount: BigInt(request.amount),
+        memo: Base64.toHex(challenge.id) as Hex.Hex,
         to: request.recipient as Hex.Hex,
         token: request.currency as Hex.Hex,
       })
@@ -829,7 +838,7 @@ describe('tempo', () => {
       })
       expect(replayResponse.status).toBe(402)
       const replayBody = (await replayResponse.json()) as { detail: string }
-      expect(replayBody.detail).toContain('Transaction hash has already been used.')
+      expect(replayBody.detail).toContain('Transaction hash has already been used')
 
       httpServer.close()
     })
@@ -1654,7 +1663,7 @@ describe('tempo', () => {
       // Should reject: receipt has no Transfer log proving the payment occurred
       expect(authResponse.status).toBe(402)
       const body = (await authResponse.json()) as { detail: string }
-      expect(body.detail).toContain('no matching transfer found')
+      expect(body.detail).toContain('no matching transfer with memo found')
 
       httpServer.close()
     })
@@ -2005,7 +2014,7 @@ describe('tempo', () => {
   })
 
   describe('attribution memo', () => {
-    test('client always generates attribution memo (hash credential)', async () => {
+    test('client uses challenge ID as memo (hash credential)', async () => {
       const httpServer = await Http.createServer(async (req, res) => {
         const result = await Mppx_server.toNodeListener(
           server.charge({ amount: '1', decimals: 6 }),
@@ -2023,14 +2032,12 @@ describe('tempo', () => {
 
       expect(challenge.request.methodDetails?.memo).toBeUndefined()
 
-      const memo = Attribution.encode({ serverId: challenge.realm, clientId: 'test-app' })
-      expect(Attribution.isMppMemo(memo)).toBe(true)
-      expect(Attribution.verifyServer(memo, realm)).toBe(true)
+      const memo = Base64.toHex(challenge.id) as Hex.Hex
 
       const { receipt } = await Actions.token.transferSync(client, {
         account: accounts[1],
         amount: BigInt(challenge.request.amount),
-        memo: memo as Hex.Hex,
+        memo,
         to: challenge.request.recipient as Hex.Hex,
         token: challenge.request.currency as Hex.Hex,
       })
@@ -2053,7 +2060,7 @@ describe('tempo', () => {
       httpServer.close()
     })
 
-    test('anonymous client (no clientId) generates valid attribution memo', async () => {
+    test('challenge ID memo works without clientId (hash credential)', async () => {
       const httpServer = await Http.createServer(async (req, res) => {
         const result = await Mppx_server.toNodeListener(
           server.charge({ amount: '1', decimals: 6 }),
@@ -2069,15 +2076,12 @@ describe('tempo', () => {
         methods: [tempo_client.charge()],
       })
 
-      const memo = Attribution.encode({ serverId: challenge.realm })
-      const decoded = Attribution.decode(memo)
-      expect(decoded).not.toBeNull()
-      expect(decoded!.clientFingerprint).toBeNull()
+      const memo = Base64.toHex(challenge.id) as Hex.Hex
 
       const { receipt } = await Actions.token.transferSync(client, {
         account: accounts[1],
         amount: BigInt(challenge.request.amount),
-        memo: memo as Hex.Hex,
+        memo,
         to: challenge.request.recipient as Hex.Hex,
         token: challenge.request.currency as Hex.Hex,
       })
@@ -2129,7 +2133,7 @@ describe('tempo', () => {
       httpServer.close()
     })
 
-    test('server accepts plain transfer without memo', async () => {
+    test('rejects plain transfer without memo', async () => {
       const httpServer = await Http.createServer(async (req, res) => {
         const result = await Mppx_server.toNodeListener(
           server.charge({ amount: '1', decimals: 6 }),
@@ -2161,19 +2165,36 @@ describe('tempo', () => {
         const response = await fetch(httpServer.url, {
           headers: { Authorization: Credential.serialize(credential) },
         })
-        expect(response.status).toBe(200)
+        expect(response.status).toBe(402)
+        const body = (await response.json()) as { detail: string }
+        expect(body.detail).toContain('no matching transfer with memo found')
       }
 
       httpServer.close()
     })
 
-    test('user-provided memo takes priority over attribution', async () => {
+    test('user-provided memo takes priority over attribution (store mode)', async () => {
       const userMemo =
         '0xdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef' as `0x${string}`
 
+      const storeServer = Mppx_server.create({
+        methods: [
+          tempo_server.charge({
+            getClient() {
+              return client
+            },
+            currency: asset,
+            account: accounts[0],
+            store: Store.memory(),
+          }),
+        ],
+        realm,
+        secretKey,
+      })
+
       const httpServer = await Http.createServer(async (req, res) => {
         const result = await Mppx_server.toNodeListener(
-          server.charge({ amount: '1', decimals: 6, memo: userMemo }),
+          storeServer.charge({ amount: '1', decimals: 6, memo: userMemo }),
         )(req, res)
         if (result.status === 402) return
         res.end('OK')
@@ -2188,6 +2209,636 @@ describe('tempo', () => {
       const memo = challenge.request.methodDetails?.memo as `0x${string}` | undefined
       expect(memo).toBe(userMemo)
       expect(Attribution.isMppMemo(memo!)).toBe(false)
+
+      httpServer.close()
+    })
+  })
+
+  describe('intent: charge; cross-challenge replay', () => {
+    test('behavior: rejects hash replayed against a different challenge (push)', async () => {
+      // A valid tx hash submitted with challenge A should NOT satisfy challenge B,
+      // even without a store, because the on-chain memo is bound to challenge A.
+      const httpServer = await Http.createServer(async (req, res) => {
+        const result = await Mppx_server.toNodeListener(
+          server.charge({ amount: '1', decimals: 6 }),
+        )(req, res)
+        if (result.status === 402) return
+        res.end('OK')
+      })
+
+      // Get challenge A
+      const responseA = await fetch(httpServer.url)
+      expect(responseA.status).toBe(402)
+      const challengeA = Challenge.fromResponse(responseA, {
+        methods: [tempo_client.charge()],
+      })
+
+      // Create a valid transfer for challenge A (with challenge-ID memo)
+      const memo = Base64.toHex(challengeA.id) as Hex.Hex
+      const { receipt } = await Actions.token.transferSync(client, {
+        account: accounts[1],
+        amount: BigInt(challengeA.request.amount),
+        memo,
+        to: challengeA.request.recipient as Hex.Hex,
+        token: challengeA.request.currency as Hex.Hex,
+      })
+
+      // Get a different challenge B
+      const responseB = await fetch(httpServer.url)
+      expect(responseB.status).toBe(402)
+      const challengeB = Challenge.fromResponse(responseB, {
+        methods: [tempo_client.charge()],
+      })
+
+      // Verify challenge IDs differ (different HMACs)
+      expect(challengeA.id).not.toBe(challengeB.id)
+
+      // Try to use the tx hash from challenge A with challenge B
+      const credential = Credential.from({
+        challenge: challengeB,
+        payload: { hash: receipt.transactionHash, type: 'hash' as const },
+      })
+
+      const response = await fetch(httpServer.url, {
+        headers: { Authorization: Credential.serialize(credential) },
+      })
+      expect(response.status).toBe(402)
+      const body = (await response.json()) as { detail: string }
+      expect(body.detail).toContain('no matching transfer')
+
+      httpServer.close()
+    })
+
+    test('behavior: rejects hash with wrong memo value', async () => {
+      // Transfer with an arbitrary memo that doesn't match the challenge's memo.
+      const serverWithMemo = Mppx_server.create({
+        methods: [
+          tempo_server.charge({
+            getClient() {
+              return client
+            },
+            currency: asset,
+            account: accounts[0],
+          }),
+        ],
+        realm,
+        secretKey,
+      })
+
+      const userMemo =
+        '0xdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef' as `0x${string}`
+
+      const httpServer = await Http.createServer(async (req, res) => {
+        const result = await Mppx_server.toNodeListener(
+          serverWithMemo.charge({ amount: '1', decimals: 6, memo: userMemo }),
+        )(req, res)
+        if (result.status === 402) return
+        res.end('OK')
+      })
+
+      const response = await fetch(httpServer.url)
+      expect(response.status).toBe(402)
+
+      const challenge = Challenge.fromResponse(response, {
+        methods: [tempo_client.charge()],
+      })
+
+      // Transfer with a DIFFERENT memo than what the challenge expects
+      const wrongMemo =
+        '0xcafebabecafebabecafebabecafebabecafebabecafebabecafebabecafebabe' as `0x${string}`
+
+      const { receipt } = await Actions.token.transferSync(client, {
+        account: accounts[1],
+        amount: BigInt(challenge.request.amount),
+        memo: wrongMemo as Hex.Hex,
+        to: challenge.request.recipient as Hex.Hex,
+        token: challenge.request.currency as Hex.Hex,
+      })
+
+      const credential = Credential.from({
+        challenge,
+        payload: { hash: receipt.transactionHash, type: 'hash' as const },
+      })
+
+      {
+        const response = await fetch(httpServer.url, {
+          headers: { Authorization: Credential.serialize(credential) },
+        })
+        expect(response.status).toBe(402)
+        const body = (await response.json()) as { detail: string }
+        expect(body.detail).toContain(
+          'Payment verification failed: no matching transfer with memo found.',
+        )
+      }
+
+      httpServer.close()
+    })
+
+    test('behavior: rejects credential with tampered challenge amount', async () => {
+      // A client modifies the challenge's amount field before submitting.
+      // The HMAC verification should reject this (challenge not issued by server).
+      const httpServer = await Http.createServer(async (req, res) => {
+        const result = await Mppx_server.toNodeListener(
+          server.charge({ amount: '100', decimals: 6 }),
+        )(req, res)
+        if (result.status === 402) return
+        res.end('OK')
+      })
+
+      const response = await fetch(httpServer.url)
+      expect(response.status).toBe(402)
+
+      const challenge = Challenge.fromResponse(response, {
+        methods: [tempo_client.charge()],
+      })
+
+      // Pay the smaller amount
+      const { receipt } = await Actions.token.transferSync(client, {
+        account: accounts[1],
+        amount: BigInt(1),
+        to: challenge.request.recipient as Hex.Hex,
+        token: challenge.request.currency as Hex.Hex,
+      })
+
+      // Tamper with the echoed challenge to claim a lower amount
+      const tamperedChallenge = {
+        ...challenge,
+        request: { ...challenge.request, amount: '1' },
+      }
+
+      const credential = Credential.from({
+        challenge: tamperedChallenge,
+        payload: { hash: receipt.transactionHash, type: 'hash' as const },
+      })
+
+      {
+        const response = await fetch(httpServer.url, {
+          headers: { Authorization: Credential.serialize(credential) },
+        })
+        expect(response.status).toBe(402)
+        const body = (await response.json()) as { detail: string }
+        expect(body.detail).toContain('challenge was not issued by this server')
+      }
+
+      httpServer.close()
+    })
+
+    test('behavior: rejects credential from a different realm', async () => {
+      // A credential obtained from server A should not work on server B
+      // (different realm = different HMAC).
+      const serverA = Mppx_server.create({
+        methods: [
+          tempo_server.charge({
+            getClient() {
+              return client
+            },
+            currency: asset,
+            account: accounts[0],
+          }),
+        ],
+        realm: 'server-a.example.com',
+        secretKey,
+      })
+
+      const serverB = Mppx_server.create({
+        methods: [
+          tempo_server.charge({
+            getClient() {
+              return client
+            },
+            currency: asset,
+            account: accounts[0],
+          }),
+        ],
+        realm: 'server-b.example.com',
+        secretKey,
+      })
+
+      // Get challenge from server A
+      const httpServerA = await Http.createServer(async (req, res) => {
+        const result = await Mppx_server.toNodeListener(
+          serverA.charge({ amount: '1', decimals: 6 }),
+        )(req, res)
+        if (result.status === 402) return
+        res.end('OK')
+      })
+
+      const responseA = await fetch(httpServerA.url)
+      expect(responseA.status).toBe(402)
+
+      const challengeA = Challenge.fromResponse(responseA, {
+        methods: [tempo_client.charge()],
+      })
+
+      const { receipt } = await Actions.token.transferSync(client, {
+        account: accounts[1],
+        amount: BigInt(challengeA.request.amount),
+        to: challengeA.request.recipient as Hex.Hex,
+        token: challengeA.request.currency as Hex.Hex,
+      })
+
+      const credential = Credential.from({
+        challenge: challengeA,
+        payload: { hash: receipt.transactionHash, type: 'hash' as const },
+      })
+
+      // Submit to server B — should be rejected (realm mismatch)
+      const httpServerB = await Http.createServer(async (req, res) => {
+        const result = await Mppx_server.toNodeListener(
+          serverB.charge({ amount: '1', decimals: 6 }),
+        )(req, res)
+        if (result.status === 402) return
+        res.end('OK')
+      })
+
+      {
+        const response = await fetch(httpServerB.url, {
+          headers: { Authorization: Credential.serialize(credential) },
+        })
+        expect(response.status).toBe(402)
+        const body = (await response.json()) as { detail: string }
+        expect(body.detail).toContain('does not match')
+      }
+
+      httpServerA.close()
+      httpServerB.close()
+    })
+
+    test('behavior: rejects credential with amount mismatch (cross-route)', async () => {
+      // A credential obtained from a cheap route should not work on an expensive route.
+      const httpServer = await Http.createServer(async (req, res) => {
+        const url = new URL(req.url!, `http://${req.headers.host}`)
+        const amount = url.pathname === '/cheap' ? '1' : '1000000'
+
+        const result = await Mppx_server.toNodeListener(server.charge({ amount, decimals: 6 }))(
+          req,
+          res,
+        )
+        if (result.status === 402) return
+        res.end('OK')
+      })
+
+      // Get a challenge for the cheap route
+      const cheapResponse = await fetch(`${httpServer.url}/cheap`)
+      expect(cheapResponse.status).toBe(402)
+
+      const cheapChallenge = Challenge.fromResponse(cheapResponse, {
+        methods: [tempo_client.charge()],
+      })
+
+      const { receipt } = await Actions.token.transferSync(client, {
+        account: accounts[1],
+        amount: BigInt(cheapChallenge.request.amount),
+        to: cheapChallenge.request.recipient as Hex.Hex,
+        token: cheapChallenge.request.currency as Hex.Hex,
+      })
+
+      const credential = Credential.from({
+        challenge: cheapChallenge,
+        payload: { hash: receipt.transactionHash, type: 'hash' as const },
+      })
+
+      // Submit to the expensive route — should be rejected
+      {
+        const response = await fetch(`${httpServer.url}/expensive`, {
+          headers: { Authorization: Credential.serialize(credential) },
+        })
+        expect(response.status).toBe(402)
+        const body = (await response.json()) as { detail: string }
+        expect(body.detail).toContain('does not match')
+      }
+
+      httpServer.close()
+    })
+
+    test('behavior: rejects pull transaction with mismatched memo', async () => {
+      // Pull mode: client signs a transferWithMemo with a memo that doesn't
+      // match the challenge's expected memo. Server should reject.
+      const userMemo =
+        '0xdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef' as `0x${string}`
+
+      const serverWithMemo = Mppx_server.create({
+        methods: [
+          tempo_server.charge({
+            getClient() {
+              return client
+            },
+            currency: asset,
+            account: accounts[0],
+          }),
+        ],
+        realm,
+        secretKey,
+      })
+
+      const httpServer = await Http.createServer(async (req, res) => {
+        const result = await Mppx_server.toNodeListener(
+          serverWithMemo.charge({
+            amount: '1',
+            decimals: 6,
+            memo: userMemo,
+            currency: asset,
+            recipient: accounts[0].address,
+          }),
+        )(req, res)
+        if (result.status === 402) return
+        res.end('OK')
+      })
+
+      const response = await fetch(httpServer.url)
+      expect(response.status).toBe(402)
+
+      const challenge = Challenge.fromResponse(response, {
+        methods: [tempo_client.charge()],
+      })
+
+      // Manually construct a pull transaction with the WRONG memo
+      const wrongMemo =
+        '0xcafebabecafebabecafebabecafebabecafebabecafebabecafebabecafebabe' as `0x${string}`
+
+      const transferCall = {
+        to: challenge.request.currency as `0x${string}`,
+        data: encodeFunctionData({
+          abi: Abis.tip20,
+          functionName: 'transferWithMemo',
+          args: [
+            challenge.request.recipient as `0x${string}`,
+            BigInt(challenge.request.amount),
+            wrongMemo,
+          ],
+        }),
+      }
+
+      const prepared = await prepareTransactionRequest(client, {
+        account: accounts[1],
+        calls: [transferCall],
+        nonceKey: 'expiring',
+      } as never)
+      prepared.gas = prepared.gas! + 5_000n
+      const signature = await signTransaction(client, prepared as never)
+
+      const credential = Credential.from({
+        challenge,
+        payload: { signature, type: 'transaction' as const },
+      })
+
+      {
+        const response = await fetch(httpServer.url, {
+          headers: { Authorization: Credential.serialize(credential) },
+        })
+        expect(response.status).toBe(402)
+        const body = (await response.json()) as { detail: string }
+        expect(body.detail).toContain('no matching payment call found')
+      }
+
+      httpServer.close()
+    })
+  })
+
+  describe('intent: charge; storeless replay protection', () => {
+    test('behavior: rejects replayed hash with alternating case (storeless)', async () => {
+      // Same attack as the store-mode case-variant test, but without a store.
+      // Memo binding catches replays regardless of hash casing.
+      const httpServer = await Http.createServer(async (req, res) => {
+        const result = await Mppx_server.toNodeListener(
+          server.charge({ amount: '1', decimals: 6 }),
+        )(req, res)
+        if (result.status === 402) return
+        res.end('OK')
+      })
+
+      // Get challenge A, transfer with its challenge-ID memo
+      const responseA = await fetch(httpServer.url)
+      expect(responseA.status).toBe(402)
+      const challengeA = Challenge.fromResponse(responseA, {
+        methods: [tempo_client.charge()],
+      })
+
+      const { receipt } = await Actions.token.transferSync(client, {
+        account: accounts[1],
+        amount: BigInt(challengeA.request.amount),
+        memo: Base64.toHex(challengeA.id) as Hex.Hex,
+        to: challengeA.request.recipient as Hex.Hex,
+        token: challengeA.request.currency as Hex.Hex,
+      })
+
+      // Get challenge B, replay with alternating-case hash
+      const responseB = await fetch(httpServer.url)
+      expect(responseB.status).toBe(402)
+      const challengeB = Challenge.fromResponse(responseB, {
+        methods: [tempo_client.charge()],
+      })
+
+      const hex = receipt.transactionHash.slice(2)
+      const alternating = `0x${hex
+        .split('')
+        .map((c, i) => (i % 2 === 0 ? c.toUpperCase() : c.toLowerCase()))
+        .join('')}` as Hex.Hex
+
+      const credential = Credential.from({
+        challenge: challengeB,
+        payload: { hash: alternating, type: 'hash' as const },
+      })
+
+      // Rejected: on-chain memo is challengeA's ID, not challengeB's
+      const response = await fetch(httpServer.url, {
+        headers: { Authorization: Credential.serialize(credential) },
+      })
+      expect(response.status).toBe(402)
+      const body = (await response.json()) as { detail: string }
+      expect(body.detail).toContain('no matching transfer')
+
+      httpServer.close()
+    })
+
+    test('behavior: rejects pull then push replay (storeless)', async () => {
+      // Pull flow succeeds for challenge A. Attacker takes the resulting
+      // tx hash and submits it as a push credential for challenge B.
+      // Memo binding rejects because on-chain memo is challengeA's ID.
+      const pullClient = Mppx_client.create({
+        polyfill: false,
+        methods: [
+          tempo_client({
+            account: accounts[1],
+            mode: 'pull',
+            getClient() {
+              return client
+            },
+          }),
+        ],
+      })
+
+      const httpServer = await Http.createServer(async (req, res) => {
+        const result = await Mppx_server.toNodeListener(
+          server.charge({ amount: '1', currency: asset, recipient: accounts[0].address }),
+        )(req, res)
+        if (result.status === 402) return
+        res.end('OK')
+      })
+
+      // Pull flow for challenge A — succeeds
+      const challengeResponse = await fetch(httpServer.url)
+      expect(challengeResponse.status).toBe(402)
+
+      const pullCredential = await pullClient.createCredential(challengeResponse)
+
+      const pullResponse = await fetch(httpServer.url, {
+        headers: { Authorization: pullCredential },
+      })
+      expect(pullResponse.status).toBe(200)
+
+      const pullReceipt = Receipt.fromResponse(pullResponse)
+
+      // Get challenge B, replay the tx hash as a push credential
+      const replayChallengeResponse = await fetch(httpServer.url)
+      expect(replayChallengeResponse.status).toBe(402)
+
+      const replayChallenge = Challenge.fromResponse(replayChallengeResponse, {
+        methods: [tempo_client.charge()],
+      })
+
+      const replayCredential = Credential.from({
+        challenge: replayChallenge,
+        payload: { hash: pullReceipt.reference as Hex.Hex, type: 'hash' as const },
+      })
+
+      const replayResponse = await fetch(httpServer.url, {
+        headers: { Authorization: Credential.serialize(replayCredential) },
+      })
+      expect(replayResponse.status).toBe(402)
+      const replayBody = (await replayResponse.json()) as { detail: string }
+      expect(replayBody.detail).toContain('no matching transfer')
+
+      httpServer.close()
+    })
+
+    test('behavior: rejects concurrent replay of same signed transaction (storeless)', async () => {
+      // Same signed tx submitted against two different challenges concurrently.
+      // Only the one matching the on-chain memo can succeed.
+      const mppx = Mppx_client.create({
+        polyfill: false,
+        methods: [
+          tempo_client({
+            account: accounts[1],
+            getClient() {
+              return client
+            },
+          }),
+        ],
+      })
+
+      const httpServer = await Http.createServer(async (req, res) => {
+        const result = await Mppx_server.toNodeListener(
+          server.charge({ amount: '1', currency: asset, recipient: accounts[0].address }),
+        )(req, res)
+        if (result.status === 402) return
+        res.end('OK')
+      })
+
+      // Get two challenges concurrently
+      const [challengeResponse1, challengeResponse2] = await Promise.all([
+        fetch(httpServer.url),
+        fetch(httpServer.url),
+      ])
+      expect(challengeResponse1.status).toBe(402)
+      expect(challengeResponse2.status).toBe(402)
+
+      // Create credential from first challenge (signs tx with challenge1's memo)
+      const credential1 = await mppx.createCredential(challengeResponse1)
+
+      // Extract the signed tx and re-wrap with second challenge
+      const decoded1 = Credential.deserialize(credential1)
+      const challenge2 = Challenge.fromResponse(challengeResponse2, {
+        methods: [tempo_client.charge()],
+      })
+      const credential2 = Credential.serialize(
+        Credential.from({
+          challenge: challenge2,
+          payload: decoded1.payload,
+        }),
+      )
+
+      // Submit to both — only challenge1 can match the on-chain memo
+      const [resA, resB] = await Promise.all([
+        fetch(httpServer.url, { headers: { Authorization: credential1 } }),
+        fetch(httpServer.url, { headers: { Authorization: credential2 } }),
+      ])
+
+      const statuses = [resA.status, resB.status].sort()
+      expect(statuses).toEqual([200, 402])
+
+      httpServer.close()
+    })
+
+    test('behavior: rejects malleable tx variants (storeless)', async () => {
+      // Different serialized bytes (0x76 vs 0x78) produce different keccak256
+      // hashes but the same on-chain tx. Without a store, memo binding catches
+      // the replay because the on-chain memo is bound to challenge A's ID.
+      const mppx = Mppx_client.create({
+        polyfill: false,
+        methods: [
+          tempo_client({
+            account: accounts[1],
+            getClient() {
+              return client
+            },
+          }),
+        ],
+      })
+
+      const httpServer = await Http.createServer(async (req, res) => {
+        const result = await Mppx_server.toNodeListener(
+          server.charge({
+            feePayer: accounts[0],
+            amount: '1',
+            currency: asset,
+            recipient: accounts[0].address,
+          }),
+        )(req, res)
+        if (result.status === 402) return
+        res.end('OK')
+      })
+
+      // Get two challenges
+      const challengeResponse1 = await fetch(httpServer.url)
+      const challengeResponse2 = await fetch(httpServer.url)
+      expect(challengeResponse1.status).toBe(402)
+      expect(challengeResponse2.status).toBe(402)
+
+      // Sign tx via first challenge (0x78 fee payer format)
+      const credential1 = await mppx.createCredential(challengeResponse1)
+
+      // Submit original — should succeed
+      const res1 = await fetch(httpServer.url, {
+        headers: { Authorization: credential1 },
+      })
+      expect(res1.status).toBe(200)
+
+      // Create malleable variant: re-serialize in 0x76 format
+      const decoded1 = Credential.deserialize(credential1)
+      const serializedTx = (decoded1.payload as { signature: string }).signature
+      const deserialized = TxEnvelopeTempo.deserialize(serializedTx as TxEnvelopeTempo.Serialized)
+      const malleableVariant = TxEnvelopeTempo.serialize(
+        TxEnvelopeTempo.from({ ...deserialized, feePayerSignature: null }),
+      )
+      expect(malleableVariant).not.toEqual(serializedTx)
+
+      // Wrap malleable variant with challenge2's credential
+      const challenge2 = Challenge.fromResponse(challengeResponse2, {
+        methods: [tempo_client.charge()],
+      })
+      const credential2 = Credential.serialize(
+        Credential.from({
+          challenge: challenge2,
+          payload: { signature: malleableVariant, type: 'transaction' as const },
+        }),
+      )
+
+      // Submit — rejected because on-chain memo is challenge1's ID, not challenge2's
+      const res2 = await fetch(httpServer.url, {
+        headers: { Authorization: credential2 },
+      })
+      expect(res2.status).toBe(402)
 
       httpServer.close()
     })

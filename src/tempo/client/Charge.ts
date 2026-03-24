@@ -1,3 +1,4 @@
+import { Base64 } from 'ox'
 import type * as Hex from 'ox/Hex'
 import type { Address } from 'viem'
 import { prepareTransactionRequest, sendCallsSync, signTransaction } from 'viem/actions'
@@ -56,9 +57,15 @@ export function charge(parameters: charge.Parameters = {}) {
       const currency = request.currency as Address
       const recipient = request.recipient as Address
 
-      const memo = methodDetails?.memo
-        ? (methodDetails.memo as Hex.Hex)
-        : Attribution.encode({ serverId: challenge.realm, clientId })
+      const memo = (() => {
+        // Server-provided memo (e.g. invoice ID) — used as-is for on-chain reconciliation
+        if (methodDetails?.memo) return methodDetails.memo as Hex.Hex
+        // Storeless mode: challenge ID as memo for replay protection without a store
+        if ((methodDetails as Record<string, unknown>)?._storeless)
+          return Base64.toHex(challenge.id) as Hex.Hex
+        // Store mode: attribution memo for on-chain MPP transaction discoverability
+        return Attribution.encode({ serverId: challenge.realm, clientId })
+      })()
 
       const transferCall = Actions.token.transfer.call({
         amount: BigInt(amount),

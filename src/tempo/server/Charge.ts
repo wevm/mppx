@@ -1,3 +1,4 @@
+import { Base64 } from 'ox'
 import type { TempoAddress as TempoAddress_types } from 'ox/tempo'
 import { decodeFunctionData, keccak256, parseEventLogs, type TransactionReceipt } from 'viem'
 import {
@@ -45,7 +46,9 @@ export function charge<const parameters extends charge.Parameters>(
     memo,
     waitForConfirmation = true,
   } = parameters
-  const store = (parameters.store ?? Store.memory()) as Store.Store<charge.StoreItemMap>
+  const store = parameters.store
+    ? (parameters.store as Store.Store<charge.StoreItemMap>)
+    : undefined
 
   const { recipient, feePayer, feePayerUrl } = Account.resolve(parameters)
 
@@ -98,7 +101,8 @@ export function charge<const parameters extends charge.Parameters>(
         ...request,
         chainId,
         feePayer: resolvedFeePayer,
-        memo: request.memo || undefined,
+        memo: store ? request.memo || undefined : undefined,
+        ...(!store ? { _storeless: true } : {}),
       }
     },
 
@@ -117,14 +121,16 @@ export function charge<const parameters extends charge.Parameters>(
 
       if (expires && new Date(expires) < new Date()) throw new PaymentExpiredError({ expires })
 
-      const memo = methodDetails?.memo as `0x${string}` | undefined
+      const memo = store
+        ? (methodDetails?.memo as `0x${string}` | undefined)
+        : (Base64.toHex(credential.challenge.id) as `0x${string}`)
 
       const payload = credential.payload
 
       switch (payload.type) {
         case 'hash': {
           const hash = payload.hash as `0x${string}`
-          await assertHashUnused(store, hash)
+          if (store) await assertHashUnused(store, hash)
 
           const receipt = await getTransactionReceipt(client, {
             hash,
@@ -138,7 +144,7 @@ export function charge<const parameters extends charge.Parameters>(
             recipient,
           })
 
-          await markHashUsed(store, hash)
+          if (store) await markHashUsed(store, hash)
 
           return toReceipt(receipt)
         }
@@ -147,9 +153,13 @@ export function charge<const parameters extends charge.Parameters>(
           const serializedTransaction = payload.signature as Transaction.TransactionSerializedTempo
 
           // Pre-broadcast dedup: catch exact byte-for-byte replays early.
-          const hash = keccak256(serializedTransaction)
-          await assertHashUnused(store, hash)
-          await markHashUsed(store, hash)
+          // Only needed when store is available; storeless mode relies on
+          // challenge-ID memo for replay protection.
+          const hash = store ? keccak256(serializedTransaction) : undefined
+          if (store && hash) {
+            await assertHashUnused(store, hash)
+            await markHashUsed(store, hash)
+          }
 
           if (!FeePayer.isTempoTransaction(serializedTransaction))
             throw new MismatchError('Only Tempo (0x76/0x78) transactions are supported.', {})
@@ -245,7 +255,7 @@ export function charge<const parameters extends charge.Parameters>(
             // (different serialized bytes, same underlying tx) that
             // bypass the pre-broadcast check. Skip if the broadcast
             // hash matches the input hash (already stored above).
-            if (receipt.transactionHash.toLowerCase() !== hash.toLowerCase()) {
+            if (store && hash && receipt.transactionHash.toLowerCase() !== hash.toLowerCase()) {
               await assertHashUnused(store, receipt.transactionHash)
               await markHashUsed(store, receipt.transactionHash)
             }
@@ -264,7 +274,7 @@ export function charge<const parameters extends charge.Parameters>(
               serializedTransaction: serializedTransaction_final,
             })
             // Post-broadcast dedup: same
-            if (reference.toLowerCase() !== hash.toLowerCase()) {
+            if (store && hash && reference.toLowerCase() !== hash.toLowerCase()) {
               await assertHashUnused(store, reference)
               await markHashUsed(store, reference)
             }
