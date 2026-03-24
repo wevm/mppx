@@ -1567,6 +1567,77 @@ describe('cross-route credential replay via scope binding flaw', () => {
     // The result should be 200 (matched to cheap), not routed to expensive.
     expect(result.status).toBe(200)
   })
+
+  test('rejects no-splits credential replayed at splits route', async () => {
+    // Method whose schema transform moves splits into methodDetails.
+    const splitsMethod = Method.from({
+      name: 'mock',
+      intent: 'charge',
+      schema: {
+        credential: { payload: z.object({ token: z.string() }) },
+        request: z.pipe(
+          z.object({
+            amount: z.string(),
+            currency: z.string(),
+            decimals: z.number(),
+            recipient: z.string(),
+            splits: z.optional(z.array(z.object({ amount: z.string(), recipient: z.string() }))),
+          }),
+          z.transform(({ amount, currency, decimals, recipient, splits }) => ({
+            methodDetails: {
+              amount: String(Number(amount) * 10 ** decimals),
+              currency,
+              recipient,
+              ...(splits && { splits }),
+            },
+          })),
+        ),
+      },
+    })
+
+    const splitsServerMethod = Method.toServer(splitsMethod, {
+      async verify() {
+        return mockReceipt()
+      },
+    })
+
+    const handler = Mppx.create({ methods: [splitsServerMethod], realm, secretKey })
+
+    // Get a challenge from a route with no splits
+    const noSplitsHandle = handler.charge({
+      amount: '1',
+      currency: '0x0000000000000000000000000000000000000001',
+      decimals: 6,
+      expires: new Date(Date.now() + 60_000).toISOString(),
+      recipient: '0x0000000000000000000000000000000000000002',
+    })
+    const noSplitsResult = await noSplitsHandle(new Request('https://example.com/no-splits'))
+    expect(noSplitsResult.status).toBe(402)
+    if (noSplitsResult.status !== 402) throw new Error()
+
+    const noSplitsChallenge = Challenge.fromResponse(noSplitsResult.challenge)
+    const credential = Credential.from({
+      challenge: noSplitsChallenge,
+      payload: { token: 'valid' },
+    })
+
+    // Present at a route that requires splits
+    const splitsHandle = handler.charge({
+      amount: '1',
+      currency: '0x0000000000000000000000000000000000000001',
+      decimals: 6,
+      expires: new Date(Date.now() + 60_000).toISOString(),
+      recipient: '0x0000000000000000000000000000000000000002',
+      splits: [{ amount: '0.2', recipient: '0x0000000000000000000000000000000000000003' }],
+    })
+    const result = await splitsHandle(
+      new Request('https://example.com/with-splits', {
+        headers: { Authorization: Credential.serialize(credential) },
+      }),
+    )
+
+    expect(result.status).toBe(402)
+  })
 })
 
 describe('withReceipt', () => {
