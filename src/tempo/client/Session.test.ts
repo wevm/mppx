@@ -2,8 +2,11 @@ import { type Address, createClient, type Hex, http } from 'viem'
 import { privateKeyToAccount } from 'viem/accounts'
 import { Addresses } from 'viem/tempo'
 import { beforeAll, describe, expect, test } from 'vitest'
+import { nodeEnv } from '~test/config.js'
 import { deployEscrow, openChannel } from '~test/tempo/session.js'
 import { accounts, asset, chain, client, fundAccount } from '~test/tempo/viem.js'
+
+const isLocalnet = nodeEnv === 'localnet'
 
 import * as Challenge from '../../Challenge.js'
 import * as Credential from '../../Credential.js'
@@ -201,7 +204,7 @@ describe('session (pure)', () => {
   })
 })
 
-describe('session (on-chain)', () => {
+describe.runIf(isLocalnet)('session (on-chain)', () => {
   const payer = accounts[2]
   const payee = accounts[1].address
   let escrowContract: Address

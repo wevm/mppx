@@ -5,6 +5,9 @@ import { type Address, createClient, type Hex } from 'viem'
 import { waitForTransactionReceipt } from 'viem/actions'
 import { Addresses } from 'viem/tempo'
 import { beforeAll, beforeEach, describe, expect, test } from 'vitest'
+import { nodeEnv } from '~test/config.js'
+
+const isLocalnet = nodeEnv === 'localnet'
 import {
   deployEscrow,
   requestCloseChannel,
@@ -40,12 +43,13 @@ let escrowContract: Address
 let saltCounter = 0
 
 beforeAll(async () => {
+  if (!isLocalnet) return
   escrowContract = await deployEscrow()
   await fundAccount({ address: payer.address, token: Addresses.pathUsd })
   await fundAccount({ address: payer.address, token: currency })
 })
 
-describe('session', () => {
+describe.runIf(isLocalnet)('session', () => {
   let rawStore: Store.Store
   let store: ChannelStore.ChannelStore
 

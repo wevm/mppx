@@ -3,8 +3,11 @@ import { type Address, createClient } from 'viem'
 import { privateKeyToAccount } from 'viem/accounts'
 import { Addresses } from 'viem/tempo'
 import { beforeAll, describe, expect, test } from 'vitest'
+import { nodeEnv } from '~test/config.js'
 import { deployEscrow, openChannel } from '~test/tempo/session.js'
 import { accounts, asset, chain, client, fundAccount, http } from '~test/tempo/viem.js'
+
+const isLocalnet = nodeEnv === 'localnet'
 
 import type { Challenge } from '../../Challenge.js'
 import * as Credential from '../../Credential.js'
@@ -166,7 +169,7 @@ describe('createClosePayload', () => {
   })
 })
 
-describe('createOpenPayload', () => {
+describe.runIf(isLocalnet)('createOpenPayload', () => {
   const payer = accounts[2]
   const payee = accounts[1].address
   const currency = asset
@@ -250,7 +253,7 @@ describe('createOpenPayload', () => {
   })
 })
 
-describe('tryRecoverChannel', () => {
+describe.runIf(isLocalnet)('tryRecoverChannel', () => {
   const payer = accounts[3]
   const payee = accounts[1].address
   const currency = asset
