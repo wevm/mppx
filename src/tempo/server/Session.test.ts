@@ -19,7 +19,6 @@ import {
   ChannelNotFoundError,
   InsufficientBalanceError,
   InvalidSignatureError,
-  VerificationFailedError,
 } from '../../Errors.js'
 import * as Store from '../../Store.js'
 import {
