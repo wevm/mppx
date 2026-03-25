@@ -918,128 +918,130 @@ export default defineConfig({
 
 const discover = Cli.create('discover', {
   description: 'Discovery tooling',
-}).command('generate', {
-  description: 'Generate a static OpenAPI discovery document from a module',
-  args: z.object({
-    module: z.string().describe('Path to a module that default-exports a discovery config'),
-  }),
-  options: z.object({
-    output: z.string().optional().describe('Write output to a file instead of stdout'),
-  }),
-  alias: { output: 'o' },
-  async run(c) {
-    const modulePath = path.resolve(c.args.module)
-    if (!fs.existsSync(modulePath)) {
-      return c.error({
-        code: 'MODULE_NOT_FOUND',
-        message: `Module not found: ${modulePath}`,
-        exitCode: 1,
-      })
-    }
-
-    let mod: Record<string, unknown>
-    try {
-      mod = await import(modulePath)
-    } catch (error) {
-      return c.error({
-        code: 'MODULE_IMPORT_FAILED',
-        message: `Failed to import module: ${(error as Error).message}`,
-        exitCode: 1,
-      })
-    }
-
-    const exported = (mod.default ?? mod) as Record<string, unknown>
-
-    // If the export is already a plain OpenAPI doc (has `openapi` key), use it directly.
-    // Otherwise, expect { mppx, ...GenerateConfig } and call generate().
-    let doc: Record<string, unknown>
-    if (typeof exported.openapi === 'string') {
-      doc = exported
-    } else {
-      const { generate } = await import('../discovery/OpenApi.js')
-      const mppx = exported.mppx as { methods: readonly any[]; realm: string }
-      if (!mppx) {
-        return c.error({
-          code: 'INVALID_MODULE',
-          message:
-            'Module must default-export an OpenAPI document (with `openapi` key) or an object with `mppx` (server instance) and `routes`.',
-          exitCode: 1,
-        })
-      }
-      doc = generate(mppx, exported as any)
-    }
-
-    const json = JSON.stringify(doc, null, 2)
-    if (c.options.output) {
-      const outPath = path.resolve(c.options.output)
-      fs.writeFileSync(outPath, `${json}\n`)
-      process.stderr.write(`Wrote ${outPath}\n`)
-    } else {
-      console.log(json)
-    }
-  },
-}).command('validate', {
-  description: 'Validate an OpenAPI discovery document from a file or URL',
-  args: z.object({
-    input: z.string().describe('Path or URL to a discovery document'),
-  }),
-  async run(c) {
-    const input = c.args.input
-    let raw: string
-    if (/^https?:\/\//.test(input)) {
-      const response = await globalThis.fetch(input)
-      if (!response.ok) {
-        return c.error({
-          code: 'DISCOVERY_FETCH_FAILED',
-          message: `Failed to fetch discovery document: HTTP ${response.status}`,
-          exitCode: 1,
-        })
-      }
-      raw = await response.text()
-    } else {
-      const resolved = path.resolve(input)
-      if (!fs.existsSync(resolved)) {
-        return c.error({
-          code: 'DISCOVERY_NOT_FOUND',
-          message: `Discovery document not found: ${resolved}`,
-          exitCode: 1,
-        })
-      }
-      raw = fs.readFileSync(resolved, 'utf-8')
-    }
-
-    let doc: unknown
-    try {
-      doc = JSON.parse(raw)
-    } catch (error) {
-      return c.error({
-        code: 'DISCOVERY_INVALID_JSON',
-        message: `Invalid discovery JSON: ${(error as Error).message}`,
-        exitCode: 1,
-      })
-    }
-
-    const issues = validateDiscovery(doc)
-    for (const issue of issues) console.log(`[${issue.severity}] ${issue.path}: ${issue.message}`)
-
-    const errorCount = issues.filter((issue) => issue.severity === 'error').length
-    const warningCount = issues.filter((issue) => issue.severity === 'warning').length
-
-    if (errorCount > 0) {
-      return c.error({
-        code: 'DISCOVERY_INVALID',
-        message: `Discovery document has ${errorCount} error(s) and ${warningCount} warning(s).`,
-        exitCode: 1,
-      })
-    }
-
-    console.log(
-      warningCount > 0
-        ? `Discovery document is valid with ${warningCount} warning(s).`
-        : 'Discovery document is valid.',
-    )
-  },
 })
+  .command('generate', {
+    description: 'Generate a static OpenAPI discovery document from a module',
+    args: z.object({
+      module: z.string().describe('Path to a module that default-exports a discovery config'),
+    }),
+    options: z.object({
+      output: z.string().optional().describe('Write output to a file instead of stdout'),
+    }),
+    alias: { output: 'o' },
+    async run(c) {
+      const modulePath = path.resolve(c.args.module)
+      if (!fs.existsSync(modulePath)) {
+        return c.error({
+          code: 'MODULE_NOT_FOUND',
+          message: `Module not found: ${modulePath}`,
+          exitCode: 1,
+        })
+      }
+
+      let mod: Record<string, unknown>
+      try {
+        mod = await import(modulePath)
+      } catch (error) {
+        return c.error({
+          code: 'MODULE_IMPORT_FAILED',
+          message: `Failed to import module: ${(error as Error).message}`,
+          exitCode: 1,
+        })
+      }
+
+      const exported = (mod.default ?? mod) as Record<string, unknown>
+
+      // If the export is already a plain OpenAPI doc (has `openapi` key), use it directly.
+      // Otherwise, expect { mppx, ...GenerateConfig } and call generate().
+      let doc: Record<string, unknown>
+      if (typeof exported.openapi === 'string') {
+        doc = exported
+      } else {
+        const { generate } = await import('../discovery/OpenApi.js')
+        const mppx = exported.mppx as { methods: readonly any[]; realm: string }
+        if (!mppx) {
+          return c.error({
+            code: 'INVALID_MODULE',
+            message:
+              'Module must default-export an OpenAPI document (with `openapi` key) or an object with `mppx` (server instance) and `routes`.',
+            exitCode: 1,
+          })
+        }
+        doc = generate(mppx, exported as any)
+      }
+
+      const json = JSON.stringify(doc, null, 2)
+      if (c.options.output) {
+        const outPath = path.resolve(c.options.output)
+        fs.writeFileSync(outPath, `${json}\n`)
+        process.stderr.write(`Wrote ${outPath}\n`)
+      } else {
+        console.log(json)
+      }
+    },
+  })
+  .command('validate', {
+    description: 'Validate an OpenAPI discovery document from a file or URL',
+    args: z.object({
+      input: z.string().describe('Path or URL to a discovery document'),
+    }),
+    async run(c) {
+      const input = c.args.input
+      let raw: string
+      if (/^https?:\/\//.test(input)) {
+        const response = await globalThis.fetch(input)
+        if (!response.ok) {
+          return c.error({
+            code: 'DISCOVERY_FETCH_FAILED',
+            message: `Failed to fetch discovery document: HTTP ${response.status}`,
+            exitCode: 1,
+          })
+        }
+        raw = await response.text()
+      } else {
+        const resolved = path.resolve(input)
+        if (!fs.existsSync(resolved)) {
+          return c.error({
+            code: 'DISCOVERY_NOT_FOUND',
+            message: `Discovery document not found: ${resolved}`,
+            exitCode: 1,
+          })
+        }
+        raw = fs.readFileSync(resolved, 'utf-8')
+      }
+
+      let doc: unknown
+      try {
+        doc = JSON.parse(raw)
+      } catch (error) {
+        return c.error({
+          code: 'DISCOVERY_INVALID_JSON',
+          message: `Invalid discovery JSON: ${(error as Error).message}`,
+          exitCode: 1,
+        })
+      }
+
+      const issues = validateDiscovery(doc)
+      for (const issue of issues) console.log(`[${issue.severity}] ${issue.path}: ${issue.message}`)
+
+      const errorCount = issues.filter((issue) => issue.severity === 'error').length
+      const warningCount = issues.filter((issue) => issue.severity === 'warning').length
+
+      if (errorCount > 0) {
+        return c.error({
+          code: 'DISCOVERY_INVALID',
+          message: `Discovery document has ${errorCount} error(s) and ${warningCount} warning(s).`,
+          exitCode: 1,
+        })
+      }
+
+      console.log(
+        warningCount > 0
+          ? `Discovery document is valid with ${warningCount} warning(s).`
+          : 'Discovery document is valid.',
+      )
+    },
+  })
 
 cli.command(account)
 cli.command(discover)

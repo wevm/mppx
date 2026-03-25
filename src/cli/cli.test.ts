@@ -196,7 +196,10 @@ describe('discover generate', () => {
           '/pay': {
             post: {
               'x-payment-info': { amount: '100', intent: 'charge', method: 'tempo' },
-              responses: { '200': { description: 'OK' }, '402': { description: 'Payment Required' } },
+              responses: {
+                '200': { description: 'OK' },
+                '402': { description: 'Payment Required' },
+              },
             },
           },
         },
