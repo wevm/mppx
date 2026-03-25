@@ -89,11 +89,12 @@ describe('charge', () => {
   })
 
   test('serves /openapi.json from discovery plugin', async () => {
-    const app = new Elysia()
-      .use(discovery(mppx, {
+    const app = new Elysia().use(
+      discovery(mppx, {
         info: { title: 'Elysia API', version: '1.0.0' },
         routes: [{ handler: mppx.charge({ amount: '1' }), method: 'get', path: '/' }],
-      }))
+      }),
+    )
 
     const server = await createServer(app)
     const response = await globalThis.fetch(`${server.url}/openapi.json`)

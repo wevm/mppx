@@ -224,9 +224,7 @@ function buildDiscoveryRoutes(services: Service.Service[]) {
   )
 }
 
-function buildServiceInfo(
-  config: create.Config,
-): { categories?: string[]; docs?: Service.Docs } {
+function buildServiceInfo(config: create.Config): { categories?: string[]; docs?: Service.Docs } {
   const categories =
     config.categories ??
     Array.from(new Set(config.services.flatMap((service) => service.categories ?? [])))

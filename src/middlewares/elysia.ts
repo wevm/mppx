@@ -94,9 +94,11 @@ export function discovery(
     }),
   )
 
-  return new Elysia().get(mountPath, () =>
-    new Response(cached, {
-      headers: { ...discoveryHeaders, 'Content-Type': 'application/json' },
-    }),
+  return new Elysia().get(
+    mountPath,
+    () =>
+      new Response(cached, {
+        headers: { ...discoveryHeaders, 'Content-Type': 'application/json' },
+      }),
   )
 }
