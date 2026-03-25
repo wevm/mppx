@@ -1,7 +1,7 @@
 {
   "extends": "../tsconfig.base.json",
   "compilerOptions": {
-    "types": ["node", "vitest/globals", "vitest/importMeta"],
+    "types": ["node", "vp/test/globals", "vp/test/importMeta"],
     "paths": {
       "~test/*": ["./*"],
       "mppx": ["../src/index.ts"],

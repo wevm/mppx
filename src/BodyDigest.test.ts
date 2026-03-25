@@ -1,5 +1,5 @@
 import { BodyDigest } from 'mppx'
-import { describe, expect, test } from 'vitest'
+import { describe, expect, test } from 'vp/test'
 
 describe('compute', () => {
   test('behavior: computes sha-256 digest from string', () => {

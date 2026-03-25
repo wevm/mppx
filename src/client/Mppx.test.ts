@@ -2,7 +2,7 @@ import { Challenge, Credential, Mcp, Method, Receipt } from 'mppx'
 import { Mppx, Transport, tempo } from 'mppx/client'
 import { Mppx as Mppx_server, tempo as tempo_server } from 'mppx/server'
 import { Methods } from 'mppx/tempo'
-import { afterEach, describe, expect, test } from 'vitest'
+import { afterEach, describe, expect, test } from 'vp/test'
 import * as Http from '~test/Http.js'
 import { accounts, asset, client } from '~test/tempo/viem.js'
 

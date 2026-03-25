@@ -1,7 +1,7 @@
 import { Challenge, Credential } from 'mppx'
 import { Mppx, stripe } from 'mppx/client'
 import { Mppx as Mppx_server, stripe as stripe_server } from 'mppx/server'
-import { describe, expect, test, vi } from 'vitest'
+import { describe, expect, test, vi } from 'vp/test'
 
 import type { StripeJs } from '../internal/types.js'
 import { charge as clientCharge_ } from './Charge.js'

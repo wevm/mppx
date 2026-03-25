@@ -1,5 +1,5 @@
 import type { Hex } from 'viem'
-import { describe, expect, test } from 'vitest'
+import { describe, expect, test } from 'vp/test'
 
 import {
   createSessionReceipt,

@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'vitest'
+import { describe, expect, test } from 'vp/test'
 
 import type { Challenge } from '../../Challenge.js'
 import type { Credential } from '../../Credential.js'

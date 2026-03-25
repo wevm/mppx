@@ -1,5 +1,5 @@
 import { Methods } from 'mppx/stripe'
-import { describe, expect, expectTypeOf, test } from 'vitest'
+import { describe, expect, expectTypeOf, test } from 'vp/test'
 
 describe('charge', () => {
   test('has correct name and intent', () => {

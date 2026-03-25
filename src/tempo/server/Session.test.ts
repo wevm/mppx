@@ -4,7 +4,7 @@ import { Mppx as Mppx_server, tempo as tempo_server } from 'mppx/server'
 import { type Address, createClient, type Hex } from 'viem'
 import { waitForTransactionReceipt } from 'viem/actions'
 import { Addresses } from 'viem/tempo'
-import { beforeAll, beforeEach, describe, expect, test } from 'vitest'
+import { beforeAll, beforeEach, describe, expect, expectTypeOf, test } from 'vp/test'
 import { nodeEnv } from '~test/config.js'
 
 const isLocalnet = nodeEnv === 'localnet'

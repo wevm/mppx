@@ -1,5 +1,5 @@
 import type { Hex } from 'viem'
-import { describe, expect, test, vi } from 'vitest'
+import { describe, expect, test, vi } from 'vp/test'
 
 import * as Challenge from '../../Challenge.js'
 import { formatNeedVoucherEvent, parseEvent } from '../session/Sse.js'

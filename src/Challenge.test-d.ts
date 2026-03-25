@@ -1,4 +1,4 @@
-import { assertType, describe, expectTypeOf, test } from 'vitest'
+import { assertType, describe, expectTypeOf, test } from 'vp/test'
 
 import * as Challenge from './Challenge.js'
 import { Method } from './index.js'
