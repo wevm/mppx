@@ -1,5 +1,3 @@
-import { describe, expect, test } from 'vitest'
-
 import { validate } from './Validate.js'
 
 function makeDoc(overrides: Record<string, unknown> = {}) {
