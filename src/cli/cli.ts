@@ -918,6 +918,66 @@ export default defineConfig({
 
 const discover = Cli.create('discover', {
   description: 'Discovery tooling',
+}).command('generate', {
+  description: 'Generate a static OpenAPI discovery document from a module',
+  args: z.object({
+    module: z.string().describe('Path to a module that default-exports a discovery config'),
+  }),
+  options: z.object({
+    output: z.string().optional().describe('Write output to a file instead of stdout'),
+  }),
+  alias: { output: 'o' },
+  async run(c) {
+    const modulePath = path.resolve(c.args.module)
+    if (!fs.existsSync(modulePath)) {
+      return c.error({
+        code: 'MODULE_NOT_FOUND',
+        message: `Module not found: ${modulePath}`,
+        exitCode: 1,
+      })
+    }
+
+    let mod: Record<string, unknown>
+    try {
+      mod = await import(modulePath)
+    } catch (error) {
+      return c.error({
+        code: 'MODULE_IMPORT_FAILED',
+        message: `Failed to import module: ${(error as Error).message}`,
+        exitCode: 1,
+      })
+    }
+
+    const exported = (mod.default ?? mod) as Record<string, unknown>
+
+    // If the export is already a plain OpenAPI doc (has `openapi` key), use it directly.
+    // Otherwise, expect { mppx, ...GenerateConfig } and call generate().
+    let doc: Record<string, unknown>
+    if (typeof exported.openapi === 'string') {
+      doc = exported
+    } else {
+      const { generate } = await import('../discovery/OpenApi.js')
+      const mppx = exported.mppx as { methods: readonly any[]; realm: string }
+      if (!mppx) {
+        return c.error({
+          code: 'INVALID_MODULE',
+          message:
+            'Module must default-export an OpenAPI document (with `openapi` key) or an object with `mppx` (server instance) and `routes`.',
+          exitCode: 1,
+        })
+      }
+      doc = generate(mppx, exported as any)
+    }
+
+    const json = JSON.stringify(doc, null, 2)
+    if (c.options.output) {
+      const outPath = path.resolve(c.options.output)
+      fs.writeFileSync(outPath, `${json}\n`)
+      process.stderr.write(`Wrote ${outPath}\n`)
+    } else {
+      console.log(json)
+    }
+  },
 }).command('validate', {
   description: 'Validate an OpenAPI discovery document from a file or URL',
   args: z.object({
