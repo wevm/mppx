@@ -1,13 +1,16 @@
+import type { DiscoveryHandler } from '../../discovery/OpenApi.js'
 import type * as Method from '../../Method.js'
 import type * as Mppx from '../../server/Mppx.js'
 
 export type AnyMethodFn = Mppx.AnyMethodFn
 export type AnyServer = Method.AnyServer
 
+type DiscoveryMeta = Pick<DiscoveryHandler, '_internal'>
+
 /** Recursively wraps nested handler objects one level deep. */
 type WrapNested<obj, handler> = {
   [key in keyof obj]: obj[key] extends (options: infer options) => any
-    ? (o: options) => handler & { _internal?: Record<string, unknown> }
+    ? (o: options) => handler & DiscoveryMeta
     : obj[key]
 }
 
@@ -21,7 +24,7 @@ export type Wrap<mppx, handler> = {
     | 'transport'
     ? mppx[key]
     : mppx[key] extends (options: infer options) => any
-      ? (o: options) => handler & { _internal?: Record<string, unknown> }
+      ? (o: options) => handler & DiscoveryMeta
       : mppx[key] extends Record<string, (options: any) => any>
         ? WrapNested<mppx[key], handler>
         : mppx[key]
