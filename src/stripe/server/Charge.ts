@@ -215,6 +215,8 @@ export declare namespace charge {
       | {
           /** Pre-configured Stripe SDK instance. Any object matching the duck-typed `StripeClient` shape works. */
           client: StripeClient
+          /** Stripe secret API key. Required for HTML payment page SPT creation when using `client`. */
+          secretKey?: string | undefined
         }
       | {
           /** Stripe secret API key. */

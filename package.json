@@ -19,7 +19,7 @@
     "test": "vitest",
     "test:html": "pnpm test:html:stripe && pnpm test:html:tempo",
     "test:html:stripe": "playwright test -c src/html/stripe/playwright.config.ts",
-    "test:html:tempo": "playwright test -c src/html/tempo/test/playwright.config.ts"
+    "test:html:tempo": "NODE_OPTIONS='--no-deprecation' playwright test -c src/html/tempo/test/playwright.config.ts"
   },
   "browserslist": [
     "defaults",

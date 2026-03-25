@@ -15,6 +15,8 @@ const mppx = Mppx.create({
       paymentMethodTypes: ['card'],
       // Publishable key for browser HTML payment form.
       publishableKey: process.env.VITE_STRIPE_PUBLIC_KEY,
+      // Secret key for HTML payment page SPT creation.
+      secretKey,
     }),
   ],
 })

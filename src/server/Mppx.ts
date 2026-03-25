@@ -156,10 +156,9 @@ export function create<
   const transport extends Transport.AnyTransport = Transport.Http,
 >(config: create.Config<methods, transport>): Mppx<methods, transport> {
   const {
-    html = true,
     realm = Env.get('realm') ?? 'MPP Payment',
     secretKey = Env.get('secretKey'),
-    transport = Transport.http({ html }) as transport,
+    transport = Transport.http() as transport,
   } = config
 
   if (!secretKey) {
@@ -266,15 +265,6 @@ export declare namespace create {
     methods extends Methods = Methods,
     transport extends Transport.AnyTransport = Transport.Http,
   > = {
-    /**
-     * Serve HTML payment page to browsers (requests with `Accept: text/html`).
-     *
-     * - `true` — use the built-in payment page
-     * - `(props) => string` — custom HTML renderer
-     *
-     * Only applies when using the default HTTP transport.
-     */
-    html?: boolean | ((props: Html.Props) => string) | undefined
     /** Array of configured methods. @example [tempo()] */
     methods: methods
     /** Server realm (e.g., hostname). Auto-detected from environment variables (`MPP_REALM`, `VERCEL_URL`, `RAILWAY_PUBLIC_DOMAIN`, `RENDER_EXTERNAL_HOSTNAME`, `HOST`, `HOSTNAME`), falling back to `"localhost"`. */

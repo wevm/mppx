@@ -113,8 +113,8 @@ export function from<
  */
 export function http(options?: http.Options): Http {
   const renderHtml = (() => {
-    if (!options?.html) return
-    if (options.html === true) return Html.render
+    if (options?.html === false) return
+    if (!options?.html || options.html === true) return Html.render
     return options.html
   })()
 

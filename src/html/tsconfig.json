@@ -1,9 +1,4 @@
 {
   "extends": "../../tsconfig.base.json",
-  "compilerOptions": {
-    "module": "nodenext",
-    "moduleResolution": "nodenext",
-    "types": ["node"]
-  },
   "include": ["build.ts", "vite.ts", "*/vite.config.ts"]
 }
