@@ -925,19 +925,18 @@ const discover = Cli.create('discover', {
   }),
   async run(c) {
     const input = c.args.input
-    const raw = await (async () => {
-      if (/^https?:\/\//.test(input)) {
-        const response = await globalThis.fetch(input)
-        if (!response.ok) {
-          return c.error({
-            code: 'DISCOVERY_FETCH_FAILED',
-            message: `Failed to fetch discovery document: HTTP ${response.status}`,
-            exitCode: 1,
-          })
-        }
-        return await response.text()
+    let raw: string
+    if (/^https?:\/\//.test(input)) {
+      const response = await globalThis.fetch(input)
+      if (!response.ok) {
+        return c.error({
+          code: 'DISCOVERY_FETCH_FAILED',
+          message: `Failed to fetch discovery document: HTTP ${response.status}`,
+          exitCode: 1,
+        })
       }
-
+      raw = await response.text()
+    } else {
       const resolved = path.resolve(input)
       if (!fs.existsSync(resolved)) {
         return c.error({
@@ -946,10 +945,8 @@ const discover = Cli.create('discover', {
           exitCode: 1,
         })
       }
-      return fs.readFileSync(resolved, 'utf-8')
-    })()
-
-    if (typeof raw !== 'string') return
+      raw = fs.readFileSync(resolved, 'utf-8')
+    }
 
     let doc: unknown
     try {
