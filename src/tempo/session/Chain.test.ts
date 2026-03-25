@@ -2,6 +2,7 @@ import { type Address, encodeFunctionData, erc20Abi, type Hex } from 'viem'
 import { waitForTransactionReceipt } from 'viem/actions'
 import { Addresses, Transaction } from 'viem/tempo'
 import { beforeAll, describe, expect, test } from 'vite-plus/test'
+import { nodeEnv } from '~test/config.js'
 import {
   closeChannelOnChain,
   deployEscrow,
@@ -21,6 +22,8 @@ import {
   verifyTopUpTransaction,
 } from './Chain.js'
 import { signVoucher } from './Voucher.js'
+
+const isLocalnet = nodeEnv === 'localnet'
 
 const UINT128_MAX = 2n ** 128n - 1n
 
@@ -70,7 +73,7 @@ describe('assertUint128 (via settleOnChain / closeOnChain)', () => {
   })
 })
 
-describe('on-chain', () => {
+describe.runIf(isLocalnet)('on-chain', () => {
   const payer = accounts[2]
   const recipient = accounts[0].address
   const currency = asset

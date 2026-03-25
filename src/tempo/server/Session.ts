@@ -462,16 +462,9 @@ async function verifyAndAcceptVoucher(parameters: {
     throw new AmountExceedsDepositError({ reason: 'voucher amount exceeds on-chain deposit' })
   }
 
-  if (voucher.cumulativeAmount <= channel.highestVoucherAmount) {
+  if (voucher.cumulativeAmount < channel.highestVoucherAmount) {
     throw new VerificationFailedError({
       reason: 'voucher cumulativeAmount must be strictly greater than highest accepted voucher',
-    })
-  }
-
-  const delta = voucher.cumulativeAmount - channel.highestVoucherAmount
-  if (delta < minVoucherDelta) {
-    throw new DeltaTooSmallError({
-      reason: `voucher delta ${delta} below minimum ${minVoucherDelta}`,
     })
   }
 
@@ -484,6 +477,25 @@ async function verifyAndAcceptVoucher(parameters: {
 
   if (!isValid) {
     throw new InvalidSignatureError({ reason: 'invalid voucher signature' })
+  }
+
+  // Idempotent replay: equal cumulative voucher is accepted without
+  // advancing channel state or charging additional value.
+  if (voucher.cumulativeAmount === channel.highestVoucherAmount) {
+    return createSessionReceipt({
+      challengeId: challenge.id,
+      channelId,
+      acceptedCumulative: channel.highestVoucherAmount,
+      spent: channel.spent,
+      units: channel.units,
+    })
+  }
+
+  const delta = voucher.cumulativeAmount - channel.highestVoucherAmount
+  if (delta < minVoucherDelta) {
+    throw new DeltaTooSmallError({
+      reason: `voucher delta ${delta} below minimum ${minVoucherDelta}`,
+    })
   }
 
   const updated = await store.updateChannel(channelId, (current) => {
