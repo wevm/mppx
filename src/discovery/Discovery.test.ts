@@ -41,6 +41,15 @@ describe('PaymentInfo', () => {
     })
     expect(result.success).toBe(false)
   })
+
+  test('accepts x402 format with unknown fields', () => {
+    const result = PaymentInfo.safeParse({
+      price: '0.54',
+      pricingMode: 'fixed',
+      protocols: ['x402', 'mpp'],
+    })
+    expect(result.success).toBe(true)
+  })
 })
 
 describe('ServiceInfo', () => {
@@ -55,6 +64,17 @@ describe('ServiceInfo', () => {
     })
     expect(result.success).toBe(true)
     expect(result.data?.categories).toEqual(['ai', 'search'])
+  })
+
+  test('accepts relative paths for doc links', () => {
+    const result = ServiceInfo.safeParse({
+      docs: {
+        llms: '/llms.txt',
+        apiReference: '/docs/api',
+      },
+    })
+    expect(result.success).toBe(true)
+    expect(result.data?.docs?.llms).toBe('/llms.txt')
   })
 
   test('rejects invalid doc URIs', () => {
@@ -97,6 +117,29 @@ describe('DiscoveryDocument', () => {
       },
       'x-service-info': {
         categories: ['search'],
+      },
+    })
+    expect(result.success).toBe(true)
+  })
+
+  test('accepts path items with summary, parameters, and extensions', () => {
+    const result = DiscoveryDocument.safeParse({
+      info: { title: 'Test', version: '1.0.0' },
+      openapi: '3.1.0',
+      paths: {
+        '/search': {
+          summary: 'Search endpoints',
+          parameters: [{ name: 'q', in: 'query' }],
+          'x-custom': 'hello',
+          post: {
+            'x-payment-info': {
+              amount: '100',
+              intent: 'charge',
+              method: 'tempo',
+            },
+            responses: { '402': { description: 'Payment Required' } },
+          },
+        },
       },
     })
     expect(result.success).toBe(true)

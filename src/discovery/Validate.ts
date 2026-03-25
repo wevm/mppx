@@ -28,10 +28,16 @@ export function validate(doc: unknown): ValidationError[] {
   const paths = parsed.paths
   if (!paths) return errors
 
-  for (const [pathKey, methods] of Object.entries(paths)) {
-    for (const [method, operation] of Object.entries(methods)) {
+  const httpMethods = ['get', 'put', 'post', 'delete', 'options', 'head', 'patch', 'trace']
+
+  for (const [pathKey, pathItem] of Object.entries(paths)) {
+    const item = pathItem as Record<string, unknown>
+    for (const method of httpMethods) {
+      const operation = item[method] as Record<string, unknown> | undefined
+      if (!operation) continue
+
       const opPath = `paths.${pathKey}.${method}`
-      const rawPaymentInfo = (operation as Record<string, unknown>)['x-payment-info']
+      const rawPaymentInfo = operation['x-payment-info']
       if (!rawPaymentInfo) continue
 
       const paymentResult = PaymentInfo.safeParse(rawPaymentInfo)

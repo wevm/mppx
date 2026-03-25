@@ -113,4 +113,78 @@ describe('validate', () => {
 
     expect(errors.some((error) => error.severity === 'error')).toBe(true)
   })
+
+  test('ignores path-item-level fields like summary and parameters', () => {
+    const errors = validate(
+      makeDoc({
+        paths: {
+          '/search': {
+            summary: 'Search endpoints',
+            parameters: [{ name: 'q', in: 'query' }],
+            'x-custom': 'value',
+            post: {
+              'x-payment-info': {
+                amount: '100',
+                intent: 'charge',
+                method: 'tempo',
+              },
+              requestBody: {
+                content: { 'application/json': { schema: { type: 'object' } } },
+              },
+              responses: {
+                '200': { description: 'OK' },
+                '402': { description: 'Payment Required' },
+              },
+            },
+          },
+        },
+      }),
+    )
+
+    expect(errors.filter((e) => e.severity === 'error')).toHaveLength(0)
+  })
+
+  test('validates proxy-generated docs with relative llms path', () => {
+    const errors = validate({
+      info: { title: 'API Proxy', version: '1.0.0' },
+      openapi: '3.1.0',
+      paths: {},
+      'x-service-info': {
+        categories: ['gateway'],
+        docs: {
+          apiReference: 'https://example.com/api',
+          homepage: 'https://example.com',
+          llms: '/llms.txt',
+        },
+      },
+    })
+
+    expect(errors.filter((e) => e.severity === 'error')).toHaveLength(0)
+  })
+
+  test('accepts x-payment-info with unknown fields', () => {
+    const errors = validate({
+      info: { title: 'Test', version: '1.0.0' },
+      openapi: '3.1.0',
+      paths: {
+        '/api/call': {
+          post: {
+            'x-payment-info': {
+              price: '0.54',
+              pricingMode: 'fixed',
+              protocols: ['x402', 'mpp'],
+            },
+            requestBody: {
+              content: { 'application/json': { schema: { type: 'object' } } },
+            },
+            responses: {
+              '200': { description: 'OK' },
+              '402': { description: 'Payment Required' },
+            },
+          },
+        },
+      },
+    })
+    expect(errors.filter((e) => e.severity === 'error')).toHaveLength(0)
+  })
 })
