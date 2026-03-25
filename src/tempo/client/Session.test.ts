@@ -1,7 +1,7 @@
 import { type Address, createClient, type Hex, http } from 'viem'
 import { privateKeyToAccount } from 'viem/accounts'
 import { Addresses } from 'viem/tempo'
-import { beforeAll, describe, expect, test, vi } from 'vitest'
+import { beforeAll, describe, expect, test, vi } from 'vp/test'
 import { nodeEnv } from '~test/config.js'
 import { deployEscrow, openChannel } from '~test/tempo/session.js'
 import { accounts, asset, chain, client, fundAccount } from '~test/tempo/viem.js'
@@ -210,7 +210,7 @@ describe('session (pure)', () => {
       vi.resetModules()
 
       const createVoucherPayload = vi.fn(
-        async (_client, _account, channelId, cumulativeAmount) => ({
+        async (_client: unknown, _account: unknown, channelId: Hex, cumulativeAmount: bigint) => ({
           action: 'voucher' as const,
           channelId,
           cumulativeAmount: cumulativeAmount.toString(),
@@ -266,7 +266,7 @@ describe('session (pure)', () => {
       vi.resetModules()
 
       const createVoucherPayload = vi.fn(
-        async (_client, _account, channelId, cumulativeAmount) => ({
+        async (_client: unknown, _account: unknown, channelId: Hex, cumulativeAmount: bigint) => ({
           action: 'voucher' as const,
           channelId,
           cumulativeAmount: cumulativeAmount.toString(),

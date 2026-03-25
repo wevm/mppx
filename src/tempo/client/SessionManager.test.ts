@@ -1,5 +1,5 @@
 import type { Address, Hex } from 'viem'
-import { describe, expect, test, vi } from 'vitest'
+import { describe, expect, test, vi } from 'vp/test'
 
 import * as Challenge from '../../Challenge.js'
 import { serializeSessionReceipt } from '../session/Receipt.js'
