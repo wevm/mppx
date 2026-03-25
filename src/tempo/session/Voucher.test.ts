@@ -1,6 +1,6 @@
 import { createClient, http } from 'viem'
 import { privateKeyToAccount } from 'viem/accounts'
-import { describe, expect, test } from 'vite-plus/test'
+import { describe, expect, test } from 'vp/test'
 
 import { parseVoucherFromPayload, signVoucher, verifyVoucher } from './Voucher.js'
 

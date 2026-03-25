@@ -1,7 +1,7 @@
 import { type Address, createClient, type Hex, http } from 'viem'
 import { privateKeyToAccount } from 'viem/accounts'
 import { Addresses } from 'viem/tempo'
-import { beforeAll, describe, expect, test } from 'vite-plus/test'
+import { beforeAll, describe, expect, test } from 'vp/test'
 import { nodeEnv } from '~test/config.js'
 import { deployEscrow, openChannel } from '~test/tempo/session.js'
 import { accounts, asset, chain, client, fundAccount } from '~test/tempo/viem.js'

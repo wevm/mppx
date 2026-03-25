@@ -1,5 +1,5 @@
 import type { Address, Hex } from 'viem'
-import { describe, expect, test } from 'vite-plus/test'
+import { describe, expect, test } from 'vp/test'
 
 import { chainId, escrowContract as escrowContractDefaults } from '../internal/defaults.js'
 import type * as ChannelStore from './ChannelStore.js'

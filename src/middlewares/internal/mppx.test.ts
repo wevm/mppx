@@ -1,6 +1,6 @@
 import { Challenge, Credential, Method, z } from 'mppx'
 import { Mppx } from 'mppx/server'
-import { describe, expect, test } from 'vite-plus/test'
+import { describe, expect, test } from 'vp/test'
 
 import { wrap } from './mppx.js'
 

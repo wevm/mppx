@@ -1,4 +1,4 @@
-import { expectTypeOf, test } from 'vite-plus/test'
+import { expectTypeOf, test } from 'vp/test'
 
 import * as Store from './Store.js'
 

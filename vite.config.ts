@@ -1,7 +1,7 @@
 import path from 'node:path'
 
 import { playwright } from '@vitest/browser-playwright'
-import { defineConfig } from 'vite-plus'
+import { defineConfig } from 'vp'
 
 // Shared aliases used by both projects
 const alias = {

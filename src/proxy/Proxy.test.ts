@@ -1,7 +1,7 @@
 import { Receipt } from 'mppx'
 import { Mppx as Mppx_client, tempo as tempo_client } from 'mppx/client'
 import { Mppx as Mppx_server, tempo as tempo_server } from 'mppx/server'
-import { afterEach, describe, expect, test } from 'vite-plus/test'
+import { afterEach, describe, expect, test } from 'vp/test'
 import * as Http from '~test/Http.js'
 import { accounts, asset, client } from '~test/tempo/viem.js'
 

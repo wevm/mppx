@@ -1,6 +1,6 @@
 import { Challenge, Credential } from 'mppx'
 import type { Address, Hex } from 'viem'
-import { describe, expect, test } from 'vite-plus/test'
+import { describe, expect, test } from 'vp/test'
 
 import * as Store from '../../../Store.js'
 import { chainId, escrowContract as escrowContractDefaults } from '../../internal/defaults.js'

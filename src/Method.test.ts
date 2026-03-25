@@ -1,5 +1,5 @@
 import { Method, z } from 'mppx'
-import { describe, expect, expectTypeOf, test } from 'vite-plus/test'
+import { describe, expect, expectTypeOf, test } from 'vp/test'
 
 describe('from', () => {
   test('behavior: creates intent', () => {

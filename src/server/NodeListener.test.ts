@@ -1,5 +1,5 @@
 import { NodeListener, Request } from 'mppx/server'
-import { afterEach, describe, expect, test } from 'vite-plus/test'
+import { afterEach, describe, expect, test } from 'vp/test'
 import * as Http from '~test/Http.js'
 
 let server: Awaited<ReturnType<typeof Http.createServer>> | undefined

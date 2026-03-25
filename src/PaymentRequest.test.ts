@@ -1,6 +1,6 @@
 import { PaymentRequest } from 'mppx'
 import { Methods } from 'mppx/tempo'
-import { describe, expect, test } from 'vite-plus/test'
+import { describe, expect, test } from 'vp/test'
 
 describe('from', () => {
   test('creates a request', () => {

@@ -1,5 +1,5 @@
 import { Bytes, Hash, Hex } from 'ox'
-import { describe, expect, test } from 'vite-plus/test'
+import { describe, expect, test } from 'vp/test'
 
 import * as Attribution from './Attribution.js'
 

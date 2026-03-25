@@ -1,7 +1,7 @@
 import { Challenge, Credential, Mcp } from 'mppx'
 import { Transport } from 'mppx/client'
 import { Methods } from 'mppx/tempo'
-import { describe, expect, test } from 'vite-plus/test'
+import { describe, expect, test } from 'vp/test'
 
 const realm = 'api.example.com'
 const secretKey = 'test-secret-key'

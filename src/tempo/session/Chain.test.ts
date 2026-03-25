@@ -1,7 +1,7 @@
 import { type Address, encodeFunctionData, erc20Abi, type Hex } from 'viem'
 import { waitForTransactionReceipt } from 'viem/actions'
 import { Addresses, Transaction } from 'viem/tempo'
-import { beforeAll, describe, expect, test } from 'vite-plus/test'
+import { beforeAll, describe, expect, test } from 'vp/test'
 import { nodeEnv } from '~test/config.js'
 import {
   closeChannelOnChain,

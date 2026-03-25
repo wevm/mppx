@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'vitest'
+import { describe, expect, test } from 'vp/test'
 
 import { address, amount, datetime, hash, period, signature, unwrapOptional, z } from './zod.js'
 
