@@ -173,30 +173,6 @@ function resolveRewriteRequest(
   return undefined
 }
 
-/** Serializes a service for discovery responses. */
-export function serialize(s: Service) {
-  return {
-    categories: s.categories,
-    description: s.description,
-    docs: s.docs,
-    id: s.id,
-    docsLlmsUrl: s.docsLlmsUrl?.({}),
-    routes: Object.entries(s.routes).map(([pattern, endpoint]) => {
-      const tokens = pattern.trim().split(/\s+/)
-      const hasMethod = tokens.length >= 2
-      const path = hasMethod ? tokens.slice(1).join(' ') : tokens[0]
-      return {
-        docsLlmsUrl: s.docsLlmsUrl?.({ route: pattern }),
-        method: hasMethod ? tokens[0] : undefined,
-        path: `/${s.id}${path}`,
-        pattern: hasMethod ? `${tokens[0]} /${s.id}${path}` : `/${s.id}${path}`,
-        payment: endpoint ? paymentOf(endpoint) : null,
-      }
-    }),
-    title: s.title,
-  }
-}
-
 /** Renders an llms.txt markdown string for a list of services. */
 export function toLlmsTxt(
   services: Service[],
@@ -224,58 +200,6 @@ export function toLlmsTxt(
   lines.push('', `[OpenAPI discovery](${options?.openApiPath ?? '/openapi.json'})`)
 
   return lines.join('\n')
-}
-
-/** Renders a full markdown listing of all services with their routes. */
-export function toServicesMarkdown(services: Service[]): string {
-  const lines: string[] = ['# Services', '']
-
-  if (services.length === 0) return lines.join('\n')
-
-  for (const s of services) {
-    lines.push(`## ${s.title ?? s.id}`, '')
-    if (s.description) lines.push(s.description, '')
-    pushRoutes(lines, s)
-  }
-
-  return lines.join('\n')
-}
-
-/** Renders a markdown string for a single service. */
-export function toMarkdown(s: Service): string {
-  const docsLlmsUrl = s.docsLlmsUrl?.({})
-  const lines: string[] = [`# ${s.title ?? s.id}`, '']
-  if (docsLlmsUrl) lines.push(`> Documentation: ${docsLlmsUrl}`, '')
-  if (s.description) lines.push(s.description, '')
-  pushRoutes(lines, s, '##')
-  return lines.join('\n')
-}
-
-function pushRoutes(lines: string[], s: Service, heading: '##' | '###' = '###') {
-  lines.push(`${heading} Routes`, '')
-  const serialized = serialize(s)
-  for (const route of serialized.routes) {
-    const p = route.payment as Record<string, unknown> | null
-    const desc = p?.description ? `: ${p.description}` : ''
-    lines.push(`- \`${route.pattern}\`${desc}`)
-    if (!p) {
-      lines.push('  - Type: free')
-    } else {
-      lines.push(`  - Type: ${p.intent}`)
-      if (p.amount) {
-        const perUnit = p.unitType ? `/${p.unitType}` : ''
-        if (p.decimals !== undefined) {
-          const price = Number(p.amount) / 10 ** Number(p.decimals)
-          lines.push(`  - Price: ${price}${perUnit} (${p.amount} units, ${p.decimals} decimals)`)
-        } else {
-          lines.push(`  - Units: ${p.amount}${perUnit}`)
-        }
-      }
-      if (p.currency) lines.push(`  - Currency: ${p.currency}`)
-    }
-    if (route.docsLlmsUrl) lines.push(`  - Docs: ${route.docsLlmsUrl}`)
-    lines.push('')
-  }
 }
 
 /** Extracts per-endpoint options from an endpoint definition. */

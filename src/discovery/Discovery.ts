@@ -11,7 +11,7 @@ function uri() {
  *
  * Discovery is advisory only. Runtime 402 challenges remain authoritative.
  */
-export const PaymentInfo = z.object({
+export const PaymentInfo = z.looseObject({
   amount: z.union([z.null(), z.string().check(z.regex(/^(0|[1-9][0-9]*)$/, 'Invalid amount'))]),
   currency: z.optional(z.string()),
   description: z.optional(z.string()),
@@ -20,7 +20,7 @@ export const PaymentInfo = z.object({
 })
 export type PaymentInfo = z.infer<typeof PaymentInfo>
 
-const ServiceDocs = z.object({
+const ServiceDocs = z.looseObject({
   apiReference: z.optional(uri()),
   homepage: z.optional(uri()),
   llms: z.optional(uri()),
@@ -29,7 +29,7 @@ const ServiceDocs = z.object({
 /**
  * Schema for the `x-service-info` OpenAPI extension at the document root.
  */
-export const ServiceInfo = z.object({
+export const ServiceInfo = z.looseObject({
   categories: z.optional(z.array(z.string())),
   docs: z.optional(ServiceDocs),
 })
@@ -39,9 +39,9 @@ export type ServiceInfo = z.infer<typeof ServiceInfo>
  * Minimal schema for an OpenAPI discovery document annotated with
  * `x-service-info` and per-operation `x-payment-info`.
  */
-export const DiscoveryDocument = z.object({
+export const DiscoveryDocument = z.looseObject({
   openapi: z.string(),
-  info: z.object({
+  info: z.looseObject({
     title: z.string(),
     version: z.string(),
   }),
@@ -51,7 +51,7 @@ export const DiscoveryDocument = z.object({
       z.string(),
       z.record(
         z.string(),
-        z.object({
+        z.looseObject({
           'x-payment-info': z.optional(PaymentInfo),
           requestBody: z.optional(z.unknown()),
           responses: z.optional(z.record(z.string(), z.unknown())),

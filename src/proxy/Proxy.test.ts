@@ -204,14 +204,6 @@ describe('create', () => {
     })
   })
 
-  test('behavior: GET /discover* returns 410', async () => {
-    const proxy = ApiProxy.create({ services: [] })
-    proxyServer = await Http.createServer(proxy.listener)
-    const res = await fetch(`${proxyServer.url}/discover/all`)
-    expect(res.status).toBe(410)
-    expect(await res.text()).toContain('/openapi.json')
-  })
-
   test('behavior: returns 404 for unknown service', async () => {
     const proxy = ApiProxy.create({ services: [] })
     proxyServer = await Http.createServer(proxy.listener)

@@ -91,13 +91,6 @@ export function create(config: create.Config): Proxy {
         }),
         { headers: { 'Content-Type': 'text/plain; charset=utf-8' } },
       )
-
-    if (request.method === 'GET' && pathname.startsWith('/discover'))
-      return new Response('Discovery moved to /openapi.json. Use /llms.txt for text docs.', {
-        status: 410,
-        headers: { 'Content-Type': 'text/plain; charset=utf-8' },
-      })
-
     const parsed = Route.parse(pathname)
     if (!parsed) return new Response('Not Found', { status: 404 })
 
