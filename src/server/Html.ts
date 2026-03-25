@@ -1,5 +1,11 @@
 import type * as Challenge from '../Challenge.js'
-import { content, script, serviceWorker } from './internal/html.js'
+import { content, script, serviceWorker } from './internal/html.gen.js'
+
+/** Element ID for the JSON script tag containing challenge + config data. */
+export const dataElementId = 'mppx-data'
+
+/** Element ID for the method-specific content container. */
+export const methodElementId = 'mppx-method'
 
 /** Pathname for the service worker script endpoint. */
 export const serviceWorkerPathname = '/__mppx_serviceWorker.js'
@@ -29,7 +35,10 @@ export function render(props: Props): string {
   const data = JSON.stringify({ challenge: props.challenge, config: props.config ?? {} })
   return content
     .replace('<!--mppx:head-->', head)
-    .replace('<!--mppx:data-->', `<script id="mppx-data" type="application/json">${data}</script>`)
+    .replace(
+      '<!--mppx:data-->',
+      `<script id="${dataElementId}" type="application/json">${data}</script>`,
+    )
     .replace('<!--mppx:script-->', script)
     .replace(
       '<!--mppx:method-->',

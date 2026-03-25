@@ -8,7 +8,7 @@ import * as Challenge from '../Challenge.js'
 import * as Credential from '../Credential.js'
 import * as Expires from '../Expires.js'
 import type * as Method from '../Method.js'
-import { serviceWorkerPathname } from '../server/Html.js'
+import { dataElementId, serviceWorkerPathname } from '../server/Html.js'
 import type * as z from '../zod.js'
 
 const html = String.raw
@@ -70,15 +70,18 @@ export function dev<const method extends Method.Method>(options: {
 
         const dataJson = JSON.stringify({ challenge, config: options.config ?? {} })
         const page = await fs.readFile(path.resolve(pageDir, 'src/page.html'), 'utf-8')
-        const methodContent = (
-          await fs.readFile(path.resolve(server.config.root, `src/${intent}.html`), 'utf-8')
-        ).trimEnd()
+        let methodContent = ''
+        try {
+          methodContent = (
+            await fs.readFile(path.resolve(server.config.root, `src/${intent}.html`), 'utf-8')
+          ).trimEnd()
+        } catch {}
 
         const html = page
           .replace('<!--mppx:head-->', defaultHead)
           .replace(
             '<!--mppx:data-->',
-            `<script id="mppx-data" type="application/json">${dataJson}</script>`,
+            `<script id="${dataElementId}" type="application/json">${dataJson}</script>`,
           )
           .replace(
             '<!--mppx:script-->',
@@ -126,7 +129,7 @@ export function build(names: string | string[]): Plugin {
     async closeBundle() {
       // e.g. root = src/html/tempo → method = tempo
       const method = path.basename(root)
-      const output = path.resolve(root, `../../${method}/server/internal/html.ts`)
+      const output = path.resolve(root, `../../${method}/server/internal/html.gen.ts`)
 
       // Read shared chunks (if code splitting produced any)
       const assetsDir = path.resolve(root, 'dist/assets')
@@ -139,9 +142,10 @@ export function build(names: string | string[]): Plugin {
       } catch {}
 
       for (const name of items) {
-        const content = (
-          await fs.readFile(path.resolve(root, `src/${name}.html`), 'utf-8')
-        ).trimEnd()
+        let content = ''
+        try {
+          content = (await fs.readFile(path.resolve(root, `src/${name}.html`), 'utf-8')).trimEnd()
+        } catch {}
         const entryScript = (
           await fs.readFile(path.resolve(root, `dist/${name}.js`), 'utf-8')
         ).trim()
@@ -176,14 +180,14 @@ export function buildPage(): Plugin {
           output: { entryFileNames: '[name].js', format: 'es' as const },
         },
         modulePreload: false,
-        minify: false,
+        minify: true,
       },
     }),
     configResolved(config) {
       root = config.root
     },
     async closeBundle() {
-      const output = path.resolve(root, '../../server/internal/page.ts')
+      const output = path.resolve(root, '../../server/internal/html.gen.ts')
       // Build service worker separately (different global scope)
       const { build } = await import('vite')
       await build({

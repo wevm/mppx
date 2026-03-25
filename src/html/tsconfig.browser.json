@@ -6,5 +6,12 @@
     "lib": ["ES2022", "DOM", "DOM.Iterable"],
     "types": []
   },
-  "include": ["env.d.ts", "tempo/src/*.ts", "stripe/src/*.ts", "page/src/page.ts"]
+  "include": [
+    "env.d.ts",
+    "tempo/src/*.ts",
+    "tempo/src/env.d.ts",
+    "stripe/src/*.ts",
+    "stripe/src/env.d.ts",
+    "page/src/page.ts"
+  ]
 }

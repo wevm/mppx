@@ -7,6 +7,7 @@
     "check": "oxlint --fix && oxfmt --write .",
     "check:ci": "oxlint && oxfmt --check .",
     "check:types": "tsgo -b",
+    "check:types:html": "tsgo -p src/html/tsconfig.browser.json",
     "check:types:examples": "pnpm -r --filter './examples/**' run check:types",
     "deps": "pnpx taze -r --no-ignore-other-workspaces --ignore-paths node_modules",
     "deps:ci": "pnpx actions-up",

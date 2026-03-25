@@ -1,26 +1,21 @@
 /// <reference lib="webworker" />
 
-let cred: string | null = null
+let credential: string | null = null
 
-;(self as unknown as ServiceWorkerGlobalScope).addEventListener('install', () => {
-  ;(self as unknown as ServiceWorkerGlobalScope).skipWaiting()
+const serviceWorker = self as unknown as ServiceWorkerGlobalScope
+serviceWorker.addEventListener('install', () => {
+  serviceWorker.skipWaiting()
 })
-;(self as unknown as ServiceWorkerGlobalScope).addEventListener(
-  'activate',
-  (e: ExtendableEvent) => {
-    e.waitUntil((self as unknown as ServiceWorkerGlobalScope).clients.claim())
-  },
-)
-;(self as unknown as ServiceWorkerGlobalScope).addEventListener(
-  'message',
-  (e: ExtendableMessageEvent) => {
-    cred = e.data
-  },
-)
-;(self as unknown as ServiceWorkerGlobalScope).addEventListener('fetch', (e: FetchEvent) => {
-  if (!cred) return
-  const h = new Headers(e.request.headers)
-  h.set('Authorization', cred)
-  cred = null
-  e.respondWith(fetch(new Request(e.request, { headers: h })))
+serviceWorker.addEventListener('activate', (event) => {
+  event.waitUntil(serviceWorker.clients.claim())
+})
+serviceWorker.addEventListener('message', (event) => {
+  credential = event.data
+})
+serviceWorker.addEventListener('fetch', (event) => {
+  if (!credential) return
+  const headers = new Headers(event.request.headers)
+  headers.set('Authorization', credential)
+  credential = null
+  event.respondWith(fetch(new Request(event.request, { headers })))
 })

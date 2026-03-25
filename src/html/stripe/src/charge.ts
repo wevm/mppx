@@ -1,73 +1,99 @@
 import { loadStripe } from '@stripe/stripe-js/pure'
 
-const request = mppx.challenge.request as Record<string, any>
+import { methodElementId } from '../../../server/Html.js'
 
-const stripe = (await loadStripe(mppx.config.publishableKey as string))!
+const root = document.getElementById(methodElementId)
+if (!root) throw new Error('Missing root element')
+
+const form = document.createElement('div')
+form.style.maxWidth = '400px'
+
+const paymentElement = document.createElement('div')
+paymentElement.style.marginBottom = '12px'
+form.appendChild(paymentElement)
+
+const payButton = document.createElement('button')
+payButton.type = 'button'
+payButton.textContent = 'Pay with card'
+form.appendChild(payButton)
+
+const statusElement = document.createElement('output')
+form.appendChild(statusElement)
+
+root.appendChild(form)
+
+const stripe = await loadStripe(mppx.config.publishableKey)
+if (!stripe) throw new Error('Failed to load stripe')
+
 const isDark = window.matchMedia('(prefers-color-scheme: dark)').matches
 const elements = stripe.elements({
   mode: 'payment',
-  amount: Number(request.amount),
-  currency: request.currency as string,
+  amount: Number(mppx.challenge.request.amount),
   appearance: { theme: isDark ? 'night' : 'stripe', variables: { spacingUnit: '3px' } },
-  paymentMethodTypes: ['card'],
+  currency: mppx.challenge.request.currency,
   paymentMethodCreation: 'manual',
+  paymentMethodTypes: ['card'],
 })
 elements
   .create('payment', {
+    fields: {
+      billingDetails: {
+        address: { country: 'never' },
+      },
+    },
     layout: 'tabs',
-    fields: { billingDetails: { address: { postalCode: 'never', country: 'never' } } },
     wallets: { link: 'never' },
   })
-  .mount('#payment-element')
+  .mount(paymentElement)
 
-const payBtn = document.getElementById('pay') as HTMLButtonElement
-const statusEl = document.getElementById('status') as HTMLOutputElement
-
-window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', (e) => {
-  elements.update({ appearance: { theme: e.matches ? 'night' : 'stripe' } })
+window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', (event) => {
+  elements.update({ appearance: { theme: event.matches ? 'night' : 'stripe' } })
 })
 
-payBtn.onclick = async () => {
-  payBtn.disabled = true
+payButton.onclick = async () => {
+  payButton.disabled = true
+
   const submitResult = await elements.submit()
   if (submitResult.error) {
-    statusEl.textContent = submitResult.error.message!
-    statusEl.style.color = 'red'
-    payBtn.disabled = false
-    return
-  }
-  const result = await stripe.createPaymentMethod({
-    elements,
-    params: { billing_details: { address: { postal_code: '10001', country: 'US' } } },
-  })
-  if (result.error) {
-    statusEl.textContent = result.error.message!
-    statusEl.style.color = 'red'
-    payBtn.disabled = false
+    statusElement.textContent = submitResult.error.message || 'Failed to submit elements.'
+    statusElement.style.color = 'red'
+    payButton.disabled = false
     return
   }
 
-  const res = await fetch('/api/create-spt', {
+  const result = await stripe.createPaymentMethod({
+    elements,
+    params: {
+      billing_details: {
+        address: { country: new Intl.Locale(navigator.language).region ?? 'US' },
+      },
+    },
+  })
+  if (result.error) {
+    statusElement.textContent = result.error.message || 'Failed to create payment method.'
+    statusElement.style.color = 'red'
+    payButton.disabled = false
+    return
+  }
+
+  const response = await fetch(mppx.config.createTokenUrl, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       paymentMethod: result.paymentMethod.id,
-      amount: String(request.amount),
-      currency: request.currency as string,
+      amount: String(mppx.challenge.request.amount),
+      currency: mppx.challenge.request.currency,
       expiresAt: Math.floor(Date.now() / 1000) + 3600,
     }),
   })
-  if (!res.ok) {
-    const err = await res.json()
-    statusEl.textContent = err.error || 'SPT creation failed'
-    statusEl.style.color = 'red'
-    payBtn.disabled = false
+  if (!response.ok) {
+    const json = (await response.json()) as { error?: string }
+    statusElement.textContent = json.error || 'Failed to create token.'
+    statusElement.style.color = 'red'
+    payButton.disabled = false
     return
   }
-  const data = await res.json()
-  dispatchEvent(
-    new CustomEvent('mppx:complete', {
-      detail: mppx.serializeCredential({ spt: data.spt }),
-    }),
-  )
+
+  const { spt } = (await response.json()) as { spt: string }
+  mppx.dispatch({ spt })
 }

@@ -1,6 +1,6 @@
 import type { MiddlewareHandler } from 'hono'
 
-import { serviceWorkerPathname, serviceWorkerScript } from '../server/Html.js'
+import * as Html from '../server/Html.js'
 import * as Mppx_core from '../server/Mppx.js'
 import * as Mppx_internal from './internal/mppx.js'
 
@@ -27,7 +27,17 @@ export namespace Mppx {
   export function create<const methods extends Mppx_core.Methods>(
     config: Mppx_core.create.Config<methods>,
   ): Mppx_internal.Wrap<Mppx_core.Mppx<methods>, MiddlewareHandler> {
-    return Mppx_internal.wrap(Mppx_core.create(config), payment)
+    const mppx = Mppx_core.create(config)
+    return Mppx_internal.wrap(mppx, (intent, options) => {
+      return (async (c, next) => {
+        const htmlResponse = await mppx.html(c.req.raw)
+        if (htmlResponse) return htmlResponse
+        const result = await intent(options)(c.req.raw)
+        if (result.status === 402) return result.challenge
+        await next()
+        c.res = result.withReceipt(c.res)
+      }) as MiddlewareHandler
+    })
   }
 }
 
@@ -56,8 +66,10 @@ export function payment<const intent extends Mppx_internal.AnyMethodFn>(
   options: intent extends (options: infer options) => any ? options : never,
 ): MiddlewareHandler {
   return async (c, next) => {
-    if (new URL(c.req.url).pathname === serviceWorkerPathname)
-      return c.body(serviceWorkerScript, { headers: { 'Content-Type': 'application/javascript' } })
+    if (new URL(c.req.url).pathname === Html.serviceWorkerPathname)
+      return c.body(Html.serviceWorkerScript, {
+        headers: { 'Content-Type': 'application/javascript' },
+      })
     const result = await intent(options)(c.req.raw)
     if (result.status === 402) return result.challenge
     await next()

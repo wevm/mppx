@@ -11,7 +11,7 @@
     { "path": "./test" },
     { "path": "./src/html" },
     { "path": "./src/html/tsconfig.browser.json" },
-    { "path": "./src/html/page/tsconfig.sw.json" },
+    { "path": "./src/html/page/tsconfig.worker.json" },
     { "path": "./src/html/tempo/test" }
   ]
 }

@@ -22,7 +22,7 @@ import * as FeePayer from '../internal/fee-payer.js'
 import * as Selectors from '../internal/selectors.js'
 import type * as types from '../internal/types.js'
 import * as Methods from '../Methods.js'
-import { html } from './internal/html.js'
+import { html } from './internal/html.gen.js'
 
 /**
  * Creates a Tempo charge method intent for usage on the server.

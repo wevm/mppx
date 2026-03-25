@@ -37,7 +37,7 @@ jobs:
         run: pnpm check:ci
 
       - name: Check types
-        run: pnpm dev && pnpm check:types && pnpm check:types:examples
+        run: pnpm dev && pnpm check:types && pnpm check:types:html && pnpm check:types:examples
 
   test:
     name: Test Runtime
@@ -69,4 +69,11 @@ jobs:
           pnpm run test --bail=1
         env:
           CI: true
+          VITE_TEMPO_TAG: sha-20aecec
+
+      - name: Run HTML e2e tests
+        run: pnpm test:html
+        env:
+          VITE_STRIPE_PUBLIC_KEY: ${{ secrets.VITE_STRIPE_PUBLIC_KEY }}
+          VITE_STRIPE_SECRET_KEY: ${{ secrets.VITE_STRIPE_SECRET_KEY }}
           VITE_TEMPO_TAG: sha-20aecec

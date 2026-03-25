@@ -1,4 +1,4 @@
-import { serviceWorkerPathname, serviceWorkerScript } from '../server/Html.js'
+import * as Html from '../server/Html.js'
 import * as Mppx_core from '../server/Mppx.js'
 import * as Mppx_internal from './internal/mppx.js'
 
@@ -28,8 +28,16 @@ export namespace Mppx {
   export function create<const methods extends Mppx_core.Methods>(
     config: Mppx_core.create.Config<methods>,
   ): Mppx_internal.Wrap<Mppx_core.Mppx<methods>, NextjsHandler> {
-    return Mppx_internal.wrap(Mppx_core.create(config), (intent, options) => {
-      return (handler: RouteHandler) => payment(intent, options, handler)
+    const mppx = Mppx_core.create(config)
+    return Mppx_internal.wrap(mppx, (intent, options) => {
+      return (handler: RouteHandler) => async (request: Request) => {
+        const htmlResponse = await mppx.html(request)
+        if (htmlResponse) return htmlResponse
+        const result = await intent(options)(request)
+        if (result.status === 402) return result.challenge
+        const response = await handler(request)
+        return result.withReceipt(response)
+      }
     })
   }
 }
@@ -59,8 +67,8 @@ export function payment<const intent extends Mppx_internal.AnyMethodFn>(
   handler: RouteHandler,
 ): RouteHandler {
   return async (request) => {
-    if (new URL(request.url).pathname === serviceWorkerPathname)
-      return new Response(serviceWorkerScript, {
+    if (new URL(request.url).pathname === Html.serviceWorkerPathname)
+      return new Response(Html.serviceWorkerScript, {
         headers: { 'Content-Type': 'application/javascript' },
       })
     const result = await intent(options)(request)

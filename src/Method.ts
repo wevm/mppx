@@ -76,6 +76,9 @@ export type Server<
 > = method & {
   defaults?: defaults | undefined
   html?: Html.Options | false | undefined
+  htmlRoutes?:
+    | Record<string, (request: globalThis.Request) => Promise<globalThis.Response>>
+    | undefined
   request?: RequestFn<method> | undefined
   respond?: RespondFn<method> | undefined
   transport?: transportOverride | undefined
@@ -204,11 +207,12 @@ export function toServer<
   method: method,
   options: toServer.Options<method, defaults, transportOverride>,
 ): Server<method, defaults, transportOverride> {
-  const { defaults, html, request, respond, transport, verify } = options
+  const { defaults, html, htmlRoutes, request, respond, transport, verify } = options
   return {
     ...method,
     defaults,
     html,
+    htmlRoutes,
     request,
     respond,
     transport,
@@ -224,6 +228,9 @@ export declare namespace toServer {
   > = {
     defaults?: defaults | undefined
     html?: Html.Options | false | undefined
+    htmlRoutes?:
+      | Record<string, (request: globalThis.Request) => Promise<globalThis.Response>>
+      | undefined
     request?: RequestFn<method> | undefined
     respond?: RespondFn<method> | undefined
     transport?: transportOverride | undefined

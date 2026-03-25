@@ -8,7 +8,9 @@ import type { LooseOmit, OneOf } from '../../internal/types.js'
 import * as Method from '../../Method.js'
 import type { StripeClient } from '../internal/types.js'
 import * as Methods from '../Methods.js'
-import { html } from './internal/html.js'
+import { html } from './internal/html.gen.js'
+
+export const createTokenPathname = '/__mppx_stripe_create_token'
 
 /**
  * Creates a Stripe charge method intent for usage on the server.
@@ -67,7 +69,87 @@ export function charge<const parameters extends charge.Parameters>(parameters: p
     ...(parameters.html === false
       ? { html: false }
       : publishableKey
-        ? { html: { method: html, config: { publishableKey } } }
+        ? {
+            html: {
+              method: html,
+              config: { publishableKey, createTokenUrl: createTokenPathname } satisfies HtmlConfig,
+            },
+            htmlRoutes: {
+              [createTokenPathname]: async (request: globalThis.Request) => {
+                const { paymentMethod, amount, currency, expiresAt, networkId, metadata } =
+                  (await request.json()) as {
+                    paymentMethod: string
+                    amount: string
+                    currency: string
+                    expiresAt: number
+                    networkId?: string
+                    metadata?: Record<string, string>
+                  }
+
+                const body = new URLSearchParams({
+                  payment_method: paymentMethod,
+                  'usage_limits[currency]': currency,
+                  'usage_limits[max_amount]': amount,
+                  'usage_limits[expires_at]': expiresAt.toString(),
+                })
+                if (networkId) body.set('seller_details[network_id]', networkId)
+                if (metadata) {
+                  for (const [key, value] of Object.entries(metadata)) {
+                    body.set(`metadata[${key}]`, value)
+                  }
+                }
+
+                const resolvedSecretKey = secretKey ?? (client as any)?.apiKey
+                if (!resolvedSecretKey)
+                  return Response.json(
+                    { error: 'secretKey is required for SPT creation' },
+                    { status: 500 },
+                  )
+
+                const createSpt = async (bodyParams: URLSearchParams) =>
+                  fetch('https://api.stripe.com/v1/test_helpers/shared_payment/granted_tokens', {
+                    method: 'POST',
+                    headers: {
+                      Authorization: `Basic ${btoa(`${resolvedSecretKey}:`)}`,
+                      'Content-Type': 'application/x-www-form-urlencoded',
+                    },
+                    body: bodyParams,
+                  })
+
+                try {
+                  let response = await createSpt(body)
+                  if (!response.ok) {
+                    const error = (await response.json()) as { error: { message: string } }
+                    if (
+                      (metadata || networkId) &&
+                      error.error.message.includes('Received unknown parameter')
+                    ) {
+                      const fallbackBody = new URLSearchParams({
+                        payment_method: paymentMethod,
+                        'usage_limits[currency]': currency,
+                        'usage_limits[max_amount]': amount,
+                        'usage_limits[expires_at]': expiresAt.toString(),
+                      })
+                      response = await createSpt(fallbackBody)
+                    } else {
+                      return Response.json({ error: error.error.message }, { status: 500 })
+                    }
+                  }
+
+                  if (!response.ok) {
+                    const error = (await response.json()) as { error: { message: string } }
+                    return Response.json({ error: error.error.message }, { status: 500 })
+                  }
+
+                  const { id: spt } = (await response.json()) as { id: string }
+                  return Response.json({ spt })
+                } catch (e) {
+                  const message = e instanceof Error ? e.message : 'Unknown error'
+                  return Response.json({ error: message }, { status: 500 })
+                }
+              },
+            },
+          }
         : {}),
 
     async verify({ credential }) {
@@ -111,6 +193,11 @@ export function charge<const parameters extends charge.Parameters>(parameters: p
       } as const
     },
   })
+}
+
+export type HtmlConfig = {
+  createTokenUrl: string
+  publishableKey: string
 }
 
 export declare namespace charge {

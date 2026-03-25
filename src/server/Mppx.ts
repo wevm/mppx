@@ -9,7 +9,7 @@ import type * as Method from '../Method.js'
 import * as PaymentRequest from '../PaymentRequest.js'
 import type * as Receipt from '../Receipt.js'
 import type * as z from '../zod.js'
-import type * as Html from './Html.js'
+import * as Html from './Html.js'
 import * as NodeListener from './NodeListener.js'
 import * as Request from './Request.js'
 import * as Transport from './Transport.js'
@@ -23,6 +23,8 @@ export type Mppx<
   methods extends Methods = Methods,
   transport extends Transport.AnyTransport = Transport.Http,
 > = {
+  /** Handles HTML payment page infrastructure routes (service worker + method-registered routes). */
+  html: (request: globalThis.Request) => Promise<globalThis.Response | null>
   /** Methods to configure. */
   methods: FlattenMethods<methods>
   /** Server realm (e.g., hostname). */
@@ -221,13 +223,42 @@ export function create<
     return compose(...(configured as ConfiguredHandler[]))
   }
 
+  const htmlRoutesMap = new Map<
+    string,
+    (request: globalThis.Request) => Promise<globalThis.Response>
+  >()
+  // Register service worker route
+  htmlRoutesMap.set(
+    Html.serviceWorkerPathname,
+    async () =>
+      new Response(Html.serviceWorkerScript, {
+        headers: { 'Content-Type': 'application/javascript' },
+      }),
+  )
+
+  // Collect htmlRoutes from all methods
+  for (const mi of methods) {
+    if (!mi.htmlRoutes) continue
+    for (const [pathname, handler] of Object.entries(mi.htmlRoutes) as [
+      string,
+      (request: globalThis.Request) => Promise<globalThis.Response>,
+    ][])
+      htmlRoutesMap.set(pathname, handler)
+  }
+
   return {
+    async html(request: globalThis.Request) {
+      const pathname = new URL(request.url).pathname
+      const handler = htmlRoutesMap.get(pathname)
+      if (handler) return handler(request)
+      return null
+    },
     methods,
     compose: composeFn,
     realm: realm as string,
     transport,
-    ...handlers,
-  } as never
+    ...(handlers as any),
+  }
 }
 
 export declare namespace create {

@@ -1,16 +1,47 @@
 import { createStore } from 'mipd'
 import type { EIP1193Provider } from 'mipd'
-import { createClient, custom, encodeFunctionData, parseAbi } from 'viem'
+import { createClient, custom, encodeFunctionData, getAddress, parseAbi, RpcError } from 'viem'
 import { sendTransactionSync } from 'viem/actions'
 import { tempo as tempoMainnet, tempoLocalnet, tempoModerato } from 'viem/chains'
 
-const request = mppx.challenge.request as Record<string, any>
+import { methodElementId } from '../../../server/Html.js'
+
+const root = document.getElementById(methodElementId)
+if (!root) throw new Error('Missing root element')
+
+const walletsElement = document.createElement('div')
+walletsElement.id = 'wallets'
+root.appendChild(walletsElement)
+
+const connectedElement = document.createElement('div')
+connectedElement.id = 'connected'
+connectedElement.hidden = true
+root.appendChild(connectedElement)
+
+const payButton = document.createElement('button')
+payButton.id = 'pay-btn'
+payButton.type = 'button'
+connectedElement.appendChild(payButton)
+
+const statusElement = document.createElement('output')
+connectedElement.appendChild(statusElement)
+
+const disconnectParagraph = document.createElement('p')
+connectedElement.appendChild(disconnectParagraph)
+
+const disconnectButton = document.createElement('button')
+disconnectButton.id = 'disconnect-btn'
+disconnectButton.type = 'button'
+disconnectButton.textContent = 'Disconnect'
+disconnectParagraph.appendChild(disconnectButton)
+
+disconnectParagraph.append(' ')
+
+const accountDisplay = document.createElement('code')
+accountDisplay.id = 'account-display'
+disconnectParagraph.appendChild(accountDisplay)
 
 const store = createStore()
-const walletsEl = document.getElementById('wallets')!
-const connectedEl = document.getElementById('connected')!
-const accountDisplay = document.getElementById('account-display')!
-const payBtn = document.getElementById('pay-btn') as HTMLButtonElement
 let activeProvider: EIP1193Provider | null = null
 let activeAccount: string | null = null
 
@@ -18,43 +49,38 @@ function renderWallets() {
   if (activeAccount) return
   const providers = store.getProviders()
   if (!providers.length) {
-    walletsEl.innerHTML = '<p>No wallets detected.</p>'
+    walletsElement.innerHTML = '<p>No wallets detected.</p>'
     return
   }
-  walletsEl.innerHTML = ''
+  walletsElement.innerHTML = ''
   for (const p of providers) {
-    const btn = document.createElement('button')
-    btn.textContent = 'Connect ' + p.info.name
-    btn.onclick = () => connect(p.provider)
-    walletsEl.appendChild(btn)
+    const button = document.createElement('button')
+    button.textContent = `Connect ${p.info.name}`
+    button.onclick = () => connect(p.provider)
+    walletsElement.appendChild(button)
   }
 }
 
 function showConnected(account: string) {
   activeAccount = account
-  accountDisplay.textContent = account.slice(0, 6) + '...' + account.slice(-4)
-  walletsEl.hidden = true
-  connectedEl.hidden = false
+  accountDisplay.textContent = `${account.slice(0, 6)}...${account.slice(-4)}`
+  walletsElement.hidden = true
+  connectedElement.hidden = false
 }
 
 function disconnect() {
   activeProvider = null
   activeAccount = null
-  walletsEl.hidden = false
-  connectedEl.hidden = true
+  walletsElement.hidden = false
+  connectedElement.hidden = true
   renderWallets()
 }
 
-document.getElementById('disconnect-btn')!.onclick = disconnect
-payBtn.onclick = () => pay()
+disconnectButton.onclick = disconnect
+payButton.onclick = () => pay()
 
-// Set pay button label from challenge amount
-const rawAmount = request.amount as string
-const decimals = (request.decimals as number) || 6
-const whole = rawAmount.slice(0, -decimals) || '0'
-const frac = rawAmount.slice(-decimals).padStart(decimals, '0').replace(/0+$/, '')
-const formatted = frac ? whole + '.' + frac : whole
-payBtn.textContent = 'Pay $' + formatted
+const request = mppx.challenge.request
+payButton.textContent = 'Pay with wallet'
 
 store.subscribe(renderWallets)
 renderWallets()
@@ -69,67 +95,61 @@ async function connect(provider: EIP1193Provider) {
 
 async function pay() {
   if (!activeProvider || !activeAccount) return
-  payBtn.disabled = true
+  payButton.disabled = true
 
   try {
-    const chainId = (request.methodDetails?.chainId as number) || 42432
-
+    const chainId = request.methodDetails?.chainId
     const chain = (() => {
       if (chainId === tempoMainnet.id) return tempoMainnet
       if (chainId === tempoModerato.id) return tempoModerato
       if (chainId === tempoLocalnet.id) return tempoLocalnet
-      throw new Error('Unsupported chain: ' + chainId)
+      throw new Error(`Unsupported chain: ${chainId}`)
     })()
-    const hexChainId = '0x' + chainId.toString(16)
-    const currentChain = (await activeProvider.request({ method: 'eth_chainId' })) as string
+    const hexChainId = `0x${chainId.toString(16)}`
+
+    const currentChain = await activeProvider.request({ method: 'eth_chainId' })
     if (parseInt(currentChain, 16) !== chainId) {
       try {
         await activeProvider.request({
           method: 'wallet_switchEthereumChain',
           params: [{ chainId: hexChainId }],
         })
-      } catch (e: any) {
-        if (e.code === 4902) {
+      } catch (error) {
+        if ((error as RpcError).code === 4902) {
           await activeProvider.request({
             method: 'wallet_addEthereumChain',
             params: [
               {
                 chainId: hexChainId,
                 chainName: chain.name,
-                nativeCurrency: { name: 'USD', symbol: 'USD', decimals: 18 },
+                nativeCurrency: { ...chain.nativeCurrency, decimals: 18 },
                 rpcUrls: [chain.rpcUrls.default.http[0]],
               },
             ],
           })
-        } else {
-          throw e
-        }
+        } else throw error
       }
     }
 
     const client = createClient({
-      account: activeAccount as `0x${string}`,
+      account: getAddress(activeAccount),
       chain,
       transport: custom(activeProvider),
     })
 
     const receipt = await sendTransactionSync(client, {
-      to: request.currency as `0x${string}`,
+      to: getAddress(request.currency),
       data: encodeFunctionData({
         abi: parseAbi(['function transfer(address to, uint256 amount)']),
-        args: [request.recipient as `0x${string}`, BigInt(request.amount as string)],
+        args: [getAddress(request.recipient ?? ''), BigInt(request.amount)],
       }),
     })
 
-    dispatchEvent(
-      new CustomEvent('mppx:complete', {
-        detail: mppx.serializeCredential(
-          { hash: receipt.transactionHash, type: 'hash' },
-          'did:pkh:eip155:' + chainId + ':' + activeAccount,
-        ),
-      }),
+    mppx.dispatch(
+      { hash: receipt.transactionHash, type: 'hash' },
+      `did:pkh:eip155:${chainId}:${activeAccount}`,
     )
   } catch {
-    payBtn.disabled = false
+    payButton.disabled = false
   }
 }

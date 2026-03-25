@@ -1,6 +1,7 @@
 import { defineConfig } from 'vite'
 
 import * as Methods from '../../stripe/Methods.js'
+import { createTokenPathname } from '../../stripe/server/Charge.js'
 import { build, dev } from '../vite.js'
 
 export default defineConfig({
@@ -9,7 +10,7 @@ export default defineConfig({
       name: 'stripe-spt',
       configureServer(server) {
         // oxlint-disable-next-line no-async-endpoint-handlers
-        server.middlewares.use('/api/create-spt', async (req, res) => {
+        server.middlewares.use(createTokenPathname, async (req, res) => {
           const secretKey = process.env.VITE_STRIPE_SECRET_KEY
           if (!secretKey) {
             res.statusCode = 500
@@ -66,6 +67,7 @@ export default defineConfig({
         paymentMethodTypes: ['card'],
       },
       config: {
+        createTokenUrl: createTokenPathname,
         publishableKey: process.env.VITE_STRIPE_PUBLIC_KEY ?? 'pk_test_example',
       },
     }),

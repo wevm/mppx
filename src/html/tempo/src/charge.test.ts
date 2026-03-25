@@ -16,10 +16,9 @@ test('displays "No wallets detected" when no provider is injected', async ({ bas
   await expect(page.locator('#wallets')).toContainText('No wallets detected')
 })
 
-test('formats the pay button amount from challenge', async ({ baseUrl, page }) => {
+test('displays pay button', async ({ baseUrl, page }) => {
   await page.goto(baseUrl)
-  // amount=1000000, decimals=6 → "Pay $1"
-  await expect(page.locator('#pay-btn')).toHaveText('Pay $1')
+  await expect(page.locator('#pay-btn')).toHaveText('Pay with wallet')
 })
 
 test('shows wallet and connects', async ({ wallet: _wallet, page }) => {

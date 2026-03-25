@@ -1,6 +1,6 @@
 import type { Context } from 'elysia'
 
-import { serviceWorkerPathname, serviceWorkerScript } from '../server/Html.js'
+import * as Html from '../server/Html.js'
 import * as Mppx_core from '../server/Mppx.js'
 import * as Mppx_internal from './internal/mppx.js'
 
@@ -33,7 +33,18 @@ export namespace Mppx {
   export function create<const methods extends Mppx_core.Methods>(
     config: Mppx_core.create.Config<methods>,
   ): Mppx_internal.Wrap<Mppx_core.Mppx<methods>, ElysiaHook> {
-    return Mppx_internal.wrap(Mppx_core.create(config), payment)
+    const mppx = Mppx_core.create(config)
+    return Mppx_internal.wrap(mppx, (intent, options) => {
+      return (async ({ request, set }) => {
+        const htmlResponse = await mppx.html(request)
+        if (htmlResponse) return htmlResponse
+        const result = await intent(options)(request)
+        if (result.status === 402) return result.challenge
+        const receipt = result.withReceipt(new Response())
+        const header = receipt.headers.get('Payment-Receipt')
+        if (header) set.headers['Payment-Receipt'] = header
+      }) as ElysiaHook
+    })
   }
 }
 
@@ -62,8 +73,8 @@ export function payment<const intent extends Mppx_internal.AnyMethodFn>(
   options: intent extends (options: infer options) => any ? options : never,
 ): ElysiaHook {
   return async ({ request, set }) => {
-    if (new URL(request.url).pathname === serviceWorkerPathname)
-      return new Response(serviceWorkerScript, {
+    if (new URL(request.url).pathname === Html.serviceWorkerPathname)
+      return new Response(Html.serviceWorkerScript, {
         headers: { 'Content-Type': 'application/javascript' },
       })
     const result = await intent(options)(request)

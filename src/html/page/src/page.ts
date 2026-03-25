@@ -1,80 +1,61 @@
-const dataEl = document.getElementById('mppx-data') as HTMLScriptElement
-const { challenge, config } = JSON.parse(dataEl.textContent!) as {
-  challenge: MppxGlobal['challenge']
-  config: Record<string, unknown>
-}
+import * as Credential from '../../../Credential.js'
+import { dataElementId, serviceWorkerPathname } from '../../../server/Html.js'
 
-// --- Globals ---
+const dataElement = document.getElementById(dataElementId)
+if (!dataElement) throw new Error(`Missing #${dataElementId} element`)
 
-function base64url(str: string): string {
-  return btoa(str).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
-}
+const data = JSON.parse(dataElement.textContent!) as Pick<typeof mppx, 'challenge' | 'config'>
+if (!data.challenge) throw new Error('Missing challenge')
 
-function sortKeys(obj: Record<string, unknown>): Record<string, unknown> {
-  const sorted: Record<string, unknown> = {}
-  Object.keys(obj)
-    .sort()
-    .forEach((k) => {
-      const v = obj[k]
-      sorted[k] =
-        v && typeof v === 'object' && !Array.isArray(v) ? sortKeys(v as Record<string, unknown>) : v
-    })
-  return sorted
-}
-
-;(window as any).mppx = Object.freeze({
-  challenge,
-  config,
-  serializeCredential(payload: unknown, source?: string): string {
-    const wire: Record<string, unknown> = {
-      challenge: Object.assign({}, mppx.challenge, {
-        request: base64url(
-          JSON.stringify(sortKeys(mppx.challenge.request as Record<string, unknown>)),
-        ),
+window.mppx = Object.freeze({
+  challenge: data.challenge,
+  config: data.config,
+  dispatch(payload: unknown, source?: string): void {
+    dispatchEvent(
+      new CustomEvent('mppx:complete', {
+        detail: mppx.serializeCredential(payload, source),
       }),
+    )
+  },
+  serializeCredential(payload: unknown, source?: string): string {
+    return Credential.serialize({
+      challenge: mppx.challenge,
       payload,
-    }
-    if (source) wire.source = source
-    return 'Payment ' + base64url(JSON.stringify(wire))
+      ...(source && { source }),
+    })
   },
 })
 
-// --- Populate challenge display ---
+const challengeElement = document.getElementById('mppx-challenge')
+if (challengeElement) challengeElement.textContent = JSON.stringify(data.challenge, null, 2)
 
-const challengeEl = document.getElementById('mppx-challenge')!
-challengeEl.textContent = JSON.stringify(challenge, null, 2)
-
-// --- Description ---
-
-if (challenge.description) {
-  const p = document.createElement('p')
-  p.textContent = challenge.description
-  document.querySelector('header')!.appendChild(p)
+if (data.challenge.description) {
+  const element = document.createElement('p')
+  element.textContent = data.challenge.description
+  document.querySelector('header')!.appendChild(element)
 }
 
-// --- Service worker & mppx:complete ---
-
-function activateSw(reg: ServiceWorkerRegistration): Promise<void> {
-  const sw = reg.installing || reg.waiting || reg.active
+function activateServiceWorker(reg: ServiceWorkerRegistration): Promise<void> {
+  const serviceWorker = reg.installing || reg.waiting || reg.active
   return new Promise((resolve) => {
-    if (sw!.state === 'activated') return resolve()
-    sw!.addEventListener('statechange', () => {
-      if (sw!.state === 'activated') resolve()
+    if (serviceWorker!.state === 'activated') return resolve()
+    serviceWorker!.addEventListener('statechange', () => {
+      if (serviceWorker!.state === 'activated') resolve()
     })
   })
 }
 
-addEventListener('mppx:complete', ((e: CustomEvent<string>) => {
-  const statusEl = document.getElementById('status')
-  const authorization = e.detail
-  if (statusEl) {
-    statusEl.textContent = 'Verifying payment...'
-    statusEl.style.color = ''
+addEventListener('mppx:complete', (event) => {
+  const statusElement = document.getElementById('status')
+  const authorization = event.detail
+  if (statusElement) {
+    statusElement.textContent = 'Verifying payment'
+    statusElement.style.color = ''
   }
 
   navigator.serviceWorker
-    .register('/__mppx_serviceWorker.js')
-    .then(activateSw)
+    .register(serviceWorkerPathname)
+    .then(activateServiceWorker)
     .then(() => {
       function sendAndReload() {
         navigator.serviceWorker.controller!.postMessage(authorization)
@@ -87,23 +68,23 @@ addEventListener('mppx:complete', ((e: CustomEvent<string>) => {
       fetch(window.location.href, {
         headers: { Authorization: authorization },
       })
-        .then((res) => {
-          if (!res.ok) {
-            if (statusEl) {
-              statusEl.textContent = 'Verification failed (' + res.status + ')'
-              statusEl.style.color = 'red'
+        .then((response) => {
+          if (!response.ok) {
+            if (statusElement) {
+              statusElement.textContent = `Verification failed (${response.status})`
+              statusElement.style.color = 'red'
             }
             return
           }
-          return res.blob().then((blob) => {
+          return response.blob().then((blob) => {
             window.location = URL.createObjectURL(blob) as any
           })
         })
-        .catch((err) => {
-          if (statusEl) {
-            statusEl.textContent = err.message || 'Request failed'
-            statusEl.style.color = 'red'
+        .catch((error) => {
+          if (statusElement) {
+            statusElement.textContent = error.message || 'Request failed'
+            statusElement.style.color = 'red'
           }
         })
     })
-}) as EventListener)
+})
