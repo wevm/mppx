@@ -28,16 +28,13 @@ export function validate(doc: unknown): ValidationError[] {
   const paths = parsed.paths
   if (!paths) return errors
 
-  const httpMethods = ['get', 'put', 'post', 'delete', 'options', 'head', 'patch', 'trace']
-
   for (const [pathKey, pathItem] of Object.entries(paths)) {
-    const item = pathItem as Record<string, unknown>
-    for (const method of httpMethods) {
-      const operation = item[method] as Record<string, unknown> | undefined
-      if (!operation) continue
+    for (const [method, operation] of Object.entries(pathItem as Record<string, unknown>)) {
+      if (!operation || typeof operation !== 'object' || Array.isArray(operation)) continue
+      const op = operation as Record<string, unknown>
 
       const opPath = `paths.${pathKey}.${method}`
-      const rawPaymentInfo = operation['x-payment-info']
+      const rawPaymentInfo = op['x-payment-info']
       if (!rawPaymentInfo) continue
 
       const paymentResult = PaymentInfo.safeParse(rawPaymentInfo)
@@ -52,7 +49,7 @@ export function validate(doc: unknown): ValidationError[] {
         continue
       }
 
-      const responses = operation.responses as Record<string, unknown> | undefined
+      const responses = op.responses as Record<string, unknown> | undefined
       if (!responses || !('402' in responses)) {
         errors.push({
           message: 'Operation with x-payment-info MUST have a 402 response',
@@ -63,7 +60,7 @@ export function validate(doc: unknown): ValidationError[] {
 
       const methodUpper = method.toUpperCase()
       if (
-        !operation.requestBody &&
+        !op.requestBody &&
         (methodUpper === 'POST' || methodUpper === 'PUT' || methodUpper === 'PATCH')
       ) {
         errors.push({
