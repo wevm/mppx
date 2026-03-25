@@ -105,7 +105,7 @@ describe('charge', () => {
 
     const body = (await response.json()) as Record<string, any>
     expect(body.info).toEqual({ title: 'Next API', version: '3.0.0' })
-    expect(body.paths['/'].get['x-payment-info']).toEqual({
+    expect(body.paths['/'].get['x-payment-info']).toMatchObject({
       amount: '1000000',
       currency: asset,
       intent: 'charge',

@@ -23,13 +23,14 @@ describe('PaymentInfo', () => {
     expect(result.data?.amount).toBeNull()
   })
 
-  test('rejects unsupported public intents', () => {
+  test('accepts custom intents', () => {
     const result = PaymentInfo.safeParse({
       amount: '100',
       intent: 'subscribe',
       method: 'tempo',
     })
-    expect(result.success).toBe(false)
+    expect(result.success).toBe(true)
+    expect(result.data?.intent).toBe('subscribe')
   })
 
   test('rejects invalid amount pattern', () => {

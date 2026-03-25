@@ -15,7 +15,7 @@ export const PaymentInfo = z.object({
   amount: z.union([z.null(), z.string().check(z.regex(/^(0|[1-9][0-9]*)$/, 'Invalid amount'))]),
   currency: z.optional(z.string()),
   description: z.optional(z.string()),
-  intent: z.union([z.literal('charge'), z.literal('session')]),
+  intent: z.string(),
   method: z.string(),
 })
 export type PaymentInfo = z.infer<typeof PaymentInfo>

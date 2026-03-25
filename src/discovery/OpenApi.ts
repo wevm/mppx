@@ -187,31 +187,31 @@ function paymentInfoFromCanonical(route: {
   method: string
 }) {
   const { canonicalRequest, intent, method } = route
-  assertEmittableIntent(intent)
   const methodDetails = (canonicalRequest.methodDetails ?? {}) as Record<string, unknown>
 
   const amount = pickString(canonicalRequest.amount) ?? pickString(methodDetails.amount) ?? null
   const currency = pickString(canonicalRequest.currency) ?? pickString(methodDetails.currency)
   const description = pickString(canonicalRequest.description)
 
-  return {
+  const base: Record<string, unknown> = {
     amount,
     ...(currency ? { currency } : {}),
     ...(description ? { description } : {}),
     intent,
     method,
   }
+
+  // Forward any extra canonical params that aren't already covered.
+  const reserved = new Set(['amount', 'currency', 'description', 'methodDetails'])
+  for (const [key, value] of Object.entries(canonicalRequest)) {
+    if (!reserved.has(key) && value !== undefined) base[key] = value
+  }
+
+  return base
 }
 
 function pickString(value: unknown) {
   return typeof value === 'string' ? value : undefined
-}
-
-function assertEmittableIntent(intent: string): asserts intent is 'charge' | 'session' {
-  if (intent !== 'charge' && intent !== 'session')
-    throw new Error(
-      `Discovery only supports the public intents "charge" and "session". Received "${intent}".`,
-    )
 }
 
 function withBasePath(basePath: string | undefined, path: string) {

@@ -116,6 +116,7 @@ describe('generate', () => {
                 "currency": "0xUSDC",
                 "intent": "charge",
                 "method": "tempo",
+                "recipient": "0x123",
               },
             },
           },
@@ -166,6 +167,7 @@ describe('generate', () => {
                 "currency": "usd",
                 "intent": "charge",
                 "method": "tempo",
+                "recipient": "0x1",
               },
             },
           },
@@ -209,6 +211,7 @@ describe('generate', () => {
                 "amount": null,
                 "intent": "session",
                 "method": "tempo",
+                "recipient": "0x123",
               },
             },
           },
@@ -308,6 +311,7 @@ describe('generate', () => {
                 "currency": "0xUSDC",
                 "intent": "charge",
                 "method": "tempo",
+                "recipient": "0xABC",
               },
             },
           },
@@ -336,6 +340,7 @@ describe('generate', () => {
                 "currency": "0xUSDC",
                 "intent": "charge",
                 "method": "tempo",
+                "recipient": "0xABC",
               },
             },
           },
@@ -353,6 +358,7 @@ describe('generate', () => {
                 "amount": null,
                 "intent": "session",
                 "method": "tempo",
+                "recipient": "0xABC",
               },
             },
           },
@@ -372,19 +378,50 @@ describe('generate', () => {
     `)
   })
 
-  test('throws on unsupported public intents', () => {
+  test('passes through custom intents and extra params', () => {
     const mppx = createMppx([subscribe])
-    expect(() =>
-      generate(mppx, {
-        routes: [
-          {
-            intent: 'subscribe',
-            method: 'post',
-            options: { amount: '100' },
-            path: '/api/subscribe',
+    const doc = generate(mppx, {
+      routes: [
+        {
+          intent: 'subscribe',
+          method: 'post',
+          options: { amount: '100', interval: 'monthly', recipient: '0xABC' },
+          path: '/api/subscribe',
+          summary: 'Monthly subscription',
+        },
+      ],
+    })
+
+    expect(doc).toMatchInlineSnapshot(`
+      {
+        "info": {
+          "title": "test-realm",
+          "version": "1.0.0",
+        },
+        "openapi": "3.1.0",
+        "paths": {
+          "/api/subscribe": {
+            "post": {
+              "responses": {
+                "200": {
+                  "description": "Successful response",
+                },
+                "402": {
+                  "description": "Payment Required",
+                },
+              },
+              "summary": "Monthly subscription",
+              "x-payment-info": {
+                "amount": "100",
+                "intent": "subscribe",
+                "interval": "monthly",
+                "method": "tempo",
+                "recipient": "0xABC",
+              },
+            },
           },
-        ],
-      }),
-    ).toThrow(/supports the public intents "charge" and "session"/)
+        },
+      }
+    `)
   })
 })
