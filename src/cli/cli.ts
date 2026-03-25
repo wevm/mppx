@@ -989,7 +989,24 @@ const discover = Cli.create('discover', {
       const input = c.args.input
       let raw: string
       if (/^https?:\/\//.test(input)) {
-        const response = await globalThis.fetch(input)
+        const controller = new AbortController()
+        const timeout = setTimeout(() => controller.abort(), 30_000)
+        let response: Response
+        try {
+          response = await globalThis.fetch(input, { signal: controller.signal })
+        } catch (error) {
+          clearTimeout(timeout)
+          const msg =
+            error instanceof DOMException && error.name === 'AbortError'
+              ? 'Request timed out after 30s'
+              : (error as Error).message
+          return c.error({
+            code: 'DISCOVERY_FETCH_FAILED',
+            message: `Failed to fetch discovery document: ${msg}`,
+            exitCode: 1,
+          })
+        }
+        clearTimeout(timeout)
         if (!response.ok) {
           return c.error({
             code: 'DISCOVERY_FETCH_FAILED',
@@ -997,7 +1014,23 @@ const discover = Cli.create('discover', {
             exitCode: 1,
           })
         }
+        const maxSize = 10 * 1024 * 1024 // 10 MB
+        const contentLength = response.headers.get('content-length')
+        if (contentLength && Number(contentLength) > maxSize) {
+          return c.error({
+            code: 'DISCOVERY_TOO_LARGE',
+            message: `Discovery document exceeds 10 MB limit`,
+            exitCode: 1,
+          })
+        }
         raw = await response.text()
+        if (raw.length > maxSize) {
+          return c.error({
+            code: 'DISCOVERY_TOO_LARGE',
+            message: `Discovery document exceeds 10 MB limit`,
+            exitCode: 1,
+          })
+        }
       } else {
         const resolved = path.resolve(input)
         if (!fs.existsSync(resolved)) {

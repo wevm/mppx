@@ -181,6 +181,22 @@ describe('discover validate', () => {
       }
     },
   )
+
+  test('rejects oversized discovery documents via content-length', { timeout: 20_000 }, async () => {
+    const server = await Http.createServer((_req, res) => {
+      res.setHeader('Content-Type', 'application/json')
+      res.setHeader('Content-Length', String(11 * 1024 * 1024))
+      res.end('{}')
+    })
+
+    try {
+      const { exitCode, output } = await serve(['discover', 'validate', server.url])
+      expect(exitCode).toBe(1)
+      expect(output).toContain('10 MB')
+    } finally {
+      server.close()
+    }
+  })
 })
 
 describe('discover generate', () => {

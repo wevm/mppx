@@ -209,7 +209,7 @@ export function getOptions(endpoint: Endpoint): EndpointOptions | undefined {
 export function paymentOf(endpoint: Endpoint): Record<string, unknown> | null {
   if (endpoint === true) return null
   const handler = typeof endpoint === 'function' ? endpoint : endpoint.pay
-  if (!('_internal' in handler)) return {}
+  if (!('_internal' in handler)) return null
   const {
     name,
     intent,

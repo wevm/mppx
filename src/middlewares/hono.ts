@@ -74,7 +74,10 @@ const discoveryHeaders = { 'Cache-Control': 'public, max-age=300' }
 /**
  * Mounts a `GET /openapi.json` route that serves an OpenAPI discovery document.
  *
- * When `auto` is true, routes are introspected from `app.routes`.
+ * When `auto` is true, routes are introspected from Hono's internal `app.routes`
+ * array. This is a **best-effort / experimental** convenience — `app.routes` is
+ * not part of Hono's stable public API and may change across versions. Prefer
+ * passing explicit `routes` for production use.
  */
 export function discovery(
   app: Hono<any>,

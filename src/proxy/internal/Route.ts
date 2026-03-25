@@ -5,7 +5,7 @@ export function pathname(url: URL, basePath?: string): string | null {
   let pathname = url.pathname
   if (basePath) {
     const base = basePath.replace(/\/+$/, '')
-    if (!pathname.startsWith(base)) return null
+    if (!(pathname === base || pathname.startsWith(`${base}/`))) return null
     pathname = pathname.slice(base.length)
   }
   return pathname
