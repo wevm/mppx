@@ -1,4 +1,4 @@
-import type { GenerateConfig, RouteConfig } from '../discovery/OpenApi.js'
+import { generate, type GenerateConfig, type RouteConfig } from '../discovery/OpenApi.js'
 import * as Mppx_core from '../server/Mppx.js'
 import * as Mppx_internal from './internal/mppx.js'
 
@@ -79,20 +79,16 @@ export function discovery(
   mppx: { methods: readonly Mppx_internal.AnyServer[]; realm: string },
   config: DiscoveryConfig = {},
 ): RouteHandler {
-  let cached: string | undefined
+  const cached = JSON.stringify(
+    generate(mppx, {
+      ...(config.info ? { info: config.info } : {}),
+      routes: config.routes ?? [],
+      ...(config.serviceInfo ? { serviceInfo: config.serviceInfo } : {}),
+    }),
+  )
 
-  return async () => {
-    if (!cached) {
-      const { generate } = await import('../discovery/OpenApi.js')
-      const doc = generate(mppx, {
-        ...(config.info ? { info: config.info } : {}),
-        routes: config.routes ?? [],
-        ...(config.serviceInfo ? { serviceInfo: config.serviceInfo } : {}),
-      })
-      cached = JSON.stringify(doc)
-    }
-    return new Response(cached, {
+  return () =>
+    new Response(cached, {
       headers: { ...discoveryHeaders, 'Content-Type': 'application/json' },
     })
-  }
 }

@@ -1,5 +1,6 @@
-import type { Context } from 'elysia'
+import { Elysia, type Context } from 'elysia'
 
+import { generate, type GenerateConfig, type RouteConfig } from '../discovery/OpenApi.js'
 import * as Mppx_core from '../server/Mppx.js'
 import * as Mppx_internal from './internal/mppx.js'
 
@@ -67,4 +68,35 @@ export function payment<const intent extends Mppx_internal.AnyMethodFn>(
     const header = receipt.headers.get('Payment-Receipt')
     if (header) set.headers['Payment-Receipt'] = header
   }
+}
+
+export type DiscoveryConfig = Omit<GenerateConfig, 'routes'> & {
+  path?: string
+  routes?: RouteConfig[]
+}
+
+const discoveryHeaders = { 'Cache-Control': 'public, max-age=300' }
+
+/**
+ * Returns an Elysia plugin that serves an OpenAPI discovery document.
+ */
+export function discovery(
+  mppx: { methods: readonly Mppx_internal.AnyServer[]; realm: string },
+  config: DiscoveryConfig = {},
+) {
+  const mountPath = config.path ?? '/openapi.json'
+
+  const cached = JSON.stringify(
+    generate(mppx, {
+      ...(config.info ? { info: config.info } : {}),
+      routes: config.routes ?? [],
+      ...(config.serviceInfo ? { serviceInfo: config.serviceInfo } : {}),
+    }),
+  )
+
+  return new Elysia().get(mountPath, () =>
+    new Response(cached, {
+      headers: { ...discoveryHeaders, 'Content-Type': 'application/json' },
+    }),
+  )
 }

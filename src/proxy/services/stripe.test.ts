@@ -129,26 +129,4 @@ describe('stripe', () => {
     const res = await fetch(`${proxyServer.url}/stripe/v1/unknown`)
     expect(res.status).toBe(404)
   })
-
-  test('behavior: docsLlmsUrl returns route-specific URL', () => {
-    const service = stripe({
-      apiKey,
-      routes: {
-        'POST /v1/charges': mppx_server.charge({ amount: '1', decimals: 6 }),
-      },
-    })
-    expect(service.docsLlmsUrl?.({ route: 'POST /v1/charges' })).toBe(
-      'https://context7.com/websites/stripe/llms.txt?topic=POST%20%2Fv1%2Fcharges',
-    )
-  })
-
-  test('behavior: docsLlmsUrl returns fallback URL without route', () => {
-    const service = stripe({
-      apiKey,
-      routes: {
-        'POST /v1/charges': mppx_server.charge({ amount: '1', decimals: 6 }),
-      },
-    })
-    expect(service.docsLlmsUrl?.({ route: undefined })).toBe('https://docs.stripe.com/llms.txt')
-  })
 })

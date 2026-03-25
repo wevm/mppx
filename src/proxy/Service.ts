@@ -12,8 +12,6 @@ export type Service = {
   docs?: Docs | undefined
   /** Unique identifier used as the URL prefix (e.g. `'openai'` → `/{id}/...`). */
   id: string
-  /** Returns a documentation URL. Called with no argument for the service root, or with a route pattern for per-endpoint docs. */
-  docsLlmsUrl?: ((options: { route?: string | undefined }) => string | undefined) | undefined
   /** Hook to modify the upstream request before sending (e.g. inject auth headers). */
   rewriteRequest?: ((req: Request, ctx: Context) => Request | Promise<Request>) | undefined
   /** Hook to modify the upstream response before returning to the client. */
@@ -94,7 +92,6 @@ export function from<options = unknown>(id: string, config: from.Config<options>
     description: config.description,
     docs: resolveDocs(config),
     id,
-    docsLlmsUrl: resolveLlmsUrl(config.docsLlmsUrl),
     routes: config.routes,
     title: config.title,
     rewriteRequest: config.rewriteRequest
@@ -233,23 +230,17 @@ function resolveDocs(config: from.Config): Docs | undefined {
   if (config.docs) {
     return {
       ...config.docs,
-      ...(config.docs.llms ? {} : { llms: resolveLlmsLink(config.docsLlmsUrl) }),
+      ...(config.docs.llms ? {} : { llms: resolveLlmsFromLegacy(config.docsLlmsUrl) }),
     }
   }
-  const llms = resolveLlmsLink(config.docsLlmsUrl)
+  const llms = resolveLlmsFromLegacy(config.docsLlmsUrl)
   return llms ? { llms } : undefined
 }
 
-function resolveLlmsLink(
+function resolveLlmsFromLegacy(
   input: string | ((options: { route?: string | undefined }) => string | undefined) | undefined,
-) {
-  return resolveLlmsUrl(input)?.({})
-}
-
-function resolveLlmsUrl(
-  input: string | ((options: { route?: string | undefined }) => string | undefined) | undefined,
-): Service['docsLlmsUrl'] {
+): string | undefined {
   if (!input) return undefined
-  if (typeof input === 'function') return input
-  return ({ route }) => (route ? undefined : input)
+  if (typeof input === 'string') return input
+  return input({}) ?? undefined
 }

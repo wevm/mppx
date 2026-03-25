@@ -109,14 +109,14 @@ describe('create', () => {
     expect(body.paths['/api/v1/models'].get.responses['200']).toEqual({
       description: 'Successful response',
     })
-    expect(body.paths['/api/v1/generate'].post['x-payment-info']).toEqual({
+    expect(body.paths['/api/v1/generate'].post['x-payment-info']).toMatchObject({
       amount: '1000000',
       currency: asset,
       description: 'Generate text',
       intent: 'charge',
       method: 'tempo',
     })
-    expect(body.paths['/api/v1/stream'].post['x-payment-info']).toEqual({
+    expect(body.paths['/api/v1/stream'].post['x-payment-info']).toMatchObject({
       amount: '1000000',
       currency: asset,
       description: 'Stream text',
@@ -195,7 +195,7 @@ describe('create', () => {
     const res = await fetch(`${proxyServer.url}/proxy/openapi.json`)
     expect(res.status).toBe(200)
     const body = (await res.json()) as Record<string, any>
-    expect(body.paths['/proxy/api/v1/generate'].post['x-payment-info']).toEqual({
+    expect(body.paths['/proxy/api/v1/generate'].post['x-payment-info']).toMatchObject({
       amount: '1000000',
       currency: asset,
       description: 'Generate text',

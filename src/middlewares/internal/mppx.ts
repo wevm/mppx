@@ -7,7 +7,7 @@ export type AnyServer = Method.AnyServer
 /** Recursively wraps nested handler objects one level deep. */
 type WrapNested<obj, handler> = {
   [key in keyof obj]: obj[key] extends (options: infer options) => any
-    ? (o: options) => handler
+    ? (o: options) => handler & { _internal?: Record<string, unknown> }
     : obj[key]
 }
 
@@ -21,7 +21,7 @@ export type Wrap<mppx, handler> = {
     | 'transport'
     ? mppx[key]
     : mppx[key] extends (options: infer options) => any
-      ? (o: options) => handler
+      ? (o: options) => handler & { _internal?: Record<string, unknown> }
       : mppx[key] extends Record<string, (options: any) => any>
         ? WrapNested<mppx[key], handler>
         : mppx[key]

@@ -95,7 +95,7 @@ describe('charge', () => {
     const server = await createServer(
       discovery(mppx, {
         info: { title: 'Next API', version: '3.0.0' },
-        routes: [{ handler: pay as any, method: 'get', path: '/' }],
+        routes: [{ handler: pay, method: 'get', path: '/' }],
       }),
     )
 

@@ -1,6 +1,6 @@
 import type { Hono, MiddlewareHandler } from 'hono'
 
-import type { GenerateConfig, RouteConfig } from '../discovery/OpenApi.js'
+import { generate, type GenerateConfig, type RouteConfig } from '../discovery/OpenApi.js'
 import * as Mppx_core from '../server/Mppx.js'
 import * as Mppx_internal from './internal/mppx.js'
 
@@ -85,9 +85,8 @@ export function discovery(
 
   let cached: string | undefined
 
-  app.get(mountPath, async (c) => {
+  app.get(mountPath, (c) => {
     if (!cached) {
-      const { generate } = await import('../discovery/OpenApi.js')
       const routes = config.routes ?? (config.auto ? introspectRoutes(app) : [])
       const doc = generate(mppx, {
         ...(config.info ? { info: config.info } : {}),

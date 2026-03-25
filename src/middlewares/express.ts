@@ -6,7 +6,7 @@ import type {
   RequestHandler,
 } from 'express'
 
-import type { GenerateConfig, RouteConfig } from '../discovery/OpenApi.js'
+import { generate, type GenerateConfig, type RouteConfig } from '../discovery/OpenApi.js'
 import * as Mppx_core from '../server/Mppx.js'
 import * as Mppx_internal from './internal/mppx.js'
 
@@ -104,18 +104,15 @@ export function discovery(
 ): void {
   const mountPath = config.path ?? '/openapi.json'
 
-  let cached: string | undefined
+  const cached = JSON.stringify(
+    generate(mppx, {
+      ...(config.info ? { info: config.info } : {}),
+      routes: config.routes ?? [],
+      ...(config.serviceInfo ? { serviceInfo: config.serviceInfo } : {}),
+    }),
+  )
 
-  app.get(mountPath, async (_req: ExpressRequest, res: ExpressResponse) => {
-    if (!cached) {
-      const { generate } = await import('../discovery/OpenApi.js')
-      const doc = generate(mppx, {
-        ...(config.info ? { info: config.info } : {}),
-        routes: config.routes ?? [],
-        ...(config.serviceInfo ? { serviceInfo: config.serviceInfo } : {}),
-      })
-      cached = JSON.stringify(doc)
-    }
+  app.get(mountPath, (_req: ExpressRequest, res: ExpressResponse) => {
     res.setHeader('Cache-Control', discoveryHeaders['Cache-Control'])
     res.setHeader('Content-Type', 'application/json')
     res.end(cached)

@@ -25,11 +25,8 @@ export function openai(config: openai.Config) {
     docs: {
       apiReference: 'https://platform.openai.com/docs/api-reference',
       homepage: 'https://platform.openai.com/docs',
+      llms: 'https://context7.com/websites/platform_openai/llms.txt',
     },
-    docsLlmsUrl: ({ route }) =>
-      route
-        ? `https://context7.com/websites/platform_openai/llms.txt?topic=${encodeURIComponent(route)}`
-        : 'https://context7.com/websites/platform_openai/llms.txt',
     rewriteRequest(request, ctx) {
       const apiKey = ctx.apiKey ?? config.apiKey
       request.headers.set('Authorization', `Bearer ${apiKey}`)

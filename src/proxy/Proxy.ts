@@ -215,24 +215,10 @@ function buildDiscoveryRoutes(services: Service.Service[]) {
       const tokens = pattern.trim().split(/\s+/)
       const hasMethod = tokens.length >= 2
       const path = hasMethod ? tokens.slice(1).join(' ') : tokens[0]
-      const payment = endpoint ? Service.paymentOf(endpoint) : null
       return {
         method: hasMethod ? tokens[0]! : 'GET',
         path: `/${service.id}${path}`,
-        payment: payment
-          ? {
-              amount:
-                typeof payment.amount === 'string' || payment.amount === null
-                  ? payment.amount
-                  : null,
-              ...(typeof payment.currency === 'string' ? { currency: payment.currency } : {}),
-              ...(typeof payment.description === 'string'
-                ? { description: payment.description }
-                : {}),
-              intent: payment.intent,
-              method: payment.method,
-            }
-          : null,
+        payment: endpoint ? Service.paymentOf(endpoint) : null,
       }
     }),
   )

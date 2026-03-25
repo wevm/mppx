@@ -1,7 +1,7 @@
 import type * as Method from '../Method.js'
 import type { ServiceInfo } from './Discovery.js'
 
-type DiscoveryHandler = ((...args: any[]) => unknown) & {
+export type DiscoveryHandler = ((...args: any[]) => unknown) & {
   _internal?: {
     _canonicalRequest: Record<string, unknown>
     intent: string

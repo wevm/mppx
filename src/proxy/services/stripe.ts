@@ -25,11 +25,8 @@ export function stripe(config: stripe.Config) {
     docs: {
       apiReference: 'https://docs.stripe.com/api',
       homepage: 'https://docs.stripe.com',
+      llms: 'https://docs.stripe.com/llms.txt',
     },
-    docsLlmsUrl: ({ route }) =>
-      route
-        ? `https://context7.com/websites/stripe/llms.txt?topic=${encodeURIComponent(route)}`
-        : 'https://docs.stripe.com/llms.txt',
     rewriteRequest(request, ctx) {
       const apiKey = ctx.apiKey ?? config.apiKey
       request.headers.set('Authorization', `Basic ${btoa(`${apiKey}:`)}`)

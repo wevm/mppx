@@ -90,7 +90,7 @@ describe('charge', () => {
     })
     discovery(app, mppx, {
       info: { title: 'Express API', version: '1.2.3' },
-      routes: [{ handler: pay as any, method: 'get', path: '/' }],
+      routes: [{ handler: pay, method: 'get', path: '/' }],
     })
 
     const server = await createServer(app)
