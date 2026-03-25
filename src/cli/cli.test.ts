@@ -183,6 +183,87 @@ describe('discover validate', () => {
   )
 })
 
+describe('discover generate', () => {
+  test('generates from a pre-built OpenAPI document module', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mppx-generate-'))
+    const mod = path.join(dir, 'doc.mjs')
+    fs.writeFileSync(
+      mod,
+      `export default ${JSON.stringify({
+        openapi: '3.1.0',
+        info: { title: 'Test', version: '1.0.0' },
+        paths: {
+          '/pay': {
+            post: {
+              'x-payment-info': { amount: '100', intent: 'charge', method: 'tempo' },
+              responses: { '200': { description: 'OK' }, '402': { description: 'Payment Required' } },
+            },
+          },
+        },
+      })}`,
+    )
+
+    const { output, exitCode } = await serve(['discover', 'generate', mod])
+    expect(exitCode).toBeUndefined()
+    const doc = JSON.parse(output)
+    expect(doc.openapi).toBe('3.1.0')
+    expect(doc.paths['/pay'].post['x-payment-info'].amount).toBe('100')
+
+    fs.rmSync(dir, { recursive: true, force: true })
+  })
+
+  test('writes to file with --output', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mppx-generate-'))
+    const mod = path.join(dir, 'doc.mjs')
+    const outFile = path.join(dir, 'openapi.json')
+    fs.writeFileSync(
+      mod,
+      `export default ${JSON.stringify({
+        openapi: '3.1.0',
+        info: { title: 'Test', version: '1.0.0' },
+        paths: {},
+      })}`,
+    )
+
+    const { output, stderr, exitCode } = await serve([
+      'discover',
+      'generate',
+      mod,
+      '--output',
+      outFile,
+    ])
+    expect(exitCode).toBeUndefined()
+    expect(output).toBe('')
+    expect(stderr).toContain(outFile)
+    const written = JSON.parse(fs.readFileSync(outFile, 'utf-8'))
+    expect(written.openapi).toBe('3.1.0')
+
+    fs.rmSync(dir, { recursive: true, force: true })
+  })
+
+  test('errors when module not found', async () => {
+    const { output, exitCode } = await serve([
+      'discover',
+      'generate',
+      '/tmp/nonexistent-mppx-module.mjs',
+    ])
+    expect(exitCode).toBe(1)
+    expect(output).toContain('MODULE_NOT_FOUND')
+  })
+
+  test('errors when module has no mppx or openapi export', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mppx-generate-'))
+    const mod = path.join(dir, 'bad.mjs')
+    fs.writeFileSync(mod, 'export default { foo: "bar" }')
+
+    const { output, exitCode } = await serve(['discover', 'generate', mod])
+    expect(exitCode).toBe(1)
+    expect(output).toContain('INVALID_MODULE')
+
+    fs.rmSync(dir, { recursive: true, force: true })
+  })
+})
+
 describe('basic charge (examples/basic)', () => {
   test('happy path: makes payment and receives response', { timeout: 120_000 }, async () => {
     const { Actions } = await import('viem/tempo')
