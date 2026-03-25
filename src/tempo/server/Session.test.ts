@@ -35,6 +35,7 @@ import { signVoucher } from '../session/Voucher.js'
 import { charge, session, settle } from './Session.js'
 
 const payer = accounts[2]
+const recipientAccount = accounts[0]
 const recipient = accounts[0].address
 const currency = asset
 
@@ -61,7 +62,7 @@ describe.runIf(isLocalnet)('session', () => {
     return session({
       store: rawStore,
       getClient: () => client,
-      account: recipient,
+      account: recipientAccount,
       currency,
       escrowContract,
       chainId: chain.id,
@@ -1237,27 +1238,29 @@ describe.runIf(isLocalnet)('session', () => {
       expect(ch!.finalized).toBe(true)
     })
 
-    test('close throws when client has no account', async () => {
-      const { channelId, serializedTransaction } = await createSignedOpenTransaction(10000000n)
-      const server = createServer({
-        getClient: () => createClient({ chain, transport: http() }),
-      })
-      await openServerChannel(server, channelId, serializedTransaction)
+    test('session() throws at initialization when no account provided', () => {
+      expect(() =>
+        session({
+          store: rawStore,
+          getClient: () => client,
+          account: recipient as Address,
+          currency,
+          escrowContract,
+          chainId: chain.id,
+        } as session.Parameters),
+      ).toThrow('tempo.session() requires an `account`')
+    })
 
-      await expect(
-        server.verify({
-          credential: {
-            challenge: makeChallenge({ id: 'challenge-2', channelId }),
-            payload: {
-              action: 'close' as const,
-              channelId,
-              cumulativeAmount: '1000000',
-              signature: await signTestVoucher(channelId, 1000000n),
-            },
-          },
-          request: makeRequest(),
-        }),
-      ).rejects.toThrow('Cannot close channel: no account available')
+    test('session() throws at initialization with no account at all', () => {
+      expect(() =>
+        session({
+          store: rawStore,
+          getClient: () => client,
+          currency,
+          escrowContract,
+          chainId: chain.id,
+        } as session.Parameters),
+      ).toThrow('tempo.session() requires an `account`')
     })
   })
 
@@ -2254,6 +2257,7 @@ describe('monotonicity and TOCTOU (unit tests)', () => {
 })
 
 describe('session default currency resolution', () => {
+  const mockAccount = accounts[0]
   const mockClient = createClient({ transport: http('http://localhost:1') })
   const mockMainnetClient = createClient({
     chain: {
@@ -2278,7 +2282,7 @@ describe('session default currency resolution', () => {
     const server = session({
       store: Store.memory(),
       getClient: () => mockClient,
-      account: '0x0000000000000000000000000000000000000001',
+      account: mockAccount,
       escrowContract: '0x0000000000000000000000000000000000000002',
     } as session.Parameters)
     expect(server.defaults?.currency).toBe('0x20C000000000000000000000b9537d11c60E8b50')
@@ -2288,7 +2292,7 @@ describe('session default currency resolution', () => {
     const server = session({
       store: Store.memory(),
       getClient: () => mockClient,
-      account: '0x0000000000000000000000000000000000000001',
+      account: mockAccount,
       escrowContract: '0x0000000000000000000000000000000000000002',
       testnet: true,
     } as session.Parameters)
@@ -2299,7 +2303,7 @@ describe('session default currency resolution', () => {
     const server = session({
       store: Store.memory(),
       getClient: () => mockClient,
-      account: '0x0000000000000000000000000000000000000001',
+      account: mockAccount,
       escrowContract: '0x0000000000000000000000000000000000000002',
       chainId: 69420,
     } as session.Parameters)
@@ -2310,7 +2314,7 @@ describe('session default currency resolution', () => {
     const server = session({
       store: Store.memory(),
       getClient: () => mockClient,
-      account: '0x0000000000000000000000000000000000000001',
+      account: mockAccount,
       currency: '0xcustom',
       escrowContract: '0x0000000000000000000000000000000000000002',
       chainId: 4217,
@@ -2323,7 +2327,7 @@ describe('session default currency resolution', () => {
     const server = session({
       store: Store.memory(),
       getClient: () => mockClient,
-      account: '0x0000000000000000000000000000000000000001',
+      account: mockAccount,
       escrowContract: '0x0000000000000000000000000000000000000002',
       chainId: 42431,
     } as session.Parameters)
@@ -2336,7 +2340,7 @@ describe('session default currency resolution', () => {
         tempo_server.session({
           store: Store.memory(),
           getClient: () => mockMainnetClient,
-          account: '0x0000000000000000000000000000000000000001',
+          account: mockAccount,
           escrowContract: '0x0000000000000000000000000000000000000002',
           chainId: 4217,
           testnet: false,
@@ -2363,7 +2367,7 @@ describe('session default currency resolution', () => {
         tempo_server.session({
           store: Store.memory(),
           getClient: () => mockTestnetClient,
-          account: '0x0000000000000000000000000000000000000001',
+          account: mockAccount,
           escrowContract: '0x0000000000000000000000000000000000000002',
           testnet: true,
         }),
@@ -2390,7 +2394,7 @@ describe('session default currency resolution', () => {
         tempo_server.session({
           store: Store.memory(),
           getClient: () => mockTestnetClient,
-          account: '0x0000000000000000000000000000000000000001',
+          account: mockAccount,
           escrowContract: '0x0000000000000000000000000000000000000002',
           chainId: 69420,
         }),
@@ -2416,7 +2420,7 @@ describe('session default currency resolution', () => {
         tempo_server.session({
           store: Store.memory(),
           getClient: () => mockClient,
-          account: '0x0000000000000000000000000000000000000001',
+          account: mockAccount,
           currency: '0xcustom',
           escrowContract: '0x0000000000000000000000000000000000000002',
           chainId: 4217,

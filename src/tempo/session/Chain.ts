@@ -132,7 +132,7 @@ export async function closeOnChain(
   const resolved = account ?? client.account
   if (!resolved)
     throw new Error(
-      'Cannot close channel: no account available. Provide an `account` in the session config or a `getClient` that returns an account-bearing client.',
+      'Cannot close channel: no account available. Pass an `account` (viem Account, e.g. privateKeyToAccount("0x...")) to tempo.session(), or provide a `getClient` that returns an account-bearing client.',
     )
   const args = [voucher.channelId, voucher.cumulativeAmount, voucher.signature] as const
   if (feePayer) {

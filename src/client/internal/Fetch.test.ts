@@ -16,6 +16,7 @@ const server = Mppx_server.create({
   methods: [
     tempo_server({
       getClient: () => client,
+      account: accounts[0],
     }),
   ],
   realm,

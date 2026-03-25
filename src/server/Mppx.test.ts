@@ -9,6 +9,7 @@ const secretKey = 'test-secret-key'
 
 const method = tempo({
   getClient: () => client,
+  account: accounts[0],
 })
 
 describe('create', () => {

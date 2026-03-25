@@ -29,7 +29,7 @@ describe('charge', () => {
       tempo_server.charge({
         getClient: () => client,
         currency: asset,
-        recipient: accounts[0].address,
+        account: accounts[0],
       }),
     ],
     secretKey,
@@ -90,7 +90,7 @@ describe('session', () => {
       methods: [
         tempo_server.session({
           getClient: () => client,
-          recipient: accounts[0].address,
+          account: accounts[0],
           currency: asset,
           escrowContract,
         }),
@@ -116,10 +116,10 @@ describe('session', () => {
       methods: [
         tempo_server.session({
           getClient: () => client,
-          recipient: accounts[0].address,
+          account: accounts[0],
           currency: asset,
           escrowContract,
-          feePayer: accounts[0],
+          feePayer: true,
         }),
       ],
       secretKey,

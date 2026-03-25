@@ -101,6 +101,11 @@ export function session<const parameters extends session.Parameters>(p?: paramet
 
   const { account, recipient, feePayer, feePayerUrl } = Account.resolve(parameters)
 
+  if (!account)
+    throw new Error(
+      'tempo.session() requires an `account` (viem Account, e.g. privateKeyToAccount("0x...")). An address string is not sufficient — the server needs a signing account for on-chain channel close and settlement.',
+    )
+
   const getClient = Client.getResolver({
     chain: tempo_chain,
     feePayerUrl,
