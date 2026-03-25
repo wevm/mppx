@@ -1,7 +1,7 @@
 import path from 'node:path'
 
 import { playwright } from '@vitest/browser-playwright'
-import { defineConfig } from 'vitest/config'
+import { defineConfig } from 'vite-plus'
 
 // Shared aliases used by both projects
 const alias = {
@@ -81,5 +81,45 @@ export default defineConfig({
         },
       },
     ],
+  },
+  lint: {
+    categories: {
+      correctness: 'error',
+      suspicious: 'warn',
+    },
+    plugins: ['typescript', 'oxc'],
+    env: {
+      builtin: true,
+    },
+    rules: {
+      'typescript/no-non-null-assertion': 'off',
+      'typescript/no-explicit-any': 'off',
+      'no-shadow-restricted-names': 'off',
+      'no-shadow': 'off',
+      'no-control-regex': 'off',
+    },
+    settings: {
+      polyfills: ['PaymentRequest', 'URLPattern', 'crypto'],
+    },
+    overrides: [
+      {
+        files: ['src/**/*.ts'],
+        rules: {
+          'compat/compat': 'error',
+        },
+        jsPlugins: ['eslint-plugin-compat'],
+      },
+    ],
+  },
+  fmt: {
+    singleQuote: true,
+    semi: false,
+    sortImports: {},
+    sortPackageJson: false,
+  },
+  staged: {
+    '*': 'vp fmt --write --no-error-on-unmatched-pattern',
+    '*.{js,jsx,ts,tsx,mjs,cjs}': 'vp lint --fix',
+    '*.{ts,tsx}': "bash -c 'vp check'",
   },
 })

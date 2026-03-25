@@ -1,7 +1,7 @@
 import { Challenge, Credential, Receipt } from 'mppx'
 import { Mppx as Mppx_client, stripe as stripe_client } from 'mppx/client'
 import { Mppx as Mppx_server, stripe as stripe_server } from 'mppx/server'
-import { afterEach, describe, expect, test } from 'vitest'
+import { afterEach, describe, expect, test } from 'vite-plus/test'
 import * as Http from '~test/Http.js'
 
 const stripeSecretKey = process.env.VITE_STRIPE_SECRET_KEY

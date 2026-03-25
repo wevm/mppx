@@ -1,5 +1,5 @@
 import type { Address } from 'viem'
-import { describe, expect, test } from 'vitest'
+import { describe, expect, test } from 'vite-plus/test'
 
 import { defaultCurrencies, InsufficientFundsError, resolve } from './auto-swap.js'
 

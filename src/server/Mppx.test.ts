@@ -1,6 +1,6 @@
 import { Challenge, Credential, Method, z } from 'mppx'
 import { Mppx, Transport, tempo } from 'mppx/server'
-import { describe, expect, test } from 'vitest'
+import { describe, expect, test } from 'vite-plus/test'
 import * as Http from '~test/Http.js'
 import { accounts, asset, client } from '~test/tempo/viem.js'
 

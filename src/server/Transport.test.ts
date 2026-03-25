@@ -1,7 +1,7 @@
 import { Challenge, Credential, Mcp, Receipt } from 'mppx'
 import { Transport } from 'mppx/server'
 import { Methods } from 'mppx/tempo'
-import { describe, expect, test } from 'vitest'
+import { describe, expect, test } from 'vite-plus/test'
 
 import { BadRequestError, ChannelClosedError } from '../Errors.js'
 

@@ -1,5 +1,5 @@
 import { Receipt } from 'mppx'
-import { describe, expect, test } from 'vitest'
+import { describe, expect, test } from 'vite-plus/test'
 
 describe('from', () => {
   test('behavior: creates receipt with success status', () => {

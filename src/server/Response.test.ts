@@ -1,6 +1,6 @@
 import { Challenge } from 'mppx'
 import { Response } from 'mppx/server'
-import { describe, expect, test } from 'vitest'
+import { describe, expect, test } from 'vite-plus/test'
 
 import * as Errors from '../Errors.js'
 

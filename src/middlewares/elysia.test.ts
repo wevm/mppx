@@ -5,7 +5,7 @@ import { Receipt } from 'mppx'
 import { Mppx as Mppx_client, tempo as tempo_client } from 'mppx/client'
 import { Mppx } from 'mppx/elysia'
 import { tempo as tempo_server } from 'mppx/server'
-import { describe, expect, test } from 'vitest'
+import { describe, expect, test } from 'vite-plus/test'
 import { accounts, asset, client } from '~test/tempo/viem.js'
 
 function createServer(app: Elysia<any, any, any, any, any, any, any>) {

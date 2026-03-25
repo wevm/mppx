@@ -1,5 +1,5 @@
 import { AbiParameters, Hash } from 'ox'
-import { describe, expect, test } from 'vitest'
+import { describe, expect, test } from 'vite-plus/test'
 
 import * as Channel from './Channel.js'
 

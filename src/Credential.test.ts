@@ -1,5 +1,5 @@
 import { Challenge, Credential } from 'mppx'
-import { describe, expect, test } from 'vitest'
+import { describe, expect, test } from 'vite-plus/test'
 
 const challenge = Challenge.from({
   id: 'x7Tg2pLqR9mKvNwY3hBcZa',

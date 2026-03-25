@@ -1,5 +1,5 @@
 import type { Account } from 'viem'
-import { describe, expectTypeOf, test } from 'vitest'
+import { describe, expectTypeOf, test } from 'vite-plus/test'
 
 import * as Method from '../Method.js'
 import { charge } from '../tempo/client/Charge.js'

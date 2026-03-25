@@ -6,7 +6,7 @@ import { Challenge, Mcp as core_Mcp } from 'mppx'
 import { tempo as tempo_client } from 'mppx/client'
 import { Mppx as Mppx_server, tempo as tempo_server } from 'mppx/server'
 import { createClient } from 'viem'
-import { afterEach, beforeEach, describe, expect, test } from 'vitest'
+import { afterEach, beforeEach, describe, expect, test } from 'vite-plus/test'
 import { accounts, asset, chain, http, client as testClient } from '~test/tempo/viem.js'
 
 import * as McpServer_transport from '../server/Transport.js'

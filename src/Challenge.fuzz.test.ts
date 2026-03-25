@@ -1,6 +1,6 @@
 import * as fc from 'fast-check'
 import { Challenge } from 'mppx'
-import { describe, expect, test } from 'vitest'
+import { describe, expect, test } from 'vite-plus/test'
 
 describe('parseAuthParams robustness', () => {
   test('deserialize never throws unhandled exception on arbitrary input', () => {

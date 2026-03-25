@@ -1,6 +1,6 @@
 import { Challenge, Credential } from 'mppx'
 import { Mppx, stripe } from 'mppx/server'
-import { afterEach, describe, expect, test, vi } from 'vitest'
+import { afterEach, describe, expect, test, vi } from 'vite-plus/test'
 import * as Http from '~test/Http.js'
 
 import type { StripeClient } from '../internal/types.js'

@@ -3,8 +3,8 @@
     "build": "zile",
     "changeset:publish": "zile publish:prepare && changeset publish && zile publish:post",
     "changeset:version": "changeset version",
-    "check": "oxlint --fix && oxfmt --write .",
-    "check:ci": "oxlint && oxfmt --check .",
+    "check": "vp lint --fix && vp fmt --write .",
+    "check:ci": "vp lint && vp fmt --check .",
     "check:types": "tsgo -b",
     "check:types:examples": "pnpm -r --filter './examples/**' run check:types",
     "deps": "pnpx taze -r --no-ignore-other-workspaces --ignore-paths node_modules",
@@ -12,7 +12,7 @@
     "dev": "zile dev",
     "dev:example": "node scripts/dev:example.ts",
     "mppx": "node --import tsx src/bin.ts",
-    "test": "vitest"
+    "test": "vp test"
   },
   "browserslist": [
     "defaults",
@@ -41,27 +41,15 @@
     "fast-check": "^4.6.0",
     "file-type": "^21.3.2",
     "hono": "^4.11.9",
-    "lint-staged": "^16.4.0",
-    "oxfmt": "^0.41.0",
-    "oxlint": "^1.56.0",
     "playwright": "^1.58.2",
     "prool": "^0.2.4",
-    "simple-git-hooks": "^2.13.1",
     "tempo.ts": "^0.14.2",
     "testcontainers": "^11.11.0",
     "tsx": "^4.21.0",
     "typescript": "~5.9.3",
     "viem": "^2.47.5",
-    "vitest": "^4.1.0",
+    "vite-plus": "~0.1.14",
     "zile": "^0.0.19"
-  },
-  "simple-git-hooks": {
-    "pre-commit": "pnpm exec lint-staged"
-  },
-  "lint-staged": {
-    "*": "oxfmt --write --no-error-on-unmatched-pattern",
-    "*.{js,jsx,ts,tsx,mjs,cjs}": "oxlint --fix",
-    "*.{ts,tsx}": "bash -c 'pnpm check:types'"
   },
   "packageManager": "pnpm@10.28.0",
   "[!start-pkg]": "",
