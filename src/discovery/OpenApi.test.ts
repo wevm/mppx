@@ -93,15 +93,35 @@ describe('generate', () => {
       ],
     })
 
-    expect(doc.openapi).toBe('3.1.0')
-    expect((doc.info as Record<string, unknown>).title).toBe('test-realm')
-    const paths = doc.paths as Record<string, Record<string, Record<string, unknown>>>
-    expect(paths['/api/resource']!.get!['x-payment-info']).toEqual({
-      amount: '100',
-      currency: '0xUSDC',
-      intent: 'charge',
-      method: 'tempo',
-    })
+    expect(doc).toMatchInlineSnapshot(`
+      {
+        "info": {
+          "title": "test-realm",
+          "version": "1.0.0",
+        },
+        "openapi": "3.1.0",
+        "paths": {
+          "/api/resource": {
+            "get": {
+              "responses": {
+                "200": {
+                  "description": "Successful response",
+                },
+                "402": {
+                  "description": "Payment Required",
+                },
+              },
+              "x-payment-info": {
+                "amount": "100",
+                "currency": "0xUSDC",
+                "intent": "charge",
+                "method": "tempo",
+              },
+            },
+          },
+        },
+      }
+    `)
   })
 
   test('supports handler-derived route config', () => {
@@ -123,16 +143,38 @@ describe('generate', () => {
       ],
     })
 
-    const paths = doc.paths as Record<string, Record<string, Record<string, unknown>>>
-    expect(paths['/api/search']!.post!['x-payment-info']).toEqual({
-      amount: '50',
-      currency: 'usd',
-      intent: 'charge',
-      method: 'tempo',
-    })
+    expect(doc).toMatchInlineSnapshot(`
+      {
+        "info": {
+          "title": "test-realm",
+          "version": "1.0.0",
+        },
+        "openapi": "3.1.0",
+        "paths": {
+          "/api/search": {
+            "post": {
+              "responses": {
+                "200": {
+                  "description": "Successful response",
+                },
+                "402": {
+                  "description": "Payment Required",
+                },
+              },
+              "x-payment-info": {
+                "amount": "50",
+                "currency": "usd",
+                "intent": "charge",
+                "method": "tempo",
+              },
+            },
+          },
+        },
+      }
+    `)
   })
 
-  test('handles null amount', () => {
+  test('handles null amount for session intent', () => {
     const mppx = createMppx([session])
     const doc = generate(mppx, {
       routes: [
@@ -145,8 +187,34 @@ describe('generate', () => {
       ],
     })
 
-    const paths = doc.paths as Record<string, Record<string, Record<string, unknown>>>
-    expect((paths['/api/stream']!.post!['x-payment-info'] as any).amount).toBeNull()
+    expect(doc).toMatchInlineSnapshot(`
+      {
+        "info": {
+          "title": "test-realm",
+          "version": "1.0.0",
+        },
+        "openapi": "3.1.0",
+        "paths": {
+          "/api/stream": {
+            "post": {
+              "responses": {
+                "200": {
+                  "description": "Successful response",
+                },
+                "402": {
+                  "description": "Payment Required",
+                },
+              },
+              "x-payment-info": {
+                "amount": null,
+                "intent": "session",
+                "method": "tempo",
+              },
+            },
+          },
+        },
+      }
+    `)
   })
 
   test('includes x-service-info when provided', () => {
@@ -159,10 +227,149 @@ describe('generate', () => {
       },
     })
 
-    expect(doc['x-service-info']).toEqual({
-      categories: ['ai'],
-      docs: { homepage: 'https://example.com' },
+    expect(doc).toMatchInlineSnapshot(`
+      {
+        "info": {
+          "title": "test-realm",
+          "version": "1.0.0",
+        },
+        "openapi": "3.1.0",
+        "paths": {},
+        "x-service-info": {
+          "categories": [
+            "ai",
+          ],
+          "docs": {
+            "homepage": "https://example.com",
+          },
+        },
+      }
+    `)
+  })
+
+  test('multi-route document with mixed intents', () => {
+    const mppx = createMppx([charge, session])
+    const doc = generate(mppx, {
+      info: { title: 'Multi-Route API', version: '2.0.0' },
+      routes: [
+        {
+          intent: 'charge',
+          method: 'post',
+          options: { amount: '500', currency: '0xUSDC', recipient: '0xABC' },
+          path: '/api/search',
+          summary: 'Search the index',
+          requestBody: {
+            content: { 'application/json': { schema: { type: 'object' } } },
+          },
+        },
+        {
+          intent: 'session',
+          method: 'post',
+          options: { amount: null, recipient: '0xABC' },
+          path: '/api/stream',
+        },
+        {
+          intent: 'charge',
+          method: 'get',
+          options: { amount: '100', currency: '0xUSDC', recipient: '0xABC' },
+          path: '/api/models',
+        },
+      ],
+      serviceInfo: {
+        categories: ['ai', 'search'],
+        docs: {
+          apiReference: 'https://example.com/api',
+          homepage: 'https://example.com',
+          llms: 'https://example.com/llms.txt',
+        },
+      },
     })
+
+    expect(doc).toMatchInlineSnapshot(`
+      {
+        "info": {
+          "title": "Multi-Route API",
+          "version": "2.0.0",
+        },
+        "openapi": "3.1.0",
+        "paths": {
+          "/api/models": {
+            "get": {
+              "responses": {
+                "200": {
+                  "description": "Successful response",
+                },
+                "402": {
+                  "description": "Payment Required",
+                },
+              },
+              "x-payment-info": {
+                "amount": "100",
+                "currency": "0xUSDC",
+                "intent": "charge",
+                "method": "tempo",
+              },
+            },
+          },
+          "/api/search": {
+            "post": {
+              "requestBody": {
+                "content": {
+                  "application/json": {
+                    "schema": {
+                      "type": "object",
+                    },
+                  },
+                },
+              },
+              "responses": {
+                "200": {
+                  "description": "Successful response",
+                },
+                "402": {
+                  "description": "Payment Required",
+                },
+              },
+              "summary": "Search the index",
+              "x-payment-info": {
+                "amount": "500",
+                "currency": "0xUSDC",
+                "intent": "charge",
+                "method": "tempo",
+              },
+            },
+          },
+          "/api/stream": {
+            "post": {
+              "responses": {
+                "200": {
+                  "description": "Successful response",
+                },
+                "402": {
+                  "description": "Payment Required",
+                },
+              },
+              "x-payment-info": {
+                "amount": null,
+                "intent": "session",
+                "method": "tempo",
+              },
+            },
+          },
+        },
+        "x-service-info": {
+          "categories": [
+            "ai",
+            "search",
+          ],
+          "docs": {
+            "apiReference": "https://example.com/api",
+            "homepage": "https://example.com",
+            "llms": "https://example.com/llms.txt",
+          },
+        },
+      }
+    `)
   })
 
   test('throws on unsupported public intents', () => {
