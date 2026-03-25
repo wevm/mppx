@@ -1,7 +1,7 @@
 import path from 'node:path'
 
-import { playwright } from '@vitest/browser-playwright'
 import { defineConfig } from 'vp'
+import { playwright } from 'vp/test/browser-playwright'
 
 // Shared aliases used by both projects
 const alias = {

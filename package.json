@@ -32,8 +32,6 @@
     "@types/express": "^5.0.6",
     "@types/node": "^25.5.0",
     "@typescript/native-preview": "7.0.0-dev.20260323.1",
-    "@vitest/browser-playwright": "^4.1.0",
-    "@vitest/coverage-v8": "^4.1.0",
     "browserslist": "^4.28.1",
     "elysia": "^1.4.27",
     "eslint-plugin-compat": "^7.0.1",
