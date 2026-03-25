@@ -79,13 +79,20 @@ export function discovery(
   mppx: { methods: readonly Mppx_internal.AnyServer[]; realm: string },
   config: DiscoveryConfig = {},
 ): RouteHandler {
+  let cached: string | undefined
+
   return async () => {
-    const { generate } = await import('../discovery/OpenApi.js')
-    const doc = generate(mppx, {
-      ...(config.info ? { info: config.info } : {}),
-      routes: config.routes ?? [],
-      ...(config.serviceInfo ? { serviceInfo: config.serviceInfo } : {}),
+    if (!cached) {
+      const { generate } = await import('../discovery/OpenApi.js')
+      const doc = generate(mppx, {
+        ...(config.info ? { info: config.info } : {}),
+        routes: config.routes ?? [],
+        ...(config.serviceInfo ? { serviceInfo: config.serviceInfo } : {}),
+      })
+      cached = JSON.stringify(doc)
+    }
+    return new Response(cached, {
+      headers: { ...discoveryHeaders, 'Content-Type': 'application/json' },
     })
-    return Response.json(doc, { headers: discoveryHeaders })
   }
 }

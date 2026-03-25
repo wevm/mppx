@@ -104,14 +104,20 @@ export function discovery(
 ): void {
   const mountPath = config.path ?? '/openapi.json'
 
+  let cached: string | undefined
+
   app.get(mountPath, async (_req: ExpressRequest, res: ExpressResponse) => {
-    const { generate } = await import('../discovery/OpenApi.js')
-    const doc = generate(mppx, {
-      ...(config.info ? { info: config.info } : {}),
-      routes: config.routes ?? [],
-      ...(config.serviceInfo ? { serviceInfo: config.serviceInfo } : {}),
-    })
+    if (!cached) {
+      const { generate } = await import('../discovery/OpenApi.js')
+      const doc = generate(mppx, {
+        ...(config.info ? { info: config.info } : {}),
+        routes: config.routes ?? [],
+        ...(config.serviceInfo ? { serviceInfo: config.serviceInfo } : {}),
+      })
+      cached = JSON.stringify(doc)
+    }
     res.setHeader('Cache-Control', discoveryHeaders['Cache-Control'])
-    res.json(doc)
+    res.setHeader('Content-Type', 'application/json')
+    res.end(cached)
   })
 }

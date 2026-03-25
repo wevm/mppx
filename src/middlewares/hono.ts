@@ -83,18 +83,23 @@ export function discovery(
 ): void {
   const mountPath = config.path ?? '/openapi.json'
 
-  app.get(mountPath, async (c) => {
-    const { generate } = await import('../discovery/OpenApi.js')
+  let cached: string | undefined
 
-    const routes = config.routes ?? (config.auto ? introspectRoutes(app) : [])
-    const doc = generate(mppx, {
-      ...(config.info ? { info: config.info } : {}),
-      routes,
-      ...(config.serviceInfo ? { serviceInfo: config.serviceInfo } : {}),
-    })
+  app.get(mountPath, async (c) => {
+    if (!cached) {
+      const { generate } = await import('../discovery/OpenApi.js')
+      const routes = config.routes ?? (config.auto ? introspectRoutes(app) : [])
+      const doc = generate(mppx, {
+        ...(config.info ? { info: config.info } : {}),
+        routes,
+        ...(config.serviceInfo ? { serviceInfo: config.serviceInfo } : {}),
+      })
+      cached = JSON.stringify(doc)
+    }
 
     c.header('Cache-Control', discoveryHeaders['Cache-Control'])
-    return c.json(doc)
+    c.header('Content-Type', 'application/json')
+    return c.body(cached)
   })
 }
 

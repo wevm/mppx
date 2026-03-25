@@ -56,6 +56,24 @@ export function create(config: create.Config): Proxy {
     }),
   )
 
+  // Pre-generate static discovery responses once at startup.
+  const openApiJson = JSON.stringify(
+    generateProxy({
+      basePath: config.basePath,
+      info: {
+        title: config.title ?? 'API Proxy',
+        version: config.version ?? '1.0.0',
+      },
+      routes: buildDiscoveryRoutes(config.services),
+      serviceInfo: buildServiceInfo(config),
+    }),
+  )
+  const llmsTxt = Service.toLlmsTxt(config.services, {
+    title: config.title,
+    description: config.description,
+    openApiPath: withBasePath(config.basePath, '/openapi.json'),
+  })
+
   async function handle(request: globalThis.Request): Promise<Response> {
     const url = new URL(request.url)
 
@@ -67,30 +85,18 @@ export function create(config: create.Config): Proxy {
       request.method === 'GET' &&
       (pathname === '/openapi.json' || pathname === '/openapi.json/')
     ) {
-      const doc = generateProxy({
-        basePath: config.basePath,
-        info: {
-          title: config.title ?? 'API Proxy',
-          version: config.version ?? '1.0.0',
+      return new Response(openApiJson, {
+        headers: {
+          'Cache-Control': 'public, max-age=300',
+          'Content-Type': 'application/json',
         },
-        routes: buildDiscoveryRoutes(config.services),
-        serviceInfo: buildServiceInfo(config, request),
-      })
-
-      return Response.json(doc, {
-        headers: { 'Cache-Control': 'public, max-age=300' },
       })
     }
 
     if (request.method === 'GET' && pathname === '/llms.txt')
-      return new Response(
-        Service.toLlmsTxt(config.services, {
-          title: config.title,
-          description: config.description,
-          openApiPath: withBasePath(config.basePath, '/openapi.json'),
-        }),
-        { headers: { 'Content-Type': 'text/plain; charset=utf-8' } },
-      )
+      return new Response(llmsTxt, {
+        headers: { 'Content-Type': 'text/plain; charset=utf-8' },
+      })
     const parsed = Route.parse(pathname)
     if (!parsed) return new Response('Not Found', { status: 404 })
 
@@ -234,16 +240,14 @@ function buildDiscoveryRoutes(services: Service.Service[]) {
 
 function buildServiceInfo(
   config: create.Config,
-  request: Request,
 ): { categories?: string[]; docs?: Service.Docs } {
   const categories =
     config.categories ??
     Array.from(new Set(config.services.flatMap((service) => service.categories ?? [])))
 
-  const llms = new URL(withBasePath(config.basePath, '/llms.txt'), request.url).toString()
   const docs = {
     ...(config.docs ?? {}),
-    llms: config.docs?.llms ?? llms,
+    llms: config.docs?.llms ?? withBasePath(config.basePath, '/llms.txt'),
   }
 
   return {

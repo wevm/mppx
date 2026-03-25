@@ -103,7 +103,7 @@ describe('create', () => {
       docs: {
         apiReference: 'https://gateway.example.com/reference',
         homepage: 'https://gateway.example.com',
-        llms: `${proxyServer.url}/llms.txt`,
+        llms: '/llms.txt',
       },
     })
     expect(body.paths['/api/v1/models'].get.responses['200']).toEqual({
