@@ -85,7 +85,9 @@ export function fromMethod<const method extends Method.Method>(
   method: method,
   request: z.input<method['schema']['request']>,
 ): Request<z.output<method['schema']['request']>> {
-  return method.schema.request.parse(request) as Request<z.output<method['schema']['request']>>
+  return stripEmpty(method.schema.request.parse(request)) as Request<
+    z.output<method['schema']['request']>
+  >
 }
 
 /**
