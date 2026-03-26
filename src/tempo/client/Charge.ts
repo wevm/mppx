@@ -58,15 +58,11 @@ export function charge(parameters: charge.Parameters = {}) {
 
       if (parameters.expectedRecipients) {
         const allowed = new Set(parameters.expectedRecipients.map((a) => a.toLowerCase()))
-        const splits = methodDetails?.splits as
-          | readonly { recipient: string }[]
-          | undefined
+        const splits = methodDetails?.splits as readonly { recipient: string }[] | undefined
         if (splits) {
           for (const split of splits) {
             if (!allowed.has(split.recipient.toLowerCase()))
-              throw new Error(
-                `Unexpected split recipient: ${split.recipient}`,
-              )
+              throw new Error(`Unexpected split recipient: ${split.recipient}`)
           }
         }
       }
