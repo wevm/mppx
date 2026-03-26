@@ -5,12 +5,7 @@ import type { Hex } from 'ox'
 import { TxEnvelopeTempo } from 'ox/tempo'
 import { Handler } from 'tempo.ts/server'
 import { createClient, custom, encodeFunctionData, parseUnits } from 'viem'
-import {
-  getTransactionReceipt,
-  prepareTransactionRequest,
-  sendCallsSync,
-  signTransaction,
-} from 'viem/actions'
+import { getTransactionReceipt, prepareTransactionRequest, signTransaction } from 'viem/actions'
 import { Abis, Account, Actions, Addresses, Secp256k1, Tick, Transaction } from 'viem/tempo'
 import { beforeAll, describe, expect, test } from 'vp/test'
 import * as Http from '~test/Http.js'
@@ -661,7 +656,6 @@ describe('tempo', () => {
         methods: [
           tempo_client({
             account: accounts[1],
-            mode: 'push',
             getClient: () => client,
           }),
         ],
@@ -693,7 +687,7 @@ describe('tempo', () => {
       httpServer.close()
     })
 
-    test('behavior: accepts hash when split transfers are out of order', async () => {
+    test('behavior: accepts transaction when split transfers are out of order', async () => {
       const httpServer = await Http.createServer(async (req, res) => {
         const result = await Mppx_server.toNodeListener(
           server.charge({
@@ -720,35 +714,33 @@ describe('tempo', () => {
       const primaryAmount =
         BigInt(challenge.request.amount) - BigInt(splits[0]!.amount) - BigInt(splits[1]!.amount)
 
-      const calls = [
-        Actions.token.transfer.call({
-          amount: BigInt(splits[1]!.amount),
-          to: splits[1]!.recipient as Hex.Hex,
-          token: challenge.request.currency as Hex.Hex,
-        }),
-        Actions.token.transfer.call({
-          amount: primaryAmount,
-          to: challenge.request.recipient as Hex.Hex,
-          token: challenge.request.currency as Hex.Hex,
-        }),
-        Actions.token.transfer.call({
-          amount: BigInt(splits[0]!.amount),
-          to: splits[0]!.recipient as Hex.Hex,
-          token: challenge.request.currency as Hex.Hex,
-        }),
-      ]
-
-      const { receipts } = await sendCallsSync(client, {
-        account: accounts[1],
-        calls: calls as never,
-        experimental_fallback: true,
-      })
-      const hash = receipts?.[0]?.transactionHash
-      if (!hash) throw new Error('No transaction receipt returned.')
+      const prepared = await prepareTransactionRequest(client, {
+        account: accounts[1]!,
+        calls: [
+          Actions.token.transfer.call({
+            amount: BigInt(splits[1]!.amount),
+            to: splits[1]!.recipient as Hex.Hex,
+            token: challenge.request.currency as Hex.Hex,
+          }),
+          Actions.token.transfer.call({
+            amount: primaryAmount,
+            to: challenge.request.recipient as Hex.Hex,
+            token: challenge.request.currency as Hex.Hex,
+          }),
+          Actions.token.transfer.call({
+            amount: BigInt(splits[0]!.amount),
+            to: splits[0]!.recipient as Hex.Hex,
+            token: challenge.request.currency as Hex.Hex,
+          }),
+        ],
+        nonceKey: 'expiring',
+      } as never)
+      prepared.gas = prepared.gas! + 5_000n
+      const signature = await signTransaction(client, prepared as never)
 
       const credential = Credential.from({
         challenge,
-        payload: { hash, type: 'hash' as const },
+        payload: { signature, type: 'transaction' as const },
       })
 
       const authResponse = await fetch(httpServer.url, {
