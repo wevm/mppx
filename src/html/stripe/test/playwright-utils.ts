@@ -1,8 +1,8 @@
 import * as path from 'node:path'
 
-import { createTest } from '../../test/playwright-utils.js'
+import { createBaseTest } from '../../test/playwright-utils.js'
 
-export const test = createTest({
+export const test = createBaseTest({
   root: path.resolve(import.meta.dirname, '..'),
   configFile: path.resolve(import.meta.dirname, '..', 'vite.config.ts'),
 })

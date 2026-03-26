@@ -1,6 +1,6 @@
 import { expect } from '@playwright/test'
 
-import { test } from './playwright-utils.js'
+import { test } from '../test/playwright-utils.js'
 
 test('renders the payment page with challenge info', async ({ baseUrl, page }) => {
   const response = await page.goto(baseUrl)

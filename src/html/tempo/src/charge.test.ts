@@ -21,7 +21,7 @@ test('displays pay button', async ({ baseUrl, page }) => {
 })
 
 test('shows wallet and connects', async ({ wallet: _wallet, page }) => {
-  await expect(page.locator('#wallets button')).toHaveText('Connect Test Wallet')
+  await expect(page.locator('#wallets button')).toHaveText('Connect Wallet')
   await page.locator('#wallets button').click()
 
   await expect(page.locator('#connected')).toBeVisible()

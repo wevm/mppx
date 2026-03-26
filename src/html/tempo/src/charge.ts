@@ -96,15 +96,12 @@ payButton.onclick = () => pay()
 const request = mppx.challenge.request
 payButton.textContent = 'Pay'
 
-store.subscribe(renderWallets)
-renderWallets()
-
 // Reconnect previously connected wallet silently
-;(async () => {
+async function tryReconnect() {
+  if (activeAccount) return
   const savedRdns = sessionStorage.getItem(STORAGE_KEY)
   if (!savedRdns) return
-  const providers = store.getProviders()
-  const match = providers.find((p) => p.info.rdns === savedRdns)
+  const match = store.getProviders().find((p) => p.info.rdns === savedRdns)
   if (!match) return
   try {
     const accounts = (await match.provider.request({ method: 'eth_accounts' })) as string[]
@@ -113,7 +110,14 @@ renderWallets()
     activeProvider = match.provider
     showConnected(account)
   } catch {}
-})()
+}
+
+store.subscribe(() => {
+  renderWallets()
+  tryReconnect()
+})
+renderWallets()
+tryReconnect()
 
 // Register formatted amount and fetch token symbol
 const methodKey = window.__mppx_active ?? 'tempo/charge'

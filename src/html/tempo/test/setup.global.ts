@@ -3,7 +3,10 @@ import assert from 'node:assert'
 import { RpcTransport } from 'ox'
 import { Server } from 'prool'
 import * as TestContainers from 'prool/testcontainers'
+import { createClient, defineChain, http, parseUnits } from 'viem'
+import { privateKeyToAccount } from 'viem/accounts'
 import { tempoLocalnet } from 'viem/chains'
+import { Actions, Addresses } from 'viem/tempo'
 
 export default async function () {
   if (process.env.TEMPO_RPC_URL) return
@@ -32,6 +35,29 @@ export default async function () {
   assert(address?.port)
   const rpcUrl = `http://localhost:${address.port}/1`
   await fetch(`${rpcUrl}/start`)
+
+  // Mint Fee AMM liquidity so stablecoin fee payments work
+  const account = privateKeyToAccount(
+    '0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80',
+  )
+  const chain = defineChain({
+    ...tempoLocalnet,
+    rpcUrls: { default: { http: [rpcUrl] } },
+  })
+  const client = createClient({ account, chain, transport: http() })
+  await Promise.all(
+    [1n, 2n, 3n].map((id) =>
+      Actions.amm.mintSync(client, {
+        account,
+        feeToken: Addresses.pathUsd,
+        nonceKey: 'expiring',
+        userTokenAddress: id,
+        validatorTokenAddress: Addresses.pathUsd,
+        validatorTokenAmount: parseUnits('1000', 6),
+        to: account.address,
+      }),
+    ),
+  )
 
   process.env.TEMPO_CHAIN_ID = String(tempoLocalnet.id)
   process.env.TEMPO_RPC_URL = rpcUrl
