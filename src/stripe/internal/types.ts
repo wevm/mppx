@@ -6,7 +6,11 @@
  */
 export type StripeClient = {
   paymentIntents: {
-    create(...args: any[]): Promise<{ id: string; status: string }>
+    create(...args: any[]): Promise<{
+      id: string
+      status: string
+      lastResponse?: { headers?: Record<string, string> }
+    }>
   }
 }
 
