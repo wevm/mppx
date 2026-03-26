@@ -30,4 +30,5 @@ export const script = `
   </script>
   `
 
-export const serviceWorker = "var e=self;e.addEventListener(`install`,()=>{e.skipWaiting()}),e.addEventListener(`activate`,t=>{t.waitUntil(e.clients.claim())});var t=null;e.addEventListener(`message`,e=>{t=e.data}),e.addEventListener(`fetch`,e=>{if(!t||e.request.url!==t.url)return;let n=new Headers(e.request.headers);n.set(`Authorization`,t.credential),t=null,e.respondWith(fetch(new Request(e.request,{headers:n})))});"
+export const serviceWorker =
+  'var e=self;e.addEventListener(`install`,()=>{e.skipWaiting()}),e.addEventListener(`activate`,t=>{t.waitUntil(e.clients.claim())});var t=null;e.addEventListener(`message`,e=>{t=e.data}),e.addEventListener(`fetch`,e=>{if(!t||e.request.url!==t.url)return;let n=new Headers(e.request.headers);n.set(`Authorization`,t.credential),t=null,e.respondWith(fetch(new Request(e.request,{headers:n})))});'

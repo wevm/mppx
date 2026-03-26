@@ -3,7 +3,7 @@ import * as http from 'node:http'
 import { Elysia } from 'elysia'
 import { Receipt } from 'mppx'
 import { Mppx as Mppx_client, tempo as tempo_client } from 'mppx/client'
-import { Mppx } from 'mppx/elysia'
+import { Mppx, discovery } from 'mppx/elysia'
 import { tempo as tempo_server } from 'mppx/server'
 import { describe, expect, test } from 'vp/test'
 import { accounts, asset, client } from '~test/tempo/viem.js'
@@ -84,6 +84,31 @@ describe('charge', () => {
     const receipt = Receipt.fromResponse(response)
     expect(receipt.status).toBe('success')
     expect(receipt.method).toBe('tempo')
+
+    server.close()
+  })
+
+  test('serves /openapi.json from discovery plugin', async () => {
+    const app = new Elysia().use(
+      discovery(mppx, {
+        info: { title: 'Elysia API', version: '1.0.0' },
+        routes: [{ handler: mppx.charge({ amount: '1' }), method: 'get', path: '/' }],
+      }),
+    )
+
+    const server = await createServer(app)
+    const response = await globalThis.fetch(`${server.url}/openapi.json`)
+    expect(response.status).toBe(200)
+    expect(response.headers.get('cache-control')).toBe('public, max-age=300')
+
+    const body = (await response.json()) as Record<string, any>
+    expect(body.info).toEqual({ title: 'Elysia API', version: '1.0.0' })
+    expect(body.paths['/'].get['x-payment-info']).toMatchObject({
+      amount: '1000000',
+      currency: asset,
+      intent: 'charge',
+      method: 'tempo',
+    })
 
     server.close()
   })

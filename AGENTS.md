@@ -115,7 +115,7 @@ Canonical specs live at [tempoxyz/payment-auth-spec](https://github.com/tempoxyz
 | **Intent**    | [draft-payment-intent-session-00](https://github.com/tempoxyz/payment-auth-spec/blob/main/specs/intents/draft-payment-intent-session-00.md) | Pay-as-you-go streaming payments                                        |
 | **Method**    | [draft-tempo-charge-00](https://github.com/tempoxyz/payment-auth-spec/blob/main/specs/methods/tempo/draft-tempo-charge-00.md)               | TIP-20 token transfers on Tempo                                         |
 | **Method**    | [draft-tempo-session-00](https://github.com/tempoxyz/payment-auth-spec/blob/main/specs/methods/tempo/draft-tempo-session-00.md)             | Tempo payment channels for streaming                                    |
-| **Extension** | [draft-payment-discovery-00](https://github.com/tempoxyz/payment-auth-spec/blob/main/specs/extensions/draft-payment-discovery-00.md)        | `/.well-known/payment` discovery                                        |
+| **Extension** | [draft-payment-discovery-00](https://paymentauth.org/draft-payment-discovery-00.html)                                                       | OpenAPI-first discovery via `/openapi.json`                             |
 
 ### Key Protocol Details
 

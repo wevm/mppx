@@ -6,6 +6,7 @@ import { playwright } from 'vp/test/browser-playwright'
 // Shared aliases used by both projects
 const alias = {
   'mppx/client': path.resolve(import.meta.dirname, 'src/client'),
+  'mppx/discovery': path.resolve(import.meta.dirname, 'src/discovery'),
   'mppx/mcp-sdk/client': path.resolve(import.meta.dirname, 'src/mcp-sdk/client'),
   'mppx/mcp-sdk/server': path.resolve(import.meta.dirname, 'src/mcp-sdk/server'),
   'mppx/proxy': path.resolve(import.meta.dirname, 'src/proxy'),

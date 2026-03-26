@@ -102,6 +102,28 @@ describe('custom', () => {
   })
 })
 
+describe('paymentOf', () => {
+  test('behavior: returns null for free passthrough endpoint', () => {
+    expect(Service.paymentOf(true)).toBeNull()
+  })
+
+  test('behavior: returns null for paid handler without _internal metadata', () => {
+    const handler: Service.IntentHandler = async () => ({
+      status: 200 as const,
+      withReceipt: <T>(r: T) => r,
+    })
+    expect(Service.paymentOf(handler)).toBeNull()
+  })
+
+  test('behavior: returns null for paid endpoint object without _internal metadata', () => {
+    const handler: Service.IntentHandler = async () => ({
+      status: 200 as const,
+      withReceipt: <T>(r: T) => r,
+    })
+    expect(Service.paymentOf({ pay: handler, options: {} })).toBeNull()
+  })
+})
+
 describe('getOptions', () => {
   test('behavior: returns options from endpoint object', () => {
     const handler: Service.IntentHandler = async () => ({
