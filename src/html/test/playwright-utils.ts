@@ -9,18 +9,50 @@ type ServerOptions = { root: string; configFile: string }
 
 // oxlint-disable-next-line no-empty-pattern
 async function baseUrl({}: object, use: (url: string) => Promise<void>, options: ServerOptions) {
+  const port = 24000 + Math.floor(Math.random() * 4000)
+  const cacheDir = `node_modules/.vite-test-${port}`
   const server = await createServer({
     root: options.root,
     configFile: options.configFile,
-    server: { port: 24000 + Math.floor(Math.random() * 4000), strictPort: false },
+    cacheDir,
+    server: { port, strictPort: false },
   })
   await server.listen()
   process.on('exit', server.close)
   const address = server.httpServer?.address()
-  const port = typeof address === 'object' && address ? address.port : 5173
-  await use(`http://localhost:${port}`)
+  const actualPort = typeof address === 'object' && address ? address.port : port
+  const url = `http://localhost:${actualPort}`
+  // Warmup: fetch the page to discover module scripts, then pre-transform them
+  // to trigger dep optimization before tests navigate. Without this, lazy dep
+  // discovery causes 504 (Outdated Optimize Dep) errors that prevent method
+  // scripts from executing on first page load.
+  const html = await fetch(url, { headers: { accept: 'text/html' } })
+    .then((r) => r.text())
+    .catch(() => '')
+  const srcRe = /src="([^"]+)"/g
+  const warmups: Promise<unknown>[] = []
+  for (let m: RegExpExecArray | null; (m = srcRe.exec(html)); ) {
+    if (m[1]!.startsWith('/@') || m[1]!.endsWith('.ts') || m[1]!.endsWith('.js'))
+      warmups.push(server.transformRequest(m[1]!).catch(() => {}))
+  }
+  await Promise.all(warmups)
+  // Wait for dep optimization to settle (discovered deps move to optimized)
+  const optimizer = (server as any).environments?.client?.depsOptimizer
+  if (optimizer) {
+    const deadline = Date.now() + 30_000
+    while (Date.now() < deadline) {
+      const { discovered } = optimizer.metadata
+      if (Object.keys(discovered).length === 0) break
+      await new Promise((r) => setTimeout(r, 200))
+    }
+  }
+  await use(url)
   process.off('exit', server.close)
   await server.close()
+  // Clean up per-worker cache dir
+  const { rm } = await import('node:fs/promises')
+  const { resolve } = await import('node:path')
+  await rm(resolve(options.root, cacheDir), { recursive: true, force: true }).catch(() => {})
 }
 
 export function createBaseTest(options: ServerOptions) {
