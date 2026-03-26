@@ -1,10 +1,7 @@
 import type { Challenge } from '../Challenge.js'
 import { classNames, elements } from '../server/Html.js'
 
-export type MountContext<
-  request = MppxChallengeRequest,
-  config = MppxConfig,
-> = {
+export type MountContext<request = MppxChallengeRequest, config = MppxConfig> = {
   /** Root element for this method's UI. */
   root: HTMLElement
   /** Parsed challenge with typed request. */
@@ -43,10 +40,9 @@ export function mount<
   method extends import('../Method.js').Method = import('../Method.js').Method,
   config extends Record<string, unknown> = MppxConfig,
 >(
-  setup: (context: MountContext<
-    import('../zod.js').output<method['schema']['request']>,
-    config
-  >) => void | Promise<void>,
+  setup: (
+    context: MountContext<import('../zod.js').output<method['schema']['request']>, config>,
+  ) => void | Promise<void>,
 ): void {
   const root = document.getElementById(window.__mppx_root ?? elements.method)
   if (!root) throw new Error(`Missing root element: #${window.__mppx_root ?? elements.method}`)

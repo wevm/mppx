@@ -815,10 +815,14 @@ async function handleClose(
     throw new ChannelClosedError({ reason: 'channel is finalized on-chain' })
   }
 
-  const minCloseAmount = channel.spent > onChain.settled ? channel.spent : onChain.settled
-  if (voucher.cumulativeAmount < minCloseAmount) {
+  if (voucher.cumulativeAmount < channel.spent) {
     throw new VerificationFailedError({
-      reason: `close voucher amount must be >= ${minCloseAmount} (max of spent and on-chain settled)`,
+      reason: `close voucher amount must be >= ${channel.spent} (spent)`,
+    })
+  }
+  if (voucher.cumulativeAmount <= onChain.settled) {
+    throw new VerificationFailedError({
+      reason: `close voucher amount must be > ${onChain.settled} (on-chain settled)`,
     })
   }
 

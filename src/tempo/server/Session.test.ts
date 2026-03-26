@@ -1143,6 +1143,35 @@ describe.runIf(isLocalnet)('session', () => {
       ).rejects.toThrow('close voucher amount must be >=')
     })
 
+    test('rejects close equal to on-chain settled amount', async () => {
+      const { channelId, serializedTransaction } = await createSignedOpenTransaction(10000000n)
+      const server = createServer()
+
+      // Open with 1M voucher (matches openServerChannel default)
+      await openServerChannel(server, channelId, serializedTransaction)
+
+      // Settle on-chain so settled becomes 1000000
+      const settleTxHash = await settle(store, client, channelId, { escrowContract })
+      await waitForTransactionReceipt(client, { hash: settleTxHash })
+
+      // Try to close with voucher == on-chain settled — should be rejected
+      // because replaying the settled amount doesn't commit new funds
+      await expect(
+        server.verify({
+          credential: {
+            challenge: makeChallenge({ id: 'challenge-2', channelId }),
+            payload: {
+              action: 'close' as const,
+              channelId,
+              cumulativeAmount: '1000000',
+              signature: await signTestVoucher(channelId, 1000000n),
+            },
+          },
+          request: makeRequest(),
+        }),
+      ).rejects.toThrow('close voucher amount must be >')
+    })
+
     test('rejects close exceeding on-chain deposit', async () => {
       const { channelId, serializedTransaction } = await createSignedOpenTransaction(10000000n)
       const server = createServer()

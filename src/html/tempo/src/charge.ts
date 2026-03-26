@@ -14,8 +14,8 @@ import { readContract } from 'viem/actions'
 import { sendTransactionSync } from 'viem/actions'
 import { tempo as tempoMainnet, tempoLocalnet, tempoModerato } from 'viem/chains'
 
-import { mount } from '../../mount.js'
 import type { Methods } from '../../../tempo/index.js'
+import { mount } from '../../mount.js'
 
 mount<typeof Methods.charge>((c) => {
   const request = c.challenge.request
@@ -66,8 +66,7 @@ mount<typeof Methods.charge>((c) => {
     walletsElement.innerHTML = ''
     for (const p of providers) {
       const button = document.createElement('button')
-      button.className =
-        providers.length === 1 ? c.classNames.button : c.classNames.buttonSecondary
+      button.className = providers.length === 1 ? c.classNames.button : c.classNames.buttonSecondary
       button.textContent = providers.length === 1 ? 'Connect Wallet' : `Connect ${p.info.name}`
       button.onclick = () => connect(p.provider, p.info.rdns)
       walletsElement.appendChild(button)

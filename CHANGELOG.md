@@ -1,5 +1,12 @@
 # mppx
 
+## 0.4.11
+
+### Patch Changes
+
+- Fixed close voucher validation to reject vouchers equal to the on-chain settled amount. ([GHSA-mv9j-8jvg-j8mr](https://github.com/wevm/mppx/security/advisories/GHSA-mv9j-8jvg-j8mr))
+- Added Stripe credential replay protection via the `Idempotent-Replayed` header. ([GHSA-8mhj-rffc-rcvw](https://github.com/wevm/mppx/security/advisories/GHSA-8mhj-rffc-rcvw))
+
 ## 0.4.10
 
 ### Patch Changes
@@ -30,7 +37,7 @@
 
 ### Patch Changes
 
-- 99920d0: Updated validation.
+- 99920d0: Updated validation. ([GHSA-8x4m-qw58-3pcx](https://github.com/wevm/mppx/security/advisories/GHSA-8x4m-qw58-3pcx))
 
 ## 0.4.7
 

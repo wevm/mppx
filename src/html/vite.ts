@@ -155,9 +155,7 @@ export default function mppx(options: {
 
       let content = ''
       try {
-        content = (
-          await fs.readFile(path.resolve(root, `src/${intent}.html`), 'utf-8')
-        ).trimEnd()
+        content = (await fs.readFile(path.resolve(root, `src/${intent}.html`), 'utf-8')).trimEnd()
       } catch {}
       const entryScript = (
         await fs.readFile(path.resolve(root, `dist/${intent}.js`), 'utf-8')
