@@ -157,7 +157,10 @@ export function charge<const parameters extends charge.Parameters>(
               {},
             )
 
-          const calls = transaction.calls ?? []
+          const calls = (transaction.calls ?? []) as readonly {
+            data?: `0x${string}` | undefined
+            to?: `0x${string}` | undefined
+          }[]
           const transfers = getExpectedTransfers({ amount, memo, methodDetails, recipient })
           const isFeePayerTx = (feePayer || feePayerUrl) && methodDetails?.feePayer !== false
           assertTransferCalls(calls, { currency, exactCount: isFeePayerTx, transfers })
@@ -186,7 +189,7 @@ export function charge<const parameters extends charge.Parameters>(
             })
             assertTransferLogs(receipt, {
               currency,
-              from: transaction.from!,
+              from: transaction.from! as `0x${string}`,
               transfers,
             })
             // Post-broadcast dedup: catch malleable input variants
