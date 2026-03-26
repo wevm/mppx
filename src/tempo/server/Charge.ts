@@ -162,7 +162,7 @@ export function charge<const parameters extends charge.Parameters>(
             to?: `0x${string}` | undefined
           }[]
           const transfers = getExpectedTransfers({ amount, memo, methodDetails, recipient })
-          const isFeePayerTx = (feePayer || feePayerUrl) && methodDetails?.feePayer !== false
+          const isFeePayerTx = !!(feePayer || feePayerUrl) && methodDetails?.feePayer !== false
           assertTransferCalls(calls, { currency, exactCount: isFeePayerTx, transfers })
 
           if (isFeePayerTx)
