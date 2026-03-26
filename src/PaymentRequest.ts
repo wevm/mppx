@@ -103,6 +103,21 @@ export function fromMethod<const method extends Method.Method>(
  * ```
  */
 export function serialize(request: Request): string {
-  const json = Json.canonicalize(request)
+  const json = Json.canonicalize(stripEmpty(request))
   return Base64.fromString(json, { pad: false, url: true })
+}
+
+/** Recursively removes keys whose values are `undefined` or empty objects. */
+function stripEmpty(obj: Record<string, unknown>): Record<string, unknown> {
+  const result: Record<string, unknown> = {}
+  for (const [key, value] of Object.entries(obj)) {
+    if (value === undefined) continue
+    if (typeof value === 'object' && value !== null && !Array.isArray(value)) {
+      const stripped = stripEmpty(value as Record<string, unknown>)
+      if (Object.keys(stripped).length > 0) result[key] = stripped
+    } else {
+      result[key] = value
+    }
+  }
+  return result
 }

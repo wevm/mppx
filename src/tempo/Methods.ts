@@ -36,19 +36,14 @@ export const charge = Method.from({
         memo: z.optional(z.hash()),
         recipient: z.optional(z.string()),
       }),
-      z.transform(({ amount, chainId, decimals, feePayer, memo, ...rest }) => ({
-        ...rest,
+      z.transform(({ amount, chainId, currency, decimals, description, externalId, feePayer, memo, recipient }) => ({
         amount: parseUnits(amount, decimals).toString(),
+        currency,
         decimals,
-        ...(chainId !== undefined || feePayer !== undefined || memo !== undefined
-          ? {
-              methodDetails: {
-                ...(chainId !== undefined && { chainId }),
-                ...(feePayer !== undefined && { feePayer }),
-                ...(memo !== undefined && { memo }),
-              },
-            }
-          : {}),
+        description,
+        externalId,
+        methodDetails: { chainId, feePayer, memo },
+        recipient,
       })),
     ),
   },
@@ -120,30 +115,32 @@ export const session = Method.from({
           amount,
           chainId,
           channelId,
+          currency,
           decimals,
           escrowContract,
           feePayer,
           minVoucherDelta,
+          recipient,
           suggestedDeposit,
-          ...rest
+          unitType,
         }) => ({
-          ...rest,
           amount: parseUnits(amount, decimals).toString(),
+          currency,
           decimals,
-          ...(suggestedDeposit
-            ? {
-                suggestedDeposit: parseUnits(suggestedDeposit, decimals).toString(),
-              }
-            : {}),
           methodDetails: {
+            chainId,
+            channelId,
             escrowContract,
-            ...(channelId !== undefined && { channelId }),
-            ...(minVoucherDelta !== undefined && {
-              minVoucherDelta: parseUnits(minVoucherDelta, decimals).toString(),
-            }),
-            ...(chainId !== undefined && { chainId }),
-            ...(feePayer !== undefined && { feePayer }),
+            feePayer,
+            minVoucherDelta: minVoucherDelta
+              ? parseUnits(minVoucherDelta, decimals).toString()
+              : undefined,
           },
+          recipient,
+          suggestedDeposit: suggestedDeposit
+            ? parseUnits(suggestedDeposit, decimals).toString()
+            : undefined,
+          unitType,
         }),
       ),
     ),

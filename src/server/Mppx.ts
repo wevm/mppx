@@ -740,14 +740,14 @@ export function compose(
         if (!result || result.status !== 402) continue
         const meta = (handlers[i] as ConfiguredHandler)._internal
         const wwwAuth = wwwAuthByIndex[i]
-        if (!meta?._html?.method || !wwwAuth) continue
+        if (!meta?._html?.content || !wwwAuth) continue
         try {
           const challenge = Challenge.deserialize(wwwAuth)
           htmlMethods.push({
             name: meta.name,
             intent: meta.intent,
             challenge,
-            html: meta._html.method,
+            html: meta._html.content,
             config: meta._html.config,
           })
         } catch {}
@@ -772,6 +772,8 @@ export function compose(
     for (const result of results) {
       if (result.status !== 402) continue
       const response = result.challenge as Response
+      const wwwAuth = response.headers.get('WWW-Authenticate')
+      if (wwwAuth) mergedHeaders.append('WWW-Authenticate', wwwAuth)
       // Use the first handler's body for the problem details / single-method HTML response.
       if (!body) {
         const contentType = response.headers.get('Content-Type')

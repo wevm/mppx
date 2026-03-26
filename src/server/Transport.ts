@@ -136,11 +136,11 @@ export function http(options?: http.Options): Http {
       }
 
       const body = (() => {
-        if (renderHtml && html?.method && input.headers.get('Accept')?.includes('text/html')) {
+        if (renderHtml && html?.content && input.headers.get('Accept')?.includes('text/html')) {
           headers['Content-Type'] = 'text/html; charset=utf-8'
           return renderHtml({
             challenge,
-            method: html.method,
+            content: html.content,
             config: html?.config,
             theme: html?.theme,
             text: html?.text,

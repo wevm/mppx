@@ -71,7 +71,7 @@ export function charge<const parameters extends charge.Parameters>(parameters: p
       : publishableKey
         ? {
             html: {
-              method: html,
+              content: html,
               config: { publishableKey, createTokenUrl: createTokenPathname } satisfies HtmlConfig,
             },
             htmlRoutes: {

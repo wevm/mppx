@@ -2,7 +2,7 @@ import { defineConfig } from 'vite'
 
 import * as Methods from '../../stripe/Methods.js'
 import { createTokenPathname } from '../../stripe/server/Charge.js'
-import { build, dev } from '../vite.js'
+import mppx from '../vite.js'
 
 export default defineConfig({
   plugins: [
@@ -57,21 +57,23 @@ export default defineConfig({
         })
       },
     },
-    dev({
+    mppx({
       method: Methods.charge,
-      description: 'Test payment',
-      request: {
-        amount: '10',
-        currency: 'usd',
-        decimals: 2,
-        networkId: 'acct_dev',
-        paymentMethodTypes: ['card'],
+      output: '../../stripe/server/internal/html.gen.ts',
+      challenge: {
+        request: {
+          amount: '10',
+          currency: 'usd',
+          decimals: 2,
+          networkId: 'acct_dev',
+          paymentMethodTypes: ['card'],
+        },
+        description: 'Test payment',
       },
       config: {
         createTokenUrl: createTokenPathname,
         publishableKey: process.env.VITE_STRIPE_PUBLIC_KEY ?? 'pk_test_example',
       },
     }),
-    build('charge'),
   ],
 })

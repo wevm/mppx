@@ -55,7 +55,7 @@ export const serviceWorker = {
  */
 export type Options = {
   /** Method-specific HTML content. Must be from a trusted source (e.g. build-time generated `html.gen.ts`). */
-  method: string
+  content: string
   config?: Record<string, unknown> | undefined
   theme?: Theme | undefined
   text?: Text | undefined
@@ -82,7 +82,7 @@ export function render(props: Props): string {
       `<script id="${elements.data}" type="application/json">${data}</script>`,
     )
     .replace('<!--mppx:script-->', script)
-    .replace('<!--mppx:method-->', props.method)
+    .replace('<!--mppx:method-->', props.content)
 }
 
 /** A method entry for composed (multi-method) rendering. */

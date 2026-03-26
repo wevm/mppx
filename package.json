@@ -157,6 +157,19 @@
       "types": "./dist/middlewares/elysia.d.ts",
       "src": "./src/middlewares/elysia.ts",
       "default": "./dist/middlewares/elysia.js"
+    },
+    "./html": {
+      "types": "./dist/html/mount.d.ts",
+      "src": "./src/html/mount.ts",
+      "default": "./dist/html/mount.js"
+    },
+    "./html/vite": {
+      "types": "./dist/html/vite.d.ts",
+      "src": "./src/html/vite.ts",
+      "default": "./dist/html/vite.js"
+    },
+    "./html/env": {
+      "types": "./src/html/env.d.ts"
     }
   },
   "peerDependencies": {

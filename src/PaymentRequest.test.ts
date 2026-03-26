@@ -28,11 +28,19 @@ describe('fromMethod', () => {
       recipient: '0x742d35Cc6634C0532925a3b844Bc9e7595f8fE00',
     })
     expect(request).toMatchInlineSnapshot(`
-      {
-        "amount": "1000000",
-        "currency": "0x20c0000000000000000000000000000000000001",
-        "recipient": "0x742d35Cc6634C0532925a3b844Bc9e7595f8fE00",
-      }
+    	{
+    	  "amount": "1000000",
+    	  "currency": "0x20c0000000000000000000000000000000000001",
+    	  "decimals": 6,
+    	  "description": undefined,
+    	  "externalId": undefined,
+    	  "methodDetails": {
+    	    "chainId": undefined,
+    	    "feePayer": undefined,
+    	    "memo": undefined,
+    	  },
+    	  "recipient": "0x742d35Cc6634C0532925a3b844Bc9e7595f8fE00",
+    	}
     `)
   })
 
@@ -45,14 +53,19 @@ describe('fromMethod', () => {
       chainId: 42431,
     })
     expect(request).toMatchInlineSnapshot(`
-      {
-        "amount": "1000000",
-        "currency": "0x20c0000000000000000000000000000000000001",
-        "methodDetails": {
-          "chainId": 42431,
-        },
-        "recipient": "0x742d35Cc6634C0532925a3b844Bc9e7595f8fE00",
-      }
+    	{
+    	  "amount": "1000000",
+    	  "currency": "0x20c0000000000000000000000000000000000001",
+    	  "decimals": 6,
+    	  "description": undefined,
+    	  "externalId": undefined,
+    	  "methodDetails": {
+    	    "chainId": 42431,
+    	    "feePayer": undefined,
+    	    "memo": undefined,
+    	  },
+    	  "recipient": "0x742d35Cc6634C0532925a3b844Bc9e7595f8fE00",
+    	}
     `)
   })
 
