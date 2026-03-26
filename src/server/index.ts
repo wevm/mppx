@@ -1,5 +1,4 @@
 export * as Expires from '../Expires.js'
-export * as Html from './Html.js'
 export * as Store from '../Store.js'
 export { stripe, tempo } from './Methods.js'
 export * as Mppx from './Mppx.js'

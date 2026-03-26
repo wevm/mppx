@@ -3,7 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev:compose": "vite dev --config vite.compose.ts",
+    "dev:compose": "vp dev --config vite.compose.ts",
     "test:compose": "playwright test -c test/playwright.config.ts"
   }
 }

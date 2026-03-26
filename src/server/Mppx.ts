@@ -733,7 +733,7 @@ export function compose(
             name: meta.name,
             intent: meta.intent,
             challenge,
-            html: meta._html.content,
+            content: meta._html.content,
             config: meta._html.config,
           })
         } catch {}

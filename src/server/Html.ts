@@ -90,7 +90,7 @@ export type ComposedMethod = {
   name: string
   intent: string
   challenge: Challenge.Challenge
-  html: string
+  content: string
   config?: Record<string, unknown> | undefined
 }
 
@@ -146,7 +146,7 @@ export function compose(props: {
       // Inject __mppx_root and __mppx_active before the method's module script.
       // The method html contains an inline <script type="module"> — we prepend
       // assignments inside it so they execute at the top of that module.
-      const patchedHtml = m.html.replace(
+      const patchedHtml = m.content.replace(
         '<script type="module">',
         `<script type="module">window.__mppx_root="${rootId}";window.__mppx_active="${key}";`,
       )
