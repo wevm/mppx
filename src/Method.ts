@@ -75,7 +75,7 @@ export type Server<
   transportOverride = undefined,
 > = method & {
   defaults?: defaults | undefined
-  html?: Html.Options | false | undefined
+  html?: Html.Options | undefined
   htmlRoutes?:
     | Record<string, (request: globalThis.Request) => Promise<globalThis.Response>>
     | undefined
@@ -227,7 +227,7 @@ export declare namespace toServer {
     transportOverride extends Transport.AnyTransport | undefined = undefined,
   > = {
     defaults?: defaults | undefined
-    html?: Html.Options | false | undefined
+    html?: Html.Options | undefined
     htmlRoutes?:
       | Record<string, (request: globalThis.Request) => Promise<globalThis.Response>>
       | undefined

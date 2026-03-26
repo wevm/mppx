@@ -1,10 +1,10 @@
 import { loadStripe } from '@stripe/stripe-js/pure'
 
 import type { Methods } from '../../../stripe/index.js'
-import type { HtmlConfig } from '../../../stripe/server/Charge.js'
+import type { charge } from '../../../stripe/server/Charge.js'
 import { mount } from '../../mount.js'
 
-mount<typeof Methods.charge, HtmlConfig>(async (c) => {
+mount<typeof Methods.charge, charge.HtmlConfig>(async (c) => {
   const request = c.challenge.request
 
   // DOM

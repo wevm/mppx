@@ -112,11 +112,7 @@ export function from<
  * - Attaches receipts via `Payment-Receipt` header
  */
 export function http(options?: http.Options): Http {
-  const renderHtml = (() => {
-    if (options?.html === false) return
-    if (!options?.html || options.html === true) return Html.render
-    return options.html
-  })()
+  const renderHtml = typeof options?.html === 'function' ? options.html : Html.render
 
   return from<Request, Response>({
     name: 'http',
@@ -230,12 +226,11 @@ export function mcp() {
 export declare namespace http {
   type Options = {
     /**
-     * Serve an HTML payment page to browsers (requests with `Accept: text/html`).
+     * Custom HTML renderer for payment pages.
      *
-     * - `true` — use the built-in payment page
-     * - `(props) => string` — custom HTML renderer
+     * Defaults to the built-in payment page. Pass a function to override.
      */
-    html?: boolean | ((props: Html.Props) => string) | undefined
+    html?: ((props: Html.Props) => string) | undefined
   }
 }
 

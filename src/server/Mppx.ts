@@ -156,7 +156,6 @@ export function create<
   const transport extends Transport.AnyTransport = Transport.Http,
 >(config: create.Config<methods, transport>): Mppx<methods, transport> {
   const {
-    html: htmlConfig,
     realm = Env.get('realm') ?? 'MPP Payment',
     secretKey = Env.get('secretKey'),
     transport = Transport.http() as transport,
@@ -177,7 +176,6 @@ export function create<
     intentCount[mi.intent] = (intentCount[mi.intent] ?? 0) + 1
     handlers[`${mi.name}/${mi.intent}`] = createMethodFn({
       defaults: mi.defaults,
-      htmlConfig,
       method: mi,
       realm,
       request: mi.request as never,
@@ -267,8 +265,6 @@ export declare namespace create {
     methods extends Methods = Methods,
     transport extends Transport.AnyTransport = Transport.Http,
   > = {
-    /** HTML payment page configuration (theme, text). Set `false` to disable HTML pages. */
-    html?: Html.Config | false | undefined
     /** Array of configured methods. @example [tempo()] */
     methods: methods
     /** Server realm (e.g., hostname). Auto-detected from environment variables (`MPP_REALM`, `VERCEL_URL`, `RAILWAY_PUBLIC_DOMAIN`, `RENDER_EXTERNAL_HOSTNAME`, `HOST`, `HOSTNAME`), falling back to `"localhost"`. */
@@ -289,17 +285,8 @@ function createMethodFn<
 ): createMethodFn.ReturnType<method, transport, defaults>
 // biome-ignore lint/correctness/noUnusedVariables: _
 function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.ReturnType {
-  const { defaults, htmlConfig, method, realm, respond, secretKey, transport, verify } = parameters
-  const html: Html.Options | undefined = (() => {
-    if (htmlConfig === false) return undefined
-    if (!('html' in method) || method.html === false) return undefined
-    const methodHtml = method.html as Html.Options
-    return {
-      ...methodHtml,
-      ...(htmlConfig?.theme ? { theme: htmlConfig.theme } : {}),
-      ...(htmlConfig?.text ? { text: htmlConfig.text } : {}),
-    }
-  })()
+  const { defaults, method, realm, respond, secretKey, transport, verify } = parameters
+  const html = ('html' in method ? method.html : undefined) as Html.Options | undefined
 
   return (options) => {
     const { description, meta, ...rest } = options
@@ -537,7 +524,6 @@ declare namespace createMethodFn {
     defaults extends Record<string, unknown> = Record<string, unknown>,
   > = {
     defaults?: defaults
-    htmlConfig?: Html.Config | false | undefined
     method: method
     realm: string
     request?: Method.RequestFn<method>

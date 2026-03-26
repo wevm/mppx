@@ -44,10 +44,10 @@ export function charge<const parameters extends charge.Parameters>(parameters: p
     decimals,
     description,
     externalId,
+    html: htmlConfig,
     metadata,
     networkId,
     paymentMethodTypes,
-    publishableKey,
   } = parameters
 
   const client = 'client' in parameters ? parameters.client : undefined
@@ -66,91 +66,92 @@ export function charge<const parameters extends charge.Parameters>(parameters: p
       paymentMethodTypes,
     } as unknown as Defaults,
 
-    ...(parameters.html === false
-      ? { html: false }
-      : publishableKey
-        ? {
-            html: {
-              content: html,
-              config: { publishableKey, createTokenUrl: createTokenPathname } satisfies HtmlConfig,
-            },
-            htmlRoutes: {
-              [createTokenPathname]: async (request: globalThis.Request) => {
-                const { paymentMethod, amount, currency, expiresAt, networkId, metadata } =
-                  (await request.json()) as {
-                    paymentMethod: string
-                    amount: string
-                    currency: string
-                    expiresAt: number
-                    networkId?: string
-                    metadata?: Record<string, string>
-                  }
-
-                const body = new URLSearchParams({
-                  payment_method: paymentMethod,
-                  'usage_limits[currency]': currency,
-                  'usage_limits[max_amount]': amount,
-                  'usage_limits[expires_at]': expiresAt.toString(),
-                })
-                if (networkId) body.set('seller_details[network_id]', networkId)
-                if (metadata) {
-                  for (const [key, value] of Object.entries(metadata)) {
-                    body.set(`metadata[${key}]`, value)
-                  }
+    ...(htmlConfig
+      ? {
+          html: {
+            content: html,
+            config: {
+              publishableKey: htmlConfig.publishableKey,
+              createTokenUrl: htmlConfig.createTokenUrl ?? createTokenPathname,
+            } satisfies charge.HtmlConfig,
+          },
+          htmlRoutes: {
+            [createTokenPathname]: async (request: globalThis.Request) => {
+              const { paymentMethod, amount, currency, expiresAt, networkId, metadata } =
+                (await request.json()) as {
+                  paymentMethod: string
+                  amount: string
+                  currency: string
+                  expiresAt: number
+                  networkId?: string
+                  metadata?: Record<string, string>
                 }
 
-                const resolvedSecretKey = secretKey ?? (client as any)?.apiKey
-                if (!resolvedSecretKey)
-                  return Response.json(
-                    { error: 'secretKey is required for SPT creation' },
-                    { status: 500 },
-                  )
+              const body = new URLSearchParams({
+                payment_method: paymentMethod,
+                'usage_limits[currency]': currency,
+                'usage_limits[max_amount]': amount,
+                'usage_limits[expires_at]': expiresAt.toString(),
+              })
+              if (networkId) body.set('seller_details[network_id]', networkId)
+              if (metadata) {
+                for (const [key, value] of Object.entries(metadata)) {
+                  body.set(`metadata[${key}]`, value)
+                }
+              }
 
-                const createSpt = async (bodyParams: URLSearchParams) =>
-                  fetch('https://api.stripe.com/v1/test_helpers/shared_payment/granted_tokens', {
-                    method: 'POST',
-                    headers: {
-                      Authorization: `Basic ${btoa(`${resolvedSecretKey}:`)}`,
-                      'Content-Type': 'application/x-www-form-urlencoded',
-                    },
-                    body: bodyParams,
-                  })
+              const resolvedSecretKey = secretKey ?? (client as any)?.apiKey
+              if (!resolvedSecretKey)
+                return Response.json(
+                  { error: 'secretKey is required for SPT creation' },
+                  { status: 500 },
+                )
 
-                try {
-                  let response = await createSpt(body)
-                  if (!response.ok) {
-                    const error = (await response.json()) as { error: { message: string } }
-                    if (
-                      (metadata || networkId) &&
-                      error.error.message.includes('Received unknown parameter')
-                    ) {
-                      const fallbackBody = new URLSearchParams({
-                        payment_method: paymentMethod,
-                        'usage_limits[currency]': currency,
-                        'usage_limits[max_amount]': amount,
-                        'usage_limits[expires_at]': expiresAt.toString(),
-                      })
-                      response = await createSpt(fallbackBody)
-                    } else {
-                      return Response.json({ error: error.error.message }, { status: 500 })
-                    }
-                  }
+              const createSpt = async (bodyParams: URLSearchParams) =>
+                fetch('https://api.stripe.com/v1/test_helpers/shared_payment/granted_tokens', {
+                  method: 'POST',
+                  headers: {
+                    Authorization: `Basic ${btoa(`${resolvedSecretKey}:`)}`,
+                    'Content-Type': 'application/x-www-form-urlencoded',
+                  },
+                  body: bodyParams,
+                })
 
-                  if (!response.ok) {
-                    const error = (await response.json()) as { error: { message: string } }
+              try {
+                let response = await createSpt(body)
+                if (!response.ok) {
+                  const error = (await response.json()) as { error: { message: string } }
+                  if (
+                    (metadata || networkId) &&
+                    error.error.message.includes('Received unknown parameter')
+                  ) {
+                    const fallbackBody = new URLSearchParams({
+                      payment_method: paymentMethod,
+                      'usage_limits[currency]': currency,
+                      'usage_limits[max_amount]': amount,
+                      'usage_limits[expires_at]': expiresAt.toString(),
+                    })
+                    response = await createSpt(fallbackBody)
+                  } else {
                     return Response.json({ error: error.error.message }, { status: 500 })
                   }
-
-                  const { id: spt } = (await response.json()) as { id: string }
-                  return Response.json({ spt })
-                } catch (e) {
-                  const message = e instanceof Error ? e.message : 'Unknown error'
-                  return Response.json({ error: message }, { status: 500 })
                 }
-              },
+
+                if (!response.ok) {
+                  const error = (await response.json()) as { error: { message: string } }
+                  return Response.json({ error: error.error.message }, { status: 500 })
+                }
+
+                const { id: spt } = (await response.json()) as { id: string }
+                return Response.json({ spt })
+              } catch (e) {
+                const message = e instanceof Error ? e.message : 'Unknown error'
+                return Response.json({ error: message }, { status: 500 })
+              }
             },
-          }
-        : {}),
+          },
+        }
+      : {}),
 
     async verify({ credential }) {
       const { challenge } = credential
@@ -198,21 +199,14 @@ export function charge<const parameters extends charge.Parameters>(parameters: p
   })
 }
 
-export type HtmlConfig = {
-  createTokenUrl: string
-  publishableKey: string
-}
-
 export declare namespace charge {
   type Defaults = LooseOmit<Method.RequestDefaults<typeof Methods.charge>, 'recipient'>
 
   type Parameters = {
-    /** Disable the built-in HTML payment page for this method. @default true */
-    html?: false | undefined
+    /** Enable the built-in HTML payment page with Stripe configuration. */
+    html?: { publishableKey: string; createTokenUrl?: string | undefined } | undefined
     /** Optional metadata to include in SPT creation requests. */
     metadata?: Record<string, string> | undefined
-    /** Stripe publishable key for browser-based HTML payment form. Required when using `html: true` on Mppx.create. */
-    publishableKey?: string | undefined
   } & Defaults &
     OneOf<
       | {
@@ -226,6 +220,11 @@ export declare namespace charge {
           secretKey: string
         }
     >
+
+  type HtmlConfig = {
+    createTokenUrl: string
+    publishableKey: string
+  }
 
   type DeriveDefaults<parameters extends Parameters> = Pick<
     parameters,

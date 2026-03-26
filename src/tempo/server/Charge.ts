@@ -69,7 +69,7 @@ export function charge<const parameters extends charge.Parameters>(
       recipient,
     } as unknown as Defaults,
 
-    html: parameters.html === false ? false : { content: html },
+    ...(parameters.html ? { html: { content: html } } : {}),
 
     // TODO: dedupe `{charge,session}.request`
     async request({ credential, request }) {
@@ -293,8 +293,8 @@ export declare namespace charge {
   type Defaults = LooseOmit<Method.RequestDefaults<typeof Methods.charge>, 'feePayer' | 'recipient'>
 
   type Parameters = {
-    /** Disable the built-in HTML payment page for this method. @default true */
-    html?: false | undefined
+    /** Enable the built-in HTML payment page for this method. @default false */
+    html?: boolean | undefined
     /** Testnet mode. */
     testnet?: boolean | undefined
     /**
