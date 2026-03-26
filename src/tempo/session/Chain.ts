@@ -101,15 +101,44 @@ export async function settleOnChain(
   escrowContract: Address,
   voucher: SignedVoucher,
   feePayer?: Account | undefined,
+  account?: Account | undefined,
 ): Promise<Hex> {
   assertUint128(voucher.cumulativeAmount)
   const args = [voucher.channelId, voucher.cumulativeAmount, voucher.signature] as const
+  const resolved = account ?? client.account
+  if (!resolved)
+    throw new Error(
+      'Cannot settle channel: no account available. Pass an `account` to tempo.settle(), or provide a `getClient` that returns an account-bearing client.',
+    )
   if (feePayer) {
     const data = encodeFunctionData({ abi: escrowAbi, functionName: 'settle', args })
-    return sendFeePayerTx(client, feePayer, escrowContract, data, 'settle')
+    const chainId = client.chain?.id
+    const feeToken = chainId
+      ? defaults.currency[chainId as keyof typeof defaults.currency]
+      : undefined
+    const prepared = await prepareTransactionRequest(client, {
+      account: resolved,
+      calls: [{ to: escrowContract, data }],
+      feePayer: true,
+      ...(feeToken ? { feeToken } : {}),
+    } as never)
+    const serialized = (await signTransaction(client, {
+      ...prepared,
+      account: resolved,
+      feePayer,
+    } as never)) as Hex
+    const receipt = await sendRawTransactionSync(client, {
+      serializedTransaction: serialized as Transaction.TransactionSerializedTempo,
+    })
+    if (receipt.status !== 'success') {
+      throw new VerificationFailedError({
+        reason: `settle transaction reverted: ${receipt.transactionHash}`,
+      })
+    }
+    return receipt.transactionHash
   }
   return writeContract(client, {
-    account: client.account!,
+    account: resolved,
     chain: client.chain,
     address: escrowContract,
     abi: escrowAbi,
