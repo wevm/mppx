@@ -8,9 +8,8 @@ import type { LooseOmit, OneOf } from '../../internal/types.js'
 import * as Method from '../../Method.js'
 import type { StripeClient } from '../internal/types.js'
 import * as Methods from '../Methods.js'
+import { createTokenPathname } from './internal/createTokenPathname.js'
 import { html } from './internal/html.gen.js'
-
-export const createTokenPathname = '/__mppx_stripe_create_token'
 
 /**
  * Creates a Stripe charge method intent for usage on the server.

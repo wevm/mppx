@@ -4,7 +4,7 @@
   "type": "module",
   "scripts": {
     "dev": "vp dev",
-    "test": "NODE_OPTIONS='--no-deprecation' playwright test -c test/playwright.config.ts"
+    "test": "NODE_OPTIONS='--no-deprecation' playwright test -c playwright.config.ts"
   },
   "devDependencies": {
     "mipd": "0.0.7",

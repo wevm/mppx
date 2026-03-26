@@ -1,4 +1,15 @@
 {
   "extends": "../../tsconfig.base.json",
-  "include": ["build.ts", "vite.ts", "*/vite.config.ts"]
+  "include": [
+    "build.ts",
+    "vite.ts",
+    "*/vite.config.ts",
+    "*/playwright.config.ts",
+    "page/test/playwright.config.ts",
+    "page/test/env.d.ts",
+    "test/*.ts",
+    "tempo/src/*.test.ts",
+    "stripe/src/*.test.ts",
+    "page/test/*.test.ts"
+  ]
 }

@@ -8,7 +8,7 @@ import * as Challenge from '../Challenge.js'
 import * as Credential from '../Credential.js'
 import * as Expires from '../Expires.js'
 import type * as Method from '../Method.js'
-import * as Html from '../server/Html.js'
+import * as Html from '../server/internal/html.shared.js'
 
 const pageDir = path.resolve(import.meta.dirname, 'page')
 

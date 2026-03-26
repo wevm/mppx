@@ -1,25 +1,23 @@
-import { expect } from '@playwright/test'
+import { expect, test } from '@playwright/test'
 
-import { test } from '../test/playwright-utils.js'
-
-test('renders the payment page with challenge info', async ({ baseUrl, page }) => {
-  const response = await page.goto(baseUrl)
+test('renders the payment page with challenge info', async ({ page }) => {
+  const response = await page.goto('/')
   expect(response!.status()).toBe(402)
 
   await expect(page.locator('h1')).toHaveText('Payment Required')
   await expect(page.locator('main')).toContainText('Expires')
 })
 
-test('mounts stripe payment element', async ({ baseUrl, page }) => {
-  await page.goto(baseUrl)
+test('mounts stripe payment element', async ({ page }) => {
+  await page.goto('/')
   await expect(page.locator('#mppx-method button')).toHaveText('Pay')
   // Stripe Payment Element renders inside an iframe
   const stripeFrame = page.locator('iframe[name^="__privateStripeFrame"]').nth(0).contentFrame()
   await expect(stripeFrame.locator('[name="number"]')).toBeVisible({ timeout: 15_000 })
 })
 
-test('completes payment with test card', async ({ baseUrl, page }) => {
-  await page.goto(baseUrl)
+test('completes payment with test card', async ({ page }) => {
+  await page.goto('/')
 
   // Wait for Stripe Payment Element iframe to load
   const stripeFrame = page.locator('iframe[name^="__privateStripeFrame"]').nth(0).contentFrame()

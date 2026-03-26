@@ -1,9 +1,9 @@
 import { expect } from '@playwright/test'
 
-import { test } from './playwright-utils.js'
+import { test } from '../../test/playwright-utils.js'
 
-test('renders accessible tabs for both methods', async ({ baseUrl, page }) => {
-  const response = await page.goto(baseUrl)
+test('renders accessible tabs for both methods', async ({ page }) => {
+  const response = await page.goto('/')
   expect(response!.status()).toBe(402)
 
   await expect(page.locator('h1')).toHaveText('Payment Required')
@@ -24,8 +24,8 @@ test('renders accessible tabs for both methods', async ({ baseUrl, page }) => {
   await expect(panels).toHaveCount(2)
 })
 
-test('first tab is active by default with correct ARIA state', async ({ baseUrl, page }) => {
-  await page.goto(baseUrl)
+test('first tab is active by default with correct ARIA state', async ({ page }) => {
+  await page.goto('/')
 
   const firstTab = page.locator('[role="tab"]').nth(0)
   const secondTab = page.locator('[role="tab"]').nth(1)
@@ -51,8 +51,8 @@ test('first tab is active by default with correct ARIA state', async ({ baseUrl,
   )
 })
 
-test('switching tabs updates ARIA state and panels', async ({ baseUrl, page }) => {
-  await page.goto(baseUrl)
+test('switching tabs updates ARIA state and panels', async ({ page }) => {
+  await page.goto('/')
 
   const firstTab = page.locator('[role="tab"]').nth(0)
   const secondTab = page.locator('[role="tab"]').nth(1)
@@ -77,8 +77,8 @@ test('switching tabs updates ARIA state and panels', async ({ baseUrl, page }) =
   )
 })
 
-test('keyboard navigation switches tabs', async ({ baseUrl, page }) => {
-  await page.goto(baseUrl)
+test('keyboard navigation switches tabs', async ({ page }) => {
+  await page.goto('/')
 
   const firstTab = page.locator('[role="tab"]').nth(0)
   const secondTab = page.locator('[role="tab"]').nth(1)
@@ -105,8 +105,8 @@ test('keyboard navigation switches tabs', async ({ baseUrl, page }) => {
   await expect(firstTab).toHaveAttribute('aria-selected', 'true')
 })
 
-test('summary shows shared info without method row', async ({ baseUrl, page }) => {
-  await page.goto(baseUrl)
+test('summary shows shared info without method row', async ({ page }) => {
+  await page.goto('/')
 
   await expect(page.locator('.mppx-summary')).toContainText('$10.00')
   await expect(page.locator('.mppx-summary')).toContainText('Test payment')
@@ -114,8 +114,8 @@ test('summary shows shared info without method row', async ({ baseUrl, page }) =
   await expect(page.locator('.mppx-summary')).not.toContainText('Method')
 })
 
-test('each panel has its own scoped root', async ({ baseUrl, page }) => {
-  await page.goto(baseUrl)
+test('each panel has its own scoped root', async ({ page }) => {
+  await page.goto('/')
 
   const stripeRoot = await page.locator('#mppx-method-stripe-charge').count()
   const tempoRoot = await page.locator('#mppx-method-tempo-charge').count()
@@ -123,8 +123,8 @@ test('each panel has its own scoped root', async ({ baseUrl, page }) => {
   expect(tempoRoot).toBe(1)
 })
 
-test('completes stripe payment via compose tab', async ({ baseUrl, page }) => {
-  await page.goto(baseUrl)
+test('completes stripe payment via compose tab', async ({ page }) => {
+  await page.goto('/')
 
   // Stripe tab is active by default — wait for Stripe Payment Element iframe
   const stripePanel = page.locator('.mppx-tab-panel[data-method="stripe/charge"]')

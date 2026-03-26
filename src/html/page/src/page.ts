@@ -1,5 +1,5 @@
 import * as Credential from '../../../Credential.js'
-import * as Html from '../../../server/Html.js'
+import * as Html from '../../../server/internal/html.shared.js'
 
 const dataElement = document.getElementById(Html.elements.data)
 if (!dataElement) throw new Error(`Missing #${Html.elements.data} element`)
@@ -192,7 +192,7 @@ function activateServiceWorker(reg: ServiceWorkerRegistration): Promise<void> {
   })
 }
 
-addEventListener('mppx:complete', (event) => {
+addEventListener('mppx:complete', (event: CustomEvent<string>) => {
   const statusElement = document.getElementById('status')
   const authorization = event.detail
   if (statusElement) {

@@ -1,5 +1,4 @@
 import { generate, type GenerateConfig, type RouteConfig } from '../discovery/OpenApi.js'
-import * as Html from '../server/Html.js'
 import * as Mppx_core from '../server/Mppx.js'
 import * as Mppx_internal from './internal/mppx.js'
 
@@ -68,10 +67,8 @@ export function payment<const intent extends Mppx_internal.AnyMethodFn>(
   handler: RouteHandler,
 ): RouteHandler {
   return async (request) => {
-    if (new URL(request.url).pathname === Html.serviceWorker.pathname)
-      return new Response(Html.serviceWorker.script, {
-        headers: { 'Content-Type': 'application/javascript' },
-      })
+    const htmlResponse = await intent._htmlHandler?.(request)
+    if (htmlResponse) return htmlResponse
     const result = await intent(options)(request)
     if (result.status === 402) return result.challenge
     const response = await handler(request)

@@ -1,24 +1,25 @@
 {
   "scripts": {
-    "build": "zile",
+    "build": "pnpm generate:html && zile",
     "build:html": "vp build src/html/page && vp build src/html/tempo && vp build src/html/stripe",
-    "changeset:publish": "zile publish:prepare && changeset publish && zile publish:post",
+    "changeset:publish": "pnpm generate:html && zile publish:prepare && changeset publish && zile publish:post",
     "changeset:version": "changeset version",
     "check": "vp lint --fix && vp fmt --write .",
     "check:ci": "vp lint && vp fmt --check .",
-    "check:types": "tsgo -b",
-    "check:types:html": "tsgo -p src/html/tsconfig.browser.json",
-    "check:types:examples": "pnpm -r --filter './examples/**' run check:types",
+    "check:types": "pnpm generate:html && tsgo -b",
+    "check:types:html": "pnpm generate:html && tsgo -p src/html/tsconfig.browser.json",
+    "check:types:examples": "pnpm generate:html && pnpm -r --filter './examples/**' run check:types",
     "deps": "pnpx taze -r --no-ignore-other-workspaces --ignore-paths node_modules",
     "deps:ci": "pnpx actions-up",
-    "dev": "zile dev",
-    "dev:example": "node scripts/dev:example.ts",
+    "dev": "pnpm generate:html && zile dev",
+    "dev:example": "pnpm generate:html && node scripts/dev:example.ts",
     "dev:html:compose": "pnpm --filter @mppx/html-page dev:compose",
     "dev:html:stripe": "pnpm --filter @mppx/html-stripe dev",
     "dev:html:tempo": "pnpm --filter @mppx/html-tempo dev",
+    "generate:html": "pnpm build:html",
     "mppx": "node --import tsx src/bin.ts",
-    "test": "vp test",
-    "test:html": "pnpm test:html:compose && pnpm test:html:stripe && pnpm test:html:tempo",
+    "test": "pnpm generate:html && vp test",
+    "test:html": "pnpm generate:html && pnpm test:html:compose && pnpm test:html:stripe && pnpm test:html:tempo",
     "test:html:compose": "pnpm --filter @mppx/html-page test:compose",
     "test:html:stripe": "pnpm --filter @mppx/html-stripe test",
     "test:html:tempo": "pnpm --filter @mppx/html-tempo test"
@@ -160,9 +161,9 @@
       "default": "./dist/middlewares/elysia.js"
     },
     "./html": {
-      "types": "./dist/html/mount.d.ts",
-      "src": "./src/html/mount.ts",
-      "default": "./dist/html/mount.js"
+      "types": "./dist/html/index.d.ts",
+      "src": "./src/html/index.ts",
+      "default": "./dist/html/index.js"
     },
     "./html/vite": {
       "types": "./dist/html/vite.d.ts",

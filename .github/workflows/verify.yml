@@ -37,7 +37,7 @@ jobs:
         run: pnpm check:ci
 
       - name: Check types
-        run: pnpm dev && pnpm check:types && pnpm check:types:html && pnpm check:types:examples
+        run: pnpm check:types && pnpm check:types:html && pnpm check:types:examples
 
   test:
     name: Test Runtime

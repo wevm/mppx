@@ -1,7 +1,7 @@
 import { defineConfig } from 'vite'
 
 import * as Methods from '../../stripe/Methods.js'
-import { createTokenPathname } from '../../stripe/server/Charge.js'
+import { createTokenPathname } from '../../stripe/server/internal/createTokenPathname.js'
 import mppx from '../vite.js'
 
 export default defineConfig({

@@ -7,7 +7,6 @@ import type {
 } from 'express'
 
 import { generate, type GenerateConfig, type RouteConfig } from '../discovery/OpenApi.js'
-import * as Html from '../server/Html.js'
 import * as Mppx_core from '../server/Mppx.js'
 import * as Mppx_internal from './internal/mppx.js'
 
@@ -93,15 +92,17 @@ export function payment<const intent extends Mppx_internal.AnyMethodFn>(
   options: intent extends (options: infer options) => any ? options : never,
 ): RequestHandler {
   return async (req: ExpressRequest, res: ExpressResponse, next: NextFunction) => {
-    if (req.originalUrl === Html.serviceWorker.pathname) {
-      res.setHeader('Content-Type', 'application/javascript')
-      res.send(Html.serviceWorker.script)
-      return
-    }
     const request = new Request(`${req.protocol}://${req.hostname}${req.originalUrl}`, {
       method: req.method,
       headers: req.headers as Record<string, string>,
     })
+    const htmlResponse = await intent._htmlHandler?.(request)
+    if (htmlResponse) {
+      res.status(htmlResponse.status)
+      for (const [key, value] of htmlResponse.headers) res.setHeader(key, value)
+      res.send(await htmlResponse.text())
+      return
+    }
     const result = await intent(options)(request)
 
     if (result.status === 402) {

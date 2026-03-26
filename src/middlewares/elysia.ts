@@ -1,7 +1,6 @@
 import { Elysia, type Context } from 'elysia'
 
 import { generate, type GenerateConfig, type RouteConfig } from '../discovery/OpenApi.js'
-import * as Html from '../server/Html.js'
 import * as Mppx_core from '../server/Mppx.js'
 import * as Mppx_internal from './internal/mppx.js'
 
@@ -74,10 +73,8 @@ export function payment<const intent extends Mppx_internal.AnyMethodFn>(
   options: intent extends (options: infer options) => any ? options : never,
 ): ElysiaHook {
   return async ({ request, set }) => {
-    if (new URL(request.url).pathname === Html.serviceWorker.pathname)
-      return new Response(Html.serviceWorker.script, {
-        headers: { 'Content-Type': 'application/javascript' },
-      })
+    const htmlResponse = await intent._htmlHandler?.(request)
+    if (htmlResponse) return htmlResponse
     const result = await intent(options)(request)
     if (result.status === 402) return result.challenge
     const receipt = result.withReceipt(new Response())

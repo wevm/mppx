@@ -45,19 +45,16 @@ export default async function () {
     rpcUrls: { default: { http: [rpcUrl] } },
   })
   const client = createClient({ account, chain, transport: http() })
-  await Promise.all(
-    [1n, 2n, 3n].map((id) =>
-      Actions.amm.mintSync(client, {
-        account,
-        feeToken: Addresses.pathUsd,
-        nonceKey: 'expiring',
-        userTokenAddress: id,
-        validatorTokenAddress: Addresses.pathUsd,
-        validatorTokenAmount: parseUnits('1000', 6),
-        to: account.address,
-      }),
-    ),
-  )
+  for (const id of [1n, 2n, 3n]) {
+    await Actions.amm.mintSync(client, {
+      account,
+      feeToken: Addresses.pathUsd,
+      userTokenAddress: id,
+      validatorTokenAddress: Addresses.pathUsd,
+      validatorTokenAmount: parseUnits('1000', 6),
+      to: account.address,
+    })
+  }
 
   process.env.TEMPO_CHAIN_ID = String(tempoLocalnet.id)
   process.env.TEMPO_RPC_URL = rpcUrl

@@ -1,7 +1,6 @@
 import type { Hono, MiddlewareHandler } from 'hono'
 
 import { generate, type GenerateConfig, type RouteConfig } from '../discovery/OpenApi.js'
-import * as Html from '../server/Html.js'
 import * as Mppx_core from '../server/Mppx.js'
 import * as Mppx_internal from './internal/mppx.js'
 
@@ -67,10 +66,8 @@ export function payment<const intent extends Mppx_internal.AnyMethodFn>(
   options: intent extends (options: infer options) => any ? options : never,
 ): MiddlewareHandler {
   return async (c, next) => {
-    if (new URL(c.req.url).pathname === Html.serviceWorker.pathname)
-      return c.body(Html.serviceWorker.script, {
-        headers: { 'Content-Type': 'application/javascript' },
-      })
+    const htmlResponse = await intent._htmlHandler?.(c.req.raw)
+    if (htmlResponse) return htmlResponse
     const result = await intent(options)(c.req.raw)
     if (result.status === 402) return result.challenge
     await next()

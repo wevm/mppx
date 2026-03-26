@@ -1,4 +1,4 @@
-import { mount } from '../../../../mount.js'
+import { mount } from '../../../../index.js'
 
 mount((c) => {
   c.setAmount('$10.00')

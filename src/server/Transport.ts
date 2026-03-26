@@ -4,7 +4,7 @@ import * as Errors from '../Errors.js'
 import type { Distribute, UnionToIntersection } from '../internal/types.js'
 import * as core_Mcp from '../Mcp.js'
 import * as Receipt from '../Receipt.js'
-import * as Html from './Html.js'
+import * as Html from './internal/html.js'
 
 export { type McpSdk, mcpSdk } from '../mcp-sdk/server/Transport.js'
 

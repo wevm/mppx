@@ -15,7 +15,7 @@ import { sendTransactionSync } from 'viem/actions'
 import { tempo as tempoMainnet, tempoLocalnet, tempoModerato } from 'viem/chains'
 
 import type { Methods } from '../../../tempo/index.js'
-import { mount } from '../../mount.js'
+import { mount } from '../../index.js'
 
 mount<typeof Methods.charge>((c) => {
   const request = c.challenge.request

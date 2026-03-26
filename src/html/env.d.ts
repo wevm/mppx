@@ -1,5 +1,5 @@
 import type { Challenge } from '../Challenge.js'
-import type { Text, Theme } from '../server/Html.js'
+import type { Text, Theme } from '../server/internal/html.shared.js'
 
 declare global {
   module '*.svg' {

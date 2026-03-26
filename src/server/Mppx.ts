@@ -9,12 +9,14 @@ import type * as Method from '../Method.js'
 import * as PaymentRequest from '../PaymentRequest.js'
 import type * as Receipt from '../Receipt.js'
 import type * as z from '../zod.js'
-import * as Html from './Html.js'
+import * as Html from './internal/html.js'
 import * as NodeListener from './NodeListener.js'
 import * as Request from './Request.js'
 import * as Transport from './Transport.js'
 
 export type Methods = readonly (Method.AnyServer | readonly Method.AnyServer[])[]
+
+export type HtmlHandler = (request: globalThis.Request) => Promise<globalThis.Response | null>
 
 /**
  * Payment handler.
@@ -24,7 +26,7 @@ export type Mppx<
   transport extends Transport.AnyTransport = Transport.Http,
 > = {
   /** Handles HTML payment page infrastructure routes (service worker + method-registered routes). */
-  html: (request: globalThis.Request) => Promise<globalThis.Response | null>
+  html: HtmlHandler
   /** Methods to configure. */
   methods: FlattenMethods<methods>
   /** Server realm (e.g., hostname). */
@@ -245,13 +247,19 @@ export function create<
       htmlRoutesMap.set(pathname, handler)
   }
 
+  const html: HtmlHandler = async (request) => {
+    const pathname = new URL(request.url).pathname
+    const handler = htmlRoutesMap.get(pathname)
+    if (handler) return handler(request)
+    return null
+  }
+
+  for (const mi of methods) {
+    ;(handlers[`${mi.name}/${mi.intent}`] as AnyMethodFn)._htmlHandler = html
+  }
+
   return {
-    async html(request: globalThis.Request) {
-      const pathname = new URL(request.url).pathname
-      const handler = htmlRoutesMap.get(pathname)
-      if (handler) return handler(request)
-      return null
-    },
+    html,
     methods,
     compose: composeFn,
     realm: realm as string,
@@ -548,7 +556,9 @@ export type MethodFn<
   options: MethodFn.Options<method, defaults>,
 ) => (input: Transport.InputOf<transport>) => Promise<MethodFn.Response<transport>>
 /** @internal */
-export type AnyMethodFn = (options: any) => (input: any) => Promise<any>
+export type AnyMethodFn = ((options: any) => (input: any) => Promise<any>) & {
+  _htmlHandler?: HtmlHandler | undefined
+}
 /** A MethodFn tagged with its source Method (set by `create()`). @internal */
 type AnyMethodFnWithMethod = AnyMethodFn & { _method: Method.AnyServer }
 

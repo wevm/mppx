@@ -190,13 +190,6 @@ describe('mcp', () => {
             "amount": "1000",
             "currency": "0x20c0000000000000000000000000000000000001",
             "decimals": 6,
-            "description": undefined,
-            "externalId": undefined,
-            "methodDetails": {
-              "chainId": undefined,
-              "feePayer": undefined,
-              "memo": undefined,
-            },
             "recipient": "0x742d35Cc6634C0532925a3b844Bc9e7595f8fE00",
           },
         }

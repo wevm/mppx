@@ -8,10 +8,13 @@
   },
   "include": [
     "env.d.ts",
+    "index.ts",
     "mount.ts",
-    "tempo/src/*.ts",
-    "stripe/src/*.ts",
+    "tempo/src/charge.ts",
+    "stripe/src/charge.ts",
     "page/src/page.ts",
-    "page/src/logos/index.ts"
+    "page/src/serviceWorker.ts",
+    "page/src/logos/index.ts",
+    "page/test/form-method/src/charge.ts"
   ]
 }

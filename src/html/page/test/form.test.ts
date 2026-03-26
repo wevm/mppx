@@ -1,16 +1,7 @@
-import * as path from 'node:path'
+import { expect, test } from '@playwright/test'
 
-import { expect } from '@playwright/test'
-
-import { createBaseTest } from '../../test/playwright-utils.js'
-
-const test = createBaseTest({
-  root: path.resolve(import.meta.dirname, 'form-method'),
-  configFile: path.resolve(import.meta.dirname, 'form-method/vite.config.ts'),
-})
-
-test('renders form with input and submit button', async ({ baseUrl, page }) => {
-  const response = await page.goto(baseUrl)
+test('renders form with input and submit button', async ({ page }) => {
+  const response = await page.goto('/')
   expect(response!.status()).toBe(402)
 
   await expect(page.locator('h1')).toHaveText('Payment Required')
@@ -19,13 +10,13 @@ test('renders form with input and submit button', async ({ baseUrl, page }) => {
   await expect(page.locator('#payment-form button[type="submit"]')).toBeVisible()
 })
 
-test('displays amount via setAmount', async ({ baseUrl, page }) => {
-  await page.goto(baseUrl)
+test('displays amount via setAmount', async ({ page }) => {
+  await page.goto('/')
   await expect(page.locator('.mppx-summary-amount')).toHaveText('$10.00')
 })
 
-test('submitting form dispatches credential', async ({ baseUrl, page }) => {
-  await page.goto(baseUrl)
+test('submitting form dispatches credential', async ({ page }) => {
+  await page.goto('/')
 
   await page.fill('input[name="code"]', 'test-payment-code-123')
   await page.click('#payment-form button[type="submit"]')
