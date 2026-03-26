@@ -341,6 +341,7 @@ export async function settle(
   options?: {
     escrowContract?: Address | undefined
     feePayer?: viem_Account | undefined
+    account?: viem_Account | undefined
   },
 ): Promise<Hex> {
   const channel = await store.getChannel(channelId)
@@ -359,6 +360,7 @@ export async function settle(
     resolvedEscrow,
     channel.highestVoucher,
     options?.feePayer,
+    options?.account,
   )
 
   await store.updateChannel(channelId, (current) => {

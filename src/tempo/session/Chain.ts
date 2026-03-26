@@ -101,15 +101,21 @@ export async function settleOnChain(
   escrowContract: Address,
   voucher: SignedVoucher,
   feePayer?: Account | undefined,
+  account?: Account | undefined,
 ): Promise<Hex> {
   assertUint128(voucher.cumulativeAmount)
+  const resolved = account ?? client.account
+  if (!resolved)
+    throw new Error(
+      'Cannot settle channel: no account available. Pass an `account` to tempo.settle(), or provide a `getClient` that returns an account-bearing client.',
+    )
   const args = [voucher.channelId, voucher.cumulativeAmount, voucher.signature] as const
   if (feePayer) {
     const data = encodeFunctionData({ abi: escrowAbi, functionName: 'settle', args })
-    return sendFeePayerTx(client, feePayer, escrowContract, data, 'settle')
+    return sendFeePayerTx(client, resolved, feePayer, escrowContract, data, 'settle')
   }
   return writeContract(client, {
-    account: client.account!,
+    account: resolved,
     chain: client.chain,
     address: escrowContract,
     abi: escrowAbi,
@@ -137,7 +143,7 @@ export async function closeOnChain(
   const args = [voucher.channelId, voucher.cumulativeAmount, voucher.signature] as const
   if (feePayer) {
     const data = encodeFunctionData({ abi: escrowAbi, functionName: 'close', args })
-    return sendFeePayerTx(client, feePayer, escrowContract, data, 'close')
+    return sendFeePayerTx(client, resolved, feePayer, escrowContract, data, 'close')
   }
   return writeContract(client, {
     account: resolved,
@@ -155,9 +161,13 @@ export async function closeOnChain(
  * Follows the same signTransaction + sendRawTransactionSync pattern used
  * by broadcastOpenTransaction / broadcastTopUpTransaction, but originates
  * the transaction server-side (estimating gas and fees first).
+ *
+ * @param account - The logical sender / msg.sender (e.g. the payee).
+ * @param feePayer - The gas sponsor — only co-signs to cover fees.
  */
 async function sendFeePayerTx(
   client: Client,
+  account: Account,
   feePayer: Account,
   to: Address,
   data: Hex,
@@ -167,12 +177,10 @@ async function sendFeePayerTx(
   // token.  `feePayer: true` tells the prepare hook to use expiring nonces but
   // does NOT set feeToken automatically, so we must provide it explicitly.
   const chainId = client.chain?.id
-  const feeToken = chainId
-    ? defaults.currency[chainId as keyof typeof defaults.currency]
-    : undefined
+  const feeToken = chainId ? defaults.resolveCurrency({ chainId }) : undefined
 
   const prepared = await prepareTransactionRequest(client, {
-    account: feePayer,
+    account,
     calls: [{ to, data }],
     feePayer: true,
     ...(feeToken ? { feeToken } : {}),
@@ -180,7 +188,7 @@ async function sendFeePayerTx(
 
   const serialized = (await signTransaction(client, {
     ...prepared,
-    account: feePayer,
+    account,
     feePayer,
   } as never)) as Hex
 
