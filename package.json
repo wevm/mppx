@@ -122,6 +122,11 @@
       "src": "./src/tempo/index.ts",
       "default": "./dist/tempo/index.js"
     },
+    "./ows": {
+      "types": "./dist/ows.d.ts",
+      "src": "./src/ows.ts",
+      "default": "./dist/ows.js"
+    },
     "./hono": {
       "types": "./dist/middlewares/hono.d.ts",
       "src": "./src/middlewares/hono.ts",
@@ -148,10 +153,14 @@
     "elysia": ">=1",
     "express": ">=5",
     "hono": ">=4",
+    "@open-wallet-standard/core": ">=1.0.0",
     "viem": ">=2.47.5"
   },
   "peerDependenciesMeta": {
     "@modelcontextprotocol/sdk": {
+      "optional": true
+    },
+    "@open-wallet-standard/core": {
       "optional": true
     },
     "elysia": {
