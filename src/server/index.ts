@@ -1,6 +1,6 @@
 export * as Expires from '../Expires.js'
 export * as Store from '../Store.js'
-export { stripe, tempo } from './Methods.js'
+export { sei, stripe, tempo } from './Methods.js'
 export * as Mppx from './Mppx.js'
 export * as NodeListener from './NodeListener.js'
 export * as Request from './Request.js'

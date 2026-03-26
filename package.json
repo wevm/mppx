@@ -122,6 +122,21 @@
       "src": "./src/stripe/server/index.ts",
       "default": "./dist/stripe/server/index.js"
     },
+    "./sei": {
+      "types": "./dist/sei/index.d.ts",
+      "src": "./src/sei/index.ts",
+      "default": "./dist/sei/index.js"
+    },
+    "./sei/client": {
+      "types": "./dist/sei/client/index.d.ts",
+      "src": "./src/sei/client/index.ts",
+      "default": "./dist/sei/client/index.js"
+    },
+    "./sei/server": {
+      "types": "./dist/sei/server/index.d.ts",
+      "src": "./src/sei/server/index.ts",
+      "default": "./dist/sei/server/index.js"
+    },
     "./tempo": {
       "types": "./dist/tempo/index.d.ts",
       "src": "./src/tempo/index.ts",
