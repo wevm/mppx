@@ -45,7 +45,7 @@
     "testcontainers": "^11.11.0",
     "tsx": "^4.21.0",
     "typescript": "~5.9.3",
-    "viem": "^2.47.5",
+    "viem": "^2.47.6",
     "vp": "npm:vite-plus@~0.1.14",
     "zile": "^0.0.19"
   },
