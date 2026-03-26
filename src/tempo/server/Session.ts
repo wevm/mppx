@@ -456,6 +456,15 @@ async function verifyAndAcceptVoucher(parameters: {
   if (onChain.closeRequestedAt !== 0n) {
     throw new ChannelClosedError({ reason: 'channel has a pending close request' })
   }
+  // Treat a zero deposit on an existing channel as settled/closed.
+  // During settlement the escrow contract may zero the deposit before
+  // setting the finalized flag, creating a brief window where
+  // finalized=false but deposit=0. Without this guard the voucher
+  // check below would return a 402 (AmountExceedsDepositError) instead
+  // of the correct 410 (ChannelClosedError).
+  if (onChain.deposit === 0n && onChain.payer !== '0x0000000000000000000000000000000000000000') {
+    throw new ChannelClosedError({ reason: 'channel deposit is zero (settled)' })
+  }
 
   if (voucher.cumulativeAmount <= onChain.settled) {
     throw new VerificationFailedError({
