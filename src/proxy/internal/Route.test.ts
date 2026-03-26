@@ -26,9 +26,7 @@ describe('pathname', () => {
   })
 
   test('error: returns null for basePath prefix collision', () => {
-    expect(
-      Route.pathname(new URL('http://localhost/proxy2/openai/v1/models'), '/proxy'),
-    ).toBeNull()
+    expect(Route.pathname(new URL('http://localhost/proxy2/openai/v1/models'), '/proxy')).toBeNull()
   })
 
   test('behavior: returns empty string when pathname equals basePath', () => {
