@@ -58,19 +58,19 @@ describe('http', () => {
       })
 
       expect(transport.getChallenge(response)).toMatchInlineSnapshot(`
-      	{
-      	  "expires": "2025-01-01T00:00:00.000Z",
-      	  "id": "TYrS4_zjUdm9n_FV2wIZrWjIttldjjzjKoiSTRDteIs",
-      	  "intent": "charge",
-      	  "method": "tempo",
-      	  "realm": "api.example.com",
-      	  "request": {
-      	    "amount": "1000",
-      	    "currency": "0x20c0000000000000000000000000000000000001",
-      	    "decimals": 6,
-      	    "recipient": "0x742d35Cc6634C0532925a3b844Bc9e7595f8fE00",
-      	  },
-      	}
+        {
+          "expires": "2025-01-01T00:00:00.000Z",
+          "id": "TYrS4_zjUdm9n_FV2wIZrWjIttldjjzjKoiSTRDteIs",
+          "intent": "charge",
+          "method": "tempo",
+          "realm": "api.example.com",
+          "request": {
+            "amount": "1000",
+            "currency": "0x20c0000000000000000000000000000000000001",
+            "decimals": 6,
+            "recipient": "0x742d35Cc6634C0532925a3b844Bc9e7595f8fE00",
+          },
+        }
       `)
     })
 
@@ -180,26 +180,26 @@ describe('mcp', () => {
       }
 
       expect(transport.getChallenge(response)).toMatchInlineSnapshot(`
-      	{
-      	  "expires": "2025-01-01T00:00:00.000Z",
-      	  "id": "TYrS4_zjUdm9n_FV2wIZrWjIttldjjzjKoiSTRDteIs",
-      	  "intent": "charge",
-      	  "method": "tempo",
-      	  "realm": "api.example.com",
-      	  "request": {
-      	    "amount": "1000",
-      	    "currency": "0x20c0000000000000000000000000000000000001",
-      	    "decimals": 6,
-      	    "description": undefined,
-      	    "externalId": undefined,
-      	    "methodDetails": {
-      	      "chainId": undefined,
-      	      "feePayer": undefined,
-      	      "memo": undefined,
-      	    },
-      	    "recipient": "0x742d35Cc6634C0532925a3b844Bc9e7595f8fE00",
-      	  },
-      	}
+        {
+          "expires": "2025-01-01T00:00:00.000Z",
+          "id": "TYrS4_zjUdm9n_FV2wIZrWjIttldjjzjKoiSTRDteIs",
+          "intent": "charge",
+          "method": "tempo",
+          "realm": "api.example.com",
+          "request": {
+            "amount": "1000",
+            "currency": "0x20c0000000000000000000000000000000000001",
+            "decimals": 6,
+            "description": undefined,
+            "externalId": undefined,
+            "methodDetails": {
+              "chainId": undefined,
+              "feePayer": undefined,
+              "memo": undefined,
+            },
+            "recipient": "0x742d35Cc6634C0532925a3b844Bc9e7595f8fE00",
+          },
+        }
       `)
     })
 
@@ -239,33 +239,33 @@ describe('mcp', () => {
       const serialized = Credential.serialize(credential)
 
       expect(transport.setCredential(mcpRequest, serialized)).toMatchInlineSnapshot(`
-      	{
-      	  "method": "tools/call",
-      	  "params": {
-      	    "_meta": {
-      	      "org.paymentauth/credential": {
-      	        "challenge": {
-      	          "expires": "2025-01-01T00:00:00.000Z",
-      	          "id": "TYrS4_zjUdm9n_FV2wIZrWjIttldjjzjKoiSTRDteIs",
-      	          "intent": "charge",
-      	          "method": "tempo",
-      	          "realm": "api.example.com",
-      	          "request": {
-      	            "amount": "1000",
-      	            "currency": "0x20c0000000000000000000000000000000000001",
-      	            "decimals": 6,
-      	            "recipient": "0x742d35Cc6634C0532925a3b844Bc9e7595f8fE00",
-      	          },
-      	        },
-      	        "payload": {
-      	          "signature": "0xabc123",
-      	          "type": "transaction",
-      	        },
-      	      },
-      	    },
-      	    "name": "test-tool",
-      	  },
-      	}
+        {
+          "method": "tools/call",
+          "params": {
+            "_meta": {
+              "org.paymentauth/credential": {
+                "challenge": {
+                  "expires": "2025-01-01T00:00:00.000Z",
+                  "id": "TYrS4_zjUdm9n_FV2wIZrWjIttldjjzjKoiSTRDteIs",
+                  "intent": "charge",
+                  "method": "tempo",
+                  "realm": "api.example.com",
+                  "request": {
+                    "amount": "1000",
+                    "currency": "0x20c0000000000000000000000000000000000001",
+                    "decimals": 6,
+                    "recipient": "0x742d35Cc6634C0532925a3b844Bc9e7595f8fE00",
+                  },
+                },
+                "payload": {
+                  "signature": "0xabc123",
+                  "type": "transaction",
+                },
+              },
+            },
+            "name": "test-tool",
+          },
+        }
       `)
     })
 
