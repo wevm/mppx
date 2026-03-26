@@ -693,7 +693,7 @@ describe('tempo', () => {
       httpServer.close()
     })
 
-    test('behavior: rejects hash when split transfers are out of order', async () => {
+    test('behavior: accepts hash when split transfers are out of order', async () => {
       const httpServer = await Http.createServer(async (req, res) => {
         const result = await Mppx_server.toNodeListener(
           server.charge({
@@ -754,9 +754,7 @@ describe('tempo', () => {
       const authResponse = await fetch(httpServer.url, {
         headers: { Authorization: Credential.serialize(credential) },
       })
-      expect(authResponse.status).toBe(402)
-      const body = (await authResponse.json()) as { detail: string }
-      expect(body.detail).toContain('no matching payment call found')
+      expect(authResponse.status).toBe(200)
 
       httpServer.close()
     })
@@ -1803,7 +1801,7 @@ describe('tempo', () => {
       httpServer.close()
     })
 
-    test('error: rejects split transaction when transfers are out of order', async () => {
+    test('behavior: accepts split transaction when transfers are out of order', async () => {
       const httpServer = await Http.createServer(async (req, res) => {
         const result = await Mppx_server.toNodeListener(
           server.charge({
@@ -1862,9 +1860,7 @@ describe('tempo', () => {
       const authResponse = await fetch(httpServer.url, {
         headers: { Authorization: Credential.serialize(credential) },
       })
-      expect(authResponse.status).toBe(402)
-      const body = (await authResponse.json()) as { detail: string }
-      expect(body.detail).toContain('no matching payment call found')
+      expect(authResponse.status).toBe(200)
 
       httpServer.close()
     })

@@ -56,6 +56,21 @@ export function charge(parameters: charge.Parameters = {}) {
       const { amount, methodDetails } = request
       const currency = request.currency as Address
 
+      if (parameters.expectedRecipients) {
+        const allowed = new Set(parameters.expectedRecipients.map((a) => a.toLowerCase()))
+        const splits = methodDetails?.splits as
+          | readonly { recipient: string }[]
+          | undefined
+        if (splits) {
+          for (const split of splits) {
+            if (!allowed.has(split.recipient.toLowerCase()))
+              throw new Error(
+                `Unexpected split recipient: ${split.recipient}`,
+              )
+          }
+        }
+      }
+
       const memo = methodDetails?.memo
         ? (methodDetails.memo as Hex.Hex)
         : Attribution.encode({ serverId: challenge.realm, clientId })
@@ -108,11 +123,19 @@ export function charge(parameters: charge.Parameters = {}) {
         })
       }
 
+      const validBefore = (() => {
+        const defaultExpiry = Math.floor(Date.now() / 1000) + 25
+        if (!challenge.expires) return defaultExpiry
+        const challengeExpiry = Math.floor(new Date(challenge.expires).getTime() / 1000)
+        return Math.min(defaultExpiry, challengeExpiry)
+      })()
+
       const prepared = await prepareTransactionRequest(client, {
         account,
         calls,
         ...(methodDetails?.feePayer && { feePayer: true }),
         nonceKey: 'expiring',
+        validBefore,
       } as never)
       // FIXME: figure out gas estimation issue for fee payer tx
       prepared.gas = prepared.gas! + 5_000n
@@ -140,6 +163,11 @@ export declare namespace charge {
     autoSwap?: AutoSwap | undefined
     /** Client identifier used to derive the client fingerprint in attribution memos. */
     clientId?: string | undefined
+    /**
+     * Allowlist of expected split recipient addresses. When set, the client
+     * rejects any challenge whose split recipients are not in this list.
+     */
+    expectedRecipients?: readonly string[] | undefined
     /**
      * Controls how the charge transaction is submitted.
      *
