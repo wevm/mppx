@@ -51,8 +51,9 @@ export type PaymentResponse = Response & {
  *
  * When the server includes a `channelId` in the 402 challenge `methodDetails`,
  * the client will attempt to recover the channel by reading its on-chain state
- * via `getOnChainChannel()`. If the channel has a positive deposit and is not
- * finalized, it resumes from the on-chain settled amount.
+ * via `getOnChainChannel()`. If the channel has enough available balance and is
+ * not finalized, it resumes from the on-chain settled amount. Otherwise, it
+ * opens a new channel for the next payment.
  */
 export function sessionManager(parameters: sessionManager.Parameters): SessionManager {
   const fetchFn = parameters.fetch ?? globalThis.fetch
