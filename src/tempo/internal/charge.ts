@@ -1,19 +1,21 @@
+import type { Address } from 'viem'
+
 export type Split = {
   amount: string
   memo?: string | undefined
-  recipient: string
+  recipient: Address
 }
 
 export type Transfer = {
   amount: string
   memo?: string | undefined
-  recipient: string
+  recipient: Address
 }
 
 export function getTransfers(request: {
   amount: string
   methodDetails?: { memo?: string | undefined; splits?: readonly Split[] | undefined }
-  recipient: string
+  recipient: Address
 }): Transfer[] {
   const totalAmount = BigInt(request.amount)
   const splits = request.methodDetails?.splits ?? []

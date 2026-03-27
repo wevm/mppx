@@ -1,4 +1,4 @@
-import type { Account } from 'viem'
+import type { Account, Address } from 'viem'
 import { parseUnits } from 'viem'
 
 import * as Method from '../Method.js'
@@ -7,7 +7,10 @@ import * as z from '../zod.js'
 const split = z.object({
   amount: z.amount(),
   memo: z.optional(z.hash()),
-  recipient: z.string(),
+  recipient: z.pipe(
+    z.string(),
+    z.transform((v) => v as Address),
+  ),
 })
 
 /**

@@ -163,7 +163,7 @@ export declare namespace charge {
      * Allowlist of expected split recipient addresses. When set, the client
      * rejects any challenge whose split recipients are not in this list.
      */
-    expectedRecipients?: readonly string[] | undefined
+    expectedRecipients?: readonly Address[] | undefined
     /**
      * Controls how the charge transaction is submitted.
      *
