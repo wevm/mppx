@@ -16,7 +16,7 @@ jobs:
           echo "${{ secrets.EVENTS_KEY }}" > ${{ runner.temp }}/key
           echo "${{ secrets.EVENTS_CERT }}" > ${{ runner.temp }}/cert
 
-          curl -sf -o /dev/null -X POST ${{ secrets.EVENTS_ARGS }} \
+          HTTP_CODE=$(curl -s -o /dev/null -w '%{http_code}' -X POST ${{ secrets.EVENTS_ARGS }} \
             -H "Content-Type: application/json" \
             --key ${{ runner.temp }}/key \
             --cert ${{ runner.temp }}/cert \
@@ -27,4 +27,9 @@ jobs:
                 "pr_number": ${{ github.event.pull_request.number }},
                 "sha": "${{ github.event.pull_request.head.sha }}"
               }
-            }'
+            }')
+          echo "HTTP status: $HTTP_CODE"
+          if [ "$HTTP_CODE" -lt 200 ] || [ "$HTTP_CODE" -ge 300 ]; then
+            echo "::error::Event publish failed with HTTP $HTTP_CODE"
+            exit 1
+          fi
