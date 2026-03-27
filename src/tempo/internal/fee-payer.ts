@@ -30,14 +30,29 @@ export function validateCalls(
   calls: readonly { data?: `0x${string}` | undefined; to?: TempoAddress.Address | undefined }[],
   details: Record<string, string>,
 ) {
-  const callSelectors = calls.map((c) => c.data?.slice(0, 10))
-  const allowed = callScopes.some(
-    (pattern) =>
-      pattern.length === callSelectors.length &&
-      pattern.every((sel, i) => sel === callSelectors[i]),
-  )
-  if (!allowed)
+  if (calls.length === 0)
     throw new FeePayerValidationError('disallowed call pattern in fee-payer transaction', details)
+
+  const callSelectors = calls.map((c) => c.data?.slice(0, 10))
+  const hasSwapPrefix = callSelectors[0] === Selectors.approve
+
+  if (hasSwapPrefix) {
+    if (callSelectors[1] !== Selectors.swapExactAmountOut)
+      throw new FeePayerValidationError('disallowed call pattern in fee-payer transaction', details)
+  } else if (callSelectors[0] === Selectors.swapExactAmountOut) {
+    throw new FeePayerValidationError('disallowed call pattern in fee-payer transaction', details)
+  }
+
+  const transferSelectors = callSelectors.slice(hasSwapPrefix ? 2 : 0)
+  if (
+    transferSelectors.length === 0 ||
+    transferSelectors.length > 11 ||
+    transferSelectors.some(
+      (selector) => selector !== Selectors.transfer && selector !== Selectors.transferWithMemo,
+    )
+  ) {
+    throw new FeePayerValidationError('disallowed call pattern in fee-payer transaction', details)
+  }
 
   // Validate approve spender and buy target are the DEX.
   const approveCall = calls.find((c) => c.data?.slice(0, 10) === Selectors.approve)
