@@ -1,5 +1,5 @@
 import type * as Challenge from '../../Challenge.js'
-import { content, script, serviceWorker as serviceWorkerGen } from './html.gen.js'
+import { content, pageStyle, script, serviceWorker as serviceWorkerGen } from './html.gen.js'
 import { classNames, elements, serviceWorker as serviceWorkerRoute, style } from './html.shared.js'
 import type { Config, LightDark, Text, Theme } from './html.shared.js'
 
@@ -42,7 +42,7 @@ export function render(props: Props): string {
   }
   const data = JSON.stringify({ challenge: props.challenge, config }).replace(/</g, '\\u003c')
   const themeStyle = style(props.theme)
-  const head = `\n  <meta name="viewport" content="width=device-width, initial-scale=1.0" />\n  <title>${title}</title>${themeStyle}`
+  const head = `\n  <meta name="viewport" content="width=device-width, initial-scale=1.0" />\n  <title>${title}</title>${themeStyle}${pageStyle}`
   return content
     .replace('<!--mppx:head-->', head)
     .replace(
@@ -125,7 +125,7 @@ export function compose(props: {
   const methodContent = `<div class="${classNames.tabs}" role="tablist" aria-label="Payment method">\n      ${tabBar}\n    </div>\n    ${panels}`
 
   const themeStyle = style(props.theme)
-  const head = `\n  <meta name="viewport" content="width=device-width, initial-scale=1.0" />\n  <title>${title}</title>${themeStyle}`
+  const head = `\n  <meta name="viewport" content="width=device-width, initial-scale=1.0" />\n  <title>${title}</title>${themeStyle}${pageStyle}`
   return content
     .replace('<!--mppx:head-->', head)
     .replace(

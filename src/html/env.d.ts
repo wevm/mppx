@@ -2,6 +2,11 @@ import type { Challenge } from '../Challenge.js'
 import type { Text, Theme } from '../server/internal/html.shared.js'
 
 declare global {
+  module '*.css' {
+    const src: string
+    export default src
+  }
+
   module '*.svg' {
     const src: string
     export default src

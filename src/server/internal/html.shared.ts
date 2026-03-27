@@ -1,5 +1,3 @@
-import { stylesheet } from './stylesheet.js'
-
 /** Element IDs used in the payment page template. */
 export const elements = {
   challenge: 'mppx-challenge',
@@ -41,7 +39,7 @@ export const serviceWorker = {
   pathname: '/__mppx_serviceWorker.js',
 } as const
 
-/** Renders a `<style>` block (and optional font `<link>`) with CSS custom properties from a theme. */
+/** Renders theme variables (and optional font `<link>`) for the payment page shell. */
 export function style(theme: Theme | undefined): string {
   const t = theme ?? {}
   const colorScheme = t.colorScheme ?? 'light dark'
@@ -74,7 +72,6 @@ export function style(theme: Theme | undefined): string {
       --mppx-radius: ${radius};
       --mppx-font-family: ${fontFamily};
     }${darkMedia}
-    ${stylesheet}
   </style>`
 }
 

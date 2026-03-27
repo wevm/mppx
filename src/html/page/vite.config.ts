@@ -49,9 +49,11 @@ export default defineConfig({
         const pageContent = (
           await fs.readFile(path.resolve(root, 'src/page.html'), 'utf-8')
         ).trimEnd()
+        const pageCss = escapeTemplateLiteral(await readCssAssets(path.resolve(root, 'dist')))
         const pageBundledScript = escapeTemplateLiteral(
           (await fs.readFile(path.resolve(root, 'dist/page.js'), 'utf-8')).trim(),
         )
+        const pageStyle = pageCss ? `\n  <style>\n${indent(pageCss, 4)}\n  </style>` : ''
         const pageScript = `\n  <script type="module">\n${indent(pageBundledScript, 4)}\n  </script>`
         const serviceWorkerScript = (
           await fs.readFile(path.resolve(root, 'dist/serviceWorker.js'), 'utf-8')
@@ -59,6 +61,8 @@ export default defineConfig({
 
         const body = [
           `export const content = \`\n${pageContent}\``,
+          ``,
+          `export const pageStyle = \`${pageStyle}\``,
           ``,
           `export const script = \`${pageScript}\n  \``,
           ``,
@@ -86,6 +90,24 @@ function escapeTemplateLiteral(str: string): string {
     .replaceAll('\\', '\\\\')
     .replaceAll('`', '\\`')
     .replaceAll('${', '\\${')
+}
+
+async function readCssAssets(dir: string): Promise<string> {
+  const entries = await fs.readdir(dir, { withFileTypes: true }).catch(() => [])
+  const chunks: string[] = []
+
+  for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
+    const entryPath = path.resolve(dir, entry.name)
+    if (entry.isDirectory()) {
+      const nested = await readCssAssets(entryPath)
+      if (nested) chunks.push(nested)
+      continue
+    }
+    if (!entry.name.endsWith('.css')) continue
+    chunks.push((await fs.readFile(entryPath, 'utf-8')).trim())
+  }
+
+  return chunks.join('\n')
 }
 
 function indent(str: string, spaces: number): string {
