@@ -27,15 +27,7 @@ export namespace Mppx {
   export function create<const methods extends Mppx_core.Methods>(
     config: Mppx_core.create.Config<methods>,
   ): Mppx_internal.Wrap<Mppx_core.Mppx<methods>, MiddlewareHandler> {
-    const mppx = Mppx_core.create(config)
-    return Mppx_internal.wrap(mppx, (intent, options) => {
-      return (async (c, next) => {
-        const result = await intent(options)(c.req.raw)
-        if (result.status === 402) return result.challenge
-        await next()
-        c.res = result.withReceipt(c.res)
-      }) as MiddlewareHandler
-    })
+    return Mppx_internal.wrap(Mppx_core.create(config), payment)
   }
 }
 

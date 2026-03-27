@@ -28,14 +28,8 @@ export namespace Mppx {
   export function create<const methods extends Mppx_core.Methods>(
     config: Mppx_core.create.Config<methods>,
   ): Mppx_internal.Wrap<Mppx_core.Mppx<methods>, NextjsHandler> {
-    const mppx = Mppx_core.create(config)
-    return Mppx_internal.wrap(mppx, (intent, options) => {
-      return (handler: RouteHandler) => async (request: Request) => {
-        const result = await intent(options)(request)
-        if (result.status === 402) return result.challenge
-        const response = await handler(request)
-        return result.withReceipt(response)
-      }
+    return Mppx_internal.wrap(Mppx_core.create(config), (intent, options) => {
+      return (handler: RouteHandler) => payment(intent, options, handler)
     })
   }
 }

@@ -33,16 +33,7 @@ export namespace Mppx {
   export function create<const methods extends Mppx_core.Methods>(
     config: Mppx_core.create.Config<methods>,
   ): Mppx_internal.Wrap<Mppx_core.Mppx<methods>, ElysiaHook> {
-    const mppx = Mppx_core.create(config)
-    return Mppx_internal.wrap(mppx, (intent, options) => {
-      return (async ({ request, set }) => {
-        const result = await intent(options)(request)
-        if (result.status === 402) return result.challenge
-        const receipt = result.withReceipt(new Response())
-        const header = receipt.headers.get('Payment-Receipt')
-        if (header) set.headers['Payment-Receipt'] = header
-      }) as ElysiaHook
-    })
+    return Mppx_internal.wrap(Mppx_core.create(config), payment)
   }
 }
 
