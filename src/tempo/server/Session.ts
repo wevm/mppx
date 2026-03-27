@@ -84,13 +84,7 @@ type SessionMethodDetails = {
  */
 export function session<const parameters extends session.Parameters>(
   p?: NoExtraKeys<parameters, session.Parameters>,
-): Method.Server<
-  typeof Methods.session,
-  session.DeriveDefaults<parameters>,
-  parameters['sse'] extends false | undefined ? undefined : Transport.Sse
->
-/** @internal */
-export function session<const parameters extends session.Parameters>(p?: parameters) {
+) {
   const parameters = p as parameters
   const {
     amount,

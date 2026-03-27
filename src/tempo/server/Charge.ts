@@ -34,11 +34,10 @@ import * as Methods from '../Methods.js'
  * ```
  */
 export function charge<const parameters extends charge.Parameters>(
-  parameters?: NoExtraKeys<parameters, charge.Parameters>,
-): Method.Server<typeof Methods.charge, charge.DeriveDefaults<parameters>>
-/** @internal */
-export function charge<const parameters extends charge.Parameters>(
-  parameters: parameters = {} as parameters,
+  parameters: NoExtraKeys<parameters, charge.Parameters> = {} as NoExtraKeys<
+    parameters,
+    charge.Parameters
+  >,
 ) {
   const {
     amount,
