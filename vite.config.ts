@@ -42,6 +42,7 @@ export default defineConfig({
           globals: true,
           retry: 3,
           setupFiles: ['./test/setup.ts'],
+          testTimeout: 10_000,
           hookTimeout: 60_000,
         },
       },
@@ -53,6 +54,7 @@ export default defineConfig({
           globals: true,
           retry: 3,
           setupFiles: ['./test/setup.ts'],
+          testTimeout: 10_000,
           hookTimeout: 60_000,
         },
       },
@@ -84,6 +86,7 @@ export default defineConfig({
           include: ['src/**/*.browser.test.ts'],
           globals: true,
           retry: 1,
+          testTimeout: 10_000,
           browser: {
             enabled: true,
             headless: true,

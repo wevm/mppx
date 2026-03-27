@@ -12,7 +12,7 @@ import { Abis, Transaction } from 'viem/tempo'
 
 import { PaymentExpiredError } from '../../Errors.js'
 import type * as Html from '../../html/internal/types.js'
-import type { LooseOmit } from '../../internal/types.js'
+import type { LooseOmit, NoExtraKeys } from '../../internal/types.js'
 import * as Method from '../../Method.js'
 import * as Store from '../../Store.js'
 import * as Client from '../../viem/Client.js'
@@ -36,7 +36,10 @@ import { html } from './internal/html.gen.js'
  * ```
  */
 export function charge<const parameters extends charge.Parameters>(
-  parameters: parameters = {} as parameters,
+  parameters: NoExtraKeys<parameters, charge.Parameters> = {} as NoExtraKeys<
+    parameters,
+    charge.Parameters
+  >,
 ) {
   const {
     amount,

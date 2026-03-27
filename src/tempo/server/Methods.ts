@@ -14,7 +14,10 @@ import { session as session_, settle as settle_ } from './Session.js'
  * ```
  */
 export function tempo<const parameters extends tempo.Parameters>(parameters?: parameters) {
-  return [tempo.charge(parameters), tempo.session(parameters)] as const
+  return [
+    tempo.charge(parameters as charge_.Parameters as never),
+    tempo.session(parameters as session_.Parameters as never),
+  ] as const
 }
 
 export namespace tempo {

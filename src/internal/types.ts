@@ -410,3 +410,28 @@ export type Flatten<element> = element extends readonly (infer item)[] ? item : 
  * @internal
  */
 export type ValueOf<T> = T[keyof T]
+
+/**
+ * Rejects objects with keys not present in `Shape`.
+ *
+ * TypeScript's `extends` constraint on generics does not perform excess-property
+ * checking, so typos like `{ stream: … }` instead of `{ sse: … }` silently
+ * pass.  Wrapping the parameter type with `NoExtraKeys` maps every extra key
+ * to `never`, surfacing a compile-time error.
+ *
+ * @example
+ * ```ts
+ * type Opts = { sse?: boolean }
+ * declare function f<T extends Opts>(p: NoExtraKeys<T, Opts>): void
+ * f({ sse: true })          // ✅
+ * f({ stream: true })       // ❌  — 'stream' mapped to never
+ * ```
+ *
+ * @internal
+ */
+export type NoExtraKeys<T, Shape> = [T] extends [Shape]
+  ? T & { [K in Exclude<keyof T, KeysOfUnion<Shape>>]: never }
+  : never
+
+/** @internal */
+type KeysOfUnion<T> = T extends unknown ? keyof T : never

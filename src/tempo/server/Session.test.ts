@@ -885,6 +885,34 @@ describe.runIf(isLocalnet)('session', () => {
         }),
       ).rejects.toThrow(ChannelClosedError)
     })
+
+    test('rejects voucher when deposit is zero (settled race window)', async () => {
+      const { channelId, serializedTransaction } = await createSignedOpenTransaction(10000000n)
+      // Use a large TTL so the voucher path uses the cached store state
+      // instead of reading on-chain. This lets us simulate the settlement
+      // race where deposit=0 but finalized=false by manipulating the store.
+      const server = createServer({ channelStateTtl: 60_000 })
+      await openServerChannel(server, channelId, serializedTransaction)
+
+      // Simulate the escrow contract zeroing the deposit before setting
+      // finalized (the race window this PR guards against).
+      await store.updateChannel(channelId, (ch) => (ch ? { ...ch, deposit: 0n } : null))
+
+      await expect(
+        server.verify({
+          credential: {
+            challenge: makeChallenge({ id: 'challenge-after-settle', channelId }),
+            payload: {
+              action: 'voucher' as const,
+              channelId,
+              cumulativeAmount: '2000000',
+              signature: await signTestVoucher(channelId, 2000000n),
+            },
+          },
+          request: makeRequest(),
+        }),
+      ).rejects.toThrow(ChannelClosedError)
+    })
   })
 
   describe('topUp', () => {

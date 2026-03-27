@@ -1,9 +1,9 @@
 import { nodeEnv } from './config.js'
 import { createServer, port } from './tempo/prool.js'
 
-const defaultStartAttempts = 5
+const defaultStartAttempts = 3
 const defaultStartRetryDelayMs = 3_000
-const defaultStartRequestTimeoutMs = 120_000
+const defaultStartRequestTimeoutMs = 30_000
 
 function parsePositiveInt(value: string | undefined, fallback: number) {
   if (!value) return fallback

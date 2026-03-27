@@ -1772,3 +1772,219 @@ describe('withReceipt', () => {
     server.close()
   })
 })
+
+describe('realm auto-detection', () => {
+  beforeEach(() => {
+    // Clear all env vars that Env.get('realm') probes so realm falls through to request detection
+    for (const name of [
+      'MPP_REALM',
+      'FLY_APP_NAME',
+      'HEROKU_APP_NAME',
+      'RAILWAY_PUBLIC_DOMAIN',
+      'RENDER_EXTERNAL_HOSTNAME',
+      'VERCEL_URL',
+      'WEBSITE_HOSTNAME',
+    ])
+      vi.stubEnv(name, '')
+  })
+
+  afterEach(() => {
+    vi.unstubAllEnvs()
+  })
+
+  const mockMethod = Method.toServer(
+    Method.from({
+      name: 'mock',
+      intent: 'charge',
+      schema: {
+        credential: { payload: z.object({ token: z.string() }) },
+        request: z.object({ amount: z.string(), currency: z.string(), recipient: z.string() }),
+      },
+    }),
+    {
+      async verify() {
+        return {
+          method: 'mock',
+          reference: 'ref',
+          status: 'success' as const,
+          timestamp: new Date().toISOString(),
+        }
+      },
+    },
+  )
+
+  test.each([
+    { url: 'https://mpp.dev/resource', expected: 'mpp.dev' },
+    { url: 'https://api.example.com/v1/resource', expected: 'api.example.com' },
+    { url: 'https://localhost:8787/resource', expected: 'localhost' },
+    { url: 'https://MPP.DEV/resource', expected: 'mpp.dev' },
+    { url: 'http://staging.mpp.dev:3000/api', expected: 'staging.mpp.dev' },
+  ])('derives realm "$expected" from $url', async ({ url, expected }) => {
+    const handler = Mppx.create({ methods: [mockMethod], secretKey })
+
+    const result = await handler.charge({
+      amount: '100',
+      currency: '0x0000000000000000000000000000000000000001',
+      recipient: '0x0000000000000000000000000000000000000002',
+    })(new Request(url))
+
+    expect(result.status).toBe(402)
+    if (result.status !== 402) throw new Error()
+
+    const challenge = Challenge.fromResponse(result.challenge)
+    expect(challenge.realm).toBe(expected)
+  })
+
+  test('credential verifies across different casing of same host', async () => {
+    const handler = Mppx.create({ methods: [mockMethod], secretKey })
+
+    const chargeOpts = {
+      amount: '100',
+      currency: '0x0000000000000000000000000000000000000001',
+      recipient: '0x0000000000000000000000000000000000000002',
+    }
+
+    // Get challenge with uppercase host
+    const result = await handler.charge(chargeOpts)(new Request('https://MPP.DEV/resource'))
+    expect(result.status).toBe(402)
+    if (result.status !== 402) throw new Error()
+
+    const challenge = Challenge.fromResponse(result.challenge)
+    const credential = Credential.from({ challenge, payload: { token: 'valid' } })
+
+    // Verify with lowercase host — should match since both normalize
+    const verifyResult = await handler.charge(chargeOpts)(
+      new Request('https://mpp.dev/resource', {
+        headers: { Authorization: Credential.serialize(credential) },
+      }),
+    )
+    expect(verifyResult.status).toBe(200)
+  })
+
+  test('explicit realm takes precedence over request url', async () => {
+    const handler = Mppx.create({ methods: [mockMethod], realm: 'explicit.example.com', secretKey })
+
+    const request = new Request('https://other.example.com/resource')
+    const result = await handler.charge({
+      amount: '100',
+      currency: '0x0000000000000000000000000000000000000001',
+      recipient: '0x0000000000000000000000000000000000000002',
+    })(request)
+
+    expect(result.status).toBe(402)
+    if (result.status !== 402) throw new Error()
+
+    const challenge = Challenge.fromResponse(result.challenge)
+    expect(challenge.realm).toBe('explicit.example.com')
+  })
+
+  test('challenge and verification use same auto-detected realm', async () => {
+    const handler = Mppx.create({ methods: [mockMethod], secretKey })
+
+    const url = 'https://mpp.dev/resource'
+
+    // Get challenge
+    const result = await handler.charge({
+      amount: '100',
+      currency: '0x0000000000000000000000000000000000000001',
+      recipient: '0x0000000000000000000000000000000000000002',
+    })(new Request(url))
+
+    expect(result.status).toBe(402)
+    if (result.status !== 402) throw new Error()
+
+    const challenge = Challenge.fromResponse(result.challenge)
+    const credential = Credential.from({ challenge, payload: { token: 'valid' } })
+
+    // Replay with credential from same host — should verify
+    const verifyResult = await handler.charge({
+      amount: '100',
+      currency: '0x0000000000000000000000000000000000000001',
+      recipient: '0x0000000000000000000000000000000000000002',
+    })(new Request(url, { headers: { Authorization: Credential.serialize(credential) } }))
+
+    expect(verifyResult.status).toBe(200)
+  })
+
+  test('credential from one host rejected at different host', async () => {
+    const handler = Mppx.create({ methods: [mockMethod], secretKey })
+
+    // Get challenge from host A
+    const result = await handler.charge({
+      amount: '100',
+      currency: '0x0000000000000000000000000000000000000001',
+      recipient: '0x0000000000000000000000000000000000000002',
+    })(new Request('https://host-a.example.com/resource'))
+
+    expect(result.status).toBe(402)
+    if (result.status !== 402) throw new Error()
+
+    const challenge = Challenge.fromResponse(result.challenge)
+    const credential = Credential.from({ challenge, payload: { token: 'valid' } })
+
+    // Present at host B — realm mismatch should reject
+    const verifyResult = await handler.charge({
+      amount: '100',
+      currency: '0x0000000000000000000000000000000000000001',
+      recipient: '0x0000000000000000000000000000000000000002',
+    })(
+      new Request('https://host-b.example.com/resource', {
+        headers: { Authorization: Credential.serialize(credential) },
+      }),
+    )
+
+    expect(verifyResult.status).toBe(402)
+  })
+
+  test('realm undefined on handler when not explicitly set', () => {
+    const handler = Mppx.create({ methods: [mockMethod], secretKey })
+    expect(handler.realm).toBeUndefined()
+  })
+
+  test('falls back to default realm when input has no url', async () => {
+    const handler = Mppx.create({ methods: [mockMethod], secretKey })
+    const handle = handler.charge({
+      amount: '100',
+      currency: '0x0000000000000000000000000000000000000001',
+      recipient: '0x0000000000000000000000000000000000000002',
+    })
+
+    // Simulate a non-HTTP input with no .url — should warn and use fallback
+    const result = await handle({} as any)
+    expect(result.status).toBe(402)
+    if (result.status !== 402) throw new Error()
+    const challenge = Challenge.fromResponse(result.challenge)
+    expect(challenge.realm).toBe('MPP Payment')
+  })
+
+  test('cross-host rejection reports realm mismatch', async () => {
+    const handler = Mppx.create({ methods: [mockMethod], secretKey })
+
+    const result = await handler.charge({
+      amount: '100',
+      currency: '0x0000000000000000000000000000000000000001',
+      recipient: '0x0000000000000000000000000000000000000002',
+    })(new Request('https://host-a.example.com/resource'))
+
+    expect(result.status).toBe(402)
+    if (result.status !== 402) throw new Error()
+
+    const challenge = Challenge.fromResponse(result.challenge)
+    const credential = Credential.from({ challenge, payload: { token: 'valid' } })
+
+    const verifyResult = await handler.charge({
+      amount: '100',
+      currency: '0x0000000000000000000000000000000000000001',
+      recipient: '0x0000000000000000000000000000000000000002',
+    })(
+      new Request('https://host-b.example.com/resource', {
+        headers: { Authorization: Credential.serialize(credential) },
+      }),
+    )
+
+    expect(verifyResult.status).toBe(402)
+    if (verifyResult.status !== 402) throw new Error()
+    const body = (await verifyResult.challenge.json()) as { detail: string }
+    expect(body.detail).toContain('realm')
+  })
+})

@@ -14,6 +14,7 @@ import {
   type Address,
   type Hex,
   parseUnits,
+  zeroAddress,
   type Account as viem_Account,
   type Client as viem_Client,
 } from 'viem'
@@ -30,7 +31,7 @@ import {
   VerificationFailedError,
 } from '../../Errors.js'
 import type { Challenge, Credential } from '../../index.js'
-import type { LooseOmit } from '../../internal/types.js'
+import type { LooseOmit, NoExtraKeys } from '../../internal/types.js'
 import * as Method from '../../Method.js'
 import * as Store from '../../Store.js'
 import * as Client from '../../viem/Client.js'
@@ -82,7 +83,9 @@ type SessionMethodDetails = {
  * })
  * ```
  */
-export function session<const parameters extends session.Parameters>(p?: parameters) {
+export function session<const parameters extends session.Parameters>(
+  p?: NoExtraKeys<parameters, session.Parameters>,
+) {
   const parameters = p as parameters
   const {
     amount,
@@ -455,6 +458,15 @@ async function verifyAndAcceptVoucher(parameters: {
   }
   if (onChain.closeRequestedAt !== 0n) {
     throw new ChannelClosedError({ reason: 'channel has a pending close request' })
+  }
+  // Treat a zero deposit on an existing channel as settled/closed.
+  // During settlement the escrow contract may zero the deposit before
+  // setting the finalized flag, creating a brief window where
+  // finalized=false but deposit=0. Without this guard the voucher
+  // check below would return a 402 (AmountExceedsDepositError) instead
+  // of the correct 410 (ChannelClosedError).
+  if (onChain.deposit === 0n && onChain.payer !== zeroAddress) {
+    throw new ChannelClosedError({ reason: 'channel deposit is zero (settled)' })
   }
 
   if (voucher.cumulativeAmount <= onChain.settled) {
