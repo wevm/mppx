@@ -3,6 +3,7 @@ import { createClient, decodeFunctionData, defineChain, http, numberToHex, parse
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts'
 import { tempoLocalnet } from 'viem/chains'
 import { Actions, Addresses } from 'viem/tempo'
+
 export const test = base.extend<{ wallet: void }>({
   wallet: async ({ page }, use) => {
     const privateKey = generatePrivateKey()

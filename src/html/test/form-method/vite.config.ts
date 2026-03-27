@@ -1,8 +1,8 @@
 import { defineConfig } from 'vite'
 
-import * as Method from '../../../../Method.js'
-import * as z from '../../../../zod.js'
-import mppx from '../../../vite.js'
+import * as Method from '../../../Method.js'
+import * as z from '../../../zod.js'
+import mppx from '../../vite.js'
 
 const testFormMethod = Method.from({
   intent: 'charge',
@@ -10,8 +10,9 @@ const testFormMethod = Method.from({
   schema: {
     credential: {
       payload: z.object({
-        code: z.string(),
-        type: z.string(),
+        code: z.string().check(z.regex(/^test-payment-code-[a-z0-9-]+$/, 'Invalid payment code')),
+        serverToken: z.string().check(z.regex(/^server-ok-[a-z0-9-]+$/, 'Invalid server token')),
+        type: z.literal('code'),
       }),
     },
     request: z.object({

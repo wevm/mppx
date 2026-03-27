@@ -6,10 +6,21 @@ import {
 } from '../../Errors.js'
 import type { LooseOmit, OneOf } from '../../internal/types.js'
 import * as Method from '../../Method.js'
+import * as z from '../../zod.js'
 import type { StripeClient } from '../internal/types.js'
 import * as Methods from '../Methods.js'
-import { createTokenPathname } from './internal/createTokenPathname.js'
 import { html } from './internal/html.gen.js'
+
+export const createTokenPathname = '/__mppx_stripe_create_token'
+const createSptPath = '/v1/test_helpers/shared_payment/granted_tokens'
+const createSptRequestSchema = z.object({
+  amount: z.string(),
+  currency: z.string(),
+  expiresAt: z.number(),
+  metadata: z.optional(z.record(z.string(), z.string())),
+  networkId: z.optional(z.string()),
+  paymentMethod: z.string(),
+})
 
 /**
  * Creates a Stripe charge method intent for usage on the server.
@@ -75,79 +86,8 @@ export function charge<const parameters extends charge.Parameters>(parameters: p
             } satisfies charge.HtmlConfig,
           },
           htmlRoutes: {
-            [createTokenPathname]: async (request: globalThis.Request) => {
-              const { paymentMethod, amount, currency, expiresAt, networkId, metadata } =
-                (await request.json()) as {
-                  paymentMethod: string
-                  amount: string
-                  currency: string
-                  expiresAt: number
-                  networkId?: string
-                  metadata?: Record<string, string>
-                }
-
-              const body = new URLSearchParams({
-                payment_method: paymentMethod,
-                'usage_limits[currency]': currency,
-                'usage_limits[max_amount]': amount,
-                'usage_limits[expires_at]': expiresAt.toString(),
-              })
-              if (networkId) body.set('seller_details[network_id]', networkId)
-              if (metadata) {
-                for (const [key, value] of Object.entries(metadata)) {
-                  body.set(`metadata[${key}]`, value)
-                }
-              }
-
-              const resolvedSecretKey = secretKey ?? (client as any)?.apiKey
-              if (!resolvedSecretKey)
-                return Response.json(
-                  { error: 'secretKey is required for SPT creation' },
-                  { status: 500 },
-                )
-
-              const createSpt = async (bodyParams: URLSearchParams) =>
-                fetch('https://api.stripe.com/v1/test_helpers/shared_payment/granted_tokens', {
-                  method: 'POST',
-                  headers: {
-                    Authorization: `Basic ${btoa(`${resolvedSecretKey}:`)}`,
-                    'Content-Type': 'application/x-www-form-urlencoded',
-                  },
-                  body: bodyParams,
-                })
-
-              try {
-                let response = await createSpt(body)
-                if (!response.ok) {
-                  const error = (await response.json()) as { error: { message: string } }
-                  if (
-                    (metadata || networkId) &&
-                    error.error.message.includes('Received unknown parameter')
-                  ) {
-                    const fallbackBody = new URLSearchParams({
-                      payment_method: paymentMethod,
-                      'usage_limits[currency]': currency,
-                      'usage_limits[max_amount]': amount,
-                      'usage_limits[expires_at]': expiresAt.toString(),
-                    })
-                    response = await createSpt(fallbackBody)
-                  } else {
-                    return Response.json({ error: error.error.message }, { status: 500 })
-                  }
-                }
-
-                if (!response.ok) {
-                  const error = (await response.json()) as { error: { message: string } }
-                  return Response.json({ error: error.error.message }, { status: 500 })
-                }
-
-                const { id: spt } = (await response.json()) as { id: string }
-                return Response.json({ spt })
-              } catch (e) {
-                const message = e instanceof Error ? e.message : 'Unknown error'
-                return Response.json({ error: message }, { status: 500 })
-              }
-            },
+            [createTokenPathname]: (request: globalThis.Request) =>
+              createTokenResponse({ request, client, secretKey }),
           },
         }
       : {}),
@@ -211,7 +151,7 @@ export declare namespace charge {
       | {
           /** Pre-configured Stripe SDK instance. Any object matching the duck-typed `StripeClient` shape works. */
           client: StripeClient
-          /** Stripe secret API key. Required for HTML payment page SPT creation when using `client`. */
+          /** Stripe secret API key used as a fallback for HTML SPT creation if the client does not expose `rawRequest()`. */
           secretKey?: string | undefined
         }
       | {
@@ -298,6 +238,168 @@ async function createWithSecretKey(parameters: {
   const replayed = response.headers.get('idempotent-replayed') === 'true'
   const result = (await response.json()) as { id: string; status: string }
   return { ...result, replayed }
+}
+
+async function createSpt(parameters: {
+  client?: StripeClient | undefined
+  parameters: Record<string, unknown>
+  secretKey?: string | undefined
+}): Promise<{ success: true; result: { id: string } } | { success: false; error: unknown } | null> {
+  const { client, parameters: requestParameters, secretKey } = parameters
+
+  if (client?.rawRequest) {
+    try {
+      const result = (await client.rawRequest('POST', createSptPath, requestParameters)) as {
+        id: string
+      }
+      return { success: true, result }
+    } catch (error) {
+      return { success: false, error }
+    }
+  }
+
+  if (!secretKey) return null
+
+  const body = new URLSearchParams()
+  appendFormFields(body, requestParameters)
+
+  const response = await fetch(`https://api.stripe.com${createSptPath}`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Basic ${btoa(`${secretKey}:`)}`,
+      'Content-Type': 'application/x-www-form-urlencoded',
+    },
+    body,
+  })
+
+  if (!response.ok) {
+    const error = (await response.json()) as { error?: { message?: string } }
+    return { success: false, error }
+  }
+
+  return { success: true, result: (await response.json()) as { id: string } }
+}
+
+/** @internal */
+export async function createTokenResponse(parameters: {
+  client?: StripeClient | undefined
+  request: globalThis.Request
+  secretKey?: string | undefined
+}): Promise<globalThis.Response> {
+  const { client, request, secretKey } = parameters
+
+  const parsed = createSptRequestSchema.safeParse(await request.json())
+  if (!parsed.success)
+    return Response.json(
+      {
+        error: parsed.error.issues[0]?.message ?? 'Invalid Stripe create token request',
+      },
+      { status: 400 },
+    )
+
+  const { paymentMethod, amount, currency, expiresAt, networkId, metadata } = parsed.data
+
+  try {
+    let spt = await createSpt({
+      client,
+      parameters: buildCreateSptParameters({
+        amount,
+        currency,
+        expiresAt,
+        metadata,
+        networkId,
+        paymentMethod,
+      }),
+      secretKey,
+    })
+    if (!spt) throw new Error('client.rawRequest() or secretKey is required for SPT creation')
+
+    if ((metadata || networkId) && !spt.success) {
+      const message = getStripeErrorMessage(spt.error)
+      if (message && message.includes('Received unknown parameter')) {
+        spt = await createSpt({
+          client,
+          parameters: buildCreateSptParameters({
+            amount,
+            currency,
+            expiresAt,
+            paymentMethod,
+          }),
+          secretKey,
+        })
+      }
+    }
+
+    if (!spt?.success)
+      return Response.json(
+        { error: getStripeErrorMessage(spt?.error) ?? 'Unknown error' },
+        { status: 500 },
+      )
+
+    return Response.json({ spt: spt.result.id })
+  } catch (e) {
+    const message = e instanceof Error ? e.message : 'Unknown error'
+    return Response.json({ error: message }, { status: 500 })
+  }
+}
+
+function buildCreateSptParameters(parameters: {
+  amount: string
+  currency: string
+  expiresAt: number
+  metadata?: Record<string, string> | undefined
+  networkId?: string | undefined
+  paymentMethod: string
+}) {
+  const { amount, currency, expiresAt, metadata, networkId, paymentMethod } = parameters
+
+  return {
+    payment_method: paymentMethod,
+    usage_limits: {
+      currency,
+      expires_at: expiresAt,
+      max_amount: amount,
+    },
+    ...(networkId ? { seller_details: { network_id: networkId } } : {}),
+    ...(metadata ? { metadata } : {}),
+  }
+}
+
+function appendFormFields(
+  searchParams: URLSearchParams,
+  value: Record<string, unknown> | unknown[],
+  prefix?: string,
+): void {
+  if (Array.isArray(value)) {
+    for (const [index, item] of value.entries())
+      appendFormValue(searchParams, item, `${prefix ?? ''}[${index}]`)
+    return
+  }
+
+  for (const [key, item] of Object.entries(value)) {
+    appendFormValue(searchParams, item, prefix ? `${prefix}[${key}]` : key)
+  }
+}
+
+function appendFormValue(searchParams: URLSearchParams, value: unknown, key: string): void {
+  if (value == null) return
+  if (Array.isArray(value)) {
+    appendFormFields(searchParams, value, key)
+    return
+  }
+  if (typeof value === 'object') {
+    appendFormFields(searchParams, value as Record<string, unknown>, key)
+    return
+  }
+  searchParams.set(key, String(value))
+}
+
+function getStripeErrorMessage(error: unknown): string | undefined {
+  if (error instanceof Error) return error.message
+  if (error && typeof error === 'object') {
+    const message = (error as { error?: { message?: unknown } }).error?.message
+    if (typeof message === 'string') return message
+  }
 }
 
 /** @internal */

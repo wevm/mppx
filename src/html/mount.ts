@@ -1,5 +1,12 @@
 import type { Challenge } from '../Challenge.js'
-import { classNames, elements } from '../server/internal/html.shared.js'
+import { classNames, elements } from './internal/constants.js'
+import type * as Runtime from './internal/runtime.js'
+
+const browser = globalThis as typeof globalThis & {
+  __mppx_active?: string | undefined
+  __mppx_root?: string | undefined
+  mppx: Runtime.Mppx
+}
 
 /**
  * Mount a payment method's UI into the page shell.
@@ -19,26 +26,27 @@ import { classNames, elements } from '../server/internal/html.shared.js'
  */
 export function mount<
   method extends import('../Method.js').Method = import('../Method.js').Method,
-  config extends Record<string, unknown> = MppxConfig,
+  config extends Record<string, unknown> = Runtime.Config,
 >(
   setup: (
     context: mount.Context<import('../zod.js').output<method['schema']['request']>, config>,
   ) => void | Promise<void>,
 ): void {
-  const root = document.getElementById(window.__mppx_root ?? elements.method)
-  if (!root) throw new Error(`Missing root element: #${window.__mppx_root ?? elements.method}`)
+  const rootId = browser.__mppx_root ?? elements.method
+  const root = document.getElementById(rootId)
+  if (!root) throw new Error(`Missing root element: #${rootId}`)
 
-  const methodKey = window.__mppx_active
+  const methodKey = browser.__mppx_active
 
   const context: mount.Context<any, any> = {
     root,
-    challenge: mppx.challenge,
-    challenges: mppx.challenges,
-    config: mppx.config,
-    dispatch: (payload, source) => mppx.dispatch(payload, source),
-    serializeCredential: (payload, source) => mppx.serializeCredential(payload, source),
+    challenge: browser.mppx.challenge,
+    challenges: browser.mppx.challenges,
+    config: browser.mppx.config,
+    dispatch: (payload, source) => browser.mppx.dispatch(payload, source),
+    serializeCredential: (payload, source) => browser.mppx.serializeCredential(payload, source),
     setAmount(formatted: string) {
-      const key = methodKey ?? Object.keys(mppx.challenges ?? {})[0] ?? 'unknown'
+      const key = methodKey ?? Object.keys(browser.mppx.challenges ?? {})[0] ?? 'unknown'
       dispatchEvent(new CustomEvent('mppx:amount', { detail: { key, amount: formatted } }))
     },
     classNames,
@@ -48,7 +56,7 @@ export function mount<
 }
 
 export declare namespace mount {
-  type Context<request = MppxChallengeRequest, config = MppxConfig> = {
+  type Context<request = Runtime.ChallengeRequest, config = Runtime.Config> = {
     /** Root element for this method's UI. */
     root: HTMLElement
     /** Parsed challenge with typed request. */

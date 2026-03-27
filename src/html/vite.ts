@@ -2,42 +2,63 @@ import * as crypto from 'node:crypto'
 import * as fs from 'node:fs/promises'
 import * as path from 'node:path'
 
+import { Json } from 'ox'
 import type { Plugin } from 'vite'
 
 import * as Challenge from '../Challenge.js'
 import * as Credential from '../Credential.js'
 import * as Expires from '../Expires.js'
 import type * as Method from '../Method.js'
-import * as Html from '../server/internal/html.shared.js'
+import type * as z from '../zod.js'
+import { elements, serviceWorker as serviceWorkerRoute } from './internal/constants.js'
+import { renderDevScripts } from './internal/dev.js'
+import { renderHead } from './internal/head.js'
+import type * as Html from './internal/types.js'
 
 const pageDir = path.resolve(import.meta.dirname, 'page')
 
-export default function mppx(options: {
+type Config<method extends Method.Method = Method.Method> = {
   /** The method schema (e.g. Methods.charge). Used to derive entry name from method.intent. */
-  method: Method.Method
+  method: method
   /** Output path for html.gen.ts, relative to Vite root. */
   output: string
   /** Challenge data for the dev server. Only used during `vite dev`. */
   challenge?: {
-    request?: Record<string, unknown>
+    request?: z.input<method['schema']['request']>
     description?: string
+    digest?: string | undefined
+    expires?: string | undefined
+    meta?: Record<string, string> | undefined
   }
   /** Method config passed to MppxConfig in the page (e.g. { publishableKey }). */
   config?: Record<string, unknown>
   /** Visual configuration for the page shell. */
   html?: Html.Config | undefined
+  /** Server realm for dev challenges. Defaults to 'localhost'. */
+  realm?: string | undefined
   /** Secret key for HMAC-bound challenge IDs. Defaults to 'mppx-dev-secret'. */
   secretKey?: string
-}): Plugin[] {
+}
+
+export default function mppx<const method extends Method.Method>(
+  options: Config<method>,
+): Plugin[] {
   const intent = options.method.intent
+  const realm = options.realm ?? 'localhost'
   const secretKey = options.secretKey ?? 'mppx-dev-secret'
   const htmlConfig = options.html
+  const challengeOptions = options.challenge
+  const challengeRequest = challengeOptions?.request
+  const challengeExpires =
+    challengeOptions && 'expires' in challengeOptions
+      ? challengeOptions.expires
+      : Expires.minutes(5)
 
   const devPlugin: Plugin = {
     name: 'mppx:dev',
     apply: 'serve',
     configureServer(server) {
-      if (!options.challenge?.request) {
+      if (!challengeRequest) {
         throw new Error(
           'mppx: "challenge.request" is required for dev mode. Add it to your mppx() plugin options.',
         )
@@ -45,7 +66,7 @@ export default function mppx(options: {
 
       // oxlint-disable-next-line no-async-endpoint-handlers
       server.middlewares.use(async (req, res, next) => {
-        if (req.url === Html.serviceWorker.pathname) {
+        if (req.url === serviceWorkerRoute.pathname) {
           const sw = await fs.readFile(path.resolve(pageDir, 'src/serviceWorker.ts'), 'utf-8')
           res.setHeader('Content-Type', 'application/javascript')
           const transformed = await server.transformRequest(
@@ -61,7 +82,12 @@ export default function mppx(options: {
         try {
           const request = (await import('../server/Request.js')).fromNodeListener(req, res)
           const credential = Credential.fromRequest(request)
-          if (Challenge.verify(credential.challenge, { secretKey })) {
+          const parsedPayload = options.method.schema.credential.payload.safeParse(
+            credential.payload,
+          )
+          // Dev mode should only accept credentials that match the method schema,
+          // otherwise fixture tests can pass without any server-side payload validation.
+          if (Challenge.verify(credential.challenge, { secretKey }) && parsedPayload.success) {
             res.setHeader('Content-Type', 'text/html')
             res.end(
               '<!doctype html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><style>html{color-scheme:light dark}</style></head><body><h1>Payment verified!</h1><p>This is the protected content.</p></body></html>',
@@ -70,13 +96,14 @@ export default function mppx(options: {
           }
         } catch {}
 
-        const challengeOptions = options.challenge!
         const challenge = Challenge.fromMethod(options.method, {
           description: challengeOptions.description,
+          digest: challengeOptions.digest,
           secretKey,
-          realm: 'localhost',
-          request: challengeOptions.request,
-          expires: Expires.minutes(5),
+          realm,
+          request: challengeRequest,
+          expires: challengeExpires,
+          meta: challengeOptions.meta,
         })
 
         const title = htmlConfig?.text?.title ?? 'Payment Required'
@@ -85,8 +112,13 @@ export default function mppx(options: {
           ...(htmlConfig?.text ? { text: htmlConfig.text } : {}),
           ...(htmlConfig?.theme ? { theme: htmlConfig.theme } : {}),
         }
-        const dataJson = JSON.stringify({ challenge, config })
-        const head = `\n  <meta name="viewport" content="width=device-width, initial-scale=1.0" />\n  <title>${title}</title>${Html.style(htmlConfig?.theme)}`
+        const dataJson = Json.stringify({ challenge, config }).replace(/</g, '\\u003c')
+        const pageStyleHref = '/@fs/' + path.resolve(pageDir, 'src/page.css').replaceAll('\\', '/')
+        const head = renderHead({
+          title,
+          theme: htmlConfig?.theme,
+          assets: `\n  <link rel="stylesheet" href="${pageStyleHref}" />`,
+        })
         const page = await fs.readFile(path.resolve(pageDir, 'src/page.html'), 'utf-8')
         let methodContent = ''
         try {
@@ -99,12 +131,9 @@ export default function mppx(options: {
           .replace('<!--mppx:head-->', head)
           .replace(
             '<!--mppx:data-->',
-            `<script id="${Html.elements.data}" type="application/json">${dataJson}</script>`,
+            `<script id="${elements.data}" type="application/json">${dataJson}</script>`,
           )
-          .replace(
-            '<!--mppx:script-->',
-            `<script type="module" src="/@fs/${path.resolve(pageDir, 'src/page.ts')}"></script>`,
-          )
+          .replace('<!--mppx:script-->', renderDevScripts(pageDir))
           .replace(
             '<!--mppx:method-->',
             `${methodContent}\n  <script type="module" src="/src/${intent}.ts"></script>`,

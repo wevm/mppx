@@ -1,7 +1,7 @@
 import { defineConfig } from 'vite'
 
 import * as Methods from '../../stripe/Methods.js'
-import { createTokenPathname } from '../../stripe/server/internal/createTokenPathname.js'
+import { createTokenPathname, createTokenResponse } from '../../stripe/server/Charge.js'
 import mppx from '../vite.js'
 
 export default defineConfig({
@@ -21,39 +21,17 @@ export default defineConfig({
 
           const chunks: Buffer[] = []
           for await (const chunk of req) chunks.push(chunk as Buffer)
-          const { paymentMethod, amount, currency, expiresAt } = JSON.parse(
-            Buffer.concat(chunks).toString(),
-          ) as { paymentMethod: string; amount: string; currency: string; expiresAt: number }
-
-          const body = new URLSearchParams({
-            payment_method: paymentMethod,
-            'usage_limits[currency]': currency,
-            'usage_limits[max_amount]': amount,
-            'usage_limits[expires_at]': expiresAt.toString(),
+          const response = await createTokenResponse({
+            request: new Request(`http://localhost${req.url ?? createTokenPathname}`, {
+              body: Buffer.concat(chunks),
+              method: req.method ?? 'POST',
+            }),
+            secretKey,
           })
 
-          const response = await fetch(
-            'https://api.stripe.com/v1/test_helpers/shared_payment/granted_tokens',
-            {
-              method: 'POST',
-              headers: {
-                Authorization: `Basic ${btoa(`${secretKey}:`)}`,
-                'Content-Type': 'application/x-www-form-urlencoded',
-              },
-              body,
-            },
-          )
-
-          res.setHeader('Content-Type', 'application/json')
-          if (!response.ok) {
-            const error = (await response.json()) as { error: { message: string } }
-            res.statusCode = 500
-            res.end(JSON.stringify({ error: error.error.message }))
-            return
-          }
-
-          const { id: spt } = (await response.json()) as { id: string }
-          res.end(JSON.stringify({ spt }))
+          for (const [key, value] of response.headers) res.setHeader(key, value)
+          res.statusCode = response.status
+          res.end(await response.text())
         })
       },
     },

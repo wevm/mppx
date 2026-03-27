@@ -1,4 +1,4 @@
-import { mount } from '../../../../index.js'
+import { mount } from '../../../index.js'
 
 mount((c) => {
   c.setAmount('$10.00')
@@ -8,7 +8,8 @@ mount((c) => {
     e.preventDefault()
     const data = new FormData(form)
     const code = data.get('code') as string
-    if (!code) return
-    c.dispatch({ code, type: 'code' })
+    const serverToken = data.get('serverToken') as string
+    if (!code || !serverToken) return
+    c.dispatch({ code, serverToken, type: 'code' })
   }
 })

@@ -53,7 +53,7 @@ export default defineConfig({
         const pageBundledScript = escapeTemplateLiteral(
           (await fs.readFile(path.resolve(root, 'dist/page.js'), 'utf-8')).trim(),
         )
-        const pageStyle = pageCss ? `\n  <style>\n${indent(pageCss, 4)}\n  </style>` : ''
+        const pageAssets = pageCss ? `\n  <style>\n${indent(pageCss, 4)}\n  </style>` : ''
         const pageScript = `\n  <script type="module">\n${indent(pageBundledScript, 4)}\n  </script>`
         const serviceWorkerScript = (
           await fs.readFile(path.resolve(root, 'dist/serviceWorker.js'), 'utf-8')
@@ -62,7 +62,7 @@ export default defineConfig({
         const body = [
           `export const content = \`\n${pageContent}\``,
           ``,
-          `export const pageStyle = \`${pageStyle}\``,
+          `export const pageAssets = \`${pageAssets}\``,
           ``,
           `export const script = \`${pageScript}\n  \``,
           ``,

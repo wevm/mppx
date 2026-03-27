@@ -10,7 +10,6 @@
     { "path": "./src" },
     { "path": "./test" },
     { "path": "./src/html" },
-    { "path": "./src/html/tsconfig.browser.json" },
-    { "path": "./src/html/page/tsconfig.worker.json" }
+    { "path": "./src/html/tsconfig.browser.json" }
   ]
 }

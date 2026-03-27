@@ -8,13 +8,14 @@
   },
   "include": [
     "env.d.ts",
+    "internal/env.d.ts",
+    "internal/themeSwitcher.ts",
+    "internal/logos/index.ts",
     "index.ts",
     "mount.ts",
-    "tempo/src/charge.ts",
-    "stripe/src/charge.ts",
-    "page/src/page.ts",
-    "page/src/serviceWorker.ts",
-    "page/src/logos/index.ts",
-    "page/test/form-method/src/charge.ts"
-  ]
+    "tempo/src/**/*.ts",
+    "stripe/src/**/*.ts",
+    "page/src/**/*.ts"
+  ],
+  "exclude": ["**/*.test.ts"]
 }

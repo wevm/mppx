@@ -1,6 +1,7 @@
 /**
  * Duck-typed interface for the Stripe Node SDK (`stripe` npm package).
- * Matches the subset of the API used by mppx for server-side payment verification.
+ * Matches the subset of the API used by mppx for server-side payment verification
+ * and HTML test-helper SPT creation.
  *
  * Uses loose signatures so any Stripe SDK version is assignable.
  */
@@ -12,6 +13,7 @@ export type StripeClient = {
       lastResponse?: { headers?: Record<string, string> }
     }>
   }
+  rawRequest?: (...args: any[]) => Promise<Record<string, unknown>>
 }
 
 /**

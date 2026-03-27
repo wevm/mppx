@@ -19,8 +19,9 @@
     "generate:html": "pnpm build:html",
     "mppx": "node --import tsx src/bin.ts",
     "test": "pnpm generate:html && vp test",
-    "test:html": "pnpm generate:html && pnpm test:html:compose && pnpm test:html:stripe && pnpm test:html:tempo",
+    "test:html": "pnpm generate:html && pnpm test:html:form && pnpm test:html:compose && pnpm test:html:stripe && pnpm test:html:tempo",
     "test:html:compose": "pnpm --filter @mppx/html-page test:compose",
+    "test:html:form": "playwright test -c src/html/test/playwright.config.ts",
     "test:html:stripe": "pnpm --filter @mppx/html-stripe test",
     "test:html:tempo": "pnpm --filter @mppx/html-tempo test"
   },
@@ -171,7 +172,8 @@
       "default": "./dist/html/vite.js"
     },
     "./html/env": {
-      "types": "./src/html/env.d.ts"
+      "types": "./dist/html/env.d.ts",
+      "src": "./src/html/env.d.ts"
     }
   },
   "peerDependencies": {

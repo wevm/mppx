@@ -1,7 +1,19 @@
+import { Json } from 'ox'
+
 import type * as Challenge from '../../Challenge.js'
-import { content, pageStyle, script, serviceWorker as serviceWorkerGen } from './html.gen.js'
-import { classNames, elements, serviceWorker as serviceWorkerRoute, style } from './html.shared.js'
-import type { Config, LightDark, Text, Theme } from './html.shared.js'
+import {
+  keyOf as composedKeyOf,
+  renderComposedMethodContent,
+  rootIdOf as composedRootIdOf,
+} from '../../html/internal/compose.js'
+import {
+  classNames,
+  elements,
+  serviceWorker as serviceWorkerRoute,
+} from '../../html/internal/constants.js'
+import { renderHead, style } from '../../html/internal/head.js'
+import type { Config, LightDark, Text, Theme } from '../../html/internal/types.js'
+import { content, pageAssets, script, serviceWorker as serviceWorkerGen } from './html.gen.js'
 
 export { classNames, elements, style }
 export type { Config, LightDark, Text, Theme }
@@ -40,9 +52,8 @@ export function render(props: Props): string {
     ...(props.text ? { text: props.text } : {}),
     ...(props.theme ? { theme: props.theme } : {}),
   }
-  const data = JSON.stringify({ challenge: props.challenge, config }).replace(/</g, '\\u003c')
-  const themeStyle = style(props.theme)
-  const head = `\n  <meta name="viewport" content="width=device-width, initial-scale=1.0" />\n  <title>${title}</title>${themeStyle}${pageStyle}`
+  const data = Json.stringify({ challenge: props.challenge, config }).replace(/</g, '\\u003c')
+  const head = renderHead({ title, theme: props.theme, assets: pageAssets })
   return content
     .replace('<!--mppx:head-->', head)
     .replace(
@@ -81,7 +92,7 @@ export function compose(props: {
   const challenges: Record<string, Challenge.Challenge> = {}
   const configs: Record<string, Record<string, unknown>> = {}
   for (const m of methods) {
-    const key = `${m.name}/${m.intent}`
+    const key = composedKeyOf(m)
     challenges[key] = m.challenge
     if (m.config) configs[key] = m.config
   }
@@ -89,43 +100,27 @@ export function compose(props: {
     ...(props.text ? { text: props.text } : {}),
     ...(props.theme ? { theme: props.theme } : {}),
   }
-  const data = JSON.stringify({ challenges, configs, config }).replace(/</g, '\\u003c')
+  const data = Json.stringify({ challenges, configs, config }).replace(/</g, '\\u003c')
 
-  // Tab bar (WAI-ARIA tabs pattern)
-  const tabBar = methods
-    .map((m, i) => {
-      const key = `${m.name}/${m.intent}`
-      const panelId = `mppx-panel-${m.name}-${m.intent}`
-      const tabId = `mppx-tab-${m.name}-${m.intent}`
-      const cls = i === 0 ? classNames.tabActive : classNames.tab
-      const selected = i === 0
-      return `<button id="${tabId}" class="${cls}" role="tab" aria-selected="${selected}" aria-controls="${panelId}" tabindex="${selected ? 0 : -1}" data-method="${key}">${m.name}</button>`
-    })
-    .join('\n      ')
-
-  // Tab panels — each has a unique root ID and a preamble script
-  const panels = methods
-    .map((m, i) => {
-      const key = `${m.name}/${m.intent}`
-      const rootId = `${elements.method}-${m.name}-${m.intent}`
-      const panelId = `mppx-panel-${m.name}-${m.intent}`
-      const tabId = `mppx-tab-${m.name}-${m.intent}`
-      const hidden = i === 0 ? '' : ' hidden'
+  const methodContent = renderComposedMethodContent(
+    methods.map((method) => {
+      const key = composedKeyOf(method)
+      const rootId = composedRootIdOf(method)
       // Inject __mppx_root and __mppx_active before the method's module script.
       // The method html contains an inline <script type="module"> — we prepend
       // assignments inside it so they execute at the top of that module.
-      const patchedHtml = m.content.replace(
+      const patchedHtml = method.content.replace(
         '<script type="module">',
         `<script type="module">window.__mppx_root="${rootId}";window.__mppx_active="${key}";`,
       )
-      return `<div id="${panelId}" class="${classNames.tabPanel}" role="tabpanel" aria-labelledby="${tabId}" data-method="${key}"${hidden}>\n      <div id="${rootId}">${patchedHtml}</div>\n    </div>`
-    })
-    .join('\n    ')
+      return {
+        ...method,
+        body: `<div id="${rootId}">${patchedHtml}</div>`,
+      }
+    }),
+  )
 
-  const methodContent = `<div class="${classNames.tabs}" role="tablist" aria-label="Payment method">\n      ${tabBar}\n    </div>\n    ${panels}`
-
-  const themeStyle = style(props.theme)
-  const head = `\n  <meta name="viewport" content="width=device-width, initial-scale=1.0" />\n  <title>${title}</title>${themeStyle}${pageStyle}`
+  const head = renderHead({ title, theme: props.theme, assets: pageAssets })
   return content
     .replace('<!--mppx:head-->', head)
     .replace(
