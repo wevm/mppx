@@ -2285,6 +2285,166 @@ describe('monotonicity and TOCTOU (unit tests)', () => {
   })
 })
 
+describe('session request and verify guardrails', () => {
+  const addressOne = '0x0000000000000000000000000000000000000001' as Address
+  const addressTwo = '0x0000000000000000000000000000000000000002' as Address
+  const defaultCurrency = '0x20c0000000000000000000000000000000000000'
+  const defaultEscrow = '0x0000000000000000000000000000000000000003'
+
+  function createMockClient(chainId: number) {
+    return createClient({
+      chain: {
+        id: chainId,
+        name: `Mock Chain ${chainId}`,
+        nativeCurrency: { name: 'ETH', symbol: 'ETH', decimals: 18 },
+        rpcUrls: { default: { http: ['http://localhost:1'] } },
+      },
+      transport: http('http://localhost:1'),
+    })
+  }
+
+  function makeRequest(overrides: Partial<Record<string, unknown>> = {}) {
+    return {
+      amount: '1',
+      unitType: 'token',
+      currency: defaultCurrency,
+      decimals: 6,
+      recipient: addressTwo,
+      chainId: 4217,
+      ...overrides,
+    }
+  }
+
+  test('request throws when no client exists for requested chain', async () => {
+    const server = session({
+      store: Store.memory(),
+      account: addressOne,
+      currency: defaultCurrency,
+      getClient: async () => {
+        throw new Error('unreachable chain')
+      },
+    } as session.Parameters)
+
+    await expect(
+      server.request!({
+        credential: null,
+        request: makeRequest({ chainId: 31337 }),
+      } as never),
+    ).rejects.toThrow('No client configured with chainId 31337.')
+  })
+
+  test('request throws when resolved client chain mismatches requested chain', async () => {
+    const wrongChainClient = createMockClient(42431)
+    const server = session({
+      store: Store.memory(),
+      account: addressOne,
+      currency: defaultCurrency,
+      getClient: async () => wrongChainClient,
+    } as session.Parameters)
+
+    await expect(
+      server.request!({
+        credential: null,
+        request: makeRequest({ chainId: 4217 }),
+      } as never),
+    ).rejects.toThrow('Client not configured with chainId 4217.')
+  })
+
+  test('request normalizes fee-payer to boolean for challenge issuance and account for verification', async () => {
+    const client = createMockClient(4217)
+    const server = session({
+      store: Store.memory(),
+      account: addressOne,
+      currency: defaultCurrency,
+      feePayer: 'https://fee-payer.example.com',
+      getClient: async () => client,
+    } as session.Parameters)
+
+    const challengeRequest = await server.request!({
+      credential: null,
+      request: makeRequest(),
+    } as never)
+    expect(challengeRequest.feePayer).toBe(true)
+
+    const verificationRequest = await server.request!({
+      credential: { challenge: {}, payload: {} } as never,
+      request: makeRequest({ feePayer: accounts[1] }),
+    } as never)
+    expect(verificationRequest.feePayer).toBe(accounts[1])
+  })
+
+  test('request allows callers to explicitly disable fee-payer', async () => {
+    const client = createMockClient(4217)
+    const server = session({
+      store: Store.memory(),
+      account: addressOne,
+      currency: defaultCurrency,
+      feePayer: 'https://fee-payer.example.com',
+      getClient: async () => client,
+    } as session.Parameters)
+
+    const normalized = await server.request!({
+      credential: null,
+      request: makeRequest({ feePayer: false }),
+    } as never)
+    expect(normalized.feePayer).toBeUndefined()
+  })
+
+  test('request leaves escrowContract undefined when chain has no configured default', async () => {
+    const unknownChainId = 999_999
+    const client = createMockClient(unknownChainId)
+    const server = session({
+      store: Store.memory(),
+      account: addressOne,
+      currency: defaultCurrency,
+      getClient: async () => client,
+    } as session.Parameters)
+
+    const normalized = await server.request!({
+      credential: null,
+      request: makeRequest({ chainId: unknownChainId }),
+    } as never)
+
+    expect(normalized.escrowContract).toBeUndefined()
+  })
+
+  test('verify rejects unknown session actions', async () => {
+    const client = createMockClient(4217)
+    const server = session({
+      store: Store.memory(),
+      account: addressOne,
+      currency: defaultCurrency,
+      getClient: async () => client,
+      escrowContract: defaultEscrow,
+      chainId: 4217,
+    } as session.Parameters)
+
+    await expect(
+      server.verify({
+        credential: {
+          challenge: {
+            id: 'guard-unknown-action',
+            realm: 'api.example.com',
+            method: 'tempo',
+            intent: 'session',
+            request: {
+              amount: '1000000',
+              currency: defaultCurrency,
+              recipient: addressTwo,
+              methodDetails: {
+                chainId: 4217,
+                escrowContract: defaultEscrow,
+              },
+            },
+          },
+          payload: { action: 'rewind' },
+        },
+        request: makeRequest(),
+      } as never),
+    ).rejects.toThrow('unknown action: rewind')
+  })
+})
+
 describe('session default currency resolution', () => {
   const mockAccount = accounts[0]
   const mockClient = createClient({ transport: http('http://localhost:1') })

@@ -1,4 +1,4 @@
-import { type Address, encodeFunctionData, erc20Abi, type Hex } from 'viem'
+import { type Account, type Address, encodeFunctionData, erc20Abi, type Hex } from 'viem'
 import { waitForTransactionReceipt } from 'viem/actions'
 import { Addresses, Transaction } from 'viem/tempo'
 import { beforeAll, describe, expect, test } from 'vp/test'
@@ -70,6 +70,29 @@ describe('assertUint128 (via settleOnChain / closeOnChain)', () => {
         signature: '0xsig' as Hex,
       }),
     ).rejects.toThrow('no account available')
+  })
+
+  test('closeOnChain fee-payer flow still requires client.account even with explicit account override', async () => {
+    const explicitAccount = {
+      address: '0x0000000000000000000000000000000000000010',
+    } as Account
+    const feePayer = {
+      address: '0x0000000000000000000000000000000000000020',
+    } as Account
+
+    await expect(
+      closeOnChain(
+        mockClient,
+        dummyEscrow,
+        {
+          channelId: dummyChannelId,
+          cumulativeAmount: 1_000_000n,
+          signature: '0xsig' as Hex,
+        },
+        explicitAccount,
+        feePayer,
+      ),
+    ).rejects.toThrow('no sender account available on client')
   })
 })
 
@@ -537,6 +560,41 @@ describe.runIf(isLocalnet)('on-chain', () => {
           previousDeposit: deposit,
         }),
       ).rejects.toThrow('topUp transaction amount')
+    })
+
+    test('rejects when post-broadcast deposit does not exceed declared previousDeposit', async () => {
+      const salt = nextSalt()
+      const deposit = 5_000_000n
+      const topUpAmount = 1_000_000n
+
+      const { channelId } = await openChannel({
+        escrow: escrowContract,
+        payer,
+        payee: recipient,
+        token: currency,
+        deposit,
+        salt,
+      })
+
+      const { serializedTransaction } = await signTopUpChannel({
+        escrow: escrowContract,
+        payer,
+        channelId,
+        token: currency,
+        amount: topUpAmount,
+      })
+
+      await expect(
+        broadcastTopUpTransaction({
+          client,
+          serializedTransaction,
+          escrowContract,
+          channelId,
+          currency: asset,
+          declaredDeposit: topUpAmount,
+          previousDeposit: deposit + topUpAmount,
+        }),
+      ).rejects.toThrow('channel deposit did not increase after topUp')
     })
 
     test('successful broadcast returns txHash and newDeposit', async () => {

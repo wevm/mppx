@@ -82,6 +82,19 @@ function makeReceipt() {
   }
 }
 
+async function readResponseText(response: Response): Promise<string> {
+  if (!response.body) return ''
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder()
+  let result = ''
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) break
+    result += decoder.decode(value, { stream: true })
+  }
+  return result
+}
+
 describe('sse transport', () => {
   test('getCredential returns null when no Authorization header', () => {
     const store = memoryStore()
@@ -152,6 +165,19 @@ describe('sse transport', () => {
       challengeId,
     })
     expect(response.headers.get('Content-Type')).toContain('text/event-stream')
+
+    const body = await readResponseText(response)
+    const receiptRaw = body.split('event: payment-receipt\ndata: ')[1]?.split('\n\n')[0]
+    const terminalReceipt = JSON.parse(receiptRaw!)
+
+    expect(response.headers.get('Payment-Receipt')).toBeNull()
+    expect(body).toContain('event: message\ndata: hello\n\n')
+    expect(body).toContain('event: message\ndata: world\n\n')
+    expect(body).toContain('event: payment-receipt\n')
+    expect(terminalReceipt.challengeId).toBe(challengeId)
+    expect(terminalReceipt.channelId).toBe(channelId)
+    expect(terminalReceipt.units).toBe(2)
+    expect(terminalReceipt.spent).toBe('2000000')
   })
 
   test('respondReceipt with AsyncGeneratorFunction passes stream controller', async () => {
@@ -197,6 +223,12 @@ describe('sse transport', () => {
       challengeId,
     })
     expect(response.headers.get('Content-Type')).toContain('text/event-stream')
+
+    const body = await readResponseText(response)
+    expect(response.headers.get('Payment-Receipt')).toBeNull()
+    expect(body).toContain('event: message\ndata: chunk1\n\n')
+    expect(body).toContain('event: message\ndata: chunk2\n\n')
+    expect(body).toContain('event: payment-receipt\n')
   })
 
   test('respondReceipt with plain Response delegates to base http transport', () => {

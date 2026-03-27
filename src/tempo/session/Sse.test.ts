@@ -366,6 +366,37 @@ describe('serve', () => {
     expect(receipt.challengeId).toBe(challengeId)
   })
 
+  test('emits exactly one terminal payment-receipt event at stream end', async () => {
+    const storage = memoryStore()
+    await seedChannel(storage, 2000000n)
+
+    const stream = serve({
+      store: storage,
+      channelId,
+      challengeId,
+      tickCost: 1000000n,
+      generate: generate(['one', 'two']),
+    })
+
+    const output = await readStream(stream)
+    const events = output
+      .trim()
+      .split('\n\n')
+      .filter((chunk) => chunk.length > 0)
+      .map((chunk) => parseEvent(`${chunk}\n\n`))
+      .filter((event): event is NonNullable<typeof event> => event !== null)
+
+    const terminal = events.at(-1)
+    expect(terminal?.type).toBe('payment-receipt')
+    if (terminal?.type !== 'payment-receipt') throw new Error('expected terminal payment receipt')
+
+    expect(events.filter((event) => event.type === 'payment-receipt')).toHaveLength(1)
+    expect(terminal.data.challengeId).toBe(challengeId)
+    expect(terminal.data.channelId).toBe(channelId)
+    expect(terminal.data.units).toBe(2)
+    expect(terminal.data.spent).toBe('2000000')
+  })
+
   test('handles empty generator', async () => {
     const storage = memoryStore()
     await seedChannel(storage, 1000000n)
