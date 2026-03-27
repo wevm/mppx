@@ -158,12 +158,6 @@ export function create<
     transport = Transport.http() as transport,
   } = config
 
-  if (!realm)
-    warnOnce(
-      Warnings.noRealm,
-      'No realm configured. Will auto-detect from request Host header. Set `realm` in Mppx.create() or MPP_REALM env var for explicit control.',
-    )
-
   if (!secretKey) {
     throw new Error(
       'Missing secret key. Set the MPP_SECRET_KEY environment variable or pass `secretKey` to Mppx.create().',
@@ -509,7 +503,6 @@ declare namespace createMethodFn {
 
 const defaultRealm = 'MPP Payment'
 const Warnings = {
-  noRealm: 'no-realm',
   realmFallback: 'realm-fallback',
 } as const
 
