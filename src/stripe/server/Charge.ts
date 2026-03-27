@@ -84,10 +84,10 @@ export function charge<const parameters extends charge.Parameters>(parameters: p
               publishableKey: htmlConfig.publishableKey,
               createTokenUrl: htmlConfig.createTokenUrl ?? createTokenPathname,
             } satisfies charge.HtmlConfig,
-          },
-          htmlRoutes: {
-            [createTokenPathname]: (request: globalThis.Request) =>
-              createTokenResponse({ request, client, secretKey }),
+            routes: {
+              [createTokenPathname]: (request: globalThis.Request) =>
+                createTokenResponse({ request, client, secretKey }),
+            },
           },
         }
       : {}),

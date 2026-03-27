@@ -62,6 +62,17 @@ export default defineConfig({
         },
       },
       {
+        test: {
+          name: 'html-node',
+          alias,
+          include: ['src/html/test/vite.test.ts'],
+          globals: true,
+          retry: 1,
+          setupFiles: ['./test/setup.ts'],
+          hookTimeout: 60_000,
+        },
+      },
+      {
         resolve: {
           alias: {
             // constantTimeEqual uses node:crypto which is unavailable in browser.

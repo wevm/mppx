@@ -237,10 +237,10 @@ export function create<
       }),
   )
 
-  // Collect htmlRoutes from all methods
+  // Collect html routes from all methods
   for (const mi of methods) {
-    if (!mi.htmlRoutes) continue
-    for (const [pathname, handler] of Object.entries(mi.htmlRoutes) as [
+    if (!mi.html?.routes) continue
+    for (const [pathname, handler] of Object.entries(mi.html.routes) as [
       string,
       (request: globalThis.Request) => Promise<globalThis.Response>,
     ][])

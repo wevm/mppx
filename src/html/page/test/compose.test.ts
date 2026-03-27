@@ -75,6 +75,26 @@ test('switching tabs updates ARIA state and panels', async ({ page }) => {
     'hidden',
     '',
   )
+  await expect(page).toHaveURL(/mppx_method=tempo%2Fcharge/)
+})
+
+test('query param selects tab on load and survives refresh', async ({ page }) => {
+  await page.goto('/?mppx_method=tempo%2Fcharge')
+
+  const firstTab = page.locator('[role="tab"]').nth(0)
+  const secondTab = page.locator('[role="tab"]').nth(1)
+
+  await expect(secondTab).toHaveAttribute('aria-selected', 'true')
+  await expect(firstTab).toHaveAttribute('aria-selected', 'false')
+  await expect(page.locator('.mppx-tab-panel[data-method="tempo/charge"]')).not.toHaveAttribute(
+    'hidden',
+    '',
+  )
+
+  await page.reload()
+
+  await expect(secondTab).toHaveAttribute('aria-selected', 'true')
+  await expect(page).toHaveURL(/mppx_method=tempo%2Fcharge/)
 })
 
 test('keyboard navigation switches tabs', async ({ page }) => {

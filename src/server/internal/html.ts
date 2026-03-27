@@ -37,6 +37,7 @@ export type Options = {
   /** Method-specific HTML content. Must be from a trusted source (e.g. build-time generated `html.gen.ts`). */
   content: string
   config?: Record<string, unknown> | undefined
+  routes?: Record<string, (request: globalThis.Request) => Promise<globalThis.Response>> | undefined
   theme?: Theme | undefined
   text?: Text | undefined
 }

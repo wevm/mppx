@@ -18,8 +18,13 @@ type Data = {
 const data = Json.parse(dataElement.textContent!) as Data
 const isComposed = data.challenges !== undefined
 const firstChallenge = isComposed ? Object.values(data.challenges!)[0]! : data.challenge!
+const composeMethodSearchParam = 'mppx_method'
 
 if (!firstChallenge) throw new Error('Missing challenge')
+
+function composeMethodFromUrl(): string | null {
+  return new URL(window.location.href).searchParams.get(composeMethodSearchParam)
+}
 
 window.mppx = Object.freeze({
   get challenge() {
@@ -147,8 +152,16 @@ if (isComposed) {
   const tabList = document.querySelector('[role="tablist"]')
   const tabs = Array.from(document.querySelectorAll<HTMLElement>('[role="tab"]'))
   const panels = document.querySelectorAll(`.${Html.classNames.tabPanel}`)
+  const defaultKey = tabs[0]?.dataset.method
 
-  function activateTab(tab: HTMLElement) {
+  function syncComposeUrl(key: string) {
+    const url = new URL(window.location.href)
+    if (key === defaultKey) url.searchParams.delete(composeMethodSearchParam)
+    else url.searchParams.set(composeMethodSearchParam, key)
+    history.replaceState(null, '', url)
+  }
+
+  function activateTab(tab: HTMLElement, options?: { focus?: boolean; syncUrl?: boolean }) {
     const key = tab.dataset.method
     if (!key) return
     window.__mppx_active = key
@@ -160,14 +173,25 @@ if (isComposed) {
     tab.className = Html.classNames.tabActive
     tab.setAttribute('aria-selected', 'true')
     tab.tabIndex = 0
-    tab.focus()
+    if (options?.focus !== false) tab.focus()
     panels.forEach((p) => ((p as HTMLElement).hidden = (p as HTMLElement).dataset.method !== key))
+    if (options?.syncUrl !== false) syncComposeUrl(key)
     // Update summary for the active method's challenge
     const challenge = data.challenges![key]
     if (challenge) updateSummary(challenge)
   }
 
+  const initialKey = composeMethodFromUrl()
+  const initialTab = tabs.find((tab) => tab.dataset.method === initialKey) ?? tabs[0]
+  if (initialTab) activateTab(initialTab, { focus: false })
+
   tabs.forEach((tab) => tab.addEventListener('click', () => activateTab(tab)))
+
+  addEventListener('popstate', () => {
+    const key = composeMethodFromUrl()
+    const tab = tabs.find((candidate) => candidate.dataset.method === key) ?? tabs[0]
+    if (tab) activateTab(tab, { focus: false, syncUrl: false })
+  })
 
   // Keyboard navigation: Arrow keys, Home, End
   tabList?.addEventListener('keydown', (e) => {
