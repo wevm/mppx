@@ -135,7 +135,7 @@ export declare namespace charge {
 
   type Parameters = {
     /** Enable the built-in HTML payment page with Stripe configuration and optional shell overrides. */
-    html?: ({ publishableKey: string } & Html.Config) | undefined
+    html?: (HtmlConfig & Html.Config) | undefined
     /** Optional metadata to include in SPT creation requests. */
     metadata?: Record<string, string> | undefined
   } & Defaults &
@@ -154,10 +154,6 @@ export declare namespace charge {
 
   type HtmlConfig = {
     publishableKey: string
-  }
-
-  type HtmlActions = {
-    createToken?: string | undefined
   }
 
   type DeriveDefaults<parameters extends Parameters> = Pick<

@@ -2,6 +2,8 @@ import { expect } from '@playwright/test'
 
 import { test } from '../../../test/playwright-utils.js'
 
+const hasStripeKeys = !!(process.env.VITE_STRIPE_PUBLIC_KEY && process.env.VITE_STRIPE_SECRET_KEY)
+
 test('renders accessible tabs for both methods', async ({ page }) => {
   const response = await page.goto('/')
   expect(response!.status()).toBe(402)
@@ -147,35 +149,37 @@ test('each panel has its own scoped root', async ({ page }) => {
   expect(tempoRoot).toBe(1)
 })
 
-test('completes stripe payment via compose tab', async ({ page }) => {
-  await page.goto('/')
+if (hasStripeKeys) {
+  test('completes stripe payment via compose tab', async ({ page }) => {
+    await page.goto('/')
 
-  // Stripe tab is active by default — wait for Stripe Payment Element iframe
-  const stripePanel = page.locator('.mppx-tab-panel[data-method="stripe/charge"]')
-  const stripeFrame = stripePanel
-    .locator('iframe[name^="__privateStripeFrame"]')
-    .nth(0)
-    .contentFrame()
-  const cardInput = stripeFrame.locator('[name="number"]')
-  await expect(cardInput).toBeVisible({ timeout: 15_000 })
+    // Stripe tab is active by default — wait for Stripe Payment Element iframe
+    const stripePanel = page.locator('.mppx-tab-panel[data-method="stripe/charge"]')
+    const stripeFrame = stripePanel
+      .locator('iframe[name^="__privateStripeFrame"]')
+      .nth(0)
+      .contentFrame()
+    const cardInput = stripeFrame.locator('[name="number"]')
+    await expect(cardInput).toBeVisible({ timeout: 15_000 })
 
-  // Fill test card details
-  await cardInput.fill('4242424242424242')
-  await stripeFrame.locator('[name="expiry"]').fill('12/34')
-  await stripeFrame.locator('[name="cvc"]').fill('123')
+    // Fill test card details
+    await cardInput.fill('4242424242424242')
+    await stripeFrame.locator('[name="expiry"]').fill('12/34')
+    await stripeFrame.locator('[name="cvc"]').fill('123')
 
-  // Fill postal code if visible
-  const postalCode = stripeFrame.locator('[name="postalCode"]')
-  if (await postalCode.isVisible({ timeout: 2_000 }).catch(() => false)) {
-    await postalCode.fill('10001')
-  }
+    // Fill postal code if visible
+    const postalCode = stripeFrame.locator('[name="postalCode"]')
+    if (await postalCode.isVisible({ timeout: 2_000 }).catch(() => false)) {
+      await postalCode.fill('10001')
+    }
 
-  // Submit payment
-  await stripePanel.locator('button.mppx-button').click()
+    // Submit payment
+    await stripePanel.locator('button.mppx-button').click()
 
-  // Should complete and reload with verified content
-  await expect(page.locator('h1')).toHaveText('Payment verified!', { timeout: 30_000 })
-})
+    // Should complete and reload with verified content
+    await expect(page.locator('h1')).toHaveText('Payment verified!', { timeout: 30_000 })
+  })
+}
 
 test('completes tempo payment via compose tab', async ({ wallet: _wallet, page }) => {
   // Switch to tempo tab

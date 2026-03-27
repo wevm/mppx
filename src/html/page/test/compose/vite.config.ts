@@ -28,17 +28,9 @@ import { renderPage, scopedRuntimePreamble } from '../../../internal/render.js'
 import type * as Html from '../../../internal/types.js'
 
 const pageDir = path.resolve(import.meta.dirname, '../..')
-const useStripeMock = process.env.MPPX_MOCK_STRIPE === '1'
-const mockStripePath = path.resolve(pageDir, 'test/mockStripe.ts')
 
 export default defineConfig({
   plugins: [
-    {
-      name: 'mock-stripe-module',
-      resolveId(id) {
-        if (useStripeMock && id === '@stripe/stripe-js/pure') return mockStripePath
-      },
-    },
     {
       name: 'stripe-spt',
       configureServer(server) {
@@ -50,13 +42,6 @@ export default defineConfig({
             url.searchParams.get(support.actionName) !== 'createToken'
           )
             return next()
-
-          if (useStripeMock) {
-            res.statusCode = 200
-            res.setHeader('Content-Type', 'application/json')
-            res.end(JSON.stringify({ spt: 'spt_mock' }))
-            return
-          }
 
           const secretKey = process.env.VITE_STRIPE_SECRET_KEY
           if (!secretKey) {

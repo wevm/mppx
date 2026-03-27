@@ -22,7 +22,6 @@
     "test:html": "pnpm gen:html && pnpm test:html:form && pnpm test:html:compose && pnpm test:html:stripe && pnpm test:html:tempo",
     "test:html:compose": "pnpm --filter @mppx/html-page test:compose",
     "test:html:form": "pnpm --filter @mppx/html-page test:form",
-    "test:html:stripe:live": "pnpm gen:html && MPPX_MOCK_STRIPE=0 pnpm test:html:stripe && MPPX_MOCK_STRIPE=0 pnpm test:html:compose",
     "test:html:stripe": "pnpm --filter @mppx/html-stripe test",
     "test:html:tempo": "pnpm --filter @mppx/html-tempo test"
   },
