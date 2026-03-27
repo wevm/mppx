@@ -4,10 +4,13 @@ import {
   PaymentExpiredError,
   VerificationFailedError,
 } from '../../Errors.js'
+import type * as Html from '../../html/internal/types.js'
 import type { LooseOmit, OneOf } from '../../internal/types.js'
 import * as Method from '../../Method.js'
 import type { StripeClient } from '../internal/types.js'
 import * as Methods from '../Methods.js'
+import { html } from './internal/html.gen.js'
+import { createTokenResponse } from './internal/sharedPaymentToken.js'
 
 /**
  * Creates a Stripe charge method intent for usage on the server.
@@ -41,6 +44,7 @@ export function charge<const parameters extends charge.Parameters>(parameters: p
     decimals,
     description,
     externalId,
+    html: htmlConfig,
     metadata,
     networkId,
     paymentMethodTypes,
@@ -61,6 +65,24 @@ export function charge<const parameters extends charge.Parameters>(parameters: p
       networkId,
       paymentMethodTypes,
     } as unknown as Defaults,
+
+    ...(htmlConfig
+      ? {
+          html: {
+            actions: {
+              createToken(request: globalThis.Request) {
+                return createTokenResponse({ request, client, secretKey })
+              },
+            },
+            content: html,
+            config: {
+              publishableKey: htmlConfig.publishableKey,
+            } satisfies charge.HtmlConfig,
+            text: htmlConfig.text,
+            theme: htmlConfig.theme,
+          },
+        }
+      : {}),
 
     async verify({ credential }) {
       const { challenge } = credential
@@ -112,6 +134,8 @@ export declare namespace charge {
   type Defaults = LooseOmit<Method.RequestDefaults<typeof Methods.charge>, 'recipient'>
 
   type Parameters = {
+    /** Enable the built-in HTML payment page with Stripe configuration and optional shell overrides. */
+    html?: (HtmlConfig & Html.Config) | undefined
     /** Optional metadata to include in SPT creation requests. */
     metadata?: Record<string, string> | undefined
   } & Defaults &
@@ -119,12 +143,18 @@ export declare namespace charge {
       | {
           /** Pre-configured Stripe SDK instance. Any object matching the duck-typed `StripeClient` shape works. */
           client: StripeClient
+          /** Stripe secret API key used as a fallback for HTML SPT creation if the client does not expose `rawRequest()`. */
+          secretKey?: string | undefined
         }
       | {
           /** Stripe secret API key. */
           secretKey: string
         }
     >
+
+  type HtmlConfig = {
+    publishableKey: string
+  }
 
   type DeriveDefaults<parameters extends Parameters> = Pick<
     parameters,

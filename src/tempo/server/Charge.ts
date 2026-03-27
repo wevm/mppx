@@ -11,6 +11,7 @@ import { tempo as tempo_chain } from 'viem/chains'
 import { Abis, Transaction } from 'viem/tempo'
 
 import { PaymentExpiredError } from '../../Errors.js'
+import type * as Html from '../../html/internal/types.js'
 import type { LooseOmit, NoExtraKeys } from '../../internal/types.js'
 import * as Method from '../../Method.js'
 import * as Store from '../../Store.js'
@@ -22,6 +23,7 @@ import * as FeePayer from '../internal/fee-payer.js'
 import * as Selectors from '../internal/selectors.js'
 import type * as types from '../internal/types.js'
 import * as Methods from '../Methods.js'
+import { html } from './internal/html.gen.js'
 
 /**
  * Creates a Tempo charge method intent for usage on the server.
@@ -45,6 +47,7 @@ export function charge<const parameters extends charge.Parameters>(
     decimals = defaults.decimals,
     description,
     externalId,
+    html: htmlConfig,
     memo,
     waitForConfirmation = true,
   } = parameters
@@ -70,6 +73,16 @@ export function charge<const parameters extends charge.Parameters>(
       memo,
       recipient,
     } as unknown as Defaults,
+
+    ...(htmlConfig
+      ? {
+          html: {
+            content: html,
+            text: htmlConfig.text,
+            theme: htmlConfig.theme,
+          },
+        }
+      : {}),
 
     // TODO: dedupe `{charge,session}.request`
     async request({ credential, request }) {
@@ -293,6 +306,8 @@ export declare namespace charge {
   type Defaults = LooseOmit<Method.RequestDefaults<typeof Methods.charge>, 'feePayer' | 'recipient'>
 
   type Parameters = {
+    /** Enable the built-in HTML payment page for this method. Pass an object to configure the shared shell. @default false */
+    html?: Html.Config | undefined
     /** Testnet mode. */
     testnet?: boolean | undefined
     /**

@@ -1,0 +1,20 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "types": []
+  },
+  "include": [
+    "env.d.ts",
+    "internal/env.d.ts",
+    "internal/themeSwitcher.ts",
+    "index.ts",
+    "mount.ts",
+    "tempo/src/**/*.ts",
+    "stripe/src/**/*.ts",
+    "page/src/**/*.ts"
+  ],
+  "exclude": ["**/*.test.ts"]
+}

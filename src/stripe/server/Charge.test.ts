@@ -13,9 +13,27 @@ let httpServer: Awaited<ReturnType<typeof Http.createServer>> | undefined
 afterEach(() => httpServer?.close())
 
 function createMockStripeClient(
-  overrides?: Partial<{ status: string; id: string; throws: boolean }>,
-): { client: StripeClient; create: ReturnType<typeof vi.fn> } {
-  const { status = 'succeeded', id = 'pi_mock_123', throws = false } = overrides ?? {}
+  overrides?:
+    | Partial<{
+        rawRequestThrows: boolean
+        sptId: string
+        status: string
+        id: string
+        throws: boolean
+      }>
+    | undefined,
+): {
+  client: StripeClient
+  create: ReturnType<typeof vi.fn>
+  rawRequest: ReturnType<typeof vi.fn>
+} {
+  const {
+    rawRequestThrows = false,
+    sptId = 'spt_mock_123',
+    status = 'succeeded',
+    id = 'pi_mock_123',
+    throws = false,
+  } = overrides ?? {}
   let callCount = 0
   const create = vi.fn(async () => {
     if (throws) throw new Error('Stripe API error')
@@ -26,9 +44,14 @@ function createMockStripeClient(
       ...(callCount > 1 ? { lastResponse: { headers: { 'idempotent-replayed': 'true' } } } : {}),
     }
   })
+  const rawRequest = vi.fn(async () => {
+    if (rawRequestThrows) throw new Error('Stripe SPT error')
+    return { id: sptId }
+  })
   return {
-    client: { paymentIntents: { create } },
+    client: { paymentIntents: { create }, rawRequest },
     create,
+    rawRequest,
   }
 }
 
@@ -290,5 +313,96 @@ describe('stripe.charge with client', () => {
       Buffer.from(receiptHeader!.replace('Payment ', ''), 'base64url').toString(),
     ) as { reference: string }
     expect(decoded.reference).toBe('pi_custom_ref')
+  })
+
+  test('behavior: html route creates SPT via client.rawRequest without stripe secretKey', async () => {
+    const { client, rawRequest } = createMockStripeClient({ sptId: 'spt_from_client' })
+
+    const server = Mppx.create({
+      methods: [
+        stripe.charge({
+          client,
+          html: { publishableKey: 'pk_test_123' },
+          networkId: 'internal',
+          paymentMethodTypes: ['card'],
+        }),
+      ],
+      realm,
+      secretKey,
+    })
+
+    const handler = server.charge({ amount: '100', currency: 'usd', decimals: 2 })
+    const result = await handler(
+      new Request(`https://${realm}/api/fortune?__mppx=action&name=createToken`, {
+        body: JSON.stringify({
+          amount: '100',
+          currency: 'usd',
+          expiresAt: 1_735_689_600,
+          metadata: { plan: 'pro' },
+          networkId: 'internal',
+          paymentMethod: 'pm_card_visa',
+        }),
+        headers: { 'Content-Type': 'application/json' },
+        method: 'POST',
+      }),
+    )
+    expect(result.status).toBe(402)
+    if (result.status !== 402) throw new Error()
+    const response = result.challenge as Response
+
+    expect(response.status).toBe(200)
+    expect(await response.json()).toEqual({ spt: 'spt_from_client' })
+    expect(rawRequest).toHaveBeenCalledWith(
+      'POST',
+      '/v1/test_helpers/shared_payment/granted_tokens',
+      {
+        metadata: { plan: 'pro' },
+        payment_method: 'pm_card_visa',
+        seller_details: { network_id: 'internal' },
+        usage_limits: {
+          currency: 'usd',
+          expires_at: 1_735_689_600,
+          max_amount: '100',
+        },
+      },
+    )
+  })
+
+  test('behavior: html route rejects malformed create token payload', async () => {
+    const { client, rawRequest } = createMockStripeClient({ sptId: 'spt_from_client' })
+
+    const server = Mppx.create({
+      methods: [
+        stripe.charge({
+          client,
+          html: { publishableKey: 'pk_test_123' },
+          networkId: 'internal',
+          paymentMethodTypes: ['card'],
+        }),
+      ],
+      realm,
+      secretKey,
+    })
+
+    const handler = server.charge({ amount: '100', currency: 'usd', decimals: 2 })
+    const result = await handler(
+      new Request(`https://${realm}/api/fortune?__mppx=action&name=createToken`, {
+        body: JSON.stringify({
+          amount: '100',
+          currency: 'usd',
+          expiresAt: 'not-a-number',
+          paymentMethod: 'pm_card_visa',
+        }),
+        headers: { 'Content-Type': 'application/json' },
+        method: 'POST',
+      }),
+    )
+    expect(result.status).toBe(402)
+    if (result.status !== 402) throw new Error()
+    const response = result.challenge as Response
+
+    expect(response.status).toBe(400)
+    expect(await response.json()).toEqual({ error: 'Invalid input' })
+    expect(rawRequest).not.toHaveBeenCalled()
   })
 })

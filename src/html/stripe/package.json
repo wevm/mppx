@@ -1,0 +1,12 @@
+{
+  "name": "@mppx/html-stripe",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vp dev",
+    "test": "playwright test -c playwright.config.ts"
+  },
+  "devDependencies": {
+    "@stripe/stripe-js": "8.9.0"
+  }
+}

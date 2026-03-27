@@ -214,6 +214,7 @@ export function paymentOf(endpoint: Endpoint): Record<string, unknown> | null {
     name,
     intent,
     defaults: _,
+    html: _h,
     schema: _s,
     _canonicalRequest,
     ...rest

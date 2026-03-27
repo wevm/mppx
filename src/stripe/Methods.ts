@@ -30,15 +30,26 @@ export const charge = Method.from({
         paymentMethodTypes: z.array(z.string()).check(z.minLength(1)),
         recipient: z.optional(z.string()),
       }),
-      z.transform(({ amount, decimals, metadata, networkId, paymentMethodTypes, ...rest }) => ({
-        ...rest,
-        amount: parseUnits(amount, decimals).toString(),
-        methodDetails: {
+      z.transform(
+        ({
+          amount,
+          currency,
+          decimals,
+          description,
+          externalId,
+          metadata,
           networkId,
           paymentMethodTypes,
-          ...(metadata !== undefined && { metadata }),
-        },
-      })),
+          recipient,
+        }) => ({
+          amount: parseUnits(amount, decimals).toString(),
+          currency,
+          description,
+          externalId,
+          methodDetails: { metadata, networkId, paymentMethodTypes },
+          recipient,
+        }),
+      ),
     ),
   },
 })

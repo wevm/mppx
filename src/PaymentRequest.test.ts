@@ -31,6 +31,7 @@ describe('fromMethod', () => {
       {
         "amount": "1000000",
         "currency": "0x20c0000000000000000000000000000000000001",
+        "decimals": 6,
         "recipient": "0x742d35Cc6634C0532925a3b844Bc9e7595f8fE00",
       }
     `)
@@ -48,6 +49,7 @@ describe('fromMethod', () => {
       {
         "amount": "1000000",
         "currency": "0x20c0000000000000000000000000000000000001",
+        "decimals": 6,
         "methodDetails": {
           "chainId": 42431,
         },

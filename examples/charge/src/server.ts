@@ -5,13 +5,14 @@ import { tempoModerato } from 'viem/chains'
 import { Actions } from 'viem/tempo'
 
 const account = privateKeyToAccount(generatePrivateKey())
-const currency = '0x20c0000000000000000000000000000000000000' as const // pathUSD
 
 const mppx = Mppx.create({
   methods: [
     tempo({
-      currency,
+      account,
+      currency: '0x20c0000000000000000000000000000000000000',
       feePayer: true,
+      html: {},
       recipient: account.address,
       testnet: true,
     }),

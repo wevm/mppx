@@ -60,13 +60,14 @@ describe('http', () => {
       expect(transport.getChallenge(response)).toMatchInlineSnapshot(`
         {
           "expires": "2025-01-01T00:00:00.000Z",
-          "id": "0hnrySRDqWfttlDIJpuxV4mJsRJIS7d7RjnufuonJOE",
+          "id": "TYrS4_zjUdm9n_FV2wIZrWjIttldjjzjKoiSTRDteIs",
           "intent": "charge",
           "method": "tempo",
           "realm": "api.example.com",
           "request": {
             "amount": "1000",
             "currency": "0x20c0000000000000000000000000000000000001",
+            "decimals": 6,
             "recipient": "0x742d35Cc6634C0532925a3b844Bc9e7595f8fE00",
           },
         }
@@ -90,7 +91,7 @@ describe('http', () => {
       const headers = result.headers as Headers
 
       expect(headers.get('Authorization')).toMatchInlineSnapshot(
-        `"Payment eyJjaGFsbGVuZ2UiOnsiZXhwaXJlcyI6IjIwMjUtMDEtMDFUMDA6MDA6MDAuMDAwWiIsImlkIjoiMGhucnlTUkRxV2Z0dGxESUpwdXhWNG1Kc1JKSVM3ZDdSam51ZnVvbkpPRSIsImludGVudCI6ImNoYXJnZSIsIm1ldGhvZCI6InRlbXBvIiwicmVhbG0iOiJhcGkuZXhhbXBsZS5jb20iLCJyZXF1ZXN0IjoiZXlKaGJXOTFiblFpT2lJeE1EQXdJaXdpWTNWeWNtVnVZM2tpT2lJd2VESXdZekF3TURBd01EQXdNREF3TURBd01EQXdNREF3TURBd01EQXdNREF3TURBd01EQXdNREVpTENKeVpXTnBjR2xsYm5RaU9pSXdlRGMwTW1Rek5VTmpOall6TkVNd05UTXlPVEkxWVROaU9EUTBRbU01WlRjMU9UVm1PR1pGTURBaWZRIn0sInBheWxvYWQiOnsic2lnbmF0dXJlIjoiMHhhYmMxMjMiLCJ0eXBlIjoidHJhbnNhY3Rpb24ifX0"`,
+        `"Payment eyJjaGFsbGVuZ2UiOnsiZXhwaXJlcyI6IjIwMjUtMDEtMDFUMDA6MDA6MDAuMDAwWiIsImlkIjoiVFlyUzRfempVZG05bl9GVjJ3SVpyV2pJdHRsZGpqempLb2lTVFJEdGVJcyIsImludGVudCI6ImNoYXJnZSIsIm1ldGhvZCI6InRlbXBvIiwicmVhbG0iOiJhcGkuZXhhbXBsZS5jb20iLCJyZXF1ZXN0IjoiZXlKaGJXOTFiblFpT2lJeE1EQXdJaXdpWTNWeWNtVnVZM2tpT2lJd2VESXdZekF3TURBd01EQXdNREF3TURBd01EQXdNREF3TURBd01EQXdNREF3TURBd01EQXdNREVpTENKa1pXTnBiV0ZzY3lJNk5pd2ljbVZqYVhCcFpXNTBJam9pTUhnM05ESmtNelZEWXpZMk16UkRNRFV6TWpreU5XRXpZamcwTkVKak9XVTNOVGsxWmpobVJUQXdJbjAifSwicGF5bG9hZCI6eyJzaWduYXR1cmUiOiIweGFiYzEyMyIsInR5cGUiOiJ0cmFuc2FjdGlvbiJ9fQ"`,
       )
     })
 
@@ -181,13 +182,14 @@ describe('mcp', () => {
       expect(transport.getChallenge(response)).toMatchInlineSnapshot(`
         {
           "expires": "2025-01-01T00:00:00.000Z",
-          "id": "0hnrySRDqWfttlDIJpuxV4mJsRJIS7d7RjnufuonJOE",
+          "id": "TYrS4_zjUdm9n_FV2wIZrWjIttldjjzjKoiSTRDteIs",
           "intent": "charge",
           "method": "tempo",
           "realm": "api.example.com",
           "request": {
             "amount": "1000",
             "currency": "0x20c0000000000000000000000000000000000001",
+            "decimals": 6,
             "recipient": "0x742d35Cc6634C0532925a3b844Bc9e7595f8fE00",
           },
         }
@@ -237,13 +239,14 @@ describe('mcp', () => {
               "org.paymentauth/credential": {
                 "challenge": {
                   "expires": "2025-01-01T00:00:00.000Z",
-                  "id": "0hnrySRDqWfttlDIJpuxV4mJsRJIS7d7RjnufuonJOE",
+                  "id": "TYrS4_zjUdm9n_FV2wIZrWjIttldjjzjKoiSTRDteIs",
                   "intent": "charge",
                   "method": "tempo",
                   "realm": "api.example.com",
                   "request": {
                     "amount": "1000",
                     "currency": "0x20c0000000000000000000000000000000000001",
+                    "decimals": 6,
                     "recipient": "0x742d35Cc6634C0532925a3b844Bc9e7595f8fE00",
                   },
                 },

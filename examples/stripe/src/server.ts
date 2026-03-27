@@ -9,6 +9,10 @@ const mppx = Mppx.create({
   methods: [
     stripe.charge({
       client: stripeClient,
+      html: {
+        // Publishable key for browser HTML payment form.
+        publishableKey: process.env.VITE_STRIPE_PUBLIC_KEY!,
+      },
       // Stripe Business Network profile ID.
       networkId: 'internal',
       // Ensure only card is supported.

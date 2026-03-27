@@ -145,11 +145,41 @@ id = base64url(HMAC-SHA256(server_secret, input))
 ## Commands
 
 ```bash
-pnpm build          # Build with zile
-pnpm check          # Lint with oxlint + format with oxfmt
-pnpm check:types    # TypeScript type checking
-pnpm test           # Run tests with vitest
+pnpm build            # Build with zile
+pnpm check            # Lint with oxlint + format with oxfmt
+pnpm check:types      # TypeScript type checking
+pnpm check:types:html # TypeScript type checking for HTML payment pages (browser tsconfig)
+pnpm test             # Run tests with vitest
+pnpm test:html        # Run HTML e2e tests (Stripe + Tempo) with Playwright
+pnpm check:types:examples # TypeScript type checking for examples/
 ```
+
+## HTML Payment Pages
+
+Browser-rendered payment pages live in `src/html/`. Each method (Tempo, Stripe) has its own directory with:
+
+- `src/charge.ts` — Entry point, creates DOM and handles payment flow
+- `src/env.d.ts` — Module augmentation for `MppxConfig` and `MppxChallengeRequest`
+- `vite.config.ts` — Dev server and build config
+
+### Build pipeline
+
+`pnpm build` bundles each method's `charge.ts` into `{method}/server/internal/html.gen.ts` (generated, do not edit). The page shell is bundled into `server/internal/html.gen.ts`.
+
+### Global types
+
+- `src/html/env.d.ts` — Base global types (`mppx` var, `MppxConfig`, `MppxChallengeRequest`, `MppxEventMap`)
+- Each method augments `MppxConfig` and `MppxChallengeRequest` via its own `src/env.d.ts`
+- Browser tsconfig: `src/html/tsconfig.browser.json`
+
+### Infrastructure routes (`mppx.html()`)
+
+`Mppx.create()` returns an `html(request)` method that handles infrastructure routes:
+
+- Service worker (`/__mppx_serviceWorker.js`)
+- Method-registered routes (e.g., Stripe's `/__mppx_stripe_create_token`)
+
+Methods register routes via `htmlRoutes` on `Method.toServer()`.
 
 ## Skills Reference
 

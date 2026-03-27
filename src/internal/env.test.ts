@@ -10,6 +10,7 @@ describe('Env.get', () => {
   })
 
   test('returns undefined when MPP_SECRET_KEY is not set', () => {
+    vi.stubEnv('MPP_SECRET_KEY', '')
     expect(Env.get('secretKey')).toBeUndefined()
   })
 

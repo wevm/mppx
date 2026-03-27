@@ -1,18 +1,29 @@
 {
   "scripts": {
-    "build": "zile",
-    "changeset:publish": "zile publish:prepare && changeset publish && zile publish:post",
+    "build": "pnpm gen:html && zile",
+    "build:html": "vp build src/html/page && vp build src/html/tempo && vp build src/html/stripe",
+    "changeset:publish": "pnpm gen:html && zile publish:prepare && changeset publish && zile publish:post",
     "changeset:version": "changeset version",
     "check": "vp lint --fix && vp fmt --write .",
     "check:ci": "vp lint && vp fmt --check .",
     "check:types": "tsgo -b",
-    "check:types:examples": "pnpm -r --filter './examples/**' run check:types",
+    "check:types:html": "tsgo -p src/html/tsconfig.browser.json",
+    "check:types:examples": "pnpm zile build && pnpm -r --filter './examples/**' run check:types",
     "deps": "pnpx taze -r --no-ignore-other-workspaces --ignore-paths node_modules",
     "deps:ci": "pnpx actions-up",
-    "dev": "zile dev",
-    "dev:example": "node scripts/dev:example.ts",
+    "dev": "pnpm gen:html && zile dev",
+    "dev:example": "pnpm gen:html && node scripts/dev:example.ts",
+    "dev:html:compose": "pnpm --filter @mppx/html-page dev:compose",
+    "dev:html:stripe": "pnpm --filter @mppx/html-stripe dev",
+    "dev:html:tempo": "pnpm --filter @mppx/html-tempo dev",
+    "gen:html": "pnpm build:html",
     "mppx": "node --import tsx src/bin.ts",
-    "test": "vp test"
+    "test": "pnpm gen:html && vp test",
+    "test:html": "pnpm gen:html && pnpm test:html:form && pnpm test:html:compose && pnpm test:html:stripe && pnpm test:html:tempo",
+    "test:html:compose": "pnpm --filter @mppx/html-page test:compose",
+    "test:html:form": "pnpm --filter @mppx/html-page test:form",
+    "test:html:stripe": "pnpm --filter @mppx/html-stripe test",
+    "test:html:tempo": "pnpm --filter @mppx/html-tempo test"
   },
   "browserslist": [
     "defaults",
@@ -39,13 +50,16 @@
     "fast-check": "^4.6.0",
     "file-type": "^21.3.2",
     "hono": "^4.11.9",
+    "@playwright/test": "^1.58.2",
     "playwright": "^1.58.2",
     "prool": "^0.2.4",
+    "vite": "^8.0.0",
     "tempo.ts": "^0.14.2",
     "testcontainers": "^11.11.0",
     "tsx": "^4.21.0",
     "typescript": "~5.9.3",
     "viem": "^2.47.6",
+    "vite-plus": "~0.1.14",
     "vp": "npm:vite-plus@~0.1.14",
     "zile": "^0.0.19"
   },
@@ -146,6 +160,20 @@
       "types": "./dist/middlewares/elysia.d.ts",
       "src": "./src/middlewares/elysia.ts",
       "default": "./dist/middlewares/elysia.js"
+    },
+    "./html": {
+      "types": "./dist/html/index.d.ts",
+      "src": "./src/html/index.ts",
+      "default": "./dist/html/index.js"
+    },
+    "./html/vite": {
+      "types": "./dist/html/vite.d.ts",
+      "src": "./src/html/vite.ts",
+      "default": "./dist/html/vite.js"
+    },
+    "./html/env": {
+      "types": "./dist/html/env.d.ts",
+      "src": "./src/html/env.d.ts"
     }
   },
   "peerDependencies": {

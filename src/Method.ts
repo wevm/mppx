@@ -2,6 +2,7 @@ import type * as Challenge from './Challenge.js'
 import type * as Credential from './Credential.js'
 import type { ExactPartial, LooseOmit, MaybePromise } from './internal/types.js'
 import type * as Receipt from './Receipt.js'
+import type * as Html from './server/internal/html.js'
 import type * as Transport from './server/Transport.js'
 import type * as z from './zod.js'
 
@@ -74,6 +75,7 @@ export type Server<
   transportOverride = undefined,
 > = method & {
   defaults?: defaults | undefined
+  html?: Html.Options | undefined
   request?: RequestFn<method> | undefined
   respond?: RespondFn<method> | undefined
   transport?: transportOverride | undefined
@@ -202,10 +204,11 @@ export function toServer<
   method: method,
   options: toServer.Options<method, defaults, transportOverride>,
 ): Server<method, defaults, transportOverride> {
-  const { defaults, request, respond, transport, verify } = options
+  const { defaults, html, request, respond, transport, verify } = options
   return {
     ...method,
     defaults,
+    html,
     request,
     respond,
     transport,
@@ -220,6 +223,7 @@ export declare namespace toServer {
     transportOverride extends Transport.AnyTransport | undefined = undefined,
   > = {
     defaults?: defaults | undefined
+    html?: Html.Options | undefined
     request?: RequestFn<method> | undefined
     respond?: RespondFn<method> | undefined
     transport?: transportOverride | undefined

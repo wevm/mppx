@@ -1,0 +1,10 @@
+{
+  "name": "@mppx/html-page",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev:compose": "vp dev --config test/compose/vite.config.ts",
+    "test:compose": "playwright test -c test/compose/playwright.config.ts",
+    "test:form": "playwright test -c test/form-method/playwright.config.ts"
+  }
+}

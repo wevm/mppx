@@ -35,7 +35,7 @@ export default defineConfig({
           name: 'node',
           alias,
           include: ['src/**/*.test.ts'],
-          exclude: ['src/**/*.browser.test.ts', 'src/cli/**/*.test.ts'],
+          exclude: ['src/**/*.browser.test.ts', 'src/cli/**/*.test.ts', 'src/html/**/*.test.ts'],
           typecheck: {
             include: ['src/**/*.test-d.ts'],
           },
@@ -55,6 +55,17 @@ export default defineConfig({
           retry: 3,
           setupFiles: ['./test/setup.ts'],
           testTimeout: 10_000,
+          hookTimeout: 60_000,
+        },
+      },
+      {
+        test: {
+          name: 'html-node',
+          alias,
+          include: ['src/html/test/vite.test.ts'],
+          globals: true,
+          retry: 1,
+          setupFiles: ['./test/setup.ts'],
           hookTimeout: 60_000,
         },
       },
@@ -103,7 +114,7 @@ export default defineConfig({
       'no-control-regex': 'off',
     },
     settings: {
-      polyfills: ['PaymentRequest', 'URLPattern', 'crypto'],
+      polyfills: ['PaymentRequest', 'URLPattern', 'crypto', 'CustomEvent', 'navigator'],
     },
     overrides: [
       {

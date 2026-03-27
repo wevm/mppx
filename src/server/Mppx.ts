@@ -9,6 +9,7 @@ import type * as Method from '../Method.js'
 import * as PaymentRequest from '../PaymentRequest.js'
 import type * as Receipt from '../Receipt.js'
 import type * as z from '../zod.js'
+import * as Html from './internal/html.js'
 import * as NodeListener from './NodeListener.js'
 import * as Request from './Request.js'
 import * as Transport from './Transport.js'
@@ -51,7 +52,7 @@ export type Mppx<
        *   secretKey,
        * })
        *
-       * app.get('/api/resource', async (req) => {
+       * app.all('/api/resource', async (req) => {
        *   const result = await mppx.compose(
        *     mppx.tempo.charge({ amount: '100' }),
        *     mppx.stripe.charge({ amount: '100' }),
@@ -224,8 +225,8 @@ export function create<
     compose: composeFn,
     realm: realm as string | undefined,
     transport,
-    ...handlers,
-  } as never
+    ...(handlers as any),
+  }
 }
 
 export declare namespace create {
@@ -254,6 +255,7 @@ function createMethodFn<
 // biome-ignore lint/correctness/noUnusedVariables: _
 function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.ReturnType {
   const { defaults, method, realm, respond, secretKey, transport, verify } = parameters
+  const html = ('html' in method ? method.html : undefined) as Html.Options | undefined
 
   return (options) => {
     const { description, meta, ...rest } = options
@@ -263,6 +265,14 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
       async (input: Transport.InputOf): Promise<MethodFn.Response> => {
         const expires =
           'expires' in options ? (options.expires as string | undefined) : Expires.minutes(5)
+
+        if (transport.name === 'http' && html?.content) {
+          const response = await Html.respondSupportRequest({
+            actions: html.actions,
+            request: input as globalThis.Request,
+          })
+          if (response) return { challenge: response, status: 402 }
+        }
 
         // Extract credential once — getCredential may have side effects (e.g. SSE transports).
         const [credential, credentialError] = (() => {
@@ -304,6 +314,7 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
             challenge,
             input,
             error: new Errors.MalformedCredentialError({ reason: credentialError.message }),
+            html,
           })
           return { challenge: response, status: 402 }
         }
@@ -314,6 +325,7 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
             challenge,
             input,
             error: new Errors.PaymentRequiredError({ description }),
+            html,
           })
           return { challenge: response, status: 402 }
         }
@@ -328,6 +340,7 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
               id: credential.challenge.id,
               reason: 'challenge was not issued by this server',
             }),
+            html,
           })
           return { challenge: response, status: 402 }
         }
@@ -356,6 +369,7 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
                   id: credential.challenge.id,
                   reason: `credential ${field} does not match this route's requirements`,
                 }),
+                html,
               })
               return { challenge: response, status: 402 }
             }
@@ -388,6 +402,7 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
                     id: credential.challenge.id,
                     reason: `credential ${field} does not match this route's requirements`,
                   }),
+                  html,
                 })
                 return { challenge: response, status: 402 }
               }
@@ -403,6 +418,7 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
             error: new Errors.PaymentExpiredError({
               expires: credential.challenge.expires,
             }),
+            html,
           })
           return { challenge: response, status: 402 }
         }
@@ -414,6 +430,7 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
             challenge,
             input,
             error: new Errors.InvalidPayloadError({ reason: (e as Error).message }),
+            html,
           })
           return { challenge: response, status: 402 }
         }
@@ -432,6 +449,7 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
             challenge,
             input,
             error,
+            html,
           })
           return { challenge: response, status: 402 }
         }
@@ -472,6 +490,7 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
           name: method.name,
           intent: method.intent,
           _canonicalRequest: PaymentRequest.fromMethod(method, merged),
+          _html: html,
         },
       },
     )
@@ -572,6 +591,7 @@ type ConfiguredHandler = ((input: Request) => Promise<MethodFn.Response<Transpor
     name: string
     intent: string
     _canonicalRequest: Record<string, unknown>
+    _html?: Html.Options
   }
 }
 
@@ -613,7 +633,7 @@ type ComposeEntry<methods extends readonly Method.AnyServer[]> =
  *   secretKey: process.env.PAYMENT_SECRET_KEY,
  * })
  *
- * app.get('/api/resource', async (req) => {
+ * app.all('/api/resource', async (req) => {
  *   const result = await Mppx.compose(
  *     mppx['tempo/charge']({ amount: '100', currency: USDC, recipient: '0x...' }),
  *     mppx['stripe/charge']({ amount: '100', currency: 'usd' }),
@@ -629,6 +649,33 @@ export function compose(
   if (handlers.length === 0) throw new Error('compose() requires at least one handler')
 
   return async (input: Request) => {
+    const supportRequest = Html.parseSupportRequest(input)
+    if (supportRequest) {
+      if (supportRequest.kind === 'serviceWorker') {
+        const htmlHandler = handlers.find(
+          (handler) => (handler as ConfiguredHandler)._internal?._html?.content,
+        )
+        if (htmlHandler) return htmlHandler(input)
+        return {
+          status: 402,
+          challenge: new Response('Not found', { status: 404 }),
+        }
+      }
+
+      if (supportRequest.method) {
+        const handler = handlers.find((candidate) => {
+          const meta = (candidate as ConfiguredHandler)._internal
+          return `${meta?.name}/${meta?.intent}` === supportRequest.method
+        })
+        if (handler) return handler(input)
+      }
+
+      return {
+        status: 402,
+        challenge: new Response('Not found', { status: 404 }),
+      }
+    }
+
     // Try to extract a Payment credential to decide whether to dispatch or challenge.
     // Only gate on the Payment scheme — other auth schemes (Bearer, Basic, etc.)
     // should fall through to the merged-402 path so all offers are presented.
@@ -686,17 +733,68 @@ export function compose(
     // No credential — call all handlers and merge 402 challenges.
     const results = await Promise.all(handlers.map((h) => h(input)))
 
-    // Merge WWW-Authenticate headers from all 402 responses.
     const mergedHeaders = new Headers()
     mergedHeaders.set('Cache-Control', 'no-store')
 
-    let body: string | null = null
-    for (const result of results) {
-      if (result.status !== 402) continue
+    const challengeResponses = results.flatMap((result, index) => {
+      if (result.status !== 402) return []
       const response = result.challenge as Response
       const wwwAuth = response.headers.get('WWW-Authenticate')
       if (wwwAuth) mergedHeaders.append('WWW-Authenticate', wwwAuth)
-      // Use the first handler's body for the problem details response.
+      return [{ meta: (handlers[index] as ConfiguredHandler)._internal, response, wwwAuth }]
+    })
+
+    // Multi-method HTML rendering: if browser accepts text/html and multiple
+    // methods have HTML enabled, render a composed page with tabs.
+    const wantsHtml = input.headers.get('Accept')?.includes('text/html')
+    if (wantsHtml) {
+      const htmlMethods: Html.ComposedMethod[] = []
+      for (const { meta, wwwAuth } of challengeResponses) {
+        if (!meta?._html?.content || !wwwAuth) continue
+        try {
+          const challenge = Challenge.deserialize(wwwAuth)
+          htmlMethods.push({
+            actions: meta._html.actions,
+            name: meta.name,
+            intent: meta.intent,
+            challenge,
+            content: meta._html.content,
+            config: meta._html.config,
+          })
+        } catch {}
+      }
+
+      if (htmlMethods.length > 1) {
+        const firstHtml = challengeResponses.find(({ meta }) => meta?._html?.content)?.meta?._html
+        const body = Html.compose({
+          methods: htmlMethods,
+          requestUrl: input.url,
+          theme: firstHtml?.theme,
+          text: firstHtml?.text,
+        })
+        mergedHeaders.set('Content-Type', 'text/html; charset=utf-8')
+        return {
+          status: 402,
+          challenge: new Response(body, { status: 402, headers: mergedHeaders }),
+        }
+      }
+
+      if (htmlMethods.length === 1) {
+        const response = challengeResponses.find(({ meta }) => meta?._html?.content)?.response
+        if (response) {
+          const contentType = response.headers.get('Content-Type')
+          if (contentType) mergedHeaders.set('Content-Type', contentType)
+          return {
+            status: 402,
+            challenge: new Response(await response.text(), { status: 402, headers: mergedHeaders }),
+          }
+        }
+      }
+    }
+
+    let body: string | null = null
+    for (const { response } of challengeResponses) {
+      // Use the first handler's body for the problem details / single-method HTML response.
       if (!body) {
         const contentType = response.headers.get('Content-Type')
         if (contentType) mergedHeaders.set('Content-Type', contentType)
