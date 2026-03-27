@@ -211,6 +211,7 @@ mount<typeof Methods.charge>((c) => {
         }),
       })
 
+      disconnectParagraph.hidden = true
       c.dispatch(
         { hash: receipt.transactionHash, type: 'hash' },
         `did:pkh:eip155:${chainId}:${activeAccount}`,

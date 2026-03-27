@@ -33,6 +33,7 @@ test('completes payment against local Tempo chain', async ({ wallet: _wallet, pa
   await expect(page.locator('#connected')).toBeVisible()
 
   await page.locator('#pay-button').click()
+  await expect(page.locator('#disconnect-button')).toBeHidden()
 
   await expect(page.locator('h1')).toHaveText('Payment verified!', { timeout: 30_000 })
 })
