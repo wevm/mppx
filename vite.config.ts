@@ -26,7 +26,13 @@ const alias = {
 export default defineConfig({
   test: {
     coverage: {
-      exclude: ['test/**'],
+      include: ['src/**'],
+      exclude: ['test/**', 'src/cli/**', 'src/bin.ts', '**/*.test-d.ts'],
+      thresholds: {
+        statements: 70,
+        branches: 70,
+        functions: 70,
+      },
     },
     globalSetup: ['./test/setup.global.ts'],
     projects: [
