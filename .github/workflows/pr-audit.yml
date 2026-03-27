@@ -1,27 +1,30 @@
-name: PR Audit
+name: Pull request audit
 
 on:
   pull_request:
     types: [labeled]
 
 jobs:
-  gate:
-    if: github.event.label.name == 'cyclops'
+  publish:
     runs-on: ubuntu-latest
-    outputs:
-      allowed: ${{ steps.check.outputs.allowed }}
+    if: github.event.label.name == 'cyclops'
     steps:
-      - id: check
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Publish event
         run: |
-          PERM=$(gh api "repos/${{ github.repository }}/collaborators/${{ github.event.sender.login }}/permission" --jq '.permission')
-          if [ "$PERM" = "admin" ]; then
-            echo "allowed=true" >> "$GITHUB_OUTPUT"
-          fi
+          set -euo pipefail
 
-  pr-audit:
-    needs: gate
-    if: needs.gate.outputs.allowed == 'true'
-    uses: tempoxyz/gh-actions/.github/workflows/pr-audit.yml@main
-    secrets: inherit
+          echo "${{ secrets.EVENTS_KEY }}" > ${{ runner.temp }}/key
+          echo "${{ secrets.EVENTS_CERT }}" > ${{ runner.temp }}/cert
+
+          curl -sf -o /dev/null -X POST ${{ secrets.EVENTS_ARGS }} \
+            -H "Content-Type: application/json" \
+            --key ${{ runner.temp }}/key \
+            --cert ${{ runner.temp }}/cert \
+            -d '{
+              "repository": "${{ github.repository }}",
+              "event": "pr_audit",
+              "data": {
+                "pr_number": ${{ github.event.pull_request.number }},
+                "sha": "${{ github.event.pull_request.head.sha }}"
+              }
+            }'
