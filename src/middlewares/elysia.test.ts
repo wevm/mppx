@@ -2,11 +2,14 @@ import * as http from 'node:http'
 
 import { Elysia } from 'elysia'
 import { Receipt } from 'mppx'
-import { Mppx as Mppx_client, tempo as tempo_client } from 'mppx/client'
+import { Mppx as Mppx_client, session as sessionIntent, tempo as tempo_client } from 'mppx/client'
 import { Mppx, discovery } from 'mppx/elysia'
 import { tempo as tempo_server } from 'mppx/server'
-import { describe, expect, test } from 'vp/test'
-import { accounts, asset, client } from '~test/tempo/viem.js'
+import type { Address } from 'viem'
+import { Addresses } from 'viem/tempo'
+import { beforeAll, describe, expect, test } from 'vp/test'
+import { deployEscrow } from '~test/tempo/session.js'
+import { accounts, asset, client, fundAccount } from '~test/tempo/viem.js'
 
 function createServer(app: Elysia<any, any, any, any, any, any, any>) {
   return new Promise<{ url: string; close: () => void }>((resolve) => {
@@ -33,14 +36,19 @@ function createServer(app: Elysia<any, any, any, any, any, any, any>) {
 }
 
 const secretKey = 'test-secret-key'
+const paymentModes = [
+  { feePayer: false, name: 'direct' },
+  { feePayer: true, name: 'fee payer' },
+] as const
 
-describe('charge', () => {
+function createChargeHarness(feePayer: boolean) {
   const mppx = Mppx.create({
     methods: [
       tempo_server.charge({
         getClient: () => client,
         currency: asset,
         recipient: accounts[0].address,
+        ...(feePayer ? { feePayer: true } : {}),
       }),
     ],
     secretKey,
@@ -56,39 +64,53 @@ describe('charge', () => {
     ],
   })
 
-  test('returns 402 when no credential', async () => {
-    const app = new Elysia().guard({ beforeHandle: mppx.charge({ amount: '1' }) }, (app) =>
-      app.get('/', () => ({ fortune: 'You will be rich' })),
-    )
+  return { fetch, mppx }
+}
 
-    const server = await createServer(app)
-    const response = await globalThis.fetch(server.url)
-    expect(response.status).toBe(402)
-    expect(response.headers.get('WWW-Authenticate')).toContain('Payment')
+describe('charge', () => {
+  for (const mode of paymentModes) {
+    describe(mode.name, () => {
+      test('returns 402 when no credential', async () => {
+        const { mppx } = createChargeHarness(mode.feePayer)
 
-    server.close()
-  })
+        const app = new Elysia().guard({ beforeHandle: mppx.charge({ amount: '1' }) }, (app) =>
+          app.get('/', () => ({ fortune: 'You will be rich' })),
+        )
 
-  test('returns 200 with receipt on valid payment', async () => {
-    const app = new Elysia().guard({ beforeHandle: mppx.charge({ amount: '1' }) }, (app) =>
-      app.get('/', () => ({ fortune: 'You will be rich' })),
-    )
+        const server = await createServer(app)
+        const response = await globalThis.fetch(server.url)
+        expect(response.status).toBe(402)
+        expect(response.headers.get('WWW-Authenticate')).toContain('Payment')
 
-    const server = await createServer(app)
-    const response = await fetch(server.url)
-    expect(response.status).toBe(200)
+        server.close()
+      })
 
-    const body = await response.json()
-    expect(body).toEqual({ fortune: 'You will be rich' })
+      test('returns 200 with receipt on valid payment', async () => {
+        const { fetch, mppx } = createChargeHarness(mode.feePayer)
 
-    const receipt = Receipt.fromResponse(response)
-    expect(receipt.status).toBe('success')
-    expect(receipt.method).toBe('tempo')
+        const app = new Elysia().guard({ beforeHandle: mppx.charge({ amount: '1' }) }, (app) =>
+          app.get('/', () => ({ fortune: 'You will be rich' })),
+        )
 
-    server.close()
-  })
+        const server = await createServer(app)
+        const response = await fetch(server.url)
+        expect(response.status).toBe(200)
+
+        const body = await response.json()
+        expect(body).toEqual({ fortune: 'You will be rich' })
+
+        const receipt = Receipt.fromResponse(response)
+        expect(receipt.status).toBe('success')
+        expect(receipt.method).toBe('tempo')
+
+        server.close()
+      })
+    })
+  }
 
   test('serves /openapi.json from discovery plugin', async () => {
+    const { mppx } = createChargeHarness(false)
+
     const app = new Elysia().use(
       discovery(mppx, {
         info: { title: 'Elysia API', version: '1.0.0' },
@@ -112,4 +134,86 @@ describe('charge', () => {
 
     server.close()
   })
+})
+
+describe('session', () => {
+  let escrowContract: Address
+
+  function createSessionHarness(feePayer: boolean) {
+    const mppx = Mppx.create({
+      methods: [
+        tempo_server.session({
+          getClient: () => client,
+          account: accounts[0],
+          currency: asset,
+          escrowContract,
+          ...(feePayer ? { feePayer: accounts[1] } : {}),
+        } as any),
+      ],
+      secretKey,
+    })
+
+    const { fetch } = Mppx_client.create({
+      polyfill: false,
+      methods: [
+        sessionIntent({
+          account: accounts[2],
+          deposit: '10',
+          getClient: () => client,
+        }),
+      ],
+    })
+
+    return { fetch, mppx }
+  }
+
+  beforeAll(async () => {
+    escrowContract = await deployEscrow()
+    await fundAccount({ address: accounts[1].address, token: Addresses.pathUsd })
+    await fundAccount({ address: accounts[1].address, token: asset })
+    await fundAccount({ address: accounts[2].address, token: Addresses.pathUsd })
+    await fundAccount({ address: accounts[2].address, token: asset })
+  })
+
+  for (const mode of paymentModes) {
+    describe(mode.name, () => {
+      test('returns 402 when no credential', async () => {
+        const { mppx } = createSessionHarness(mode.feePayer)
+
+        const app = new Elysia().guard(
+          { beforeHandle: mppx.session({ amount: '1', currency: asset, unitType: 'token' }) },
+          (app) => app.get('/', () => ({ data: 'streamed' })),
+        )
+
+        const server = await createServer(app)
+        const response = await globalThis.fetch(server.url)
+        expect(response.status).toBe(402)
+        expect(response.headers.get('WWW-Authenticate')).toContain('Payment')
+
+        server.close()
+      })
+
+      test('returns 200 with receipt on valid payment', async () => {
+        const { fetch, mppx } = createSessionHarness(mode.feePayer)
+
+        const app = new Elysia().guard(
+          { beforeHandle: mppx.session({ amount: '1', currency: asset, unitType: 'token' }) },
+          (app) => app.get('/', () => ({ data: 'streamed' })),
+        )
+
+        const server = await createServer(app)
+        const response = await fetch(server.url)
+        expect(response.status).toBe(200)
+
+        const body = await response.json()
+        expect(body).toEqual({ data: 'streamed' })
+
+        const receipt = Receipt.fromResponse(response)
+        expect(receipt.status).toBe('success')
+        expect(receipt.method).toBe('tempo')
+
+        server.close()
+      })
+    })
+  }
 })
