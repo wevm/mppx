@@ -1,11 +1,9 @@
 /** Map of configuration keys to environment variable names, checked in order. */
 const variables = {
   realm: [
+    'MPP_REALM',
     'FLY_APP_NAME',
     'HEROKU_APP_NAME',
-    'HOST',
-    'HOSTNAME',
-    'MPP_REALM',
     'RAILWAY_PUBLIC_DOMAIN',
     'RENDER_EXTERNAL_HOSTNAME',
     'VERCEL_URL',
@@ -15,9 +13,7 @@ const variables = {
 } as const satisfies Record<string, readonly string[]>
 
 /** Fallback values when no environment variable is set. */
-const defaults = {
-  realm: 'MPP Payment',
-} as const satisfies Partial<Record<keyof typeof variables, string>>
+const defaults = {} as const satisfies Partial<Record<keyof typeof variables, string>>
 
 /**
  * Resolves a configuration value from environment variables.
