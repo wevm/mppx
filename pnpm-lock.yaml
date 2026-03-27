@@ -5,8 +5,28 @@ settings:
   excludeLinksFromLockfile: false
 
 overrides:
-  path-to-regexp: '>=8.4.0'
-  tar: '>=7.5.11'
+  mppx: workspace:*
+  vite: npm:@voidzero-dev/vite-plus-core@~0.1.14
+  vitest: npm:@voidzero-dev/vite-plus-test@~0.1.14
+  ox: ^0.14.1
+  viem: ^2.47.5
+  path-to-regexp@<8.4.0: 8.4.0
+  tar@<=7.5.10: 7.5.11
+  '@modelcontextprotocol/sdk@>=1.10.0 <=1.25.3': 1.26.0
+  qs@>=6.7.0 <=6.14.1: 6.14.2
+  hono@<4.12.7: 4.12.7
+  minimatch@>=5.0.0 <5.1.8: 5.1.8
+  minimatch@>=9.0.0 <9.0.7: 9.0.7
+  rollup@>=4.0.0 <4.59.0: 4.59.0
+  ajv@>=7.0.0-alpha.0 <8.18.0: 8.18.0
+  '@hono/node-server@<1.19.10': 1.19.10
+  elysia@<1.4.26: 1.4.26
+  file-type: 21.3.2
+  flatted@<=3.4.1: '>=3.4.2'
+  undici@>=7.0.0 <7.24.0: 7.24.0
+  socket.io-parser@>=4.0.0 <4.2.6: '>=4.2.6'
+  yaml@<2.8.3: '>=2.8.3'
+  brace-expansion@<5.0.5: '>=5.0.5'
 
 importers:
 
@@ -32,11 +52,11 @@ importers:
         specifier: ^2.30.0
         version: 2.30.0(@types/node@25.5.0)
       '@hono/node-server':
-        specifier: ^1.19.9
+        specifier: 1.19.10
         version: 1.19.10(hono@4.12.7)
       '@modelcontextprotocol/sdk':
-        specifier: ^1.25.3
-        version: 1.27.1(zod@4.3.6)
+        specifier: 1.26.0
+        version: 1.26.0(zod@4.3.6)
       '@types/express':
         specifier: ^5.0.6
         version: 5.0.6
@@ -62,10 +82,10 @@ importers:
         specifier: ^4.6.0
         version: 4.6.0
       file-type:
-        specifier: ^21.3.2
+        specifier: 21.3.2
         version: 21.3.2
       hono:
-        specifier: ^4.11.9
+        specifier: 4.12.7
         version: 4.12.7
       playwright:
         specifier: ^1.58.2
@@ -86,7 +106,7 @@ importers:
         specifier: ~5.9.3
         version: 5.9.3
       viem:
-        specifier: ^2.47.6
+        specifier: ^2.47.5
         version: 2.47.6(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.3.6)
       vp:
         specifier: npm:vite-plus@~0.1.14
@@ -110,17 +130,17 @@ importers:
         specifier: latest
         version: 1.3.10
       mppx:
-        specifier: latest
-        version: 0.4.11(@modelcontextprotocol/sdk@1.27.1(zod@4.3.6))(elysia@1.4.27(@sinclair/typebox@0.34.48)(exact-mirror@0.2.7(@sinclair/typebox@0.34.48))(file-type@21.3.2)(openapi-types@12.1.3)(typescript@5.9.3))(express@5.2.1)(hono@4.12.7)(openapi-types@12.1.3)(typescript@5.9.3)(viem@2.47.6(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.3.6))
+        specifier: workspace:*
+        version: link:../..
       typescript:
         specifier: latest
         version: 5.9.3
       viem:
-        specifier: latest
+        specifier: ^2.47.5
         version: 2.47.6(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.3.6)
       vite:
-        specifier: latest
-        version: 8.0.3(@types/node@25.5.0)(esbuild@0.27.2)(tsx@4.21.0)(yaml@2.8.3)
+        specifier: npm:@voidzero-dev/vite-plus-core@~0.1.14
+        version: '@voidzero-dev/vite-plus-core@0.1.14(@types/node@25.5.0)(esbuild@0.27.2)(tsx@4.21.0)(typescript@5.9.3)(yaml@2.8.3)'
 
   examples/charge-wagmi:
     dependencies:
@@ -137,8 +157,8 @@ importers:
         specifier: latest
         version: 25.5.0
       mppx:
-        specifier: latest
-        version: 0.4.11(@modelcontextprotocol/sdk@1.27.1(zod@4.3.6))(elysia@1.4.27(@sinclair/typebox@0.34.48)(exact-mirror@0.2.7(@sinclair/typebox@0.34.48))(file-type@21.3.2)(openapi-types@12.1.3)(typescript@5.9.3))(express@5.2.1)(hono@4.12.7)(openapi-types@12.1.3)(typescript@5.9.3)(viem@2.47.6(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.3.6))
+        specifier: workspace:*
+        version: link:../..
       react:
         specifier: latest
         version: 19.2.4
@@ -146,7 +166,7 @@ importers:
         specifier: latest
         version: 19.2.4(react@19.2.4)
       viem:
-        specifier: latest
+        specifier: ^2.47.5
         version: 2.47.6(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.3.6)
       wagmi:
         specifier: latest
@@ -163,13 +183,13 @@ importers:
         version: 7.0.0-dev.20260323.1
       '@vitejs/plugin-react':
         specifier: latest
-        version: 6.0.1(vite@8.0.3(@types/node@25.5.0)(esbuild@0.27.2)(tsx@4.21.0)(yaml@2.8.3))
+        version: 6.0.1(@voidzero-dev/vite-plus-core@0.1.14(@types/node@25.5.0)(esbuild@0.27.2)(tsx@4.21.0)(typescript@5.9.3)(yaml@2.8.3))
       typescript:
         specifier: latest
         version: 5.9.3
       vite:
-        specifier: latest
-        version: 8.0.3(@types/node@25.5.0)(esbuild@0.27.2)(tsx@4.21.0)(yaml@2.8.3)
+        specifier: npm:@voidzero-dev/vite-plus-core@~0.1.14
+        version: '@voidzero-dev/vite-plus-core@0.1.14(@types/node@25.5.0)(esbuild@0.27.2)(tsx@4.21.0)(typescript@5.9.3)(yaml@2.8.3)'
 
   examples/session/multi-fetch:
     dependencies:
@@ -183,8 +203,8 @@ importers:
         specifier: latest
         version: 7.0.0-dev.20260323.1
       mppx:
-        specifier: latest
-        version: 0.4.11(@modelcontextprotocol/sdk@1.27.1(zod@4.3.6))(elysia@1.4.27(@sinclair/typebox@0.34.48)(exact-mirror@0.2.7(@sinclair/typebox@0.34.48))(file-type@21.3.2)(openapi-types@12.1.3)(typescript@5.9.3))(express@5.2.1)(hono@4.12.7)(openapi-types@12.1.3)(typescript@5.9.3)(viem@2.47.6(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.3.6))
+        specifier: workspace:*
+        version: link:../../..
       tsx:
         specifier: latest
         version: 4.21.0
@@ -192,11 +212,11 @@ importers:
         specifier: latest
         version: 5.9.3
       viem:
-        specifier: latest
+        specifier: ^2.47.5
         version: 2.47.6(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.3.6)
       vite:
-        specifier: latest
-        version: 8.0.3(@types/node@25.5.0)(esbuild@0.27.2)(tsx@4.21.0)(yaml@2.8.3)
+        specifier: npm:@voidzero-dev/vite-plus-core@~0.1.14
+        version: '@voidzero-dev/vite-plus-core@0.1.14(@types/node@25.5.0)(esbuild@0.27.2)(tsx@4.21.0)(typescript@5.9.3)(yaml@2.8.3)'
 
   examples/session/sse:
     dependencies:
@@ -210,8 +230,8 @@ importers:
         specifier: latest
         version: 7.0.0-dev.20260323.1
       mppx:
-        specifier: latest
-        version: 0.4.11(@modelcontextprotocol/sdk@1.27.1(zod@4.3.6))(elysia@1.4.27(@sinclair/typebox@0.34.48)(exact-mirror@0.2.7(@sinclair/typebox@0.34.48))(file-type@21.3.2)(openapi-types@12.1.3)(typescript@5.9.3))(express@5.2.1)(hono@4.12.7)(openapi-types@12.1.3)(typescript@5.9.3)(viem@2.47.6(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.3.6))
+        specifier: workspace:*
+        version: link:../../..
       tsx:
         specifier: latest
         version: 4.21.0
@@ -219,11 +239,11 @@ importers:
         specifier: latest
         version: 5.9.3
       viem:
-        specifier: latest
+        specifier: ^2.47.5
         version: 2.47.6(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.3.6)
       vite:
-        specifier: latest
-        version: 8.0.3(@types/node@25.5.0)(esbuild@0.27.2)(tsx@4.21.0)(yaml@2.8.3)
+        specifier: npm:@voidzero-dev/vite-plus-core@~0.1.14
+        version: '@voidzero-dev/vite-plus-core@0.1.14(@types/node@25.5.0)(esbuild@0.27.2)(tsx@4.21.0)(typescript@5.9.3)(yaml@2.8.3)'
 
   examples/stripe:
     dependencies:
@@ -240,8 +260,8 @@ importers:
         specifier: latest
         version: 7.0.0-dev.20260323.1
       mppx:
-        specifier: latest
-        version: 0.4.11(@modelcontextprotocol/sdk@1.27.1(zod@4.3.6))(elysia@1.4.27(@sinclair/typebox@0.34.48)(exact-mirror@0.2.7(@sinclair/typebox@0.34.48))(file-type@21.3.2)(openapi-types@12.1.3)(typescript@5.9.3))(express@5.2.1)(hono@4.12.7)(openapi-types@12.1.3)(typescript@5.9.3)(viem@2.47.6(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.3.6))
+        specifier: workspace:*
+        version: link:../..
       stripe:
         specifier: ^17.7.0
         version: 17.7.0
@@ -249,8 +269,8 @@ importers:
         specifier: latest
         version: 5.9.3
       vite:
-        specifier: latest
-        version: 8.0.3(@types/node@25.5.0)(esbuild@0.27.2)(tsx@4.21.0)(yaml@2.8.3)
+        specifier: npm:@voidzero-dev/vite-plus-core@~0.1.14
+        version: '@voidzero-dev/vite-plus-core@0.1.14(@types/node@25.5.0)(esbuild@0.27.2)(tsx@4.21.0)(typescript@5.9.3)(yaml@2.8.3)'
 
 packages:
 
@@ -577,7 +597,7 @@ packages:
     resolution: {integrity: sha512-hZ7nOssGqRgyV3FVVQdfi+U4q02uB23bpnYpdvNXkYTRRyWx84b7yf1ans+dnJ/7h41sGL3CeQTfO+ZGxuO+Iw==}
     engines: {node: '>=18.14.1'}
     peerDependencies:
-      hono: ^4
+      hono: 4.12.7
 
   '@humanfs/core@0.19.1':
     resolution: {integrity: sha512-5DyQ4+1JEUzejeK1JGICcideyfUbGixgS9jNgex5nqkW+cY7WZhxBigmieN5Qnw9ZosSNVC9KQKyb+GUaGyKUA==}
@@ -687,6 +707,16 @@ packages:
   '@metamask/utils@9.3.0':
     resolution: {integrity: sha512-w8CVbdkDrVXFJbfBSlDfafDR6BAkpDmv1bC1UJVCoVny5tW2RKAdn9i68Xf7asYT4TnUhl/hN4zfUiKQq9II4g==}
     engines: {node: '>=16.0.0'}
+
+  '@modelcontextprotocol/sdk@1.26.0':
+    resolution: {integrity: sha512-Y5RmPncpiDtTXDbLKswIJzTqu2hyBKxTNsgKqKclDbhIgg1wgtf1fRuvxgTnRfcnxtvvgbIEcqUOzZrJ6iSReg==}
+    engines: {node: '>=18'}
+    peerDependencies:
+      '@cfworker/json-schema': ^4.1.1
+      zod: ^3.25 || ^4.0
+    peerDependenciesMeta:
+      '@cfworker/json-schema':
+        optional: true
 
   '@modelcontextprotocol/sdk@1.27.1':
     resolution: {integrity: sha512-sr6GbP+4edBwFndLbM60gf07z0FQ79gaExpnsjMGePXqFcSSb7t6iscpjk9DhFhwd+mTEQrzNafGP8/iGGFYaA==}
@@ -1106,7 +1136,7 @@ packages:
     resolution: {integrity: sha512-9WODaOAKSl/mU+MYNZ2aHCrkoRSvmQ+1YkLj589OEqqjOAhbn8j7Z+ilYoiTu/he6X63/clsxxAB4qny9/dDzg==}
     engines: {node: '>=18'}
     peerDependencies:
-      ajv: 4.11.8 - 8
+      ajv: 8.18.0
 
   '@readme/openapi-parser@6.0.0':
     resolution: {integrity: sha512-PaTnrKlKgEJZzjJ77AAhGe28NiyLBdiKMx95rJ9xlLZ8QLqYitMpPBQAKhsuEGOWQQbsIMfBZEPavbXghACQHA==}
@@ -1443,7 +1473,7 @@ packages:
       tsx: ^4.8.1
       typescript: ^5.0.0
       unplugin-unused: ^0.5.0
-      yaml: ^2.4.2
+      yaml: '>=2.8.3'
     peerDependenciesMeta:
       '@arethetypeswrong/core':
         optional: true
@@ -1567,7 +1597,7 @@ packages:
       '@walletconnect/ethereum-provider': ^2.21.1
       porto: ~0.2.35
       typescript: '>=5.7.3'
-      viem: 2.x
+      viem: ^2.47.5
     peerDependenciesMeta:
       '@base-org/account':
         optional: true
@@ -1590,9 +1620,9 @@ packages:
     resolution: {integrity: sha512-EU5gDsUp5t7+cuLv12/L8hfyWfCIKsBNiiBqpOqxZJxvAcAiQk4xFe2jMgaQPqApc3Omvxrk032M8AQ4N0cQeg==}
     peerDependencies:
       '@tanstack/query-core': '>=5.0.0'
-      ox: '>=0.11.1'
+      ox: ^0.14.1
       typescript: '>=5.7.3'
-      viem: 2.x
+      viem: ^2.47.5
     peerDependenciesMeta:
       '@tanstack/query-core':
         optional: true
@@ -1633,7 +1663,7 @@ packages:
   ajv-draft-04@1.0.0:
     resolution: {integrity: sha512-mv00Te6nmYbRp5DCwclxtt7yV/joXJPGS7nM+97GdxvuttCOfgI3K4U25zboyeX0O+myI8ERluxQe5wljMmVIw==}
     peerDependencies:
-      ajv: ^8.5.0
+      ajv: 8.18.0
     peerDependenciesMeta:
       ajv:
         optional: true
@@ -1641,7 +1671,7 @@ packages:
   ajv-formats@3.0.1:
     resolution: {integrity: sha512-8iUql50EUR+uUcdRQ3HDqa6EVyo3docL8g5WJ3FNcWmu62IbkGUue/pEyLBW8VGKKucTPgqeks4fIU1DA4yowQ==}
     peerDependencies:
-      ajv: ^8.0.0
+      ajv: 8.18.0
     peerDependenciesMeta:
       ajv:
         optional: true
@@ -1718,9 +1748,6 @@ packages:
       react-native-b4a:
         optional: true
 
-  balanced-match@1.0.2:
-    resolution: {integrity: sha512-3oSeUO0TMV67hN1AmbXsK4yaqU7tjiHlbxRDZOpH0KW9+CeX4bRAaX0Anxt0tx2MrpRpWwQaPwIlISEJhYU5Pw==}
-
   balanced-match@4.0.4:
     resolution: {integrity: sha512-BLrgEcRTwX2o6gGxGOCNyMvGSp35YofuYzw9h1IMTRmKqttAZZVU67bdb9Pr2vUHA8+j3i2tJfjO6C6+4myGTA==}
     engines: {node: 18 || 20 || >=22}
@@ -1787,9 +1814,6 @@ packages:
 
   bowser@2.14.1:
     resolution: {integrity: sha512-tzPjzCxygAKWFOJP011oxFHs57HzIhOEracIgAePE4pqB3LikALKnSzUyU4MGs9/iCEUuHlAJTjTc5M+u7YEGg==}
-
-  brace-expansion@2.0.3:
-    resolution: {integrity: sha512-MCV/fYJEbqx68aE58kv2cA/kiky1G8vux3OR6/jbS+jIMe/6fJWa0DTzJU7dqijOWYwHi1t29FlfYI9uytqlpA==}
 
   brace-expansion@5.0.5:
     resolution: {integrity: sha512-VZznLgtwhn+Mact9tfiwx64fA9erHH/MCXEUfB/0bX/6Fz6ny5EGTXYltMocqg4xFAQZtnO3DHWWXi8RiuN7cQ==}
@@ -2020,7 +2044,7 @@ packages:
       '@sinclair/typebox': '>= 0.34.0 < 1'
       '@types/bun': '>= 1.2.0'
       exact-mirror: '>= 0.0.9'
-      file-type: '>= 20.0.0'
+      file-type: 21.3.2
       openapi-types: '>= 12.0.0'
       typescript: '>= 5.0.0'
     peerDependenciesMeta:
@@ -2746,25 +2770,6 @@ packages:
     engines: {node: '>=10'}
     hasBin: true
 
-  mppx@0.4.11:
-    resolution: {integrity: sha512-IjXz5HYqBfwyaDZrtJaMpdROBJBdEPxeSx8yVnaIEagYpsAVqrfvdmKInhitsvkM8kHGYLWjGZFnrbIFJTQ90A==}
-    hasBin: true
-    peerDependencies:
-      '@modelcontextprotocol/sdk': '>=1.25.0'
-      elysia: '>=1'
-      express: '>=5'
-      hono: '>=4'
-      viem: '>=2.47.5'
-    peerDependenciesMeta:
-      '@modelcontextprotocol/sdk':
-        optional: true
-      elysia:
-        optional: true
-      express:
-        optional: true
-      hono:
-        optional: true
-
   mri@1.2.0:
     resolution: {integrity: sha512-tzzskb3bG8LvYGFF/mDTpq3jpI6Q9wc3LEmBaghu+DdCssd1FakN7Bc0hVNmEyGq1bq3RgfkCb3cmQLpNPOroA==}
     engines: {node: '>=4'}
@@ -3318,7 +3323,7 @@ packages:
   tempo.ts@0.14.2:
     resolution: {integrity: sha512-N4UkP2X/KDLmYUEIEWUDAk1m/USbKMzTjjUz1m0LwrIEVfoDlcSbBRc9jp14gLZcJVDlnq+fWHFVcH+GdrySgQ==}
     peerDependencies:
-      viem: '>=2.43.3'
+      viem: ^2.47.5
     peerDependenciesMeta:
       viem:
         optional: true
@@ -3503,7 +3508,7 @@ packages:
       sugarss: ^5.0.0
       terser: ^5.16.0
       tsx: ^4.8.1
-      yaml: ^2.4.2
+      yaml: '>=2.8.3'
     peerDependenciesMeta:
       '@types/node':
         optional: true
@@ -3536,7 +3541,7 @@ packages:
       '@tanstack/react-query': '>=5.0.0'
       react: '>=18'
       typescript: '>=5.7.3'
-      viem: 2.x
+      viem: ^2.47.5
     peerDependenciesMeta:
       typescript:
         optional: true
@@ -4210,6 +4215,28 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
+  '@modelcontextprotocol/sdk@1.26.0(zod@4.3.6)':
+    dependencies:
+      '@hono/node-server': 1.19.10(hono@4.12.7)
+      ajv: 8.18.0
+      ajv-formats: 3.0.1(ajv@8.18.0)
+      content-type: 1.0.5
+      cors: 2.8.6
+      cross-spawn: 7.0.6
+      eventsource: 3.0.7
+      eventsource-parser: 3.0.6
+      express: 5.2.1
+      express-rate-limit: 8.3.1(express@5.2.1)
+      hono: 4.12.7
+      jose: 6.2.1
+      json-schema-typed: 8.0.2
+      pkce-challenge: 5.0.1
+      raw-body: 3.0.2
+      zod: 4.3.6
+      zod-to-json-schema: 3.25.1(zod@4.3.6)
+    transitivePeerDependencies:
+      - supports-color
+
   '@modelcontextprotocol/sdk@1.27.1(zod@4.3.6)':
     dependencies:
       '@hono/node-server': 1.19.10(hono@4.12.7)
@@ -4751,10 +4778,10 @@ snapshots:
       '@typescript/native-preview-win32-arm64': 7.0.0-dev.20260323.1
       '@typescript/native-preview-win32-x64': 7.0.0-dev.20260323.1
 
-  '@vitejs/plugin-react@6.0.1(vite@8.0.3(@types/node@25.5.0)(esbuild@0.27.2)(tsx@4.21.0)(yaml@2.8.3))':
+  '@vitejs/plugin-react@6.0.1(@voidzero-dev/vite-plus-core@0.1.14(@types/node@25.5.0)(esbuild@0.27.2)(tsx@4.21.0)(typescript@5.9.3)(yaml@2.8.3))':
     dependencies:
       '@rolldown/pluginutils': 1.0.0-rc.7
-      vite: 8.0.3(@types/node@25.5.0)(esbuild@0.27.2)(tsx@4.21.0)(yaml@2.8.3)
+      vite: '@voidzero-dev/vite-plus-core@0.1.14(@types/node@25.5.0)(esbuild@0.27.2)(tsx@4.21.0)(typescript@5.9.3)(yaml@2.8.3)'
 
   '@voidzero-dev/vite-plus-core@0.1.14(@types/node@25.5.0)(esbuild@0.27.2)(tsx@4.21.0)(typescript@5.9.3)(yaml@2.8.3)':
     dependencies:
@@ -4962,8 +4989,6 @@ snapshots:
 
   b4a@1.7.3: {}
 
-  balanced-match@1.0.2: {}
-
   balanced-match@4.0.4: {}
 
   bare-events@2.8.2: {}
@@ -5036,10 +5061,6 @@ snapshots:
       - supports-color
 
   bowser@2.14.1: {}
-
-  brace-expansion@2.0.3:
-    dependencies:
-      balanced-match: 1.0.2
 
   brace-expansion@5.0.5:
     dependencies:
@@ -5988,7 +6009,7 @@ snapshots:
 
   minimatch@5.1.8:
     dependencies:
-      brace-expansion: 2.0.3
+      brace-expansion: 5.0.5
 
   minimatch@9.0.7:
     dependencies:
@@ -6007,25 +6028,6 @@ snapshots:
   mkdirp-classic@0.5.3: {}
 
   mkdirp@1.0.4: {}
-
-  mppx@0.4.11(@modelcontextprotocol/sdk@1.27.1(zod@4.3.6))(elysia@1.4.27(@sinclair/typebox@0.34.48)(exact-mirror@0.2.7(@sinclair/typebox@0.34.48))(file-type@21.3.2)(openapi-types@12.1.3)(typescript@5.9.3))(express@5.2.1)(hono@4.12.7)(openapi-types@12.1.3)(typescript@5.9.3)(viem@2.47.6(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.3.6)):
-    dependencies:
-      '@remix-run/fetch-proxy': 0.7.1
-      '@remix-run/node-fetch-server': 0.13.0
-      incur: 0.3.1(openapi-types@12.1.3)
-      ox: 0.14.1(typescript@5.9.3)(zod@4.3.6)
-      viem: 2.47.6(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.3.6)
-      zod: 4.3.6
-    optionalDependencies:
-      '@modelcontextprotocol/sdk': 1.27.1(zod@4.3.6)
-      elysia: 1.4.27(@sinclair/typebox@0.34.48)(exact-mirror@0.2.7(@sinclair/typebox@0.34.48))(file-type@21.3.2)(openapi-types@12.1.3)(typescript@5.9.3)
-      express: 5.2.1
-      hono: 4.12.7
-    transitivePeerDependencies:
-      - '@cfworker/json-schema'
-      - openapi-types
-      - supports-color
-      - typescript
 
   mri@1.2.0: {}
 
