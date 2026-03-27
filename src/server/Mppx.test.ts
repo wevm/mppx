@@ -707,6 +707,37 @@ describe('compose', () => {
     expect(wwwAuth).toContain('method="beta"')
   })
 
+  test('prefers the HTML-capable method body in compose() without duplicating challenge headers', async () => {
+    const alphaPlainMethod = Method.toServer(mockChargeA, {
+      async verify() {
+        return mockReceipt('alpha')
+      },
+    })
+    const betaHtmlMethod = Method.toServer(mockChargeB, {
+      html: { content: '<p>beta html body</p>' },
+      async verify() {
+        return mockReceipt('beta')
+      },
+    })
+    const mppx = Mppx.create({ methods: [alphaPlainMethod, betaHtmlMethod], realm, secretKey })
+
+    const result = await mppx.compose(
+      [alphaPlainMethod, challengeOpts],
+      [betaHtmlMethod, challengeOpts],
+    )(
+      new Request('https://example.com/resource', {
+        headers: { Accept: 'text/html' },
+      }),
+    )
+
+    expect(result.status).toBe(402)
+    if (result.status !== 402) throw new Error()
+
+    expect(result.challenge.headers.get('Content-Type')).toContain('text/html')
+    expect(Challenge.fromResponseList(result.challenge)).toHaveLength(2)
+    expect(await result.challenge.text()).toContain('beta html body')
+  })
+
   test('dispatches to matching handler when credential matches alpha', async () => {
     const mppx = Mppx.create({ methods: [alphaMethod, betaMethod], realm, secretKey })
 

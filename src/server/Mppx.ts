@@ -52,7 +52,7 @@ export type Mppx<
        *   secretKey,
        * })
        *
-       * app.get('/api/resource', async (req) => {
+       * app.all('/api/resource', async (req) => {
        *   const result = await mppx.compose(
        *     mppx.tempo.charge({ amount: '100' }),
        *     mppx.stripe.charge({ amount: '100' }),
@@ -602,7 +602,7 @@ type ComposeEntry<methods extends readonly Method.AnyServer[]> =
  *   secretKey: process.env.PAYMENT_SECRET_KEY,
  * })
  *
- * app.get('/api/resource', async (req) => {
+ * app.all('/api/resource', async (req) => {
  *   const result = await Mppx.compose(
  *     mppx['tempo/charge']({ amount: '100', currency: USDC, recipient: '0x...' }),
  *     mppx['stripe/charge']({ amount: '100', currency: 'usd' }),
@@ -702,34 +702,23 @@ export function compose(
     // No credential — call all handlers and merge 402 challenges.
     const results = await Promise.all(handlers.map((h) => h(input)))
 
-    // Merge WWW-Authenticate headers from all 402 responses.
     const mergedHeaders = new Headers()
     mergedHeaders.set('Cache-Control', 'no-store')
+
+    const challengeResponses = results.flatMap((result, index) => {
+      if (result.status !== 402) return []
+      const response = result.challenge as Response
+      const wwwAuth = response.headers.get('WWW-Authenticate')
+      if (wwwAuth) mergedHeaders.append('WWW-Authenticate', wwwAuth)
+      return [{ meta: (handlers[index] as ConfiguredHandler)._internal, response, wwwAuth }]
+    })
 
     // Multi-method HTML rendering: if browser accepts text/html and multiple
     // methods have HTML enabled, render a composed page with tabs.
     const wantsHtml = input.headers.get('Accept')?.includes('text/html')
     if (wantsHtml) {
-      // Collect WWW-Authenticate headers, indexed by handler position.
-      const wwwAuthByIndex: (string | undefined)[] = []
-      for (let i = 0; i < results.length; i++) {
-        const result = results[i]!
-        if (result.status !== 402) {
-          wwwAuthByIndex.push(undefined)
-          continue
-        }
-        const response = result.challenge as Response
-        const wwwAuth = response.headers.get('WWW-Authenticate')
-        wwwAuthByIndex.push(wwwAuth ?? undefined)
-        if (wwwAuth) mergedHeaders.append('WWW-Authenticate', wwwAuth)
-      }
-
       const htmlMethods: Html.ComposedMethod[] = []
-      for (let i = 0; i < handlers.length; i++) {
-        const result = results[i]
-        if (!result || result.status !== 402) continue
-        const meta = (handlers[i] as ConfiguredHandler)._internal
-        const wwwAuth = wwwAuthByIndex[i]
+      for (const { meta, wwwAuth } of challengeResponses) {
         if (!meta?._html?.content || !wwwAuth) continue
         try {
           const challenge = Challenge.deserialize(wwwAuth)
@@ -745,7 +734,7 @@ export function compose(
       }
 
       if (htmlMethods.length > 1) {
-        const firstHtml = (handlers[0] as ConfiguredHandler)?._internal?._html
+        const firstHtml = challengeResponses.find(({ meta }) => meta?._html?.content)?.meta?._html
         const body = Html.compose({
           methods: htmlMethods,
           requestUrl: input.url,
@@ -758,14 +747,22 @@ export function compose(
           challenge: new Response(body, { status: 402, headers: mergedHeaders }),
         }
       }
+
+      if (htmlMethods.length === 1) {
+        const response = challengeResponses.find(({ meta }) => meta?._html?.content)?.response
+        if (response) {
+          const contentType = response.headers.get('Content-Type')
+          if (contentType) mergedHeaders.set('Content-Type', contentType)
+          return {
+            status: 402,
+            challenge: new Response(await response.text(), { status: 402, headers: mergedHeaders }),
+          }
+        }
+      }
     }
 
     let body: string | null = null
-    for (const result of results) {
-      if (result.status !== 402) continue
-      const response = result.challenge as Response
-      const wwwAuth = response.headers.get('WWW-Authenticate')
-      if (wwwAuth) mergedHeaders.append('WWW-Authenticate', wwwAuth)
+    for (const { response } of challengeResponses) {
       // Use the first handler's body for the problem details / single-method HTML response.
       if (!body) {
         const contentType = response.headers.get('Content-Type')

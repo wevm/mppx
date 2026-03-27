@@ -42,6 +42,9 @@ mount<typeof Methods.charge, RequiredBy<charge.HtmlConfig, 'createToken'>>(async
   const stripe = await loadStripe(c.config.publishableKey)
   if (!stripe) throw new Error('Failed to load stripe')
   const createTokenUrl = c.config.createToken
+  const paymentMethodTypes = (
+    request.methodDetails as { paymentMethodTypes?: string[] } | undefined
+  )?.paymentMethodTypes ?? ['card']
 
   function getAppearance(): Appearance {
     const style = getComputedStyle(document.documentElement)
@@ -75,7 +78,7 @@ mount<typeof Methods.charge, RequiredBy<charge.HtmlConfig, 'createToken'>>(async
     appearance: getAppearance(),
     currency: request.currency,
     paymentMethodCreation: 'manual',
-    paymentMethodTypes: ['card'],
+    paymentMethodTypes,
   })
   elements
     .create('payment', {

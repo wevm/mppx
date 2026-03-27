@@ -12,7 +12,7 @@ const mppx = Mppx.create({
       account,
       currency: '0x20c0000000000000000000000000000000000000',
       feePayer: true,
-      html: true,
+      html: {},
       recipient: account.address,
       testnet: true,
     }),

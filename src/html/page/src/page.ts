@@ -30,6 +30,12 @@ function composeMethodFromUrl(): string | null {
   return new URL(window.location.href).searchParams.get(composeMethodSearchParam)
 }
 
+function navigationUrl(): string {
+  const url = new URL(window.location.href)
+  url.hash = ''
+  return url.toString()
+}
+
 window.mppx = Object.freeze({
   get challenge() {
     if (isComposed && __mppx_active) return data.challenges![__mppx_active]!
@@ -257,6 +263,101 @@ function sendCredentialToServiceWorker(parameters: {
   })
 }
 
+function escapeHtml(text: string): string {
+  return text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+}
+
+function renderDocument(parameters: { body: string; title: string; url: string }): void {
+  const { body, title, url } = parameters
+  history.replaceState(null, '', url)
+  document.open()
+  document.write(
+    `<!doctype html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>${escapeHtml(title)}</title><style>html{color-scheme:light dark}body{font-family:system-ui,-apple-system,sans-serif;margin:0;padding:2rem;line-height:1.5}main{max-width:960px;margin:0 auto}pre{white-space:pre-wrap;word-break:break-word;background:rgba(127,127,127,0.12);padding:1rem;border-radius:0.75rem;overflow:auto}img,video,iframe,object{max-width:100%;width:100%;min-height:70vh;border:0;border-radius:0.75rem}audio{width:100%}a{color:inherit}</style></head><body><main>${body}</main></body></html>`,
+  )
+  document.close()
+}
+
+async function renderFetchedResponse(parameters: {
+  response: Response
+  url: string
+}): Promise<void> {
+  const { response, url } = parameters
+  const contentType =
+    response.headers.get('Content-Type')?.split(';')[0]?.trim().toLowerCase() ?? ''
+
+  if (contentType === 'text/html' || contentType === 'application/xhtml+xml') {
+    history.replaceState(null, '', url)
+    document.open()
+    document.write(await response.text())
+    document.close()
+    return
+  }
+
+  if (
+    contentType.startsWith('text/') ||
+    contentType === 'application/json' ||
+    contentType.endsWith('+json') ||
+    contentType === 'application/xml' ||
+    contentType.endsWith('+xml')
+  ) {
+    const text = await response.text()
+    renderDocument({
+      body: `<h1>Protected response</h1><pre>${escapeHtml(text)}</pre>`,
+      title: 'Protected response',
+      url,
+    })
+    return
+  }
+
+  const objectUrl = URL.createObjectURL(await response.blob())
+
+  if (contentType.startsWith('image/')) {
+    renderDocument({
+      body: `<img alt="Protected response" src="${objectUrl}">`,
+      title: 'Protected image',
+      url,
+    })
+    return
+  }
+
+  if (contentType.startsWith('video/')) {
+    renderDocument({
+      body: `<video controls src="${objectUrl}"></video>`,
+      title: 'Protected video',
+      url,
+    })
+    return
+  }
+
+  if (contentType.startsWith('audio/')) {
+    renderDocument({
+      body: `<audio controls src="${objectUrl}"></audio>`,
+      title: 'Protected audio',
+      url,
+    })
+    return
+  }
+
+  if (contentType === 'application/pdf') {
+    renderDocument({
+      body: `<iframe src="${objectUrl}" title="Protected PDF"></iframe>`,
+      title: 'Protected PDF',
+      url,
+    })
+    return
+  }
+
+  renderDocument({
+    body: `<h1>Protected response</h1><p>Payment succeeded, but your browser could not complete a standard navigation for this response type.</p><p><a href="${objectUrl}" download>Download the protected response</a></p>`,
+    title: 'Protected response',
+    url,
+  })
+}
+
 addEventListener('mppx:complete', (event: CustomEvent<string>) => {
   const statusElement = document.getElementById('status')
   const authorization = event.detail
@@ -273,14 +374,14 @@ addEventListener('mppx:complete', (event: CustomEvent<string>) => {
       sendCredentialToServiceWorker({
         controller,
         credential: authorization,
-        url: window.location.href,
+        url: navigationUrl(),
       }),
     )
     .then(() => {
       window.location.reload()
     })
     .catch(() => {
-      fetch(window.location.href, {
+      fetch(navigationUrl(), {
         headers: { Authorization: authorization },
       })
         .then((response) => {
@@ -293,9 +394,7 @@ addEventListener('mppx:complete', (event: CustomEvent<string>) => {
             }
             return
           }
-          return response.blob().then((blob) => {
-            window.location = URL.createObjectURL(blob) as any
-          })
+          return renderFetchedResponse({ response, url: navigationUrl() })
         })
         .catch((error) => {
           if (statusElement) {

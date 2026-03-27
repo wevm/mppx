@@ -4,6 +4,7 @@ import {
   PaymentExpiredError,
   VerificationFailedError,
 } from '../../Errors.js'
+import type * as Html from '../../html/internal/types.js'
 import type { LooseOmit, OneOf } from '../../internal/types.js'
 import * as Method from '../../Method.js'
 import type { StripeClient } from '../internal/types.js'
@@ -77,6 +78,8 @@ export function charge<const parameters extends charge.Parameters>(parameters: p
             config: {
               publishableKey: htmlConfig.publishableKey,
             } satisfies charge.HtmlConfig,
+            text: htmlConfig.text,
+            theme: htmlConfig.theme,
           },
         }
       : {}),
@@ -131,8 +134,8 @@ export declare namespace charge {
   type Defaults = LooseOmit<Method.RequestDefaults<typeof Methods.charge>, 'recipient'>
 
   type Parameters = {
-    /** Enable the built-in HTML payment page with Stripe configuration. */
-    html?: { publishableKey: string } | undefined
+    /** Enable the built-in HTML payment page with Stripe configuration and optional shell overrides. */
+    html?: ({ publishableKey: string } & Html.Config) | undefined
     /** Optional metadata to include in SPT creation requests. */
     metadata?: Record<string, string> | undefined
   } & Defaults &

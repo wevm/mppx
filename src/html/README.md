@@ -28,7 +28,7 @@ const mppx = Mppx.create({
     tempo.charge({
       currency: '0x20c0000000000000000000000000000000000000',
       recipient: '0x0000000000000000000000000000000000000001',
-      html: true,
+      html: {},
     }),
   ],
 })
@@ -41,15 +41,19 @@ export async function handler(request: Request) {
 }
 ```
 
+If HTML is enabled, expose the protected route on a handler that accepts both `GET` and `POST`. Built-in browser actions are served from the same route via reserved query params.
+
 ### Built-In Method Variants
 
-Tempo enables the built-in HTML page with `html: true`:
+Tempo enables the built-in HTML page with the same `html: { ... }` object shape as other methods:
 
 ```ts
 tempo.charge({
   currency: '0x20c0000000000000000000000000000000000000',
   recipient: '0x0000000000000000000000000000000000000001',
-  html: true,
+  html: {
+    text: { title: 'Complete payment' },
+  },
 })
 ```
 
@@ -63,6 +67,9 @@ stripe.charge({
   paymentMethodTypes: ['card'],
   html: {
     publishableKey: process.env.STRIPE_PUBLISHABLE_KEY!,
+    theme: {
+      accent: ['#111111', '#f5f5f5'],
+    },
   },
 })
 ```

@@ -1,4 +1,5 @@
 import type { Challenge } from '../Challenge.js'
+import * as Credential from '../Credential.js'
 import type * as Method from '../Method.js'
 import type * as z from '../zod.js'
 import { classNames, elements } from './internal/constants.js'
@@ -43,16 +44,31 @@ export function mount<
   if (!root) throw new Error(`Missing root element: #${rootId}`)
 
   const methodKey = browser.__mppx_active
+  const challenge = browser.mppx.challenge
+  const challenges = browser.mppx.challenges
+  const config = browser.mppx.config
+
+  function serializeCredential(payload: unknown, source?: string): string {
+    return Credential.serialize({
+      challenge,
+      payload,
+      ...(source ? { source } : {}),
+    })
+  }
 
   const context: mount.Context<any, any> = {
     root,
-    challenge: browser.mppx.challenge,
-    challenges: browser.mppx.challenges,
-    config: browser.mppx.config,
-    dispatch: (payload, source) => browser.mppx.dispatch(payload, source),
-    serializeCredential: (payload, source) => browser.mppx.serializeCredential(payload, source),
+    challenge,
+    challenges,
+    config,
+    dispatch: (payload, source) => {
+      dispatchEvent(
+        new CustomEvent('mppx:complete', { detail: serializeCredential(payload, source) }),
+      )
+    },
+    serializeCredential,
     set<name extends keyof ShellState>(name: name, value: ShellState[name]) {
-      const key = methodKey ?? Object.keys(browser.mppx.challenges ?? {})[0] ?? 'unknown'
+      const key = methodKey ?? Object.keys(challenges ?? {})[0] ?? 'unknown'
       dispatchEvent(new CustomEvent('mppx:set', { detail: { key, name, value } }))
     },
     classNames,

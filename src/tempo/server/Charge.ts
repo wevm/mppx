@@ -11,6 +11,7 @@ import { tempo as tempo_chain } from 'viem/chains'
 import { Abis, Transaction } from 'viem/tempo'
 
 import { PaymentExpiredError } from '../../Errors.js'
+import type * as Html from '../../html/internal/types.js'
 import type { LooseOmit } from '../../internal/types.js'
 import * as Method from '../../Method.js'
 import * as Store from '../../Store.js'
@@ -43,6 +44,7 @@ export function charge<const parameters extends charge.Parameters>(
     decimals = defaults.decimals,
     description,
     externalId,
+    html: htmlConfig,
     memo,
     waitForConfirmation = true,
   } = parameters
@@ -69,7 +71,15 @@ export function charge<const parameters extends charge.Parameters>(
       recipient,
     } as unknown as Defaults,
 
-    ...(parameters.html ? { html: { content: html } } : {}),
+    ...(htmlConfig
+      ? {
+          html: {
+            content: html,
+            text: htmlConfig.text,
+            theme: htmlConfig.theme,
+          },
+        }
+      : {}),
 
     // TODO: dedupe `{charge,session}.request`
     async request({ credential, request }) {
@@ -293,8 +303,8 @@ export declare namespace charge {
   type Defaults = LooseOmit<Method.RequestDefaults<typeof Methods.charge>, 'feePayer' | 'recipient'>
 
   type Parameters = {
-    /** Enable the built-in HTML payment page for this method. @default false */
-    html?: boolean | undefined
+    /** Enable the built-in HTML payment page for this method. Pass an object to configure the shared shell. @default false */
+    html?: Html.Config | undefined
     /** Testnet mode. */
     testnet?: boolean | undefined
     /**
