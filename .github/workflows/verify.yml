@@ -37,7 +37,7 @@ jobs:
         run: pnpm check:ci
 
       - name: Generate HTML
-        run: pnpm generate:html
+        run: pnpm gen:html
 
       - name: Check types
         run: pnpm check:types && pnpm check:types:html && pnpm check:types:examples
