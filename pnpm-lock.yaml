@@ -8,7 +8,7 @@ overrides:
   mppx: workspace:*
   mppx>vite: npm:@voidzero-dev/vite-plus-core@~0.1.14
   vitest: npm:@voidzero-dev/vite-plus-test@~0.1.14
-  ox: ^0.14.1
+  ox: 0.14.1
   viem: ^2.47.5
   tar@<=7.5.10: 7.5.11
   '@modelcontextprotocol/sdk@>=1.10.0 <=1.25.3': 1.26.0
@@ -21,6 +21,7 @@ overrides:
   '@hono/node-server@<1.19.10': 1.19.10
   elysia@<1.4.26: 1.4.26
   file-type: 21.3.2
+  path-to-regexp: ^8.4.0
   flatted@<=3.4.1: '>=3.4.2'
   undici@>=7.0.0 <7.24.0: 7.24.0
   socket.io-parser@>=4.0.0 <4.2.6: '>=4.2.6'
@@ -41,7 +42,7 @@ importers:
         specifier: ^0.3.1
         version: 0.3.1(openapi-types@12.1.3)
       ox:
-        specifier: ^0.14.1
+        specifier: 0.14.1
         version: 0.14.1(typescript@5.9.3)(zod@4.3.6)
       zod:
         specifier: ^4.3.6
@@ -1654,7 +1655,7 @@ packages:
     resolution: {integrity: sha512-EU5gDsUp5t7+cuLv12/L8hfyWfCIKsBNiiBqpOqxZJxvAcAiQk4xFe2jMgaQPqApc3Omvxrk032M8AQ4N0cQeg==}
     peerDependencies:
       '@tanstack/query-core': '>=5.0.0'
-      ox: ^0.14.1
+      ox: 0.14.1
       typescript: '>=5.7.3'
       viem: ^2.47.5
     peerDependenciesMeta:
@@ -2979,8 +2980,8 @@ packages:
     resolution: {integrity: sha512-Xa4Nw17FS9ApQFJ9umLiJS4orGjm7ZzwUrwamcGQuHSzDyth9boKDaycYdDcZDuqYATXw4HFXgaqWTctW/v1HA==}
     engines: {node: '>=16 || 14 >=14.18'}
 
-  path-to-regexp@8.3.0:
-    resolution: {integrity: sha512-7jdwVIRtsP8MYpdXSwOS0YdD0Du+qOoF/AEPIt88PcCFrZCzx41oxku1jD88hZBwbNUIEfpqvuhjFaMAqMTWnA==}
+  path-to-regexp@8.4.0:
+    resolution: {integrity: sha512-PuseHIvAnz3bjrM2rGJtSgo1zjgxapTLZ7x2pjhzWwlp4SJQgK3f3iZIQwkpEnBaKz6seKBADpM4B4ySkuYypg==}
 
   path-type@4.0.0:
     resolution: {integrity: sha512-gDKb8aZMDeD/tZWs9P6+q0J9Mwkdl6xMV8TjnGP3qJVJ06bdMgkbBlLU8IdfOsIsFz2BW1rNVT3XuNEl8zPAvw==}
@@ -6248,7 +6249,7 @@ snapshots:
       lru-cache: 10.4.3
       minipass: 7.1.2
 
-  path-to-regexp@8.3.0: {}
+  path-to-regexp@8.4.0: {}
 
   path-type@4.0.0: {}
 
@@ -6450,7 +6451,7 @@ snapshots:
       depd: 2.0.0
       is-promise: 4.0.0
       parseurl: 1.3.3
-      path-to-regexp: 8.3.0
+      path-to-regexp: 8.4.0
     transitivePeerDependencies:
       - supports-color
 
