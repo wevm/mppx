@@ -5,12 +5,7 @@ import type { Hex } from 'ox'
 import { TxEnvelopeTempo } from 'ox/tempo'
 import { Handler } from 'tempo.ts/server'
 import { createClient, custom, encodeFunctionData, parseUnits } from 'viem'
-import {
-  getTransaction,
-  getTransactionReceipt,
-  prepareTransactionRequest,
-  signTransaction,
-} from 'viem/actions'
+import { getTransactionReceipt, prepareTransactionRequest, signTransaction } from 'viem/actions'
 import { Abis, Account, Actions, Addresses, Secp256k1, Tick, Transaction } from 'viem/tempo'
 import { beforeAll, describe, expect, test } from 'vp/test'
 import * as Http from '~test/Http.js'
@@ -114,161 +109,6 @@ describe('tempo', () => {
 
       const receipt = Receipt.fromResponse(response)
       expect(receipt.status).toBe('success')
-
-      httpServer.close()
-    })
-
-    test('behavior: push mode sets validBefore no later than challenge expiry', async () => {
-      const expires = new Date(Date.now() + 60_000).toISOString()
-      const mppx = Mppx_client.create({
-        polyfill: false,
-        methods: [
-          tempo_client({
-            account: accounts[1],
-            mode: 'push',
-            getClient: () => client,
-          }),
-        ],
-      })
-
-      const httpServer = await Http.createServer(async (req, res) => {
-        const result = await Mppx_server.toNodeListener(
-          server.charge({
-            amount: '1',
-            currency: asset,
-            expires,
-            recipient: accounts[0].address,
-          }),
-        )(req, res)
-        if (result.status === 402) return
-        res.end('OK')
-      })
-
-      const response = await mppx.fetch(httpServer.url)
-      expect(response.status).toBe(200)
-
-      const receipt = Receipt.fromResponse(response)
-      const transaction = await getTransaction(client, {
-        hash: receipt.reference as Hex.Hex,
-      })
-
-      expect(transaction.validBefore).toBeTypeOf('number')
-      expect(transaction.validBefore!).toBeLessThanOrEqual(
-        Math.floor(new Date(expires).getTime() / 1000),
-      )
-
-      httpServer.close()
-    })
-
-    test('behavior: rejects hash credentials for fee-payer challenges', async () => {
-      const httpServer = await Http.createServer(async (req, res) => {
-        const result = await Mppx_server.toNodeListener(
-          server.charge({
-            feePayer: accounts[0],
-            amount: '1',
-            currency: asset,
-            recipient: accounts[0].address,
-          }),
-        )(req, res)
-        if (result.status === 402) return
-        res.end('OK')
-      })
-
-      const response = await fetch(httpServer.url)
-      expect(response.status).toBe(402)
-
-      const challenge = Challenge.fromResponse(response, {
-        methods: [tempo_client.charge()],
-      })
-
-      const { receipt } = await Actions.token.transferSync(client, {
-        account: accounts[1],
-        amount: BigInt(challenge.request.amount),
-        to: challenge.request.recipient as Hex.Hex,
-        token: challenge.request.currency as Hex.Hex,
-      })
-
-      const credential = Credential.from({
-        challenge,
-        payload: { hash: receipt.transactionHash, type: 'hash' as const },
-        source: `did:pkh:eip155:${chain.id}:${accounts[1].address}`,
-      })
-
-      const authResponse = await fetch(httpServer.url, {
-        headers: { Authorization: Credential.serialize(credential) },
-      })
-      expect(authResponse.status).toBe(402)
-
-      const body = (await authResponse.json()) as { detail: string }
-      expect(body.detail).toContain('Hash credentials cannot be used when `feePayer` is true.')
-
-      httpServer.close()
-    })
-
-    test('behavior: verifies payment effects even when receipt.from differs', async () => {
-      const interceptingClient = createClient({
-        chain: client.chain,
-        transport: custom({
-          async request(args: any) {
-            const result = await client.transport.request(args)
-            if (args?.method === 'eth_getTransactionReceipt') {
-              return {
-                ...(result as any),
-                from: accounts[0].address,
-              }
-            }
-            return result
-          },
-        }),
-      })
-
-      const serverProxy = Mppx_server.create({
-        methods: [
-          tempo_server.charge({
-            getClient() {
-              return interceptingClient
-            },
-            currency: asset,
-            account: accounts[0],
-          }),
-        ],
-        realm,
-        secretKey,
-      })
-
-      const httpServer = await Http.createServer(async (req, res) => {
-        const result = await Mppx_server.toNodeListener(serverProxy.charge({ amount: '1' }))(
-          req,
-          res,
-        )
-        if (result.status === 402) return
-        res.end('OK')
-      })
-
-      const response = await fetch(httpServer.url)
-      expect(response.status).toBe(402)
-
-      const challenge = Challenge.fromResponse(response, {
-        methods: [tempo_client.charge()],
-      })
-
-      const { receipt } = await Actions.token.transferSync(client, {
-        account: accounts[1],
-        amount: BigInt(challenge.request.amount),
-        to: challenge.request.recipient as Hex.Hex,
-        token: challenge.request.currency as Hex.Hex,
-      })
-
-      const credential = Credential.from({
-        challenge,
-        payload: { hash: receipt.transactionHash, type: 'hash' as const },
-        source: `did:pkh:eip155:${chain.id}:${accounts[1].address}`,
-      })
-
-      const authResponse = await fetch(httpServer.url, {
-        headers: { Authorization: Credential.serialize(credential) },
-      })
-      expect(authResponse.status).toBe(200)
 
       httpServer.close()
     })
@@ -1413,43 +1253,6 @@ describe('tempo', () => {
             }
           `)
       }
-
-      httpServer.close()
-    })
-
-    test('error: rejects push mode for fee-payer challenges', async () => {
-      const mppx = Mppx_client.create({
-        polyfill: false,
-        methods: [
-          tempo_client({
-            account: accounts[1],
-            mode: 'push',
-            getClient() {
-              return client
-            },
-          }),
-        ],
-      })
-
-      const httpServer = await Http.createServer(async (req, res) => {
-        const result = await Mppx_server.toNodeListener(
-          server.charge({
-            feePayer: accounts[0],
-            amount: '1',
-            currency: asset,
-            recipient: accounts[0].address,
-          }),
-        )(req, res)
-        if (result.status === 402) return
-        res.end('OK')
-      })
-
-      const response = await fetch(httpServer.url)
-      expect(response.status).toBe(402)
-
-      await expect(mppx.createCredential(response)).rejects.toThrow(
-        '`feePayer: true` requires pull mode so the server can co-sign it.',
-      )
 
       httpServer.close()
     })

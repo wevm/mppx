@@ -1,6 +1,6 @@
 import type * as Hex from 'ox/Hex'
 import type { Address } from 'viem'
-import { prepareTransactionRequest, sendTransactionSync, signTransaction } from 'viem/actions'
+import { prepareTransactionRequest, sendCallsSync, signTransaction } from 'viem/actions'
 import { tempo as tempo_chain } from 'viem/chains'
 import { Actions } from 'viem/tempo'
 
@@ -112,17 +112,16 @@ export function charge(parameters: charge.Parameters = {}) {
       })()
 
       if (mode === 'push') {
-        if (methodDetails?.feePayer)
-          throw new Error('`feePayer: true` requires pull mode so the server can co-sign it.')
-
-        const receipt = await sendTransactionSync(client, {
+        const { receipts } = await sendCallsSync(client, {
           account,
-          calls,
-          validBefore,
-        } as never)
+          calls: calls as never,
+          experimental_fallback: true,
+        })
+        const hash = receipts?.[0]?.transactionHash
+        if (!hash) throw new Error('No transaction receipt returned.')
         return Credential.serialize({
           challenge,
-          payload: { hash: receipt.transactionHash, type: 'hash' },
+          payload: { hash, type: 'hash' },
           source: `did:pkh:eip155:${chainId}:${account.address}`,
         })
       }

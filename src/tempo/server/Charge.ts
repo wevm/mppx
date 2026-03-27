@@ -103,7 +103,7 @@ export function charge<const parameters extends charge.Parameters>(
     },
 
     async verify({ credential, request }) {
-      const { challenge, source } = credential
+      const { challenge } = credential
       const { chainId, feePayer } = request
 
       const client = await getClient({ chainId })
@@ -123,9 +123,6 @@ export function charge<const parameters extends charge.Parameters>(
 
       switch (payload.type) {
         case 'hash': {
-          if (methodDetails?.feePayer)
-            throw new MismatchError('Hash credentials cannot be used when `feePayer` is true.', {})
-
           const hash = payload.hash as `0x${string}`
           await assertHashUnused(store, hash)
 
@@ -133,7 +130,7 @@ export function charge<const parameters extends charge.Parameters>(
           const receipt = await getTransactionReceipt(client, { hash })
           assertTransferLogs(receipt, {
             currency,
-            sender: getCredentialSourceAddress(source) ?? receipt.from,
+            sender: receipt.from,
             transfers: expectedTransfers,
           })
 
@@ -192,6 +189,7 @@ export function charge<const parameters extends charge.Parameters>(
             })
             assertTransferLogs(receipt, {
               currency,
+              sender: transaction.from! as `0x${string}`,
               transfers,
             })
             // Post-broadcast dedup: catch malleable input variants
@@ -407,7 +405,7 @@ function assertTransferLogs(
   receipt: TransactionReceipt,
   parameters: {
     currency: `0x${string}`
-    sender?: `0x${string}` | undefined
+    sender: `0x${string}`
     transfers: readonly ExpectedTransfer[]
   },
 ) {
@@ -438,7 +436,7 @@ function assertTransferLogs(
     const matchIndex = logs.findIndex((log, index) => {
       if (used.has(index)) return false
       if (!TempoAddress.isEqual(log.address, parameters.currency)) return false
-      if (parameters.sender && !TempoAddress.isEqual(log.args.from, parameters.sender)) return false
+      if (!TempoAddress.isEqual(log.args.from, parameters.sender)) return false
       if (!TempoAddress.isEqual(log.args.to, transfer.recipient)) return false
       if (log.args.amount.toString() !== transfer.amount) return false
       if (transfer.memo) {
@@ -458,11 +456,6 @@ function assertTransferLogs(
 
     used.add(matchIndex)
   }
-}
-
-function getCredentialSourceAddress(source: string | undefined): `0x${string}` | undefined {
-  const match = source?.match(/^did:pkh:eip155:\d+:(0x[0-9a-fA-F]{40})$/)
-  return match?.[1] as `0x${string}` | undefined
 }
 
 /** @internal */
