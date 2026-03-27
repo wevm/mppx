@@ -205,9 +205,7 @@ function buildConfig(parameters: {
     : undefined
   return {
     ...config,
-    ...(actionUrls
-      ? { actions: { ...(config?.actions as Record<string, string> | undefined), ...actionUrls } }
-      : {}),
+    ...actionUrls,
   }
 }
 

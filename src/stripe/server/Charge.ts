@@ -149,7 +149,7 @@ export declare namespace charge {
     >
 
   type HtmlConfig = {
-    actions?: Record<string, string> | undefined
+    createToken?: string | undefined
     publishableKey: string
   }
 

@@ -107,7 +107,7 @@ const charge = Method.toServer(Methods.charge, {
 
 `html` supports:
 
-- `actions` — route-local browser actions exposed on `mppx.config.actions`.
+- `actions` — route-local browser actions exposed on `mppx.config.<actionName>`.
 - `content` — the method HTML fragment to render inside the shared page shell.
 - `config` — method-specific browser config, available as `mppx.config`.
 - `text` — shell copy overrides.
@@ -224,7 +224,7 @@ declare global {
   }
 
   interface MppxConfig {
-    actions?: Record<string, string>
+    createToken?: string
     publishableKey: string
   }
 }
@@ -236,7 +236,7 @@ Then browser code can use typed globals:
 
 ```ts
 const amount = mppx.challenge.request.amount
-const tokenUrl = mppx.config.actions?.createToken
+const tokenUrl = mppx.config.createToken
 ```
 
 ## Vite Authoring

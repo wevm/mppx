@@ -1,11 +1,12 @@
 import type { Appearance } from '@stripe/stripe-js'
 import { loadStripe } from '@stripe/stripe-js/pure'
 
+import type { RequiredBy } from '../../../internal/types.js'
 import type { Methods } from '../../../stripe/index.js'
 import type { charge } from '../../../stripe/server/Charge.js'
 import { mount } from '../../index.js'
 
-mount<typeof Methods.charge, charge.HtmlConfig>(async (c) => {
+mount<typeof Methods.charge, RequiredBy<charge.HtmlConfig, 'createToken'>>(async (c) => {
   const request = c.challenge.request
 
   // DOM
@@ -40,8 +41,7 @@ mount<typeof Methods.charge, charge.HtmlConfig>(async (c) => {
   // Stripe
   const stripe = await loadStripe(c.config.publishableKey)
   if (!stripe) throw new Error('Failed to load stripe')
-  const createTokenUrl = c.config.actions?.createToken
-  if (!createTokenUrl) throw new Error('Missing Stripe createToken action URL')
+  const createTokenUrl = c.config.createToken
 
   function getAppearance(): Appearance {
     const style = getComputedStyle(document.documentElement)

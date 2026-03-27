@@ -3,9 +3,7 @@ import type { Config as HtmlConfig } from './types.js'
 
 export interface ChallengeRequest extends Record<string, unknown> {}
 
-export interface Config extends Record<string, unknown>, HtmlConfig {
-  actions?: Record<string, string> | undefined
-}
+export interface Config extends Record<string, unknown>, HtmlConfig {}
 
 export type SetEvent<state extends object> = {
   [name in keyof state]: {

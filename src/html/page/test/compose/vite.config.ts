@@ -214,14 +214,12 @@ function devCompose(options: {
             ...entry.config,
             ...(entry.method.name === 'stripe'
               ? {
-                  actions: {
-                    createToken: supportRequestUrl({
-                      kind: support.action,
-                      method: key,
-                      name: 'createToken',
-                      url: `${supportPlaceholderOrigin}${req.url ?? '/'}`,
-                    }),
-                  },
+                  createToken: supportRequestUrl({
+                    kind: support.action,
+                    method: key,
+                    name: 'createToken',
+                    url: `${supportPlaceholderOrigin}${req.url ?? '/'}`,
+                  }),
                 }
               : {}),
           }
