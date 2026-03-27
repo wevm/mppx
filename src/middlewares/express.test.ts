@@ -22,14 +22,19 @@ function createServer(app: express.Express) {
 }
 
 const secretKey = 'test-secret-key'
+const paymentModes = [
+  { feePayer: false, name: 'direct' },
+  { feePayer: true, name: 'fee payer' },
+] as const
 
-describe('charge', () => {
+function createChargeHarness(feePayer: boolean) {
   const mppx = Mppx.create({
     methods: [
       tempo_server({
         getClient: () => client,
         currency: asset,
         account: accounts[0],
+        ...(feePayer ? { feePayer: true } : {}),
       }),
     ],
     secretKey,
@@ -45,44 +50,84 @@ describe('charge', () => {
     ],
   })
 
-  test('returns 402 when no credential', async () => {
-    const app = express()
-    app.get('/', mppx.charge({ amount: '1' }), (_req, res) => {
-      res.json({ fortune: 'You will be rich' })
-    })
+  return { fetch, mppx }
+}
 
-    const server = await createServer(app)
-    const response = await globalThis.fetch(server.url)
-    expect(response.status).toBe(402)
-    expect(response.headers.get('WWW-Authenticate')).toContain('Payment')
-
-    server.close()
+function createCoreChargeHarness(feePayer: boolean) {
+  const mppx = Mppx_server.create({
+    methods: [
+      tempo_server({
+        getClient: () => client,
+        currency: asset,
+        account: accounts[0],
+        ...(feePayer ? { feePayer: true } : {}),
+      }),
+    ],
+    secretKey,
   })
 
-  test('returns 200 with receipt on valid payment', async () => {
-    const app = express()
-    app.get('/', mppx.charge({ amount: '1' }), (_req, res) => {
-      res.json({ fortune: 'You will be rich' })
-    })
-
-    const server = await createServer(app)
-    const response = await fetch(server.url)
-    expect(response.status).toBe(200)
-
-    const body = await response.json()
-    expect(body).toEqual({ fortune: 'You will be rich' })
-
-    const receiptHeader = response.headers.get('Payment-Receipt')
-    expect(receiptHeader).toBeTruthy()
-
-    const receipt = Receipt.fromResponse(response)
-    expect(receipt.status).toBe('success')
-    expect(receipt.method).toBe('tempo')
-
-    server.close()
+  const { fetch } = Mppx_client.create({
+    polyfill: false,
+    methods: [
+      tempo_client({
+        account: accounts[1],
+        getClient: () => client,
+      }),
+    ],
   })
+
+  return { fetch, mppx }
+}
+
+describe('charge', () => {
+  for (const mode of paymentModes) {
+    describe(mode.name, () => {
+      test('returns 402 when no credential', async () => {
+        const { mppx } = createChargeHarness(mode.feePayer)
+
+        const app = express()
+        app.get('/', mppx.charge({ amount: '1' }), (_req, res) => {
+          res.json({ fortune: 'You will be rich' })
+        })
+
+        const server = await createServer(app)
+        const response = await globalThis.fetch(server.url)
+        expect(response.status).toBe(402)
+        expect(response.headers.get('WWW-Authenticate')).toContain('Payment')
+
+        server.close()
+      })
+
+      test('returns 200 with receipt on valid payment', async () => {
+        const { fetch, mppx } = createChargeHarness(mode.feePayer)
+
+        const app = express()
+        app.get('/', mppx.charge({ amount: '1' }), (_req, res) => {
+          res.json({ fortune: 'You will be rich' })
+        })
+
+        const server = await createServer(app)
+        const response = await fetch(server.url)
+        expect(response.status).toBe(200)
+
+        const body = await response.json()
+        expect(body).toEqual({ fortune: 'You will be rich' })
+
+        const receiptHeader = response.headers.get('Payment-Receipt')
+        expect(receiptHeader).toBeTruthy()
+
+        const receipt = Receipt.fromResponse(response)
+        expect(receipt.status).toBe('success')
+        expect(receipt.method).toBe('tempo')
+
+        server.close()
+      })
+    })
+  }
 
   test('serves /openapi.json from a handler-derived route config', async () => {
+    const { mppx } = createChargeHarness(false)
+
     const app = express()
     const pay = mppx.charge({ amount: '1' })
     app.get('/', pay, (_req, res) => {
@@ -114,13 +159,7 @@ describe('charge', () => {
 describe('session', () => {
   let escrowContract: Address
 
-  beforeAll(async () => {
-    escrowContract = await deployEscrow()
-    await fundAccount({ address: accounts[2].address, token: Addresses.pathUsd })
-    await fundAccount({ address: accounts[2].address, token: asset })
-  })
-
-  test('returns 402 when no credential', async () => {
+  function createSessionHarness(feePayer: boolean) {
     const mppx = Mppx.create({
       methods: [
         tempo_server.session({
@@ -128,34 +167,8 @@ describe('session', () => {
           account: accounts[0],
           currency: asset,
           escrowContract,
-        }),
-      ],
-      secretKey,
-    })
-
-    const app = express()
-    app.get('/', mppx.session({ amount: '1', unitType: 'token' }), (_req, res) => {
-      res.json({ data: 'streamed' })
-    })
-
-    const server = await createServer(app)
-    const response = await globalThis.fetch(server.url)
-    expect(response.status).toBe(402)
-    expect(response.headers.get('WWW-Authenticate')).toContain('Payment')
-
-    server.close()
-  })
-
-  test('returns 200 with receipt on valid payment', async () => {
-    const mppx = Mppx.create({
-      methods: [
-        tempo_server.session({
-          getClient: () => client,
-          account: accounts[0],
-          currency: asset,
-          escrowContract,
-          feePayer: true,
-        }),
+          ...(feePayer ? { feePayer: accounts[1] } : {}),
+        } as any),
       ],
       secretKey,
     })
@@ -171,78 +184,107 @@ describe('session', () => {
       ],
     })
 
-    const app = express()
-    app.get('/', mppx.session({ amount: '1', unitType: 'token' }), (_req, res) => {
-      res.json({ data: 'streamed' })
-    })
+    return { fetch, mppx }
+  }
 
-    const server = await createServer(app)
-    const response = await fetch(server.url)
-    expect(response.status).toBe(200)
-
-    const body = await response.json()
-    expect(body).toEqual({ data: 'streamed' })
-
-    server.close()
+  beforeAll(async () => {
+    escrowContract = await deployEscrow()
+    await fundAccount({ address: accounts[1].address, token: Addresses.pathUsd })
+    await fundAccount({ address: accounts[1].address, token: asset })
+    await fundAccount({ address: accounts[2].address, token: Addresses.pathUsd })
+    await fundAccount({ address: accounts[2].address, token: asset })
   })
+
+  for (const mode of paymentModes) {
+    describe(mode.name, () => {
+      test('returns 402 when no credential', async () => {
+        const { mppx } = createSessionHarness(mode.feePayer)
+
+        const app = express()
+        app.get(
+          '/',
+          mppx.session({ amount: '1', currency: asset, unitType: 'token' }),
+          (_req, res) => {
+            res.json({ data: 'streamed' })
+          },
+        )
+
+        const server = await createServer(app)
+        const response = await globalThis.fetch(server.url)
+        expect(response.status).toBe(402)
+        expect(response.headers.get('WWW-Authenticate')).toContain('Payment')
+
+        server.close()
+      })
+
+      test('returns 200 with receipt on valid payment', async () => {
+        const { fetch, mppx } = createSessionHarness(mode.feePayer)
+
+        const app = express()
+        app.get(
+          '/',
+          mppx.session({ amount: '1', currency: asset, unitType: 'token' }),
+          (_req, res) => {
+            res.json({ data: 'streamed' })
+          },
+        )
+
+        const server = await createServer(app)
+        const response = await fetch(server.url)
+        expect(response.status).toBe(200)
+
+        const body = await response.json()
+        expect(body).toEqual({ data: 'streamed' })
+
+        server.close()
+      })
+    })
+  }
 })
 
 describe('payment', () => {
-  const mppx = Mppx_server.create({
-    methods: [
-      tempo_server({
-        getClient: () => client,
-        currency: asset,
-        account: accounts[0],
-      }),
-    ],
-    secretKey,
-  })
+  for (const mode of paymentModes) {
+    describe(mode.name, () => {
+      test('returns 402 when no credential', async () => {
+        const { mppx } = createCoreChargeHarness(mode.feePayer)
 
-  const { fetch } = Mppx_client.create({
-    polyfill: false,
-    methods: [
-      tempo_client({
-        account: accounts[1],
-        getClient: () => client,
-      }),
-    ],
-  })
+        const app = express()
+        app.get('/', payment(mppx.charge, { amount: '1' }), (_req, res) => {
+          res.json({ fortune: 'You will be rich' })
+        })
 
-  test('returns 402 when no credential', async () => {
-    const app = express()
-    app.get('/', payment(mppx.charge, { amount: '1' }), (_req, res) => {
-      res.json({ fortune: 'You will be rich' })
+        const server = await createServer(app)
+        const response = await globalThis.fetch(server.url)
+        expect(response.status).toBe(402)
+        expect(response.headers.get('WWW-Authenticate')).toContain('Payment')
+
+        server.close()
+      })
+
+      test('returns 200 with receipt on valid payment', async () => {
+        const { fetch, mppx } = createCoreChargeHarness(mode.feePayer)
+
+        const app = express()
+        app.get('/', payment(mppx.charge, { amount: '1' }), (_req, res) => {
+          res.json({ fortune: 'You will be rich' })
+        })
+
+        const server = await createServer(app)
+        const response = await fetch(server.url)
+        expect(response.status).toBe(200)
+
+        const body = await response.json()
+        expect(body).toEqual({ fortune: 'You will be rich' })
+
+        const receiptHeader = response.headers.get('Payment-Receipt')
+        expect(receiptHeader).toBeTruthy()
+
+        const receipt = Receipt.fromResponse(response)
+        expect(receipt.status).toBe('success')
+        expect(receipt.method).toBe('tempo')
+
+        server.close()
+      })
     })
-
-    const server = await createServer(app)
-    const response = await globalThis.fetch(server.url)
-    expect(response.status).toBe(402)
-    expect(response.headers.get('WWW-Authenticate')).toContain('Payment')
-
-    server.close()
-  })
-
-  test('returns 200 with receipt on valid payment', async () => {
-    const app = express()
-    app.get('/', payment(mppx.charge, { amount: '1' }), (_req, res) => {
-      res.json({ fortune: 'You will be rich' })
-    })
-
-    const server = await createServer(app)
-    const response = await fetch(server.url)
-    expect(response.status).toBe(200)
-
-    const body = await response.json()
-    expect(body).toEqual({ fortune: 'You will be rich' })
-
-    const receiptHeader = response.headers.get('Payment-Receipt')
-    expect(receiptHeader).toBeTruthy()
-
-    const receipt = Receipt.fromResponse(response)
-    expect(receipt.status).toBe('success')
-    expect(receipt.method).toBe('tempo')
-
-    server.close()
-  })
+  }
 })
