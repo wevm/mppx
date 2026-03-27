@@ -14,6 +14,7 @@ import {
   type Address,
   type Hex,
   parseUnits,
+  zeroAddress,
   type Account as viem_Account,
   type Client as viem_Client,
 } from 'viem'
@@ -462,7 +463,7 @@ async function verifyAndAcceptVoucher(parameters: {
   // finalized=false but deposit=0. Without this guard the voucher
   // check below would return a 402 (AmountExceedsDepositError) instead
   // of the correct 410 (ChannelClosedError).
-  if (onChain.deposit === 0n && onChain.payer !== '0x0000000000000000000000000000000000000000') {
+  if (onChain.deposit === 0n && onChain.payer !== zeroAddress) {
     throw new ChannelClosedError({ reason: 'channel deposit is zero (settled)' })
   }
 
