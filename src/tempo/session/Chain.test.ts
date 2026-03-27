@@ -730,8 +730,7 @@ describe.runIf(isLocalnet)('on-chain', () => {
       expect(channel.finalized).toBe(false)
     })
 
-    // TODO: add on-chain test with distinct feePayer != account once localnet
-    // supports fee-sponsored settle (currently msg.sender resolves to feePayer).
+    test.todo('settles with distinct feePayer != account (fee-sponsored settle)')
 
     test('settles with explicit account (no fee payer)', async () => {
       const salt = nextSalt()
@@ -764,8 +763,7 @@ describe.runIf(isLocalnet)('on-chain', () => {
           cumulativeAmount: settleAmount,
           signature,
         },
-        undefined,
-        accounts[0],
+        { account: accounts[0] },
       )
 
       expect(txHash).toBeDefined()
@@ -826,8 +824,7 @@ describe.runIf(isLocalnet)('on-chain', () => {
       expect(channel.finalized).toBe(true)
     })
 
-    // TODO: add on-chain test with distinct feePayer != account once localnet
-    // supports fee-sponsored close (currently msg.sender resolves to feePayer).
+    test.todo('closes with distinct feePayer != account (fee-sponsored close)')
 
     test('closes with explicit account (no fee payer)', async () => {
       const salt = nextSalt()
@@ -860,7 +857,7 @@ describe.runIf(isLocalnet)('on-chain', () => {
           cumulativeAmount: closeAmount,
           signature,
         },
-        accounts[0],
+        { account: accounts[0] },
       )
 
       expect(txHash).toBeDefined()

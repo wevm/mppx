@@ -343,9 +343,10 @@ export async function settle(
   channelId: Hex,
   options?: {
     escrowContract?: Address | undefined
-    feePayer?: viem_Account | undefined
-    account?: viem_Account | undefined
-  },
+  } & (
+    | { feePayer: viem_Account; account: viem_Account }
+    | { feePayer?: undefined; account?: viem_Account | undefined }
+  ),
 ): Promise<Hex> {
   const channel = await store.getChannel(channelId)
   if (!channel) throw new ChannelNotFoundError({ reason: 'channel not found' })
@@ -358,13 +359,11 @@ export async function settle(
   if (!resolvedEscrow) throw new Error(`No escrow contract for chainId ${chainId}.`)
 
   const settledAmount = channel.highestVoucher.cumulativeAmount
-  const txHash = await settleOnChain(
-    client,
-    resolvedEscrow,
-    channel.highestVoucher,
-    options?.feePayer,
-    options?.account,
-  )
+  const txHash = await settleOnChain(client, resolvedEscrow, channel.highestVoucher, {
+    ...(options?.feePayer && options?.account
+      ? { feePayer: options.feePayer, account: options.account }
+      : { account: options?.account }),
+  })
 
   await store.updateChannel(channelId, (current) => {
     if (!current) return null
@@ -857,13 +856,9 @@ async function handleClose(
     throw new InvalidSignatureError({ reason: 'invalid voucher signature' })
   }
 
-  const txHash = await closeOnChain(
-    client,
-    methodDetails.escrowContract,
-    voucher,
-    account,
-    feePayer,
-  )
+  const txHash = await closeOnChain(client, methodDetails.escrowContract, voucher, {
+    ...(feePayer && account ? { feePayer, account } : { account }),
+  })
 
   const updated = await store.updateChannel(payload.channelId, (current) => {
     if (!current) return null
