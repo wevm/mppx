@@ -11,7 +11,12 @@ import * as Credential from '../Credential.js'
 import * as Expires from '../Expires.js'
 import type * as Method from '../Method.js'
 import type * as z from '../zod.js'
-import { elements, support, supportRequestUrl } from './internal/constants.js'
+import {
+  elements,
+  support,
+  supportPlaceholderOrigin,
+  supportRequestUrl,
+} from './internal/constants.js'
 import { renderDevScripts } from './internal/dev.js'
 import { renderHead } from './internal/head.js'
 import type * as Html from './internal/types.js'
@@ -69,7 +74,7 @@ export default function mppx<const method extends Method.Method>(
 
       // oxlint-disable-next-line no-async-endpoint-handlers
       server.middlewares.use(async (req, res, next) => {
-        const requestUrl = new URL(req.url ?? '/', 'http://localhost')
+        const requestUrl = new URL(req.url ?? '/', supportPlaceholderOrigin)
         if (requestUrl.searchParams.get(support.kind) === support.serviceWorker) {
           const sw = await fs.readFile(path.resolve(pageDir, 'src/serviceWorker.ts'), 'utf-8')
           res.setHeader('Content-Type', 'application/javascript')
@@ -122,7 +127,7 @@ export default function mppx<const method extends Method.Method>(
           support: {
             serviceWorkerUrl: supportRequestUrl({
               kind: support.serviceWorker,
-              url: `http://localhost${req.url ?? '/'}`,
+              url: `${supportPlaceholderOrigin}${req.url ?? '/'}`,
             }),
           },
         }).replace(/</g, '\\u003c')

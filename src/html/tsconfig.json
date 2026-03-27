@@ -5,13 +5,11 @@
     "vite.ts",
     "*/vite.config.ts",
     "*/playwright.config.ts",
-    "page/test/playwright.config.ts",
+    "page/test/**/*.ts",
     "test/*.ts",
     "test/env.d.ts",
-    "test/form-method/src/*.ts",
     "tempo/src/*.test.ts",
     "stripe/src/*.test.ts",
-    "test/*.test.ts",
-    "page/test/*.test.ts"
+    "test/*.test.ts"
   ]
 }

@@ -33,7 +33,7 @@ export function renderComposedMethodContent(methods: readonly ComposedShellEntry
       const tabId = tabIdOf(method)
       const isSelected = index === 0
       const className = isSelected ? classNames.tabActive : classNames.tab
-      return `<button id="${tabId}" class="${className}" role="tab" aria-selected="${isSelected}" aria-controls="${panelId}" tabindex="${isSelected ? 0 : -1}" data-method="${key}">${method.name}</button>`
+      return `<button type="button" id="${tabId}" class="${className}" role="tab" aria-selected="${isSelected}" aria-controls="${panelId}" tabindex="${isSelected ? 0 : -1}" data-method="${key}">${method.name}</button>`
     })
     .join('\n      ')
 
@@ -43,7 +43,7 @@ export function renderComposedMethodContent(methods: readonly ComposedShellEntry
       const panelId = panelIdOf(method)
       const tabId = tabIdOf(method)
       const hidden = index === 0 ? '' : ' hidden'
-      return `<div id="${panelId}" class="${classNames.tabPanel}" role="tabpanel" aria-labelledby="${tabId}" data-method="${key}"${hidden}>\n      ${method.body}\n    </div>`
+      return `<div id="${panelId}" class="${classNames.tabPanel}" role="tabpanel" tabindex="0" aria-labelledby="${tabId}" data-method="${key}"${hidden}>\n      ${method.body}\n    </div>`
     })
     .join('\n    ')
 

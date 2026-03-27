@@ -10,7 +10,7 @@
     "env.d.ts",
     "internal/env.d.ts",
     "internal/themeSwitcher.ts",
-    "internal/logos/index.ts",
+    "internal/logos.ts",
     "index.ts",
     "mount.ts",
     "tempo/src/**/*.ts",

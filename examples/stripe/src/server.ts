@@ -21,6 +21,9 @@ const mppx = Mppx.create({
   ],
 })
 
+// Handles creating an SPT and charging a customer.
+// In production examples, this would be a DIFFERENT server than
+// the one that handles the HTTP 402 flow.
 export async function handler(request: Request): Promise<Response | null> {
   const url = new URL(request.url)
 
@@ -35,6 +38,13 @@ export async function handler(request: Request): Promise<Response | null> {
         metadata?: Record<string, string>
       }
 
+    if (metadata?.externalId) {
+      return Response.json(
+        { error: 'metadata.externalId is reserved; use credential externalId instead' },
+        { status: 400 },
+      )
+    }
+
     const body = new URLSearchParams({
       payment_method: paymentMethod,
       'usage_limits[currency]': currency,
@@ -48,6 +58,7 @@ export async function handler(request: Request): Promise<Response | null> {
       }
     }
 
+    // Test-only endpoint; production SPT flow uses the agent-side issued_tokens API.
     const createSpt = async (bodyParams: URLSearchParams) =>
       fetch('https://api.stripe.com/v1/test_helpers/shared_payment/granted_tokens', {
         method: 'POST',

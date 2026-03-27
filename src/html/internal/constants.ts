@@ -43,8 +43,11 @@ export const support = {
   serviceWorker: 'sw',
 } as const
 
+/** Placeholder origin used only to resolve relative URLs before stripping the origin. */
+export const supportPlaceholderOrigin = 'http://example.invalid'
+
 function cloneUrl(url: URL | string): URL {
-  return typeof url === 'string' ? new URL(url, 'http://localhost') : new URL(url)
+  return typeof url === 'string' ? new URL(url, supportPlaceholderOrigin) : new URL(url)
 }
 
 export function supportRequestUrl(parameters: {

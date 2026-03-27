@@ -1,8 +1,8 @@
 import { defineConfig } from 'vite'
 
 import * as Methods from '../../stripe/Methods.js'
-import { createTokenResponse } from '../../stripe/server/Charge.js'
-import { support, supportRequestUrl } from '../internal/constants.js'
+import { createTokenResponse } from '../../stripe/server/internal/sharedPaymentToken.js'
+import { support, supportPlaceholderOrigin, supportRequestUrl } from '../internal/constants.js'
 import mppx from '../vite.js'
 
 export default defineConfig({
@@ -12,7 +12,7 @@ export default defineConfig({
       configureServer(server) {
         // oxlint-disable-next-line no-async-endpoint-handlers
         server.middlewares.use(async (req, res, next) => {
-          const url = new URL(req.url ?? '/', 'http://localhost')
+          const url = new URL(req.url ?? '/', supportPlaceholderOrigin)
           if (
             url.searchParams.get(support.kind) !== support.action ||
             url.searchParams.get(support.actionName) !== 'createToken'
@@ -30,7 +30,7 @@ export default defineConfig({
           const chunks: Buffer[] = []
           for await (const chunk of req) chunks.push(chunk as Buffer)
           const response = await createTokenResponse({
-            request: new Request(`http://localhost${req.url ?? '/'}`, {
+            request: new Request(`${supportPlaceholderOrigin}${req.url ?? '/'}`, {
               body: Buffer.concat(chunks),
               method: req.method ?? 'POST',
             }),

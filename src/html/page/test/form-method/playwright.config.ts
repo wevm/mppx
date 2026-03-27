@@ -2,10 +2,10 @@ import * as path from 'node:path'
 
 import { defineConfig } from '@playwright/test'
 
-const root = path.resolve(import.meta.dirname, '../../..')
+const root = path.resolve(import.meta.dirname, '../..')
 
 export default defineConfig({
-  globalSetup: './tempo.setup.global.ts',
+  globalSetup: '../../../test/tempo.setup.global.ts',
   testDir: '.',
   testMatch: 'form.test.ts',
   timeout: 60_000,
@@ -15,7 +15,7 @@ export default defineConfig({
   },
   webServer: {
     command:
-      'pnpm exec vp dev src/html/test/form-method --config src/html/test/form-method/vite.config.ts --host 127.0.0.1 --port 34073 --strictPort',
+      'pnpm exec vp dev test/form-method --config test/form-method/vite.config.ts --host 127.0.0.1 --port 34073 --strictPort',
     cwd: root,
     reuseExistingServer: !process.env.CI,
     url: 'http://127.0.0.1:34073/?__mppx=sw',

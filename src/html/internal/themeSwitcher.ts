@@ -1,5 +1,5 @@
 import * as Html from './constants.js'
-import { cloudflare, nyt, stripe, vercel } from './logos/index.js'
+import { cloudflare, nyt, stripe, vercel } from './logos.js'
 
 type ThemeColors = {
   '--mppx-accent': string

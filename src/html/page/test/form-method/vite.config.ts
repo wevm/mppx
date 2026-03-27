@@ -1,8 +1,8 @@
 import { defineConfig } from 'vite'
 
-import * as Method from '../../../Method.js'
-import * as z from '../../../zod.js'
-import mppx from '../../vite.js'
+import * as Method from '../../../../Method.js'
+import * as z from '../../../../zod.js'
+import mppx from '../../../vite.js'
 
 const testFormMethod = Method.from({
   intent: 'charge',

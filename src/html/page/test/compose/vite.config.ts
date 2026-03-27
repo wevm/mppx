@@ -5,25 +5,31 @@ import { Json } from 'ox'
 import { tempoModerato } from 'viem/chains'
 import { type Plugin, defineConfig } from 'vite'
 
-import * as Challenge from '../../Challenge.js'
-import * as Credential from '../../Credential.js'
-import * as Expires from '../../Expires.js'
-import type * as Method from '../../Method.js'
-import * as StripeMethods from '../../stripe/Methods.js'
-import { createTokenResponse } from '../../stripe/server/Charge.js'
-import * as TempoMethods from '../../tempo/Methods.js'
-import type * as z from '../../zod.js'
+import * as Challenge from '../../../../Challenge.js'
+import * as Credential from '../../../../Credential.js'
+import * as Expires from '../../../../Expires.js'
+import type * as Method from '../../../../Method.js'
+import * as StripeMethods from '../../../../stripe/Methods.js'
+import { createTokenResponse } from '../../../../stripe/server/internal/sharedPaymentToken.js'
+import * as TempoMethods from '../../../../tempo/Methods.js'
+import type * as z from '../../../../zod.js'
 import {
   keyOf as composedKeyOf,
   renderComposedMethodContent,
   rootIdOf as composedRootIdOf,
-} from '../internal/compose.js'
-import { classNames, elements, support, supportRequestUrl } from '../internal/constants.js'
-import { renderDevScripts } from '../internal/dev.js'
-import { renderHead } from '../internal/head.js'
-import type * as Html from '../internal/types.js'
+} from '../../../internal/compose.js'
+import {
+  classNames,
+  elements,
+  support,
+  supportPlaceholderOrigin,
+  supportRequestUrl,
+} from '../../../internal/constants.js'
+import { renderDevScripts } from '../../../internal/dev.js'
+import { renderHead } from '../../../internal/head.js'
+import type * as Html from '../../../internal/types.js'
 
-const pageDir = import.meta.dirname
+const pageDir = path.resolve(import.meta.dirname, '../..')
 
 export default defineConfig({
   plugins: [
@@ -32,7 +38,7 @@ export default defineConfig({
       configureServer(server) {
         // oxlint-disable-next-line no-async-endpoint-handlers
         server.middlewares.use(async (req, res, next) => {
-          const url = new URL(req.url ?? '/', 'http://localhost')
+          const url = new URL(req.url ?? '/', supportPlaceholderOrigin)
           if (
             url.searchParams.get(support.kind) !== support.action ||
             url.searchParams.get(support.actionName) !== 'createToken'
@@ -50,7 +56,7 @@ export default defineConfig({
           const chunks: Buffer[] = []
           for await (const chunk of req) chunks.push(chunk as Buffer)
           const response = await createTokenResponse({
-            request: new Request(`http://localhost${req.url ?? '/'}`, {
+            request: new Request(`${supportPlaceholderOrigin}${req.url ?? '/'}`, {
               body: Buffer.concat(chunks),
               method: req.method ?? 'POST',
             }),
@@ -147,7 +153,7 @@ function devCompose(options: {
     configureServer(server) {
       // oxlint-disable-next-line no-async-endpoint-handlers
       server.middlewares.use(async (req, res, next) => {
-        const requestUrl = new URL(req.url ?? '/', 'http://localhost')
+        const requestUrl = new URL(req.url ?? '/', supportPlaceholderOrigin)
         if (requestUrl.searchParams.get(support.kind) === support.serviceWorker) {
           const sw = await fs.readFile(path.resolve(pageDir, 'src/serviceWorker.ts'), 'utf-8')
           res.setHeader('Content-Type', 'application/javascript')
@@ -162,7 +168,7 @@ function devCompose(options: {
         if (pathname2 !== '/' || !req.headers.accept?.includes('text/html')) return next()
 
         try {
-          const request = (await import('../../server/Request.js')).fromNodeListener(req, res)
+          const request = (await import('../../../../server/Request.js')).fromNodeListener(req, res)
           const credential = Credential.fromRequest(request)
           if (Challenge.verify(credential.challenge, { secretKey })) {
             res.setHeader('Content-Type', 'text/html')
@@ -210,7 +216,7 @@ function devCompose(options: {
                       kind: support.action,
                       method: key,
                       name: 'createToken',
-                      url: `http://localhost${req.url ?? '/'}`,
+                      url: `${supportPlaceholderOrigin}${req.url ?? '/'}`,
                     }),
                   },
                 }
@@ -255,7 +261,7 @@ function devCompose(options: {
           support: {
             serviceWorkerUrl: supportRequestUrl({
               kind: support.serviceWorker,
-              url: `http://localhost${req.url ?? '/'}`,
+              url: `${supportPlaceholderOrigin}${req.url ?? '/'}`,
             }),
           },
         }).replace(/</g, '\\u003c')

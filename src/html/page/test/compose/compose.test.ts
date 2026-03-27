@@ -1,6 +1,6 @@
 import { expect } from '@playwright/test'
 
-import { test } from '../../test/playwright-utils.js'
+import { test } from '../../../test/playwright-utils.js'
 
 test('renders accessible tabs for both methods', async ({ page }) => {
   const response = await page.goto('/')
@@ -18,10 +18,14 @@ test('renders accessible tabs for both methods', async ({ page }) => {
   await expect(tabs).toHaveCount(2)
   await expect(tabs.nth(0)).toHaveText('stripe')
   await expect(tabs.nth(1)).toHaveText('tempo')
+  await expect(tabs.nth(0)).toHaveAttribute('type', 'button')
+  await expect(tabs.nth(1)).toHaveAttribute('type', 'button')
 
   // Panels with ARIA attributes
   const panels = page.locator('[role="tabpanel"]')
   await expect(panels).toHaveCount(2)
+  await expect(panels.nth(0)).toHaveAttribute('tabindex', '0')
+  await expect(panels.nth(1)).toHaveAttribute('tabindex', '0')
 })
 
 test('first tab is active by default with correct ARIA state', async ({ page }) => {
