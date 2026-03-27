@@ -69,8 +69,9 @@ export function charge<const parameters extends charge.Parameters>(parameters: p
       ? {
           html: {
             actions: {
-              createToken: (request: globalThis.Request) =>
-                createTokenResponse({ request, client, secretKey }),
+              createToken(request: globalThis.Request) {
+                return createTokenResponse({ request, client, secretKey })
+              },
             },
             content: html,
             config: {

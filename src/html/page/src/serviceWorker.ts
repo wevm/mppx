@@ -18,6 +18,7 @@ let pending: { credential: string; url: string } | null = null
 // Receive a credential + target URL from the payment page via `postMessage`.
 serviceWorker.addEventListener('message', (event) => {
   pending = event.data
+  event.ports[0]?.postMessage({ ok: true })
 })
 
 // Intercept the matching fetch and inject the `Authorization` header with the

@@ -225,6 +225,38 @@ function activateServiceWorker(reg: ServiceWorkerRegistration): Promise<void> {
   })
 }
 
+function waitForServiceWorkerController(): Promise<ServiceWorker> {
+  const controller = navigator.serviceWorker.controller
+  if (controller) return Promise.resolve(controller)
+
+  return new Promise((resolve) => {
+    const onControllerChange = () => {
+      const nextController = navigator.serviceWorker.controller
+      if (!nextController) return
+      navigator.serviceWorker.removeEventListener('controllerchange', onControllerChange)
+      resolve(nextController)
+    }
+
+    navigator.serviceWorker.addEventListener('controllerchange', onControllerChange)
+    onControllerChange()
+  })
+}
+
+function sendCredentialToServiceWorker(parameters: {
+  controller: ServiceWorker
+  credential: string
+  url: string
+}): Promise<void> {
+  const { controller, credential, url } = parameters
+
+  return new Promise((resolve, reject) => {
+    const channel = new MessageChannel()
+    channel.port1.onmessage = () => resolve()
+    channel.port1.onmessageerror = () => reject(new Error('Failed to hand off payment credential'))
+    controller.postMessage({ credential, url }, [channel.port2])
+  })
+}
+
 addEventListener('mppx:complete', (event: CustomEvent<string>) => {
   const statusElement = document.getElementById('status')
   const authorization = event.detail
@@ -236,16 +268,16 @@ addEventListener('mppx:complete', (event: CustomEvent<string>) => {
   navigator.serviceWorker
     .register(data.support.serviceWorkerUrl)
     .then(activateServiceWorker)
+    .then(() => waitForServiceWorkerController())
+    .then((controller) =>
+      sendCredentialToServiceWorker({
+        controller,
+        credential: authorization,
+        url: window.location.href,
+      }),
+    )
     .then(() => {
-      function send() {
-        navigator.serviceWorker.controller?.postMessage({
-          credential: authorization,
-          url: window.location.href,
-        })
-        window.location.reload()
-      }
-      if (navigator.serviceWorker.controller) send()
-      else navigator.serviceWorker.addEventListener('controllerchange', send)
+      window.location.reload()
     })
     .catch(() => {
       fetch(window.location.href, {
