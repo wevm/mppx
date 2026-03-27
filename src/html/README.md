@@ -18,6 +18,8 @@ This directory has three public entrypoints:
 
 ## Server Usage
 
+HTML rendering is configured per server method via its `html` option. `Transport.http()` always uses the built-in page shell when a method provides HTML content.
+
 ```ts
 import { Mppx, tempo } from 'mppx/server'
 
@@ -71,6 +73,8 @@ Custom methods attach HTML through the `html` namespace on `Method.toServer(...)
 
 ```ts
 import { Method } from 'mppx'
+import * as Methods from './Methods.js'
+import { html } from './html.gen.js'
 
 const charge = Method.toServer(Methods.charge, {
   html: {
@@ -242,7 +246,7 @@ const tokenUrl = mppx.config.actions?.createToken
 ```ts
 import { defineConfig } from 'vite'
 
-import * as Methods from 'mppx/tempo'
+import { Methods } from 'mppx/tempo'
 import mppx from 'mppx/html/vite'
 
 export default defineConfig({
@@ -273,6 +277,7 @@ export default defineConfig({
 Plugin options:
 
 - `method` — the method schema used by the page.
+- `entry` — optional entry basename. Defaults to `method.intent`, but you can point to files like `src/form.ts` and `src/form.html` with `entry: 'form'`.
 - `output` — file path for the generated `html.gen.ts` module.
 - `challenge` — dev-only challenge fixture. `challenge.request` is required in dev.
 - `config` — method config exposed to the browser as `mppx.config`.
@@ -284,12 +289,12 @@ Plugin options:
 
 Expected app files:
 
-- `src/<intent>.ts` — optional browser entry, for example `src/charge.ts`.
-- `src/<intent>.html` — optional HTML fragment inserted before the module script.
+- `src/<entry>.ts` — optional browser entry, for example `src/charge.ts` or `src/form.ts`.
+- `src/<entry>.html` — optional HTML fragment inserted before the module script.
 
-At least one of `src/<intent>.ts` or `src/<intent>.html` is required. You only need both when you want both markup and browser logic.
+At least one of `src/<entry>.ts` or `src/<entry>.html` is required. You only need both when you want both markup and browser logic. When `entry` is omitted, `<entry>` defaults to `method.intent`.
 
-Method-specific CSS can live in a normal stylesheet file and be imported from `src/<intent>.ts`:
+Method-specific CSS can live in a normal stylesheet file and be imported from `src/<entry>.ts`:
 
 ```ts
 import './charge.css'

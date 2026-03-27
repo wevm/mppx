@@ -620,7 +620,7 @@ export function compose(
   return async (input: Request) => {
     const supportRequest = Html.parseSupportRequest(input)
     if (supportRequest) {
-      if (supportRequest.kind === 'sw') {
+      if (supportRequest.kind === 'serviceWorker') {
         const htmlHandler = handlers.find(
           (handler) => (handler as ConfiguredHandler)._internal?._html?.content,
         )

@@ -111,9 +111,7 @@ export function from<
  * - Issues challenges via `WWW-Authenticate` header with 402 status
  * - Attaches receipts via `Payment-Receipt` header
  */
-export function http(options?: http.Options): Http {
-  const renderHtml = typeof options?.html === 'function' ? options.html : Html.render
-
+export function http(): Http {
   return from<Request, Response>({
     name: 'http',
 
@@ -132,9 +130,9 @@ export function http(options?: http.Options): Http {
       }
 
       const body = (() => {
-        if (renderHtml && html?.content && input.headers.get('Accept')?.includes('text/html')) {
+        if (html?.content && input.headers.get('Accept')?.includes('text/html')) {
           headers['Content-Type'] = 'text/html; charset=utf-8'
-          return renderHtml({
+          return Html.render({
             actions: html.actions,
             challenge,
             content: html.content,
@@ -223,17 +221,6 @@ export function mcp() {
       }
     },
   })
-}
-
-export declare namespace http {
-  type Options = {
-    /**
-     * Custom HTML renderer for payment pages.
-     *
-     * Defaults to the built-in payment page. Pass a function to override.
-     */
-    html?: ((props: Html.Props) => string) | undefined
-  }
 }
 
 /** @internal */

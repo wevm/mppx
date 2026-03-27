@@ -8,6 +8,7 @@ describe('html vite', () => {
   test('challenge request derives from method schema', () => {
     mppx({
       method: TempoMethods.charge,
+      entry: 'form',
       output: 'dist/html.gen.ts',
       realm: 'dev.local',
       challenge: {

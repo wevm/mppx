@@ -155,12 +155,15 @@ function devCompose(options: {
       server.middlewares.use(async (req, res, next) => {
         const requestUrl = new URL(req.url ?? '/', supportPlaceholderOrigin)
         if (requestUrl.searchParams.get(support.kind) === support.serviceWorker) {
-          const sw = await fs.readFile(path.resolve(pageDir, 'src/serviceWorker.ts'), 'utf-8')
+          const serviceWorker = await fs.readFile(
+            path.resolve(pageDir, 'src/serviceWorker.ts'),
+            'utf-8',
+          )
           res.setHeader('Content-Type', 'application/javascript')
           const transformed = await server.transformRequest(
             '/@fs/' + path.resolve(pageDir, 'src/serviceWorker.ts'),
           )
-          res.end(transformed?.code ?? sw)
+          res.end(transformed?.code ?? serviceWorker)
           return
         }
 

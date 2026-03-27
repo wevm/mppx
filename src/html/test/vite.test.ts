@@ -60,6 +60,26 @@ describe('mppx/html/vite', () => {
     expect(output).toContain('.html-css-test')
     expect(output).toContain('color:red')
   })
+
+  test('build: supports custom entry basenames', async () => {
+    const root = await createFixture({
+      'src/form.html': '<div class="form-only">Form payment page</div>',
+      'src/form.ts': "import './form.css'\ndocument.documentElement.dataset.formReady = '1'\n",
+      'src/form.css': '.form-css-test{color:blue}',
+    })
+
+    await build({
+      configFile: false,
+      logLevel: 'silent',
+      plugins: [mppx({ method, entry: 'form', output: './html.gen.ts' })],
+      root,
+    })
+
+    const output = await fs.readFile(path.join(root, 'html.gen.ts'), 'utf8')
+    expect(output).toContain('Form payment page')
+    expect(output).toContain('.form-css-test')
+    expect(output).toMatch(/color:(blue|#00f)/)
+  })
 })
 
 async function createFixture(files: Record<string, string>) {

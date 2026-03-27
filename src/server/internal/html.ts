@@ -156,7 +156,7 @@ export function compose(props: {
 
 export type SupportRequest =
   | { kind: 'action'; method?: string | undefined; name: string }
-  | { kind: 'sw' }
+  | { kind: 'serviceWorker' }
 
 export function parseSupportRequest(request: globalThis.Request): SupportRequest | null {
   const url = new URL(request.url)

@@ -18,6 +18,6 @@ export default defineConfig({
       'TEMPO_CHAIN_ID=1337 pnpm exec vp dev --config test/compose/vite.config.ts --host 127.0.0.1 --port 34074 --strictPort',
     cwd: root,
     reuseExistingServer: !process.env.CI,
-    url: 'http://127.0.0.1:34074/?__mppx=sw',
+    url: 'http://127.0.0.1:34074/?__mppx=serviceWorker',
   },
 })

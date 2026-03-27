@@ -40,7 +40,7 @@ export const support = {
   action: 'action',
   actionName: 'name',
   method: 'method',
-  serviceWorker: 'sw',
+  serviceWorker: 'serviceWorker',
 } as const
 
 /** Placeholder origin used only to resolve relative URLs before stripping the origin. */
@@ -51,7 +51,7 @@ function cloneUrl(url: URL | string): URL {
 }
 
 export function supportRequestUrl(parameters: {
-  kind: 'action' | 'sw'
+  kind: 'action' | 'serviceWorker'
   name?: string | undefined
   method?: string | undefined
   url: URL | string

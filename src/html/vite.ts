@@ -25,10 +25,12 @@ const pageDir = path.resolve(import.meta.dirname, 'page')
 const emptyEntryId = '\0mppx:empty-entry'
 
 type Config<method extends Method.Method = Method.Method> = {
-  /** The method schema (e.g. Methods.charge). Used to derive entry name from method.intent. */
+  /** The method schema (e.g. Methods.charge). Used to derive the default entry name from method.intent. */
   method: method
   /** Output path for html.gen.ts, relative to Vite root. */
   output: string
+  /** Override the browser entry basename. Defaults to method.intent (e.g. `charge` -> `src/charge.ts`). */
+  entry?: string | undefined
   /** Challenge data for the dev server. Only used during `vite dev`. */
   challenge?: {
     request?: z.input<method['schema']['request']>
@@ -51,6 +53,7 @@ export default function mppx<const method extends Method.Method>(
   options: Config<method>,
 ): Plugin[] {
   const intent = options.method.intent
+  const entry = options.entry ?? intent
   const realm = options.realm ?? 'localhost'
   const secretKey = options.secretKey ?? 'mppx-dev-secret'
   const htmlConfig = options.html
@@ -76,12 +79,15 @@ export default function mppx<const method extends Method.Method>(
       server.middlewares.use(async (req, res, next) => {
         const requestUrl = new URL(req.url ?? '/', supportPlaceholderOrigin)
         if (requestUrl.searchParams.get(support.kind) === support.serviceWorker) {
-          const sw = await fs.readFile(path.resolve(pageDir, 'src/serviceWorker.ts'), 'utf-8')
+          const serviceWorker = await fs.readFile(
+            path.resolve(pageDir, 'src/serviceWorker.ts'),
+            'utf-8',
+          )
           res.setHeader('Content-Type', 'application/javascript')
           const transformed = await server.transformRequest(
             '/@fs/' + path.resolve(pageDir, 'src/serviceWorker.ts'),
           )
-          res.end(transformed?.code ?? sw)
+          res.end(transformed?.code ?? serviceWorker)
           return
         }
 
@@ -138,13 +144,13 @@ export default function mppx<const method extends Method.Method>(
           assets: `\n  <link rel="stylesheet" href="${pageStyleHref}" />`,
         })
         const page = await fs.readFile(path.resolve(pageDir, 'src/page.html'), 'utf-8')
-        const entrypoints = resolveEntrypoints(server.config.root, intent)
-        assertEntrypoints(entrypoints, intent)
+        const entrypoints = resolveEntrypoints(server.config.root, entry)
+        assertEntrypoints(entrypoints, entry)
         let methodContent = ''
         if (entrypoints.html)
           methodContent = (await fs.readFile(entrypoints.html, 'utf-8')).trimEnd()
         const methodScript = entrypoints.script
-          ? `\n  <script type="module" src="/src/${intent}.ts"></script>`
+          ? `\n  <script type="module" src="/src/${entry}.ts"></script>`
           : ''
 
         const html = page
@@ -173,14 +179,14 @@ export default function mppx<const method extends Method.Method>(
     apply: 'build',
     config(config) {
       const root = path.resolve(config.root ?? process.cwd())
-      entrypoints = resolveEntrypoints(root, intent)
-      assertEntrypoints(entrypoints, intent)
+      entrypoints = resolveEntrypoints(root, entry)
+      assertEntrypoints(entrypoints, entry)
       return {
         build: {
           outDir: 'dist',
           emptyOutDir: true,
           rolldownOptions: {
-            input: { [intent]: entrypoints.script ? `src/${intent}.ts` : emptyEntryId },
+            input: { [intent]: entrypoints.script ? `src/${entry}.ts` : emptyEntryId },
             output: {
               entryFileNames: '[name].js',
               format: 'es' as const,
@@ -200,11 +206,11 @@ export default function mppx<const method extends Method.Method>(
     },
     configResolved(config) {
       root = config.root
-      entrypoints = resolveEntrypoints(root, intent)
+      entrypoints = resolveEntrypoints(root, entry)
     },
     async closeBundle() {
       const output = path.resolve(root, options.output)
-      assertEntrypoints(entrypoints, intent)
+      assertEntrypoints(entrypoints, entry)
 
       const assetsDir = path.resolve(root, 'dist/assets')
       const chunks: string[] = []
@@ -274,9 +280,9 @@ function indent(str: string, spaces: number): string {
     .join('\n')
 }
 
-function resolveEntrypoints(root: string, intent: string) {
-  const html = path.resolve(root, `src/${intent}.html`)
-  const script = path.resolve(root, `src/${intent}.ts`)
+function resolveEntrypoints(root: string, entry: string) {
+  const html = path.resolve(root, `src/${entry}.html`)
+  const script = path.resolve(root, `src/${entry}.ts`)
   return {
     html: existsSync(html) ? html : undefined,
     script: existsSync(script) ? script : undefined,
@@ -285,8 +291,8 @@ function resolveEntrypoints(root: string, intent: string) {
 
 function assertEntrypoints(
   entrypoints: { html?: string | undefined; script?: string | undefined } | undefined,
-  intent: string,
+  entry: string,
 ): asserts entrypoints is { html?: string | undefined; script?: string | undefined } {
   if (entrypoints?.html || entrypoints?.script) return
-  throw new Error(`mppx: expected src/${intent}.ts or src/${intent}.html`)
+  throw new Error(`mppx: expected src/${entry}.ts or src/${entry}.html`)
 }

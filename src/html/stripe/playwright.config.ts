@@ -12,6 +12,6 @@ export default defineConfig({
     command: 'pnpm exec vp dev --host 127.0.0.1 --port 34071 --strictPort',
     cwd: import.meta.dirname,
     reuseExistingServer: !process.env.CI,
-    url: 'http://127.0.0.1:34071/?__mppx=sw',
+    url: 'http://127.0.0.1:34071/?__mppx=serviceWorker',
   },
 })

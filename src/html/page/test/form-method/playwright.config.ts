@@ -18,6 +18,6 @@ export default defineConfig({
       'pnpm exec vp dev test/form-method --config test/form-method/vite.config.ts --host 127.0.0.1 --port 34073 --strictPort',
     cwd: root,
     reuseExistingServer: !process.env.CI,
-    url: 'http://127.0.0.1:34073/?__mppx=sw',
+    url: 'http://127.0.0.1:34073/?__mppx=serviceWorker',
   },
 })

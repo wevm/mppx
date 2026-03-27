@@ -35,12 +35,7 @@ export default defineConfig({
           name: 'node',
           alias,
           include: ['src/**/*.test.ts'],
-          exclude: [
-            'src/**/*.browser.test.ts',
-            'src/cli/**/*.test.ts',
-            'src/html/**/*.test.ts',
-            'src/**/node_modules/**',
-          ],
+          exclude: ['src/**/*.browser.test.ts', 'src/cli/**/*.test.ts', 'src/html/**/*.test.ts'],
           typecheck: {
             include: ['src/**/*.test-d.ts'],
           },

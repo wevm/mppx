@@ -25,6 +25,7 @@ export default defineConfig({
   plugins: [
     mppx({
       method: testFormMethod,
+      entry: 'form',
       output: './html.gen.ts',
       challenge: {
         request: { amount: '1000' },
