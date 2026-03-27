@@ -72,7 +72,7 @@ export const client = createClient({
   account: accounts[0],
   chain,
   transport: http(rpcUrl),
-})
+}) as import('viem').Client<import('viem').HttpTransport, typeof chain, (typeof accounts)[0]>
 
 export async function fundAccount(parameters: { address: Hex.Hex; token: Hex.Hex }) {
   const { address, token } = parameters
