@@ -31,8 +31,6 @@ export namespace Mppx {
     const mppx = Mppx_core.create(config)
     return Mppx_internal.wrap(mppx, (intent, options) => {
       return (handler: RouteHandler) => async (request: Request) => {
-        const htmlResponse = await mppx.html(request)
-        if (htmlResponse) return htmlResponse
         const result = await intent(options)(request)
         if (result.status === 402) return result.challenge
         const response = await handler(request)
@@ -67,8 +65,6 @@ export function payment<const intent extends Mppx_internal.AnyMethodFn>(
   handler: RouteHandler,
 ): RouteHandler {
   return async (request) => {
-    const htmlResponse = await intent._htmlHandler?.(request)
-    if (htmlResponse) return htmlResponse
     const result = await intent(options)(request)
     if (result.status === 402) return result.challenge
     const response = await handler(request)

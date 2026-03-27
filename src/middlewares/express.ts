@@ -40,13 +40,6 @@ export namespace Mppx {
           method: req.method,
           headers: req.headers as Record<string, string>,
         })
-        const htmlResponse = await mppx.html(request)
-        if (htmlResponse) {
-          res.status(htmlResponse.status)
-          for (const [key, value] of htmlResponse.headers) res.setHeader(key, value)
-          res.send(await htmlResponse.text())
-          return
-        }
         const result = await intent(options)(request)
         if (result.status === 402) {
           const challenge = result.challenge as Response
@@ -96,13 +89,6 @@ export function payment<const intent extends Mppx_internal.AnyMethodFn>(
       method: req.method,
       headers: req.headers as Record<string, string>,
     })
-    const htmlResponse = await intent._htmlHandler?.(request)
-    if (htmlResponse) {
-      res.status(htmlResponse.status)
-      for (const [key, value] of htmlResponse.headers) res.setHeader(key, value)
-      res.send(await htmlResponse.text())
-      return
-    }
     const result = await intent(options)(request)
 
     if (result.status === 402) {

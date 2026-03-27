@@ -1,6 +1,12 @@
 import type { Challenge } from '../Challenge.js'
+import type * as Method from '../Method.js'
+import type * as z from '../zod.js'
 import { classNames, elements } from './internal/constants.js'
 import type * as Runtime from './internal/runtime.js'
+
+export interface ShellState {
+  amount: string
+}
 
 const browser = globalThis as typeof globalThis & {
   __mppx_active?: string | undefined
@@ -25,11 +31,11 @@ const browser = globalThis as typeof globalThis & {
  * ```
  */
 export function mount<
-  method extends import('../Method.js').Method = import('../Method.js').Method,
+  method extends Method.Method = Method.Method,
   config extends Record<string, unknown> = Runtime.Config,
 >(
   setup: (
-    context: mount.Context<import('../zod.js').output<method['schema']['request']>, config>,
+    context: mount.Context<z.output<method['schema']['request']>, config>,
   ) => void | Promise<void>,
 ): void {
   const rootId = browser.__mppx_root ?? elements.method
@@ -45,9 +51,9 @@ export function mount<
     config: browser.mppx.config,
     dispatch: (payload, source) => browser.mppx.dispatch(payload, source),
     serializeCredential: (payload, source) => browser.mppx.serializeCredential(payload, source),
-    setAmount(formatted: string) {
+    set<name extends keyof ShellState>(name: name, value: ShellState[name]) {
       const key = methodKey ?? Object.keys(browser.mppx.challenges ?? {})[0] ?? 'unknown'
-      dispatchEvent(new CustomEvent('mppx:amount', { detail: { key, amount: formatted } }))
+      dispatchEvent(new CustomEvent('mppx:set', { detail: { key, name, value } }))
     },
     classNames,
   }
@@ -69,8 +75,8 @@ export declare namespace mount {
     dispatch(payload: unknown, source?: string): void
     /** Serialize a credential without dispatching. */
     serializeCredential(payload: unknown, source?: string): string
-    /** Update the formatted amount shown in the page shell header. */
-    setAmount(formatted: string): void
+    /** Update shell UI values like the formatted amount. */
+    set<name extends keyof ShellState>(name: name, value: ShellState[name]): void
     /** CSS class names for consistent styling with the page shell. */
     classNames: typeof classNames
   }

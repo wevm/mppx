@@ -11,7 +11,7 @@ test('renders form with input and submit button', async ({ page }) => {
   await expect(page.locator('#payment-form button[type="submit"]')).toBeVisible()
 })
 
-test('displays amount via setAmount', async ({ page }) => {
+test('displays amount via set("amount")', async ({ page }) => {
   await page.goto('/')
   await expect(page.locator('.mppx-summary-amount')).toHaveText('$10.00')
 })

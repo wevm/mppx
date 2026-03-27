@@ -3,7 +3,8 @@ import { Json } from 'ox'
 
 import * as Credential from '../../../Credential.js'
 import * as Html from '../../internal/constants.js'
-import { serviceWorker as serviceWorkerRoute } from '../../internal/constants.js'
+import type * as Runtime from '../../internal/runtime.js'
+import type { ShellState } from '../../mount.js'
 
 const dataElement = document.getElementById(Html.elements.data)
 if (!dataElement) throw new Error(`Missing #${Html.elements.data} element`)
@@ -13,6 +14,9 @@ type Data = {
   challenges?: Record<string, typeof mppx.challenge>
   config: typeof mppx.config
   configs?: Record<string, Record<string, unknown>>
+  support: {
+    serviceWorkerUrl: string
+  }
 }
 
 const data = Json.parse(dataElement.textContent!) as Data
@@ -97,11 +101,12 @@ if (summaryElement) {
   updateSummary(firstChallenge)
 }
 
-// Methods call this to register their formatted amount
+// Methods call this to register shell state such as the formatted amount.
 window.addEventListener(
-  'mppx:amount' as any,
-  ((e: CustomEvent<{ key: string; amount: string }>) => {
-    summaryAmounts.set(e.detail.key, e.detail.amount)
+  'mppx:set' as any,
+  ((e: CustomEvent<Runtime.SetEvent<ShellState>>) => {
+    if (e.detail.name !== 'amount') return
+    summaryAmounts.set(e.detail.key, e.detail.value)
     // Update if this is the active method (check actual selected tab, not __mppx_active)
     const activeTab = document.querySelector(
       '[role="tab"][aria-selected="true"]',
@@ -109,7 +114,7 @@ window.addEventListener(
     const activeKey = isComposed ? activeTab?.dataset.method : e.detail.key
     if (activeKey === e.detail.key) {
       const amountEl = summaryElement?.querySelector(`.${Html.classNames.summaryAmount}`)
-      if (amountEl) amountEl.textContent = e.detail.amount
+      if (amountEl) amountEl.textContent = e.detail.value
     }
   }) as EventListener,
 )
@@ -229,7 +234,7 @@ addEventListener('mppx:complete', (event: CustomEvent<string>) => {
   }
 
   navigator.serviceWorker
-    .register(serviceWorkerRoute.pathname)
+    .register(data.support.serviceWorkerUrl)
     .then(activateServiceWorker)
     .then(() => {
       function send() {

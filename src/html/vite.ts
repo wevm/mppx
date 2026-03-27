@@ -11,7 +11,7 @@ import * as Credential from '../Credential.js'
 import * as Expires from '../Expires.js'
 import type * as Method from '../Method.js'
 import type * as z from '../zod.js'
-import { elements, serviceWorker as serviceWorkerRoute } from './internal/constants.js'
+import { elements, support, supportRequestUrl } from './internal/constants.js'
 import { renderDevScripts } from './internal/dev.js'
 import { renderHead } from './internal/head.js'
 import type * as Html from './internal/types.js'
@@ -69,7 +69,8 @@ export default function mppx<const method extends Method.Method>(
 
       // oxlint-disable-next-line no-async-endpoint-handlers
       server.middlewares.use(async (req, res, next) => {
-        if (req.url === serviceWorkerRoute.pathname) {
+        const requestUrl = new URL(req.url ?? '/', 'http://localhost')
+        if (requestUrl.searchParams.get(support.kind) === support.serviceWorker) {
           const sw = await fs.readFile(path.resolve(pageDir, 'src/serviceWorker.ts'), 'utf-8')
           res.setHeader('Content-Type', 'application/javascript')
           const transformed = await server.transformRequest(
@@ -115,7 +116,16 @@ export default function mppx<const method extends Method.Method>(
           ...(htmlConfig?.text ? { text: htmlConfig.text } : {}),
           ...(htmlConfig?.theme ? { theme: htmlConfig.theme } : {}),
         }
-        const dataJson = Json.stringify({ challenge, config }).replace(/</g, '\\u003c')
+        const dataJson = Json.stringify({
+          challenge,
+          config,
+          support: {
+            serviceWorkerUrl: supportRequestUrl({
+              kind: support.serviceWorker,
+              url: `http://localhost${req.url ?? '/'}`,
+            }),
+          },
+        }).replace(/</g, '\\u003c')
         const pageStyleHref = '/@fs/' + path.resolve(pageDir, 'src/page.css').replaceAll('\\', '/')
         const head = renderHead({
           title,

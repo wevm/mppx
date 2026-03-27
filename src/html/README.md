@@ -11,14 +11,12 @@ This directory has three public entrypoints:
 ## End-to-End Flow
 
 1. A server method exposes `html.content`.
-2. Your app calls `mppx.html(request)` before normal route handling.
-3. On a 402 response, mppx renders the page shell, embeds the challenge/config JSON, and serves any HTML infrastructure routes.
-4. Your browser code reads `mppx.challenge` / `mppx.config`, collects payment proof, then calls `mppx.dispatch(...)`.
-5. The page shell verifies the payment and reloads the page with the credential attached.
+2. Your app runs the normal payment handler for the protected route.
+3. On a 402 response, if the request accepts HTML (`Accept: text/html`), mppx renders the page shell, embeds the challenge/config JSON, and serves any HTML infrastructure requests via reserved query params on that same route.
+4. In the browser, your page code reads `mppx.challenge` / `mppx.config`, collects payment proof, then calls `mppx.dispatch(...)`.
+5. The browser page shell verifies the payment and reloads the page with the credential attached.
 
 ## Server Usage
-
-Always call `mppx.html(request)` before your route logic so the built-in service worker route and any method-specific `html.routes` are handled.
 
 ```ts
 import { Mppx, tempo } from 'mppx/server'
@@ -34,9 +32,6 @@ const mppx = Mppx.create({
 })
 
 export async function handler(request: Request) {
-  const htmlResponse = await mppx.html(request)
-  if (htmlResponse) return htmlResponse
-
   const result = await mppx.charge({ amount: '1' })(request)
   if (result.status === 402) return result.challenge
 
@@ -79,14 +74,14 @@ import { Method } from 'mppx'
 
 const charge = Method.toServer(Methods.charge, {
   html: {
+    actions: {
+      issueToken: async (request) => {
+        return new Response('ok')
+      },
+    },
     content: html,
     config: {
       issuer: 'example-payments',
-    },
-    routes: {
-      '/__mppx_issue_token': async (request) => {
-        return new Response('ok')
-      },
     },
     text: {
       title: 'Complete payment',
@@ -108,9 +103,9 @@ const charge = Method.toServer(Methods.charge, {
 
 `html` supports:
 
+- `actions` — route-local browser actions exposed on `mppx.config.actions`.
 - `content` — the method HTML fragment to render inside the shared page shell.
 - `config` — method-specific browser config, available as `mppx.config`.
-- `routes` — extra infrastructure endpoints needed by the HTML page.
 - `text` — shell copy overrides.
 - `theme` — shell theme overrides.
 
@@ -140,7 +135,7 @@ Use `serializeCredential(...)` when you need the encoded `Authorization: Payment
 import { mount } from 'mppx/html'
 
 mount((c) => {
-  c.setAmount('$10.00')
+  c.set('amount', '$10.00')
 
   const button = document.createElement('button')
   button.className = c.classNames.button
@@ -161,7 +156,7 @@ mount((c) => {
 - `config` — method config from the server.
 - `dispatch(...)` — submit a credential.
 - `serializeCredential(...)` — encode a credential without dispatching.
-- `setAmount(...)` — update the shell header amount.
+- `set(name, value)` — update shell UI state like the header amount.
 - `classNames` — shell CSS class names for consistent styling.
 
 ### Without `mount(...)`
@@ -225,8 +220,8 @@ declare global {
   }
 
   interface MppxConfig {
+    actions?: Record<string, string>
     publishableKey: string
-    createTokenUrl: string
   }
 }
 
@@ -237,7 +232,7 @@ Then browser code can use typed globals:
 
 ```ts
 const amount = mppx.challenge.request.amount
-const tokenUrl = mppx.config.createTokenUrl
+const tokenUrl = mppx.config.actions?.createToken
 ```
 
 ## Vite Authoring
@@ -339,4 +334,4 @@ Use them when you want your custom UI to match the shell styling or target shell
 - Prefer `mount(...)` unless you have a strong reason not to.
 - Use `mppx/html/vite` for authoring instead of hand-building HTML strings.
 - Use `mppx/html/env` only when you want typed global access to `mppx`.
-- Keep custom server endpoints under `html.routes` so all HTML infrastructure stays in one namespace.
+- Keep custom HTML helpers under `html.actions` so route-local browser support stays declarative.

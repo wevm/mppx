@@ -127,7 +127,7 @@ mount<typeof Methods.charge>((c) => {
       maximumFractionDigits: decimals,
     },
   )
-  c.setAmount(displayAmount)
+  c.set('amount', displayAmount)
 
   // Fetch token symbol and update
   ;(async () => {
@@ -146,7 +146,7 @@ mount<typeof Methods.charge>((c) => {
         abi: parseAbi(['function symbol() view returns (string)']),
         functionName: 'symbol',
       })
-      if (symbol) c.setAmount(`${displayAmount} ${symbol}`)
+      if (symbol) c.set('amount', `${displayAmount} ${symbol}`)
     } catch {}
   })()
 

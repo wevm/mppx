@@ -11,7 +11,6 @@ import type { StripeClient } from '../internal/types.js'
 import * as Methods from '../Methods.js'
 import { html } from './internal/html.gen.js'
 
-export const createTokenPathname = '/__mppx_stripe_create_token'
 const createSptPath = '/v1/test_helpers/shared_payment/granted_tokens'
 const createSptRequestSchema = z.object({
   amount: z.string(),
@@ -79,15 +78,14 @@ export function charge<const parameters extends charge.Parameters>(parameters: p
     ...(htmlConfig
       ? {
           html: {
+            actions: {
+              createToken: (request: globalThis.Request) =>
+                createTokenResponse({ request, client, secretKey }),
+            },
             content: html,
             config: {
               publishableKey: htmlConfig.publishableKey,
-              createTokenUrl: htmlConfig.createTokenUrl ?? createTokenPathname,
             } satisfies charge.HtmlConfig,
-            routes: {
-              [createTokenPathname]: (request: globalThis.Request) =>
-                createTokenResponse({ request, client, secretKey }),
-            },
           },
         }
       : {}),
@@ -143,7 +141,7 @@ export declare namespace charge {
 
   type Parameters = {
     /** Enable the built-in HTML payment page with Stripe configuration. */
-    html?: { publishableKey: string; createTokenUrl?: string | undefined } | undefined
+    html?: { publishableKey: string } | undefined
     /** Optional metadata to include in SPT creation requests. */
     metadata?: Record<string, string> | undefined
   } & Defaults &
@@ -161,7 +159,7 @@ export declare namespace charge {
     >
 
   type HtmlConfig = {
-    createTokenUrl: string
+    actions?: Record<string, string> | undefined
     publishableKey: string
   }
 

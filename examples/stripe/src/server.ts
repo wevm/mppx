@@ -12,8 +12,6 @@ const mppx = Mppx.create({
       html: {
         // Publishable key for browser HTML payment form.
         publishableKey: process.env.VITE_STRIPE_PUBLIC_KEY!,
-        // Secret key for HTML payment page SPT creation.
-        secretKey,
       },
       // Stripe Business Network profile ID.
       networkId: 'internal',
@@ -24,9 +22,6 @@ const mppx = Mppx.create({
 })
 
 export async function handler(request: Request): Promise<Response | null> {
-  const htmlResponse = await mppx.html(request)
-  if (htmlResponse) return htmlResponse
-
   if (new URL(request.url).pathname === '/api/fortune') {
     const result = await mppx.charge({
       amount: '1',

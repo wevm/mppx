@@ -135,9 +135,11 @@ export function http(options?: http.Options): Http {
         if (renderHtml && html?.content && input.headers.get('Accept')?.includes('text/html')) {
           headers['Content-Type'] = 'text/html; charset=utf-8'
           return renderHtml({
+            actions: html.actions,
             challenge,
             content: html.content,
             config: html?.config,
+            requestUrl: input.url,
             theme: html?.theme,
             text: html?.text,
           })

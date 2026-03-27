@@ -34,7 +34,32 @@ export const classNames = {
   wallets: 'mppx-wallets',
 } as const
 
-/** Service worker route used by the payment page shell. */
-export const serviceWorker = {
-  pathname: '/__mppx_serviceWorker.js',
+/** Reserved query params used for route-local HTML infrastructure requests. */
+export const support = {
+  kind: '__mppx',
+  action: 'action',
+  actionName: 'name',
+  method: 'method',
+  serviceWorker: 'sw',
 } as const
+
+function cloneUrl(url: URL | string): URL {
+  return typeof url === 'string' ? new URL(url, 'http://localhost') : new URL(url)
+}
+
+export function supportRequestUrl(parameters: {
+  kind: 'action' | 'sw'
+  name?: string | undefined
+  method?: string | undefined
+  url: URL | string
+}): string {
+  const { kind, name, method, url } = parameters
+  const next = cloneUrl(url)
+  next.hash = ''
+  next.searchParams.set(support.kind, kind)
+  if (kind === support.action && name) next.searchParams.set(support.actionName, name)
+  else next.searchParams.delete(support.actionName)
+  if (kind === support.action && method) next.searchParams.set(support.method, method)
+  else next.searchParams.delete(support.method)
+  return `${next.pathname}${next.search}`
+}

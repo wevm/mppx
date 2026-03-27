@@ -1,3 +1,4 @@
+import type { Appearance } from '@stripe/stripe-js'
 import { loadStripe } from '@stripe/stripe-js/pure'
 
 import type { Methods } from '../../../stripe/index.js'
@@ -33,14 +34,16 @@ mount<typeof Methods.charge, charge.HtmlConfig>(async (c) => {
       style: 'currency',
       currency: request.currency.toUpperCase(),
     }).format(Number(request.amount) / 100)
-    c.setAmount(formatted)
+    c.set('amount', formatted)
   } catch {}
 
   // Stripe
   const stripe = await loadStripe(c.config.publishableKey)
   if (!stripe) throw new Error('Failed to load stripe')
+  const createTokenUrl = c.config.actions?.createToken
+  if (!createTokenUrl) throw new Error('Missing Stripe createToken action URL')
 
-  function getAppearance(): import('@stripe/stripe-js').Appearance {
+  function getAppearance(): Appearance {
     const style = getComputedStyle(document.documentElement)
     const get = (name: string) => style.getPropertyValue(name).trim()
     return {
@@ -121,7 +124,7 @@ mount<typeof Methods.charge, charge.HtmlConfig>(async (c) => {
       return
     }
 
-    const response = await fetch(c.config.createTokenUrl, {
+    const response = await fetch(createTokenUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({

@@ -10,7 +10,7 @@ import * as Credential from '../../Credential.js'
 import * as Expires from '../../Expires.js'
 import type * as Method from '../../Method.js'
 import * as StripeMethods from '../../stripe/Methods.js'
-import { createTokenPathname, createTokenResponse } from '../../stripe/server/Charge.js'
+import { createTokenResponse } from '../../stripe/server/Charge.js'
 import * as TempoMethods from '../../tempo/Methods.js'
 import type * as z from '../../zod.js'
 import {
@@ -18,7 +18,7 @@ import {
   renderComposedMethodContent,
   rootIdOf as composedRootIdOf,
 } from '../internal/compose.js'
-import { classNames, elements, serviceWorker as serviceWorkerRoute } from '../internal/constants.js'
+import { classNames, elements, support, supportRequestUrl } from '../internal/constants.js'
 import { renderDevScripts } from '../internal/dev.js'
 import { renderHead } from '../internal/head.js'
 import type * as Html from '../internal/types.js'
@@ -31,7 +31,14 @@ export default defineConfig({
       name: 'stripe-spt',
       configureServer(server) {
         // oxlint-disable-next-line no-async-endpoint-handlers
-        server.middlewares.use(createTokenPathname, async (req, res) => {
+        server.middlewares.use(async (req, res, next) => {
+          const url = new URL(req.url ?? '/', 'http://localhost')
+          if (
+            url.searchParams.get(support.kind) !== support.action ||
+            url.searchParams.get(support.actionName) !== 'createToken'
+          )
+            return next()
+
           const secretKey = process.env.VITE_STRIPE_SECRET_KEY
           if (!secretKey) {
             res.statusCode = 500
@@ -43,7 +50,7 @@ export default defineConfig({
           const chunks: Buffer[] = []
           for await (const chunk of req) chunks.push(chunk as Buffer)
           const response = await createTokenResponse({
-            request: new Request(`http://localhost${req.url ?? createTokenPathname}`, {
+            request: new Request(`http://localhost${req.url ?? '/'}`, {
               body: Buffer.concat(chunks),
               method: req.method ?? 'POST',
             }),
@@ -71,7 +78,6 @@ export default defineConfig({
             },
           },
           config: {
-            createTokenUrl: createTokenPathname,
             publishableKey: process.env.VITE_STRIPE_PUBLIC_KEY ?? 'pk_test_example',
           },
         },
@@ -141,7 +147,8 @@ function devCompose(options: {
     configureServer(server) {
       // oxlint-disable-next-line no-async-endpoint-handlers
       server.middlewares.use(async (req, res, next) => {
-        if (req.url === serviceWorkerRoute.pathname) {
+        const requestUrl = new URL(req.url ?? '/', 'http://localhost')
+        if (requestUrl.searchParams.get(support.kind) === support.serviceWorker) {
           const sw = await fs.readFile(path.resolve(pageDir, 'src/serviceWorker.ts'), 'utf-8')
           res.setHeader('Content-Type', 'application/javascript')
           const transformed = await server.transformRequest(
@@ -194,7 +201,22 @@ function devCompose(options: {
           const intent = entry.method.intent
           const key = composedKeyOf(entry.method)
           challenges[key] = challenge
-          if (entry.config) configs[key] = entry.config
+          const config = {
+            ...entry.config,
+            ...(entry.method.name === 'stripe'
+              ? {
+                  actions: {
+                    createToken: supportRequestUrl({
+                      kind: support.action,
+                      method: key,
+                      name: 'createToken',
+                      url: `http://localhost${req.url ?? '/'}`,
+                    }),
+                  },
+                }
+              : {}),
+          }
+          if (Object.keys(config).length > 0) configs[key] = config
 
           const methodDir = path.resolve(server.config.root, `../${entry.method.name}`)
           let htmlContent = ''
@@ -226,7 +248,17 @@ function devCompose(options: {
           ...(htmlConfig?.text ? { text: htmlConfig.text } : {}),
           ...(htmlConfig?.theme ? { theme: htmlConfig.theme } : {}),
         }
-        const dataJson = Json.stringify({ challenges, configs, config }).replace(/</g, '\\u003c')
+        const dataJson = Json.stringify({
+          challenges,
+          configs,
+          config,
+          support: {
+            serviceWorkerUrl: supportRequestUrl({
+              kind: support.serviceWorker,
+              url: `http://localhost${req.url ?? '/'}`,
+            }),
+          },
+        }).replace(/</g, '\\u003c')
 
         // Build tab panels — each with its own external module script.
         // The transform hook injects __mppx_root/__mppx_active at the top of each

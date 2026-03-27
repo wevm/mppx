@@ -19,7 +19,6 @@ export type Wrap<mppx, handler> = {
   // middleware-shaped result. Use `Mppx.compose()` static instead.
   // `methods`, `realm`, `transport` are data properties — not handlers.
   [key in keyof mppx as key extends 'compose' ? never : key]: key extends
-    | 'html'
     | 'methods'
     | 'realm'
     | 'transport'

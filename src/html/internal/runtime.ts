@@ -3,7 +3,17 @@ import type { Config as HtmlConfig } from './types.js'
 
 export interface ChallengeRequest extends Record<string, unknown> {}
 
-export interface Config extends Record<string, unknown>, HtmlConfig {}
+export interface Config extends Record<string, unknown>, HtmlConfig {
+  actions?: Record<string, string> | undefined
+}
+
+export type SetEvent<state extends object> = {
+  [name in keyof state]: {
+    key: string
+    name: name
+    value: state[name]
+  }
+}[keyof state]
 
 export type Mppx<
   request extends Record<string, unknown> = ChallengeRequest,

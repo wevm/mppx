@@ -11,6 +11,7 @@ const mppx = Mppx.create({
     tempo({
       currency: '0x20c0000000000000000000000000000000000000',
       feePayer: true,
+      html: true,
       recipient: account.address,
       testnet: true,
     }),
@@ -18,9 +19,6 @@ const mppx = Mppx.create({
 })
 
 export async function handler(request: Request): Promise<Response | null> {
-  const htmlResponse = await mppx.html(request)
-  if (htmlResponse) return htmlResponse
-
   const url = new URL(request.url)
 
   // Free

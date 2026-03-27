@@ -1,7 +1,7 @@
 import { mount } from '../../../index.js'
 
 mount((c) => {
-  c.setAmount('$10.00')
+  c.set('amount', '$10.00')
 
   const form = c.root.querySelector<HTMLFormElement>('#payment-form')!
   form.onsubmit = (e) => {

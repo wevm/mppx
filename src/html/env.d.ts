@@ -1,4 +1,5 @@
 import type * as Runtime from './internal/runtime.js'
+import type { ShellState } from './mount.js'
 
 declare global {
   interface MppxChallengeRequest extends Runtime.ChallengeRequest {}
@@ -7,6 +8,7 @@ declare global {
 
   interface MppxEventMap {
     'mppx:complete': CustomEvent<string>
+    'mppx:set': CustomEvent<Runtime.SetEvent<ShellState>>
   }
 
   interface WindowEventMap extends MppxEventMap {}

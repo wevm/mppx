@@ -36,8 +36,6 @@ export namespace Mppx {
     const mppx = Mppx_core.create(config)
     return Mppx_internal.wrap(mppx, (intent, options) => {
       return (async ({ request, set }) => {
-        const htmlResponse = await mppx.html(request)
-        if (htmlResponse) return htmlResponse
         const result = await intent(options)(request)
         if (result.status === 402) return result.challenge
         const receipt = result.withReceipt(new Response())
@@ -73,8 +71,6 @@ export function payment<const intent extends Mppx_internal.AnyMethodFn>(
   options: intent extends (options: infer options) => any ? options : never,
 ): ElysiaHook {
   return async ({ request, set }) => {
-    const htmlResponse = await intent._htmlHandler?.(request)
-    if (htmlResponse) return htmlResponse
     const result = await intent(options)(request)
     if (result.status === 402) return result.challenge
     const receipt = result.withReceipt(new Response())

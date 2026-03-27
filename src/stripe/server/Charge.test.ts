@@ -331,8 +331,9 @@ describe('stripe.charge with client', () => {
       secretKey,
     })
 
-    const response = await server.html(
-      new Request(`https://${realm}/__mppx_stripe_create_token`, {
+    const handler = server.charge({ amount: '100', currency: 'usd', decimals: 2 })
+    const result = await handler(
+      new Request(`https://${realm}/api/fortune?__mppx=action&name=createToken`, {
         body: JSON.stringify({
           amount: '100',
           currency: 'usd',
@@ -345,10 +346,12 @@ describe('stripe.charge with client', () => {
         method: 'POST',
       }),
     )
+    expect(result.status).toBe(402)
+    if (result.status !== 402) throw new Error()
+    const response = result.challenge as Response
 
-    expect(response).toBeTruthy()
-    expect(response!.status).toBe(200)
-    expect(await response!.json()).toEqual({ spt: 'spt_from_client' })
+    expect(response.status).toBe(200)
+    expect(await response.json()).toEqual({ spt: 'spt_from_client' })
     expect(rawRequest).toHaveBeenCalledWith(
       'POST',
       '/v1/test_helpers/shared_payment/granted_tokens',
@@ -381,8 +384,9 @@ describe('stripe.charge with client', () => {
       secretKey,
     })
 
-    const response = await server.html(
-      new Request(`https://${realm}/__mppx_stripe_create_token`, {
+    const handler = server.charge({ amount: '100', currency: 'usd', decimals: 2 })
+    const result = await handler(
+      new Request(`https://${realm}/api/fortune?__mppx=action&name=createToken`, {
         body: JSON.stringify({
           amount: '100',
           currency: 'usd',
@@ -393,10 +397,12 @@ describe('stripe.charge with client', () => {
         method: 'POST',
       }),
     )
+    expect(result.status).toBe(402)
+    if (result.status !== 402) throw new Error()
+    const response = result.challenge as Response
 
-    expect(response).toBeTruthy()
-    expect(response!.status).toBe(400)
-    expect(await response!.json()).toEqual({ error: 'Invalid input' })
+    expect(response.status).toBe(400)
+    expect(await response.json()).toEqual({ error: 'Invalid input' })
     expect(rawRequest).not.toHaveBeenCalled()
   })
 })

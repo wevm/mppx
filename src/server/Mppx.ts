@@ -16,8 +16,6 @@ import * as Transport from './Transport.js'
 
 export type Methods = readonly (Method.AnyServer | readonly Method.AnyServer[])[]
 
-export type HtmlHandler = (request: globalThis.Request) => Promise<globalThis.Response | null>
-
 /**
  * Payment handler.
  */
@@ -25,8 +23,6 @@ export type Mppx<
   methods extends Methods = Methods,
   transport extends Transport.AnyTransport = Transport.Http,
 > = {
-  /** Handles HTML payment page infrastructure routes (service worker + method-registered routes). */
-  html: HtmlHandler
   /** Methods to configure. */
   methods: FlattenMethods<methods>
   /** Server realm (e.g., hostname). */
@@ -224,42 +220,7 @@ export function create<
     return compose(...(configured as ConfiguredHandler[]))
   }
 
-  const htmlRoutesMap = new Map<
-    string,
-    (request: globalThis.Request) => Promise<globalThis.Response>
-  >()
-  // Register service worker route
-  htmlRoutesMap.set(
-    Html.serviceWorker.pathname,
-    async () =>
-      new Response(Html.serviceWorker.script, {
-        headers: { 'Content-Type': 'application/javascript' },
-      }),
-  )
-
-  // Collect html routes from all methods
-  for (const mi of methods) {
-    if (!mi.html?.routes) continue
-    for (const [pathname, handler] of Object.entries(mi.html.routes) as [
-      string,
-      (request: globalThis.Request) => Promise<globalThis.Response>,
-    ][])
-      htmlRoutesMap.set(pathname, handler)
-  }
-
-  const html: HtmlHandler = async (request) => {
-    const pathname = new URL(request.url).pathname
-    const handler = htmlRoutesMap.get(pathname)
-    if (handler) return handler(request)
-    return null
-  }
-
-  for (const mi of methods) {
-    ;(handlers[`${mi.name}/${mi.intent}`] as AnyMethodFn)._htmlHandler = html
-  }
-
   return {
-    html,
     methods,
     compose: composeFn,
     realm: realm as string,
@@ -304,6 +265,14 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
       async (input: Transport.InputOf): Promise<MethodFn.Response> => {
         const expires =
           'expires' in options ? (options.expires as string | undefined) : Expires.minutes(5)
+
+        if (transport.name === 'http' && html?.content) {
+          const response = await Html.respondSupportRequest({
+            actions: html.actions,
+            request: input as globalThis.Request,
+          })
+          if (response) return { challenge: response, status: 402 }
+        }
 
         // Extract credential once — getCredential may have side effects (e.g. SSE transports).
         const [credential, credentialError] = (() => {
@@ -556,9 +525,7 @@ export type MethodFn<
   options: MethodFn.Options<method, defaults>,
 ) => (input: Transport.InputOf<transport>) => Promise<MethodFn.Response<transport>>
 /** @internal */
-export type AnyMethodFn = ((options: any) => (input: any) => Promise<any>) & {
-  _htmlHandler?: HtmlHandler | undefined
-}
+export type AnyMethodFn = (options: any) => (input: any) => Promise<any>
 /** A MethodFn tagged with its source Method (set by `create()`). @internal */
 type AnyMethodFnWithMethod = AnyMethodFn & { _method: Method.AnyServer }
 
@@ -651,6 +618,33 @@ export function compose(
   if (handlers.length === 0) throw new Error('compose() requires at least one handler')
 
   return async (input: Request) => {
+    const supportRequest = Html.parseSupportRequest(input)
+    if (supportRequest) {
+      if (supportRequest.kind === 'sw') {
+        const htmlHandler = handlers.find(
+          (handler) => (handler as ConfiguredHandler)._internal?._html?.content,
+        )
+        if (htmlHandler) return htmlHandler(input)
+        return {
+          status: 402,
+          challenge: new Response('Not found', { status: 404 }),
+        }
+      }
+
+      if (supportRequest.method) {
+        const handler = handlers.find((candidate) => {
+          const meta = (candidate as ConfiguredHandler)._internal
+          return `${meta?.name}/${meta?.intent}` === supportRequest.method
+        })
+        if (handler) return handler(input)
+      }
+
+      return {
+        status: 402,
+        challenge: new Response('Not found', { status: 404 }),
+      }
+    }
+
     // Try to extract a Payment credential to decide whether to dispatch or challenge.
     // Only gate on the Payment scheme — other auth schemes (Bearer, Basic, etc.)
     // should fall through to the merged-402 path so all offers are presented.
@@ -740,6 +734,7 @@ export function compose(
         try {
           const challenge = Challenge.deserialize(wwwAuth)
           htmlMethods.push({
+            actions: meta._html.actions,
             name: meta.name,
             intent: meta.intent,
             challenge,
@@ -753,6 +748,7 @@ export function compose(
         const firstHtml = (handlers[0] as ConfiguredHandler)?._internal?._html
         const body = Html.compose({
           methods: htmlMethods,
+          requestUrl: input.url,
           theme: firstHtml?.theme,
           text: firstHtml?.text,
         })

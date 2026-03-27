@@ -1,7 +1,8 @@
 import { defineConfig } from 'vite'
 
 import * as Methods from '../../stripe/Methods.js'
-import { createTokenPathname, createTokenResponse } from '../../stripe/server/Charge.js'
+import { createTokenResponse } from '../../stripe/server/Charge.js'
+import { support, supportRequestUrl } from '../internal/constants.js'
 import mppx from '../vite.js'
 
 export default defineConfig({
@@ -10,7 +11,14 @@ export default defineConfig({
       name: 'stripe-spt',
       configureServer(server) {
         // oxlint-disable-next-line no-async-endpoint-handlers
-        server.middlewares.use(createTokenPathname, async (req, res) => {
+        server.middlewares.use(async (req, res, next) => {
+          const url = new URL(req.url ?? '/', 'http://localhost')
+          if (
+            url.searchParams.get(support.kind) !== support.action ||
+            url.searchParams.get(support.actionName) !== 'createToken'
+          )
+            return next()
+
           const secretKey = process.env.VITE_STRIPE_SECRET_KEY
           if (!secretKey) {
             res.statusCode = 500
@@ -22,7 +30,7 @@ export default defineConfig({
           const chunks: Buffer[] = []
           for await (const chunk of req) chunks.push(chunk as Buffer)
           const response = await createTokenResponse({
-            request: new Request(`http://localhost${req.url ?? createTokenPathname}`, {
+            request: new Request(`http://localhost${req.url ?? '/'}`, {
               body: Buffer.concat(chunks),
               method: req.method ?? 'POST',
             }),
@@ -49,7 +57,9 @@ export default defineConfig({
         description: 'Test payment',
       },
       config: {
-        createTokenUrl: createTokenPathname,
+        actions: {
+          createToken: supportRequestUrl({ kind: support.action, name: 'createToken', url: '/' }),
+        },
         publishableKey: process.env.VITE_STRIPE_PUBLIC_KEY ?? 'pk_test_example',
       },
     }),
