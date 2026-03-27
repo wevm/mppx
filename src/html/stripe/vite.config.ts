@@ -74,8 +74,10 @@ export default defineConfig({
         },
         description: 'Test payment',
       },
-      config: {
+      actions: {
         createToken: supportRequestUrl({ kind: support.action, name: 'createToken', url: '/' }),
+      },
+      config: {
         publishableKey: process.env.VITE_STRIPE_PUBLIC_KEY ?? 'pk_test_example',
       },
     }),

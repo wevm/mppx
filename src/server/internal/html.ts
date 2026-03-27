@@ -1,5 +1,3 @@
-import { Json } from 'ox'
-
 import type * as Challenge from '../../Challenge.js'
 import {
   keyOf as composedKeyOf,
@@ -8,6 +6,7 @@ import {
 } from '../../html/internal/compose.js'
 import { classNames, elements, support, supportRequestUrl } from '../../html/internal/constants.js'
 import { renderHead, style } from '../../html/internal/head.js'
+import { prependScopedRuntime, renderPage } from '../../html/internal/render.js'
 import type { Config, LightDark, Text, Theme } from '../../html/internal/types.js'
 import type { MaybePromise } from '../../internal/types.js'
 import { content, pageAssets, script, serviceWorker as serviceWorkerGen } from './html.gen.js'
@@ -47,28 +46,31 @@ export type Props = Options & {
 
 export function render(props: Props): string {
   const title = props.text?.title ?? 'Payment Required'
-  const data = Json.stringify({
-    challenge: props.challenge,
-    config: {
-      ...buildConfig({
-        actions: props.actions,
-        config: props.config,
-        requestUrl: props.requestUrl,
-      }),
-      ...(props.text ? { text: props.text } : {}),
-      ...(props.theme ? { theme: props.theme } : {}),
+  const actions = buildActions({ actions: props.actions, requestUrl: props.requestUrl })
+  const data = {
+    method: {
+      challenge: props.challenge,
+      ...(props.config ? { config: props.config } : {}),
+      ...(actions ? { actions } : {}),
     },
+    ...(props.text || props.theme
+      ? {
+          shell: {
+            ...(props.text ? { text: props.text } : {}),
+            ...(props.theme ? { theme: props.theme } : {}),
+          },
+        }
+      : {}),
     support: { serviceWorkerUrl: serviceWorkerUrl(props.requestUrl) },
-  }).replace(/</g, '\\u003c')
+  }
   const head = renderHead({ title, theme: props.theme, assets: pageAssets })
-  return content
-    .replace('<!--mppx:head-->', head)
-    .replace(
-      '<!--mppx:data-->',
-      `<script id="${elements.data}" type="application/json">${data}</script>`,
-    )
-    .replace('<!--mppx:script-->', script)
-    .replace('<!--mppx:method-->', props.content)
+  return renderPage({
+    template: content,
+    head,
+    data,
+    scripts: script,
+    methodContent: props.content,
+  })
 }
 
 /** A method entry for composed (multi-method) rendering. */
@@ -97,42 +99,48 @@ export function compose(props: {
   const { methods } = props
   const title = props.text?.title ?? 'Payment Required'
 
-  // Build data: challenges + configs keyed by "name/intent"
-  const challenges: Record<string, Challenge.Challenge> = {}
-  const configs: Record<string, Record<string, unknown>> = {}
+  const pageMethods: Record<
+    string,
+    {
+      challenge: Challenge.Challenge
+      config?: Record<string, unknown>
+      actions?: Record<string, string>
+    }
+  > = {}
   for (const m of methods) {
     const key = composedKeyOf(m)
-    challenges[key] = m.challenge
-    const config = buildConfig({
+    const actions = buildActions({
       actions: m.actions,
-      config: m.config,
       method: key,
       requestUrl: props.requestUrl,
     })
-    if (Object.keys(config).length > 0) configs[key] = config
+    pageMethods[key] = {
+      challenge: m.challenge,
+      ...(m.config ? { config: m.config } : {}),
+      ...(actions ? { actions } : {}),
+    }
   }
-  const config = {
-    ...(props.text ? { text: props.text } : {}),
-    ...(props.theme ? { theme: props.theme } : {}),
-  }
-  const data = Json.stringify({
-    challenges,
-    configs,
-    config,
+  const data = {
+    methods: pageMethods,
+    ...(props.text || props.theme
+      ? {
+          shell: {
+            ...(props.text ? { text: props.text } : {}),
+            ...(props.theme ? { theme: props.theme } : {}),
+          },
+        }
+      : {}),
     support: { serviceWorkerUrl: serviceWorkerUrl(props.requestUrl) },
-  }).replace(/</g, '\\u003c')
+  }
 
   const methodContent = renderComposedMethodContent(
     methods.map((method) => {
       const key = composedKeyOf(method)
       const rootId = composedRootIdOf(method)
-      // Inject __mppx_root and __mppx_active before the method's module script.
-      // The method html contains an inline <script type="module"> — we prepend
-      // assignments inside it so they execute at the top of that module.
-      const patchedHtml = method.content.replace(
-        '<script type="module">',
-        `<script type="module">window.__mppx_root="${rootId}";window.__mppx_active="${key}";`,
-      )
+      const patchedHtml = prependScopedRuntime({
+        html: method.content,
+        scope: { key, rootId },
+      })
       return {
         ...method,
         body: `<div id="${rootId}">${patchedHtml}</div>`,
@@ -141,17 +149,13 @@ export function compose(props: {
   )
 
   const head = renderHead({ title, theme: props.theme, assets: pageAssets })
-  return content
-    .replace('<!--mppx:head-->', head)
-    .replace(
-      '<!--mppx:data-->',
-      `<script id="${elements.data}" type="application/json">${data}</script>`,
-    )
-    .replace('<!--mppx:script-->', script)
-    .replace(
-      `<div class="${classNames.method}" id="${elements.method}"><!--mppx:method--></div>`,
-      methodContent,
-    )
+  return renderPage({
+    template: content,
+    head,
+    data,
+    scripts: script,
+    methodContent,
+  })
 }
 
 export type SupportRequest =
@@ -191,22 +195,16 @@ export async function respondSupportRequest(parameters: {
   return handler(request)
 }
 
-function buildConfig(parameters: {
+function buildActions(parameters: {
   actions?: Options['actions'] | undefined
-  config?: Record<string, unknown> | undefined
   method?: string | undefined
   requestUrl: string
 }) {
-  const { actions, config, method, requestUrl } = parameters
-  const actionUrls = actions
-    ? Object.fromEntries(
-        Object.keys(actions).map((name) => [name, actionUrl({ method, name, requestUrl })]),
-      )
-    : undefined
-  return {
-    ...config,
-    ...actionUrls,
-  }
+  const { actions, method, requestUrl } = parameters
+  if (!actions) return undefined
+  return Object.fromEntries(
+    Object.keys(actions).map((name) => [name, actionUrl({ method, name, requestUrl })]),
+  )
 }
 
 export function actionUrl(parameters: {

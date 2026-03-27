@@ -16,7 +16,7 @@ interface ImportMeta {
   readonly env: ImportMetaEnv
 }
 
-/** Per-method root element ID, set by composed pages. @internal */
-declare var __mppx_root: string | undefined
-/** Active method key for composed pages. @internal */
-declare var __mppx_active: string | undefined
+interface Window {
+  /** Current composed-method scope while a method module initializes. @internal */
+  __mppx_scope?: { key: string; rootId: string }
+}

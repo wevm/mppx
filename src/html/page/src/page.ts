@@ -10,21 +10,41 @@ const dataElement = document.getElementById(Html.elements.data)
 if (!dataElement) throw new Error(`Missing #${Html.elements.data} element`)
 
 type Data = {
-  challenge?: typeof mppx.challenge
-  challenges?: Record<string, typeof mppx.challenge>
-  config: typeof mppx.config
-  configs?: Record<string, Record<string, unknown>>
+  method?: {
+    challenge: Runtime.Mppx['challenge']
+    config?: Runtime.Config | undefined
+    actions?: Runtime.Actions | undefined
+  }
+  methods?: Record<
+    string,
+    {
+      challenge: Runtime.Mppx['challenge']
+      config?: Runtime.Config | undefined
+      actions?: Runtime.Actions | undefined
+    }
+  >
+  shell?: Runtime.Shell | undefined
   support: {
     serviceWorkerUrl: string
   }
 }
 
 const data = Json.parse(dataElement.textContent!) as Data
-const isComposed = data.challenges !== undefined
-const firstChallenge = isComposed ? Object.values(data.challenges!)[0]! : data.challenge!
+const methods = data.methods ?? (data.method ? { default: data.method } : undefined)
+const methodEntries = methods ? Object.entries(methods) : []
+const firstMethod = methodEntries[0]?.[1]
+const firstMethodKey = methodEntries[0]?.[0]
+const isComposed = methodEntries.length > 1
+const allChallenges = isComposed
+  ? (Object.fromEntries(
+      methodEntries.map(([key, method]) => [key, method.challenge]),
+    ) as typeof mppx.challenges)
+  : undefined
 const composeMethodSearchParam = 'mppx_method'
 
-if (!firstChallenge) throw new Error('Missing challenge')
+if (!firstMethod || !firstMethodKey) throw new Error('Missing challenge')
+
+let activeMethodKey = firstMethodKey
 
 function composeMethodFromUrl(): string | null {
   return new URL(window.location.href).searchParams.get(composeMethodSearchParam)
@@ -36,38 +56,78 @@ function navigationUrl(): string {
   return url.toString()
 }
 
+function methodFor(key: string) {
+  return methods?.[key] ?? firstMethod!
+}
+
+function serializeCredential(
+  challenge: Runtime.Mppx['challenge'],
+  payload: unknown,
+  source?: string,
+): string {
+  return Credential.serialize({
+    challenge,
+    payload,
+    ...(source && { source }),
+  })
+}
+
+const runtimeCache = new Map<string, Runtime.ScopedMppx>()
+
+function scopedRuntime(key: string): Runtime.ScopedMppx {
+  const existing = runtimeCache.get(key)
+  if (existing) return existing
+
+  const method = methodFor(key)
+  const challenge = method.challenge
+  const config = (method.config ?? {}) as Runtime.Config
+  const actions = (method.actions ?? {}) as Runtime.Actions
+  const runtime = Object.freeze({
+    challenge,
+    challenges: allChallenges,
+    config,
+    actions,
+    dispatch(payload: unknown, source?: string): void {
+      dispatchEvent(
+        new CustomEvent('mppx:complete', {
+          detail: serializeCredential(challenge, payload, source),
+        }),
+      )
+    },
+    serializeCredential(payload: unknown, source?: string): string {
+      return serializeCredential(challenge, payload, source)
+    },
+  })
+  runtimeCache.set(key, runtime)
+  return runtime
+}
+
 window.mppx = Object.freeze({
   get challenge() {
-    if (isComposed && __mppx_active) return data.challenges![__mppx_active]!
-    return firstChallenge
+    return scopedRuntime(activeMethodKey).challenge
   },
-  challenges: data.challenges,
+  challenges: allChallenges,
   get config() {
-    const base = data.config
-    if (isComposed && __mppx_active && data.configs?.[__mppx_active])
-      return { ...base, ...data.configs[__mppx_active] }
-    return base
+    return scopedRuntime(activeMethodKey).config
+  },
+  get actions() {
+    return scopedRuntime(activeMethodKey).actions
   },
   dispatch(payload: unknown, source?: string): void {
-    dispatchEvent(
-      new CustomEvent('mppx:complete', {
-        detail: mppx.serializeCredential(payload, source),
-      }),
-    )
+    scopedRuntime(activeMethodKey).dispatch(payload, source)
   },
   serializeCredential(payload: unknown, source?: string): string {
-    return Credential.serialize({
-      challenge: mppx.challenge,
-      payload,
-      ...(source && { source }),
-    })
+    return scopedRuntime(activeMethodKey).serializeCredential(payload, source)
+  },
+  scope(key: string): Runtime.ScopedMppx {
+    return scopedRuntime(key)
   },
 })
 
 const summaryElement = document.getElementById(Html.elements.challenge)
 const summaryAmounts = new Map<string, string>()
 
-function updateSummary(challenge: typeof firstChallenge) {
+function updateSummary(challenge: Runtime.Mppx['challenge']) {
   if (!summaryElement) return
   const amountEl = summaryElement.querySelector(`.${Html.classNames.summaryAmount}`)
   const descEl = summaryElement.querySelector(`.${Html.classNames.description}`)
@@ -104,7 +164,7 @@ if (summaryElement) {
   expiresEl.className = Html.classNames.summaryLabel
   summaryElement.appendChild(expiresEl)
 
-  updateSummary(firstChallenge)
+  updateSummary(firstMethod.challenge)
 }
 
 // Methods call this to register shell state such as the formatted amount.
@@ -126,14 +186,14 @@ window.addEventListener(
 )
 
 // Apply text overrides
-const text = data.config.text as { title?: string; verifying?: string; error?: string } | undefined
+const text = data.shell?.text
 if (text?.title) {
   const titleElement = document.querySelector(`.${Html.classNames.title}`)
   if (titleElement) titleElement.textContent = text.title
 }
 
 // Apply logo
-const theme = data.config.theme as { logo?: string | { light: string; dark: string } } | undefined
+const theme = data.shell?.theme
 if (theme?.logo) {
   const header = document.querySelector(`.${Html.classNames.header}`)
   if (header) {
@@ -175,7 +235,7 @@ if (isComposed) {
   function activateTab(tab: HTMLElement, options?: { focus?: boolean; syncUrl?: boolean }) {
     const key = tab.dataset.method
     if (!key) return
-    window.__mppx_active = key
+    activeMethodKey = key
     tabs.forEach((t) => {
       t.className = 'mppx-tab'
       t.setAttribute('aria-selected', 'false')
@@ -188,7 +248,7 @@ if (isComposed) {
     panels.forEach((p) => ((p as HTMLElement).hidden = (p as HTMLElement).dataset.method !== key))
     if (options?.syncUrl !== false) syncComposeUrl(key)
     // Update summary for the active method's challenge
-    const challenge = data.challenges![key]
+    const challenge = methodFor(key).challenge
     if (challenge) updateSummary(challenge)
   }
 

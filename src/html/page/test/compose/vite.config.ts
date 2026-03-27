@@ -1,7 +1,6 @@
 import * as fs from 'node:fs/promises'
 import * as path from 'node:path'
 
-import { Json } from 'ox'
 import { tempoModerato } from 'viem/chains'
 import { type Plugin, defineConfig } from 'vite'
 
@@ -19,14 +18,13 @@ import {
   rootIdOf as composedRootIdOf,
 } from '../../../internal/compose.js'
 import {
-  classNames,
-  elements,
   support,
   supportPlaceholderOrigin,
   supportRequestUrl,
 } from '../../../internal/constants.js'
 import { renderDevScripts } from '../../../internal/dev.js'
 import { renderHead } from '../../../internal/head.js'
+import { renderPage, scopedRuntimePreamble } from '../../../internal/render.js'
 import type * as Html from '../../../internal/types.js'
 
 const pageDir = path.resolve(import.meta.dirname, '../..')
@@ -130,6 +128,7 @@ type DevComposeMethodEntry<method extends Method.Method = Method.Method> = {
     meta?: Record<string, string> | undefined
   }
   config?: Record<string, unknown>
+  actions?: Record<string, string>
 }
 
 function devCompose(options: {
@@ -142,27 +141,14 @@ function devCompose(options: {
   const secretKey = options.secretKey ?? 'mppx-dev-secret'
   const htmlConfig = options.html
 
-  // Map method entry scripts to their compose context (rootId, active key).
-  // The `transform` hook prepends globals to the method module source so they
-  // execute synchronously at the top of the module — before any imports or awaits.
-  // This avoids the timing issue where separate <script type="module"> tags
-  // run concurrently and overwrite shared globals.
   const composeContext = new Map<string, { rootId: string; key: string }>()
 
   return {
     name: 'mppx:dev-compose',
     transform(code, id) {
-      // Inject compose preamble at the top of method entry modules.
-      // Sets __mppx_root/__mppx_active, then creates a module-scoped `mppx` const
-      // that shadows the global with eagerly-captured challenge/config values.
-      // This prevents races where another method module overwrites __mppx_active
-      // during an `await` (e.g. `await loadStripe()`).
       const ctx = composeContext.get(id)
       if (!ctx) return
-      const preamble = [
-        `window.__mppx_root="${ctx.rootId}";window.__mppx_active="${ctx.key}";`,
-        `const mppx=Object.freeze({challenge:window.mppx.challenge,challenges:window.mppx.challenges,config:window.mppx.config,dispatch:window.mppx.dispatch.bind(window.mppx),serializeCredential:(p,s)=>{const _a=window.__mppx_active;window.__mppx_active="${ctx.key}";try{return window.mppx.serializeCredential(p,s)}finally{window.__mppx_active=_a}}});`,
-      ].join('')
+      const preamble = scopedRuntimePreamble(ctx)
       return `${preamble}\n${code}`
     },
     configureServer(server) {
@@ -197,8 +183,14 @@ function devCompose(options: {
           }
         } catch {}
 
-        const challenges: Record<string, unknown> = {}
-        const configs: Record<string, Record<string, unknown>> = {}
+        const methods: Record<
+          string,
+          {
+            challenge: Challenge.Challenge
+            config?: Record<string, unknown>
+            actions?: Record<string, string>
+          }
+        > = {}
         const wwwAuthHeaders: string[] = []
         const methodEntries: {
           key: string
@@ -224,9 +216,8 @@ function devCompose(options: {
           wwwAuthHeaders.push(Challenge.serialize(challenge))
           const intent = entry.method.intent
           const key = composedKeyOf(entry.method)
-          challenges[key] = challenge
-          const config = {
-            ...entry.config,
+          const actions = {
+            ...entry.actions,
             ...(entry.method.name === 'stripe'
               ? {
                   createToken: supportRequestUrl({
@@ -238,7 +229,11 @@ function devCompose(options: {
                 }
               : {}),
           }
-          if (Object.keys(config).length > 0) configs[key] = config
+          methods[key] = {
+            challenge,
+            ...(entry.config ? { config: entry.config } : {}),
+            ...(Object.keys(actions).length > 0 ? { actions } : {}),
+          }
 
           const methodDir = path.resolve(server.config.root, `../${entry.method.name}`)
           let htmlContent = ''
@@ -252,7 +247,6 @@ function devCompose(options: {
           const methodAbsPath = path.resolve(methodDir, `src/${intent}.ts`)
           const methodSrc = `/@fs/${methodAbsPath}`
 
-          // Register compose context so the transform hook can inject the preamble
           composeContext.set(methodAbsPath, { rootId, key })
 
           methodEntries.push({
@@ -265,26 +259,24 @@ function devCompose(options: {
           })
         }
 
-        // Build data JSON
-        const config = {
-          ...(htmlConfig?.text ? { text: htmlConfig.text } : {}),
-          ...(htmlConfig?.theme ? { theme: htmlConfig.theme } : {}),
-        }
-        const dataJson = Json.stringify({
-          challenges,
-          configs,
-          config,
+        const data = {
+          methods,
+          ...(htmlConfig?.text || htmlConfig?.theme
+            ? {
+                shell: {
+                  ...(htmlConfig?.text ? { text: htmlConfig.text } : {}),
+                  ...(htmlConfig?.theme ? { theme: htmlConfig.theme } : {}),
+                },
+              }
+            : {}),
           support: {
             serviceWorkerUrl: supportRequestUrl({
               kind: support.serviceWorker,
               url: `${supportPlaceholderOrigin}${req.url ?? '/'}`,
             }),
           },
-        }).replace(/</g, '\\u003c')
+        }
 
-        // Build tab panels — each with its own external module script.
-        // The transform hook injects __mppx_root/__mppx_active at the top of each
-        // method module, so globals are set synchronously before any code runs.
         const methodContent = renderComposedMethodContent(
           methodEntries.map((method) => ({
             ...method,
@@ -301,17 +293,13 @@ function devCompose(options: {
         })
 
         const page = await fs.readFile(path.resolve(pageDir, 'src/page.html'), 'utf-8')
-        const html = page
-          .replace('<!--mppx:head-->', head)
-          .replace(
-            '<!--mppx:data-->',
-            `<script id="${elements.data}" type="application/json">${dataJson}</script>`,
-          )
-          .replace('<!--mppx:script-->', renderDevScripts(pageDir))
-          .replace(
-            `<div class="${classNames.method}" id="${elements.method}"><!--mppx:method--></div>`,
-            methodContent,
-          )
+        const html = renderPage({
+          template: page,
+          head,
+          data,
+          scripts: renderDevScripts(pageDir),
+          methodContent,
+        })
 
         const transformed = await server.transformIndexHtml(req.url!, html)
         res.setHeader('Content-Type', 'text/html; charset=utf-8')

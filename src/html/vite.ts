@@ -3,7 +3,6 @@ import { existsSync } from 'node:fs'
 import * as fs from 'node:fs/promises'
 import * as path from 'node:path'
 
-import { Json } from 'ox'
 import type { Plugin } from 'vite'
 
 import * as Challenge from '../Challenge.js'
@@ -11,14 +10,10 @@ import * as Credential from '../Credential.js'
 import * as Expires from '../Expires.js'
 import type * as Method from '../Method.js'
 import type * as z from '../zod.js'
-import {
-  elements,
-  support,
-  supportPlaceholderOrigin,
-  supportRequestUrl,
-} from './internal/constants.js'
+import { support, supportPlaceholderOrigin, supportRequestUrl } from './internal/constants.js'
 import { renderDevScripts } from './internal/dev.js'
 import { renderHead } from './internal/head.js'
+import { renderPage } from './internal/render.js'
 import type * as Html from './internal/types.js'
 
 const pageDir = path.resolve(import.meta.dirname, 'page')
@@ -41,6 +36,8 @@ type Config<method extends Method.Method = Method.Method> = {
   }
   /** Method config passed to MppxConfig in the page (e.g. { publishableKey }). */
   config?: Record<string, unknown>
+  /** Route-local action URLs exposed to the browser as `mppx.actions`. */
+  actions?: Record<string, string>
   /** Visual configuration for the page shell. */
   html?: Html.Config | undefined
   /** Server realm for dev challenges. Defaults to 'localhost'. */
@@ -122,21 +119,27 @@ export default function mppx<const method extends Method.Method>(
         })
 
         const title = htmlConfig?.text?.title ?? 'Payment Required'
-        const config = {
-          ...options.config,
-          ...(htmlConfig?.text ? { text: htmlConfig.text } : {}),
-          ...(htmlConfig?.theme ? { theme: htmlConfig.theme } : {}),
-        }
-        const dataJson = Json.stringify({
-          challenge,
-          config,
+        const data = {
+          method: {
+            challenge,
+            ...(options.config ? { config: options.config } : {}),
+            ...(options.actions ? { actions: options.actions } : {}),
+          },
+          ...(htmlConfig?.text || htmlConfig?.theme
+            ? {
+                shell: {
+                  ...(htmlConfig?.text ? { text: htmlConfig.text } : {}),
+                  ...(htmlConfig?.theme ? { theme: htmlConfig.theme } : {}),
+                },
+              }
+            : {}),
           support: {
             serviceWorkerUrl: supportRequestUrl({
               kind: support.serviceWorker,
               url: `${supportPlaceholderOrigin}${req.url ?? '/'}`,
             }),
           },
-        }).replace(/</g, '\\u003c')
+        }
         const pageStyleHref = '/@fs/' + path.resolve(pageDir, 'src/page.css').replaceAll('\\', '/')
         const head = renderHead({
           title,
@@ -153,14 +156,13 @@ export default function mppx<const method extends Method.Method>(
           ? `\n  <script type="module" src="/src/${entry}.ts"></script>`
           : ''
 
-        const html = page
-          .replace('<!--mppx:head-->', head)
-          .replace(
-            '<!--mppx:data-->',
-            `<script id="${elements.data}" type="application/json">${dataJson}</script>`,
-          )
-          .replace('<!--mppx:script-->', renderDevScripts(pageDir))
-          .replace('<!--mppx:method-->', `${methodContent}${methodScript}`)
+        const html = renderPage({
+          template: page,
+          head,
+          data,
+          scripts: renderDevScripts(pageDir),
+          methodContent: `${methodContent}${methodScript}`,
+        })
 
         const transformed = await server.transformIndexHtml(req.url!, html)
         res.setHeader('Content-Type', 'text/html; charset=utf-8')

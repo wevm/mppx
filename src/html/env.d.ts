@@ -6,6 +6,8 @@ declare global {
 
   interface MppxConfig extends Runtime.Config {}
 
+  interface MppxActions extends Runtime.Actions {}
+
   interface MppxEventMap {
     'mppx:complete': CustomEvent<string>
     'mppx:set': CustomEvent<Runtime.SetEvent<ShellState>>
@@ -13,5 +15,5 @@ declare global {
 
   interface WindowEventMap extends MppxEventMap {}
 
-  var mppx: Runtime.Mppx<MppxChallengeRequest, MppxConfig>
+  var mppx: Runtime.Mppx<MppxChallengeRequest, MppxConfig, MppxActions>
 }

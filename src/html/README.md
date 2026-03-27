@@ -12,8 +12,8 @@ This directory has three public entrypoints:
 
 1. A server method exposes `html.content`.
 2. Your app runs the normal payment handler for the protected route.
-3. On a 402 response, if the request accepts HTML (`Accept: text/html`), mppx renders the page shell, embeds the challenge/config JSON, and serves any HTML infrastructure requests via reserved query params on that same route.
-4. In the browser, your page code reads `mppx.challenge` / `mppx.config`, collects payment proof, then calls `mppx.dispatch(...)`.
+3. On a 402 response, if the request accepts HTML (`Accept: text/html`), mppx renders the page shell, embeds the challenge/config/action JSON, and serves any HTML infrastructure requests via reserved query params on that same route.
+4. In the browser, your page code reads `mppx.challenge` / `mppx.config` / `mppx.actions`, collects payment proof, then calls `mppx.dispatch(...)`.
 5. The browser page shell verifies the payment and reloads the page with the credential attached.
 
 ## Server Usage
@@ -114,7 +114,7 @@ const charge = Method.toServer(Methods.charge, {
 
 `html` supports:
 
-- `actions` — route-local browser actions exposed on `mppx.config.<actionName>`.
+- `actions` — route-local browser actions exposed on `mppx.actions.<actionName>`.
 - `content` — the method HTML fragment to render inside the shared page shell.
 - `config` — method-specific browser config, available as `mppx.config`.
 - `text` — shell copy overrides.
@@ -129,6 +129,7 @@ type Mppx = {
   readonly challenge: Challenge
   readonly challenges: Readonly<Record<string, Challenge>> | undefined
   readonly config: Record<string, unknown>
+  readonly actions: Record<string, string>
   dispatch(payload: unknown, source?: string): void
   serializeCredential(payload: unknown, source?: string): string
 }
@@ -165,6 +166,7 @@ mount((c) => {
 - `challenge` — parsed challenge for this method.
 - `challenges` — all challenges in composed pages.
 - `config` — method config from the server.
+- `actions` — route-local action URLs from the server.
 - `dispatch(...)` — submit a credential.
 - `serializeCredential(...)` — encode a credential without dispatching.
 - `set(name, value)` — update shell UI state like the header amount.
@@ -180,18 +182,20 @@ import { classNames, elements } from 'mppx/html'
 const root = document.getElementById(elements.method)!
 const challenge = mppx.challenge
 const config = mppx.config
+const actions = mppx.actions
 
 const button = document.createElement('button')
 button.className = classNames.button
 button.textContent = `Pay ${challenge.request.amount}`
 button.onclick = () => {
+  fetch(actions.createToken)
   mppx.dispatch({ token: `signed-for-${config.networkId}` })
 }
 
 root.appendChild(button)
 ```
 
-If you skip `mount(...)`, it is best to snapshot `mppx.challenge` / `mppx.config` during setup instead of repeatedly reading them later. That matters most for composed pages, where the active method changes as tabs change.
+If you skip `mount(...)`, it is best to snapshot `mppx.challenge` / `mppx.config` / `mppx.actions` during setup instead of repeatedly reading them later. That matters most for composed pages, where the active method changes as tabs change.
 
 ## Typing Options
 
@@ -231,8 +235,11 @@ declare global {
   }
 
   interface MppxConfig {
-    createToken?: string
     publishableKey: string
+  }
+
+  interface MppxActions {
+    createToken?: string
   }
 }
 
@@ -243,7 +250,7 @@ Then browser code can use typed globals:
 
 ```ts
 const amount = mppx.challenge.request.amount
-const tokenUrl = mppx.config.createToken
+const tokenUrl = mppx.actions.createToken
 ```
 
 ## Vite Authoring
@@ -288,6 +295,7 @@ Plugin options:
 - `output` — file path for the generated `html.gen.ts` module.
 - `challenge` — dev-only challenge fixture. `challenge.request` is required in dev.
 - `config` — method config exposed to the browser as `mppx.config`.
+- `actions` — route-local action URLs exposed to the browser as `mppx.actions`.
 - `html` — shell text/theme configuration for dev.
 - `realm` — dev challenge realm.
 - `secretKey` — dev HMAC secret for challenge IDs.
@@ -326,6 +334,7 @@ When the server uses `mppx.compose(...)`, the shell renders tabs for each paymen
 In composed pages:
 
 - `mount(...)` scopes `root`, `challenge`, and `config` to the method instance being mounted.
+- `mount(...)` scopes `actions` to the method instance being mounted.
 - `mppx.challenges` contains all challenges keyed by `name/intent`.
 - the active tab is also reflected in the URL with `mppx_method=...`.
 

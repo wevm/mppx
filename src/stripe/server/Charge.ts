@@ -153,8 +153,11 @@ export declare namespace charge {
     >
 
   type HtmlConfig = {
-    createToken?: string | undefined
     publishableKey: string
+  }
+
+  type HtmlActions = {
+    createToken?: string | undefined
   }
 
   type DeriveDefaults<parameters extends Parameters> = Pick<
