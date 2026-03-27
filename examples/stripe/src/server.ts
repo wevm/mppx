@@ -22,7 +22,68 @@ const mppx = Mppx.create({
 })
 
 export async function handler(request: Request): Promise<Response | null> {
-  if (new URL(request.url).pathname === '/api/fortune') {
+  const url = new URL(request.url)
+
+  if (url.pathname === '/api/create-spt') {
+    const { paymentMethod, amount, currency, expiresAt, networkId, metadata } =
+      (await request.json()) as {
+        paymentMethod: string
+        amount: string
+        currency: string
+        expiresAt: number
+        networkId?: string
+        metadata?: Record<string, string>
+      }
+
+    const body = new URLSearchParams({
+      payment_method: paymentMethod,
+      'usage_limits[currency]': currency,
+      'usage_limits[max_amount]': amount,
+      'usage_limits[expires_at]': expiresAt.toString(),
+    })
+    if (networkId) body.set('seller_details[network_id]', networkId)
+    if (metadata) {
+      for (const [key, value] of Object.entries(metadata)) {
+        body.set(`metadata[${key}]`, value)
+      }
+    }
+
+    const createSpt = async (bodyParams: URLSearchParams) =>
+      fetch('https://api.stripe.com/v1/test_helpers/shared_payment/granted_tokens', {
+        method: 'POST',
+        headers: {
+          Authorization: `Basic ${btoa(`${secretKey}:`)}`,
+          'Content-Type': 'application/x-www-form-urlencoded',
+        },
+        body: bodyParams,
+      })
+
+    let response = await createSpt(body)
+    if (!response.ok) {
+      const error = (await response.json()) as { error: { message: string } }
+      if ((metadata || networkId) && error.error.message.includes('Received unknown parameter')) {
+        const fallbackBody = new URLSearchParams({
+          payment_method: paymentMethod,
+          'usage_limits[currency]': currency,
+          'usage_limits[max_amount]': amount,
+          'usage_limits[expires_at]': expiresAt.toString(),
+        })
+        response = await createSpt(fallbackBody)
+      } else {
+        return Response.json({ error: error.error.message }, { status: 500 })
+      }
+    }
+
+    if (!response.ok) {
+      const error = (await response.json()) as { error: { message: string } }
+      return Response.json({ error: error.error.message }, { status: 500 })
+    }
+
+    const { id: spt } = (await response.json()) as { id: string }
+    return Response.json({ spt })
+  }
+
+  if (url.pathname === '/api/fortune') {
     const result = await mppx.charge({
       amount: '1',
       currency: 'usd',

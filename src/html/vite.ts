@@ -176,8 +176,11 @@ export default function mppx<const method extends Method.Method>(
           emptyOutDir: true,
           rolldownOptions: {
             input: { [intent]: entrypoints.script ? `src/${intent}.ts` : emptyEntryId },
-            output: { entryFileNames: '[name].js', format: 'es' as const },
-            ...({ codeSplitting: false } as {}),
+            output: {
+              entryFileNames: '[name].js',
+              format: 'es' as const,
+              ...({ codeSplitting: false } as {}),
+            },
           },
           modulePreload: false,
           minify: true,
@@ -218,7 +221,7 @@ export default function mppx<const method extends Method.Method>(
         const entryScript = (
           await fs.readFile(path.resolve(root, `dist/${intent}.js`), 'utf-8')
         ).trim()
-        cleanedEntry = entryScript.replace(/^import\s.*?;\n?/gm, '')
+        cleanedEntry = entryScript.replace(/^import\s?.*?;\n?/gm, '')
       }
 
       const allStyles = styles.filter(Boolean).join('\n')
