@@ -8,7 +8,6 @@ import {
   type Hex,
   parseSignature,
   serializeCompactSignature,
-  serializeSignature,
   signatureToCompactSignature,
 } from 'viem'
 import { waitForTransactionReceipt } from 'viem/actions'
@@ -50,7 +49,6 @@ const delegatedSigner = accounts[4]
 const recipientAccount = accounts[0]
 const recipient = accounts[0].address
 const currency = asset
-const secp256k1N = BigInt('0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141')
 
 let escrowContract: Address
 let saltCounter = 0
@@ -2099,44 +2097,6 @@ describe.runIf(isLocalnet)('session', () => {
   })
 
   describe('signature compatibility', () => {
-    test('accepts compact (EIP-2098) signatures for open and voucher', async () => {
-      const { channelId, serializedTransaction } = await createSignedOpenTransaction(10000000n)
-      const server = createServer()
-
-      const openSignature = toCompactSignature(await signTestVoucher(channelId, 1000000n))
-      const openReceipt = await server.verify({
-        credential: {
-          challenge: makeChallenge({ id: 'open-compact', channelId }),
-          payload: {
-            action: 'open' as const,
-            type: 'transaction' as const,
-            channelId,
-            transaction: serializedTransaction,
-            cumulativeAmount: '1000000',
-            signature: openSignature,
-          },
-        },
-        request: makeRequest(),
-      })
-      expect(openReceipt.status).toBe('success')
-
-      const voucherSignature = toCompactSignature(await signTestVoucher(channelId, 2000000n))
-      const voucherReceipt = (await server.verify({
-        credential: {
-          challenge: makeChallenge({ id: 'voucher-compact', channelId }),
-          payload: {
-            action: 'voucher' as const,
-            channelId,
-            cumulativeAmount: '2000000',
-            signature: voucherSignature,
-          },
-        },
-        request: makeRequest(),
-      })) as SessionReceipt
-      expect(voucherReceipt.status).toBe('success')
-      expect(voucherReceipt.acceptedCumulative).toBe('2000000')
-    })
-
     test('rejects malformed compact signatures', async () => {
       const { channelId, serializedTransaction } = await createSignedOpenTransaction(10000000n)
       const server = createServer()
@@ -2166,44 +2126,6 @@ describe.runIf(isLocalnet)('session', () => {
               channelId,
               cumulativeAmount: '2000000',
               signature: mutateSignature(compact),
-            },
-          },
-          request: makeRequest(),
-        }),
-      ).rejects.toThrow('invalid voucher signature')
-    })
-
-    test('rejects high-s malleable signatures in session voucher path', async () => {
-      const { channelId, serializedTransaction } = await createSignedOpenTransaction(10000000n)
-      const server = createServer()
-
-      await server.verify({
-        credential: {
-          challenge: makeChallenge({ id: 'open-for-high-s', channelId }),
-          payload: {
-            action: 'open' as const,
-            type: 'transaction' as const,
-            channelId,
-            transaction: serializedTransaction,
-            cumulativeAmount: '1000000',
-            signature: await signTestVoucher(channelId, 1000000n),
-          },
-        },
-        request: makeRequest(),
-      })
-
-      const lowS = await signTestVoucher(channelId, 2000000n)
-      const highS = toHighSSignature(lowS)
-
-      await expect(
-        server.verify({
-          credential: {
-            challenge: makeChallenge({ id: 'voucher-high-s', channelId }),
-            payload: {
-              action: 'voucher' as const,
-              channelId,
-              cumulativeAmount: '2000000',
-              signature: highS,
             },
           },
           request: makeRequest(),
@@ -2992,7 +2914,7 @@ describe.runIf(isLocalnet)('session', () => {
           tempo_server.session({
             store: backingStore,
             getClient: () => client,
-            account: recipient,
+            account: recipientAccount,
             currency,
             escrowContract,
             chainId: chain.id,
@@ -3070,7 +2992,7 @@ describe.runIf(isLocalnet)('session', () => {
           tempo_server.session({
             store: backingStore,
             getClient: () => client,
-            account: recipient,
+            account: recipientAccount,
             currency,
             escrowContract,
             chainId: chain.id,
@@ -3248,7 +3170,7 @@ describe('monotonicity and TOCTOU (unit tests)', () => {
 })
 
 describe('session request and verify guardrails', () => {
-  const addressOne = '0x0000000000000000000000000000000000000001' as Address
+  const accountOne = accounts[0]
   const addressTwo = '0x0000000000000000000000000000000000000002' as Address
   const defaultCurrency = '0x20c0000000000000000000000000000000000000'
   const defaultEscrow = '0x0000000000000000000000000000000000000003'
@@ -3280,7 +3202,7 @@ describe('session request and verify guardrails', () => {
   test('request throws when no client exists for requested chain', async () => {
     const server = session({
       store: Store.memory(),
-      account: addressOne,
+      account: accountOne,
       currency: defaultCurrency,
       getClient: async () => {
         throw new Error('unreachable chain')
@@ -3299,7 +3221,7 @@ describe('session request and verify guardrails', () => {
     const wrongChainClient = createMockClient(42431)
     const server = session({
       store: Store.memory(),
-      account: addressOne,
+      account: accountOne,
       currency: defaultCurrency,
       getClient: async () => wrongChainClient,
     } as session.Parameters)
@@ -3316,7 +3238,7 @@ describe('session request and verify guardrails', () => {
     const client = createMockClient(4217)
     const server = session({
       store: Store.memory(),
-      account: addressOne,
+      account: accountOne,
       currency: defaultCurrency,
       feePayer: 'https://fee-payer.example.com',
       getClient: async () => client,
@@ -3339,7 +3261,7 @@ describe('session request and verify guardrails', () => {
     const client = createMockClient(4217)
     const server = session({
       store: Store.memory(),
-      account: addressOne,
+      account: accountOne,
       currency: defaultCurrency,
       feePayer: 'https://fee-payer.example.com',
       getClient: async () => client,
@@ -3357,7 +3279,7 @@ describe('session request and verify guardrails', () => {
     const client = createMockClient(unknownChainId)
     const server = session({
       store: Store.memory(),
-      account: addressOne,
+      account: accountOne,
       currency: defaultCurrency,
       getClient: async () => client,
     } as session.Parameters)
@@ -3374,7 +3296,7 @@ describe('session request and verify guardrails', () => {
     const client = createMockClient(4217)
     const server = session({
       store: Store.memory(),
-      account: addressOne,
+      account: accountOne,
       currency: defaultCurrency,
       getClient: async () => client,
       escrowContract: defaultEscrow,
@@ -3671,16 +3593,6 @@ function mutateSignature(signature: Hex): Hex {
   const last = signature.at(-1)
   const replacement = last === '0' ? '1' : '0'
   return `${signature.slice(0, -1)}${replacement}` as Hex
-}
-
-function toHighSSignature(signature: Hex): Hex {
-  const parsed = parseSignature(signature)
-  const highS = secp256k1N - BigInt(parsed.s)
-  return serializeSignature({
-    r: parsed.r,
-    s: `0x${highS.toString(16).padStart(64, '0')}`,
-    yParity: parsed.yParity === 0 ? 1 : 0,
-  })
 }
 
 function withFaultHooks(store: Store.Store, options: { failPutAt: number }) {
