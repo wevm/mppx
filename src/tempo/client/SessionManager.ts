@@ -8,7 +8,7 @@ import type * as Client from '../../viem/Client.js'
 import { deserializeSessionReceipt } from '../session/Receipt.js'
 import { parseEvent } from '../session/Sse.js'
 import type { SessionReceipt } from '../session/Types.js'
-import type { ChannelEntry } from './ChannelOps.js'
+import { reconcileChannelReceipt, type ChannelEntry } from './ChannelOps.js'
 import { session as sessionPlugin } from './Session.js'
 
 export type SessionManager = {
@@ -49,10 +49,10 @@ export type PaymentResponse = Response & {
  * the session is lost and a new on-chain channel will be opened on the next
  * request — the previous channel's deposit is orphaned until manually closed.
  *
- * When the server includes a `channelId` in the 402 challenge `methodDetails`,
- * the client will attempt to recover the channel by reading its on-chain state
- * via `getOnChainChannel()`. If the channel has a positive deposit and is not
- * finalized, it resumes from the on-chain settled amount.
+ * When the server includes session hints in the 402 challenge `methodDetails`,
+ * the client resumes from those authoritative values first. If only a
+ * `channelId` is available, it falls back to reading on-chain state via
+ * `getOnChainChannel()` and resumes from the on-chain settled amount.
  */
 export function sessionManager(parameters: sessionManager.Parameters): SessionManager {
   const fetchFn = parameters.fetch ?? globalThis.fetch
@@ -72,6 +72,7 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
     onChannelUpdate(entry) {
       if (entry.channelId !== channel?.channelId) spent = 0n
       channel = entry
+      spent = entry.spent
     },
   })
 
@@ -84,16 +85,30 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
     },
   })
 
-  function updateSpentFromReceipt(receipt: SessionReceipt | null | undefined) {
-    if (!receipt || receipt.channelId !== channel?.channelId) return
-    const next = BigInt(receipt.spent)
-    spent = spent > next ? spent : next
+  function reconcileReceipt(receipt: SessionReceipt | null | undefined) {
+    if (!receipt) return
+    if (channel && receipt.channelId === channel.channelId) {
+      if (reconcileChannelReceipt(channel, receipt)) spent = channel.spent
+      return
+    }
+    spent = BigInt(receipt.spent)
+  }
+
+  function reconcileResponse(response: Response): SessionReceipt | undefined {
+    const receiptHeader = response.headers.get('Payment-Receipt')
+    if (!receiptHeader) return undefined
+
+    try {
+      const receipt = deserializeSessionReceipt(receiptHeader)
+      reconcileReceipt(receipt)
+      return receipt
+    } catch {
+      return undefined
+    }
   }
 
   function toPaymentResponse(response: Response): PaymentResponse {
-    const receiptHeader = response.headers.get('Payment-Receipt')
-    const receipt = receiptHeader ? deserializeSessionReceipt(receiptHeader) : null
-    updateSpentFromReceipt(receipt)
+    const receipt = reconcileResponse(response) ?? null
     return Object.assign(response, {
       receipt,
       challenge: lastChallenge,
@@ -148,6 +163,7 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
           `Open request failed with status ${response.status}${body ? `: ${body}` : ''}${wwwAuth ? ` [WWW-Authenticate: ${wwwAuth}]` : ''}`,
         )
       }
+      reconcileResponse(response)
     },
 
     fetch: doFetch,
@@ -222,11 +238,12 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
                   if (!voucherResponse.ok) {
                     throw new Error(`Voucher POST failed with status ${voucherResponse.status}`)
                   }
+                  reconcileResponse(voucherResponse)
                   break
                 }
 
                 case 'payment-receipt':
-                  updateSpentFromReceipt(event.data)
+                  reconcileReceipt(event.data)
                   onReceipt?.(event.data)
                   break
               }
@@ -258,8 +275,7 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
           method: 'POST',
           headers: { Authorization: credential },
         })
-        const receiptHeader = response.headers.get('Payment-Receipt')
-        if (receiptHeader) receipt = deserializeSessionReceipt(receiptHeader)
+        receipt = reconcileResponse(response)
       }
 
       return receipt
