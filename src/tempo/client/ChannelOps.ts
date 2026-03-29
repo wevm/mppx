@@ -21,16 +21,23 @@ import * as Credential from '../../Credential.js'
 import * as defaults from '../internal/defaults.js'
 import { escrowAbi, getOnChainChannel } from '../session/Chain.js'
 import * as Channel from '../session/Channel.js'
-import type { SessionCredentialPayload } from '../session/Types.js'
+import type {
+  SessionChallengeMethodDetails,
+  SessionCredentialPayload,
+  SessionReceipt,
+} from '../session/Types.js'
 import { signVoucher } from '../session/Voucher.js'
 
 export type ChannelEntry = {
-  channelId: Hex.Hex
-  salt: Hex.Hex
-  cumulativeAmount: bigint
-  escrowContract: Address
+  acceptedCumulative: bigint
   chainId: number
+  channelId: Hex.Hex
+  cumulativeAmount: bigint
+  deposit?: bigint | undefined
+  escrowContract: Address
   opened: boolean
+  salt: Hex.Hex
+  spent: bigint
 }
 
 export function resolveChainId(challenge: Challenge): number {
@@ -66,6 +73,87 @@ export function serializeCredential(
     challenge,
     payload,
     source: `did:pkh:eip155:${chainId}:${account.address}`,
+  })
+}
+
+type ChannelSnapshot = {
+  acceptedCumulative?: bigint | string | undefined
+  deposit?: bigint | string | undefined
+  spent?: bigint | string | undefined
+}
+
+function toBigInt(value: bigint | string): bigint {
+  return typeof value === 'bigint' ? value : BigInt(value)
+}
+
+export function createHintedChannelEntry(options: {
+  chainId: number
+  channelId: Hex.Hex
+  escrowContract: Address
+  hints: Pick<SessionChallengeMethodDetails, 'acceptedCumulative' | 'deposit' | 'spent'>
+}): ChannelEntry {
+  const acceptedCumulative = BigInt(options.hints.acceptedCumulative ?? options.hints.spent ?? '0')
+  const spent = BigInt(options.hints.spent ?? options.hints.acceptedCumulative ?? '0')
+
+  return {
+    acceptedCumulative,
+    chainId: options.chainId,
+    channelId: options.channelId,
+    cumulativeAmount: acceptedCumulative,
+    ...(options.hints.deposit !== undefined && { deposit: BigInt(options.hints.deposit) }),
+    escrowContract: options.escrowContract,
+    opened: true,
+    salt: '0x' as Hex.Hex,
+    spent,
+  }
+}
+
+export function reconcileChannelEntry(entry: ChannelEntry, snapshot: ChannelSnapshot): boolean {
+  let changed = false
+
+  if (snapshot.acceptedCumulative !== undefined) {
+    const acceptedCumulative = toBigInt(snapshot.acceptedCumulative)
+    if (entry.acceptedCumulative !== acceptedCumulative) {
+      entry.acceptedCumulative = acceptedCumulative
+      changed = true
+    }
+    if (entry.cumulativeAmount !== acceptedCumulative) {
+      entry.cumulativeAmount = acceptedCumulative
+      changed = true
+    }
+  }
+
+  if (snapshot.spent !== undefined) {
+    const spent = toBigInt(snapshot.spent)
+    if (entry.spent !== spent) {
+      entry.spent = spent
+      changed = true
+    }
+    if (snapshot.acceptedCumulative === undefined && entry.acceptedCumulative < spent) {
+      entry.acceptedCumulative = spent
+      changed = true
+    }
+    if (snapshot.acceptedCumulative === undefined && entry.cumulativeAmount < spent) {
+      entry.cumulativeAmount = spent
+      changed = true
+    }
+  }
+
+  if (snapshot.deposit !== undefined) {
+    const deposit = toBigInt(snapshot.deposit)
+    if (entry.deposit !== deposit) {
+      entry.deposit = deposit
+      changed = true
+    }
+  }
+
+  return changed
+}
+
+export function reconcileChannelReceipt(entry: ChannelEntry, receipt: SessionReceipt): boolean {
+  return reconcileChannelEntry(entry, {
+    acceptedCumulative: receipt.acceptedCumulative,
+    spent: receipt.spent,
   })
 }
 
@@ -181,12 +269,15 @@ export async function createOpenPayload(
 
   return {
     entry: {
-      channelId,
-      salt,
-      cumulativeAmount: initialAmount,
-      escrowContract,
+      acceptedCumulative: initialAmount,
       chainId,
+      channelId,
+      cumulativeAmount: initialAmount,
+      deposit,
+      escrowContract,
       opened: true,
+      salt,
+      spent: 0n,
     },
     payload: {
       action: 'open',
@@ -221,12 +312,15 @@ export async function tryRecoverChannel(
 
     if (onChain.deposit > 0n && !onChain.finalized) {
       return {
-        channelId,
-        salt: '0x' as Hex.Hex,
-        cumulativeAmount: onChain.settled,
-        escrowContract,
+        acceptedCumulative: onChain.settled,
         chainId,
+        channelId,
+        cumulativeAmount: onChain.settled,
+        deposit: onChain.deposit,
+        escrowContract,
         opened: true,
+        salt: '0x' as Hex.Hex,
+        spent: onChain.settled,
       }
     }
   } catch {}

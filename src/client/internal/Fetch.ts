@@ -11,6 +11,10 @@ type WrappedFetch = typeof globalThis.fetch & {
   [MPPX_FETCH_WRAPPER]?: typeof globalThis.fetch
 }
 
+type ResponseAwareClient = Method.AnyClient & {
+  onResponse?: ((response: Response) => Promise<void> | void) | undefined
+}
+
 let originalFetch: typeof globalThis.fetch | undefined
 
 /**
@@ -46,7 +50,10 @@ export function from<const methods extends readonly Method.AnyClient[]>(
     // Pass init through untouched to preserve object identity for non-402 responses.
     const response = await baseFetch(input, init)
 
-    if (response.status !== 402) return response
+    if (response.status !== 402) {
+      await handleResponse(methods, response)
+      return response
+    }
 
     // Only extract context for payment handling after confirming 402.
     const context = (init as Record<string, unknown> | undefined)?.context
@@ -81,10 +88,12 @@ export function from<const methods extends readonly Method.AnyClient[]>(
     const credential = onChallengeCredential ?? (await resolveCredential(challenge, mi, context))
     validateCredentialHeaderValue(credential)
 
-    return baseFetch(input, {
+    const retryResponse = await baseFetch(input, {
       ...fetchInit,
       headers: withAuthorizationHeader(fetchInit.headers, credential),
     })
+    await handleResponse(methods, retryResponse)
+    return retryResponse
   }
 
   // Record the wrapped target so future polyfill() / restore() calls can detect origin
@@ -237,6 +246,16 @@ function validateCredentialHeaderValue(credential: string): void {
   if (!credential.trim()) throw new Error('Credential header value must be non-empty')
   if (credential.includes('\r') || credential.includes('\n')) {
     throw new Error('Credential header value contains illegal newline characters')
+  }
+}
+
+async function handleResponse(
+  methods: readonly Method.AnyClient[],
+  response: Response,
+): Promise<void> {
+  for (const method of methods) {
+    const onResponse = (method as ResponseAwareClient).onResponse
+    if (onResponse) await onResponse(response)
   }
 }
 
