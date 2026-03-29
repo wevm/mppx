@@ -14,6 +14,7 @@ import {
   type Address,
   type Hex,
   parseUnits,
+  zeroAddress,
   type Account as viem_Account,
   type Client as viem_Client,
 } from 'viem'
@@ -30,7 +31,7 @@ import {
   VerificationFailedError,
 } from '../../Errors.js'
 import type { Challenge, Credential } from '../../index.js'
-import type { LooseOmit } from '../../internal/types.js'
+import type { LooseOmit, NoExtraKeys } from '../../internal/types.js'
 import * as Method from '../../Method.js'
 import * as Store from '../../Store.js'
 import * as Client from '../../viem/Client.js'
@@ -82,7 +83,9 @@ type SessionMethodDetails = {
  * })
  * ```
  */
-export function session<const parameters extends session.Parameters>(p?: parameters) {
+export function session<const parameters extends session.Parameters>(
+  p?: NoExtraKeys<parameters, session.Parameters>,
+) {
   const parameters = p as parameters
   const {
     amount,
@@ -100,6 +103,11 @@ export function session<const parameters extends session.Parameters>(p?: paramet
   const store = ChannelStore.fromStore(rawStore)
 
   const { account, recipient, feePayer, feePayerUrl } = Account.resolve(parameters)
+
+  if (!account)
+    throw new Error(
+      'tempo.session() requires an `account` (viem Account, e.g. privateKeyToAccount("0x...")). An address string is not sufficient — the server needs a signing account for on-chain channel close and settlement.',
+    )
 
   const getClient = Client.getResolver({
     chain: tempo_chain,
@@ -335,8 +343,10 @@ export async function settle(
   channelId: Hex,
   options?: {
     escrowContract?: Address | undefined
-    feePayer?: viem_Account | undefined
-  },
+  } & (
+    | { feePayer: viem_Account; account: viem_Account }
+    | { feePayer?: undefined; account?: viem_Account | undefined }
+  ),
 ): Promise<Hex> {
   const channel = await store.getChannel(channelId)
   if (!channel) throw new ChannelNotFoundError({ reason: 'channel not found' })
@@ -349,12 +359,11 @@ export async function settle(
   if (!resolvedEscrow) throw new Error(`No escrow contract for chainId ${chainId}.`)
 
   const settledAmount = channel.highestVoucher.cumulativeAmount
-  const txHash = await settleOnChain(
-    client,
-    resolvedEscrow,
-    channel.highestVoucher,
-    options?.feePayer,
-  )
+  const txHash = await settleOnChain(client, resolvedEscrow, channel.highestVoucher, {
+    ...(options?.feePayer && options?.account
+      ? { feePayer: options.feePayer, account: options.account }
+      : { account: options?.account }),
+  })
 
   await store.updateChannel(channelId, (current) => {
     if (!current) return null
@@ -450,6 +459,15 @@ async function verifyAndAcceptVoucher(parameters: {
   }
   if (onChain.closeRequestedAt !== 0n) {
     throw new ChannelClosedError({ reason: 'channel has a pending close request' })
+  }
+  // Treat a zero deposit on an existing channel as settled/closed.
+  // During settlement the escrow contract may zero the deposit before
+  // setting the finalized flag, creating a brief window where
+  // finalized=false but deposit=0. Without this guard the voucher
+  // check below would return a 402 (AmountExceedsDepositError) instead
+  // of the correct 410 (ChannelClosedError).
+  if (onChain.deposit === 0n && onChain.payer !== zeroAddress) {
+    throw new ChannelClosedError({ reason: 'channel deposit is zero (settled)' })
   }
 
   if (voucher.cumulativeAmount <= onChain.settled) {
@@ -810,10 +828,14 @@ async function handleClose(
     throw new ChannelClosedError({ reason: 'channel is finalized on-chain' })
   }
 
-  const minCloseAmount = channel.spent > onChain.settled ? channel.spent : onChain.settled
-  if (voucher.cumulativeAmount < minCloseAmount) {
+  if (voucher.cumulativeAmount < channel.spent) {
     throw new VerificationFailedError({
-      reason: `close voucher amount must be >= ${minCloseAmount} (max of spent and on-chain settled)`,
+      reason: `close voucher amount must be >= ${channel.spent} (spent)`,
+    })
+  }
+  if (voucher.cumulativeAmount <= onChain.settled) {
+    throw new VerificationFailedError({
+      reason: `close voucher amount must be > ${onChain.settled} (on-chain settled)`,
     })
   }
 
@@ -834,13 +856,9 @@ async function handleClose(
     throw new InvalidSignatureError({ reason: 'invalid voucher signature' })
   }
 
-  const txHash = await closeOnChain(
-    client,
-    methodDetails.escrowContract,
-    voucher,
-    account,
-    feePayer,
-  )
+  const txHash = await closeOnChain(client, methodDetails.escrowContract, voucher, {
+    ...(feePayer && account ? { feePayer, account } : { account }),
+  })
 
   const updated = await store.updateChannel(payload.channelId, (current) => {
     if (!current) return null

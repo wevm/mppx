@@ -1,6 +1,6 @@
 import { encodeFunctionData } from 'viem'
 import { Abis, Addresses } from 'viem/tempo'
-import { describe, expect, test } from 'vitest'
+import { describe, expect, test } from 'vp/test'
 
 import { callScopes, FeePayerValidationError, validateCalls } from './fee-payer.js'
 import * as Selectors from './selectors.js'

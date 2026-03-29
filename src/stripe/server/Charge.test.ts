@@ -1,6 +1,6 @@
 import { Challenge, Credential } from 'mppx'
 import { Mppx, stripe } from 'mppx/server'
-import { afterEach, describe, expect, test, vi } from 'vitest'
+import { afterEach, describe, expect, test, vi } from 'vp/test'
 import * as Http from '~test/Http.js'
 
 import type { StripeClient } from '../internal/types.js'
@@ -16,9 +16,15 @@ function createMockStripeClient(
   overrides?: Partial<{ status: string; id: string; throws: boolean }>,
 ): { client: StripeClient; create: ReturnType<typeof vi.fn> } {
   const { status = 'succeeded', id = 'pi_mock_123', throws = false } = overrides ?? {}
+  let callCount = 0
   const create = vi.fn(async () => {
     if (throws) throw new Error('Stripe API error')
-    return { id, status }
+    callCount++
+    return {
+      id,
+      status,
+      ...(callCount > 1 ? { lastResponse: { headers: { 'idempotent-replayed': 'true' } } } : {}),
+    }
   })
   return {
     client: { paymentIntents: { create } },
@@ -194,6 +200,51 @@ describe('stripe.charge with client', () => {
     expect(paidResponse.status).toBe(402)
     const body = (await paidResponse.json()) as { detail: string }
     expect(body.detail).toContain('requires action')
+  })
+
+  test('behavior: rejects replayed credential', async () => {
+    const { client } = createMockStripeClient()
+
+    const server = Mppx.create({
+      methods: [
+        stripe.charge({
+          client,
+          networkId: 'internal',
+          paymentMethodTypes: ['card'],
+        }),
+      ],
+      realm,
+      secretKey,
+    })
+
+    const handle = server.charge({ amount: '1', currency: 'usd', decimals: 2 })
+
+    // First request: get challenge
+    const firstResult = await handle(new Request('https://example.com'))
+    expect(firstResult.status).toBe(402)
+    if (firstResult.status !== 402) throw new Error()
+
+    const challenge = Challenge.fromResponse(firstResult.challenge)
+    const credential = Credential.from({
+      challenge,
+      payload: { spt: 'spt_test_token' },
+    })
+
+    // First payment: should succeed
+    const result1 = await handle(
+      new Request('https://example.com', {
+        headers: { Authorization: Credential.serialize(credential) },
+      }),
+    )
+    expect(result1.status).toBe(200)
+
+    // Replay same credential: should be rejected
+    const result2 = await handle(
+      new Request('https://example.com', {
+        headers: { Authorization: Credential.serialize(credential) },
+      }),
+    )
+    expect(result2.status).toBe(402)
   })
 
   test('behavior: receipt contains mock reference', async () => {

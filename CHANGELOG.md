@@ -1,5 +1,29 @@
 # mppx
 
+## 0.4.11
+
+### Patch Changes
+
+- Fixed close voucher validation to reject vouchers equal to the on-chain settled amount. ([GHSA-mv9j-8jvg-j8mr](https://github.com/wevm/mppx/security/advisories/GHSA-mv9j-8jvg-j8mr))
+- Added Stripe credential replay protection via the `Idempotent-Replayed` header. ([GHSA-8mhj-rffc-rcvw](https://github.com/wevm/mppx/security/advisories/GHSA-8mhj-rffc-rcvw))
+
+## 0.4.10
+
+### Patch Changes
+
+- b4e1a3d: Add OpenAPI-first discovery tooling via `mppx/discovery`, framework `discovery()` helpers, and `mppx discover validate`.
+
+  This also changes `mppx/proxy` discovery routes:
+  - `GET /openapi.json` is now the canonical machine-readable discovery document.
+  - `GET /llms.txt` remains available as the text-friendly discovery view.
+  - Legacy `/discover*` routes now return `410 Gone`.
+
+- 70f6595: Fix two production session/SSE robustness issues.
+  1. Accept exact voucher replays (`cumulativeAmount == highestVoucherAmount`) as idempotent success after signature verification, while still rejecting lower cumulative amounts and preserving monotonic state advancement rules.
+  2. Prevent invalid null-body response wrapping in SSE receipt transport by returning `101/204/205/304` responses directly instead of stream-wrapping them.
+
+- 3c713c9: `tempo.session()` now throws immediately at initialization if no viem `Account` is provided, instead of failing later with an opaque error during channel close. The error message includes an example fix.
+
 ## 0.4.9
 
 ### Patch Changes
@@ -13,7 +37,7 @@
 
 ### Patch Changes
 
-- 99920d0: Updated validation.
+- 99920d0: Updated validation. ([GHSA-8x4m-qw58-3pcx](https://github.com/wevm/mppx/security/advisories/GHSA-8x4m-qw58-3pcx))
 
 ## 0.4.7
 

@@ -3,7 +3,7 @@ import { privateKeyToAccount } from 'viem/accounts'
 import { signTransaction } from 'viem/actions'
 import { tempoLocalnet } from 'viem/chains'
 import { Transaction } from 'viem/tempo'
-import { describe, expect, test } from 'vitest'
+import { describe, expect, test } from 'vp/test'
 
 import * as Client from './Client.js'
 

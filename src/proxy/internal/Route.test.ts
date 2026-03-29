@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'vitest'
+import { describe, expect, test } from 'vp/test'
 
 import * as Route from './Route.js'
 
@@ -23,6 +23,14 @@ describe('pathname', () => {
     expect(
       Route.pathname(new URL('http://localhost/other/openai/v1/models'), '/api/proxy'),
     ).toBeNull()
+  })
+
+  test('error: returns null for basePath prefix collision', () => {
+    expect(Route.pathname(new URL('http://localhost/proxy2/openai/v1/models'), '/proxy')).toBeNull()
+  })
+
+  test('behavior: returns empty string when pathname equals basePath', () => {
+    expect(Route.pathname(new URL('http://localhost/proxy'), '/proxy')).toBe('')
   })
 })
 

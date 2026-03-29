@@ -13,7 +13,7 @@ import {
 } from 'viem'
 import { waitForTransactionReceipt } from 'viem/actions'
 import { Addresses } from 'viem/tempo'
-import { beforeAll, beforeEach, describe, expect, expectTypeOf, test } from 'vitest'
+import { beforeAll, beforeEach, describe, expect, expectTypeOf, test } from 'vp/test'
 import { nodeEnv } from '~test/config.js'
 
 const isLocalnet = nodeEnv === 'localnet'
@@ -47,6 +47,7 @@ import { charge, session, settle } from './Session.js'
 
 const payer = accounts[2]
 const delegatedSigner = accounts[4]
+const recipientAccount = accounts[0]
 const recipient = accounts[0].address
 const currency = asset
 const secp256k1N = BigInt('0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141')
@@ -74,7 +75,7 @@ describe.runIf(isLocalnet)('session', () => {
     return session({
       store: rawStore,
       getClient: () => client,
-      account: recipient,
+      account: recipientAccount,
       currency,
       escrowContract,
       chainId: chain.id,
@@ -89,7 +90,7 @@ describe.runIf(isLocalnet)('session', () => {
     return session({
       store: customStore,
       getClient: () => client,
-      account: recipient,
+      account: recipientAccount,
       currency,
       escrowContract,
       chainId: chain.id,
@@ -103,7 +104,7 @@ describe.runIf(isLocalnet)('session', () => {
         tempo_server.session({
           store: rawStore,
           getClient: () => client,
-          account: recipient,
+          account: recipientAccount,
           currency,
           escrowContract,
           chainId: chain.id,
@@ -930,6 +931,34 @@ describe.runIf(isLocalnet)('session', () => {
         }),
       ).rejects.toThrow(ChannelClosedError)
     })
+
+    test('rejects voucher when deposit is zero (settled race window)', async () => {
+      const { channelId, serializedTransaction } = await createSignedOpenTransaction(10000000n)
+      // Use a large TTL so the voucher path uses the cached store state
+      // instead of reading on-chain. This lets us simulate the settlement
+      // race where deposit=0 but finalized=false by manipulating the store.
+      const server = createServer({ channelStateTtl: 60_000 })
+      await openServerChannel(server, channelId, serializedTransaction)
+
+      // Simulate the escrow contract zeroing the deposit before setting
+      // finalized (the race window this PR guards against).
+      await store.updateChannel(channelId, (ch) => (ch ? { ...ch, deposit: 0n } : null))
+
+      await expect(
+        server.verify({
+          credential: {
+            challenge: makeChallenge({ id: 'challenge-after-settle', channelId }),
+            payload: {
+              action: 'voucher' as const,
+              channelId,
+              cumulativeAmount: '2000000',
+              signature: await signTestVoucher(channelId, 2000000n),
+            },
+          },
+          request: makeRequest(),
+        }),
+      ).rejects.toThrow(ChannelClosedError)
+    })
   })
 
   describe('topUp', () => {
@@ -1188,6 +1217,35 @@ describe.runIf(isLocalnet)('session', () => {
       ).rejects.toThrow('close voucher amount must be >=')
     })
 
+    test('rejects close equal to on-chain settled amount', async () => {
+      const { channelId, serializedTransaction } = await createSignedOpenTransaction(10000000n)
+      const server = createServer()
+
+      // Open with 1M voucher (matches openServerChannel default)
+      await openServerChannel(server, channelId, serializedTransaction)
+
+      // Settle on-chain so settled becomes 1000000
+      const settleTxHash = await settle(store, client, channelId, { escrowContract })
+      await waitForTransactionReceipt(client, { hash: settleTxHash })
+
+      // Try to close with voucher == on-chain settled — should be rejected
+      // because replaying the settled amount doesn't commit new funds
+      await expect(
+        server.verify({
+          credential: {
+            challenge: makeChallenge({ id: 'challenge-2', channelId }),
+            payload: {
+              action: 'close' as const,
+              channelId,
+              cumulativeAmount: '1000000',
+              signature: await signTestVoucher(channelId, 1000000n),
+            },
+          },
+          request: makeRequest(),
+        }),
+      ).rejects.toThrow('close voucher amount must be >')
+    })
+
     test('rejects close exceeding on-chain deposit', async () => {
       const { channelId, serializedTransaction } = await createSignedOpenTransaction(10000000n)
       const server = createServer()
@@ -1283,27 +1341,29 @@ describe.runIf(isLocalnet)('session', () => {
       expect(ch!.finalized).toBe(true)
     })
 
-    test('close throws when client has no account', async () => {
-      const { channelId, serializedTransaction } = await createSignedOpenTransaction(10000000n)
-      const server = createServer({
-        getClient: () => createClient({ chain, transport: http() }),
-      })
-      await openServerChannel(server, channelId, serializedTransaction)
+    test('session() throws at initialization when no account provided', () => {
+      expect(() =>
+        session({
+          store: rawStore,
+          getClient: () => client,
+          account: recipient as Address,
+          currency,
+          escrowContract,
+          chainId: chain.id,
+        } as session.Parameters),
+      ).toThrow('tempo.session() requires an `account`')
+    })
 
-      await expect(
-        server.verify({
-          credential: {
-            challenge: makeChallenge({ id: 'challenge-2', channelId }),
-            payload: {
-              action: 'close' as const,
-              channelId,
-              cumulativeAmount: '1000000',
-              signature: await signTestVoucher(channelId, 1000000n),
-            },
-          },
-          request: makeRequest(),
-        }),
-      ).rejects.toThrow('Cannot close channel: no account available')
+    test('session() throws at initialization with no account at all', () => {
+      expect(() =>
+        session({
+          store: rawStore,
+          getClient: () => client,
+          currency,
+          escrowContract,
+          chainId: chain.id,
+        } as session.Parameters),
+      ).toThrow('tempo.session() requires an `account`')
     })
   })
 
@@ -3348,6 +3408,7 @@ describe('session request and verify guardrails', () => {
 })
 
 describe('session default currency resolution', () => {
+  const mockAccount = accounts[0]
   const mockClient = createClient({ transport: http('http://localhost:1') })
   const mockMainnetClient = createClient({
     chain: {
@@ -3372,7 +3433,7 @@ describe('session default currency resolution', () => {
     const server = session({
       store: Store.memory(),
       getClient: () => mockClient,
-      account: '0x0000000000000000000000000000000000000001',
+      account: mockAccount,
       escrowContract: '0x0000000000000000000000000000000000000002',
     } as session.Parameters)
     expect(server.defaults?.currency).toBe('0x20C000000000000000000000b9537d11c60E8b50')
@@ -3382,7 +3443,7 @@ describe('session default currency resolution', () => {
     const server = session({
       store: Store.memory(),
       getClient: () => mockClient,
-      account: '0x0000000000000000000000000000000000000001',
+      account: mockAccount,
       escrowContract: '0x0000000000000000000000000000000000000002',
       testnet: true,
     } as session.Parameters)
@@ -3393,7 +3454,7 @@ describe('session default currency resolution', () => {
     const server = session({
       store: Store.memory(),
       getClient: () => mockClient,
-      account: '0x0000000000000000000000000000000000000001',
+      account: mockAccount,
       escrowContract: '0x0000000000000000000000000000000000000002',
       chainId: 69420,
     } as session.Parameters)
@@ -3404,7 +3465,7 @@ describe('session default currency resolution', () => {
     const server = session({
       store: Store.memory(),
       getClient: () => mockClient,
-      account: '0x0000000000000000000000000000000000000001',
+      account: mockAccount,
       currency: '0xcustom',
       escrowContract: '0x0000000000000000000000000000000000000002',
       chainId: 4217,
@@ -3417,7 +3478,7 @@ describe('session default currency resolution', () => {
     const server = session({
       store: Store.memory(),
       getClient: () => mockClient,
-      account: '0x0000000000000000000000000000000000000001',
+      account: mockAccount,
       escrowContract: '0x0000000000000000000000000000000000000002',
       chainId: 42431,
     } as session.Parameters)
@@ -3430,7 +3491,7 @@ describe('session default currency resolution', () => {
         tempo_server.session({
           store: Store.memory(),
           getClient: () => mockMainnetClient,
-          account: '0x0000000000000000000000000000000000000001',
+          account: mockAccount,
           escrowContract: '0x0000000000000000000000000000000000000002',
           chainId: 4217,
           testnet: false,
@@ -3457,7 +3518,7 @@ describe('session default currency resolution', () => {
         tempo_server.session({
           store: Store.memory(),
           getClient: () => mockTestnetClient,
-          account: '0x0000000000000000000000000000000000000001',
+          account: mockAccount,
           escrowContract: '0x0000000000000000000000000000000000000002',
           testnet: true,
         }),
@@ -3484,7 +3545,7 @@ describe('session default currency resolution', () => {
         tempo_server.session({
           store: Store.memory(),
           getClient: () => mockTestnetClient,
-          account: '0x0000000000000000000000000000000000000001',
+          account: mockAccount,
           escrowContract: '0x0000000000000000000000000000000000000002',
           chainId: 69420,
         }),
@@ -3510,7 +3571,7 @@ describe('session default currency resolution', () => {
         tempo_server.session({
           store: Store.memory(),
           getClient: () => mockClient,
-          account: '0x0000000000000000000000000000000000000001',
+          account: mockAccount,
           currency: '0xcustom',
           escrowContract: '0x0000000000000000000000000000000000000002',
           chainId: 4217,

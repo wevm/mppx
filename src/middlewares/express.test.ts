@@ -1,11 +1,11 @@
 import express from 'express'
 import { Receipt } from 'mppx'
 import { Mppx as Mppx_client, session as sessionIntent, tempo as tempo_client } from 'mppx/client'
-import { Mppx, payment } from 'mppx/express'
+import { Mppx, discovery, payment } from 'mppx/express'
 import { Mppx as Mppx_server, tempo as tempo_server } from 'mppx/server'
 import type { Address } from 'viem'
 import { Addresses } from 'viem/tempo'
-import { beforeAll, describe, expect, test } from 'vitest'
+import { beforeAll, describe, expect, test } from 'vp/test'
 import { deployEscrow } from '~test/tempo/session.js'
 import { accounts, asset, client, fundAccount } from '~test/tempo/viem.js'
 
@@ -29,7 +29,7 @@ describe('charge', () => {
       tempo_server({
         getClient: () => client,
         currency: asset,
-        recipient: accounts[0].address,
+        account: accounts[0],
       }),
     ],
     secretKey,
@@ -81,6 +81,34 @@ describe('charge', () => {
 
     server.close()
   })
+
+  test('serves /openapi.json from a handler-derived route config', async () => {
+    const app = express()
+    const pay = mppx.charge({ amount: '1' })
+    app.get('/', pay, (_req, res) => {
+      res.json({ fortune: 'You will be rich' })
+    })
+    discovery(app, mppx, {
+      info: { title: 'Express API', version: '1.2.3' },
+      routes: [{ handler: pay, method: 'get', path: '/' }],
+    })
+
+    const server = await createServer(app)
+    const response = await globalThis.fetch(`${server.url}/openapi.json`)
+    expect(response.status).toBe(200)
+    expect(response.headers.get('cache-control')).toBe('public, max-age=300')
+
+    const body = (await response.json()) as Record<string, any>
+    expect(body.info).toEqual({ title: 'Express API', version: '1.2.3' })
+    expect(body.paths['/'].get['x-payment-info']).toMatchObject({
+      amount: '1000000',
+      currency: asset,
+      intent: 'charge',
+      method: 'tempo',
+    })
+
+    server.close()
+  })
 })
 
 describe('session', () => {
@@ -97,7 +125,7 @@ describe('session', () => {
       methods: [
         tempo_server.session({
           getClient: () => client,
-          recipient: accounts[0].address,
+          account: accounts[0],
           currency: asset,
           escrowContract,
         }),
@@ -123,10 +151,10 @@ describe('session', () => {
       methods: [
         tempo_server.session({
           getClient: () => client,
-          recipient: accounts[0].address,
+          account: accounts[0],
           currency: asset,
           escrowContract,
-          feePayer: accounts[0],
+          feePayer: true,
         }),
       ],
       secretKey,
@@ -165,7 +193,7 @@ describe('payment', () => {
       tempo_server({
         getClient: () => client,
         currency: asset,
-        recipient: accounts[0].address,
+        account: accounts[0],
       }),
     ],
     secretKey,

@@ -2,7 +2,7 @@ import { Receipt } from 'mppx'
 import { tempo } from 'mppx/client'
 import { Mppx as Mppx_server, tempo as tempo_server } from 'mppx/server'
 import { createClient, defineChain } from 'viem'
-import { describe, expect, test, vi } from 'vitest'
+import { describe, expect, test, vi } from 'vp/test'
 import * as Http from '~test/Http.js'
 import { rpcUrl } from '~test/tempo/prool.js'
 import { accounts, asset, chain, client, http } from '~test/tempo/viem.js'
@@ -16,6 +16,7 @@ const server = Mppx_server.create({
   methods: [
     tempo_server({
       getClient: () => client,
+      account: accounts[0],
     }),
   ],
   realm,

@@ -1,11 +1,12 @@
 import path from 'node:path'
 
-import { playwright } from '@vitest/browser-playwright'
-import { defineConfig } from 'vitest/config'
+import { defineConfig } from 'vp'
+import { playwright } from 'vp/test/browser-playwright'
 
 // Shared aliases used by both projects
 const alias = {
   'mppx/client': path.resolve(import.meta.dirname, 'src/client'),
+  'mppx/discovery': path.resolve(import.meta.dirname, 'src/discovery'),
   'mppx/mcp-sdk/client': path.resolve(import.meta.dirname, 'src/mcp-sdk/client'),
   'mppx/mcp-sdk/server': path.resolve(import.meta.dirname, 'src/mcp-sdk/server'),
   'mppx/proxy': path.resolve(import.meta.dirname, 'src/proxy'),
@@ -25,7 +26,13 @@ const alias = {
 export default defineConfig({
   test: {
     coverage: {
-      exclude: ['test/**'],
+      include: ['src/**'],
+      exclude: ['test/**', 'src/cli/**', 'src/bin.ts', '**/*.test-d.ts'],
+      thresholds: {
+        statements: 70,
+        branches: 70,
+        functions: 70,
+      },
     },
     globalSetup: ['./test/setup.global.ts'],
     projects: [
@@ -41,6 +48,7 @@ export default defineConfig({
           globals: true,
           retry: 3,
           setupFiles: ['./test/setup.ts'],
+          testTimeout: 10_000,
           hookTimeout: 60_000,
         },
       },
@@ -52,6 +60,7 @@ export default defineConfig({
           globals: true,
           retry: 3,
           setupFiles: ['./test/setup.ts'],
+          testTimeout: 10_000,
           hookTimeout: 60_000,
         },
       },
@@ -72,6 +81,7 @@ export default defineConfig({
           include: ['src/**/*.browser.test.ts'],
           globals: true,
           retry: 1,
+          testTimeout: 10_000,
           browser: {
             enabled: true,
             headless: true,
@@ -81,5 +91,45 @@ export default defineConfig({
         },
       },
     ],
+  },
+  lint: {
+    categories: {
+      correctness: 'error',
+      suspicious: 'warn',
+    },
+    plugins: ['typescript', 'oxc'],
+    env: {
+      builtin: true,
+    },
+    rules: {
+      'typescript/no-non-null-assertion': 'off',
+      'typescript/no-explicit-any': 'off',
+      'no-shadow-restricted-names': 'off',
+      'no-shadow': 'off',
+      'no-control-regex': 'off',
+    },
+    settings: {
+      polyfills: ['PaymentRequest', 'URLPattern', 'crypto'],
+    },
+    overrides: [
+      {
+        files: ['src/**/*.ts'],
+        rules: {
+          'compat/compat': 'error',
+        },
+        jsPlugins: ['eslint-plugin-compat'],
+      },
+    ],
+  },
+  fmt: {
+    singleQuote: true,
+    semi: false,
+    sortImports: {},
+    sortPackageJson: false,
+  },
+  staged: {
+    '*': 'vp fmt --write --no-error-on-unmatched-pattern',
+    '*.{js,jsx,ts,tsx,mjs,cjs}': 'vp lint --fix',
+    '*.{ts,tsx}': "bash -c 'vp check'",
   },
 })

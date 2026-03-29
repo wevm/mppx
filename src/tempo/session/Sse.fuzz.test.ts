@@ -1,5 +1,5 @@
 import * as fc from 'fast-check'
-import { describe, expect, test } from 'vitest'
+import { describe, expect, test } from 'vp/test'
 
 import * as Sse from './Sse.js'
 

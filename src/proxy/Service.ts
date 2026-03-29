@@ -4,12 +4,14 @@ import { Value } from 'ox'
 export type Service = {
   /** Base URL of the upstream service (e.g. `'https://api.openai.com'`). */
   baseUrl: string
+  /** Free-form service categories for discovery metadata. */
+  categories?: string[] | undefined
   /** Short description of the service. */
   description?: string | undefined
+  /** Structured service documentation links for discovery metadata. */
+  docs?: Docs | undefined
   /** Unique identifier used as the URL prefix (e.g. `'openai'` → `/{id}/...`). */
   id: string
-  /** Returns a documentation URL. Called with no argument for the service root, or with a route pattern for per-endpoint docs. */
-  docsLlmsUrl?: ((options: { route?: string | undefined }) => string | undefined) | undefined
   /** Hook to modify the upstream request before sending (e.g. inject auth headers). */
   rewriteRequest?: ((req: Request, ctx: Context) => Request | Promise<Request>) | undefined
   /** Hook to modify the upstream response before returning to the client. */
@@ -18,6 +20,12 @@ export type Service = {
   routes: EndpointMap
   /** Human-readable title for the service (e.g. `'OpenAI'`). */
   title?: string | undefined
+}
+
+export type Docs = {
+  apiReference?: string | undefined
+  homepage?: string | undefined
+  llms?: string | undefined
 }
 
 /**
@@ -80,9 +88,10 @@ export function from<options = unknown>(id: string, config: from.Config<options>
   const rewriteFromConfig = resolveRewriteRequest(config)
   return {
     baseUrl: config.baseUrl,
+    categories: config.categories,
     description: config.description,
+    docs: resolveDocs(config),
     id,
-    docsLlmsUrl: resolveLlmsUrl(config.docsLlmsUrl),
     routes: config.routes,
     title: config.title,
     rewriteRequest: config.rewriteRequest
@@ -102,8 +111,12 @@ export declare namespace from {
     baseUrl: string
     /** Shorthand: inject `Authorization: Bearer {token}` header. */
     bearer?: string | undefined
+    /** Free-form service categories for discovery metadata. */
+    categories?: string[] | undefined
     /** Short description of the service. */
     description?: string | undefined
+    /** Structured service documentation links for discovery metadata. */
+    docs?: Docs | undefined
     /** Shorthand: inject custom headers. */
     headers?: Record<string, string> | undefined
     /** Documentation URL for the service. String for a static base URL, or a function receiving an optional endpoint pattern. */
@@ -157,32 +170,14 @@ function resolveRewriteRequest(
   return undefined
 }
 
-/** Serializes a service for discovery responses. */
-export function serialize(s: Service) {
-  return {
-    description: s.description,
-    id: s.id,
-    docsLlmsUrl: s.docsLlmsUrl?.({}),
-    routes: Object.entries(s.routes).map(([pattern, endpoint]) => {
-      const tokens = pattern.trim().split(/\s+/)
-      const hasMethod = tokens.length >= 2
-      const path = hasMethod ? tokens.slice(1).join(' ') : tokens[0]
-      return {
-        docsLlmsUrl: s.docsLlmsUrl?.({ route: pattern }),
-        method: hasMethod ? tokens[0] : undefined,
-        path: `/${s.id}${path}`,
-        pattern: hasMethod ? `${tokens[0]} /${s.id}${path}` : `/${s.id}${path}`,
-        payment: endpoint ? resolvePayment(endpoint) : null,
-      }
-    }),
-    title: s.title,
-  }
-}
-
 /** Renders an llms.txt markdown string for a list of services. */
 export function toLlmsTxt(
   services: Service[],
-  options?: { title?: string | undefined; description?: string | undefined },
+  options?: {
+    description?: string | undefined
+    openApiPath?: string | undefined
+    title?: string | undefined
+  },
 ): string {
   const lines: string[] = [
     `# ${options?.title ?? 'API Proxy'}`,
@@ -197,63 +192,11 @@ export function toLlmsTxt(
   for (const s of services) {
     const label = s.title ?? s.id
     const desc = s.description ? `: ${s.description}` : ''
-    lines.push(`- [${label}](/discover/${s.id}.md)${desc}`)
+    lines.push(`- ${label}${desc}`)
   }
-  lines.push('', '[See all service definitions](/discover/all.md)')
+  lines.push('', `[OpenAPI discovery](${options?.openApiPath ?? '/openapi.json'})`)
 
   return lines.join('\n')
-}
-
-/** Renders a full markdown listing of all services with their routes. */
-export function toServicesMarkdown(services: Service[]): string {
-  const lines: string[] = ['# Services', '']
-
-  if (services.length === 0) return lines.join('\n')
-
-  for (const s of services) {
-    lines.push(`## [${s.title ?? s.id}](/discover/${s.id}.md)`, '')
-    if (s.description) lines.push(s.description, '')
-    pushRoutes(lines, s)
-  }
-
-  return lines.join('\n')
-}
-
-/** Renders a markdown string for a single service. */
-export function toMarkdown(s: Service): string {
-  const docsLlmsUrl = s.docsLlmsUrl?.({})
-  const lines: string[] = [`# ${s.title ?? s.id}`, '']
-  if (docsLlmsUrl) lines.push(`> Documentation: ${docsLlmsUrl}`, '')
-  if (s.description) lines.push(s.description, '')
-  pushRoutes(lines, s, '##')
-  return lines.join('\n')
-}
-
-function pushRoutes(lines: string[], s: Service, heading: '##' | '###' = '###') {
-  lines.push(`${heading} Routes`, '')
-  const serialized = serialize(s)
-  for (const route of serialized.routes) {
-    const p = route.payment as Record<string, unknown> | null
-    const desc = p?.description ? `: ${p.description}` : ''
-    lines.push(`- \`${route.pattern}\`${desc}`)
-    if (!p) {
-      lines.push('  - Type: free')
-    } else {
-      lines.push(`  - Type: ${p.intent}`)
-      if (p.amount) {
-        const perUnit = p.unitType ? `/${p.unitType}` : ''
-        if (p.decimals !== undefined) {
-          const price = Number(p.amount) / 10 ** Number(p.decimals)
-          lines.push(`  - Price: ${price}${perUnit} (${p.amount} units, ${p.decimals} decimals)`)
-        } else {
-          lines.push(`  - Units: ${p.amount}${perUnit}`)
-        }
-      }
-      if (p.currency) lines.push(`  - Currency: ${p.currency}`)
-    }
-    if (route.docsLlmsUrl) lines.push(`  - Docs: ${route.docsLlmsUrl}`)
-    lines.push('')
-  }
 }
 
 /** Extracts per-endpoint options from an endpoint definition. */
@@ -263,10 +206,10 @@ export function getOptions(endpoint: Endpoint): EndpointOptions | undefined {
   return undefined
 }
 
-function resolvePayment(endpoint: Endpoint): Record<string, unknown> | null {
+export function paymentOf(endpoint: Endpoint): Record<string, unknown> | null {
   if (endpoint === true) return null
   const handler = typeof endpoint === 'function' ? endpoint : endpoint.pay
-  if (!('_internal' in handler)) return {}
+  if (!('_internal' in handler)) return null
   const {
     name,
     intent,
@@ -283,10 +226,21 @@ function resolvePayment(endpoint: Endpoint): Record<string, unknown> | null {
   return { intent, method: name, ...rest, ...(amount !== undefined && { amount }) }
 }
 
-function resolveLlmsUrl(
+function resolveDocs(config: from.Config): Docs | undefined {
+  if (config.docs) {
+    return {
+      ...config.docs,
+      ...(config.docs.llms ? {} : { llms: resolveLlmsFromLegacy(config.docsLlmsUrl) }),
+    }
+  }
+  const llms = resolveLlmsFromLegacy(config.docsLlmsUrl)
+  return llms ? { llms } : undefined
+}
+
+function resolveLlmsFromLegacy(
   input: string | ((options: { route?: string | undefined }) => string | undefined) | undefined,
-): Service['docsLlmsUrl'] {
+): string | undefined {
   if (!input) return undefined
-  if (typeof input === 'function') return input
-  return ({ route }) => (route ? undefined : input)
+  if (typeof input === 'string') return input
+  return input({}) ?? undefined
 }

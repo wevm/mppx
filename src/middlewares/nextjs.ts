@@ -1,3 +1,4 @@
+import { generate, type GenerateConfig, type RouteConfig } from '../discovery/OpenApi.js'
 import * as Mppx_core from '../server/Mppx.js'
 import * as Mppx_internal from './internal/mppx.js'
 
@@ -63,4 +64,31 @@ export function payment<const intent extends Mppx_internal.AnyMethodFn>(
     const response = await handler(request)
     return result.withReceipt(response)
   }
+}
+
+export type DiscoveryConfig = Omit<GenerateConfig, 'routes'> & {
+  routes?: RouteConfig[]
+}
+
+const discoveryHeaders = { 'Cache-Control': 'public, max-age=300' }
+
+/**
+ * Creates a route handler that serves an OpenAPI discovery document.
+ */
+export function discovery(
+  mppx: { methods: readonly Mppx_internal.AnyServer[]; realm: string },
+  config: DiscoveryConfig = {},
+): RouteHandler {
+  const cached = JSON.stringify(
+    generate(mppx, {
+      ...(config.info ? { info: config.info } : {}),
+      routes: config.routes ?? [],
+      ...(config.serviceInfo ? { serviceInfo: config.serviceInfo } : {}),
+    }),
+  )
+
+  return () =>
+    new Response(cached, {
+      headers: { ...discoveryHeaders, 'Content-Type': 'application/json' },
+    })
 }

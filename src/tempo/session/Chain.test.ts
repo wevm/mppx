@@ -1,7 +1,7 @@
 import { type Account, type Address, encodeFunctionData, erc20Abi, type Hex } from 'viem'
 import { waitForTransactionReceipt } from 'viem/actions'
 import { Addresses, Transaction } from 'viem/tempo'
-import { beforeAll, describe, expect, test } from 'vitest'
+import { beforeAll, describe, expect, test } from 'vp/test'
 import { nodeEnv } from '~test/config.js'
 import {
   closeChannelOnChain,
@@ -788,7 +788,9 @@ describe.runIf(isLocalnet)('on-chain', () => {
       expect(channel.finalized).toBe(false)
     })
 
-    test('settles a channel with fee payer', async () => {
+    test.todo('settles with distinct feePayer != account (fee-sponsored settle)')
+
+    test('settles with explicit account (no fee payer)', async () => {
       const salt = nextSalt()
       const deposit = 10_000_000n
       const settleAmount = 5_000_000n
@@ -810,6 +812,7 @@ describe.runIf(isLocalnet)('on-chain', () => {
         chain.id,
       )
 
+      // Pass account explicitly — should use it as sender instead of client.account
       const txHash = await settleOnChain(
         client,
         escrowContract,
@@ -818,7 +821,7 @@ describe.runIf(isLocalnet)('on-chain', () => {
           cumulativeAmount: settleAmount,
           signature,
         },
-        accounts[0],
+        { account: accounts[0] },
       )
 
       expect(txHash).toBeDefined()
@@ -826,6 +829,21 @@ describe.runIf(isLocalnet)('on-chain', () => {
       const channel = await getOnChainChannel(client, escrowContract, channelId)
       expect(channel.settled).toBe(settleAmount)
       expect(channel.finalized).toBe(false)
+    })
+
+    test('throws when no account available', async () => {
+      const noAccountClient = { chain: { id: 42431 } } as any
+      const dummyEscrow = '0x0000000000000000000000000000000000000001' as Address
+      const dummyChannelId =
+        '0x0000000000000000000000000000000000000000000000000000000000000001' as Hex
+
+      await expect(
+        settleOnChain(noAccountClient, dummyEscrow, {
+          channelId: dummyChannelId,
+          cumulativeAmount: 1_000_000n,
+          signature: '0xsig' as Hex,
+        }),
+      ).rejects.toThrow('no account available')
     })
   })
 
@@ -864,7 +882,9 @@ describe.runIf(isLocalnet)('on-chain', () => {
       expect(channel.finalized).toBe(true)
     })
 
-    test('closes a channel with fee payer', async () => {
+    test.todo('closes with distinct feePayer != account (fee-sponsored close)')
+
+    test('closes with explicit account (no fee payer)', async () => {
       const salt = nextSalt()
       const deposit = 10_000_000n
       const closeAmount = 5_000_000n
@@ -886,6 +906,7 @@ describe.runIf(isLocalnet)('on-chain', () => {
         chain.id,
       )
 
+      // Pass account explicitly — should use it as sender instead of client.account
       const txHash = await closeOnChain(
         client,
         escrowContract,
@@ -894,8 +915,7 @@ describe.runIf(isLocalnet)('on-chain', () => {
           cumulativeAmount: closeAmount,
           signature,
         },
-        undefined,
-        accounts[0],
+        { account: accounts[0] },
       )
 
       expect(txHash).toBeDefined()

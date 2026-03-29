@@ -153,7 +153,7 @@ export function create<
   const transport extends Transport.AnyTransport = Transport.Http,
 >(config: create.Config<methods, transport>): Mppx<methods, transport> {
   const {
-    realm = Env.get('realm') ?? 'MPP Payment',
+    realm = Env.get('realm'),
     secretKey = Env.get('secretKey'),
     transport = Transport.http() as transport,
   } = config
@@ -222,7 +222,7 @@ export function create<
   return {
     methods,
     compose: composeFn,
-    realm: realm as string,
+    realm: realm as string | undefined,
     transport,
     ...handlers,
   } as never
@@ -235,7 +235,7 @@ export declare namespace create {
   > = {
     /** Array of configured methods. @example [tempo()] */
     methods: methods
-    /** Server realm (e.g., hostname). Auto-detected from environment variables (`MPP_REALM`, `VERCEL_URL`, `RAILWAY_PUBLIC_DOMAIN`, `RENDER_EXTERNAL_HOSTNAME`, `HOST`, `HOSTNAME`), falling back to `"localhost"`. */
+    /** Server realm (e.g., hostname). Resolution order: explicit value > env vars (`MPP_REALM`, `FLY_APP_NAME`, `VERCEL_URL`, etc.) > request URL hostname > `"MPP Payment"`. */
     realm?: string | undefined
     /** Secret key for HMAC-bound challenge IDs for stateless verification. Auto-detected from `MPP_SECRET_KEY` environment variable. Throws if neither provided nor set. */
     secretKey?: string | undefined
@@ -283,6 +283,9 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
             : merged
         ) as never
 
+        // Resolve realm: explicit > env var > request Host header.
+        const effectiveRealm = realm ?? resolveRealmFromRequest(input)
+
         // Recompute challenge from options. The HMAC-bound ID means we don't need to
         // store challenges server-side—if the client echoes back a credential with
         // a matching ID, we know it was issued by us with these exact parameters.
@@ -290,7 +293,7 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
           description,
           expires,
           meta,
-          realm,
+          realm: effectiveRealm,
           request,
           secretKey,
         })
@@ -483,7 +486,7 @@ declare namespace createMethodFn {
   > = {
     defaults?: defaults
     method: method
-    realm: string
+    realm: string | undefined
     request?: Method.RequestFn<method>
     respond?: Method.RespondFn<method>
     secretKey: string
@@ -496,6 +499,34 @@ declare namespace createMethodFn {
     transport extends Transport.AnyTransport = Transport.Http,
     defaults extends Record<string, unknown> = Record<string, unknown>,
   > = MethodFn<method, transport, defaults>
+}
+
+const defaultRealm = 'MPP Payment'
+const Warnings = {
+  realmFallback: 'realm-fallback',
+} as const
+
+const _warned = new Set<string>()
+function warnOnce(key: string, message: string) {
+  if (_warned.has(key)) return
+  _warned.add(key)
+  console.warn(`[mppx] ${message}`)
+}
+
+/** Extracts hostname from the request URL, falling back to a default. */
+function resolveRealmFromRequest(input: unknown): string {
+  try {
+    const url = typeof (input as any)?.url === 'string' ? (input as any).url : undefined
+    if (url) {
+      const { protocol, hostname } = new URL(url)
+      if (/^https?:$/.test(protocol) && hostname) return hostname
+    }
+  } catch {}
+  warnOnce(
+    Warnings.realmFallback,
+    `Could not auto-detect realm from request. Falling back to "${defaultRealm}". Set \`realm\` in Mppx.create() or the MPP_REALM env var.`,
+  )
+  return defaultRealm
 }
 
 export type MethodFn<

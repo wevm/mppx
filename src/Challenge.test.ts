@@ -1,6 +1,6 @@
 import { Challenge } from 'mppx'
 import { Methods } from 'mppx/tempo'
-import { describe, expect, test } from 'vitest'
+import { describe, expect, test } from 'vp/test'
 
 describe('from', () => {
   test('behavior: creates challenge', () => {

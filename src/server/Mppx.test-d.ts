@@ -1,6 +1,6 @@
 import { Method, z } from 'mppx'
 import { Mppx } from 'mppx/server'
-import { assertType, describe, expectTypeOf, test } from 'vitest'
+import { assertType, describe, expectTypeOf, test } from 'vp/test'
 
 const mockChargeA = Method.from({
   name: 'alpha',

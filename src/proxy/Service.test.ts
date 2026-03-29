@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'vitest'
+import { describe, expect, test } from 'vp/test'
 
 import * as Service from './Service.js'
 
@@ -99,6 +99,28 @@ describe('from', () => {
 describe('custom', () => {
   test('behavior: alias for from', () => {
     expect(Service.custom).toBe(Service.from)
+  })
+})
+
+describe('paymentOf', () => {
+  test('behavior: returns null for free passthrough endpoint', () => {
+    expect(Service.paymentOf(true)).toBeNull()
+  })
+
+  test('behavior: returns null for paid handler without _internal metadata', () => {
+    const handler: Service.IntentHandler = async () => ({
+      status: 200 as const,
+      withReceipt: <T>(r: T) => r,
+    })
+    expect(Service.paymentOf(handler)).toBeNull()
+  })
+
+  test('behavior: returns null for paid endpoint object without _internal metadata', () => {
+    const handler: Service.IntentHandler = async () => ({
+      status: 200 as const,
+      withReceipt: <T>(r: T) => r,
+    })
+    expect(Service.paymentOf({ pay: handler, options: {} })).toBeNull()
   })
 })
 

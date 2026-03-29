@@ -1,6 +1,6 @@
 import * as fc from 'fast-check'
 import { Challenge, Credential, Receipt } from 'mppx'
-import { describe, expect, test } from 'vitest'
+import { describe, expect, test } from 'vp/test'
 
 describe('Credential', () => {
   test('serialize → deserialize roundtrip', () => {

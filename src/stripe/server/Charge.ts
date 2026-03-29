@@ -89,6 +89,9 @@ export function charge<const parameters extends charge.Parameters>(parameters: p
             metadata: resolvedMetadata,
           })
 
+      if (pi.replayed)
+        throw new VerificationFailedError({ reason: 'Payment has already been processed.' })
+
       if (pi.status === 'requires_action') {
         throw new PaymentActionRequiredError({ reason: 'Stripe PaymentIntent requires action' })
       }
@@ -136,7 +139,7 @@ async function createWithClient(parameters: {
   metadata: Record<string, string>
   request: { amount: unknown; currency: unknown }
   spt: string
-}): Promise<{ id: string; status: string }> {
+}): Promise<{ id: string; status: string; replayed: boolean }> {
   const { client, challenge, metadata, request, spt } = parameters
   try {
     const result = await client.paymentIntents.create(
@@ -151,7 +154,9 @@ async function createWithClient(parameters: {
       } as any,
       { idempotencyKey: `mppx_${challenge.id}_${spt}` },
     )
-    return { id: result.id, status: result.status }
+    // https://docs.stripe.com/error-low-level#idempotency
+    const replayed = result.lastResponse?.headers?.['idempotent-replayed'] === 'true'
+    return { id: result.id, status: result.status, replayed }
   } catch {
     throw new VerificationFailedError({ reason: 'Stripe PaymentIntent failed' })
   }
@@ -164,7 +169,7 @@ async function createWithSecretKey(parameters: {
   metadata: Record<string, string>
   request: { amount: unknown; currency: unknown }
   spt: string
-}): Promise<{ id: string; status: string }> {
+}): Promise<{ id: string; status: string; replayed: boolean }> {
   const { secretKey, challenge, metadata, request, spt } = parameters
 
   const body = new URLSearchParams({
@@ -190,7 +195,10 @@ async function createWithSecretKey(parameters: {
   })
 
   if (!response.ok) throw new VerificationFailedError({ reason: 'Stripe PaymentIntent failed' })
-  return (await response.json()) as { id: string; status: string }
+  // https://docs.stripe.com/error-low-level#idempotency
+  const replayed = response.headers.get('idempotent-replayed') === 'true'
+  const result = (await response.json()) as { id: string; status: string }
+  return { ...result, replayed }
 }
 
 /** @internal */

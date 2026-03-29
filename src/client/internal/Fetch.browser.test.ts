@@ -1,4 +1,4 @@
-import { describe, expect, test, vi } from 'vitest'
+import { describe, expect, test, vi } from 'vp/test'
 
 import * as Fetch from './Fetch.js'
 
