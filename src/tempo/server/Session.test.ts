@@ -1,14 +1,24 @@
 import type { z } from 'mppx'
-import { Challenge } from 'mppx'
+import { Challenge, Credential } from 'mppx'
 import { Mppx as Mppx_server, tempo as tempo_server } from 'mppx/server'
-import { type Address, createClient, type Hex } from 'viem'
+import { Base64 } from 'ox'
+import {
+  type Address,
+  createClient,
+  type Hex,
+  parseSignature,
+  serializeCompactSignature,
+  serializeSignature,
+  signatureToCompactSignature,
+} from 'viem'
 import { waitForTransactionReceipt } from 'viem/actions'
 import { Addresses } from 'viem/tempo'
-import { beforeAll, beforeEach, describe, expect, test } from 'vitest'
+import { beforeAll, beforeEach, describe, expect, expectTypeOf, test } from 'vitest'
 import { nodeEnv } from '~test/config.js'
 
 const isLocalnet = nodeEnv === 'localnet'
 import {
+  closeChannelOnChain,
   deployEscrow,
   requestCloseChannel,
   signOpenChannel,
@@ -24,6 +34,7 @@ import {
   InvalidSignatureError,
 } from '../../Errors.js'
 import * as Store from '../../Store.js'
+import { sessionManager } from '../client/SessionManager.js'
 import {
   chainId as chainIdDefaults,
   escrowContract as escrowContractDefaults,
@@ -35,8 +46,10 @@ import { signVoucher } from '../session/Voucher.js'
 import { charge, session, settle } from './Session.js'
 
 const payer = accounts[2]
+const delegatedSigner = accounts[4]
 const recipient = accounts[0].address
 const currency = asset
+const secp256k1N = BigInt('0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141')
 
 let escrowContract: Address
 let saltCounter = 0
@@ -67,6 +80,39 @@ describe.runIf(isLocalnet)('session', () => {
       chainId: chain.id,
       ...overrides,
     } as session.Parameters)
+  }
+
+  function createServerWithStore(
+    customStore: Store.Store,
+    overrides: Partial<session.Parameters> = {},
+  ) {
+    return session({
+      store: customStore,
+      getClient: () => client,
+      account: recipient,
+      currency,
+      escrowContract,
+      chainId: chain.id,
+      ...overrides,
+    } as session.Parameters)
+  }
+
+  function createHandler(overrides: Partial<session.Parameters> = {}) {
+    return Mppx_server.create({
+      methods: [
+        tempo_server.session({
+          store: rawStore,
+          getClient: () => client,
+          account: recipient,
+          currency,
+          escrowContract,
+          chainId: chain.id,
+          ...overrides,
+        } as session.Parameters),
+      ],
+      realm: 'api.example.com',
+      secretKey: 'secret',
+    })
   }
 
   describe('open', () => {
@@ -1331,6 +1377,185 @@ describe.runIf(isLocalnet)('session', () => {
       expect(chAfter).not.toBeNull()
       expect(chAfter!.highestVoucherAmount).toBe(7000000n)
     })
+
+    test('supports delegated signer end-to-end (open -> voucher -> close)', async () => {
+      const { channelId, serializedTransaction } = await createSignedOpenTransaction(10000000n, {
+        authorizedSigner: delegatedSigner.address,
+      })
+      const server = createServer()
+
+      const openReceipt = await server.verify({
+        credential: {
+          challenge: makeChallenge({ id: 'open-delegated', channelId }),
+          payload: {
+            action: 'open' as const,
+            type: 'transaction' as const,
+            channelId,
+            transaction: serializedTransaction,
+            cumulativeAmount: '1000000',
+            signature: await signTestVoucher(channelId, 1000000n, delegatedSigner),
+          },
+        },
+        request: makeRequest(),
+      })
+      expect(openReceipt.status).toBe('success')
+
+      const channel = await store.getChannel(channelId)
+      expect(channel?.authorizedSigner).toBe(delegatedSigner.address)
+
+      const voucherReceipt = (await server.verify({
+        credential: {
+          challenge: makeChallenge({ id: 'voucher-delegated', channelId }),
+          payload: {
+            action: 'voucher' as const,
+            channelId,
+            cumulativeAmount: '2000000',
+            signature: await signTestVoucher(channelId, 2000000n, delegatedSigner),
+          },
+        },
+        request: makeRequest(),
+      })) as SessionReceipt
+      expect(voucherReceipt.acceptedCumulative).toBe('2000000')
+
+      const closeReceipt = await server.verify({
+        credential: {
+          challenge: makeChallenge({ id: 'close-delegated', channelId }),
+          payload: {
+            action: 'close' as const,
+            channelId,
+            cumulativeAmount: '2000000',
+            signature: await signTestVoucher(channelId, 2000000n, delegatedSigner),
+          },
+        },
+        request: makeRequest(),
+      })
+      expect(closeReceipt.status).toBe('success')
+    })
+
+    test('open -> topUp -> topUp -> voucher/charge -> close', async () => {
+      const { channelId, serializedTransaction } = await createSignedOpenTransaction(4000000n)
+      const server = createServer()
+
+      const openReceipt = await server.verify({
+        credential: {
+          challenge: makeChallenge({ id: 'open-multi-topup', channelId }),
+          payload: {
+            action: 'open' as const,
+            type: 'transaction' as const,
+            channelId,
+            transaction: serializedTransaction,
+            cumulativeAmount: '1000000',
+            signature: await signTestVoucher(channelId, 1000000n),
+          },
+        },
+        request: makeRequest(),
+      })
+      expect(openReceipt.status).toBe('success')
+
+      await charge(store, channelId, 1000000n)
+      await expect(charge(store, channelId, 1000000n)).rejects.toThrow('requested')
+
+      const topUp1Amount = 2000000n
+      const { serializedTransaction: topUp1 } = await signTopUpChannel({
+        escrow: escrowContract,
+        payer,
+        channelId,
+        token: currency,
+        amount: topUp1Amount,
+      })
+
+      const topUp1Receipt = await server.verify({
+        credential: {
+          challenge: makeChallenge({ id: 'topup-1', channelId }),
+          payload: {
+            action: 'topUp' as const,
+            type: 'transaction' as const,
+            channelId,
+            transaction: topUp1,
+            additionalDeposit: topUp1Amount.toString(),
+          },
+        },
+        request: makeRequest(),
+      })
+      expect(topUp1Receipt.status).toBe('success')
+      expect((await store.getChannel(channelId))?.deposit).toBe(6000000n)
+
+      const voucher1 = (await server.verify({
+        credential: {
+          challenge: makeChallenge({ id: 'voucher-after-topup-1', channelId }),
+          payload: {
+            action: 'voucher' as const,
+            channelId,
+            cumulativeAmount: '3000000',
+            signature: await signTestVoucher(channelId, 3000000n),
+          },
+        },
+        request: makeRequest(),
+      })) as SessionReceipt
+      expect(voucher1.acceptedCumulative).toBe('3000000')
+
+      await charge(store, channelId, 2000000n)
+      await expect(charge(store, channelId, 1000000n)).rejects.toThrow('requested')
+
+      const topUp2Amount = 2000000n
+      const { serializedTransaction: topUp2 } = await signTopUpChannel({
+        escrow: escrowContract,
+        payer,
+        channelId,
+        token: currency,
+        amount: topUp2Amount,
+      })
+
+      const topUp2Receipt = await server.verify({
+        credential: {
+          challenge: makeChallenge({ id: 'topup-2', channelId }),
+          payload: {
+            action: 'topUp' as const,
+            type: 'transaction' as const,
+            channelId,
+            transaction: topUp2,
+            additionalDeposit: topUp2Amount.toString(),
+          },
+        },
+        request: makeRequest(),
+      })
+      expect(topUp2Receipt.status).toBe('success')
+      expect((await store.getChannel(channelId))?.deposit).toBe(8000000n)
+
+      const voucher2 = (await server.verify({
+        credential: {
+          challenge: makeChallenge({ id: 'voucher-after-topup-2', channelId }),
+          payload: {
+            action: 'voucher' as const,
+            channelId,
+            cumulativeAmount: '5000000',
+            signature: await signTestVoucher(channelId, 5000000n),
+          },
+        },
+        request: makeRequest(),
+      })) as SessionReceipt
+      expect(voucher2.acceptedCumulative).toBe('5000000')
+
+      await charge(store, channelId, 2000000n)
+
+      const closeReceipt = await server.verify({
+        credential: {
+          challenge: makeChallenge({ id: 'close-multi-topup', channelId }),
+          payload: {
+            action: 'close' as const,
+            channelId,
+            cumulativeAmount: '5000000',
+            signature: await signTestVoucher(channelId, 5000000n),
+          },
+        },
+        request: makeRequest(),
+      })
+      expect(closeReceipt.status).toBe('success')
+
+      const finalized = await store.getChannel(channelId)
+      expect(finalized?.spent).toBe(5000000n)
+      expect(finalized?.finalized).toBe(true)
+    })
   })
 
   describe('charge', () => {
@@ -1813,6 +2038,563 @@ describe.runIf(isLocalnet)('session', () => {
     })
   })
 
+  describe('signature compatibility', () => {
+    test('accepts compact (EIP-2098) signatures for open and voucher', async () => {
+      const { channelId, serializedTransaction } = await createSignedOpenTransaction(10000000n)
+      const server = createServer()
+
+      const openSignature = toCompactSignature(await signTestVoucher(channelId, 1000000n))
+      const openReceipt = await server.verify({
+        credential: {
+          challenge: makeChallenge({ id: 'open-compact', channelId }),
+          payload: {
+            action: 'open' as const,
+            type: 'transaction' as const,
+            channelId,
+            transaction: serializedTransaction,
+            cumulativeAmount: '1000000',
+            signature: openSignature,
+          },
+        },
+        request: makeRequest(),
+      })
+      expect(openReceipt.status).toBe('success')
+
+      const voucherSignature = toCompactSignature(await signTestVoucher(channelId, 2000000n))
+      const voucherReceipt = (await server.verify({
+        credential: {
+          challenge: makeChallenge({ id: 'voucher-compact', channelId }),
+          payload: {
+            action: 'voucher' as const,
+            channelId,
+            cumulativeAmount: '2000000',
+            signature: voucherSignature,
+          },
+        },
+        request: makeRequest(),
+      })) as SessionReceipt
+      expect(voucherReceipt.status).toBe('success')
+      expect(voucherReceipt.acceptedCumulative).toBe('2000000')
+    })
+
+    test('rejects malformed compact signatures', async () => {
+      const { channelId, serializedTransaction } = await createSignedOpenTransaction(10000000n)
+      const server = createServer()
+
+      await server.verify({
+        credential: {
+          challenge: makeChallenge({ id: 'open-baseline', channelId }),
+          payload: {
+            action: 'open' as const,
+            type: 'transaction' as const,
+            channelId,
+            transaction: serializedTransaction,
+            cumulativeAmount: '1000000',
+            signature: await signTestVoucher(channelId, 1000000n),
+          },
+        },
+        request: makeRequest(),
+      })
+
+      const compact = toCompactSignature(await signTestVoucher(channelId, 2000000n))
+      await expect(
+        server.verify({
+          credential: {
+            challenge: makeChallenge({ id: 'voucher-invalid-compact', channelId }),
+            payload: {
+              action: 'voucher' as const,
+              channelId,
+              cumulativeAmount: '2000000',
+              signature: mutateSignature(compact),
+            },
+          },
+          request: makeRequest(),
+        }),
+      ).rejects.toThrow('invalid voucher signature')
+    })
+
+    test('rejects high-s malleable signatures in session voucher path', async () => {
+      const { channelId, serializedTransaction } = await createSignedOpenTransaction(10000000n)
+      const server = createServer()
+
+      await server.verify({
+        credential: {
+          challenge: makeChallenge({ id: 'open-for-high-s', channelId }),
+          payload: {
+            action: 'open' as const,
+            type: 'transaction' as const,
+            channelId,
+            transaction: serializedTransaction,
+            cumulativeAmount: '1000000',
+            signature: await signTestVoucher(channelId, 1000000n),
+          },
+        },
+        request: makeRequest(),
+      })
+
+      const lowS = await signTestVoucher(channelId, 2000000n)
+      const highS = toHighSSignature(lowS)
+
+      await expect(
+        server.verify({
+          credential: {
+            challenge: makeChallenge({ id: 'voucher-high-s', channelId }),
+            payload: {
+              action: 'voucher' as const,
+              channelId,
+              cumulativeAmount: '2000000',
+              signature: highS,
+            },
+          },
+          request: makeRequest(),
+        }),
+      ).rejects.toThrow('invalid voucher signature')
+    })
+  })
+
+  describe('session-level concurrency', () => {
+    test('concurrent voucher submissions linearize to monotonic final state', async () => {
+      const { channelId, serializedTransaction } = await createSignedOpenTransaction(10000000n)
+      const server = createServer()
+
+      await server.verify({
+        credential: {
+          challenge: makeChallenge({ id: 'open-concurrency', channelId }),
+          payload: {
+            action: 'open' as const,
+            type: 'transaction' as const,
+            channelId,
+            transaction: serializedTransaction,
+            cumulativeAmount: '1000000',
+            signature: await signTestVoucher(channelId, 1000000n),
+          },
+        },
+        request: makeRequest(),
+      })
+
+      const amounts = [2000000n, 3000000n, 4000000n, 5000000n]
+      const results = await Promise.allSettled(
+        amounts.map(async (amount, index) =>
+          server.verify({
+            credential: {
+              challenge: makeChallenge({ id: `voucher-concurrency-${index}`, channelId }),
+              payload: {
+                action: 'voucher' as const,
+                channelId,
+                cumulativeAmount: amount.toString(),
+                signature: await signTestVoucher(channelId, amount),
+              },
+            },
+            request: makeRequest(),
+          }),
+        ),
+      )
+
+      const fulfilled = results.filter((result) => result.status === 'fulfilled')
+      expect(fulfilled.length).toBeGreaterThan(0)
+
+      const channel = await store.getChannel(channelId)
+      expect(channel?.highestVoucherAmount).toBe(5000000n)
+      expect(channel?.spent).toBe(0n)
+    })
+  })
+
+  describe('fault tolerance', () => {
+    test('recovers after open write crash by replaying open against on-chain state', async () => {
+      const baseStore = Store.memory()
+      const faultStore = withFaultHooks(baseStore, { failPutAt: 1 })
+      const faultServer = createServerWithStore(faultStore)
+
+      const { channelId, serializedTransaction } = await createSignedOpenTransaction(10000000n)
+      const openPayload = {
+        action: 'open' as const,
+        type: 'transaction' as const,
+        channelId,
+        transaction: serializedTransaction,
+        cumulativeAmount: '1000000',
+        signature: await signTestVoucher(channelId, 1000000n),
+      }
+
+      await expect(
+        faultServer.verify({
+          credential: {
+            challenge: makeChallenge({ id: 'open-crash-1', channelId }),
+            payload: openPayload,
+          },
+          request: makeRequest(),
+        }),
+      ).rejects.toThrow('simulated store crash before persisting')
+
+      const afterCrashStore = ChannelStore.fromStore(baseStore)
+      expect(await afterCrashStore.getChannel(channelId)).toBeNull()
+
+      const healthyServer = createServerWithStore(baseStore)
+      const recovered = await healthyServer.verify({
+        credential: {
+          challenge: makeChallenge({ id: 'open-crash-retry', channelId }),
+          payload: openPayload,
+        },
+        request: makeRequest(),
+      })
+
+      expect(recovered.status).toBe('success')
+      const channel = await afterCrashStore.getChannel(channelId)
+      expect(channel?.highestVoucherAmount).toBe(1000000n)
+      expect(channel?.deposit).toBe(10000000n)
+    })
+
+    test('recovers stale deposit after topUp write crash by reopening from on-chain state', async () => {
+      const baseStore = Store.memory()
+      const healthyServer = createServerWithStore(baseStore)
+      const { channelId, serializedTransaction } = await createSignedOpenTransaction(5000000n)
+
+      await healthyServer.verify({
+        credential: {
+          challenge: makeChallenge({ id: 'open-before-topup-crash', channelId }),
+          payload: {
+            action: 'open' as const,
+            type: 'transaction' as const,
+            channelId,
+            transaction: serializedTransaction,
+            cumulativeAmount: '1000000',
+            signature: await signTestVoucher(channelId, 1000000n),
+          },
+        },
+        request: makeRequest(),
+      })
+
+      const additionalDeposit = 2000000n
+      const { serializedTransaction: topUpTransaction } = await signTopUpChannel({
+        escrow: escrowContract,
+        payer,
+        channelId,
+        token: currency,
+        amount: additionalDeposit,
+      })
+
+      const faultStore = withFaultHooks(baseStore, { failPutAt: 1 })
+      const faultServer = createServerWithStore(faultStore)
+
+      await expect(
+        faultServer.verify({
+          credential: {
+            challenge: makeChallenge({ id: 'topup-crash', channelId }),
+            payload: {
+              action: 'topUp' as const,
+              type: 'transaction' as const,
+              channelId,
+              transaction: topUpTransaction,
+              additionalDeposit: additionalDeposit.toString(),
+            },
+          },
+          request: makeRequest(),
+        }),
+      ).rejects.toThrow('simulated store crash before persisting')
+
+      const staleStore = ChannelStore.fromStore(baseStore)
+      expect((await staleStore.getChannel(channelId))?.deposit).toBe(5000000n)
+
+      await healthyServer.verify({
+        credential: {
+          challenge: makeChallenge({ id: 'reopen-after-topup-crash', channelId }),
+          payload: {
+            action: 'open' as const,
+            type: 'transaction' as const,
+            channelId,
+            transaction: serializedTransaction,
+            cumulativeAmount: '2000000',
+            signature: await signTestVoucher(channelId, 2000000n),
+          },
+        },
+        request: makeRequest(),
+      })
+
+      const recoveredChannel = await staleStore.getChannel(channelId)
+      expect(recoveredChannel?.deposit).toBe(7000000n)
+    })
+
+    test('voucher rejects when channel disappears between read and update', async () => {
+      const baseStore = Store.memory()
+      const hooks = withReadDropHooks(baseStore)
+      const server = createServerWithStore(hooks.store)
+
+      const { channelId, serializedTransaction } = await createSignedOpenTransaction(5000000n)
+      await server.verify({
+        credential: {
+          challenge: makeChallenge({ id: 'open-racy-voucher', channelId }),
+          payload: {
+            action: 'open' as const,
+            type: 'transaction' as const,
+            channelId,
+            transaction: serializedTransaction,
+            cumulativeAmount: '1000000',
+            signature: await signTestVoucher(channelId, 1000000n),
+          },
+        },
+        request: makeRequest(),
+      })
+
+      hooks.dropOnRead(channelId, 1)
+      await expect(
+        server.verify({
+          credential: {
+            challenge: makeChallenge({ id: 'voucher-racy-missing', channelId }),
+            payload: {
+              action: 'voucher' as const,
+              channelId,
+              cumulativeAmount: '2000000',
+              signature: await signTestVoucher(channelId, 2000000n),
+            },
+          },
+          request: makeRequest(),
+        }),
+      ).rejects.toThrow('channel not found')
+
+      const persisted = await ChannelStore.fromStore(baseStore).getChannel(channelId)
+      expect(persisted).not.toBeNull()
+    })
+
+    test('close still returns a receipt when channel disappears before final write', async () => {
+      const baseStore = Store.memory()
+      const hooks = withReadDropHooks(baseStore)
+      const server = createServerWithStore(hooks.store)
+
+      const { channelId, serializedTransaction } = await createSignedOpenTransaction(5000000n)
+      await server.verify({
+        credential: {
+          challenge: makeChallenge({ id: 'open-racy-close', channelId }),
+          payload: {
+            action: 'open' as const,
+            type: 'transaction' as const,
+            channelId,
+            transaction: serializedTransaction,
+            cumulativeAmount: '1000000',
+            signature: await signTestVoucher(channelId, 1000000n),
+          },
+        },
+        request: makeRequest(),
+      })
+
+      hooks.dropOnRead(channelId, 1)
+      const closeReceipt = (await server.verify({
+        credential: {
+          challenge: makeChallenge({ id: 'close-racy-missing', channelId }),
+          payload: {
+            action: 'close' as const,
+            channelId,
+            cumulativeAmount: '1000000',
+            signature: await signTestVoucher(channelId, 1000000n),
+          },
+        },
+        request: makeRequest(),
+      })) as SessionReceipt
+
+      expect(closeReceipt.status).toBe('success')
+      expect(closeReceipt.spent).toBe('0')
+      const persisted = await ChannelStore.fromStore(baseStore).getChannel(channelId)
+      expect(persisted).toBeNull()
+    })
+
+    test('settle returns txHash even when channel disappears before settle write', async () => {
+      const baseStore = Store.memory()
+      const hooks = withReadDropHooks(baseStore)
+      const server = createServerWithStore(hooks.store)
+
+      const { channelId, serializedTransaction } = await createSignedOpenTransaction(5000000n)
+      await server.verify({
+        credential: {
+          challenge: makeChallenge({ id: 'open-racy-settle', channelId }),
+          payload: {
+            action: 'open' as const,
+            type: 'transaction' as const,
+            channelId,
+            transaction: serializedTransaction,
+            cumulativeAmount: '1000000',
+            signature: await signTestVoucher(channelId, 1000000n),
+          },
+        },
+        request: makeRequest(),
+      })
+
+      hooks.dropOnRead(channelId, 1)
+      const txHash = await settle(ChannelStore.fromStore(hooks.store), client, channelId, {
+        escrowContract,
+      })
+
+      expect(txHash).toBeDefined()
+      const persisted = await ChannelStore.fromStore(baseStore).getChannel(channelId)
+      expect(persisted).toBeNull()
+    })
+
+    test('close rejects when channel was already finalized on-chain', async () => {
+      const { channelId, serializedTransaction } = await createSignedOpenTransaction(5000000n)
+      const server = createServer()
+
+      await server.verify({
+        credential: {
+          challenge: makeChallenge({ id: 'open-before-external-close', channelId }),
+          payload: {
+            action: 'open' as const,
+            type: 'transaction' as const,
+            channelId,
+            transaction: serializedTransaction,
+            cumulativeAmount: '1000000',
+            signature: await signTestVoucher(channelId, 1000000n),
+          },
+        },
+        request: makeRequest(),
+      })
+
+      const closeSignature = await signTestVoucher(channelId, 1000000n)
+      await closeChannelOnChain({
+        escrow: escrowContract,
+        payee: accounts[0],
+        channelId,
+        cumulativeAmount: 1000000n,
+        signature: closeSignature,
+      })
+
+      await expect(
+        server.verify({
+          credential: {
+            challenge: makeChallenge({ id: 'close-after-external-finalize', channelId }),
+            payload: {
+              action: 'close' as const,
+              channelId,
+              cumulativeAmount: '1000000',
+              signature: closeSignature,
+            },
+          },
+          request: makeRequest(),
+        }),
+      ).rejects.toThrow('channel is finalized on-chain')
+    })
+  })
+
+  describe('protocol compatibility', () => {
+    test('HEAD voucher management request falls through to content handler', () => {
+      const server = createServer()
+      const response = server.respond!({
+        credential: {
+          challenge: makeChallenge({
+            channelId: '0x0000000000000000000000000000000000000000000000000000000000000001' as Hex,
+          }),
+          payload: { action: 'voucher' },
+        },
+        input: new Request('https://api.example.com/resource', { method: 'HEAD' }),
+      } as never)
+
+      expect(response).toBeUndefined()
+    })
+
+    test('ignores unknown challenge and credential fields for forward compatibility', async () => {
+      const challenge = Challenge.from({
+        id: 'forward-compat',
+        realm: 'api.example.com',
+        method: 'tempo',
+        intent: 'session',
+        request: {
+          amount: '1000000',
+          currency: '0x20c0000000000000000000000000000000000001',
+          recipient: '0x0000000000000000000000000000000000000002',
+          unitType: 'token',
+        },
+      })
+      const parsed = Challenge.deserialize(`${Challenge.serialize(challenge)}, future="v1"`)
+      expect(parsed.id).toBe(challenge.id)
+
+      const { channelId, serializedTransaction } = await createSignedOpenTransaction(10000000n)
+      const handler = createHandler()
+      const route = handler.session({ amount: '1', decimals: 6, unitType: 'token' })
+
+      const first = await route(new Request('https://api.example.com/resource'))
+      if (first.status !== 402) throw new Error('expected challenge')
+      const issuedChallenge = Challenge.fromResponse(first.challenge)
+      const signature = await signTestVoucher(channelId, 1000000n)
+
+      const header = Credential.serialize({
+        challenge: issuedChallenge,
+        payload: {
+          action: 'open',
+          type: 'transaction',
+          channelId,
+          transaction: serializedTransaction,
+          cumulativeAmount: '1000000',
+          signature,
+        },
+      })
+      const encoded = header.replace(/^Payment\s+/i, '')
+      const decoded = JSON.parse(Base64.toString(encoded)) as Record<string, any>
+      decoded.payload.futureField = { enabled: true }
+      decoded.unrecognized = 'ignored'
+      const mutatedHeader = `Payment ${Base64.fromString(JSON.stringify(decoded), { url: true, pad: false })}`
+
+      const second = await route(
+        new Request('https://api.example.com/resource', {
+          headers: { Authorization: mutatedHeader },
+        }),
+      )
+      expect(second.status).toBe(200)
+    })
+
+    test('does not return Payment-Receipt on verification errors', async () => {
+      const { channelId, serializedTransaction } = await createSignedOpenTransaction(10000000n)
+      const handler = createHandler()
+      const route = handler.session({ amount: '1', decimals: 6, unitType: 'token' })
+
+      const first = await route(new Request('https://api.example.com/resource'))
+      if (first.status !== 402) throw new Error('expected challenge')
+      const issuedChallenge = Challenge.fromResponse(first.challenge)
+
+      const invalidCredential = Credential.serialize({
+        challenge: issuedChallenge,
+        payload: {
+          action: 'open',
+          type: 'transaction',
+          channelId,
+          transaction: serializedTransaction,
+          cumulativeAmount: '1000000',
+          signature: `0x${'ab'.repeat(65)}`,
+        },
+      })
+
+      const second = await route(
+        new Request('https://api.example.com/resource', {
+          headers: { Authorization: invalidCredential },
+        }),
+      )
+
+      expect(second.status).toBe(402)
+      if (second.status !== 402) throw new Error('expected challenge')
+      expect(second.challenge.headers.get('Payment-Receipt')).toBeNull()
+    })
+
+    test('converts amount/suggestedDeposit/minVoucherDelta with decimals=18', async () => {
+      const handler = createHandler()
+      const route = handler.session({
+        amount: '0.000000000000000001',
+        suggestedDeposit: '0.000000000000000002',
+        minVoucherDelta: '0.000000000000000001',
+        decimals: 18,
+        unitType: 'token',
+      })
+
+      const result = await route(new Request('https://api.example.com/resource'))
+      expect(result.status).toBe(402)
+      if (result.status !== 402) throw new Error('expected challenge')
+
+      const challenge = Challenge.fromResponse(result.challenge)
+      const request = challenge.request as {
+        amount: string
+        suggestedDeposit: string
+        methodDetails: { minVoucherDelta: string }
+      }
+      expect(request.amount).toBe('1')
+      expect(request.suggestedDeposit).toBe('2')
+      expect(request.methodDetails.minVoucherDelta).toBe('1')
+    })
+  })
+
   describe('structured errors', () => {
     test('ChannelNotFoundError on unknown channel', async () => {
       const { channelId } = await createSignedOpenTransaction(10000000n)
@@ -2141,6 +2923,158 @@ describe.runIf(isLocalnet)('session', () => {
         const response = result.withReceipt(new Response())
         expectTypeOf(response).toEqualTypeOf<Response>()
       }
+    })
+
+    test('open -> stream -> need-voucher -> resume -> close', async () => {
+      const backingStore = Store.memory()
+      const routeHandler = Mppx_server.create({
+        methods: [
+          tempo_server.session({
+            store: backingStore,
+            getClient: () => client,
+            account: recipient,
+            currency,
+            escrowContract,
+            chainId: chain.id,
+            sse: true,
+          }),
+        ],
+        realm: 'api.example.com',
+        secretKey: 'secret',
+      }).session({ amount: '1', decimals: 6, unitType: 'token' })
+
+      let voucherPosts = 0
+      const fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+        const request = new Request(input, init)
+        let action: 'open' | 'topUp' | 'voucher' | 'close' | undefined
+
+        if (request.method === 'POST' && request.headers.has('Authorization')) {
+          try {
+            const credential = Credential.fromRequest<any>(request)
+            action = credential.payload?.action
+            if (action === 'voucher') voucherPosts++
+          } catch {}
+        }
+
+        const result = await routeHandler(request)
+        if (result.status === 402) return result.challenge
+
+        if (action === 'voucher') {
+          return new Response(null, { status: 200 })
+        }
+
+        if (request.headers.get('Accept')?.includes('text/event-stream')) {
+          return result.withReceipt(async function* (stream) {
+            await stream.charge()
+            yield 'chunk-1'
+            await stream.charge()
+            yield 'chunk-2'
+            await stream.charge()
+            yield 'chunk-3'
+          })
+        }
+
+        return result.withReceipt(new Response('ok'))
+      }
+
+      const manager = sessionManager({
+        account: payer,
+        client,
+        escrowContract,
+        fetch,
+        maxDeposit: '3',
+      })
+
+      const chunks: string[] = []
+      const stream = await manager.sse('https://api.example.com/stream')
+      for await (const chunk of stream) chunks.push(chunk)
+
+      expect(chunks).toEqual(['chunk-1', 'chunk-2', 'chunk-3'])
+      expect(voucherPosts).toBeGreaterThan(0)
+
+      const closeReceipt = await manager.close()
+      expect(closeReceipt?.status).toBe('success')
+      expect(closeReceipt?.spent).toBe('3000000')
+
+      const channelId = manager.channelId
+      expect(channelId).toBeTruthy()
+
+      const persisted = await ChannelStore.fromStore(backingStore).getChannel(channelId!)
+      expect(persisted?.finalized).toBe(true)
+    })
+
+    test('handles repeated exhaustion/resume cycles within one stream', async () => {
+      const backingStore = Store.memory()
+      const routeHandler = Mppx_server.create({
+        methods: [
+          tempo_server.session({
+            store: backingStore,
+            getClient: () => client,
+            account: recipient,
+            currency,
+            escrowContract,
+            chainId: chain.id,
+            sse: true,
+          }),
+        ],
+        realm: 'api.example.com',
+        secretKey: 'secret',
+      }).session({ amount: '1', decimals: 6, unitType: 'token' })
+
+      let voucherPosts = 0
+      const fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+        const request = new Request(input, init)
+        let action: 'open' | 'topUp' | 'voucher' | 'close' | undefined
+
+        if (request.method === 'POST' && request.headers.has('Authorization')) {
+          try {
+            const credential = Credential.fromRequest<any>(request)
+            action = credential.payload?.action
+            if (action === 'voucher') voucherPosts++
+          } catch {}
+        }
+
+        const result = await routeHandler(request)
+        if (result.status === 402) return result.challenge
+
+        if (action === 'voucher') {
+          return new Response(null, { status: 200 })
+        }
+
+        if (request.headers.get('Accept')?.includes('text/event-stream')) {
+          return result.withReceipt(async function* (stream) {
+            await stream.charge()
+            yield 'chunk-1'
+            await stream.charge()
+            yield 'chunk-2'
+            await stream.charge()
+            yield 'chunk-3'
+            await stream.charge()
+            yield 'chunk-4'
+          })
+        }
+
+        return result.withReceipt(new Response('ok'))
+      }
+
+      const manager = sessionManager({
+        account: payer,
+        client,
+        escrowContract,
+        fetch,
+        maxDeposit: '4',
+      })
+
+      const chunks: string[] = []
+      const stream = await manager.sse('https://api.example.com/stream')
+      for await (const chunk of stream) chunks.push(chunk)
+
+      expect(chunks).toEqual(['chunk-1', 'chunk-2', 'chunk-3', 'chunk-4'])
+      expect(voucherPosts).toBeGreaterThanOrEqual(2)
+
+      const closeReceipt = await manager.close()
+      expect(closeReceipt?.status).toBe('success')
+      expect(closeReceipt?.spent).toBe('4000000')
     })
 
     test('behavior: charge withReceipt returns Response', async () => {
@@ -2636,10 +3570,14 @@ function makeRequest() {
   }
 }
 
-async function signTestVoucher(channelId: Hex, amount: bigint) {
+async function signTestVoucher(
+  channelId: Hex,
+  amount: bigint,
+  account: (typeof accounts)[number] = payer,
+) {
   return signVoucher(
     client,
-    payer,
+    account,
     { channelId, cumulativeAmount: amount },
     escrowContract,
     chain.id,
@@ -2661,4 +3599,64 @@ async function createSignedOpenTransaction(
     ...(opts?.authorizedSigner !== undefined && { authorizedSigner: opts.authorizedSigner }),
   })
   return { channelId, serializedTransaction }
+}
+
+function toCompactSignature(signature: Hex): Hex {
+  const compact = signatureToCompactSignature(parseSignature(signature))
+  return serializeCompactSignature(compact)
+}
+
+function mutateSignature(signature: Hex): Hex {
+  const last = signature.at(-1)
+  const replacement = last === '0' ? '1' : '0'
+  return `${signature.slice(0, -1)}${replacement}` as Hex
+}
+
+function toHighSSignature(signature: Hex): Hex {
+  const parsed = parseSignature(signature)
+  const highS = secp256k1N - BigInt(parsed.s)
+  return serializeSignature({
+    r: parsed.r,
+    s: `0x${highS.toString(16).padStart(64, '0')}`,
+    yParity: parsed.yParity === 0 ? 1 : 0,
+  })
+}
+
+function withFaultHooks(store: Store.Store, options: { failPutAt: number }) {
+  let putCalls = 0
+  return Store.from({
+    get: (key) => store.get(key),
+    delete: (key) => store.delete(key),
+    put: async (key, value) => {
+      putCalls++
+      if (putCalls === options.failPutAt)
+        throw new Error(`simulated store crash before persisting key ${key}`)
+      await store.put(key, value)
+    },
+  })
+}
+
+function withReadDropHooks(store: Store.Store) {
+  const pending = new Map<string, number>()
+  const wrapped = Store.from({
+    async get(key) {
+      const remaining = pending.get(key)
+      if (remaining !== undefined) {
+        if (remaining === 0) {
+          pending.delete(key)
+          return null
+        }
+        pending.set(key, remaining - 1)
+      }
+      return store.get(key)
+    },
+    put: (key, value) => store.put(key, value),
+    delete: (key) => store.delete(key),
+  })
+  return {
+    store: wrapped,
+    dropOnRead(channelId: Hex, readsBeforeDrop = 0) {
+      pending.set(channelId, readsBeforeDrop)
+    },
+  }
 }
