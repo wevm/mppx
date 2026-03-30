@@ -133,6 +133,7 @@ mount<typeof Methods.charge, charge.HtmlConfig>((c) => {
   function showConnected(account: string) {
     activeAccount = account
     statusElement.textContent = ''
+    statusElement.className = c.classNames.status
     walletsElement.hidden = true
     connectedElement.hidden = false
   }
@@ -140,6 +141,7 @@ mount<typeof Methods.charge, charge.HtmlConfig>((c) => {
   function showWallets() {
     activeAccount = null
     statusElement.textContent = ''
+    statusElement.className = c.classNames.status
     disconnectParagraph.hidden = false
     walletsElement.hidden = false
     connectedElement.hidden = true
@@ -212,7 +214,9 @@ mount<typeof Methods.charge, charge.HtmlConfig>((c) => {
   async function pay() {
     if (!activeAccount) return
     payButton.disabled = true
+    disconnectParagraph.hidden = true
     statusElement.textContent = ''
+    statusElement.className = c.classNames.status
 
     try {
       const chain = getChain(request.methodDetails?.chainId)
@@ -239,13 +243,18 @@ mount<typeof Methods.charge, charge.HtmlConfig>((c) => {
         }),
       })
 
-      disconnectParagraph.hidden = true
       c.dispatch(
         { hash: receipt.transactionHash, type: 'hash' },
         `did:pkh:eip155:${chain.id}:${activeAccount}`,
       )
     } catch (error) {
-      statusElement.textContent = error instanceof Error ? error.message : 'Payment failed'
+      const message =
+        error instanceof Error
+          ? ((error as Error & { shortMessage?: string }).shortMessage ?? error.message)
+          : 'Payment failed'
+      statusElement.textContent = message
+      statusElement.className = c.classNames.statusError
+      disconnectParagraph.hidden = false
       payButton.disabled = false
     }
   }

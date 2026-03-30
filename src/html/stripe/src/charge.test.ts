@@ -42,8 +42,8 @@ if (hasStripeKeys) {
 
     await toolbar.getByRole('button', { name: 'Failed' }).click()
     await expect(page.locator('h1')).toHaveText('Payment Required')
-    await expect(overlay).toHaveText('Verification failed')
-    await expect(page.locator('#mppx-method button')).toBeHidden()
+    await expect(page.locator('.mppx-state-pane--error')).toHaveText('Verification failed')
+    await expect(page.locator('#mppx-method button')).toBeVisible()
     expect(await stripeFrameHandle!.evaluate((element) => element.isConnected)).toBe(true)
   })
 

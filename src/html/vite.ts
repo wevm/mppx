@@ -17,7 +17,28 @@ import { renderPage } from './internal/render.js'
 import type * as Html from './internal/types.js'
 
 const pageDir = path.resolve(import.meta.dirname, 'page')
+const packageRoot = path.resolve(import.meta.dirname, '../..')
 const emptyEntryId = '\0mppx:empty-entry'
+
+/**
+ * Map `mppx` and `mppx/*` imports to source files via the `src` export condition.
+ * Only active in workspace builds (when dist may not exist yet). Downstream consumers
+ * resolve through normal package exports since dist/ ships in the npm package.
+ */
+const mppxSourceMap: Record<string, string> = (() => {
+  const pkgPath = path.resolve(packageRoot, 'package.json')
+  if (!existsSync(pkgPath)) return {}
+  // Only apply in workspace context (dist/ may not exist yet)
+  if (existsSync(path.resolve(packageRoot, 'dist/index.js'))) return {}
+  const pkg = JSON.parse(require('node:fs').readFileSync(pkgPath, 'utf-8'))
+  const map: Record<string, string> = {}
+  for (const [subpath, entry] of Object.entries<any>(pkg.exports ?? {})) {
+    if (!entry?.src) continue
+    const id = subpath === '.' ? 'mppx' : `mppx/${subpath.slice(2)}`
+    map[id] = path.resolve(packageRoot, entry.src)
+  }
+  return map
+})()
 
 type Config<method extends Method.Method = Method.Method> = {
   /** The method schema (e.g. Methods.charge). Used to derive the default entry name from method.intent. */
@@ -202,6 +223,7 @@ export default function mppx<const method extends Method.Method>(
     },
     resolveId(id) {
       if (id === emptyEntryId) return id
+      if (mppxSourceMap[id]) return mppxSourceMap[id]
     },
     load(id) {
       if (id === emptyEntryId) return ''

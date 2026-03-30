@@ -30,14 +30,14 @@ export function renderPage(parameters: {
   const dataJson = Json.stringify(data).replace(/</g, '\\u003c')
   const challenge = data.method?.challenge ?? Object.values(data.methods ?? {})[0]?.challenge
   return template
-    .replace('<!--mppx:head-->', head)
+    .replace('<!--mppx:head-->', () => head)
     .replace(
       '<!--mppx:data-->',
-      `<script id="${elements.data}" type="application/json">${dataJson}</script>`,
+      () => `<script id="${elements.data}" type="application/json">${dataJson}</script>`,
     )
-    .replace('<!--mppx:summary-->', renderSummary(challenge))
-    .replace('<!--mppx:script-->', scripts)
-    .replace('<!--mppx:method-->', methodContent)
+    .replace('<!--mppx:summary-->', () => renderSummary(challenge))
+    .replace('<!--mppx:script-->', () => scripts)
+    .replace('<!--mppx:method-->', () => methodContent)
 }
 
 function escapeHtml(str: string): string {
