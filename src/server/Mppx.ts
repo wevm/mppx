@@ -430,6 +430,17 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
           })
           return { challenge: response, status: 402 }
         }
+        if (Number.isNaN(new Date(credential.challenge.expires).getTime())) {
+          const response = await transport.respondChallenge({
+            challenge,
+            input,
+            error: new Errors.InvalidChallengeError({
+              id: credential.challenge.id,
+              reason: 'malformed expires timestamp',
+            }),
+          })
+          return { challenge: response, status: 402 }
+        }
         if (new Date(credential.challenge.expires) < new Date()) {
           const response = await transport.respondChallenge({
             challenge,

@@ -9,7 +9,7 @@ import {
 import { tempo as tempo_chain } from 'viem/chains'
 import { Abis, Transaction } from 'viem/tempo'
 
-import { PaymentExpiredError } from '../../Errors.js'
+import { InvalidChallengeError, PaymentExpiredError } from '../../Errors.js'
 import type { LooseOmit, NoExtraKeys } from '../../internal/types.js'
 import * as Method from '../../Method.js'
 import * as Store from '../../Store.js'
@@ -119,6 +119,8 @@ export function charge<const parameters extends charge.Parameters>(
       const recipient = challengeRequest.recipient as `0x${string}`
 
       if (!expires) throw new PaymentExpiredError()
+      if (Number.isNaN(new Date(expires).getTime()))
+        throw new InvalidChallengeError({ id: challenge.id, reason: 'malformed expires timestamp' })
       if (new Date(expires) < new Date()) throw new PaymentExpiredError({ expires })
 
       const memo = methodDetails?.memo as `0x${string}` | undefined

@@ -1,5 +1,6 @@
 import type * as Credential from '../../Credential.js'
 import {
+  InvalidChallengeError,
   PaymentActionRequiredError,
   PaymentExpiredError,
   VerificationFailedError,
@@ -68,6 +69,8 @@ export function charge<const parameters extends charge.Parameters>(parameters: p
 
       if (!challenge.expires)
         throw new PaymentExpiredError()
+      if (Number.isNaN(new Date(challenge.expires).getTime()))
+        throw new InvalidChallengeError({ id: challenge.id, reason: 'malformed expires timestamp' })
       if (new Date(challenge.expires) < new Date())
         throw new PaymentExpiredError({ expires: challenge.expires })
 
