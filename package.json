@@ -3,7 +3,7 @@
     "build": "pnpm gen:html && zile",
     "build:html": "vp build src/html/page && vp build src/html/tempo && vp build src/html/stripe",
     "changeset:publish": "pnpm gen:html && zile publish:prepare && changeset publish && zile publish:post",
-    "changeset:version": "changeset version",
+    "changeset:version": "changeset version && vp fmt .",
     "check": "vp lint --fix && vp fmt --write .",
     "check:ci": "vp lint && vp fmt --check .",
     "check:types": "tsgo -b",
@@ -67,7 +67,7 @@
   "[!start-pkg]": "",
   "name": "mppx",
   "type": "module",
-  "version": "0.4.11",
+  "version": "0.4.12",
   "main": "./dist/index.js",
   "license": "MIT",
   "files": [
@@ -214,11 +214,5 @@
   "bin": {
     "mppx": "./dist/bin.js",
     "mppx.src": "./src/bin.ts"
-  },
-  "pnpm": {
-    "overrides": {
-      "path-to-regexp": ">=8.4.0",
-      "tar": ">=7.5.11"
-    }
   }
 }

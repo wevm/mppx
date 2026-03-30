@@ -70,17 +70,7 @@ describe('validateCalls', () => {
     ).not.toThrow()
   })
 
-  test('error: rejects empty calls', () => {
-    expect(() => validateCalls([], details)).toThrow(FeePayerValidationError)
-  })
-
-  test('error: rejects unknown selector', () => {
-    expect(() => validateCalls([{ data: '0xdeadbeef' as `0x${string}` }], details)).toThrow(
-      'disallowed call pattern',
-    )
-  })
-
-  test('error: rejects extra calls beyond allowed patterns', () => {
+  test('accepts multiple transfers after swap prefix', () => {
     const swapSelector = Selectors.swapExactAmountOut
     expect(() =>
       validateCalls(
@@ -100,17 +90,46 @@ describe('validateCalls', () => {
             data: encodeFunctionData({
               abi: Abis.tip20,
               functionName: 'transfer',
-              args: [bogus, 100n],
+              args: [bogus, 90n],
             }),
           },
           {
             data: encodeFunctionData({
               abi: Abis.tip20,
-              functionName: 'transfer',
-              args: [bogus, 100n],
+              functionName: 'transferWithMemo',
+              args: [
+                '0x0000000000000000000000000000000000000002',
+                10n,
+                '0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef',
+              ],
             }),
           },
         ],
+        details,
+      ),
+    ).not.toThrow()
+  })
+
+  test('error: rejects empty calls', () => {
+    expect(() => validateCalls([], details)).toThrow(FeePayerValidationError)
+  })
+
+  test('error: rejects unknown selector', () => {
+    expect(() => validateCalls([{ data: '0xdeadbeef' as `0x${string}` }], details)).toThrow(
+      'disallowed call pattern',
+    )
+  })
+
+  test('error: rejects more than 11 transfers', () => {
+    expect(() =>
+      validateCalls(
+        Array.from({ length: 12 }, (_, index) => ({
+          data: encodeFunctionData({
+            abi: Abis.tip20,
+            functionName: 'transfer',
+            args: [`0x${(index + 1).toString(16).padStart(40, '0')}`, 100n],
+          }),
+        })),
         details,
       ),
     ).toThrow('disallowed call pattern')

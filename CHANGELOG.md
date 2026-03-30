@@ -1,5 +1,20 @@
 # mppx
 
+## 0.4.12
+
+### Patch Changes
+
+- 5684b94: Fixed `settleOnChain` and `closeOnChain` to use the payee account as
+  `msg.sender` instead of the fee payer when submitting fee-sponsored
+  transactions. Previously, `sendFeePayerTx` used the fee payer as both
+  sender and gas sponsor, causing the escrow contract to revert with
+  `NotPayee()`. Added `account` option to `tempo.settle()` so callers can
+  specify the signing account separately from the fee payer.
+- 3bc8657: Added compile-time guard to `tempo.session()` and `tempo.charge()`. Unknown properties (e.g. `stream` instead of `sse`) now cause a type error instead of being silently accepted.
+- 0531edd: Added split-payment support to Tempo charge requests, including client transaction construction and stricter server verification for split transfers.
+- 6188184: Added `realm` auto-detection from the request `Host` header when not explicitly configured. Resolution order: explicit value → env vars (`MPP_REALM`, `FLY_APP_NAME`, `VERCEL_URL`, etc.) → request URL hostname → `"MPP Payment"` fallback with a one-time warning. Removed the hard-coded `"MPP Payment"` default and deprioritized `HOST`/`HOSTNAME` env vars in favor of platform-specific alternatives.
+- ba79504: Return `410 ChannelClosedError` instead of `402 AmountExceedsDepositError` when a channel's on-chain deposit is zero but the channel still exists (payer is non-zero). This handles a race window during settlement where the escrow contract zeros the deposit before setting the finalized flag.
+
 ## 0.4.11
 
 ### Patch Changes

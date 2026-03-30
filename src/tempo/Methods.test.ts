@@ -51,6 +51,85 @@ describe('charge', () => {
     expect(result.success).toBe(true)
   })
 
+  test('schema: validates request with splits', () => {
+    const result = Methods.charge.schema.request.safeParse({
+      amount: '1',
+      currency: '0x20c0000000000000000000000000000000000001',
+      decimals: 6,
+      recipient: '0x1234567890abcdef1234567890abcdef12345678',
+      splits: [
+        {
+          amount: '0.25',
+          recipient: '0xabcdefabcdefabcdefabcdefabcdefabcdefabcd',
+        },
+        {
+          amount: '0.1',
+          memo: '0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef',
+          recipient: '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+        },
+      ],
+    })
+    expect(result.success).toBe(true)
+    if (!result.success) return
+
+    expect(result.data.methodDetails?.splits).toEqual([
+      {
+        amount: '250000',
+        recipient: '0xabcdefabcdefabcdefabcdefabcdefabcdefabcd',
+      },
+      {
+        amount: '100000',
+        memo: '0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef',
+        recipient: '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+      },
+    ])
+  })
+
+  test('schema: rejects empty splits', () => {
+    const result = Methods.charge.schema.request.safeParse({
+      amount: '1',
+      currency: '0x20c0000000000000000000000000000000000001',
+      decimals: 6,
+      recipient: '0x1234567890abcdef1234567890abcdef12345678',
+      splits: [],
+    })
+    expect(result.success).toBe(false)
+  })
+
+  test('schema: rejects more than 10 splits', () => {
+    const result = Methods.charge.schema.request.safeParse({
+      amount: '11',
+      currency: '0x20c0000000000000000000000000000000000001',
+      decimals: 6,
+      recipient: '0x1234567890abcdef1234567890abcdef12345678',
+      splits: Array.from({ length: 11 }, (_, index) => ({
+        amount: '0.1',
+        recipient: `0x${(index + 1).toString(16).padStart(40, '0')}`,
+      })),
+    })
+    expect(result.success).toBe(false)
+  })
+
+  test('schema: rejects split totals greater than or equal to amount', () => {
+    const result = Methods.charge.schema.request.safeParse({
+      amount: '1',
+      currency: '0x20c0000000000000000000000000000000000001',
+      decimals: 6,
+      recipient: '0x1234567890abcdef1234567890abcdef12345678',
+      splits: [
+        {
+          amount: '0.5',
+          recipient: '0xabcdefabcdefabcdefabcdefabcdefabcdefabcd',
+        },
+        {
+          amount: '0.5',
+          recipient: '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+        },
+      ],
+    })
+    expect(result.success).toBe(false)
+  })
+
   test('schema: rejects invalid request', () => {
     const result = Methods.charge.schema.request.safeParse({
       amount: '1',

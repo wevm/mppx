@@ -407,6 +407,29 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
                 return { challenge: response, status: 402 }
               }
             }
+
+            // Compare payment-relevant methodDetails fields (memo, splits).
+            // These are excluded from the top-level field check above but
+            // affect verification semantics — a credential issued for a
+            // no-splits route must not be accepted on a splits route.
+            for (const field of ['memo', 'splits'] as const) {
+              const routeVal = routeDetails[field]
+              const echoedVal = echoedDetails[field]
+              if (
+                routeVal !== undefined &&
+                JSON.stringify(routeVal) !== JSON.stringify(echoedVal)
+              ) {
+                const response = await transport.respondChallenge({
+                  challenge,
+                  input,
+                  error: new Errors.InvalidChallengeError({
+                    id: credential.challenge.id,
+                    reason: `credential ${field} does not match this route's requirements`,
+                  }),
+                })
+                return { challenge: response, status: 402 }
+              }
+            }
           }
         }
 
