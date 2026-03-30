@@ -118,7 +118,8 @@ export function charge<const parameters extends charge.Parameters>(
       const currency = challengeRequest.currency as `0x${string}`
       const recipient = challengeRequest.recipient as `0x${string}`
 
-      if (expires && new Date(expires) < new Date()) throw new PaymentExpiredError({ expires })
+      if (!expires) throw new PaymentExpiredError()
+      if (new Date(expires) < new Date()) throw new PaymentExpiredError({ expires })
 
       const memo = methodDetails?.memo as `0x${string}` | undefined
 

@@ -418,8 +418,19 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
           }
         }
 
-        // Reject expired credentials
-        if (credential.challenge.expires && new Date(credential.challenge.expires) < new Date()) {
+        // Reject credentials without expires (fail-closed) or with expired timestamp
+        if (!credential.challenge.expires) {
+          const response = await transport.respondChallenge({
+            challenge,
+            input,
+            error: new Errors.InvalidChallengeError({
+              id: credential.challenge.id,
+              reason: 'missing required expires field',
+            }),
+          })
+          return { challenge: response, status: 402 }
+        }
+        if (new Date(credential.challenge.expires) < new Date()) {
           const response = await transport.respondChallenge({
             challenge,
             input,

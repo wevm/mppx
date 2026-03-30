@@ -66,7 +66,9 @@ export function charge<const parameters extends charge.Parameters>(parameters: p
       const { challenge } = credential
       const { request } = challenge
 
-      if (challenge.expires && new Date(challenge.expires) < new Date())
+      if (!challenge.expires)
+        throw new PaymentExpiredError()
+      if (new Date(challenge.expires) < new Date())
         throw new PaymentExpiredError({ expires: challenge.expires })
 
       const parsed = Methods.charge.schema.credential.payload.safeParse(credential.payload)
