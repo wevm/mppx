@@ -28,6 +28,9 @@ import { renderPage, scopedRuntimePreamble } from '../../../internal/render.js'
 import type * as Html from '../../../internal/types.js'
 
 const pageDir = path.resolve(import.meta.dirname, '../..')
+const accountsPrivateKey = process.env.MPPX_TEMPO_ACCOUNTS_PRIVATE_KEY
+const tempoRpcUrl = process.env.TEMPO_RPC_URL
+const tempoChainId = Number(process.env.TEMPO_CHAIN_ID ?? tempoModerato.id)
 
 export default defineConfig({
   plugins: [
@@ -87,6 +90,14 @@ export default defineConfig({
         },
         {
           method: TempoMethods.charge,
+          ...(accountsPrivateKey || tempoRpcUrl
+            ? {
+                config: {
+                  ...(accountsPrivateKey ? { accountsPrivateKey } : {}),
+                  ...(tempoRpcUrl ? { rpcUrls: { [tempoChainId]: tempoRpcUrl } } : {}),
+                },
+              }
+            : {}),
           challenge: {
             description: 'Test payment',
             request: {
@@ -94,7 +105,7 @@ export default defineConfig({
               currency: '0x20c0000000000000000000000000000000000001', // AlphaUSD
               decimals: 6,
               recipient: '0x0000000000000000000000000000000000000002',
-              chainId: Number(process.env.TEMPO_CHAIN_ID ?? tempoModerato.id),
+              chainId: tempoChainId,
             },
           },
         },

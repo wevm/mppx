@@ -10,9 +10,9 @@ test('renders the payment page with challenge info', async ({ page }) => {
   await expect(page.locator('main')).toContainText('Expires')
 })
 
-test('displays "No wallets detected" when no provider is injected', async ({ page }) => {
+test('displays connect wallet button when disconnected', async ({ page }) => {
   await page.goto('/')
-  await expect(page.locator('#wallets')).toContainText('No wallets detected')
+  await expect(page.locator('#wallets button')).toHaveAccessibleName('Continue with Tempo')
 })
 
 test('displays pay button', async ({ page }) => {
@@ -21,7 +21,7 @@ test('displays pay button', async ({ page }) => {
 })
 
 test('shows wallet and connects', async ({ wallet: _wallet, page }) => {
-  await expect(page.locator('#wallets button')).toHaveText('Connect Wallet')
+  await expect(page.locator('#wallets button')).toHaveAccessibleName('Continue with Tempo')
   await page.locator('#wallets button').click()
 
   await expect(page.locator('#connected')).toBeVisible()

@@ -1,4 +1,10 @@
-import { decodeFunctionData, keccak256, parseEventLogs, type TransactionReceipt } from 'viem'
+import {
+  decodeFunctionData,
+  keccak256,
+  parseEventLogs,
+  type Hex,
+  type TransactionReceipt,
+} from 'viem'
 import {
   getTransactionReceipt,
   sendRawTransaction,
@@ -6,7 +12,7 @@ import {
   signTransaction,
   call as viem_call,
 } from 'viem/actions'
-import { tempo as tempo_chain } from 'viem/chains'
+import { tempo as tempoMainnet, tempoLocalnet, tempoModerato } from 'viem/chains'
 import { Abis, Transaction } from 'viem/tempo'
 
 import { PaymentExpiredError } from '../../Errors.js'
@@ -56,7 +62,7 @@ export function charge<const parameters extends charge.Parameters>(
   const { recipient, feePayer, feePayerUrl } = Account.resolve(parameters)
 
   const getClient = Client.getResolver({
-    chain: { ...tempo_chain, experimental_preconfirmationTime: 500 },
+    chain: { ...tempoMainnet, experimental_preconfirmationTime: 500 },
     feePayerUrl,
     getClient: parameters.getClient,
     rpcUrl: defaults.rpcUrl,
@@ -78,6 +84,12 @@ export function charge<const parameters extends charge.Parameters>(
       ? {
           html: {
             content: html,
+            config: {
+              ...(htmlConfig.accountsPrivateKey
+                ? { accountsPrivateKey: htmlConfig.accountsPrivateKey }
+                : {}),
+              ...(htmlConfig.rpcUrls ? { rpcUrls: htmlConfig.rpcUrls } : {}),
+            } satisfies charge.HtmlConfig,
             text: htmlConfig.text,
             theme: htmlConfig.theme,
           },
@@ -258,7 +270,7 @@ export declare namespace charge {
 
   type Parameters = {
     /** Enable the built-in HTML payment page for this method. Pass an object to configure the shared shell. @default false */
-    html?: Html.Config | undefined
+    html?: (HtmlConfig & Html.Config) | undefined
     /** Testnet mode. */
     testnet?: boolean | undefined
     /**
@@ -283,6 +295,15 @@ export declare namespace charge {
   } & Client.getResolver.Parameters &
     Account.resolve.Parameters &
     Defaults
+
+  type HtmlConfig = {
+    accountsPrivateKey?: Hex | undefined
+    rpcUrls?:
+      | Partial<
+          Record<typeof tempoMainnet.id | typeof tempoModerato.id | typeof tempoLocalnet.id, string>
+        >
+      | undefined
+  }
 
   type DeriveDefaults<parameters extends Parameters> = types.DeriveDefaults<
     parameters,

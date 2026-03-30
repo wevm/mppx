@@ -187,9 +187,18 @@ window.addEventListener(
 
 // Apply text overrides
 const text = data.shell?.text
+const titleElement = document.querySelector(`.${Html.classNames.title}`)
 if (text?.title) {
-  const titleElement = document.querySelector(`.${Html.classNames.title}`)
   if (titleElement) titleElement.textContent = text.title
+}
+
+function showVerificationSuccessState() {
+  if (titleElement) titleElement.textContent = 'Payment Verified'
+
+  const statusElement = document.getElementById('status')
+  if (!statusElement) return
+  statusElement.textContent = text?.success ?? 'Payment verified'
+  statusElement.className = Html.classNames.statusSuccess
 }
 
 // Apply logo
@@ -438,6 +447,7 @@ addEventListener('mppx:complete', (event: CustomEvent<string>) => {
       }),
     )
     .then(() => {
+      showVerificationSuccessState()
       window.location.reload()
     })
     .catch(() => {
