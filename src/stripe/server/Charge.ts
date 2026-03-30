@@ -67,8 +67,7 @@ export function charge<const parameters extends charge.Parameters>(parameters: p
       const { challenge } = credential
       const { request } = challenge
 
-      if (!challenge.expires)
-        throw new PaymentExpiredError()
+      if (!challenge.expires) throw new PaymentExpiredError()
       if (Number.isNaN(new Date(challenge.expires).getTime()))
         throw new InvalidChallengeError({ id: challenge.id, reason: 'malformed expires timestamp' })
       if (new Date(challenge.expires) < new Date())
