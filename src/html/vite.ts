@@ -65,6 +65,8 @@ type Config<method extends Method.Method = Method.Method> = {
   realm?: string | undefined
   /** Secret key for HMAC-bound challenge IDs. Defaults to 'mppx-dev-secret'. */
   secretKey?: string
+  /** Optional server-side verify function. When provided, dev mode runs real payment verification instead of only checking credential shape. */
+  verify?: ((parameters: { credential: Credential.Credential }) => Promise<unknown>) | undefined
 }
 
 export default function mppx<const method extends Method.Method>(
@@ -121,6 +123,19 @@ export default function mppx<const method extends Method.Method>(
           // Dev mode should only accept credentials that match the method schema,
           // otherwise fixture tests can pass without any server-side payload validation.
           if (Challenge.verify(credential.challenge, { secretKey }) && parsedPayload.success) {
+            if (options.verify) {
+              try {
+                await options.verify({ credential })
+              } catch (error) {
+                const message = error instanceof Error ? error.message : 'Verification failed'
+                res.setHeader('Content-Type', 'text/html')
+                res.statusCode = 402
+                res.end(
+                  `<!doctype html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><style>html{color-scheme:light dark}</style></head><body><h1>Payment failed</h1><p>${message}</p></body></html>`,
+                )
+                return
+              }
+            }
             res.setHeader('Content-Type', 'text/html')
             res.end(
               '<!doctype html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><style>html{color-scheme:light dark}</style></head><body><h1>Payment verified!</h1><p>This is the protected content.</p></body></html>',

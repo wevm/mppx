@@ -23,14 +23,15 @@
 //      the owed amount to the server and refunds the remainder to the client.
 //
 
-// `Mppx` is the server-side payment handler that manages challenges, credential
-// verification, and receipt generation. `tempo` provides the Tempo-specific
-// streaming payment method.
-import { Mppx, tempo } from 'mppx/server'
 import { createClient, http } from 'viem'
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts'
 import { tempoModerato } from 'viem/chains'
 import { Actions } from 'viem/tempo'
+
+// `Mppx` is the server-side payment handler that manages challenges, credential
+// verification, and receipt generation. `tempo` provides the Tempo-specific
+// streaming payment method.
+import { Mppx, tempo } from '../../../_shared/mppxSource.server.js'
 
 // Generate a fresh keypair for the server on each start.
 // In production, you'd use a persistent key stored securely.

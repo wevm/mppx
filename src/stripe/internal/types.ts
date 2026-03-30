@@ -10,6 +10,7 @@ export type StripeClient = {
     create(...args: any[]): Promise<{
       id: string
       status: string
+      latest_charge?: { outcome?: { risk_level?: string } } | string | null
       lastResponse?: { headers?: Record<string, string> }
     }>
   }

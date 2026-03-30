@@ -27,10 +27,14 @@ serviceWorker.addEventListener('message', (event) => {
   event.ports[0]?.postMessage({ ok: true })
 })
 
-// Intercept the matching fetch and inject the `Authorization` header with the
-// payment credential, then clear the pending state so it's used only once.
+// Intercept the matching navigation and inject the `Authorization` header with
+// the payment credential, then clear the pending state so it's used only once.
+// Only navigate-mode requests are intercepted so that fetch() calls from the
+// page (e.g. action endpoints, fallback paths) don't accidentally consume the
+// one-shot credential.
 serviceWorker.addEventListener('fetch', (event) => {
   if (!pending) return
+  if (event.request.mode !== 'navigate') return
   if (normalizeUrl(event.request.url) !== pending.url) return
   const headers = new Headers(event.request.headers)
   headers.set('Authorization', pending.credential)

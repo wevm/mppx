@@ -18,14 +18,15 @@
 // while the SSE generator is running.
 //
 
-// `Mppx` is the server-side payment handler. `tempo` provides Tempo-specific
-// payment method implementations (stream channels, SSE transport, storage).
-import { Mppx, Store, tempo } from 'mppx/server'
 import { createClient, http } from 'viem'
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts'
 import { tempoModerato } from 'viem/chains'
 // `Actions` provides Tempo-specific viem actions (faucet, token ops, etc.)
 import { Actions } from 'viem/tempo'
+
+// `Mppx` is the server-side payment handler. `tempo` provides Tempo-specific
+// payment method implementations (stream channels, SSE transport, storage).
+import { Mppx, Store, tempo } from '../../../_shared/mppxSource.server.js'
 
 // Server Account Setup
 

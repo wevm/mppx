@@ -136,6 +136,7 @@ body {
 
 .mppx-state-pane--error {
   color: var(--mppx-negative);
+  margin-bottom: 0.75rem;
 }
 
 .mppx-state-pane--success {

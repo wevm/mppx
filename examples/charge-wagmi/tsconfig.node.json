@@ -8,5 +8,5 @@
     "allowImportingTsExtensions": true,
     "emitDeclarationOnly": true
   },
-  "include": ["vite.config.ts", "server.ts"]
+  "include": ["vite.config.ts", "server.ts", "../_shared/mppxSource.ts"]
 }

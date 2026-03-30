@@ -281,13 +281,14 @@ function setPageState(state: DebugState, message?: string) {
       hideMethodStateOverlay()
       statePaneElement.className = paneClassName
       statePaneElement.textContent = paneMessage
-      methodElement.after(statePaneElement)
+      methodElement.before(statePaneElement)
     } else {
       const element = statusElement()
       if (!element) return
       element.textContent = paneMessage
       element.className = Html.classNames.statusError
     }
+    dispatchEvent(new CustomEvent('mppx:failed', { detail: { message: paneMessage } }))
     return
   }
 
@@ -406,30 +407,28 @@ if (isComposed) {
   })
 }
 
-function activateServiceWorker(reg: ServiceWorkerRegistration): Promise<void> {
-  const serviceWorker = reg.installing || reg.waiting || reg.active
+function waitForServiceWorkerReady(reg: ServiceWorkerRegistration): Promise<ServiceWorker> {
+  const sw = reg.installing || reg.waiting || reg.active
+  if (!sw) throw new Error('No service worker in registration')
   return new Promise((resolve) => {
-    if (serviceWorker!.state === 'activated') return resolve()
-    serviceWorker!.addEventListener('statechange', () => {
-      if (serviceWorker!.state === 'activated') resolve()
-    })
-  })
-}
-
-function waitForServiceWorkerController(): Promise<ServiceWorker> {
-  const controller = navigator.serviceWorker.controller
-  if (controller) return Promise.resolve(controller)
-
-  return new Promise((resolve) => {
-    const onControllerChange = () => {
-      const nextController = navigator.serviceWorker.controller
-      if (!nextController) return
-      navigator.serviceWorker.removeEventListener('controllerchange', onControllerChange)
-      resolve(nextController)
+    if (sw.state === 'activated') {
+      if (navigator.serviceWorker.controller) return resolve(navigator.serviceWorker.controller)
+      navigator.serviceWorker.addEventListener(
+        'controllerchange',
+        () => resolve(navigator.serviceWorker.controller!),
+        { once: true },
+      )
+      return
     }
-
-    navigator.serviceWorker.addEventListener('controllerchange', onControllerChange)
-    onControllerChange()
+    sw.addEventListener('statechange', () => {
+      if (sw.state !== 'activated') return
+      if (navigator.serviceWorker.controller) return resolve(navigator.serviceWorker.controller)
+      navigator.serviceWorker.addEventListener(
+        'controllerchange',
+        () => resolve(navigator.serviceWorker.controller!),
+        { once: true },
+      )
+    })
   })
 }
 
@@ -448,109 +447,13 @@ function sendCredentialToServiceWorker(parameters: {
   })
 }
 
-function escapeHtml(text: string): string {
-  return text
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-}
-
-function renderDocument(parameters: { body: string; title: string; url: string }): void {
-  const { body, title, url } = parameters
-  history.replaceState(null, '', url)
-  document.open()
-  document.write(
-    `<!doctype html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>${escapeHtml(title)}</title><style>html{color-scheme:light dark}body{font-family:system-ui,-apple-system,sans-serif;margin:0;padding:2rem;line-height:1.5}main{max-width:960px;margin:0 auto}pre{white-space:pre-wrap;word-break:break-word;background:rgba(127,127,127,0.12);padding:1rem;border-radius:0.75rem;overflow:auto}img,video,iframe,object{max-width:100%;width:100%;min-height:70vh;border:0;border-radius:0.75rem}audio{width:100%}a{color:inherit}</style></head><body><main>${body}</main></body></html>`,
-  )
-  document.close()
-}
-
-async function renderFetchedResponse(parameters: {
-  response: Response
-  url: string
-}): Promise<void> {
-  const { response, url } = parameters
-  const contentType =
-    response.headers.get('Content-Type')?.split(';')[0]?.trim().toLowerCase() ?? ''
-
-  if (contentType === 'text/html' || contentType === 'application/xhtml+xml') {
-    history.replaceState(null, '', url)
-    document.open()
-    document.write(await response.text())
-    document.close()
-    return
-  }
-
-  if (
-    contentType.startsWith('text/') ||
-    contentType === 'application/json' ||
-    contentType.endsWith('+json') ||
-    contentType === 'application/xml' ||
-    contentType.endsWith('+xml')
-  ) {
-    const text = await response.text()
-    renderDocument({
-      body: `<h1>Protected response</h1><pre>${escapeHtml(text)}</pre>`,
-      title: 'Protected response',
-      url,
-    })
-    return
-  }
-
-  const objectUrl = URL.createObjectURL(await response.blob())
-
-  if (contentType.startsWith('image/')) {
-    renderDocument({
-      body: `<img alt="Protected response" src="${objectUrl}">`,
-      title: 'Protected image',
-      url,
-    })
-    return
-  }
-
-  if (contentType.startsWith('video/')) {
-    renderDocument({
-      body: `<video controls src="${objectUrl}"></video>`,
-      title: 'Protected video',
-      url,
-    })
-    return
-  }
-
-  if (contentType.startsWith('audio/')) {
-    renderDocument({
-      body: `<audio controls src="${objectUrl}"></audio>`,
-      title: 'Protected audio',
-      url,
-    })
-    return
-  }
-
-  if (contentType === 'application/pdf') {
-    renderDocument({
-      body: `<iframe src="${objectUrl}" title="Protected PDF"></iframe>`,
-      title: 'Protected PDF',
-      url,
-    })
-    return
-  }
-
-  renderDocument({
-    body: `<h1>Protected response</h1><p>Payment succeeded, but your browser could not complete a standard navigation for this response type.</p><p><a href="${objectUrl}" download>Download the protected response</a></p>`,
-    title: 'Protected response',
-    url,
-  })
-}
-
 addEventListener('mppx:complete', (event: CustomEvent<string>) => {
   const authorization = event.detail
   setPageState('verifying')
 
   navigator.serviceWorker
     .register(data.support.serviceWorkerUrl)
-    .then(activateServiceWorker)
-    .then(() => waitForServiceWorkerController())
+    .then(waitForServiceWorkerReady)
     .then((controller) =>
       sendCredentialToServiceWorker({
         controller,
@@ -563,23 +466,6 @@ addEventListener('mppx:complete', (event: CustomEvent<string>) => {
       window.location.reload()
     })
     .catch(() => {
-      fetch(navigationUrl(), {
-        headers: { Authorization: authorization },
-      })
-        .then((response) => {
-          if (!response.ok) {
-            setPageState(
-              'failed',
-              text?.error
-                ? `${text.error} (${response.status})`
-                : `Verification failed (${response.status})`,
-            )
-            return
-          }
-          return renderFetchedResponse({ response, url: navigationUrl() })
-        })
-        .catch((error) => {
-          setPageState('failed', error.message || text?.error || 'Request failed')
-        })
+      setPageState('failed', text?.error ?? 'Payment service unavailable')
     })
 })

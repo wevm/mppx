@@ -1,11 +1,16 @@
 import { createRequest, sendResponse } from '@remix-run/node-fetch-server'
 import { defineConfig, loadEnv } from 'vite'
 
+import { mppxSourceAlias } from '../_shared/mppxSource.js'
+
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), '')
   Object.assign(process.env, env)
 
   return {
+    resolve: {
+      alias: mppxSourceAlias,
+    },
     plugins: [
       {
         name: 'api',

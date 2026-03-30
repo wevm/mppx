@@ -62,8 +62,17 @@ if (arg) {
 
 function runExample(example: { name: string; path: string }) {
   console.log(`Starting ${example.name}...\n`)
+  const nodeOptions = [process.env.NODE_OPTIONS, '--import tsx', '--conditions=src']
+    .filter(Boolean)
+    .join(' ')
   const child = child_process.spawn('pnpm', ['dev'], {
     cwd: example.path,
+    env: {
+      ...process.env,
+      // Resolve local `mppx/*` imports against workspace source instead of stale `dist/`.
+      // `tsx` is required so Node can execute the TypeScript source entrypoints.
+      NODE_OPTIONS: nodeOptions,
+    },
     stdio: 'inherit',
     shell: true,
   })

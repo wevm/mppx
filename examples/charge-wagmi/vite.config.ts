@@ -2,7 +2,12 @@ import { createRequest, sendResponse } from '@remix-run/node-fetch-server'
 import react from '@vitejs/plugin-react'
 import { defineConfig } from 'vite'
 
+import { mppxSourceAlias } from '../_shared/mppxSource.js'
+
 export default defineConfig({
+  resolve: {
+    alias: mppxSourceAlias,
+  },
   plugins: [
     react(),
     {

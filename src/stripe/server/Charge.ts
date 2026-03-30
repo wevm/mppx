@@ -182,12 +182,16 @@ async function createWithClient(parameters: {
         // `shared_payment_granted_token` is not yet in the Stripe SDK types (SPTs are in private preview).
         shared_payment_granted_token: spt,
       } as any,
-      { idempotencyKey: `mppx_${challenge.id}_${spt}` },
+      { idempotencyKey: `mppx_${challenge.id}_${spt}`, expand: ['latest_charge'] },
     )
     // https://docs.stripe.com/error-low-level#idempotency
     const replayed = result.lastResponse?.headers?.['idempotent-replayed'] === 'true'
+    const riskLevel = getRiskLevel(result.latest_charge)
+    if (riskLevel === 'highest')
+      throw new VerificationFailedError({ reason: 'Payment blocked due to high fraud risk' })
     return { id: result.id, status: result.status, replayed }
-  } catch {
+  } catch (e) {
+    if (e instanceof VerificationFailedError) throw e
     throw new VerificationFailedError({ reason: 'Stripe PaymentIntent failed' })
   }
 }
@@ -208,6 +212,7 @@ async function createWithSecretKey(parameters: {
     'automatic_payment_methods[enabled]': 'true',
     confirm: 'true',
     currency: request.currency as string,
+    'expand[]': 'latest_charge',
     shared_payment_granted_token: spt,
   })
   for (const [key, value] of Object.entries(metadata)) {
@@ -227,8 +232,22 @@ async function createWithSecretKey(parameters: {
   if (!response.ok) throw new VerificationFailedError({ reason: 'Stripe PaymentIntent failed' })
   // https://docs.stripe.com/error-low-level#idempotency
   const replayed = response.headers.get('idempotent-replayed') === 'true'
-  const result = (await response.json()) as { id: string; status: string }
+  const result = (await response.json()) as {
+    id: string
+    status: string
+    latest_charge?: { outcome?: { risk_level?: string } } | null
+  }
+  const riskLevel = getRiskLevel(result.latest_charge)
+  if (riskLevel === 'highest')
+    throw new VerificationFailedError({ reason: 'Payment blocked due to high fraud risk' })
   return { ...result, replayed }
+}
+
+function getRiskLevel(
+  latestCharge: { outcome?: { risk_level?: string } } | string | null | undefined,
+): string | undefined {
+  if (!latestCharge || typeof latestCharge === 'string') return undefined
+  return latestCharge.outcome?.risk_level
 }
 
 /** @internal */

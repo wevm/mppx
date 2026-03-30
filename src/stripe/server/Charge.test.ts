@@ -20,6 +20,7 @@ function createMockStripeClient(
         status: string
         id: string
         throws: boolean
+        riskLevel: string
       }>
     | undefined,
 ): {
@@ -33,6 +34,7 @@ function createMockStripeClient(
     status = 'succeeded',
     id = 'pi_mock_123',
     throws = false,
+    riskLevel = 'normal',
   } = overrides ?? {}
   let callCount = 0
   const create = vi.fn(async () => {
@@ -41,6 +43,7 @@ function createMockStripeClient(
     return {
       id,
       status,
+      latest_charge: { outcome: { risk_level: riskLevel } },
       ...(callCount > 1 ? { lastResponse: { headers: { 'idempotent-replayed': 'true' } } } : {}),
     }
   })
@@ -185,6 +188,44 @@ describe('stripe.charge with client', () => {
     expect(paidResponse.status).toBe(402)
     const body = (await paidResponse.json()) as { detail: string }
     expect(body.detail).toContain('Stripe PaymentIntent failed')
+  })
+
+  test('behavior: rejects highest risk level (fraudulent card)', async () => {
+    const { client } = createMockStripeClient({ riskLevel: 'highest' })
+
+    const server = Mppx.create({
+      methods: [
+        stripe.charge({
+          client,
+          networkId: 'internal',
+          paymentMethodTypes: ['card'],
+        }),
+      ],
+      realm,
+      secretKey,
+    })
+
+    httpServer = await Http.createServer(async (req, res) => {
+      const result = await Mppx.toNodeListener(
+        server.charge({ amount: '1', currency: 'usd', decimals: 2 }),
+      )(req, res)
+      if (result.status === 402) return
+      res.end('OK')
+    })
+
+    const response = await fetch(httpServer.url)
+    const challenge = Challenge.fromResponse(response)
+    const credential = Credential.from({
+      challenge,
+      payload: { spt: 'spt_test_token' },
+    })
+
+    const paidResponse = await fetch(httpServer.url, {
+      headers: { Authorization: Credential.serialize(credential) },
+    })
+    expect(paidResponse.status).toBe(402)
+    const body = (await paidResponse.json()) as { detail: string }
+    expect(body.detail).toContain('high fraud risk')
   })
 
   test('behavior: rejects requires_action status', async () => {

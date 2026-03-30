@@ -25,6 +25,8 @@ const testFormMethod = Method.from({
   },
 })
 
+const seenCredentials = new Set<string>()
+
 export default defineConfig({
   plugins: [
     attachmentOnVerifiedPayment(),
@@ -35,6 +37,9 @@ export default defineConfig({
       challenge: {
         request: { amount: '1000' },
         description: 'Test form payment',
+      },
+      verify({ credential }) {
+        verifyCredentialOnce(credential)
       },
     }),
   ],
@@ -60,6 +65,7 @@ function attachmentOnVerifiedPayment(): Plugin {
           if (!Challenge.verify(credential.challenge, { secretKey: 'mppx-dev-secret' }))
             return next()
           if (!parsedPayload.success) return next()
+          verifyCredentialOnce(credential)
 
           res.statusCode = 200
           res.setHeader('Cache-Control', 'no-store')
@@ -73,4 +79,10 @@ function attachmentOnVerifiedPayment(): Plugin {
       })
     },
   }
+}
+
+function verifyCredentialOnce(credential: Credential.Credential) {
+  const serialized = Credential.serialize(credential)
+  if (seenCredentials.has(serialized)) throw new Error('Payment has already been processed.')
+  seenCredentials.add(serialized)
 }

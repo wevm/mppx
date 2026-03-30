@@ -1,5 +1,6 @@
 import { defineConfig } from 'vite'
 
+import { VerificationFailedError } from '../../Errors.js'
 import * as Methods from '../../stripe/Methods.js'
 import { createTokenResponse } from '../../stripe/server/internal/sharedPaymentToken.js'
 import { support, supportPlaceholderOrigin, supportRequestUrl } from '../internal/constants.js'
@@ -61,6 +62,42 @@ export default defineConfig({
       },
       config: {
         publishableKey: process.env.VITE_STRIPE_PUBLIC_KEY ?? 'pk_test_example',
+      },
+      async verify({ credential }) {
+        const secretKey = process.env.VITE_STRIPE_SECRET_KEY
+        if (!secretKey) throw new Error('VITE_STRIPE_SECRET_KEY not set')
+
+        const parsed = Methods.charge.schema.credential.payload.safeParse(credential.payload)
+        if (!parsed.success) throw new Error('Invalid credential payload: missing or malformed spt')
+        const { spt } = parsed.data as { spt: string }
+
+        const body = new URLSearchParams({
+          amount: String(credential.challenge.request.amount),
+          'automatic_payment_methods[allow_redirects]': 'never',
+          'automatic_payment_methods[enabled]': 'true',
+          confirm: 'true',
+          currency: String(credential.challenge.request.currency),
+          shared_payment_granted_token: spt,
+        })
+
+        const response = await fetch('https://api.stripe.com/v1/payment_intents', {
+          method: 'POST',
+          headers: {
+            Authorization: `Basic ${btoa(`${secretKey}:`)}`,
+            'Content-Type': 'application/x-www-form-urlencoded',
+            'Idempotency-Key': `mppx_${credential.challenge.id}_${spt}`,
+          },
+          body,
+        })
+
+        if (!response.ok)
+          throw new VerificationFailedError({ reason: 'Stripe PaymentIntent failed' })
+
+        const result = (await response.json()) as { id: string; status: string }
+        if (result.status !== 'succeeded')
+          throw new VerificationFailedError({
+            reason: `Stripe PaymentIntent status: ${result.status}`,
+          })
       },
     }),
   ],

@@ -1,8 +1,9 @@
-import { Mppx, tempo } from 'mppx/server'
 import { createClient, http } from 'viem'
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts'
 import { tempoModerato } from 'viem/chains'
 import { Actions } from 'viem/tempo'
+
+import { Mppx, tempo } from '../../_shared/mppxSource.server.js'
 
 const account = privateKeyToAccount(generatePrivateKey())
 

@@ -1,5 +1,6 @@
-import { Mppx, stripe } from 'mppx/server'
 import Stripe from 'stripe'
+
+import { Mppx, stripe } from '../../_shared/mppxSource.server.js'
 
 const secretKey = process.env.VITE_STRIPE_SECRET_KEY!
 const stripeClient = new Stripe(secretKey)

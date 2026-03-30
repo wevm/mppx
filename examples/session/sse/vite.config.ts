@@ -1,9 +1,13 @@
 import { createRequest, sendResponse } from '@remix-run/node-fetch-server'
 import { defineConfig } from 'vite'
 
+import { mppxSourceAlias } from '../../_shared/mppxSource.js'
 import { handler } from './src/server.ts'
 
 export default defineConfig({
+  resolve: {
+    alias: mppxSourceAlias,
+  },
   plugins: [
     {
       name: 'api',

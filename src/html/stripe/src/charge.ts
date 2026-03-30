@@ -162,4 +162,8 @@ mount<typeof Methods.charge, charge.HtmlConfig, { createToken: string }>(async (
     const { spt } = (await response.json()) as { spt: string }
     c.dispatch({ spt })
   }
+
+  addEventListener('mppx:failed', () => {
+    payButton.disabled = false
+  })
 })

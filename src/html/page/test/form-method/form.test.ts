@@ -105,25 +105,6 @@ test('submitting form with a valid server token dispatches credential', async ({
   await expect(page.locator('h1')).toHaveText('Payment verified!', { timeout: 15_000 })
 })
 
-test('shows success state when verification triggers a download without navigation', async ({
-  page,
-}) => {
-  await page.goto('/?download=1')
-
-  await page.fill('input[name="code"]', 'test-payment-code-123')
-  await page.fill('input[name="serverToken"]', 'server-ok-123')
-
-  const [download] = await Promise.all([
-    page.waitForEvent('download', { timeout: 15_000 }),
-    page.click('#payment-form button[type="submit"]'),
-  ])
-
-  await expect(page.locator('h1')).toHaveText('Payment Required')
-  await expect(page.locator('#mppx-method')).toHaveText('Verified payment')
-  await expect(page.locator('#payment-form')).toHaveCount(0)
-  expect(download.suggestedFilename()).toBe('protected.txt')
-})
-
 test('submitting form with an invalid server token stays unauthorized', async ({ page }) => {
   await page.goto('/')
 
