@@ -19,6 +19,34 @@ if (hasStripeKeys) {
     await expect(stripeFrame.locator('[name="number"]')).toBeVisible({ timeout: 15_000 })
   })
 
+  test('debug toolbar visually hides stripe method for verifying and failed states', async ({
+    page,
+  }) => {
+    await page.goto('/')
+    await expect(page.locator('#mppx-method button')).toHaveText('Pay')
+    const stripeFrame = page.locator('iframe[name^="__privateStripeFrame"]').nth(0)
+    const stripeFrameHandle = await stripeFrame.elementHandle()
+    const overlay = page.locator('#mppx-method .mppx-state-pane--overlay')
+    expect(stripeFrameHandle).toBeTruthy()
+
+    const toolbar = page.locator('#mppx-debug-toolbar')
+    await toolbar.getByRole('button', { name: 'Verifying' }).click()
+
+    await expect(page.locator('h1')).toHaveText('Payment Required')
+    await expect(overlay).toHaveText('Verifying payment')
+    await expect(page.locator('#mppx-method button')).toBeHidden()
+    expect(await stripeFrameHandle!.evaluate((element) => element.isConnected)).toBe(true)
+
+    await toolbar.getByRole('button', { name: 'Default' }).click()
+    await expect(page.locator('#mppx-method button')).toHaveText('Pay')
+
+    await toolbar.getByRole('button', { name: 'Failed' }).click()
+    await expect(page.locator('h1')).toHaveText('Payment Required')
+    await expect(overlay).toHaveText('Verification failed')
+    await expect(page.locator('#mppx-method button')).toBeHidden()
+    expect(await stripeFrameHandle!.evaluate((element) => element.isConnected)).toBe(true)
+  })
+
   test('completes payment with test card', async ({ page }) => {
     await page.goto('/')
 

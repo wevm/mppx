@@ -37,7 +37,7 @@ export type Text = {
   title?: string | undefined
   /** Verifying status text. @default 'Verifying payment' */
   verifying?: string | undefined
-  /** Success status text shown after verification succeeds but before navigation completes. @default 'Payment verified' */
+  /** Success status text shown after verification succeeds but before navigation completes. @default 'Verified payment' */
   success?: string | undefined
   /** Generic error text. @default 'Verification failed' */
   error?: string | undefined

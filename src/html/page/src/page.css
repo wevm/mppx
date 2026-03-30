@@ -106,7 +106,40 @@ body {
 }
 
 .mppx-method {
+  position: relative;
   margin-bottom: 1rem;
+}
+
+.mppx-method--overlay > :not(.mppx-state-pane--overlay) {
+  pointer-events: none;
+  user-select: none;
+  visibility: hidden;
+}
+
+.mppx-state-pane {
+  background: var(--mppx-surface);
+  border-radius: var(--mppx-radius);
+  color: var(--mppx-foreground);
+  font-size: 1rem;
+  font-weight: 600;
+  padding: 1rem;
+  text-align: center;
+}
+
+.mppx-state-pane--overlay {
+  align-items: center;
+  display: flex;
+  inset: 0;
+  justify-content: center;
+  position: absolute;
+}
+
+.mppx-state-pane--error {
+  color: var(--mppx-negative);
+}
+
+.mppx-state-pane--success {
+  color: var(--mppx-positive);
 }
 
 .mppx-button {

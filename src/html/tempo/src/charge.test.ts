@@ -15,6 +15,18 @@ test('displays connect wallet button when disconnected', async ({ page }) => {
   await expect(page.locator('#wallets button')).toHaveAccessibleName('Continue with Tempo')
 })
 
+test('debug toolbar shows verifying state while disconnected', async ({ page }) => {
+  await page.goto('/')
+
+  await page.locator('#mppx-debug-toolbar').getByRole('button', { name: 'Verifying' }).click()
+
+  await expect(page.locator('h1')).toHaveText('Payment Required')
+  await expect(page.locator('#mppx-method .mppx-state-pane--overlay')).toHaveText(
+    'Verifying payment',
+  )
+  await expect(page.locator('#wallets')).toBeHidden()
+})
+
 test('displays pay button', async ({ page }) => {
   await page.goto('/')
   await expect(page.locator('#pay-button')).toHaveText('Pay')

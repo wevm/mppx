@@ -9,7 +9,7 @@
   "include": [
     "env.d.ts",
     "internal/env.d.ts",
-    "internal/themeSwitcher.ts",
+    "internal/debugToolbar.ts",
     "index.ts",
     "mount.ts",
     "tempo/src/**/*.ts",

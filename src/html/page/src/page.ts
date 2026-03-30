@@ -139,7 +139,10 @@ function updateSummary(challenge: Runtime.Mppx['challenge']) {
   ) as HTMLElement | null
   const key = isComposed ? activeTab?.dataset.method : undefined
   const registeredAmount = key ? summaryAmounts.get(key) : summaryAmounts.values().next().value
-  if (amountEl && registeredAmount) amountEl.textContent = registeredAmount
+  if (amountEl && registeredAmount) {
+    amountEl.textContent = registeredAmount
+    ;(amountEl as HTMLElement).style.opacity = ''
+  }
 
   // Update description
   if (descEl) descEl.textContent = challenge.description ?? ''
@@ -152,17 +155,19 @@ function updateSummary(challenge: Runtime.Mppx['challenge']) {
 }
 
 if (summaryElement) {
-  const amountEl = document.createElement('div')
-  amountEl.className = Html.classNames.summaryAmount
-  summaryElement.appendChild(amountEl)
+  if (!summaryElement.querySelector(`.${Html.classNames.summaryAmount}`)) {
+    const amountEl = document.createElement('div')
+    amountEl.className = Html.classNames.summaryAmount
+    summaryElement.appendChild(amountEl)
 
-  const descEl = document.createElement('p')
-  descEl.className = Html.classNames.description
-  summaryElement.appendChild(descEl)
+    const descEl = document.createElement('p')
+    descEl.className = Html.classNames.description
+    summaryElement.appendChild(descEl)
 
-  const expiresEl = document.createElement('p')
-  expiresEl.className = Html.classNames.summaryLabel
-  summaryElement.appendChild(expiresEl)
+    const expiresEl = document.createElement('p')
+    expiresEl.className = Html.classNames.summaryLabel
+    summaryElement.appendChild(expiresEl)
+  }
 
   updateSummary(firstMethod.challenge)
 }
@@ -180,26 +185,137 @@ window.addEventListener(
     const activeKey = isComposed ? activeTab?.dataset.method : e.detail.key
     if (activeKey === e.detail.key) {
       const amountEl = summaryElement?.querySelector(`.${Html.classNames.summaryAmount}`)
-      if (amountEl) amountEl.textContent = e.detail.value
+      if (amountEl) {
+        amountEl.textContent = e.detail.value
+        ;(amountEl as HTMLElement).style.opacity = ''
+      }
     }
   }) as EventListener,
 )
 
 // Apply text overrides
 const text = data.shell?.text
-const titleElement = document.querySelector(`.${Html.classNames.title}`)
-if (text?.title) {
-  if (titleElement) titleElement.textContent = text.title
+const titleElement = document.querySelector<HTMLElement>(`.${Html.classNames.title}`)
+const methodElement = document.getElementById(Html.elements.method)
+const defaultTitle = text?.title ?? 'Payment Required'
+const successText = text?.success ?? 'Verified payment'
+const verifyingText = text?.verifying ?? 'Verifying payment'
+
+type DebugState = 'default' | 'verifying' | 'success' | 'failed'
+
+if (titleElement) titleElement.textContent = defaultTitle
+
+const statePaneElement = document.createElement('div')
+statePaneElement.role = 'status'
+
+let detachedMethodNodes: Node[] | undefined
+
+function statusElement() {
+  return document.getElementById('status')
 }
 
-function showVerificationSuccessState() {
-  if (titleElement) titleElement.textContent = 'Payment Verified'
-
-  const statusElement = document.getElementById('status')
-  if (!statusElement) return
-  statusElement.textContent = text?.success ?? 'Payment verified'
-  statusElement.className = Html.classNames.statusSuccess
+function hideMethodStateOverlay() {
+  if (!methodElement) return
+  methodElement.classList.remove(Html.classNames.methodOverlay)
+  statePaneElement.remove()
 }
+
+function restoreMethodContent() {
+  hideMethodStateOverlay()
+  if (!methodElement || !detachedMethodNodes) return
+  methodElement.replaceChildren(...detachedMethodNodes)
+  detachedMethodNodes = undefined
+}
+
+function replaceMethodWithState(parameters: { className: string; message: string }) {
+  const { className, message } = parameters
+  if (!methodElement) return false
+  hideMethodStateOverlay()
+  if (!detachedMethodNodes) detachedMethodNodes = Array.from(methodElement.childNodes)
+  statePaneElement.className = className
+  statePaneElement.textContent = message
+  methodElement.replaceChildren(statePaneElement)
+  return true
+}
+
+function overlayMethodWithState(parameters: { className: string; message: string }) {
+  const { className, message } = parameters
+  if (!methodElement) return false
+  if (detachedMethodNodes) restoreMethodContent()
+  statePaneElement.className = `${className} mppx-state-pane--overlay`
+  statePaneElement.textContent = message
+  methodElement.classList.add(Html.classNames.methodOverlay)
+  if (statePaneElement.parentElement !== methodElement) methodElement.appendChild(statePaneElement)
+  return true
+}
+
+function setPageState(state: DebugState, message?: string) {
+  if (titleElement) titleElement.textContent = defaultTitle
+
+  const paneClassName =
+    state === 'success'
+      ? Html.classNames.statePaneSuccess
+      : state === 'failed'
+        ? Html.classNames.statePaneError
+        : Html.classNames.statePane
+  const paneMessage =
+    state === 'success'
+      ? successText
+      : state === 'verifying'
+        ? verifyingText
+        : (message ?? text?.error ?? 'Verification failed')
+
+  if (state === 'success') {
+    if (replaceMethodWithState({ className: paneClassName, message: paneMessage })) return
+
+    const element = statusElement()
+    if (!element) return
+    element.textContent = paneMessage
+    element.className = Html.classNames.statusSuccess
+    return
+  }
+
+  if (state === 'failed') {
+    if (methodElement) {
+      if (detachedMethodNodes) restoreMethodContent()
+      hideMethodStateOverlay()
+      statePaneElement.className = paneClassName
+      statePaneElement.textContent = paneMessage
+      methodElement.after(statePaneElement)
+    } else {
+      const element = statusElement()
+      if (!element) return
+      element.textContent = paneMessage
+      element.className = Html.classNames.statusError
+    }
+    return
+  }
+
+  if (state !== 'default') {
+    if (overlayMethodWithState({ className: paneClassName, message: paneMessage })) return
+
+    const element = statusElement()
+    if (!element) return
+    element.textContent = paneMessage
+    element.className = Html.classNames.status
+    return
+  }
+
+  restoreMethodContent()
+
+  const element = statusElement()
+
+  if (!element) return
+  element.textContent = ''
+  element.className = Html.classNames.status
+}
+
+window.addEventListener(
+  'mppx:debug-state' as any,
+  ((event: CustomEvent<{ state: DebugState }>) => {
+    setPageState(event.detail.state)
+  }) as EventListener,
+)
 
 // Apply logo
 const theme = data.shell?.theme
@@ -428,12 +544,8 @@ async function renderFetchedResponse(parameters: {
 }
 
 addEventListener('mppx:complete', (event: CustomEvent<string>) => {
-  const statusElement = document.getElementById('status')
   const authorization = event.detail
-  if (statusElement) {
-    statusElement.textContent = text?.verifying ?? 'Verifying payment'
-    statusElement.className = Html.classNames.status
-  }
+  setPageState('verifying')
 
   navigator.serviceWorker
     .register(data.support.serviceWorkerUrl)
@@ -447,7 +559,7 @@ addEventListener('mppx:complete', (event: CustomEvent<string>) => {
       }),
     )
     .then(() => {
-      showVerificationSuccessState()
+      setPageState('success')
       window.location.reload()
     })
     .catch(() => {
@@ -456,21 +568,18 @@ addEventListener('mppx:complete', (event: CustomEvent<string>) => {
       })
         .then((response) => {
           if (!response.ok) {
-            if (statusElement) {
-              statusElement.textContent = text?.error
+            setPageState(
+              'failed',
+              text?.error
                 ? `${text.error} (${response.status})`
-                : `Verification failed (${response.status})`
-              statusElement.className = Html.classNames.statusError
-            }
+                : `Verification failed (${response.status})`,
+            )
             return
           }
           return renderFetchedResponse({ response, url: navigationUrl() })
         })
         .catch((error) => {
-          if (statusElement) {
-            statusElement.textContent = error.message || text?.error || 'Request failed'
-            statusElement.className = Html.classNames.statusError
-          }
+          setPageState('failed', error.message || text?.error || 'Request failed')
         })
     })
 })
