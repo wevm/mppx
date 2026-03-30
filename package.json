@@ -2,7 +2,7 @@
   "scripts": {
     "build": "zile",
     "changeset:publish": "zile publish:prepare && changeset publish && zile publish:post",
-    "changeset:version": "changeset version",
+    "changeset:version": "changeset version && vp fmt .",
     "check": "vp lint --fix && vp fmt --write .",
     "check:ci": "vp lint && vp fmt --check .",
     "check:types": "tsgo -b",
