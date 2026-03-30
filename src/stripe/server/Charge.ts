@@ -1,10 +1,6 @@
 import type * as Credential from '../../Credential.js'
-import {
-  InvalidChallengeError,
-  PaymentActionRequiredError,
-  PaymentExpiredError,
-  VerificationFailedError,
-} from '../../Errors.js'
+import { PaymentActionRequiredError, VerificationFailedError } from '../../Errors.js'
+import * as Expires from '../../Expires.js'
 import type { LooseOmit, OneOf } from '../../internal/types.js'
 import * as Method from '../../Method.js'
 import type { StripeClient } from '../internal/types.js'
@@ -67,11 +63,7 @@ export function charge<const parameters extends charge.Parameters>(parameters: p
       const { challenge } = credential
       const { request } = challenge
 
-      if (!challenge.expires) throw new PaymentExpiredError()
-      if (Number.isNaN(new Date(challenge.expires).getTime()))
-        throw new InvalidChallengeError({ id: challenge.id, reason: 'malformed expires timestamp' })
-      if (new Date(challenge.expires) < new Date())
-        throw new PaymentExpiredError({ expires: challenge.expires })
+      Expires.assert(challenge.expires, challenge.id)
 
       const parsed = Methods.charge.schema.credential.payload.safeParse(credential.payload)
       if (!parsed.success) throw new Error('Invalid credential payload: missing or malformed spt')

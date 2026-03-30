@@ -419,35 +419,13 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
         }
 
         // Reject credentials without expires (fail-closed) or with expired timestamp
-        if (!credential.challenge.expires) {
+        try {
+          Expires.assert(credential.challenge.expires, credential.challenge.id)
+        } catch (error) {
           const response = await transport.respondChallenge({
             challenge,
             input,
-            error: new Errors.InvalidChallengeError({
-              id: credential.challenge.id,
-              reason: 'missing required expires field',
-            }),
-          })
-          return { challenge: response, status: 402 }
-        }
-        if (Number.isNaN(new Date(credential.challenge.expires).getTime())) {
-          const response = await transport.respondChallenge({
-            challenge,
-            input,
-            error: new Errors.InvalidChallengeError({
-              id: credential.challenge.id,
-              reason: 'malformed expires timestamp',
-            }),
-          })
-          return { challenge: response, status: 402 }
-        }
-        if (new Date(credential.challenge.expires) < new Date()) {
-          const response = await transport.respondChallenge({
-            challenge,
-            input,
-            error: new Errors.PaymentExpiredError({
-              expires: credential.challenge.expires,
-            }),
+            error: error as Errors.PaymentError,
           })
           return { challenge: response, status: 402 }
         }
