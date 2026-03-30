@@ -11,9 +11,15 @@ export function assert(
   challengeId?: string,
 ): asserts expires is string {
   if (!expires)
-    throw new InvalidChallengeError({ id: challengeId, reason: 'missing required expires field' })
+    throw new InvalidChallengeError({
+      ...(challengeId && { id: challengeId }),
+      reason: 'missing required expires field',
+    })
   if (Number.isNaN(new Date(expires).getTime()))
-    throw new InvalidChallengeError({ id: challengeId, reason: 'malformed expires timestamp' })
+    throw new InvalidChallengeError({
+      ...(challengeId && { id: challengeId }),
+      reason: 'malformed expires timestamp',
+    })
   if (new Date(expires) < new Date()) throw new PaymentExpiredError({ expires })
 }
 
