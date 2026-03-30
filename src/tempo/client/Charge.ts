@@ -1,6 +1,11 @@
 import type * as Hex from 'ox/Hex'
 import type { Address } from 'viem'
-import { prepareTransactionRequest, sendCallsSync, signTransaction } from 'viem/actions'
+import {
+  prepareTransactionRequest,
+  sendCallsSync,
+  signTypedData,
+  signTransaction,
+} from 'viem/actions'
 import { tempo as tempo_chain } from 'viem/chains'
 import { Actions } from 'viem/tempo'
 
@@ -13,6 +18,7 @@ import * as Attribution from '../Attribution.js'
 import * as AutoSwap from '../internal/auto-swap.js'
 import * as Charge_internal from '../internal/charge.js'
 import * as defaults from '../internal/defaults.js'
+import * as Proof from '../internal/proof.js'
 import * as Methods from '../Methods.js'
 
 /**
@@ -49,11 +55,28 @@ export function charge(parameters: charge.Parameters = {}) {
       const client = await getClient({ chainId })
       const account = getAccount(client, context)
 
+      const { request } = challenge
+      const { amount, methodDetails } = request
+
+      // Zero-amount: sign EIP-712 typed data instead of creating a transaction.
+      if (BigInt(amount) === 0n) {
+        const signature = await signTypedData(client, {
+          account,
+          domain: Proof.domain(chainId!),
+          types: Proof.types,
+          primaryType: 'Proof',
+          message: Proof.message(challenge.id),
+        })
+        return Credential.serialize({
+          challenge,
+          payload: { signature, type: 'proof' },
+          source: Proof.proofSource({ address: account.address, chainId: chainId! }),
+        })
+      }
+
       const mode =
         context?.mode ?? parameters.mode ?? (account.type === 'json-rpc' ? 'push' : 'pull')
 
-      const { request } = challenge
-      const { amount, methodDetails } = request
       const currency = request.currency as Address
 
       if (parameters.expectedRecipients) {

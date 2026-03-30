@@ -26,6 +26,7 @@ export const charge = Method.from({
       payload: z.discriminatedUnion('type', [
         z.object({ hash: z.hash(), type: z.literal('hash') }),
         z.object({ signature: z.signature(), type: z.literal('transaction') }),
+        z.object({ signature: z.signature(), type: z.literal('proof') }),
       ]),
     },
     request: z.pipe(

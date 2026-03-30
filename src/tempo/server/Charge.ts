@@ -4,6 +4,7 @@ import {
   sendRawTransaction,
   sendRawTransactionSync,
   signTransaction,
+  verifyTypedData,
   call as viem_call,
 } from 'viem/actions'
 import { tempo as tempo_chain } from 'viem/chains'
@@ -19,6 +20,7 @@ import * as TempoAddress from '../internal/address.js'
 import * as Charge_internal from '../internal/charge.js'
 import * as defaults from '../internal/defaults.js'
 import * as FeePayer from '../internal/fee-payer.js'
+import * as Proof from '../internal/proof.js'
 import * as Selectors from '../internal/selectors.js'
 import type * as types from '../internal/types.js'
 import * as Methods from '../Methods.js'
@@ -123,6 +125,10 @@ export function charge<const parameters extends charge.Parameters>(
       const memo = methodDetails?.memo as `0x${string}` | undefined
 
       const payload = credential.payload
+      const isZeroAmount = BigInt(amount) === 0n
+
+      if (isZeroAmount && payload.type !== 'proof')
+        throw new MismatchError('Zero-amount challenges require a proof credential.', {})
 
       switch (payload.type) {
         case 'hash': {
@@ -140,6 +146,38 @@ export function charge<const parameters extends charge.Parameters>(
           await markHashUsed(store, hash)
 
           return toReceipt(receipt)
+        }
+
+        case 'proof': {
+          if (!isZeroAmount)
+            throw new MismatchError(
+              'Proof credentials are only valid for zero-amount challenges.',
+              {},
+            )
+
+          const expectedSource = credential.source
+          if (!expectedSource)
+            throw new MismatchError('Proof credential must include a source.', {})
+
+          const sourceAddress = expectedSource.split(':').pop() as `0x${string}`
+          const resolvedChainId = challenge.request.methodDetails?.chainId ?? chainId!
+
+          const valid = await verifyTypedData(client, {
+            address: sourceAddress,
+            domain: Proof.domain(resolvedChainId),
+            types: Proof.types,
+            primaryType: 'Proof',
+            message: Proof.message(challenge.id),
+            signature: payload.signature as `0x${string}`,
+          })
+          if (!valid) throw new MismatchError('Proof signature does not match source.', {})
+
+          return {
+            method: 'tempo',
+            status: 'success',
+            timestamp: new Date().toISOString(),
+            reference: challenge.id,
+          } as const
         }
 
         case 'transaction': {
