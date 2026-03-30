@@ -36,13 +36,14 @@ function createServer(handler: (request: Request) => Promise<Response> | Respons
 
 const secretKey = 'test-secret-key'
 
-describe('charge', () => {
+function createChargeHarness(feePayer: boolean) {
   const mppx = Mppx.create({
     methods: [
       tempo_server.charge({
         getClient: () => client,
         currency: asset,
         account: accounts[0],
+        ...(feePayer ? { feePayer: true } : {}),
       }),
     ],
     secretKey,
@@ -58,7 +59,13 @@ describe('charge', () => {
     ],
   })
 
+  return { fetch, mppx }
+}
+
+describe('charge', () => {
   test('returns 402 when no credential', async () => {
+    const { mppx } = createChargeHarness(false)
+
     const handler = mppx.charge({ amount: '1' })(() =>
       Response.json({ fortune: 'You will be rich' }),
     )
@@ -72,6 +79,8 @@ describe('charge', () => {
   })
 
   test('returns 200 with receipt on valid payment', async () => {
+    const { fetch, mppx } = createChargeHarness(false)
+
     const handler = mppx.charge({ amount: '1' })(() =>
       Response.json({ fortune: 'You will be rich' }),
     )
@@ -90,7 +99,24 @@ describe('charge', () => {
     server.close()
   })
 
+  test('fee payer: returns 200 with receipt on valid payment', async () => {
+    const { fetch, mppx } = createChargeHarness(true)
+
+    const handler = mppx.charge({ amount: '1' })(() =>
+      Response.json({ fortune: 'You will be rich' }),
+    )
+
+    const server = await createServer(handler)
+    const response = await fetch(server.url)
+    expect(response.status).toBe(200)
+    expect(Receipt.fromResponse(response).status).toBe('success')
+
+    server.close()
+  })
+
   test('serves /openapi.json from a handler-derived route config', async () => {
+    const { mppx } = createChargeHarness(false)
+
     const pay = mppx.charge({ amount: '1' })
     const server = await createServer(
       discovery(mppx, {
@@ -119,13 +145,7 @@ describe('charge', () => {
 describe('session', () => {
   let escrowContract: Address
 
-  beforeAll(async () => {
-    escrowContract = await deployEscrow()
-    await fundAccount({ address: accounts[2].address, token: Addresses.pathUsd })
-    await fundAccount({ address: accounts[2].address, token: asset })
-  })
-
-  test('returns 402 when no credential', async () => {
+  function createSessionHarness(feePayer: boolean) {
     const mppx = Mppx.create({
       methods: [
         tempo_server.session({
@@ -133,33 +153,8 @@ describe('session', () => {
           account: accounts[0],
           currency: asset,
           escrowContract,
-        }),
-      ],
-      secretKey,
-    })
-
-    const handler = mppx.session({ amount: '1', unitType: 'token' })(() =>
-      Response.json({ data: 'streamed' }),
-    )
-
-    const server = await createServer(handler)
-    const response = await globalThis.fetch(server.url)
-    expect(response.status).toBe(402)
-    expect(response.headers.get('WWW-Authenticate')).toContain('Payment')
-
-    server.close()
-  })
-
-  test('returns 200 with receipt on valid payment', async () => {
-    const mppx = Mppx.create({
-      methods: [
-        tempo_server.session({
-          getClient: () => client,
-          account: accounts[0],
-          currency: asset,
-          escrowContract,
-          feePayer: true,
-        }),
+          ...(feePayer ? { feePayer: accounts[1] } : {}),
+        } as any),
       ],
       secretKey,
     })
@@ -175,7 +170,36 @@ describe('session', () => {
       ],
     })
 
-    const handler = mppx.session({ amount: '1', unitType: 'token' })(() =>
+    return { fetch, mppx }
+  }
+
+  beforeAll(async () => {
+    escrowContract = await deployEscrow()
+    await fundAccount({ address: accounts[1].address, token: Addresses.pathUsd })
+    await fundAccount({ address: accounts[1].address, token: asset })
+    await fundAccount({ address: accounts[2].address, token: Addresses.pathUsd })
+    await fundAccount({ address: accounts[2].address, token: asset })
+  })
+
+  test('returns 402 when no credential', async () => {
+    const { mppx } = createSessionHarness(false)
+
+    const handler = mppx.session({ amount: '1', currency: asset, unitType: 'token' })(() =>
+      Response.json({ data: 'streamed' }),
+    )
+
+    const server = await createServer(handler)
+    const response = await globalThis.fetch(server.url)
+    expect(response.status).toBe(402)
+    expect(response.headers.get('WWW-Authenticate')).toContain('Payment')
+
+    server.close()
+  })
+
+  test('returns 200 with receipt on valid payment', async () => {
+    const { fetch, mppx } = createSessionHarness(false)
+
+    const handler = mppx.session({ amount: '1', currency: asset, unitType: 'token' })(() =>
       Response.json({ data: 'streamed' }),
     )
 
@@ -189,6 +213,21 @@ describe('session', () => {
     const receipt = Receipt.fromResponse(response)
     expect(receipt.status).toBe('success')
     expect(receipt.method).toBe('tempo')
+
+    server.close()
+  })
+
+  test('fee payer: returns 200 with receipt on valid payment', async () => {
+    const { fetch, mppx } = createSessionHarness(true)
+
+    const handler = mppx.session({ amount: '1', currency: asset, unitType: 'token' })(() =>
+      Response.json({ data: 'streamed' }),
+    )
+
+    const server = await createServer(handler)
+    const response = await fetch(server.url)
+    expect(response.status).toBe(200)
+    expect(Receipt.fromResponse(response).status).toBe('success')
 
     server.close()
   })

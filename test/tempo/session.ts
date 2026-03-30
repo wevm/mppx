@@ -146,6 +146,7 @@ export async function signOpenChannel(params: {
   deposit: bigint
   salt: Hex
   authorizedSigner?: Address
+  feePayer?: boolean
 }): Promise<{ channelId: Hex; serializedTransaction: Hex }> {
   const { escrow, payer, payee, token, deposit, salt } = params
   const authorizedSigner = params.authorizedSigner ?? zeroAddress
@@ -177,6 +178,7 @@ export async function signOpenChannel(params: {
       { to: token, data: approveData },
       { to: escrow, data: openData },
     ],
+    ...(params.feePayer ? { feePayer: true, feeToken: token } : {}),
   } as never)
   prepared.gas = prepared.gas! + 5_000n
 
@@ -191,6 +193,7 @@ export async function signTopUpChannel(params: {
   channelId: Hex
   token: Address
   amount: bigint
+  feePayer?: boolean
 }): Promise<{ serializedTransaction: Hex }> {
   const { escrow, payer, channelId, token, amount } = params
 
@@ -211,6 +214,7 @@ export async function signTopUpChannel(params: {
       { to: token, data: approveData },
       { to: escrow, data: topUpData },
     ],
+    ...(params.feePayer ? { feePayer: true, feeToken: token } : {}),
   } as never)
   prepared.gas = prepared.gas! + 5_000n
 
