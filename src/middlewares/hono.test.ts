@@ -14,10 +14,12 @@ import { accounts, asset, client, fundAccount } from '~test/tempo/viem.js'
 function createServer(app: Hono) {
   return new Promise<Http.TestServer>((resolve) => {
     const server = serve({ fetch: app.fetch, port: 0 }, (info) => {
-      resolve(Http.wrapServer(server as unknown as import('node:http').Server, {
-        port: info.port,
-        url: `http://localhost:${info.port}`,
-      }))
+      resolve(
+        Http.wrapServer(server as unknown as import('node:http').Server, {
+          port: info.port,
+          url: `http://localhost:${info.port}`,
+        }),
+      )
     })
   })
 }

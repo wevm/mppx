@@ -7,7 +7,10 @@ export type TestServer = http.Server & {
   url: string
 }
 
-export function wrapServer(server: http.Server, options: { port: number; url: string }): TestServer {
+export function wrapServer(
+  server: http.Server,
+  options: { port: number; url: string },
+): TestServer {
   const sockets = new Set<net.Socket>()
   let closed = false
 
