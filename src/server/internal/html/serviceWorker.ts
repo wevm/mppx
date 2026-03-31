@@ -7,7 +7,7 @@ serviceWorker.addEventListener('activate', (event) => {
 })
 
 serviceWorker.addEventListener('message', (event) => {
-  if (!(event.source instanceof Client)) return
+  if (!event.source) return
   const value = event.data?.credential
   if (typeof value !== 'string' || !value.startsWith('Payment ')) return
   credential = value
