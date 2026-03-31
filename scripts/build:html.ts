@@ -17,6 +17,11 @@ for (const entry of htmlEntries) {
 
   await build({
     input: path.resolve(root, entry),
+    transform: {
+      define: {
+        __LOCAL_ACCOUNT__: JSON.stringify(process.env.LOCAL_ACCOUNT ?? ''),
+      },
+    },
     output: {
       dir: outDir,
       format: 'iife',

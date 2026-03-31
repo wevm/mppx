@@ -1,6 +1,7 @@
-import { Provider } from 'accounts'
-import { Json } from 'ox'
+import { local, Provider } from 'accounts'
+import { Hex, Json } from 'ox'
 import { createClient, custom } from 'viem'
+import { Account } from 'viem/tempo'
 
 import type * as Challenge from '../../../../Challenge.js'
 import { tempo } from '../../../../client/index.js'
@@ -11,7 +12,20 @@ const data = Json.parse(document.getElementById('__MPPX_DATA__')!.textContent) a
   challenge: Challenge.FromMethods<[typeof Methods.charge]>
 }
 
-const provider = Provider.create()
+const localAccount = (typeof __LOCAL_ACCOUNT__ === 'string' && __LOCAL_ACCOUNT__) || undefined
+declare const __LOCAL_ACCOUNT__: string | undefined
+
+const provider = Provider.create(
+  localAccount
+    ? {
+        adapter: local({
+          loadAccounts: async () => ({
+            accounts: [Account.fromSecp256k1(localAccount as Hex.Hex)],
+          }),
+        }),
+      }
+    : undefined,
+)
 const chain =
   provider.chains.find((x) => x.id === data.challenge.request.methodDetails?.chainId) ??
   provider.chains.at(0)

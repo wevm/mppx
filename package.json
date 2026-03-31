@@ -12,7 +12,8 @@
     "dev": "zile dev",
     "dev:example": "node scripts/dev:example.ts",
     "mppx": "node --import tsx src/bin.ts",
-    "test": "vp test"
+    "test": "vp test",
+    "test:e2e": "playwright test --config test/html/playwright.config.ts"
   },
   "browserslist": [
     "defaults",
@@ -29,6 +30,7 @@
     "@changesets/cli": "^2.30.0",
     "@hono/node-server": "^1.19.9",
     "@modelcontextprotocol/sdk": "^1.25.3",
+    "@playwright/test": "^1.58.2",
     "@types/express": "^5.0.6",
     "@types/node": "^25.5.0",
     "@typescript/native-preview": "7.0.0-dev.20260323.1",
