@@ -14,6 +14,7 @@ type WrappedFetch = typeof globalThis.fetch & {
   [MPPX_FETCH_WRAPPER]?: typeof globalThis.fetch
 }
 
+/** Client method extension used to reconcile successful HTTP responses. */
 type ResponseAwareClient = Method.AnyClient & {
   onResponse?: ((response: Response) => Promise<void> | void) | undefined
 }

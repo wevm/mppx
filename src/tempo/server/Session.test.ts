@@ -3786,6 +3786,51 @@ describe.runIf(isLocalnet)('session', () => {
   })
 
   describe('respond', () => {
+    test('request() ignores forged credential.source during payer discovery', async () => {
+      const channelId = '0x00000000000000000000000000000000000000000000000000000000000000af' as Hex
+      await store.updateChannel(channelId, () => ({
+        channelId,
+        payer: payer.address,
+        payee: recipient,
+        token: currency,
+        authorizedSigner: payer.address,
+        chainId: chain.id,
+        escrowContract,
+        deposit: 10_000_000n,
+        settledOnChain: 0n,
+        highestVoucherAmount: 5_000_000n,
+        highestVoucher: null,
+        spent: 5_000_000n,
+        units: 5,
+        closeRequestedAt: 0n,
+        finalized: false,
+        createdAt: new Date().toISOString(),
+      }))
+
+      const server = createServer({
+        resolvePayerSource: (options) =>
+          (options as { credential?: { source?: string | undefined } }).credential?.source,
+      })
+      const request = await server.request!({
+        credential: {
+          challenge: makeChallenge({ channelId }),
+          payload: { action: 'voucher', channelId, cumulativeAmount: '1', signature: '0x' },
+          source: `did:pkh:eip155:${chain.id}:${payer.address}`,
+        } as never,
+        input: new Request('http://localhost'),
+        request: {
+          ...makeRequest(),
+          amount: '1',
+        },
+      })
+
+      expect(request.channelId).toBeUndefined()
+      expect(request.acceptedCumulative).toBeUndefined()
+      expect(request.deposit).toBeUndefined()
+      expect(request.requiredCumulative).toBeUndefined()
+      expect(request.spent).toBeUndefined()
+    })
+
     test('request() discovers reusable channel hints from resolved payer source', async () => {
       const channelId = '0x00000000000000000000000000000000000000000000000000000000000000ac' as Hex
       await store.updateChannel(channelId, () => ({
@@ -3812,7 +3857,7 @@ describe.runIf(isLocalnet)('session', () => {
       }))
 
       const server = createServer({
-        resolveSource: () => `did:pkh:eip155:${chain.id}:${payer.address}`,
+        resolvePayerSource: () => `did:pkh:eip155:${chain.id}:${payer.address}`,
       })
       const request = await server.request!({
         credential: undefined,
@@ -3828,6 +3873,81 @@ describe.runIf(isLocalnet)('session', () => {
       expect(request.deposit).toBe('10000000')
       expect(request.requiredCumulative).toBe('6000000')
       expect(request.spent).toBe('5000000')
+    })
+
+    test('request() supports deprecated resolveSource alias', async () => {
+      const channelId = '0x00000000000000000000000000000000000000000000000000000000000000bd' as Hex
+      await store.updateChannel(channelId, () => ({
+        channelId,
+        payer: payer.address,
+        payee: recipient,
+        token: currency,
+        authorizedSigner: payer.address,
+        chainId: chain.id,
+        escrowContract,
+        deposit: 10_000_000n,
+        settledOnChain: 0n,
+        highestVoucherAmount: 5_000_000n,
+        highestVoucher: null,
+        spent: 5_000_000n,
+        units: 5,
+        closeRequestedAt: 0n,
+        finalized: false,
+        createdAt: new Date().toISOString(),
+      }))
+
+      const server = createServer({
+        resolveSource: () => `did:pkh:eip155:${chain.id}:${payer.address}`,
+      })
+      const request = await server.request!({
+        credential: undefined,
+        input: new Request('http://localhost'),
+        request: {
+          ...makeRequest(),
+          amount: '1',
+        },
+      })
+
+      expect(request.channelId).toBe(channelId)
+      expect(request.acceptedCumulative).toBe('5000000')
+    })
+
+    test('request() prefers resolvePayerSource over deprecated resolveSource alias', async () => {
+      const channelId = '0x00000000000000000000000000000000000000000000000000000000000000be' as Hex
+      await store.updateChannel(channelId, () => ({
+        channelId,
+        payer: payer.address,
+        payee: recipient,
+        token: currency,
+        authorizedSigner: payer.address,
+        chainId: chain.id,
+        escrowContract,
+        deposit: 10_000_000n,
+        settledOnChain: 0n,
+        highestVoucherAmount: 5_000_000n,
+        highestVoucher: null,
+        spent: 5_000_000n,
+        units: 5,
+        closeRequestedAt: 0n,
+        finalized: false,
+        createdAt: new Date().toISOString(),
+      }))
+
+      const server = createServer({
+        resolvePayerSource: () => `did:pkh:eip155:${chain.id}:${payer.address}`,
+        resolveSource: () => `did:pkh:eip155:${chain.id}:${accounts[3].address}`,
+      })
+      const request = await server.request!({
+        credential: undefined,
+        input: new Request('http://localhost'),
+        request: {
+          ...makeRequest(),
+          amount: '1',
+        },
+      })
+
+      expect(request.channelId).toBe(channelId)
+      expect(request.acceptedCumulative).toBe('5000000')
     })
 
     test('request() keeps explicit channelId as the discovery fast path', async () => {
@@ -3874,7 +3994,7 @@ describe.runIf(isLocalnet)('session', () => {
       }))
 
       const server = createServer({
-        resolveSource: () => `did:pkh:eip155:${chain.id}:${payer.address}`,
+        resolvePayerSource: () => `did:pkh:eip155:${chain.id}:${payer.address}`,
       })
       const request = await server.request!({
         credential: undefined,
@@ -3890,6 +4010,85 @@ describe.runIf(isLocalnet)('session', () => {
       expect(request.acceptedCumulative).toBe('4000000')
       expect(request.requiredCumulative).toBe('5000000')
       expect(request.spent).toBe('4000000')
+    })
+
+    test('request() omits explicit channel hints when resolved payer does not own the channel', async () => {
+      const channelId = '0x00000000000000000000000000000000000000000000000000000000000000b0' as Hex
+      await store.updateChannel(channelId, () => ({
+        channelId,
+        payer: payer.address,
+        payee: recipient,
+        token: currency,
+        authorizedSigner: payer.address,
+        chainId: chain.id,
+        escrowContract,
+        deposit: 8_000_000n,
+        settledOnChain: 0n,
+        highestVoucherAmount: 4_000_000n,
+        highestVoucher: null,
+        spent: 4_000_000n,
+        units: 4,
+        closeRequestedAt: 0n,
+        finalized: false,
+        createdAt: new Date().toISOString(),
+      }))
+
+      const server = createServer({
+        resolvePayerSource: () => `did:pkh:eip155:${chain.id}:${accounts[3].address}`,
+      })
+      const request = await server.request!({
+        credential: undefined,
+        input: new Request('http://localhost'),
+        request: {
+          ...makeRequest(),
+          amount: '1',
+          channelId,
+        },
+      })
+
+      expect(request.channelId).toBe(channelId)
+      expect(request.acceptedCumulative).toBeUndefined()
+      expect(request.deposit).toBeUndefined()
+      expect(request.requiredCumulative).toBeUndefined()
+      expect(request.spent).toBeUndefined()
+    })
+
+    test('request() omits explicit channel hints when the stored channel does not match the route dimensions', async () => {
+      const channelId = '0x00000000000000000000000000000000000000000000000000000000000000b1' as Hex
+      await store.updateChannel(channelId, () => ({
+        channelId,
+        payer: payer.address,
+        payee: accounts[3].address,
+        token: currency,
+        authorizedSigner: payer.address,
+        chainId: chain.id,
+        escrowContract,
+        deposit: 8_000_000n,
+        settledOnChain: 0n,
+        highestVoucherAmount: 4_000_000n,
+        highestVoucher: null,
+        spent: 4_000_000n,
+        units: 4,
+        closeRequestedAt: 0n,
+        finalized: false,
+        createdAt: new Date().toISOString(),
+      }))
+
+      const server = createServer()
+      const request = await server.request!({
+        credential: undefined,
+        request: {
+          ...makeRequest(),
+          amount: '1',
+          channelId,
+        },
+      })
+
+      expect(request.channelId).toBe(channelId)
+      expect(request.acceptedCumulative).toBeUndefined()
+      expect(request.deposit).toBeUndefined()
+      expect(request.requiredCumulative).toBeUndefined()
+      expect(request.spent).toBeUndefined()
     })
 
     test('request() adds reusable channel hints to challenge data', async () => {

@@ -31,14 +31,19 @@ import { signVoucher } from '../session/Voucher.js'
 export type ChannelEntry = {
   /** Highest voucher amount observed from server accounting hints or receipts. */
   acceptedCumulative: bigint
+  /** Chain ID the channel belongs to. */
   chainId: number
+  /** Unique on-chain channel identifier. */
   channelId: Hex.Hex
   /** Highest cumulative amount the client itself has signed for this channel. */
   cumulativeAmount: bigint
   /** Latest known deposit ceiling. */
   deposit?: bigint | undefined
+  /** Escrow contract used for recovery, opening, and voucher signing. */
   escrowContract: Address
+  /** Whether the channel has been opened, recovered, or hydrated as reusable. */
   opened: boolean
+  /** Channel creation salt; hint-hydrated channels use `0x` because they are not locally opened. */
   salt: Hex.Hex
   /** Latest server-reported spent amount for the session. */
   spent: bigint

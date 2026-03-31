@@ -254,6 +254,41 @@ describe('channelStore', () => {
   })
 
   describe('findReusableChannel', () => {
+    test('uses payer index prefixes to isolate reusable channel lookups', async () => {
+      const backingStore = Store.memory()
+      const defaultStore = ChannelStore.fromStore(backingStore)
+      const prefixedStore = ChannelStore.fromStore(backingStore, {
+        payerIndexPrefix: 'tenant:a:session:payer:',
+      })
+
+      await prefixedStore.updateChannel(channelId, () => makeChannel())
+
+      const query = {
+        amount: 1_000_000n,
+        chainId: 42431,
+        escrowContract: escrowContractDefaults[chainId.testnet] as Address,
+        payee: '0x0000000000000000000000000000000000000002' as Address,
+        payer: '0x0000000000000000000000000000000000000001' as Address,
+        token: '0x0000000000000000000000000000000000000003' as Address,
+      }
+
+      expect(await ChannelStore.findReusableChannel(defaultStore, query)).toBeNull()
+      expect((await ChannelStore.findReusableChannel(prefixedStore, query))?.channelId).toBe(
+        channelId,
+      )
+    })
+
+    test('caches store adapters per payer index prefix', () => {
+      const backingStore = Store.memory()
+
+      expect(ChannelStore.fromStore(backingStore, { payerIndexPrefix: 'a:' })).toBe(
+        ChannelStore.fromStore(backingStore, { payerIndexPrefix: 'a:' }),
+      )
+      expect(ChannelStore.fromStore(backingStore, { payerIndexPrefix: 'a:' })).not.toBe(
+        ChannelStore.fromStore(backingStore, { payerIndexPrefix: 'b:' }),
+      )
+    })
+
     test('selects the newest viable channel for matching payer and session dimensions', async () => {
       const cs = ChannelStore.fromStore(Store.memory())
 

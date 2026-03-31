@@ -824,7 +824,7 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
                 method,
                 request: parameters.request,
               }) as never,
-          )
+            )
           return response
         }
 

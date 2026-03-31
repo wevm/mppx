@@ -118,6 +118,7 @@ export function session(parameters: session.Parameters = {}) {
     return resolveEscrow(challenge, chainId, parameters.escrowContract)
   }
 
+  /** Stores a channel and keeps the reverse channelId lookup in sync. */
   function rememberChannel(key: string, entry: ChannelEntry) {
     const previous = channels.get(key)
     if (previous && previous.channelId !== entry.channelId) {
@@ -128,12 +129,14 @@ export function session(parameters: session.Parameters = {}) {
     escrowContractMap.set(entry.channelId, entry.escrowContract)
   }
 
+  /** Narrows session methodDetails to the optional channel reuse hints. */
   function getChallengeHints(
     challenge: Challenge.Challenge,
   ): SessionChallengeMethodDetails | undefined {
     return challenge.request.methodDetails as SessionChallengeMethodDetails | undefined
   }
 
+  /** Converts caller-provided cumulative overrides into raw token units. */
   function getContextCumulative(context?: SessionContext): bigint | undefined {
     return context?.cumulativeAmountRaw
       ? BigInt(context.cumulativeAmountRaw)
@@ -142,6 +145,7 @@ export function session(parameters: session.Parameters = {}) {
         : undefined
   }
 
+  /** Creates an advisory reusable channel only when the server supplied accounting hints. */
   function hydrateChannelFromHints(
     channelId: Hex.Hex,
     chainId: number,
@@ -164,6 +168,7 @@ export function session(parameters: session.Parameters = {}) {
     })
   }
 
+  /** Resolves a server-suggested channel from chain state, with opt-in hint hydration fallback. */
   async function resolveSuggestedChannel(parameters: {
     chainId: number
     client: Awaited<ReturnType<typeof getClient>>
@@ -200,6 +205,7 @@ export function session(parameters: session.Parameters = {}) {
     return entry
   }
 
+  /** Applies session receipts to the cached channel entry that produced the request. */
   function reconcileReceipt(receipt: SessionReceipt) {
     const key = channelIdToKey.get(receipt.channelId)
     if (!key) return

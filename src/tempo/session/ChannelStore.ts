@@ -201,8 +201,10 @@ export async function findReusableChannel(
   return store.findReusableChannel(options)
 }
 
-function payerIndexKey(payer: Address): `mppx:session:payer:${string}` {
-  return `mppx:session:payer:${payer.toLowerCase()}`
+const defaultPayerIndexPrefix = 'mppx:session:payer:'
+
+function payerIndexKey(payer: Address, prefix = defaultPayerIndexPrefix): string {
+  return `${prefix}${payer.toLowerCase()}`
 }
 
 function normalizeChannelIds(channelIds: readonly Hex[]): Hex[] {
@@ -281,10 +283,15 @@ function compareReusableChannels(left: State, right: State): number {
  * Backends that need true atomicity (e.g., Durable Objects, D1)
  * should implement {@link Store} directly.
  */
-const storeCache = new WeakMap<Store.Store, ChannelStore>()
+const storeCache = new WeakMap<Store.Store, Map<string, ChannelStore>>()
 
-export function fromStore(store: Store.Store | Store.AtomicStore): ChannelStore {
-  const cached = storeCache.get(store)
+export function fromStore(
+  store: Store.Store | Store.AtomicStore,
+  options?: fromStore.Options,
+): ChannelStore {
+  const { payerIndexPrefix = defaultPayerIndexPrefix } = options ?? {}
+  let cachedByPrefix = storeCache.get(store)
+  const cached = cachedByPrefix?.get(payerIndexPrefix)
   if (cached) return cached
 
   const atomicUpdate = 'update' in store ? (store as Store.AtomicStore).update : undefined
@@ -322,7 +329,7 @@ export function fromStore(store: Store.Store | Store.AtomicStore): ChannelStore 
     payer: Address,
     update: (current: readonly Hex[]) => readonly Hex[],
   ): Promise<void> {
-    const key = payerIndexKey(payer)
+    const key = payerIndexKey(payer, payerIndexPrefix)
     await withLock(key, async () => {
       const current = ((await store.get(key as never)) as Hex[] | null) ?? []
       const next = normalizeChannelIds(update(current))
@@ -464,7 +471,7 @@ export function fromStore(store: Store.Store | Store.AtomicStore): ChannelStore 
       })
     },
     async findReusableChannel(options) {
-      const key = payerIndexKey(options.payer)
+      const key = payerIndexKey(options.payer, payerIndexPrefix)
       const channelIds = ((await store.get(key as never)) as Hex[] | null) ?? []
       if (channelIds.length === 0) return null
 
@@ -488,6 +495,17 @@ export function fromStore(store: Store.Store | Store.AtomicStore): ChannelStore 
 
   cs.updateChannelResult = updateResult
 
-  storeCache.set(store, cs)
+  if (!cachedByPrefix) {
+    cachedByPrefix = new Map()
+    storeCache.set(store, cachedByPrefix)
+  }
+  cachedByPrefix.set(payerIndexPrefix, cs)
   return cs
+}
+
+export declare namespace fromStore {
+  type Options = {
+    /** Key prefix for payer-to-channel reverse indexes. @default `'mppx:session:payer:'` */
+    payerIndexPrefix?: string | undefined
+  }
 }

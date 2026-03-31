@@ -94,10 +94,10 @@ export type PaymentResponse = Response & {
  * the session is lost and a new on-chain channel will be opened on the next
  * request — the previous channel's deposit is orphaned until manually closed.
  *
- * When the server includes session hints in the 402 challenge `methodDetails`,
- * the client resumes from those authoritative values first. If only a
- * `channelId` is available, it falls back to reading on-chain state via
- * `getOnChainChannel()` and resumes from the on-chain settled amount.
+ * When the server includes a `channelId` in the 402 challenge `methodDetails`,
+ * the client first tries to recover trusted channel state on-chain. If recovery
+ * is unavailable, advisory server hints can hydrate accounting state without
+ * increasing the next client-signed voucher amount.
  */
 export function sessionManager(parameters: sessionManager.Parameters): SessionManager {
   const fetchFn = parameters.fetch ?? globalThis.fetch
@@ -137,16 +137,13 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
     account: parameters.account,
     getClient: parameters.client ? () => parameters.client! : parameters.getClient,
   })
+  const sessionMethods = [method] as const
+  const sessionPreferences = AcceptPayment.resolve(sessionMethods).entries
 
   function updateSpentFromReceipt(receipt: SessionReceipt | null | undefined) {
     if (!receipt || receipt.channelId !== channel?.channelId) return
     assertReceiptWithinLocalState(receipt)
-    if (reconcileChannelReceipt(channel, receipt)) {
-      spent = channel.spent
-      return
-    }
-    const next = BigInt(receipt.spent)
-    spent = spent > next ? spent : next
+    reconcileChannelReceipt(channel, receipt)
   }
 
   function isZeroAuthChallenge(challenge: Challenge.Challenge): boolean {
@@ -186,12 +183,6 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
     const receiptSpent = BigInt(receipt.spent)
     if (receiptSpent > acceptedCumulative) {
       throw new Error('receipt spent exceeds accepted cumulative voucher amount')
-    }
-    if (acceptedCumulative > channel.cumulativeAmount) {
-      throw new Error('receipt accepted cumulative exceeds local voucher state')
-    }
-    if (receiptSpent > channel.cumulativeAmount) {
-      throw new Error('receipt spent exceeds local voucher state')
     }
     assertVoucherWithinLocalLimit(acceptedCumulative)
     assertVoucherWithinLocalLimit(receiptSpent)
@@ -255,11 +246,19 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
 
     if (wsTickCost > 0n) {
       const deliveryEstimate = wsDeliveredChunks * wsTickCost
-      const bestSpent = channel?.spent ?? 0n > deliveryEstimate ? channel?.spent ?? 0n : deliveryEstimate
+      const currentSpent = channel?.spent ?? 0n
+      const bestSpent = currentSpent > deliveryEstimate ? currentSpent : deliveryEstimate
       return (bestSpent > cumulative ? cumulative : bestSpent).toString()
     }
 
     return (channel?.spent ?? 0n).toString()
+  }
+
+  function getLocalAuthorizedAmount(): bigint {
+    if (!channel) return 0n
+    const spent =
+      channel.spent > channel.acceptedCumulative ? channel.spent : channel.acceptedCumulative
+    return channel.cumulativeAmount > spent ? channel.cumulativeAmount : spent
   }
 
   function assertVoucherWithinLocalLimit(cumulativeAmount: bigint) {
@@ -272,7 +271,9 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
 
   async function syncResponse(response: Response): Promise<SessionReceipt | null> {
     await method.onResponse?.(response)
-    return readReceipt(response) ?? null
+    const receipt = readReceipt(response) ?? null
+    updateSpentFromReceipt(receipt)
+    return receipt
   }
 
   function reconcileReceiptEvent(receipt: SessionReceipt | null | undefined) {
@@ -303,15 +304,15 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
       const challenges = Challenge.fromResponseList(response)
       const sessionCandidates = AcceptPayment.selectChallengeCandidates(
         challenges,
-        [method] as const,
-        AcceptPayment.resolve([method] as const).entries,
+        sessionMethods,
+        sessionPreferences,
       )
-      const orderedSessionCandidates = requestOrderChallenges
-        ? await requestOrderChallenges(sessionCandidates)
-        : parameters.orderChallenges
-          ? await parameters.orderChallenges(sessionCandidates)
-          : sessionCandidates
-      const sessionChallenge = orderedSessionCandidates[0]?.challenge
+      const sessionChallenge = (
+        await resolveSessionChallengeOrder(
+          sessionCandidates,
+          requestOrderChallenges ?? parameters.orderChallenges,
+        )
+      )[0]?.challenge
       if (sessionChallenge) lastChallenge = sessionChallenge
       else if (challenges[0]) lastChallenge = challenges[0]
 
@@ -636,8 +637,8 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
 
       const candidates = AcceptPayment.selectChallengeCandidates(
         Challenge.fromResponseList(probe),
-        [method] as const,
-        AcceptPayment.resolve([method] as const).entries,
+        sessionMethods,
+        sessionPreferences,
       )
       const challenge = (
         await resolveSessionChallengeOrder(
@@ -847,7 +848,8 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
             return waitForCloseReady()
           })())
         const readySpent = BigInt(ready.spent)
-        if (readySpent > (channel.cumulativeAmount > spent ? channel.cumulativeAmount : spent)) {
+        const localAuthorized = getLocalAuthorizedAmount()
+        if (readySpent > localAuthorized) {
           throw new Error('close-ready spent exceeds local voucher state')
         }
 
@@ -888,7 +890,8 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
           channelId: closeChannelId,
           cumulativeAmountRaw: (() => {
             const closeAmount = BigInt(getFallbackCloseAmount(closeChallenge, closeChannelId))
-            if (closeAmount > channel.cumulativeAmount) {
+            const localAuthorized = getLocalAuthorizedAmount()
+            if (closeAmount > localAuthorized) {
               throw new Error('fallback close amount exceeds local voucher state')
             }
             assertVoucherWithinLocalLimit(closeAmount)
@@ -960,6 +963,5 @@ async function resolveSessionChallengeOrder(
   candidates: readonly AcceptPayment.ChallengeCandidate<SessionMethod>[],
   override: SessionOrderChallenges | undefined,
 ): Promise<readonly AcceptPayment.ChallengeCandidate<SessionMethod>[]> {
-  const orderChallenges = override
-  return orderChallenges ? orderChallenges(candidates) : candidates
+  return override ? override(candidates) : candidates
 }

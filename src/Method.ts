@@ -96,6 +96,7 @@ export type VerifiedChallengeEnvelope<
 export type RequestContext<method extends Method> = {
   capturedRequest?: CapturedRequest
   credential?: Credential.Credential | null | undefined
+  /** Incoming HTTP request when the server transport can provide one. */
   input?: globalThis.Request | undefined
   request: z.input<method['schema']['request']>
 }

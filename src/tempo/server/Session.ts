@@ -62,12 +62,15 @@ import { parseVoucherFromPayload, verifyVoucher } from '../session/Voucher.js'
 import { captureRequestBodyProbe, isSessionContentRequest } from './internal/request-body.js'
 import * as Transport from './internal/transport.js'
 
-/** Challenge methodDetails shape for session methods. */
+/** Session challenge methodDetails including required network and escrow routing fields. */
 type SessionMethodDetails = SessionChallengeMethodDetails & {
+  /** Escrow contract clients should use for this challenge. */
   escrowContract: Address
+  /** Chain ID clients should use for this challenge. */
   chainId: number
 }
 
+/** Builds advisory reuse hints for a live channel; unusable channels are omitted. */
 function createChallengeHints(
   channel: ChannelStore.State | null,
   amount: bigint | undefined,
@@ -93,6 +96,38 @@ function createChallengeHints(
   }
 }
 
+/** Parses an authenticated payer source and rejects sources bound to another chain. */
+function resolveRequestedPayer(
+  source: string | undefined,
+  chainId: number,
+): Address | null | undefined {
+  if (!source) return undefined
+
+  const payer = Proof.parsePkhSource(source)
+  if (!payer || payer.chainId !== chainId) return null
+  return payer.address
+}
+
+/** Checks that a reusable channel matches the requested payment dimensions and optional payer. */
+function matchesRequestedChannel(parameters: {
+  channel: ChannelStore.State
+  request: { currency: Address; recipient: Address }
+  resolvedEscrow: Address
+  chainId: number
+  payer?: Address | undefined
+}): boolean {
+  const { channel, chainId, payer, request, resolvedEscrow } = parameters
+
+  if (channel.chainId !== chainId) return false
+  if (channel.escrowContract.toLowerCase() !== resolvedEscrow.toLowerCase()) return false
+  if (channel.payee.toLowerCase() !== request.recipient.toLowerCase()) return false
+  if (channel.token.toLowerCase() !== request.currency.toLowerCase()) return false
+  if (payer && channel.payer.toLowerCase() !== payer.toLowerCase()) return false
+
+  return true
+}
+
+/** Finds an explicit requested channel first, then falls back to payer-index reuse. */
 async function findRequestedChannel(parameters: {
   amount: bigint
   request: { channelId?: Hex | undefined; currency: Address; recipient: Address }
@@ -102,22 +137,34 @@ async function findRequestedChannel(parameters: {
   store: ChannelStore.ChannelStore
 }): Promise<ChannelStore.State | null> {
   const { amount, chainId, request, resolvedEscrow, source, store } = parameters
+  const payer = resolveRequestedPayer(source, chainId)
+  if (source && !payer) return null
 
   if (request.channelId) {
-    return store.getChannel(request.channelId)
+    const channel = await store.getChannel(request.channelId)
+    if (!channel) return null
+    if (
+      !matchesRequestedChannel({
+        channel,
+        chainId,
+        ...(payer ? { payer } : {}),
+        request,
+        resolvedEscrow,
+      })
+    ) {
+      return null
+    }
+    return channel
   }
 
-  if (!source) return null
-
-  const payer = Proof.parsePkhSource(source)
-  if (!payer || payer.chainId !== chainId) return null
+  if (!payer) return null
 
   return ChannelStore.findReusableChannel(store, {
     amount,
     chainId,
     escrowContract: resolvedEscrow,
     payee: request.recipient,
-    payer: payer.address,
+    payer,
     token: request.currency,
   })
 }
@@ -161,7 +208,7 @@ export function session<const parameters extends session.Parameters>(
 
   const lastOnChainVerified = new Map<Hex, number>()
 
-  const store = ChannelStore.fromStore(rawStore)
+  const store = ChannelStore.fromStore(rawStore, parameters.storeOptions)
 
   const { account, recipient, feePayer, feePayerUrl } = Account.resolve(parameters)
 
@@ -199,6 +246,7 @@ export function session<const parameters extends session.Parameters>(
     transport: transport as never,
 
     // TODO: dedupe `{charge,session}.request`
+    // `input` is optional request context; resolvePayerSource uses it for app-level auth.
     async request({ credential, input, request }) {
       // Extract chainId from request or default.
       const chainId = await (async () => {
@@ -224,7 +272,8 @@ export function session<const parameters extends session.Parameters>(
         defaults.escrowContract[chainId as keyof typeof defaults.escrowContract]
 
       const amount = parseUnits(request.amount, request.decimals ?? decimals)
-      const source = await parameters.resolveSource?.({ credential, input, request })
+      const resolvePayerSource = parameters.resolvePayerSource ?? parameters.resolveSource
+      const source = await resolvePayerSource?.({ input, request })
       const requestedChannel = await findRequestedChannel({
         amount,
         chainId: chainId as number,
@@ -406,6 +455,10 @@ export declare namespace session {
   >
 
   type FeePayerPolicy = Partial<FeePayer.Policy>
+  type ResolvePayerSource = (options: {
+    input?: globalThis.Request | undefined
+    request: Method.RequestDefaults<typeof Methods.session>
+  }) => MaybePromise<string | undefined>
 
   type Parameters = {
     /** TTL in milliseconds for cached on-chain channel state. After this duration, the server re-queries on-chain state during voucher handling to detect forced close requests. @default 5_000 */
@@ -415,7 +468,7 @@ export declare namespace session {
     /** Minimum voucher delta to accept (numeric string, default: "0"). */
     minVoucherDelta?: string | undefined
     /**
-     * Resolves the authenticated payer identity used for stateless channel
+     * Resolves the authenticated payer source used for stateless channel
      * discovery when the client does not provide a channelId.
      *
      * Return the zero-dollar proof source DID (for example
@@ -423,13 +476,12 @@ export declare namespace session {
      * context, such as a cookie-backed login established by `tempo.charge`
      * proof auth.
      */
-    resolveSource?:
-      | ((options: {
-          credential?: Credential.Credential | null | undefined
-          input?: globalThis.Request | undefined
-          request: Method.RequestDefaults<typeof Methods.session>
-        }) => MaybePromise<string | undefined>)
-      | undefined
+    resolvePayerSource?: ResolvePayerSource | undefined
+    /**
+     * @deprecated Use {@link resolvePayerSource}. Kept for compatibility with
+     * prerelease stateless-resume integrations.
+     */
+    resolveSource?: ResolvePayerSource | undefined
     /**
      * Whether to wait for the open transaction to confirm on-chain before
      * responding. @default true
@@ -450,6 +502,8 @@ export declare namespace session {
      * local single-process usage.
      */
     store?: Store.AtomicStore | undefined
+    /** Options for adapting `store` into a channel store. */
+    storeOptions?: ChannelStore.fromStore.Options | undefined
     /**
      * Enable SSE streaming.
      *
