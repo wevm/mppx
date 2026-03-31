@@ -2099,6 +2099,164 @@ describe('tempo', () => {
       httpServer.close()
     })
 
+    test('behavior: shared store rejects proof replay across server instances', async () => {
+      const replayStore = Store.memory()
+      const serverA = Mppx_server.create({
+        methods: [
+          tempo_server.charge({
+            getClient() {
+              return client
+            },
+            currency: asset,
+            account: accounts[0],
+            store: replayStore,
+          }),
+        ],
+        realm,
+        secretKey,
+      })
+      const serverB = Mppx_server.create({
+        methods: [
+          tempo_server.charge({
+            getClient() {
+              return client
+            },
+            currency: asset,
+            account: accounts[0],
+            store: replayStore,
+          }),
+        ],
+        realm,
+        secretKey,
+      })
+
+      const httpServer = await Http.createServer(async (req, res) => {
+        const route = new URL(req.url!, 'https://example.com').pathname
+        const handler = route === '/a' ? serverA : serverB
+        const result = await Mppx_server.toNodeListener(
+          handler.charge({ amount: '0', decimals: 6 }),
+        )(req, res)
+        if (result.status === 402) return
+        res.end('OK')
+      })
+
+      const response1 = await fetch(`${httpServer.url}/a`)
+      expect(response1.status).toBe(402)
+
+      const challenge = Challenge.fromResponse(response1, {
+        methods: [tempo_client.charge()],
+      })
+
+      const signature = await signTypedData(client, {
+        account: accounts[1],
+        domain: Proof.domain(chain.id),
+        types: Proof.types,
+        primaryType: 'Proof',
+        message: Proof.message(challenge.id),
+      })
+
+      const credential = Credential.from({
+        challenge,
+        payload: { signature, type: 'proof' as const },
+        source: `did:pkh:eip155:${chain.id}:${accounts[1].address}`,
+      })
+
+      const response2 = await fetch(`${httpServer.url}/a`, {
+        headers: { Authorization: Credential.serialize(credential) },
+      })
+      expect(response2.status).toBe(200)
+
+      const replayResponse = await fetch(`${httpServer.url}/b`, {
+        headers: { Authorization: Credential.serialize(credential) },
+      })
+      expect(replayResponse.status).toBe(402)
+      const replayBody = (await replayResponse.json()) as { detail: string }
+      expect(replayBody.detail).toContain('Proof credential has already been used.')
+
+      httpServer.close()
+    })
+
+    test('behavior: store keys proof replay protection by challenge ID', async () => {
+      const replayStore = Store.memory()
+      const server_ = Mppx_server.create({
+        methods: [
+          tempo_server.charge({
+            getClient() {
+              return client
+            },
+            currency: asset,
+            account: accounts[0],
+            store: replayStore,
+          }),
+        ],
+        realm,
+        secretKey,
+      })
+
+      const httpServer = await Http.createServer(async (req, res) => {
+        const result = await Mppx_server.toNodeListener(
+          server_.charge({ amount: '0', decimals: 6 }),
+        )(req, res)
+        if (result.status === 402) return
+        res.end('OK')
+      })
+
+      const response1 = await fetch(httpServer.url)
+      expect(response1.status).toBe(402)
+
+      const challenge1 = Challenge.fromResponse(response1, {
+        methods: [tempo_client.charge()],
+      })
+
+      const signature1 = await signTypedData(client, {
+        account: accounts[1],
+        domain: Proof.domain(chain.id),
+        types: Proof.types,
+        primaryType: 'Proof',
+        message: Proof.message(challenge1.id),
+      })
+
+      const credential1 = Credential.from({
+        challenge: challenge1,
+        payload: { signature: signature1, type: 'proof' as const },
+        source: `did:pkh:eip155:${chain.id}:${accounts[1].address}`,
+      })
+
+      const response2 = await fetch(httpServer.url, {
+        headers: { Authorization: Credential.serialize(credential1) },
+      })
+      expect(response2.status).toBe(200)
+
+      const response3 = await fetch(httpServer.url)
+      expect(response3.status).toBe(402)
+
+      const challenge2 = Challenge.fromResponse(response3, {
+        methods: [tempo_client.charge()],
+      })
+      expect(challenge2.id).not.toBe(challenge1.id)
+
+      const signature2 = await signTypedData(client, {
+        account: accounts[1],
+        domain: Proof.domain(chain.id),
+        types: Proof.types,
+        primaryType: 'Proof',
+        message: Proof.message(challenge2.id),
+      })
+
+      const credential2 = Credential.from({
+        challenge: challenge2,
+        payload: { signature: signature2, type: 'proof' as const },
+        source: `did:pkh:eip155:${chain.id}:${accounts[1].address}`,
+      })
+
+      const response4 = await fetch(httpServer.url, {
+        headers: { Authorization: Credential.serialize(credential2) },
+      })
+      expect(response4.status).toBe(200)
+
+      httpServer.close()
+    })
+
     test('behavior: rejects proof with wrong signer', async () => {
       const httpServer = await Http.createServer(async (req, res) => {
         const result = await Mppx_server.toNodeListener(
