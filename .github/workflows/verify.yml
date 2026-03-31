@@ -48,6 +48,7 @@ jobs:
   test:
     name: Test Runtime
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     env:
       # GitHub-hosted runners are ephemeral, so we can skip the Ryuk sidecar
       # and avoid Docker Hub rate limits on testcontainers/ryuk pulls.
