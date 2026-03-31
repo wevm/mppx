@@ -80,10 +80,20 @@ export function serializeCredential(
   })
 }
 
+/**
+ * Server-provided advisory channel state from receipts or hints.
+ *
+ * Values are monotonically reconciled into the local {@link ChannelEntry} —
+ * only upward adjustments are applied. These are **never** used directly for
+ * signing authorization; they inform the client's view of server-side
+ * accounting only.
+ */
 type ChannelSnapshot = {
-  /** Advisory server snapshot: not safe to treat as client authorization. */
+  /** Server-acknowledged cumulative voucher amount. */
   acceptedCumulative?: bigint | string | undefined
+  /** Current on-chain deposit as observed by the server. */
   deposit?: bigint | string | undefined
+  /** Cumulative amount the server considers consumed. */
   spent?: bigint | string | undefined
 }
 

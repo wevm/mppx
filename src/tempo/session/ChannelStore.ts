@@ -150,6 +150,18 @@ function payerIndexKey(payer: Address): `mppx:session:payer:${string}` {
   return `mppx:session:payer:${payer.toLowerCase()}`
 }
 
+function normalizeChannelIds(channelIds: readonly Hex[]): Hex[] {
+  return [...new Set(channelIds.map((channelId) => channelId.toLowerCase() as Hex))]
+}
+
+function sameChannelIds(left: readonly Hex[], right: readonly Hex[]): boolean {
+  if (left.length !== right.length) return false
+  for (let index = 0; index < left.length; index++) {
+    if (left[index]!.toLowerCase() !== right[index]!.toLowerCase()) return false
+  }
+  return true
+}
+
 function compareHexDesc(left: Hex, right: Hex): number {
   return right.localeCompare(left)
 }
@@ -256,7 +268,8 @@ export function fromStore(store: Store.Store): ChannelStore {
     const key = payerIndexKey(payer)
     await withLock(key, async () => {
       const current = ((await store.get(key as never)) as Hex[] | null) ?? []
-      const next = [...new Set(update(current).map((channelId) => channelId.toLowerCase() as Hex))]
+      const next = normalizeChannelIds(update(current))
+      if (sameChannelIds(current, next)) return
       if (next.length === 0) {
         await store.delete(key as never)
         return

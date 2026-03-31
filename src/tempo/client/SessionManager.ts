@@ -104,7 +104,6 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
   let channel: ChannelEntry | null = null
   let lastChallenge: Challenge.Challenge | null = null
   let lastUrl: RequestInfo | URL | null = null
-  let spent = 0n
   let activeSocketChallenge: Challenge.Challenge | null = null
   let activeSocketChannelId: Hex.Hex | null = null
   let activeSocket: WebSocket | null = null
@@ -123,9 +122,7 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
     decimals: parameters.decimals,
     maxDeposit: parameters.maxDeposit,
     onChannelUpdate(entry) {
-      if (entry.channelId !== channel?.channelId) spent = 0n
       channel = entry
-      spent = entry.spent
     },
   })
   const authMethod = chargePlugin({
@@ -161,24 +158,12 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
     return normalized
   }
 
-  function reconcileReceipt(receipt: SessionReceipt | null | undefined) {
-    if (!receipt) return
-    if (channel && receipt.channelId === channel.channelId) {
-      if (reconcileChannelReceipt(channel, receipt)) spent = channel.spent
-      return
-    }
-    if (channel) return
-    spent = BigInt(receipt.spent)
-  }
-
-  function reconcileResponse(response: Response): SessionReceipt | undefined {
+  function readReceipt(response: Response): SessionReceipt | undefined {
     const receiptHeader = response.headers.get('Payment-Receipt')
     if (!receiptHeader) return undefined
 
     try {
-      const receipt = deserializeSessionReceipt(receiptHeader)
-      reconcileReceipt(receipt)
-      return receipt
+      return deserializeSessionReceipt(receiptHeader)
     } catch {
       return undefined
     }
@@ -240,20 +225,13 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
 
     const cumulative = channel?.channelId === channelId ? channel.cumulativeAmount : 0n
 
-    // For WS sessions, use delivered chunk count × tick cost as a tight spend
-    // estimate.  Without this, a socket death before close-ready would cause
-    // the client to sign for the full cumulative voucher authorization —
-    // potentially orders of magnitude more than what was actually consumed.
-    // The estimate may undercount by at most 1 chunk (if the server committed
-    // a charge but the socket died before delivering the message).
     if (wsTickCost > 0n) {
       const deliveryEstimate = wsDeliveredChunks * wsTickCost
-      const bestSpent = spent > deliveryEstimate ? spent : deliveryEstimate
+      const bestSpent = channel?.spent ?? 0n > deliveryEstimate ? channel?.spent ?? 0n : deliveryEstimate
       return (bestSpent > cumulative ? cumulative : bestSpent).toString()
     }
 
-    // SSE/HTTP: spent is kept in sync by inline receipts, use it directly.
-    return spent.toString()
+    return (channel?.spent ?? 0n).toString()
   }
 
   function assertVoucherWithinLocalLimit(cumulativeAmount: bigint) {
@@ -264,8 +242,17 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
     )
   }
 
-  function toPaymentResponse(response: Response): PaymentResponse {
-    const receipt = reconcileResponse(response) ?? null
+  async function syncResponse(response: Response): Promise<SessionReceipt | null> {
+    await method.onResponse?.(response)
+    return readReceipt(response) ?? null
+  }
+
+  function reconcileReceiptEvent(receipt: SessionReceipt | null | undefined) {
+    if (!receipt || !channel || receipt.channelId !== channel.channelId) return
+    reconcileChannelReceipt(channel, receipt)
+  }
+
+  function toPaymentResponse(response: Response, receipt: SessionReceipt | null): PaymentResponse {
     return Object.assign(response, {
       receipt,
       challenge: lastChallenge,
@@ -316,8 +303,8 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
       })
     }
 
-    await method.onResponse?.(response)
-    return toPaymentResponse(response)
+    const receipt = await syncResponse(response)
+    return toPaymentResponse(response, receipt)
   }
 
   function createManagedSocket(socket: WebSocket) {
@@ -484,7 +471,7 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
           `Open request failed with status ${response.status}${body ? `: ${body}` : ''}${wwwAuth ? ` [WWW-Authenticate: ${wwwAuth}]` : ''}`,
         )
       }
-      reconcileResponse(response)
+      await syncResponse(response)
     },
 
     fetch: doFetch,
@@ -560,12 +547,12 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
                   if (!voucherResponse.ok) {
                     throw new Error(`Voucher POST failed with status ${voucherResponse.status}`)
                   }
-                  reconcileResponse(voucherResponse)
+                  await syncResponse(voucherResponse)
                   break
                 }
 
                 case 'payment-receipt':
-                  reconcileReceipt(event.data)
+                  reconcileReceiptEvent(event.data)
                   onReceipt?.(event.data)
                   break
               }
@@ -841,7 +828,7 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
           method: 'POST',
           headers: { Authorization: credential },
         })
-        receipt = reconcileResponse(response)
+        receipt = (await syncResponse(response)) ?? undefined
       }
 
       return receipt

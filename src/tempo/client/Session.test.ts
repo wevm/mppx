@@ -131,13 +131,17 @@ describe('session (pure)', () => {
       }
     })
 
-    test('keeps the current local channel when a server-supplied replacement cannot be verified', async () => {
+    test('does not apply replacement hints to the current local channel when a server-supplied replacement cannot be verified', async () => {
       const channelIdA = '0x00000000000000000000000000000000000000000000000000000000000000aa' as Hex
       const channelIdB = '0x00000000000000000000000000000000000000000000000000000000000000bb' as Hex
+      const updates: { channelId: Hex; spent: bigint }[] = []
       const method = session({
         getClient: () => pureClient,
         account: pureAccount,
         deposit: '10',
+        onChannelUpdate(entry) {
+          updates.push({ channelId: entry.channelId, spent: entry.spent })
+        },
       })
 
       const challengeA = makeChallenge({
@@ -152,9 +156,12 @@ describe('session (pure)', () => {
       })
       const challengeB = makeChallenge({
         methodDetails: {
+          acceptedCumulative: '9000000',
           chainId: 42431,
           channelId: channelIdB,
+          deposit: '12000000',
           escrowContract: escrowAddress,
+          spent: '9000000',
         },
       })
 
@@ -168,6 +175,8 @@ describe('session (pure)', () => {
         expect(result.payload.channelId).toBe(channelIdA)
         expect(result.payload.cumulativeAmount).toBe('2000000')
       }
+
+      expect(updates[updates.length - 1]).toEqual({ channelId: channelIdA, spent: 4_000_000n })
     })
   })
 
