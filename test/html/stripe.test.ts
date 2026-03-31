@@ -6,7 +6,15 @@ test.beforeAll(async () => {
   await setup()
 })
 
-test('charge via stripe html payment page', async ({ page }) => {
+test('charge via stripe html payment page', async ({ page, context }) => {
+  const logs: string[] = []
+  page.on('pageerror', (err) => logs.push(`[pageerror] ${err.message}`))
+  page.on('console', (msg) => logs.push(`[console.${msg.type()}] ${msg.text()}`))
+  page.on('requestfailed', (req) =>
+    logs.push(`[requestfailed] ${req.url()} ${req.failure()?.errorText}`),
+  )
+  context.on('serviceworker', (sw) => logs.push(`[serviceworker] registered: ${sw.url()}`))
+
   await page.goto('/api/fortune', {
     waitUntil: 'domcontentloaded',
   })
@@ -18,7 +26,12 @@ test('charge via stripe html payment page', async ({ page }) => {
   // Wait for Stripe Payment Element iframe to load
   const stripeFrame = page.frameLocator('iframe[name^="__privateStripeFrame"]').first()
   const cardButton = stripeFrame.locator('[data-value="card"]')
-  await expect(cardButton).toBeVisible({ timeout: 15_000 })
+  await expect(cardButton)
+    .toBeVisible({ timeout: 15_000 })
+    .catch((e) => {
+      console.error('Browser logs:\n' + logs.join('\n'))
+      throw e
+    })
 
   // Card option is collapsed by default — click to expand, wait for inputs to render
   await cardButton.click()

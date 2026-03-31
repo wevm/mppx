@@ -6,7 +6,15 @@ test.beforeAll(async () => {
   await setup()
 })
 
-test('charge via html payment page', async ({ page }) => {
+test('charge via html payment page', async ({ page, context }) => {
+  const logs: string[] = []
+  page.on('pageerror', (err) => logs.push(`[pageerror] ${err.message}`))
+  page.on('console', (msg) => logs.push(`[console.${msg.type()}] ${msg.text()}`))
+  page.on('requestfailed', (req) =>
+    logs.push(`[requestfailed] ${req.url()} ${req.failure()?.errorText}`),
+  )
+  context.on('serviceworker', (sw) => logs.push(`[serviceworker] registered: ${sw.url()}`))
+
   // Navigate to the payment endpoint as a browser
   await page.goto('/api/photo', {
     waitUntil: 'domcontentloaded',
@@ -20,7 +28,12 @@ test('charge via html payment page', async ({ page }) => {
   await page.getByText('Continue with Tempo').click()
 
   // Wait for service worker to submit credential and page to reload with paid response
-  await expect(page.locator('body')).toContainText('"url":', { timeout: 30_000 })
+  await expect(page.locator('body'))
+    .toContainText('"url":', { timeout: 30_000 })
+    .catch((e) => {
+      console.error('Browser logs:\n' + logs.join('\n'))
+      throw e
+    })
 })
 
 test('service worker endpoint returns javascript', async ({ page }) => {
