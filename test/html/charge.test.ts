@@ -20,7 +20,7 @@ test('charge via html payment page', async ({ page }) => {
   await page.getByText('Continue with Tempo').click()
 
   // Wait for service worker to submit credential and page to reload with paid response
-  // await expect(page.locator('body')).toContainText('"url":', { timeout: 30_000 })
+  await expect(page.locator('body')).toContainText('"url":', { timeout: 30_000 })
 })
 
 test('service worker endpoint returns javascript', async ({ page }) => {

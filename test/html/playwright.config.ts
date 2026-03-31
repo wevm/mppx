@@ -4,7 +4,7 @@ import { defineConfig } from '@playwright/test'
 
 const project = process.argv.find((_, i, a) => a[i - 1] === '--project')
 
-const chargePort = await getPort('_MPPX_CHARGE_PORT')
+const tempoPort = await getPort('_MPPX_TEMPO_PORT')
 const stripePort = await getPort('_MPPX_STRIPE_PORT')
 
 export default defineConfig({
@@ -18,9 +18,9 @@ export default defineConfig({
   },
   projects: [
     {
-      name: 'charge',
+      name: 'tempo',
       testMatch: 'charge.test.ts',
-      use: { baseURL: `http://localhost:${chargePort}` },
+      use: { baseURL: `http://localhost:${tempoPort}` },
     },
     {
       name: 'stripe',
@@ -29,12 +29,12 @@ export default defineConfig({
     },
   ],
   webServer: [
-    ...(!project || project === 'charge'
+    ...(!project || project === 'tempo'
       ? [
           {
-            command: `pnpm --filter charge dev -- --port ${chargePort}`,
-            port: chargePort,
-            reuseExistingServer: !process.env.CI,
+            command: `pnpm --filter charge dev -- --port ${tempoPort}`,
+            port: tempoPort,
+            reuseExistingServer: false,
             timeout: 30_000,
           },
         ]
@@ -44,7 +44,7 @@ export default defineConfig({
           {
             command: `pnpm --filter stripe dev -- --port ${stripePort}`,
             port: stripePort,
-            reuseExistingServer: !process.env.CI,
+            reuseExistingServer: false,
             timeout: 30_000,
           },
         ]
