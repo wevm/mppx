@@ -4,13 +4,19 @@ import * as os from 'node:os'
 import * as path from 'node:path'
 
 const SERVICE_NAME = 'mppx'
+const defaultCommandTimeoutMs = 10_000
+
+function commandTimeoutMs() {
+  const value = Number.parseInt(process.env.MPPX_KEYCHAIN_COMMAND_TIMEOUT_MS ?? '', 10)
+  return Number.isFinite(value) && value > 0 ? value : defaultCommandTimeoutMs
+}
 
 export function execCommand(
   command: string,
   args: string[],
 ): Promise<{ stdout: string; stderr: string; error: Error | null }> {
   return new Promise((resolve) => {
-    child.execFile(command, args, (error, stdout, stderr) => {
+    child.execFile(command, args, { timeout: commandTimeoutMs() }, (error, stdout, stderr) => {
       resolve({ stdout: stdout.trim(), stderr: stderr.trim(), error })
     })
   })
@@ -134,14 +140,19 @@ export function createKeychain(account = 'main') {
           'account',
           account,
         ])
+        const timeout = setTimeout(() => proc.kill(), commandTimeoutMs())
         proc.stdin?.write(value)
         proc.stdin?.end()
         return new Promise((resolve, reject) => {
           proc.on('close', (code) => {
+            clearTimeout(timeout)
             if (code === 0) resolve()
             else reject(new Error(`secret-tool exited with code ${code}`))
           })
-          proc.on('error', reject)
+          proc.on('error', (error) => {
+            clearTimeout(timeout)
+            reject(error)
+          })
         })
       }
       throw new Error(`Unsupported platform: ${platform}`)
