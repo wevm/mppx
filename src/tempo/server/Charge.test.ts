@@ -1995,6 +1995,110 @@ describe('tempo', () => {
       httpServer.close()
     })
 
+    test('behavior: proof credential remains reusable until expiry without store', async () => {
+      const httpServer = await Http.createServer(async (req, res) => {
+        const result = await Mppx_server.toNodeListener(
+          server.charge({ amount: '0', decimals: 6 }),
+        )(req, res)
+        if (result.status === 402) return
+        res.end('OK')
+      })
+
+      const response1 = await fetch(httpServer.url)
+      expect(response1.status).toBe(402)
+
+      const challenge = Challenge.fromResponse(response1, {
+        methods: [tempo_client.charge()],
+      })
+
+      const signature = await signTypedData(client, {
+        account: accounts[1],
+        domain: Proof.domain(chain.id),
+        types: Proof.types,
+        primaryType: 'Proof',
+        message: Proof.message(challenge.id),
+      })
+
+      const credential = Credential.from({
+        challenge,
+        payload: { signature, type: 'proof' as const },
+        source: `did:pkh:eip155:${chain.id}:${accounts[1].address}`,
+      })
+
+      const response2 = await fetch(httpServer.url, {
+        headers: { Authorization: Credential.serialize(credential) },
+      })
+      expect(response2.status).toBe(200)
+
+      const replayResponse = await fetch(httpServer.url, {
+        headers: { Authorization: Credential.serialize(credential) },
+      })
+      expect(replayResponse.status).toBe(200)
+
+      httpServer.close()
+    })
+
+    test('behavior: rejects replayed proof credential when store is configured', async () => {
+      const replayStore = Store.memory()
+      const server_ = Mppx_server.create({
+        methods: [
+          tempo_server.charge({
+            getClient() {
+              return client
+            },
+            currency: asset,
+            account: accounts[0],
+            store: replayStore,
+          }),
+        ],
+        realm,
+        secretKey,
+      })
+
+      const httpServer = await Http.createServer(async (req, res) => {
+        const result = await Mppx_server.toNodeListener(
+          server_.charge({ amount: '0', decimals: 6 }),
+        )(req, res)
+        if (result.status === 402) return
+        res.end('OK')
+      })
+
+      const response1 = await fetch(httpServer.url)
+      expect(response1.status).toBe(402)
+
+      const challenge = Challenge.fromResponse(response1, {
+        methods: [tempo_client.charge()],
+      })
+
+      const signature = await signTypedData(client, {
+        account: accounts[1],
+        domain: Proof.domain(chain.id),
+        types: Proof.types,
+        primaryType: 'Proof',
+        message: Proof.message(challenge.id),
+      })
+
+      const credential = Credential.from({
+        challenge,
+        payload: { signature, type: 'proof' as const },
+        source: `did:pkh:eip155:${chain.id}:${accounts[1].address}`,
+      })
+
+      const response2 = await fetch(httpServer.url, {
+        headers: { Authorization: Credential.serialize(credential) },
+      })
+      expect(response2.status).toBe(200)
+
+      const replayResponse = await fetch(httpServer.url, {
+        headers: { Authorization: Credential.serialize(credential) },
+      })
+      expect(replayResponse.status).toBe(402)
+      const replayBody = (await replayResponse.json()) as { detail: string }
+      expect(replayBody.detail).toContain('Proof credential has already been used.')
+
+      httpServer.close()
+    })
+
     test('behavior: rejects proof with wrong signer', async () => {
       const httpServer = await Http.createServer(async (req, res) => {
         const result = await Mppx_server.toNodeListener(

@@ -51,6 +51,7 @@ export function charge<const parameters extends charge.Parameters>(
     waitForConfirmation = true,
   } = parameters
   const store = (parameters.store ?? Store.memory()) as Store.Store<charge.StoreItemMap>
+  const proofStore = parameters.store as Store.Store<charge.StoreItemMap> | undefined
 
   const { recipient, feePayer, feePayerUrl } = Account.resolve(parameters)
 
@@ -172,6 +173,11 @@ export function charge<const parameters extends charge.Parameters>(
           })
           if (!valid) throw new MismatchError('Proof signature does not match source.', {})
 
+          if (proofStore) {
+            await assertProofUnused(proofStore, challenge.id)
+            await markProofUsed(proofStore, challenge.id)
+          }
+
           return {
             method: 'tempo',
             status: 'success',
@@ -285,10 +291,15 @@ export declare namespace charge {
     /** Testnet mode. */
     testnet?: boolean | undefined
     /**
-     * Store for transaction hash replay protection.
+     * Store for charge replay protection.
      *
-     * Use a shared store in multi-instance deployments so consumed hashes are
-     * visible across all server instances.
+     * Non-zero charge flows default to an in-memory store if omitted. For
+     * zero-dollar proof auth, replay prevention is enabled only when a store
+     * is explicitly provided; otherwise proofs remain reusable until the
+     * challenge expires.
+     *
+     * Use a shared store in multi-instance deployments so consumed hashes and
+     * proofs are visible across all server instances.
      */
     store?: Store.Store | undefined
     /**
@@ -505,6 +516,11 @@ function getHashStoreKey(hash: `0x${string}`): `mppx:charge:${string}` {
 }
 
 /** @internal */
+function getProofStoreKey(challengeId: string): `mppx:charge:${string}` {
+  return `mppx:charge:proof:${challengeId}`
+}
+
+/** @internal */
 async function assertHashUnused(
   store: Store.Store<charge.StoreItemMap>,
   hash: `0x${string}`,
@@ -519,6 +535,23 @@ async function markHashUsed(
   hash: `0x${string}`,
 ): Promise<void> {
   await store.put(getHashStoreKey(hash), Date.now())
+}
+
+/** @internal */
+async function assertProofUnused(
+  store: Store.Store<charge.StoreItemMap>,
+  challengeId: string,
+): Promise<void> {
+  const seen = await store.get(getProofStoreKey(challengeId))
+  if (seen !== null) throw new Error('Proof credential has already been used.')
+}
+
+/** @internal */
+async function markProofUsed(
+  store: Store.Store<charge.StoreItemMap>,
+  challengeId: string,
+): Promise<void> {
+  await store.put(getProofStoreKey(challengeId), Date.now())
 }
 
 /** @internal */
