@@ -7,11 +7,12 @@ import { tempo as tempo_server } from 'mppx/server'
 import type { Address } from 'viem'
 import { Addresses } from 'viem/tempo'
 import { beforeAll, describe, expect, test } from 'vp/test'
+import * as TestHttp from '~test/Http.js'
 import { deployEscrow } from '~test/tempo/session.js'
 import { accounts, asset, chain, client, fundAccount } from '~test/tempo/viem.js'
 
 function createServer(handler: (request: Request) => Promise<Response> | Response) {
-  return new Promise<{ url: string; close: () => void }>((resolve) => {
+  return new Promise<TestHttp.TestServer>((resolve) => {
     const server = http.createServer(async (req, res) => {
       const url = `http://localhost${req.url}`
       const headers = new Headers()
@@ -26,10 +27,7 @@ function createServer(handler: (request: Request) => Promise<Response> | Respons
     })
     server.listen(0, () => {
       const { port } = server.address() as { port: number }
-      resolve({
-        url: `http://localhost:${port}`,
-        close: () => server.close(),
-      })
+      resolve(TestHttp.wrapServer(server, { port, url: `http://localhost:${port}` }))
     })
   })
 }

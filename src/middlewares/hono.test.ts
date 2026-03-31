@@ -7,16 +7,17 @@ import { tempo as tempo_server } from 'mppx/server'
 import type { Address } from 'viem'
 import { Addresses } from 'viem/tempo'
 import { beforeAll, describe, expect, test } from 'vp/test'
+import * as Http from '~test/Http.js'
 import { deployEscrow } from '~test/tempo/session.js'
 import { accounts, asset, client, fundAccount } from '~test/tempo/viem.js'
 
 function createServer(app: Hono) {
-  return new Promise<{ url: string; close: () => void }>((resolve) => {
+  return new Promise<Http.TestServer>((resolve) => {
     const server = serve({ fetch: app.fetch, port: 0 }, (info) => {
-      resolve({
+      resolve(Http.wrapServer(server as unknown as import('node:http').Server, {
+        port: info.port,
         url: `http://localhost:${info.port}`,
-        close: () => server.close(),
-      })
+      }))
     })
   })
 }

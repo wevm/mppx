@@ -6,17 +6,15 @@ import { Mppx as Mppx_server, tempo as tempo_server } from 'mppx/server'
 import type { Address } from 'viem'
 import { Addresses } from 'viem/tempo'
 import { beforeAll, describe, expect, test } from 'vp/test'
+import * as Http from '~test/Http.js'
 import { deployEscrow } from '~test/tempo/session.js'
 import { accounts, asset, client, fundAccount } from '~test/tempo/viem.js'
 
 function createServer(app: express.Express) {
-  return new Promise<{ url: string; close: () => void }>((resolve) => {
+  return new Promise<Http.TestServer>((resolve) => {
     const server = app.listen(0, () => {
       const { port } = server.address() as { port: number }
-      resolve({
-        url: `http://localhost:${port}`,
-        close: () => server.close(),
-      })
+      resolve(Http.wrapServer(server, { port, url: `http://localhost:${port}` }))
     })
   })
 }
