@@ -12,6 +12,7 @@ import { Abis, Transaction } from 'viem/tempo'
 import * as Expires from '../../Expires.js'
 import type { LooseOmit, NoExtraKeys } from '../../internal/types.js'
 import * as Method from '../../Method.js'
+import type * as Html from '../../server/internal/html.js'
 import * as Store from '../../Store.js'
 import * as Client from '../../viem/Client.js'
 import * as Account from '../internal/account.js'
@@ -45,6 +46,7 @@ export function charge<const parameters extends charge.Parameters>(
     decimals = defaults.decimals,
     description,
     externalId,
+    html,
     memo,
     waitForConfirmation = true,
   } = parameters
@@ -70,6 +72,8 @@ export function charge<const parameters extends charge.Parameters>(
       memo,
       recipient,
     } as unknown as Defaults,
+
+    html,
 
     // TODO: dedupe `{charge,session}.request`
     async request({ credential, request }) {
@@ -244,6 +248,8 @@ export declare namespace charge {
   type Defaults = LooseOmit<Method.RequestDefaults<typeof Methods.charge>, 'feePayer' | 'recipient'>
 
   type Parameters = {
+    /** Render payment page when Accept header is text/html (e.g. in browsers) */
+    html?: Html.Options | undefined
     /** Testnet mode. */
     testnet?: boolean | undefined
     /**

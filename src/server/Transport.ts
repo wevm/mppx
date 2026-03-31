@@ -1,9 +1,12 @@
+import { Json } from 'ox'
+
 import * as Challenge from '../Challenge.js'
 import * as Credential from '../Credential.js'
 import * as Errors from '../Errors.js'
 import type { Distribute, UnionToIntersection } from '../internal/types.js'
 import * as core_Mcp from '../Mcp.js'
 import * as Receipt from '../Receipt.js'
+import type * as Html from './internal/html.js'
 
 export { type McpSdk, mcpSdk } from '../mcp-sdk/server/Transport.js'
 
@@ -30,6 +33,7 @@ export type Transport<
   respondChallenge: (options: {
     challenge: Challenge.Challenge
     error?: Errors.PaymentError | undefined
+    html?: Html.Options | undefined
     input: input
   }) => challengeOutput | Promise<challengeOutput>
   /** Attaches a receipt to a successful response. */
@@ -121,17 +125,40 @@ export function http(): Http {
       return Credential.deserialize(payment)
     },
 
-    respondChallenge({ challenge, error }) {
+    respondChallenge({ challenge, error, html, input }) {
       const headers: Record<string, string> = {
         'WWW-Authenticate': Challenge.serialize(challenge),
         'Cache-Control': 'no-store',
       }
 
-      let body: string | null = null
-      if (error) {
-        headers['Content-Type'] = 'application/problem+json'
-        body = JSON.stringify(error.toProblemDetails(challenge.id))
-      }
+      const body = (() => {
+        if (html && input.headers.get('Accept')?.includes('text/html')) {
+          headers['Content-Type'] = 'text/html; charset=utf-8'
+          const html = String.raw
+          return html`<!doctype html>
+            <html lang="en">
+              <head>
+                <meta charset="UTF-8" />
+                <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+                <title>Payment Required</title>
+                <style>
+                  :root {
+                    color-scheme: dark light;
+                  }
+                </style>
+              </head>
+              <body>
+                <h1>Payment Required</h1>
+                <pre>${Json.stringify(challenge, null, 2)}</pre>
+              </body>
+            </html> `
+        }
+        if (error) {
+          headers['Content-Type'] = 'application/problem+json'
+          return JSON.stringify(error.toProblemDetails(challenge.id))
+        }
+        return null
+      })()
 
       return new Response(body, { status: error?.status ?? 402, headers })
     },

@@ -10,8 +10,10 @@ const currency = '0x20c0000000000000000000000000000000000000' as const // pathUS
 const mppx = Mppx.create({
   methods: [
     tempo({
+      account,
       currency,
       feePayer: true,
+      html: true,
       recipient: account.address,
       testnet: true,
     }),

@@ -9,6 +9,7 @@ const mppx = Mppx.create({
   methods: [
     stripe.charge({
       client: stripeClient,
+      html: true,
       // Stripe Business Network profile ID.
       networkId: 'internal',
       // Ensure only card is supported.

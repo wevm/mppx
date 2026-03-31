@@ -304,6 +304,7 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
             challenge,
             input,
             error: new Errors.MalformedCredentialError({ reason: credentialError.message }),
+            html: method.html,
           })
           return { challenge: response, status: 402 }
         }
@@ -314,6 +315,7 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
             challenge,
             input,
             error: new Errors.PaymentRequiredError({ description }),
+            html: method.html,
           })
           return { challenge: response, status: 402 }
         }
@@ -328,6 +330,7 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
               id: credential.challenge.id,
               reason: 'challenge was not issued by this server',
             }),
+            html: method.html,
           })
           return { challenge: response, status: 402 }
         }
@@ -356,6 +359,7 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
                   id: credential.challenge.id,
                   reason: `credential ${field} does not match this route's requirements`,
                 }),
+                html: method.html,
               })
               return { challenge: response, status: 402 }
             }
