@@ -2739,6 +2739,47 @@ describe.runIf(isLocalnet)('session', () => {
       expect(request.spent).toBe('5000000')
     })
 
+    test('request() omits reuse hints when the stored channel is closing', async () => {
+      const channelId = '0x00000000000000000000000000000000000000000000000000000000000000ab' as Hex
+      await store.updateChannel(channelId, () => ({
+        channelId,
+        payer: payer.address,
+        payee: recipient,
+        token: currency,
+        authorizedSigner: payer.address,
+        chainId: chain.id,
+        escrowContract,
+        deposit: 10_000_000n,
+        settledOnChain: 0n,
+        highestVoucherAmount: 5_000_000n,
+        highestVoucher: {
+          channelId,
+          cumulativeAmount: 5_000_000n,
+          signature: '0xdeadbeef' as Hex,
+        },
+        spent: 5_000_000n,
+        units: 5,
+        closeRequestedAt: 1n,
+        finalized: false,
+        createdAt: new Date().toISOString(),
+      }))
+
+      const server = createServer()
+      const request = await server.request!({
+        credential: undefined,
+        request: {
+          ...makeRequest(),
+          amount: '1',
+          channelId,
+        },
+      })
+
+      expect(request.acceptedCumulative).toBeUndefined()
+      expect(request.deposit).toBeUndefined()
+      expect(request.requiredCumulative).toBeUndefined()
+      expect(request.spent).toBeUndefined()
+    })
+
     test('returns 204 for POST with open action', () => {
       const server = createServer()
       const result = server.respond!({

@@ -86,14 +86,18 @@ function toBigInt(value: bigint | string): bigint {
   return typeof value === 'bigint' ? value : BigInt(value)
 }
 
+function maxBigInt(current: bigint, next: bigint): bigint {
+  return current > next ? current : next
+}
+
 export function createHintedChannelEntry(options: {
   chainId: number
   channelId: Hex.Hex
   escrowContract: Address
   hints: Pick<SessionChallengeMethodDetails, 'acceptedCumulative' | 'deposit' | 'spent'>
 }): ChannelEntry {
-  const acceptedCumulative = BigInt(options.hints.acceptedCumulative ?? options.hints.spent ?? '0')
   const spent = BigInt(options.hints.spent ?? options.hints.acceptedCumulative ?? '0')
+  const acceptedCumulative = maxBigInt(BigInt(options.hints.acceptedCumulative ?? '0'), spent)
 
   return {
     acceptedCumulative,
@@ -113,11 +117,11 @@ export function reconcileChannelEntry(entry: ChannelEntry, snapshot: ChannelSnap
 
   if (snapshot.acceptedCumulative !== undefined) {
     const acceptedCumulative = toBigInt(snapshot.acceptedCumulative)
-    if (entry.acceptedCumulative !== acceptedCumulative) {
+    if (acceptedCumulative > entry.acceptedCumulative) {
       entry.acceptedCumulative = acceptedCumulative
       changed = true
     }
-    if (entry.cumulativeAmount !== acceptedCumulative) {
+    if (acceptedCumulative > entry.cumulativeAmount) {
       entry.cumulativeAmount = acceptedCumulative
       changed = true
     }
@@ -125,7 +129,7 @@ export function reconcileChannelEntry(entry: ChannelEntry, snapshot: ChannelSnap
 
   if (snapshot.spent !== undefined) {
     const spent = toBigInt(snapshot.spent)
-    if (entry.spent !== spent) {
+    if (spent > entry.spent) {
       entry.spent = spent
       changed = true
     }
@@ -141,7 +145,7 @@ export function reconcileChannelEntry(entry: ChannelEntry, snapshot: ChannelSnap
 
   if (snapshot.deposit !== undefined) {
     const deposit = toBigInt(snapshot.deposit)
-    if (entry.deposit !== deposit) {
+    if (entry.deposit === undefined || deposit > entry.deposit) {
       entry.deposit = deposit
       changed = true
     }

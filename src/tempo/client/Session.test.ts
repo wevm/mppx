@@ -98,6 +98,38 @@ describe('session (pure)', () => {
         expect(cred.payload.cumulativeAmount).toBe('6000000')
       }
     })
+
+    test('does not let stale requiredCumulative move local cumulative backwards', async () => {
+      const method = session({
+        getClient: () => pureClient,
+        account: pureAccount,
+        deposit: '10',
+      })
+
+      const challenge = makeChallenge({
+        methodDetails: {
+          acceptedCumulative: '5000000',
+          chainId: 42431,
+          channelId,
+          deposit: '10000000',
+          escrowContract: escrowAddress,
+          requiredCumulative: '6000000',
+          spent: '5000000',
+        },
+      })
+
+      const first = deserializePayload(await method.createCredential({ challenge, context: {} }))
+      const second = deserializePayload(await method.createCredential({ challenge, context: {} }))
+
+      expect(first.payload.action).toBe('voucher')
+      expect(second.payload.action).toBe('voucher')
+      if (first.payload.action === 'voucher') {
+        expect(first.payload.cumulativeAmount).toBe('6000000')
+      }
+      if (second.payload.action === 'voucher') {
+        expect(second.payload.cumulativeAmount).toBe('7000000')
+      }
+    })
   })
 
   describe('manual action validation', () => {
@@ -449,6 +481,34 @@ describe.runIf(isLocalnet)('session (on-chain)', () => {
           },
         }),
       ).rejects.toThrow('cannot be reused')
+    })
+
+    test('falls back to opening a new channel when hints omit cumulative state', async () => {
+      const hintedChannelId =
+        '0x0000000000000000000000000000000000000000000000000000000000000bad' as Hex
+      const method = session({
+        getClient: () => client,
+        account: payer,
+        deposit: '10',
+        escrowContract,
+      })
+
+      const challenge = makeLiveChallenge({
+        methodDetails: {
+          chainId: chain.id,
+          channelId: hintedChannelId,
+          deposit: '10000000',
+          escrowContract,
+        },
+      })
+
+      const result = await method.createCredential({ challenge, context: {} })
+      const cred = deserializePayload(result)
+
+      expect(cred.payload.action).toBe('open')
+      if (cred.payload.action === 'open') {
+        expect(cred.payload.channelId).not.toBe(hintedChannelId)
+      }
     })
   })
 

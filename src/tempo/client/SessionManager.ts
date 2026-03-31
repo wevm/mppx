@@ -143,6 +143,7 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
       if (reconcileChannelReceipt(channel, receipt)) spent = channel.spent
       return
     }
+    if (channel) return
     spent = BigInt(receipt.spent)
   }
 
