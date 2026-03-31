@@ -3,11 +3,24 @@ name: Pull request audit
 on:
   pull_request:
     types: [labeled]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: Pull request number to audit
+        required: true
+        type: number
+      sha:
+        description: Commit SHA to audit (defaults to the selected ref SHA)
+        required: false
+        type: string
 
 jobs:
   publish:
     runs-on: ubuntu-latest
-    if: github.event.label.name == 'cyclops'
+    if: github.event_name == 'workflow_dispatch' || github.event.label.name == 'cyclops'
+    env:
+      PR_NUMBER: ${{ github.event.pull_request.number || inputs.pr_number }}
+      PR_SHA: ${{ github.event.pull_request.head.sha || inputs.sha || github.sha }}
     steps:
       - name: Publish event
         run: |
@@ -24,8 +37,8 @@ jobs:
               "repository": "${{ github.repository }}",
               "event": "pr_audit",
               "data": {
-                "pr_number": ${{ github.event.pull_request.number }},
-                "sha": "${{ github.event.pull_request.head.sha }}"
+                "pr_number": ${{ env.PR_NUMBER }},
+                "sha": "${{ env.PR_SHA }}"
               }
             }')
           echo "HTTP status: $HTTP_CODE"
