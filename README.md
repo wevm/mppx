@@ -78,33 +78,6 @@ Mppx.create({
 const res = await fetch('https://mpp.dev/api/ping/paid')
 ```
 
-## Replay Protection for $0 Auth
-
-`tempo.charge({ amount: '0' })` uses a signed proof credential instead of an on-chain transfer. By default, `mppx` does not persist proof usage, so a valid zero-dollar proof can be replayed until the challenge expires.
-
-If you want single-use zero-dollar auth, provide a `store` and `mppx` will consume the challenge ID after the first successful proof verification:
-
-```ts
-import { Mppx, Store, tempo } from 'mppx/server'
-
-const replayStore = Store.memory()
-
-const mppx = Mppx.create({
-  methods: [
-    tempo.charge({
-      currency: '0x20c0000000000000000000000000000000000000',
-      recipient: '0x742d35Cc6634c0532925a3b844bC9e7595F8fE00',
-      store: replayStore,
-    }),
-  ],
-})
-```
-
-- `Store.memory()` is a good fit for local development, tests, or a single long-lived server process. Replay prevention only applies inside that process and is lost on restart.
-- Use `Store.redis()`, `Store.upstash()`, or `Store.cloudflare()` when you need replay prevention to survive restarts or apply across multiple server instances.
-- If no store is configured for zero-dollar auth, the proof remains reusable until expiry. Existing challenge binding and route/request verification still apply, but the proof is not treated as single-use.
-- Multi-instance deployments that want cross-instance replay prevention should use a shared store so consumed proofs are visible everywhere.
-
 ## Examples
 
 | Example                                                | Description                                          |
