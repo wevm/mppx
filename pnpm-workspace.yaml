@@ -6,7 +6,6 @@ packages:
 
 overrides:
   mppx: 'workspace:*'
-  vite: 'npm:@voidzero-dev/vite-plus-core@~0.1.14'
   vitest: 'npm:@voidzero-dev/vite-plus-test@~0.1.14'
   ox: '^0.14.1'
   viem: '^2.47.5'

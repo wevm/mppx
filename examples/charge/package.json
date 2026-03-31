@@ -4,7 +4,7 @@
   "type": "module",
   "scripts": {
     "check:types": "tsgo -b",
-    "dev": "vp dev",
+    "dev": "vite dev",
     "build": "vite build",
     "preview": "vite preview"
   },

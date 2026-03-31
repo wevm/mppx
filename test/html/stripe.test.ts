@@ -1,3 +1,4 @@
+import type { Frame, Page } from '@playwright/test'
 import { expect, test } from '@playwright/test'
 
 test('charge via stripe html payment page', async ({ page }) => {
@@ -11,17 +12,21 @@ test('charge via stripe html payment page', async ({ page }) => {
   await expect(page.locator('h1')).toHaveText('Payment Required')
   await expect(page.getByRole('button', { name: 'Pay' })).toBeVisible({ timeout: 30_000 })
 
-  // Wait for Stripe Payment Element iframe to load
-  const stripeFrame = page.frameLocator('iframe[name^="__privateStripeFrame"]').first()
-  const cardButton = stripeFrame.locator('[data-value="card"]')
-  await expect(cardButton).toBeVisible({ timeout: 30_000 })
+  // Stripe renders several private frames. Find the one that actually contains
+  // the payment controls instead of assuming the first frame is the card UI.
+  const stripeFrame = await getStripePaymentFrame(page)
+  const numberInput = stripeFrame.locator('[name="number"]')
 
-  // Card option is collapsed by default — click to expand, wait for inputs to render
-  await cardButton.click()
-  await page.waitForTimeout(1_000)
+  // Some runs render card fields immediately; others require expanding card.
+  if (!(await numberInput.isVisible({ timeout: 2_000 }).catch(() => false))) {
+    const cardButton = stripeFrame.locator('[data-value="card"]')
+    if (await cardButton.isVisible({ timeout: 10_000 }).catch(() => false)) {
+      await cardButton.click()
+      await page.waitForTimeout(1_000)
+    }
+  }
 
   // Wait for card inputs to appear and fill test card details
-  const numberInput = stripeFrame.locator('[name="number"]')
   await expect(numberInput).toBeVisible({ timeout: 30_000 })
   await numberInput.fill('4242424242424242')
   await stripeFrame.locator('[name="expiry"]').fill('12/34')
@@ -47,3 +52,30 @@ test('service worker endpoint returns javascript', async ({ page }) => {
   expect(response?.headers()['content-type']).toContain('application/javascript')
   expect(response?.status()).toBe(200)
 })
+
+async function getStripePaymentFrame(page: Page, timeout = 30_000): Promise<Frame> {
+  const deadline = Date.now() + timeout
+
+  while (Date.now() < deadline) {
+    for (const frame of page.frames()) {
+      if (!frame.name().startsWith('__privateStripeFrame')) continue
+
+      const hasNumberInput =
+        (await frame
+          .locator('[name="number"]')
+          .count()
+          .catch(() => 0)) > 0
+      const hasCardButton =
+        (await frame
+          .locator('[data-value="card"]')
+          .count()
+          .catch(() => 0)) > 0
+
+      if (hasNumberInput || hasCardButton) return frame
+    }
+
+    await page.waitForTimeout(250)
+  }
+
+  throw new Error('Timed out waiting for Stripe payment frame')
+}

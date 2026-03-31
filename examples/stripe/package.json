@@ -3,7 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "vp dev",
+    "dev": "vite dev",
     "check": "biome check --fix --unsafe",
     "check:types": "tsgo -b",
     "build": "vite build",
