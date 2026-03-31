@@ -172,6 +172,23 @@ describe('createClosePayload', () => {
 })
 
 describe('reconcileChannelEntry', () => {
+  test('hinted entries do not treat server snapshots as local authorization', () => {
+    const entry = createHintedChannelEntry({
+      chainId,
+      channelId,
+      escrowContract,
+      hints: {
+        acceptedCumulative: '6000000',
+        deposit: '10000000',
+        spent: '4000000',
+      },
+    })
+
+    expect(entry.acceptedCumulative).toBe(6_000_000n)
+    expect(entry.cumulativeAmount).toBe(0n)
+    expect(entry.spent).toBe(4_000_000n)
+  })
+
   test('does not move channel state backwards for stale snapshots', () => {
     const entry = createHintedChannelEntry({
       chainId,
