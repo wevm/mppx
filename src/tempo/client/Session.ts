@@ -165,60 +165,39 @@ export function session(parameters: session.Parameters = {}) {
   }
 
   async function resolveSuggestedChannel(parameters: {
-    challenge: Challenge.Challenge
     chainId: number
     client: Awaited<ReturnType<typeof getClient>>
     context?: SessionContext | undefined
     escrowContract: Address
     key: string
+    snapshot: Pick<SessionChallengeMethodDetails, 'acceptedCumulative' | 'deposit' | 'spent'>
     suggestedChannelId: Hex.Hex
     allowHintHydration?: boolean | undefined
   }): Promise<ChannelEntry | undefined> {
     const {
-      challenge,
       chainId,
       client,
       context,
       escrowContract,
       key,
+      snapshot,
       suggestedChannelId,
       allowHintHydration = false,
     } = parameters
 
-    const recovered = await tryRecoverChannel(client, escrowContract, suggestedChannelId, chainId)
-    if (recovered) {
-      const contextCumulative = getContextCumulative(context)
-      if (contextCumulative !== undefined) recovered.cumulativeAmount = contextCumulative
-      if (
-        reconcileChannelEntry(recovered, {
-          acceptedCumulative: getChallengeHints(challenge)?.acceptedCumulative,
-          deposit: getChallengeHints(challenge)?.deposit,
-          spent: getChallengeHints(challenge)?.spent,
-        })
-      ) {
-        // Preserve the locally recoverable signing baseline even when server
-        // accounting hints advance independently.
-      }
-      rememberChannel(key, recovered)
-      notifyUpdate(recovered)
-      return recovered
+    let entry = await tryRecoverChannel(client, escrowContract, suggestedChannelId, chainId)
+    if (!entry && allowHintHydration) {
+      entry = hydrateChannelFromHints(suggestedChannelId, chainId, escrowContract, snapshot)
     }
-
-    if (!allowHintHydration) return undefined
-
-    const hinted = hydrateChannelFromHints(
-      suggestedChannelId,
-      chainId,
-      escrowContract,
-      getChallengeHints(challenge),
-    )
-    if (!hinted) return undefined
+    if (!entry) return undefined
 
     const contextCumulative = getContextCumulative(context)
-    if (contextCumulative !== undefined) hinted.cumulativeAmount = contextCumulative
-    rememberChannel(key, hinted)
-    notifyUpdate(hinted)
-    return hinted
+    if (contextCumulative !== undefined) entry.cumulativeAmount = contextCumulative
+
+    reconcileChannelEntry(entry, snapshot)
+    rememberChannel(key, entry)
+    notifyUpdate(entry)
+    return entry
   }
 
   function reconcileReceipt(receipt: SessionReceipt) {
@@ -265,48 +244,35 @@ export function session(parameters: session.Parameters = {}) {
     const key = channelKey(payee, currency, escrowContract)
     let entry = channels.get(key)
     const suggestedChannelId = (context?.channelId ?? md?.channelId) as Hex.Hex | undefined
+    const snapshot = {
+      acceptedCumulative: md?.acceptedCumulative,
+      deposit: md?.deposit,
+      spent: md?.spent,
+    }
 
-    if (entry && suggestedChannelId && entry.channelId !== suggestedChannelId) {
-      const rebound = await resolveSuggestedChannel({
-        challenge,
+    if (suggestedChannelId && (!entry || entry.channelId !== suggestedChannelId)) {
+      const resolved = await resolveSuggestedChannel({
         chainId,
         client,
         context,
         escrowContract,
         key,
+        snapshot,
         suggestedChannelId,
+        allowHintHydration: !entry,
       })
-      if (rebound) entry = rebound
-    }
-
-    if (!entry) {
-      if (suggestedChannelId) {
-        entry = await resolveSuggestedChannel({
-          challenge,
-          chainId,
-          client,
-          context,
-          escrowContract,
-          key,
-          suggestedChannelId,
-          allowHintHydration: true,
-        })
-
-        if (!entry) {
-          throw new Error(
-            `Channel ${suggestedChannelId} cannot be reused (closed or not found on-chain).`,
-          )
-        }
+      if (resolved) entry = resolved
+      else if (!entry) {
+        throw new Error(
+          `Channel ${suggestedChannelId} cannot be reused (closed or not found on-chain).`,
+        )
       }
     }
 
     if (
       entry &&
-      reconcileChannelEntry(entry, {
-        acceptedCumulative: md?.acceptedCumulative,
-        deposit: md?.deposit,
-        spent: md?.spent,
-      })
+      (!suggestedChannelId || entry.channelId === suggestedChannelId) &&
+      reconcileChannelEntry(entry, snapshot)
     ) {
       notifyUpdate(entry)
     }

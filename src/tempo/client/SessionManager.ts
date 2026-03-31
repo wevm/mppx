@@ -61,7 +61,6 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
   let channel: ChannelEntry | null = null
   let lastChallenge: Challenge.Challenge | null = null
   let lastUrl: RequestInfo | URL | null = null
-  let spent = 0n
 
   const method = sessionPlugin({
     account: parameters.account,
@@ -71,9 +70,7 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
     decimals: parameters.decimals,
     maxDeposit: parameters.maxDeposit,
     onChannelUpdate(entry) {
-      if (entry.channelId !== channel?.channelId) spent = 0n
       channel = entry
-      spent = entry.spent
     },
   })
   const authMethod = chargePlugin({
@@ -109,31 +106,28 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
     return normalized
   }
 
-  function reconcileReceipt(receipt: SessionReceipt | null | undefined) {
-    if (!receipt) return
-    if (channel && receipt.channelId === channel.channelId) {
-      if (reconcileChannelReceipt(channel, receipt)) spent = channel.spent
-      return
-    }
-    if (channel) return
-    spent = BigInt(receipt.spent)
-  }
-
-  function reconcileResponse(response: Response): SessionReceipt | undefined {
+  function readReceipt(response: Response): SessionReceipt | undefined {
     const receiptHeader = response.headers.get('Payment-Receipt')
     if (!receiptHeader) return undefined
 
     try {
-      const receipt = deserializeSessionReceipt(receiptHeader)
-      reconcileReceipt(receipt)
-      return receipt
+      return deserializeSessionReceipt(receiptHeader)
     } catch {
       return undefined
     }
   }
 
-  function toPaymentResponse(response: Response): PaymentResponse {
-    const receipt = reconcileResponse(response) ?? null
+  async function syncResponse(response: Response): Promise<SessionReceipt | null> {
+    await method.onResponse?.(response)
+    return readReceipt(response) ?? null
+  }
+
+  function reconcileReceiptEvent(receipt: SessionReceipt | null | undefined) {
+    if (!receipt || !channel || receipt.channelId !== channel.channelId) return
+    reconcileChannelReceipt(channel, receipt)
+  }
+
+  function toPaymentResponse(response: Response, receipt: SessionReceipt | null): PaymentResponse {
     return Object.assign(response, {
       receipt,
       challenge: lastChallenge,
@@ -184,8 +178,8 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
       })
     }
 
-    await method.onResponse?.(response)
-    return toPaymentResponse(response)
+    const receipt = await syncResponse(response)
+    return toPaymentResponse(response, receipt)
   }
 
   const self: SessionManager = {
@@ -228,7 +222,7 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
           `Open request failed with status ${response.status}${body ? `: ${body}` : ''}${wwwAuth ? ` [WWW-Authenticate: ${wwwAuth}]` : ''}`,
         )
       }
-      reconcileResponse(response)
+      await syncResponse(response)
     },
 
     fetch: doFetch,
@@ -303,12 +297,12 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
                   if (!voucherResponse.ok) {
                     throw new Error(`Voucher POST failed with status ${voucherResponse.status}`)
                   }
-                  reconcileResponse(voucherResponse)
+                  await syncResponse(voucherResponse)
                   break
                 }
 
                 case 'payment-receipt':
-                  reconcileReceipt(event.data)
+                  reconcileReceiptEvent(event.data)
                   onReceipt?.(event.data)
                   break
               }
@@ -330,7 +324,7 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
         context: {
           action: 'close',
           channelId: channel.channelId,
-          cumulativeAmountRaw: spent.toString(),
+          cumulativeAmountRaw: channel.spent.toString(),
         },
       })
 
@@ -340,7 +334,7 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
           method: 'POST',
           headers: { Authorization: credential },
         })
-        receipt = reconcileResponse(response)
+        receipt = (await syncResponse(response)) ?? undefined
       }
 
       return receipt
