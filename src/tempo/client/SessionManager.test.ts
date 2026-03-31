@@ -1,14 +1,30 @@
+import { createClient, http } from 'viem'
 import type { Hex } from 'viem'
+import { privateKeyToAccount } from 'viem/accounts'
 import { describe, expect, test, vi } from 'vp/test'
 
 import * as Challenge from '../../Challenge.js'
+import * as Credential from '../../Credential.js'
+import { createSessionReceipt, serializeSessionReceipt } from '../session/Receipt.js'
 import { formatNeedVoucherEvent, parseEvent } from '../session/Sse.js'
-import type { NeedVoucherEvent, SessionReceipt } from '../session/Types.js'
+import type {
+  NeedVoucherEvent,
+  SessionCredentialPayload,
+  SessionReceipt,
+} from '../session/Types.js'
 import { sessionManager } from './SessionManager.js'
 
 const channelId = '0x0000000000000000000000000000000000000000000000000000000000000001' as Hex
+const staleChannelId = '0x0000000000000000000000000000000000000000000000000000000000000002' as Hex
 const challengeId = 'test-challenge-1'
 const realm = 'test.example.com'
+const account = privateKeyToAccount(
+  '0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80',
+)
+const paymentClient = createClient({
+  account,
+  transport: http('http://127.0.0.1'),
+})
 
 function makeChallenge(overrides: Record<string, unknown> = {}): Challenge.Challenge {
   return Challenge.from({
@@ -47,6 +63,15 @@ function makeSseResponse(events: string[]): Response {
   return new Response(body, {
     status: 200,
     headers: { 'Content-Type': 'text/event-stream' },
+  })
+}
+
+function makeReceiptResponse(receipt: SessionReceipt, body?: string): Response {
+  return new Response(body ?? 'ok', {
+    status: 200,
+    headers: {
+      'Payment-Receipt': serializeSessionReceipt(receipt),
+    },
   })
 }
 
@@ -246,6 +271,82 @@ describe('Session', () => {
 
       await s.close()
       expect(mockFetch).not.toHaveBeenCalled()
+    })
+
+    test('ignores delayed receipts for other channels when closing the active channel', async () => {
+      let callCount = 0
+      const mockFetch = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+        callCount++
+
+        if (callCount === 1) {
+          return make402Response(
+            makeChallenge({
+              methodDetails: {
+                acceptedCumulative: '5000000',
+                chainId: 4217,
+                channelId,
+                deposit: '10000000',
+                escrowContract: '0x9d136eEa063eDE5418A6BC7bEafF009bBb6CFa70',
+                requiredCumulative: '6000000',
+                spent: '5000000',
+              },
+            }),
+          )
+        }
+
+        if (callCount === 2) {
+          return makeReceiptResponse(
+            createSessionReceipt({
+              challengeId,
+              channelId,
+              acceptedCumulative: 6_000_000n,
+              spent: 6_000_000n,
+            }),
+          )
+        }
+
+        if (callCount === 3) {
+          return makeReceiptResponse(
+            createSessionReceipt({
+              challengeId,
+              channelId: staleChannelId,
+              acceptedCumulative: 1_000_000n,
+              spent: 1_000_000n,
+            }),
+          )
+        }
+
+        const authorization = new Headers(init?.headers).get('Authorization')
+        if (!authorization) throw new Error('expected Authorization header on close')
+
+        const credential = Credential.deserialize<SessionCredentialPayload>(authorization)
+        expect(credential.payload.action).toBe('close')
+        if (credential.payload.action === 'close') {
+          expect(credential.payload.cumulativeAmount).toBe('6000000')
+        }
+
+        return makeReceiptResponse(
+          createSessionReceipt({
+            challengeId,
+            channelId,
+            acceptedCumulative: 6_000_000n,
+            spent: 6_000_000n,
+          }),
+        )
+      })
+
+      const s = sessionManager({
+        account,
+        client: paymentClient as never,
+        fetch: mockFetch as typeof globalThis.fetch,
+        maxDeposit: '10',
+      })
+
+      await s.fetch('https://api.example.com/data')
+      await s.fetch('https://api.example.com/data')
+      await s.close()
+
+      expect(mockFetch).toHaveBeenCalledTimes(4)
     })
   })
 })

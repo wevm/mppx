@@ -144,11 +144,7 @@ export function session(parameters: session.Parameters = {}) {
     escrowContract: Address,
     hints: SessionChallengeMethodDetails | undefined,
   ): ChannelEntry | undefined {
-    if (
-      hints?.acceptedCumulative === undefined &&
-      hints?.deposit === undefined &&
-      hints?.spent === undefined
-    ) {
+    if (hints?.acceptedCumulative === undefined && hints?.spent === undefined) {
       return undefined
     }
 
@@ -291,9 +287,10 @@ export function session(parameters: session.Parameters = {}) {
     let payload: SessionCredentialPayload
 
     if (entry?.opened) {
-      entry.cumulativeAmount = md?.requiredCumulative
-        ? BigInt(md.requiredCumulative)
-        : entry.cumulativeAmount + amount
+      const nextCumulative = entry.cumulativeAmount + amount
+      const requiredCumulative = md?.requiredCumulative ? BigInt(md.requiredCumulative) : 0n
+      entry.cumulativeAmount =
+        nextCumulative > requiredCumulative ? nextCumulative : requiredCumulative
       payload = await createVoucherPayload(
         client,
         account,
