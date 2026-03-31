@@ -14,10 +14,6 @@ const data = JSON.parse(document.getElementById(Html.dataId)!.textContent!) as {
 
 const root = document.getElementById('root')!
 
-// Stripe.js can enable invisible anti-bot checks. In real browsers we keep the
-// default behavior, but deterministic automation benefits from opting out.
-if (navigator.webdriver) loadStripe.setLoadParameters({ advancedFraudSignals: false })
-
 const h2 = document.createElement('h2')
 h2.textContent = 'stripe'
 root.appendChild(h2)

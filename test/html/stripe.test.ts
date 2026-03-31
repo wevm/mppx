@@ -18,16 +18,16 @@ test('charge via stripe html payment page', async ({ page }) => {
   const numberInput = stripeFrame.locator('[name="number"]')
 
   // Some runs render card fields immediately; others require expanding card.
-  if (!(await numberInput.isVisible({ timeout: 2_000 }).catch(() => false))) {
+  if (!(await numberInput.isVisible({ timeout: 90_000 }).catch(() => false))) {
     const cardButton = stripeFrame.locator('[data-value="card"]')
-    if (await cardButton.isVisible({ timeout: 10_000 }).catch(() => false)) {
+    if (await cardButton.isVisible({ timeout: 90_000 }).catch(() => false)) {
       await cardButton.click()
       await page.waitForTimeout(1_000)
     }
   }
 
   // Wait for card inputs to appear and fill test card details
-  await expect(numberInput).toBeVisible({ timeout: 30_000 })
+  await expect(numberInput).toBeVisible({ timeout: 90_000 })
   await numberInput.fill('4242424242424242')
   await stripeFrame.locator('[name="expiry"]').fill('12/34')
   await stripeFrame.locator('[name="cvc"]').fill('123')

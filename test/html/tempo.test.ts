@@ -11,7 +11,6 @@ test.beforeAll(async () => {
   // Fund the test payer account via faucet
   const client = createClient({ chain: tempoModerato, transport: http() })
   await Actions.faucet.fundSync(client, { account })
-  console.log(`funded ${account.address}`)
 })
 
 test('charge via html payment page', async ({ page, context }) => {
