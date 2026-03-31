@@ -23,7 +23,7 @@ h2.textContent = 'stripe'
 root.appendChild(h2)
 
 ;(async () => {
-  const stripeJs = (await loadStripe(data.config.publishableKey))!
+  const stripeJs = await loadStripe(data.config.publishableKey)
   if (!stripeJs) throw new Error('Failed to loadStripe')
 
   const darkQuery = window.matchMedia('(prefers-color-scheme: dark)')
