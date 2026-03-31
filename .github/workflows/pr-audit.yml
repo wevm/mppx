@@ -10,7 +10,7 @@ on:
         required: true
         type: number
       sha:
-        description: Commit SHA to audit (defaults to the selected ref SHA)
+        description: Optional commit SHA override for the audit target
         required: false
         type: string
 
@@ -18,11 +18,26 @@ jobs:
   publish:
     runs-on: ubuntu-latest
     if: github.event_name == 'workflow_dispatch' || github.event.label.name == 'cyclops'
-    env:
-      PR_NUMBER: ${{ github.event.pull_request.number || inputs.pr_number }}
-      PR_SHA: ${{ github.event.pull_request.head.sha || inputs.sha || github.sha }}
     steps:
+      - name: Resolve manual target SHA
+        if: github.event_name == 'workflow_dispatch'
+        id: resolve_manual_target
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          if [[ -n '${{ inputs.sha }}' ]]; then
+            echo 'sha=${{ inputs.sha }}' >> "$GITHUB_OUTPUT"
+          else
+            SHA=$(gh api repos/${{ github.repository }}/pulls/${{ inputs.pr_number }} --jq '.head.sha')
+            echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Publish event
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number || inputs.pr_number }}
+          PR_SHA: ${{ github.event.pull_request.head.sha || steps.resolve_manual_target.outputs.sha }}
         run: |
           set -euo pipefail
 
