@@ -1,6 +1,6 @@
 import * as http from 'node:http'
 
-import { Receipt } from 'mppx'
+import { Challenge, Receipt } from 'mppx'
 import { Mppx as Mppx_client, session as sessionIntent, tempo as tempo_client } from 'mppx/client'
 import { Mppx, discovery } from 'mppx/nextjs'
 import { tempo as tempo_server } from 'mppx/server'
@@ -8,7 +8,7 @@ import type { Address } from 'viem'
 import { Addresses } from 'viem/tempo'
 import { beforeAll, describe, expect, test } from 'vp/test'
 import { deployEscrow } from '~test/tempo/session.js'
-import { accounts, asset, client, fundAccount } from '~test/tempo/viem.js'
+import { accounts, asset, chain, client, fundAccount } from '~test/tempo/viem.js'
 
 function createServer(handler: (request: Request) => Promise<Response> | Response) {
   return new Promise<{ url: string; close: () => void }>((resolve) => {
@@ -110,6 +110,73 @@ describe('charge', () => {
     const response = await fetch(server.url)
     expect(response.status).toBe(200)
     expect(Receipt.fromResponse(response).status).toBe('success')
+
+    server.close()
+  })
+
+  test('zero-amount repro: fetch rejects during credential creation', async () => {
+    const { fetch, mppx } = createChargeHarness(false)
+
+    const handler = mppx.charge({ amount: '0' })((request) =>
+      Response.json({ payer: request.headers.get('Authorization') }),
+    )
+
+    const server = await createServer(handler)
+
+    const challengeResponse = await globalThis.fetch(server.url)
+    expect(challengeResponse.status).toBe(402)
+
+    await expect(fetch(server.url)).rejects.toThrow(
+      'Invalid charge request: split total must be less than total amount.',
+    )
+
+    server.close()
+  })
+
+  test('zero-amount repro: testnet currency omission still issues a challenge before failing', async () => {
+    const isTestnet = true
+    const mainnetCurrency = '0x20C000000000000000000000b9537d11c60E8b50' as const
+
+    const mppx = Mppx.create({
+      methods: [
+        tempo_server.charge({
+          account: accounts[0],
+          getClient: () => client,
+          ...(isTestnet ? {} : { currency: mainnetCurrency }),
+          recipient: accounts[0].address,
+          testnet: isTestnet,
+        }),
+      ],
+      secretKey,
+    })
+
+    const { fetch } = Mppx_client.create({
+      polyfill: false,
+      methods: [
+        tempo_client.charge({
+          account: accounts[1],
+          getClient: () => client,
+        }),
+      ],
+    })
+
+    const handler = mppx.charge({ amount: '0', chainId: chain.id })(() =>
+      Response.json({ ok: true }),
+    )
+
+    const server = await createServer(handler)
+
+    const challengeResponse = await globalThis.fetch(server.url)
+    expect(challengeResponse.status).toBe(402)
+
+    const challenge = Challenge.fromResponse(challengeResponse, {
+      methods: [tempo_client.charge()],
+    })
+    expect(challenge.request.currency).toBe('0x20c0000000000000000000000000000000000000')
+
+    await expect(fetch(server.url)).rejects.toThrow(
+      'Invalid charge request: split total must be less than total amount.',
+    )
 
     server.close()
   })

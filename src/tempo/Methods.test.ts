@@ -130,6 +130,32 @@ describe('charge', () => {
     expect(result.success).toBe(false)
   })
 
+  test('schema: rejects zero-amount with splits', () => {
+    const result = Methods.charge.schema.request.safeParse({
+      amount: '0',
+      currency: '0x20c0000000000000000000000000000000000001',
+      decimals: 6,
+      recipient: '0x1234567890abcdef1234567890abcdef12345678',
+      splits: [
+        {
+          amount: '0.1',
+          recipient: '0xabcdefabcdefabcdefabcdefabcdefabcdefabcd',
+        },
+      ],
+    })
+    expect(result.success).toBe(false)
+  })
+
+  test('schema: accepts zero-amount without splits', () => {
+    const result = Methods.charge.schema.request.safeParse({
+      amount: '0',
+      currency: '0x20c0000000000000000000000000000000000001',
+      decimals: 6,
+      recipient: '0x1234567890abcdef1234567890abcdef12345678',
+    })
+    expect(result.success).toBe(true)
+  })
+
   test('schema: rejects invalid request', () => {
     const result = Methods.charge.schema.request.safeParse({
       amount: '1',
