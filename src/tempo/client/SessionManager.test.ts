@@ -136,6 +136,84 @@ describe('Session', () => {
         'no `deposit` or `maxDeposit` configured',
       )
     })
+
+    test('performs zero-dollar auth before stateless session resume', async () => {
+      const authChallenge = Challenge.from({
+        id: 'auth-challenge-1',
+        realm,
+        method: 'tempo',
+        intent: 'charge',
+        request: {
+          amount: '0',
+          currency: '0x20c0000000000000000000000000000000000001',
+          recipient: '0x742d35Cc6634C0532925a3b844Bc9e7595f8fE00',
+          decimals: 6,
+          methodDetails: {
+            chainId: 4217,
+          },
+        },
+      })
+
+      let callCount = 0
+      const mockFetch = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+        callCount++
+
+        if (callCount === 1) return make402Response(authChallenge)
+
+        const authorization = new Headers(init?.headers).get('Authorization')
+        if (!authorization) throw new Error('expected Authorization header')
+
+        if (callCount === 2) {
+          const credential = Credential.deserialize<{ type: string }>(authorization)
+          expect(credential.payload.type).toBe('proof')
+          expect(credential.source).toBe(`did:pkh:eip155:4217:${account.address}`)
+          return make402Response(
+            makeChallenge({
+              methodDetails: {
+                acceptedCumulative: '5000000',
+                chainId: 4217,
+                channelId,
+                deposit: '10000000',
+                escrowContract: '0x9d136eEa063eDE5418A6BC7bEafF009bBb6CFa70',
+                requiredCumulative: '6000000',
+                spent: '5000000',
+              },
+            }),
+          )
+        }
+
+        const credential = Credential.deserialize<SessionCredentialPayload>(authorization)
+        expect(credential.payload.action).toBe('voucher')
+        if (credential.payload.action === 'voucher') {
+          expect(credential.payload.channelId).toBe(channelId)
+          expect(credential.payload.cumulativeAmount).toBe('6000000')
+        }
+
+        return makeReceiptResponse(
+          createSessionReceipt({
+            challengeId,
+            channelId,
+            acceptedCumulative: 6_000_000n,
+            spent: 6_000_000n,
+          }),
+        )
+      })
+
+      const s = sessionManager({
+        account,
+        client: paymentClient as never,
+        fetch: mockFetch as typeof globalThis.fetch,
+        maxDeposit: '10',
+      })
+
+      const response = await s.fetch('https://api.example.com/data')
+
+      expect(response.status).toBe(200)
+      expect(response.receipt?.acceptedCumulative).toBe('6000000')
+      expect(s.channelId).toBe(channelId)
+      expect(s.cumulative).toBe(6_000_000n)
+      expect(mockFetch).toHaveBeenCalledTimes(3)
+    })
   })
 
   describe('.open()', () => {

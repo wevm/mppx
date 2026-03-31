@@ -40,6 +40,38 @@ const server = Mppx_server.create({
 })
 
 describe('tempo', () => {
+  describe('intent: charge; type: proof (zero-dollar auth)', () => {
+    test('default: end-to-end zero-dollar auth via SDK', async () => {
+      const mppx = Mppx_client.create({
+        polyfill: false,
+        methods: [
+          tempo_client({
+            account: accounts[1],
+            getClient: () => client,
+          }),
+        ],
+      })
+
+      const httpServer = await Http.createServer(async (req, res) => {
+        const result = await Mppx_server.toNodeListener(
+          server.charge({ amount: '0', decimals: 6 }),
+        )(req, res)
+        if (result.status === 402) return
+        res.end('OK')
+      })
+
+      const response = await mppx.fetch(httpServer.url)
+      expect(response.status).toBe(200)
+
+      const receipt = Receipt.fromResponse(response)
+      expect(receipt.status).toBe('success')
+      expect(receipt.method).toBe('tempo')
+      expect(receipt.reference).toBeDefined()
+
+      httpServer.close()
+    })
+  })
+
   describe('intent: charge; type: hash', () => {
     test('default', async () => {
       const mppx = Mppx_client.create({

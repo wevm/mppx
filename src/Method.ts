@@ -98,6 +98,7 @@ export type CreateCredentialFn<method extends Method, context = unknown> = (
 /** Request transform function for a single method. */
 export type RequestFn<method extends Method> = (options: {
   credential?: Credential.Credential | null | undefined
+  input?: globalThis.Request | undefined
   request: z.input<method['schema']['request']>
 }) => MaybePromise<z.input<method['schema']['request']>>
 
