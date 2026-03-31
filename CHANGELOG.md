@@ -6,6 +6,10 @@
 
 - 5e7750b: Added a `proof` credential type for zero-amount Tempo charge requests. Clients now sign an EIP-712 proof over the challenge ID instead of creating a broadcastable transaction, and servers verify the proof against the credential source DID before accepting the request. This prevents zero-dollar auth flows from burning gas when the payer would otherwise have been the fee payer.
 
+### Patch Changes
+
+- 074a4ef: Added optional replay protection for zero-dollar Tempo `proof` credentials when `tempo_server.charge({ store })` is configured. Replayed proofs are rejected by challenge ID within the shared store scope, including across server instances; deployments without a configured store remain stateless and allow proof reuse until the challenge expires.
+
 ## 0.4.12
 
 ### Patch Changes
