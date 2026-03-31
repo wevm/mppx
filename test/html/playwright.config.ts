@@ -11,7 +11,7 @@ export default defineConfig({
   timeout: 60_000,
   retries: 1,
   use: {
-    headless: false,
+    headless: true,
     screenshot: 'only-on-failure',
     trace: 'retain-on-failure',
     video: 'retain-on-failure',
