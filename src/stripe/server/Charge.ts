@@ -3,9 +3,9 @@ import { PaymentActionRequiredError, VerificationFailedError } from '../../Error
 import * as Expires from '../../Expires.js'
 import type { LooseOmit, OneOf } from '../../internal/types.js'
 import * as Method from '../../Method.js'
-import type * as Html from '../../server/internal/html.js'
 import type { StripeClient } from '../internal/types.js'
 import * as Methods from '../Methods.js'
+import { html as htmlContent } from './internal/html.gen.js'
 
 /**
  * Creates a Stripe charge method intent for usage on the server.
@@ -61,7 +61,7 @@ export function charge<const parameters extends charge.Parameters>(parameters: p
       paymentMethodTypes,
     } as unknown as Defaults,
 
-    html,
+    html: html ? { content: htmlContent } : undefined,
 
     async verify({ credential }) {
       const { challenge } = credential
@@ -113,7 +113,7 @@ export declare namespace charge {
 
   type Parameters = {
     /** Render payment page when Accept header is text/html (e.g. in browsers) */
-    html?: Html.Options | undefined
+    html?: boolean | undefined
     /** Optional metadata to include in SPT creation requests. */
     metadata?: Record<string, string> | undefined
   } & Defaults &

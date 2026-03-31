@@ -1,1 +1,3 @@
-export type Options = boolean
+export type Options = {
+  content: string
+}

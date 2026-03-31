@@ -1,0 +1,10 @@
+{
+  "name": "@mppx/tempo-html",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "accounts": "https://pkg.pr.new/tempoxyz/accounts@d21e422",
+    "mppx": "workspace:*",
+    "viem": "2.47.5"
+  }
+}

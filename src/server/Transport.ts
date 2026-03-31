@@ -125,15 +125,17 @@ export function http(): Http {
       return Credential.deserialize(payment)
     },
 
-    respondChallenge({ challenge, error, html, input }) {
+    respondChallenge(options) {
+      const { challenge, error, input } = options
       const headers: Record<string, string> = {
         'WWW-Authenticate': Challenge.serialize(challenge),
         'Cache-Control': 'no-store',
       }
 
       const body = (() => {
-        if (html && input.headers.get('Accept')?.includes('text/html')) {
+        if (options.html && input.headers.get('Accept')?.includes('text/html')) {
           headers['Content-Type'] = 'text/html; charset=utf-8'
+          const data = Json.stringify({ challenge }).replace(/</g, '\\u003c')
           const html = String.raw
           return html`<!doctype html>
             <html lang="en">
@@ -150,6 +152,11 @@ export function http(): Http {
               <body>
                 <h1>Payment Required</h1>
                 <pre>${Json.stringify(challenge, null, 2)}</pre>
+                <div id="root"></div>
+                <script id="__MPPX_DATA__" type="application/json">
+                  ${data}
+                </script>
+                ${options.html.content}
               </body>
             </html> `
         }

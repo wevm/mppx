@@ -12,7 +12,6 @@ import { Abis, Transaction } from 'viem/tempo'
 import * as Expires from '../../Expires.js'
 import type { LooseOmit, NoExtraKeys } from '../../internal/types.js'
 import * as Method from '../../Method.js'
-import type * as Html from '../../server/internal/html.js'
 import * as Store from '../../Store.js'
 import * as Client from '../../viem/Client.js'
 import * as Account from '../internal/account.js'
@@ -23,6 +22,7 @@ import * as FeePayer from '../internal/fee-payer.js'
 import * as Selectors from '../internal/selectors.js'
 import type * as types from '../internal/types.js'
 import * as Methods from '../Methods.js'
+import { html as htmlContent } from './internal/html.gen.js'
 
 /**
  * Creates a Tempo charge method intent for usage on the server.
@@ -73,7 +73,7 @@ export function charge<const parameters extends charge.Parameters>(
       recipient,
     } as unknown as Defaults,
 
-    html,
+    html: html ? { content: htmlContent } : undefined,
 
     // TODO: dedupe `{charge,session}.request`
     async request({ credential, request }) {
@@ -249,7 +249,7 @@ export declare namespace charge {
 
   type Parameters = {
     /** Render payment page when Accept header is text/html (e.g. in browsers) */
-    html?: Html.Options | undefined
+    html?: boolean | undefined
     /** Testnet mode. */
     testnet?: boolean | undefined
     /**

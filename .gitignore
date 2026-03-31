@@ -1,6 +1,7 @@
 _
 dist
 node_modules
+*.gen.ts
 coverage
 *.tsbuildinfo
 .DS_Store

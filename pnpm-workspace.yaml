@@ -2,6 +2,7 @@ packages:
   - .
   - examples/*
   - examples/session/*
+  - src/*/server/internal/html
 
 overrides:
   mppx: 'workspace:*'

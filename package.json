@@ -1,6 +1,6 @@
 {
   "scripts": {
-    "build": "zile",
+    "build": "tsx scripts/build:html.ts && zile",
     "changeset:publish": "zile publish:prepare && changeset publish && zile publish:post",
     "changeset:version": "changeset version && vp fmt .",
     "check": "vp lint --fix && vp fmt --write .",
@@ -41,6 +41,7 @@
     "hono": "^4.11.9",
     "playwright": "^1.58.2",
     "prool": "^0.2.4",
+    "rolldown": "1.0.0-rc.12",
     "tempo.ts": "^0.14.2",
     "testcontainers": "^11.11.0",
     "tsx": "^4.21.0",

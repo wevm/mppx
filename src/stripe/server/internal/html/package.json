@@ -1,0 +1,9 @@
+{
+  "name": "@mppx/stripe-html",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@stripe/stripe-js": "8.9.0",
+    "mppx": "workspace:*"
+  }
+}
