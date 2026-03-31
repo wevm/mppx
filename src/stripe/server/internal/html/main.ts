@@ -59,7 +59,10 @@ root.appendChild(h2)
       const method = stripe({
         client: stripeJs,
         createToken: async (opts) => {
-          const res = await fetch(data.config.createTokenUrl, {
+          const createTokenUrl = new URL(data.config.createTokenUrl, location.origin)
+          if (createTokenUrl.origin !== location.origin)
+            throw new Error('createTokenUrl must be same-origin')
+          const res = await fetch(createTokenUrl, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ paymentMethod, ...opts }),

@@ -1,22 +1,26 @@
-const sw = self as unknown as ServiceWorkerGlobalScope
+const serviceWorker = self as unknown as ServiceWorkerGlobalScope
 
 let credential: string | undefined
 
-sw.addEventListener('activate', (event) => {
-  event.waitUntil(sw.clients.claim())
+serviceWorker.addEventListener('activate', (event) => {
+  event.waitUntil(serviceWorker.clients.claim())
 })
 
-sw.addEventListener('message', (event) => {
-  credential = event.data?.credential
+serviceWorker.addEventListener('message', (event) => {
+  if (!(event.source instanceof Client)) return
+  const value = event.data?.credential
+  if (typeof value !== 'string' || !value.startsWith('Payment ')) return
+  credential = value
 })
 
-sw.addEventListener('fetch', (event) => {
+serviceWorker.addEventListener('fetch', (event) => {
   if (!credential || event.request.mode !== 'navigate') return
+  if (new URL(event.request.url).origin !== serviceWorker.location.origin) return
 
   const headers = new Headers(event.request.headers)
   headers.set('Authorization', credential)
   credential = undefined
 
   event.respondWith(fetch(event.request, { headers }))
-  sw.registration.unregister()
+  serviceWorker.registration.unregister()
 })

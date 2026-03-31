@@ -10,7 +10,7 @@ jobs:
   ci-gate:
     name: CI Gate
     if: always()
-    needs: [checks, test, test-e2e]
+    needs: [checks, test, test-html]
     runs-on: ubuntu-latest
     steps:
       - run: |

@@ -165,7 +165,12 @@ export function http(): Http {
               </head>
               <body>
                 <h1>Payment Required</h1>
-                <pre>${Json.stringify(challenge, null, 2)}</pre>
+                <pre>
+${Json.stringify(challenge, null, 2)
+                    .replace(/&/g, '&amp;')
+                    .replace(/</g, '&lt;')
+                    .replace(/>/g, '&gt;')}</pre
+                >
                 <div id="root"></div>
                 <script id="__MPPX_DATA__" type="application/json">
                   ${data}
