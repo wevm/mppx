@@ -188,9 +188,7 @@ describe('charge', () => {
     const body = (await response.json()) as { payer: string }
     const credential = Credential.deserialize<{ signature: string; type: 'proof' }>(body.payer)
     expect(credential.challenge.request.amount).toBe('0')
-    expect(credential.challenge.request.currency).toBe(
-      '0x20c0000000000000000000000000000000000000',
-    )
+    expect(credential.challenge.request.currency).toBe('0x20c0000000000000000000000000000000000000')
     expect(credential.payload.type).toBe('proof')
     expect(credential.source).toBe(`did:pkh:eip155:${chain.id}:${accounts[1].address}`)
 
