@@ -1,6 +1,6 @@
 {
   "scripts": {
-    "build": "tsx scripts/build:html.ts && zile",
+    "build": "node --import tsx scripts/build:html.ts && zile",
     "changeset:publish": "zile publish:prepare && changeset publish && zile publish:post",
     "changeset:version": "changeset version && vp fmt .",
     "check": "vp lint --fix && vp fmt --write .",
