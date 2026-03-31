@@ -11,6 +11,7 @@ serviceWorker.addEventListener('message', (event) => {
   const value = event.data?.credential
   if (typeof value !== 'string' || !value.startsWith('Payment ')) return
   credential = value
+  event.ports[0]?.postMessage('ack')
 })
 
 serviceWorker.addEventListener('fetch', (event) => {

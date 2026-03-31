@@ -17,6 +17,10 @@ export async function submitCredential(credential: string): Promise<void> {
     })
   })
 
-  serviceWorker.postMessage({ credential })
+  await new Promise<void>((resolve) => {
+    const channel = new MessageChannel()
+    channel.port1.onmessage = () => resolve()
+    serviceWorker.postMessage({ credential }, [channel.port2])
+  })
   location.reload()
 }
