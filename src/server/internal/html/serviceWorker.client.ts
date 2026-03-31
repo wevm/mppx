@@ -4,10 +4,10 @@ export async function submitCredential(credential: string): Promise<void> {
 
   const registration = await navigator.serviceWorker.register(url.pathname + url.search)
 
-  const sw = await new Promise<ServiceWorker>((resolve) => {
-    const worker = registration.installing ?? registration.waiting ?? registration.active
-    if (worker?.state === 'activated') return resolve(worker)
-    const target = worker ?? registration
+  const serviceWorker = await new Promise<ServiceWorker>((resolve) => {
+    const mppxWorker = registration.installing ?? registration.waiting ?? registration.active
+    if (mppxWorker?.state === 'activated') return resolve(mppxWorker)
+    const target = mppxWorker ?? registration
     target.addEventListener('statechange', function handler() {
       const active = registration.active
       if (active?.state === 'activated') {
@@ -17,6 +17,6 @@ export async function submitCredential(credential: string): Promise<void> {
     })
   })
 
-  sw.postMessage({ credential })
+  serviceWorker.postMessage({ credential })
   location.reload()
 }
