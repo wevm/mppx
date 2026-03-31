@@ -29,14 +29,18 @@ import type {
 import { signVoucher } from '../session/Voucher.js'
 
 export type ChannelEntry = {
+  /** Highest voucher amount observed from server accounting hints or receipts. */
   acceptedCumulative: bigint
   chainId: number
   channelId: Hex.Hex
+  /** Highest cumulative amount the client itself has signed for this channel. */
   cumulativeAmount: bigint
+  /** Latest known deposit ceiling. */
   deposit?: bigint | undefined
   escrowContract: Address
   opened: boolean
   salt: Hex.Hex
+  /** Latest server-reported spent amount for the session. */
   spent: bigint
 }
 
@@ -77,6 +81,7 @@ export function serializeCredential(
 }
 
 type ChannelSnapshot = {
+  /** Advisory server snapshot: not safe to treat as client authorization. */
   acceptedCumulative?: bigint | string | undefined
   deposit?: bigint | string | undefined
   spent?: bigint | string | undefined
@@ -103,7 +108,8 @@ export function createHintedChannelEntry(options: {
     acceptedCumulative,
     chainId: options.chainId,
     channelId: options.channelId,
-    cumulativeAmount: acceptedCumulative,
+    // Hints are advisory only. Start signing from locally authorized state.
+    cumulativeAmount: 0n,
     ...(options.hints.deposit !== undefined && { deposit: BigInt(options.hints.deposit) }),
     escrowContract: options.escrowContract,
     opened: true,
@@ -121,10 +127,6 @@ export function reconcileChannelEntry(entry: ChannelEntry, snapshot: ChannelSnap
       entry.acceptedCumulative = acceptedCumulative
       changed = true
     }
-    if (acceptedCumulative > entry.cumulativeAmount) {
-      entry.cumulativeAmount = acceptedCumulative
-      changed = true
-    }
   }
 
   if (snapshot.spent !== undefined) {
@@ -135,10 +137,6 @@ export function reconcileChannelEntry(entry: ChannelEntry, snapshot: ChannelSnap
     }
     if (snapshot.acceptedCumulative === undefined && entry.acceptedCumulative < spent) {
       entry.acceptedCumulative = spent
-      changed = true
-    }
-    if (snapshot.acceptedCumulative === undefined && entry.cumulativeAmount < spent) {
-      entry.cumulativeAmount = spent
       changed = true
     }
   }

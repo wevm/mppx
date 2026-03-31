@@ -186,7 +186,7 @@ describe('Session', () => {
         expect(credential.payload.action).toBe('voucher')
         if (credential.payload.action === 'voucher') {
           expect(credential.payload.channelId).toBe(channelId)
-          expect(credential.payload.cumulativeAmount).toBe('6000000')
+          expect(credential.payload.cumulativeAmount).toBe('1000000')
         }
 
         return makeReceiptResponse(
@@ -211,7 +211,7 @@ describe('Session', () => {
       expect(response.status).toBe(200)
       expect(response.receipt?.acceptedCumulative).toBe('6000000')
       expect(s.channelId).toBe(channelId)
-      expect(s.cumulative).toBe(6_000_000n)
+      expect(s.cumulative).toBe(1_000_000n)
       expect(mockFetch).toHaveBeenCalledTimes(3)
     })
   })

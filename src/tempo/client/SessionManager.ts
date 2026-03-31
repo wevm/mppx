@@ -146,6 +146,7 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
     lastUrl = input
     let response = await fetchFn(input, init)
     let attemptedZeroAuth = false
+    let attemptedSession = false
 
     for (let attempts = 0; response.status === 402 && attempts < 3; attempts++) {
       const challenges = Challenge.fromResponseList(response)
@@ -170,7 +171,9 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
       }
 
       if (!sessionChallenge) break
+      if (attemptedSession) break
 
+      attemptedSession = true
       const credential = await method.createCredential({
         challenge: sessionChallenge as never,
         context: {},

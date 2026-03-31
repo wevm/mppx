@@ -119,6 +119,10 @@ export function session(parameters: session.Parameters = {}) {
   }
 
   function rememberChannel(key: string, entry: ChannelEntry) {
+    const previous = channels.get(key)
+    if (previous && previous.channelId !== entry.channelId) {
+      channelIdToKey.delete(previous.channelId)
+    }
     channels.set(key, entry)
     channelIdToKey.set(entry.channelId, key)
     escrowContractMap.set(entry.channelId, entry.escrowContract)
@@ -168,9 +172,39 @@ export function session(parameters: session.Parameters = {}) {
     escrowContract: Address
     key: string
     suggestedChannelId: Hex.Hex
+    allowHintHydration?: boolean | undefined
   }): Promise<ChannelEntry | undefined> {
-    const { challenge, chainId, client, context, escrowContract, key, suggestedChannelId } =
-      parameters
+    const {
+      challenge,
+      chainId,
+      client,
+      context,
+      escrowContract,
+      key,
+      suggestedChannelId,
+      allowHintHydration = false,
+    } = parameters
+
+    const recovered = await tryRecoverChannel(client, escrowContract, suggestedChannelId, chainId)
+    if (recovered) {
+      const contextCumulative = getContextCumulative(context)
+      if (contextCumulative !== undefined) recovered.cumulativeAmount = contextCumulative
+      if (
+        reconcileChannelEntry(recovered, {
+          acceptedCumulative: getChallengeHints(challenge)?.acceptedCumulative,
+          deposit: getChallengeHints(challenge)?.deposit,
+          spent: getChallengeHints(challenge)?.spent,
+        })
+      ) {
+        // Preserve the locally recoverable signing baseline even when server
+        // accounting hints advance independently.
+      }
+      rememberChannel(key, recovered)
+      notifyUpdate(recovered)
+      return recovered
+    }
+
+    if (!allowHintHydration) return undefined
 
     const hinted = hydrateChannelFromHints(
       suggestedChannelId,
@@ -178,22 +212,13 @@ export function session(parameters: session.Parameters = {}) {
       escrowContract,
       getChallengeHints(challenge),
     )
-    if (hinted) {
-      const contextCumulative = getContextCumulative(context)
-      if (contextCumulative !== undefined) hinted.cumulativeAmount = contextCumulative
-      rememberChannel(key, hinted)
-      notifyUpdate(hinted)
-      return hinted
-    }
-
-    const recovered = await tryRecoverChannel(client, escrowContract, suggestedChannelId, chainId)
-    if (!recovered) return undefined
+    if (!hinted) return undefined
 
     const contextCumulative = getContextCumulative(context)
-    if (contextCumulative !== undefined) recovered.cumulativeAmount = contextCumulative
-    rememberChannel(key, recovered)
-    notifyUpdate(recovered)
-    return recovered
+    if (contextCumulative !== undefined) hinted.cumulativeAmount = contextCumulative
+    rememberChannel(key, hinted)
+    notifyUpdate(hinted)
+    return hinted
   }
 
   function reconcileReceipt(receipt: SessionReceipt) {
@@ -201,7 +226,7 @@ export function session(parameters: session.Parameters = {}) {
     if (!key) return
 
     const entry = channels.get(key)
-    if (!entry) return
+    if (!entry || entry.channelId !== receipt.channelId) return
 
     if (reconcileChannelReceipt(entry, receipt)) notifyUpdate(entry)
   }
@@ -242,7 +267,7 @@ export function session(parameters: session.Parameters = {}) {
     const suggestedChannelId = (context?.channelId ?? md?.channelId) as Hex.Hex | undefined
 
     if (entry && suggestedChannelId && entry.channelId !== suggestedChannelId) {
-      entry = await resolveSuggestedChannel({
+      const rebound = await resolveSuggestedChannel({
         challenge,
         chainId,
         client,
@@ -251,6 +276,7 @@ export function session(parameters: session.Parameters = {}) {
         key,
         suggestedChannelId,
       })
+      if (rebound) entry = rebound
     }
 
     if (!entry) {
@@ -263,11 +289,12 @@ export function session(parameters: session.Parameters = {}) {
           escrowContract,
           key,
           suggestedChannelId,
+          allowHintHydration: true,
         })
 
-        if (!entry && context?.channelId) {
+        if (!entry) {
           throw new Error(
-            `Channel ${context.channelId} cannot be reused (closed or not found on-chain).`,
+            `Channel ${suggestedChannelId} cannot be reused (closed or not found on-chain).`,
           )
         }
       }
@@ -287,10 +314,7 @@ export function session(parameters: session.Parameters = {}) {
     let payload: SessionCredentialPayload
 
     if (entry?.opened) {
-      const nextCumulative = entry.cumulativeAmount + amount
-      const requiredCumulative = md?.requiredCumulative ? BigInt(md.requiredCumulative) : 0n
-      entry.cumulativeAmount =
-        nextCumulative > requiredCumulative ? nextCumulative : requiredCumulative
+      entry.cumulativeAmount += amount
       payload = await createVoucherPayload(
         client,
         account,
