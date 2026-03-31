@@ -33,4 +33,22 @@ describe('Proof', () => {
     const address = '0xAbCdEf1234567890AbCdEf1234567890AbCdEf12'
     expect(Proof.proofSource({ address, chainId: 1 })).toBe(`did:pkh:eip155:1:${address}`)
   })
+
+  test('parseProofSource parses a valid did:pkh:eip155 source', () => {
+    const address = '0xa5cc3c03994db5b0d9ba5e4f6d2efbd9f213b141'
+
+    expect(Proof.parseProofSource(`did:pkh:eip155:42431:${address}`)).toEqual({
+      address,
+      chainId: 42431,
+    })
+  })
+
+  test('parseProofSource rejects malformed sources', () => {
+    expect(Proof.parseProofSource('did:pkh:eip155:not-a-number:0x1234')).toBeNull()
+    expect(
+      Proof.parseProofSource(
+        'did:pkh:eip155:42431:0xAbCdEf1234567890AbCdEf1234567890AbCdEf12:extra',
+      ),
+    ).toBeNull()
+  })
 })

@@ -159,11 +159,19 @@ export function charge<const parameters extends charge.Parameters>(
           if (!expectedSource)
             throw new MismatchError('Proof credential must include a source.', {})
 
-          const sourceAddress = expectedSource.split(':').pop() as `0x${string}`
           const resolvedChainId = challenge.request.methodDetails?.chainId ?? chainId!
+          const source = Proof.parseProofSource(expectedSource)
+
+          if (
+            !source ||
+            source.chainId !== resolvedChainId ||
+            Proof.proofSource(source) !== expectedSource
+          ) {
+            throw new MismatchError('Proof credential source is invalid.', {})
+          }
 
           const valid = await verifyTypedData(client, {
-            address: sourceAddress,
+            address: source.address,
             domain: Proof.domain(resolvedChainId),
             types: Proof.types,
             primaryType: 'Proof',
