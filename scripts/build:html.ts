@@ -17,6 +17,9 @@ for (const entry of htmlEntries) {
 
   await build({
     input: path.resolve(root, entry),
+    resolve: {
+      alias: { 'mppx/client': path.resolve(root, 'src/client/index.ts') },
+    },
     transform: {
       define: {
         __LOCAL_ACCOUNT__: JSON.stringify(process.env.LOCAL_ACCOUNT ?? ''),
