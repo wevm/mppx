@@ -90,6 +90,35 @@ function createChallengeHints(
   }
 }
 
+function resolveRequestedPayer(
+  source: string | undefined,
+  chainId: number,
+): Address | null | undefined {
+  if (!source) return undefined
+
+  const payer = Proof.parseProofSource(source)
+  if (!payer || payer.chainId !== chainId) return null
+  return payer.address
+}
+
+function matchesRequestedChannel(parameters: {
+  channel: ChannelStore.State
+  request: { currency: Address; recipient: Address }
+  resolvedEscrow: Address
+  chainId: number
+  payer?: Address | undefined
+}): boolean {
+  const { channel, chainId, payer, request, resolvedEscrow } = parameters
+
+  if (channel.chainId !== chainId) return false
+  if (channel.escrowContract.toLowerCase() !== resolvedEscrow.toLowerCase()) return false
+  if (channel.payee.toLowerCase() !== request.recipient.toLowerCase()) return false
+  if (channel.token.toLowerCase() !== request.currency.toLowerCase()) return false
+  if (payer && channel.payer.toLowerCase() !== payer.toLowerCase()) return false
+
+  return true
+}
+
 async function findRequestedChannel(parameters: {
   amount: bigint
   request: { channelId?: Hex | undefined; currency: Address; recipient: Address }
@@ -99,22 +128,34 @@ async function findRequestedChannel(parameters: {
   store: ChannelStore.ChannelStore
 }): Promise<ChannelStore.State | null> {
   const { amount, chainId, request, resolvedEscrow, source, store } = parameters
+  const payer = resolveRequestedPayer(source, chainId)
+  if (source && !payer) return null
 
   if (request.channelId) {
-    return store.getChannel(request.channelId)
+    const channel = await store.getChannel(request.channelId)
+    if (!channel) return null
+    if (
+      !matchesRequestedChannel({
+        channel,
+        chainId,
+        ...(payer ? { payer } : {}),
+        request,
+        resolvedEscrow,
+      })
+    ) {
+      return null
+    }
+    return channel
   }
 
-  if (!source) return null
-
-  const payer = Proof.parseProofSource(source)
-  if (!payer || payer.chainId !== chainId) return null
+  if (!payer) return null
 
   return ChannelStore.findReusableChannel(store, {
     amount,
     chainId,
     escrowContract: resolvedEscrow,
     payee: request.recipient,
-    payer: payer.address,
+    payer,
     token: request.currency,
   })
 }
@@ -220,7 +261,7 @@ export function session<const parameters extends session.Parameters>(
         defaults.escrowContract[chainId as keyof typeof defaults.escrowContract]
 
       const amount = parseUnits(request.amount, request.decimals ?? decimals)
-      const source = await parameters.resolveSource?.({ credential, input, request })
+      const source = await parameters.resolveSource?.({ input, request })
       const requestedChannel = await findRequestedChannel({
         amount,
         chainId: chainId as number,
@@ -386,7 +427,6 @@ export declare namespace session {
      */
     resolveSource?:
       | ((options: {
-          credential?: Credential.Credential | null | undefined
           input?: globalThis.Request | undefined
           request: Method.RequestDefaults<typeof Methods.session>
         }) => MaybePromise<string | undefined>)
