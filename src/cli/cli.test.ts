@@ -12,7 +12,9 @@ import { rpcUrl } from '~test/tempo/prool.js'
 import { deployEscrow } from '~test/tempo/session.js'
 import { accounts, asset, chain, client, fundAccount } from '~test/tempo/viem.js'
 
+import * as Challenge from '../Challenge.js'
 import * as Credential from '../Credential.js'
+import * as Receipt from '../Receipt.js'
 import * as Mppx_server from '../server/Mppx.js'
 import { toNodeListener } from '../server/Mppx.js'
 import * as Store from '../Store.js'
@@ -328,7 +330,7 @@ describe('basic charge (examples/basic)', () => {
   })
 
   test(
-    'repro: zero-amount charge fails during credential creation',
+    'zero-amount charge uses a proof credential and receives response',
     { timeout: 120_000 },
     async () => {
       const server = Mppx_server.create({
@@ -336,8 +338,10 @@ describe('basic charge (examples/basic)', () => {
         realm: 'localhost',
         secretKey: 'cli-test-secret',
       })
+      let authorization: string | undefined
 
       const httpServer = await Http.createServer(async (req, res) => {
+        authorization = req.headers.authorization
         const result = await toNodeListener(
           server.charge({
             amount: '0',
@@ -347,17 +351,23 @@ describe('basic charge (examples/basic)', () => {
           }),
         )(req, res)
         if (result.status === 402) return
-        res.end('unexpected-success')
+        res.end('zero-dollar-paid')
       })
 
       try {
         const { output, exitCode } = await serve([httpServer.url, '--rpc-url', rpcUrl, '-s'], {
           env: { MPPX_PRIVATE_KEY: testPrivateKey },
         })
-        expect(exitCode).toBe(1)
-        expect(output).toContain('REQUEST_FAILED')
-        expect(output).toContain('split total must be less than total amount')
-        expect(output).not.toContain('unexpected-success')
+        expect(exitCode).toBeUndefined()
+        expect(output).toContain('zero-dollar-paid')
+
+        const credential = Credential.deserialize<{ signature: string; type: 'proof' }>(
+          authorization!,
+        )
+        expect(credential.challenge.request.amount).toBe('0')
+        expect(credential.payload.type).toBe('proof')
+        expect(credential.payload.signature).toMatch(/^0x/)
+        expect(credential.source).toBe(`did:pkh:eip155:${chain.id}:${testAccount.address}`)
       } finally {
         httpServer.close()
       }
@@ -365,7 +375,7 @@ describe('basic charge (examples/basic)', () => {
   )
 
   test(
-    'repro: zero-amount charge with testnet currency omission still fails during credential creation',
+    'zero-amount charge with testnet currency omission uses a proof credential',
     { timeout: 120_000 },
     async () => {
       const isTestnet = true
@@ -382,8 +392,10 @@ describe('basic charge (examples/basic)', () => {
         realm: 'localhost',
         secretKey: 'cli-test-secret',
       })
+      let authorization: string | undefined
 
       const httpServer = await Http.createServer(async (req, res) => {
+        authorization = req.headers.authorization
         const result = await toNodeListener(
           server.charge({
             amount: '0',
@@ -393,17 +405,25 @@ describe('basic charge (examples/basic)', () => {
           }),
         )(req, res)
         if (result.status === 402) return
-        res.end('unexpected-success')
+        res.end('zero-dollar-testnet-paid')
       })
 
       try {
         const { output, exitCode } = await serve([httpServer.url, '--rpc-url', rpcUrl, '-s'], {
           env: { MPPX_PRIVATE_KEY: testPrivateKey },
         })
-        expect(exitCode).toBe(1)
-        expect(output).toContain('REQUEST_FAILED')
-        expect(output).toContain('split total must be less than total amount')
-        expect(output).not.toContain('unexpected-success')
+        expect(exitCode).toBeUndefined()
+        expect(output).toContain('zero-dollar-testnet-paid')
+
+        const credential = Credential.deserialize<{ signature: string; type: 'proof' }>(
+          authorization!,
+        )
+        expect(credential.challenge.request.amount).toBe('0')
+        expect(credential.challenge.request.currency).toBe(
+          '0x20c0000000000000000000000000000000000000',
+        )
+        expect(credential.payload.type).toBe('proof')
+        expect(credential.source).toBe(`did:pkh:eip155:${chain.id}:${testAccount.address}`)
       } finally {
         httpServer.close()
       }
@@ -1129,4 +1149,130 @@ describe('sign', () => {
     const parsed = JSON.parse(output.trim())
     expect(parsed.authorization).toMatch(/^Payment\s+\S+/)
   })
+
+  test(
+    'happy path: zero-amount challenge returns proof authorization accepted by live server',
+    { timeout: 120_000 },
+    async () => {
+      const server = Mppx_server.create({
+        methods: [tempo.charge({ getClient: () => client })],
+        realm: 'cli-sign-zero',
+        secretKey: 'cli-test-secret',
+      })
+
+      const httpServer = await Http.createServer(async (req, res) => {
+        const result = await toNodeListener(
+          server.charge({
+            amount: '0',
+            currency: asset,
+            expires: new Date(Date.now() + 60_000).toISOString(),
+            recipient: accounts[0].address,
+          }),
+        )(req, res)
+        if (result.status === 402) return
+        res.end('zero-dollar-live-sign')
+      })
+
+      try {
+        const challengeResponse = await fetch(httpServer.url)
+        expect(challengeResponse.status).toBe(402)
+        const challenge = Challenge.fromResponse(challengeResponse)
+
+        const { output, exitCode } = await serve(
+          ['sign', '--challenge', Challenge.serialize(challenge), '--rpc-url', rpcUrl],
+          { env: { MPPX_PRIVATE_KEY: testPrivateKey } },
+        )
+
+        expect(exitCode).toBeUndefined()
+
+        const authorization = output.trim()
+        const credential = Credential.deserialize<{ signature: string; type: 'proof' }>(
+          authorization,
+        )
+        expect(credential.challenge.request.amount).toBe('0')
+        expect(credential.payload.type).toBe('proof')
+        expect(credential.source).toBe(`did:pkh:eip155:${chain.id}:${testAccount.address}`)
+
+        const response = await fetch(httpServer.url, {
+          headers: { Authorization: authorization },
+        })
+        expect(response.status).toBe(200)
+        expect(await response.text()).toBe('zero-dollar-live-sign')
+
+        const receipt = Receipt.fromResponse(response)
+        expect(receipt.reference).toBe(credential.challenge.id)
+      } finally {
+        httpServer.close()
+      }
+    },
+  )
+
+  test(
+    'happy path: zero-amount testnet challenge without explicit currency is accepted by live server',
+    { timeout: 120_000 },
+    async () => {
+      const isTestnet = true
+      const mainnetCurrency = '0x20C00000000000000000000b9537d11c60E8b50' as `0x${string}`
+
+      const server = Mppx_server.create({
+        methods: [
+          tempo.charge({
+            getClient: () => client,
+            ...(isTestnet ? {} : { currency: mainnetCurrency }),
+            testnet: isTestnet,
+          }),
+        ],
+        realm: 'cli-sign-zero-testnet',
+        secretKey: 'cli-test-secret',
+      })
+
+      const httpServer = await Http.createServer(async (req, res) => {
+        const result = await toNodeListener(
+          server.charge({
+            amount: '0',
+            chainId: chain.id,
+            expires: new Date(Date.now() + 60_000).toISOString(),
+            recipient: accounts[0].address,
+          }),
+        )(req, res)
+        if (result.status === 402) return
+        res.end('zero-dollar-live-sign-testnet')
+      })
+
+      try {
+        const challengeResponse = await fetch(httpServer.url)
+        expect(challengeResponse.status).toBe(402)
+        const challenge = Challenge.fromResponse(challengeResponse)
+
+        const { output, exitCode } = await serve(
+          ['sign', '--challenge', Challenge.serialize(challenge), '--rpc-url', rpcUrl],
+          { env: { MPPX_PRIVATE_KEY: testPrivateKey } },
+        )
+
+        expect(exitCode).toBeUndefined()
+
+        const authorization = output.trim()
+        const credential = Credential.deserialize<{ signature: string; type: 'proof' }>(
+          authorization,
+        )
+        expect(credential.challenge.request.amount).toBe('0')
+        expect(credential.challenge.request.currency).toBe(
+          '0x20c0000000000000000000000000000000000000',
+        )
+        expect(credential.payload.type).toBe('proof')
+        expect(credential.source).toBe(`did:pkh:eip155:${chain.id}:${testAccount.address}`)
+
+        const response = await fetch(httpServer.url, {
+          headers: { Authorization: authorization },
+        })
+        expect(response.status).toBe(200)
+        expect(await response.text()).toBe('zero-dollar-live-sign-testnet')
+
+        const receipt = Receipt.fromResponse(response)
+        expect(receipt.reference).toBe(credential.challenge.id)
+      } finally {
+        httpServer.close()
+      }
+    },
+  )
 })

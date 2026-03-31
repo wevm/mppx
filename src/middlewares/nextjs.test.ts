@@ -1,6 +1,6 @@
 import * as http from 'node:http'
 
-import { Challenge, Receipt } from 'mppx'
+import { Challenge, Credential, Receipt } from 'mppx'
 import { Mppx as Mppx_client, session as sessionIntent, tempo as tempo_client } from 'mppx/client'
 import { Mppx, discovery } from 'mppx/nextjs'
 import { tempo as tempo_server } from 'mppx/server'
@@ -114,7 +114,7 @@ describe('charge', () => {
     server.close()
   })
 
-  test('zero-amount repro: fetch rejects during credential creation', async () => {
+  test('zero-amount charge creates a proof credential and receipt', async () => {
     const { fetch, mppx } = createChargeHarness(false)
 
     const handler = mppx.charge({ amount: '0' })((request) =>
@@ -126,14 +126,22 @@ describe('charge', () => {
     const challengeResponse = await globalThis.fetch(server.url)
     expect(challengeResponse.status).toBe(402)
 
-    await expect(fetch(server.url)).rejects.toThrow(
-      'Invalid charge request: split total must be less than total amount.',
-    )
+    const response = await fetch(server.url)
+    expect(response.status).toBe(200)
+
+    const body = (await response.json()) as { payer: string }
+    const credential = Credential.deserialize<{ signature: string; type: 'proof' }>(body.payer)
+    expect(credential.challenge.request.amount).toBe('0')
+    expect(credential.payload.type).toBe('proof')
+    expect(credential.source).toBe(`did:pkh:eip155:${chain.id}:${accounts[1].address}`)
+
+    const receipt = Receipt.fromResponse(response)
+    expect(receipt.reference).toBe(credential.challenge.id)
 
     server.close()
   })
 
-  test('zero-amount repro: testnet currency omission still issues a challenge before failing', async () => {
+  test('zero-amount charge with testnet currency omission creates a proof credential', async () => {
     const isTestnet = true
     const mainnetCurrency = '0x20C000000000000000000000b9537d11c60E8b50' as const
 
@@ -160,8 +168,8 @@ describe('charge', () => {
       ],
     })
 
-    const handler = mppx.charge({ amount: '0', chainId: chain.id })(() =>
-      Response.json({ ok: true }),
+    const handler = mppx.charge({ amount: '0', chainId: chain.id })((request) =>
+      Response.json({ payer: request.headers.get('Authorization') }),
     )
 
     const server = await createServer(handler)
@@ -174,9 +182,20 @@ describe('charge', () => {
     })
     expect(challenge.request.currency).toBe('0x20c0000000000000000000000000000000000000')
 
-    await expect(fetch(server.url)).rejects.toThrow(
-      'Invalid charge request: split total must be less than total amount.',
+    const response = await fetch(server.url)
+    expect(response.status).toBe(200)
+
+    const body = (await response.json()) as { payer: string }
+    const credential = Credential.deserialize<{ signature: string; type: 'proof' }>(body.payer)
+    expect(credential.challenge.request.amount).toBe('0')
+    expect(credential.challenge.request.currency).toBe(
+      '0x20c0000000000000000000000000000000000000',
     )
+    expect(credential.payload.type).toBe('proof')
+    expect(credential.source).toBe(`did:pkh:eip155:${chain.id}:${accounts[1].address}`)
+
+    const receipt = Receipt.fromResponse(response)
+    expect(receipt.reference).toBe(credential.challenge.id)
 
     server.close()
   })
