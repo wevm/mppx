@@ -1,6 +1,6 @@
-import { local, Provider, Storage } from 'accounts'
+import { Provider } from 'accounts'
 import { Hex, Json } from 'ox'
-import { createClient, custom } from 'viem'
+import { createClient, custom, http } from 'viem'
 import { tempoModerato, tempoLocalnet } from 'viem/chains'
 import { Account } from 'viem/tempo'
 
@@ -12,29 +12,11 @@ import type * as Methods from '../../../Methods.js'
 const data = Json.parse(document.getElementById('__MPPX_DATA__')!.textContent) as {
   challenge: Challenge.FromMethods<[typeof Methods.charge]>
 }
-
-const localAccount = (typeof __LOCAL_ACCOUNT__ === 'string' && __LOCAL_ACCOUNT__) || undefined
+// Used for testing. TODO: Wire up more native way
+const localTempoAccount = __LOCAL_ACCOUNT__
+  ? Account.fromSecp256k1(__LOCAL_ACCOUNT__ as Hex.Hex)
+  : undefined
 declare const __LOCAL_ACCOUNT__: string | undefined
-
-const provider = Provider.create({
-  testnet:
-    data.challenge.request.methodDetails?.chainId === tempoModerato.id ||
-    data.challenge.request.methodDetails?.chainId === tempoLocalnet.id,
-  ...(localAccount
-    ? {
-        adapter: local({
-          loadAccounts: async () => ({
-            accounts: [Account.fromSecp256k1(localAccount as Hex.Hex)],
-          }),
-        }),
-        storage: Storage.memory(),
-      }
-    : undefined),
-})
-const chain =
-  provider.chains.find((x) => x.id === data.challenge.request.methodDetails?.chainId) ??
-  provider.chains.at(0)
-const client = createClient({ chain, transport: custom(provider) })
 
 const root = document.getElementById('root')!
 
@@ -47,9 +29,37 @@ button.textContent = 'Continue with Tempo'
 button.onclick = async () => {
   try {
     button.disabled = true
-    const result = await provider.request({ method: 'wallet_connect' })
-    const account = result.accounts[0]!.address
+
+    const provider = (() => {
+      if (localTempoAccount) return undefined
+      return Provider.create({
+        testnet:
+          data.challenge.request.methodDetails?.chainId === tempoModerato.id ||
+          data.challenge.request.methodDetails?.chainId === tempoLocalnet.id,
+      })
+    })()
+
+    const client = (() => {
+      // TODO: provider.chains
+      const chain = [...(provider?.chains ?? []), tempoModerato, tempoLocalnet].find(
+        (x) => x.id === data.challenge.request.methodDetails?.chainId,
+      )
+      if (localTempoAccount || !provider)
+        return createClient({
+          account: localTempoAccount,
+          chain,
+          transport: http(chain?.rpcUrls.default.http[0]),
+        })
+      return createClient({ chain, transport: custom(provider) })
+    })()
+
+    const account = await (async () => {
+      if (localTempoAccount || !provider) return localTempoAccount
+      const res = await provider.request({ method: 'wallet_connect' })
+      return res.accounts[0]!.address
+    })()
     const method = tempo({ account, getClient: () => client })[0]
+
     const credential = await method.createCredential({ challenge: data.challenge, context: {} })
     await submitCredential(credential)
   } finally {

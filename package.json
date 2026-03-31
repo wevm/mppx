@@ -6,6 +6,7 @@
     "check": "vp lint --fix && vp fmt --write .",
     "check:ci": "vp lint && vp fmt --check .",
     "check:types": "tsgo -b",
+    "check:types:html": "tsgo -p src/tempo/server/internal/html/tsconfig.json && tsgo -p src/stripe/server/internal/html/tsconfig.json",
     "check:types:examples": "pnpm -r --filter './examples/**' run check:types",
     "deps": "pnpx taze -r --no-ignore-other-workspaces --ignore-paths node_modules",
     "deps:ci": "pnpx actions-up",

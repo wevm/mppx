@@ -43,7 +43,7 @@ jobs:
         run: pnpm check:ci
 
       - name: Check types
-        run: pnpm dev && pnpm exec tsx scripts/build:html.ts && pnpm check:types && pnpm check:types:examples
+        run: pnpm dev && pnpm exec tsx scripts/build:html.ts && pnpm check:types && pnpm check:types:html && pnpm check:types:examples
 
   test:
     name: Test Runtime

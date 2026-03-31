@@ -2,10 +2,7 @@ import net from 'node:net'
 
 import { defineConfig } from '@playwright/test'
 
-const project = process.argv.find((_, i, a) => a[i - 1] === '--project')
-
-const tempoPort = await getPort('_MPPX_TEMPO_PORT')
-const stripePort = await getPort('_MPPX_STRIPE_PORT')
+const port = await getPort('_MPPX_HTML_PORT')
 
 export default defineConfig({
   globalSetup: './globalSetup.ts',
@@ -19,36 +16,14 @@ export default defineConfig({
   projects: [
     {
       name: 'tempo',
-      testMatch: 'charge.test.ts',
-      use: { baseURL: `http://localhost:${tempoPort}` },
+      testMatch: 'tempo.test.ts',
+      use: { baseURL: `http://localhost:${port}` },
     },
     {
       name: 'stripe',
       testMatch: 'stripe.test.ts',
-      use: { baseURL: `http://localhost:${stripePort}` },
+      use: { baseURL: `http://localhost:${port}` },
     },
-  ],
-  webServer: [
-    ...(!project || project === 'tempo'
-      ? [
-          {
-            command: `pnpm --filter charge dev -- --port ${tempoPort}`,
-            port: tempoPort,
-            reuseExistingServer: false,
-            timeout: 30_000,
-          },
-        ]
-      : []),
-    ...(!project || project === 'stripe'
-      ? [
-          {
-            command: `pnpm --filter stripe dev -- --port ${stripePort}`,
-            port: stripePort,
-            reuseExistingServer: false,
-            timeout: 30_000,
-          },
-        ]
-      : []),
   ],
 })
 

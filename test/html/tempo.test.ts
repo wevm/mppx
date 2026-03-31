@@ -16,7 +16,7 @@ test('charge via html payment page', async ({ page, context }) => {
   context.on('serviceworker', (sw) => logs.push(`[serviceworker] registered: ${sw.url()}`))
 
   // Navigate to the payment endpoint as a browser
-  await page.goto('/api/photo', {
+  await page.goto('/tempo/charge', {
     waitUntil: 'domcontentloaded',
   })
 
@@ -37,7 +37,7 @@ test('charge via html payment page', async ({ page, context }) => {
 })
 
 test('service worker endpoint returns javascript', async ({ page }) => {
-  const response = await page.goto('/api/photo?__mppx_worker')
+  const response = await page.goto('/tempo/charge?__mppx_worker')
   expect(response?.headers()['content-type']).toContain('application/javascript')
   expect(response?.status()).toBe(200)
 })

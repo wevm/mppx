@@ -15,7 +15,7 @@ test('charge via stripe html payment page', async ({ page, context }) => {
   )
   context.on('serviceworker', (sw) => logs.push(`[serviceworker] registered: ${sw.url()}`))
 
-  await page.goto('/api/fortune', {
+  await page.goto('/stripe/charge', {
     waitUntil: 'domcontentloaded',
   })
 
@@ -61,7 +61,7 @@ test('charge via stripe html payment page', async ({ page, context }) => {
 })
 
 test('service worker endpoint returns javascript', async ({ page }) => {
-  const response = await page.goto('/api/fortune?__mppx_worker')
+  const response = await page.goto('/stripe/charge?__mppx_worker')
   expect(response?.headers()['content-type']).toContain('application/javascript')
   expect(response?.status()).toBe(200)
 })
