@@ -2,9 +2,11 @@ import { loadStripe } from '@stripe/stripe-js'
 
 import type * as Challenge from '../../../../Challenge.js'
 import { stripe } from '../../../../client/index.js'
+import type { charge } from '../../../../stripe/server/Charge.js'
 import type * as Methods from '../../../Methods.js'
 
 const data = JSON.parse(document.getElementById('__MPPX_DATA__')!.textContent!) as {
+  config: NonNullable<charge.Parameters['html']>
   challenge: Challenge.FromMethods<[typeof Methods.charge]>
 }
 
@@ -15,9 +17,9 @@ h2.textContent = 'stripe'
 root.appendChild(h2)
 
 ;(async () => {
-  const stripeJs = (await loadStripe(
-    'pk_test_51SzNfEGlV7dYX3N7FwZQBlWCF5wIqakWKw8lk1e4Saf0b2H4exVG5bBCAopgPQvo9QhU5TNsBuuIFbXSrvbBjut50090YN7Xip',
-  ))!
+  const stripeJs = (await loadStripe(data.config.publishableKey))!
+  if (!stripeJs) throw new Error('Failed to loadStripe')
+
   const darkQuery = window.matchMedia('(prefers-color-scheme: dark)')
   const getAppearance = () => ({
     theme: (darkQuery.matches ? 'night' : 'stripe') as 'night' | 'stripe',
@@ -56,7 +58,7 @@ root.appendChild(h2)
       const method = stripe({
         client: stripeJs,
         createToken: async (opts) => {
-          const res = await fetch('/api/create-spt', {
+          const res = await fetch(data.config.createTokenUrl, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ paymentMethod, ...opts }),

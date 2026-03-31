@@ -61,7 +61,7 @@ export function charge<const parameters extends charge.Parameters>(parameters: p
       paymentMethodTypes,
     } as unknown as Defaults,
 
-    html: html ? { content: htmlContent } : undefined,
+    html: html ? { config: html, content: htmlContent } : undefined,
 
     async verify({ credential }) {
       const { challenge } = credential
@@ -113,7 +113,7 @@ export declare namespace charge {
 
   type Parameters = {
     /** Render payment page when Accept header is text/html (e.g. in browsers) */
-    html?: boolean | undefined
+    html?: { createTokenUrl: string; publishableKey: string } | undefined
     /** Optional metadata to include in SPT creation requests. */
     metadata?: Record<string, string> | undefined
   } & Defaults &

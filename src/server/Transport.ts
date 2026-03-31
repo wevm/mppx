@@ -135,7 +135,10 @@ export function http(): Http {
       const body = (() => {
         if (options.html && input.headers.get('Accept')?.includes('text/html')) {
           headers['Content-Type'] = 'text/html; charset=utf-8'
-          const data = Json.stringify({ challenge }).replace(/</g, '\\u003c')
+          const data = Json.stringify({ config: options.html.config, challenge }).replace(
+            /</g,
+            '\\u003c',
+          )
           const html = String.raw
           return html`<!doctype html>
             <html lang="en">

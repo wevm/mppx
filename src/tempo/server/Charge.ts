@@ -73,7 +73,7 @@ export function charge<const parameters extends charge.Parameters>(
       recipient,
     } as unknown as Defaults,
 
-    html: html ? { content: htmlContent } : undefined,
+    html: html ? { config: {}, content: htmlContent } : undefined,
 
     // TODO: dedupe `{charge,session}.request`
     async request({ credential, request }) {

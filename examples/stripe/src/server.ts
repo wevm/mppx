@@ -9,7 +9,10 @@ const mppx = Mppx.create({
   methods: [
     stripe.charge({
       client: stripeClient,
-      html: true,
+      html: {
+        publishableKey: process.env.VITE_STRIPE_PUBLIC_KEY!,
+        createTokenUrl: '/api/create-spt',
+      },
       // Stripe Business Network profile ID.
       networkId: 'internal',
       // Ensure only card is supported.
