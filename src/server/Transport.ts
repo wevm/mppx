@@ -6,7 +6,8 @@ import * as Errors from '../Errors.js'
 import type { Distribute, UnionToIntersection } from '../internal/types.js'
 import * as core_Mcp from '../Mcp.js'
 import * as Receipt from '../Receipt.js'
-import type * as Html from './internal/html.js'
+import { serviceWorker } from './internal/html/serviceWorker.gen.js'
+import type * as Html from './internal/html/types.js'
 
 export { type McpSdk, mcpSdk } from '../mcp-sdk/server/Transport.js'
 
@@ -127,6 +128,16 @@ export function http(): Http {
 
     respondChallenge(options) {
       const { challenge, error, input } = options
+
+      if (options.html && new URL(input.url).searchParams.has('__mppx_worker'))
+        return new Response(serviceWorker, {
+          status: 200,
+          headers: {
+            'Content-Type': 'application/javascript',
+            'Cache-Control': 'no-store',
+          },
+        })
+
       const headers: Record<string, string> = {
         'WWW-Authenticate': Challenge.serialize(challenge),
         'Cache-Control': 'no-store',

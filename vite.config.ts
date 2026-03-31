@@ -109,7 +109,7 @@ export default defineConfig({
       'no-control-regex': 'off',
     },
     settings: {
-      polyfills: ['PaymentRequest', 'URLPattern', 'crypto'],
+      polyfills: ['PaymentRequest', 'URLPattern', 'crypto', 'navigator'],
     },
     overrides: [
       {

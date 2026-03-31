@@ -6,5 +6,10 @@
     "strict": true
   },
   "files": [],
-  "references": [{ "path": "./src" }, { "path": "./test" }]
+  "references": [
+    { "path": "./src" },
+    { "path": "./src/server/internal/html/tsconfig.worker.client.json" },
+    { "path": "./src/server/internal/html/tsconfig.worker.json" },
+    { "path": "./test" }
+  ]
 }

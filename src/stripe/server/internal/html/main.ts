@@ -2,6 +2,7 @@ import { loadStripe } from '@stripe/stripe-js'
 
 import type * as Challenge from '../../../../Challenge.js'
 import { stripe } from '../../../../client/index.js'
+import { submitCredential } from '../../../../server/internal/html/serviceWorker.client.js'
 import type { charge } from '../../../../stripe/server/Charge.js'
 import type * as Methods from '../../../Methods.js'
 
@@ -74,10 +75,7 @@ root.appendChild(h2)
         context: { paymentMethod: paymentMethod.id },
       })
 
-      const res = await fetch(location.pathname, {
-        headers: { Authorization: credential },
-      })
-      console.log(await res.json())
+      await submitCredential(credential)
     } finally {
       button.disabled = false
     }
