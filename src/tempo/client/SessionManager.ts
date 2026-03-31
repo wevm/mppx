@@ -163,6 +163,7 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
       updateSpentFromReceipt(receipt)
       return
     }
+    if (channel) return
     spent = BigInt(receipt.spent)
   }
 
