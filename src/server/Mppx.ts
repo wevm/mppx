@@ -279,7 +279,7 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
         // Transform request if method provides a `request` function.
         const request = (
           parameters.request
-            ? await parameters.request({ credential, request: merged } as never)
+            ? await parameters.request({ credential, input, request: merged } as never)
             : merged
         ) as never
 

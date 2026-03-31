@@ -2630,6 +2630,112 @@ describe.runIf(isLocalnet)('session', () => {
   })
 
   describe('respond', () => {
+    test('request() discovers reusable channel hints from resolved payer source', async () => {
+      const channelId = '0x00000000000000000000000000000000000000000000000000000000000000ac' as Hex
+      await store.updateChannel(channelId, () => ({
+        channelId,
+        payer: payer.address,
+        payee: recipient,
+        token: currency,
+        authorizedSigner: payer.address,
+        chainId: chain.id,
+        escrowContract,
+        deposit: 10_000_000n,
+        settledOnChain: 0n,
+        highestVoucherAmount: 5_000_000n,
+        highestVoucher: {
+          channelId,
+          cumulativeAmount: 5_000_000n,
+          signature: '0xdeadbeef' as Hex,
+        },
+        spent: 5_000_000n,
+        units: 5,
+        closeRequestedAt: 0n,
+        finalized: false,
+        createdAt: new Date().toISOString(),
+      }))
+
+      const server = createServer({
+        resolveSource: () => `did:pkh:eip155:${chain.id}:${payer.address}`,
+      })
+      const request = await server.request!({
+        credential: undefined,
+        input: new Request('http://localhost'),
+        request: {
+          ...makeRequest(),
+          amount: '1',
+        },
+      })
+
+      expect(request.channelId).toBe(channelId)
+      expect(request.acceptedCumulative).toBe('5000000')
+      expect(request.deposit).toBe('10000000')
+      expect(request.requiredCumulative).toBe('6000000')
+      expect(request.spent).toBe('5000000')
+    })
+
+    test('request() keeps explicit channelId as the discovery fast path', async () => {
+      const explicitChannelId =
+        '0x00000000000000000000000000000000000000000000000000000000000000ad' as Hex
+      const discoveredChannelId =
+        '0x00000000000000000000000000000000000000000000000000000000000000ae' as Hex
+
+      await store.updateChannel(explicitChannelId, () => ({
+        channelId: explicitChannelId,
+        payer: payer.address,
+        payee: recipient,
+        token: currency,
+        authorizedSigner: payer.address,
+        chainId: chain.id,
+        escrowContract,
+        deposit: 8_000_000n,
+        settledOnChain: 0n,
+        highestVoucherAmount: 4_000_000n,
+        highestVoucher: null,
+        spent: 4_000_000n,
+        units: 4,
+        closeRequestedAt: 0n,
+        finalized: false,
+        createdAt: '2025-01-01T00:00:00.000Z',
+      }))
+      await store.updateChannel(discoveredChannelId, () => ({
+        channelId: discoveredChannelId,
+        payer: payer.address,
+        payee: recipient,
+        token: currency,
+        authorizedSigner: payer.address,
+        chainId: chain.id,
+        escrowContract,
+        deposit: 12_000_000n,
+        settledOnChain: 0n,
+        highestVoucherAmount: 6_000_000n,
+        highestVoucher: null,
+        spent: 6_000_000n,
+        units: 6,
+        closeRequestedAt: 0n,
+        finalized: false,
+        createdAt: '2025-02-01T00:00:00.000Z',
+      }))
+
+      const server = createServer({
+        resolveSource: () => `did:pkh:eip155:${chain.id}:${payer.address}`,
+      })
+      const request = await server.request!({
+        credential: undefined,
+        input: new Request('http://localhost'),
+        request: {
+          ...makeRequest(),
+          amount: '1',
+          channelId: explicitChannelId,
+        },
+      })
+
+      expect(request.channelId).toBe(explicitChannelId)
+      expect(request.acceptedCumulative).toBe('4000000')
+      expect(request.requiredCumulative).toBe('5000000')
+      expect(request.spent).toBe('4000000')
+    })
+
     test('request() adds reusable channel hints to challenge data', async () => {
       const channelId = '0x00000000000000000000000000000000000000000000000000000000000000aa' as Hex
       await store.updateChannel(channelId, () => ({
