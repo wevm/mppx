@@ -6,8 +6,8 @@ import * as Errors from '../Errors.js'
 import type { Distribute, UnionToIntersection } from '../internal/types.js'
 import * as core_Mcp from '../Mcp.js'
 import * as Receipt from '../Receipt.js'
+import * as Html from './internal/html/config.js'
 import { serviceWorker } from './internal/html/serviceWorker.gen.js'
-import type * as Html from './internal/html/types.js'
 
 export { type McpSdk, mcpSdk } from '../mcp-sdk/server/Transport.js'
 
@@ -172,7 +172,7 @@ ${Json.stringify(challenge, null, 2)
                     .replace(/>/g, '&gt;')}</pre
                 >
                 <div id="root"></div>
-                <script id="__MPPX_DATA__" type="application/json">
+                <script id="${Html.dataId}" type="application/json">
                   ${data}
                 </script>
                 ${options.html.content}

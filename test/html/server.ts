@@ -12,32 +12,9 @@ export async function startServer(port: number): Promise<HtmlTestServer> {
   const stripeSecretKey = process.env.VITE_STRIPE_SECRET_KEY
   if (!stripeSecretKey) throw new Error('Missing VITE_STRIPE_SECRET_KEY')
 
-  const account = privateKeyToAccount(generatePrivateKey())
-  const tempoClient = createClient({
-    chain: tempoModerato,
-    pollingInterval: 1_000,
-    transport: createHttpTransport(process.env.MPPX_RPC_URL),
-  })
-  for (let attempt = 1; ; attempt++) {
-    try {
-      await Actions.faucet.fundSync(tempoClient, { account })
-      break
-    } catch (error) {
-      if (attempt >= 3) throw error
-    }
-  }
-
   const createTokenUrl = '/stripe/create-spt'
-  const mppx = Mppx.create({
+  const stripeMppx = Mppx.create({
     methods: [
-      tempo.charge({
-        account,
-        currency: '0x20c0000000000000000000000000000000000000',
-        feePayer: true,
-        html: true,
-        recipient: account.address,
-        testnet: true,
-      }),
       stripe.charge({
         html: {
           createTokenUrl,
@@ -50,16 +27,58 @@ export async function startServer(port: number): Promise<HtmlTestServer> {
     ],
     secretKey: 'test-html-server-secret-key',
   })
+  let tempoChargePromise: Promise<(request: Request) => Promise<any>> | undefined
+
+  async function getTempoCharge() {
+    if (!tempoChargePromise) {
+      tempoChargePromise = (async () => {
+        const account = privateKeyToAccount(generatePrivateKey())
+        const tempoClient = createClient({
+          chain: tempoModerato,
+          pollingInterval: 1_000,
+          transport: createHttpTransport(process.env.MPPX_RPC_URL),
+        })
+
+        for (let attempt = 1; ; attempt++) {
+          try {
+            await Actions.faucet.fundSync(tempoClient, { account })
+            break
+          } catch (error) {
+            if (attempt >= 3) throw error
+          }
+        }
+
+        const tempoMppx = Mppx.create({
+          methods: [
+            tempo.charge({
+              account,
+              currency: '0x20c0000000000000000000000000000000000000',
+              feePayer: true,
+              html: true,
+              recipient: account.address,
+              testnet: true,
+            }),
+          ],
+          secretKey: 'test-html-server-secret-key',
+        })
+
+        return tempoMppx.tempo.charge({
+          amount: '0.01',
+          description: 'Random stock photo',
+        })
+      })()
+    }
+
+    return await tempoChargePromise
+  }
 
   const server = http.createServer(
     ServerRequest.toNodeListener(async (request) => {
       const url = new URL(request.url)
 
       if (url.pathname === '/tempo/charge') {
-        const result = await mppx.tempo.charge({
-          amount: '0.01',
-          description: 'Random stock photo',
-        })(request)
+        const tempoCharge = await getTempoCharge()
+        const result = await tempoCharge(request)
 
         if (result.status === 402) return result.challenge
 
@@ -69,7 +88,7 @@ export async function startServer(port: number): Promise<HtmlTestServer> {
       if (url.pathname === createTokenUrl) return createSharedPaymentToken(request, stripeSecretKey)
 
       if (url.pathname === '/stripe/charge') {
-        const result = await mppx.stripe.charge({
+        const result = await stripeMppx.stripe.charge({
           amount: '1',
           currency: 'usd',
           decimals: 2,

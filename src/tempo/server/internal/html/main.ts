@@ -6,17 +6,13 @@ import { Account } from 'viem/tempo'
 
 import type * as Challenge from '../../../../Challenge.js'
 import { tempo } from '../../../../client/index.js'
+import * as Html from '../../../../server/internal/html/config.js'
 import { submitCredential } from '../../../../server/internal/html/serviceWorker.client.js'
 import type * as Methods from '../../../Methods.js'
 
-const data = Json.parse(document.getElementById('__MPPX_DATA__')!.textContent) as {
+const data = Json.parse(document.getElementById(Html.dataId)!.textContent) as {
   challenge: Challenge.FromMethods<[typeof Methods.charge]>
 }
-// Used for testing. TODO: Wire up more native way
-const localTempoAccount = __LOCAL_ACCOUNT__
-  ? Account.fromSecp256k1(__LOCAL_ACCOUNT__ as Hex.Hex)
-  : undefined
-declare const __LOCAL_ACCOUNT__: string | undefined
 
 const root = document.getElementById('root')!
 
@@ -24,23 +20,28 @@ const h2 = document.createElement('h2')
 h2.textContent = 'tempo'
 root.appendChild(h2)
 
+// Used for testing. TODO: Wire up more native way
+const localTempoAccount = __LOCAL_ACCOUNT__
+  ? Account.fromSecp256k1(__LOCAL_ACCOUNT__ as Hex.Hex)
+  : undefined
+declare const __LOCAL_ACCOUNT__: string | undefined
+
+const provider = (() => {
+  if (localTempoAccount) return undefined
+  return Provider.create({
+    testnet:
+      data.challenge.request.methodDetails?.chainId === tempoModerato.id ||
+      data.challenge.request.methodDetails?.chainId === tempoLocalnet.id,
+  })
+})()
+
 const button = document.createElement('button')
 button.textContent = 'Continue with Tempo'
 button.onclick = async () => {
   try {
     button.disabled = true
 
-    const provider = (() => {
-      if (localTempoAccount) return undefined
-      return Provider.create({
-        testnet:
-          data.challenge.request.methodDetails?.chainId === tempoModerato.id ||
-          data.challenge.request.methodDetails?.chainId === tempoLocalnet.id,
-      })
-    })()
-
     const client = (() => {
-      // TODO: provider.chains
       const chain = [...(provider?.chains ?? []), tempoModerato, tempoLocalnet].find(
         (x) => x.id === data.challenge.request.methodDetails?.chainId,
       )

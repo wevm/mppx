@@ -2,7 +2,7 @@ import type * as Challenge from './Challenge.js'
 import type * as Credential from './Credential.js'
 import type { ExactPartial, LooseOmit, MaybePromise } from './internal/types.js'
 import type * as Receipt from './Receipt.js'
-import type * as Html from './server/internal/html/types.js'
+import type * as Html from './server/internal/html/config.js'
 import type * as Transport from './server/Transport.js'
 import type * as z from './zod.js'
 
