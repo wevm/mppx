@@ -13,7 +13,7 @@
     "dev:example": "node scripts/dev:example.ts",
     "mppx": "node --import tsx src/bin.ts",
     "test": "vp test",
-    "test:e2e": "playwright test --config test/html/playwright.config.ts"
+    "test:html": "playwright test --config test/html/playwright.config.ts"
   },
   "browserslist": [
     "defaults",

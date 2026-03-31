@@ -162,7 +162,7 @@ jobs:
         run: pnpm build
 
       - name: Run tests
-        run: pnpm run test:e2e
+        run: pnpm run test:html
         env:
           CI: true
           MPP_SECRET_KEY: test-secret-key
