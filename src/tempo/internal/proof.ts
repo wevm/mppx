@@ -22,24 +22,14 @@ export function proofSource(parameters: { address: string; chainId: number }): s
 
 /** Parses a proof credential `did:pkh:eip155` source DID. */
 export function parseProofSource(source: string): { address: Address; chainId: number } | null {
-  const [did, pkh, namespace, chainIdText, address, ...rest] = source.split(':')
+  const match = /^did:pkh:eip155:(0|[1-9]\d*):([^:]+)$/.exec(source)
+  if (!match) return null
 
-  if (
-    did !== 'did' ||
-    pkh !== 'pkh' ||
-    namespace !== 'eip155' ||
-    !chainIdText ||
-    !address ||
-    rest.length > 0
-  ) {
-    return null
-  }
-
-  if (!/^(0|[1-9]\d*)$/.test(chainIdText)) return null
-
+  const chainIdText = match[1]!
+  const address = match[2]!
   const chainId = Number(chainIdText)
   if (!Number.isSafeInteger(chainId)) return null
   if (!isAddress(address)) return null
 
-  return { address, chainId }
+  return { address: address as Address, chainId }
 }

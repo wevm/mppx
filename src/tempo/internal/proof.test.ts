@@ -2,6 +2,47 @@ import { describe, expect, test } from 'vp/test'
 
 import * as Proof from './proof.js'
 
+const parseProofSourceCases = [
+  {
+    expected: {
+      address: '0xa5cc3c03994db5b0d9ba5e4f6d2efbd9f213b141',
+      chainId: 42431,
+    },
+    name: 'parses a valid did:pkh:eip155 source',
+    source: 'did:pkh:eip155:42431:0xa5cc3c03994db5b0d9ba5e4f6d2efbd9f213b141',
+  },
+  {
+    expected: null,
+    name: 'rejects non-numeric chain ids',
+    source: 'did:pkh:eip155:not-a-number:0x1234',
+  },
+  {
+    expected: null,
+    name: 'rejects leading-zero chain ids',
+    source: 'did:pkh:eip155:01:0xa5cc3c03994db5b0d9ba5e4f6d2efbd9f213b141',
+  },
+  {
+    expected: null,
+    name: 'rejects unsafe integer chain ids',
+    source: 'did:pkh:eip155:9007199254740992:0xa5cc3c03994db5b0d9ba5e4f6d2efbd9f213b141',
+  },
+  {
+    expected: null,
+    name: 'rejects invalid addresses',
+    source: 'did:pkh:eip155:42431:not-an-address',
+  },
+  {
+    expected: null,
+    name: 'rejects extra path segments',
+    source: 'did:pkh:eip155:42431:0xAbCdEf1234567890AbCdEf1234567890AbCdEf12:extra',
+  },
+  {
+    expected: null,
+    name: 'rejects unsupported namespaces',
+    source: 'did:pkh:solana:42431:0xa5cc3c03994db5b0d9ba5e4f6d2efbd9f213b141',
+  },
+] as const
+
 describe('Proof', () => {
   test('types has Proof with challengeId field', () => {
     expect(Proof.types).toEqual({
@@ -34,21 +75,9 @@ describe('Proof', () => {
     expect(Proof.proofSource({ address, chainId: 1 })).toBe(`did:pkh:eip155:1:${address}`)
   })
 
-  test('parseProofSource parses a valid did:pkh:eip155 source', () => {
-    const address = '0xa5cc3c03994db5b0d9ba5e4f6d2efbd9f213b141'
-
-    expect(Proof.parseProofSource(`did:pkh:eip155:42431:${address}`)).toEqual({
-      address,
-      chainId: 42431,
+  for (const { expected, name, source } of parseProofSourceCases) {
+    test(`parseProofSource ${name}`, () => {
+      expect(Proof.parseProofSource(source)).toEqual(expected)
     })
-  })
-
-  test('parseProofSource rejects malformed sources', () => {
-    expect(Proof.parseProofSource('did:pkh:eip155:not-a-number:0x1234')).toBeNull()
-    expect(
-      Proof.parseProofSource(
-        'did:pkh:eip155:42431:0xAbCdEf1234567890AbCdEf1234567890AbCdEf12:extra',
-      ),
-    ).toBeNull()
-  })
+  }
 })

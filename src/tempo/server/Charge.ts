@@ -162,11 +162,7 @@ export function charge<const parameters extends charge.Parameters>(
           const resolvedChainId = challenge.request.methodDetails?.chainId ?? chainId!
           const source = Proof.parseProofSource(expectedSource)
 
-          if (
-            !source ||
-            source.chainId !== resolvedChainId ||
-            Proof.proofSource(source) !== expectedSource
-          ) {
+          if (!source || source.chainId !== resolvedChainId) {
             throw new MismatchError('Proof credential source is invalid.', {})
           }
 
