@@ -1,3 +1,4 @@
+import type { Appearance } from '@stripe/stripe-js'
 import { loadStripe } from '@stripe/stripe-js/pure'
 
 import type * as Challenge from '../../../../Challenge.js'
@@ -11,6 +12,9 @@ import type * as Methods from '../../../Methods.js'
 const data = JSON.parse(document.getElementById(Html.dataId)!.textContent!) as {
   config: NonNullable<charge.Parameters['html']>
   challenge: Challenge.FromMethods<[typeof Methods.charge]>
+  theme: {
+    [k in keyof Omit<Html.Theme, 'fontUrl' | 'logo'>]-?: NonNullable<Html.Theme[k]>
+  }
 }
 
 const root = document.getElementById('root')!
@@ -44,9 +48,40 @@ root.appendChild(h2)
   if (!stripeJs) throw new Error('Failed to loadStripe')
 
   const darkQuery = window.matchMedia('(prefers-color-scheme: dark)')
-  const getAppearance = () => ({
-    theme: (darkQuery.matches ? 'night' : 'stripe') as 'night' | 'stripe',
-  })
+  const getAppearance = () => {
+    const theme = (() => {
+      if (data.config.elements?.options?.appearance?.theme)
+        return data.config.elements?.options?.appearance?.theme
+      switch (data.theme.colorScheme) {
+        case 'light dark':
+          return (darkQuery.matches ? 'night' : 'stripe') as 'night' | 'stripe'
+        case 'light':
+          return 'stripe' as const
+        case 'dark':
+          return 'night' as const
+      }
+    })()
+    const resolvedColorSchemeIndex = darkQuery ? 1 : 0
+    console.log({ theme, resolvedColorSchemeIndex, darkQuery })
+    return Html.mergeDefined(
+      {
+        theme,
+        variables: {
+          colorPrimary: data.theme.accent[resolvedColorSchemeIndex],
+          colorBackground: data.theme.surface[resolvedColorSchemeIndex],
+          colorText: data.theme.foreground[resolvedColorSchemeIndex],
+          colorTextSecondary: data.theme.muted[resolvedColorSchemeIndex],
+          colorDanger: data.theme.negative[resolvedColorSchemeIndex],
+          fontFamily: data.theme.fontFamily,
+          fontWeightNormal: '400',
+          fontSizeSm: '0.875rem',
+          borderRadius: data.theme.radius,
+          spacingUnit: '2px',
+        },
+      } satisfies Appearance,
+      (data.config.elements?.options?.appearance as never) ?? {},
+    )
+  }
 
   const elements = stripeJs.elements({
     appearance: getAppearance(),

@@ -10,7 +10,11 @@ import { submitCredential } from '../../../../server/internal/html/serviceWorker
 import type * as Methods from '../../../Methods.js'
 
 const data = Json.parse(document.getElementById(Html.dataId)!.textContent) as {
+  config: {}
   challenge: Challenge.FromMethods<[typeof Methods.charge]>
+  theme: {
+    [k in keyof Omit<Html.Theme, 'fontUrl' | 'logo'>]-?: NonNullable<Html.Theme[k]>
+  }
 }
 
 const root = document.getElementById('root')!

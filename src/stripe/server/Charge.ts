@@ -45,7 +45,7 @@ export function charge<const parameters extends charge.Parameters>(parameters: p
     decimals,
     description,
     externalId,
-    html: { theme: htmlTheme, ...htmlConfig } = {},
+    html: { text: htmlText, theme: htmlTheme, ...htmlConfig } = {},
     metadata,
     networkId,
     paymentMethodTypes,
@@ -72,6 +72,7 @@ export function charge<const parameters extends charge.Parameters>(parameters: p
         ? {
             config: htmlConfig,
             content: htmlContent,
+            text: htmlText,
             theme: htmlTheme,
           }
         : undefined,
@@ -137,6 +138,7 @@ export declare namespace charge {
               }
             | undefined
           publishableKey: string
+          text?: Html.Text
           theme?: Html.Theme
         }
       | undefined

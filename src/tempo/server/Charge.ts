@@ -81,6 +81,7 @@ export function charge<const parameters extends charge.Parameters>(
       ? {
           config: {},
           content: htmlContent,
+          text: typeof html === 'object' ? html.text : undefined,
           theme: typeof html === 'object' ? html.theme : undefined,
         }
       : undefined,
@@ -307,6 +308,7 @@ export declare namespace charge {
     html?:
       | boolean
       | {
+          text?: Html.Text
           theme?: Html.Theme
         }
       | undefined

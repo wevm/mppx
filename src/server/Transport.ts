@@ -7,6 +7,7 @@ import type { Distribute, UnionToIntersection } from '../internal/types.js'
 import * as core_Mcp from '../Mcp.js'
 import * as Receipt from '../Receipt.js'
 import * as Html from './internal/html/config.js'
+import { html } from './internal/html/config.js'
 import { serviceWorker } from './internal/html/serviceWorker.gen.js'
 
 export { type McpSdk, mcpSdk } from '../mcp-sdk/server/Transport.js'
@@ -146,25 +147,29 @@ export function http(): Http {
       const body = (() => {
         if (options.html && input.headers.get('Accept')?.includes('text/html')) {
           headers['Content-Type'] = 'text/html; charset=utf-8'
-          const theme = options.html.theme
-          const html = String.raw
+
+          const theme = Html.mergeDefined(
+            {
+              logo: undefined as Html.Theme['logo'],
+              ...Html.defaultTheme,
+            },
+            (options.html.theme as never) ?? {},
+          )
+          const text = Html.mergeDefined(Html.defaultText, (options.html.text as never) ?? {})
+
           return html`<!doctype html>
             <html lang="en">
               <head>
                 <meta charset="UTF-8" />
                 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-                <title>Payment Required</title>
-                <style>
-                  :root {
-                    color-scheme: dark light;
-                  }
-                </style>
+                <title>${text.title}</title>
+                ${Html.style(theme)}
               </head>
               <body>
-                <h1>Payment Required</h1>
-
-                ${theme?.logo &&
-                `<img src="${typeof theme.logo === 'string' ? theme.logo : theme.logo.light}" />`}
+                <header>
+                  ${Html.logo(theme.logo)}
+                  <h1>${text.title}</h1>
+                </header>
 
                 <pre>
 ${Json.stringify(challenge, null, 2)
@@ -174,10 +179,11 @@ ${Json.stringify(challenge, null, 2)
                 >
                 <div id="root"></div>
                 <script id="${Html.dataId}" type="application/json">
-                  ${Json.stringify({ config: options.html.config, challenge }).replace(
-                    /</g,
-                    '\\u003c',
-                  )}
+                  ${Json.stringify({
+                    config: options.html.config,
+                    challenge,
+                    theme,
+                  }).replace(/</g, '\\u003c')}
                 </script>
                 ${options.html.content}
               </body>
