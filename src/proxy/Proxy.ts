@@ -2,6 +2,7 @@ import type * as http from 'node:http'
 
 import { createFetchProxy } from '@remix-run/fetch-proxy'
 
+import * as Credential from '../Credential.js'
 import { generateProxy } from '../discovery/OpenApi.js'
 import * as Request from '../server/Request.js'
 import * as Headers from './internal/Headers.js'
@@ -106,19 +107,26 @@ export function create(config: create.Config): Proxy {
 
     const { service, proxy } = entry
 
-    const matched =
-      Route.match(service.routes, request.method, upstreamPath) ??
-      // Management POSTs (e.g. session close) may target a path whose route
-      // is registered for a different HTTP method (e.g. GET). Fall back to
-      // path-only matching so the payment handler can process the action.
-      (request.method === 'POST' && request.headers.has('authorization')
-        ? Route.matchPath(
+    const exactMatch = Route.match(service.routes, request.method, upstreamPath)
+    const fallbackBinding =
+      !exactMatch && request.method === 'POST' && request.headers.has('authorization')
+        ? getPaymentBinding(request)
+        : null
+    const fallbackMatch =
+      !exactMatch && request.method === 'POST' && request.headers.has('authorization')
+        ? // Management POSTs (e.g. session close) may target a path whose route
+          // is registered for a different HTTP method (e.g. GET). Fall back to
+          // path-only matching so the payment handler can process the action.
+          // When the credential parses cleanly, also bind on payment method+intent
+          // so same-path paid routes can coexist without sharing credentials.
+          Route.matchPath(
             service.routes,
             upstreamPath,
             // skip free routes (e.g. `'GET /foo/bar': true`)
-            (endpoint) => endpoint !== true,
+            (endpoint) => endpoint !== true && matchesPaymentBinding(endpoint, fallbackBinding),
           )
-        : null)
+        : null
+    const matched = exactMatch ?? fallbackMatch
     if (!matched) return new Response('Not Found', { status: 404 })
 
     const endpoint = matched.value as Service.Endpoint
@@ -129,6 +137,22 @@ export function create(config: create.Config): Proxy {
     const handler = typeof endpoint === 'function' ? endpoint : endpoint.pay
     const result = await handler(request)
     if (result.status === 402) return result.challenge
+
+    const managementResponse = (() => {
+      try {
+        return (result.withReceipt as () => Response)()
+      } catch (error) {
+        if (
+          error instanceof Error &&
+          error.message === 'withReceipt() requires a response argument'
+        )
+          return null
+        throw error
+      }
+    })()
+
+    if (managementResponse) return managementResponse
+    if (fallbackMatch) return new Response('Method Not Allowed', { status: 405 })
 
     const options = Service.getOptions(endpoint)
     const upstreamRes = await proxyUpstream({
@@ -245,4 +269,29 @@ function withBasePath(basePath: string | undefined, path: string) {
   const normalized = basePath.startsWith('/') ? basePath : `/${basePath}`
   const trimmed = normalized.endsWith('/') ? normalized.slice(0, -1) : normalized
   return `${trimmed}${path}`
+}
+
+type PaymentBinding = {
+  intent: string
+  method: string
+}
+
+function getPaymentBinding(request: Request): PaymentBinding | null {
+  try {
+    const credential = Credential.fromRequest(request)
+    return {
+      intent: credential.challenge.intent,
+      method: credential.challenge.method,
+    }
+  } catch {
+    return null
+  }
+}
+
+function matchesPaymentBinding(endpoint: unknown, binding: PaymentBinding | null): boolean {
+  if (endpoint === true) return false
+  if (!binding) return true
+  const payment = Service.paymentOf(endpoint as Exclude<Service.Endpoint, true>)
+  if (!payment) return true
+  return payment.method === binding.method && payment.intent === binding.intent
 }

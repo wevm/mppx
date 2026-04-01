@@ -135,6 +135,8 @@ describe('http', () => {
       const originalResponse = new Response('OK', { status: 200 })
 
       const response = transport.respondReceipt({
+        credential,
+        input: new Request('https://example.com'),
         receipt,
         response: originalResponse,
         challengeId: challenge.id,
@@ -252,7 +254,13 @@ describe('mcp', () => {
       }
 
       expect(
-        transport.respondReceipt({ receipt, response: successResponse, challengeId: challenge.id }),
+        transport.respondReceipt({
+          credential,
+          input: mcpRequest,
+          receipt,
+          response: successResponse,
+          challengeId: challenge.id,
+        }),
       ).toMatchInlineSnapshot(`
         {
           "id": 1,
@@ -285,7 +293,13 @@ describe('mcp', () => {
       }
 
       expect(
-        transport.respondReceipt({ receipt, response: errorResponse, challengeId: challenge.id }),
+        transport.respondReceipt({
+          credential,
+          input: mcpRequest,
+          receipt,
+          response: errorResponse,
+          challengeId: challenge.id,
+        }),
       ).toBe(errorResponse)
     })
   })

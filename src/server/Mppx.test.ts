@@ -95,6 +95,36 @@ describe('request handler', () => {
     `)
   })
 
+  test('returns sanitized malformed credential error for unexpected transport failures', async () => {
+    const baseTransport = Transport.http()
+    const transport = Transport.from({
+      ...baseTransport,
+      name: 'leaking-http',
+      getCredential() {
+        throw new Error('request to https://rpc.example.com/?key=secret-key failed')
+      },
+    })
+
+    const result = await Mppx.create({ methods: [method], realm, secretKey, transport }).charge({
+      amount: '1000',
+      currency: asset,
+      expires: new Date(Date.now() + 60_000).toISOString(),
+      recipient: accounts[0].address,
+    })(
+      new Request('https://example.com/resource', {
+        headers: { Authorization: 'Payment invalid' },
+      }),
+    )
+
+    expect(result.status).toBe(402)
+    if (result.status !== 402) throw new Error()
+
+    const body = (await result.challenge.json()) as { detail: string }
+    expect(body.detail).toBe('Credential is malformed.')
+    expect(body.detail).not.toContain('secret-key')
+    expect(body.detail).not.toContain('rpc.example.com')
+  })
+
   test('returns 402 when challenge ID mismatch', async () => {
     const wrongChallenge = Challenge.from({
       id: 'wrong-id',
@@ -181,7 +211,7 @@ describe('request handler', () => {
     expect(body.detail).toContain('does not match')
   })
 
-  test('topUp credential bypasses cross-route amount validation', async () => {
+  test('topUp credential is rejected when replayed across routes with different amounts', async () => {
     // Use a session method whose schema defines action: 'topUp'
     const sessionMethod = Method.from({
       name: 'mock',
@@ -231,7 +261,7 @@ describe('request handler', () => {
       payload: { action: 'topUp', token: 'valid' },
     })
 
-    // Present it at the "expensive" route — topUp should bypass amount check
+    // Present it at the "expensive" route — topUp must still match scope.
     const expensiveHandle = handler['mock/session']({
       amount: '1000000',
       currency: asset,
@@ -244,16 +274,13 @@ describe('request handler', () => {
       }),
     )
 
-    // Should NOT get 402 for amount mismatch — topUp bypasses the check.
-    // It will fail at a later stage (payload validation), but not with
-    // "does not match this route's requirements".
-    if (result.status === 402) {
-      const body = (await result.challenge.json()) as { detail?: string }
-      expect(body.detail).not.toContain('does not match')
-    }
+    expect(result.status).toBe(402)
+    if (result.status !== 402) throw new Error()
+    const body = (await result.challenge.json()) as { detail?: string }
+    expect(body.detail).toContain('does not match')
   })
 
-  test('voucher credential bypasses cross-route amount validation', async () => {
+  test('voucher credential is rejected when replayed across routes with different amounts', async () => {
     const sessionMethod = Method.from({
       name: 'mock',
       intent: 'session',
@@ -307,8 +334,8 @@ describe('request handler', () => {
       payload: { action: 'voucher', cumulativeAmount: '500', signature: '0xabc' },
     })
 
-    // Present it at the same route but with a higher price — voucher should
-    // bypass the cross-route amount check just like topUp does
+    // Present it at the same route but with a higher price — voucher must
+    // still match the original priced scope.
     const expensiveHandle = handler['mock/session']({
       amount: '1000000',
       currency: asset,
@@ -321,11 +348,10 @@ describe('request handler', () => {
       }),
     )
 
-    // Should NOT get 402 for amount mismatch — voucher bypasses the check.
-    if (result.status === 402) {
-      const body = (await result.challenge.json()) as { detail?: string }
-      expect(body.detail).not.toContain('does not match')
-    }
+    expect(result.status).toBe(402)
+    if (result.status !== 402) throw new Error()
+    const body = (await result.challenge.json()) as { detail?: string }
+    expect(body.detail).toContain('does not match')
   })
 
   test('rejects charge credential with injected action: topUp (cross-route bypass attempt)', async () => {
@@ -552,7 +578,63 @@ describe('request handler', () => {
         "type": "https://paymentauth.org/problems/invalid-payload",
       }
     `)
-    expect(body.detail).toContain('Credential payload is invalid')
+    expect(body.detail).toBe('Credential payload is invalid.')
+    expect(body.detail).not.toContain('invalidField')
+  })
+
+  test('returns sanitized verification error for unexpected verifier failures', async () => {
+    const leakingMethod = Method.toServer(
+      Method.from({
+        name: 'mock',
+        intent: 'charge',
+        schema: {
+          credential: {
+            payload: z.object({ token: z.string() }),
+          },
+          request: z.object({
+            amount: z.string(),
+            currency: z.string(),
+            recipient: z.string(),
+          }),
+        },
+      }),
+      {
+        async verify() {
+          throw new Error('request to https://mainnet.infura.io/v3/secret-key failed')
+        },
+      },
+    )
+
+    const handle = Mppx.create({ methods: [leakingMethod], realm, secretKey })['mock/charge']({
+      amount: '1000',
+      currency: asset,
+      expires: new Date(Date.now() + 60_000).toISOString(),
+      recipient: accounts[0].address,
+    })
+
+    const firstResult = await handle(new Request('https://example.com/resource'))
+    expect(firstResult.status).toBe(402)
+    if (firstResult.status !== 402) throw new Error()
+
+    const challenge = Challenge.fromResponse(firstResult.challenge)
+    const credential = Credential.from({
+      challenge,
+      payload: { token: 'valid' },
+    })
+
+    const result = await handle(
+      new Request('https://example.com/resource', {
+        headers: { Authorization: Credential.serialize(credential) },
+      }),
+    )
+
+    expect(result.status).toBe(402)
+    if (result.status !== 402) throw new Error()
+
+    const body = (await result.challenge.json()) as { detail: string }
+    expect(body.detail).toBe('Payment verification failed.')
+    expect(body.detail).not.toContain('infura')
+    expect(body.detail).not.toContain('secret-key')
   })
 })
 
@@ -1723,6 +1805,77 @@ describe('cross-route credential replay via scope binding flaw', () => {
     )
 
     expect(result.status).toBe(402)
+  })
+
+  test('compose dispatch includes methodDetails memo/splits binding', async () => {
+    const splitsMethod = Method.from({
+      name: 'mock',
+      intent: 'charge',
+      schema: {
+        credential: { payload: z.object({ token: z.string() }) },
+        request: z.pipe(
+          z.object({
+            amount: z.string(),
+            currency: z.string(),
+            decimals: z.number(),
+            recipient: z.string(),
+            splits: z.optional(z.array(z.object({ amount: z.string(), recipient: z.string() }))),
+          }),
+          z.transform(({ amount, currency, decimals, recipient, splits }) => ({
+            methodDetails: {
+              amount: String(Number(amount) * 10 ** decimals),
+              currency,
+              recipient,
+              ...(splits && { splits }),
+            },
+          })),
+        ),
+      },
+    })
+
+    const splitsServerMethod = Method.toServer(splitsMethod, {
+      async verify() {
+        return mockReceipt()
+      },
+    })
+
+    const handler = Mppx.create({ methods: [splitsServerMethod], realm, secretKey })
+
+    const noSplitsHandle = handler.charge({
+      amount: '1',
+      currency: '0x0000000000000000000000000000000000000001',
+      decimals: 6,
+      expires: new Date(Date.now() + 60_000).toISOString(),
+      recipient: '0x0000000000000000000000000000000000000002',
+    })
+    const splitsHandle = handler.charge({
+      amount: '1',
+      currency: '0x0000000000000000000000000000000000000001',
+      decimals: 6,
+      expires: new Date(Date.now() + 60_000).toISOString(),
+      recipient: '0x0000000000000000000000000000000000000002',
+      splits: [{ amount: '0.2', recipient: '0x0000000000000000000000000000000000000003' }],
+    })
+
+    const composed = Mppx.compose(noSplitsHandle, splitsHandle)
+    const firstResult = await composed(new Request('https://example.com/resource'))
+    expect(firstResult.status).toBe(402)
+    if (firstResult.status !== 402) throw new Error()
+
+    const challenges = Challenge.fromResponseList(firstResult.challenge)
+    const noSplitsChallenge = challenges[0]!
+    const credential = Credential.from({
+      challenge: noSplitsChallenge,
+      payload: { token: 'valid' },
+    })
+
+    const result = await composed(
+      new Request('https://example.com/resource', {
+        headers: { Authorization: Credential.serialize(credential) },
+      }),
+    )
+
+    expect(result.status).toBe(200)
   })
 })
 

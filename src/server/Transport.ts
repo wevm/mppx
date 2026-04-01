@@ -40,6 +40,8 @@ export type Transport<
   /** Attaches a receipt to a successful response. */
   respondReceipt: (options: {
     challengeId: string
+    credential: Credential.Credential
+    input: input
     receipt: Receipt.Receipt
     response: receiptResponse
   }) => receiptOutput
@@ -92,7 +94,7 @@ export type WithReceipt<transport extends AnyTransport = Http> = WithReceiptOver
  *   name: 'custom',
  *   getCredential(input) { ... },
  *   respondChallenge({ challenge, input }) { ... },
- *   respondReceipt({ receipt, response, challengeId }) { ... },
+ *   respondReceipt({ receipt, response, challengeId, credential, input }) { ... },
  * })
  * ```
  */

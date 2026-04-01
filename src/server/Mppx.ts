@@ -1,4 +1,5 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
+import { isDeepStrictEqual } from 'node:util'
 
 import * as Challenge from '../Challenge.js'
 import * as Credential from '../Credential.js'
@@ -300,10 +301,11 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
 
         // Credential was provided but malformed
         if (credentialError) {
+          const reason = getSafeCredentialReason(credentialError)
           const response = await transport.respondChallenge({
             challenge,
             input,
-            error: new Errors.MalformedCredentialError({ reason: credentialError.message }),
+            error: new Errors.MalformedCredentialError(reason ? { reason } : {}),
             html: method.html,
           })
           return { challenge: response, status: 402 }
@@ -342,13 +344,6 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
         // Note: we compare specific payment parameters rather than the full
         // request because the `request` hook may produce credential-dependent
         // output (e.g. `feePayer` differs between 402 and credential calls).
-        //
-        // Skip this check for topUp and voucher actions: the route's
-        // `request` hook may produce a different amount because these
-        // requests carry no application body (e.g. no model field for
-        // dynamic pricing). The credential echoes a challenge obtained
-        // from the original request which had the correct amount; the
-        // on-chain voucher signature is the real validation.
         {
           for (const field of ['method', 'intent', 'realm'] as const) {
             if (credential.challenge[field] !== challenge[field]) {
@@ -365,60 +360,20 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
             }
           }
 
-          // Use safeParse (not raw payload) so only methods whose schema
-          // defines `action` can trigger the skip. Without this, a client
-          // could inject `action: 'topUp'` on a charge credential to bypass
-          // the amount check. Zod strips unknown keys, so charge payloads
-          // (which don't define `action`) will have it removed.
-          const parsed = method.schema.credential.payload.safeParse(credential.payload)
-          const action = parsed.success
-            ? (parsed.data as Record<string, unknown>)?.action
-            : undefined
-          if (action !== 'topUp' && action !== 'voucher') {
-            const routeReq = challenge.request as Record<string, unknown>
-            const echoedReq = credential.challenge.request as Record<string, unknown>
-            const routeDetails = (routeReq.methodDetails ?? {}) as Record<string, unknown>
-            const echoedDetails = (echoedReq.methodDetails ?? {}) as Record<string, unknown>
-            for (const field of ['amount', 'currency', 'recipient'] as const) {
-              const routeVal = routeReq[field] ?? routeDetails[field]
-              if (
-                routeVal !== undefined &&
-                String(routeVal) !== String(echoedReq[field] ?? echoedDetails[field])
-              ) {
-                const response = await transport.respondChallenge({
-                  challenge,
-                  input,
-                  error: new Errors.InvalidChallengeError({
-                    id: credential.challenge.id,
-                    reason: `credential ${field} does not match this route's requirements`,
-                  }),
-                })
-                return { challenge: response, status: 402 }
-              }
-            }
-
-            // Compare payment-relevant methodDetails fields (memo, splits).
-            // These are excluded from the top-level field check above but
-            // affect verification semantics — a credential issued for a
-            // no-splits route must not be accepted on a splits route.
-            for (const field of ['memo', 'splits'] as const) {
-              const routeVal = routeDetails[field]
-              const echoedVal = echoedDetails[field]
-              if (
-                routeVal !== undefined &&
-                JSON.stringify(routeVal) !== JSON.stringify(echoedVal)
-              ) {
-                const response = await transport.respondChallenge({
-                  challenge,
-                  input,
-                  error: new Errors.InvalidChallengeError({
-                    id: credential.challenge.id,
-                    reason: `credential ${field} does not match this route's requirements`,
-                  }),
-                })
-                return { challenge: response, status: 402 }
-              }
-            }
+          const mismatch = getRequestBindingMismatch(
+            challenge.request as Record<string, unknown>,
+            credential.challenge.request as Record<string, unknown>,
+          )
+          if (mismatch) {
+            const response = await transport.respondChallenge({
+              challenge,
+              input,
+              error: new Errors.InvalidChallengeError({
+                id: credential.challenge.id,
+                reason: `credential ${mismatch} does not match this route's requirements`,
+              }),
+            })
+            return { challenge: response, status: 402 }
           }
         }
 
@@ -436,11 +391,11 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
         // Validate payload structure against method schema
         try {
           method.schema.credential.payload.parse(credential.payload)
-        } catch (e) {
+        } catch {
           const response = await transport.respondChallenge({
             challenge,
             input,
-            error: new Errors.InvalidPayloadError({ reason: (e as Error).message }),
+            error: new Errors.InvalidPayloadError(),
           })
           return { challenge: response, status: 402 }
         }
@@ -451,10 +406,9 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
         try {
           receiptData = await verify({ credential, request } as never)
         } catch (e) {
-          const error =
-            e instanceof Errors.PaymentError
-              ? e
-              : new Errors.VerificationFailedError({ reason: (e as Error).message })
+          if (!(e instanceof Errors.PaymentError))
+            console.error('mppx: internal verification error', e)
+          const error = e instanceof Errors.PaymentError ? e : new Errors.VerificationFailedError()
           const response = await transport.respondChallenge({
             challenge,
             input,
@@ -477,6 +431,8 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
           withReceipt<response>(response?: response) {
             if (managementResponse) {
               return transport.respondReceipt({
+                credential,
+                input,
                 receipt: receiptData,
                 response: managementResponse as never,
                 challengeId: credential.challenge.id,
@@ -484,6 +440,8 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
             }
             if (!response) throw new Error('withReceipt() requires a response argument')
             return transport.respondReceipt({
+              credential,
+              input,
               receipt: receiptData,
               response: response as never,
               challengeId: credential.challenge.id,
@@ -503,6 +461,13 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
       },
     )
   }
+}
+
+function getSafeCredentialReason(error: unknown): string | undefined {
+  if (error instanceof Credential.InvalidCredentialEncodingError) return error.message
+  if (error instanceof Credential.MissingAuthorizationHeaderError) return error.message
+  if (error instanceof Credential.MissingPaymentSchemeError) return error.message
+  return undefined
 }
 
 declare namespace createMethodFn {
@@ -554,6 +519,88 @@ function resolveRealmFromRequest(input: unknown): string {
     `Could not auto-detect realm from request. Falling back to "${defaultRealm}". Set \`realm\` in Mppx.create() or the MPP_REALM env var.`,
   )
   return defaultRealm
+}
+
+type RequestBindingField = 'amount' | 'currency' | 'recipient' | 'chainId' | 'memo' | 'splits'
+
+const requestBindingFields = [
+  'amount',
+  'currency',
+  'recipient',
+  'chainId',
+  'memo',
+  'splits',
+] as const satisfies readonly RequestBindingField[]
+
+type RequestBinding = Partial<Record<RequestBindingField, unknown>>
+
+function getRequestBindingMismatch(
+  expectedRequest: Record<string, unknown>,
+  actualRequest: Record<string, unknown>,
+): RequestBindingField | undefined {
+  const expected = getRequestBinding(expectedRequest)
+  const actual = getRequestBinding(actualRequest)
+
+  return requestBindingFields.find(
+    (field) => !requestBindingValuesMatch(field, expected[field], actual[field]),
+  )
+}
+
+function getRequestBinding(request: Record<string, unknown>): RequestBinding {
+  const methodDetails = (request.methodDetails ?? {}) as Record<string, unknown>
+
+  return {
+    amount: request.amount ?? methodDetails.amount,
+    currency: request.currency ?? methodDetails.currency,
+    recipient: request.recipient ?? methodDetails.recipient,
+    chainId: request.chainId ?? methodDetails.chainId,
+    memo: methodDetails.memo,
+    splits: methodDetails.splits,
+  }
+}
+
+function requestBindingValuesMatch(
+  field: RequestBindingField,
+  expected: unknown,
+  actual: unknown,
+): boolean {
+  return isDeepStrictEqual(
+    normalizeRequestBindingValue(field, expected),
+    normalizeRequestBindingValue(field, actual),
+  )
+}
+
+function normalizeRequestBindingValue(field: RequestBindingField, value: unknown): unknown {
+  switch (field) {
+    case 'memo':
+      return normalizeHex(value)
+    case 'splits':
+      return normalizeComparable(value)
+    default:
+      return normalizeScalar(value)
+  }
+}
+
+function normalizeScalar(value: unknown): string | undefined {
+  return value === undefined ? undefined : String(value)
+}
+
+function normalizeHex(value: unknown): unknown {
+  return typeof value === 'string' && value.startsWith('0x') ? value.toLowerCase() : value
+}
+
+function normalizeComparable(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(normalizeComparable)
+
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>)
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([key, nested]) => [key, normalizeComparable(nested)]),
+    )
+  }
+
+  return normalizeHex(value)
 }
 
 export type MethodFn<
@@ -672,7 +719,6 @@ export function compose(
       if (credential) {
         const { method: credMethod, intent: credIntent } = credential.challenge
         const credReq = credential.challenge.request as Record<string, unknown>
-        const credDetails = (credReq.methodDetails ?? {}) as Record<string, unknown>
 
         // Filter by name+intent, then narrow by comparing stable request fields
         // from the echoed challenge against each handler's canonical request.
@@ -684,16 +730,7 @@ export function compose(
           if (!meta || meta.name !== credMethod || meta.intent !== credIntent) return false
           const canonical = meta._canonicalRequest
           if (!canonical) return true
-          const canonicalDetails = (canonical.methodDetails ?? {}) as Record<string, unknown>
-          for (const field of ['amount', 'currency', 'recipient', 'chainId'] as const) {
-            const canonicalVal = canonical[field] ?? canonicalDetails[field]
-            if (
-              canonicalVal !== undefined &&
-              String(canonicalVal) !== String(credReq[field] ?? credDetails[field])
-            )
-              return false
-          }
-          return true
+          return !getRequestBindingMismatch(canonical, credReq)
         })
 
         const match =

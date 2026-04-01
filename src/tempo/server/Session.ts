@@ -179,10 +179,11 @@ export function session<const parameters extends session.Parameters>(
       }
     },
 
-    async verify({ credential }) {
+    async verify({ credential, request }) {
       const { challenge, payload } = credential as Credential.Credential<SessionCredentialPayload>
 
-      const methodDetails = challenge.request.methodDetails as SessionMethodDetails
+      const resolvedRequest = Methods.session.schema.request.parse(request)
+      const methodDetails = resolvedRequest.methodDetails as SessionMethodDetails
       const client = await getClient({ chainId: methodDetails.chainId })
 
       const resolvedFeePayer = methodDetails.feePayer === true ? feePayer : undefined

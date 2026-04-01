@@ -18,6 +18,30 @@ export type Credential<
   source?: string
 }
 
+export class MissingAuthorizationHeaderError extends Error {
+  override readonly name = 'MissingAuthorizationHeaderError'
+
+  constructor() {
+    super('Missing Authorization header.')
+  }
+}
+
+export class MissingPaymentSchemeError extends Error {
+  override readonly name = 'MissingPaymentSchemeError'
+
+  constructor() {
+    super('Missing Payment scheme.')
+  }
+}
+
+export class InvalidCredentialEncodingError extends Error {
+  override readonly name = 'InvalidCredentialEncodingError'
+
+  constructor() {
+    super('Invalid base64url or JSON.')
+  }
+}
+
 /**
  * Deserializes an Authorization header value to a credential.
  *
@@ -33,7 +57,7 @@ export type Credential<
  */
 export function deserialize<payload = unknown>(value: string): Credential<payload> {
   const prefixMatch = value.match(/^Payment\s+(.+)$/i)
-  if (!prefixMatch?.[1]) throw new Error('Missing Payment scheme.')
+  if (!prefixMatch?.[1]) throw new MissingPaymentSchemeError()
   try {
     const json = Base64.toString(prefixMatch[1])
     const parsed = JSON.parse(json) as {
@@ -51,7 +75,7 @@ export function deserialize<payload = unknown>(value: string): Credential<payloa
       ...(parsed.source && { source: parsed.source }),
     } as Credential<payload>
   } catch {
-    throw new Error('Invalid base64url or JSON.')
+    throw new InvalidCredentialEncodingError()
   }
 }
 
@@ -108,9 +132,9 @@ export declare namespace from {
  */
 export function fromRequest<payload = unknown>(request: Request): Credential<payload> {
   const header = request.headers.get('Authorization')
-  if (!header) throw new Error('Missing Authorization header.')
+  if (!header) throw new MissingAuthorizationHeaderError()
   const payment = extractPaymentScheme(header)
-  if (!payment) throw new Error('Missing Payment scheme.')
+  if (!payment) throw new MissingPaymentSchemeError()
   return deserialize<payload>(payment)
 }
 

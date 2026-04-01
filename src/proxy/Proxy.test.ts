@@ -1,4 +1,4 @@
-import { Receipt } from 'mppx'
+import { Challenge, Credential, Method, Receipt, z } from 'mppx'
 import { Mppx as Mppx_client, tempo as tempo_client } from 'mppx/client'
 import { Mppx as Mppx_server, tempo as tempo_server } from 'mppx/server'
 import { afterEach, describe, expect, test } from 'vp/test'
@@ -437,6 +437,193 @@ describe('create', () => {
     })
     // Should hit the paid endpoint and get a 402 challenge, not 404
     expect(res.status).toBe(402)
+  })
+
+  test('behavior: management POST uses credential method binding to disambiguate same-path paid routes', async () => {
+    const alpha = Method.from({
+      name: 'alpha',
+      intent: 'charge',
+      schema: {
+        credential: { payload: z.object({ token: z.string() }) },
+        request: z.object({ amount: z.string() }),
+      },
+    })
+    const beta = Method.from({
+      name: 'beta',
+      intent: 'charge',
+      schema: {
+        credential: { payload: z.object({ token: z.string() }) },
+        request: z.object({ amount: z.string() }),
+      },
+    })
+
+    const handler = Mppx_server.create({
+      methods: [
+        Method.toServer(alpha, {
+          async verify() {
+            return Receipt.from({
+              method: 'alpha',
+              status: 'success',
+              timestamp: new Date().toISOString(),
+              reference: 'alpha-reference',
+            })
+          },
+          respond() {
+            return new Response(null, { status: 204 })
+          },
+        }),
+        Method.toServer(beta, {
+          async verify() {
+            return Receipt.from({
+              method: 'beta',
+              status: 'success',
+              timestamp: new Date().toISOString(),
+              reference: 'beta-reference',
+            })
+          },
+          respond() {
+            return new Response(null, { status: 205 })
+          },
+        }),
+      ],
+      secretKey,
+    })
+
+    const proxy = ApiProxy.create({
+      services: [
+        Service.from('api', {
+          baseUrl: 'https://example.com',
+          routes: {
+            'GET /v1/stream': handler['alpha/charge']({ amount: '1' }),
+            'PATCH /v1/stream': handler['beta/charge']({ amount: '1' }),
+          },
+        }),
+      ],
+    })
+    proxyServer = await Http.createServer(proxy.listener)
+
+    const challengeResponse = await fetch(`${proxyServer.url}/api/v1/stream`)
+    expect(challengeResponse.status).toBe(402)
+
+    const challenge = Challenge.fromResponse(challengeResponse)
+    const authorization = Credential.serialize(
+      Credential.from({
+        challenge,
+        payload: { token: 'ok' },
+      }),
+    )
+
+    const res = await fetch(`${proxyServer.url}/api/v1/stream`, {
+      method: 'POST',
+      headers: { Authorization: authorization },
+    })
+
+    expect(res.status).toBe(204)
+  })
+
+  test('behavior: exact-match management POST does not forward upstream', async () => {
+    let upstreamRequests = 0
+    upstream = await createUpstream(() => {
+      upstreamRequests += 1
+      return Response.json({ ok: true })
+    })
+
+    const method = Method.from({
+      name: 'mock',
+      intent: 'charge',
+      schema: {
+        credential: { payload: z.object({ token: z.string() }) },
+        request: z.object({ amount: z.string() }),
+      },
+    })
+    const handler = Mppx_server.create({
+      methods: [
+        Method.toServer(method, {
+          async verify() {
+            return Receipt.from({
+              method: 'mock',
+              status: 'success',
+              timestamp: new Date().toISOString(),
+              reference: 'mock-reference',
+            })
+          },
+          respond() {
+            return new Response(null, { status: 204 })
+          },
+        }),
+      ],
+      secretKey,
+    })
+
+    const proxy = ApiProxy.create({
+      services: [
+        Service.from('api', {
+          baseUrl: upstream.url,
+          routes: {
+            'POST /v1/stream': handler['mock/charge']({ amount: '1' }),
+          },
+        }),
+      ],
+    })
+    proxyServer = await Http.createServer(proxy.listener)
+
+    const challengeResponse = await fetch(`${proxyServer.url}/api/v1/stream`, { method: 'POST' })
+    expect(challengeResponse.status).toBe(402)
+
+    const challenge = Challenge.fromResponse(challengeResponse)
+    const authorization = Credential.serialize(
+      Credential.from({
+        challenge,
+        payload: { token: 'ok' },
+      }),
+    )
+    const res = await fetch(`${proxyServer.url}/api/v1/stream`, {
+      method: 'POST',
+      headers: { Authorization: authorization },
+    })
+
+    expect(res.status).toBe(204)
+    expect(upstreamRequests).toBe(0)
+  })
+
+  test('behavior: paid GET fallback does not forward POST upstream', async () => {
+    let upstreamRequests = 0
+    upstream = await createUpstream(async (req) => {
+      upstreamRequests += 1
+      return Response.json({
+        body: await req.json(),
+        method: req.method,
+      })
+    })
+
+    const proxy = ApiProxy.create({
+      services: [
+        Service.from('api', {
+          baseUrl: upstream.url,
+          bearer: 'sk-upstream-key',
+          routes: { 'GET /v1/messages': mppx_server.charge({ amount: '1', decimals: 6 }) },
+        }),
+      ],
+    })
+    proxyServer = await Http.createServer(proxy.listener)
+
+    const challengeResponse = await fetch(`${proxyServer.url}/api/v1/messages`)
+    expect(challengeResponse.status).toBe(402)
+
+    const authorization = await mppx_client.createCredential(challengeResponse)
+    expect(Credential.extractPaymentScheme(authorization)).toBeTruthy()
+
+    const res = await fetch(`${proxyServer.url}/api/v1/messages`, {
+      method: 'POST',
+      headers: {
+        Authorization: authorization,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ prompt: 'hello' }),
+    })
+
+    expect(res.status).toBe(405)
+    expect(upstreamRequests).toBe(0)
   })
 
   test('behavior: POST to unregistered method does not fall back to free GET route', async () => {
