@@ -22,25 +22,27 @@ h2.textContent = 'tempo'
 root.appendChild(h2)
 
 const provider = Provider.create({
-  ...(__TEST__ && {
-    // Dead code eliminated from production bundle
-    adapter: local({
-      async loadAccounts() {
-        const privateKey = generatePrivateKey()
-        const account = Account.fromSecp256k1(privateKey)
-        const client = createClient({
-          chain: [tempoModerato, tempoLocalnet].find(
-            (x) => x.id === data.challenge.request.methodDetails?.chainId,
-          ),
-          transport: http(),
-        })
-        await Actions.faucet.fundSync(client, { account })
-        return {
-          accounts: [account],
-        }
-      },
-    }),
-  }),
+  // Dead code eliminated from production bundle (including top-level imports)
+  ...(import.meta.env.MODE === 'test'
+    ? {
+        adapter: local({
+          async loadAccounts() {
+            const privateKey = generatePrivateKey()
+            const account = Account.fromSecp256k1(privateKey)
+            const client = createClient({
+              chain: [tempoModerato, tempoLocalnet].find(
+                (x) => x.id === data.challenge.request.methodDetails?.chainId,
+              ),
+              transport: http(),
+            })
+            await Actions.faucet.fundSync(client, { account })
+            return {
+              accounts: [account],
+            }
+          },
+        }),
+      }
+    : {}),
   testnet:
     data.challenge.request.methodDetails?.chainId === tempoModerato.id ||
     data.challenge.request.methodDetails?.chainId === tempoLocalnet.id,

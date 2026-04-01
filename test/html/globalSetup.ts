@@ -1,8 +1,18 @@
 import { execSync } from 'node:child_process'
 
-export default async function globalSetup() {
-  execSync(`TEST=1 pnpm build`, {
+import type { FullConfig } from '@playwright/test'
+
+export default async function globalSetup(config: FullConfig) {
+  const stripeProject = config.projects.find((project) => project.name === 'stripe')
+  const stripeMode = stripeProject?.use.headless === false ? 'production' : 'test'
+
+  execSync(`pnpm build`, {
     cwd: new URL('../..', import.meta.url).pathname,
+    env: {
+      ...process.env,
+      STRIPE_HTML_MODE: stripeMode,
+      TEST: '1',
+    },
     stdio: 'inherit',
   })
 

@@ -5,16 +5,24 @@ import { build } from 'rolldown'
 
 const root = path.resolve(import.meta.dirname, '..')
 const outDir = path.resolve(root, '.tmp/html-build')
+const defaultMode = process.env.TEST ? 'test' : 'production'
+const stripeMode = process.env.STRIPE_HTML_MODE ?? defaultMode
 
 // HTML entries — bundled into <script> tags
 const htmlEntries = [
-  'src/tempo/server/internal/html/main.ts',
-  'src/stripe/server/internal/html/main.ts',
+  {
+    entry: 'src/tempo/server/internal/html/main.ts',
+    mode: defaultMode,
+    outFile: path.resolve(root, 'src/tempo/server/internal/html.gen.ts'),
+  },
+  {
+    entry: 'src/stripe/server/internal/html/main.ts',
+    mode: stripeMode,
+    outFile: path.resolve(root, 'src/stripe/server/internal/html.gen.ts'),
+  },
 ]
 
-for (const entry of htmlEntries) {
-  const outFile = path.resolve(root, path.dirname(entry), '..', 'html.gen.ts')
-
+for (const { entry, mode, outFile } of htmlEntries) {
   await build({
     input: path.resolve(root, entry),
     resolve: {
@@ -22,7 +30,9 @@ for (const entry of htmlEntries) {
     },
     transform: {
       define: {
-        __TEST__: process.env.TEST ? 'true' : 'false',
+        'import.meta': JSON.stringify({}),
+        'import.meta.env': JSON.stringify({ MODE: mode }),
+        'import.meta.env.MODE': JSON.stringify(mode),
       },
     },
     output: {
@@ -43,7 +53,7 @@ for (const entry of htmlEntries) {
   console.log(`wrote ${path.relative(root, outFile)}`)
 }
 
-// Service worker — bundled as raw JS string
+// Service worker (bundled as raw JS string)
 {
   const entry = 'src/server/internal/html/serviceWorker.ts'
   const outFile = path.resolve(root, 'src/server/internal/html/serviceWorker.gen.ts')

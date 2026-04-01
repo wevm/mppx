@@ -1,7 +1,7 @@
-import type { Frame, Page } from '@playwright/test'
+import type { Frame, Page, TestInfo } from '@playwright/test'
 import { expect, test } from '@playwright/test'
 
-test('charge via stripe html payment page', async ({ page }) => {
+test('charge via stripe html payment page', async ({ page }, testInfo) => {
   test.slow()
 
   await page.goto('/stripe/charge', {
@@ -12,30 +12,26 @@ test('charge via stripe html payment page', async ({ page }) => {
   await expect(page.locator('h1')).toHaveText('Payment Required')
   await expect(page.getByRole('button', { name: 'Pay' })).toBeVisible({ timeout: 10_000 })
 
-  // Stripe renders several private frames. Find the one that actually contains
-  // the payment controls instead of assuming the first frame is the card UI.
-  const stripeFrame = await getStripePaymentFrame(page)
-  const numberInput = stripeFrame.locator('[name="number"]')
+  if (!isHeadless(testInfo)) {
+    const stripeFrame = await getStripePaymentFrame(page)
+    const numberInput = stripeFrame.locator('[name="number"]')
+    const cardButton = stripeFrame.locator('[data-value="card"]')
 
-  // Open card form
-  const cardButton = stripeFrame.locator('[data-value="card"]')
-  await cardButton.isVisible({ timeout: 90_000 })
-  await cardButton.click()
-  await page.waitForTimeout(1_000)
+    await cardButton.isVisible({ timeout: 90_000 })
+    await cardButton.click()
+    await page.waitForTimeout(1_000)
 
-  // Wait for card inputs to appear and fill test card details
-  await expect(numberInput).toBeVisible({ timeout: 90_000 })
-  await numberInput.fill('4242424242424242')
-  await stripeFrame.locator('[name="expiry"]').fill('12/34')
-  await stripeFrame.locator('[name="cvc"]').fill('123')
+    await expect(numberInput).toBeVisible({ timeout: 90_000 })
+    await numberInput.fill('4242424242424242')
+    await stripeFrame.locator('[name="expiry"]').fill('12/34')
+    await stripeFrame.locator('[name="cvc"]').fill('123')
 
-  // Fill postal code if visible
-  const postalCode = stripeFrame.locator('[name="postalCode"]')
-  await postalCode.isVisible({ timeout: 2_000 })
-  await postalCode.fill('10001')
+    const postalCode = stripeFrame.locator('[name="postalCode"]')
+    await postalCode.isVisible({ timeout: 2_000 })
+    await postalCode.fill('10001')
 
-  // Wait for Stripe Elements to settle
-  await page.waitForTimeout(500)
+    await page.waitForTimeout(500)
+  }
 
   // Submit payment
   await page.getByRole('button', { name: 'Pay' }).click()
@@ -49,6 +45,10 @@ test('service worker endpoint returns javascript', async ({ page }) => {
   expect(response?.headers()['content-type']).toContain('application/javascript')
   expect(response?.status()).toBe(200)
 })
+
+function isHeadless(testInfo: TestInfo) {
+  return testInfo.project.use.headless !== false
+}
 
 async function getStripePaymentFrame(page: Page, timeout = 30_000): Promise<Frame> {
   const deadline = Date.now() + timeout
