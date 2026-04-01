@@ -10,21 +10,18 @@ test('charge via stripe html payment page', async ({ page }) => {
 
   // Verify 402 payment page rendered
   await expect(page.locator('h1')).toHaveText('Payment Required')
-  await expect(page.getByRole('button', { name: 'Pay' })).toBeVisible({ timeout: 30_000 })
+  await expect(page.getByRole('button', { name: 'Pay' })).toBeVisible({ timeout: 10_000 })
 
   // Stripe renders several private frames. Find the one that actually contains
   // the payment controls instead of assuming the first frame is the card UI.
   const stripeFrame = await getStripePaymentFrame(page)
   const numberInput = stripeFrame.locator('[name="number"]')
 
-  // Some runs render card fields immediately; others require expanding card.
-  if (!(await numberInput.isVisible({ timeout: 90_000 }).catch(() => false))) {
-    const cardButton = stripeFrame.locator('[data-value="card"]')
-    if (await cardButton.isVisible({ timeout: 90_000 }).catch(() => false)) {
-      await cardButton.click()
-      await page.waitForTimeout(1_000)
-    }
-  }
+  // Open card form
+  const cardButton = stripeFrame.locator('[data-value="card"]')
+  await cardButton.isVisible({ timeout: 90_000 })
+  await cardButton.click()
+  await page.waitForTimeout(1_000)
 
   // Wait for card inputs to appear and fill test card details
   await expect(numberInput).toBeVisible({ timeout: 90_000 })
@@ -34,8 +31,8 @@ test('charge via stripe html payment page', async ({ page }) => {
 
   // Fill postal code if visible
   const postalCode = stripeFrame.locator('[name="postalCode"]')
-  if (await postalCode.isVisible({ timeout: 2_000 }).catch(() => false))
-    await postalCode.fill('10001')
+  await postalCode.isVisible({ timeout: 2_000 })
+  await postalCode.fill('10001')
 
   // Wait for Stripe Elements to settle
   await page.waitForTimeout(500)
@@ -60,18 +57,12 @@ async function getStripePaymentFrame(page: Page, timeout = 30_000): Promise<Fram
     for (const frame of page.frames()) {
       if (!frame.name().startsWith('__privateStripeFrame')) continue
 
-      const hasNumberInput =
-        (await frame
-          .locator('[name="number"]')
-          .count()
-          .catch(() => 0)) > 0
       const hasCardButton =
         (await frame
           .locator('[data-value="card"]')
           .count()
           .catch(() => 0)) > 0
-
-      if (hasNumberInput || hasCardButton) return frame
+      if (hasCardButton) return frame
     }
 
     await page.waitForTimeout(250)

@@ -10,8 +10,9 @@ export default defineConfig({
   testMatch: '*.test.ts',
   timeout: 60_000,
   retries: 1,
+  reporter: process.env.CI ? [['line'], ['html', { open: 'never' }]] : 'list',
   use: {
-    headless: true,
+    headless: !!process.env.CI || true,
     screenshot: 'only-on-failure',
     trace: 'retain-on-failure',
     video: 'retain-on-failure',
