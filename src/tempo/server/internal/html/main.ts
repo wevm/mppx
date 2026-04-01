@@ -1,9 +1,7 @@
 import { local, Provider } from 'accounts'
 import { Json } from 'ox'
 import { createClient, custom, http } from 'viem'
-import { generatePrivateKey } from 'viem/accounts'
 import { tempoModerato, tempoLocalnet } from 'viem/chains'
-import { Account, Actions } from 'viem/tempo'
 
 import type * as Challenge from '../../../../Challenge.js'
 import { tempo } from '../../../../client/index.js'
@@ -27,6 +25,8 @@ const provider = Provider.create({
     ? {
         adapter: local({
           async loadAccounts() {
+            const { generatePrivateKey } = await import('viem/accounts')
+            const { Account, Actions } = await import('viem/tempo')
             const privateKey = generatePrivateKey()
             const account = Account.fromSecp256k1(privateKey)
             const client = createClient({

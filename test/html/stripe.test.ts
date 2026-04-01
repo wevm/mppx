@@ -1,4 +1,4 @@
-import type { Frame, Page, TestInfo } from '@playwright/test'
+import type { Frame, Page } from '@playwright/test'
 import { expect, test } from '@playwright/test'
 
 test('charge via stripe html payment page', async ({ page }, testInfo) => {
@@ -12,7 +12,7 @@ test('charge via stripe html payment page', async ({ page }, testInfo) => {
   await expect(page.locator('h1')).toHaveText('Payment Required')
   await expect(page.getByRole('button', { name: 'Pay' })).toBeVisible({ timeout: 10_000 })
 
-  if (!isHeadless(testInfo)) {
+  if (!testInfo.project.use.headless) {
     const stripeFrame = await getStripePaymentFrame(page)
     const numberInput = stripeFrame.locator('[name="number"]')
     const cardButton = stripeFrame.locator('[data-value="card"]')
@@ -45,10 +45,6 @@ test('service worker endpoint returns javascript', async ({ page }) => {
   expect(response?.headers()['content-type']).toContain('application/javascript')
   expect(response?.status()).toBe(200)
 })
-
-function isHeadless(testInfo: TestInfo) {
-  return testInfo.project.use.headless !== false
-}
 
 async function getStripePaymentFrame(page: Page, timeout = 30_000): Promise<Frame> {
   const deadline = Date.now() + timeout
