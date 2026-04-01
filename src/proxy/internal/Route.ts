@@ -42,13 +42,16 @@ export function matchPath(
   path: string,
   filter?: (value: unknown) => boolean,
 ): { key: string; value: unknown } | null {
+  let match: { key: string; value: unknown } | null = null
   for (const [key, value] of Object.entries(routes)) {
     if (filter && !filter(value)) continue
     const { pattern } = parseRouteKey(key)
     const urlPattern = new URLPattern({ pathname: pattern })
-    if (urlPattern.test({ pathname: path })) return { key, value }
+    if (!urlPattern.test({ pathname: path })) continue
+    if (match) return null
+    match = { key, value }
   }
-  return null
+  return match
 }
 
 function parseRouteKey(key: string): { method: string | undefined; pattern: string } {

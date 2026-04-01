@@ -63,9 +63,9 @@ export function charge<const parameters extends charge.Parameters>(parameters: p
 
     html: html ? { config: html, content: htmlContent } : undefined,
 
-    async verify({ credential }) {
+    async verify({ credential, request }) {
       const { challenge } = credential
-      const { request } = challenge
+      const resolvedRequest = Methods.charge.schema.request.parse(request)
 
       Expires.assert(challenge.expires, challenge.id)
 
@@ -76,15 +76,23 @@ export function charge<const parameters extends charge.Parameters>(parameters: p
         externalId?: string
       }
 
-      const userMetadata = request.methodDetails?.metadata as Record<string, string> | undefined
+      const userMetadata = resolvedRequest.methodDetails?.metadata as
+        | Record<string, string>
+        | undefined
       const resolvedMetadata = { ...buildAnalytics({ credential }), ...userMetadata }
 
       const pi = client
-        ? await createWithClient({ client, challenge, request, spt, metadata: resolvedMetadata })
+        ? await createWithClient({
+            client,
+            challenge,
+            request: resolvedRequest,
+            spt,
+            metadata: resolvedMetadata,
+          })
         : await createWithSecretKey({
             secretKey: secretKey!,
             challenge,
-            request,
+            request: resolvedRequest,
             spt,
             metadata: resolvedMetadata,
           })

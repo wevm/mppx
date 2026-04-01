@@ -1,6 +1,6 @@
 /**
  * Tempo-specific SSE transport that wraps the base HTTP transport
- * with metering logic (context capture from credentials, per-token
+ * with metering logic (context capture from verified credentials, per-token
  * charging via Sse.serve).
  *
  * @internal
@@ -8,6 +8,7 @@
 import * as Transport from '../../../server/Transport.js'
 import * as ChannelStore from '../../session/ChannelStore.js'
 import * as Sse_core from '../../session/Sse.js'
+import type { SessionCredentialPayload } from '../../session/Types.js'
 
 /** SSE transport with Tempo session controller. */
 export type Sse = Transport.Sse<Sse_core.SessionController>
@@ -33,30 +34,24 @@ export function sse(options: sse.Options & { store: ChannelStore.ChannelStore })
     return store
   })()
 
-  const contextMap = new Map<string, Sse_core.fromRequest.Context & { signal?: AbortSignal }>()
-
   const base = Transport.http()
   return Transport.from<Request, Response, Transport.ReceiptResponseOf<Sse>, Response>({
     name: 'sse',
 
     getCredential(request) {
-      const credential = base.getCredential(request)
-      if (credential) {
-        try {
-          const ctx = Sse_core.fromRequest(request)
-          contextMap.set(ctx.challengeId, { ...ctx, signal: request.signal })
-        } catch {
-          // ignore — non-SSE credentials won't have session context
-        }
-      }
-      return credential
+      return base.getCredential(request)
     },
 
     respondChallenge(options) {
       return base.respondChallenge(options) as Response
     },
 
-    respondReceipt({ receipt, response, challengeId }) {
+    respondReceipt({ credential, receipt, response, challengeId, input }) {
+      const payload = credential.payload as Partial<SessionCredentialPayload>
+      if (!payload.channelId) throw new Error('No SSE context available')
+      const channelId = payload.channelId
+      const tickCost = BigInt(credential.challenge.request.amount as string)
+
       // Auto-detect upstream SSE responses and parse them into an
       // AsyncIterable so they flow through the metered pipeline.
       // This lets proxy consumers simply pass `result.withReceipt(upstreamRes)`
@@ -67,10 +62,6 @@ export function sse(options: sse.Options & { store: ChannelStore.ChannelStore })
           : response
 
       if (isAsyncGeneratorFunction(resolved) || isAsyncIterable(resolved)) {
-        const ctx = contextMap.get(challengeId)
-        if (!ctx) throw new Error('No SSE context available — credential was not parsed')
-        contextMap.delete(challengeId)
-
         // Pass async generator functions directly so Sse.serve gives them
         // a SessionController for manual charge(). Pass raw AsyncIterables
         // as-is so Sse.serve auto-charges per yielded value.
@@ -79,17 +70,19 @@ export function sse(options: sse.Options & { store: ChannelStore.ChannelStore })
           : (resolved as AsyncIterable<string>)
         const stream = Sse_core.serve({
           store,
-          channelId: ctx.channelId,
+          channelId,
           challengeId,
-          tickCost: ctx.tickCost,
+          tickCost,
           pollIntervalMs: pollingInterval,
           generate,
-          signal: ctx.signal,
+          signal: input.signal,
         })
         return Sse_core.toResponse(stream)
       }
 
       const baseResponse = base.respondReceipt({
+        credential,
+        input,
         receipt,
         response: response as Response,
         challengeId,
@@ -97,45 +90,38 @@ export function sse(options: sse.Options & { store: ChannelStore.ChannelStore })
 
       // Non-SSE response (e.g. upstream returned JSON instead of event-stream).
       // Need to deduct tickCost so request isn't free.
-      const ctx = contextMap.get(challengeId)
-      if (ctx) {
-        contextMap.delete(challengeId)
-
-        // Null-body statuses (e.g. 204 from management actions) cannot carry a
-        // response body per Fetch/HTTP semantics.
-        if (isNullBodyStatus(baseResponse.status)) {
-          return baseResponse
-        }
-
-        const stream = new ReadableStream<Uint8Array>({
-          async start(controller) {
-            // deduction completes before consumer reads
-            await ChannelStore.deductFromChannel(store, ctx.channelId, ctx.tickCost)
-            if (!baseResponse.body) {
-              controller.close()
-              return
-            }
-            const reader = baseResponse.body.getReader()
-            try {
-              while (true) {
-                const { done, value } = await reader.read()
-                if (done) break
-                controller.enqueue(value)
-              }
-            } finally {
-              reader.releaseLock()
-              controller.close()
-            }
-          },
-        })
-        return new Response(stream, {
-          status: baseResponse.status,
-          statusText: baseResponse.statusText,
-          headers: baseResponse.headers,
-        })
+      // Null-body statuses (e.g. 204 from management actions) cannot carry a
+      // response body per Fetch/HTTP semantics.
+      if (isNullBodyStatus(baseResponse.status)) {
+        return baseResponse
       }
 
-      return baseResponse
+      const stream = new ReadableStream<Uint8Array>({
+        async start(controller) {
+          // deduction completes before consumer reads
+          await ChannelStore.deductFromChannel(store, channelId, tickCost)
+          if (!baseResponse.body) {
+            controller.close()
+            return
+          }
+          const reader = baseResponse.body.getReader()
+          try {
+            while (true) {
+              const { done, value } = await reader.read()
+              if (done) break
+              controller.enqueue(value)
+            }
+          } finally {
+            reader.releaseLock()
+            controller.close()
+          }
+        },
+      })
+      return new Response(stream, {
+        status: baseResponse.status,
+        statusText: baseResponse.statusText,
+        headers: baseResponse.headers,
+      })
     },
   })
 }

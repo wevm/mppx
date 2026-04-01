@@ -113,19 +113,20 @@ describe('sse transport', () => {
     expect((credential!.payload as any).channelId).toBe(channelId)
   })
 
-  test('getCredential captures SSE context in contextMap', async () => {
+  test('respondReceipt derives SSE context from the verified credential', async () => {
     const store = memoryStore()
     await seedChannel(store, 10000000n)
     const transport = sse({ store })
 
-    const request = makeAuthorizedRequest()
-    transport.getCredential(request)
+    const credential = makeCredential()
 
     async function* gen() {
       yield 'test'
     }
 
     const response = transport.respondReceipt({
+      credential,
+      input: new Request('https://test.example.com/session'),
       receipt: makeReceipt(),
       response: gen(),
       challengeId,
@@ -151,8 +152,7 @@ describe('sse transport', () => {
     const store = memoryStore()
     await seedChannel(store, 10000000n)
     const transport = sse({ store })
-
-    transport.getCredential(makeAuthorizedRequest())
+    const request = makeAuthorizedRequest()
 
     async function* gen() {
       yield 'hello'
@@ -160,6 +160,8 @@ describe('sse transport', () => {
     }
 
     const response = transport.respondReceipt({
+      credential: makeCredential(),
+      input: request,
       receipt: makeReceipt(),
       response: gen(),
       challengeId,
@@ -184,10 +186,11 @@ describe('sse transport', () => {
     const store = memoryStore()
     await seedChannel(store, 10000000n)
     const transport = sse({ store })
-
-    transport.getCredential(makeAuthorizedRequest())
+    const request = makeAuthorizedRequest()
 
     const response = transport.respondReceipt({
+      credential: makeCredential(),
+      input: request,
       receipt: makeReceipt(),
       response: async function* (stream) {
         await stream.charge()
@@ -202,8 +205,7 @@ describe('sse transport', () => {
     const store = memoryStore()
     await seedChannel(store, 10000000n)
     const transport = sse({ store })
-
-    transport.getCredential(makeAuthorizedRequest())
+    const request = makeAuthorizedRequest()
 
     const encoder = new TextEncoder()
     const upstream = new Response(
@@ -218,6 +220,8 @@ describe('sse transport', () => {
     )
 
     const response = transport.respondReceipt({
+      credential: makeCredential(),
+      input: request,
       receipt: makeReceipt(),
       response: upstream,
       challengeId,
@@ -241,6 +245,8 @@ describe('sse transport', () => {
     })
 
     const response = transport.respondReceipt({
+      credential: makeCredential(),
+      input: new Request('https://test.example.com/session'),
       receipt,
       response: plainResponse,
       challengeId,
@@ -249,34 +255,24 @@ describe('sse transport', () => {
     expect(response.headers.get('Payment-Receipt')).toBeTruthy()
   })
 
-  test('respondReceipt cleans up contextMap after use', async () => {
+  test('respondReceipt no longer depends on prior getCredential side effects', async () => {
     const store = memoryStore()
     await seedChannel(store, 10000000n)
     const transport = sse({ store })
-
-    transport.getCredential(makeAuthorizedRequest())
+    const request = makeAuthorizedRequest()
 
     async function* gen() {
       yield 'first'
     }
 
-    transport.respondReceipt({
+    const response = transport.respondReceipt({
+      credential: makeCredential(),
+      input: request,
       receipt: makeReceipt(),
       response: gen(),
       challengeId,
     })
-
-    async function* gen2() {
-      yield 'second'
-    }
-
-    expect(() =>
-      transport.respondReceipt({
-        receipt: makeReceipt(),
-        response: gen2(),
-        challengeId,
-      }),
-    ).toThrow('No SSE context available')
+    expect(response.headers.get('Content-Type')).toContain('text/event-stream')
   })
 
   test('respondReceipt throws when no SSE context available', () => {
@@ -287,8 +283,15 @@ describe('sse transport', () => {
       yield 'hello'
     }
 
+    const credential = Credential.from({
+      challenge: makeChallenge(),
+      payload: { signature: '0xabc123', type: 'transaction' },
+    })
+
     expect(() =>
       transport.respondReceipt({
+        credential,
+        input: new Request('https://test.example.com/session'),
         receipt: makeReceipt(),
         response: gen(),
         challengeId,
@@ -300,14 +303,15 @@ describe('sse transport', () => {
     const store = memoryStore()
     await seedChannel(store, 10000000n)
     const transport = sse({ store })
-
-    transport.getCredential(makeAuthorizedRequest())
+    const request = makeAuthorizedRequest()
 
     const plainResponse = new Response(JSON.stringify({ content: 'hello' }), {
       headers: { 'Content-Type': 'application/json' },
     })
 
     const response = transport.respondReceipt({
+      credential: makeCredential(),
+      input: request,
       receipt: makeReceipt(),
       response: plainResponse,
       challengeId,
@@ -328,11 +332,12 @@ describe('sse transport', () => {
     const store = memoryStore()
     await seedChannel(store, 10000000n)
     const transport = sse({ store })
-
-    transport.getCredential(makeAuthorizedRequest())
+    const request = makeAuthorizedRequest()
 
     const managementResponse = new Response(null, { status: 204 })
     const response = transport.respondReceipt({
+      credential: makeCredential(),
+      input: request,
       receipt: makeReceipt(),
       response: managementResponse,
       challengeId,
@@ -353,14 +358,15 @@ describe('sse transport', () => {
     await seedChannel(store, 10000000n)
 
     const transport = sse({ store, poll: true })
-
-    transport.getCredential(makeAuthorizedRequest())
+    const request = makeAuthorizedRequest()
 
     async function* gen() {
       yield 'test'
     }
 
     const response = transport.respondReceipt({
+      credential: makeCredential(),
+      input: request,
       receipt: makeReceipt(),
       response: gen(),
       challengeId,

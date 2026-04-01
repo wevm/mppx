@@ -113,6 +113,8 @@ describe('mcpSdk', () => {
 
       const result = transport.respondReceipt({
         challengeId: 'test-challenge-id',
+        credential,
+        input: {} as Extra,
         receipt,
         response,
       })
@@ -139,6 +141,8 @@ describe('mcpSdk', () => {
 
       const result = transport.respondReceipt({
         challengeId: 'cid',
+        credential,
+        input: {} as Extra,
         receipt,
         response,
       })
@@ -162,6 +166,8 @@ describe('mcpSdk', () => {
 
       const result = transport.respondReceipt({
         challengeId: 'cid',
+        credential,
+        input: {} as Extra,
         receipt,
         response,
       })

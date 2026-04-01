@@ -193,6 +193,15 @@ describe('matchPath', () => {
     expect(result).toMatchObject({ key: 'POST /v1/*' })
   })
 
+  // TODO (brendanryan): Relax this if `matchPath()` gains method-aware disambiguation.
+  test('error: returns null when multiple paid routes share the same path', () => {
+    const routes = {
+      'GET /v1/stream': { pay: () => {} },
+      'POST /v1/stream': { pay: () => {} },
+    }
+    expect(Route.matchPath(routes, '/v1/stream', paidOnly)).toBeNull()
+  })
+
   test('error: returns null when all routes are free', () => {
     const routes = {
       'GET /v1/models': true,

@@ -10,6 +10,7 @@ import {
 import { tempo as tempo_chain } from 'viem/chains'
 import { Abis, Transaction } from 'viem/tempo'
 
+import { PaymentError, VerificationFailedError } from '../../Errors.js'
 import * as Expires from '../../Expires.js'
 import type { LooseOmit, NoExtraKeys } from '../../internal/types.js'
 import * as Method from '../../Method.js'
@@ -114,16 +115,17 @@ export function charge<const parameters extends charge.Parameters>(
 
     async verify({ credential, request }) {
       const { challenge } = credential
-      const { chainId, feePayer } = request
+      const resolvedRequest = Methods.charge.schema.request.parse(request)
+      const chainId = resolvedRequest.methodDetails?.chainId ?? request.chainId
+      const feePayer = request.feePayer
 
       const client = await getClient({ chainId })
 
-      const { request: challengeRequest } = challenge
-      const { amount, methodDetails } = challengeRequest
+      const { amount, methodDetails } = resolvedRequest
       const expires = challenge.expires
 
-      const currency = challengeRequest.currency as `0x${string}`
-      const recipient = challengeRequest.recipient as `0x${string}`
+      const currency = resolvedRequest.currency as `0x${string}`
+      const recipient = resolvedRequest.recipient as `0x${string}`
 
       Expires.assert(expires, challenge.id)
 
@@ -536,7 +538,8 @@ async function assertHashUnused(
   hash: `0x${string}`,
 ): Promise<void> {
   const seen = await store.get(getHashStoreKey(hash))
-  if (seen !== null) throw new Error('Transaction hash has already been used.')
+  if (seen !== null)
+    throw new VerificationFailedError({ reason: 'Transaction hash has already been used' })
 }
 
 /** @internal */
@@ -553,7 +556,8 @@ async function assertProofUnused(
   challengeId: string,
 ): Promise<void> {
   const seen = await store.get(getProofStoreKey(challengeId))
-  if (seen !== null) throw new Error('Proof credential has already been used.')
+  if (seen !== null)
+    throw new VerificationFailedError({ reason: 'Proof credential has already been used' })
 }
 
 /** @internal */
@@ -579,8 +583,10 @@ function toReceipt(receipt: TransactionReceipt) {
 }
 
 /** @internal */
-class MismatchError extends Error {
+class MismatchError extends PaymentError {
   override readonly name = 'MismatchError'
+  readonly title = 'Verification Failed'
+  readonly type = 'https://paymentauth.org/problems/verification-failed'
 
   constructor(reason: string, details: Record<string, string>) {
     super([reason, ...Object.entries(details).map(([k, v]) => `  - ${k}: ${v}`)].join('\n'))
