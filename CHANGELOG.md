@@ -1,5 +1,17 @@
 # mppx
 
+## 0.5.1
+
+### Patch Changes
+
+- dd27cb1: Validate the `did:pkh:eip155` source DID on zero-dollar Tempo proof credentials. Servers now reject malformed proof source DIDs and chain ID mismatches between the source DID and the challenge signing domain.
+
+## 0.5.0
+
+### Minor Changes
+
+- 5e7750b: Added a `proof` credential type for zero-amount Tempo charge requests. Clients now sign an EIP-712 proof over the challenge ID instead of creating a broadcastable transaction, and servers verify the proof against the credential source DID before accepting the request. This prevents zero-dollar auth flows from burning gas when the payer would otherwise have been the fee payer.
+
 ## 0.4.12
 
 ### Patch Changes

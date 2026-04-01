@@ -3,13 +3,41 @@ name: Pull request audit
 on:
   pull_request:
     types: [labeled]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: Pull request number to audit
+        required: true
+        type: number
+      sha:
+        description: Optional commit SHA override for the audit target
+        required: false
+        type: string
 
 jobs:
   publish:
     runs-on: ubuntu-latest
-    if: github.event.label.name == 'cyclops'
+    if: github.event_name == 'workflow_dispatch' || github.event.label.name == 'cyclops'
     steps:
+      - name: Resolve manual target SHA
+        if: github.event_name == 'workflow_dispatch'
+        id: resolve_manual_target
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          if [[ -n '${{ inputs.sha }}' ]]; then
+            echo 'sha=${{ inputs.sha }}' >> "$GITHUB_OUTPUT"
+          else
+            SHA=$(gh api repos/${{ github.repository }}/pulls/${{ inputs.pr_number }} --jq '.head.sha')
+            echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Publish event
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number || inputs.pr_number }}
+          PR_SHA: ${{ github.event.pull_request.head.sha || steps.resolve_manual_target.outputs.sha }}
         run: |
           set -euo pipefail
 
@@ -24,8 +52,8 @@ jobs:
               "repository": "${{ github.repository }}",
               "event": "pr_audit",
               "data": {
-                "pr_number": ${{ github.event.pull_request.number }},
-                "sha": "${{ github.event.pull_request.head.sha }}"
+                "pr_number": ${{ env.PR_NUMBER }},
+                "sha": "${{ env.PR_SHA }}"
               }
             }')
           echo "HTTP status: $HTTP_CODE"
