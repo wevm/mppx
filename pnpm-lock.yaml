@@ -7,7 +7,7 @@ settings:
 overrides:
   mppx: workspace:*
   vitest: npm:@voidzero-dev/vite-plus-test@~0.1.14
-  ox: ^0.14.1
+  ox: 0.14.7
   viem: ^2.47.5
   path-to-regexp@<8.4.0: 8.4.0
   tar@<=7.5.10: 7.5.11
@@ -41,8 +41,8 @@ importers:
         specifier: ^0.3.1
         version: 0.3.1(openapi-types@12.1.3)
       ox:
-        specifier: ^0.14.1
-        version: 0.14.1(typescript@5.9.3)(zod@4.3.6)
+        specifier: 0.14.7
+        version: 0.14.7(typescript@5.9.3)(zod@4.3.6)
       zod:
         specifier: ^4.3.6
         version: 4.3.6
@@ -1655,7 +1655,7 @@ packages:
     resolution: {integrity: sha512-EU5gDsUp5t7+cuLv12/L8hfyWfCIKsBNiiBqpOqxZJxvAcAiQk4xFe2jMgaQPqApc3Omvxrk032M8AQ4N0cQeg==}
     peerDependencies:
       '@tanstack/query-core': '>=5.0.0'
-      ox: ^0.14.1
+      ox: 0.14.7
       typescript: '>=5.7.3'
       viem: ^2.47.5
     peerDependenciesMeta:
@@ -2912,14 +2912,6 @@ packages:
 
   outdent@0.5.0:
     resolution: {integrity: sha512-/jHxFIzoMXdqPzTaCpFzAAWhpkSjZPF4Vsn6jAfNpmbH/ymsmd7Qc6VE9BGn0L6YMj6uwpQLxCECpus4ukKS9Q==}
-
-  ox@0.14.1:
-    resolution: {integrity: sha512-93eZUbyDMYBWbFoPivZb8lyE3wFIYg795rjdPu2YRMBAkDnpUHoAmuoEfoMJ/RRWpsA8+jnSFjOWJEfLT72XyA==}
-    peerDependencies:
-      typescript: '>=5.4.0'
-    peerDependenciesMeta:
-      typescript:
-        optional: true
 
   ox@0.14.7:
     resolution: {integrity: sha512-zSQ/cfBdolj7U4++NAvH7sI+VG0T3pEohITCgcQj8KlawvTDY4vGVhDT64Atsm0d6adWfIYHDpu88iUBMMp+AQ==}
@@ -6203,21 +6195,6 @@ snapshots:
 
   outdent@0.5.0: {}
 
-  ox@0.14.1(typescript@5.9.3)(zod@4.3.6):
-    dependencies:
-      '@adraffy/ens-normalize': 1.11.1
-      '@noble/ciphers': 1.3.0
-      '@noble/curves': 1.9.1
-      '@noble/hashes': 1.8.0
-      '@scure/bip32': 1.7.0
-      '@scure/bip39': 1.6.0
-      abitype: 1.2.3(typescript@5.9.3)(zod@4.3.6)
-      eventemitter3: 5.0.1
-    optionalDependencies:
-      typescript: 5.9.3
-    transitivePeerDependencies:
-      - zod
-
   ox@0.14.7(typescript@5.9.3)(zod@4.3.6):
     dependencies:
       '@adraffy/ens-normalize': 1.11.1
@@ -6787,7 +6764,7 @@ snapshots:
   tempo.ts@0.14.2(typescript@5.9.3)(viem@2.47.6(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.3.6))(zod@4.3.6):
     dependencies:
       '@remix-run/fetch-router': 0.17.0
-      ox: 0.14.1(typescript@5.9.3)(zod@4.3.6)
+      ox: 0.14.7(typescript@5.9.3)(zod@4.3.6)
     optionalDependencies:
       viem: 2.47.6(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.3.6)
     transitivePeerDependencies:

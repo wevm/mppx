@@ -7,6 +7,8 @@ const root = path.resolve(import.meta.dirname, '..')
 const outDir = path.resolve(root, '.tmp/html-build')
 const defaultMode = process.env.TEST ? 'test' : 'production'
 const stripeMode = process.env.STRIPE_HTML_MODE ?? defaultMode
+const formatBundleSize = (bytes: number) =>
+  bytes >= 1_000 ? `${(bytes / 1_000).toFixed(1)} kB` : `${bytes} B`
 
 // HTML entries — bundled into <script> tags
 const htmlEntries = [
@@ -46,11 +48,12 @@ for (const { entry, mode, outFile } of htmlEntries) {
   if (!jsFile) throw new Error(`No .js output found for ${entry}`)
 
   const code = fs.readFileSync(path.join(outDir, jsFile), 'utf8').trim()
+  const bundleBytes = Buffer.byteLength(code)
   const content = `// Generated — do not edit.\nexport const html = ${JSON.stringify(`<script>${code}</script>`)}\n`
 
   fs.writeFileSync(outFile, content)
   fs.rmSync(outDir, { recursive: true })
-  console.log(`wrote ${path.relative(root, outFile)}`)
+  console.log(`wrote ${path.relative(root, outFile)} (${formatBundleSize(bundleBytes)})`)
 }
 
 // Service worker (bundled as raw JS string)
@@ -71,9 +74,10 @@ for (const { entry, mode, outFile } of htmlEntries) {
   if (!jsFile) throw new Error(`No .js output found for ${entry}`)
 
   const code = fs.readFileSync(path.join(outDir, jsFile), 'utf8').trim()
+  const bundleBytes = Buffer.byteLength(code)
   const content = `// Generated — do not edit.\nexport const serviceWorker = ${JSON.stringify(code)}\n`
 
   fs.writeFileSync(outFile, content)
   fs.rmSync(outDir, { recursive: true })
-  console.log(`wrote ${path.relative(root, outFile)}`)
+  console.log(`wrote ${path.relative(root, outFile)} (${formatBundleSize(bundleBytes)})`)
 }

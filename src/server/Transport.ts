@@ -129,7 +129,7 @@ export function http(): Http {
     respondChallenge(options) {
       const { challenge, error, input } = options
 
-      if (options.html && new URL(input.url).searchParams.has('__mppx_worker'))
+      if (options.html && new URL(input.url).searchParams.has(Html.serviceWorkerParam))
         return new Response(serviceWorker, {
           status: 200,
           headers: {
@@ -146,10 +146,6 @@ export function http(): Http {
       const body = (() => {
         if (options.html && input.headers.get('Accept')?.includes('text/html')) {
           headers['Content-Type'] = 'text/html; charset=utf-8'
-          const data = Json.stringify({ config: options.html.config, challenge }).replace(
-            /</g,
-            '\\u003c',
-          )
           const html = String.raw
           return html`<!doctype html>
             <html lang="en">
@@ -173,7 +169,10 @@ ${Json.stringify(challenge, null, 2)
                 >
                 <div id="root"></div>
                 <script id="${Html.dataId}" type="application/json">
-                  ${data}
+                  ${Json.stringify({ config: options.html.config, challenge }).replace(
+                    /</g,
+                    '\\u003c',
+                  )}
                 </script>
                 ${options.html.content}
               </body>
