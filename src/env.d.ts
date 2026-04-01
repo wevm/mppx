@@ -1,5 +1,7 @@
 /// <reference types="vite/client" />
 
+declare const __TEST__: boolean
+
 interface ImportMetaEnv {
   readonly VITE_NODE_ENV: 'localnet' | 'testnet' | 'mainnet'
   readonly VITE_HTTP_LOG: 'true' | 'false'

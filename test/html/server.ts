@@ -13,14 +13,14 @@ export async function startServer(port: number): Promise<HtmlTestServer> {
   if (!stripeSecretKey) throw new Error('Missing VITE_STRIPE_SECRET_KEY')
 
   const account = privateKeyToAccount(generatePrivateKey())
-  const tempoClient = createClient({
+  const client = createClient({
     chain: tempoModerato,
     pollingInterval: 1_000,
-    transport: createHttpTransport(process.env.MPPX_RPC_URL),
+    transport: createHttpTransport(),
   })
   for (let attempt = 1; ; attempt++)
     try {
-      await Actions.faucet.fundSync(tempoClient, { account })
+      await Actions.faucet.fundSync(client, { account })
       break
     } catch (error) {
       if (attempt >= 3) throw error

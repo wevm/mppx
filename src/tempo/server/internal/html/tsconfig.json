@@ -4,5 +4,5 @@
     "lib": ["es2022", "dom"],
     "types": []
   },
-  "include": ["./**/*.ts"]
+  "include": ["./**/*.ts", "../../../../env.d.ts"]
 }

@@ -22,7 +22,7 @@ for (const entry of htmlEntries) {
     },
     transform: {
       define: {
-        __LOCAL_ACCOUNT__: JSON.stringify(process.env.LOCAL_ACCOUNT ?? ''),
+        __TEST__: process.env.TEST ? 'true' : 'false',
       },
     },
     output: {
