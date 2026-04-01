@@ -19,7 +19,9 @@ export const classNames = {
 
 export const html = String.raw
 
-export function style(theme: Theme) {
+export function style(theme: {
+  [k in keyof Omit<Theme, 'fontUrl' | 'logo'>]-?: NonNullable<Theme[k]>
+}) {
   const colors = Object.fromEntries(
     colorTokens.map((name) => [name, resolveColor(theme[name], defaultTheme[name])]),
   ) as Record<(typeof colorTokens)[number], readonly [light: string, dark: string]>
@@ -36,6 +38,7 @@ export function style(theme: Theme) {
     !isLightOnly && !isDarkOnly
       ? `\n    @media (prefers-color-scheme: dark) {\n      :root {\n        ${darkVars}\n      }\n    }`
       : ''
+  // TODO: basic stylesheet reset
   return html`
     <style>
       * {
@@ -45,15 +48,16 @@ export function style(theme: Theme) {
       }
       :root {
         color-scheme: ${theme.colorScheme};
-        ${rootVars}
         --mppx-radius: ${theme.radius};
         --mppx-font-family: ${theme.fontFamily};
+        ${rootVars}
       }${darkMedia}
       body {
         -webkit-font-smoothing: antialiased;
         -moz-osx-font-smoothing: grayscale;
         background: var(--mppx-background);
         color: var(--mppx-foreground);
+        font-family: var(--mppx-font-family);
       }
       [hidden] {
         display: none !important;

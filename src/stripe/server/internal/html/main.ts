@@ -9,7 +9,8 @@ import type { charge as chargeClient } from '../../../../stripe/client/Charge.js
 import type { charge } from '../../../../stripe/server/Charge.js'
 import type * as Methods from '../../../Methods.js'
 
-const data = JSON.parse(document.getElementById(Html.dataId)!.textContent!) as {
+const dataElement = document.getElementById(Html.dataId)!
+const data = JSON.parse(dataElement.textContent) as {
   config: NonNullable<charge.Parameters['html']>
   challenge: Challenge.FromMethods<[typeof Methods.charge]>
   theme: {
@@ -61,21 +62,21 @@ root.appendChild(h2)
           return 'night' as const
       }
     })()
-    const resolvedColorSchemeIndex = darkQuery ? 1 : 0
-    console.log({ theme, resolvedColorSchemeIndex, darkQuery })
+    const resolvedColorSchemeIndex = darkQuery.matches ? 1 : 0
     return Html.mergeDefined(
       {
+        disableAnimations: true,
         theme,
         variables: {
-          colorPrimary: data.theme.accent[resolvedColorSchemeIndex],
+          borderRadius: data.theme.radius,
           colorBackground: data.theme.surface[resolvedColorSchemeIndex],
+          colorDanger: data.theme.negative[resolvedColorSchemeIndex],
+          colorPrimary: data.theme.accent[resolvedColorSchemeIndex],
           colorText: data.theme.foreground[resolvedColorSchemeIndex],
           colorTextSecondary: data.theme.muted[resolvedColorSchemeIndex],
-          colorDanger: data.theme.negative[resolvedColorSchemeIndex],
           fontFamily: data.theme.fontFamily,
-          fontWeightNormal: '400',
           fontSizeSm: '0.875rem',
-          borderRadius: data.theme.radius,
+          fontWeightNormal: '400',
           spacingUnit: '2px',
         },
       } satisfies Appearance,
@@ -144,3 +145,5 @@ async function createToken(opts: chargeClient.OnChallengeParameters) {
   const json = (await res.json()) as { spt: string }
   return json.spt
 }
+
+dataElement.remove()

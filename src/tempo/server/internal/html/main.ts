@@ -9,7 +9,8 @@ import * as Html from '../../../../server/internal/html/config.js'
 import { submitCredential } from '../../../../server/internal/html/serviceWorker.client.js'
 import type * as Methods from '../../../Methods.js'
 
-const data = Json.parse(document.getElementById(Html.dataId)!.textContent) as {
+const dataElement = document.getElementById(Html.dataId)!
+const data = Json.parse(dataElement.textContent) as {
   config: {}
   challenge: Challenge.FromMethods<[typeof Methods.charge]>
   theme: {
@@ -73,3 +74,5 @@ button.onclick = async () => {
   }
 }
 root.appendChild(button)
+
+dataElement.remove()

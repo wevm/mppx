@@ -150,6 +150,7 @@ export function http(): Http {
 
           const theme = Html.mergeDefined(
             {
+              fontUrl: undefined as Html.Theme['fontUrl'],
               logo: undefined as Html.Theme['logo'],
               ...Html.defaultTheme,
             },
