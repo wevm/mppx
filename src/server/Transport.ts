@@ -146,6 +146,7 @@ export function http(): Http {
       const body = (() => {
         if (options.html && input.headers.get('Accept')?.includes('text/html')) {
           headers['Content-Type'] = 'text/html; charset=utf-8'
+          const theme = options.html.theme
           const html = String.raw
           return html`<!doctype html>
             <html lang="en">
@@ -161,6 +162,10 @@ export function http(): Http {
               </head>
               <body>
                 <h1>Payment Required</h1>
+
+                ${theme?.logo &&
+                `<img src="${typeof theme.logo === 'string' ? theme.logo : theme.logo.light}" />`}
+
                 <pre>
 ${Json.stringify(challenge, null, 2)
                     .replace(/&/g, '&amp;')

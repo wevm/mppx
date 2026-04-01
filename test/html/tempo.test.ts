@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test'
 
-test('charge via html payment page', async ({ page }) => {
+test('charge via tempo html payment page', async ({ page }) => {
   // Navigate to the payment endpoint as a browser
   await page.goto('/tempo/charge', {
     waitUntil: 'domcontentloaded',

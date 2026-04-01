@@ -10,8 +10,23 @@ const mppx = Mppx.create({
     stripe.charge({
       client: stripeClient,
       html: {
-        publishableKey: process.env.VITE_STRIPE_PUBLIC_KEY!,
         createTokenUrl: '/api/create-spt',
+        elements: {
+          options: {},
+          paymentOptions: {
+            fields: {
+              billingDetails: { address: { postalCode: 'never', country: 'never' } },
+            },
+          },
+          createPaymentMethodOptions: {
+            params: {
+              billing_details: {
+                address: { postal_code: '10001', country: 'US' },
+              },
+            },
+          },
+        },
+        publishableKey: process.env.VITE_STRIPE_PUBLIC_KEY!,
       },
       // Stripe Business Network profile ID.
       networkId: 'internal',

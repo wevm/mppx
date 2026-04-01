@@ -49,11 +49,13 @@ root.appendChild(h2)
   })
 
   const elements = stripeJs.elements({
-    amount: Number(data.challenge.request.amount),
     appearance: getAppearance(),
-    currency: data.challenge.request.currency as string,
+    ...data.config.elements?.options,
+    amount: Number(data.challenge.request.amount),
+    currency: data.challenge.request.currency,
     mode: 'payment',
     paymentMethodCreation: 'manual',
+    paymentMethodTypes: data.challenge.request.methodDetails.paymentMethodTypes,
   })
 
   darkQuery.addEventListener('change', () => {
@@ -61,7 +63,7 @@ root.appendChild(h2)
   })
 
   const form = document.createElement('form')
-  elements.create('payment').mount(form)
+  elements.create('payment', data.config.elements?.paymentOptions).mount(form)
   root.appendChild(form)
 
   const button = document.createElement('button')
@@ -74,7 +76,10 @@ root.appendChild(h2)
     button.disabled = true
     try {
       await elements.submit()
-      const { paymentMethod, error } = await stripeJs.createPaymentMethod({ elements })
+      const { paymentMethod, error } = await stripeJs.createPaymentMethod({
+        ...data.config.elements?.createPaymentMethodOptions,
+        elements,
+      })
       if (error || !paymentMethod) throw error ?? new Error('Failed to create payment method')
       const method = stripe({ client: stripeJs, createToken })[0]
       const credential = await method.createCredential({

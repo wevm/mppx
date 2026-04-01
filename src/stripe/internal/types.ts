@@ -1,3 +1,5 @@
+import * as StripeJsTypes from '../../stripe/server/internal/html/types.js'
+
 /**
  * Duck-typed interface for the Stripe Node SDK (`stripe` npm package).
  * Matches the subset of the API used by mppx for server-side payment verification.
@@ -24,3 +26,21 @@ export type StripeJs = {
   createPaymentMethod(...args: any[]): Promise<Record<string, unknown>>
   elements(...args: any[]): unknown
 }
+
+export type CreatePaymentMethodFromElements = Omit<
+  StripeJsTypes.CreatePaymentMethodFromElements,
+  'elements'
+> & {}
+
+export type StripeElementsOptionsMode = Omit<
+  Extract<StripeJsTypes.StripeElementsOptionsMode, { mode: 'payment' }>,
+  | 'amount'
+  | 'currency'
+  | 'mode'
+  | 'excludedPaymentMethodTypes'
+  | 'paymentMethodCreation'
+  | 'paymentMethodTypes'
+  | 'payment_method_types'
+> & {}
+
+export type StripePaymentElementOptions = StripeJsTypes.StripePaymentElementOptions

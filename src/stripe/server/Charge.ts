@@ -3,7 +3,13 @@ import { PaymentActionRequiredError, VerificationFailedError } from '../../Error
 import * as Expires from '../../Expires.js'
 import type { LooseOmit, OneOf } from '../../internal/types.js'
 import * as Method from '../../Method.js'
-import type { StripeClient } from '../internal/types.js'
+import type * as Html from '../../server/internal/html/config.ts'
+import type {
+  StripeClient,
+  CreatePaymentMethodFromElements,
+  StripeElementsOptionsMode,
+  StripePaymentElementOptions,
+} from '../internal/types.js'
 import * as Methods from '../Methods.js'
 import { html as htmlContent } from './internal/html.gen.js'
 
@@ -39,7 +45,7 @@ export function charge<const parameters extends charge.Parameters>(parameters: p
     decimals,
     description,
     externalId,
-    html,
+    html: { theme: htmlTheme, ...htmlConfig } = {},
     metadata,
     networkId,
     paymentMethodTypes,
@@ -61,7 +67,14 @@ export function charge<const parameters extends charge.Parameters>(parameters: p
       paymentMethodTypes,
     } as unknown as Defaults,
 
-    html: html ? { config: html, content: htmlContent } : undefined,
+    html:
+      'publishableKey' in htmlConfig && htmlConfig.publishableKey && htmlConfig.createTokenUrl
+        ? {
+            config: htmlConfig,
+            content: htmlContent,
+            theme: htmlTheme,
+          }
+        : undefined,
 
     async verify({ credential }) {
       const { challenge } = credential
@@ -113,7 +126,20 @@ export declare namespace charge {
 
   type Parameters = {
     /** Render payment page when Accept header is text/html (e.g. in browsers) */
-    html?: { createTokenUrl: string; publishableKey: string } | undefined
+    html?:
+      | {
+          createTokenUrl: string
+          elements?:
+            | {
+                options?: StripeElementsOptionsMode | undefined
+                paymentOptions?: StripePaymentElementOptions | undefined
+                createPaymentMethodOptions?: CreatePaymentMethodFromElements | undefined
+              }
+            | undefined
+          publishableKey: string
+          theme?: Html.Theme
+        }
+      | undefined
     /** Optional metadata to include in SPT creation requests. */
     metadata?: Record<string, string> | undefined
   } & Defaults &
