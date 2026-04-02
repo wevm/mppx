@@ -163,28 +163,38 @@ export function http(): Http {
               <head>
                 <meta charset="UTF-8" />
                 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+                <meta name="robots" content="noindex" />
+                <meta name="color-scheme" content="${theme.colorScheme}" />
                 <title>${text.title}</title>
+                ${theme.fontUrl
+                  ? `<link rel="preconnect" href="${new URL(theme.fontUrl).origin}" crossorigin />
+                     <link rel="stylesheet" href="${theme.fontUrl}" />`
+                  : ''}
                 ${Html.style(theme)}
               </head>
               <body>
                 <main>
                   <header class="${Html.classNames.header}">
                     ${Html.logo(theme.logo)}
-                    <h1>${text.title}</h1>
+                    <span>${text.paymentRequired}</span>
                   </header>
-
-                  <div class="${Html.classNames.summary}">
-                    <div>${await options.html.formatAmount(challenge.request)}</div>
-                    ${challenge.description ? `<div>${challenge.description}</div>` : ''}
-                    ${challenge.expires
-                      ? `<div>Expires at ${new Date(challenge.expires).toLocaleString()}</div>`
+                  <section class="${Html.classNames.summary}" aria-label="Payment summary">
+                    <h1 class="${Html.classNames.summaryAmount}">
+                      ${await options.html.formatAmount(challenge.request)}
+                    </h1>
+                    ${challenge.description
+                      ? `<p class="${Html.classNames.summaryDescription}">${challenge.description}</p>`
                       : ''}
-                  </div>
-                  <div id="root"></div>
+                    ${challenge.expires
+                      ? `<p class="${Html.classNames.summaryExpires}">${text.expires} <time datetime="${new Date(challenge.expires).toISOString()}">${new Date(challenge.expires).toLocaleString()}</time></p>`
+                      : ''}
+                  </section>
+                  <div id="${Html.rootId}" aria-label="Payment form"></div>
                   <script id="${Html.dataId}" type="application/json">
                     ${Json.stringify({
                       config: options.html.config,
                       challenge,
+                      text,
                       theme,
                     } satisfies Html.Data).replace(/</g, '\\u003c')}
                   </script>

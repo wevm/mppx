@@ -73,8 +73,19 @@ export function charge<const parameters extends charge.Parameters>(parameters: p
         ? {
             config: htmlConfig,
             content: htmlContent,
-            formatAmount: (request: z.output<typeof Methods.charge.schema.request>) =>
-              `${request.currency}${request.amount}`,
+            formatAmount: (request: z.output<typeof Methods.charge.schema.request>) => {
+              try {
+                const formatter = new Intl.NumberFormat('en', {
+                  style: 'currency',
+                  currency: request.currency,
+                  currencyDisplay: 'narrowSymbol',
+                })
+                const decimals = formatter.resolvedOptions().maximumFractionDigits ?? 2
+                return formatter.format(Number(request.amount) / 10 ** decimals)
+              } catch {
+                return `${request.currency}${request.amount}`
+              }
+            },
             text: htmlText,
             theme: htmlTheme,
           }

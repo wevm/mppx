@@ -11,7 +11,7 @@ import type * as Methods from '../../../Methods.js'
 const dataElement = document.getElementById(Html.dataId)!
 const data = Json.parse(dataElement.textContent) as Html.Data<typeof Methods.charge>
 
-const root = document.getElementById('root')!
+const root = document.getElementById(Html.rootId)!
 
 const css = String.raw
 const style = document.createElement('style')
@@ -94,6 +94,9 @@ button.onclick = async () => {
 
     const credential = await method.createCredential({ challenge: data.challenge, context: {} })
     await submitCredential(credential)
+  } catch (e) {
+    const message = e instanceof Error && 'shortMessage' in e ? (e as any).shortMessage : undefined
+    Html.showError(message ?? (e instanceof Error ? e.message : 'Payment failed'))
   } finally {
     button.disabled = false
   }

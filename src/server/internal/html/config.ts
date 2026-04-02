@@ -15,6 +15,7 @@ export type Data<
 > = {
   config: config
   challenge: Challenge.FromMethods<[method]>
+  text: { [k in keyof Text]-?: NonNullable<Text[k]> }
   theme: {
     [k in keyof Omit<Theme, 'fontUrl' | 'logo'>]-?: NonNullable<Theme[k]>
   }
@@ -22,9 +23,12 @@ export type Data<
 
 export const dataId = '__MPPX_DATA__'
 
+export const rootId = 'root'
+
 export const serviceWorkerParam = '__mppx_worker'
 
 export const classNames = {
+  error: 'mppx-error',
   header: 'mppx-header',
   logo: 'mppx-logo',
   logoColorScheme: (colorScheme: string) =>
@@ -109,12 +113,15 @@ export function style(theme: {
         margin-left: auto;
         margin-right: auto;
         max-width: clamp(300px, calc(${vars.spacingUnit} * 224), 896px);
+        padding: calc(${vars.spacingUnit} * 12) calc(${vars.spacingUnit} * 8) calc(${vars.spacingUnit} * 16);
       }
       .${classNames.header} {
         align-items: center;
         display: flex;
+        flex-wrap: wrap;
+        gap: calc(${vars.spacingUnit} * 4);
         justify-content: space-between;
-        h1 {
+        span {
           background: ${vars.surface};
           border: 1px solid ${vars.border};
           border-radius: calc(${vars.spacingUnit} * 50);
@@ -141,10 +148,44 @@ export function style(theme: {
         background: ${vars.surface};
         border: 1px solid ${vars.border};
         border-radius: ${vars.radius};
-        padding: calc(${vars.spacingUnit} * 1) calc(${vars.spacingUnit} * 4);
+        display: flex;
+        flex-direction: column;
+        gap: calc(${vars.spacingUnit} * 3);
+        padding: calc(${vars.spacingUnit} * 6) calc(${vars.spacingUnit} * 6);
+      }
+      .${classNames.summaryAmount} {
+        font-size: 2.5rem;
+        font-variant-numeric: tabular-nums;
+        font-weight: 700;
+        line-height: 1.2;
+      }
+      .${classNames.summaryDescription} {
+        font-size: 1.25rem;
+      }
+      .${classNames.summaryExpires} {
+        color: ${vars.muted};
+      }
+      .${classNames.error} {
+        color: ${vars.negative};
+        font-size: 0.95rem;
+        text-align: center;
       }
     </style>
   `
+}
+
+export function showError(message: string) {
+  const existing = document.getElementById('__MPPX_ERROR__')
+  if (existing) {
+    existing.textContent = message
+    return
+  }
+  const el = document.createElement('p')
+  el.id = 'root_error'
+  el.className = classNames.error
+  el.role = 'alert'
+  el.textContent = message
+  document.getElementById(rootId)?.after(el)
 }
 
 export function logo(value: Theme['logo']) {
@@ -164,11 +205,20 @@ export function logo(value: Theme['logo']) {
 }
 
 export type Text = {
-  /** Page title. @default 'Payment Required' */
+  /** Prefix for the expiry line. @default 'Expires at' */
+  expires?: string | undefined
+  /** Pay button label. @default 'Pay' */
+  pay?: string | undefined
+  /** Badge label. @default 'Payment Required' */
+  paymentRequired?: string | undefined
+  /** Page title. @default text.paymentRequired */
   title?: string | undefined
 }
 
 export const defaultText = {
+  expires: 'Expires at',
+  pay: 'Pay',
+  paymentRequired: 'Payment Required',
   title: 'Payment Required',
 } as const satisfies Required<Text>
 

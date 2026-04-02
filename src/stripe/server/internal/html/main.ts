@@ -15,7 +15,7 @@ const data = Json.parse(dataElement.textContent) as Html.Data<
   NonNullable<charge.Parameters['html']>
 >
 
-const root = document.getElementById('root')!
+const root = document.getElementById(Html.rootId)!
 
 const css = String.raw
 const style = document.createElement('style')
@@ -32,6 +32,7 @@ style.textContent = css`
     cursor: pointer;
     font-weight: 500;
     padding: calc(${Html.vars.spacingUnit} * 4) calc(${Html.vars.spacingUnit} * 8);
+    width: 100%;
   }
   button:hover:not(:disabled) {
     opacity: 0.85;
@@ -46,7 +47,7 @@ root.append(style)
 ;(async () => {
   if (import.meta.env.MODE === 'test') {
     const button = document.createElement('button')
-    button.textContent = 'Pay'
+    button.textContent = data.text.pay
     root.appendChild(button)
     button.onclick = async () => {
       try {
@@ -57,6 +58,8 @@ root.append(style)
           context: { paymentMethod: 'pm_card_visa' },
         })
         await submitCredential(credential)
+      } catch (e) {
+        Html.showError(e instanceof Error ? e.message : 'Payment failed')
       } finally {
         button.disabled = false
       }
@@ -121,7 +124,7 @@ root.append(style)
   root.appendChild(form)
 
   const button = document.createElement('button')
-  button.textContent = 'Pay'
+  button.textContent = data.text.pay
   button.type = 'submit'
   form.appendChild(button)
 
@@ -130,17 +133,20 @@ root.append(style)
     button.disabled = true
     try {
       await elements.submit()
-      const { paymentMethod, error } = await stripeJs.createPaymentMethod({
+      const { paymentMethod, error: stripeError } = await stripeJs.createPaymentMethod({
         ...data.config.elements?.createPaymentMethodOptions,
         elements,
       })
-      if (error || !paymentMethod) throw error ?? new Error('Failed to create payment method')
+      if (stripeError || !paymentMethod)
+        throw stripeError ?? new Error('Failed to create payment method')
       const method = stripe({ client: stripeJs, createToken })[0]
       const credential = await method.createCredential({
         challenge: data.challenge,
         context: { paymentMethod: paymentMethod.id },
       })
       await submitCredential(credential)
+    } catch (e) {
+      Html.showError(e instanceof Error ? e.message : 'Payment failed')
     } finally {
       button.disabled = false
     }
