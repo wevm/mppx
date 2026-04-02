@@ -1,3 +1,5 @@
+import * as node_http from 'node:http'
+
 import type { z } from 'mppx'
 import { Challenge, Credential } from 'mppx'
 import { Mppx as Mppx_server, tempo as tempo_server } from 'mppx/server'
@@ -13,7 +15,9 @@ import {
 import { waitForTransactionReceipt } from 'viem/actions'
 import { Addresses } from 'viem/tempo'
 import { beforeAll, beforeEach, describe, expect, expectTypeOf, test } from 'vp/test'
+import { WebSocketServer } from 'ws'
 import { nodeEnv } from '~test/config.js'
+import * as Http from '~test/Http.js'
 
 const isLocalnet = nodeEnv === 'localnet'
 import {
@@ -32,6 +36,7 @@ import {
   InsufficientBalanceError,
   InvalidSignatureError,
 } from '../../Errors.js'
+import * as NodeRequest from '../../server/Request.js'
 import * as Store from '../../Store.js'
 import { sessionManager } from '../client/SessionManager.js'
 import {
@@ -42,6 +47,7 @@ import type * as Methods from '../Methods.js'
 import * as ChannelStore from '../session/ChannelStore.js'
 import type { SessionReceipt } from '../session/Types.js'
 import { signVoucher } from '../session/Voucher.js'
+import * as TempoWs from '../session/Ws.js'
 import { charge, session, settle } from './Session.js'
 
 const payer = accounts[2]
@@ -3074,6 +3080,226 @@ describe.runIf(isLocalnet)('session', () => {
       if (result.status === 200) {
         const response = result.withReceipt(new Response())
         expectTypeOf(response).toEqualTypeOf<Response>()
+      }
+    })
+  })
+
+  describe('WebSocket', () => {
+    test('open -> stream -> need-voucher -> resume -> close', async () => {
+      const backingStore = Store.memory()
+      const routeHandler = Mppx_server.create({
+        methods: [
+          tempo_server.session({
+            store: backingStore,
+            getClient: () => client,
+            account: recipientAccount,
+            currency,
+            escrowContract,
+            chainId: chain.id,
+          }),
+        ],
+        realm: 'api.example.com',
+        secretKey: 'secret',
+      }).session({ amount: '1', decimals: 6, unitType: 'token' })
+
+      let voucherUpdates = 0
+      const route = async (request: Request) => {
+        if (request.method === 'POST' && request.headers.has('Authorization')) {
+          try {
+            const credential = Credential.fromRequest<any>(request)
+            if (credential.payload?.action === 'voucher') voucherUpdates++
+          } catch {}
+        }
+        return routeHandler(request)
+      }
+
+      const httpHandler = NodeRequest.toNodeListener(async (request) => {
+        const result = await route(request)
+        if (result.status === 402) return result.challenge
+        return result.withReceipt(new Response('ok'))
+      })
+
+      const nodeServer = node_http.createServer(httpHandler)
+      const wsServer = new WebSocketServer({ noServer: true })
+
+      await new Promise<void>((resolve) => nodeServer.listen(0, resolve))
+      const { port } = nodeServer.address() as { port: number }
+      const server = Http.wrapServer(nodeServer, { port, url: `http://localhost:${port}` })
+
+      wsServer.on('connection', (socket: import('ws').WebSocket) => {
+        void TempoWs.serve({
+          socket,
+          store: backingStore,
+          url: `${server.url}/ws`,
+          route,
+          generate: async function* (stream: TempoWs.SessionController) {
+            await stream.charge()
+            yield 'chunk-1'
+            await stream.charge()
+            yield 'chunk-2'
+            await stream.charge()
+            yield 'chunk-3'
+          },
+        })
+      })
+
+      nodeServer.on('upgrade', (req, socket, head) => {
+        if (req.url !== '/ws') {
+          socket.destroy()
+          return
+        }
+
+        wsServer.handleUpgrade(req, socket, head, (websocket: import('ws').WebSocket) => {
+          wsServer.emit('connection', websocket, req)
+        })
+      })
+
+      try {
+        const manager = sessionManager({
+          account: payer,
+          client,
+          escrowContract,
+          fetch: globalThis.fetch,
+          maxDeposit: '3',
+        })
+
+        const ws = await manager.ws(`ws://localhost:${port}/ws`)
+        const chunks: string[] = []
+
+        await new Promise<void>((resolve, reject) => {
+          ws.addEventListener('message', (event) => {
+            if (typeof event.data !== 'string') return
+            chunks.push(event.data)
+          })
+          ws.addEventListener('close', () => resolve(), { once: true })
+          ws.addEventListener('error', () => reject(new Error('websocket stream failed')), {
+            once: true,
+          })
+        })
+
+        expect(chunks).toEqual(['chunk-1', 'chunk-2', 'chunk-3'])
+        expect(voucherUpdates).toBeGreaterThan(0)
+
+        const closeReceipt = await manager.close()
+        expect(closeReceipt?.status).toBe('success')
+        expect(closeReceipt?.spent).toBe('3000000')
+
+        const channelId = manager.channelId
+        expect(channelId).toBeTruthy()
+
+        const persisted = await ChannelStore.fromStore(backingStore).getChannel(channelId!)
+        expect(persisted?.finalized).toBe(true)
+      } finally {
+        wsServer.close()
+        server.close()
+      }
+    })
+
+    test('close() stops the stream and application listeners never receive payment control frames', async () => {
+      const backingStore = Store.memory()
+      const routeHandler = Mppx_server.create({
+        methods: [
+          tempo_server.session({
+            store: backingStore,
+            getClient: () => client,
+            account: recipientAccount,
+            currency,
+            escrowContract,
+            chainId: chain.id,
+          }),
+        ],
+        realm: 'api.example.com',
+        secretKey: 'secret',
+      }).session({ amount: '1', decimals: 6, unitType: 'token' })
+
+      const route = (request: Request) => routeHandler(request)
+
+      const httpHandler = NodeRequest.toNodeListener(async (request) => {
+        const result = await route(request)
+        if (result.status === 402) return result.challenge
+        return result.withReceipt(new Response('ok'))
+      })
+
+      const nodeServer = node_http.createServer(httpHandler)
+      const wsServer = new WebSocketServer({ noServer: true })
+
+      await new Promise<void>((resolve) => nodeServer.listen(0, resolve))
+      const { port } = nodeServer.address() as { port: number }
+      const server = Http.wrapServer(nodeServer, { port, url: `http://localhost:${port}` })
+
+      wsServer.on('connection', (socket: import('ws').WebSocket) => {
+        void TempoWs.serve({
+          socket,
+          store: backingStore,
+          url: `${server.url}/ws`,
+          route,
+          generate: async function* (stream: TempoWs.SessionController) {
+            await stream.charge()
+            yield 'chunk-1'
+            await new Promise((resolve) => setTimeout(resolve, 50))
+            await stream.charge()
+            yield 'chunk-2'
+            await stream.charge()
+            yield 'chunk-3'
+          },
+        })
+      })
+
+      nodeServer.on('upgrade', (req, socket, head) => {
+        if (req.url !== '/ws') {
+          socket.destroy()
+          return
+        }
+
+        wsServer.handleUpgrade(req, socket, head, (websocket: import('ws').WebSocket) => {
+          wsServer.emit('connection', websocket, req)
+        })
+      })
+
+      try {
+        const manager = sessionManager({
+          account: payer,
+          client,
+          escrowContract,
+          fetch: globalThis.fetch,
+          maxDeposit: '3',
+        })
+
+        let receiptCount = 0
+        let closePromise: Promise<SessionReceipt | undefined> | undefined
+        const ws = await manager.ws(`ws://localhost:${port}/ws`, {
+          onReceipt() {
+            receiptCount++
+            if (receiptCount === 2 && !closePromise) closePromise = manager.close()
+          },
+        })
+
+        const chunks: string[] = []
+        await new Promise<void>((resolve, reject) => {
+          ws.addEventListener('message', (event) => {
+            if (typeof event.data !== 'string') return
+            chunks.push(event.data)
+          })
+          ws.addEventListener('close', () => resolve(), { once: true })
+          ws.addEventListener('error', () => reject(new Error('websocket stream failed')), {
+            once: true,
+          })
+        })
+
+        const closeReceipt = await closePromise
+        expect(closeReceipt?.status).toBe('success')
+        expect(closeReceipt?.txHash).toBeTruthy()
+        expect(closeReceipt?.spent).toBe('2000000')
+        expect(chunks).toEqual(['chunk-1', 'chunk-2'])
+
+        const channelId = manager.channelId
+        expect(channelId).toBeTruthy()
+
+        const persisted = await ChannelStore.fromStore(backingStore).getChannel(channelId!)
+        expect(persisted?.finalized).toBe(true)
+      } finally {
+        wsServer.close()
+        server.close()
       }
     })
   })
