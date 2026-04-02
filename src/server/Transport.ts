@@ -195,6 +195,7 @@ export function http(): Http {
                       [challenge.id]: {
                         label: challenge.method.charAt(0).toUpperCase() + challenge.method.slice(1),
                         rootId: Html.rootId,
+                        formattedAmount: amount,
                         config: options.html.config,
                         challenge,
                         text,

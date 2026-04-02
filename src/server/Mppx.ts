@@ -849,17 +849,36 @@ export function compose(
       )
 
       const firstChallenge = htmlEntries[0]!.challenge
-      const amount = await htmlEntries[0]!.handler._internal.html!.formatAmount(
-        firstChallenge.request,
-      )
 
       const hasTabs = htmlEntries.length > 1
 
+      // Build data map keyed by challenge.id (before tabList so we can use formattedAmount)
+      const dataMap: Record<string, Html.Data> = {}
+      for (let i = 0; i < htmlEntries.length; i++) {
+        const entry = htmlEntries[i]!
+        dataMap[entry.challenge.id] = {
+          label:
+            entry.handler._internal.name.charAt(0).toUpperCase() +
+            entry.handler._internal.name.slice(1),
+          rootId: `${Html.rootId}-${i}`,
+          formattedAmount: await entry.handler._internal.html!.formatAmount(
+            entry.challenge.request,
+          ),
+          config: entry.handler._internal.html!.config,
+          challenge: entry.challenge as never,
+          text,
+          theme,
+        }
+      }
+
+      const firstData = Object.values(dataMap)[0]!
+      const dataValues = Object.values(dataMap)
+
       const tabList = hasTabs
         ? html`<nav class="${Html.classNames.tabList}" role="tablist" aria-label="Payment methods">
-            ${htmlEntries
+            ${dataValues
               .map(
-                (entry, i) =>
+                (data, i) =>
                   html`<button
                     class="${Html.classNames.tab}"
                     role="tab"
@@ -867,11 +886,18 @@ export function compose(
                     aria-selected="${i === 0 ? 'true' : 'false'}"
                     aria-controls="mppx-panel-${i}"
                     ${i !== 0 ? 'tabindex="-1"' : ''}
+                    data-amount="${Html.sanitize(data.formattedAmount)}"
+                    ${data.challenge.description
+                      ? `data-description="${Html.sanitize(data.challenge.description)}"`
+                      : ''}
+                    ${data.challenge.expires
+                      ? `data-expires="${Html.sanitize(data.challenge.expires)}"`
+                      : ''}
+                    ${data.challenge.expires
+                      ? `data-expires-label="${Html.sanitize(text.expires)}"`
+                      : ''}
                   >
-                    ${Html.sanitize(
-                      entry.handler._internal.name.charAt(0).toUpperCase() +
-                        entry.handler._internal.name.slice(1),
-                    )}
+                    ${Html.sanitize(data.label)}
                   </button>`,
               )
               .join('')}
@@ -891,22 +917,6 @@ export function compose(
             </div>`,
         )
         .join('')
-
-      // Build data map keyed by challenge.id
-      const dataMap: Record<string, Html.Data> = {}
-      for (let i = 0; i < htmlEntries.length; i++) {
-        const entry = htmlEntries[i]!
-        dataMap[entry.challenge.id] = {
-          label:
-            entry.handler._internal.name.charAt(0).toUpperCase() +
-            entry.handler._internal.name.slice(1),
-          rootId: `${Html.rootId}-${i}`,
-          config: entry.handler._internal.html!.config,
-          challenge: entry.challenge as never,
-          text,
-          theme,
-        }
-      }
 
       mergedHeaders.set('Content-Type', 'text/html; charset=utf-8')
 
@@ -928,7 +938,9 @@ export function compose(
                 <span>${text.paymentRequired}</span>
               </header>
               <section class="${Html.classNames.summary}" aria-label="Payment summary">
-                <h1 class="${Html.classNames.summaryAmount}">${Html.sanitize(amount)}</h1>
+                <h1 class="${Html.classNames.summaryAmount}">
+                  ${Html.sanitize(firstData.formattedAmount)}
+                </h1>
                 ${firstChallenge.description
                   ? `<p class="${Html.classNames.summaryDescription}">${Html.sanitize(firstChallenge.description)}</p>`
                   : ''}
@@ -937,7 +949,11 @@ export function compose(
                   : ''}
               </section>
               ${tabList} ${panels}
-              <script id="${Html.dataId}" type="application/json">
+              <script
+                id="${Html.dataId}"
+                type="application/json"
+                ${htmlEntries.length > 1 ? ` ${Html.remainingAttr}="${htmlEntries.length}"` : ''}
+              >
                 ${Json.stringify(dataMap satisfies Record<string, Html.Data>).replace(
                   /</g,
                   '\\u003c',

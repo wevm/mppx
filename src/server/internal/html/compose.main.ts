@@ -1,4 +1,6 @@
 const tablist = document.querySelector<HTMLElement>('.mppx-tablist')!
+const summary = document.querySelector<HTMLElement>('.mppx-summary')!
+const amountEl = summary.querySelector<HTMLElement>('.mppx-summary-amount')!
 const param = '__mppx_tab'
 const tabs = Array.from(tablist.querySelectorAll<HTMLElement>('[role="tab"]'))
 
@@ -9,6 +11,31 @@ for (const tab of tabs) {
   const name = tab.textContent!.trim().toLowerCase()
   counts[name] = (counts[name] || 0) + 1
   slugs.push(counts[name] === 1 ? name : `${name}-${counts[name]}`)
+}
+
+function updateSummary(tab: HTMLElement) {
+  amountEl.textContent = tab.dataset.amount!
+
+  summary.querySelector('.mppx-summary-description')?.remove()
+  if (tab.dataset.description) {
+    const p = document.createElement('p')
+    p.className = 'mppx-summary-description'
+    p.textContent = tab.dataset.description
+    amountEl.after(p)
+  }
+
+  summary.querySelector('.mppx-summary-expires')?.remove()
+  if (tab.dataset.expires) {
+    const p = document.createElement('p')
+    p.className = 'mppx-summary-expires'
+    const date = new Date(tab.dataset.expires)
+    const time = document.createElement('time')
+    time.dateTime = date.toISOString()
+    time.textContent = date.toLocaleString()
+    p.textContent = `${tab.dataset.expiresLabel} `
+    p.appendChild(time)
+    summary.appendChild(p)
+  }
 }
 
 function activate(tab: HTMLElement, updateUrl = true) {
@@ -23,6 +50,8 @@ function activate(tab: HTMLElement, updateUrl = true) {
     p.hidden = true
   })
   document.getElementById(tab.getAttribute('aria-controls')!)!.hidden = false
+
+  updateSummary(tab)
 
   if (updateUrl) {
     const url = new URL(location.href)

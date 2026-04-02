@@ -1255,7 +1255,7 @@ describe('compose', () => {
 
       // Data map with both entries
       const dataMatch = body.match(
-        /<script id="__MPPX_DATA__" type="application\/json">\s*([\s\S]*?)\s*<\/script>/,
+        /<script id="__MPPX_DATA__" type="application\/json"[^>]*>\s*([\s\S]*?)\s*<\/script>/,
       )
       expect(dataMatch).not.toBeNull()
       const dataMap = JSON.parse(dataMatch![1]!.replace(/\\u003c/g, '<'))
@@ -1298,7 +1298,7 @@ describe('compose', () => {
 
       // Data map with single entry
       const dataMatch = body.match(
-        /<script id="__MPPX_DATA__" type="application\/json">\s*([\s\S]*?)\s*<\/script>/,
+        /<script id="__MPPX_DATA__" type="application\/json"[^>]*>\s*([\s\S]*?)\s*<\/script>/,
       )
       const dataMap = JSON.parse(dataMatch![1]!.replace(/\\u003c/g, '<'))
       const dataValues = Object.values(dataMap) as { label: string }[]

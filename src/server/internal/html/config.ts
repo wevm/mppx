@@ -17,6 +17,7 @@ export type Data<
 > = {
   label: string
   rootId: string
+  formattedAmount: string
   config: config
   challenge: Challenge.FromMethods<[method]>
   text: { [k in keyof Text]-?: NonNullable<Text[k]> }
@@ -34,20 +35,23 @@ export const rootId = 'root'
 export const serviceWorkerParam = '__mppx_worker'
 
 export const challengeIdAttr = 'data-mppx-challenge-id'
+export const remainingAttr = 'data-remaining'
 
 export function getData<
   method extends Method.Method = Method.Method,
   config extends Record<string, unknown> = {},
 >(methodName: method['name']): Data<method, config> {
-  const g = globalThis as Record<string, unknown>
-  if (!g.__mppx_data) {
-    const el = document.getElementById(dataId)!
-    g.__mppx_data = Json.parse(el.textContent) as Record<string, unknown>
-    el.remove()
+  const el = document.getElementById(dataId)!
+  const map = Json.parse(el.textContent) as Record<string, Data<method, config>>
+  const remaining = el.getAttribute(remainingAttr)
+  if (!remaining || Number(remaining) <= 1) el.remove()
+  else el.setAttribute(remainingAttr, String(Number(remaining) - 1))
+  const script = document.currentScript
+  const challengeId = script?.getAttribute(challengeIdAttr)
+  if (challengeId) {
+    script!.removeAttribute(challengeIdAttr)
+    return map[challengeId]!
   }
-  const map = g.__mppx_data as Record<string, Data<method, config>>
-  const challengeId = document.currentScript?.getAttribute(challengeIdAttr)
-  if (challengeId) return map[challengeId]!
   return Object.values(map).find((d) => d.challenge.method === methodName)!
 }
 

@@ -197,33 +197,6 @@ importers:
         specifier: latest
         version: 8.0.3(@types/node@25.5.0)(esbuild@0.27.2)(tsx@4.21.0)(yaml@2.8.3)
 
-  examples/compose:
-    dependencies:
-      '@stripe/stripe-js':
-        specifier: ^8.7.0
-        version: 8.9.0
-      '@types/node':
-        specifier: latest
-        version: 25.5.0
-      '@typescript/native-preview':
-        specifier: 7.0.0-dev.20260323.1
-        version: 7.0.0-dev.20260323.1
-      mppx:
-        specifier: workspace:*
-        version: link:../..
-      stripe:
-        specifier: ^17.7.0
-        version: 17.7.0
-      typescript:
-        specifier: 5.9.3
-        version: 5.9.3
-      viem:
-        specifier: ^2.47.5
-        version: 2.47.6(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.3.6)
-      vite:
-        specifier: latest
-        version: 8.0.3(@types/node@25.5.0)(esbuild@0.27.2)(tsx@4.21.0)(yaml@2.8.3)
-
   examples/session/multi-fetch:
     dependencies:
       '@remix-run/node-fetch-server':
