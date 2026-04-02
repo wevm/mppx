@@ -130,6 +130,7 @@ root.append(style)
 
   form.onsubmit = async (event) => {
     event.preventDefault()
+    document.getElementById(Html.errorId)?.remove()
     button.disabled = true
     try {
       await elements.submit()

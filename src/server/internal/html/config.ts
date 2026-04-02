@@ -23,6 +23,8 @@ export type Data<
 
 export const dataId = '__MPPX_DATA__'
 
+export const errorId = 'root_error'
+
 export const rootId = 'root'
 
 export const serviceWorkerParam = '__mppx_worker'
@@ -39,6 +41,15 @@ export const classNames = {
   summaryAmount: 'mppx-summary-amount',
   summaryDescription: 'mppx-summary-description',
   summaryExpires: 'mppx-summary-expires',
+}
+
+export function sanitize(str: string): string {
+  return str
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;')
 }
 
 export const html = String.raw
@@ -67,6 +78,12 @@ export const vars = {
   radius: new CssVar('radius'),
   spacingUnit: new CssVar('spacing-unit'),
 } as const
+
+export function font(theme: Theme) {
+  if (!theme.fontUrl) return ''
+  return html`<link rel="preconnect" href="${new URL(theme.fontUrl).origin}" crossorigin />
+    <link rel="stylesheet" href="${theme.fontUrl}" />`
+}
 
 export function style(theme: {
   [k in keyof Omit<Theme, 'fontUrl' | 'logo'>]-?: NonNullable<Theme[k]>
@@ -98,6 +115,12 @@ export function style(theme: {
         ${vars.spacingUnit.name}: ${theme.spacingUnit};
         ${rootVars}
       }${darkMedia}
+      *:focus-visible {
+        outline-color: ${vars.accent};
+        outline-offset: 0.15rem;
+        outline-style: solid;
+        outline-width: 2px;
+      }
       body {
         -webkit-font-smoothing: antialiased;
         -moz-osx-font-smoothing: grayscale;
@@ -168,6 +191,7 @@ export function style(theme: {
       .${classNames.error} {
         color: ${vars.negative};
         font-size: 0.95rem;
+        margin-top: calc(${vars.spacingUnit} * -1.5);
         text-align: center;
       }
     </style>
@@ -175,30 +199,30 @@ export function style(theme: {
 }
 
 export function showError(message: string) {
-  const existing = document.getElementById('__MPPX_ERROR__')
+  const existing = document.getElementById(errorId)
   if (existing) {
     existing.textContent = message
     return
   }
   const el = document.createElement('p')
-  el.id = 'root_error'
+  el.id = errorId
   el.className = classNames.error
   el.role = 'alert'
   el.textContent = message
   document.getElementById(rootId)?.after(el)
 }
 
-export function logo(value: Theme['logo']) {
-  if (typeof value === 'undefined') return ``
-  if (typeof value === 'string')
-    return html`<img alt="" class="${classNames.logo}" src="${value}" />`
-  return Object.entries(value)
+export function logo(value: Theme) {
+  if (typeof value.logo === 'undefined') return ''
+  if (typeof value.logo === 'string')
+    return html`<img alt="" class="${classNames.logo}" src="${value.logo}" />`
+  return Object.entries(value.logo)
     .map(
-      ([key, value]) =>
+      (entry) =>
         html`<img
           alt=""
-          class="${classNames.logo} ${classNames.logoColorScheme(key)}"
-          src="${value}"
+          class="${classNames.logo} ${classNames.logoColorScheme(entry[0])}"
+          src="${entry[1]}"
         />`,
     )
     .join('\n')

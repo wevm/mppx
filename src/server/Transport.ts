@@ -157,6 +157,7 @@ export function http(): Http {
             (options.html.theme as never) ?? {},
           )
           const text = Html.mergeDefined(Html.defaultText, (options.html.text as never) ?? {})
+          const amount = await options.html.formatAmount(challenge.request)
 
           return html`<!doctype html>
             <html lang="en">
@@ -166,24 +167,18 @@ export function http(): Http {
                 <meta name="robots" content="noindex" />
                 <meta name="color-scheme" content="${theme.colorScheme}" />
                 <title>${text.title}</title>
-                ${theme.fontUrl
-                  ? `<link rel="preconnect" href="${new URL(theme.fontUrl).origin}" crossorigin />
-                     <link rel="stylesheet" href="${theme.fontUrl}" />`
-                  : ''}
-                ${Html.style(theme)}
+                ${Html.font(theme)} ${Html.style(theme)}
               </head>
               <body>
                 <main>
                   <header class="${Html.classNames.header}">
-                    ${Html.logo(theme.logo)}
+                    ${Html.logo(theme)}
                     <span>${text.paymentRequired}</span>
                   </header>
                   <section class="${Html.classNames.summary}" aria-label="Payment summary">
-                    <h1 class="${Html.classNames.summaryAmount}">
-                      ${await options.html.formatAmount(challenge.request)}
-                    </h1>
+                    <h1 class="${Html.classNames.summaryAmount}">${amount}</h1>
                     ${challenge.description
-                      ? `<p class="${Html.classNames.summaryDescription}">${challenge.description}</p>`
+                      ? `<p class="${Html.classNames.summaryDescription}">${Html.sanitize(challenge.description)}</p>`
                       : ''}
                     ${challenge.expires
                       ? `<p class="${Html.classNames.summaryExpires}">${text.expires} <time datetime="${new Date(challenge.expires).toISOString()}">${new Date(challenge.expires).toLocaleString()}</time></p>`
