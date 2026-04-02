@@ -70,20 +70,6 @@ jobs:
       - name: Install dependencies
         uses: ./.github/actions/install-dependencies
 
-      - name: Cache Playwright browsers
-        uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
-        id: playwright-cache
-        with:
-          path: ~/.cache/ms-playwright
-          key: playwright-chromium-${{ hashFiles('pnpm-lock.yaml') }}
-
-      - name: Install Playwright browsers
-        if: steps.playwright-cache.outputs.cache-hit != 'true'
-        run: pnpm exec playwright install chromium
-
-      - name: Install Playwright system deps
-        run: pnpm exec playwright install-deps chromium
-
       - name: Cache Tempo Docker image
         uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
         id: docker-cache
@@ -109,7 +95,7 @@ jobs:
           eval "$(dbus-launch --sh-syntax)"
           eval "$(printf '\n' | gnome-keyring-daemon --unlock)"
           eval "$(printf '\n' | gnome-keyring-daemon --start)"
-          pnpm run test --bail=1
+          pnpm exec vp test --run --project node --project cli --bail=1
         env:
           CI: true
 
@@ -139,6 +125,11 @@ jobs:
 
       - name: Bundle HTML files
         run: pnpm build
+
+      - name: Run browser unit tests
+        run: pnpm exec vp test --run --project browser --bail=1
+        env:
+          CI: true
 
       - name: Run tests
         run: pnpm run test:html
