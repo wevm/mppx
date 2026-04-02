@@ -52,6 +52,12 @@ export function sanitize(str: string): string {
     .replace(/'/g, '&#39;')
 }
 
+export function sanitizeRecord<type extends Record<string, string>>(record: type): type {
+  return Object.fromEntries(
+    Object.entries(record).map(([key, value]) => [key, sanitize(value)]),
+  ) as type
+}
+
 export const html = String.raw
 
 class CssVar {
@@ -81,8 +87,12 @@ export const vars = {
 
 export function font(theme: Theme) {
   if (!theme.fontUrl) return ''
-  return html`<link rel="preconnect" href="${new URL(theme.fontUrl).origin}" crossorigin />
-    <link rel="stylesheet" href="${theme.fontUrl}" />`
+  return html`<link
+      rel="preconnect"
+      href="${sanitize(new URL(theme.fontUrl).origin)}"
+      crossorigin
+    />
+    <link rel="stylesheet" href="${sanitize(theme.fontUrl)}" />`
 }
 
 export function style(theme: {
@@ -213,14 +223,19 @@ export function showError(message: string) {
 }
 
 export function favicon(theme: Theme, realm: string) {
-  if (typeof theme.favicon === 'string') return html`<link rel="icon" href="${theme.favicon}" />`
+  if (typeof theme.favicon === 'string')
+    return html`<link rel="icon" href="${sanitize(theme.favicon)}" />`
   if (typeof theme.favicon === 'object') {
     return html`<link
         rel="icon"
-        href="${theme.favicon.light}"
+        href="${sanitize(theme.favicon.light)}"
         media="(prefers-color-scheme: light)"
       />
-      <link rel="icon" href="${theme.favicon.dark}" media="(prefers-color-scheme: dark)" />`
+      <link
+        rel="icon"
+        href="${sanitize(theme.favicon.dark)}"
+        media="(prefers-color-scheme: dark)"
+      />`
   }
   // Fallback: use host's favicon via Google S2 service
   try {
@@ -237,14 +252,14 @@ export function favicon(theme: Theme, realm: string) {
 export function logo(value: Theme) {
   if (typeof value.logo === 'undefined') return ''
   if (typeof value.logo === 'string')
-    return html`<img alt="" class="${classNames.logo}" src="${value.logo}" />`
+    return html`<img alt="" class="${classNames.logo}" src="${sanitize(value.logo)}" />`
   return Object.entries(value.logo)
     .map(
       (entry) =>
         html`<img
           alt=""
           class="${classNames.logo} ${classNames.logoColorScheme(entry[0])}"
-          src="${entry[1]}"
+          src="${sanitize(entry[1])}"
         />`,
     )
     .join('\n')

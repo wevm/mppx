@@ -157,7 +157,9 @@ export function http(): Http {
             },
             (options.html.theme as never) ?? {},
           )
-          const text = Html.mergeDefined(Html.defaultText, (options.html.text as never) ?? {})
+          const text = Html.sanitizeRecord(
+            Html.mergeDefined(Html.defaultText, (options.html.text as never) ?? {}),
+          )
           const amount = await options.html.formatAmount(challenge.request)
 
           return html`<!doctype html>
@@ -177,7 +179,7 @@ export function http(): Http {
                     <span>${text.paymentRequired}</span>
                   </header>
                   <section class="${Html.classNames.summary}" aria-label="Payment summary">
-                    <h1 class="${Html.classNames.summaryAmount}">${amount}</h1>
+                    <h1 class="${Html.classNames.summaryAmount}">${Html.sanitize(amount)}</h1>
                     ${challenge.description
                       ? `<p class="${Html.classNames.summaryDescription}">${Html.sanitize(challenge.description)}</p>`
                       : ''}
