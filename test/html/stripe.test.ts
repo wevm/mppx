@@ -9,7 +9,7 @@ test('charge via stripe html payment page', async ({ page }, testInfo) => {
   })
 
   // Verify 402 payment page rendered
-  await expect(page.locator('h1')).toHaveText('Payment Required')
+  await expect(page.getByText('Payment Required')).toBeVisible()
   await expect(page.getByRole('button', { name: 'Pay' })).toBeVisible({ timeout: 10_000 })
 
   if (!testInfo.project.use.headless) {
@@ -33,8 +33,8 @@ test('charge via stripe html payment page', async ({ page }, testInfo) => {
     await page.waitForTimeout(500)
   }
 
-  // Submit payment
-  await page.getByRole('button', { name: 'Pay' }).click()
+  // Submit payment (force needed — Stripe Link overlay can intercept click)
+  await page.getByRole('button', { name: 'Pay' }).click({ force: true })
 
   // Wait for service worker to submit credential and page to reload with paid response
   await expect(page.locator('body')).toContainText('"fortune":', { timeout: 30_000 })

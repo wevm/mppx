@@ -10,8 +10,8 @@ const mppx = Mppx.create({
     stripe.charge({
       client: stripeClient,
       html: {
-        publishableKey: process.env.VITE_STRIPE_PUBLIC_KEY!,
         createTokenUrl: '/api/create-spt',
+        publishableKey: process.env.VITE_STRIPE_PUBLIC_KEY!,
       },
       // Stripe Business Network profile ID.
       networkId: 'internal',

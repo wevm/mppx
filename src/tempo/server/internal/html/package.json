@@ -3,7 +3,7 @@
   "private": true,
   "type": "module",
   "dependencies": {
-    "accounts": "https://pkg.pr.new/tempoxyz/accounts@c339a21",
+    "accounts": "0.4.12",
     "mppx": "workspace:*",
     "viem": "2.47.5"
   }

@@ -7,6 +7,7 @@ import type { Distribute, UnionToIntersection } from '../internal/types.js'
 import * as core_Mcp from '../Mcp.js'
 import * as Receipt from '../Receipt.js'
 import * as Html from './internal/html/config.js'
+import { html } from './internal/html/config.js'
 import { serviceWorker } from './internal/html/serviceWorker.gen.js'
 
 export { type McpSdk, mcpSdk } from '../mcp-sdk/server/Transport.js'
@@ -128,7 +129,7 @@ export function http(): Http {
       return Credential.deserialize(payment)
     },
 
-    respondChallenge(options) {
+    async respondChallenge(options) {
       const { challenge, error, input } = options
 
       if (options.html && new URL(input.url).searchParams.has(Html.serviceWorkerParam))
@@ -145,38 +146,60 @@ export function http(): Http {
         'Cache-Control': 'no-store',
       }
 
-      const body = (() => {
+      const body = await (async () => {
         if (options.html && input.headers.get('Accept')?.includes('text/html')) {
           headers['Content-Type'] = 'text/html; charset=utf-8'
-          const html = String.raw
+
+          const theme = Html.mergeDefined(
+            {
+              favicon: undefined as Html.Theme['favicon'],
+              fontUrl: undefined as Html.Theme['fontUrl'],
+              logo: undefined as Html.Theme['logo'],
+              ...Html.defaultTheme,
+            },
+            (options.html.theme as never) ?? {},
+          )
+          const text = Html.sanitizeRecord(
+            Html.mergeDefined(Html.defaultText, (options.html.text as never) ?? {}),
+          )
+          const amount = await options.html.formatAmount(challenge.request)
+
           return html`<!doctype html>
             <html lang="en">
               <head>
                 <meta charset="UTF-8" />
                 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-                <title>Payment Required</title>
-                <style>
-                  :root {
-                    color-scheme: dark light;
-                  }
-                </style>
+                <meta name="robots" content="noindex" />
+                <meta name="color-scheme" content="${theme.colorScheme}" />
+                <title>${text.title}</title>
+                ${Html.favicon(theme, challenge.realm)} ${Html.font(theme)} ${Html.style(theme)}
               </head>
               <body>
-                <h1>Payment Required</h1>
-                <pre>
-${Json.stringify(challenge, null, 2)
-                    .replace(/&/g, '&amp;')
-                    .replace(/</g, '&lt;')
-                    .replace(/>/g, '&gt;')}</pre
-                >
-                <div id="root"></div>
-                <script id="${Html.dataId}" type="application/json">
-                  ${Json.stringify({ config: options.html.config, challenge }).replace(
-                    /</g,
-                    '\\u003c',
-                  )}
-                </script>
-                ${options.html.content}
+                <main>
+                  <header class="${Html.classNames.header}">
+                    ${Html.logo(theme)}
+                    <span>${text.paymentRequired}</span>
+                  </header>
+                  <section class="${Html.classNames.summary}" aria-label="Payment summary">
+                    <h1 class="${Html.classNames.summaryAmount}">${Html.sanitize(amount)}</h1>
+                    ${challenge.description
+                      ? `<p class="${Html.classNames.summaryDescription}">${Html.sanitize(challenge.description)}</p>`
+                      : ''}
+                    ${challenge.expires
+                      ? `<p class="${Html.classNames.summaryExpires}">${text.expires} <time datetime="${new Date(challenge.expires).toISOString()}">${new Date(challenge.expires).toLocaleString()}</time></p>`
+                      : ''}
+                  </section>
+                  <div id="${Html.rootId}" aria-label="Payment form"></div>
+                  <script id="${Html.dataId}" type="application/json">
+                    ${Json.stringify({
+                      config: options.html.config,
+                      challenge,
+                      text,
+                      theme,
+                    } satisfies Html.Data).replace(/</g, '\\u003c')}
+                  </script>
+                  ${options.html.content}
+                </main>
               </body>
             </html> `
         }

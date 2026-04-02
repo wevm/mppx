@@ -1,4 +1,10 @@
-import { decodeFunctionData, keccak256, parseEventLogs, type TransactionReceipt } from 'viem'
+import {
+  decodeFunctionData,
+  formatUnits,
+  keccak256,
+  parseEventLogs,
+  type TransactionReceipt,
+} from 'viem'
 import {
   getTransactionReceipt,
   sendRawTransaction,
@@ -8,14 +14,16 @@ import {
   call as viem_call,
 } from 'viem/actions'
 import { tempo as tempo_chain } from 'viem/chains'
-import { Abis, Transaction } from 'viem/tempo'
+import { Abis, Actions, Transaction } from 'viem/tempo'
 
 import { PaymentError, VerificationFailedError } from '../../Errors.js'
 import * as Expires from '../../Expires.js'
 import type { LooseOmit, NoExtraKeys } from '../../internal/types.js'
 import * as Method from '../../Method.js'
+import type * as Html from '../../server/internal/html/config.ts'
 import * as Store from '../../Store.js'
 import * as Client from '../../viem/Client.js'
+import type * as z from '../../zod.js'
 import * as Account from '../internal/account.js'
 import * as TempoAddress from '../internal/address.js'
 import * as Charge_internal from '../internal/charge.js'
@@ -77,7 +85,35 @@ export function charge<const parameters extends charge.Parameters>(
       recipient,
     } as unknown as Defaults,
 
-    html: html ? { config: {}, content: htmlContent } : undefined,
+    html: html
+      ? {
+          config: {},
+          content: htmlContent,
+          formatAmount: async (request: z.output<typeof Methods.charge.schema.request>) => {
+            try {
+              const chainId = request.methodDetails?.chainId
+              if (chainId === undefined) throw new Error('no chainId')
+              const client = await getClient({ chainId })
+              const metadata = await Actions.token.getMetadata(client, {
+                token: request.currency as `0x${string}`,
+              })
+              const symbol =
+                new Intl.NumberFormat('en', {
+                  style: 'currency',
+                  currency: metadata.currency,
+                  currencyDisplay: 'narrowSymbol',
+                })
+                  .formatToParts(0)
+                  .find((p) => p.type === 'currency')?.value ?? metadata.currency
+              return `${symbol}${formatUnits(BigInt(request.amount), metadata.decimals)}`
+            } catch {
+              return `$${request.amount}`
+            }
+          },
+          text: typeof html === 'object' ? html.text : undefined,
+          theme: typeof html === 'object' ? html.theme : undefined,
+        }
+      : undefined,
 
     // TODO: dedupe `{charge,session}.request`
     async request({ credential, request }) {
@@ -299,7 +335,13 @@ export declare namespace charge {
 
   type Parameters = {
     /** Render payment page when Accept header is text/html (e.g. in browsers) */
-    html?: boolean | undefined
+    html?:
+      | boolean
+      | {
+          text?: Html.Text
+          theme?: Html.Theme
+        }
+      | undefined
     /** Testnet mode. */
     testnet?: boolean | undefined
     /**

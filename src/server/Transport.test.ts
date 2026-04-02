@@ -101,6 +101,222 @@ describe('http', () => {
     })
   })
 
+  describe('respondChallenge html', () => {
+    const htmlOptions = {
+      config: { foo: 'bar' },
+      content: '<script src="/pay.js"></script>',
+      formatAmount: () => '$10.00',
+      text: undefined,
+      theme: undefined,
+    } satisfies Parameters<Transport.Http['respondChallenge']>[0]['html']
+
+    test('returns html when Accept includes text/html', async () => {
+      const transport = Transport.http()
+      const request = new Request('https://example.com', {
+        headers: { Accept: 'text/html' },
+      })
+
+      const response = await transport.respondChallenge({
+        challenge,
+        input: request,
+        html: htmlOptions,
+      })
+
+      expect(response.status).toBe(402)
+      expect(response.headers.get('Content-Type')).toBe('text/html; charset=utf-8')
+      expect(response.headers.get('WWW-Authenticate')).toContain('Payment')
+      expect(response.headers.get('Cache-Control')).toBe('no-store')
+
+      const body = await response.text()
+      expect(body).toContain('<!doctype html>')
+      expect(body).toContain('<title>Payment Required</title>')
+      expect(body).toContain('$10.00')
+      expect(body).toContain('Payment Required')
+      expect(body).toContain('<script src="/pay.js"></script>')
+      expect(body).toContain('__MPPX_DATA__')
+    })
+
+    test('returns service worker script when __mppx_worker param is set', async () => {
+      const transport = Transport.http()
+      const request = new Request('https://example.com?__mppx_worker')
+
+      const response = await transport.respondChallenge({
+        challenge,
+        input: request,
+        html: htmlOptions,
+      })
+
+      expect(response.status).toBe(200)
+      expect(response.headers.get('Content-Type')).toBe('application/javascript')
+      expect(response.headers.get('Cache-Control')).toBe('no-store')
+
+      const body = await response.text()
+      expect(body).toContain('addEventListener')
+    })
+
+    test('does not return html when Accept does not include text/html', async () => {
+      const transport = Transport.http()
+      const request = new Request('https://example.com', {
+        headers: { Accept: 'application/json' },
+      })
+
+      const response = await transport.respondChallenge({
+        challenge,
+        input: request,
+        html: htmlOptions,
+      })
+
+      expect(response.status).toBe(402)
+      expect(response.headers.get('Content-Type')).toBeNull()
+      expect(await response.text()).toBe('')
+    })
+
+    test('renders description when challenge has one', async () => {
+      const transport = Transport.http()
+      const request = new Request('https://example.com', {
+        headers: { Accept: 'text/html' },
+      })
+
+      const challengeWithDescription = {
+        ...challenge,
+        description: 'Access to premium content',
+      }
+
+      const response = await transport.respondChallenge({
+        challenge: challengeWithDescription,
+        input: request,
+        html: htmlOptions,
+      })
+
+      const body = await response.text()
+      expect(body).toContain('Access to premium content')
+      expect(body).toContain('mppx-summary-description')
+    })
+
+    test('renders expires when challenge has one', async () => {
+      const transport = Transport.http()
+      const request = new Request('https://example.com', {
+        headers: { Accept: 'text/html' },
+      })
+
+      const response = await transport.respondChallenge({
+        challenge,
+        input: request,
+        html: htmlOptions,
+      })
+
+      const body = await response.text()
+      expect(body).toContain('Expires at')
+      expect(body).toContain('2025-01-01T00:00:00.000Z')
+      expect(body).toContain('mppx-summary-expires')
+    })
+
+    test('does not render description when challenge lacks one', async () => {
+      const transport = Transport.http()
+      const request = new Request('https://example.com', {
+        headers: { Accept: 'text/html' },
+      })
+
+      const challengeNoDescription = { ...challenge }
+      delete (challengeNoDescription as any).description
+
+      const response = await transport.respondChallenge({
+        challenge: challengeNoDescription,
+        input: request,
+        html: htmlOptions,
+      })
+
+      const body = await response.text()
+      expect(body).not.toMatch(/<p class="mppx-summary-description"/)
+    })
+
+    test('applies custom text', async () => {
+      const transport = Transport.http()
+      const request = new Request('https://example.com', {
+        headers: { Accept: 'text/html' },
+      })
+
+      const response = await transport.respondChallenge({
+        challenge,
+        input: request,
+        html: {
+          ...htmlOptions,
+          text: { title: 'Pay Up', paymentRequired: 'Gotta Pay' },
+        },
+      })
+
+      const body = await response.text()
+      expect(body).toContain('<title>Pay Up</title>')
+      expect(body).toContain('Gotta Pay')
+    })
+
+    test('applies custom theme logo', async () => {
+      const transport = Transport.http()
+      const request = new Request('https://example.com', {
+        headers: { Accept: 'text/html' },
+      })
+
+      const response = await transport.respondChallenge({
+        challenge,
+        input: request,
+        html: {
+          ...htmlOptions,
+          theme: { logo: 'https://example.com/logo.png' },
+        },
+      })
+
+      const body = await response.text()
+      expect(body).toContain('https://example.com/logo.png')
+      expect(body).toContain('mppx-logo')
+    })
+
+    test('embeds config and challenge in data script', async () => {
+      const transport = Transport.http()
+      const request = new Request('https://example.com', {
+        headers: { Accept: 'text/html' },
+      })
+
+      const response = await transport.respondChallenge({
+        challenge,
+        input: request,
+        html: htmlOptions,
+      })
+
+      const body = await response.text()
+      // Extract the JSON data from the script tag
+      const dataMatch = body.match(
+        /<script id="__MPPX_DATA__" type="application\/json">\s*([\s\S]*?)\s*<\/script>/,
+      )
+      expect(dataMatch).not.toBeNull()
+
+      const data = JSON.parse(dataMatch?.[1]?.replace(/\\u003c/g, '<') ?? '')
+      expect(data.config).toEqual({ foo: 'bar' })
+      expect(data.challenge.id).toBe(challenge.id)
+      expect(data.challenge.method).toBe('tempo')
+      expect(data.text.paymentRequired).toBe('Payment Required')
+    })
+
+    test('sanitizes html in formatted amount', async () => {
+      const transport = Transport.http()
+      const request = new Request('https://example.com', {
+        headers: { Accept: 'text/html' },
+      })
+
+      const response = await transport.respondChallenge({
+        challenge,
+        input: request,
+        html: {
+          ...htmlOptions,
+          formatAmount: () => '<script>alert("xss")</script>',
+        },
+      })
+
+      const body = await response.text()
+      expect(body).not.toContain('<script>alert("xss")</script>')
+      expect(body).toContain('&lt;script&gt;')
+    })
+  })
+
   describe('respondChallenge with error status codes', () => {
     test('BadRequestError returns 400', async () => {
       const transport = Transport.http()
