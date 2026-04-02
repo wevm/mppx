@@ -32,6 +32,7 @@ import {
   printResponseHeaders,
   prompt,
   resolveChain,
+  resolveRpcUrl,
 } from './utils.js'
 
 const packageJson = createRequire(import.meta.url)('../../package.json') as {
@@ -516,8 +517,9 @@ const account = Cli.create('account', {
         ? link(`${explorerUrl}/address/${acct.address}`, acct.address)
         : acct.address
       console.log(pc.dim(`Address ${addrDisplay}`))
-      resolveChain(c.options)
-        .then((chain) => createClient({ chain, transport: http(c.options.rpcUrl) }))
+      const rpcUrl = resolveRpcUrl(c.options.rpcUrl)
+      resolveChain({ rpcUrl })
+        .then((chain) => createClient({ chain, transport: http(rpcUrl) }))
         .then((client) =>
           import('viem/tempo').then(({ Actions }) =>
             Actions.faucet.fund(client, { account: acct }).catch(() => {}),
@@ -629,8 +631,9 @@ const account = Cli.create('account', {
           return c.error({ code: 'ACCOUNT_NOT_FOUND', message: 'No account found.', exitCode: 69 })
       }
       const acct = privateKeyToAccount(key as `0x${string}`)
-      const chain = await resolveChain(c.options)
-      const client = createClient({ chain, transport: http(c.options.rpcUrl) })
+      const rpcUrl = resolveRpcUrl(c.options.rpcUrl)
+      const chain = await resolveChain({ rpcUrl })
+      const client = createClient({ chain, transport: http(rpcUrl) })
       console.log(`Funding "${accountName}" on ${chainName(chain)}`)
       try {
         const { Actions } = await import('viem/tempo')
@@ -711,8 +714,8 @@ const account = Cli.create('account', {
           })
         }
         const address = tempoEntry.wallet_address as Address
-        const rpcUrl = c.options.rpcUrl ?? (process.env.MPPX_RPC_URL || undefined)
-        const chain = rpcUrl ? await resolveChain({ rpcUrl }) : tempoMainnet
+        const rpcUrl = resolveRpcUrl(c.options.rpcUrl)
+        const chain = await resolveChain({ rpcUrl })
         const explorerUrl = chain.blockExplorers?.default?.url
         const addrDisplay = explorerUrl
           ? link(`${explorerUrl}/address/${address}`, address)
@@ -744,8 +747,8 @@ const account = Cli.create('account', {
           return c.error({ code: 'ACCOUNT_NOT_FOUND', message: 'No account found.', exitCode: 69 })
       }
       const acct = privateKeyToAccount(key as `0x${string}`)
-      const rpcUrl = c.options.rpcUrl ?? (process.env.MPPX_RPC_URL || undefined)
-      const chain = rpcUrl ? await resolveChain({ rpcUrl }) : tempoMainnet
+      const rpcUrl = resolveRpcUrl(c.options.rpcUrl)
+      const chain = await resolveChain({ rpcUrl })
       const explorerUrl = chain.blockExplorers?.default?.url
       const addrDisplay = explorerUrl
         ? link(`${explorerUrl}/address/${acct.address}`, acct.address)

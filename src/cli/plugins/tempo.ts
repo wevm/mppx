@@ -24,6 +24,7 @@ import {
   link,
   pc,
   resolveChain,
+  resolveRpcUrl,
 } from '../utils.js'
 import { createPlugin, type Plugin } from './plugin.js'
 
@@ -67,7 +68,7 @@ export function tempo() {
         useTempoCliSign = true
         const tempoEntry = resolveTempoAccount(accountName)
         if (tempoEntry) {
-          const rpcUrl = options.rpcUrl ?? process.env.RPC_URL
+          const rpcUrl = resolveRpcUrl(options.rpcUrl)
           client = createClient({
             chain: await resolveChain({ rpcUrl }),
             transport: http(rpcUrl),
@@ -107,7 +108,7 @@ export function tempo() {
       } else account = privateKeyToAccount(privateKey as `0x${string}`)
 
       if (!useTempoCliSign && account) {
-        const rpcUrl = options.rpcUrl ?? process.env.RPC_URL
+        const rpcUrl = resolveRpcUrl(options.rpcUrl)
         client = createClient({
           chain: await resolveChain({ rpcUrl }),
           transport: http(rpcUrl),

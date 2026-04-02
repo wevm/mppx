@@ -221,17 +221,23 @@ export function fmtBalance(
   return `${dec ? `${formatted}.${dec}` : formatted} ${sym}`
 }
 
+/** Resolve RPC URL from explicit option, then MPPX_RPC_URL, then RPC_URL env vars. */
+export function resolveRpcUrl(explicit?: string | undefined): string | undefined {
+  return explicit ?? (process.env.MPPX_RPC_URL?.trim() || process.env.RPC_URL?.trim() || undefined)
+}
+
 export async function resolveChain(opts: { rpcUrl?: string | undefined } = {}): Promise<Chain> {
-  if (!opts.rpcUrl) return tempoModerato
+  const rpcUrl = resolveRpcUrl(opts.rpcUrl)
+  if (!rpcUrl) return tempoMainnet
   const { getChainId } = await import('viem/actions')
-  const chainId = await getChainId(createClient({ transport: http(opts.rpcUrl) }))
+  const chainId = await getChainId(createClient({ transport: http(rpcUrl) }))
   const allExports = Object.values(await import('viem/chains')) as unknown[]
   const candidates = allExports.filter(
     (c): c is Chain =>
       typeof c === 'object' && c !== null && 'id' in c && (c as Chain).id === chainId,
   )
   const found = candidates.find((c) => 'serializers' in c && c.serializers) ?? candidates[0]
-  if (!found) throw new Error(`Unknown chain ID ${chainId} from RPC ${opts.rpcUrl}`)
+  if (!found) throw new Error(`Unknown chain ID ${chainId} from RPC ${rpcUrl}`)
   return found
 }
 
@@ -306,7 +312,7 @@ export async function fetchBalanceLines(
 
   const mainnetClient = createClient({
     chain: tempoMainnet,
-    transport: http(process.env.MPPX_RPC_URL || undefined),
+    transport: http(resolveRpcUrl()),
   })
   const mainnetExplorerUrl = tempoMainnet.blockExplorers?.default?.url
   const mainnetResults = await Promise.all(
