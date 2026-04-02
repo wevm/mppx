@@ -53,7 +53,7 @@ jobs:
       # GitHub-hosted runners are ephemeral, so we can skip the Ryuk sidecar
       # and avoid Docker Hub rate limits on testcontainers/ryuk pulls.
       TESTCONTAINERS_RYUK_DISABLED: true
-      VITE_TEMPO_TAG: sha-20aecec
+      VITE_TEMPO_TAG: latest
     steps:
       - name: Clone repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -70,12 +70,18 @@ jobs:
       - name: Install dependencies
         uses: ./.github/actions/install-dependencies
 
+      - name: Resolve Tempo image digest
+        id: tempo-digest
+        run: |
+          digest=$(docker buildx imagetools inspect ghcr.io/tempoxyz/tempo:${VITE_TEMPO_TAG} --raw | sha256sum | cut -d' ' -f1)
+          echo "digest=${digest}" >> "$GITHUB_OUTPUT"
+
       - name: Cache Tempo Docker image
         uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
         id: docker-cache
         with:
           path: /tmp/tempo-image.tar
-          key: tempo-image-${{ env.VITE_TEMPO_TAG }}
+          key: tempo-image-${{ steps.tempo-digest.outputs.digest }}
 
       - name: Load cached Tempo image
         if: steps.docker-cache.outputs.cache-hit == 'true'
