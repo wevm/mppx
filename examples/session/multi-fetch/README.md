@@ -2,6 +2,27 @@
 
 Multiple paid requests over a single payment channel, then close and settle. Demonstrates a batch scraping use case where each fetch increments the cumulative voucher by 0.002 pathUSD.
 
+## Restore after restart
+
+Session persistence is caller-owned. If the client restarts between fetches,
+save the latest `channelId`, cumulative amount, and optionally `spent`, then
+resume with:
+
+```ts
+const manager = tempo.sessionManager({
+  account,
+  maxDeposit: '10',
+  restore: {
+    channelId: saved.channelId,
+    cumulativeAmount: saved.cumulativeAmount,
+    spent: saved.spent,
+  },
+})
+```
+
+After restart, `.close()` still requires one fresh paid request first so the
+manager can receive a new challenge and remember the request URL.
+
 ## Setup
 
 ```bash
