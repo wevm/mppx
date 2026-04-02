@@ -4,6 +4,7 @@ import * as Expires from '../../Expires.js'
 import type { LooseOmit, OneOf } from '../../internal/types.js'
 import * as Method from '../../Method.js'
 import type * as Html from '../../server/internal/html/config.ts'
+import type * as z from '../../zod.js'
 import type {
   StripeClient,
   CreatePaymentMethodFromElements,
@@ -72,6 +73,8 @@ export function charge<const parameters extends charge.Parameters>(parameters: p
         ? {
             config: htmlConfig,
             content: htmlContent,
+            formatAmount: (request: z.output<typeof Methods.charge.schema.request>) =>
+              `${request.currency}${request.amount}`,
             text: htmlText,
             theme: htmlTheme,
           }

@@ -127,7 +127,7 @@ export function http(): Http {
       return Credential.deserialize(payment)
     },
 
-    respondChallenge(options) {
+    async respondChallenge(options) {
       const { challenge, error, input } = options
 
       if (options.html && new URL(input.url).searchParams.has(Html.serviceWorkerParam))
@@ -144,7 +144,7 @@ export function http(): Http {
         'Cache-Control': 'no-store',
       }
 
-      const body = (() => {
+      const body = await (async () => {
         if (options.html && input.headers.get('Accept')?.includes('text/html')) {
           headers['Content-Type'] = 'text/html; charset=utf-8'
 
@@ -167,26 +167,29 @@ export function http(): Http {
                 ${Html.style(theme)}
               </head>
               <body>
-                <header>
-                  ${Html.logo(theme.logo)}
-                  <h1>${text.title}</h1>
-                </header>
+                <main>
+                  <header class="${Html.classNames.header}">
+                    ${Html.logo(theme.logo)}
+                    <h1>${text.title}</h1>
+                  </header>
 
-                <pre>
-${Json.stringify(challenge, null, 2)
-                    .replace(/&/g, '&amp;')
-                    .replace(/</g, '&lt;')
-                    .replace(/>/g, '&gt;')}</pre
-                >
-                <div id="root"></div>
-                <script id="${Html.dataId}" type="application/json">
-                  ${Json.stringify({
-                    config: options.html.config,
-                    challenge,
-                    theme,
-                  }).replace(/</g, '\\u003c')}
-                </script>
-                ${options.html.content}
+                  <div class="${Html.classNames.summary}">
+                    <div>${await options.html.formatAmount(challenge.request)}</div>
+                    ${challenge.description ? `<div>${challenge.description}</div>` : ''}
+                    ${challenge.expires
+                      ? `<div>Expires at ${new Date(challenge.expires).toLocaleString()}</div>`
+                      : ''}
+                  </div>
+                  <div id="root"></div>
+                  <script id="${Html.dataId}" type="application/json">
+                    ${Json.stringify({
+                      config: options.html.config,
+                      challenge,
+                      theme,
+                    } satisfies Html.Data).replace(/</g, '\\u003c')}
+                  </script>
+                  ${options.html.content}
+                </main>
               </body>
             </html> `
         }

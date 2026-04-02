@@ -1,7 +1,7 @@
 import type { Appearance } from '@stripe/stripe-js'
 import { loadStripe } from '@stripe/stripe-js/pure'
+import { Json } from 'ox'
 
-import type * as Challenge from '../../../../Challenge.js'
 import { stripe } from '../../../../client/index.js'
 import * as Html from '../../../../server/internal/html/config.js'
 import { submitCredential } from '../../../../server/internal/html/serviceWorker.client.js'
@@ -10,19 +10,38 @@ import type { charge } from '../../../../stripe/server/Charge.js'
 import type * as Methods from '../../../Methods.js'
 
 const dataElement = document.getElementById(Html.dataId)!
-const data = JSON.parse(dataElement.textContent) as {
-  config: NonNullable<charge.Parameters['html']>
-  challenge: Challenge.FromMethods<[typeof Methods.charge]>
-  theme: {
-    [k in keyof Omit<Html.Theme, 'fontUrl' | 'logo'>]-?: NonNullable<Html.Theme[k]>
-  }
-}
+const data = Json.parse(dataElement.textContent) as Html.Data<
+  typeof Methods.charge,
+  NonNullable<charge.Parameters['html']>
+>
 
 const root = document.getElementById('root')!
 
-const h2 = document.createElement('h2')
-h2.textContent = 'stripe'
-root.appendChild(h2)
+const css = String.raw
+const style = document.createElement('style')
+style.textContent = css`
+  form {
+    display: flex;
+    flex-direction: column;
+    gap: calc(${Html.vars.spacingUnit} * 8);
+  }
+  button {
+    background: ${Html.vars.accent};
+    border-radius: ${Html.vars.radius};
+    color: ${Html.vars.background};
+    cursor: pointer;
+    font-weight: 500;
+    padding: calc(${Html.vars.spacingUnit} * 4) calc(${Html.vars.spacingUnit} * 8);
+  }
+  button:hover:not(:disabled) {
+    opacity: 0.85;
+  }
+  button:disabled {
+    cursor: default;
+    opacity: 0.5;
+  }
+`
+root.append(style)
 
 ;(async () => {
   if (import.meta.env.MODE === 'test') {
@@ -74,10 +93,9 @@ root.appendChild(h2)
           colorPrimary: data.theme.accent[resolvedColorSchemeIndex],
           colorText: data.theme.foreground[resolvedColorSchemeIndex],
           colorTextSecondary: data.theme.muted[resolvedColorSchemeIndex],
+          fontSizeBase: data.theme.fontSizeBase,
           fontFamily: data.theme.fontFamily,
-          fontSizeSm: '0.875rem',
-          fontWeightNormal: '400',
-          spacingUnit: '2px',
+          spacingUnit: data.theme.spacingUnit,
         },
       } satisfies Appearance,
       (data.config.elements?.options?.appearance as never) ?? {},
