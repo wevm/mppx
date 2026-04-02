@@ -7,11 +7,11 @@ test('charge via tempo html payment page', async ({ page }) => {
   })
 
   // Verify 402 payment page rendered
-  await expect(page.locator('h1')).toHaveText('Payment Required')
-  await expect(page.getByText('Continue with Tempo')).toBeVisible()
+  await expect(page.getByText('Payment Required')).toBeVisible()
+  await expect(page.getByRole('button', { name: /continue with tempo/i })).toBeVisible()
 
   // Click the pay button (local adapter signs without dialog)
-  await page.getByText('Continue with Tempo').click()
+  await page.getByRole('button', { name: /continue with tempo/i }).click()
 
   // Wait for service worker to submit credential and page to reload with paid response
   await expect(page.locator('body')).toContainText('"url":', { timeout: 30_000 })
