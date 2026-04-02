@@ -167,3 +167,30 @@ Built on the ["Payment" HTTP Authentication Scheme](https://datatracker.ietf.org
 ## License
 
 MIT
+
+## Community Payment Methods
+
+Third-party payment methods built on the mppx SDK:
+
+| Package | Network | Install |
+| ------- | ------- | ------- |
+| [`@solana/mpp`](https://github.com/solana-foundation/mpp-sdk) | Solana | `npm i @solana/mpp` |
+| [`mppx-xpr-network`](https://github.com/charliebot87/mpp-xpr) | XPR Network | `npm i mppx-xpr-network` |
+
+### XPR Network
+
+Zero gas fees, sub-second finality, human-readable account names.
+
+```ts
+import { Mppx } from 'mppx/server'
+import { xpr } from 'mppx-xpr-network'
+
+const mppx = Mppx.create({
+  methods: [xpr.charge({ recipient: 'myaccount' })],
+  secretKey: process.env.MPP_SECRET_KEY,
+})
+
+const result = await mppx.charge({ amount: '1.0000 XPR' })(request)
+if (result.status === 402) return result.challenge
+return result.withReceipt(Response.json({ data: '...' }))
+```
