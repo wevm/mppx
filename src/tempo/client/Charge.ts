@@ -92,7 +92,7 @@ export function charge(parameters: charge.Parameters = {}) {
 
       const memo = methodDetails?.memo
         ? (methodDetails.memo as Hex.Hex)
-        : Attribution.encode({ serverId: challenge.realm, clientId })
+        : Attribution.encode({ challengeId: challenge.id, clientId, serverId: challenge.realm })
       const transfers = Charge_internal.getTransfers({
         amount,
         methodDetails: {

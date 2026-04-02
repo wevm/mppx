@@ -14,7 +14,7 @@ import { Bytes, Hash, Hex } from 'ox'
  * | 4      | 1    | version (0x01)                            |
  * | 5..14  | 10   | serverId = keccak256(serverId)[0..9]       |
  * | 15..24 | 10   | clientId = keccak256(clientId)[0..9] or 0s |
- * | 25..31 | 7    | nonce (random bytes)                      |
+ * | 25..31 | 7    | nonce = keccak256(challengeId)[0..6]      |
  *
  * The TAG prefix makes MPP transactions trivially distinguishable
  * from arbitrary memos via `TransferWithMemo` event topic filtering.
@@ -50,11 +50,11 @@ function fingerprint(value: string): Uint8Array {
  * ```ts
  * import * as Attribution from './Attribution.js'
  *
- * const memo = Attribution.encode({ serverId: 'api.example.com', clientId: 'my-app' })
+ * const memo = Attribution.encode({ challengeId: 'challenge-123', clientId: 'my-app', serverId: 'api.example.com' })
  * ```
  */
 export function encode(parameters: encode.Parameters) {
-  const { serverId, clientId } = parameters
+  const { serverId, clientId, challengeId } = parameters
   const buf = new Uint8Array(32)
 
   buf.set(Hex.toBytes(tag), 0)
@@ -62,18 +62,22 @@ export function encode(parameters: encode.Parameters) {
   buf.set(fingerprint(serverId), 5)
   if (clientId) buf.set(fingerprint(clientId), 15)
 
-  const nonce = crypto.getRandomValues(new Uint8Array(7))
-  buf.set(nonce, 25)
+  // Derive the nonce from keccak256(challengeId)[0..6] to bind the memo
+  // to the challenge and prevent transaction hash stealing.
+  // TODO: expand to full memo verification once the server tracks the complete attribution payload.
+  buf.set(challengeNonce(challengeId), 25)
 
   return Hex.fromBytes(buf)
 }
 
 export declare namespace encode {
   type Parameters = {
-    /** Server identity used to derive the server fingerprint. */
-    serverId: string
+    /** Challenge ID used to derive a deterministic nonce, binding the memo to the challenge. */
+    challengeId: string
     /** Optional client identity used to derive the client fingerprint. */
     clientId?: string | undefined
+    /** Server identity used to derive the server fingerprint. */
+    serverId: string
   }
 }
 
@@ -87,7 +91,7 @@ export declare namespace encode {
  * ```ts
  * import * as Attribution from './Attribution.js'
  *
- * Attribution.isMppMemo(Attribution.encode({ serverId: 'api.example.com' })) // true
+ * Attribution.isMppMemo(Attribution.encode({ challengeId: 'challenge-123', serverId: 'api.example.com' })) // true
  * Attribution.isMppMemo('0x0000...0000')      // false
  * ```
  */
@@ -124,7 +128,7 @@ export function verifyServer(memo: `0x${string}`, serverId: string): boolean {
  * ```ts
  * import * as Attribution from './Attribution.js'
  *
- * const memo = Attribution.encode({ serverId: 'api.example.com', clientId: 'my-app' })
+ * const memo = Attribution.encode({ challengeId: 'challenge-123', clientId: 'my-app', serverId: 'api.example.com' })
  * const decoded = Attribution.decode(memo)
  * // { version: 1, serverFingerprint: '0x...', clientFingerprint: '0x...', nonce: '0x...' }
  * ```
@@ -150,7 +154,32 @@ export declare namespace decode {
     serverFingerprint: `0x${string}`
     /** 10-byte client fingerprint hex, or `null` if anonymous. */
     clientFingerprint: `0x${string}` | null
-    /** 7-byte random nonce hex. */
+    /** 7-byte challenge-bound nonce hex (keccak256(challengeId)[0..6]). */
     nonce: `0x${string}`
   }
+}
+
+/**
+ * Computes the 7-byte challenge-bound nonce: keccak256(challengeId)[0..6].
+ * @internal
+ */
+export function challengeNonce(challengeId: string): Uint8Array {
+  const hash = Hash.keccak256(Bytes.fromString(challengeId), { as: 'Hex' })
+  return Hex.toBytes(Hex.slice(hash, 0, 7))
+}
+
+/**
+ * Verifies that a memo's nonce is bound to the given challengeId.
+ *
+ * Checks TAG, version byte, and that bytes 25–31 equal keccak256(challengeId)[0..6].
+ *
+ * @param memo - A `0x`-prefixed hex string (bytes32).
+ * @param challengeId - The expected challenge ID.
+ * @returns `true` if the memo has a valid MPP tag and matching challenge nonce.
+ */
+export function verifyChallengeBinding(memo: `0x${string}`, challengeId: string): boolean {
+  const decoded = decode(memo)
+  if (!decoded) return false
+  const expectedNonce = Hex.fromBytes(challengeNonce(challengeId))
+  return decoded.nonce.toLowerCase() === expectedNonce.toLowerCase()
 }

@@ -16,27 +16,38 @@ describe('Attribution', () => {
 
   describe('encode', () => {
     test('returns a 32-byte hex string', () => {
-      const memo = Attribution.encode({ serverId: 'api.example.com' })
+      const memo = Attribution.encode({
+        challengeId: 'test-challenge-1',
+        serverId: 'api.example.com',
+      })
       // 0x prefix + 64 hex chars = 32 bytes
       expect(memo).toMatch(/^0x[0-9a-f]{64}$/i)
     })
 
     test('starts with TAG + version byte', () => {
-      const memo = Attribution.encode({ serverId: 'api.example.com' })
+      const memo = Attribution.encode({
+        challengeId: 'test-challenge-1',
+        serverId: 'api.example.com',
+      })
       const tag = memo.slice(0, 10) // 0x + 8 hex chars
       expect(tag.toLowerCase()).toBe(Attribution.tag.toLowerCase())
       const version = memo.slice(10, 12)
       expect(version).toBe('01')
     })
 
-    test('generates unique memos (random nonce)', () => {
-      const a = Attribution.encode({ serverId: 'api.example.com' })
-      const b = Attribution.encode({ serverId: 'api.example.com' })
+    test('produces deterministic memos (challenge-bound nonce)', () => {
+      const a = Attribution.encode({ challengeId: 'challenge-a', serverId: 'api.example.com' })
+      const b = Attribution.encode({ challengeId: 'challenge-b', serverId: 'api.example.com' })
       expect(a).not.toBe(b)
+      const c = Attribution.encode({ challengeId: 'challenge-a', serverId: 'api.example.com' })
+      expect(a).toBe(c)
     })
 
     test('encodes server fingerprint from serverId', () => {
-      const memo = Attribution.encode({ serverId: 'api.example.com' })
+      const memo = Attribution.encode({
+        challengeId: 'test-challenge-1',
+        serverId: 'api.example.com',
+      })
       const expectedFingerprint = Hex.slice(
         Hash.keccak256(Bytes.fromString('api.example.com'), { as: 'Hex' }),
         0,
@@ -47,7 +58,11 @@ describe('Attribution', () => {
     })
 
     test('encodes client fingerprint from clientId', () => {
-      const memo = Attribution.encode({ serverId: 'api.example.com', clientId: 'my-app' })
+      const memo = Attribution.encode({
+        challengeId: 'test-challenge-1',
+        clientId: 'my-app',
+        serverId: 'api.example.com',
+      })
       const expectedFingerprint = Hex.slice(
         Hash.keccak256(Bytes.fromString('my-app'), { as: 'Hex' }),
         0,
@@ -58,13 +73,20 @@ describe('Attribution', () => {
     })
 
     test('encodes zero client bytes when no clientId', () => {
-      const memo = Attribution.encode({ serverId: 'api.example.com' })
+      const memo = Attribution.encode({
+        challengeId: 'test-challenge-1',
+        serverId: 'api.example.com',
+      })
       const clientHex = `0x${memo.slice(32, 52)}` as `0x${string}`
       expect(clientHex).toBe(Attribution.anonymous)
     })
 
     test('treats empty string clientId as anonymous', () => {
-      const memo = Attribution.encode({ serverId: 'api.example.com', clientId: '' })
+      const memo = Attribution.encode({
+        challengeId: 'test-challenge-1',
+        clientId: '',
+        serverId: 'api.example.com',
+      })
       const clientHex = `0x${memo.slice(32, 52)}` as `0x${string}`
       expect(clientHex).toBe(Attribution.anonymous)
       const decoded = Attribution.decode(memo)
@@ -75,12 +97,19 @@ describe('Attribution', () => {
 
   describe('isMppMemo', () => {
     test('returns true for encoded memos', () => {
-      const memo = Attribution.encode({ serverId: 'api.example.com' })
+      const memo = Attribution.encode({
+        challengeId: 'test-challenge-1',
+        serverId: 'api.example.com',
+      })
       expect(Attribution.isMppMemo(memo)).toBe(true)
     })
 
     test('returns true for encoded memos with clientId', () => {
-      const memo = Attribution.encode({ serverId: 'api.example.com', clientId: 'my-app' })
+      const memo = Attribution.encode({
+        challengeId: 'test-challenge-1',
+        clientId: 'my-app',
+        serverId: 'api.example.com',
+      })
       expect(Attribution.isMppMemo(memo)).toBe(true)
     })
 
@@ -101,13 +130,19 @@ describe('Attribution', () => {
     })
 
     test('returns false for wrong version', () => {
-      const memo = Attribution.encode({ serverId: 'api.example.com' })
+      const memo = Attribution.encode({
+        challengeId: 'test-challenge-1',
+        serverId: 'api.example.com',
+      })
       const wrongVersion = `${memo.slice(0, 10)}ff${memo.slice(12)}` as `0x${string}`
       expect(Attribution.isMppMemo(wrongVersion)).toBe(false)
     })
 
     test('handles mixed case hex', () => {
-      const memo = Attribution.encode({ serverId: 'api.example.com' })
+      const memo = Attribution.encode({
+        challengeId: 'test-challenge-1',
+        serverId: 'api.example.com',
+      })
       const tagUpper = memo.slice(0, 10).toUpperCase()
       const mixed = `0x${tagUpper.slice(2)}${memo.slice(10)}` as `0x${string}`
       expect(Attribution.isMppMemo(mixed)).toBe(true)
@@ -116,17 +151,27 @@ describe('Attribution', () => {
 
   describe('verifyServer', () => {
     test('returns true for matching serverId', () => {
-      const memo = Attribution.encode({ serverId: 'api.example.com' })
+      const memo = Attribution.encode({
+        challengeId: 'test-challenge-1',
+        serverId: 'api.example.com',
+      })
       expect(Attribution.verifyServer(memo, 'api.example.com')).toBe(true)
     })
 
     test('returns true for matching serverId with clientId', () => {
-      const memo = Attribution.encode({ serverId: 'api.example.com', clientId: 'my-app' })
+      const memo = Attribution.encode({
+        challengeId: 'test-challenge-1',
+        clientId: 'my-app',
+        serverId: 'api.example.com',
+      })
       expect(Attribution.verifyServer(memo, 'api.example.com')).toBe(true)
     })
 
     test('returns false for wrong serverId', () => {
-      const memo = Attribution.encode({ serverId: 'api.example.com' })
+      const memo = Attribution.encode({
+        challengeId: 'test-challenge-1',
+        serverId: 'api.example.com',
+      })
       expect(Attribution.verifyServer(memo, 'other.example.com')).toBe(false)
     })
 
@@ -139,7 +184,11 @@ describe('Attribution', () => {
 
   describe('decode', () => {
     test('decodes an encoded memo with serverId and clientId', () => {
-      const memo = Attribution.encode({ serverId: 'api.example.com', clientId: 'my-app' })
+      const memo = Attribution.encode({
+        challengeId: 'test-challenge-1',
+        clientId: 'my-app',
+        serverId: 'api.example.com',
+      })
       const result = Attribution.decode(memo)
       expect(result).not.toBeNull()
       expect(result!.version).toBe(1)
@@ -150,7 +199,10 @@ describe('Attribution', () => {
     })
 
     test('decodes anonymous client as null', () => {
-      const memo = Attribution.encode({ serverId: 'api.example.com' })
+      const memo = Attribution.encode({
+        challengeId: 'test-challenge-1',
+        serverId: 'api.example.com',
+      })
       const result = Attribution.decode(memo)
       expect(result).not.toBeNull()
       expect(result!.clientFingerprint).toBeNull()
@@ -162,14 +214,22 @@ describe('Attribution', () => {
       expect(Attribution.decode(arbitrary)).toBeNull()
     })
 
-    test('different encodes produce different nonces', () => {
-      const a = Attribution.decode(Attribution.encode({ serverId: 'api.example.com' }))
-      const b = Attribution.decode(Attribution.encode({ serverId: 'api.example.com' }))
+    test('different challengeIds produce different nonces', () => {
+      const a = Attribution.decode(
+        Attribution.encode({ challengeId: 'challenge-a', serverId: 'api.example.com' }),
+      )
+      const b = Attribution.decode(
+        Attribution.encode({ challengeId: 'challenge-b', serverId: 'api.example.com' }),
+      )
       expect(a!.nonce).not.toBe(b!.nonce)
     })
 
     test('serverId fingerprint matches expected keccak hash', () => {
-      const memo = Attribution.encode({ serverId: 'api.example.com', clientId: 'my-app' })
+      const memo = Attribution.encode({
+        challengeId: 'test-challenge-1',
+        clientId: 'my-app',
+        serverId: 'api.example.com',
+      })
       const result = Attribution.decode(memo)!
       const expectedServer = Hex.slice(
         Hash.keccak256(Bytes.fromString('api.example.com'), { as: 'Hex' }),
@@ -180,9 +240,55 @@ describe('Attribution', () => {
     })
 
     test('returns null for wrong version via decode', () => {
-      const memo = Attribution.encode({ serverId: 'api.example.com' })
+      const memo = Attribution.encode({
+        challengeId: 'test-challenge-1',
+        serverId: 'api.example.com',
+      })
       const corrupted = `${memo.slice(0, 10)}ff${memo.slice(12)}` as `0x${string}`
       expect(Attribution.decode(corrupted)).toBeNull()
+    })
+  })
+
+  describe('challengeNonce', () => {
+    test('returns 7 bytes', () => {
+      const nonce = Attribution.challengeNonce('challenge-123')
+      expect(nonce.length).toBe(7)
+    })
+
+    test('is deterministic', () => {
+      const a = Attribution.challengeNonce('challenge-123')
+      const b = Attribution.challengeNonce('challenge-123')
+      expect(Hex.fromBytes(a)).toBe(Hex.fromBytes(b))
+    })
+
+    test('differs for different challengeIds', () => {
+      const a = Attribution.challengeNonce('challenge-123')
+      const b = Attribution.challengeNonce('challenge-456')
+      expect(Hex.fromBytes(a)).not.toBe(Hex.fromBytes(b))
+    })
+  })
+
+  describe('verifyChallengeBinding', () => {
+    test('returns true for matching challengeId', () => {
+      const memo = Attribution.encode({
+        challengeId: 'challenge-123',
+        serverId: 'api.example.com',
+      })
+      expect(Attribution.verifyChallengeBinding(memo, 'challenge-123')).toBe(true)
+    })
+
+    test('returns false for wrong challengeId', () => {
+      const memo = Attribution.encode({
+        challengeId: 'challenge-123',
+        serverId: 'api.example.com',
+      })
+      expect(Attribution.verifyChallengeBinding(memo, 'challenge-456')).toBe(false)
+    })
+
+    test('returns false for non-MPP memo', () => {
+      const arbitrary =
+        '0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef' as `0x${string}`
+      expect(Attribution.verifyChallengeBinding(arbitrary, 'challenge-123')).toBe(false)
     })
   })
 })

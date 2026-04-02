@@ -24,6 +24,7 @@ import type * as Html from '../../server/internal/html/config.ts'
 import * as Store from '../../Store.js'
 import * as Client from '../../viem/Client.js'
 import type * as z from '../../zod.js'
+import * as Attribution from '../Attribution.js'
 import * as Account from '../internal/account.js'
 import * as TempoAddress from '../internal/address.js'
 import * as Charge_internal from '../internal/charge.js'
@@ -180,11 +181,21 @@ export function charge<const parameters extends charge.Parameters>(
 
           const expectedTransfers = getExpectedTransfers({ amount, memo, methodDetails, recipient })
           const receipt = await getTransactionReceipt(client, { hash })
-          assertTransferLogs(receipt, {
+          const matchedLogs = assertTransferLogs(receipt, {
             currency,
             sender: receipt.from,
             transfers: expectedTransfers,
           })
+
+          // Only verify challenge binding when using auto-generated attribution memos.
+          // Explicit memos (set by the server) are strictly matched by assertTransferLogs
+          // but are NOT challenge-bound — callers that set explicit memos are responsible
+          // for ensuring memo uniqueness per challenge to prevent cross-challenge hash reuse.
+          if (!memo)
+            assertChallengeBoundMemo(matchedLogs, {
+              challengeId: challenge.id,
+              realm: challenge.realm,
+            })
 
           await markHashUsed(store, hash)
 
@@ -507,6 +518,18 @@ function decodeTransferCall(
   return null
 }
 
+type TransferLog =
+  | {
+      kind: 'transfer'
+      args: { from: `0x${string}`; to: `0x${string}`; amount: bigint }
+      address: `0x${string}`
+    }
+  | {
+      kind: 'memo'
+      args: { from: `0x${string}`; to: `0x${string}`; amount: bigint; memo: `0x${string}` }
+      address: `0x${string}`
+    }
+
 function assertTransferLogs(
   receipt: TransactionReceipt,
   parameters: {
@@ -514,7 +537,7 @@ function assertTransferLogs(
     sender: `0x${string}`
     transfers: readonly ExpectedTransfer[]
   },
-) {
+): TransferLog[] {
   const transferLogs = parseEventLogs({
     abi: Abis.tip20,
     eventName: 'Transfer',
@@ -527,8 +550,11 @@ function assertTransferLogs(
     logs: receipt.logs,
   }).map((log) => ({ ...log, kind: 'memo' as const }))
 
-  const logs = [...transferLogs, ...memoLogs]
+  // Prefer memo logs so allowAnyMemo matches TransferWithMemo before Transfer,
+  // preserving the memo for challenge binding verification.
+  const logs = [...memoLogs, ...transferLogs]
   const used = new Set<number>()
+  const matched: TransferLog[] = []
 
   // Match memo-specific transfers before wildcards to avoid greedy
   // consumption of memo-bearing logs by allowAnyMemo entries.
@@ -561,7 +587,10 @@ function assertTransferLogs(
     }
 
     used.add(matchIndex)
+    matched.push(logs[matchIndex]! as TransferLog)
   }
+
+  return matched
 }
 
 /** @internal */
@@ -622,6 +651,28 @@ function toReceipt(receipt: TransactionReceipt) {
     timestamp: new Date().toISOString(),
     reference: transactionHash,
   } as const
+}
+
+/**
+ * Asserts that at least one of the matched payment logs carries a
+ * challenge-bound memo nonce (keccak256(challengeId)[0..6] in bytes 25–31).
+ * Only checks logs that were matched by `assertTransferLogs`, not the
+ * entire receipt — preventing unrelated dust transfers from satisfying
+ * the binding.
+ * @internal
+ */
+function assertChallengeBoundMemo(
+  matchedLogs: readonly TransferLog[],
+  parameters: { challengeId: string; realm: string },
+) {
+  const bound = matchedLogs.some((log) => {
+    if (log.kind !== 'memo') return false
+    if (!Attribution.verifyServer(log.args.memo, parameters.realm)) return false
+    return Attribution.verifyChallengeBinding(log.args.memo, parameters.challengeId)
+  })
+
+  if (!bound)
+    throw new MismatchError('Payment verification failed: memo is not bound to this challenge.', {})
 }
 
 /** @internal */

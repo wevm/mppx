@@ -142,6 +142,22 @@ id = base64url(HMAC-SHA256(server_secret, input))
 
 **Verification:** Server recomputes HMAC from echoed challenge parameters and compares to `id`. If mismatch, reject credential.
 
+## Changesets
+
+**Never manually edit `CHANGELOG.md`.** Use [changesets](https://github.com/changesets/changesets) instead:
+
+Create a `.changeset/<name>.md` file with frontmatter specifying the package and bump type:
+
+```md
+---
+'mppx': patch
+---
+
+Description of the change.
+```
+
+The changelog is auto-generated from changesets during `changeset version`.
+
 ## Commands
 
 ```bash
