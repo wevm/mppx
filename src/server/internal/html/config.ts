@@ -17,7 +17,7 @@ export type Data<
   challenge: Challenge.FromMethods<[method]>
   text: { [k in keyof Text]-?: NonNullable<Text[k]> }
   theme: {
-    [k in keyof Omit<Theme, 'fontUrl' | 'logo'>]-?: NonNullable<Theme[k]>
+    [k in keyof Omit<Theme, 'favicon' | 'fontUrl' | 'logo'>]-?: NonNullable<Theme[k]>
   }
 }
 
@@ -86,7 +86,7 @@ export function font(theme: Theme) {
 }
 
 export function style(theme: {
-  [k in keyof Omit<Theme, 'fontUrl' | 'logo'>]-?: NonNullable<Theme[k]>
+  [k in keyof Omit<Theme, 'favicon' | 'fontUrl' | 'logo'>]-?: NonNullable<Theme[k]>
 }) {
   const colors = Object.fromEntries(
     colorTokens.map((name) => [name, resolveColor(theme[name], defaultTheme[name])]),
@@ -212,6 +212,28 @@ export function showError(message: string) {
   document.getElementById(rootId)?.after(el)
 }
 
+export function favicon(theme: Theme, realm: string) {
+  if (typeof theme.favicon === 'string') return html`<link rel="icon" href="${theme.favicon}" />`
+  if (typeof theme.favicon === 'object') {
+    return html`<link
+        rel="icon"
+        href="${theme.favicon.light}"
+        media="(prefers-color-scheme: light)"
+      />
+      <link rel="icon" href="${theme.favicon.dark}" media="(prefers-color-scheme: dark)" />`
+  }
+  // Fallback: use host's favicon via Google S2 service
+  try {
+    const domain = new URL(realm).hostname
+    return html`<link
+      rel="icon"
+      href="https://www.google.com/s2/favicons?domain=${domain}&sz=64"
+    />`
+  } catch {
+    return ''
+  }
+}
+
 export function logo(value: Theme) {
   if (typeof value.logo === 'undefined') return ''
   if (typeof value.logo === 'string')
@@ -255,6 +277,8 @@ export type Theme = {
   fontSizeBase?: string | undefined
   /** Font URL to inject (e.g. Google Fonts `<link>`). */
   fontUrl?: string | undefined
+  /** Favicon URL. Light/dark variants supported. Falls back to host's favicon via Google S2 service. */
+  favicon?: string | { light: string; dark: string } | undefined
   /** Logo URL shown in header. Light/dark variants supported. */
   logo?: string | { light: string; dark: string } | undefined
   /** Border radius. @default '6px' */
@@ -297,7 +321,7 @@ export const defaultTheme = {
   negative: ['#e5484d', '#e5484d'],
   positive: ['#30a46c', '#30a46c'],
   surface: ['#f5f5f5', '#1a1a1a'],
-} as const satisfies Required<Omit<Theme, 'fontUrl' | 'logo'>>
+} as const satisfies Required<Omit<Theme, 'favicon' | 'fontUrl' | 'logo'>>
 
 export const colorTokens = [
   'accent',

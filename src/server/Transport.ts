@@ -150,6 +150,7 @@ export function http(): Http {
 
           const theme = Html.mergeDefined(
             {
+              favicon: undefined as Html.Theme['favicon'],
               fontUrl: undefined as Html.Theme['fontUrl'],
               logo: undefined as Html.Theme['logo'],
               ...Html.defaultTheme,
@@ -167,7 +168,7 @@ export function http(): Http {
                 <meta name="robots" content="noindex" />
                 <meta name="color-scheme" content="${theme.colorScheme}" />
                 <title>${text.title}</title>
-                ${Html.font(theme)} ${Html.style(theme)}
+                ${Html.favicon(theme, challenge.realm)} ${Html.font(theme)} ${Html.style(theme)}
               </head>
               <body>
                 <main>
