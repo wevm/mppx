@@ -70,22 +70,8 @@ jobs:
       - name: Install dependencies
         uses: ./.github/actions/install-dependencies
 
-      - name: Cache Playwright browsers
-        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
-        id: playwright-cache
-        with:
-          path: ~/.cache/ms-playwright
-          key: playwright-chromium-${{ hashFiles('pnpm-lock.yaml') }}
-
-      - name: Install Playwright browsers
-        if: steps.playwright-cache.outputs.cache-hit != 'true'
-        run: pnpm exec playwright install chromium
-
-      - name: Install Playwright system deps
-        run: pnpm exec playwright install-deps chromium
-
       - name: Cache Tempo Docker image
-        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
         id: docker-cache
         with:
           path: /tmp/tempo-image.tar
@@ -109,13 +95,14 @@ jobs:
           eval "$(dbus-launch --sh-syntax)"
           eval "$(printf '\n' | gnome-keyring-daemon --unlock)"
           eval "$(printf '\n' | gnome-keyring-daemon --start)"
-          pnpm run test --bail=1
+          pnpm exec vp test --run --project node --project cli --bail=1
         env:
           CI: true
 
   test-html:
     name: Test HTML
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - name: Clone repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -124,7 +111,7 @@ jobs:
         uses: ./.github/actions/install-dependencies
 
       - name: Cache Playwright browsers
-        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
         id: playwright-cache
         with:
           path: ~/.cache/ms-playwright
@@ -140,6 +127,14 @@ jobs:
       - name: Bundle HTML files
         run: pnpm build
 
+      - name: Run browser unit tests
+        run: pnpm exec vp test --run --project browser --bail=1
+        env:
+          CI: true
+          # These browser-only unit tests do not touch localnet, so skip the
+          # global Tempo server startup/teardown path that can leave the step hanging.
+          VITE_NODE_ENV: testnet
+
       - name: Run tests
         run: pnpm run test:html
         env:
@@ -150,7 +145,7 @@ jobs:
 
       - name: Upload Playwright artifacts
         if: ${{ always() }}
-        uses: actions/upload-artifact@4cec3d8aa04e39d1a68397de0c4cd6fb9dce8ec1 # v4.6.1
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: playwright-artifacts
           path: |

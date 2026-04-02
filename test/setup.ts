@@ -7,6 +7,8 @@ import { nodeEnv } from './config.js'
 import { rpcUrl } from './tempo/prool.js'
 import { accounts, asset, client, fundAccount } from './tempo/viem.js'
 
+const stopTimeoutMs = 2_000
+
 beforeAll(async () => {
   if (nodeEnv !== 'localnet') return
 
@@ -34,5 +36,8 @@ beforeAll(async () => {
 
 afterAll(async () => {
   if (nodeEnv !== 'localnet') return
-  await fetch(`${rpcUrl}/stop`)
+
+  // Teardown is best-effort: when the localnet instance is already unhealthy,
+  // waiting forever here can keep the whole Vitest worker alive.
+  await fetch(`${rpcUrl}/stop`, { signal: AbortSignal.timeout(stopTimeoutMs) }).catch(() => {})
 })

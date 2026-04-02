@@ -9,6 +9,14 @@ import { rpcUrl } from './prool.js'
 
 export const asset = '0x20c0000000000000000000000000000000000001' as const
 
+const localnetTransportOptions =
+  nodeEnv === 'localnet'
+    ? {
+        retryCount: 0,
+        timeout: 2_000,
+      }
+    : undefined
+
 const accountsMnemonic = (() => {
   if (nodeEnv === 'localnet') return 'test test test test test test test test test test test junk'
   return generateMnemonic(english)
@@ -57,6 +65,7 @@ export const http = (url = rpcUrl) =>
     ...debugOptions({
       rpcUrl: url,
     }),
+    ...localnetTransportOptions,
     ...(import.meta.env.VITE_RPC_CREDENTIALS
       ? {
           fetchOptions: {
