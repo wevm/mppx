@@ -289,7 +289,10 @@ describe('http', () => {
       )
       expect(dataMatch).not.toBeNull()
 
-      const data = JSON.parse(dataMatch?.[1]?.replace(/\\u003c/g, '<') ?? '')
+      const dataMap = JSON.parse(dataMatch?.[1]?.replace(/\\u003c/g, '<') ?? '')
+      expect(typeof dataMap).toBe('object')
+      expect(Object.keys(dataMap)).toHaveLength(1)
+      const data = dataMap[challenge.id]
       expect(data.config).toEqual({ foo: 'bar' })
       expect(data.challenge.id).toBe(challenge.id)
       expect(data.challenge.method).toBe('tempo')

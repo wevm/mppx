@@ -1184,6 +1184,209 @@ describe('compose', () => {
 
     expect(result.status).toBe(200)
   })
+
+  describe('html', () => {
+    const htmlOptionsA = {
+      config: { providerA: true },
+      content: '<script src="/alpha-bundle.js"></script>',
+      formatAmount: (request: Record<string, unknown>) => `$${request.amount}`,
+      text: undefined,
+      theme: undefined,
+    }
+
+    const htmlOptionsB = {
+      config: { providerB: true },
+      content: '<script src="/beta-bundle.js"></script>',
+      formatAmount: (request: Record<string, unknown>) => `$${request.amount}`,
+      text: undefined,
+      theme: undefined,
+    }
+
+    const alphaWithHtml = Method.toServer(mockChargeA, {
+      html: htmlOptionsA,
+      async verify() {
+        return mockReceipt('alpha')
+      },
+    })
+
+    const betaWithHtml = Method.toServer(mockChargeB, {
+      html: htmlOptionsB,
+      async verify() {
+        return mockReceipt('beta')
+      },
+    })
+
+    test('returns html with tabs when multiple methods have html', async () => {
+      const mppx = Mppx.create({
+        methods: [alphaWithHtml, betaWithHtml],
+        realm,
+        secretKey,
+      })
+
+      const handle = mppx.compose([alphaWithHtml, challengeOpts], [betaWithHtml, challengeOpts])
+
+      const result = await handle(
+        new Request('https://example.com/resource', {
+          headers: { Accept: 'text/html' },
+        }),
+      )
+
+      expect(result.status).toBe(402)
+      if (result.status !== 402) throw new Error()
+
+      const body = await result.challenge.text()
+      expect(result.challenge.headers.get('Content-Type')).toBe('text/html; charset=utf-8')
+
+      // Tab a11y markup
+      expect(body).toContain('role="tablist"')
+      expect(body).toContain('role="tab"')
+      expect(body).toContain('role="tabpanel"')
+      expect(body).toContain('aria-selected="true"')
+      expect(body).toContain('aria-controls="mppx-panel-0"')
+      expect(body).toContain('aria-controls="mppx-panel-1"')
+
+      // Tab labels from method names
+      expect(body).toContain('Alpha')
+      expect(body).toContain('Beta')
+
+      // Both method bundles included
+      expect(body).toContain('/alpha-bundle.js')
+      expect(body).toContain('/beta-bundle.js')
+
+      // Data map with both entries
+      const dataMatch = body.match(
+        /<script id="__MPPX_DATA__" type="application\/json">\s*([\s\S]*?)\s*<\/script>/,
+      )
+      expect(dataMatch).not.toBeNull()
+      const dataMap = JSON.parse(dataMatch![1]!.replace(/\\u003c/g, '<'))
+      const dataValues = Object.values(dataMap) as { label: string; config: unknown }[]
+      expect(dataValues).toHaveLength(2)
+      expect(dataValues[0]!.label).toBe('Alpha')
+      expect(dataValues[0]!.config).toEqual({ providerA: true })
+      expect(dataValues[1]!.label).toBe('Beta')
+      expect(dataValues[1]!.config).toEqual({ providerB: true })
+    })
+
+    test('returns html without tabs when single method has html', async () => {
+      const mppx = Mppx.create({
+        methods: [alphaWithHtml, betaMethod],
+        realm,
+        secretKey,
+      })
+
+      const handle = mppx.compose([alphaWithHtml, challengeOpts], [betaMethod, challengeOpts])
+
+      const result = await handle(
+        new Request('https://example.com/resource', {
+          headers: { Accept: 'text/html' },
+        }),
+      )
+
+      expect(result.status).toBe(402)
+      if (result.status !== 402) throw new Error()
+
+      const body = await result.challenge.text()
+      expect(result.challenge.headers.get('Content-Type')).toBe('text/html; charset=utf-8')
+
+      // No tabs when only one method has html
+      expect(body).not.toContain('role="tablist"')
+      expect(body).not.toContain('role="tab"')
+
+      // Single panel present
+      expect(body).toContain('mppx-panel-0')
+      expect(body).toContain('/alpha-bundle.js')
+
+      // Data map with single entry
+      const dataMatch = body.match(
+        /<script id="__MPPX_DATA__" type="application\/json">\s*([\s\S]*?)\s*<\/script>/,
+      )
+      const dataMap = JSON.parse(dataMatch![1]!.replace(/\\u003c/g, '<'))
+      const dataValues = Object.values(dataMap) as { label: string }[]
+      expect(dataValues).toHaveLength(1)
+      expect(dataValues[0]!.label).toBe('Alpha')
+    })
+
+    test('falls back to json when Accept does not include text/html', async () => {
+      const mppx = Mppx.create({
+        methods: [alphaWithHtml, betaWithHtml],
+        realm,
+        secretKey,
+      })
+
+      const handle = mppx.compose([alphaWithHtml, challengeOpts], [betaWithHtml, challengeOpts])
+
+      const result = await handle(new Request('https://example.com/resource'))
+
+      expect(result.status).toBe(402)
+      if (result.status !== 402) throw new Error()
+
+      const contentType = result.challenge.headers.get('Content-Type')
+      expect(contentType).not.toContain('text/html')
+    })
+
+    test('serves service worker when __mppx_worker param is set', async () => {
+      const mppx = Mppx.create({
+        methods: [alphaWithHtml, betaWithHtml],
+        realm,
+        secretKey,
+      })
+
+      const handle = mppx.compose([alphaWithHtml, challengeOpts], [betaWithHtml, challengeOpts])
+
+      const result = await handle(new Request('https://example.com/resource?__mppx_worker'))
+
+      expect(result.status).toBe(402)
+      if (result.status !== 402) throw new Error()
+
+      expect(result.challenge.status).toBe(200)
+      expect(result.challenge.headers.get('Content-Type')).toBe('application/javascript')
+    })
+
+    test('returns json when no methods have html configured', async () => {
+      const mppx = Mppx.create({
+        methods: [alphaMethod, betaMethod],
+        realm,
+        secretKey,
+      })
+
+      const handle = mppx.compose([alphaMethod, challengeOpts], [betaMethod, challengeOpts])
+
+      const result = await handle(
+        new Request('https://example.com/resource', {
+          headers: { Accept: 'text/html' },
+        }),
+      )
+
+      expect(result.status).toBe(402)
+      if (result.status !== 402) throw new Error()
+
+      const contentType = result.challenge.headers.get('Content-Type')
+      expect(contentType).not.toContain('text/html')
+    })
+
+    test('both WWW-Authenticate headers present even with html', async () => {
+      const mppx = Mppx.create({
+        methods: [alphaWithHtml, betaWithHtml],
+        realm,
+        secretKey,
+      })
+
+      const handle = mppx.compose([alphaWithHtml, challengeOpts], [betaWithHtml, challengeOpts])
+
+      const result = await handle(
+        new Request('https://example.com/resource', {
+          headers: { Accept: 'text/html' },
+        }),
+      )
+
+      expect(result.status).toBe(402)
+      if (result.status !== 402) throw new Error()
+
+      const wwwAuth = result.challenge.headers.get('WWW-Authenticate')!
+      expect(wwwAuth).toContain('method="alpha"')
+      expect(wwwAuth).toContain('method="beta"')
+    })
+  })
 })
 
 describe('compose: pre-dispatch narrowing edge cases', () => {

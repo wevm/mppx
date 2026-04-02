@@ -1,6 +1,8 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { isDeepStrictEqual } from 'node:util'
 
+import { Json } from 'ox'
+
 import * as Challenge from '../Challenge.js'
 import * as Credential from '../Credential.js'
 import * as Errors from '../Errors.js'
@@ -10,6 +12,10 @@ import type * as Method from '../Method.js'
 import * as PaymentRequest from '../PaymentRequest.js'
 import type * as Receipt from '../Receipt.js'
 import type * as z from '../zod.js'
+import { tabScript } from './internal/html/compose.main.gen.js'
+import * as Html from './internal/html/config.js'
+import { html } from './internal/html/config.js'
+import { serviceWorker } from './internal/html/serviceWorker.gen.js'
 import * as NodeListener from './NodeListener.js'
 import * as Request from './Request.js'
 import * as Transport from './Transport.js'
@@ -645,6 +651,7 @@ type ConfiguredHandler = ((input: Request) => Promise<MethodFn.Response<Transpor
   _internal: {
     name: string
     intent: string
+    html: Html.Options | undefined
     _canonicalRequest: Record<string, unknown>
   }
 }
@@ -697,12 +704,53 @@ type ComposeEntry<methods extends readonly Method.AnyServer[]> =
  * })
  * ```
  */
+type ComposeHtmlOptions = { theme?: Html.Theme; text?: Html.Text }
+
 export function compose(
-  ...handlers: readonly ((input: Request) => Promise<MethodFn.Response<Transport.Http>>)[]
+  ...args: readonly unknown[]
 ): (input: Request) => Promise<MethodFn.Response<Transport.Http>> {
+  // Extract optional html options from last argument
+  const last = args[args.length - 1]
+  const composeOptions: Html.Options | undefined =
+    typeof last === 'object' &&
+    last !== null &&
+    typeof last !== 'function' &&
+    !('_internal' in last)
+      ? (() => {
+          const opts = last as ComposeHtmlOptions
+          return {
+            config: {},
+            content: '',
+            formatAmount: () => '',
+            text: opts.text,
+            theme: opts.theme,
+          }
+        })()
+      : undefined
+  const handlers = (composeOptions ? args.slice(0, -1) : args) as readonly ((
+    input: Request,
+  ) => Promise<MethodFn.Response<Transport.Http>>)[]
+
   if (handlers.length === 0) throw new Error('compose() requires at least one handler')
 
   return async (input: Request) => {
+    // Serve service worker for html-enabled compose
+    if (new URL(input.url).searchParams.has(Html.serviceWorkerParam)) {
+      const hasHtml = handlers.some((h) => (h as ConfiguredHandler)._internal?.html)
+      if (hasHtml) {
+        return {
+          status: 402,
+          challenge: new Response(serviceWorker, {
+            status: 200,
+            headers: {
+              'Content-Type': 'application/javascript',
+              'Cache-Control': 'no-store',
+            },
+          }),
+        } as MethodFn.Response<Transport.Http>
+      }
+    }
+
     // Try to extract a Payment credential to decide whether to dispatch or challenge.
     // Only gate on the Payment scheme — other auth schemes (Bearer, Basic, etc.)
     // should fall through to the merged-402 path so all offers are presented.
@@ -754,17 +802,176 @@ export function compose(
     const mergedHeaders = new Headers()
     mergedHeaders.set('Cache-Control', 'no-store')
 
-    let body: string | null = null
     for (const result of results) {
       if (result.status !== 402) continue
       const response = result.challenge as Response
       const wwwAuth = response.headers.get('WWW-Authenticate')
       if (wwwAuth) mergedHeaders.append('WWW-Authenticate', wwwAuth)
-      // Use the first handler's body for the problem details response.
+    }
+
+    // Collect html-enabled handlers and their challenges
+    const htmlEntries = (() => {
+      const entries: {
+        handler: ConfiguredHandler
+        challenge: Challenge.Challenge
+      }[] = []
+      for (let i = 0; i < handlers.length; i++) {
+        const meta = (handlers[i] as ConfiguredHandler)._internal
+        if (!meta?.html) continue
+        const result = results[i]
+        if (result?.status !== 402) continue
+        const wwwAuth = result.challenge.headers.get('WWW-Authenticate')
+        if (!wwwAuth) continue
+        entries.push({
+          handler: handlers[i] as ConfiguredHandler,
+          challenge: Challenge.deserialize(wwwAuth),
+        })
+      }
+      return entries
+    })()
+
+    const wantsHtml = input.headers.get('Accept')?.includes('text/html')
+
+    if (wantsHtml && htmlEntries.length > 0) {
+      // Use compose-level options or first html-enabled method's config for the page shell
+      const shellHtml = composeOptions ?? htmlEntries[0]!.handler._internal.html!
+      const theme = Html.mergeDefined(
+        {
+          favicon: undefined as Html.Theme['favicon'],
+          fontUrl: undefined as Html.Theme['fontUrl'],
+          logo: undefined as Html.Theme['logo'],
+          ...Html.defaultTheme,
+        },
+        (shellHtml.theme as never) ?? {},
+      )
+      const text = Html.sanitizeRecord(
+        Html.mergeDefined(Html.defaultText, (shellHtml.text as never) ?? {}),
+      )
+
+      const firstChallenge = htmlEntries[0]!.challenge
+      const amount = await htmlEntries[0]!.handler._internal.html!.formatAmount(
+        firstChallenge.request,
+      )
+
+      const hasTabs = htmlEntries.length > 1
+
+      const tabList = hasTabs
+        ? html`<nav class="${Html.classNames.tabList}" role="tablist" aria-label="Payment methods">
+            ${htmlEntries
+              .map(
+                (entry, i) =>
+                  html`<button
+                    class="${Html.classNames.tab}"
+                    role="tab"
+                    id="mppx-tab-${i}"
+                    aria-selected="${i === 0 ? 'true' : 'false'}"
+                    aria-controls="mppx-panel-${i}"
+                    ${i !== 0 ? 'tabindex="-1"' : ''}
+                  >
+                    ${Html.sanitize(
+                      entry.handler._internal.name.charAt(0).toUpperCase() +
+                        entry.handler._internal.name.slice(1),
+                    )}
+                  </button>`,
+              )
+              .join('')}
+          </nav>`
+        : ''
+
+      const panels = htmlEntries
+        .map(
+          (_entry, i) =>
+            html`<div
+              role="${hasTabs ? 'tabpanel' : ''}"
+              id="mppx-panel-${i}"
+              ${hasTabs ? `aria-labelledby="mppx-tab-${i}"` : ''}
+              ${i !== 0 ? 'hidden' : ''}
+            >
+              <div id="${Html.rootId}-${i}" aria-label="Payment form"></div>
+            </div>`,
+        )
+        .join('')
+
+      // Build data map keyed by challenge.id
+      const dataMap: Record<string, Html.Data> = {}
+      for (let i = 0; i < htmlEntries.length; i++) {
+        const entry = htmlEntries[i]!
+        dataMap[entry.challenge.id] = {
+          label:
+            entry.handler._internal.name.charAt(0).toUpperCase() +
+            entry.handler._internal.name.slice(1),
+          rootId: `${Html.rootId}-${i}`,
+          config: entry.handler._internal.html!.config,
+          challenge: entry.challenge as never,
+          text,
+          theme,
+        }
+      }
+
+      mergedHeaders.set('Content-Type', 'text/html; charset=utf-8')
+
+      const body = html`<!doctype html>
+        <html lang="en">
+          <head>
+            <meta charset="UTF-8" />
+            <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+            <meta name="robots" content="noindex" />
+            <meta name="color-scheme" content="${theme.colorScheme}" />
+            <title>${text.title}</title>
+            ${Html.favicon(theme, firstChallenge.realm)} ${Html.font(theme)} ${Html.style(theme)}
+            ${hasTabs ? Html.tabStyle() : ''}
+          </head>
+          <body>
+            <main>
+              <header class="${Html.classNames.header}">
+                ${Html.logo(theme)}
+                <span>${text.paymentRequired}</span>
+              </header>
+              <section class="${Html.classNames.summary}" aria-label="Payment summary">
+                <h1 class="${Html.classNames.summaryAmount}">${Html.sanitize(amount)}</h1>
+                ${firstChallenge.description
+                  ? `<p class="${Html.classNames.summaryDescription}">${Html.sanitize(firstChallenge.description)}</p>`
+                  : ''}
+                ${firstChallenge.expires
+                  ? `<p class="${Html.classNames.summaryExpires}">${text.expires} <time datetime="${new Date(firstChallenge.expires).toISOString()}">${new Date(firstChallenge.expires).toLocaleString()}</time></p>`
+                  : ''}
+              </section>
+              ${tabList} ${panels}
+              <script id="${Html.dataId}" type="application/json">
+                ${Json.stringify(dataMap satisfies Record<string, Html.Data>).replace(
+                  /</g,
+                  '\\u003c',
+                )}
+              </script>
+              ${htmlEntries
+                .map((entry) =>
+                  entry.handler._internal.html!.content.replace(
+                    '<script>',
+                    `<script ${Html.challengeIdAttr}="${Html.sanitize(entry.challenge.id)}">`,
+                  ),
+                )
+                .join('\n')}
+              ${hasTabs ? tabScript : ''}
+            </main>
+          </body>
+        </html>`
+
+      return {
+        status: 402,
+        challenge: new Response(body, { status: 402, headers: mergedHeaders }),
+      }
+    }
+
+    // Non-HTML fallback: use first handler's body
+    let body: string | null = null
+    for (const result of results) {
+      if (result.status !== 402) continue
       if (!body) {
+        const response = result.challenge as Response
         const contentType = response.headers.get('Content-Type')
         if (contentType) mergedHeaders.set('Content-Type', contentType)
         body = await response.text()
+        break
       }
     }
 

@@ -1,6 +1,5 @@
 import type { Appearance } from '@stripe/stripe-js'
 import { loadStripe } from '@stripe/stripe-js/pure'
-import { Json } from 'ox'
 
 import { stripe } from '../../../../client/index.js'
 import * as Html from '../../../../server/internal/html/config.js'
@@ -9,13 +8,9 @@ import type { charge as chargeClient } from '../../../../stripe/client/Charge.js
 import type { charge } from '../../../../stripe/server/Charge.js'
 import type * as Methods from '../../../Methods.js'
 
-const dataElement = document.getElementById(Html.dataId)!
-const data = Json.parse(dataElement.textContent) as Html.Data<
-  typeof Methods.charge,
-  NonNullable<charge.Parameters['html']>
->
+const data = Html.getData<typeof Methods.charge, NonNullable<charge.Parameters['html']>>('stripe')
 
-const root = document.getElementById(Html.rootId)!
+const root = document.getElementById(data.rootId)!
 
 const css = String.raw
 const style = document.createElement('style')
@@ -170,5 +165,3 @@ async function createToken(opts: chargeClient.OnChallengeParameters) {
   const json = (await res.json()) as { spt: string }
   return json.spt
 }
-
-dataElement.remove()

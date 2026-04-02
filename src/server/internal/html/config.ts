@@ -1,3 +1,5 @@
+import { Json } from 'ox'
+
 import type * as Challenge from '../../../Challenge.js'
 import type * as Method from '../../../Method.js'
 
@@ -13,6 +15,8 @@ export type Data<
   method extends Method.Method = Method.Method,
   config extends Record<string, unknown> = {},
 > = {
+  label: string
+  rootId: string
   config: config
   challenge: Challenge.FromMethods<[method]>
   text: { [k in keyof Text]-?: NonNullable<Text[k]> }
@@ -29,6 +33,24 @@ export const rootId = 'root'
 
 export const serviceWorkerParam = '__mppx_worker'
 
+export const challengeIdAttr = 'data-mppx-challenge-id'
+
+export function getData<
+  method extends Method.Method = Method.Method,
+  config extends Record<string, unknown> = {},
+>(methodName: method['name']): Data<method, config> {
+  const g = globalThis as Record<string, unknown>
+  if (!g.__mppx_data) {
+    const el = document.getElementById(dataId)!
+    g.__mppx_data = Json.parse(el.textContent) as Record<string, unknown>
+    el.remove()
+  }
+  const map = g.__mppx_data as Record<string, Data<method, config>>
+  const challengeId = document.currentScript?.getAttribute(challengeIdAttr)
+  if (challengeId) return map[challengeId]!
+  return Object.values(map).find((d) => d.challenge.method === methodName)!
+}
+
 export const classNames = {
   error: 'mppx-error',
   header: 'mppx-header',
@@ -41,6 +63,9 @@ export const classNames = {
   summaryAmount: 'mppx-summary-amount',
   summaryDescription: 'mppx-summary-description',
   summaryExpires: 'mppx-summary-expires',
+  tab: 'mppx-tab',
+  tabList: 'mppx-tablist',
+  tabPanel: 'mppx-tabpanel',
 }
 
 export function sanitize(str: string): string {
@@ -203,6 +228,41 @@ export function style(theme: {
         font-size: 0.95rem;
         margin-top: calc(${vars.spacingUnit} * -1.5);
         text-align: center;
+      }
+    </style>
+  `
+}
+
+export function tabStyle() {
+  return html`
+    <style>
+      .${classNames.tabList} {
+        display: flex;
+        gap: calc(${vars.spacingUnit} * 2);
+        border-bottom: 1px solid ${vars.border};
+      }
+      .${classNames.tab} {
+        background: none !important;
+        border: none !important;
+        border-bottom: 1px solid transparent !important;
+        border-radius: 0 !important;
+        color: ${vars.muted} !important;
+        cursor: pointer;
+        font-size: 0.875rem;
+        font-weight: 500;
+        margin-bottom: -1px !important;
+        padding: calc(${vars.spacingUnit} * 2) calc(${vars.spacingUnit} * 4) !important;
+        width: auto !important;
+      }
+      .${classNames.tab}[aria-selected='true'] {
+        border-bottom-color: ${vars.foreground} !important;
+        color: ${vars.foreground} !important;
+      }
+      .${classNames.tab}:hover:not([aria-selected='true']) {
+        color: ${vars.foreground} !important;
+      }
+      .${classNames.tabPanel}[hidden] {
+        display: none;
       }
     </style>
   `

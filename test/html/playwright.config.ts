@@ -28,6 +28,11 @@ export default defineConfig({
       testMatch: 'stripe.test.ts',
       use: { baseURL: `http://localhost:${port}` },
     },
+    {
+      name: 'compose',
+      testMatch: 'compose.test.ts',
+      use: { baseURL: `http://localhost:${port}` },
+    },
   ],
 })
 

@@ -65,8 +65,6 @@ export async function startServer(port: number): Promise<HtmlTestServer> {
         return result.withReceipt(Response.json({ url: 'https://example.com/photo.jpg' }))
       }
 
-      if (url.pathname === createTokenUrl) return createSharedPaymentToken(request, stripeSecretKey)
-
       if (url.pathname === '/stripe/charge') {
         const result = await mppx.stripe.charge({
           amount: '1',
@@ -91,6 +89,31 @@ export async function startServer(port: number): Promise<HtmlTestServer> {
 
         const fortune = fortunes[Math.floor(Math.random() * fortunes.length)]
         return result.withReceipt(Response.json({ fortune }))
+      }
+
+      if (url.pathname === createTokenUrl) return createSharedPaymentToken(request, stripeSecretKey)
+
+      if (url.pathname === '/compose') {
+        const result = await mppx.compose(
+          ['tempo/charge', { amount: '0.01', description: 'Composed payment' }],
+          ['stripe/charge', { amount: '1', currency: 'usd', decimals: 2 }],
+        )(request)
+
+        if (result.status === 402) return result.challenge
+
+        return result.withReceipt(Response.json({ ok: true }))
+      }
+
+      if (url.pathname === '/compose-duplicates') {
+        const result = await mppx.compose(
+          ['tempo/charge', { amount: '0.01', description: 'Composed payment' }],
+          ['stripe/charge', { amount: '1', currency: 'usd', decimals: 2 }],
+          ['stripe/charge', { amount: '2', currency: 'usd', decimals: 2 }],
+        )(request)
+
+        if (result.status === 402) return result.challenge
+
+        return result.withReceipt(Response.json({ ok: true }))
       }
 
       return new Response('Not Found', { status: 404 })

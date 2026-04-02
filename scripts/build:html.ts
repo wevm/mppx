@@ -10,6 +10,33 @@ const stripeMode = process.env.STRIPE_HTML_MODE ?? defaultMode
 const formatBundleSize = (bytes: number) =>
   bytes >= 1_000 ? `${(bytes / 1_000).toFixed(1)} kB` : `${bytes} B`
 
+// Tab script (bundled as raw JS string for compose HTML)
+// Must be built before HTML entries since they import config.ts which re-exports tabScript
+{
+  const entry = 'src/server/internal/html/compose.main.ts'
+  const outFile = path.resolve(root, 'src/server/internal/html/compose.main.gen.ts')
+
+  await build({
+    input: path.resolve(root, entry),
+    output: {
+      dir: outDir,
+      format: 'iife',
+      minify: true,
+    },
+  })
+
+  const jsFile = fs.readdirSync(outDir).find((f) => f.endsWith('.js'))
+  if (!jsFile) throw new Error(`No .js output found for ${entry}`)
+
+  const code = fs.readFileSync(path.join(outDir, jsFile), 'utf8').trim()
+  const bundleBytes = Buffer.byteLength(code)
+  const content = `// Generated — do not edit.\nexport const tabScript = ${JSON.stringify(`<script>${code}</script>`)}\n`
+
+  fs.writeFileSync(outFile, content)
+  fs.rmSync(outDir, { recursive: true })
+  console.log(`wrote ${path.relative(root, outFile)} (${formatBundleSize(bundleBytes)})`)
+}
+
 // HTML entries — bundled into <script> tags
 const htmlEntries = [
   {

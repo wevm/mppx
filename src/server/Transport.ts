@@ -192,11 +192,15 @@ export function http(): Http {
                   <div id="${Html.rootId}" aria-label="Payment form"></div>
                   <script id="${Html.dataId}" type="application/json">
                     ${Json.stringify({
-                      config: options.html.config,
-                      challenge,
-                      text,
-                      theme,
-                    } satisfies Html.Data).replace(/</g, '\\u003c')}
+                      [challenge.id]: {
+                        label: challenge.method.charAt(0).toUpperCase() + challenge.method.slice(1),
+                        rootId: Html.rootId,
+                        config: options.html.config,
+                        challenge,
+                        text,
+                        theme,
+                      },
+                    } satisfies Record<string, Html.Data>).replace(/</g, '\\u003c')}
                   </script>
                   ${options.html.content}
                 </main>
