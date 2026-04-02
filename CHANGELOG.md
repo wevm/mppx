@@ -1,5 +1,12 @@
 # mppx
 
+## 0.5.4
+
+### Patch Changes
+
+- c3f522c: Fixed CLI defaulting to testnet when `--rpc-url` is omitted. The CLI now defaults to Tempo mainnet. Also added `resolveRpcUrl` helper so `MPPX_RPC_URL` and `RPC_URL` env vars are respected consistently across all commands.
+- f086276: Added theming to automatic HTML payment links.
+
 ## 0.5.3
 
 ### Patch Changes
