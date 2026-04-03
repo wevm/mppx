@@ -1,4 +1,4 @@
-import { params } from './config.js'
+import { params } from './constants.js'
 
 export async function submitCredential(credential: string): Promise<void> {
   const url = new URL(location.href)

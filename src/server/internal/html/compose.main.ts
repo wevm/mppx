@@ -1,9 +1,8 @@
-import { params } from './config.js'
+import { classNames, params } from './constants.js'
 
-const tablist = document.querySelector<HTMLElement>('.mppx-tablist')!
-const summary = document.querySelector<HTMLElement>('.mppx-summary')!
-const amountEl = summary.querySelector<HTMLElement>('.mppx-summary-amount')!
-const param = params.tab
+const tablist = document.querySelector<HTMLElement>(`.${classNames.tabList}`)!
+const summary = document.querySelector<HTMLElement>(`.${classNames.summary}`)!
+const amount = summary.querySelector<HTMLElement>(`.${classNames.summaryAmount}`)!
 const tabs = Array.from(tablist.querySelectorAll<HTMLElement>('[role="tab"]'))
 
 // Generate unique slugs: tempo, stripe, stripe-2
@@ -16,20 +15,20 @@ for (const tab of tabs) {
 }
 
 function updateSummary(tab: HTMLElement) {
-  amountEl.textContent = tab.dataset.amount!
+  amount.textContent = tab.dataset.amount!
 
-  summary.querySelector('.mppx-summary-description')?.remove()
+  summary.querySelector(`.${classNames.summaryDescription}`)?.remove()
   if (tab.dataset.description) {
     const p = document.createElement('p')
-    p.className = 'mppx-summary-description'
+    p.className = classNames.summaryDescription
     p.textContent = tab.dataset.description
-    amountEl.after(p)
+    amount.after(p)
   }
 
-  summary.querySelector('.mppx-summary-expires')?.remove()
+  summary.querySelector(`.${classNames.summaryExpires}`)?.remove()
   if (tab.dataset.expires) {
     const p = document.createElement('p')
-    p.className = 'mppx-summary-expires'
+    p.className = classNames.summaryExpires
     const date = new Date(tab.dataset.expires)
     const time = document.createElement('time')
     time.dateTime = date.toISOString()
@@ -57,33 +56,33 @@ function activate(tab: HTMLElement, updateUrl = true) {
 
   if (updateUrl) {
     const url = new URL(location.href)
-    url.searchParams.set(param, slugs[tabs.indexOf(tab)]!)
+    url.searchParams.set(params.tab, slugs[tabs.indexOf(tab)]!)
     history.replaceState(null, '', url)
   }
 }
 
 // Restore tab from URL on load
-const initial = new URL(location.href).searchParams.get(param)
+const initial = new URL(location.href).searchParams.get(params.tab)
 if (initial !== null) {
-  const idx = slugs.indexOf(initial)
-  if (idx >= 0) activate(tabs[idx]!, false)
+  const index = slugs.indexOf(initial)
+  if (index >= 0) activate(tabs[index]!, false)
 }
 
-tablist.addEventListener('click', (e) => {
-  const tab = (e.target as HTMLElement).closest<HTMLElement>('[role="tab"]')
+tablist.addEventListener('click', (event) => {
+  const tab = (event.target as HTMLElement).closest<HTMLElement>('[role="tab"]')
   if (tab) activate(tab)
 })
 
-tablist.addEventListener('keydown', (e) => {
-  const idx = tabs.indexOf(e.target as HTMLElement)
-  if (idx < 0) return
+tablist.addEventListener('keydown', (event) => {
+  const index = tabs.indexOf(event.target as HTMLElement)
+  if (index < 0) return
   let next: HTMLElement | undefined
-  if (e.key === 'ArrowRight') next = tabs[(idx + 1) % tabs.length]
-  else if (e.key === 'ArrowLeft') next = tabs[(idx - 1 + tabs.length) % tabs.length]
-  else if (e.key === 'Home') next = tabs[0]
-  else if (e.key === 'End') next = tabs[tabs.length - 1]
+  if (event.key === 'ArrowRight') next = tabs[(index + 1) % tabs.length]
+  else if (event.key === 'ArrowLeft') next = tabs[(index - 1 + tabs.length) % tabs.length]
+  else if (event.key === 'Home') next = tabs[0]
+  else if (event.key === 'End') next = tabs[tabs.length - 1]
   if (next) {
-    e.preventDefault()
+    event.preventDefault()
     activate(next)
   }
 })

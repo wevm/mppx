@@ -27,37 +27,13 @@ export type Data<
   }
 }
 
-export const ids = {
-  data: '__MPPX_DATA__',
-  error: 'root_error',
-  root: 'root',
-} as const
+export { attrs, classNames, ids, params } from './constants.js'
+import { attrs, classNames, ids } from './constants.js'
 
-export const params = {
-  serviceWorker: '__mppx_worker',
-  tab: '__mppx_tab',
-} as const
-
-export const attrs = {
-  challengeId: 'data-mppx-challenge-id',
-  remaining: 'data-remaining',
-} as const
-
-const classNames = {
-  error: 'mppx-error',
-  header: 'mppx-header',
-  logo: 'mppx-logo',
-  logoColorScheme: (colorScheme: string) =>
-    colorScheme === 'dark' || colorScheme === 'light'
-      ? `${classNames.logo}--${colorScheme}`
-      : undefined,
-  summary: 'mppx-summary',
-  summaryAmount: 'mppx-summary-amount',
-  summaryDescription: 'mppx-summary-description',
-  summaryExpires: 'mppx-summary-expires',
-  tab: 'mppx-tab',
-  tabList: 'mppx-tablist',
-  tabPanel: 'mppx-tabpanel',
+function logoColorScheme(colorScheme: string) {
+  return colorScheme === 'dark' || colorScheme === 'light'
+    ? `${classNames.logo}--${colorScheme}`
+    : undefined
 }
 
 class CssVar {
@@ -385,12 +361,12 @@ function style(theme: {
       .${classNames.logo} {
         max-height: 1.75rem;
       }
-      .${classNames.logoColorScheme('dark')} {
+      .${logoColorScheme('dark')} {
         @media (prefers-color-scheme: light) {
           display: none;
         }
       }
-      .${classNames.logoColorScheme('light')} {
+      .${logoColorScheme('light')} {
         @media (prefers-color-scheme: dark) {
           display: none;
         }
@@ -472,7 +448,7 @@ function logo(value: Theme) {
       (entry) =>
         html`<img
           alt=""
-          class="${classNames.logo} ${classNames.logoColorScheme(entry[0])}"
+          class="${classNames.logo} ${logoColorScheme(entry[0])}"
           src="${sanitize(entry[1])}"
         />`,
     )
