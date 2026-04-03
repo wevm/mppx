@@ -1,15 +1,43 @@
 import type { Hex } from 'ox'
 import type { Address } from 'viem'
 
-import type * as Challenge from '../../Challenge.js'
+import * as Challenge from '../../Challenge.js'
 import * as Fetch from '../../client/internal/Fetch.js'
+import * as PaymentCredential from '../../Credential.js'
 import type * as Account from '../../viem/Account.js'
 import type * as Client from '../../viem/Client.js'
 import { deserializeSessionReceipt } from '../session/Receipt.js'
 import { parseEvent } from '../session/Sse.js'
-import type { SessionReceipt } from '../session/Types.js'
+import type { SessionCredentialPayload, SessionReceipt } from '../session/Types.js'
+import * as Ws from '../session/Ws.js'
 import type { ChannelEntry } from './ChannelOps.js'
 import { session as sessionPlugin } from './Session.js'
+
+type WebSocketConstructor = {
+  new (url: string | URL, protocols?: string | string[]): WebSocket
+}
+
+type ReceiptWaiter = {
+  predicate: (receipt: SessionReceipt) => boolean
+  reject(error: Error): void
+  resolve(receipt: SessionReceipt): void
+}
+
+type CloseReadyWaiter = {
+  reject(error: Error): void
+  resolve(receipt: SessionReceipt): void
+}
+
+const WebSocketReadyState = {
+  CONNECTING: 0,
+  OPEN: 1,
+  CLOSING: 2,
+  CLOSED: 3,
+} as const
+
+// Browser-style WebSocket clients may only initiate close with 1000 or 3000-4999.
+// Keep protocol/policy close codes on the server side and use an app-defined code here.
+const ClientWebSocketProtocolErrorCloseCode = 3008
 
 export type SessionManager = {
   readonly channelId: Hex.Hex | undefined
@@ -25,6 +53,14 @@ export type SessionManager = {
       signal?: AbortSignal | undefined
     },
   ): Promise<AsyncIterable<string>>
+  ws(
+    input: string | URL,
+    init?: {
+      onReceipt?: ((receipt: SessionReceipt) => void) | undefined
+      protocols?: string | string[] | undefined
+      signal?: AbortSignal | undefined
+    },
+  ): Promise<WebSocket>
   close(): Promise<SessionReceipt | undefined>
 }
 
@@ -56,11 +92,20 @@ export type PaymentResponse = Response & {
  */
 export function sessionManager(parameters: sessionManager.Parameters): SessionManager {
   const fetchFn = parameters.fetch ?? globalThis.fetch
+  const WebSocketImpl =
+    parameters.webSocket ??
+    (globalThis as typeof globalThis & { WebSocket?: WebSocketConstructor }).WebSocket
 
   let channel: ChannelEntry | null = null
   let lastChallenge: Challenge.Challenge | null = null
   let lastUrl: RequestInfo | URL | null = null
   let spent = 0n
+  let activeSocketChallenge: Challenge.Challenge | null = null
+  let activeSocketChannelId: Hex.Hex | null = null
+  let activeSocket: WebSocket | null = null
+  let closeReadyReceipt: SessionReceipt | null = null
+  let closeReadyWaiter: CloseReadyWaiter | null = null
+  let receiptWaiter: ReceiptWaiter | null = null
 
   const method = sessionPlugin({
     account: parameters.account,
@@ -90,6 +135,64 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
     spent = spent > next ? spent : next
   }
 
+  function waitForReceipt(predicate: (receipt: SessionReceipt) => boolean = () => true) {
+    if (receiptWaiter) throw new Error('receipt wait already in progress')
+    return new Promise<SessionReceipt>((resolve, reject) => {
+      receiptWaiter = { predicate, resolve, reject }
+    })
+  }
+
+  function waitForCloseReady() {
+    if (closeReadyReceipt) return Promise.resolve(closeReadyReceipt)
+    if (closeReadyWaiter) throw new Error('close-ready wait already in progress')
+    return new Promise<SessionReceipt>((resolve, reject) => {
+      closeReadyWaiter = { resolve, reject }
+    })
+  }
+
+  function settleReceipt(receipt: SessionReceipt) {
+    if (!receiptWaiter) return
+    if (!receiptWaiter.predicate(receipt)) return
+    const waiter = receiptWaiter
+    receiptWaiter = null
+    waiter.resolve(receipt)
+  }
+
+  function settleCloseReady(receipt: SessionReceipt) {
+    closeReadyReceipt = receipt
+    if (!closeReadyWaiter) return
+    const waiter = closeReadyWaiter
+    closeReadyWaiter = null
+    waiter.resolve(receipt)
+  }
+
+  function rejectReceipt(error: Error) {
+    if (!receiptWaiter) return
+    const waiter = receiptWaiter
+    receiptWaiter = null
+    waiter.reject(error)
+  }
+
+  function rejectCloseReady(error: Error) {
+    if (!closeReadyWaiter) return
+    const waiter = closeReadyWaiter
+    closeReadyWaiter = null
+    waiter.reject(error)
+  }
+
+  function getFallbackCloseAmount(challenge: Challenge.Challenge, channelId: Hex.Hex): string {
+    if (
+      closeReadyReceipt &&
+      closeReadyReceipt.challengeId === challenge.id &&
+      closeReadyReceipt.channelId === channelId
+    ) {
+      return closeReadyReceipt.spent
+    }
+
+    const cumulative = channel?.channelId === channelId ? channel.cumulativeAmount : 0n
+    return (cumulative > spent ? cumulative : spent).toString()
+  }
+
   function toPaymentResponse(response: Response): PaymentResponse {
     const receiptHeader = response.headers.get('Payment-Receipt')
     const receipt = receiptHeader ? deserializeSessionReceipt(receiptHeader) : null
@@ -106,6 +209,106 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
     lastUrl = input
     const response = await wrappedFetch(input, init)
     return toPaymentResponse(response)
+  }
+
+  function createManagedSocket(socket: WebSocket) {
+    type EventType = 'close' | 'error' | 'message' | 'open'
+    type Listener = {
+      once: boolean
+      value: ((event: any) => void) | { handleEvent(event: any): void }
+    }
+    const listeners = new Map<EventType, Set<Listener>>()
+    let emittedClose = false
+    let readyState = socket.readyState
+
+    const add = (
+      type: EventType,
+      listener: ((event: any) => void) | { handleEvent(event: any): void },
+      options?: boolean | AddEventListenerOptions,
+    ) => {
+      let set = listeners.get(type)
+      if (!set) {
+        set = new Set()
+        listeners.set(type, set)
+      }
+      set.add({
+        once: typeof options === 'object' ? options.once === true : false,
+        value: listener,
+      })
+    }
+
+    const remove = (
+      type: EventType,
+      listener: ((event: any) => void) | { handleEvent(event: any): void },
+    ) => {
+      const set = listeners.get(type)
+      if (!set) return
+      for (const entry of set) {
+        if (entry.value === listener) set.delete(entry)
+      }
+    }
+
+    const emit = (type: EventType, event: any) => {
+      if (type === 'close') {
+        if (emittedClose) return
+        emittedClose = true
+        readyState = WebSocketReadyState.CLOSED
+      }
+      if (type === 'open') readyState = WebSocketReadyState.OPEN
+
+      const property = `on${type}` as const
+      const handler = (managed as Record<string, unknown>)[property]
+      if (typeof handler === 'function') handler(event)
+
+      const set = listeners.get(type)
+      if (!set) return
+      for (const entry of Array.from(set)) {
+        if (typeof entry.value === 'function') entry.value(event)
+        else entry.value.handleEvent(event)
+        if (entry.once) set.delete(entry)
+      }
+    }
+
+    const managed = {
+      addEventListener: add,
+      close(code?: number, reason?: string) {
+        socket.close(code, reason)
+      },
+      get bufferedAmount() {
+        return socket.bufferedAmount
+      },
+      get extensions() {
+        return socket.extensions
+      },
+      on(type: EventType, listener: (...args: any[]) => void) {
+        add(type, listener)
+      },
+      onclose: null as ((event: any) => void) | null,
+      onerror: null as ((event: any) => void) | null,
+      onmessage: null as ((event: any) => void) | null,
+      onopen: null as ((event: any) => void) | null,
+      off(type: EventType, listener: (...args: any[]) => void) {
+        remove(type, listener)
+      },
+      get protocol() {
+        return socket.protocol
+      },
+      get readyState() {
+        return readyState
+      },
+      removeEventListener: remove,
+      send(data: string) {
+        socket.send(data)
+      },
+      get url() {
+        return socket.url
+      },
+    }
+
+    return {
+      emit,
+      socket: managed as unknown as WebSocket,
+    }
   }
 
   const self: SessionManager = {
@@ -240,15 +443,228 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
       return iterate()
     },
 
-    async close() {
-      if (!channel?.opened || !lastChallenge) return undefined
+    async ws(input, init) {
+      if (!WebSocketImpl) {
+        throw new Error(
+          'No WebSocket implementation available. Pass `webSocket` to sessionManager() in this runtime.',
+        )
+      }
+
+      const { onReceipt, protocols, signal } = init ?? {}
+      const wsUrl = new URL(input.toString())
+      const httpUrl = new URL(wsUrl.toString())
+      if (httpUrl.protocol === 'ws:') httpUrl.protocol = 'http:'
+      if (httpUrl.protocol === 'wss:') httpUrl.protocol = 'https:'
+
+      lastUrl = httpUrl.toString()
+      const probe = await fetchFn(httpUrl, signal ? { signal } : undefined)
+      if (probe.status !== 402) {
+        throw new Error(
+          `Expected a 402 payment challenge from ${httpUrl}, received ${probe.status} instead.`,
+        )
+      }
+
+      const challenge = Challenge.fromResponseList(probe).find(
+        (item) => item.method === method.name && item.intent === method.intent,
+      )
+      if (!challenge) {
+        throw new Error(
+          'No payment challenge received from HTTP endpoint for this WebSocket URL. The server may not require payment or did not advertise a challenge.',
+        )
+      }
+      lastChallenge = challenge
 
       const credential = await method.createCredential({
-        challenge: lastChallenge as never,
+        challenge: challenge as never,
+        context: {},
+      })
+
+      closeReadyReceipt = null
+      activeSocketChallenge = challenge
+      const openCredential = PaymentCredential.deserialize<SessionCredentialPayload>(credential)
+      activeSocketChannelId = openCredential.payload.channelId
+      const rawSocket = new WebSocketImpl(wsUrl, protocols)
+      activeSocket = rawSocket
+      const managedSocket = createManagedSocket(rawSocket)
+
+      const failSocketFlow = (message: string) => {
+        rejectReceipt(new Error(message))
+        rejectCloseReady(new Error(message))
+        if (
+          rawSocket.readyState === WebSocketReadyState.CONNECTING ||
+          rawSocket.readyState === WebSocketReadyState.OPEN
+        ) {
+          rawSocket.close(ClientWebSocketProtocolErrorCloseCode, message)
+        }
+      }
+
+      const isExpectedReceipt = (receipt: SessionReceipt) =>
+        receipt.challengeId === challenge.id && receipt.channelId === activeSocketChannelId
+
+      const socketOpened = new Promise<void>((resolve, reject) => {
+        const onOpen = () => {
+          rawSocket.removeEventListener('error', onError)
+          managedSocket.emit('open', { type: 'open' })
+          resolve()
+        }
+        const onError = () => {
+          rawSocket.removeEventListener('open', onOpen)
+          reject(new Error(`WebSocket connection to ${wsUrl} failed to open.`))
+        }
+        rawSocket.addEventListener('open', onOpen, { once: true })
+        rawSocket.addEventListener('error', onError, { once: true })
+      })
+
+      rawSocket.addEventListener('close', (event) => {
+        if (activeSocket === rawSocket) activeSocket = null
+        if (activeSocketChallenge === challenge) activeSocketChallenge = null
+        if (activeSocketChannelId === openCredential.payload.channelId) activeSocketChannelId = null
+        rejectReceipt(new Error('WebSocket closed before the payment flow completed.'))
+        rejectCloseReady(new Error('WebSocket closed before the payment flow completed.'))
+        managedSocket.emit('close', {
+          code: (event as CloseEvent).code ?? 1000,
+          reason: (event as CloseEvent).reason ?? '',
+          type: 'close',
+          wasClean: true,
+        })
+      })
+
+      rawSocket.addEventListener('error', () => {
+        managedSocket.emit('error', { type: 'error' })
+      })
+
+      rawSocket.addEventListener('message', async (event) => {
+        const raw = typeof event.data === 'string' ? event.data : undefined
+        if (!raw) return
+
+        const message = Ws.parseMessage(raw)
+        if (!message) {
+          managedSocket.emit('message', { data: raw, type: 'message' })
+          return
+        }
+
+        switch (message.mpp) {
+          case 'authorization':
+            break
+          case 'message':
+            managedSocket.emit('message', { data: message.data, type: 'message' })
+            break
+          case 'payment-close-ready':
+            if (!isExpectedReceipt(message.data)) {
+              failSocketFlow('received mismatched payment-close-ready frame')
+              break
+            }
+            if (BigInt(message.data.spent) > (channel?.cumulativeAmount ?? 0n)) {
+              failSocketFlow('received payment-close-ready beyond local voucher state')
+              break
+            }
+            updateSpentFromReceipt(message.data)
+            onReceipt?.(message.data)
+            settleCloseReady(message.data)
+            managedSocket.emit('close', { code: 1000, reason: 'stream complete', type: 'close' })
+            break
+          case 'payment-error':
+            rejectReceipt(new Error(message.message))
+            rejectCloseReady(new Error(message.message))
+            break
+          case 'payment-need-voucher': {
+            if (message.data.channelId !== activeSocketChannelId) {
+              failSocketFlow('received mismatched payment-need-voucher frame')
+              break
+            }
+            const required = BigInt(message.data.requiredCumulative)
+            const nextCumulative =
+              (channel?.cumulativeAmount ?? 0n) > required
+                ? (channel?.cumulativeAmount ?? 0n)
+                : required
+            if (channel?.channelId === activeSocketChannelId)
+              channel.cumulativeAmount = nextCumulative
+
+            const voucher = await method.createCredential({
+              challenge: challenge as never,
+              context: {
+                action: 'voucher',
+                channelId: activeSocketChannelId,
+                cumulativeAmountRaw: nextCumulative.toString(),
+              },
+            })
+            rawSocket.send(Ws.formatAuthorizationMessage(voucher))
+            break
+          }
+          case 'payment-receipt':
+            if (!isExpectedReceipt(message.data)) {
+              failSocketFlow('received mismatched payment-receipt frame')
+              break
+            }
+            updateSpentFromReceipt(message.data)
+            onReceipt?.(message.data)
+            settleReceipt(message.data)
+            break
+        }
+      })
+
+      if (signal) {
+        signal.addEventListener(
+          'abort',
+          () => {
+            rejectReceipt(new Error('WebSocket payment flow aborted.'))
+            rejectCloseReady(new Error('WebSocket payment flow aborted.'))
+            rawSocket.close()
+          },
+          { once: true },
+        )
+      }
+
+      await socketOpened
+      rawSocket.send(Ws.formatAuthorizationMessage(credential))
+      await waitForReceipt()
+      return managedSocket.socket
+    },
+
+    async close() {
+      const closeChallenge = activeSocketChallenge ?? lastChallenge
+      const closeChannelId = activeSocketChannelId ?? channel?.channelId
+      if (!channel?.opened || !closeChallenge || !closeChannelId) return undefined
+      if (activeSocket?.readyState === WebSocketReadyState.OPEN) {
+        const ready =
+          closeReadyReceipt ??
+          (await (async () => {
+            activeSocket.send(Ws.formatCloseRequestMessage())
+            return waitForCloseReady()
+          })())
+        const readySpent = BigInt(ready.spent)
+        if (readySpent > (channel.cumulativeAmount > spent ? channel.cumulativeAmount : spent)) {
+          throw new Error('close-ready spent exceeds local voucher state')
+        }
+
+        const credential = await method.createCredential({
+          challenge: closeChallenge as never,
+          context: {
+            action: 'close',
+            channelId: closeChannelId,
+            cumulativeAmountRaw: readySpent.toString(),
+          },
+        })
+
+        const pendingReceipt = waitForReceipt(
+          (receipt) =>
+            Boolean(receipt.txHash) &&
+            receipt.challengeId === closeChallenge.id &&
+            receipt.channelId === closeChannelId,
+        )
+        activeSocket.send(Ws.formatAuthorizationMessage(credential))
+        const receipt = await pendingReceipt
+        activeSocket.close()
+        closeReadyReceipt = null
+        return receipt
+      }
+
+      const credential = await method.createCredential({
+        challenge: closeChallenge as never,
         context: {
           action: 'close',
-          channelId: channel.channelId,
-          cumulativeAmountRaw: spent.toString(),
+          channelId: closeChannelId,
+          cumulativeAmountRaw: getFallbackCloseAmount(closeChallenge, closeChannelId),
         },
       })
 
@@ -283,5 +699,7 @@ export declare namespace sessionManager {
       fetch?: typeof globalThis.fetch | undefined
       /** Maximum deposit in human-readable units (e.g. `'10'` for 10 tokens). Converted to raw units via `decimals`. */
       maxDeposit?: string | undefined
+      /** Optional websocket constructor for runtimes without a global WebSocket. */
+      webSocket?: WebSocketConstructor | undefined
     }
 }

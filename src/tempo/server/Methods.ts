@@ -1,3 +1,4 @@
+import * as Ws_ from '../session/Ws.js'
 import { charge as charge_ } from './Charge.js'
 import { session as session_, settle as settle_ } from './Session.js'
 
@@ -29,4 +30,6 @@ export namespace tempo {
   export const session = session_
   /** One-shot settle: reads highest voucher from storage and submits on-chain. */
   export const settle = settle_
+  /** Experimental websocket helpers for Tempo sessions. */
+  export const Ws = Ws_
 }

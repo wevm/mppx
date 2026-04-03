@@ -34,6 +34,7 @@
     "@playwright/test": "^1.58.2",
     "@types/express": "^5.0.6",
     "@types/node": "^25.5.0",
+    "@types/ws": "^8.18.1",
     "@typescript/native-preview": "7.0.0-dev.20260323.1",
     "browserslist": "^4.28.1",
     "elysia": "^1.4.27",
@@ -51,6 +52,7 @@
     "typescript": "~5.9.3",
     "viem": "^2.47.6",
     "vp": "npm:vite-plus@~0.1.14",
+    "ws": "^8.20.0",
     "zile": "^0.0.19"
   },
   "packageManager": "pnpm@10.28.0",

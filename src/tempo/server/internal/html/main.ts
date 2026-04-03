@@ -86,16 +86,15 @@ button.onclick = async () => {
       const result = await provider.request({ method: 'wallet_connect' })
       return result.accounts[0]?.address
     })()
-    const method = tempo({
-      account,
-      getClient(opts) {
-        const chainId = opts.chainId ?? c.challenge.request.methodDetails?.chainId
-        const chain = [...(provider?.chains ?? []), tempoModerato, tempoLocalnet].find(
-          (x) => x.id === chainId,
-        )
-        return createClient({ chain, transport: custom(provider) })
-      },
-    })[0]
+    type TempoParameters = NonNullable<Parameters<typeof tempo>[0]>
+    const getClient: NonNullable<TempoParameters['getClient']> = (opts) => {
+      const chainId = opts.chainId ?? c.challenge.request.methodDetails?.chainId
+      const chain = [...(provider?.chains ?? []), tempoModerato, tempoLocalnet].find(
+        (x) => x.id === chainId,
+      )
+      return createClient({ chain, transport: custom(provider) }) as never
+    }
+    const method = tempo({ account, getClient })[0]
 
     const credential = await method.createCredential({ challenge: c.challenge, context: {} })
     await c.submit(credential)
