@@ -208,4 +208,24 @@ describe('session', () => {
     expect(request.amount).toBe('1000000')
     expect(request.methodDetails?.minVoucherDelta).toBe('100000')
   })
+
+  test('schema: preserves additive session hints in methodDetails', () => {
+    const request = Methods.session.schema.request.parse({
+      acceptedCumulative: '5000000',
+      amount: '1',
+      currency: '0x20c0000000000000000000000000000000000001',
+      decimals: 6,
+      deposit: '10000000',
+      escrowContract: '0x1234567890abcdef1234567890abcdef12345678',
+      recipient: '0x1234567890abcdef1234567890abcdef12345678',
+      requiredCumulative: '6000000',
+      spent: '4000000',
+      unitType: 'token',
+    })
+
+    expect(request.methodDetails?.acceptedCumulative).toBe('5000000')
+    expect(request.methodDetails?.deposit).toBe('10000000')
+    expect(request.methodDetails?.requiredCumulative).toBe('6000000')
+    expect(request.methodDetails?.spent).toBe('4000000')
+  })
 })

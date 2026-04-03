@@ -1,14 +1,15 @@
 import type { Hex } from 'ox'
 import type { Address } from 'viem'
 
-import type * as Challenge from '../../Challenge.js'
+import * as Challenge from '../../Challenge.js'
 import * as Fetch from '../../client/internal/Fetch.js'
 import type * as Account from '../../viem/Account.js'
 import type * as Client from '../../viem/Client.js'
 import { deserializeSessionReceipt } from '../session/Receipt.js'
 import { parseEvent } from '../session/Sse.js'
 import type { SessionReceipt } from '../session/Types.js'
-import type { ChannelEntry } from './ChannelOps.js'
+import { reconcileChannelReceipt, type ChannelEntry } from './ChannelOps.js'
+import { charge as chargePlugin } from './Charge.js'
 import { session as sessionPlugin } from './Session.js'
 
 export type SessionManager = {
@@ -39,9 +40,9 @@ export type PaymentResponse = Response & {
  * Creates a session manager that handles the full client payment lifecycle:
  * channel open, incremental vouchers, SSE streaming, and channel close.
  *
- * Internally delegates to the `session()` method for all
- * channel state management and credential creation, and to `Fetch.from`
- * for the 402 challenge/retry flow.
+ * Internally delegates to the `session()` method for channel state
+ * management and credential creation, while owning a bounded 402 retry
+ * loop for zero-auth bootstrap and stateless resume.
  *
  * ## Session resumption
  *
@@ -49,10 +50,10 @@ export type PaymentResponse = Response & {
  * the session is lost and a new on-chain channel will be opened on the next
  * request — the previous channel's deposit is orphaned until manually closed.
  *
- * When the server includes a `channelId` in the 402 challenge `methodDetails`,
- * the client will attempt to recover the channel by reading its on-chain state
- * via `getOnChainChannel()`. If the channel has a positive deposit and is not
- * finalized, it resumes from the on-chain settled amount.
+ * When the server includes session hints in the 402 challenge `methodDetails`,
+ * the client resumes from those authoritative values first. If only a
+ * `channelId` is available, it falls back to reading on-chain state via
+ * `getOnChainChannel()` and resumes from the on-chain settled amount.
  */
 export function sessionManager(parameters: sessionManager.Parameters): SessionManager {
   const fetchFn = parameters.fetch ?? globalThis.fetch
@@ -60,7 +61,6 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
   let channel: ChannelEntry | null = null
   let lastChallenge: Challenge.Challenge | null = null
   let lastUrl: RequestInfo | URL | null = null
-  let spent = 0n
 
   const method = sessionPlugin({
     account: parameters.account,
@@ -70,30 +70,64 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
     decimals: parameters.decimals,
     maxDeposit: parameters.maxDeposit,
     onChannelUpdate(entry) {
-      if (entry.channelId !== channel?.channelId) spent = 0n
       channel = entry
     },
   })
-
-  const wrappedFetch = Fetch.from({
-    fetch: fetchFn,
-    methods: [method],
-    onChallenge: async (challenge, _helpers) => {
-      lastChallenge = challenge
-      return undefined
-    },
+  const authMethod = chargePlugin({
+    account: parameters.account,
+    getClient: parameters.client ? () => parameters.client! : parameters.getClient,
   })
 
-  function updateSpentFromReceipt(receipt: SessionReceipt | null | undefined) {
-    if (!receipt || receipt.channelId !== channel?.channelId) return
-    const next = BigInt(receipt.spent)
-    spent = spent > next ? spent : next
+  function isZeroAuthChallenge(challenge: Challenge.Challenge): boolean {
+    return (
+      challenge.method === 'tempo' &&
+      challenge.intent === 'charge' &&
+      challenge.request.amount === '0'
+    )
   }
 
-  function toPaymentResponse(response: Response): PaymentResponse {
+  function findSessionChallenge(
+    challenges: readonly Challenge.Challenge[],
+  ): Challenge.Challenge | undefined {
+    return challenges.find(
+      (challenge) => challenge.method === 'tempo' && challenge.intent === 'session',
+    )
+  }
+
+  function withAuthorizationHeader(
+    headers: RequestInit['headers'],
+    credential: string,
+  ): Record<string, string> {
+    const normalized = Fetch.normalizeHeaders(headers)
+    for (const key of Object.keys(normalized)) {
+      if (key.toLowerCase() === 'authorization') delete normalized[key]
+    }
+    normalized.Authorization = credential
+    return normalized
+  }
+
+  function readReceipt(response: Response): SessionReceipt | undefined {
     const receiptHeader = response.headers.get('Payment-Receipt')
-    const receipt = receiptHeader ? deserializeSessionReceipt(receiptHeader) : null
-    updateSpentFromReceipt(receipt)
+    if (!receiptHeader) return undefined
+
+    try {
+      return deserializeSessionReceipt(receiptHeader)
+    } catch {
+      return undefined
+    }
+  }
+
+  async function syncResponse(response: Response): Promise<SessionReceipt | null> {
+    await method.onResponse?.(response)
+    return readReceipt(response) ?? null
+  }
+
+  function reconcileReceiptEvent(receipt: SessionReceipt | null | undefined) {
+    if (!receipt || !channel || receipt.channelId !== channel.channelId) return
+    reconcileChannelReceipt(channel, receipt)
+  }
+
+  function toPaymentResponse(response: Response, receipt: SessionReceipt | null): PaymentResponse {
     return Object.assign(response, {
       receipt,
       challenge: lastChallenge,
@@ -104,8 +138,48 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
 
   async function doFetch(input: RequestInfo | URL, init?: RequestInit): Promise<PaymentResponse> {
     lastUrl = input
-    const response = await wrappedFetch(input, init)
-    return toPaymentResponse(response)
+    let response = await fetchFn(input, init)
+    let attemptedZeroAuth = false
+    let attemptedSession = false
+
+    for (let attempts = 0; response.status === 402 && attempts < 3; attempts++) {
+      const challenges = Challenge.fromResponseList(response)
+      const sessionChallenge = findSessionChallenge(challenges)
+      if (sessionChallenge) lastChallenge = sessionChallenge
+      else if (challenges[0]) lastChallenge = challenges[0]
+
+      const zeroAuthChallenge =
+        !channel && !attemptedZeroAuth ? challenges.find(isZeroAuthChallenge) : undefined
+
+      if (zeroAuthChallenge) {
+        attemptedZeroAuth = true
+        const credential = await authMethod.createCredential({
+          challenge: zeroAuthChallenge as never,
+          context: {},
+        })
+        response = await fetchFn(input, {
+          ...init,
+          headers: withAuthorizationHeader(init?.headers, credential),
+        })
+        continue
+      }
+
+      if (!sessionChallenge) break
+      if (attemptedSession) break
+
+      attemptedSession = true
+      const credential = await method.createCredential({
+        challenge: sessionChallenge as never,
+        context: {},
+      })
+      response = await fetchFn(input, {
+        ...init,
+        headers: withAuthorizationHeader(init?.headers, credential),
+      })
+    }
+
+    const receipt = await syncResponse(response)
+    return toPaymentResponse(response, receipt)
   }
 
   const self: SessionManager = {
@@ -148,6 +222,7 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
           `Open request failed with status ${response.status}${body ? `: ${body}` : ''}${wwwAuth ? ` [WWW-Authenticate: ${wwwAuth}]` : ''}`,
         )
       }
+      await syncResponse(response)
     },
 
     fetch: doFetch,
@@ -222,11 +297,12 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
                   if (!voucherResponse.ok) {
                     throw new Error(`Voucher POST failed with status ${voucherResponse.status}`)
                   }
+                  await syncResponse(voucherResponse)
                   break
                 }
 
                 case 'payment-receipt':
-                  updateSpentFromReceipt(event.data)
+                  reconcileReceiptEvent(event.data)
                   onReceipt?.(event.data)
                   break
               }
@@ -248,7 +324,7 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
         context: {
           action: 'close',
           channelId: channel.channelId,
-          cumulativeAmountRaw: spent.toString(),
+          cumulativeAmountRaw: channel.spent.toString(),
         },
       })
 
@@ -258,8 +334,7 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
           method: 'POST',
           headers: { Authorization: credential },
         })
-        const receiptHeader = response.headers.get('Payment-Receipt')
-        if (receiptHeader) receipt = deserializeSessionReceipt(receiptHeader)
+        receipt = (await syncResponse(response)) ?? undefined
       }
 
       return receipt

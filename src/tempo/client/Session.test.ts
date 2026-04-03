@@ -11,6 +11,7 @@ const isLocalnet = nodeEnv === 'localnet'
 import * as Challenge from '../../Challenge.js'
 import * as Credential from '../../Credential.js'
 import { chainId, escrowContract as escrowContractDefaults } from '../internal/defaults.js'
+import { createSessionReceipt, serializeSessionReceipt } from '../session/Receipt.js'
 import type { SessionCredentialPayload } from '../session/Types.js'
 import { session } from './Session.js'
 
@@ -62,6 +63,120 @@ describe('session (pure)', () => {
       await expect(
         method.createCredential({ challenge: makeChallenge(), context: {} }),
       ).rejects.toThrow('No `action` in context and no `deposit` or `maxDeposit` configured')
+    })
+  })
+
+  describe('server-authored hints', () => {
+    const channelId = '0x0000000000000000000000000000000000000000000000000000000000000001' as Hex
+
+    test('hydrates accounting hints without inflating the next signed voucher', async () => {
+      const method = session({
+        getClient: () => pureClient,
+        account: pureAccount,
+        deposit: '10',
+      })
+
+      const result = await method.createCredential({
+        challenge: makeChallenge({
+          methodDetails: {
+            acceptedCumulative: '5000000',
+            chainId: 42431,
+            channelId,
+            deposit: '10000000',
+            escrowContract: escrowAddress,
+            requiredCumulative: '6000000',
+            spent: '4000000',
+          },
+        }),
+        context: {},
+      })
+
+      const cred = deserializePayload(result)
+      expect(cred.payload.action).toBe('voucher')
+      if (cred.payload.action === 'voucher') {
+        expect(cred.payload.channelId).toBe(channelId)
+        expect(cred.payload.cumulativeAmount).toBe('1000000')
+      }
+    })
+
+    test('keeps cumulative strictly local across repeated hinted requests', async () => {
+      const method = session({
+        getClient: () => pureClient,
+        account: pureAccount,
+        deposit: '10',
+      })
+
+      const challenge = makeChallenge({
+        methodDetails: {
+          acceptedCumulative: '5000000',
+          chainId: 42431,
+          channelId,
+          deposit: '10000000',
+          escrowContract: escrowAddress,
+          requiredCumulative: '6000000',
+          spent: '5000000',
+        },
+      })
+
+      const first = deserializePayload(await method.createCredential({ challenge, context: {} }))
+      const second = deserializePayload(await method.createCredential({ challenge, context: {} }))
+
+      expect(first.payload.action).toBe('voucher')
+      expect(second.payload.action).toBe('voucher')
+      if (first.payload.action === 'voucher') {
+        expect(first.payload.cumulativeAmount).toBe('1000000')
+      }
+      if (second.payload.action === 'voucher') {
+        expect(second.payload.cumulativeAmount).toBe('2000000')
+      }
+    })
+
+    test('does not apply replacement hints to the current local channel when a server-supplied replacement cannot be verified', async () => {
+      const channelIdA = '0x00000000000000000000000000000000000000000000000000000000000000aa' as Hex
+      const channelIdB = '0x00000000000000000000000000000000000000000000000000000000000000bb' as Hex
+      const updates: { channelId: Hex; spent: bigint }[] = []
+      const method = session({
+        getClient: () => pureClient,
+        account: pureAccount,
+        deposit: '10',
+        onChannelUpdate(entry) {
+          updates.push({ channelId: entry.channelId, spent: entry.spent })
+        },
+      })
+
+      const challengeA = makeChallenge({
+        methodDetails: {
+          acceptedCumulative: '5000000',
+          chainId: 42431,
+          channelId: channelIdA,
+          deposit: '10000000',
+          escrowContract: escrowAddress,
+          spent: '4000000',
+        },
+      })
+      const challengeB = makeChallenge({
+        methodDetails: {
+          acceptedCumulative: '9000000',
+          chainId: 42431,
+          channelId: channelIdB,
+          deposit: '12000000',
+          escrowContract: escrowAddress,
+          spent: '9000000',
+        },
+      })
+
+      await method.createCredential({ challenge: challengeA, context: {} })
+      const result = deserializePayload(
+        await method.createCredential({ challenge: challengeB, context: {} }),
+      )
+
+      expect(result.payload.action).toBe('voucher')
+      if (result.payload.action === 'voucher') {
+        expect(result.payload.channelId).toBe(channelIdA)
+        expect(result.payload.cumulativeAmount).toBe('2000000')
+      }
+
+      expect(updates[updates.length - 1]).toEqual({ channelId: channelIdA, spent: 4_000_000n })
     })
   })
 
@@ -415,6 +530,99 @@ describe.runIf(isLocalnet)('session (on-chain)', () => {
         }),
       ).rejects.toThrow('cannot be reused')
     })
+
+    test('throws when a server-supplied channelId cannot be recovered', async () => {
+      const hintedChannelId =
+        '0x0000000000000000000000000000000000000000000000000000000000000bad' as Hex
+      const method = session({
+        getClient: () => client,
+        account: payer,
+        deposit: '10',
+        escrowContract,
+      })
+
+      const challenge = makeLiveChallenge({
+        methodDetails: {
+          chainId: chain.id,
+          channelId: hintedChannelId,
+          deposit: '10000000',
+          escrowContract,
+        },
+      })
+
+      await expect(method.createCredential({ challenge, context: {} })).rejects.toThrow(
+        'cannot be reused',
+      )
+    })
+
+    test('ignores stale receipts after rebinding to a newly recovered channel', async () => {
+      const { channelId: channelIdA } = await openChannel({
+        escrow: escrowContract,
+        payer,
+        payee,
+        token: asset,
+        deposit: 10_000_000n,
+        salt: nextSalt(),
+      })
+      const { channelId: channelIdB } = await openChannel({
+        escrow: escrowContract,
+        payer,
+        payee,
+        token: asset,
+        deposit: 10_000_000n,
+        salt: nextSalt(),
+      })
+
+      const method = session({
+        getClient: () => client,
+        account: payer,
+        deposit: '10',
+        escrowContract,
+      })
+
+      const challengeA = makeLiveChallenge({
+        methodDetails: {
+          chainId: chain.id,
+          escrowContract,
+          channelId: channelIdA,
+        },
+      })
+      const challengeB = makeLiveChallenge({
+        methodDetails: {
+          chainId: chain.id,
+          escrowContract,
+          channelId: channelIdB,
+        },
+      })
+
+      await method.createCredential({ challenge: challengeA, context: {} })
+      await method.createCredential({ challenge: challengeB, context: {} })
+
+      method.onResponse(
+        new Response(null, {
+          headers: {
+            'Payment-Receipt': serializeSessionReceipt(
+              createSessionReceipt({
+                challengeId: challengeA.id,
+                channelId: channelIdA,
+                acceptedCumulative: 9_000_000n,
+                spent: 9_000_000n,
+              }),
+            ),
+          },
+        }),
+      )
+
+      const result = deserializePayload(
+        await method.createCredential({ challenge: challengeB, context: {} }),
+      )
+
+      expect(result.payload.action).toBe('voucher')
+      if (result.payload.action === 'voucher') {
+        expect(result.payload.channelId).toBe(channelIdB)
+        expect(result.payload.cumulativeAmount).toBe('2000000')
+      }
+    })
   })
 
   describe('cumulative tracking in auto mode', () => {
@@ -450,6 +658,42 @@ describe.runIf(isLocalnet)('session (on-chain)', () => {
       expect(updates.length).toBe(2)
       expect(updates[0]!.cumulativeAmount).toBe(1_000_000n)
       expect(updates[1]!.cumulativeAmount).toBe(2_000_000n)
+    })
+
+    test('does not let Payment-Receipt inflate the next voucher amount', async () => {
+      const method = session({
+        getClient: () => client,
+        account: payer,
+        deposit: '10',
+        escrowContract,
+      })
+
+      const challenge = makeLiveChallenge()
+      const first = await method.createCredential({ challenge, context: {} })
+      const firstCred = deserializePayload(first)
+      if (firstCred.payload.action !== 'open') throw new Error('expected open payload')
+
+      method.onResponse(
+        new Response(null, {
+          headers: {
+            'Payment-Receipt': serializeSessionReceipt(
+              createSessionReceipt({
+                challengeId: challenge.id,
+                channelId: firstCred.payload.channelId,
+                acceptedCumulative: 5_000_000n,
+                spent: 3_000_000n,
+              }),
+            ),
+          },
+        }),
+      )
+
+      const second = await method.createCredential({ challenge, context: {} })
+      const secondCred = deserializePayload(second)
+      expect(secondCred.payload.action).toBe('voucher')
+      if (secondCred.payload.action === 'voucher') {
+        expect(secondCred.payload.cumulativeAmount).toBe('2000000')
+      }
     })
   })
 
