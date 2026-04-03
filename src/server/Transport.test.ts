@@ -285,7 +285,7 @@ describe('http', () => {
       const body = await response.text()
       // Extract the JSON data from the script tag
       const dataMatch = body.match(
-        /<script id="__MPPX_DATA__" type="application\/json"[^>]*>\s*([\s\S]*?)\s*<\/script>/,
+        /<script[^>]*id="__MPPX_DATA__"[^>]*type="application\/json"[^>]*>\s*([\s\S]*?)\s*<\/script>/s,
       )
       expect(dataMatch).not.toBeNull()
 
