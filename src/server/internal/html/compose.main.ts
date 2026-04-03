@@ -1,7 +1,9 @@
+import { params } from './config.js'
+
 const tablist = document.querySelector<HTMLElement>('.mppx-tablist')!
 const summary = document.querySelector<HTMLElement>('.mppx-summary')!
 const amountEl = summary.querySelector<HTMLElement>('.mppx-summary-amount')!
-const param = '__mppx_tab'
+const param = params.tab
 const tabs = Array.from(tablist.querySelectorAll<HTMLElement>('[role="tab"]'))
 
 // Generate unique slugs: tempo, stripe, stripe-2

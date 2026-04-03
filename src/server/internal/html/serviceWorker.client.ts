@@ -1,8 +1,8 @@
-import { serviceWorkerParam } from './config.js'
+import { params } from './config.js'
 
 export async function submitCredential(credential: string): Promise<void> {
   const url = new URL(location.href)
-  url.searchParams.set(serviceWorkerParam, '')
+  url.searchParams.set(params.serviceWorker, '')
 
   const registration = await navigator.serviceWorker.register(url.pathname + url.search)
 

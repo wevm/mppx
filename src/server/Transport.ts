@@ -129,7 +129,7 @@ export function http(): Http {
     async respondChallenge(options) {
       const { challenge, error, input } = options
 
-      if (options.html && new URL(input.url).searchParams.has(Html.serviceWorkerParam))
+      if (options.html && new URL(input.url).searchParams.has(Html.params.serviceWorker))
         return new Response(serviceWorker, {
           status: 200,
           headers: {
@@ -153,7 +153,7 @@ export function http(): Http {
           const dataMap = {
             [challenge.id]: {
               label: challenge.method,
-              rootId: Html.rootId,
+              rootId: Html.ids.root,
               formattedAmount: amount,
               config: options.html.config,
               challenge,

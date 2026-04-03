@@ -27,28 +27,21 @@ export type Data<
   }
 }
 
-export const errorId = 'root_error'
-export const rootId = 'root'
-export const dataId = '__MPPX_DATA__'
+export const ids = {
+  data: '__MPPX_DATA__',
+  error: 'root_error',
+  root: 'root',
+} as const
 
-export const serviceWorkerParam = '__mppx_worker'
+export const params = {
+  serviceWorker: '__mppx_worker',
+  tab: '__mppx_tab',
+} as const
 
-export const challengeIdAttr = 'data-mppx-challenge-id'
-export const remainingAttr = 'data-remaining'
-
-export function showError(message: string) {
-  const existing = document.getElementById(errorId)
-  if (existing) {
-    existing.textContent = message
-    return
-  }
-  const el = document.createElement('p')
-  el.id = errorId
-  el.className = classNames.error
-  el.role = 'alert'
-  el.textContent = message
-  document.getElementById(rootId)?.after(el)
-}
+export const attrs = {
+  challengeId: 'data-mppx-challenge-id',
+  remaining: 'data-remaining',
+} as const
 
 const classNames = {
   error: 'mppx-error',
@@ -264,18 +257,18 @@ export function render(options: {
               id="mppx-panel-${i}"
               ${i !== 0 ? 'hidden' : ''}
             >
-              <div id="${rootId}-${i}" aria-label="Payment form"></div>
+              <div id="${ids.root}-${i}" aria-label="Payment form"></div>
             </div>`,
         )
         .join('')
-    : html`<div id="${rootId}" aria-label="Payment form"></div>`
+    : html`<div id="${ids.root}" aria-label="Payment form"></div>`
 
   const contentScripts = hasTabs
     ? entries
         .map((entry) =>
           entry.content.replace(
             '<script>',
-            `<script ${challengeIdAttr}="${sanitize(entry.challenge.id)}">`,
+            `<script ${attrs.challengeId}="${sanitize(entry.challenge.id)}">`,
           ),
         )
         .join('\n')
@@ -309,9 +302,9 @@ export function render(options: {
           </section>
           ${tabListHtml} ${panelsHtml}
           <script
-            id="${dataId}"
+            id="${ids.data}"
             type="application/json"
-            ${entries.length > 1 ? ` ${remainingAttr}="${entries.length}"` : ''}
+            ${entries.length > 1 ? ` ${attrs.remaining}="${entries.length}"` : ''}
           >
             ${Json.stringify(dataMap satisfies Record<string, Data>).replace(/</g, '\\u003c')}
           </script>

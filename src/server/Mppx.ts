@@ -731,7 +731,7 @@ export function compose(
 
   return async (input: Request) => {
     // Serve service worker for html-enabled compose
-    if (new URL(input.url).searchParams.has(Html.serviceWorkerParam)) {
+    if (new URL(input.url).searchParams.has(Html.params.serviceWorker)) {
       const hasHtml = handlers.some((h) => (h as ConfiguredHandler)._internal?.html)
       if (hasHtml)
         return {
@@ -838,7 +838,7 @@ export function compose(
         const entry = htmlEntries[i]!
         dataMap[entry.challenge.id] = {
           label: entry.handler._internal.name,
-          rootId: `${Html.rootId}-${i}`,
+          rootId: `${Html.ids.root}-${i}`,
           formattedAmount: await entry.handler._internal.html!.formatAmount(
             entry.challenge.request,
           ),
