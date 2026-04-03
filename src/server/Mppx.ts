@@ -733,7 +733,7 @@ export function compose(
     // Serve service worker for html-enabled compose
     if (new URL(input.url).searchParams.has(Html.serviceWorkerParam)) {
       const hasHtml = handlers.some((h) => (h as ConfiguredHandler)._internal?.html)
-      if (hasHtml) {
+      if (hasHtml)
         return {
           status: 402,
           challenge: new Response(serviceWorker, {
@@ -744,7 +744,6 @@ export function compose(
             },
           }),
         } as MethodFn.Response<Transport.Http>
-      }
     }
 
     // Try to extract a Payment credential to decide whether to dispatch or challenge.

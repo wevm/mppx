@@ -1,5 +1,7 @@
 import { expect, test } from '@playwright/test'
 
+import { getStripePaymentFrame } from './utils.js'
+
 test('compose renders tabs for multiple methods', async ({ page }) => {
   await page.goto('/compose', { waitUntil: 'domcontentloaded' })
 
@@ -131,6 +133,43 @@ test('compose restores duplicate method tab from URL', async ({ page }) => {
   await expect(page.locator('#mppx-panel-2')).toBeVisible()
   await expect(page.locator('#mppx-panel-0')).toBeHidden()
   await expect(page.locator('#mppx-panel-1')).toBeHidden()
+})
+
+test('compose pay via stripe tab', async ({ page }, testInfo) => {
+  test.slow()
+
+  await page.goto('/compose', { waitUntil: 'domcontentloaded' })
+
+  // Switch to Stripe tab
+  await page.getByRole('tab', { name: 'Stripe' }).click()
+  await expect(page.getByRole('button', { name: 'Pay' })).toBeVisible({ timeout: 10_000 })
+
+  if (!testInfo.project.use.headless) {
+    const stripeFrame = await getStripePaymentFrame(page)
+    const numberInput = stripeFrame.locator('[name="number"]')
+    const cardButton = stripeFrame.locator('[data-value="card"]')
+
+    await cardButton.isVisible({ timeout: 90_000 })
+    await cardButton.click()
+    await page.waitForTimeout(1_000)
+
+    await expect(numberInput).toBeVisible({ timeout: 90_000 })
+    await numberInput.fill('4242424242424242')
+    await stripeFrame.locator('[name="expiry"]').fill('12/34')
+    await stripeFrame.locator('[name="cvc"]').fill('123')
+
+    const postalCode = stripeFrame.locator('[name="postalCode"]')
+    await postalCode.isVisible({ timeout: 2_000 })
+    await postalCode.fill('10001')
+
+    await page.waitForTimeout(500)
+  }
+
+  // Submit payment (force needed — Stripe Link overlay can intercept click)
+  await page.getByRole('button', { name: 'Pay' }).click({ force: true })
+
+  // Wait for service worker to submit credential and page to reload with paid response
+  await expect(page.locator('body')).toContainText('"ok":', { timeout: 30_000 })
 })
 
 test('compose pay via tempo tab', async ({ page }) => {

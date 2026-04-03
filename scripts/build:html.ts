@@ -51,6 +51,13 @@ const htmlEntries = [
   },
 ]
 
+// Markers that only exist inside `import.meta.env.MODE === 'test'` branches.
+// If any survive bundling in non-test mode, dead code elimination failed.
+const testOnlyMarkers: Record<string, string[]> = {
+  'src/stripe/server/internal/html/main.ts': ['pm_card_visa'],
+  'src/tempo/server/internal/html/main.ts': ['generatePrivateKey'],
+}
+
 for (const { entry, mode, outFile } of htmlEntries) {
   await build({
     input: path.resolve(root, entry),
@@ -77,6 +84,17 @@ for (const { entry, mode, outFile } of htmlEntries) {
   const code = fs.readFileSync(path.join(outDir, jsFile), 'utf8').trim()
   const bundleBytes = Buffer.byteLength(code)
   const content = `// Generated — do not edit.\nexport const html = ${JSON.stringify(`<script>${code}</script>`)}\n`
+
+  // Confirm test-only dead code was eliminated for non-test builds
+  if (mode !== 'test') {
+    const markers = testOnlyMarkers[entry] ?? []
+    const leaked = markers.filter((m) => code.includes(m))
+    if (leaked.length > 0)
+      throw new Error(
+        `Dead code elimination failed for ${entry} (mode=${mode}). ` +
+          `Test-only markers found in bundle: ${leaked.join(', ')}`,
+      )
+  }
 
   fs.writeFileSync(outFile, content)
   fs.rmSync(outDir, { recursive: true })
