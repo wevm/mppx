@@ -97,7 +97,6 @@ button.onclick = async () => {
           (x) => x.id === chainId,
         )
         return createClient({ chain, transport: custom(provider) })
-        return
       },
     })[0]
 

@@ -7,7 +7,7 @@ import { tabScript } from './compose.main.gen.js'
 export type Options = {
   config: Record<string, unknown>
   content: string
-  formatAmount: (request: Record<string, unknown>) => string | Promise<string>
+  formatAmount: (request: any) => string | Promise<string>
   text: Text | undefined
   theme: Theme | undefined
 }
