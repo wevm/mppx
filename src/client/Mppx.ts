@@ -1,4 +1,5 @@
 import type * as Challenge from '../Challenge.js'
+import * as Errors from '../Errors.js'
 import type * as Method from '../Method.js'
 import type * as z from '../zod.js'
 import * as Fetch from './internal/Fetch.js'
@@ -80,6 +81,11 @@ export function create<
     transport,
     async createCredential(response: Transport.ResponseOf<transport>, context?: unknown) {
       const challenge = transport.getChallenge(response as never) as Challenge.Challenge
+
+      // Validate challenge expiration before creating credential (client-side early rejection)
+      if (challenge.expires && new Date(challenge.expires) < new Date()) {
+        throw new Errors.PaymentExpiredError({ expires: challenge.expires })
+      }
 
       const mi = methods.find((m) => m.name === challenge.method && m.intent === challenge.intent)
       if (!mi)
