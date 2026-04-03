@@ -2,15 +2,13 @@ import type { Appearance } from '@stripe/stripe-js'
 import { loadStripe } from '@stripe/stripe-js/pure'
 
 import { stripe } from '../../../../client/index.js'
-import * as Html from '../../../../server/internal/html/config.js'
-import { submitCredential } from '../../../../server/internal/html/serviceWorker.client.js'
+import * as Html from '../../../../Html.js'
+import { mergeDefined } from '../../../../server/internal/html/config.js'
 import type { charge as chargeClient } from '../../../../stripe/client/Charge.js'
 import type { charge } from '../../../../stripe/server/Charge.js'
 import type * as Methods from '../../../Methods.js'
 
-const data = Html.getData<typeof Methods.charge, NonNullable<charge.Parameters['html']>>('stripe')
-
-const root = document.getElementById(data.rootId)!
+const c = Html.init<typeof Methods.charge, NonNullable<charge.Parameters['html']>>('stripe')
 
 const css = String.raw
 const style = document.createElement('style')
@@ -18,15 +16,15 @@ style.textContent = css`
   form {
     display: flex;
     flex-direction: column;
-    gap: calc(${Html.vars.spacingUnit} * 8);
+    gap: calc(${c.vars.spacingUnit} * 8);
   }
   button {
-    background: ${Html.vars.accent};
-    border-radius: ${Html.vars.radius};
-    color: ${Html.vars.background};
+    background: ${c.vars.accent};
+    border-radius: ${c.vars.radius};
+    color: ${c.vars.background};
     cursor: pointer;
     font-weight: 500;
-    padding: calc(${Html.vars.spacingUnit} * 4) calc(${Html.vars.spacingUnit} * 8);
+    padding: calc(${c.vars.spacingUnit} * 4) calc(${c.vars.spacingUnit} * 8);
     width: 100%;
   }
   button:hover:not(:disabled) {
@@ -37,24 +35,24 @@ style.textContent = css`
     opacity: 0.5;
   }
 `
-root.append(style)
+c.root.append(style)
 
 ;(async () => {
   if (import.meta.env.MODE === 'test') {
     const button = document.createElement('button')
-    button.textContent = data.text.pay
-    root.appendChild(button)
+    button.textContent = c.text.pay
+    c.root.appendChild(button)
     button.onclick = async () => {
       try {
         button.disabled = true
         const method = stripe({ createToken })[0]
         const credential = await method.createCredential({
-          challenge: data.challenge,
+          challenge: c.challenge,
           context: { paymentMethod: 'pm_card_visa' },
         })
-        await submitCredential(credential)
-      } catch (e) {
-        Html.showError(e instanceof Error ? e.message : 'Payment failed')
+        await c.submit(credential)
+      } catch (error) {
+        c.error(error instanceof Error ? error.message : 'Payment failed')
       } finally {
         button.disabled = false
       }
@@ -62,15 +60,15 @@ root.append(style)
     return
   }
 
-  const stripeJs = await loadStripe(data.config.publishableKey)
+  const stripeJs = await loadStripe(c.config.publishableKey)
   if (!stripeJs) throw new Error('Failed to loadStripe')
 
   const darkQuery = window.matchMedia('(prefers-color-scheme: dark)')
   const getAppearance = () => {
     const theme = (() => {
-      if (data.config.elements?.options?.appearance?.theme)
-        return data.config.elements?.options?.appearance?.theme
-      switch (data.theme.colorScheme) {
+      if (c.config.elements?.options?.appearance?.theme)
+        return c.config.elements?.options?.appearance?.theme
+      switch (c.theme.colorScheme) {
         case 'light dark':
           return (darkQuery.matches ? 'night' : 'stripe') as 'night' | 'stripe'
         case 'light':
@@ -80,34 +78,34 @@ root.append(style)
       }
     })()
     const resolvedColorSchemeIndex = darkQuery.matches ? 1 : 0
-    return Html.mergeDefined(
+    return mergeDefined(
       {
         disableAnimations: true,
         theme,
         variables: {
-          borderRadius: data.theme.radius,
-          colorBackground: data.theme.surface[resolvedColorSchemeIndex],
-          colorDanger: data.theme.negative[resolvedColorSchemeIndex],
-          colorPrimary: data.theme.accent[resolvedColorSchemeIndex],
-          colorText: data.theme.foreground[resolvedColorSchemeIndex],
-          colorTextSecondary: data.theme.muted[resolvedColorSchemeIndex],
-          fontSizeBase: data.theme.fontSizeBase,
-          fontFamily: data.theme.fontFamily,
-          spacingUnit: data.theme.spacingUnit,
+          borderRadius: c.theme.radius,
+          colorBackground: c.theme.surface[resolvedColorSchemeIndex],
+          colorDanger: c.theme.negative[resolvedColorSchemeIndex],
+          colorPrimary: c.theme.accent[resolvedColorSchemeIndex],
+          colorText: c.theme.foreground[resolvedColorSchemeIndex],
+          colorTextSecondary: c.theme.muted[resolvedColorSchemeIndex],
+          fontSizeBase: c.theme.fontSizeBase,
+          fontFamily: c.theme.fontFamily,
+          spacingUnit: c.theme.spacingUnit,
         },
       } satisfies Appearance,
-      (data.config.elements?.options?.appearance as never) ?? {},
+      (c.config.elements?.options?.appearance as never) ?? {},
     )
   }
 
   const elements = stripeJs.elements({
     appearance: getAppearance(),
-    ...data.config.elements?.options,
-    amount: Number(data.challenge.request.amount),
-    currency: data.challenge.request.currency,
+    ...c.config.elements?.options,
+    amount: Number(c.challenge.request.amount),
+    currency: c.challenge.request.currency,
     mode: 'payment',
     paymentMethodCreation: 'manual',
-    paymentMethodTypes: data.challenge.request.methodDetails.paymentMethodTypes,
+    paymentMethodTypes: c.challenge.request.methodDetails.paymentMethodTypes,
   })
 
   darkQuery.addEventListener('change', () => {
@@ -115,34 +113,34 @@ root.append(style)
   })
 
   const form = document.createElement('form')
-  elements.create('payment', data.config.elements?.paymentOptions).mount(form)
-  root.appendChild(form)
+  elements.create('payment', c.config.elements?.paymentOptions).mount(form)
+  c.root.appendChild(form)
 
   const button = document.createElement('button')
-  button.textContent = data.text.pay
+  button.textContent = c.text.pay
   button.type = 'submit'
   form.appendChild(button)
 
   form.onsubmit = async (event) => {
     event.preventDefault()
-    document.getElementById(Html.errorId)?.remove()
+    c.error()
     button.disabled = true
     try {
       await elements.submit()
       const { paymentMethod, error: stripeError } = await stripeJs.createPaymentMethod({
-        ...data.config.elements?.createPaymentMethodOptions,
+        ...c.config.elements?.createPaymentMethodOptions,
         elements,
       })
       if (stripeError || !paymentMethod)
         throw stripeError ?? new Error('Failed to create payment method')
       const method = stripe({ client: stripeJs, createToken })[0]
       const credential = await method.createCredential({
-        challenge: data.challenge,
+        challenge: c.challenge,
         context: { paymentMethod: paymentMethod.id },
       })
-      await submitCredential(credential)
-    } catch (e) {
-      Html.showError(e instanceof Error ? e.message : 'Payment failed')
+      await c.submit(credential)
+    } catch (error) {
+      c.error(error instanceof Error ? error.message : 'Payment failed')
     } finally {
       button.disabled = false
     }
@@ -150,7 +148,7 @@ root.append(style)
 })()
 
 async function createToken(opts: chargeClient.OnChallengeParameters) {
-  const createTokenUrl = new URL(data.config.createTokenUrl, location.origin)
+  const createTokenUrl = new URL(c.config.createTokenUrl, location.origin)
   if (createTokenUrl.origin !== location.origin)
     throw new Error('createTokenUrl must be same-origin')
   const res = await fetch(createTokenUrl, {

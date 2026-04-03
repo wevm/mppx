@@ -161,10 +161,13 @@ The changelog is auto-generated from changesets during `changeset version`.
 ## Commands
 
 ```bash
-pnpm build          # Build with zile
-pnpm check          # Lint with oxlint + format with oxfmt
-pnpm check:types    # TypeScript type checking
-pnpm test           # Run tests with vitest
+pnpm build                 # Build HTML with rolldown and library with zile
+pnpm check                 # Lint with oxlint + format with oxfmt
+pnpm check:types           # TypeScript type checking
+pnpm check:types:examples  # Examples type checking
+pnpm check:types:html      # HTML type checking
+pnpm test                  # Run tests with vitest
+pnpm test:html             # Run HTML tests with playwright
 ```
 
 ## Skills Reference

@@ -29,30 +29,12 @@ export type Data<
 
 export const errorId = 'root_error'
 export const rootId = 'root'
-const dataId = '__MPPX_DATA__'
+export const dataId = '__MPPX_DATA__'
 
 export const serviceWorkerParam = '__mppx_worker'
 
-const challengeIdAttr = 'data-mppx-challenge-id'
-const remainingAttr = 'data-remaining'
-
-export function getData<
-  method extends Method.Method = Method.Method,
-  config extends Record<string, unknown> = {},
->(methodName: method['name']): Data<method, config> {
-  const el = document.getElementById(dataId)!
-  const map = Json.parse(el.textContent) as Record<string, Data<method, config>>
-  const remaining = el.getAttribute(remainingAttr)
-  if (!remaining || Number(remaining) <= 1) el.remove()
-  else el.setAttribute(remainingAttr, String(Number(remaining) - 1))
-  const script = document.currentScript
-  const challengeId = script?.getAttribute(challengeIdAttr)
-  if (challengeId) {
-    script!.removeAttribute(challengeIdAttr)
-    return map[challengeId]!
-  }
-  return Object.values(map).find((d) => d.challenge.method === methodName)!
-}
+export const challengeIdAttr = 'data-mppx-challenge-id'
+export const remainingAttr = 'data-remaining'
 
 export function showError(message: string) {
   const existing = document.getElementById(errorId)

@@ -131,6 +131,11 @@
       "src": "./src/tempo/index.ts",
       "default": "./dist/tempo/index.js"
     },
+    "./html": {
+      "types": "./dist/Html.d.ts",
+      "src": "./src/Html.ts",
+      "default": "./dist/Html.js"
+    },
     "./hono": {
       "types": "./dist/middlewares/hono.d.ts",
       "src": "./src/middlewares/hono.ts",
