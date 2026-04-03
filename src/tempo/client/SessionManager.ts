@@ -35,6 +35,10 @@ const WebSocketReadyState = {
   CLOSED: 3,
 } as const
 
+// Browser-style WebSocket clients may only initiate close with 1000 or 3000-4999.
+// Keep protocol/policy close codes on the server side and use an app-defined code here.
+const ClientWebSocketProtocolErrorCloseCode = 3008
+
 export type SessionManager = {
   readonly channelId: Hex.Hex | undefined
   readonly cumulative: bigint
@@ -490,7 +494,7 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
           rawSocket.readyState === WebSocketReadyState.CONNECTING ||
           rawSocket.readyState === WebSocketReadyState.OPEN
         ) {
-          rawSocket.close(1008, message)
+          rawSocket.close(ClientWebSocketProtocolErrorCloseCode, message)
         }
       }
 
