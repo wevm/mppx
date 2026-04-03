@@ -285,11 +285,14 @@ describe('http', () => {
       const body = await response.text()
       // Extract the JSON data from the script tag
       const dataMatch = body.match(
-        /<script id="__MPPX_DATA__" type="application\/json">\s*([\s\S]*?)\s*<\/script>/,
+        /<script[^>]*id="__MPPX_DATA__"[^>]*type="application\/json"[^>]*>\s*([\s\S]*?)\s*<\/script>/s,
       )
       expect(dataMatch).not.toBeNull()
 
-      const data = JSON.parse(dataMatch?.[1]?.replace(/\\u003c/g, '<') ?? '')
+      const dataMap = JSON.parse(dataMatch?.[1]?.replace(/\\u003c/g, '<') ?? '')
+      expect(typeof dataMap).toBe('object')
+      expect(Object.keys(dataMap)).toHaveLength(1)
+      const data = dataMap[challenge.id]
       expect(data.config).toEqual({ foo: 'bar' })
       expect(data.challenge.id).toBe(challenge.id)
       expect(data.challenge.method).toBe('tempo')

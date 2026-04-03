@@ -10,6 +10,8 @@ import type * as Method from '../Method.js'
 import * as PaymentRequest from '../PaymentRequest.js'
 import type * as Receipt from '../Receipt.js'
 import type * as z from '../zod.js'
+import * as Html from './internal/html/config.js'
+import { serviceWorker } from './internal/html/serviceWorker.gen.js'
 import * as NodeListener from './NodeListener.js'
 import * as Request from './Request.js'
 import * as Transport from './Transport.js'
@@ -645,6 +647,7 @@ type ConfiguredHandler = ((input: Request) => Promise<MethodFn.Response<Transpor
   _internal: {
     name: string
     intent: string
+    html: Html.Options | undefined
     _canonicalRequest: Record<string, unknown>
   }
 }
@@ -697,12 +700,52 @@ type ComposeEntry<methods extends readonly Method.AnyServer[]> =
  * })
  * ```
  */
+type ComposeHtmlOptions = { theme?: Html.Theme; text?: Html.Text }
+
 export function compose(
-  ...handlers: readonly ((input: Request) => Promise<MethodFn.Response<Transport.Http>>)[]
+  ...args: readonly unknown[]
 ): (input: Request) => Promise<MethodFn.Response<Transport.Http>> {
+  // Extract optional html options from last argument
+  const last = args[args.length - 1]
+  const composeOptions: Html.Options | undefined =
+    typeof last === 'object' &&
+    last !== null &&
+    typeof last !== 'function' &&
+    !('_internal' in last)
+      ? (() => {
+          const opts = last as ComposeHtmlOptions
+          return {
+            config: {},
+            content: '',
+            formatAmount: () => '',
+            text: opts.text,
+            theme: opts.theme,
+          }
+        })()
+      : undefined
+  const handlers = (composeOptions ? args.slice(0, -1) : args) as readonly ((
+    input: Request,
+  ) => Promise<MethodFn.Response<Transport.Http>>)[]
+
   if (handlers.length === 0) throw new Error('compose() requires at least one handler')
 
   return async (input: Request) => {
+    // Serve service worker for html-enabled compose
+    if (new URL(input.url).searchParams.has(Html.serviceWorkerParam)) {
+      const hasHtml = handlers.some((h) => (h as ConfiguredHandler)._internal?.html)
+      if (hasHtml)
+        return {
+          status: 402,
+          challenge: new Response(serviceWorker, {
+            status: 200,
+            headers: {
+              'Content-Type': 'application/javascript',
+              'Cache-Control': 'no-store',
+            },
+          }),
+        } as MethodFn.Response<Transport.Http>
+    }
+
     // Try to extract a Payment credential to decide whether to dispatch or challenge.
     // Only gate on the Payment scheme — other auth schemes (Bearer, Basic, etc.)
     // should fall through to the merged-402 path so all offers are presented.
@@ -754,17 +797,89 @@ export function compose(
     const mergedHeaders = new Headers()
     mergedHeaders.set('Cache-Control', 'no-store')
 
-    let body: string | null = null
     for (const result of results) {
       if (result.status !== 402) continue
       const response = result.challenge as Response
       const wwwAuth = response.headers.get('WWW-Authenticate')
       if (wwwAuth) mergedHeaders.append('WWW-Authenticate', wwwAuth)
-      // Use the first handler's body for the problem details response.
+    }
+
+    // Collect html-enabled handlers and their challenges
+    const htmlEntries = (() => {
+      const entries: {
+        handler: ConfiguredHandler
+        challenge: Challenge.Challenge
+      }[] = []
+      for (let i = 0; i < handlers.length; i++) {
+        const meta = (handlers[i] as ConfiguredHandler)._internal
+        if (!meta?.html) continue
+        const result = results[i]
+        if (result?.status !== 402) continue
+        const wwwAuth = result.challenge.headers.get('WWW-Authenticate')
+        if (!wwwAuth) continue
+        entries.push({
+          handler: handlers[i] as ConfiguredHandler,
+          challenge: Challenge.deserialize(wwwAuth),
+        })
+      }
+      return entries
+    })()
+
+    const wantsHtml = input.headers.get('Accept')?.includes('text/html')
+    if (wantsHtml && htmlEntries.length > 0) {
+      const { theme, text } = Html.resolveOptions(
+        // Use compose-level options or first html-enabled method's config for the page shell
+        composeOptions ?? htmlEntries[0]?.handler._internal.html ?? ({} as Html.Options),
+      )
+
+      // Build data map keyed by challenge.id
+      const dataMap: Record<string, Html.Data> = {}
+      for (let i = 0; i < htmlEntries.length; i++) {
+        const entry = htmlEntries[i]!
+        dataMap[entry.challenge.id] = {
+          label: entry.handler._internal.name,
+          rootId: `${Html.rootId}-${i}`,
+          formattedAmount: await entry.handler._internal.html!.formatAmount(
+            entry.challenge.request,
+          ),
+          config: entry.handler._internal.html!.config,
+          challenge: entry.challenge as never,
+          text,
+          theme,
+        }
+      }
+
+      mergedHeaders.set('Content-Type', 'text/html; charset=utf-8')
+
+      const firstData = Object.values(dataMap)[0]!
+      const body = Html.render({
+        entries: htmlEntries.map((entry) => ({
+          challenge: entry.challenge,
+          content: entry.handler._internal.html!.content,
+        })),
+        dataMap,
+        formattedAmount: firstData.formattedAmount,
+        panels: true,
+        text,
+        theme,
+      })
+
+      return {
+        status: 402,
+        challenge: new Response(body, { status: 402, headers: mergedHeaders }),
+      }
+    }
+
+    // Non-HTML fallback: use first handler's body
+    let body: string | null = null
+    for (const result of results) {
+      if (result.status !== 402) continue
       if (!body) {
+        const response = result.challenge as Response
         const contentType = response.headers.get('Content-Type')
         if (contentType) mergedHeaders.set('Content-Type', contentType)
         body = await response.text()
+        break
       }
     }
 
