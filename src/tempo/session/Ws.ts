@@ -30,6 +30,7 @@ export type Socket = {
 
 export type Message =
   | { mpp: 'authorization'; authorization: string }
+  | { mpp: 'message'; data: string }
   | { mpp: 'payment-close-request' }
   | { mpp: 'payment-close-ready'; data: SessionReceipt }
   | { mpp: 'payment-error'; status: number; message: string }
@@ -38,6 +39,10 @@ export type Message =
 
 export function formatAuthorizationMessage(authorization: string): string {
   return JSON.stringify({ mpp: 'authorization', authorization } satisfies Message)
+}
+
+export function formatApplicationMessage(data: string): string {
+  return JSON.stringify({ mpp: 'message', data } satisfies Message)
 }
 
 export function formatCloseRequestMessage(): string {
@@ -65,6 +70,9 @@ export function parseMessage(raw: string): Message | null {
     const parsed = JSON.parse(raw) as Record<string, unknown>
     if (parsed.mpp === 'authorization' && typeof parsed.authorization === 'string') {
       return { mpp: 'authorization', authorization: parsed.authorization }
+    }
+    if (parsed.mpp === 'message' && typeof parsed.data === 'string') {
+      return { mpp: 'message', data: parsed.data }
     }
     if (parsed.mpp === 'payment-close-request') {
       return { mpp: 'payment-close-request' }
@@ -95,6 +103,7 @@ export async function serve(options: serve.Options): Promise<void> {
   const { generate, pollIntervalMs = 100, route, socket, store: rawStore, url } = options
   const store = 'getChannel' in rawStore ? rawStore : ChannelStore.fromStore(rawStore)
   const requestUrl = normalizeHttpUrl(url)
+  const maxQueuedPaymentMessages = 32
 
   const abortController = new AbortController()
   let closed = false
@@ -109,6 +118,7 @@ export async function serve(options: serve.Options): Promise<void> {
     tickCost: bigint
   } | null = null
   let action = Promise.resolve()
+  let queuedActions = 0
 
   const close = async (code = 1000, reason?: string) => {
     if (closed) return
@@ -158,7 +168,7 @@ export async function serve(options: serve.Options): Promise<void> {
         if (abortController.signal.aborted) break
         if (typeof generate !== 'function') await charge()
         if (abortController.signal.aborted) break
-        await send(socket, value)
+        await send(socket, formatApplicationMessage(value))
       }
 
       if (!abortController.signal.aborted) await sendCloseReady()
@@ -179,6 +189,7 @@ export async function serve(options: serve.Options): Promise<void> {
   }
 
   const requestClose = async () => {
+    if (closed) return
     if (closeRequestHandled) return
     closeRequestHandled = true
     closeRequested = true
@@ -188,6 +199,7 @@ export async function serve(options: serve.Options): Promise<void> {
   }
 
   const processAuthorization = async (authorization: string) => {
+    if (closed) return
     const credential = Credential.deserialize<SessionCredentialPayload>(authorization)
     const payload = credential.payload
     if (payload.action === 'close') closeRequested = true
@@ -224,6 +236,7 @@ export async function serve(options: serve.Options): Promise<void> {
       return
     }
 
+    if (payload.action === 'topUp') return
     if (streamStarted || closeRequested) return
     streamStarted = true
     streamContext = {
@@ -240,6 +253,7 @@ export async function serve(options: serve.Options): Promise<void> {
   }
 
   const onMessage = (payload: unknown) => {
+    if (closed) return
     const raw = toText(payload)
     if (!raw) return
     const message = parseMessage(raw)
@@ -258,19 +272,40 @@ export async function serve(options: serve.Options): Promise<void> {
           : null
 
     if (!work) return
+    if (queuedActions >= maxQueuedPaymentMessages) {
+      void send(
+        socket,
+        formatErrorMessage({
+          message: 'too many queued payment messages',
+          status: 429,
+        }),
+      ).catch(() => {})
+      void close(1008, 'too many queued payment messages')
+      return
+    }
 
-    action = action.then(work).catch(async (error) => {
-      if (!closed) {
-        await send(
-          socket,
-          formatErrorMessage({
-            message: error instanceof Error ? error.message : 'invalid payment message',
-            status: 400,
-          }),
-        )
-        await close(1008, 'invalid payment message')
-      }
-    })
+    queuedActions++
+    action = action
+      .then(async () => {
+        try {
+          if (closed) return
+          await work()
+        } finally {
+          queuedActions--
+        }
+      })
+      .catch(async (error) => {
+        if (!closed) {
+          await send(
+            socket,
+            formatErrorMessage({
+              message: error instanceof Error ? error.message : 'invalid payment message',
+              status: 400,
+            }),
+          )
+          await close(1008, 'invalid payment message')
+        }
+      })
   }
 
   const onClose = () => {
