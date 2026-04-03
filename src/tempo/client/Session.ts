@@ -154,6 +154,7 @@ export function session(parameters: session.Parameters = {}) {
           escrowContract,
           suggestedChannelId,
           chainId,
+          amount,
         )
         if (recovered) {
           const contextCumulative = context?.cumulativeAmountRaw
@@ -169,7 +170,7 @@ export function session(parameters: session.Parameters = {}) {
           notifyUpdate(entry)
         } else if (context?.channelId) {
           throw new Error(
-            `Channel ${context.channelId} cannot be reused (closed or not found on-chain).`,
+            `Channel ${context.channelId} cannot be reused (closed, not found, or lacking available balance on-chain).`,
           )
         }
       }
