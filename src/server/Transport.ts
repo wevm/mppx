@@ -1,5 +1,3 @@
-import { Json } from 'ox'
-
 import * as Challenge from '../Challenge.js'
 import * as Credential from '../Credential.js'
 import * as Errors from '../Errors.js'
@@ -7,7 +5,6 @@ import type { Distribute, UnionToIntersection } from '../internal/types.js'
 import * as core_Mcp from '../Mcp.js'
 import * as Receipt from '../Receipt.js'
 import * as Html from './internal/html/config.js'
-import { html } from './internal/html/config.js'
 import { serviceWorker } from './internal/html/serviceWorker.gen.js'
 
 export { type McpSdk, mcpSdk } from '../mcp-sdk/server/Transport.js'
@@ -150,63 +147,28 @@ export function http(): Http {
         if (options.html && input.headers.get('Accept')?.includes('text/html')) {
           headers['Content-Type'] = 'text/html; charset=utf-8'
 
-          const theme = Html.mergeDefined(
-            {
-              favicon: undefined as Html.Theme['favicon'],
-              fontUrl: undefined as Html.Theme['fontUrl'],
-              logo: undefined as Html.Theme['logo'],
-              ...Html.defaultTheme,
-            },
-            (options.html.theme as never) ?? {},
-          )
-          const text = Html.sanitizeRecord(
-            Html.mergeDefined(Html.defaultText, (options.html.text as never) ?? {}),
-          )
+          const { theme, text } = Html.resolveOptions(options.html)
           const amount = await options.html.formatAmount(challenge.request)
 
-          return html`<!doctype html>
-            <html lang="en">
-              <head>
-                <meta charset="UTF-8" />
-                <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-                <meta name="robots" content="noindex" />
-                <meta name="color-scheme" content="${theme.colorScheme}" />
-                <title>${text.title}</title>
-                ${Html.favicon(theme, challenge.realm)} ${Html.font(theme)} ${Html.style(theme)}
-              </head>
-              <body>
-                <main>
-                  <header class="${Html.classNames.header}">
-                    ${Html.logo(theme)}
-                    <span>${text.paymentRequired}</span>
-                  </header>
-                  <section class="${Html.classNames.summary}" aria-label="Payment summary">
-                    <h1 class="${Html.classNames.summaryAmount}">${Html.sanitize(amount)}</h1>
-                    ${challenge.description
-                      ? `<p class="${Html.classNames.summaryDescription}">${Html.sanitize(challenge.description)}</p>`
-                      : ''}
-                    ${challenge.expires
-                      ? `<p class="${Html.classNames.summaryExpires}">${text.expires} <time datetime="${new Date(challenge.expires).toISOString()}">${new Date(challenge.expires).toLocaleString()}</time></p>`
-                      : ''}
-                  </section>
-                  <div id="${Html.rootId}" aria-label="Payment form"></div>
-                  <script id="${Html.dataId}" type="application/json">
-                    ${Json.stringify({
-                      [challenge.id]: {
-                        label: challenge.method.charAt(0).toUpperCase() + challenge.method.slice(1),
-                        rootId: Html.rootId,
-                        formattedAmount: amount,
-                        config: options.html.config,
-                        challenge,
-                        text,
-                        theme,
-                      },
-                    } satisfies Record<string, Html.Data>).replace(/</g, '\\u003c')}
-                  </script>
-                  ${options.html.content}
-                </main>
-              </body>
-            </html> `
+          const dataMap = {
+            [challenge.id]: {
+              label: challenge.method,
+              rootId: Html.rootId,
+              formattedAmount: amount,
+              config: options.html.config,
+              challenge,
+              text,
+              theme,
+            },
+          } satisfies Record<string, Html.Data>
+
+          return Html.render({
+            entries: [{ challenge, content: options.html.content }],
+            dataMap,
+            formattedAmount: amount,
+            text,
+            theme,
+          })
         }
         if (error) {
           headers['Content-Type'] = 'application/problem+json'

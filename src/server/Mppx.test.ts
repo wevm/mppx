@@ -1245,9 +1245,9 @@ describe('compose', () => {
       expect(body).toContain('aria-controls="mppx-panel-0"')
       expect(body).toContain('aria-controls="mppx-panel-1"')
 
-      // Tab labels from method names
-      expect(body).toContain('Alpha')
-      expect(body).toContain('Beta')
+      // Tab labels from method names (capitalized via CSS)
+      expect(body).toContain('alpha')
+      expect(body).toContain('beta')
 
       // Both method bundles included
       expect(body).toContain('/alpha-bundle.js')
@@ -1261,9 +1261,9 @@ describe('compose', () => {
       const dataMap = JSON.parse(dataMatch![1]!.replace(/\\u003c/g, '<'))
       const dataValues = Object.values(dataMap) as { label: string; config: unknown }[]
       expect(dataValues).toHaveLength(2)
-      expect(dataValues[0]!.label).toBe('Alpha')
+      expect(dataValues[0]!.label).toBe('alpha')
       expect(dataValues[0]!.config).toEqual({ providerA: true })
-      expect(dataValues[1]!.label).toBe('Beta')
+      expect(dataValues[1]!.label).toBe('beta')
       expect(dataValues[1]!.config).toEqual({ providerB: true })
     })
 
@@ -1303,7 +1303,7 @@ describe('compose', () => {
       const dataMap = JSON.parse(dataMatch![1]!.replace(/\\u003c/g, '<'))
       const dataValues = Object.values(dataMap) as { label: string }[]
       expect(dataValues).toHaveLength(1)
-      expect(dataValues[0]!.label).toBe('Alpha')
+      expect(dataValues[0]!.label).toBe('alpha')
     })
 
     test('falls back to json when Accept does not include text/html', async () => {

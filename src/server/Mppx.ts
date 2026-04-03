@@ -1,8 +1,6 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { isDeepStrictEqual } from 'node:util'
 
-import { Json } from 'ox'
-
 import * as Challenge from '../Challenge.js'
 import * as Credential from '../Credential.js'
 import * as Errors from '../Errors.js'
@@ -12,9 +10,7 @@ import type * as Method from '../Method.js'
 import * as PaymentRequest from '../PaymentRequest.js'
 import type * as Receipt from '../Receipt.js'
 import type * as z from '../zod.js'
-import { tabScript } from './internal/html/compose.main.gen.js'
 import * as Html from './internal/html/config.js'
-import { html } from './internal/html/config.js'
 import { serviceWorker } from './internal/html/serviceWorker.gen.js'
 import * as NodeListener from './NodeListener.js'
 import * as Request from './Request.js'
@@ -831,35 +827,18 @@ export function compose(
     })()
 
     const wantsHtml = input.headers.get('Accept')?.includes('text/html')
-
     if (wantsHtml && htmlEntries.length > 0) {
-      // Use compose-level options or first html-enabled method's config for the page shell
-      const shellHtml = composeOptions ?? htmlEntries[0]!.handler._internal.html!
-      const theme = Html.mergeDefined(
-        {
-          favicon: undefined as Html.Theme['favicon'],
-          fontUrl: undefined as Html.Theme['fontUrl'],
-          logo: undefined as Html.Theme['logo'],
-          ...Html.defaultTheme,
-        },
-        (shellHtml.theme as never) ?? {},
-      )
-      const text = Html.sanitizeRecord(
-        Html.mergeDefined(Html.defaultText, (shellHtml.text as never) ?? {}),
+      const { theme, text } = Html.resolveOptions(
+        // Use compose-level options or first html-enabled method's config for the page shell
+        composeOptions ?? htmlEntries[0]?.handler._internal.html ?? ({} as Html.Options),
       )
 
-      const firstChallenge = htmlEntries[0]!.challenge
-
-      const hasTabs = htmlEntries.length > 1
-
-      // Build data map keyed by challenge.id (before tabList so we can use formattedAmount)
+      // Build data map keyed by challenge.id
       const dataMap: Record<string, Html.Data> = {}
       for (let i = 0; i < htmlEntries.length; i++) {
         const entry = htmlEntries[i]!
         dataMap[entry.challenge.id] = {
-          label:
-            entry.handler._internal.name.charAt(0).toUpperCase() +
-            entry.handler._internal.name.slice(1),
+          label: entry.handler._internal.name,
           rootId: `${Html.rootId}-${i}`,
           formattedAmount: await entry.handler._internal.html!.formatAmount(
             entry.challenge.request,
@@ -871,106 +850,20 @@ export function compose(
         }
       }
 
-      const firstData = Object.values(dataMap)[0]!
-      const dataValues = Object.values(dataMap)
-
-      const tabList = hasTabs
-        ? html`<nav class="${Html.classNames.tabList}" role="tablist" aria-label="Payment methods">
-            ${dataValues
-              .map(
-                (data, i) =>
-                  html`<button
-                    class="${Html.classNames.tab}"
-                    role="tab"
-                    id="mppx-tab-${i}"
-                    aria-selected="${i === 0 ? 'true' : 'false'}"
-                    aria-controls="mppx-panel-${i}"
-                    ${i !== 0 ? 'tabindex="-1"' : ''}
-                    data-amount="${Html.sanitize(data.formattedAmount)}"
-                    ${data.challenge.description
-                      ? `data-description="${Html.sanitize(data.challenge.description)}"`
-                      : ''}
-                    ${data.challenge.expires
-                      ? `data-expires="${Html.sanitize(data.challenge.expires)}"`
-                      : ''}
-                    ${data.challenge.expires
-                      ? `data-expires-label="${Html.sanitize(text.expires)}"`
-                      : ''}
-                  >
-                    ${Html.sanitize(data.label)}
-                  </button>`,
-              )
-              .join('')}
-          </nav>`
-        : ''
-
-      const panels = htmlEntries
-        .map(
-          (_entry, i) =>
-            html`<div
-              role="${hasTabs ? 'tabpanel' : ''}"
-              id="mppx-panel-${i}"
-              ${hasTabs ? `aria-labelledby="mppx-tab-${i}"` : ''}
-              ${i !== 0 ? 'hidden' : ''}
-            >
-              <div id="${Html.rootId}-${i}" aria-label="Payment form"></div>
-            </div>`,
-        )
-        .join('')
-
       mergedHeaders.set('Content-Type', 'text/html; charset=utf-8')
 
-      const body = html`<!doctype html>
-        <html lang="en">
-          <head>
-            <meta charset="UTF-8" />
-            <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-            <meta name="robots" content="noindex" />
-            <meta name="color-scheme" content="${theme.colorScheme}" />
-            <title>${text.title}</title>
-            ${Html.favicon(theme, firstChallenge.realm)} ${Html.font(theme)} ${Html.style(theme)}
-            ${hasTabs ? Html.tabStyle() : ''}
-          </head>
-          <body>
-            <main>
-              <header class="${Html.classNames.header}">
-                ${Html.logo(theme)}
-                <span>${text.paymentRequired}</span>
-              </header>
-              <section class="${Html.classNames.summary}" aria-label="Payment summary">
-                <h1 class="${Html.classNames.summaryAmount}">
-                  ${Html.sanitize(firstData.formattedAmount)}
-                </h1>
-                ${firstChallenge.description
-                  ? `<p class="${Html.classNames.summaryDescription}">${Html.sanitize(firstChallenge.description)}</p>`
-                  : ''}
-                ${firstChallenge.expires
-                  ? `<p class="${Html.classNames.summaryExpires}">${text.expires} <time datetime="${new Date(firstChallenge.expires).toISOString()}">${new Date(firstChallenge.expires).toLocaleString()}</time></p>`
-                  : ''}
-              </section>
-              ${tabList} ${panels}
-              <script
-                id="${Html.dataId}"
-                type="application/json"
-                ${htmlEntries.length > 1 ? ` ${Html.remainingAttr}="${htmlEntries.length}"` : ''}
-              >
-                ${Json.stringify(dataMap satisfies Record<string, Html.Data>).replace(
-                  /</g,
-                  '\\u003c',
-                )}
-              </script>
-              ${htmlEntries
-                .map((entry) =>
-                  entry.handler._internal.html!.content.replace(
-                    '<script>',
-                    `<script ${Html.challengeIdAttr}="${Html.sanitize(entry.challenge.id)}">`,
-                  ),
-                )
-                .join('\n')}
-              ${hasTabs ? tabScript : ''}
-            </main>
-          </body>
-        </html>`
+      const firstData = Object.values(dataMap)[0]!
+      const body = Html.render({
+        entries: htmlEntries.map((entry) => ({
+          challenge: entry.challenge,
+          content: entry.handler._internal.html!.content,
+        })),
+        dataMap,
+        formattedAmount: firstData.formattedAmount,
+        panels: true,
+        text,
+        theme,
+      })
 
       return {
         status: 402,
