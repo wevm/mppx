@@ -677,13 +677,13 @@ function sanitizeRecord<type extends Record<string, string>>(record: type): type
 }
 
 export function mergeDefined<type>(defaults: type, value: DeepPartial<type> | undefined): type {
-  if (value === undefined) return defaults
+  if (value === undefined || value === null) return defaults
   if (!isPlainObject(defaults) || !isPlainObject(value)) return (value ?? defaults) as type
 
   const result: Record<string, unknown> = { ...defaults }
 
   for (const [key, nextValue] of Object.entries(value)) {
-    if (nextValue === undefined) continue
+    if (nextValue === undefined || nextValue === null || nextValue === '') continue
 
     const currentValue = result[key]
 
