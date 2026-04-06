@@ -8,6 +8,7 @@ import { rpcUrl } from './tempo/prool.js'
 import { accounts, asset, chain, client, fundAccount } from './tempo/viem.js'
 
 const stopTimeoutMs = 2_000
+const setupTimeoutMs = 120_000
 const warmupAttempts = 5
 const warmupRetryDelayMs = 1_000
 const warmupRequestTimeoutMs = 10_000
@@ -65,7 +66,7 @@ beforeAll(async () => {
 
   await fundAccount({ address: accounts[1].address, token: asset })
   await fundAccount({ address: accounts[2].address, token: asset })
-})
+}, setupTimeoutMs)
 
 afterAll(async () => {
   if (nodeEnv !== 'localnet') return
