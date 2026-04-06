@@ -177,6 +177,10 @@ export function charge<const parameters extends charge.Parameters>(
       switch (payload.type) {
         case 'hash': {
           const hash = payload.hash as `0x${string}`
+          if (!(await markHashUsed(store, hash))) {
+            throw new VerificationFailedError({ reason: 'Transaction hash has already been used' })
+          }
+
           const expectedTransfers = getExpectedTransfers({ amount, memo, methodDetails, recipient })
           const receipt = await getTransactionReceipt(client, { hash })
           const matchedLogs = assertTransferLogs(receipt, {
@@ -193,10 +197,6 @@ export function charge<const parameters extends charge.Parameters>(
               challengeId: challenge.id,
               realm: challenge.realm,
             })
-
-          if (!(await markHashUsed(store, hash))) {
-            throw new VerificationFailedError({ reason: 'Transaction hash has already been used' })
-          }
 
           return toReceipt(receipt)
         }

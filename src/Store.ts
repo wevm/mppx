@@ -70,7 +70,12 @@ export function from<store extends Store>(store: store): store {
 }
 
 function wrapJsonUpdate(
-  update: (<result>(key: string, fn: (current: string | null) => Change<string, result>) => Promise<result>) | undefined,
+  update:
+    | (<result>(
+        key: string,
+        fn: (current: string | null) => Change<string, result>,
+      ) => Promise<result>)
+    | undefined,
 ): { update: Update } | {} {
   if (!update) return {}
   return {
