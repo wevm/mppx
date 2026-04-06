@@ -1,7 +1,15 @@
 import { Json } from 'ox'
 
 import type * as Method from './Method.js'
-import { attrs, type Data, ids, vars } from './server/internal/html/config.js'
+import {
+  attrs,
+  type Config,
+  type Data,
+  ids,
+  type Text,
+  type Theme,
+  vars,
+} from './server/internal/html/config.js'
 import { submitCredential } from './server/internal/html/serviceWorker.client.js'
 
 export function init<
@@ -55,3 +63,5 @@ export type Context<
   submit: (credential: string) => Promise<void>
   vars: typeof vars
 }
+
+export type { Config, Text, Theme }

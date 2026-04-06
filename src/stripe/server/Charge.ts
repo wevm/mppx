@@ -150,7 +150,7 @@ export declare namespace charge {
   type Parameters = {
     /** Render payment page when Accept header is text/html (e.g. in browsers) */
     html?:
-      | {
+      | ({
           createTokenUrl: string
           elements?:
             | {
@@ -160,9 +160,7 @@ export declare namespace charge {
               }
             | undefined
           publishableKey: string
-          text?: Html.Text
-          theme?: Html.Theme
-        }
+        } & Html.Config)
       | undefined
     /** Optional metadata to include in SPT creation requests. */
     metadata?: Record<string, string> | undefined

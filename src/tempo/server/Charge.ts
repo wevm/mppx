@@ -346,13 +346,7 @@ export declare namespace charge {
 
   type Parameters = {
     /** Render payment page when Accept header is text/html (e.g. in browsers) */
-    html?:
-      | boolean
-      | {
-          text?: Html.Text
-          theme?: Html.Theme
-        }
-      | undefined
+    html?: boolean | Html.Config | undefined
     /** Testnet mode. */
     testnet?: boolean | undefined
     /**

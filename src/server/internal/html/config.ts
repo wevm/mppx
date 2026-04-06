@@ -132,6 +132,11 @@ export type Theme = {
   surface?: LightDark | undefined
 }
 
+export type Config = {
+  text?: Text | undefined
+  theme?: Theme | undefined
+}
+
 type LightDark = string | readonly [light: string, dark: string]
 
 function resolveColor(

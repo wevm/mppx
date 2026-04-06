@@ -700,7 +700,7 @@ type ComposeEntry<methods extends readonly Method.AnyServer[]> =
  * })
  * ```
  */
-type ComposeHtmlOptions = { theme?: Html.Theme; text?: Html.Text }
+type ComposeHtmlOptions = Html.Config
 
 export function compose(
   ...args: readonly unknown[]
