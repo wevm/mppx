@@ -181,15 +181,15 @@ describe('json roundtrip behavior', () => {
   test('memory update can noop, set, and delete with typed results', async () => {
     const store = Store.memory()
 
-    const inserted = await store.update!('k', (current) => {
+    const inserted = await store.update('k', (current) => {
       expect(current).toBeNull()
       return { op: 'set', value: { count: 1 }, result: 'inserted' as const }
     })
-    const preserved = await store.update!('k', (current) => {
+    const preserved = await store.update('k', (current) => {
       expect(current).toEqual({ count: 1 })
       return { op: 'noop', result: 'unchanged' as const }
     })
-    const deleted = await store.update!('k', (current) => {
+    const deleted = await store.update('k', (current) => {
       expect(current).toEqual({ count: 1 })
       return { op: 'delete', result: 'removed' as const }
     })
@@ -205,7 +205,53 @@ describe('json roundtrip behavior', () => {
     const store = Store.cloudflare(kv)
 
     await store.put('k', { count: 1 })
-    const result = await store.update!('k', (current) => {
+    const result = await store.update('k', (current) => {
+      expect(current).toEqual({ count: 1 })
+      return {
+        op: 'set',
+        value: { count: (current as { count: number }).count + 1 },
+        result: 'updated' as const,
+      }
+    })
+
+    expect(result).toBe('updated')
+    expect(await store.get('k')).toEqual({ count: 2 })
+  })
+
+  test('redis update adapts JSON values through the wrapper', async () => {
+    const kv = fakeStringKv()
+    const store = Store.redis({
+      get: kv.get,
+      set: kv.put,
+      del: (key) => kv.delete(key),
+      update: kv.update,
+    })
+
+    await store.put('k', { count: 1 })
+    const result = await store.update('k', (current) => {
+      expect(current).toEqual({ count: 1 })
+      return {
+        op: 'set',
+        value: { count: (current as { count: number }).count + 1 },
+        result: 'updated' as const,
+      }
+    })
+
+    expect(result).toBe('updated')
+    expect(await store.get('k')).toEqual({ count: 2 })
+  })
+
+  test('upstash update passes values through the wrapper', async () => {
+    const kv = fakeUnknownKv()
+    const store = Store.upstash({
+      get: kv.get,
+      set: kv.set,
+      del: kv.del,
+      update: kv.update,
+    })
+
+    await store.put('k', { count: 1 })
+    const result = await store.update('k', (current) => {
       expect(current).toEqual({ count: 1 })
       return {
         op: 'set',

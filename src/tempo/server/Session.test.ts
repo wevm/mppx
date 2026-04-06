@@ -67,7 +67,7 @@ beforeAll(async () => {
 })
 
 describe.runIf(isLocalnet)('session', () => {
-  let rawStore: Store.Store
+  let rawStore: Store.AtomicStore
   let store: ChannelStore.ChannelStore
 
   beforeEach(() => {
@@ -88,7 +88,7 @@ describe.runIf(isLocalnet)('session', () => {
   }
 
   function createServerWithStore(
-    customStore: Store.Store,
+    customStore: Store.AtomicStore,
     overrides: Partial<session.Parameters> = {},
   ) {
     return session({
@@ -4570,36 +4570,58 @@ function mutateSignature(signature: Hex): Hex {
   return `${signature.slice(0, -1)}${replacement}` as Hex
 }
 
-function withFaultHooks(store: Store.Store, options: { failPutAt: number }) {
-  let putCalls = 0
+function withFaultHooks(store: Store.AtomicStore, options: { failPutAt: number }) {
+  let writeCalls = 0
+
+  function maybeFail(key: string) {
+    writeCalls++
+    if (writeCalls === options.failPutAt)
+      throw new Error(`simulated store crash before persisting key ${key}`)
+  }
+
   return Store.from({
     get: (key) => store.get(key),
-    delete: (key) => store.delete(key),
+    delete: async (key) => {
+      maybeFail(key)
+      await store.delete(key)
+    },
     put: async (key, value) => {
-      putCalls++
-      if (putCalls === options.failPutAt)
-        throw new Error(`simulated store crash before persisting key ${key}`)
+      maybeFail(key)
       await store.put(key, value)
+    },
+    async update(key, fn) {
+      return store.update(key, (current) => {
+        const change = fn(current)
+        if (change.op !== 'noop') maybeFail(key)
+        return change
+      })
     },
   })
 }
 
-function withReadDropHooks(store: Store.Store) {
+function withReadDropHooks(store: Store.AtomicStore) {
   const pending = new Map<string, number>()
+
+  function readOrDrop<value>(key: string, current: value | null) {
+    const remaining = pending.get(key)
+    if (remaining === undefined) return current
+    if (remaining === 0) {
+      pending.delete(key)
+      return null
+    }
+    pending.set(key, remaining - 1)
+    return current
+  }
+
   const wrapped = Store.from({
     async get(key) {
-      const remaining = pending.get(key)
-      if (remaining !== undefined) {
-        if (remaining === 0) {
-          pending.delete(key)
-          return null
-        }
-        pending.set(key, remaining - 1)
-      }
-      return store.get(key)
+      return readOrDrop(key, await store.get(key))
     },
     put: (key, value) => store.put(key, value),
     delete: (key) => store.delete(key),
+    async update(key, fn) {
+      return store.update(key, (current) => fn(readOrDrop(key, current)))
+    },
   })
   return {
     store: wrapped,

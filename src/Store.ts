@@ -13,6 +13,14 @@ export type Change<value, result> =
   | { op: 'set'; value: value; result: result }
   | { op: 'delete'; result: result }
 
+export type Update<itemMap extends StoreItemMap = StoreItemMap> = <
+  key extends keyof itemMap & string,
+  result,
+>(
+  key: key,
+  fn: (current: itemMap[key] | null) => Change<itemMap[key], result>,
+) => Promise<result>
+
 export type Store<itemMap extends StoreItemMap = StoreItemMap> = {
   get: <key extends keyof itemMap & string>(key: key) => Promise<itemMap[key] | null>
   put: <key extends keyof itemMap & string>(key: key, value: itemMap[key]) => Promise<void>
@@ -23,10 +31,14 @@ export type Store<itemMap extends StoreItemMap = StoreItemMap> = {
    *
    * Implementations may retry `fn`, so it must be synchronous and free of side effects.
    */
-  update?: <key extends keyof itemMap & string, result>(
-    key: key,
-    fn: (current: itemMap[key] | null) => Change<itemMap[key], result>,
-  ) => Promise<result>
+  update?: Update<itemMap>
+}
+
+export type AtomicStore<itemMap extends StoreItemMap = StoreItemMap> = Omit<
+  Store<itemMap>,
+  'update'
+> & {
+  update: Update<itemMap>
 }
 
 /** Creates a {@link Store} from an existing implementation. */
@@ -35,6 +47,8 @@ export function from<store extends Store>(store: store): store {
 }
 
 /** Wraps a Cloudflare KV namespace. */
+export function cloudflare(kv: cloudflare.AtomicParameters): AtomicStore
+export function cloudflare(kv: cloudflare.Parameters): Store
 export function cloudflare(kv: cloudflare.Parameters): Store {
   return from({
     async get(key) {
@@ -73,10 +87,14 @@ export declare namespace cloudflare {
       fn: (current: string | null) => Change<string, result>,
     ) => Promise<result>
   }
+
+  export type AtomicParameters = Omit<Parameters, 'update'> & {
+    update: NonNullable<Parameters['update']>
+  }
 }
 
 /** In-memory store backed by a `Map`. JSON-roundtrips values to match production behavior. */
-export function memory(): Store {
+export function memory(): AtomicStore {
   const store = new Map<string, string>()
   return from({
     async get(key) {
@@ -101,6 +119,8 @@ export function memory(): Store {
 }
 
 /** Wraps a standard Redis client (ioredis, node-redis, Valkey). */
+export function redis(client: redis.AtomicParameters): AtomicStore
+export function redis(client: redis.Parameters): Store
 export function redis(client: redis.Parameters): Store {
   return from({
     async get(key) {
@@ -139,9 +159,15 @@ export declare namespace redis {
       fn: (current: string | null) => Change<string, result>,
     ) => Promise<result>
   }
+
+  export type AtomicParameters = Omit<Parameters, 'update'> & {
+    update: NonNullable<Parameters['update']>
+  }
 }
 
 /** Wraps an Upstash Redis instance (e.g. Vercel KV). */
+export function upstash(redis: upstash.AtomicParameters): AtomicStore
+export function upstash(redis: upstash.Parameters): Store
 export function upstash(redis: upstash.Parameters): Store {
   return from({
     async get(key) {
@@ -172,5 +198,9 @@ export declare namespace upstash {
       key: string,
       fn: (current: unknown | null) => Change<unknown, result>,
     ) => Promise<result>
+  }
+
+  export type AtomicParameters = Omit<Parameters, 'update'> & {
+    update: NonNullable<Parameters['update']>
   }
 }
