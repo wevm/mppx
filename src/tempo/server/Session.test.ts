@@ -4579,7 +4579,7 @@ function withFaultHooks(store: Store.AtomicStore, options: { failPutAt: number }
       throw new Error(`simulated store crash before persisting key ${key}`)
   }
 
-  return Store.from({
+  return Store.from<Store.AtomicStore>({
     get: (key) => store.get(key),
     delete: async (key) => {
       maybeFail(key)
@@ -4589,7 +4589,7 @@ function withFaultHooks(store: Store.AtomicStore, options: { failPutAt: number }
       maybeFail(key)
       await store.put(key, value)
     },
-    async update(key, fn) {
+    update(key, fn) {
       return store.update(key, (current) => {
         const change = fn(current)
         if (change.op !== 'noop') maybeFail(key)
@@ -4613,13 +4613,13 @@ function withReadDropHooks(store: Store.AtomicStore) {
     return current
   }
 
-  const wrapped = Store.from({
+  const wrapped = Store.from<Store.AtomicStore>({
     async get(key) {
       return readOrDrop(key, await store.get(key))
     },
     put: (key, value) => store.put(key, value),
     delete: (key) => store.delete(key),
-    async update(key, fn) {
+    update(key, fn) {
       return store.update(key, (current) => fn(readOrDrop(key, current)))
     },
   })

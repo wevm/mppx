@@ -3,6 +3,16 @@
  *
  * Modeled after Cloudflare KV's API (`get`/`put`/`delete`).
  * Implementations handle serialization internally.
+ *
+ * ## Type architecture
+ *
+ * Uses a two-slot generic pattern inspired by Viem's `Client` type:
+ *
+ * - `itemMap` — constrains keys and their value types
+ * - `extended` — accumulates additional capabilities (e.g., atomic `update`)
+ *
+ * `AtomicStore` is a type alias that fills the `extended` slot with
+ * `AtomicActions`, just like Viem's `PublicClient = Client<..., PublicActions>`.
  */
 import { Json } from 'ox'
 
@@ -37,35 +47,47 @@ export type Update<itemMap extends StoreItemMap = StoreItemMap> = <
   fn: (current: itemMap[key] | null) => Change<itemMap[key], result>,
 ) => Promise<result>
 
-export type Store<itemMap extends StoreItemMap = StoreItemMap> = {
+/** Base key-value actions available on every {@link Store}. */
+export type StoreActions<itemMap extends StoreItemMap = StoreItemMap> = {
   get: <key extends keyof itemMap & string>(key: key) => Promise<itemMap[key] | null>
   put: <key extends keyof itemMap & string>(key: key, value: itemMap[key]) => Promise<void>
   delete: <key extends keyof itemMap & string>(key: key) => Promise<void>
-  /**
-   * Atomically reads the current value for `key`, computes the next operation,
-   * and commits it before returning `result`.
-   *
-   * Implementations may retry `fn`, so it must be synchronous and free of side effects.
-   */
-  update?: Update<itemMap>
+}
+
+/** Atomic actions that can be provided via the `extended` slot. */
+export type AtomicActions<itemMap extends StoreItemMap = StoreItemMap> = {
+  update: Update<itemMap>
 }
 
 /**
- * A {@link Store} whose {@link Update} method is guaranteed to exist.
+ * Async key-value store.
+ *
+ * The second generic `extended` accumulates additional capabilities
+ * (like {@link AtomicActions}) without structural patching.
+ */
+export type Store<
+  itemMap extends StoreItemMap = StoreItemMap,
+  extended extends Record<string, unknown> | undefined = undefined,
+> = StoreActions<itemMap> & (extended extends Record<string, unknown> ? extended : unknown)
+
+/**
+ * A {@link Store} whose atomic {@link Update} method is guaranteed to exist.
  *
  * Use this when atomicity is required (e.g., replay protection, channel
  * deductions). Factory functions return `AtomicStore` when the backing
  * adapter provides an `update` implementation.
+ *
+ * Equivalent to `Store<itemMap, AtomicActions<itemMap>>`.
  */
-export type AtomicStore<itemMap extends StoreItemMap = StoreItemMap> = Omit<
-  Store<itemMap>,
-  'update'
-> & {
-  update: Update<itemMap>
-}
+export type AtomicStore<itemMap extends StoreItemMap = StoreItemMap> = Store<
+  itemMap,
+  AtomicActions<itemMap>
+>
 
 /** Creates a {@link Store} from an existing implementation. */
-export function from<store extends Store>(store: store): store {
+export function from<store extends Store>(store: store): store
+export function from<store extends AtomicStore>(store: store): store
+export function from(store: Store | AtomicStore) {
   return store
 }
 
@@ -76,7 +98,7 @@ function wrapJsonUpdate(
         fn: (current: string | null) => Change<string, result>,
       ) => Promise<result>)
     | undefined,
-): { update: Update } | {} {
+): AtomicActions | {} {
   if (!update) return {}
   return {
     async update(key, fn) {
@@ -87,7 +109,7 @@ function wrapJsonUpdate(
         return { ...change, value: Json.stringify(change.value) }
       })
     },
-  }
+  } satisfies AtomicActions
 }
 
 /** Wraps a Cloudflare KV namespace. */
@@ -202,11 +224,11 @@ export function upstash(redis: upstash.Parameters): Store {
       await redis.del(key)
     },
     ...(redis.update
-      ? {
-          async update(key, fn) {
-            return redis.update!(key, fn)
+      ? ({
+          async update(key: string, fn: (current: unknown) => Change<unknown, unknown>) {
+            return redis.update!(key, fn as any)
           },
-        }
+        } satisfies AtomicActions)
       : {}),
   })
 }
