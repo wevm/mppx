@@ -13,10 +13,10 @@
     "@remix-run/node-fetch-server": "latest",
     "@stripe/stripe-js": "^8.7.0",
     "@types/node": "latest",
+    "@typescript/native-preview": "latest",
     "mppx": "latest",
     "stripe": "^17.7.0",
-    "@typescript/native-preview": "latest",
     "typescript": "latest",
-    "vite": "latest"
+    "vite": "8.0.5"
   }
 }

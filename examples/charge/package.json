@@ -11,11 +11,11 @@
   "dependencies": {
     "@remix-run/node-fetch-server": "latest",
     "@types/node": "latest",
+    "@typescript/native-preview": "latest",
     "bun": "latest",
     "mppx": "latest",
-    "@typescript/native-preview": "latest",
     "typescript": "latest",
     "viem": "latest",
-    "vite": "latest"
+    "vite": "8.0.5"
   }
 }

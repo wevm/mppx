@@ -22,9 +22,9 @@
   "devDependencies": {
     "@types/react": "latest",
     "@types/react-dom": "latest",
-    "@vitejs/plugin-react": "latest",
     "@typescript/native-preview": "latest",
+    "@vitejs/plugin-react": "latest",
     "typescript": "latest",
-    "vite": "latest"
+    "vite": "8.0.5"
   }
 }

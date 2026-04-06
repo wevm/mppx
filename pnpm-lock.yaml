@@ -115,6 +115,9 @@ importers:
       viem:
         specifier: ^2.47.5
         version: 2.47.6(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.3.6)
+      vite:
+        specifier: ^8.0.5
+        version: 8.0.5(@types/node@25.5.0)(esbuild@0.27.2)(tsx@4.21.0)(yaml@2.8.3)
       vp:
         specifier: npm:vite-plus@~0.1.14
         version: vite-plus@0.1.14(@types/node@25.5.0)(bufferutil@4.1.0)(esbuild@0.27.2)(tsx@4.21.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(vite@8.0.5(@types/node@25.5.0)(esbuild@0.27.2)(tsx@4.21.0)(yaml@2.8.3))(yaml@2.8.3)
@@ -146,7 +149,7 @@ importers:
         specifier: ^2.47.5
         version: 2.47.6(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.3.6)
       vite:
-        specifier: latest
+        specifier: 8.0.5
         version: 8.0.5(@types/node@25.5.0)(esbuild@0.27.2)(tsx@4.21.0)(yaml@2.8.3)
 
   examples/charge-wagmi:
@@ -195,7 +198,7 @@ importers:
         specifier: ~5.9.3
         version: 5.9.3
       vite:
-        specifier: latest
+        specifier: 8.0.5
         version: 8.0.5(@types/node@25.5.0)(esbuild@0.27.2)(tsx@4.21.0)(yaml@2.8.3)
 
   examples/session/multi-fetch:
@@ -222,7 +225,7 @@ importers:
         specifier: ^2.47.5
         version: 2.47.6(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.3.6)
       vite:
-        specifier: latest
+        specifier: 8.0.5
         version: 8.0.5(@types/node@25.5.0)(esbuild@0.27.2)(tsx@4.21.0)(yaml@2.8.3)
 
   examples/session/sse:
@@ -249,7 +252,7 @@ importers:
         specifier: ^2.47.5
         version: 2.47.6(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.3.6)
       vite:
-        specifier: latest
+        specifier: 8.0.5
         version: 8.0.5(@types/node@25.5.0)(esbuild@0.27.2)(tsx@4.21.0)(yaml@2.8.3)
 
   examples/stripe:
@@ -276,7 +279,7 @@ importers:
         specifier: ~5.9.3
         version: 5.9.3
       vite:
-        specifier: latest
+        specifier: 8.0.5
         version: 8.0.5(@types/node@25.5.0)(esbuild@0.27.2)(tsx@4.21.0)(yaml@2.8.3)
 
   src/stripe/server/internal/html:
