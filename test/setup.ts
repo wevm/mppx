@@ -8,12 +8,35 @@ import { rpcUrl } from './tempo/prool.js'
 import { accounts, asset, client, fundAccount } from './tempo/viem.js'
 
 const stopTimeoutMs = 2_000
+const warmupAttempts = 3
+const warmupRetryDelayMs = 1_000
+
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+async function warmupLocalnet() {
+  let lastError: unknown
+
+  for (let attempt = 1; attempt <= warmupAttempts; attempt++) {
+    try {
+      await sendTransactionSync(client, {})
+      return
+    } catch (error) {
+      lastError = error
+      if (attempt === warmupAttempts) break
+      await sleep(warmupRetryDelayMs)
+    }
+  }
+
+  throw lastError
+}
 
 beforeAll(async () => {
   if (nodeEnv !== 'localnet') return
 
   // Send noop tx to trigger block.
-  await sendTransactionSync(client, {})
+  await warmupLocalnet()
 
   // Mint liquidity for fee tokens.
   await Promise.all(
