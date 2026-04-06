@@ -93,18 +93,21 @@ export type ChannelStore = {
    * When not implemented, callers fall back to polling.
    */
   waitForUpdate?(channelId: Hex): Promise<void>
+
+  /**
+   * Atomic read-modify-write that returns the callback's `result` directly.
+   *
+   * Used by {@link deductFromChannel} to atomically compute the deduction
+   * outcome. When backed by `Store.update()`, this delegates to the store's
+   * native atomic primitive.
+   */
+  updateChannelResult?<result>(
+    channelId: Hex,
+    fn: (current: State | null) => Store.Change<State, result>,
+  ): Promise<result>
 }
 
 export type DeductResult = { ok: true; channel: State } | { ok: false; channel: State }
-
-const updateChannelResult = Symbol('ChannelStore.updateResult')
-
-type InternalChannelStore = ChannelStore & {
-  [updateChannelResult]?: <result>(
-    channelId: Hex,
-    fn: (current: State | null) => Store.Change<State, result>,
-  ) => Promise<result>
-}
 
 /**
  * Atomically deduct `amount` from a channel's available balance.
@@ -118,9 +121,8 @@ export async function deductFromChannel(
   channelId: Hex,
   amount: bigint,
 ): Promise<DeductResult> {
-  const internalStore = store as InternalChannelStore
-  if (internalStore[updateChannelResult]) {
-    const result = await internalStore[updateChannelResult]<DeductResult | null>(
+  if (store.updateChannelResult) {
+    const result = await store.updateChannelResult<DeductResult | null>(
       channelId,
       (current): Store.Change<State, DeductResult | null> => {
         if (!current) return { op: 'noop', result: null }
@@ -258,7 +260,7 @@ export function fromStore(store: Store.Store): ChannelStore {
     },
   }
 
-  ;(cs as InternalChannelStore)[updateChannelResult] = updateResult
+  cs.updateChannelResult = updateResult
 
   storeCache.set(store, cs)
   return cs
