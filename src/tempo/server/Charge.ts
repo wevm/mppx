@@ -75,268 +75,305 @@ export function charge<const parameters extends charge.Parameters>(
   })
 
   type Defaults = charge.DeriveDefaults<parameters>
-  return Method.toServer<typeof Methods.charge, Defaults>(Methods.charge, {
-    defaults: {
-      amount,
-      currency,
-      decimals,
-      description,
-      externalId,
-      memo,
-      recipient,
-    } as unknown as Defaults,
+  type ResolvedRequest = z.input<typeof Methods.charge.schema.request>
+  return Method.toServer<typeof Methods.charge, Defaults, undefined, ResolvedRequest>(
+    Methods.charge,
+    {
+      defaults: {
+        amount,
+        currency,
+        decimals,
+        description,
+        externalId,
+        memo,
+        recipient,
+      } as unknown as Defaults,
 
-    html: html
-      ? {
-          config: {},
-          content: htmlContent,
-          formatAmount: async (request: z.output<typeof Methods.charge.schema.request>) => {
-            try {
-              const chainId = request.methodDetails?.chainId
-              if (chainId === undefined) throw new Error('no chainId')
-              const client = await getClient({ chainId })
-              const metadata = await Actions.token.getMetadata(client, {
-                token: request.currency as `0x${string}`,
-              })
-              const symbol =
-                new Intl.NumberFormat('en', {
-                  style: 'currency',
-                  currency: metadata.currency,
-                  currencyDisplay: 'narrowSymbol',
+      html: html
+        ? {
+            config: {},
+            content: htmlContent,
+            formatAmount: async (request: z.output<typeof Methods.charge.schema.request>) => {
+              try {
+                const chainId = request.methodDetails?.chainId
+                if (chainId === undefined) throw new Error('no chainId')
+                const client = await getClient({ chainId })
+                const metadata = await Actions.token.getMetadata(client, {
+                  token: request.currency as `0x${string}`,
                 })
-                  .formatToParts(0)
-                  .find((p) => p.type === 'currency')?.value ?? metadata.currency
-              return `${symbol}${formatUnits(BigInt(request.amount), metadata.decimals)}`
-            } catch {
-              return `$${request.amount}`
-            }
-          },
-          text: typeof html === 'object' ? html.text : undefined,
-          theme: typeof html === 'object' ? html.theme : undefined,
-        }
-      : undefined,
-
-    // TODO: dedupe `{charge,session}.request`
-    async request({ credential, request }) {
-      const chainId = await (async () => {
-        if (request.chainId) return request.chainId
-        if (parameters.testnet) return defaults.chainId.testnet
-        return (await getClient({})).chain?.id
-      })()
-
-      const client = await (async () => {
-        try {
-          return await getClient({ chainId })
-        } catch {
-          throw new Error(`No client configured with chainId ${chainId}.`)
-        }
-      })()
-      if (client.chain?.id !== chainId)
-        throw new Error(`Client not configured with chainId ${chainId}.`)
-
-      const resolvedFeePayer = (() => {
-        const account = typeof request.feePayer === 'object' ? request.feePayer : feePayer
-        const requested = request.feePayer !== false && (account ?? feePayer ?? feePayerUrl)
-        if (credential) return account
-        if (requested) return true
-        return undefined
-      })()
-
-      return {
-        ...request,
-        chainId,
-        feePayer: resolvedFeePayer,
-        memo: request.memo || undefined,
-      }
-    },
-
-    async verify({ credential, request }) {
-      const { challenge } = credential
-      const resolvedRequest = Methods.charge.schema.request.parse(request)
-      const chainId = resolvedRequest.methodDetails?.chainId ?? request.chainId
-      const feePayer = request.feePayer
-
-      const client = await getClient({ chainId })
-
-      const { amount, methodDetails } = resolvedRequest
-      const expires = challenge.expires
-
-      const currency = resolvedRequest.currency as `0x${string}`
-      const recipient = resolvedRequest.recipient as `0x${string}`
-
-      Expires.assert(expires, challenge.id)
-
-      const memo = methodDetails?.memo as `0x${string}` | undefined
-
-      const payload = credential.payload
-      const isZeroAmount = BigInt(amount) === 0n
-
-      if (isZeroAmount && payload.type !== 'proof')
-        throw new MismatchError('Zero-amount challenges require a proof credential.', {})
-
-      switch (payload.type) {
-        case 'hash': {
-          const hash = payload.hash as `0x${string}`
-          await assertHashUnused(store, hash)
-
-          const expectedTransfers = getExpectedTransfers({ amount, memo, methodDetails, recipient })
-          const receipt = await getTransactionReceipt(client, { hash })
-          const matchedLogs = assertTransferLogs(receipt, {
-            currency,
-            sender: receipt.from,
-            transfers: expectedTransfers,
-          })
-
-          // Only verify challenge binding when using auto-generated attribution memos.
-          // Explicit memos (set by the server) are strictly matched by assertTransferLogs
-          // but are NOT challenge-bound — callers that set explicit memos are responsible
-          // for ensuring memo uniqueness per challenge to prevent cross-challenge hash reuse.
-          if (!memo)
-            assertChallengeBoundMemo(matchedLogs, {
-              challengeId: challenge.id,
-              realm: challenge.realm,
-            })
-
-          await markHashUsed(store, hash)
-
-          return toReceipt(receipt)
-        }
-
-        case 'proof': {
-          if (!isZeroAmount)
-            throw new MismatchError(
-              'Proof credentials are only valid for zero-amount challenges.',
-              {},
-            )
-
-          const expectedSource = credential.source
-          if (!expectedSource)
-            throw new MismatchError('Proof credential must include a source.', {})
-
-          const resolvedChainId = challenge.request.methodDetails?.chainId ?? chainId!
-          const source = Proof.parseProofSource(expectedSource)
-
-          if (!source || source.chainId !== resolvedChainId) {
-            throw new MismatchError('Proof credential source is invalid.', {})
+                const symbol =
+                  new Intl.NumberFormat('en', {
+                    style: 'currency',
+                    currency: metadata.currency,
+                    currencyDisplay: 'narrowSymbol',
+                  })
+                    .formatToParts(0)
+                    .find((p) => p.type === 'currency')?.value ?? metadata.currency
+                return `${symbol}${formatUnits(BigInt(request.amount), metadata.decimals)}`
+              } catch {
+                return `$${request.amount}`
+              }
+            },
+            text: typeof html === 'object' ? html.text : undefined,
+            theme: typeof html === 'object' ? html.theme : undefined,
           }
+        : undefined,
 
-          const valid = await verifyTypedData(client, {
-            address: source.address,
-            domain: Proof.domain(resolvedChainId),
-            types: Proof.types,
-            primaryType: 'Proof',
-            message: Proof.message(challenge.id),
-            signature: payload.signature as `0x${string}`,
-          })
-          if (!valid) throw new MismatchError('Proof signature does not match source.', {})
+      // TODO: dedupe `{charge,session}.challenge`
+      async challenge({ request }) {
+        const chainId = await (async () => {
+          if (request.chainId) return request.chainId
+          if (parameters.testnet) return defaults.chainId.testnet
+          return (await getClient({})).chain?.id
+        })()
 
-          if (proofStore) {
-            await assertProofUnused(proofStore, challenge.id)
-            await markProofUsed(proofStore, challenge.id)
+        const client = await (async () => {
+          try {
+            return await getClient({ chainId })
+          } catch {
+            throw new Error(`No client configured with chainId ${chainId}.`)
           }
+        })()
+        if (client.chain?.id !== chainId)
+          throw new Error(`Client not configured with chainId ${chainId}.`)
 
-          return {
-            method: 'tempo',
-            status: 'success',
-            timestamp: new Date().toISOString(),
-            reference: challenge.id,
-          } as const
+        const resolvedFeePayer = (() => {
+          const requested =
+            request.feePayer !== false && (request.feePayer ?? feePayer ?? feePayerUrl)
+          if (requested) return true
+          return undefined
+        })()
+
+        return {
+          ...request,
+          chainId,
+          feePayer: resolvedFeePayer,
+          memo: request.memo || undefined,
         }
+      },
 
-        case 'transaction': {
-          const serializedTransaction = payload.signature as Transaction.TransactionSerializedTempo
+      async request({ requestInput }) {
+        const chainId = await (async () => {
+          if (requestInput.chainId) return requestInput.chainId
+          if (parameters.testnet) return defaults.chainId.testnet
+          return (await getClient({})).chain?.id
+        })()
 
-          // Pre-broadcast dedup: catch exact byte-for-byte replays early.
-          const hash = keccak256(serializedTransaction)
-          await assertHashUnused(store, hash)
-          await markHashUsed(store, hash)
+        const client = await (async () => {
+          try {
+            return await getClient({ chainId })
+          } catch {
+            throw new Error(`No client configured with chainId ${chainId}.`)
+          }
+        })()
+        if (client.chain?.id !== chainId)
+          throw new Error(`Client not configured with chainId ${chainId}.`)
 
-          if (!FeePayer.isTempoTransaction(serializedTransaction))
-            throw new MismatchError('Only Tempo (0x76/0x78) transactions are supported.', {})
+        const account = typeof requestInput.feePayer === 'object' ? requestInput.feePayer : feePayer
+        return {
+          ...requestInput,
+          chainId,
+          feePayer: account,
+          memo: requestInput.memo || undefined,
+        }
+      },
 
-          const transaction = Transaction.deserialize(serializedTransaction)
-          if (!transaction.signature || !transaction.from)
-            throw new MismatchError(
-              'Transaction must be signed by the sender before fee payer co-signing.',
-              {},
-            )
+      async verify({ envelope, request }) {
+        const { challenge, credential } = envelope
+        const resolvedRequest = Methods.charge.schema.request.parse(request)
+        const chainId = resolvedRequest.methodDetails?.chainId ?? request.chainId
+        const resolvedFeePayer = typeof request.feePayer === 'object' ? request.feePayer : undefined
 
-          const calls = (transaction.calls ?? []) as readonly {
-            data?: `0x${string}` | undefined
-            to?: `0x${string}` | undefined
-          }[]
-          const transfers = getExpectedTransfers({ amount, memo, methodDetails, recipient })
-          const isFeePayerTx = !!(feePayer || feePayerUrl) && methodDetails?.feePayer !== false
-          assertTransferCalls(calls, { currency, exactCount: isFeePayerTx, transfers })
+        const client = await getClient({ chainId })
 
-          if (isFeePayerTx)
-            FeePayer.validateCalls(transaction.calls, { amount, currency, recipient })
+        const { amount, methodDetails } = resolvedRequest
+        const expires = challenge.expires
 
-          const resolvedFeeToken =
-            transaction.feeToken ?? defaults.currency[chainId as keyof typeof defaults.currency]
+        const currency = resolvedRequest.currency as `0x${string}`
+        const recipient = resolvedRequest.recipient as `0x${string}`
 
-          const serializedTransaction_final = await (async () => {
-            if (feePayer && methodDetails?.feePayer !== false) {
-              return signTransaction(client, {
-                ...transaction,
-                account: feePayer,
-                feePayer,
-                feeToken: resolvedFeeToken,
-              } as never)
-            }
-            return serializedTransaction
-          })()
+        Expires.assert(expires, challenge.id)
 
-          if (waitForConfirmation) {
-            const receipt = await sendRawTransactionSync(client, {
-              serializedTransaction: serializedTransaction_final,
+        const memo = methodDetails?.memo as `0x${string}` | undefined
+
+        const payload = credential.payload
+        const isZeroAmount = BigInt(amount) === 0n
+
+        if (isZeroAmount && payload.type !== 'proof')
+          throw new MismatchError('Zero-amount challenges require a proof credential.', {})
+
+        switch (payload.type) {
+          case 'hash': {
+            const hash = payload.hash as `0x${string}`
+            await assertHashUnused(store, hash)
+
+            const expectedTransfers = getExpectedTransfers({
+              amount,
+              memo,
+              methodDetails,
+              recipient,
             })
-            assertTransferLogs(receipt, {
+            const receipt = await getTransactionReceipt(client, { hash })
+            const matchedLogs = assertTransferLogs(receipt, {
               currency,
-              sender: transaction.from! as `0x${string}`,
-              transfers,
+              sender: receipt.from,
+              transfers: expectedTransfers,
             })
-            // Post-broadcast dedup: catch malleable input variants
-            // (different serialized bytes, same underlying tx) that
-            // bypass the pre-broadcast check. Skip if the broadcast
-            // hash matches the input hash (already stored above).
-            if (receipt.transactionHash.toLowerCase() !== hash.toLowerCase()) {
-              await assertHashUnused(store, receipt.transactionHash)
-              await markHashUsed(store, receipt.transactionHash)
-            }
+
+            // Only verify challenge binding when using auto-generated attribution memos.
+            // Explicit memos (set by the server) are strictly matched by assertTransferLogs
+            // but are NOT challenge-bound — callers that set explicit memos are responsible
+            // for ensuring memo uniqueness per challenge to prevent cross-challenge hash reuse.
+            if (!memo)
+              assertChallengeBoundMemo(matchedLogs, {
+                challengeId: challenge.id,
+                realm: challenge.realm,
+              })
+
+            await markHashUsed(store, hash)
+
             return toReceipt(receipt)
-          } else {
-            // Optimistic path: simulate to catch obvious reverts, then broadcast
-            // without waiting for on-chain confirmation. The returned receipt
-            // assumes success — callers opt into this risk via waitForConfirmation: false.
-            await viem_call(client, {
-              ...transaction,
-              account: transaction.from,
-              feeToken: resolvedFeeToken,
-              calls: transaction.calls,
-            } as never)
-            const reference = await sendRawTransaction(client, {
-              serializedTransaction: serializedTransaction_final,
-            })
-            // Post-broadcast dedup: same
-            if (reference.toLowerCase() !== hash.toLowerCase()) {
-              await assertHashUnused(store, reference)
-              await markHashUsed(store, reference)
+          }
+
+          case 'proof': {
+            if (!isZeroAmount)
+              throw new MismatchError(
+                'Proof credentials are only valid for zero-amount challenges.',
+                {},
+              )
+
+            const expectedSource = credential.source
+            if (!expectedSource)
+              throw new MismatchError('Proof credential must include a source.', {})
+
+            const resolvedChainId = challenge.request.methodDetails?.chainId ?? chainId!
+            const source = Proof.parseProofSource(expectedSource)
+
+            if (!source || source.chainId !== resolvedChainId) {
+              throw new MismatchError('Proof credential source is invalid.', {})
             }
+
+            const valid = await verifyTypedData(client, {
+              address: source.address,
+              domain: Proof.domain(resolvedChainId),
+              types: Proof.types,
+              primaryType: 'Proof',
+              message: Proof.message(challenge.id),
+              signature: payload.signature as `0x${string}`,
+            })
+            if (!valid) throw new MismatchError('Proof signature does not match source.', {})
+
+            if (proofStore) {
+              await assertProofUnused(proofStore, challenge.id)
+              await markProofUsed(proofStore, challenge.id)
+            }
+
             return {
               method: 'tempo',
               status: 'success',
               timestamp: new Date().toISOString(),
-              reference,
+              reference: challenge.id,
             } as const
           }
-        }
 
-        default:
-          throw new Error(`Unsupported credential type "${(payload as { type: string }).type}".`)
-      }
+          case 'transaction': {
+            const serializedTransaction =
+              payload.signature as Transaction.TransactionSerializedTempo
+
+            // Pre-broadcast dedup: catch exact byte-for-byte replays early.
+            const hash = keccak256(serializedTransaction)
+            await assertHashUnused(store, hash)
+            await markHashUsed(store, hash)
+
+            if (!FeePayer.isTempoTransaction(serializedTransaction))
+              throw new MismatchError('Only Tempo (0x76/0x78) transactions are supported.', {})
+
+            const transaction = Transaction.deserialize(serializedTransaction)
+            if (!transaction.signature || !transaction.from)
+              throw new MismatchError(
+                'Transaction must be signed by the sender before fee payer co-signing.',
+                {},
+              )
+
+            const calls = (transaction.calls ?? []) as readonly {
+              data?: `0x${string}` | undefined
+              to?: `0x${string}` | undefined
+            }[]
+            const transfers = getExpectedTransfers({ amount, memo, methodDetails, recipient })
+            const isFeePayerTx =
+              !!(resolvedFeePayer || feePayerUrl) && methodDetails?.feePayer !== false
+            assertTransferCalls(calls, { currency, exactCount: isFeePayerTx, transfers })
+
+            if (isFeePayerTx)
+              FeePayer.validateCalls(transaction.calls, { amount, currency, recipient })
+
+            const resolvedFeeToken =
+              transaction.feeToken ??
+              (chainId !== undefined ? defaults.resolveCurrency({ chainId }) : undefined)
+
+            const serializedTransaction_final = await (async () => {
+              if (resolvedFeePayer && methodDetails?.feePayer !== false) {
+                return signTransaction(client, {
+                  ...transaction,
+                  account: resolvedFeePayer,
+                  feePayer: resolvedFeePayer,
+                  feeToken: resolvedFeeToken,
+                } as never)
+              }
+              return serializedTransaction
+            })()
+
+            if (waitForConfirmation) {
+              const receipt = await sendRawTransactionSync(client, {
+                serializedTransaction: serializedTransaction_final,
+              })
+              assertTransferLogs(receipt, {
+                currency,
+                sender: transaction.from! as `0x${string}`,
+                transfers,
+              })
+              // Post-broadcast dedup: catch malleable input variants
+              // (different serialized bytes, same underlying tx) that
+              // bypass the pre-broadcast check. Skip if the broadcast
+              // hash matches the input hash (already stored above).
+              if (receipt.transactionHash.toLowerCase() !== hash.toLowerCase()) {
+                await assertHashUnused(store, receipt.transactionHash)
+                await markHashUsed(store, receipt.transactionHash)
+              }
+              return toReceipt(receipt)
+            } else {
+              // Optimistic path: simulate to catch obvious reverts, then broadcast
+              // without waiting for on-chain confirmation. The returned receipt
+              // assumes success — callers opt into this risk via waitForConfirmation: false.
+              await viem_call(client, {
+                ...transaction,
+                account: transaction.from,
+                feeToken: resolvedFeeToken,
+                calls: transaction.calls,
+              } as never)
+              const reference = await sendRawTransaction(client, {
+                serializedTransaction: serializedTransaction_final,
+              })
+              // Post-broadcast dedup: same
+              if (reference.toLowerCase() !== hash.toLowerCase()) {
+                await assertHashUnused(store, reference)
+                await markHashUsed(store, reference)
+              }
+              return {
+                method: 'tempo',
+                status: 'success',
+                timestamp: new Date().toISOString(),
+                reference,
+              } as const
+            }
+          }
+
+          default:
+            throw new Error(`Unsupported credential type "${(payload as { type: string }).type}".`)
+        }
+      },
     },
-  })
+  )
 }
 
 export declare namespace charge {

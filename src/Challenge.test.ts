@@ -56,7 +56,8 @@ describe('from', () => {
   // ---------------------------------------------------------------------------
   // HMAC Challenge ID Test Vectors
   //
-  // HMAC input: realm | method | intent | base64url(canonicalize(request)) | expires | digest
+  // HMAC input:
+  //   realm | method | intent | base64url(canonicalize(request)) | expires | digest
   // HMAC key:   UTF-8 bytes of secretKey
   // Output:     base64url(HMAC-SHA256(key, input), no padding)
   //
@@ -73,7 +74,7 @@ describe('from', () => {
         intent: 'charge',
         request: { amount: '1000000' },
       },
-      expectedId: 'X6v1eo7fJ76gAxqY0xN9Jd__4lUyDDYmriryOM-5FO4',
+      expectedId: 'SOfbA51LV3LCkGE7RbomqwXdbWVlrZwlW-Z9aOHolxw',
     },
     {
       label: 'with expires',
@@ -84,7 +85,7 @@ describe('from', () => {
         request: { amount: '1000000' },
         expires: '2025-01-06T12:00:00Z',
       },
-      expectedId: 'ChPX33RkKSZoSUyZcu8ai4hhkvjZJFkZVnvWs5s0iXI',
+      expectedId: 'R1ZSIwoIjkFhMCSzUGiCTesiigf5vV65EQ_3gVNtsNw',
     },
     {
       label: 'with digest',
@@ -95,7 +96,7 @@ describe('from', () => {
         request: { amount: '1000000' },
         digest: 'sha-256=X48E9qOokqqrvdts8nOJRJN3OWDUoyWxBf7kbu9DBPE',
       },
-      expectedId: 'JHB7EFsPVb-xsYCo8LHcOzeX1gfXWVoUSzQsZhKAfKM',
+      expectedId: 'AiMmBdsSOkOYpXTupMnzVnrzZbqMY_P2i80vENRUSN4',
     },
     {
       label: 'with expires and digest',
@@ -107,7 +108,7 @@ describe('from', () => {
         expires: '2025-01-06T12:00:00Z',
         digest: 'sha-256=X48E9qOokqqrvdts8nOJRJN3OWDUoyWxBf7kbu9DBPE',
       },
-      expectedId: 'm39jbWWCIfmfJZSwCfvKFFtBl0Qwf9X4nOmDb21peLA',
+      expectedId: 'FMBGqN7MzpKagHsCcartZM09CnUqv7UgmaCy45Ozgug',
     },
     {
       label: 'with description (not in HMAC input)',
@@ -118,7 +119,7 @@ describe('from', () => {
         request: { amount: '1000000' },
         description: 'Test payment',
       },
-      expectedId: 'X6v1eo7fJ76gAxqY0xN9Jd__4lUyDDYmriryOM-5FO4',
+      expectedId: 'SOfbA51LV3LCkGE7RbomqwXdbWVlrZwlW-Z9aOHolxw',
     },
     {
       label: 'with multi-field request',
@@ -128,7 +129,7 @@ describe('from', () => {
         intent: 'charge',
         request: { amount: '1000000', currency: '0x1234', recipient: '0xabcd' },
       },
-      expectedId: '_H5TOnnlW0zduQ5OhQ3EyLVze_TqxLDPda2CGZPZxOc',
+      expectedId: '5CXJi4bWMz2W54WjnlmoxnwTYe-JKwhw0z32ICQ65Es',
     },
     {
       label: 'with nested methodDetails in request',
@@ -138,7 +139,7 @@ describe('from', () => {
         intent: 'charge',
         request: { amount: '1000000', currency: '0x1234', methodDetails: { chainId: 42431 } },
       },
-      expectedId: 'TqujwpuDDg_zsWGINAd5XObO2rRe6uYufpqvtDmr6N8',
+      expectedId: 'eid66xXUZsj46Pb30AfAf7m5kPehgianI16rZ-QY8HU',
     },
     {
       label: 'with empty request',
@@ -148,7 +149,7 @@ describe('from', () => {
         intent: 'charge',
         request: {},
       },
-      expectedId: 'yLN7yChAejW9WNmb54HpJIWpdb1WWXeA3_aCx4dxmkU',
+      expectedId: '6kq-PYTyXtaGAHTHCVUrc_hIsAwLeskeQFtDZerMYhM',
     },
     {
       label: 'different realm',
@@ -158,7 +159,7 @@ describe('from', () => {
         intent: 'charge',
         request: { amount: '1000000' },
       },
-      expectedId: '3F5bOo2a9RUihdwKk4hGRvBvzQmVPBMDvW0YM-8GD00',
+      expectedId: '-gMjd8UeUvBcqUaUzarVj6ikH_YoDowpaNbEwK1Tmx8',
     },
     {
       label: 'different method',
@@ -168,7 +169,7 @@ describe('from', () => {
         intent: 'charge',
         request: { amount: '1000000' },
       },
-      expectedId: 'o0ra2sd7HcB4Ph0Vns69gRDUhSj5WNOnUopcDqKPLz4',
+      expectedId: 'DRH9ycmIlZ2lYUatIHCrxpm9K7ig5pniZ3ulleb7vl0',
     },
     {
       label: 'different intent',
@@ -178,7 +179,7 @@ describe('from', () => {
         intent: 'session',
         request: { amount: '1000000' },
       },
-      expectedId: 'aAY7_IEDzsznNYplhOSE8cERQxvjFcT4Lcn-7FHjLVE',
+      expectedId: 'INeBi93MhinvbwdUxeUUIaT5Q_ufgLKPYZb5Tg43A1o',
     },
   ] as const
 
@@ -709,7 +710,7 @@ describe('opaque', () => {
     expect(challenge.opaque).toEqual({})
   })
 
-  test('hmac: opaque affects challenge ID', () => {
+  test('hmac: opaque does not affect challenge ID', () => {
     const withMeta = Challenge.from({
       realm: 'api.example.com',
       method: 'tempo',
@@ -727,10 +728,10 @@ describe('opaque', () => {
       secretKey: 'test-secret',
     })
 
-    expect(withMeta.id).not.toBe(withoutMeta.id)
+    expect(withMeta.id).toBe(withoutMeta.id)
   })
 
-  test('hmac: different opaque values produce different IDs', () => {
+  test('hmac: different opaque values produce same ID', () => {
     const meta1 = Challenge.from({
       realm: 'api.example.com',
       method: 'tempo',
@@ -749,7 +750,7 @@ describe('opaque', () => {
       secretKey: 'test-secret',
     })
 
-    expect(meta1.id).not.toBe(meta2.id)
+    expect(meta1.id).toBe(meta2.id)
   })
 
   test('hmac: same opaque produces same ID', () => {
@@ -787,7 +788,7 @@ describe('opaque', () => {
     expect(Challenge.verify(challenge, { secretKey: 'my-secret' })).toBe(true)
   })
 
-  test('hmac: verify detects tampered opaque', () => {
+  test('hmac: tampered opaque is not detected by HMAC (opaque is not HMAC-bound)', () => {
     const challenge = Challenge.from({
       realm: 'api.example.com',
       method: 'tempo',
@@ -801,7 +802,7 @@ describe('opaque', () => {
       ...challenge,
       opaque: { pi: 'pi_TAMPERED' },
     }
-    expect(Challenge.verify(tampered, { secretKey: 'my-secret' })).toBe(false)
+    expect(Challenge.verify(tampered, { secretKey: 'my-secret' })).toBe(true)
   })
 
   test('behavior: multiple key-value pairs in opaque', () => {

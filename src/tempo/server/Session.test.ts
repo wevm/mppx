@@ -4183,8 +4183,12 @@ describe('session request and verify guardrails', () => {
     } as session.Parameters)
 
     await expect(
-      server.request!({
-        credential: null,
+      server.challenge!({
+        capturedRequest: {
+          headers: new Headers(),
+          method: 'GET',
+          url: new URL('https://example.com'),
+        },
         request: makeRequest({ chainId: 31337 }),
       } as never),
     ).rejects.toThrow('No client configured with chainId 31337.')
@@ -4200,14 +4204,18 @@ describe('session request and verify guardrails', () => {
     } as session.Parameters)
 
     await expect(
-      server.request!({
-        credential: null,
+      server.challenge!({
+        capturedRequest: {
+          headers: new Headers(),
+          method: 'GET',
+          url: new URL('https://example.com'),
+        },
         request: makeRequest({ chainId: 4217 }),
       } as never),
     ).rejects.toThrow('Client not configured with chainId 4217.')
   })
 
-  test('request normalizes fee-payer to boolean for challenge issuance and account for verification', async () => {
+  test('challenge normalizes fee-payer to boolean for challenge issuance', async () => {
     const client = createMockClient(4217)
     const server = session({
       store: Store.memory(),
@@ -4217,20 +4225,18 @@ describe('session request and verify guardrails', () => {
       getClient: async () => client,
     } as session.Parameters)
 
-    const challengeRequest = await server.request!({
-      credential: null,
+    const challengeRequest = await server.challenge!({
+      capturedRequest: {
+        headers: new Headers(),
+        method: 'GET',
+        url: new URL('https://example.com'),
+      },
       request: makeRequest(),
     } as never)
     expect(challengeRequest.feePayer).toBe(true)
-
-    const verificationRequest = await server.request!({
-      credential: { challenge: {}, payload: {} } as never,
-      request: makeRequest({ feePayer: accounts[1] }),
-    } as never)
-    expect(verificationRequest.feePayer).toBe(accounts[1])
   })
 
-  test('request allows callers to explicitly disable fee-payer', async () => {
+  test('challenge allows callers to explicitly disable fee-payer', async () => {
     const client = createMockClient(4217)
     const server = session({
       store: Store.memory(),
@@ -4240,14 +4246,18 @@ describe('session request and verify guardrails', () => {
       getClient: async () => client,
     } as session.Parameters)
 
-    const normalized = await server.request!({
-      credential: null,
+    const normalized = await server.challenge!({
+      capturedRequest: {
+        headers: new Headers(),
+        method: 'GET',
+        url: new URL('https://example.com'),
+      },
       request: makeRequest({ feePayer: false }),
     } as never)
     expect(normalized.feePayer).toBeUndefined()
   })
 
-  test('request leaves escrowContract undefined when chain has no configured default', async () => {
+  test('challenge leaves escrowContract undefined when chain has no configured default', async () => {
     const unknownChainId = 999_999
     const client = createMockClient(unknownChainId)
     const server = session({
@@ -4257,8 +4267,12 @@ describe('session request and verify guardrails', () => {
       getClient: async () => client,
     } as session.Parameters)
 
-    const normalized = await server.request!({
-      credential: null,
+    const normalized = await server.challenge!({
+      capturedRequest: {
+        headers: new Headers(),
+        method: 'GET',
+        url: new URL('https://example.com'),
+      },
       request: makeRequest({ chainId: unknownChainId }),
     } as never)
 

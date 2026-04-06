@@ -78,7 +78,8 @@ export type FromMethods<methods extends readonly Method.Method[]> = {
  * Creates a challenge from the given parameters.
  *
  * If `secretKey` option is provided, the challenge ID is computed as HMAC-SHA256
- * over the challenge parameters (realm|method|intent|request|expires|digest),
+ * over the challenge binding input
+ * (`realm|method|intent|request|expires|digest`),
  * cryptographically binding the ID to its contents.
  *
  * @param parameters - Challenge parameters.
@@ -189,7 +190,7 @@ export declare namespace from {
  * Creates a validated challenge from a method intent.
  *
  * If `secretKey` option is provided, the challenge ID is computed as HMAC-SHA256
- * over the challenge parameters, cryptographically binding the ID to its contents.
+ * over the challenge binding input, cryptographically binding the ID to its contents.
  *
  * @param intent - The method intent to validate against.
  * @param parameters - Challenge parameters (realm, request, optional expires/digest, and id if no secretKey).
@@ -608,21 +609,29 @@ export function meta(challenge: Challenge): Record<string, string> | undefined {
   return challenge.opaque
 }
 
+const idBindingFields = ['realm', 'method', 'intent', 'request', 'expires', 'digest'] as const
+
+function idBindingSegments(
+  challenge: Omit<Challenge, 'id'>,
+): Record<(typeof idBindingFields)[number], string> {
+  return {
+    realm: challenge.realm,
+    method: challenge.method,
+    intent: challenge.intent,
+    request: PaymentRequest.serialize(challenge.request),
+    expires: challenge.expires ?? '',
+    digest: challenge.digest ?? '',
+  }
+}
+
 /** @internal Computes HMAC-SHA256 challenge ID from parameters. */
 function computeId(challenge: Omit<Challenge, 'id'>, options: { secretKey: string }): string {
   // Each field occupies a fixed positional slot joined by '|'. Optional fields
   // use an empty string when absent so the slot count is stable — this avoids
   // ambiguity between e.g. (expires set, no digest) vs (no expires, digest set)
   // and means adding a new optional field changes all HMACs exactly once.
-  const input = [
-    challenge.realm,
-    challenge.method,
-    challenge.intent,
-    PaymentRequest.serialize(challenge.request),
-    challenge.expires ?? '',
-    challenge.digest ?? '',
-    challenge.opaque ? PaymentRequest.serialize(challenge.opaque) : '',
-  ].join('|')
+  const segments = idBindingSegments(challenge)
+  const input = idBindingFields.map((field) => segments[field]).join('|')
 
   const key = Bytes.fromString(options.secretKey)
   const data = Bytes.fromString(input)
