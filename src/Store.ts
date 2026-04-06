@@ -69,6 +69,22 @@ export function from<store extends Store>(store: store): store {
   return store
 }
 
+function wrapJsonUpdate(
+  update: (<result>(key: string, fn: (current: string | null) => Change<string, result>) => Promise<result>) | undefined,
+): { update: Update } | {} {
+  if (!update) return {}
+  return {
+    async update(key, fn) {
+      return update(key, (current) => {
+        const parsed = current == null ? null : (Json.parse(current) as never)
+        const change = fn(parsed)
+        if (change.op !== 'set') return change
+        return { ...change, value: Json.stringify(change.value) }
+      })
+    },
+  }
+}
+
 /** Wraps a Cloudflare KV namespace. */
 export function cloudflare(kv: cloudflare.AtomicParameters): AtomicStore
 export function cloudflare(kv: cloudflare.Parameters): Store
@@ -85,18 +101,7 @@ export function cloudflare(kv: cloudflare.Parameters): Store {
     async delete(key) {
       await kv.delete(key)
     },
-    ...(kv.update
-      ? {
-          async update(key, fn) {
-            return kv.update!(key, (current) => {
-              const parsed = current == null ? null : (Json.parse(current) as never)
-              const change = fn(parsed)
-              if (change.op !== 'set') return change
-              return { ...change, value: Json.stringify(change.value) }
-            })
-          },
-        }
-      : {}),
+    ...wrapJsonUpdate(kv.update),
   })
 }
 
@@ -157,18 +162,7 @@ export function redis(client: redis.Parameters): Store {
     async delete(key) {
       await client.del(key)
     },
-    ...(client.update
-      ? {
-          async update(key, fn) {
-            return client.update!(key, (current) => {
-              const parsed = current == null ? null : (Json.parse(current) as never)
-              const change = fn(parsed)
-              if (change.op !== 'set') return change
-              return { ...change, value: Json.stringify(change.value) }
-            })
-          },
-        }
-      : {}),
+    ...wrapJsonUpdate(client.update),
   })
 }
 

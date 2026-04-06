@@ -177,8 +177,6 @@ export function charge<const parameters extends charge.Parameters>(
       switch (payload.type) {
         case 'hash': {
           const hash = payload.hash as `0x${string}`
-          await assertHashUnused(store, hash)
-
           const expectedTransfers = getExpectedTransfers({ amount, memo, methodDetails, recipient })
           const receipt = await getTransactionReceipt(client, { hash })
           const matchedLogs = assertTransferLogs(receipt, {
@@ -618,16 +616,6 @@ function getProofStoreKey(challengeId: string): `mppx:charge:${string}` {
   return `mppx:charge:proof:${challengeId}`
 }
 
-/** @internal */
-async function assertHashUnused(
-  store: Store.AtomicStore<charge.StoreItemMap>,
-  hash: `0x${string}`,
-): Promise<void> {
-  const seen = await store.get(getHashStoreKey(hash))
-  if (seen !== null)
-    throw new VerificationFailedError({ reason: 'Transaction hash has already been used' })
-}
-
 async function markHashUsed(
   store: Store.AtomicStore<charge.StoreItemMap>,
   hash: `0x${string}`,
@@ -643,10 +631,7 @@ async function releaseHashUse(
   store: Store.AtomicStore<charge.StoreItemMap>,
   hash: `0x${string}`,
 ): Promise<void> {
-  await store.update(getHashStoreKey(hash), (current) => {
-    if (current === null) return { op: 'noop', result: undefined }
-    return { op: 'delete', result: undefined }
-  })
+  await store.delete(getHashStoreKey(hash))
 }
 
 /** @internal */
