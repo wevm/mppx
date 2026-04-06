@@ -209,6 +209,25 @@ describe('channelStore', () => {
       await sleep(10)
       expect(ch1Resolved).toBe(false)
     })
+
+    test('resolves on successful deductFromChannel with atomic store.update', async () => {
+      const cs = ChannelStore.fromStore(Store.memory())
+      await seedChannel(cs, { highestVoucherAmount: 5_000_000n, spent: 0n })
+
+      let resolved = false
+      const waiter = cs.waitForUpdate!(channelId).then(() => {
+        resolved = true
+      })
+
+      await sleep(10)
+      expect(resolved).toBe(false)
+
+      const result = await ChannelStore.deductFromChannel(cs, channelId, 1_000_000n)
+      expect(result.ok).toBe(true)
+
+      await waiter
+      expect(resolved).toBe(true)
+    })
   })
 })
 
