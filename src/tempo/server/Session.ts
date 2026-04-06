@@ -35,6 +35,7 @@ import type { LooseOmit, NoExtraKeys } from '../../internal/types.js'
 import * as Method from '../../Method.js'
 import * as Store from '../../Store.js'
 import * as Client from '../../viem/Client.js'
+import type * as z from '../../zod.js'
 import * as Account from '../internal/account.js'
 import * as defaults from '../internal/defaults.js'
 import type * as types from '../internal/types.js'
@@ -137,8 +138,8 @@ export function session<const parameters extends session.Parameters>(
 
     transport: transport as never,
 
-    // TODO: dedupe `{charge,session}.request`
-    async request({ credential, request }) {
+    // TODO: dedupe `{charge,session}.challenge`
+    async challenge({ request }) {
       // Extract chainId from request or default.
       const chainId = await (async () => {
         if (request.chainId) return request.chainId
@@ -164,9 +165,8 @@ export function session<const parameters extends session.Parameters>(
 
       // Extract feePayer.
       const resolvedFeePayer = (() => {
-        const account = typeof request.feePayer === 'object' ? request.feePayer : feePayer
-        const requested = request.feePayer !== false && (account ?? feePayer ?? feePayerUrl)
-        if (credential) return account
+        const requested =
+          request.feePayer !== false && (request.feePayer ?? feePayer ?? feePayerUrl)
         if (requested) return true
         return undefined
       })()
@@ -179,10 +179,11 @@ export function session<const parameters extends session.Parameters>(
       }
     },
 
-    async verify({ credential, request }) {
-      const { challenge, payload } = credential as Credential.Credential<SessionCredentialPayload>
+    async verify({ envelope }) {
+      const { challenge, credential } = envelope
+      const { payload } = credential as Credential.Credential<SessionCredentialPayload>
 
-      const resolvedRequest = Methods.session.schema.request.parse(request)
+      const resolvedRequest = challenge.request as z.output<typeof Methods.session.schema.request>
       const methodDetails = resolvedRequest.methodDetails as SessionMethodDetails
       const client = await getClient({ chainId: methodDetails.chainId })
 
@@ -267,7 +268,9 @@ export function session<const parameters extends session.Parameters>(
     // through to serve content. GETs always fall through so auto-mode
     // clients (whose fetch wrapper bundles open+voucher into a single
     // GET retry) receive content as expected.
-    respond({ credential, input }) {
+    respond({ envelope }) {
+      const input = envelope.capturedRequest
+      const { credential } = envelope
       const { payload } = credential as Credential.Credential<SessionCredentialPayload>
 
       if (payload.action === 'close') return new Response(null, { status: 204 })

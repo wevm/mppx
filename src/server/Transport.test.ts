@@ -32,6 +32,42 @@ const receipt = Receipt.from({
   reference: '0xtxhash',
 })
 
+function makeRespondContext(input: Request) {
+  return {
+    coreBinding: {
+      amount: String(challenge.request.amount),
+      currency: String(challenge.request.currency),
+      recipient: String(challenge.request.recipient),
+    },
+    envelope: {
+      capturedRequest: {
+        headers: new Headers(input.headers),
+        method: input.method,
+        url: new URL(input.url),
+      },
+      challenge,
+      credential,
+    },
+    methodBinding: {},
+    receipt,
+    request: challenge.request,
+  } as const
+}
+
+function makeMcpRespondContext(method = 'tools/call') {
+  return {
+    ...makeRespondContext(new Request('https://example.com')),
+    envelope: {
+      ...makeRespondContext(new Request('https://example.com')).envelope,
+      capturedRequest: {
+        headers: new Headers(),
+        method: 'POST',
+        url: new URL(`mcp://request/${encodeURIComponent(method)}`),
+      },
+    },
+  } as const
+}
+
 describe('http', () => {
   describe('getCredential', () => {
     test('returns credential from Authorization header', () => {
@@ -352,13 +388,12 @@ describe('http', () => {
     test('default', () => {
       const transport = Transport.http()
       const originalResponse = new Response('OK', { status: 200 })
+      const input = new Request('https://example.com')
 
       const response = transport.respondReceipt({
-        credential,
-        input: new Request('https://example.com'),
-        receipt,
+        context: makeRespondContext(input),
+        input,
         response: originalResponse,
-        challengeId: challenge.id,
       })
 
       expect({
@@ -474,11 +509,9 @@ describe('mcp', () => {
 
       expect(
         transport.respondReceipt({
-          credential,
+          context: makeMcpRespondContext(mcpRequest.method),
           input: mcpRequest,
-          receipt,
           response: successResponse,
-          challengeId: challenge.id,
         }),
       ).toMatchInlineSnapshot(`
         {
@@ -513,11 +546,9 @@ describe('mcp', () => {
 
       expect(
         transport.respondReceipt({
-          credential,
+          context: makeMcpRespondContext(mcpRequest.method),
           input: mcpRequest,
-          receipt,
           response: errorResponse,
-          challengeId: challenge.id,
         }),
       ).toBe(errorResponse)
     })
