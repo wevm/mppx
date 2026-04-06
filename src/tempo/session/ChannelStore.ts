@@ -204,12 +204,16 @@ export function fromStore(store: Store.Store): ChannelStore {
     channelId: Hex,
     fn: (current: State | null) => Store.Change<State, result>,
   ): Promise<result> {
+    let change: Store.Change<State, result> | undefined
+
     if (store.update) {
-      return store.update(channelId, (current) => {
-        const change = fn((current as State | null) ?? null)
+      const result = await store.update(channelId, (current) => {
+        change = fn((current as State | null) ?? null)
         if (change.op !== 'set') return change
         return { ...change, value: change.value as never }
       })
+      if (change?.op !== 'noop') notify(channelId)
+      return result
     }
 
     while (locks.has(channelId)) await locks.get(channelId)
@@ -224,9 +228,10 @@ export function fromStore(store: Store.Store): ChannelStore {
 
     try {
       const current = (await store.get(channelId)) as State | null
-      const change = fn(current)
+      change = fn(current)
       if (change.op === 'set') await store.put(channelId, change.value as never)
       if (change.op === 'delete') await store.delete(channelId)
+      if (change.op !== 'noop') notify(channelId)
       return change.result
     } finally {
       locks.delete(channelId)
@@ -239,9 +244,7 @@ export function fromStore(store: Store.Store): ChannelStore {
       return (await store.get(channelId)) as State | null
     },
     async updateChannel(channelId, fn) {
-      const result = await update(channelId, fn)
-      notify(channelId)
-      return result
+      return update(channelId, fn)
     },
     waitForUpdate(channelId) {
       return new Promise<void>((resolve) => {
