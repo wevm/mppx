@@ -310,8 +310,14 @@ export declare namespace session {
      * the failure.
      */
     waitForConfirmation?: boolean | undefined
-    /** Store backend for channel state. */
-    store?: Store.Store | undefined
+    /**
+     * Atomic store backend for channel state.
+     *
+     * Session state mutations must be linearizable across instances, so this
+     * requires a {@link Store.AtomicStore}. Use `Store.memory()` for tests or
+     * local single-process usage.
+     */
+    store?: Store.AtomicStore | undefined
     /**
      * Enable SSE streaming.
      *

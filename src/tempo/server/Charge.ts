@@ -62,8 +62,8 @@ export function charge<const parameters extends charge.Parameters>(
     memo,
     waitForConfirmation = true,
   } = parameters
-  const store = (parameters.store ?? Store.memory()) as Store.Store<charge.StoreItemMap>
-  const proofStore = parameters.store as Store.Store<charge.StoreItemMap> | undefined
+  const store = (parameters.store ?? Store.memory()) as Store.AtomicStore<charge.StoreItemMap>
+  const proofStore = parameters.store as Store.AtomicStore<charge.StoreItemMap> | undefined
 
   const { recipient, feePayer, feePayerUrl } = Account.resolve(parameters)
 
@@ -375,13 +375,13 @@ export declare namespace charge {
      * is explicitly provided; otherwise proofs remain reusable until the
      * challenge expires.
      *
-     * Stores used for replay protection must implement `Store.update()` so
-     * replay markers can be written atomically.
+     * Replay protection requires a {@link Store.AtomicStore} so replay markers
+     * can be written atomically.
      *
      * Use a shared store in multi-instance deployments so consumed hashes and
      * proofs are visible across all server instances.
      */
-    store?: Store.Store | undefined
+    store?: Store.AtomicStore | undefined
     /**
      * Whether to wait for the charge transaction to confirm on-chain before
      * responding. @default true
@@ -620,7 +620,7 @@ function getProofStoreKey(challengeId: string): `mppx:charge:${string}` {
 
 /** @internal */
 async function assertHashUnused(
-  store: Store.Store<charge.StoreItemMap>,
+  store: Store.AtomicStore<charge.StoreItemMap>,
   hash: `0x${string}`,
 ): Promise<void> {
   const seen = await store.get(getHashStoreKey(hash))
@@ -629,11 +629,9 @@ async function assertHashUnused(
 }
 
 async function markHashUsed(
-  store: Store.Store<charge.StoreItemMap>,
+  store: Store.AtomicStore<charge.StoreItemMap>,
   hash: `0x${string}`,
 ): Promise<boolean> {
-  if (!store.update) throw new Error('Store must implement update for replay protection.')
-
   return store.update(getHashStoreKey(hash), (current) => {
     if (current !== null) return { op: 'noop', result: false }
     return { op: 'set', value: Date.now(), result: true }
@@ -642,11 +640,9 @@ async function markHashUsed(
 
 /** @internal */
 async function releaseHashUse(
-  store: Store.Store<charge.StoreItemMap>,
+  store: Store.AtomicStore<charge.StoreItemMap>,
   hash: `0x${string}`,
 ): Promise<void> {
-  if (!store.update) throw new Error('Store must implement update for replay protection.')
-
   await store.update(getHashStoreKey(hash), (current) => {
     if (current === null) return { op: 'noop', result: undefined }
     return { op: 'delete', result: undefined }
@@ -655,11 +651,9 @@ async function releaseHashUse(
 
 /** @internal */
 async function markProofUsed(
-  store: Store.Store<charge.StoreItemMap>,
+  store: Store.AtomicStore<charge.StoreItemMap>,
   challengeId: string,
 ): Promise<boolean> {
-  if (!store.update) throw new Error('Store must implement update for proof replay protection.')
-
   return store.update(getProofStoreKey(challengeId), (current) => {
     if (current !== null) return { op: 'noop', result: false }
     return { op: 'set', value: Date.now(), result: true }

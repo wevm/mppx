@@ -3,7 +3,7 @@ import { expectTypeOf, test } from 'vp/test'
 import * as Store from './Store.js'
 
 test('default Store accepts any string key', () => {
-  const store = Store.memory()
+  const store = {} as Store.Store
   expectTypeOf(store.get).parameter(0).toBeString()
   expectTypeOf(store.put).parameter(0).toBeString()
   expectTypeOf(store.delete).parameter(0).toBeString()
@@ -11,9 +11,14 @@ test('default Store accepts any string key', () => {
 })
 
 test('default Store get returns unknown', async () => {
-  const store = Store.memory()
+  const store = {} as Store.Store
   const value = await store.get('anything')
   expectTypeOf(value).toEqualTypeOf<unknown>()
+})
+
+test('memory returns AtomicStore', () => {
+  const store = Store.memory()
+  expectTypeOf(store).toEqualTypeOf<Store.AtomicStore>()
 })
 
 test('typed Store constrains keys', () => {
@@ -78,4 +83,34 @@ test('upstash returns generic Store', () => {
     del: async () => null,
   })
   expectTypeOf(store).toEqualTypeOf<Store.Store>()
+})
+
+test('cloudflare with update returns AtomicStore', () => {
+  const store = Store.cloudflare({
+    get: async () => null,
+    put: async () => {},
+    delete: async () => {},
+    update: async (_key, fn) => fn(null).result,
+  })
+  expectTypeOf(store).toEqualTypeOf<Store.AtomicStore>()
+})
+
+test('redis with update returns AtomicStore', () => {
+  const store = Store.redis({
+    get: async () => null,
+    set: async () => null,
+    del: async () => null,
+    update: async (_key, fn) => fn(null).result,
+  })
+  expectTypeOf(store).toEqualTypeOf<Store.AtomicStore>()
+})
+
+test('upstash with update returns AtomicStore', () => {
+  const store = Store.upstash({
+    get: async () => null,
+    set: async () => null,
+    del: async () => null,
+    update: async (_key, fn) => fn(null).result,
+  })
+  expectTypeOf(store).toEqualTypeOf<Store.AtomicStore>()
 })
