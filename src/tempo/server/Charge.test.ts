@@ -1061,6 +1061,7 @@ describe('tempo', () => {
       const { receipt } = await Actions.token.transferSync(client, {
         account: accounts[1],
         amount: BigInt(challenge1.request.amount),
+        memo: Attribution.encode({ challengeId: challenge1.id, serverId: realm }) as Hex.Hex,
         to: challenge1.request.recipient as Hex.Hex,
         token: challenge1.request.currency as Hex.Hex,
       })
