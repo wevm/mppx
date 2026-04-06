@@ -1,8 +1,9 @@
 import * as Challenge from '../Challenge.js'
 import * as Credential from '../Credential.js'
 import * as Errors from '../Errors.js'
-import type { Distribute, UnionToIntersection } from '../internal/types.js'
+import type { Distribute, MaybePromise, UnionToIntersection } from '../internal/types.js'
 import * as core_Mcp from '../Mcp.js'
+import type * as Method from '../Method.js'
 import * as Receipt from '../Receipt.js'
 import * as Html from './internal/html/config.js'
 import { serviceWorker } from './internal/html/serviceWorker.gen.js'
@@ -23,6 +24,8 @@ export type Transport<
 > = {
   /** Transport name for identification. */
   name: string
+  /** Captures the transport request into an immutable verification snapshot. */
+  captureRequest: (input: input) => MaybePromise<Method.CapturedRequest>
   /**
    * Extracts credential from the transport input.
    * Returns `null` if no credential was provided, or throws if malformed.
@@ -37,10 +40,8 @@ export type Transport<
   }) => challengeOutput | Promise<challengeOutput>
   /** Attaches a receipt to a successful response. */
   respondReceipt: (options: {
-    challengeId: string
-    credential: Credential.Credential
+    context: Method.RespondContext<Method.Method, unknown, Record<string, unknown>>
     input: input
-    receipt: Receipt.Receipt
     response: receiptResponse
   }) => receiptOutput
 }
@@ -90,9 +91,10 @@ export type WithReceipt<transport extends AnyTransport = Http> = WithReceiptOver
  *
  * const custom = Transport.from({
  *   name: 'custom',
+ *   captureRequest(input) { ... },
  *   getCredential(input) { ... },
  *   respondChallenge({ challenge, input }) { ... },
- *   respondReceipt({ receipt, response, challengeId, credential, input }) { ... },
+ *   respondReceipt({ context, response, input }) { ... },
  * })
  * ```
  */
@@ -117,6 +119,14 @@ export function from<
 export function http(): Http {
   return from<Request, Response>({
     name: 'http',
+
+    captureRequest(request) {
+      return {
+        headers: new Headers(request.headers),
+        method: request.method,
+        url: safeUrl(request.url),
+      }
+    },
 
     getCredential(request) {
       const header = request.headers.get('Authorization')
@@ -180,9 +190,9 @@ export function http(): Http {
       return new Response(body, { status: error?.status ?? 402, headers })
     },
 
-    respondReceipt({ receipt, response }) {
+    respondReceipt({ context, response }) {
       const headers = new Headers(response.headers)
-      headers.set('Payment-Receipt', Receipt.serialize(receipt))
+      headers.set('Payment-Receipt', Receipt.serialize(context.receipt))
       return new Response(response.body, {
         status: response.status,
         statusText: response.statusText,
@@ -205,6 +215,14 @@ export function http(): Http {
 export function mcp() {
   return from<core_Mcp.JsonRpcRequest, core_Mcp.Response>({
     name: 'mcp',
+
+    captureRequest(request) {
+      return {
+        headers: new Headers(),
+        method: 'POST',
+        url: new URL(`mcp://request/${encodeURIComponent(request.method ?? 'unknown')}`),
+      }
+    },
 
     getCredential(request) {
       const meta = request.params?._meta
@@ -229,12 +247,12 @@ export function mcp() {
       }
     },
 
-    respondReceipt({ receipt, response, challengeId }) {
+    respondReceipt({ context, response }) {
       if ('error' in response) return response
 
       const mcpReceipt: core_Mcp.Receipt = {
-        ...receipt,
-        challengeId,
+        ...context.receipt,
+        challengeId: context.envelope.challenge.id,
       }
 
       return {
@@ -257,6 +275,13 @@ function mcpErrorCode(error?: Errors.PaymentError): number {
   if (error instanceof Errors.MalformedCredentialError) return -32602
   if (error instanceof Errors.PaymentRequiredError) return core_Mcp.paymentRequiredCode
   return core_Mcp.paymentVerificationFailedCode
+}
+
+function safeUrl(url: string | undefined): URL {
+  try {
+    if (url) return new URL(url)
+  } catch {}
+  return new URL('about:blank')
 }
 
 /** @internal Distributes over the receipt response union to create overloads. */

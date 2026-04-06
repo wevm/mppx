@@ -38,6 +38,10 @@ export function sse(options: sse.Options & { store: ChannelStore.ChannelStore })
   return Transport.from<Request, Response, Transport.ReceiptResponseOf<Sse>, Response>({
     name: 'sse',
 
+    captureRequest(request) {
+      return base.captureRequest(request)
+    },
+
     getCredential(request) {
       return base.getCredential(request)
     },
@@ -46,11 +50,13 @@ export function sse(options: sse.Options & { store: ChannelStore.ChannelStore })
       return base.respondChallenge(options) as Response
     },
 
-    respondReceipt({ credential, receipt, response, challengeId, input }) {
+    respondReceipt({ context, input, response }) {
+      const { credential, challenge } = context.envelope
       const payload = credential.payload as Partial<SessionCredentialPayload>
       if (!payload.channelId) throw new Error('No SSE context available')
+      const challengeId = challenge.id
       const channelId = payload.channelId
-      const tickCost = BigInt(credential.challenge.request.amount as string)
+      const tickCost = BigInt(challenge.request.amount as string)
 
       // Auto-detect upstream SSE responses and parse them into an
       // AsyncIterable so they flow through the metered pipeline.
@@ -81,11 +87,9 @@ export function sse(options: sse.Options & { store: ChannelStore.ChannelStore })
       }
 
       const baseResponse = base.respondReceipt({
-        credential,
+        context,
         input,
-        receipt,
         response: response as Response,
-        challengeId,
       })
 
       // Non-SSE response (e.g. upstream returned JSON instead of event-stream).

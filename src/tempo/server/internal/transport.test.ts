@@ -82,6 +82,36 @@ function makeReceipt() {
   }
 }
 
+function makeRespondContext(
+  input: Request,
+  options: {
+    credential?: Credential.Credential
+    receipt?: ReturnType<typeof makeReceipt>
+  } = {},
+) {
+  const credential = options.credential ?? makeCredential()
+  const receipt = options.receipt ?? makeReceipt()
+  return {
+    coreBinding: {
+      amount: String(credential.challenge.request.amount),
+      currency: String(credential.challenge.request.currency),
+      recipient: String(credential.challenge.request.recipient),
+    },
+    envelope: {
+      capturedRequest: {
+        headers: new Headers(input.headers),
+        method: input.method,
+        url: new URL(input.url),
+      },
+      challenge: credential.challenge,
+      credential,
+    },
+    methodBinding: {},
+    receipt,
+    request: credential.challenge.request,
+  } as const
+}
+
 async function readResponseText(response: Response): Promise<string> {
   if (!response.body) return ''
   const reader = response.body.getReader()
@@ -118,18 +148,16 @@ describe('sse transport', () => {
     await seedChannel(store, 10000000n)
     const transport = sse({ store })
 
-    const credential = makeCredential()
+    const request = new Request('https://test.example.com/session')
 
     async function* gen() {
       yield 'test'
     }
 
     const response = transport.respondReceipt({
-      credential,
-      input: new Request('https://test.example.com/session'),
-      receipt: makeReceipt(),
+      context: makeRespondContext(request),
+      input: request,
       response: gen(),
-      challengeId,
     })
     expect(response.headers.get('Content-Type')).toContain('text/event-stream')
   })
@@ -160,11 +188,9 @@ describe('sse transport', () => {
     }
 
     const response = transport.respondReceipt({
-      credential: makeCredential(),
+      context: makeRespondContext(request),
       input: request,
-      receipt: makeReceipt(),
       response: gen(),
-      challengeId,
     })
     expect(response.headers.get('Content-Type')).toContain('text/event-stream')
 
@@ -189,14 +215,12 @@ describe('sse transport', () => {
     const request = makeAuthorizedRequest()
 
     const response = transport.respondReceipt({
-      credential: makeCredential(),
+      context: makeRespondContext(request),
       input: request,
-      receipt: makeReceipt(),
       response: async function* (stream) {
         await stream.charge()
         yield 'hello'
       },
-      challengeId,
     })
     expect(response.headers.get('Content-Type')).toContain('text/event-stream')
   })
@@ -220,11 +244,9 @@ describe('sse transport', () => {
     )
 
     const response = transport.respondReceipt({
-      credential: makeCredential(),
+      context: makeRespondContext(request),
       input: request,
-      receipt: makeReceipt(),
       response: upstream,
-      challengeId,
     })
     expect(response.headers.get('Content-Type')).toContain('text/event-stream')
 
@@ -243,13 +265,12 @@ describe('sse transport', () => {
     const plainResponse = new Response('ok', {
       headers: { 'Content-Type': 'application/json' },
     })
+    const input = new Request('https://test.example.com/session')
 
     const response = transport.respondReceipt({
-      credential: makeCredential(),
-      input: new Request('https://test.example.com/session'),
-      receipt,
+      context: makeRespondContext(input, { receipt }),
+      input,
       response: plainResponse,
-      challengeId,
     })
     expect(response).toBeInstanceOf(Response)
     expect(response.headers.get('Payment-Receipt')).toBeTruthy()
@@ -266,11 +287,9 @@ describe('sse transport', () => {
     }
 
     const response = transport.respondReceipt({
-      credential: makeCredential(),
+      context: makeRespondContext(request),
       input: request,
-      receipt: makeReceipt(),
       response: gen(),
-      challengeId,
     })
     expect(response.headers.get('Content-Type')).toContain('text/event-stream')
   })
@@ -290,11 +309,11 @@ describe('sse transport', () => {
 
     expect(() =>
       transport.respondReceipt({
-        credential,
+        context: makeRespondContext(new Request('https://test.example.com/session'), {
+          credential,
+        }),
         input: new Request('https://test.example.com/session'),
-        receipt: makeReceipt(),
         response: gen(),
-        challengeId,
       }),
     ).toThrow('No SSE context available')
   })
@@ -310,11 +329,9 @@ describe('sse transport', () => {
     })
 
     const response = transport.respondReceipt({
-      credential: makeCredential(),
+      context: makeRespondContext(request),
       input: request,
-      receipt: makeReceipt(),
       response: plainResponse,
-      challengeId,
     })
 
     const body = await response.text()
@@ -336,11 +353,9 @@ describe('sse transport', () => {
 
     const managementResponse = new Response(null, { status: 204 })
     const response = transport.respondReceipt({
-      credential: makeCredential(),
+      context: makeRespondContext(request),
       input: request,
-      receipt: makeReceipt(),
       response: managementResponse,
-      challengeId,
     })
 
     expect(response.status).toBe(204)
@@ -365,11 +380,9 @@ describe('sse transport', () => {
     }
 
     const response = transport.respondReceipt({
-      credential: makeCredential(),
+      context: makeRespondContext(request),
       input: request,
-      receipt: makeReceipt(),
       response: gen(),
-      challengeId,
     })
     expect(response.headers.get('Content-Type')).toContain('text/event-stream')
     expect(transport.name).toBe('sse')

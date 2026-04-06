@@ -175,6 +175,7 @@ export function create<
   for (const mi of methods) {
     intentCount[mi.intent] = (intentCount[mi.intent] ?? 0) + 1
     handlers[`${mi.name}/${mi.intent}`] = createMethodFn({
+      challenge: mi.challenge as never,
       defaults: mi.defaults,
       method: mi,
       realm,
@@ -266,6 +267,7 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
       async (input: Transport.InputOf): Promise<MethodFn.Response> => {
         const expires =
           'expires' in options ? (options.expires as string | undefined) : Expires.minutes(5)
+        const capturedRequest = await transport.captureRequest(input)
 
         // Extract credential once — getCredential may have side effects (e.g. SSE transports).
         const [credential, credentialError] = (() => {
@@ -279,15 +281,15 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
           }
         })()
 
-        // Transform request if method provides a `request` function.
-        const request = (
-          parameters.request
-            ? await parameters.request({ credential, request: merged } as never)
+        // Derive the canonical request used for challenge issuance and binding.
+        const challengeRequest = (
+          parameters.challenge
+            ? await parameters.challenge({ capturedRequest, request: merged } as never)
             : merged
         ) as never
 
         // Resolve realm: explicit > env var > request Host header.
-        const effectiveRealm = realm ?? resolveRealmFromRequest(input)
+        const effectiveRealm = realm ?? resolveRealmFromCapturedRequest(capturedRequest)
 
         // Recompute challenge from options. The HMAC-bound ID means we don't need to
         // store challenges server-side—if the client echoes back a credential with
@@ -297,7 +299,7 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
           expires,
           meta,
           realm: effectiveRealm,
-          request,
+          request: challengeRequest,
           secretKey,
         })
 
@@ -343,9 +345,6 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
         // method, intent, realm, and request. Prevents cross-route scope
         // confusion where a credential issued for a cheap route (or different
         // method/intent) is presented at an expensive route.
-        // Note: we compare specific payment parameters rather than the full
-        // request because the `request` hook may produce credential-dependent
-        // output (e.g. `feePayer` differs between 402 and credential calls).
         {
           for (const field of ['method', 'intent', 'realm'] as const) {
             if (credential.challenge[field] !== challenge[field]) {
@@ -402,11 +401,27 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
           return { challenge: response, status: 402 }
         }
 
+        const context = {
+          coreBinding: getCoreBinding(credential.challenge.request as Record<string, unknown>),
+          envelope: {
+            capturedRequest,
+            challenge: credential.challenge,
+            credential,
+          },
+          methodBinding: getMethodBinding(credential.challenge.request as Record<string, unknown>),
+        } satisfies Method.VerifiedPaymentContext
+
+        const request = (
+          parameters.request
+            ? await parameters.request({ ...context, requestInput: merged } as never)
+            : credential.challenge.request
+        ) as never
+
         // User-provided verification (e.g., check signature, submit tx, verify payment).
         // If verification fails, re-issue the challenge so the client can retry.
         let receiptData: Receipt.Receipt
         try {
-          receiptData = await verify({ credential, request } as never)
+          receiptData = await verify({ ...context, request } as never)
         } catch (e) {
           if (!(e instanceof Errors.PaymentError))
             console.error('mppx: internal verification error', e)
@@ -424,29 +439,24 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
         // and the user's route handler should NOT run. `withReceipt()` will
         // return the management response directly. If undefined, `withReceipt()`
         // expects the caller to pass the user handler's response instead.
-        const managementResponse = respond
-          ? await respond({ credential, input, receipt: receiptData, request } as never)
-          : undefined
+        const respondContext = { ...context, receipt: receiptData, request } as never
+        const managementResponse = respond ? await respond(respondContext) : undefined
 
         return {
           status: 200,
           withReceipt<response>(response?: response) {
             if (managementResponse) {
               return transport.respondReceipt({
-                credential,
+                context: respondContext,
                 input,
-                receipt: receiptData,
                 response: managementResponse as never,
-                challengeId: credential.challenge.id,
               }) as response
             }
             if (!response) throw new Error('withReceipt() requires a response argument')
             return transport.respondReceipt({
-              credential,
+              context: respondContext,
               input,
-              receipt: receiptData,
               response: response as never,
-              challengeId: credential.challenge.id,
             }) as response
           },
         }
@@ -478,6 +488,7 @@ declare namespace createMethodFn {
     transport extends Transport.AnyTransport = Transport.Http,
     defaults extends Record<string, unknown> = Record<string, unknown>,
   > = {
+    challenge?: Method.ChallengeFn<method>
     defaults?: defaults
     method: method
     realm: string | undefined
@@ -507,14 +518,11 @@ function warnOnce(key: string, message: string) {
   console.warn(`[mppx] ${message}`)
 }
 
-/** Extracts hostname from the request URL, falling back to a default. */
-function resolveRealmFromRequest(input: unknown): string {
+/** Extracts hostname from the captured request URL, falling back to a default. */
+function resolveRealmFromCapturedRequest(capturedRequest: Method.CapturedRequest): string {
   try {
-    const url = typeof (input as any)?.url === 'string' ? (input as any).url : undefined
-    if (url) {
-      const { protocol, hostname } = new URL(url)
-      if (/^https?:$/.test(protocol) && hostname) return hostname
-    }
+    const { protocol, hostname } = capturedRequest.url
+    if (/^https?:$/.test(protocol) && hostname) return hostname.toLowerCase()
   } catch {}
   warnOnce(
     Warnings.realmFallback,
@@ -523,7 +531,9 @@ function resolveRealmFromRequest(input: unknown): string {
   return defaultRealm
 }
 
-type RequestBindingField = 'amount' | 'currency' | 'recipient' | 'chainId' | 'memo' | 'splits'
+type RequestBindingField = CoreBindingField | MethodBindingField
+type CoreBindingField = 'amount' | 'currency' | 'recipient'
+type MethodBindingField = 'chainId' | 'memo' | 'splits'
 
 const requestBindingFields = [
   'amount',
@@ -535,6 +545,7 @@ const requestBindingFields = [
 ] as const satisfies readonly RequestBindingField[]
 
 type RequestBinding = Partial<Record<RequestBindingField, unknown>>
+type MethodBinding = Pick<RequestBinding, MethodBindingField>
 
 function getRequestBindingMismatch(
   expectedRequest: Record<string, unknown>,
@@ -558,6 +569,24 @@ function getRequestBinding(request: Record<string, unknown>): RequestBinding {
     chainId: request.chainId ?? methodDetails.chainId,
     memo: methodDetails.memo,
     splits: methodDetails.splits,
+  }
+}
+
+function getCoreBinding(request: Record<string, unknown>): Method.CoreBinding {
+  const binding = getRequestBinding(request)
+  return {
+    amount: normalizeScalar(binding.amount),
+    currency: normalizeScalar(binding.currency),
+    recipient: normalizeScalar(binding.recipient),
+  }
+}
+
+function getMethodBinding(request: Record<string, unknown>): MethodBinding {
+  const binding = getRequestBinding(request)
+  return {
+    chainId: binding.chainId,
+    memo: binding.memo,
+    splits: binding.splits,
   }
 }
 
