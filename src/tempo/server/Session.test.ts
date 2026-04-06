@@ -125,20 +125,22 @@ describe.runIf(isLocalnet)('session', () => {
       const { channelId, serializedTransaction } = await createSignedOpenTransaction(10000000n)
       const server = createServer()
 
-      const receipt = await server.verify({
-        credential: {
-          challenge: makeChallenge({ channelId }),
-          payload: {
-            action: 'open' as const,
-            type: 'transaction' as const,
-            channelId,
-            transaction: serializedTransaction,
-            cumulativeAmount: '1000000',
-            signature: await signTestVoucher(channelId, 1000000n),
+      const receipt = await server.verify(
+        verifyContext({
+          credential: {
+            challenge: makeChallenge({ channelId }),
+            payload: {
+              action: 'open' as const,
+              type: 'transaction' as const,
+              channelId,
+              transaction: serializedTransaction,
+              cumulativeAmount: '1000000',
+              signature: await signTestVoucher(channelId, 1000000n),
+            },
           },
-        },
-        request: makeRequest(),
-      })
+          request: makeRequest(),
+        }),
+      )
 
       expect(receipt.method).toBe('tempo')
       expect(receipt.status).toBe('success')
@@ -157,20 +159,22 @@ describe.runIf(isLocalnet)('session', () => {
       const server = createServer()
 
       await expect(
-        server.verify({
-          credential: {
-            challenge: makeChallenge({ channelId }),
-            payload: {
-              action: 'open' as const,
-              type: 'transaction' as const,
-              channelId,
-              transaction: serializedTransaction,
-              cumulativeAmount: '1000000',
-              signature: await signTestVoucher(channelId, 1000000n),
+        server.verify(
+          verifyContext({
+            credential: {
+              challenge: makeChallenge({ channelId }),
+              payload: {
+                action: 'open' as const,
+                type: 'transaction' as const,
+                channelId,
+                transaction: serializedTransaction,
+                cumulativeAmount: '1000000',
+                signature: await signTestVoucher(channelId, 1000000n),
+              },
             },
-          },
-          request: makeRequest(),
-        }),
+            request: makeRequest(),
+          }),
+        ),
       ).rejects.toThrow('open transaction payee does not match server recipient')
     })
 
@@ -179,9 +183,57 @@ describe.runIf(isLocalnet)('session', () => {
       const server = createServer()
 
       await expect(
-        server.verify({
+        server.verify(
+          verifyContext({
+            credential: {
+              challenge: makeChallenge({ channelId }),
+              payload: {
+                action: 'open' as const,
+                type: 'transaction' as const,
+                channelId,
+                transaction: serializedTransaction,
+                cumulativeAmount: '1000000',
+                signature: await signTestVoucher(channelId, 1000000n),
+              },
+            },
+            request: makeRequest(),
+          }),
+        ),
+      ).rejects.toThrow('channel available balance insufficient for requested amount')
+    })
+
+    test('rejects open with invalid voucher signature', async () => {
+      const { channelId, serializedTransaction } = await createSignedOpenTransaction(10000000n)
+      const server = createServer()
+
+      await expect(
+        server.verify(
+          verifyContext({
+            credential: {
+              challenge: makeChallenge({ channelId }),
+              payload: {
+                action: 'open' as const,
+                type: 'transaction' as const,
+                channelId,
+                transaction: serializedTransaction,
+                cumulativeAmount: '1000000',
+                signature: `0x${'ab'.repeat(65)}` as Hex,
+              },
+            },
+            request: makeRequest(),
+          }),
+        ),
+      ).rejects.toThrow('invalid voucher signature')
+    })
+
+    test('reopen existing channel with higher voucher updates state', async () => {
+      const { channelId, serializedTransaction } = await createSignedOpenTransaction(10000000n)
+      const server = createServer()
+
+      await server.verify(
+        verifyContext({
           credential: {
-            challenge: makeChallenge({ channelId }),
+            challenge: makeChallenge({ id: 'open-1', channelId }),
             payload: {
               action: 'open' as const,
               type: 'transaction' as const,
@@ -193,67 +245,27 @@ describe.runIf(isLocalnet)('session', () => {
           },
           request: makeRequest(),
         }),
-      ).rejects.toThrow('channel available balance insufficient for requested amount')
-    })
+      )
 
-    test('rejects open with invalid voucher signature', async () => {
-      const { channelId, serializedTransaction } = await createSignedOpenTransaction(10000000n)
-      const server = createServer()
+      const ch1 = await store.getChannel(channelId)
+      expect(ch1!.highestVoucherAmount).toBe(1000000n)
 
-      await expect(
-        server.verify({
+      const receipt = await server.verify(
+        verifyContext({
           credential: {
-            challenge: makeChallenge({ channelId }),
+            challenge: makeChallenge({ id: 'open-2', channelId }),
             payload: {
               action: 'open' as const,
               type: 'transaction' as const,
               channelId,
               transaction: serializedTransaction,
-              cumulativeAmount: '1000000',
-              signature: `0x${'ab'.repeat(65)}` as Hex,
+              cumulativeAmount: '5000000',
+              signature: await signTestVoucher(channelId, 5000000n),
             },
           },
           request: makeRequest(),
         }),
-      ).rejects.toThrow('invalid voucher signature')
-    })
-
-    test('reopen existing channel with higher voucher updates state', async () => {
-      const { channelId, serializedTransaction } = await createSignedOpenTransaction(10000000n)
-      const server = createServer()
-
-      await server.verify({
-        credential: {
-          challenge: makeChallenge({ id: 'open-1', channelId }),
-          payload: {
-            action: 'open' as const,
-            type: 'transaction' as const,
-            channelId,
-            transaction: serializedTransaction,
-            cumulativeAmount: '1000000',
-            signature: await signTestVoucher(channelId, 1000000n),
-          },
-        },
-        request: makeRequest(),
-      })
-
-      const ch1 = await store.getChannel(channelId)
-      expect(ch1!.highestVoucherAmount).toBe(1000000n)
-
-      const receipt = await server.verify({
-        credential: {
-          challenge: makeChallenge({ id: 'open-2', channelId }),
-          payload: {
-            action: 'open' as const,
-            type: 'transaction' as const,
-            channelId,
-            transaction: serializedTransaction,
-            cumulativeAmount: '5000000',
-            signature: await signTestVoucher(channelId, 5000000n),
-          },
-        },
-        request: makeRequest(),
-      })
+      )
 
       expect(receipt.status).toBe('success')
       const ch2 = await store.getChannel(channelId)
@@ -264,35 +276,39 @@ describe.runIf(isLocalnet)('session', () => {
       const { channelId, serializedTransaction } = await createSignedOpenTransaction(10000000n)
       const server = createServer()
 
-      await server.verify({
-        credential: {
-          challenge: makeChallenge({ id: 'open-1', channelId }),
-          payload: {
-            action: 'open' as const,
-            type: 'transaction' as const,
-            channelId,
-            transaction: serializedTransaction,
-            cumulativeAmount: '1000000',
-            signature: await signTestVoucher(channelId, 1000000n),
+      await server.verify(
+        verifyContext({
+          credential: {
+            challenge: makeChallenge({ id: 'open-1', channelId }),
+            payload: {
+              action: 'open' as const,
+              type: 'transaction' as const,
+              channelId,
+              transaction: serializedTransaction,
+              cumulativeAmount: '1000000',
+              signature: await signTestVoucher(channelId, 1000000n),
+            },
           },
-        },
-        request: makeRequest(),
-      })
+          request: makeRequest(),
+        }),
+      )
 
-      const receipt = await server.verify({
-        credential: {
-          challenge: makeChallenge({ id: 'open-2', channelId }),
-          payload: {
-            action: 'open' as const,
-            type: 'transaction' as const,
-            channelId,
-            transaction: serializedTransaction,
-            cumulativeAmount: '1000000',
-            signature: await signTestVoucher(channelId, 1000000n),
+      const receipt = await server.verify(
+        verifyContext({
+          credential: {
+            challenge: makeChallenge({ id: 'open-2', channelId }),
+            payload: {
+              action: 'open' as const,
+              type: 'transaction' as const,
+              channelId,
+              transaction: serializedTransaction,
+              cumulativeAmount: '1000000',
+              signature: await signTestVoucher(channelId, 1000000n),
+            },
           },
-        },
-        request: makeRequest(),
-      })
+          request: makeRequest(),
+        }),
+      )
 
       expect(receipt.status).toBe('success')
       const ch = await store.getChannel(channelId)
@@ -303,40 +319,44 @@ describe.runIf(isLocalnet)('session', () => {
       const { channelId, serializedTransaction } = await createSignedOpenTransaction(10000000n)
       const server = createServer()
 
-      await server.verify({
-        credential: {
-          challenge: makeChallenge({ id: 'open-1', channelId }),
-          payload: {
-            action: 'open' as const,
-            type: 'transaction' as const,
-            channelId,
-            transaction: serializedTransaction,
-            cumulativeAmount: '5000000',
-            signature: await signTestVoucher(channelId, 5000000n),
+      await server.verify(
+        verifyContext({
+          credential: {
+            challenge: makeChallenge({ id: 'open-1', channelId }),
+            payload: {
+              action: 'open' as const,
+              type: 'transaction' as const,
+              channelId,
+              transaction: serializedTransaction,
+              cumulativeAmount: '5000000',
+              signature: await signTestVoucher(channelId, 5000000n),
+            },
           },
-        },
-        request: makeRequest(),
-      })
+          request: makeRequest(),
+        }),
+      )
 
       await store.updateChannel(channelId, (ch) =>
         ch ? { ...ch, settledOnChain: 5000000n } : null,
       )
 
       await expect(
-        server.verify({
-          credential: {
-            challenge: makeChallenge({ id: 'open-2', channelId }),
-            payload: {
-              action: 'open' as const,
-              type: 'transaction' as const,
-              channelId,
-              transaction: serializedTransaction,
-              cumulativeAmount: '3000000',
-              signature: await signTestVoucher(channelId, 3000000n),
+        server.verify(
+          verifyContext({
+            credential: {
+              challenge: makeChallenge({ id: 'open-2', channelId }),
+              payload: {
+                action: 'open' as const,
+                type: 'transaction' as const,
+                channelId,
+                transaction: serializedTransaction,
+                cumulativeAmount: '3000000',
+                signature: await signTestVoucher(channelId, 3000000n),
+              },
             },
-          },
-          request: makeRequest(),
-        }),
+            request: makeRequest(),
+          }),
+        ),
       ).rejects.toThrow('voucher amount is below settled on-chain amount')
     })
 
@@ -346,20 +366,22 @@ describe.runIf(isLocalnet)('session', () => {
       })
       const server = createServer()
 
-      const receipt = await server.verify({
-        credential: {
-          challenge: makeChallenge({ channelId }),
-          payload: {
-            action: 'open' as const,
-            type: 'transaction' as const,
-            channelId,
-            transaction: serializedTransaction,
-            cumulativeAmount: '1000000',
-            signature: await signTestVoucher(channelId, 1000000n),
+      const receipt = await server.verify(
+        verifyContext({
+          credential: {
+            challenge: makeChallenge({ channelId }),
+            payload: {
+              action: 'open' as const,
+              type: 'transaction' as const,
+              channelId,
+              transaction: serializedTransaction,
+              cumulativeAmount: '1000000',
+              signature: await signTestVoucher(channelId, 1000000n),
+            },
           },
-        },
-        request: makeRequest(),
-      })
+          request: makeRequest(),
+        }),
+      )
 
       expect(receipt.status).toBe('success')
     })
@@ -369,20 +391,22 @@ describe.runIf(isLocalnet)('session', () => {
       const server = createServer()
 
       // 1. Open channel and accept a voucher
-      await server.verify({
-        credential: {
-          challenge: makeChallenge({ id: 'open-1', channelId }),
-          payload: {
-            action: 'open' as const,
-            type: 'transaction' as const,
-            channelId,
-            transaction: serializedTransaction,
-            cumulativeAmount: '5000000',
-            signature: await signTestVoucher(channelId, 5000000n),
+      await server.verify(
+        verifyContext({
+          credential: {
+            challenge: makeChallenge({ id: 'open-1', channelId }),
+            payload: {
+              action: 'open' as const,
+              type: 'transaction' as const,
+              channelId,
+              transaction: serializedTransaction,
+              cumulativeAmount: '5000000',
+              signature: await signTestVoucher(channelId, 5000000n),
+            },
           },
-        },
-        request: makeRequest(),
-      })
+          request: makeRequest(),
+        }),
+      )
 
       // 2. Settle on-chain so settled becomes 5000000
       const settleTxHash = await settle(store, client, channelId, {
@@ -397,20 +421,22 @@ describe.runIf(isLocalnet)('session', () => {
 
       // 4. Re-open with a new voucher above the settled amount
       const server2 = createServer()
-      const receipt = await server2.verify({
-        credential: {
-          challenge: makeChallenge({ id: 'reopen', channelId }),
-          payload: {
-            action: 'open' as const,
-            type: 'transaction' as const,
-            channelId,
-            transaction: serializedTransaction,
-            cumulativeAmount: '7000000',
-            signature: await signTestVoucher(channelId, 7000000n),
+      const receipt = await server2.verify(
+        verifyContext({
+          credential: {
+            challenge: makeChallenge({ id: 'reopen', channelId }),
+            payload: {
+              action: 'open' as const,
+              type: 'transaction' as const,
+              channelId,
+              transaction: serializedTransaction,
+              cumulativeAmount: '7000000',
+              signature: await signTestVoucher(channelId, 7000000n),
+            },
           },
-        },
-        request: makeRequest(),
-      })
+          request: makeRequest(),
+        }),
+      )
 
       expect(receipt.status).toBe('success')
 
@@ -429,20 +455,22 @@ describe.runIf(isLocalnet)('session', () => {
       const server = createServer()
 
       // Open, settle, wipe store
-      await server.verify({
-        credential: {
-          challenge: makeChallenge({ id: 'open-1', channelId }),
-          payload: {
-            action: 'open' as const,
-            type: 'transaction' as const,
-            channelId,
-            transaction: serializedTransaction,
-            cumulativeAmount: '3000000',
-            signature: await signTestVoucher(channelId, 3000000n),
+      await server.verify(
+        verifyContext({
+          credential: {
+            challenge: makeChallenge({ id: 'open-1', channelId }),
+            payload: {
+              action: 'open' as const,
+              type: 'transaction' as const,
+              channelId,
+              transaction: serializedTransaction,
+              cumulativeAmount: '3000000',
+              signature: await signTestVoucher(channelId, 3000000n),
+            },
           },
-        },
-        request: makeRequest(),
-      })
+          request: makeRequest(),
+        }),
+      )
 
       const settleTxHash = await settle(store, client, channelId, {
         escrowContract,
@@ -452,20 +480,22 @@ describe.runIf(isLocalnet)('session', () => {
 
       // Re-open — receipt.spent must reflect unsettled portion
       const server2 = createServer()
-      const receipt = (await server2.verify({
-        credential: {
-          challenge: makeChallenge({ id: 'reopen', channelId }),
-          payload: {
-            action: 'open' as const,
-            type: 'transaction' as const,
-            channelId,
-            transaction: serializedTransaction,
-            cumulativeAmount: '8000000',
-            signature: await signTestVoucher(channelId, 8000000n),
+      const receipt = (await server2.verify(
+        verifyContext({
+          credential: {
+            challenge: makeChallenge({ id: 'reopen', channelId }),
+            payload: {
+              action: 'open' as const,
+              type: 'transaction' as const,
+              channelId,
+              transaction: serializedTransaction,
+              cumulativeAmount: '8000000',
+              signature: await signTestVoucher(channelId, 8000000n),
+            },
           },
-        },
-        request: makeRequest(),
-      })) as SessionReceipt
+          request: makeRequest(),
+        }),
+      )) as SessionReceipt
 
       // spent reflects on-chain settled (3M) so only unsettled portion is available
       expect(receipt.spent).toBe('3000000')
@@ -479,20 +509,22 @@ describe.runIf(isLocalnet)('session', () => {
       channelId: Hex,
       serializedTransaction: Hex,
     ) {
-      await server.verify({
-        credential: {
-          challenge: makeChallenge({ id: 'open-challenge', channelId }),
-          payload: {
-            action: 'open' as const,
-            type: 'transaction' as const,
-            channelId,
-            transaction: serializedTransaction,
-            cumulativeAmount: '1000000',
-            signature: await signTestVoucher(channelId, 1000000n),
+      await server.verify(
+        verifyContext({
+          credential: {
+            challenge: makeChallenge({ id: 'open-challenge', channelId }),
+            payload: {
+              action: 'open' as const,
+              type: 'transaction' as const,
+              channelId,
+              transaction: serializedTransaction,
+              cumulativeAmount: '1000000',
+              signature: await signTestVoucher(channelId, 1000000n),
+            },
           },
-        },
-        request: makeRequest(),
-      })
+          request: makeRequest(),
+        }),
+      )
     }
 
     test('accepts increasing voucher', async () => {
@@ -500,18 +532,20 @@ describe.runIf(isLocalnet)('session', () => {
       const server = createServer()
       await openServerChannel(server, channelId, serializedTransaction)
 
-      const receipt = await server.verify({
-        credential: {
-          challenge: makeChallenge({ id: 'challenge-2', channelId }),
-          payload: {
-            action: 'voucher' as const,
-            channelId,
-            cumulativeAmount: '2000000',
-            signature: await signTestVoucher(channelId, 2000000n),
+      const receipt = await server.verify(
+        verifyContext({
+          credential: {
+            challenge: makeChallenge({ id: 'challenge-2', channelId }),
+            payload: {
+              action: 'voucher' as const,
+              channelId,
+              cumulativeAmount: '2000000',
+              signature: await signTestVoucher(channelId, 2000000n),
+            },
           },
-        },
-        request: makeRequest(),
-      })
+          request: makeRequest(),
+        }),
+      )
 
       expect(receipt.status).toBe('success')
 
@@ -525,18 +559,20 @@ describe.runIf(isLocalnet)('session', () => {
       await openServerChannel(server, channelId, serializedTransaction)
 
       await expect(
-        server.verify({
-          credential: {
-            challenge: makeChallenge({ id: 'challenge-2', channelId }),
-            payload: {
-              action: 'voucher' as const,
-              channelId,
-              cumulativeAmount: '500000',
-              signature: await signTestVoucher(channelId, 500000n),
+        server.verify(
+          verifyContext({
+            credential: {
+              challenge: makeChallenge({ id: 'challenge-2', channelId }),
+              payload: {
+                action: 'voucher' as const,
+                channelId,
+                cumulativeAmount: '500000',
+                signature: await signTestVoucher(channelId, 500000n),
+              },
             },
-          },
-          request: makeRequest(),
-        }),
+            request: makeRequest(),
+          }),
+        ),
       ).rejects.toThrow(
         'voucher cumulativeAmount must be strictly greater than highest accepted voucher',
       )
@@ -552,18 +588,20 @@ describe.runIf(isLocalnet)('session', () => {
       await settle(store, client, channelId, { escrowContract })
 
       await expect(
-        server.verify({
-          credential: {
-            challenge: makeChallenge({ id: 'challenge-replay', channelId }),
-            payload: {
-              action: 'voucher' as const,
-              channelId,
-              cumulativeAmount: leakedAmount.toString(),
-              signature: leakedSignature,
+        server.verify(
+          verifyContext({
+            credential: {
+              challenge: makeChallenge({ id: 'challenge-replay', channelId }),
+              payload: {
+                action: 'voucher' as const,
+                channelId,
+                cumulativeAmount: leakedAmount.toString(),
+                signature: leakedSignature,
+              },
             },
-          },
-          request: makeRequest(),
-        }),
+            request: makeRequest(),
+          }),
+        ),
       ).rejects.toThrow('voucher cumulativeAmount is below on-chain settled amount')
     })
 
@@ -573,18 +611,20 @@ describe.runIf(isLocalnet)('session', () => {
       await openServerChannel(server, channelId, serializedTransaction)
 
       await expect(
-        server.verify({
-          credential: {
-            challenge: makeChallenge({ id: 'challenge-2', channelId }),
-            payload: {
-              action: 'voucher' as const,
-              channelId,
-              cumulativeAmount: '99999999',
-              signature: await signTestVoucher(channelId, 99999999n),
+        server.verify(
+          verifyContext({
+            credential: {
+              challenge: makeChallenge({ id: 'challenge-2', channelId }),
+              payload: {
+                action: 'voucher' as const,
+                channelId,
+                cumulativeAmount: '99999999',
+                signature: await signTestVoucher(channelId, 99999999n),
+              },
             },
-          },
-          request: makeRequest(),
-        }),
+            request: makeRequest(),
+          }),
+        ),
       ).rejects.toThrow('voucher amount exceeds on-chain deposit')
     })
 
@@ -594,18 +634,20 @@ describe.runIf(isLocalnet)('session', () => {
       await openServerChannel(server, channelId, serializedTransaction)
 
       await expect(
-        server.verify({
-          credential: {
-            challenge: makeChallenge({ id: 'challenge-2', channelId }),
-            payload: {
-              action: 'voucher' as const,
-              channelId,
-              cumulativeAmount: '1500000',
-              signature: await signTestVoucher(channelId, 1500000n),
+        server.verify(
+          verifyContext({
+            credential: {
+              challenge: makeChallenge({ id: 'challenge-2', channelId }),
+              payload: {
+                action: 'voucher' as const,
+                channelId,
+                cumulativeAmount: '1500000',
+                signature: await signTestVoucher(channelId, 1500000n),
+              },
             },
-          },
-          request: makeRequest(),
-        }),
+            request: makeRequest(),
+          }),
+        ),
       ).rejects.toThrow('voucher delta 500000 below minimum 2000000')
     })
 
@@ -614,18 +656,20 @@ describe.runIf(isLocalnet)('session', () => {
       const server = createServer()
 
       await expect(
-        server.verify({
-          credential: {
-            challenge: makeChallenge({ channelId }),
-            payload: {
-              action: 'voucher' as const,
-              channelId,
-              cumulativeAmount: '1000000',
-              signature: await signTestVoucher(channelId, 1000000n),
+        server.verify(
+          verifyContext({
+            credential: {
+              challenge: makeChallenge({ channelId }),
+              payload: {
+                action: 'voucher' as const,
+                channelId,
+                cumulativeAmount: '1000000',
+                signature: await signTestVoucher(channelId, 1000000n),
+              },
             },
-          },
-          request: makeRequest(),
-        }),
+            request: makeRequest(),
+          }),
+        ),
       ).rejects.toThrow(ChannelNotFoundError)
     })
 
@@ -635,20 +679,22 @@ describe.runIf(isLocalnet)('session', () => {
       await openServerChannel(server, channelId, serializedTransaction)
 
       await expect(
-        server.verify({
-          credential: {
-            challenge: makeChallenge({ id: 'hijack-attempt', channelId }),
-            payload: {
-              action: 'voucher' as const,
-              channelId,
-              // Attacker submits cumulativeAmount=500000, which is <= highestVoucherAmount (1000000)
-              // but > settled (0). Rejected by non-increasing cumulative amount check before signature validation.
-              cumulativeAmount: '500000',
-              signature: `0x${'ab'.repeat(65)}` as Hex,
+        server.verify(
+          verifyContext({
+            credential: {
+              challenge: makeChallenge({ id: 'hijack-attempt', channelId }),
+              payload: {
+                action: 'voucher' as const,
+                channelId,
+                // Attacker submits cumulativeAmount=500000, which is <= highestVoucherAmount (1000000)
+                // but > settled (0). Rejected by non-increasing cumulative amount check before signature validation.
+                cumulativeAmount: '500000',
+                signature: `0x${'ab'.repeat(65)}` as Hex,
+              },
             },
-          },
-          request: makeRequest(),
-        }),
+            request: makeRequest(),
+          }),
+        ),
       ).rejects.toThrow(
         'voucher cumulativeAmount must be strictly greater than highest accepted voucher',
       )
@@ -660,19 +706,21 @@ describe.runIf(isLocalnet)('session', () => {
       await openServerChannel(server, channelId, serializedTransaction)
 
       await expect(
-        server.verify({
-          credential: {
-            challenge: makeChallenge({ id: 'forge-attempt', channelId }),
-            payload: {
-              action: 'voucher' as const,
-              channelId,
-              // Higher cumulativeAmount than the open voucher, but forged signature.
-              cumulativeAmount: '2000000',
-              signature: `0x${'cd'.repeat(65)}` as Hex,
+        server.verify(
+          verifyContext({
+            credential: {
+              challenge: makeChallenge({ id: 'forge-attempt', channelId }),
+              payload: {
+                action: 'voucher' as const,
+                channelId,
+                // Higher cumulativeAmount than the open voucher, but forged signature.
+                cumulativeAmount: '2000000',
+                signature: `0x${'cd'.repeat(65)}` as Hex,
+              },
             },
-          },
-          request: makeRequest(),
-        }),
+            request: makeRequest(),
+          }),
+        ),
       ).rejects.toThrow(InvalidSignatureError)
     })
 
@@ -688,23 +736,27 @@ describe.runIf(isLocalnet)('session', () => {
         signature: await signTestVoucher(channelId, 2000000n),
       }
 
-      await server.verify({
-        credential: {
-          challenge: makeChallenge({ id: 'challenge-2', channelId }),
-          payload,
-        },
-        request: makeRequest(),
-      })
+      await server.verify(
+        verifyContext({
+          credential: {
+            challenge: makeChallenge({ id: 'challenge-2', channelId }),
+            payload,
+          },
+          request: makeRequest(),
+        }),
+      )
 
       const channelAfterFirstAccept = await store.getChannel(channelId)
 
-      const replayReceipt = (await server.verify({
-        credential: {
-          challenge: makeChallenge({ id: 'challenge-3', channelId }),
-          payload,
-        },
-        request: makeRequest(),
-      })) as SessionReceipt
+      const replayReceipt = (await server.verify(
+        verifyContext({
+          credential: {
+            challenge: makeChallenge({ id: 'challenge-3', channelId }),
+            payload,
+          },
+          request: makeRequest(),
+        }),
+      )) as SessionReceipt
 
       expect(replayReceipt.status).toBe('success')
       expect(replayReceipt.acceptedCumulative).toBe('2000000')
@@ -728,25 +780,29 @@ describe.runIf(isLocalnet)('session', () => {
         signature: await signTestVoucher(channelId, 2000000n),
       }
 
-      await server.verify({
-        credential: {
-          challenge: makeChallenge({ id: 'challenge-2', channelId }),
-          payload,
-        },
-        request: makeRequest(),
-      })
-
-      await expect(
-        server.verify({
+      await server.verify(
+        verifyContext({
           credential: {
-            challenge: makeChallenge({ id: 'challenge-3', channelId }),
-            payload: {
-              ...payload,
-              signature: `0x${'ab'.repeat(65)}` as Hex,
-            },
+            challenge: makeChallenge({ id: 'challenge-2', channelId }),
+            payload,
           },
           request: makeRequest(),
         }),
+      )
+
+      await expect(
+        server.verify(
+          verifyContext({
+            credential: {
+              challenge: makeChallenge({ id: 'challenge-3', channelId }),
+              payload: {
+                ...payload,
+                signature: `0x${'ab'.repeat(65)}` as Hex,
+              },
+            },
+            request: makeRequest(),
+          }),
+        ),
       ).rejects.toThrow(InvalidSignatureError)
     })
 
@@ -758,27 +814,10 @@ describe.runIf(isLocalnet)('session', () => {
       // Server accepts a higher voucher and then settles on-chain.
       // settle() broadcasts the highestVoucher, leaking it on-chain.
       const voucherSig = await signTestVoucher(channelId, 5000000n)
-      await server.verify({
-        credential: {
-          challenge: makeChallenge({ id: 'challenge-2', channelId }),
-          payload: {
-            action: 'voucher' as const,
-            channelId,
-            cumulativeAmount: '5000000',
-            signature: voucherSig,
-          },
-        },
-        request: makeRequest(),
-      })
-
-      await settle(store, client, channelId, { escrowContract })
-      expect((await store.getChannel(channelId))!.settledOnChain).toBe(5000000n)
-
-      // Attacker replays the leaked voucher via the voucher action.
-      await expect(
-        server.verify({
+      await server.verify(
+        verifyContext({
           credential: {
-            challenge: makeChallenge({ id: 'replay-attempt', channelId }),
+            challenge: makeChallenge({ id: 'challenge-2', channelId }),
             payload: {
               action: 'voucher' as const,
               channelId,
@@ -788,6 +827,27 @@ describe.runIf(isLocalnet)('session', () => {
           },
           request: makeRequest(),
         }),
+      )
+
+      await settle(store, client, channelId, { escrowContract })
+      expect((await store.getChannel(channelId))!.settledOnChain).toBe(5000000n)
+
+      // Attacker replays the leaked voucher via the voucher action.
+      await expect(
+        server.verify(
+          verifyContext({
+            credential: {
+              challenge: makeChallenge({ id: 'replay-attempt', channelId }),
+              payload: {
+                action: 'voucher' as const,
+                channelId,
+                cumulativeAmount: '5000000',
+                signature: voucherSig,
+              },
+            },
+            request: makeRequest(),
+          }),
+        ),
       ).rejects.toThrow('voucher cumulativeAmount is below on-chain settled amount')
     })
 
@@ -799,21 +859,23 @@ describe.runIf(isLocalnet)('session', () => {
       await openServerChannel(server, victimChannelId, victimTx)
 
       const leakedSig = await signTestVoucher(victimChannelId, 5000000n)
-      await server.verify({
-        credential: {
-          challenge: makeChallenge({
-            id: 'c-victim',
-            channelId: victimChannelId,
-          }),
-          payload: {
-            action: 'voucher' as const,
-            channelId: victimChannelId,
-            cumulativeAmount: '5000000',
-            signature: leakedSig,
+      await server.verify(
+        verifyContext({
+          credential: {
+            challenge: makeChallenge({
+              id: 'c-victim',
+              channelId: victimChannelId,
+            }),
+            payload: {
+              action: 'voucher' as const,
+              channelId: victimChannelId,
+              cumulativeAmount: '5000000',
+              signature: leakedSig,
+            },
           },
-        },
-        request: makeRequest(),
-      })
+          request: makeRequest(),
+        }),
+      )
 
       await settle(store, client, victimChannelId, { escrowContract })
 
@@ -834,23 +896,25 @@ describe.runIf(isLocalnet)('session', () => {
       })
 
       await expect(
-        server.verify({
-          credential: {
-            challenge: makeChallenge({
-              id: 'c-attack',
-              channelId: victimChannelId,
-            }),
-            payload: {
-              action: 'open' as const,
-              type: 'transaction' as const,
-              channelId: victimChannelId,
-              transaction: attackerTx,
-              cumulativeAmount: '5000000',
-              signature: leakedSig,
+        server.verify(
+          verifyContext({
+            credential: {
+              challenge: makeChallenge({
+                id: 'c-attack',
+                channelId: victimChannelId,
+              }),
+              payload: {
+                action: 'open' as const,
+                type: 'transaction' as const,
+                channelId: victimChannelId,
+                transaction: attackerTx,
+                cumulativeAmount: '5000000',
+                signature: leakedSig,
+              },
             },
-          },
-          request: makeRequest(),
-        }),
+            request: makeRequest(),
+          }),
+        ),
       ).rejects.toThrow('open transaction does not match claimed channelId')
     })
 
@@ -862,18 +926,20 @@ describe.runIf(isLocalnet)('session', () => {
       await openServerChannel(server, channelId, serializedTransaction)
 
       // Accept a voucher to prime the cache (open already verified on-chain)
-      await server.verify({
-        credential: {
-          challenge: makeChallenge({ id: 'challenge-2', channelId }),
-          payload: {
-            action: 'voucher' as const,
-            channelId,
-            cumulativeAmount: '2000000',
-            signature: await signTestVoucher(channelId, 2000000n),
+      await server.verify(
+        verifyContext({
+          credential: {
+            challenge: makeChallenge({ id: 'challenge-2', channelId }),
+            payload: {
+              action: 'voucher' as const,
+              channelId,
+              cumulativeAmount: '2000000',
+              signature: await signTestVoucher(channelId, 2000000n),
+            },
           },
-        },
-        request: makeRequest(),
-      })
+          request: makeRequest(),
+        }),
+      )
 
       // Payer initiates a force-close on-chain (sets closeRequestedAt != 0)
       await requestCloseChannel({ escrow: escrowContract, payer, channelId })
@@ -883,18 +949,20 @@ describe.runIf(isLocalnet)('session', () => {
       // in verifyAndAcceptVoucher never fires. This should throw
       // ChannelClosedError but currently doesn't due to the stale cache.
       await expect(
-        server.verify({
-          credential: {
-            challenge: makeChallenge({ id: 'challenge-3', channelId }),
-            payload: {
-              action: 'voucher' as const,
-              channelId,
-              cumulativeAmount: '3000000',
-              signature: await signTestVoucher(channelId, 3000000n),
+        server.verify(
+          verifyContext({
+            credential: {
+              challenge: makeChallenge({ id: 'challenge-3', channelId }),
+              payload: {
+                action: 'voucher' as const,
+                channelId,
+                cumulativeAmount: '3000000',
+                signature: await signTestVoucher(channelId, 3000000n),
+              },
             },
-          },
-          request: makeRequest(),
-        }),
+            request: makeRequest(),
+          }),
+        ),
       ).rejects.toThrow(ChannelClosedError)
     })
 
@@ -912,18 +980,20 @@ describe.runIf(isLocalnet)('session', () => {
       // First voucher after close: stale re-query detects closeRequestedAt,
       // persists it to the store, then throws ChannelClosedError.
       await expect(
-        server.verify({
-          credential: {
-            challenge: makeChallenge({ id: 'challenge-2', channelId }),
-            payload: {
-              action: 'voucher' as const,
-              channelId,
-              cumulativeAmount: '2000000',
-              signature: await signTestVoucher(channelId, 2000000n),
+        server.verify(
+          verifyContext({
+            credential: {
+              challenge: makeChallenge({ id: 'challenge-2', channelId }),
+              payload: {
+                action: 'voucher' as const,
+                channelId,
+                cumulativeAmount: '2000000',
+                signature: await signTestVoucher(channelId, 2000000n),
+              },
             },
-          },
-          request: makeRequest(),
-        }),
+            request: makeRequest(),
+          }),
+        ),
       ).rejects.toThrow(ChannelClosedError)
 
       // Now switch to a large TTL so subsequent vouchers use the cached path.
@@ -934,18 +1004,20 @@ describe.runIf(isLocalnet)('session', () => {
         store: rawStore,
       })
       await expect(
-        server2.verify({
-          credential: {
-            challenge: makeChallenge({ id: 'challenge-3', channelId }),
-            payload: {
-              action: 'voucher' as const,
-              channelId,
-              cumulativeAmount: '3000000',
-              signature: await signTestVoucher(channelId, 3000000n),
+        server2.verify(
+          verifyContext({
+            credential: {
+              challenge: makeChallenge({ id: 'challenge-3', channelId }),
+              payload: {
+                action: 'voucher' as const,
+                channelId,
+                cumulativeAmount: '3000000',
+                signature: await signTestVoucher(channelId, 3000000n),
+              },
             },
-          },
-          request: makeRequest(),
-        }),
+            request: makeRequest(),
+          }),
+        ),
       ).rejects.toThrow(ChannelClosedError)
     })
 
@@ -962,21 +1034,23 @@ describe.runIf(isLocalnet)('session', () => {
       await store.updateChannel(channelId, (ch) => (ch ? { ...ch, deposit: 0n } : null))
 
       await expect(
-        server.verify({
-          credential: {
-            challenge: makeChallenge({
-              id: 'challenge-after-settle',
-              channelId,
-            }),
-            payload: {
-              action: 'voucher' as const,
-              channelId,
-              cumulativeAmount: '2000000',
-              signature: await signTestVoucher(channelId, 2000000n),
+        server.verify(
+          verifyContext({
+            credential: {
+              challenge: makeChallenge({
+                id: 'challenge-after-settle',
+                channelId,
+              }),
+              payload: {
+                action: 'voucher' as const,
+                channelId,
+                cumulativeAmount: '2000000',
+                signature: await signTestVoucher(channelId, 2000000n),
+              },
             },
-          },
-          request: makeRequest(),
-        }),
+            request: makeRequest(),
+          }),
+        ),
       ).rejects.toThrow(ChannelClosedError)
     })
   })
@@ -987,20 +1061,22 @@ describe.runIf(isLocalnet)('session', () => {
       channelId: Hex,
       serializedTransaction: Hex,
     ) {
-      await server.verify({
-        credential: {
-          challenge: makeChallenge({ id: 'open-challenge', channelId }),
-          payload: {
-            action: 'open' as const,
-            type: 'transaction' as const,
-            channelId,
-            transaction: serializedTransaction,
-            cumulativeAmount: '1000000',
-            signature: await signTestVoucher(channelId, 1000000n),
+      await server.verify(
+        verifyContext({
+          credential: {
+            challenge: makeChallenge({ id: 'open-challenge', channelId }),
+            payload: {
+              action: 'open' as const,
+              type: 'transaction' as const,
+              channelId,
+              transaction: serializedTransaction,
+              cumulativeAmount: '1000000',
+              signature: await signTestVoucher(channelId, 1000000n),
+            },
           },
-        },
-        request: makeRequest(),
-      })
+          request: makeRequest(),
+        }),
+      )
     }
 
     test('accepts topUp with increased deposit', async () => {
@@ -1016,19 +1092,21 @@ describe.runIf(isLocalnet)('session', () => {
         amount: 10000000n,
       })
 
-      const receipt = await server.verify({
-        credential: {
-          challenge: makeChallenge({ id: 'challenge-2', channelId }),
-          payload: {
-            action: 'topUp' as const,
-            type: 'transaction' as const,
-            channelId,
-            transaction: topUpTx,
-            additionalDeposit: '10000000',
+      const receipt = await server.verify(
+        verifyContext({
+          credential: {
+            challenge: makeChallenge({ id: 'challenge-2', channelId }),
+            payload: {
+              action: 'topUp' as const,
+              type: 'transaction' as const,
+              channelId,
+              transaction: topUpTx,
+              additionalDeposit: '10000000',
+            },
           },
-        },
-        request: makeRequest(),
-      })
+          request: makeRequest(),
+        }),
+      )
 
       expect(receipt.status).toBe('success')
 
@@ -1056,19 +1134,21 @@ describe.runIf(isLocalnet)('session', () => {
         amount: 5000000n,
       })
 
-      const receipt = (await server.verify({
-        credential: {
-          challenge: makeChallenge({ id: 'challenge-topup', channelId }),
-          payload: {
-            action: 'topUp' as const,
-            type: 'transaction' as const,
-            channelId,
-            transaction: topUpTx,
-            additionalDeposit: '5000000',
+      const receipt = (await server.verify(
+        verifyContext({
+          credential: {
+            challenge: makeChallenge({ id: 'challenge-topup', channelId }),
+            payload: {
+              action: 'topUp' as const,
+              type: 'transaction' as const,
+              channelId,
+              transaction: topUpTx,
+              additionalDeposit: '5000000',
+            },
           },
-        },
-        request: makeRequest(),
-      })) as SessionReceipt
+          request: makeRequest(),
+        }),
+      )) as SessionReceipt
 
       expect(receipt.status).toBe('success')
       expect(receipt.spent).toBe('800000')
@@ -1085,19 +1165,21 @@ describe.runIf(isLocalnet)('session', () => {
       const server = createServer()
 
       await expect(
-        server.verify({
-          credential: {
-            challenge: makeChallenge({ channelId }),
-            payload: {
-              action: 'topUp' as const,
-              type: 'transaction' as const,
-              channelId,
-              transaction: '0xabcdef' as Hex,
-              additionalDeposit: '5000000',
+        server.verify(
+          verifyContext({
+            credential: {
+              challenge: makeChallenge({ channelId }),
+              payload: {
+                action: 'topUp' as const,
+                type: 'transaction' as const,
+                channelId,
+                transaction: '0xabcdef' as Hex,
+                additionalDeposit: '5000000',
+              },
             },
-          },
-          request: makeRequest(),
-        }),
+            request: makeRequest(),
+          }),
+        ),
       ).rejects.toThrow(ChannelNotFoundError)
     })
   })
@@ -1108,20 +1190,22 @@ describe.runIf(isLocalnet)('session', () => {
       channelId: Hex,
       serializedTransaction: Hex,
     ) {
-      await server.verify({
-        credential: {
-          challenge: makeChallenge({ id: 'open-challenge', channelId }),
-          payload: {
-            action: 'open' as const,
-            type: 'transaction' as const,
-            channelId,
-            transaction: serializedTransaction,
-            cumulativeAmount: '1000000',
-            signature: await signTestVoucher(channelId, 1000000n),
+      await server.verify(
+        verifyContext({
+          credential: {
+            challenge: makeChallenge({ id: 'open-challenge', channelId }),
+            payload: {
+              action: 'open' as const,
+              type: 'transaction' as const,
+              channelId,
+              transaction: serializedTransaction,
+              cumulativeAmount: '1000000',
+              signature: await signTestVoucher(channelId, 1000000n),
+            },
           },
-        },
-        request: makeRequest(),
-      })
+          request: makeRequest(),
+        }),
+      )
     }
 
     test('accepts close with final voucher >= highest', async () => {
@@ -1129,18 +1213,20 @@ describe.runIf(isLocalnet)('session', () => {
       const server = createServer()
       await openServerChannel(server, channelId, serializedTransaction)
 
-      const receipt = await server.verify({
-        credential: {
-          challenge: makeChallenge({ id: 'challenge-2', channelId }),
-          payload: {
-            action: 'close' as const,
-            channelId,
-            cumulativeAmount: '1000000',
-            signature: await signTestVoucher(channelId, 1000000n),
+      const receipt = await server.verify(
+        verifyContext({
+          credential: {
+            challenge: makeChallenge({ id: 'challenge-2', channelId }),
+            payload: {
+              action: 'close' as const,
+              channelId,
+              cumulativeAmount: '1000000',
+              signature: await signTestVoucher(channelId, 1000000n),
+            },
           },
-        },
-        request: makeRequest(),
-      })
+          request: makeRequest(),
+        }),
+      )
 
       expect(receipt.status).toBe('success')
 
@@ -1154,18 +1240,20 @@ describe.runIf(isLocalnet)('session', () => {
       const server = createServer()
       await openServerChannel(server, channelId, serializedTransaction)
 
-      const receipt = await server.verify({
-        credential: {
-          challenge: makeChallenge({ id: 'challenge-2', channelId }),
-          payload: {
-            action: 'close' as const,
-            channelId,
-            cumulativeAmount: '5000000',
-            signature: await signTestVoucher(channelId, 5000000n),
+      const receipt = await server.verify(
+        verifyContext({
+          credential: {
+            challenge: makeChallenge({ id: 'challenge-2', channelId }),
+            payload: {
+              action: 'close' as const,
+              channelId,
+              cumulativeAmount: '5000000',
+              signature: await signTestVoucher(channelId, 5000000n),
+            },
           },
-        },
-        request: makeRequest(),
-      })
+          request: makeRequest(),
+        }),
+      )
 
       expect(receipt.status).toBe('success')
 
@@ -1178,33 +1266,37 @@ describe.runIf(isLocalnet)('session', () => {
       const server = createServer()
       await openServerChannel(server, channelId, serializedTransaction)
 
-      await server.verify({
-        credential: {
-          challenge: makeChallenge({ id: 'challenge-2', channelId }),
-          payload: {
-            action: 'voucher' as const,
-            channelId,
-            cumulativeAmount: '3000000',
-            signature: await signTestVoucher(channelId, 3000000n),
+      await server.verify(
+        verifyContext({
+          credential: {
+            challenge: makeChallenge({ id: 'challenge-2', channelId }),
+            payload: {
+              action: 'voucher' as const,
+              channelId,
+              cumulativeAmount: '3000000',
+              signature: await signTestVoucher(channelId, 3000000n),
+            },
           },
-        },
-        request: makeRequest(),
-      })
+          request: makeRequest(),
+        }),
+      )
 
       await charge(store, channelId, 500000n)
 
-      const receipt = await server.verify({
-        credential: {
-          challenge: makeChallenge({ id: 'challenge-3', channelId }),
-          payload: {
-            action: 'close' as const,
-            channelId,
-            cumulativeAmount: '500000',
-            signature: await signTestVoucher(channelId, 500000n),
+      const receipt = await server.verify(
+        verifyContext({
+          credential: {
+            challenge: makeChallenge({ id: 'challenge-3', channelId }),
+            payload: {
+              action: 'close' as const,
+              channelId,
+              cumulativeAmount: '500000',
+              signature: await signTestVoucher(channelId, 500000n),
+            },
           },
-        },
-        request: makeRequest(),
-      })
+          request: makeRequest(),
+        }),
+      )
 
       expect(receipt.status).toBe('success')
 
@@ -1222,18 +1314,20 @@ describe.runIf(isLocalnet)('session', () => {
       await charge(store, channelId, 500000n)
 
       await expect(
-        server.verify({
-          credential: {
-            challenge: makeChallenge({ id: 'challenge-2', channelId }),
-            payload: {
-              action: 'close' as const,
-              channelId,
-              cumulativeAmount: '100000',
-              signature: await signTestVoucher(channelId, 100000n),
+        server.verify(
+          verifyContext({
+            credential: {
+              challenge: makeChallenge({ id: 'challenge-2', channelId }),
+              payload: {
+                action: 'close' as const,
+                channelId,
+                cumulativeAmount: '100000',
+                signature: await signTestVoucher(channelId, 100000n),
+              },
             },
-          },
-          request: makeRequest(),
-        }),
+            request: makeRequest(),
+          }),
+        ),
       ).rejects.toThrow('close voucher amount must be >=')
     })
 
@@ -1253,18 +1347,20 @@ describe.runIf(isLocalnet)('session', () => {
       // Try to close with voucher == on-chain settled — should be rejected
       // because replaying the settled amount doesn't commit new funds
       await expect(
-        server.verify({
-          credential: {
-            challenge: makeChallenge({ id: 'challenge-2', channelId }),
-            payload: {
-              action: 'close' as const,
-              channelId,
-              cumulativeAmount: '1000000',
-              signature: await signTestVoucher(channelId, 1000000n),
+        server.verify(
+          verifyContext({
+            credential: {
+              challenge: makeChallenge({ id: 'challenge-2', channelId }),
+              payload: {
+                action: 'close' as const,
+                channelId,
+                cumulativeAmount: '1000000',
+                signature: await signTestVoucher(channelId, 1000000n),
+              },
             },
-          },
-          request: makeRequest(),
-        }),
+            request: makeRequest(),
+          }),
+        ),
       ).rejects.toThrow('close voucher amount must be >')
     })
 
@@ -1274,18 +1370,20 @@ describe.runIf(isLocalnet)('session', () => {
       await openServerChannel(server, channelId, serializedTransaction)
 
       await expect(
-        server.verify({
-          credential: {
-            challenge: makeChallenge({ id: 'challenge-2', channelId }),
-            payload: {
-              action: 'close' as const,
-              channelId,
-              cumulativeAmount: '99999999',
-              signature: await signTestVoucher(channelId, 99999999n),
+        server.verify(
+          verifyContext({
+            credential: {
+              challenge: makeChallenge({ id: 'challenge-2', channelId }),
+              payload: {
+                action: 'close' as const,
+                channelId,
+                cumulativeAmount: '99999999',
+                signature: await signTestVoucher(channelId, 99999999n),
+              },
             },
-          },
-          request: makeRequest(),
-        }),
+            request: makeRequest(),
+          }),
+        ),
       ).rejects.toThrow('close voucher amount exceeds on-chain deposit')
     })
 
@@ -1302,18 +1400,20 @@ describe.runIf(isLocalnet)('session', () => {
         amount: 10000000n,
       })
 
-      const receipt = await server.verify({
-        credential: {
-          challenge: makeChallenge({ id: 'challenge-2', channelId }),
-          payload: {
-            action: 'close' as const,
-            channelId,
-            cumulativeAmount: '15000000',
-            signature: await signTestVoucher(channelId, 15000000n),
+      const receipt = await server.verify(
+        verifyContext({
+          credential: {
+            challenge: makeChallenge({ id: 'challenge-2', channelId }),
+            payload: {
+              action: 'close' as const,
+              channelId,
+              cumulativeAmount: '15000000',
+              signature: await signTestVoucher(channelId, 15000000n),
+            },
           },
-        },
-        request: makeRequest(),
-      })
+          request: makeRequest(),
+        }),
+      )
 
       expect(receipt.status).toBe('success')
     })
@@ -1323,9 +1423,32 @@ describe.runIf(isLocalnet)('session', () => {
       const server = createServer()
 
       await expect(
-        server.verify({
+        server.verify(
+          verifyContext({
+            credential: {
+              challenge: makeChallenge({ channelId }),
+              payload: {
+                action: 'close' as const,
+                channelId,
+                cumulativeAmount: '1000000',
+                signature: await signTestVoucher(channelId, 1000000n),
+              },
+            },
+            request: makeRequest(),
+          }),
+        ),
+      ).rejects.toThrow(ChannelNotFoundError)
+    })
+
+    test('close submits on-chain and returns txHash', async () => {
+      const { channelId, serializedTransaction } = await createSignedOpenTransaction(10000000n)
+      const server = createServer({ getClient: () => client })
+      await openServerChannel(server, channelId, serializedTransaction)
+
+      const receipt = await server.verify(
+        verifyContext({
           credential: {
-            challenge: makeChallenge({ channelId }),
+            challenge: makeChallenge({ id: 'challenge-2', channelId }),
             payload: {
               action: 'close' as const,
               channelId,
@@ -1335,26 +1458,7 @@ describe.runIf(isLocalnet)('session', () => {
           },
           request: makeRequest(),
         }),
-      ).rejects.toThrow(ChannelNotFoundError)
-    })
-
-    test('close submits on-chain and returns txHash', async () => {
-      const { channelId, serializedTransaction } = await createSignedOpenTransaction(10000000n)
-      const server = createServer({ getClient: () => client })
-      await openServerChannel(server, channelId, serializedTransaction)
-
-      const receipt = await server.verify({
-        credential: {
-          challenge: makeChallenge({ id: 'challenge-2', channelId }),
-          payload: {
-            action: 'close' as const,
-            channelId,
-            cumulativeAmount: '1000000',
-            signature: await signTestVoucher(channelId, 1000000n),
-          },
-        },
-        request: makeRequest(),
-      })
+      )
 
       expect(receipt.status).toBe('success')
       expect((receipt as SessionReceipt).txHash).toMatch(/^0x/)
@@ -1394,64 +1498,72 @@ describe.runIf(isLocalnet)('session', () => {
       const { channelId, serializedTransaction } = await createSignedOpenTransaction(10000000n)
       const server = createServer()
 
-      await server.verify({
-        credential: {
-          challenge: makeChallenge({ id: 'c1', channelId }),
-          payload: {
-            action: 'open' as const,
-            type: 'transaction' as const,
-            channelId,
-            transaction: serializedTransaction,
-            cumulativeAmount: '1000000',
-            signature: await signTestVoucher(channelId, 1000000n),
+      await server.verify(
+        verifyContext({
+          credential: {
+            challenge: makeChallenge({ id: 'c1', channelId }),
+            payload: {
+              action: 'open' as const,
+              type: 'transaction' as const,
+              channelId,
+              transaction: serializedTransaction,
+              cumulativeAmount: '1000000',
+              signature: await signTestVoucher(channelId, 1000000n),
+            },
           },
-        },
-        request: makeRequest(),
-      })
+          request: makeRequest(),
+        }),
+      )
 
-      const r2 = await server.verify({
-        credential: {
-          challenge: makeChallenge({ id: 'c2', channelId }),
-          payload: {
-            action: 'voucher' as const,
-            channelId,
-            cumulativeAmount: '3000000',
-            signature: await signTestVoucher(channelId, 3000000n),
+      const r2 = await server.verify(
+        verifyContext({
+          credential: {
+            challenge: makeChallenge({ id: 'c2', channelId }),
+            payload: {
+              action: 'voucher' as const,
+              channelId,
+              cumulativeAmount: '3000000',
+              signature: await signTestVoucher(channelId, 3000000n),
+            },
           },
-        },
-        request: makeRequest(),
-      })
+          request: makeRequest(),
+        }),
+      )
       expect(r2.status).toBe('success')
 
-      const r3 = await server.verify({
-        credential: {
-          challenge: makeChallenge({ id: 'c3', channelId }),
-          payload: {
-            action: 'voucher' as const,
-            channelId,
-            cumulativeAmount: '7000000',
-            signature: await signTestVoucher(channelId, 7000000n),
+      const r3 = await server.verify(
+        verifyContext({
+          credential: {
+            challenge: makeChallenge({ id: 'c3', channelId }),
+            payload: {
+              action: 'voucher' as const,
+              channelId,
+              cumulativeAmount: '7000000',
+              signature: await signTestVoucher(channelId, 7000000n),
+            },
           },
-        },
-        request: makeRequest(),
-      })
+          request: makeRequest(),
+        }),
+      )
       expect(r3.status).toBe('success')
 
       const ch = await store.getChannel(channelId)
       expect(ch!.highestVoucherAmount).toBe(7000000n)
 
-      const r4 = await server.verify({
-        credential: {
-          challenge: makeChallenge({ id: 'c4', channelId }),
-          payload: {
-            action: 'close' as const,
-            channelId,
-            cumulativeAmount: '7000000',
-            signature: await signTestVoucher(channelId, 7000000n),
+      const r4 = await server.verify(
+        verifyContext({
+          credential: {
+            challenge: makeChallenge({ id: 'c4', channelId }),
+            payload: {
+              action: 'close' as const,
+              channelId,
+              cumulativeAmount: '7000000',
+              signature: await signTestVoucher(channelId, 7000000n),
+            },
           },
-        },
-        request: makeRequest(),
-      })
+          request: makeRequest(),
+        }),
+      )
       expect(r4.status).toBe('success')
       expect(r4.reference).toBe(channelId)
 
@@ -1466,51 +1578,57 @@ describe.runIf(isLocalnet)('session', () => {
       })
       const server = createServer()
 
-      const openReceipt = await server.verify({
-        credential: {
-          challenge: makeChallenge({ id: 'open-delegated', channelId }),
-          payload: {
-            action: 'open' as const,
-            type: 'transaction' as const,
-            channelId,
-            transaction: serializedTransaction,
-            cumulativeAmount: '1000000',
-            signature: await signTestVoucher(channelId, 1000000n, delegatedSigner),
+      const openReceipt = await server.verify(
+        verifyContext({
+          credential: {
+            challenge: makeChallenge({ id: 'open-delegated', channelId }),
+            payload: {
+              action: 'open' as const,
+              type: 'transaction' as const,
+              channelId,
+              transaction: serializedTransaction,
+              cumulativeAmount: '1000000',
+              signature: await signTestVoucher(channelId, 1000000n, delegatedSigner),
+            },
           },
-        },
-        request: makeRequest(),
-      })
+          request: makeRequest(),
+        }),
+      )
       expect(openReceipt.status).toBe('success')
 
       const channel = await store.getChannel(channelId)
       expect(channel?.authorizedSigner).toBe(delegatedSigner.address)
 
-      const voucherReceipt = (await server.verify({
-        credential: {
-          challenge: makeChallenge({ id: 'voucher-delegated', channelId }),
-          payload: {
-            action: 'voucher' as const,
-            channelId,
-            cumulativeAmount: '2000000',
-            signature: await signTestVoucher(channelId, 2000000n, delegatedSigner),
+      const voucherReceipt = (await server.verify(
+        verifyContext({
+          credential: {
+            challenge: makeChallenge({ id: 'voucher-delegated', channelId }),
+            payload: {
+              action: 'voucher' as const,
+              channelId,
+              cumulativeAmount: '2000000',
+              signature: await signTestVoucher(channelId, 2000000n, delegatedSigner),
+            },
           },
-        },
-        request: makeRequest(),
-      })) as SessionReceipt
+          request: makeRequest(),
+        }),
+      )) as SessionReceipt
       expect(voucherReceipt.acceptedCumulative).toBe('2000000')
 
-      const closeReceipt = await server.verify({
-        credential: {
-          challenge: makeChallenge({ id: 'close-delegated', channelId }),
-          payload: {
-            action: 'close' as const,
-            channelId,
-            cumulativeAmount: '2000000',
-            signature: await signTestVoucher(channelId, 2000000n, delegatedSigner),
+      const closeReceipt = await server.verify(
+        verifyContext({
+          credential: {
+            challenge: makeChallenge({ id: 'close-delegated', channelId }),
+            payload: {
+              action: 'close' as const,
+              channelId,
+              cumulativeAmount: '2000000',
+              signature: await signTestVoucher(channelId, 2000000n, delegatedSigner),
+            },
           },
-        },
-        request: makeRequest(),
-      })
+          request: makeRequest(),
+        }),
+      )
       expect(closeReceipt.status).toBe('success')
     })
 
@@ -1518,20 +1636,22 @@ describe.runIf(isLocalnet)('session', () => {
       const { channelId, serializedTransaction } = await createSignedOpenTransaction(4000000n)
       const server = createServer()
 
-      const openReceipt = await server.verify({
-        credential: {
-          challenge: makeChallenge({ id: 'open-multi-topup', channelId }),
-          payload: {
-            action: 'open' as const,
-            type: 'transaction' as const,
-            channelId,
-            transaction: serializedTransaction,
-            cumulativeAmount: '1000000',
-            signature: await signTestVoucher(channelId, 1000000n),
+      const openReceipt = await server.verify(
+        verifyContext({
+          credential: {
+            challenge: makeChallenge({ id: 'open-multi-topup', channelId }),
+            payload: {
+              action: 'open' as const,
+              type: 'transaction' as const,
+              channelId,
+              transaction: serializedTransaction,
+              cumulativeAmount: '1000000',
+              signature: await signTestVoucher(channelId, 1000000n),
+            },
           },
-        },
-        request: makeRequest(),
-      })
+          request: makeRequest(),
+        }),
+      )
       expect(openReceipt.status).toBe('success')
 
       await charge(store, channelId, 1000000n)
@@ -1546,34 +1666,38 @@ describe.runIf(isLocalnet)('session', () => {
         amount: topUp1Amount,
       })
 
-      const topUp1Receipt = await server.verify({
-        credential: {
-          challenge: makeChallenge({ id: 'topup-1', channelId }),
-          payload: {
-            action: 'topUp' as const,
-            type: 'transaction' as const,
-            channelId,
-            transaction: topUp1,
-            additionalDeposit: topUp1Amount.toString(),
+      const topUp1Receipt = await server.verify(
+        verifyContext({
+          credential: {
+            challenge: makeChallenge({ id: 'topup-1', channelId }),
+            payload: {
+              action: 'topUp' as const,
+              type: 'transaction' as const,
+              channelId,
+              transaction: topUp1,
+              additionalDeposit: topUp1Amount.toString(),
+            },
           },
-        },
-        request: makeRequest(),
-      })
+          request: makeRequest(),
+        }),
+      )
       expect(topUp1Receipt.status).toBe('success')
       expect((await store.getChannel(channelId))?.deposit).toBe(6000000n)
 
-      const voucher1 = (await server.verify({
-        credential: {
-          challenge: makeChallenge({ id: 'voucher-after-topup-1', channelId }),
-          payload: {
-            action: 'voucher' as const,
-            channelId,
-            cumulativeAmount: '3000000',
-            signature: await signTestVoucher(channelId, 3000000n),
+      const voucher1 = (await server.verify(
+        verifyContext({
+          credential: {
+            challenge: makeChallenge({ id: 'voucher-after-topup-1', channelId }),
+            payload: {
+              action: 'voucher' as const,
+              channelId,
+              cumulativeAmount: '3000000',
+              signature: await signTestVoucher(channelId, 3000000n),
+            },
           },
-        },
-        request: makeRequest(),
-      })) as SessionReceipt
+          request: makeRequest(),
+        }),
+      )) as SessionReceipt
       expect(voucher1.acceptedCumulative).toBe('3000000')
 
       await charge(store, channelId, 2000000n)
@@ -1588,50 +1712,56 @@ describe.runIf(isLocalnet)('session', () => {
         amount: topUp2Amount,
       })
 
-      const topUp2Receipt = await server.verify({
-        credential: {
-          challenge: makeChallenge({ id: 'topup-2', channelId }),
-          payload: {
-            action: 'topUp' as const,
-            type: 'transaction' as const,
-            channelId,
-            transaction: topUp2,
-            additionalDeposit: topUp2Amount.toString(),
+      const topUp2Receipt = await server.verify(
+        verifyContext({
+          credential: {
+            challenge: makeChallenge({ id: 'topup-2', channelId }),
+            payload: {
+              action: 'topUp' as const,
+              type: 'transaction' as const,
+              channelId,
+              transaction: topUp2,
+              additionalDeposit: topUp2Amount.toString(),
+            },
           },
-        },
-        request: makeRequest(),
-      })
+          request: makeRequest(),
+        }),
+      )
       expect(topUp2Receipt.status).toBe('success')
       expect((await store.getChannel(channelId))?.deposit).toBe(8000000n)
 
-      const voucher2 = (await server.verify({
-        credential: {
-          challenge: makeChallenge({ id: 'voucher-after-topup-2', channelId }),
-          payload: {
-            action: 'voucher' as const,
-            channelId,
-            cumulativeAmount: '5000000',
-            signature: await signTestVoucher(channelId, 5000000n),
+      const voucher2 = (await server.verify(
+        verifyContext({
+          credential: {
+            challenge: makeChallenge({ id: 'voucher-after-topup-2', channelId }),
+            payload: {
+              action: 'voucher' as const,
+              channelId,
+              cumulativeAmount: '5000000',
+              signature: await signTestVoucher(channelId, 5000000n),
+            },
           },
-        },
-        request: makeRequest(),
-      })) as SessionReceipt
+          request: makeRequest(),
+        }),
+      )) as SessionReceipt
       expect(voucher2.acceptedCumulative).toBe('5000000')
 
       await charge(store, channelId, 2000000n)
 
-      const closeReceipt = await server.verify({
-        credential: {
-          challenge: makeChallenge({ id: 'close-multi-topup', channelId }),
-          payload: {
-            action: 'close' as const,
-            channelId,
-            cumulativeAmount: '5000000',
-            signature: await signTestVoucher(channelId, 5000000n),
+      const closeReceipt = await server.verify(
+        verifyContext({
+          credential: {
+            challenge: makeChallenge({ id: 'close-multi-topup', channelId }),
+            payload: {
+              action: 'close' as const,
+              channelId,
+              cumulativeAmount: '5000000',
+              signature: await signTestVoucher(channelId, 5000000n),
+            },
           },
-        },
-        request: makeRequest(),
-      })
+          request: makeRequest(),
+        }),
+      )
       expect(closeReceipt.status).toBe('success')
 
       const finalized = await store.getChannel(channelId)
@@ -1645,20 +1775,22 @@ describe.runIf(isLocalnet)('session', () => {
       const { channelId, serializedTransaction } = await createSignedOpenTransaction(10000000n)
       const server = createServer()
 
-      await server.verify({
-        credential: {
-          challenge: makeChallenge({ id: 'c1', channelId }),
-          payload: {
-            action: 'open' as const,
-            type: 'transaction' as const,
-            channelId,
-            transaction: serializedTransaction,
-            cumulativeAmount: '5000000',
-            signature: await signTestVoucher(channelId, 5000000n),
+      await server.verify(
+        verifyContext({
+          credential: {
+            challenge: makeChallenge({ id: 'c1', channelId }),
+            payload: {
+              action: 'open' as const,
+              type: 'transaction' as const,
+              channelId,
+              transaction: serializedTransaction,
+              cumulativeAmount: '5000000',
+              signature: await signTestVoucher(channelId, 5000000n),
+            },
           },
-        },
-        request: makeRequest(),
-      })
+          request: makeRequest(),
+        }),
+      )
 
       const result = await charge(store, channelId, 1000000n)
       expect(result.spent).toBe(1000000n)
@@ -1673,20 +1805,22 @@ describe.runIf(isLocalnet)('session', () => {
       const { channelId, serializedTransaction } = await createSignedOpenTransaction(10000000n)
       const server = createServer()
 
-      await server.verify({
-        credential: {
-          challenge: makeChallenge({ id: 'c1', channelId }),
-          payload: {
-            action: 'open' as const,
-            type: 'transaction' as const,
-            channelId,
-            transaction: serializedTransaction,
-            cumulativeAmount: '1000000',
-            signature: await signTestVoucher(channelId, 1000000n),
+      await server.verify(
+        verifyContext({
+          credential: {
+            challenge: makeChallenge({ id: 'c1', channelId }),
+            payload: {
+              action: 'open' as const,
+              type: 'transaction' as const,
+              channelId,
+              transaction: serializedTransaction,
+              cumulativeAmount: '1000000',
+              signature: await signTestVoucher(channelId, 1000000n),
+            },
           },
-        },
-        request: makeRequest(),
-      })
+          request: makeRequest(),
+        }),
+      )
 
       await expect(charge(store, channelId, 2000000n)).rejects.toThrow(InsufficientBalanceError)
     })
@@ -1703,20 +1837,22 @@ describe.runIf(isLocalnet)('session', () => {
       const { channelId, serializedTransaction } = await createSignedOpenTransaction(10000000n)
       const server = createServer()
 
-      await server.verify({
-        credential: {
-          challenge: makeChallenge({ id: 'c1', channelId }),
-          payload: {
-            action: 'open' as const,
-            type: 'transaction' as const,
-            channelId,
-            transaction: serializedTransaction,
-            cumulativeAmount: '5000000',
-            signature: await signTestVoucher(channelId, 5000000n),
+      await server.verify(
+        verifyContext({
+          credential: {
+            challenge: makeChallenge({ id: 'c1', channelId }),
+            payload: {
+              action: 'open' as const,
+              type: 'transaction' as const,
+              channelId,
+              transaction: serializedTransaction,
+              cumulativeAmount: '5000000',
+              signature: await signTestVoucher(channelId, 5000000n),
+            },
           },
-        },
-        request: makeRequest(),
-      })
+          request: makeRequest(),
+        }),
+      )
 
       const settleTxHash = await settle(store, client, channelId, {
         escrowContract,
@@ -1742,20 +1878,22 @@ describe.runIf(isLocalnet)('session', () => {
       const server = createServer()
 
       // Open channel and accept a voucher.
-      await server.verify({
-        credential: {
-          challenge: makeChallenge({ id: 'c1', channelId }),
-          payload: {
-            action: 'open' as const,
-            type: 'transaction' as const,
-            channelId,
-            transaction: serializedTransaction,
-            cumulativeAmount: '5000000',
-            signature: await signTestVoucher(channelId, 5000000n),
+      await server.verify(
+        verifyContext({
+          credential: {
+            challenge: makeChallenge({ id: 'c1', channelId }),
+            payload: {
+              action: 'open' as const,
+              type: 'transaction' as const,
+              channelId,
+              transaction: serializedTransaction,
+              cumulativeAmount: '5000000',
+              signature: await signTestVoucher(channelId, 5000000n),
+            },
           },
-        },
-        request: makeRequest(),
-      })
+          request: makeRequest(),
+        }),
+      )
 
       // Settle on-chain so onChain.settled = 5000000.
       const settleTxHash = await settle(store, client, channelId, {
@@ -1770,20 +1908,22 @@ describe.runIf(isLocalnet)('session', () => {
 
       // Re-open with a new (fresh) server instance using the same store.
       const server2 = createServer()
-      const receipt = (await server2.verify({
-        credential: {
-          challenge: makeChallenge({ id: 'c2', channelId }),
-          payload: {
-            action: 'open' as const,
-            type: 'transaction' as const,
-            channelId,
-            transaction: serializedTransaction,
-            cumulativeAmount: '7000000',
-            signature: await signTestVoucher(channelId, 7000000n),
+      const receipt = (await server2.verify(
+        verifyContext({
+          credential: {
+            challenge: makeChallenge({ id: 'c2', channelId }),
+            payload: {
+              action: 'open' as const,
+              type: 'transaction' as const,
+              channelId,
+              transaction: serializedTransaction,
+              cumulativeAmount: '7000000',
+              signature: await signTestVoucher(channelId, 7000000n),
+            },
           },
-        },
-        request: makeRequest(),
-      })) as SessionReceipt
+          request: makeRequest(),
+        }),
+      )) as SessionReceipt
 
       expect(receipt.status).toBe('success')
 
@@ -1799,20 +1939,22 @@ describe.runIf(isLocalnet)('session', () => {
       const { channelId, serializedTransaction } = await createSignedOpenTransaction(10000000n)
       const server = createServer()
 
-      await server.verify({
-        credential: {
-          challenge: makeChallenge({ id: 'c1', channelId }),
-          payload: {
-            action: 'open' as const,
-            type: 'transaction' as const,
-            channelId,
-            transaction: serializedTransaction,
-            cumulativeAmount: '5000000',
-            signature: await signTestVoucher(channelId, 5000000n),
+      await server.verify(
+        verifyContext({
+          credential: {
+            challenge: makeChallenge({ id: 'c1', channelId }),
+            payload: {
+              action: 'open' as const,
+              type: 'transaction' as const,
+              channelId,
+              transaction: serializedTransaction,
+              cumulativeAmount: '5000000',
+              signature: await signTestVoucher(channelId, 5000000n),
+            },
           },
-        },
-        request: makeRequest(),
-      })
+          request: makeRequest(),
+        }),
+      )
 
       const settleTxHash2 = await settle(store, client, channelId, {
         escrowContract,
@@ -1824,20 +1966,22 @@ describe.runIf(isLocalnet)('session', () => {
 
       // Re-open with voucher = 6000000 on a channel with settled = 5000000.
       const server2 = createServer()
-      await server2.verify({
-        credential: {
-          challenge: makeChallenge({ id: 'c2', channelId }),
-          payload: {
-            action: 'open' as const,
-            type: 'transaction' as const,
-            channelId,
-            transaction: serializedTransaction,
-            cumulativeAmount: '6000000',
-            signature: await signTestVoucher(channelId, 6000000n),
+      await server2.verify(
+        verifyContext({
+          credential: {
+            challenge: makeChallenge({ id: 'c2', channelId }),
+            payload: {
+              action: 'open' as const,
+              type: 'transaction' as const,
+              channelId,
+              transaction: serializedTransaction,
+              cumulativeAmount: '6000000',
+              signature: await signTestVoucher(channelId, 6000000n),
+            },
           },
-        },
-        request: makeRequest(),
-      })
+          request: makeRequest(),
+        }),
+      )
 
       // spent = settledOnChain = 5M, highestVoucherAmount = 6M.
       // Available = 6M - 5M = 1M (only the unsettled portion).
@@ -1853,20 +1997,22 @@ describe.runIf(isLocalnet)('session', () => {
       const { channelId, serializedTransaction } = await createSignedOpenTransaction(10000000n)
       const server = createServer()
 
-      await server.verify({
-        credential: {
-          challenge: makeChallenge({ id: 'c1', channelId }),
-          payload: {
-            action: 'open' as const,
-            type: 'transaction' as const,
-            channelId,
-            transaction: serializedTransaction,
-            cumulativeAmount: '3000000',
-            signature: await signTestVoucher(channelId, 3000000n),
+      await server.verify(
+        verifyContext({
+          credential: {
+            challenge: makeChallenge({ id: 'c1', channelId }),
+            payload: {
+              action: 'open' as const,
+              type: 'transaction' as const,
+              channelId,
+              transaction: serializedTransaction,
+              cumulativeAmount: '3000000',
+              signature: await signTestVoucher(channelId, 3000000n),
+            },
           },
-        },
-        request: makeRequest(),
-      })
+          request: makeRequest(),
+        }),
+      )
 
       // Settle on-chain so onChain.settled = 3000000.
       const settleTxHash = await settle(store, client, channelId, {
@@ -1883,20 +2029,22 @@ describe.runIf(isLocalnet)('session', () => {
 
       // Re-open with a higher voucher — should bump settledOnChain from chain.
       const server2 = createServer()
-      await server2.verify({
-        credential: {
-          challenge: makeChallenge({ id: 'c2', channelId }),
-          payload: {
-            action: 'open' as const,
-            type: 'transaction' as const,
-            channelId,
-            transaction: serializedTransaction,
-            cumulativeAmount: '5000000',
-            signature: await signTestVoucher(channelId, 5000000n),
+      await server2.verify(
+        verifyContext({
+          credential: {
+            challenge: makeChallenge({ id: 'c2', channelId }),
+            payload: {
+              action: 'open' as const,
+              type: 'transaction' as const,
+              channelId,
+              transaction: serializedTransaction,
+              cumulativeAmount: '5000000',
+              signature: await signTestVoucher(channelId, 5000000n),
+            },
           },
-        },
-        request: makeRequest(),
-      })
+          request: makeRequest(),
+        }),
+      )
 
       const ch = await store.getChannel(channelId)
       expect(ch!.settledOnChain).toBe(3000000n)
@@ -1908,20 +2056,22 @@ describe.runIf(isLocalnet)('session', () => {
       const server = createServer()
 
       // Open channel with voucher = 5M (spent stays 0).
-      await server.verify({
-        credential: {
-          challenge: makeChallenge({ id: 'c1', channelId }),
-          payload: {
-            action: 'open' as const,
-            type: 'transaction' as const,
-            channelId,
-            transaction: serializedTransaction,
-            cumulativeAmount: '5000000',
-            signature: await signTestVoucher(channelId, 5000000n),
+      await server.verify(
+        verifyContext({
+          credential: {
+            challenge: makeChallenge({ id: 'c1', channelId }),
+            payload: {
+              action: 'open' as const,
+              type: 'transaction' as const,
+              channelId,
+              transaction: serializedTransaction,
+              cumulativeAmount: '5000000',
+              signature: await signTestVoucher(channelId, 5000000n),
+            },
           },
-        },
-        request: makeRequest(),
-      })
+          request: makeRequest(),
+        }),
+      )
 
       // Settle on-chain so onChain.settled = 5M.
       const settleTxHash = await settle(store, client, channelId, {
@@ -1936,20 +2086,22 @@ describe.runIf(isLocalnet)('session', () => {
 
       // Re-open with higher voucher = 7M on existing record.
       const server2 = createServer()
-      await server2.verify({
-        credential: {
-          challenge: makeChallenge({ id: 'c2', channelId }),
-          payload: {
-            action: 'open' as const,
-            type: 'transaction' as const,
-            channelId,
-            transaction: serializedTransaction,
-            cumulativeAmount: '7000000',
-            signature: await signTestVoucher(channelId, 7000000n),
+      await server2.verify(
+        verifyContext({
+          credential: {
+            challenge: makeChallenge({ id: 'c2', channelId }),
+            payload: {
+              action: 'open' as const,
+              type: 'transaction' as const,
+              channelId,
+              transaction: serializedTransaction,
+              cumulativeAmount: '7000000',
+              signature: await signTestVoucher(channelId, 7000000n),
+            },
           },
-        },
-        request: makeRequest(),
-      })
+          request: makeRequest(),
+        }),
+      )
 
       // spent must be bumped to at least settledOnChain (5M) so available
       // is only the unsettled portion (7M - 5M = 2M), not the full 7M.
@@ -1967,34 +2119,10 @@ describe.runIf(isLocalnet)('session', () => {
       const { channelId, serializedTransaction } = await createSignedOpenTransaction(10000000n)
       const server = createServer()
 
-      await server.verify({
-        credential: {
-          challenge: makeChallenge({ id: 'c1', channelId }),
-          payload: {
-            action: 'open' as const,
-            type: 'transaction' as const,
-            channelId,
-            transaction: serializedTransaction,
-            cumulativeAmount: '5000000',
-            signature: await signTestVoucher(channelId, 5000000n),
-          },
-        },
-        request: makeRequest(),
-      })
-
-      const settleTxHash3 = await settle(store, client, channelId, {
-        escrowContract,
-      })
-      await waitForTransactionReceipt(client, { hash: settleTxHash3 })
-      await store.updateChannel(channelId, () => null)
-
-      // Attempt to re-open with a voucher equal to the settled amount.
-      // This should be rejected because cumulativeAmount <= onChain.settled.
-      const server2 = createServer()
-      await expect(
-        server2.verify({
+      await server.verify(
+        verifyContext({
           credential: {
-            challenge: makeChallenge({ id: 'c2', channelId }),
+            challenge: makeChallenge({ id: 'c1', channelId }),
             payload: {
               action: 'open' as const,
               type: 'transaction' as const,
@@ -2006,6 +2134,34 @@ describe.runIf(isLocalnet)('session', () => {
           },
           request: makeRequest(),
         }),
+      )
+
+      const settleTxHash3 = await settle(store, client, channelId, {
+        escrowContract,
+      })
+      await waitForTransactionReceipt(client, { hash: settleTxHash3 })
+      await store.updateChannel(channelId, () => null)
+
+      // Attempt to re-open with a voucher equal to the settled amount.
+      // This should be rejected because cumulativeAmount <= onChain.settled.
+      const server2 = createServer()
+      await expect(
+        server2.verify(
+          verifyContext({
+            credential: {
+              challenge: makeChallenge({ id: 'c2', channelId }),
+              payload: {
+                action: 'open' as const,
+                type: 'transaction' as const,
+                channelId,
+                transaction: serializedTransaction,
+                cumulativeAmount: '5000000',
+                signature: await signTestVoucher(channelId, 5000000n),
+              },
+            },
+            request: makeRequest(),
+          }),
+        ),
       ).rejects.toThrow('voucher cumulativeAmount is below on-chain settled amount')
     })
 
@@ -2014,20 +2170,22 @@ describe.runIf(isLocalnet)('session', () => {
       const server = createServer()
 
       // Open, settle 4M, wipe store.
-      await server.verify({
-        credential: {
-          challenge: makeChallenge({ id: 'c1', channelId }),
-          payload: {
-            action: 'open' as const,
-            type: 'transaction' as const,
-            channelId,
-            transaction: serializedTransaction,
-            cumulativeAmount: '4000000',
-            signature: await signTestVoucher(channelId, 4000000n),
+      await server.verify(
+        verifyContext({
+          credential: {
+            challenge: makeChallenge({ id: 'c1', channelId }),
+            payload: {
+              action: 'open' as const,
+              type: 'transaction' as const,
+              channelId,
+              transaction: serializedTransaction,
+              cumulativeAmount: '4000000',
+              signature: await signTestVoucher(channelId, 4000000n),
+            },
           },
-        },
-        request: makeRequest(),
-      })
+          request: makeRequest(),
+        }),
+      )
 
       const settleTxHash = await settle(store, client, channelId, {
         escrowContract,
@@ -2037,38 +2195,42 @@ describe.runIf(isLocalnet)('session', () => {
 
       // Re-open with voucher = 8M.
       const server2 = createServer()
-      await server2.verify({
-        credential: {
-          challenge: makeChallenge({ id: 'c2', channelId }),
-          payload: {
-            action: 'open' as const,
-            type: 'transaction' as const,
-            channelId,
-            transaction: serializedTransaction,
-            cumulativeAmount: '8000000',
-            signature: await signTestVoucher(channelId, 8000000n),
+      await server2.verify(
+        verifyContext({
+          credential: {
+            challenge: makeChallenge({ id: 'c2', channelId }),
+            payload: {
+              action: 'open' as const,
+              type: 'transaction' as const,
+              channelId,
+              transaction: serializedTransaction,
+              cumulativeAmount: '8000000',
+              signature: await signTestVoucher(channelId, 8000000n),
+            },
           },
-        },
-        request: makeRequest(),
-      })
+          request: makeRequest(),
+        }),
+      )
 
       // Charge 1M — spent goes from 4M (settled baseline) to 5M.
       await charge(store, channelId, 1000000n)
 
       // Close must succeed with voucher >= max(spent=5M, settled=4M) = 5M.
       // Use 8M (the full authorization).
-      const receipt = await server2.verify({
-        credential: {
-          challenge: makeChallenge({ id: 'close', channelId }),
-          payload: {
-            action: 'close' as const,
-            channelId,
-            cumulativeAmount: '8000000',
-            signature: await signTestVoucher(channelId, 8000000n),
+      const receipt = await server2.verify(
+        verifyContext({
+          credential: {
+            challenge: makeChallenge({ id: 'close', channelId }),
+            payload: {
+              action: 'close' as const,
+              channelId,
+              cumulativeAmount: '8000000',
+              signature: await signTestVoucher(channelId, 8000000n),
+            },
           },
-        },
-        request: makeRequest(),
-      })
+          request: makeRequest(),
+        }),
+      )
 
       expect(receipt.status).toBe('success')
       const ch = await store.getChannel(channelId)
@@ -2080,20 +2242,22 @@ describe.runIf(isLocalnet)('session', () => {
       const server = createServer()
 
       // Open, settle 5M, wipe store.
-      await server.verify({
-        credential: {
-          challenge: makeChallenge({ id: 'c1', channelId }),
-          payload: {
-            action: 'open' as const,
-            type: 'transaction' as const,
-            channelId,
-            transaction: serializedTransaction,
-            cumulativeAmount: '5000000',
-            signature: await signTestVoucher(channelId, 5000000n),
+      await server.verify(
+        verifyContext({
+          credential: {
+            challenge: makeChallenge({ id: 'c1', channelId }),
+            payload: {
+              action: 'open' as const,
+              type: 'transaction' as const,
+              channelId,
+              transaction: serializedTransaction,
+              cumulativeAmount: '5000000',
+              signature: await signTestVoucher(channelId, 5000000n),
+            },
           },
-        },
-        request: makeRequest(),
-      })
+          request: makeRequest(),
+        }),
+      )
 
       const settleTxHash = await settle(store, client, channelId, {
         escrowContract,
@@ -2103,35 +2267,39 @@ describe.runIf(isLocalnet)('session', () => {
 
       // Re-open with voucher = 7M.
       const server2 = createServer()
-      await server2.verify({
-        credential: {
-          challenge: makeChallenge({ id: 'c2', channelId }),
-          payload: {
-            action: 'open' as const,
-            type: 'transaction' as const,
-            channelId,
-            transaction: serializedTransaction,
-            cumulativeAmount: '7000000',
-            signature: await signTestVoucher(channelId, 7000000n),
-          },
-        },
-        request: makeRequest(),
-      })
-
-      // Try to close with 3M — below settled (5M). Must be rejected.
-      await expect(
-        server2.verify({
+      await server2.verify(
+        verifyContext({
           credential: {
-            challenge: makeChallenge({ id: 'close', channelId }),
+            challenge: makeChallenge({ id: 'c2', channelId }),
             payload: {
-              action: 'close' as const,
+              action: 'open' as const,
+              type: 'transaction' as const,
               channelId,
-              cumulativeAmount: '3000000',
-              signature: await signTestVoucher(channelId, 3000000n),
+              transaction: serializedTransaction,
+              cumulativeAmount: '7000000',
+              signature: await signTestVoucher(channelId, 7000000n),
             },
           },
           request: makeRequest(),
         }),
+      )
+
+      // Try to close with 3M — below settled (5M). Must be rejected.
+      await expect(
+        server2.verify(
+          verifyContext({
+            credential: {
+              challenge: makeChallenge({ id: 'close', channelId }),
+              payload: {
+                action: 'close' as const,
+                channelId,
+                cumulativeAmount: '3000000',
+                signature: await signTestVoucher(channelId, 3000000n),
+              },
+            },
+            request: makeRequest(),
+          }),
+        ),
       ).rejects.toThrow('close voucher amount must be >=')
     })
   })
@@ -2141,38 +2309,42 @@ describe.runIf(isLocalnet)('session', () => {
       const { channelId, serializedTransaction } = await createSignedOpenTransaction(10000000n)
       const server = createServer()
 
-      await server.verify({
-        credential: {
-          challenge: makeChallenge({ id: 'open-baseline', channelId }),
-          payload: {
-            action: 'open' as const,
-            type: 'transaction' as const,
-            channelId,
-            transaction: serializedTransaction,
-            cumulativeAmount: '1000000',
-            signature: await signTestVoucher(channelId, 1000000n),
-          },
-        },
-        request: makeRequest(),
-      })
-
-      const compact = toCompactSignature(await signTestVoucher(channelId, 2000000n))
-      await expect(
-        server.verify({
+      await server.verify(
+        verifyContext({
           credential: {
-            challenge: makeChallenge({
-              id: 'voucher-invalid-compact',
-              channelId,
-            }),
+            challenge: makeChallenge({ id: 'open-baseline', channelId }),
             payload: {
-              action: 'voucher' as const,
+              action: 'open' as const,
+              type: 'transaction' as const,
               channelId,
-              cumulativeAmount: '2000000',
-              signature: mutateSignature(compact),
+              transaction: serializedTransaction,
+              cumulativeAmount: '1000000',
+              signature: await signTestVoucher(channelId, 1000000n),
             },
           },
           request: makeRequest(),
         }),
+      )
+
+      const compact = toCompactSignature(await signTestVoucher(channelId, 2000000n))
+      await expect(
+        server.verify(
+          verifyContext({
+            credential: {
+              challenge: makeChallenge({
+                id: 'voucher-invalid-compact',
+                channelId,
+              }),
+              payload: {
+                action: 'voucher' as const,
+                channelId,
+                cumulativeAmount: '2000000',
+                signature: mutateSignature(compact),
+              },
+            },
+            request: makeRequest(),
+          }),
+        ),
       ).rejects.toThrow('invalid voucher signature')
     })
   })
@@ -2182,39 +2354,43 @@ describe.runIf(isLocalnet)('session', () => {
       const { channelId, serializedTransaction } = await createSignedOpenTransaction(10000000n)
       const server = createServer()
 
-      await server.verify({
-        credential: {
-          challenge: makeChallenge({ id: 'open-concurrency', channelId }),
-          payload: {
-            action: 'open' as const,
-            type: 'transaction' as const,
-            channelId,
-            transaction: serializedTransaction,
-            cumulativeAmount: '1000000',
-            signature: await signTestVoucher(channelId, 1000000n),
+      await server.verify(
+        verifyContext({
+          credential: {
+            challenge: makeChallenge({ id: 'open-concurrency', channelId }),
+            payload: {
+              action: 'open' as const,
+              type: 'transaction' as const,
+              channelId,
+              transaction: serializedTransaction,
+              cumulativeAmount: '1000000',
+              signature: await signTestVoucher(channelId, 1000000n),
+            },
           },
-        },
-        request: makeRequest(),
-      })
+          request: makeRequest(),
+        }),
+      )
 
       const amounts = [2000000n, 3000000n, 4000000n, 5000000n]
       const results = await Promise.allSettled(
         amounts.map(async (amount, index) =>
-          server.verify({
-            credential: {
-              challenge: makeChallenge({
-                id: `voucher-concurrency-${index}`,
-                channelId,
-              }),
-              payload: {
-                action: 'voucher' as const,
-                channelId,
-                cumulativeAmount: amount.toString(),
-                signature: await signTestVoucher(channelId, amount),
+          server.verify(
+            verifyContext({
+              credential: {
+                challenge: makeChallenge({
+                  id: `voucher-concurrency-${index}`,
+                  channelId,
+                }),
+                payload: {
+                  action: 'voucher' as const,
+                  channelId,
+                  cumulativeAmount: amount.toString(),
+                  signature: await signTestVoucher(channelId, amount),
+                },
               },
-            },
-            request: makeRequest(),
-          }),
+              request: makeRequest(),
+            }),
+          ),
         ),
       )
 
@@ -2244,26 +2420,30 @@ describe.runIf(isLocalnet)('session', () => {
       }
 
       await expect(
-        faultServer.verify({
-          credential: {
-            challenge: makeChallenge({ id: 'open-crash-1', channelId }),
-            payload: openPayload,
-          },
-          request: makeRequest(),
-        }),
+        faultServer.verify(
+          verifyContext({
+            credential: {
+              challenge: makeChallenge({ id: 'open-crash-1', channelId }),
+              payload: openPayload,
+            },
+            request: makeRequest(),
+          }),
+        ),
       ).rejects.toThrow('simulated store crash before persisting')
 
       const afterCrashStore = ChannelStore.fromStore(baseStore)
       expect(await afterCrashStore.getChannel(channelId)).toBeNull()
 
       const healthyServer = createServerWithStore(baseStore)
-      const recovered = await healthyServer.verify({
-        credential: {
-          challenge: makeChallenge({ id: 'open-crash-retry', channelId }),
-          payload: openPayload,
-        },
-        request: makeRequest(),
-      })
+      const recovered = await healthyServer.verify(
+        verifyContext({
+          credential: {
+            challenge: makeChallenge({ id: 'open-crash-retry', channelId }),
+            payload: openPayload,
+          },
+          request: makeRequest(),
+        }),
+      )
 
       expect(recovered.status).toBe('success')
       const channel = await afterCrashStore.getChannel(channelId)
@@ -2276,23 +2456,25 @@ describe.runIf(isLocalnet)('session', () => {
       const healthyServer = createServerWithStore(baseStore)
       const { channelId, serializedTransaction } = await createSignedOpenTransaction(5000000n)
 
-      await healthyServer.verify({
-        credential: {
-          challenge: makeChallenge({
-            id: 'open-before-topup-crash',
-            channelId,
-          }),
-          payload: {
-            action: 'open' as const,
-            type: 'transaction' as const,
-            channelId,
-            transaction: serializedTransaction,
-            cumulativeAmount: '1000000',
-            signature: await signTestVoucher(channelId, 1000000n),
+      await healthyServer.verify(
+        verifyContext({
+          credential: {
+            challenge: makeChallenge({
+              id: 'open-before-topup-crash',
+              channelId,
+            }),
+            payload: {
+              action: 'open' as const,
+              type: 'transaction' as const,
+              channelId,
+              transaction: serializedTransaction,
+              cumulativeAmount: '1000000',
+              signature: await signTestVoucher(channelId, 1000000n),
+            },
           },
-        },
-        request: makeRequest(),
-      })
+          request: makeRequest(),
+        }),
+      )
 
       const additionalDeposit = 2000000n
       const { serializedTransaction: topUpTransaction } = await signTopUpChannel({
@@ -2307,41 +2489,45 @@ describe.runIf(isLocalnet)('session', () => {
       const faultServer = createServerWithStore(faultStore)
 
       await expect(
-        faultServer.verify({
-          credential: {
-            challenge: makeChallenge({ id: 'topup-crash', channelId }),
-            payload: {
-              action: 'topUp' as const,
-              type: 'transaction' as const,
-              channelId,
-              transaction: topUpTransaction,
-              additionalDeposit: additionalDeposit.toString(),
+        faultServer.verify(
+          verifyContext({
+            credential: {
+              challenge: makeChallenge({ id: 'topup-crash', channelId }),
+              payload: {
+                action: 'topUp' as const,
+                type: 'transaction' as const,
+                channelId,
+                transaction: topUpTransaction,
+                additionalDeposit: additionalDeposit.toString(),
+              },
             },
-          },
-          request: makeRequest(),
-        }),
+            request: makeRequest(),
+          }),
+        ),
       ).rejects.toThrow('simulated store crash before persisting')
 
       const staleStore = ChannelStore.fromStore(baseStore)
       expect((await staleStore.getChannel(channelId))?.deposit).toBe(5000000n)
 
-      await healthyServer.verify({
-        credential: {
-          challenge: makeChallenge({
-            id: 'reopen-after-topup-crash',
-            channelId,
-          }),
-          payload: {
-            action: 'open' as const,
-            type: 'transaction' as const,
-            channelId,
-            transaction: serializedTransaction,
-            cumulativeAmount: '2000000',
-            signature: await signTestVoucher(channelId, 2000000n),
+      await healthyServer.verify(
+        verifyContext({
+          credential: {
+            challenge: makeChallenge({
+              id: 'reopen-after-topup-crash',
+              channelId,
+            }),
+            payload: {
+              action: 'open' as const,
+              type: 'transaction' as const,
+              channelId,
+              transaction: serializedTransaction,
+              cumulativeAmount: '2000000',
+              signature: await signTestVoucher(channelId, 2000000n),
+            },
           },
-        },
-        request: makeRequest(),
-      })
+          request: makeRequest(),
+        }),
+      )
 
       const recoveredChannel = await staleStore.getChannel(channelId)
       expect(recoveredChannel?.deposit).toBe(7000000n)
@@ -2353,35 +2539,39 @@ describe.runIf(isLocalnet)('session', () => {
       const server = createServerWithStore(hooks.store)
 
       const { channelId, serializedTransaction } = await createSignedOpenTransaction(5000000n)
-      await server.verify({
-        credential: {
-          challenge: makeChallenge({ id: 'open-racy-voucher', channelId }),
-          payload: {
-            action: 'open' as const,
-            type: 'transaction' as const,
-            channelId,
-            transaction: serializedTransaction,
-            cumulativeAmount: '1000000',
-            signature: await signTestVoucher(channelId, 1000000n),
-          },
-        },
-        request: makeRequest(),
-      })
-
-      hooks.dropOnRead(channelId, 1)
-      await expect(
-        server.verify({
+      await server.verify(
+        verifyContext({
           credential: {
-            challenge: makeChallenge({ id: 'voucher-racy-missing', channelId }),
+            challenge: makeChallenge({ id: 'open-racy-voucher', channelId }),
             payload: {
-              action: 'voucher' as const,
+              action: 'open' as const,
+              type: 'transaction' as const,
               channelId,
-              cumulativeAmount: '2000000',
-              signature: await signTestVoucher(channelId, 2000000n),
+              transaction: serializedTransaction,
+              cumulativeAmount: '1000000',
+              signature: await signTestVoucher(channelId, 1000000n),
             },
           },
           request: makeRequest(),
         }),
+      )
+
+      hooks.dropOnRead(channelId, 1)
+      await expect(
+        server.verify(
+          verifyContext({
+            credential: {
+              challenge: makeChallenge({ id: 'voucher-racy-missing', channelId }),
+              payload: {
+                action: 'voucher' as const,
+                channelId,
+                cumulativeAmount: '2000000',
+                signature: await signTestVoucher(channelId, 2000000n),
+              },
+            },
+            request: makeRequest(),
+          }),
+        ),
       ).rejects.toThrow('channel not found')
 
       const persisted = await ChannelStore.fromStore(baseStore).getChannel(channelId)
@@ -2394,34 +2584,38 @@ describe.runIf(isLocalnet)('session', () => {
       const server = createServerWithStore(hooks.store)
 
       const { channelId, serializedTransaction } = await createSignedOpenTransaction(5000000n)
-      await server.verify({
-        credential: {
-          challenge: makeChallenge({ id: 'open-racy-close', channelId }),
-          payload: {
-            action: 'open' as const,
-            type: 'transaction' as const,
-            channelId,
-            transaction: serializedTransaction,
-            cumulativeAmount: '1000000',
-            signature: await signTestVoucher(channelId, 1000000n),
+      await server.verify(
+        verifyContext({
+          credential: {
+            challenge: makeChallenge({ id: 'open-racy-close', channelId }),
+            payload: {
+              action: 'open' as const,
+              type: 'transaction' as const,
+              channelId,
+              transaction: serializedTransaction,
+              cumulativeAmount: '1000000',
+              signature: await signTestVoucher(channelId, 1000000n),
+            },
           },
-        },
-        request: makeRequest(),
-      })
+          request: makeRequest(),
+        }),
+      )
 
       hooks.dropOnRead(channelId, 1)
-      const closeReceipt = (await server.verify({
-        credential: {
-          challenge: makeChallenge({ id: 'close-racy-missing', channelId }),
-          payload: {
-            action: 'close' as const,
-            channelId,
-            cumulativeAmount: '1000000',
-            signature: await signTestVoucher(channelId, 1000000n),
+      const closeReceipt = (await server.verify(
+        verifyContext({
+          credential: {
+            challenge: makeChallenge({ id: 'close-racy-missing', channelId }),
+            payload: {
+              action: 'close' as const,
+              channelId,
+              cumulativeAmount: '1000000',
+              signature: await signTestVoucher(channelId, 1000000n),
+            },
           },
-        },
-        request: makeRequest(),
-      })) as SessionReceipt
+          request: makeRequest(),
+        }),
+      )) as SessionReceipt
 
       expect(closeReceipt.status).toBe('success')
       expect(closeReceipt.spent).toBe('0')
@@ -2435,20 +2629,22 @@ describe.runIf(isLocalnet)('session', () => {
       const server = createServerWithStore(hooks.store)
 
       const { channelId, serializedTransaction } = await createSignedOpenTransaction(5000000n)
-      await server.verify({
-        credential: {
-          challenge: makeChallenge({ id: 'open-racy-settle', channelId }),
-          payload: {
-            action: 'open' as const,
-            type: 'transaction' as const,
-            channelId,
-            transaction: serializedTransaction,
-            cumulativeAmount: '1000000',
-            signature: await signTestVoucher(channelId, 1000000n),
+      await server.verify(
+        verifyContext({
+          credential: {
+            challenge: makeChallenge({ id: 'open-racy-settle', channelId }),
+            payload: {
+              action: 'open' as const,
+              type: 'transaction' as const,
+              channelId,
+              transaction: serializedTransaction,
+              cumulativeAmount: '1000000',
+              signature: await signTestVoucher(channelId, 1000000n),
+            },
           },
-        },
-        request: makeRequest(),
-      })
+          request: makeRequest(),
+        }),
+      )
 
       hooks.dropOnRead(channelId, 1)
       const txHash = await settle(ChannelStore.fromStore(hooks.store), client, channelId, {
@@ -2464,23 +2660,25 @@ describe.runIf(isLocalnet)('session', () => {
       const { channelId, serializedTransaction } = await createSignedOpenTransaction(5000000n)
       const server = createServer()
 
-      await server.verify({
-        credential: {
-          challenge: makeChallenge({
-            id: 'open-before-external-close',
-            channelId,
-          }),
-          payload: {
-            action: 'open' as const,
-            type: 'transaction' as const,
-            channelId,
-            transaction: serializedTransaction,
-            cumulativeAmount: '1000000',
-            signature: await signTestVoucher(channelId, 1000000n),
+      await server.verify(
+        verifyContext({
+          credential: {
+            challenge: makeChallenge({
+              id: 'open-before-external-close',
+              channelId,
+            }),
+            payload: {
+              action: 'open' as const,
+              type: 'transaction' as const,
+              channelId,
+              transaction: serializedTransaction,
+              cumulativeAmount: '1000000',
+              signature: await signTestVoucher(channelId, 1000000n),
+            },
           },
-        },
-        request: makeRequest(),
-      })
+          request: makeRequest(),
+        }),
+      )
 
       const closeSignature = await signTestVoucher(channelId, 1000000n)
       await closeChannelOnChain({
@@ -2492,21 +2690,23 @@ describe.runIf(isLocalnet)('session', () => {
       })
 
       await expect(
-        server.verify({
-          credential: {
-            challenge: makeChallenge({
-              id: 'close-after-external-finalize',
-              channelId,
-            }),
-            payload: {
-              action: 'close' as const,
-              channelId,
-              cumulativeAmount: '1000000',
-              signature: closeSignature,
+        server.verify(
+          verifyContext({
+            credential: {
+              challenge: makeChallenge({
+                id: 'close-after-external-finalize',
+                channelId,
+              }),
+              payload: {
+                action: 'close' as const,
+                channelId,
+                cumulativeAmount: '1000000',
+                signature: closeSignature,
+              },
             },
-          },
-          request: makeRequest(),
-        }),
+            request: makeRequest(),
+          }),
+        ),
       ).rejects.toThrow('channel is finalized on-chain')
     })
   })
@@ -2651,18 +2851,20 @@ describe.runIf(isLocalnet)('session', () => {
       const server = createServer()
 
       try {
-        await server.verify({
-          credential: {
-            challenge: makeChallenge({ channelId }),
-            payload: {
-              action: 'voucher' as const,
-              channelId,
-              cumulativeAmount: '1000000',
-              signature: await signTestVoucher(channelId, 1000000n),
+        await server.verify(
+          verifyContext({
+            credential: {
+              challenge: makeChallenge({ channelId }),
+              payload: {
+                action: 'voucher' as const,
+                channelId,
+                cumulativeAmount: '1000000',
+                signature: await signTestVoucher(channelId, 1000000n),
+              },
             },
-          },
-          request: makeRequest(),
-        })
+            request: makeRequest(),
+          }),
+        )
         expect.unreachable()
       } catch (e) {
         expect(e).toBeInstanceOf(ChannelNotFoundError)
@@ -2675,20 +2877,22 @@ describe.runIf(isLocalnet)('session', () => {
       const server = createServer()
 
       try {
-        await server.verify({
-          credential: {
-            challenge: makeChallenge({ channelId }),
-            payload: {
-              action: 'open' as const,
-              type: 'transaction' as const,
-              channelId,
-              transaction: serializedTransaction,
-              cumulativeAmount: '1000000',
-              signature: `0x${'ab'.repeat(65)}` as Hex,
+        await server.verify(
+          verifyContext({
+            credential: {
+              challenge: makeChallenge({ channelId }),
+              payload: {
+                action: 'open' as const,
+                type: 'transaction' as const,
+                channelId,
+                transaction: serializedTransaction,
+                cumulativeAmount: '1000000',
+                signature: `0x${'ab'.repeat(65)}` as Hex,
+              },
             },
-          },
-          request: makeRequest(),
-        })
+            request: makeRequest(),
+          }),
+        )
         expect.unreachable()
       } catch (e) {
         expect(e).toBeInstanceOf(InvalidSignatureError)
@@ -4183,8 +4387,12 @@ describe('session request and verify guardrails', () => {
     } as session.Parameters)
 
     await expect(
-      server.request!({
-        credential: null,
+      server.challenge!({
+        capturedRequest: {
+          headers: new Headers(),
+          method: 'GET',
+          url: new URL('https://example.com'),
+        },
         request: makeRequest({ chainId: 31337 }),
       } as never),
     ).rejects.toThrow('No client configured with chainId 31337.')
@@ -4200,14 +4408,18 @@ describe('session request and verify guardrails', () => {
     } as session.Parameters)
 
     await expect(
-      server.request!({
-        credential: null,
+      server.challenge!({
+        capturedRequest: {
+          headers: new Headers(),
+          method: 'GET',
+          url: new URL('https://example.com'),
+        },
         request: makeRequest({ chainId: 4217 }),
       } as never),
     ).rejects.toThrow('Client not configured with chainId 4217.')
   })
 
-  test('request normalizes fee-payer to boolean for challenge issuance and account for verification', async () => {
+  test('challenge normalizes fee-payer to boolean for challenge issuance', async () => {
     const client = createMockClient(4217)
     const server = session({
       store: Store.memory(),
@@ -4217,20 +4429,18 @@ describe('session request and verify guardrails', () => {
       getClient: async () => client,
     } as session.Parameters)
 
-    const challengeRequest = await server.request!({
-      credential: null,
+    const challengeRequest = await server.challenge!({
+      capturedRequest: {
+        headers: new Headers(),
+        method: 'GET',
+        url: new URL('https://example.com'),
+      },
       request: makeRequest(),
     } as never)
     expect(challengeRequest.feePayer).toBe(true)
-
-    const verificationRequest = await server.request!({
-      credential: { challenge: {}, payload: {} } as never,
-      request: makeRequest({ feePayer: accounts[1] }),
-    } as never)
-    expect(verificationRequest.feePayer).toBe(accounts[1])
   })
 
-  test('request allows callers to explicitly disable fee-payer', async () => {
+  test('challenge allows callers to explicitly disable fee-payer', async () => {
     const client = createMockClient(4217)
     const server = session({
       store: Store.memory(),
@@ -4240,14 +4450,18 @@ describe('session request and verify guardrails', () => {
       getClient: async () => client,
     } as session.Parameters)
 
-    const normalized = await server.request!({
-      credential: null,
+    const normalized = await server.challenge!({
+      capturedRequest: {
+        headers: new Headers(),
+        method: 'GET',
+        url: new URL('https://example.com'),
+      },
       request: makeRequest({ feePayer: false }),
     } as never)
     expect(normalized.feePayer).toBeUndefined()
   })
 
-  test('request leaves escrowContract undefined when chain has no configured default', async () => {
+  test('challenge leaves escrowContract undefined when chain has no configured default', async () => {
     const unknownChainId = 999_999
     const client = createMockClient(unknownChainId)
     const server = session({
@@ -4257,8 +4471,12 @@ describe('session request and verify guardrails', () => {
       getClient: async () => client,
     } as session.Parameters)
 
-    const normalized = await server.request!({
-      credential: null,
+    const normalized = await server.challenge!({
+      capturedRequest: {
+        headers: new Headers(),
+        method: 'GET',
+        url: new URL('https://example.com'),
+      },
       request: makeRequest({ chainId: unknownChainId }),
     } as never)
 
@@ -4277,27 +4495,29 @@ describe('session request and verify guardrails', () => {
     } as session.Parameters)
 
     await expect(
-      server.verify({
-        credential: {
-          challenge: {
-            id: 'guard-unknown-action',
-            realm: 'api.example.com',
-            method: 'tempo',
-            intent: 'session',
-            request: {
-              amount: '1000000',
-              currency: defaultCurrency,
-              recipient: addressTwo,
-              methodDetails: {
-                chainId: 4217,
-                escrowContract: defaultEscrow,
+      server.verify(
+        verifyContext({
+          credential: {
+            challenge: {
+              id: 'guard-unknown-action',
+              realm: 'api.example.com',
+              method: 'tempo',
+              intent: 'session',
+              request: {
+                amount: '1000000',
+                currency: defaultCurrency,
+                recipient: addressTwo,
+                methodDetails: {
+                  chainId: 4217,
+                  escrowContract: defaultEscrow,
+                },
               },
             },
+            payload: { action: 'rewind' },
           },
-          payload: { action: 'rewind' },
-        },
-        request: makeRequest(),
-      } as never),
+          request: makeRequest(),
+        } as never),
+      ),
     ).rejects.toThrow('unknown action: rewind')
   })
 })
@@ -4493,6 +4713,22 @@ describe('session default currency resolution', () => {
 function nextSalt(): Hex {
   saltCounter++
   return `0x${saltCounter.toString(16).padStart(64, '0')}` as Hex
+}
+
+/** Wraps the old `{ credential, request }` test shape into the new VerifyContext. */
+function verifyContext(params: {
+  credential: Record<string, unknown>
+  request: Record<string, unknown>
+}) {
+  const { credential, request } = params
+  return {
+    envelope: {
+      capturedRequest: { headers: new Headers(), method: 'POST', url: new URL('about:blank') },
+      challenge: (credential as any).challenge,
+      credential,
+    },
+    request,
+  } as any
 }
 
 function makeChallenge(opts: { id?: string; channelId: Hex }) {

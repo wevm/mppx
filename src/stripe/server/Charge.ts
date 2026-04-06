@@ -91,9 +91,9 @@ export function charge<const parameters extends charge.Parameters>(parameters: p
           }
         : undefined,
 
-    async verify({ credential, request }) {
-      const { challenge } = credential
-      const resolvedRequest = Methods.charge.schema.request.parse(request)
+    async verify({ envelope }) {
+      const { challenge, credential } = envelope
+      const resolvedRequest = challenge.request as z.output<typeof Methods.charge.schema.request>
 
       Expires.assert(challenge.expires, challenge.id)
 

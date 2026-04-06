@@ -51,6 +51,14 @@ export function mcpSdk(): McpSdk {
   return Transport.from<Extra, McpError, CallToolResult>({
     name: 'mcp-sdk',
 
+    captureRequest() {
+      return {
+        headers: new Headers(),
+        method: 'POST',
+        url: new URL('mcp://sdk/request'),
+      }
+    },
+
     getCredential(extra) {
       const credential = extra._meta?.[core_Mcp.credentialMetaKey]
       if (!credential) return null
@@ -77,10 +85,10 @@ export function mcpSdk(): McpSdk {
       })
     },
 
-    respondReceipt({ receipt, response, challengeId }) {
+    respondReceipt({ context, response }) {
       const mcpReceipt: core_Mcp.Receipt = {
-        ...receipt,
-        challengeId,
+        ...context.receipt,
+        challengeId: context.envelope.challenge.id,
       }
 
       return {

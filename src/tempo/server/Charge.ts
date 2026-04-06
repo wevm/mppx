@@ -116,8 +116,8 @@ export function charge<const parameters extends charge.Parameters>(
         }
       : undefined,
 
-    // TODO: dedupe `{charge,session}.request`
-    async request({ credential, request }) {
+    // TODO: dedupe `{charge,session}.challenge`
+    async challenge({ request }) {
       const chainId = await (async () => {
         if (request.chainId) return request.chainId
         if (parameters.testnet) return defaults.chainId.testnet
@@ -135,9 +135,8 @@ export function charge<const parameters extends charge.Parameters>(
         throw new Error(`Client not configured with chainId ${chainId}.`)
 
       const resolvedFeePayer = (() => {
-        const account = typeof request.feePayer === 'object' ? request.feePayer : feePayer
-        const requested = request.feePayer !== false && (account ?? feePayer ?? feePayerUrl)
-        if (credential) return account
+        const requested =
+          request.feePayer !== false && (request.feePayer ?? feePayer ?? feePayerUrl)
         if (requested) return true
         return undefined
       })()
@@ -150,19 +149,19 @@ export function charge<const parameters extends charge.Parameters>(
       }
     },
 
-    async verify({ credential, request }) {
-      const { challenge } = credential
-      const resolvedRequest = Methods.charge.schema.request.parse(request)
-      const chainId = resolvedRequest.methodDetails?.chainId ?? request.chainId
-      const feePayer = request.feePayer
+    async verify({ envelope }) {
+      const { challenge, credential } = envelope
+      const request = challenge.request
+      const chainId = request.methodDetails?.chainId
+      const resolvedFeePayer = request.methodDetails?.feePayer ? feePayer : undefined
 
       const client = await getClient({ chainId })
 
-      const { amount, methodDetails } = resolvedRequest
+      const { amount, methodDetails } = request
       const expires = challenge.expires
 
-      const currency = resolvedRequest.currency as `0x${string}`
-      const recipient = resolvedRequest.recipient as `0x${string}`
+      const currency = request.currency as `0x${string}`
+      const recipient = request.recipient as `0x${string}`
 
       Expires.assert(expires, challenge.id)
 
@@ -178,16 +177,24 @@ export function charge<const parameters extends charge.Parameters>(
         case 'hash': {
           const hash = payload.hash as `0x${string}`
           if (!(await markHashUsed(store, hash))) {
-            throw new VerificationFailedError({ reason: 'Transaction hash has already been used' })
+            throw new VerificationFailedError({
+              reason: 'Transaction hash has already been used',
+            })
           }
 
-          const expectedTransfers = getExpectedTransfers({ amount, memo, methodDetails, recipient })
+          const expectedTransfers = getExpectedTransfers({
+            amount,
+            memo,
+            methodDetails,
+            recipient,
+          })
           const receipt = await getTransactionReceipt(client, { hash })
           const matchedLogs = assertTransferLogs(receipt, {
             currency,
             sender: receipt.from,
             transfers: expectedTransfers,
           })
+
           // Only verify challenge binding when using auto-generated attribution memos.
           // Explicit memos (set by the server) are strictly matched by assertTransferLogs
           // but are NOT challenge-bound — callers that set explicit memos are responsible
@@ -230,7 +237,9 @@ export function charge<const parameters extends charge.Parameters>(
           if (!valid) throw new MismatchError('Proof signature does not match source.', {})
 
           if (proofStore && !(await markProofUsed(proofStore, challenge.id))) {
-            throw new VerificationFailedError({ reason: 'Proof credential has already been used' })
+            throw new VerificationFailedError({
+              reason: 'Proof credential has already been used',
+            })
           }
 
           return {
@@ -247,7 +256,9 @@ export function charge<const parameters extends charge.Parameters>(
           // Pre-broadcast dedup: catch exact byte-for-byte replays early.
           const hash = keccak256(serializedTransaction)
           if (!(await markHashUsed(store, hash))) {
-            throw new VerificationFailedError({ reason: 'Transaction hash has already been used' })
+            throw new VerificationFailedError({
+              reason: 'Transaction hash has already been used',
+            })
           }
 
           let releaseReservation = true
@@ -268,21 +279,23 @@ export function charge<const parameters extends charge.Parameters>(
               to?: `0x${string}` | undefined
             }[]
             const transfers = getExpectedTransfers({ amount, memo, methodDetails, recipient })
-            const isFeePayerTx = !!(feePayer || feePayerUrl) && methodDetails?.feePayer !== false
+            const isFeePayerTx =
+              !!(resolvedFeePayer || feePayerUrl) && methodDetails?.feePayer !== false
             assertTransferCalls(calls, { currency, exactCount: isFeePayerTx, transfers })
 
             if (isFeePayerTx)
               FeePayer.validateCalls(transaction.calls, { amount, currency, recipient })
 
             const resolvedFeeToken =
-              transaction.feeToken ?? defaults.currency[chainId as keyof typeof defaults.currency]
+              transaction.feeToken ??
+              (chainId !== undefined ? defaults.resolveCurrency({ chainId }) : undefined)
 
             const serializedTransaction_final = await (async () => {
-              if (feePayer && methodDetails?.feePayer !== false) {
+              if (resolvedFeePayer && methodDetails?.feePayer !== false) {
                 return signTransaction(client, {
                   ...transaction,
-                  account: feePayer,
-                  feePayer,
+                  account: resolvedFeePayer,
+                  feePayer: resolvedFeePayer,
                   feeToken: resolvedFeeToken,
                 } as never)
               }
@@ -372,9 +385,6 @@ export declare namespace charge {
      * zero-dollar proof auth, replay prevention is enabled only when a store
      * is explicitly provided; otherwise proofs remain reusable until the
      * challenge expires.
-     *
-     * Replay protection requires a {@link Store.AtomicStore} so replay markers
-     * can be written atomically.
      *
      * Use a shared store in multi-instance deployments so consumed hashes and
      * proofs are visible across all server instances.

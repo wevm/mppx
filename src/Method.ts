@@ -1,3 +1,4 @@
+import type * as BodyDigest from './BodyDigest.js'
 import type * as Challenge from './Challenge.js'
 import type * as Credential from './Credential.js'
 import type { ExactPartial, LooseOmit, MaybePromise } from './internal/types.js'
@@ -67,6 +68,51 @@ export type Client<
 }
 export type AnyClient = Client<any, any>
 
+/** Transport-captured request metadata used as the authoritative request snapshot. */
+export type CapturedRequest = {
+  bodyDigest?: BodyDigest.BodyDigest | undefined
+  headers: Headers
+  method: string
+  url: URL
+}
+
+/** Verified challenge + credential pair, bound to the captured request snapshot. */
+export type VerifiedChallengeEnvelope<
+  request extends Record<string, unknown> = Record<string, unknown>,
+  payload = unknown,
+  intent extends string = string,
+  method_name extends string = string,
+> = {
+  capturedRequest: CapturedRequest
+  challenge: Challenge.Challenge<request, intent, method_name>
+  credential: Credential.Credential<payload, Challenge.Challenge<request, intent, method_name>>
+}
+
+/** Derives the envelope type from a method. */
+type EnvelopeOf<method extends Method> = VerifiedChallengeEnvelope<
+  z.output<method['schema']['request']>,
+  z.output<method['schema']['credential']['payload']>,
+  method['intent'],
+  method['name']
+>
+
+/** Pre-challenge request derivation hook. */
+export type ChallengeContext<method extends Method> = {
+  capturedRequest: CapturedRequest
+  request: z.input<method['schema']['request']>
+}
+
+/** Context passed to verification hooks. */
+export type VerifyContext<method extends Method> = {
+  envelope: EnvelopeOf<method>
+  request: z.output<method['schema']['request']>
+}
+
+/** Context passed to respond hooks. */
+export type RespondContext<method extends Method> = VerifyContext<method> & {
+  receipt: Receipt.Receipt
+}
+
 /**
  * A server-side configured method with verification logic.
  */
@@ -75,9 +121,9 @@ export type Server<
   defaults extends ExactPartial<z.input<method['schema']['request']>> = {},
   transportOverride = undefined,
 > = method & {
+  challenge?: ChallengeFn<method> | undefined
   defaults?: defaults | undefined
   html?: Html.Options | undefined
-  request?: RequestFn<method> | undefined
   respond?: RespondFn<method> | undefined
   transport?: transportOverride | undefined
   verify: VerifyFn<method>
@@ -95,20 +141,15 @@ export type CreateCredentialFn<method extends Method, context = unknown> = (
   } & ([keyof context] extends [never] ? unknown : { context: context }),
 ) => Promise<string>
 
-/** Request transform function for a single method. */
-export type RequestFn<method extends Method> = (options: {
-  credential?: Credential.Credential | null | undefined
-  request: z.input<method['schema']['request']>
-}) => MaybePromise<z.input<method['schema']['request']>>
+/** Pre-challenge request derivation function for a single method. */
+export type ChallengeFn<method extends Method> = (
+  context: ChallengeContext<method>,
+) => MaybePromise<z.input<method['schema']['request']>>
 
 /** Verification function for a single method. */
-export type VerifyFn<method extends Method> = (parameters: {
-  credential: Credential.Credential<
-    z.output<method['schema']['credential']['payload']>,
-    Challenge.Challenge<z.output<method['schema']['request']>, method['intent'], method['name']>
-  >
-  request: z.input<method['schema']['request']>
-}) => Promise<Receipt.Receipt>
+export type VerifyFn<method extends Method> = (
+  context: VerifyContext<method>,
+) => Promise<Receipt.Receipt>
 
 /**
  * Optional respond function for a server-side method.
@@ -119,19 +160,10 @@ export type VerifyFn<method extends Method> = (parameters: {
  * with the receipt header attached without invoking any user-supplied
  * response or generator. If it returns `undefined`, the server handler
  * is expected to serve content via `withReceipt(response)`.
- *
- * **HTTP-only.** The `input` parameter is a `Request` object; MCP transports
- * do not invoke this hook.
  */
-export type RespondFn<method extends Method> = (parameters: {
-  credential: Credential.Credential<
-    z.output<method['schema']['credential']['payload']>,
-    Challenge.Challenge<z.output<method['schema']['request']>, method['intent'], method['name']>
-  >
-  input: globalThis.Request
-  receipt: Receipt.Receipt
-  request: z.input<method['schema']['request']>
-}) => MaybePromise<globalThis.Response | undefined>
+export type RespondFn<method extends Method> = (
+  context: RespondContext<method>,
+) => MaybePromise<globalThis.Response | undefined>
 
 /** Partial request type for defaults. */
 export type RequestDefaults<method extends Method> = ExactPartial<
@@ -190,7 +222,7 @@ export declare namespace toClient {
  * import { Methods } from 'mppx/tempo'
  *
  * const tempoCharge = Method.toServer(Methods.charge, {
- *   async verify({ credential }) {
+ *   async verify({ envelope }) {
  *     // verification logic
  *     return { status: 'success', ... }
  *   },
@@ -205,12 +237,13 @@ export function toServer<
   method: method,
   options: toServer.Options<method, defaults, transportOverride>,
 ): Server<method, defaults, transportOverride> {
-  const { defaults, html, request, respond, transport, verify } = options
+  const { challenge, defaults, html, respond, transport, verify } = options
+
   return {
     ...method,
+    challenge,
     defaults,
     html,
-    request,
     respond,
     transport,
     verify,
@@ -223,9 +256,9 @@ export declare namespace toServer {
     defaults extends RequestDefaults<method> = {},
     transportOverride extends Transport.AnyTransport | undefined = undefined,
   > = {
+    challenge?: ChallengeFn<method> | undefined
     defaults?: defaults | undefined
     html?: Html.Options | undefined
-    request?: RequestFn<method> | undefined
     respond?: RespondFn<method> | undefined
     transport?: transportOverride | undefined
     verify: VerifyFn<method>

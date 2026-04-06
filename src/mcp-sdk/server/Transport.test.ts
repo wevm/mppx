@@ -25,6 +25,31 @@ const credential: Credential = {
   source: 'did:pkh:eip155:42431:0x1111111111111111111111111111111111111111',
 }
 
+function makeRespondContext(receipt: {
+  method: string
+  reference: string
+  status: 'success'
+  timestamp: string
+}) {
+  return {
+    coreBinding: {
+      amount: String(challenge.request.amount),
+    },
+    envelope: {
+      capturedRequest: {
+        headers: new Headers(),
+        method: 'POST',
+        url: new URL('mcp://sdk/request'),
+      },
+      challenge,
+      credential,
+    },
+    methodBinding: {},
+    receipt,
+    request: challenge.request,
+  } as const
+}
+
 describe('mcpSdk', () => {
   describe('getCredential', () => {
     test('returns credential from _meta', () => {
@@ -110,12 +135,11 @@ describe('mcpSdk', () => {
       const response = {
         content: [{ type: 'text' as const, text: 'hello' }],
       }
+      const context = makeRespondContext(receipt)
 
       const result = transport.respondReceipt({
-        challengeId: 'test-challenge-id',
-        credential,
+        context,
         input: {} as Extra,
-        receipt,
         response,
       })
 
@@ -138,12 +162,11 @@ describe('mcpSdk', () => {
         _meta: { existingKey: 'value' },
         content: [{ type: 'text' as const, text: 'hello' }],
       }
+      const context = makeRespondContext(receipt)
 
       const result = transport.respondReceipt({
-        challengeId: 'cid',
-        credential,
+        context,
         input: {} as Extra,
-        receipt,
         response,
       })
 
@@ -163,12 +186,11 @@ describe('mcpSdk', () => {
       const response = {
         content: [{ type: 'text' as const, text: 'result data' }],
       }
+      const context = makeRespondContext(receipt)
 
       const result = transport.respondReceipt({
-        challengeId: 'cid',
-        credential,
+        context,
         input: {} as Extra,
-        receipt,
         response,
       })
 
