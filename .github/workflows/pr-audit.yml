@@ -1,5 +1,7 @@
 name: Pull request audit
 
+permissions: {}
+
 on:
   pull_request:
     types: [labeled]
