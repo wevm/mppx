@@ -8,11 +8,27 @@ import { Json } from 'ox'
 
 export type StoreItemMap = Record<string, unknown>
 
+/**
+ * Describes the outcome of an atomic {@link Update} callback.
+ *
+ * - `noop` — leave the stored value unchanged.
+ * - `set`  — write `value` for the key.
+ * - `delete` — remove the key.
+ *
+ * Every variant carries a `result` that is forwarded to the caller.
+ */
 export type Change<value, result> =
   | { op: 'noop'; result: result }
   | { op: 'set'; value: value; result: result }
   | { op: 'delete'; result: result }
 
+/**
+ * Atomic read-modify-write for a single key.
+ *
+ * `fn` receives the current value (or `null`) and returns a {@link Change}
+ * describing the write to perform. Implementations may retry `fn`, so it
+ * must be synchronous and free of side effects.
+ */
 export type Update<itemMap extends StoreItemMap = StoreItemMap> = <
   key extends keyof itemMap & string,
   result,
@@ -34,6 +50,13 @@ export type Store<itemMap extends StoreItemMap = StoreItemMap> = {
   update?: Update<itemMap>
 }
 
+/**
+ * A {@link Store} whose {@link Update} method is guaranteed to exist.
+ *
+ * Use this when atomicity is required (e.g., replay protection, channel
+ * deductions). Factory functions return `AtomicStore` when the backing
+ * adapter provides an `update` implementation.
+ */
 export type AtomicStore<itemMap extends StoreItemMap = StoreItemMap> = Omit<
   Store<itemMap>,
   'update'
