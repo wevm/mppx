@@ -1,5 +1,11 @@
 # mppx
 
+## 0.5.6
+
+### Patch Changes
+
+- 0c4ce6f: Added `.compose` support to HTML payment links.
+
 ## 0.5.5
 
 ### Patch Changes
