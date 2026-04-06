@@ -177,8 +177,6 @@ export function charge<const parameters extends charge.Parameters>(
       switch (payload.type) {
         case 'hash': {
           const hash = payload.hash as `0x${string}`
-          await assertHashUnused(store, hash)
-
           const expectedTransfers = getExpectedTransfers({ amount, memo, methodDetails, recipient })
           const receipt = await getTransactionReceipt(client, { hash })
           const matchedLogs = assertTransferLogs(receipt, {
@@ -186,7 +184,6 @@ export function charge<const parameters extends charge.Parameters>(
             sender: receipt.from,
             transfers: expectedTransfers,
           })
-
           // Only verify challenge binding when using auto-generated attribution memos.
           // Explicit memos (set by the server) are strictly matched by assertTransferLogs
           // but are NOT challenge-bound — callers that set explicit memos are responsible
@@ -197,7 +194,9 @@ export function charge<const parameters extends charge.Parameters>(
               realm: challenge.realm,
             })
 
-          await markHashUsed(store, hash)
+          if (!(await markHashUsed(store, hash))) {
+            throw new VerificationFailedError({ reason: 'Transaction hash has already been used' })
+          }
 
           return toReceipt(receipt)
         }
@@ -230,9 +229,8 @@ export function charge<const parameters extends charge.Parameters>(
           })
           if (!valid) throw new MismatchError('Proof signature does not match source.', {})
 
-          if (proofStore) {
-            await assertProofUnused(proofStore, challenge.id)
-            await markProofUsed(proofStore, challenge.id)
+          if (proofStore && !(await markProofUsed(proofStore, challenge.id))) {
+            throw new VerificationFailedError({ reason: 'Proof credential has already been used' })
           }
 
           return {
@@ -248,64 +246,74 @@ export function charge<const parameters extends charge.Parameters>(
 
           // Pre-broadcast dedup: catch exact byte-for-byte replays early.
           const hash = keccak256(serializedTransaction)
-          await assertHashUnused(store, hash)
-          await markHashUsed(store, hash)
+          if (!(await markHashUsed(store, hash))) {
+            throw new VerificationFailedError({ reason: 'Transaction hash has already been used' })
+          }
 
-          if (!FeePayer.isTempoTransaction(serializedTransaction))
-            throw new MismatchError('Only Tempo (0x76/0x78) transactions are supported.', {})
+          let releaseReservation = true
 
-          const transaction = Transaction.deserialize(serializedTransaction)
-          if (!transaction.signature || !transaction.from)
-            throw new MismatchError(
-              'Transaction must be signed by the sender before fee payer co-signing.',
-              {},
-            )
+          try {
+            if (!FeePayer.isTempoTransaction(serializedTransaction))
+              throw new MismatchError('Only Tempo (0x76/0x78) transactions are supported.', {})
 
-          const calls = (transaction.calls ?? []) as readonly {
-            data?: `0x${string}` | undefined
-            to?: `0x${string}` | undefined
-          }[]
-          const transfers = getExpectedTransfers({ amount, memo, methodDetails, recipient })
-          const isFeePayerTx = !!(feePayer || feePayerUrl) && methodDetails?.feePayer !== false
-          assertTransferCalls(calls, { currency, exactCount: isFeePayerTx, transfers })
+            const transaction = Transaction.deserialize(serializedTransaction)
+            if (!transaction.signature || !transaction.from)
+              throw new MismatchError(
+                'Transaction must be signed by the sender before fee payer co-signing.',
+                {},
+              )
 
-          if (isFeePayerTx)
-            FeePayer.validateCalls(transaction.calls, { amount, currency, recipient })
+            const calls = (transaction.calls ?? []) as readonly {
+              data?: `0x${string}` | undefined
+              to?: `0x${string}` | undefined
+            }[]
+            const transfers = getExpectedTransfers({ amount, memo, methodDetails, recipient })
+            const isFeePayerTx = !!(feePayer || feePayerUrl) && methodDetails?.feePayer !== false
+            assertTransferCalls(calls, { currency, exactCount: isFeePayerTx, transfers })
 
-          const resolvedFeeToken =
-            transaction.feeToken ?? defaults.currency[chainId as keyof typeof defaults.currency]
+            if (isFeePayerTx)
+              FeePayer.validateCalls(transaction.calls, { amount, currency, recipient })
 
-          const serializedTransaction_final = await (async () => {
-            if (feePayer && methodDetails?.feePayer !== false) {
-              return signTransaction(client, {
-                ...transaction,
-                account: feePayer,
-                feePayer,
-                feeToken: resolvedFeeToken,
-              } as never)
+            const resolvedFeeToken =
+              transaction.feeToken ?? defaults.currency[chainId as keyof typeof defaults.currency]
+
+            const serializedTransaction_final = await (async () => {
+              if (feePayer && methodDetails?.feePayer !== false) {
+                return signTransaction(client, {
+                  ...transaction,
+                  account: feePayer,
+                  feePayer,
+                  feeToken: resolvedFeeToken,
+                } as never)
+              }
+              return serializedTransaction
+            })()
+
+            if (waitForConfirmation) {
+              const receipt = await sendRawTransactionSync(client, {
+                serializedTransaction: serializedTransaction_final,
+              })
+              assertTransferLogs(receipt, {
+                currency,
+                sender: transaction.from! as `0x${string}`,
+                transfers,
+              })
+              // Post-broadcast dedup: catch malleable input variants
+              // (different serialized bytes, same underlying tx) that
+              // bypass the pre-broadcast check. Skip if the broadcast
+              // hash matches the input hash (already stored above).
+              if (
+                receipt.transactionHash.toLowerCase() !== hash.toLowerCase() &&
+                !(await markHashUsed(store, receipt.transactionHash))
+              ) {
+                throw new VerificationFailedError({
+                  reason: 'Transaction hash has already been used',
+                })
+              }
+              releaseReservation = false
+              return toReceipt(receipt)
             }
-            return serializedTransaction
-          })()
 
-          if (waitForConfirmation) {
-            const receipt = await sendRawTransactionSync(client, {
-              serializedTransaction: serializedTransaction_final,
-            })
-            assertTransferLogs(receipt, {
-              currency,
-              sender: transaction.from! as `0x${string}`,
-              transfers,
-            })
-            // Post-broadcast dedup: catch malleable input variants
-            // (different serialized bytes, same underlying tx) that
-            // bypass the pre-broadcast check. Skip if the broadcast
-            // hash matches the input hash (already stored above).
-            if (receipt.transactionHash.toLowerCase() !== hash.toLowerCase()) {
-              await assertHashUnused(store, receipt.transactionHash)
-              await markHashUsed(store, receipt.transactionHash)
-            }
-            return toReceipt(receipt)
-          } else {
             // Optimistic path: simulate to catch obvious reverts, then broadcast
             // without waiting for on-chain confirmation. The returned receipt
             // assumes success — callers opt into this risk via waitForConfirmation: false.
@@ -319,16 +327,24 @@ export function charge<const parameters extends charge.Parameters>(
               serializedTransaction: serializedTransaction_final,
             })
             // Post-broadcast dedup: same
-            if (reference.toLowerCase() !== hash.toLowerCase()) {
-              await assertHashUnused(store, reference)
-              await markHashUsed(store, reference)
+            if (
+              reference.toLowerCase() !== hash.toLowerCase() &&
+              !(await markHashUsed(store, reference))
+            ) {
+              throw new VerificationFailedError({
+                reason: 'Transaction hash has already been used',
+              })
             }
+            releaseReservation = false
             return {
               method: 'tempo',
               status: 'success',
               timestamp: new Date().toISOString(),
               reference,
             } as const
+          } catch (error) {
+            if (releaseReservation) await releaseHashUse(store, hash)
+            throw error
           }
         }
 
@@ -356,6 +372,9 @@ export declare namespace charge {
      * zero-dollar proof auth, replay prevention is enabled only when a store
      * is explicitly provided; otherwise proofs remain reusable until the
      * challenge expires.
+     *
+     * Stores used for replay protection must implement `Store.update()` so
+     * replay markers can be written atomically.
      *
      * Use a shared store in multi-instance deployments so consumed hashes and
      * proofs are visible across all server instances.
@@ -597,40 +616,42 @@ function getProofStoreKey(challengeId: string): `mppx:charge:${string}` {
   return `mppx:charge:proof:${challengeId}`
 }
 
-/** @internal */
-async function assertHashUnused(
-  store: Store.Store<charge.StoreItemMap>,
-  hash: `0x${string}`,
-): Promise<void> {
-  const seen = await store.get(getHashStoreKey(hash))
-  if (seen !== null)
-    throw new VerificationFailedError({ reason: 'Transaction hash has already been used' })
-}
-
-/** @internal */
 async function markHashUsed(
   store: Store.Store<charge.StoreItemMap>,
   hash: `0x${string}`,
-): Promise<void> {
-  await store.put(getHashStoreKey(hash), Date.now())
+): Promise<boolean> {
+  if (!store.update) throw new Error('Store must implement update for replay protection.')
+
+  return store.update(getHashStoreKey(hash), (current) => {
+    if (current !== null) return { op: 'noop', result: false }
+    return { op: 'set', value: Date.now(), result: true }
+  })
 }
 
 /** @internal */
-async function assertProofUnused(
+async function releaseHashUse(
   store: Store.Store<charge.StoreItemMap>,
-  challengeId: string,
+  hash: `0x${string}`,
 ): Promise<void> {
-  const seen = await store.get(getProofStoreKey(challengeId))
-  if (seen !== null)
-    throw new VerificationFailedError({ reason: 'Proof credential has already been used' })
+  if (!store.update) throw new Error('Store must implement update for replay protection.')
+
+  await store.update(getHashStoreKey(hash), (current) => {
+    if (current === null) return { op: 'noop', result: undefined }
+    return { op: 'delete', result: undefined }
+  })
 }
 
 /** @internal */
 async function markProofUsed(
   store: Store.Store<charge.StoreItemMap>,
   challengeId: string,
-): Promise<void> {
-  await store.put(getProofStoreKey(challengeId), Date.now())
+): Promise<boolean> {
+  if (!store.update) throw new Error('Store must implement update for proof replay protection.')
+
+  return store.update(getProofStoreKey(challengeId), (current) => {
+    if (current !== null) return { op: 'noop', result: false }
+    return { op: 'set', value: Date.now(), result: true }
+  })
 }
 
 /** @internal */
@@ -676,6 +697,13 @@ class MismatchError extends PaymentError {
   readonly type = 'https://paymentauth.org/problems/verification-failed'
 
   constructor(reason: string, details: Record<string, string>) {
-    super([reason, ...Object.entries(details).map(([k, v]) => `  - ${k}: ${v}`)].join('\n'))
+    super(
+      [
+        reason.startsWith('Payment verification failed')
+          ? reason
+          : `Payment verification failed: ${reason}`,
+        ...Object.entries(details).map(([k, v]) => `  - ${k}: ${v}`),
+      ].join('\n'),
+    )
   }
 }

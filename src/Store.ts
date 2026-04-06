@@ -8,10 +8,25 @@ import { Json } from 'ox'
 
 export type StoreItemMap = Record<string, unknown>
 
+export type Change<value, result> =
+  | { op: 'noop'; result: result }
+  | { op: 'set'; value: value; result: result }
+  | { op: 'delete'; result: result }
+
 export type Store<itemMap extends StoreItemMap = StoreItemMap> = {
   get: <key extends keyof itemMap & string>(key: key) => Promise<itemMap[key] | null>
   put: <key extends keyof itemMap & string>(key: key, value: itemMap[key]) => Promise<void>
   delete: <key extends keyof itemMap & string>(key: key) => Promise<void>
+  /**
+   * Atomically reads the current value for `key`, computes the next operation,
+   * and commits it before returning `result`.
+   *
+   * Implementations may retry `fn`, so it must be synchronous and free of side effects.
+   */
+  update?: <key extends keyof itemMap & string, result>(
+    key: key,
+    fn: (current: itemMap[key] | null) => Change<itemMap[key], result>,
+  ) => Promise<result>
 }
 
 /** Creates a {@link Store} from an existing implementation. */
@@ -33,6 +48,18 @@ export function cloudflare(kv: cloudflare.Parameters): Store {
     async delete(key) {
       await kv.delete(key)
     },
+    ...(kv.update
+      ? {
+          async update(key, fn) {
+            return kv.update!(key, (current) => {
+              const parsed = current == null ? null : (Json.parse(current) as never)
+              const change = fn(parsed)
+              if (change.op !== 'set') return change
+              return { ...change, value: Json.stringify(change.value) }
+            })
+          },
+        }
+      : {}),
   })
 }
 
@@ -41,6 +68,10 @@ export declare namespace cloudflare {
     get: (key: string) => Promise<unknown>
     put: (key: string, value: string) => Promise<void>
     delete: (key: string) => Promise<void>
+    update?: <result>(
+      key: string,
+      fn: (current: string | null) => Change<string, result>,
+    ) => Promise<result>
   }
 }
 
@@ -59,6 +90,13 @@ export function memory(): Store {
     async delete(key) {
       store.delete(key)
     },
+    async update(key, fn) {
+      const current = store.has(key) ? (Json.parse(store.get(key)!) as never) : null
+      const change = fn(current)
+      if (change.op === 'set') store.set(key, Json.stringify(change.value))
+      if (change.op === 'delete') store.delete(key)
+      return change.result
+    },
   })
 }
 
@@ -76,6 +114,18 @@ export function redis(client: redis.Parameters): Store {
     async delete(key) {
       await client.del(key)
     },
+    ...(client.update
+      ? {
+          async update(key, fn) {
+            return client.update!(key, (current) => {
+              const parsed = current == null ? null : (Json.parse(current) as never)
+              const change = fn(parsed)
+              if (change.op !== 'set') return change
+              return { ...change, value: Json.stringify(change.value) }
+            })
+          },
+        }
+      : {}),
   })
 }
 
@@ -84,6 +134,10 @@ export declare namespace redis {
     get: (key: string) => Promise<string | null>
     set: (key: string, value: string) => Promise<unknown>
     del: (key: string) => Promise<unknown>
+    update?: <result>(
+      key: string,
+      fn: (current: string | null) => Change<string, result>,
+    ) => Promise<result>
   }
 }
 
@@ -99,6 +153,13 @@ export function upstash(redis: upstash.Parameters): Store {
     async delete(key) {
       await redis.del(key)
     },
+    ...(redis.update
+      ? {
+          async update(key, fn) {
+            return redis.update!(key, fn)
+          },
+        }
+      : {}),
   })
 }
 
@@ -107,5 +168,9 @@ export declare namespace upstash {
     get: (key: string) => Promise<unknown>
     set: (key: string, value: unknown) => Promise<unknown>
     del: (key: string) => Promise<unknown>
+    update?: <result>(
+      key: string,
+      fn: (current: unknown | null) => Change<unknown, result>,
+    ) => Promise<result>
   }
 }
