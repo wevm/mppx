@@ -1,5 +1,4 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
-import { isDeepStrictEqual } from 'node:util'
 
 import * as Challenge from '../Challenge.js'
 import * as Credential from '../Credential.js'
@@ -341,30 +340,15 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
           return { challenge: response, status: 402 }
         }
 
-        // Verify the credential's challenge matches this route's configured
-        // method, intent, realm, and request. Prevents cross-route scope
-        // confusion where a credential issued for a cheap route (or different
-        // method/intent) is presented at an expensive route.
+        // Verify the credential's challenge matches this route's stable scope:
+        // method, intent, realm, full canonical request, and opaque. This prevents
+        // cross-route scope confusion where a credential issued for one route
+        // (or different method/intent/opaque) is presented at another.
+        // Fields not compared: expires (per-issuance freshness, checked separately),
+        // digest (request-body binding, deferred to a separate layer), description
+        // (intentionally not part of binding).
         {
-          for (const field of ['method', 'intent', 'realm'] as const) {
-            if (credential.challenge[field] !== challenge[field]) {
-              const response = await transport.respondChallenge({
-                challenge,
-                input,
-                error: new Errors.InvalidChallengeError({
-                  id: credential.challenge.id,
-                  reason: `credential ${field} does not match this route's requirements`,
-                }),
-                html: method.html,
-              })
-              return { challenge: response, status: 402 }
-            }
-          }
-
-          const mismatch = getRequestBindingMismatch(
-            challenge.request as Record<string, unknown>,
-            credential.challenge.request as Record<string, unknown>,
-          )
+          const mismatch = getChallengeScopeMismatch(challenge, credential.challenge)
           if (mismatch) {
             const response = await transport.respondChallenge({
               challenge,
@@ -373,6 +357,7 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
                 id: credential.challenge.id,
                 reason: `credential ${mismatch} does not match this route's requirements`,
               }),
+              html: method.html,
             })
             return { challenge: response, status: 402 }
           }
@@ -469,6 +454,7 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
           name: method.name,
           intent: method.intent,
           _canonicalRequest: PaymentRequest.fromMethod(method, merged),
+          _canonicalOpaque: options.meta,
         },
       },
     )
@@ -531,35 +517,27 @@ function resolveRealmFromCapturedRequest(capturedRequest: Method.CapturedRequest
   return defaultRealm
 }
 
-type RequestBindingField = CoreBindingField | MethodBindingField
-type CoreBindingField = 'amount' | 'currency' | 'recipient'
-type MethodBindingField = 'chainId' | 'memo' | 'splits'
+type ChallengeScopeField = 'method' | 'intent' | 'realm' | 'request' | 'opaque'
 
-const requestBindingFields = [
-  'amount',
-  'currency',
-  'recipient',
-  'chainId',
-  'memo',
-  'splits',
-] as const satisfies readonly RequestBindingField[]
-
-type RequestBinding = Partial<Record<RequestBindingField, unknown>>
-type MethodBinding = Pick<RequestBinding, MethodBindingField>
-
-function getRequestBindingMismatch(
-  expectedRequest: Record<string, unknown>,
-  actualRequest: Record<string, unknown>,
-): RequestBindingField | undefined {
-  const expected = getRequestBinding(expectedRequest)
-  const actual = getRequestBinding(actualRequest)
-
-  return requestBindingFields.find(
-    (field) => !requestBindingValuesMatch(field, expected[field], actual[field]),
-  )
+function getChallengeScopeMismatch(
+  expected: Challenge.Challenge,
+  actual: Challenge.Challenge,
+): ChallengeScopeField | undefined {
+  if (actual.method !== expected.method) return 'method'
+  if (actual.intent !== expected.intent) return 'intent'
+  if (actual.realm !== expected.realm) return 'realm'
+  if (PaymentRequest.serialize(actual.request) !== PaymentRequest.serialize(expected.request))
+    return 'request'
+  const expectedOpaque = expected.opaque ? PaymentRequest.serialize(expected.opaque) : ''
+  const actualOpaque = actual.opaque ? PaymentRequest.serialize(actual.opaque) : ''
+  if (actualOpaque !== expectedOpaque) return 'opaque'
+  return undefined
 }
 
-function getRequestBinding(request: Record<string, unknown>): RequestBinding {
+type MethodBindingField = 'chainId' | 'memo' | 'splits'
+type MethodBinding = Partial<Record<MethodBindingField, unknown>>
+
+function getRequestBinding(request: Record<string, unknown>) {
   const methodDetails = (request.methodDetails ?? {}) as Record<string, unknown>
 
   return {
@@ -590,48 +568,8 @@ function getMethodBinding(request: Record<string, unknown>): MethodBinding {
   }
 }
 
-function requestBindingValuesMatch(
-  field: RequestBindingField,
-  expected: unknown,
-  actual: unknown,
-): boolean {
-  return isDeepStrictEqual(
-    normalizeRequestBindingValue(field, expected),
-    normalizeRequestBindingValue(field, actual),
-  )
-}
-
-function normalizeRequestBindingValue(field: RequestBindingField, value: unknown): unknown {
-  switch (field) {
-    case 'memo':
-      return normalizeHex(value)
-    case 'splits':
-      return normalizeComparable(value)
-    default:
-      return normalizeScalar(value)
-  }
-}
-
 function normalizeScalar(value: unknown): string | undefined {
   return value === undefined ? undefined : String(value)
-}
-
-function normalizeHex(value: unknown): unknown {
-  return typeof value === 'string' && value.startsWith('0x') ? value.toLowerCase() : value
-}
-
-function normalizeComparable(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(normalizeComparable)
-
-  if (value && typeof value === 'object') {
-    return Object.fromEntries(
-      Object.entries(value as Record<string, unknown>)
-        .sort(([left], [right]) => left.localeCompare(right))
-        .map(([key, nested]) => [key, normalizeComparable(nested)]),
-    )
-  }
-
-  return normalizeHex(value)
 }
 
 export type MethodFn<
@@ -678,6 +616,7 @@ type ConfiguredHandler = ((input: Request) => Promise<MethodFn.Response<Transpor
     intent: string
     html: Html.Options | undefined
     _canonicalRequest: Record<string, unknown>
+    _canonicalOpaque: Record<string, string> | undefined
   }
 }
 
@@ -790,19 +729,29 @@ export function compose(
 
       if (credential) {
         const { method: credMethod, intent: credIntent } = credential.challenge
-        const credReq = credential.challenge.request as Record<string, unknown>
 
-        // Filter by name+intent, then narrow by comparing stable request fields
-        // from the echoed challenge against each handler's canonical request.
-        // Uses the schema-parsed canonical form (not raw options) so that
-        // transformed fields (e.g. amount with decimals) match correctly.
-        // Also checks inside methodDetails for fields moved there by transforms.
+        // Filter by name+intent, then narrow by comparing the full canonical
+        // request and opaque from the echoed challenge against each handler's
+        // stored canonical values. This is a best-effort dispatch heuristic —
+        // the authoritative scope check happens inside each handler via
+        // getChallengeScopeMismatch().
         const candidates = handlers.filter((h) => {
           const meta = (h as ConfiguredHandler)._internal
           if (!meta || meta.name !== credMethod || meta.intent !== credIntent) return false
           const canonical = meta._canonicalRequest
           if (!canonical) return true
-          return !getRequestBindingMismatch(canonical, credReq)
+          if (
+            PaymentRequest.serialize(canonical) !==
+            PaymentRequest.serialize(credential.challenge.request)
+          )
+            return false
+          const canonicalOpaque = meta._canonicalOpaque
+            ? PaymentRequest.serialize(meta._canonicalOpaque)
+            : ''
+          const credOpaque = credential.challenge.opaque
+            ? PaymentRequest.serialize(credential.challenge.opaque)
+            : ''
+          return canonicalOpaque === credOpaque
         })
 
         const match =
