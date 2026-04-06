@@ -210,7 +210,8 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
       return (bestSpent > cumulative ? cumulative : bestSpent).toString()
     }
 
-    return (cumulative > spent ? cumulative : spent).toString()
+    // SSE/HTTP: spent is kept in sync by inline receipts, use it directly.
+    return spent.toString()
   }
 
   function assertVoucherWithinLocalLimit(cumulativeAmount: bigint) {
