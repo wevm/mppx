@@ -2331,6 +2331,211 @@ describe('challenge scope binding: full request comparison', () => {
   })
 })
 
+describe('request body digest binding', () => {
+  const simpleMethod = Method.from({
+    name: 'mock',
+    intent: 'charge',
+    schema: {
+      credential: { payload: z.object({ token: z.string() }) },
+      request: z.object({
+        amount: z.string(),
+        currency: z.string(),
+        recipient: z.string(),
+      }),
+    },
+  })
+
+  const serverMethod = Method.toServer(simpleMethod, {
+    async verify() {
+      return {
+        method: 'mock',
+        reference: 'ref',
+        status: 'success' as const,
+        timestamp: new Date().toISOString(),
+      }
+    },
+  })
+
+  test('challenge includes body digest when request has a body', async () => {
+    const handler = Mppx.create({ methods: [serverMethod], realm, secretKey })
+    const body = JSON.stringify({ data: 'hello' })
+
+    const result = await handler.charge({
+      amount: '1000',
+      currency: '0xabc',
+      recipient: '0x001',
+      expires: new Date(Date.now() + 60_000).toISOString(),
+    })(
+      new Request('https://example.com/resource', {
+        method: 'POST',
+        body,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
+
+    expect(result.status).toBe(402)
+    if (result.status !== 402) throw new Error()
+
+    const challenge = Challenge.fromResponse(result.challenge)
+    expect(challenge.digest).toBeDefined()
+    expect(challenge.digest).toMatch(/^sha-256=/)
+  })
+
+  test('challenge omits digest when request has no body', async () => {
+    const handler = Mppx.create({ methods: [serverMethod], realm, secretKey })
+
+    const result = await handler.charge({
+      amount: '1000',
+      currency: '0xabc',
+      recipient: '0x001',
+      expires: new Date(Date.now() + 60_000).toISOString(),
+    })(new Request('https://example.com/resource'))
+
+    expect(result.status).toBe(402)
+    if (result.status !== 402) throw new Error()
+
+    const challenge = Challenge.fromResponse(result.challenge)
+    expect(challenge.digest).toBeUndefined()
+  })
+
+  test('rejects credential when body changes between challenge and verification', async () => {
+    const handler = Mppx.create({ methods: [serverMethod], realm, secretKey })
+
+    const originalBody = JSON.stringify({ data: 'original' })
+
+    // Get challenge for original body
+    const challengeResult = await handler.charge({
+      amount: '1000',
+      currency: '0xabc',
+      recipient: '0x001',
+      expires: new Date(Date.now() + 60_000).toISOString(),
+    })(
+      new Request('https://example.com/resource', {
+        method: 'POST',
+        body: originalBody,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
+
+    expect(challengeResult.status).toBe(402)
+    if (challengeResult.status !== 402) throw new Error()
+
+    const challenge = Challenge.fromResponse(challengeResult.challenge)
+    const credential = Credential.from({
+      challenge,
+      payload: { token: 'valid' },
+    })
+
+    // Replay with different body
+    const tamperedBody = JSON.stringify({ data: 'tampered' })
+    const result = await handler.charge({
+      amount: '1000',
+      currency: '0xabc',
+      recipient: '0x001',
+      expires: new Date(Date.now() + 60_000).toISOString(),
+    })(
+      new Request('https://example.com/resource', {
+        method: 'POST',
+        body: tamperedBody,
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: Credential.serialize(credential),
+        },
+      }),
+    )
+
+    expect(result.status).toBe(402)
+    if (result.status !== 402) throw new Error()
+    const body = (await result.challenge.json()) as { detail: string }
+    expect(body.detail).toContain('request body does not match challenge digest')
+  })
+
+  test('accepts credential when body matches between challenge and verification', async () => {
+    const handler = Mppx.create({ methods: [serverMethod], realm, secretKey })
+
+    const requestBody = JSON.stringify({ data: 'consistent' })
+
+    // Get challenge
+    const challengeResult = await handler.charge({
+      amount: '1000',
+      currency: '0xabc',
+      recipient: '0x001',
+      expires: new Date(Date.now() + 60_000).toISOString(),
+    })(
+      new Request('https://example.com/resource', {
+        method: 'POST',
+        body: requestBody,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
+
+    expect(challengeResult.status).toBe(402)
+    if (challengeResult.status !== 402) throw new Error()
+
+    const challenge = Challenge.fromResponse(challengeResult.challenge)
+    const credential = Credential.from({
+      challenge,
+      payload: { token: 'valid' },
+    })
+
+    // Replay with same body
+    const result = await handler.charge({
+      amount: '1000',
+      currency: '0xabc',
+      recipient: '0x001',
+      expires: new Date(Date.now() + 60_000).toISOString(),
+    })(
+      new Request('https://example.com/resource', {
+        method: 'POST',
+        body: requestBody,
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: Credential.serialize(credential),
+        },
+      }),
+    )
+
+    expect(result.status).toBe(200)
+  })
+
+  test('GET request without body still works (no digest)', async () => {
+    const handler = Mppx.create({ methods: [serverMethod], realm, secretKey })
+
+    // GET challenge (no body)
+    const challengeResult = await handler.charge({
+      amount: '1000',
+      currency: '0xabc',
+      recipient: '0x001',
+      expires: new Date(Date.now() + 60_000).toISOString(),
+    })(new Request('https://example.com/resource'))
+
+    expect(challengeResult.status).toBe(402)
+    if (challengeResult.status !== 402) throw new Error()
+
+    const challenge = Challenge.fromResponse(challengeResult.challenge)
+    expect(challenge.digest).toBeUndefined()
+
+    const credential = Credential.from({
+      challenge,
+      payload: { token: 'valid' },
+    })
+
+    // Present credential on GET (no body)
+    const result = await handler.charge({
+      amount: '1000',
+      currency: '0xabc',
+      recipient: '0x001',
+      expires: new Date(Date.now() + 60_000).toISOString(),
+    })(
+      new Request('https://example.com/resource', {
+        headers: { Authorization: Credential.serialize(credential) },
+      }),
+    )
+
+    expect(result.status).toBe(200)
+  })
+})
+
 describe('withReceipt', () => {
   const mockCharge = Method.from({
     name: 'mock',

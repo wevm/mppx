@@ -293,8 +293,10 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
         // Recompute challenge from options. The HMAC-bound ID means we don't need to
         // store challenges server-side—if the client echoes back a credential with
         // a matching ID, we know it was issued by us with these exact parameters.
+        const digest = capturedRequest.bodyDigest
         const challenge = Challenge.fromMethod(method, {
           description,
+          digest,
           expires,
           meta,
           realm: effectiveRealm,
@@ -345,7 +347,7 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
         // cross-route scope confusion where a credential issued for one route
         // (or different method/intent/opaque) is presented at another.
         // Fields not compared: expires (per-issuance freshness, checked separately),
-        // digest (request-body binding, deferred to a separate layer), description
+        // digest (request-body binding, verified separately below), description
         // (intentionally not part of binding).
         {
           const mismatch = getChallengeScopeMismatch(challenge, credential.challenge)
@@ -356,6 +358,25 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
               error: new Errors.InvalidChallengeError({
                 id: credential.challenge.id,
                 reason: `credential ${mismatch} does not match this route's requirements`,
+              }),
+              html: method.html,
+            })
+            return { challenge: response, status: 402 }
+          }
+        }
+
+        // Verify the echoed digest matches the current request body.
+        // The digest is already HMAC-bound via the challenge ID, so tampering
+        // with the digest field is caught by the HMAC check above. This check
+        // ensures the credential was issued for this specific request body.
+        if (credential.challenge.digest && capturedRequest.bodyDigest) {
+          if (credential.challenge.digest !== capturedRequest.bodyDigest) {
+            const response = await transport.respondChallenge({
+              challenge,
+              input,
+              error: new Errors.InvalidChallengeError({
+                id: credential.challenge.id,
+                reason: 'request body does not match challenge digest',
               }),
               html: method.html,
             })

@@ -1,3 +1,4 @@
+import * as BodyDigest from '../BodyDigest.js'
 import * as Challenge from '../Challenge.js'
 import * as Credential from '../Credential.js'
 import * as Errors from '../Errors.js'
@@ -120,8 +121,11 @@ export function http(): Http {
   return from<Request, Response>({
     name: 'http',
 
-    captureRequest(request) {
+    async captureRequest(request) {
+      const bodyBytes = await safeBodyBytes(request)
       return {
+        bodyBytes,
+        bodyDigest: bodyBytes ? BodyDigest.compute(new TextDecoder().decode(bodyBytes)) : undefined,
         headers: new Headers(request.headers),
         method: request.method,
         url: safeUrl(request.url),
@@ -282,6 +286,17 @@ function safeUrl(url: string | undefined): URL {
     if (url) return new URL(url)
   } catch {}
   return new URL('about:blank')
+}
+
+async function safeBodyBytes(request: Request): Promise<Uint8Array | undefined> {
+  try {
+    if (request.body === null) return undefined
+    const bytes = await request.arrayBuffer()
+    if (bytes.byteLength === 0) return undefined
+    return new Uint8Array(bytes)
+  } catch {
+    return undefined
+  }
 }
 
 /** @internal Distributes over the receipt response union to create overloads. */
