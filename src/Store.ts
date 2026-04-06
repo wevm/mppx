@@ -224,11 +224,9 @@ export function upstash(redis: upstash.Parameters): Store {
       await redis.del(key)
     },
     ...(redis.update
-      ? ({
-          async update(key: string, fn: (current: unknown) => Change<unknown, unknown>) {
-            return redis.update!(key, fn as any)
-          },
-        } satisfies AtomicActions)
+      ? {
+          update: redis.update as Update,
+        }
       : {}),
   })
 }
