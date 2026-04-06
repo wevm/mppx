@@ -15,6 +15,6 @@
     "tsx": "latest",
     "typescript": "latest",
     "viem": "latest",
-    "vite": "8.0.5"
+    "vite": "latest"
   }
 }

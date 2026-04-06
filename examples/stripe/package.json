@@ -17,6 +17,6 @@
     "mppx": "latest",
     "stripe": "^17.7.0",
     "typescript": "latest",
-    "vite": "8.0.5"
+    "vite": "latest"
   }
 }
