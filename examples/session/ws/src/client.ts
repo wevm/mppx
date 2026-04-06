@@ -12,13 +12,13 @@
 //   5. Client signs and sends voucher updates over the same socket
 //   6. Client sends a final `close()` credential to settle on-chain
 
+import { WebSocket } from 'isows'
 // `tempo` from 'mppx/client' provides the session manager used for this demo.
 import { tempo } from 'mppx/client'
 import { createClient, type Hex, http } from 'viem'
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts'
 import { tempoModerato } from 'viem/chains'
 import { Actions } from 'viem/tempo'
-import { WebSocket } from 'ws'
 
 // The server URL. The websocket URL is derived from this base.
 const BASE_URL = process.env.BASE_URL ?? 'http://localhost:5173'

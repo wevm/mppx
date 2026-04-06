@@ -94,6 +94,9 @@ importers:
       hono:
         specifier: 4.12.7
         version: 4.12.7
+      isows:
+        specifier: ^1.0.7
+        version: 1.0.7(ws@8.20.0(bufferutil@4.1.0)(utf-8-validate@5.0.10))
       playwright:
         specifier: ^1.58.2
         version: 1.58.2
@@ -120,7 +123,7 @@ importers:
         version: 2.47.6(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.3.6)
       vp:
         specifier: npm:vite-plus@~0.1.14
-        version: vite-plus@0.1.14(@types/node@25.5.0)(bufferutil@4.1.0)(esbuild@0.27.2)(tsx@4.21.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(vite@8.0.3(@types/node@25.5.0)(esbuild@0.27.2)(tsx@4.21.0)(yaml@2.8.3))(yaml@2.8.3)
+        version: vite-plus@0.1.14(@types/node@25.5.0)(bufferutil@4.1.0)(esbuild@0.27.2)(tsx@4.21.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(vite@8.0.5(@types/node@25.5.0)(esbuild@0.27.2)(tsx@4.21.0)(yaml@2.8.3))(yaml@2.8.3)
       ws:
         specifier: ^8.20.0
         version: 8.20.0(bufferutil@4.1.0)(utf-8-validate@5.0.10)
@@ -256,7 +259,7 @@ importers:
         version: 2.47.6(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.3.6)
       vite:
         specifier: latest
-        version: 8.0.3(@types/node@25.5.0)(esbuild@0.27.2)(tsx@4.21.0)(yaml@2.8.3)
+        version: 8.0.5(@types/node@25.5.0)(esbuild@0.27.2)(tsx@4.21.0)(yaml@2.8.3)
 
   examples/session/ws:
     dependencies:
@@ -272,6 +275,9 @@ importers:
       '@typescript/native-preview':
         specifier: 7.0.0-dev.20260323.1
         version: 7.0.0-dev.20260323.1
+      isows:
+        specifier: ^1.0.7
+        version: 1.0.7(ws@8.20.0(bufferutil@4.1.0)(utf-8-validate@5.0.10))
       mppx:
         specifier: workspace:*
         version: link:../../..
@@ -286,7 +292,7 @@ importers:
         version: 2.47.6(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.3.6)
       vite:
         specifier: latest
-        version: 8.0.3(@types/node@25.5.2)(esbuild@0.27.2)(tsx@4.21.0)(yaml@2.8.3)
+        version: 8.0.5(@types/node@25.5.2)(esbuild@0.27.2)(tsx@4.21.0)(yaml@2.8.3)
       ws:
         specifier: ^8.20.0
         version: 8.20.0(bufferutil@4.1.0)(utf-8-validate@5.0.10)
@@ -4974,7 +4980,7 @@ snapshots:
       tinybench: 2.9.0
       tinyexec: 1.0.4
       tinyglobby: 0.2.15
-      vite: 8.0.3(@types/node@25.5.0)(esbuild@0.27.2)(tsx@4.21.0)(yaml@2.8.3)
+      vite: 8.0.5(@types/node@25.5.0)(esbuild@0.27.2)(tsx@4.21.0)(yaml@2.8.3)
       ws: 8.20.0(bufferutil@4.1.0)(utf-8-validate@5.0.10)
     optionalDependencies:
       '@types/node': 25.5.0
@@ -6036,6 +6042,10 @@ snapshots:
     dependencies:
       ws: 8.18.3(bufferutil@4.1.0)(utf-8-validate@5.0.10)
 
+  isows@1.0.7(ws@8.20.0(bufferutil@4.1.0)(utf-8-validate@5.0.10)):
+    dependencies:
+      ws: 8.20.0(bufferutil@4.1.0)(utf-8-validate@5.0.10)
+
   jackspeak@3.4.3:
     dependencies:
       '@isaacs/cliui': 8.0.2
@@ -7088,7 +7098,7 @@ snapshots:
       tsx: 4.21.0
       yaml: 2.8.3
 
-  vite@8.0.3(@types/node@25.5.2)(esbuild@0.27.2)(tsx@4.21.0)(yaml@2.8.3):
+  vite@8.0.5(@types/node@25.5.2)(esbuild@0.27.2)(tsx@4.21.0)(yaml@2.8.3):
     dependencies:
       lightningcss: 1.32.0
       picomatch: 4.0.4

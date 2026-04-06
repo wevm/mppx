@@ -12,6 +12,7 @@
     "@types/node": "^25.5.0",
     "@types/ws": "^8.18.1",
     "@typescript/native-preview": "7.0.0-dev.20260323.1",
+    "isows": "^1.0.7",
     "mppx": "workspace:*",
     "tsx": "^4.21.0",
     "typescript": "~5.9.3",

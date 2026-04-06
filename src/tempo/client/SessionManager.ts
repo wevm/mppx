@@ -1,13 +1,14 @@
 import type { Hex } from 'ox'
-import type { Address } from 'viem'
+import { parseUnits, type Address } from 'viem'
 
 import * as Challenge from '../../Challenge.js'
 import * as Fetch from '../../client/internal/Fetch.js'
+import * as PaymentCredential from '../../Credential.js'
 import type * as Account from '../../viem/Account.js'
 import type * as Client from '../../viem/Client.js'
 import { deserializeSessionReceipt } from '../session/Receipt.js'
 import { parseEvent } from '../session/Sse.js'
-import type { SessionReceipt } from '../session/Types.js'
+import type { SessionCredentialPayload, SessionReceipt } from '../session/Types.js'
 import * as Ws from '../session/Ws.js'
 import type { ChannelEntry } from './ChannelOps.js'
 import { session as sessionPlugin } from './Session.js'
@@ -26,6 +27,17 @@ type CloseReadyWaiter = {
   reject(error: Error): void
   resolve(receipt: SessionReceipt): void
 }
+
+const WebSocketReadyState = {
+  CONNECTING: 0,
+  OPEN: 1,
+  CLOSING: 2,
+  CLOSED: 3,
+} as const
+
+// Browser-style WebSocket clients may only initiate close with 1000 or 3000-4999.
+// Keep protocol/policy close codes on the server side and use an app-defined code here.
+const ClientWebSocketProtocolErrorCloseCode = 3008
 
 export type SessionManager = {
   readonly channelId: Hex.Hex | undefined
@@ -83,6 +95,10 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
   const WebSocketImpl =
     parameters.webSocket ??
     (globalThis as typeof globalThis & { WebSocket?: WebSocketConstructor }).WebSocket
+  const maxVoucherCumulative =
+    parameters.maxDeposit !== undefined
+      ? parseUnits(parameters.maxDeposit, parameters.decimals ?? 6)
+      : null
 
   let channel: ChannelEntry | null = null
   let lastChallenge: Challenge.Challenge | null = null
@@ -93,7 +109,10 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
   let activeSocket: WebSocket | null = null
   let closeReadyReceipt: SessionReceipt | null = null
   let closeReadyWaiter: CloseReadyWaiter | null = null
+  let expectedSocketCloseAmount: string | null = null
   let receiptWaiter: ReceiptWaiter | null = null
+  let wsDeliveredChunks = 0n
+  let wsTickCost = 0n
 
   const method = sessionPlugin({
     account: parameters.account,
@@ -168,6 +187,40 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
     waiter.reject(error)
   }
 
+  function getFallbackCloseAmount(challenge: Challenge.Challenge, channelId: Hex.Hex): string {
+    if (
+      closeReadyReceipt &&
+      closeReadyReceipt.challengeId === challenge.id &&
+      closeReadyReceipt.channelId === channelId
+    ) {
+      return closeReadyReceipt.spent
+    }
+
+    const cumulative = channel?.channelId === channelId ? channel.cumulativeAmount : 0n
+
+    // For WS sessions, use delivered chunk count × tick cost as a tight spend
+    // estimate.  Without this, a socket death before close-ready would cause
+    // the client to sign for the full cumulative voucher authorization —
+    // potentially orders of magnitude more than what was actually consumed.
+    // The estimate may undercount by at most 1 chunk (if the server committed
+    // a charge but the socket died before delivering the message).
+    if (wsTickCost > 0n) {
+      const deliveryEstimate = wsDeliveredChunks * wsTickCost
+      const bestSpent = spent > deliveryEstimate ? spent : deliveryEstimate
+      return (bestSpent > cumulative ? cumulative : bestSpent).toString()
+    }
+
+    return (cumulative > spent ? cumulative : spent).toString()
+  }
+
+  function assertVoucherWithinLocalLimit(cumulativeAmount: bigint) {
+    if (maxVoucherCumulative === null) return
+    if (cumulativeAmount <= maxVoucherCumulative) return
+    throw new Error(
+      `requested voucher amount ${cumulativeAmount} exceeds local maxDeposit ${maxVoucherCumulative}`,
+    )
+  }
+
   function toPaymentResponse(response: Response): PaymentResponse {
     const receiptHeader = response.headers.get('Payment-Receipt')
     const receipt = receiptHeader ? deserializeSessionReceipt(receiptHeader) : null
@@ -188,12 +241,14 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
 
   function createManagedSocket(socket: WebSocket) {
     type EventType = 'close' | 'error' | 'message' | 'open'
+    type MessageEvent = { data: string; type: 'message' }
     type Listener = {
       once: boolean
       value: ((event: any) => void) | { handleEvent(event: any): void }
     }
     const listeners = new Map<EventType, Set<Listener>>()
     let emittedClose = false
+    let messageBuffer: MessageEvent[] | null = []
     let readyState = socket.readyState
 
     const add = (
@@ -210,6 +265,11 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
         once: typeof options === 'object' ? options.once === true : false,
         value: listener,
       })
+      if (type === 'message' && messageBuffer) {
+        const buffered = messageBuffer
+        messageBuffer = null
+        for (const event of buffered) emit('message', event)
+      }
     }
 
     const remove = (
@@ -227,9 +287,15 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
       if (type === 'close') {
         if (emittedClose) return
         emittedClose = true
-        readyState = 3
+        readyState = WebSocketReadyState.CLOSED
+        messageBuffer = null
       }
-      if (type === 'open') readyState = 1
+      if (type === 'open') readyState = WebSocketReadyState.OPEN
+
+      if (type === 'message' && messageBuffer) {
+        messageBuffer.push(event)
+        return
+      }
 
       const property = `on${type}` as const
       const handler = (managed as Record<string, unknown>)[property]
@@ -260,7 +326,18 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
       },
       onclose: null as ((event: any) => void) | null,
       onerror: null as ((event: any) => void) | null,
-      onmessage: null as ((event: any) => void) | null,
+      _onmessage: null as ((event: any) => void) | null,
+      get onmessage() {
+        return managed._onmessage
+      },
+      set onmessage(fn: ((event: any) => void) | null) {
+        managed._onmessage = fn
+        if (fn && messageBuffer) {
+          const buffered = messageBuffer
+          messageBuffer = null
+          for (const event of buffered) emit('message', event)
+        }
+      },
       onopen: null as ((event: any) => void) | null,
       off(type: EventType, listener: (...args: any[]) => void) {
         remove(type, listener)
@@ -382,6 +459,7 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
                 case 'payment-need-voucher': {
                   if (!channel || !sseChallenge) break
                   const required = BigInt(event.data.requiredCumulative)
+                  assertVoucherWithinLocalLimit(required)
                   channel.cumulativeAmount =
                     channel.cumulativeAmount > required ? channel.cumulativeAmount : required
 
@@ -456,10 +534,27 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
 
       closeReadyReceipt = null
       activeSocketChallenge = challenge
-      activeSocketChannelId = null
+      wsDeliveredChunks = 0n
+      wsTickCost = BigInt(challenge.request.amount as string)
+      const openCredential = PaymentCredential.deserialize<SessionCredentialPayload>(credential)
+      activeSocketChannelId = openCredential.payload.channelId
       const rawSocket = new WebSocketImpl(wsUrl, protocols)
       activeSocket = rawSocket
       const managedSocket = createManagedSocket(rawSocket)
+
+      const failSocketFlow = (message: string) => {
+        rejectReceipt(new Error(message))
+        rejectCloseReady(new Error(message))
+        if (
+          rawSocket.readyState === WebSocketReadyState.CONNECTING ||
+          rawSocket.readyState === WebSocketReadyState.OPEN
+        ) {
+          rawSocket.close(ClientWebSocketProtocolErrorCloseCode, message)
+        }
+      }
+
+      const isExpectedReceipt = (receipt: SessionReceipt) =>
+        receipt.challengeId === challenge.id && receipt.channelId === activeSocketChannelId
 
       const socketOpened = new Promise<void>((resolve, reject) => {
         const onOpen = () => {
@@ -478,7 +573,8 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
       rawSocket.addEventListener('close', (event) => {
         if (activeSocket === rawSocket) activeSocket = null
         if (activeSocketChallenge === challenge) activeSocketChallenge = null
-        activeSocketChannelId = null
+        if (activeSocketChannelId === openCredential.payload.channelId) activeSocketChannelId = null
+        expectedSocketCloseAmount = null
         rejectReceipt(new Error('WebSocket closed before the payment flow completed.'))
         rejectCloseReady(new Error('WebSocket closed before the payment flow completed.'))
         managedSocket.emit('close', {
@@ -506,7 +602,19 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
         switch (message.mpp) {
           case 'authorization':
             break
+          case 'message':
+            wsDeliveredChunks += 1n
+            managedSocket.emit('message', { data: message.data, type: 'message' })
+            break
           case 'payment-close-ready':
+            if (!isExpectedReceipt(message.data)) {
+              failSocketFlow('received mismatched payment-close-ready frame')
+              break
+            }
+            if (BigInt(message.data.spent) > (channel?.cumulativeAmount ?? 0n)) {
+              failSocketFlow('received payment-close-ready beyond local voucher state')
+              break
+            }
             updateSpentFromReceipt(message.data)
             onReceipt?.(message.data)
             settleCloseReady(message.data)
@@ -517,8 +625,21 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
             rejectCloseReady(new Error(message.message))
             break
           case 'payment-need-voucher': {
-            if (!activeSocketChannelId) break
+            if (message.data.channelId !== activeSocketChannelId) {
+              failSocketFlow('received mismatched payment-need-voucher frame')
+              break
+            }
             const required = BigInt(message.data.requiredCumulative)
+            try {
+              assertVoucherWithinLocalLimit(required)
+            } catch (error) {
+              failSocketFlow(
+                error instanceof Error
+                  ? error.message
+                  : 'requested voucher amount exceeds local maxDeposit',
+              )
+              break
+            }
             const nextCumulative =
               (channel?.cumulativeAmount ?? 0n) > required
                 ? (channel?.cumulativeAmount ?? 0n)
@@ -538,7 +659,19 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
             break
           }
           case 'payment-receipt':
-            activeSocketChannelId ??= message.data.channelId
+            if (!isExpectedReceipt(message.data)) {
+              failSocketFlow('received mismatched payment-receipt frame')
+              break
+            }
+            if (
+              expectedSocketCloseAmount !== null &&
+              Boolean(message.data.txHash) &&
+              (message.data.acceptedCumulative !== expectedSocketCloseAmount ||
+                message.data.spent !== expectedSocketCloseAmount)
+            ) {
+              failSocketFlow('received mismatched payment-close receipt frame')
+              break
+            }
             updateSpentFromReceipt(message.data)
             onReceipt?.(message.data)
             settleReceipt(message.data)
@@ -568,29 +701,46 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
       const closeChallenge = activeSocketChallenge ?? lastChallenge
       const closeChannelId = activeSocketChannelId ?? channel?.channelId
       if (!channel?.opened || !closeChallenge || !closeChannelId) return undefined
-      if (activeSocket?.readyState === 1) {
+      if (activeSocket?.readyState === WebSocketReadyState.OPEN) {
         const ready =
           closeReadyReceipt ??
           (await (async () => {
             activeSocket.send(Ws.formatCloseRequestMessage())
             return waitForCloseReady()
           })())
+        const readySpent = BigInt(ready.spent)
+        if (readySpent > (channel.cumulativeAmount > spent ? channel.cumulativeAmount : spent)) {
+          throw new Error('close-ready spent exceeds local voucher state')
+        }
 
         const credential = await method.createCredential({
           challenge: closeChallenge as never,
           context: {
             action: 'close',
             channelId: closeChannelId,
-            cumulativeAmountRaw: ready.spent,
+            cumulativeAmountRaw: readySpent.toString(),
           },
         })
 
-        const pendingReceipt = waitForReceipt((receipt) => Boolean(receipt.txHash))
-        activeSocket.send(Ws.formatAuthorizationMessage(credential))
-        const receipt = await pendingReceipt
-        activeSocket.close()
-        closeReadyReceipt = null
-        return receipt
+        const expectedCloseAmount = readySpent.toString()
+        expectedSocketCloseAmount = expectedCloseAmount
+        try {
+          const pendingReceipt = waitForReceipt(
+            (receipt) =>
+              Boolean(receipt.txHash) &&
+              receipt.challengeId === closeChallenge.id &&
+              receipt.channelId === closeChannelId &&
+              receipt.acceptedCumulative === expectedCloseAmount &&
+              receipt.spent === expectedCloseAmount,
+          )
+          activeSocket.send(Ws.formatAuthorizationMessage(credential))
+          const receipt = await pendingReceipt
+          activeSocket.close()
+          closeReadyReceipt = null
+          return receipt
+        } finally {
+          expectedSocketCloseAmount = null
+        }
       }
 
       const credential = await method.createCredential({
@@ -598,7 +748,7 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
         context: {
           action: 'close',
           channelId: closeChannelId,
-          cumulativeAmountRaw: spent.toString(),
+          cumulativeAmountRaw: getFallbackCloseAmount(closeChallenge, closeChannelId),
         },
       })
 

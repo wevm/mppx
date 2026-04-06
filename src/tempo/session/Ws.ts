@@ -30,6 +30,7 @@ export type Socket = {
 
 export type Message =
   | { mpp: 'authorization'; authorization: string }
+  | { mpp: 'message'; data: string }
   | { mpp: 'payment-close-request' }
   | { mpp: 'payment-close-ready'; data: SessionReceipt }
   | { mpp: 'payment-error'; status: number; message: string }
@@ -38,6 +39,10 @@ export type Message =
 
 export function formatAuthorizationMessage(authorization: string): string {
   return JSON.stringify({ mpp: 'authorization', authorization } satisfies Message)
+}
+
+export function formatApplicationMessage(data: string): string {
+  return JSON.stringify({ mpp: 'message', data } satisfies Message)
 }
 
 export function formatCloseRequestMessage(): string {
@@ -66,11 +71,14 @@ export function parseMessage(raw: string): Message | null {
     if (parsed.mpp === 'authorization' && typeof parsed.authorization === 'string') {
       return { mpp: 'authorization', authorization: parsed.authorization }
     }
+    if (parsed.mpp === 'message' && typeof parsed.data === 'string') {
+      return { mpp: 'message', data: parsed.data }
+    }
     if (parsed.mpp === 'payment-close-request') {
       return { mpp: 'payment-close-request' }
     }
-    if (parsed.mpp === 'payment-close-ready' && parsed.data) {
-      return { mpp: 'payment-close-ready', data: parsed.data as SessionReceipt }
+    if (parsed.mpp === 'payment-close-ready' && isSessionReceipt(parsed.data)) {
+      return { mpp: 'payment-close-ready', data: parsed.data }
     }
     if (
       parsed.mpp === 'payment-error' &&
@@ -79,11 +87,11 @@ export function parseMessage(raw: string): Message | null {
     ) {
       return { mpp: 'payment-error', status: parsed.status, message: parsed.message }
     }
-    if (parsed.mpp === 'payment-need-voucher' && parsed.data) {
-      return { mpp: 'payment-need-voucher', data: parsed.data as NeedVoucherEvent }
+    if (parsed.mpp === 'payment-need-voucher' && isNeedVoucherEvent(parsed.data)) {
+      return { mpp: 'payment-need-voucher', data: parsed.data }
     }
-    if (parsed.mpp === 'payment-receipt' && parsed.data) {
-      return { mpp: 'payment-receipt', data: parsed.data as SessionReceipt }
+    if (parsed.mpp === 'payment-receipt' && isSessionReceipt(parsed.data)) {
+      return { mpp: 'payment-receipt', data: parsed.data }
     }
     return null
   } catch {
@@ -91,10 +99,29 @@ export function parseMessage(raw: string): Message | null {
   }
 }
 
+/**
+ * Bridge a WebSocket connection to a Tempo session payment flow.
+ *
+ * Credential verification is performed by routing each in-band authorization
+ * frame through `route` as a **synthetic `POST` request** that carries only
+ * the `Authorization` header. The synthetic request does not include cookies,
+ * bodies, query parameters, or other headers from the original WebSocket
+ * upgrade request. Do not wrap `route` with middleware that depends on
+ * HTTP-specific context beyond the `Authorization` header.
+ */
 export async function serve(options: serve.Options): Promise<void> {
-  const { generate, pollIntervalMs = 100, route, socket, store: rawStore, url } = options
+  const {
+    amount: expectedAmount,
+    generate,
+    pollIntervalMs = 100,
+    route,
+    socket,
+    store: rawStore,
+    url,
+  } = options
   const store = 'getChannel' in rawStore ? rawStore : ChannelStore.fromStore(rawStore)
   const requestUrl = normalizeHttpUrl(url)
+  const maxQueuedPaymentMessages = 32
 
   const abortController = new AbortController()
   let closed = false
@@ -109,6 +136,7 @@ export async function serve(options: serve.Options): Promise<void> {
     tickCost: bigint
   } | null = null
   let action = Promise.resolve()
+  let queuedActions = 0
 
   const close = async (code = 1000, reason?: string) => {
     if (closed) return
@@ -140,14 +168,21 @@ export async function serve(options: serve.Options): Promise<void> {
     channelId: SessionCredentialPayload['channelId']
     tickCost: bigint
   }) => {
+    let reservedAmount = 0n
+    let reservedUnits = 0
+
     const charge = () =>
-      chargeOrWait({
+      reserveChargeOrWait({
         amount: context.tickCost,
         channelId: context.channelId,
+        reservedAmount,
         emit: (message) => send(socket, message),
         pollIntervalMs,
         signal: abortController.signal,
         store,
+      }).then(() => {
+        reservedAmount += context.tickCost
+        reservedUnits += 1
       })
 
     const iterable: AsyncIterable<string> =
@@ -157,8 +192,15 @@ export async function serve(options: serve.Options): Promise<void> {
       for await (const value of iterable) {
         if (abortController.signal.aborted) break
         if (typeof generate !== 'function') await charge()
-        if (abortController.signal.aborted) break
-        await send(socket, value)
+        await commitReservedCharges({
+          store,
+          channelId: context.channelId,
+          amount: reservedAmount,
+          units: reservedUnits,
+        })
+        reservedAmount = 0n
+        reservedUnits = 0
+        await send(socket, formatApplicationMessage(value))
       }
 
       if (!abortController.signal.aborted) await sendCloseReady()
@@ -179,6 +221,7 @@ export async function serve(options: serve.Options): Promise<void> {
   }
 
   const requestClose = async () => {
+    if (closed) return
     if (closeRequestHandled) return
     closeRequestHandled = true
     closeRequested = true
@@ -188,9 +231,22 @@ export async function serve(options: serve.Options): Promise<void> {
   }
 
   const processAuthorization = async (authorization: string) => {
+    if (closed) return
     const credential = Credential.deserialize<SessionCredentialPayload>(authorization)
     const payload = credential.payload
     if (payload.action === 'close') closeRequested = true
+
+    if (expectedAmount && credential.challenge.request.amount !== expectedAmount) {
+      await send(
+        socket,
+        formatErrorMessage({
+          message: 'credential amount does not match this endpoint',
+          status: 402,
+        }),
+      )
+      await close(1008, 'credential amount does not match this endpoint')
+      return
+    }
 
     const result = await route(
       new Request(requestUrl, {
@@ -224,6 +280,7 @@ export async function serve(options: serve.Options): Promise<void> {
       return
     }
 
+    if (payload.action === 'topUp') return
     if (streamStarted || closeRequested) return
     streamStarted = true
     streamContext = {
@@ -240,6 +297,7 @@ export async function serve(options: serve.Options): Promise<void> {
   }
 
   const onMessage = (payload: unknown) => {
+    if (closed) return
     const raw = toText(payload)
     if (!raw) return
     const message = parseMessage(raw)
@@ -258,19 +316,40 @@ export async function serve(options: serve.Options): Promise<void> {
           : null
 
     if (!work) return
+    if (queuedActions >= maxQueuedPaymentMessages) {
+      void send(
+        socket,
+        formatErrorMessage({
+          message: 'too many queued payment messages',
+          status: 429,
+        }),
+      ).catch(() => {})
+      void close(1008, 'too many queued payment messages')
+      return
+    }
 
-    action = action.then(work).catch(async (error) => {
-      if (!closed) {
-        await send(
-          socket,
-          formatErrorMessage({
-            message: error instanceof Error ? error.message : 'invalid payment message',
-            status: 400,
-          }),
-        )
-        await close(1008, 'invalid payment message')
-      }
-    })
+    queuedActions++
+    action = action
+      .then(async () => {
+        try {
+          if (closed) return
+          await work()
+        } finally {
+          queuedActions--
+        }
+      })
+      .catch(async (error) => {
+        if (!closed) {
+          await send(
+            socket,
+            formatErrorMessage({
+              message: error instanceof Error ? error.message : 'invalid payment message',
+              status: 400,
+            }),
+          )
+          await close(1008, 'invalid payment message')
+        }
+      })
   }
 
   const onClose = () => {
@@ -289,8 +368,16 @@ export async function serve(options: serve.Options): Promise<void> {
 
 export declare namespace serve {
   type Options = {
+    /** Expected per-tick amount in raw units. When set, credentials whose
+     *  challenge `request.amount` does not match are rejected. Use this to
+     *  pin the price when the route is backed by `Mppx.compose()` with
+     *  multiple offers — otherwise a client can select the cheapest offer
+     *  and still receive the same stream. */
+    amount?: string | undefined
     generate: AsyncIterable<string> | ((stream: SessionController) => AsyncIterable<string>)
     pollIntervalMs?: number | undefined
+    /** Payment route handler. Receives synthetic `POST` requests with only
+     *  the `Authorization` header — no cookies, bodies, or upgrade headers. */
     route: SessionRoute
     socket: Socket
     store: ChannelStore.ChannelStore | import('../../Store.js').Store
@@ -305,32 +392,65 @@ function normalizeHttpUrl(value: string | URL): string {
   return url.toString()
 }
 
-async function chargeOrWait(options: {
+async function reserveChargeOrWait(options: {
   amount: bigint
   channelId: SessionCredentialPayload['channelId']
+  reservedAmount: bigint
   emit: (message: string) => Promise<void>
   pollIntervalMs: number
   signal: AbortSignal
   store: ChannelStore.ChannelStore
 }): Promise<void> {
-  const { amount, channelId, emit, pollIntervalMs, signal, store } = options
+  const { amount, channelId, emit, pollIntervalMs, reservedAmount, signal, store } = options
 
-  let result = await ChannelStore.deductFromChannel(store, channelId, amount)
-  if (result.ok) return
+  let channel = await store.getChannel(channelId)
+  if (!channel) throw new Error('channel not found')
+
+  const hasHeadroom = (state: ChannelStore.State) =>
+    state.highestVoucherAmount - state.spent - reservedAmount >= amount
+
+  if (hasHeadroom(channel)) return
 
   await emit(
     formatNeedVoucherMessage({
       channelId,
-      requiredCumulative: (result.channel.spent + amount).toString(),
-      acceptedCumulative: result.channel.highestVoucherAmount.toString(),
-      deposit: result.channel.deposit.toString(),
+      requiredCumulative: (channel.spent + reservedAmount + amount).toString(),
+      acceptedCumulative: channel.highestVoucherAmount.toString(),
+      deposit: channel.deposit.toString(),
     }),
   )
 
-  while (!result.ok) {
+  while (!hasHeadroom(channel)) {
     await waitForUpdate(store, channelId, pollIntervalMs, signal)
-    result = await ChannelStore.deductFromChannel(store, channelId, amount)
+    channel = await store.getChannel(channelId)
+    if (!channel) throw new Error('channel not found')
   }
+}
+
+async function commitReservedCharges(options: {
+  amount: bigint
+  channelId: SessionCredentialPayload['channelId']
+  units: number
+  store: ChannelStore.ChannelStore
+}): Promise<void> {
+  const { amount, channelId, units, store } = options
+  if (amount === 0n || units === 0) return
+
+  let committed = false
+  const channel = await store.updateChannel(channelId, (current) => {
+    if (!current) return null
+    if (current.finalized) return current
+    if (current.highestVoucherAmount - current.spent < amount) return current
+    committed = true
+    return {
+      ...current,
+      spent: current.spent + amount,
+      units: current.units + units,
+    }
+  })
+
+  if (!channel) throw new Error('channel not found')
+  if (!committed) throw new Error('reserved voucher coverage is no longer available')
 }
 
 async function waitForUpdate(
@@ -428,4 +548,16 @@ function onceAborted(signal: AbortSignal) {
 
 function throwIfAborted(signal: AbortSignal) {
   if (signal.aborted) throw signal.reason ?? new Error('aborted')
+}
+
+function isSessionReceipt(value: unknown): value is SessionReceipt {
+  if (typeof value !== 'object' || value === null) return false
+  const v = value as Record<string, unknown>
+  return typeof v.challengeId === 'string' && typeof v.channelId === 'string'
+}
+
+function isNeedVoucherEvent(value: unknown): value is NeedVoucherEvent {
+  if (typeof value !== 'object' || value === null) return false
+  const v = value as Record<string, unknown>
+  return typeof v.channelId === 'string' && typeof v.requiredCumulative === 'string'
 }

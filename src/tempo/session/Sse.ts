@@ -80,6 +80,13 @@ export function parseEvent(raw: string): SseEvent | null {
 }
 
 export type SessionController = {
+  /**
+   * Reserve voucher coverage for the next emitted chunk.
+   *
+   * The reservation blocks until sufficient voucher headroom exists, but the
+   * charge is only committed once a chunk is actually emitted. If the stream
+   * ends or aborts before that emission, the reservation is dropped.
+   */
   charge(): Promise<void>
 }
 
@@ -93,11 +100,13 @@ export type SessionController = {
  *   generator controls when charges happen by calling `stream.charge()`.
  *
  * For each emitted value the stream:
- * 1. Deducts `tickCost` from the channel balance atomically (auto or manual).
+ * 1. Reserves `tickCost` from the channel's available voucher headroom
+ *    (auto or manual).
  * 2. If balance is sufficient, emits `event: message` with the value.
  * 3. If balance is exhausted, emits `event: payment-need-voucher`
  *    and polls store until the client tops up the channel.
- * 4. On generator completion, emits a final `event: payment-receipt`.
+ * 4. Commits the reserved charge immediately before the chunk is emitted.
+ * 5. On generator completion, emits a final `event: payment-receipt`.
  *
  * Returns a `ReadableStream<Uint8Array>` suitable for use as an HTTP response body.
  */
@@ -118,15 +127,21 @@ export function serve(options: serve.Options): ReadableStream<Uint8Array> {
     async start(controller) {
       const aborted = () => signal?.aborted ?? false
       const emit = (event: string) => controller.enqueue(encoder.encode(event))
+      let reservedAmount = 0n
+      let reservedUnits = 0
 
       const charge = () =>
-        chargeOrWait({
+        reserveChargeOrWait({
           store,
           channelId,
           amount: tickCost,
+          reservedAmount,
           emit,
           pollIntervalMs,
           signal,
+        }).then(() => {
+          reservedAmount += tickCost
+          reservedUnits += 1
         })
 
       const iterable: AsyncIterable<string> =
@@ -137,7 +152,14 @@ export function serve(options: serve.Options): ReadableStream<Uint8Array> {
           if (aborted()) break
 
           if (typeof generate !== 'function') await charge()
-
+          await commitReservedCharges({
+            store,
+            channelId,
+            amount: reservedAmount,
+            units: reservedUnits,
+          })
+          reservedAmount = 0n
+          reservedUnits = 0
           controller.enqueue(encoder.encode(`event: message\ndata: ${value}\n\n`))
         }
 
@@ -221,43 +243,74 @@ export declare namespace fromRequest {
 }
 
 /**
- * Atomically deduct `amount` from a channel, retrying when balance is
- * insufficient. Uses `store.waitForUpdate()` when available for
+ * Reserve `amount` of voucher headroom for a future emission, retrying when
+ * balance is insufficient. Uses `store.waitForUpdate()` when available for
  * event-driven wakeups, falling back to polling otherwise. Emits
  * `payment-need-voucher` events via `emit` while waiting.
  */
-async function chargeOrWait(options: {
+async function reserveChargeOrWait(options: {
   store: ChannelStore.ChannelStore
   channelId: Hex
   amount: bigint
-  emit: (event: string) => void
+  reservedAmount: bigint
+  emit: (event: string) => void | Promise<void>
   pollIntervalMs: number
   signal?: AbortSignal | undefined
 }): Promise<void> {
-  const { store, channelId, amount, emit, pollIntervalMs, signal } = options
+  const { store, channelId, amount, emit, pollIntervalMs, reservedAmount, signal } = options
 
-  let result = await ChannelStore.deductFromChannel(store, channelId, amount)
+  let channel = await store.getChannel(channelId)
+  if (!channel) throw new Error('channel not found')
 
-  if (!result.ok) {
-    // Emit a single need-voucher event, then poll/wait until the client
-    // sends an updated voucher. The requiredCumulative is constant here:
-    // `spent` only changes on successful deduction (which exits the loop),
-    // so re-emitting on every poll cycle would just cause redundant
-    // voucher POSTs from the client.
+  const hasHeadroom = (state: ChannelStore.State) =>
+    state.highestVoucherAmount - state.spent - reservedAmount >= amount
+
+  if (hasHeadroom(channel)) return
+
+  // Emit a single need-voucher event, then wait until the accepted voucher
+  // headroom covers both already-reserved units and the next requested unit.
+  await Promise.resolve(
     emit(
       formatNeedVoucherEvent({
         channelId,
-        requiredCumulative: (result.channel.spent + amount).toString(),
-        acceptedCumulative: result.channel.highestVoucherAmount.toString(),
-        deposit: result.channel.deposit.toString(),
+        requiredCumulative: (channel.spent + reservedAmount + amount).toString(),
+        acceptedCumulative: channel.highestVoucherAmount.toString(),
+        deposit: channel.deposit.toString(),
       }),
-    )
+    ),
+  )
 
-    while (!result.ok) {
-      await waitForUpdate(store, channelId, pollIntervalMs, signal)
-      result = await ChannelStore.deductFromChannel(store, channelId, amount)
-    }
+  while (!hasHeadroom(channel)) {
+    await waitForUpdate(store, channelId, pollIntervalMs, signal)
+    channel = await store.getChannel(channelId)
+    if (!channel) throw new Error('channel not found')
   }
+}
+
+async function commitReservedCharges(options: {
+  store: ChannelStore.ChannelStore
+  channelId: Hex
+  amount: bigint
+  units: number
+}): Promise<void> {
+  const { store, channelId, amount, units } = options
+  if (amount === 0n || units === 0) return
+
+  let committed = false
+  const channel = await store.updateChannel(channelId, (current) => {
+    if (!current) return null
+    if (current.finalized) return current
+    if (current.highestVoucherAmount - current.spent < amount) return current
+    committed = true
+    return {
+      ...current,
+      spent: current.spent + amount,
+      units: current.units + units,
+    }
+  })
+
+  if (!channel) throw new Error('channel not found')
+  if (!committed) throw new Error('reserved voucher coverage is no longer available')
 }
 
 async function waitForUpdate(

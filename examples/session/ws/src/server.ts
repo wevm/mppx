@@ -180,7 +180,7 @@ export function handleUpgrade(
 ) {
   if (req.url?.startsWith('/ws/chat') !== true) return
 
-  wsServer.handleUpgrade(req, socket as any, head, (websocket) => {
+  wsServer.handleUpgrade(req, socket, head, (websocket) => {
     wsServer.emit('connection', websocket, req)
   })
 }

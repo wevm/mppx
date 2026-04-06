@@ -9,3 +9,4 @@ coverage
 .env.*
 !.env.example
 test-results/
+.cursor

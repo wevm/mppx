@@ -385,7 +385,9 @@ describe.runIf(isLocalnet)('session', () => {
       })
 
       // 2. Settle on-chain so settled becomes 5000000
-      const settleTxHash = await settle(store, client, channelId, { escrowContract })
+      const settleTxHash = await settle(store, client, channelId, {
+        escrowContract,
+      })
       await waitForTransactionReceipt(client, { hash: settleTxHash })
       expect((await store.getChannel(channelId))!.settledOnChain).toBe(5000000n)
 
@@ -442,7 +444,9 @@ describe.runIf(isLocalnet)('session', () => {
         request: makeRequest(),
       })
 
-      const settleTxHash = await settle(store, client, channelId, { escrowContract })
+      const settleTxHash = await settle(store, client, channelId, {
+        escrowContract,
+      })
       await waitForTransactionReceipt(client, { hash: settleTxHash })
       await store.updateChannel(channelId, () => null)
 
@@ -797,7 +801,10 @@ describe.runIf(isLocalnet)('session', () => {
       const leakedSig = await signTestVoucher(victimChannelId, 5000000n)
       await server.verify({
         credential: {
-          challenge: makeChallenge({ id: 'c-victim', channelId: victimChannelId }),
+          challenge: makeChallenge({
+            id: 'c-victim',
+            channelId: victimChannelId,
+          }),
           payload: {
             action: 'voucher' as const,
             channelId: victimChannelId,
@@ -829,7 +836,10 @@ describe.runIf(isLocalnet)('session', () => {
       await expect(
         server.verify({
           credential: {
-            challenge: makeChallenge({ id: 'c-attack', channelId: victimChannelId }),
+            challenge: makeChallenge({
+              id: 'c-attack',
+              channelId: victimChannelId,
+            }),
             payload: {
               action: 'open' as const,
               type: 'transaction' as const,
@@ -919,7 +929,10 @@ describe.runIf(isLocalnet)('session', () => {
       // Now switch to a large TTL so subsequent vouchers use the cached path.
       // The persisted closeRequestedAt should cause rejection without an
       // on-chain re-query.
-      const server2 = createServer({ channelStateTtl: 60_000, store: rawStore })
+      const server2 = createServer({
+        channelStateTtl: 60_000,
+        store: rawStore,
+      })
       await expect(
         server2.verify({
           credential: {
@@ -951,7 +964,10 @@ describe.runIf(isLocalnet)('session', () => {
       await expect(
         server.verify({
           credential: {
-            challenge: makeChallenge({ id: 'challenge-after-settle', channelId }),
+            challenge: makeChallenge({
+              id: 'challenge-after-settle',
+              channelId,
+            }),
             payload: {
               action: 'voucher' as const,
               channelId,
@@ -1229,7 +1245,9 @@ describe.runIf(isLocalnet)('session', () => {
       await openServerChannel(server, channelId, serializedTransaction)
 
       // Settle on-chain so settled becomes 1000000
-      const settleTxHash = await settle(store, client, channelId, { escrowContract })
+      const settleTxHash = await settle(store, client, channelId, {
+        escrowContract,
+      })
       await waitForTransactionReceipt(client, { hash: settleTxHash })
 
       // Try to close with voucher == on-chain settled — should be rejected
@@ -1700,7 +1718,9 @@ describe.runIf(isLocalnet)('session', () => {
         request: makeRequest(),
       })
 
-      const settleTxHash = await settle(store, client, channelId, { escrowContract })
+      const settleTxHash = await settle(store, client, channelId, {
+        escrowContract,
+      })
       expect(settleTxHash).toMatch(/^0x/)
 
       const ch = await store.getChannel(channelId)
@@ -1738,7 +1758,9 @@ describe.runIf(isLocalnet)('session', () => {
       })
 
       // Settle on-chain so onChain.settled = 5000000.
-      const settleTxHash = await settle(store, client, channelId, { escrowContract })
+      const settleTxHash = await settle(store, client, channelId, {
+        escrowContract,
+      })
       await waitForTransactionReceipt(client, { hash: settleTxHash })
       expect((await store.getChannel(channelId))!.settledOnChain).toBe(5000000n)
 
@@ -1792,7 +1814,9 @@ describe.runIf(isLocalnet)('session', () => {
         request: makeRequest(),
       })
 
-      const settleTxHash2 = await settle(store, client, channelId, { escrowContract })
+      const settleTxHash2 = await settle(store, client, channelId, {
+        escrowContract,
+      })
       await waitForTransactionReceipt(client, { hash: settleTxHash2 })
 
       // Wipe store.
@@ -1845,7 +1869,9 @@ describe.runIf(isLocalnet)('session', () => {
       })
 
       // Settle on-chain so onChain.settled = 3000000.
-      const settleTxHash = await settle(store, client, channelId, { escrowContract })
+      const settleTxHash = await settle(store, client, channelId, {
+        escrowContract,
+      })
       await waitForTransactionReceipt(client, { hash: settleTxHash })
 
       // Store still has the old record — settledOnChain is correct after settle.
@@ -1898,7 +1924,9 @@ describe.runIf(isLocalnet)('session', () => {
       })
 
       // Settle on-chain so onChain.settled = 5M.
-      const settleTxHash = await settle(store, client, channelId, { escrowContract })
+      const settleTxHash = await settle(store, client, channelId, {
+        escrowContract,
+      })
       await waitForTransactionReceipt(client, { hash: settleTxHash })
 
       // Store record still exists (no store loss), but spent is 0.
@@ -1954,7 +1982,9 @@ describe.runIf(isLocalnet)('session', () => {
         request: makeRequest(),
       })
 
-      const settleTxHash3 = await settle(store, client, channelId, { escrowContract })
+      const settleTxHash3 = await settle(store, client, channelId, {
+        escrowContract,
+      })
       await waitForTransactionReceipt(client, { hash: settleTxHash3 })
       await store.updateChannel(channelId, () => null)
 
@@ -1999,7 +2029,9 @@ describe.runIf(isLocalnet)('session', () => {
         request: makeRequest(),
       })
 
-      const settleTxHash = await settle(store, client, channelId, { escrowContract })
+      const settleTxHash = await settle(store, client, channelId, {
+        escrowContract,
+      })
       await waitForTransactionReceipt(client, { hash: settleTxHash })
       await store.updateChannel(channelId, () => null)
 
@@ -2063,7 +2095,9 @@ describe.runIf(isLocalnet)('session', () => {
         request: makeRequest(),
       })
 
-      const settleTxHash = await settle(store, client, channelId, { escrowContract })
+      const settleTxHash = await settle(store, client, channelId, {
+        escrowContract,
+      })
       await waitForTransactionReceipt(client, { hash: settleTxHash })
       await store.updateChannel(channelId, () => null)
 
@@ -2126,7 +2160,10 @@ describe.runIf(isLocalnet)('session', () => {
       await expect(
         server.verify({
           credential: {
-            challenge: makeChallenge({ id: 'voucher-invalid-compact', channelId }),
+            challenge: makeChallenge({
+              id: 'voucher-invalid-compact',
+              channelId,
+            }),
             payload: {
               action: 'voucher' as const,
               channelId,
@@ -2165,7 +2202,10 @@ describe.runIf(isLocalnet)('session', () => {
         amounts.map(async (amount, index) =>
           server.verify({
             credential: {
-              challenge: makeChallenge({ id: `voucher-concurrency-${index}`, channelId }),
+              challenge: makeChallenge({
+                id: `voucher-concurrency-${index}`,
+                channelId,
+              }),
               payload: {
                 action: 'voucher' as const,
                 channelId,
@@ -2238,7 +2278,10 @@ describe.runIf(isLocalnet)('session', () => {
 
       await healthyServer.verify({
         credential: {
-          challenge: makeChallenge({ id: 'open-before-topup-crash', channelId }),
+          challenge: makeChallenge({
+            id: 'open-before-topup-crash',
+            channelId,
+          }),
           payload: {
             action: 'open' as const,
             type: 'transaction' as const,
@@ -2284,7 +2327,10 @@ describe.runIf(isLocalnet)('session', () => {
 
       await healthyServer.verify({
         credential: {
-          challenge: makeChallenge({ id: 'reopen-after-topup-crash', channelId }),
+          challenge: makeChallenge({
+            id: 'reopen-after-topup-crash',
+            channelId,
+          }),
           payload: {
             action: 'open' as const,
             type: 'transaction' as const,
@@ -2420,7 +2466,10 @@ describe.runIf(isLocalnet)('session', () => {
 
       await server.verify({
         credential: {
-          challenge: makeChallenge({ id: 'open-before-external-close', channelId }),
+          challenge: makeChallenge({
+            id: 'open-before-external-close',
+            channelId,
+          }),
           payload: {
             action: 'open' as const,
             type: 'transaction' as const,
@@ -2445,7 +2494,10 @@ describe.runIf(isLocalnet)('session', () => {
       await expect(
         server.verify({
           credential: {
-            challenge: makeChallenge({ id: 'close-after-external-finalize', channelId }),
+            challenge: makeChallenge({
+              id: 'close-after-external-finalize',
+              channelId,
+            }),
             payload: {
               action: 'close' as const,
               channelId,
@@ -2469,7 +2521,9 @@ describe.runIf(isLocalnet)('session', () => {
           }),
           payload: { action: 'voucher' },
         },
-        input: new Request('https://api.example.com/resource', { method: 'HEAD' }),
+        input: new Request('https://api.example.com/resource', {
+          method: 'HEAD',
+        }),
       } as never)
 
       expect(response).toBeUndefined()
@@ -2493,7 +2547,11 @@ describe.runIf(isLocalnet)('session', () => {
 
       const { channelId, serializedTransaction } = await createSignedOpenTransaction(10000000n)
       const handler = createHandler()
-      const route = handler.session({ amount: '1', decimals: 6, unitType: 'token' })
+      const route = handler.session({
+        amount: '1',
+        decimals: 6,
+        unitType: 'token',
+      })
 
       const first = await route(new Request('https://api.example.com/resource'))
       if (first.status !== 402) throw new Error('expected challenge')
@@ -2528,7 +2586,11 @@ describe.runIf(isLocalnet)('session', () => {
     test('does not return Payment-Receipt on verification errors', async () => {
       const { channelId, serializedTransaction } = await createSignedOpenTransaction(10000000n)
       const handler = createHandler()
-      const route = handler.session({ amount: '1', decimals: 6, unitType: 'token' })
+      const route = handler.session({
+        amount: '1',
+        decimals: 6,
+        unitType: 'token',
+      })
 
       const first = await route(new Request('https://api.example.com/resource'))
       if (first.status !== 402) throw new Error('expected challenge')
@@ -3065,6 +3127,58 @@ describe.runIf(isLocalnet)('session', () => {
       expect(closeReceipt?.spent).toBe('4000000')
     })
 
+    test('refuses SSE voucher requests beyond local maxDeposit', async () => {
+      const backingStore = Store.memory()
+      const routeHandler = Mppx_server.create({
+        methods: [
+          tempo_server.session({
+            store: backingStore,
+            getClient: () => client,
+            account: recipientAccount,
+            currency,
+            escrowContract,
+            chainId: chain.id,
+            sse: true,
+          }),
+        ],
+        realm: 'api.example.com',
+        secretKey: 'secret',
+      }).session({ amount: '1', decimals: 6, unitType: 'token' })
+
+      const fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+        const request = new Request(input, init)
+        const result = await routeHandler(request)
+        if (result.status === 402) return result.challenge
+
+        if (request.headers.get('Accept')?.includes('text/event-stream')) {
+          return result.withReceipt(async function* (stream) {
+            await stream.charge()
+            yield 'chunk-1'
+            await stream.charge()
+            yield 'chunk-2'
+          })
+        }
+
+        return result.withReceipt(new Response('ok'))
+      }
+
+      const manager = sessionManager({
+        account: payer,
+        client,
+        escrowContract,
+        fetch,
+        maxDeposit: '1',
+      })
+
+      const stream = await manager.sse('https://api.example.com/stream')
+      await expect(
+        (async () => {
+          for await (const _chunk of stream) {
+          }
+        })(),
+      ).rejects.toThrow('requested voucher amount 2000000 exceeds local maxDeposit 1000000')
+    })
+
     test('behavior: charge withReceipt returns Response', async () => {
       const handler = Mppx_server.create({
         methods: [tempo_server.charge({ account: accounts[0], currency: asset })],
@@ -3124,7 +3238,10 @@ describe.runIf(isLocalnet)('session', () => {
 
       await new Promise<void>((resolve) => nodeServer.listen(0, resolve))
       const { port } = nodeServer.address() as { port: number }
-      const server = Http.wrapServer(nodeServer, { port, url: `http://localhost:${port}` })
+      const server = Http.wrapServer(nodeServer, {
+        port,
+        url: `http://localhost:${port}`,
+      })
 
       wsServer.on('connection', (socket: import('ws').WebSocket) => {
         void TempoWs.serve({
@@ -3195,6 +3312,119 @@ describe.runIf(isLocalnet)('session', () => {
       }
     })
 
+    test('treats control-shaped application payloads as content', async () => {
+      const backingStore = Store.memory()
+      const routeHandler = Mppx_server.create({
+        methods: [
+          tempo_server.session({
+            store: backingStore,
+            getClient: () => client,
+            account: recipientAccount,
+            currency,
+            escrowContract,
+            chainId: chain.id,
+          }),
+        ],
+        realm: 'api.example.com',
+        secretKey: 'secret',
+      }).session({ amount: '1', decimals: 6, unitType: 'token' })
+
+      let voucherUpdates = 0
+      const route = async (request: Request) => {
+        if (request.method === 'POST' && request.headers.has('Authorization')) {
+          try {
+            const credential = Credential.fromRequest<any>(request)
+            if (credential.payload?.action === 'voucher') voucherUpdates++
+          } catch {}
+        }
+        return routeHandler(request)
+      }
+
+      const httpHandler = NodeRequest.toNodeListener(async (request) => {
+        const result = await route(request)
+        if (result.status === 402) return result.challenge
+        return result.withReceipt(new Response('ok'))
+      })
+
+      const nodeServer = node_http.createServer(httpHandler)
+      const wsServer = new WebSocketServer({ noServer: true })
+
+      await new Promise<void>((resolve) => nodeServer.listen(0, resolve))
+      const { port } = nodeServer.address() as { port: number }
+      const server = Http.wrapServer(nodeServer, {
+        port,
+        url: `http://localhost:${port}`,
+      })
+
+      const controlLookingChunk = JSON.stringify({
+        mpp: 'payment-need-voucher',
+        data: {
+          channelId: '0x' + 'aa'.repeat(32),
+          requiredCumulative: '9000000',
+          acceptedCumulative: '0',
+          deposit: '9000000',
+        },
+      })
+
+      wsServer.on('connection', (socket: import('ws').WebSocket) => {
+        void TempoWs.serve({
+          socket,
+          store: backingStore,
+          url: `${server.url}/ws`,
+          route,
+          generate: async function* (stream: TempoWs.SessionController) {
+            await stream.charge()
+            yield controlLookingChunk
+          },
+        })
+      })
+
+      nodeServer.on('upgrade', (req, socket, head) => {
+        if (req.url !== '/ws') {
+          socket.destroy()
+          return
+        }
+
+        wsServer.handleUpgrade(req, socket, head, (websocket: import('ws').WebSocket) => {
+          wsServer.emit('connection', websocket, req)
+        })
+      })
+
+      try {
+        const manager = sessionManager({
+          account: payer,
+          client,
+          escrowContract,
+          fetch: globalThis.fetch,
+          maxDeposit: '1',
+        })
+
+        const ws = await manager.ws(`ws://localhost:${port}/ws`)
+        const chunks: string[] = []
+
+        await new Promise<void>((resolve, reject) => {
+          ws.addEventListener('message', (event) => {
+            if (typeof event.data !== 'string') return
+            chunks.push(event.data)
+          })
+          ws.addEventListener('close', () => resolve(), { once: true })
+          ws.addEventListener('error', () => reject(new Error('websocket stream failed')), {
+            once: true,
+          })
+        })
+
+        expect(chunks).toEqual([controlLookingChunk])
+        expect(voucherUpdates).toBe(0)
+
+        const closeReceipt = await manager.close()
+        expect(closeReceipt?.status).toBe('success')
+        expect(closeReceipt?.spent).toBe('1000000')
+      } finally {
+        wsServer.close()
+        server.close()
+      }
+    })
+
     test('close() stops the stream and application listeners never receive payment control frames', async () => {
       const backingStore = Store.memory()
       const routeHandler = Mppx_server.create({
@@ -3225,7 +3455,10 @@ describe.runIf(isLocalnet)('session', () => {
 
       await new Promise<void>((resolve) => nodeServer.listen(0, resolve))
       const { port } = nodeServer.address() as { port: number }
-      const server = Http.wrapServer(nodeServer, { port, url: `http://localhost:${port}` })
+      const server = Http.wrapServer(nodeServer, {
+        port,
+        url: `http://localhost:${port}`,
+      })
 
       wsServer.on('connection', (socket: import('ws').WebSocket) => {
         void TempoWs.serve({
@@ -3302,6 +3535,512 @@ describe.runIf(isLocalnet)('session', () => {
         server.close()
       }
     })
+
+    test('rejects websocket receipts bound to a different channel', async () => {
+      const routeHandler = Mppx_server.create({
+        methods: [
+          tempo_server.session({
+            store: Store.memory(),
+            getClient: () => client,
+            account: recipientAccount,
+            currency,
+            escrowContract,
+            chainId: chain.id,
+          }),
+        ],
+        realm: 'api.example.com',
+        secretKey: 'secret',
+      }).session({ amount: '1', decimals: 6, unitType: 'token' })
+
+      const httpHandler = NodeRequest.toNodeListener(async (request) => {
+        const result = await routeHandler(request)
+        if (result.status === 402) return result.challenge
+        return result.withReceipt(new Response('ok'))
+      })
+
+      const nodeServer = node_http.createServer(httpHandler)
+      const wsServer = new WebSocketServer({ noServer: true })
+      const wrongChannelId = `0x${'11'.repeat(32)}` as Hex
+
+      await new Promise<void>((resolve) => nodeServer.listen(0, resolve))
+      const { port } = nodeServer.address() as { port: number }
+      const server = Http.wrapServer(nodeServer, {
+        port,
+        url: `http://localhost:${port}`,
+      })
+
+      wsServer.on('connection', (socket: import('ws').WebSocket) => {
+        socket.once('message', (data) => {
+          const raw = data.toString()
+          const message = TempoWs.parseMessage(raw)
+          if (!message || message.mpp !== 'authorization') return
+
+          const credential = Credential.deserialize<any>(message.authorization)
+          socket.send(
+            TempoWs.formatReceiptMessage({
+              method: 'tempo',
+              intent: 'session',
+              status: 'success',
+              timestamp: new Date().toISOString(),
+              reference: wrongChannelId,
+              challengeId: credential.challenge.id,
+              channelId: wrongChannelId,
+              acceptedCumulative: '1000000',
+              spent: '0',
+              units: 0,
+            }),
+          )
+        })
+      })
+
+      nodeServer.on('upgrade', (req, socket, head) => {
+        if (req.url !== '/ws') {
+          socket.destroy()
+          return
+        }
+
+        wsServer.handleUpgrade(req, socket, head, (websocket: import('ws').WebSocket) => {
+          wsServer.emit('connection', websocket, req)
+        })
+      })
+
+      try {
+        const manager = sessionManager({
+          account: payer,
+          client,
+          escrowContract,
+          fetch: globalThis.fetch,
+          maxDeposit: '1',
+        })
+
+        await expect(manager.ws(`ws://localhost:${port}/ws`)).rejects.toThrow(
+          'received mismatched payment-receipt frame',
+        )
+      } finally {
+        wsServer.close()
+        server.close()
+      }
+    })
+
+    test('refuses websocket voucher requests beyond local maxDeposit', async () => {
+      const backingStore = Store.memory()
+      const routeHandler = Mppx_server.create({
+        methods: [
+          tempo_server.session({
+            store: backingStore,
+            getClient: () => client,
+            account: recipientAccount,
+            currency,
+            escrowContract,
+            chainId: chain.id,
+          }),
+        ],
+        realm: 'api.example.com',
+        secretKey: 'secret',
+      }).session({ amount: '1', decimals: 6, unitType: 'token' })
+
+      const route = (request: Request) => routeHandler(request)
+
+      const httpHandler = NodeRequest.toNodeListener(async (request) => {
+        const result = await route(request)
+        if (result.status === 402) return result.challenge
+        return result.withReceipt(new Response('ok'))
+      })
+
+      const nodeServer = node_http.createServer(httpHandler)
+      const wsServer = new WebSocketServer({ noServer: true })
+
+      await new Promise<void>((resolve) => nodeServer.listen(0, resolve))
+      const { port } = nodeServer.address() as { port: number }
+      const server = Http.wrapServer(nodeServer, {
+        port,
+        url: `http://localhost:${port}`,
+      })
+
+      wsServer.on('connection', (socket: import('ws').WebSocket) => {
+        void TempoWs.serve({
+          socket,
+          store: backingStore,
+          url: `${server.url}/ws`,
+          route,
+          generate: async function* (stream: TempoWs.SessionController) {
+            await stream.charge()
+            yield 'chunk-1'
+            await stream.charge()
+            yield 'chunk-2'
+          },
+        })
+      })
+
+      nodeServer.on('upgrade', (req, socket, head) => {
+        if (req.url !== '/ws') {
+          socket.destroy()
+          return
+        }
+
+        wsServer.handleUpgrade(req, socket, head, (websocket: import('ws').WebSocket) => {
+          wsServer.emit('connection', websocket, req)
+        })
+      })
+
+      try {
+        const manager = sessionManager({
+          account: payer,
+          client,
+          escrowContract,
+          fetch: globalThis.fetch,
+          maxDeposit: '1',
+        })
+
+        const ws = await manager.ws(`ws://localhost:${port}/ws`)
+        const closeEvent = await new Promise<{ code: number; reason: string }>(
+          (resolve, reject) => {
+            ws.addEventListener(
+              'close',
+              (event) => resolve({ code: event.code, reason: event.reason }),
+              { once: true },
+            )
+            ws.addEventListener('error', () => reject(new Error('websocket stream failed')), {
+              once: true,
+            })
+          },
+        )
+
+        expect(closeEvent.code).toBe(3008)
+        expect(closeEvent.reason).toBe(
+          'requested voucher amount 2000000 exceeds local maxDeposit 1000000',
+        )
+      } finally {
+        wsServer.close()
+        server.close()
+      }
+    })
+
+    test('rejects close-ready receipts beyond local voucher state', async () => {
+      const routeHandler = Mppx_server.create({
+        methods: [
+          tempo_server.session({
+            store: Store.memory(),
+            getClient: () => client,
+            account: recipientAccount,
+            currency,
+            escrowContract,
+            chainId: chain.id,
+          }),
+        ],
+        realm: 'api.example.com',
+        secretKey: 'secret',
+      }).session({ amount: '1', decimals: 6, unitType: 'token' })
+
+      const httpHandler = NodeRequest.toNodeListener(async (request) => {
+        const result = await routeHandler(request)
+        if (result.status === 402) return result.challenge
+        return result.withReceipt(new Response('ok'))
+      })
+
+      const nodeServer = node_http.createServer(httpHandler)
+      const wsServer = new WebSocketServer({ noServer: true })
+
+      await new Promise<void>((resolve) => nodeServer.listen(0, resolve))
+      const { port } = nodeServer.address() as { port: number }
+      const server = Http.wrapServer(nodeServer, {
+        port,
+        url: `http://localhost:${port}`,
+      })
+
+      wsServer.on('connection', (socket: import('ws').WebSocket) => {
+        let openCredential: any
+
+        socket.on('message', (data) => {
+          const raw = data.toString()
+          const message = TempoWs.parseMessage(raw)
+          if (!message) return
+
+          if (message.mpp === 'authorization') {
+            openCredential = Credential.deserialize<any>(message.authorization)
+            socket.send(
+              TempoWs.formatReceiptMessage({
+                method: 'tempo',
+                intent: 'session',
+                status: 'success',
+                timestamp: new Date().toISOString(),
+                reference: openCredential.payload.channelId,
+                challengeId: openCredential.challenge.id,
+                channelId: openCredential.payload.channelId,
+                acceptedCumulative: openCredential.payload.cumulativeAmount,
+                spent: '0',
+                units: 0,
+              }),
+            )
+            return
+          }
+
+          if (message.mpp === 'payment-close-request' && openCredential) {
+            socket.send(
+              TempoWs.formatCloseReadyMessage({
+                method: 'tempo',
+                intent: 'session',
+                status: 'success',
+                timestamp: new Date().toISOString(),
+                reference: openCredential.payload.channelId,
+                challengeId: openCredential.challenge.id,
+                channelId: openCredential.payload.channelId,
+                acceptedCumulative: openCredential.payload.cumulativeAmount,
+                spent: '9000000',
+                units: 1,
+              }),
+            )
+          }
+        })
+      })
+
+      nodeServer.on('upgrade', (req, socket, head) => {
+        if (req.url !== '/ws') {
+          socket.destroy()
+          return
+        }
+
+        wsServer.handleUpgrade(req, socket, head, (websocket: import('ws').WebSocket) => {
+          wsServer.emit('connection', websocket, req)
+        })
+      })
+
+      try {
+        const manager = sessionManager({
+          account: payer,
+          client,
+          escrowContract,
+          fetch: globalThis.fetch,
+          maxDeposit: '1',
+        })
+
+        await manager.ws(`ws://localhost:${port}/ws`)
+        await expect(manager.close()).rejects.toThrow(
+          'received payment-close-ready beyond local voucher state',
+        )
+      } finally {
+        wsServer.close()
+        server.close()
+      }
+    })
+
+    test('fallback close after socket death signs for delivered amount, not full voucher', async () => {
+      const backingStore = Store.memory()
+      const routeHandler = Mppx_server.create({
+        methods: [
+          tempo_server.session({
+            store: backingStore,
+            getClient: () => client,
+            account: recipientAccount,
+            currency,
+            escrowContract,
+            chainId: chain.id,
+          }),
+        ],
+        realm: 'api.example.com',
+        secretKey: 'secret',
+      }).session({ amount: '1', decimals: 6, unitType: 'token' })
+
+      const route = (request: Request) => routeHandler(request)
+
+      const httpHandler = NodeRequest.toNodeListener(async (request) => {
+        const result = await route(request)
+        if (result.status === 402) return result.challenge
+        return result.withReceipt(new Response('ok'))
+      })
+
+      const nodeServer = node_http.createServer(httpHandler)
+      const wsServer = new WebSocketServer({ noServer: true })
+      let serverSocket: import('ws').WebSocket | null = null
+
+      await new Promise<void>((resolve) => nodeServer.listen(0, resolve))
+      const { port } = nodeServer.address() as { port: number }
+      const server = Http.wrapServer(nodeServer, {
+        port,
+        url: `http://localhost:${port}`,
+      })
+
+      wsServer.on('connection', (socket: import('ws').WebSocket) => {
+        serverSocket = socket
+        void TempoWs.serve({
+          socket,
+          store: backingStore,
+          url: `${server.url}/ws`,
+          route,
+          generate: async function* (stream: TempoWs.SessionController) {
+            await stream.charge()
+            yield 'chunk-1'
+            await stream.charge()
+            yield 'chunk-2'
+            await new Promise((resolve) => setTimeout(resolve, 60_000))
+          },
+        })
+      })
+
+      nodeServer.on('upgrade', (req, socket, head) => {
+        if (req.url !== '/ws') {
+          socket.destroy()
+          return
+        }
+
+        wsServer.handleUpgrade(req, socket, head, (websocket: import('ws').WebSocket) => {
+          wsServer.emit('connection', websocket, req)
+        })
+      })
+
+      try {
+        const manager = sessionManager({
+          account: payer,
+          client,
+          escrowContract,
+          fetch: globalThis.fetch,
+          maxDeposit: '3',
+        })
+
+        const ws = await manager.ws(`ws://localhost:${port}/ws`)
+        const chunks: string[] = []
+
+        await new Promise<void>((resolve) => {
+          ws.addEventListener('message', (event) => {
+            if (typeof event.data !== 'string') return
+            chunks.push(event.data)
+            if (chunks.length === 2) serverSocket?.terminate()
+          })
+          ws.addEventListener('close', () => resolve(), { once: true })
+        })
+
+        expect(chunks).toEqual(['chunk-1', 'chunk-2'])
+
+        const closeReceipt = await manager.close()
+        expect(closeReceipt).toBeDefined()
+
+        const settledAmount = BigInt(closeReceipt!.spent)
+        const deliveredCost = 2n * 1000000n
+        expect(settledAmount).toBeLessThanOrEqual(deliveredCost)
+        expect(settledAmount).toBeGreaterThan(0n)
+
+        const fullDeposit = 3000000n
+        expect(settledAmount).toBeLessThan(fullDeposit)
+      } finally {
+        wsServer.close()
+        server.close()
+      }
+    })
+
+    test('rejects tx-bearing open receipts replayed during websocket close', async () => {
+      const routeHandler = Mppx_server.create({
+        methods: [
+          tempo_server.session({
+            store: Store.memory(),
+            getClient: () => client,
+            account: recipientAccount,
+            currency,
+            escrowContract,
+            chainId: chain.id,
+          }),
+        ],
+        realm: 'api.example.com',
+        secretKey: 'secret',
+      }).session({ amount: '1', decimals: 6, unitType: 'token' })
+
+      const httpHandler = NodeRequest.toNodeListener(async (request) => {
+        const result = await routeHandler(request)
+        if (result.status === 402) return result.challenge
+        return result.withReceipt(new Response('ok'))
+      })
+
+      const nodeServer = node_http.createServer(httpHandler)
+      const wsServer = new WebSocketServer({ noServer: true })
+
+      await new Promise<void>((resolve) => nodeServer.listen(0, resolve))
+      const { port } = nodeServer.address() as { port: number }
+      const server = Http.wrapServer(nodeServer, {
+        port,
+        url: `http://localhost:${port}`,
+      })
+
+      wsServer.on('connection', (socket: import('ws').WebSocket) => {
+        let openCredential: any
+        let openReceipt: SessionReceipt | undefined
+
+        socket.on('message', (data) => {
+          const raw = data.toString()
+          const message = TempoWs.parseMessage(raw)
+          if (!message) return
+
+          if (message.mpp === 'authorization') {
+            const credential = Credential.deserialize<any>(message.authorization)
+            if (credential.payload?.action === 'close') {
+              if (openReceipt) socket.send(TempoWs.formatReceiptMessage(openReceipt))
+              return
+            }
+
+            openCredential = credential
+            openReceipt = {
+              method: 'tempo',
+              intent: 'session',
+              status: 'success',
+              timestamp: new Date().toISOString(),
+              reference: credential.payload.channelId,
+              challengeId: credential.challenge.id,
+              channelId: credential.payload.channelId,
+              acceptedCumulative: credential.payload.cumulativeAmount,
+              spent: '0',
+              units: 0,
+              txHash: `0x${'12'.repeat(32)}` as Hex,
+            }
+            socket.send(TempoWs.formatReceiptMessage(openReceipt))
+            return
+          }
+
+          if (message.mpp === 'payment-close-request' && openCredential) {
+            socket.send(
+              TempoWs.formatCloseReadyMessage({
+                method: 'tempo',
+                intent: 'session',
+                status: 'success',
+                timestamp: new Date().toISOString(),
+                reference: openCredential.payload.channelId,
+                challengeId: openCredential.challenge.id,
+                channelId: openCredential.payload.channelId,
+                acceptedCumulative: openCredential.payload.cumulativeAmount,
+                spent: '0',
+                units: 0,
+              }),
+            )
+          }
+        })
+      })
+
+      nodeServer.on('upgrade', (req, socket, head) => {
+        if (req.url !== '/ws') {
+          socket.destroy()
+          return
+        }
+
+        wsServer.handleUpgrade(req, socket, head, (websocket: import('ws').WebSocket) => {
+          wsServer.emit('connection', websocket, req)
+        })
+      })
+
+      try {
+        const manager = sessionManager({
+          account: payer,
+          client,
+          escrowContract,
+          fetch: globalThis.fetch,
+          maxDeposit: '1',
+        })
+
+        await manager.ws(`ws://localhost:${port}/ws`)
+        await expect(manager.close()).rejects.toThrow(
+          'received mismatched payment-close receipt frame',
+        )
+      } finally {
+        wsServer.close()
+        server.close()
+      }
+    })
   })
 })
 
@@ -3339,7 +4078,11 @@ describe('monotonicity and TOCTOU (unit tests)', () => {
 
   test('charge does not allow highestVoucherAmount to decrease', async () => {
     const store = ChannelStore.fromStore(Store.memory())
-    await seedChannel(store, { highestVoucherAmount: 5000000n, spent: 0n, units: 0 })
+    await seedChannel(store, {
+      highestVoucherAmount: 5000000n,
+      spent: 0n,
+      units: 0,
+    })
 
     const channel = await charge(store, testChannelId, 1000000n)
     expect(channel.spent).toBe(1000000n)
@@ -3380,7 +4123,11 @@ describe('monotonicity and TOCTOU (unit tests)', () => {
 
   test('acceptVoucher is monotonic — lower value does not decrease highestVoucherAmount', async () => {
     const store = ChannelStore.fromStore(Store.memory())
-    await seedChannel(store, { highestVoucherAmount: 5000000n, spent: 2000000n, units: 3 })
+    await seedChannel(store, {
+      highestVoucherAmount: 5000000n,
+      spent: 2000000n,
+      units: 3,
+    })
 
     const channel = await store.updateChannel(testChannelId, (existing) => {
       if (!existing) return null
@@ -3805,7 +4552,9 @@ async function createSignedOpenTransaction(
     token: currency,
     deposit,
     salt,
-    ...(opts?.authorizedSigner !== undefined && { authorizedSigner: opts.authorizedSigner }),
+    ...(opts?.authorizedSigner !== undefined && {
+      authorizedSigner: opts.authorizedSigner,
+    }),
   })
   return { channelId, serializedTransaction }
 }
