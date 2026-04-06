@@ -1019,6 +1019,75 @@ describe('tempo', () => {
       httpServer.close()
     })
 
+    test('behavior: rejects concurrent replay of the same transaction hash', async () => {
+      const dedupServer = Mppx_server.create({
+        methods: [
+          tempo_server.charge({
+            getClient() {
+              return client
+            },
+            currency: asset,
+            account: accounts[0],
+            store: Store.memory(),
+          }),
+        ],
+        realm,
+        secretKey,
+      })
+
+      const httpServer = await Http.createServer(async (req, res) => {
+        const result = await Mppx_server.toNodeListener(dedupServer.charge({ amount: '1' }))(
+          req,
+          res,
+        )
+        if (result.status === 402) return
+        res.end('OK')
+      })
+
+      const [challengeResponse1, challengeResponse2] = await Promise.all([
+        fetch(httpServer.url),
+        fetch(httpServer.url),
+      ])
+      expect(challengeResponse1.status).toBe(402)
+      expect(challengeResponse2.status).toBe(402)
+
+      const challenge1 = Challenge.fromResponse(challengeResponse1, {
+        methods: [tempo_client.charge()],
+      })
+      const challenge2 = Challenge.fromResponse(challengeResponse2, {
+        methods: [tempo_client.charge()],
+      })
+
+      const { receipt } = await Actions.token.transferSync(client, {
+        account: accounts[1],
+        amount: BigInt(challenge1.request.amount),
+        to: challenge1.request.recipient as Hex.Hex,
+        token: challenge1.request.currency as Hex.Hex,
+      })
+
+      const credential1 = Credential.serialize(
+        Credential.from({
+          challenge: challenge1,
+          payload: { hash: receipt.transactionHash, type: 'hash' as const },
+        }),
+      )
+      const credential2 = Credential.serialize(
+        Credential.from({
+          challenge: challenge2,
+          payload: { hash: receipt.transactionHash, type: 'hash' as const },
+        }),
+      )
+
+      const [resA, resB] = await Promise.all([
+        fetch(httpServer.url, { headers: { Authorization: credential1 } }),
+        fetch(httpServer.url, { headers: { Authorization: credential2 } }),
+      ])
+
+      expect([resA.status, resB.status].sort()).toEqual([200, 402])
+
+      httpServer.close()
+    })
+
     test('behavior: rejects malleable variants with different feePayerSignature', async () => {
       const dedupStore = Store.memory()
       const dedupServer = Mppx_server.create({
@@ -2101,6 +2170,64 @@ describe('tempo', () => {
       expect(replayResponse.status).toBe(402)
       const replayBody = (await replayResponse.json()) as { detail: string }
       expect(replayBody.detail).toContain('Proof credential has already been used.')
+
+      httpServer.close()
+    })
+
+    test('behavior: rejects concurrent replay of the same proof credential', async () => {
+      const replayStore = Store.memory()
+      const server_ = Mppx_server.create({
+        methods: [
+          tempo_server.charge({
+            getClient() {
+              return client
+            },
+            currency: asset,
+            account: accounts[0],
+            store: replayStore,
+          }),
+        ],
+        realm,
+        secretKey,
+      })
+
+      const httpServer = await Http.createServer(async (req, res) => {
+        const result = await Mppx_server.toNodeListener(
+          server_.charge({ amount: '0', decimals: 6 }),
+        )(req, res)
+        if (result.status === 402) return
+        res.end('OK')
+      })
+
+      const response = await fetch(httpServer.url)
+      expect(response.status).toBe(402)
+
+      const challenge = Challenge.fromResponse(response, {
+        methods: [tempo_client.charge()],
+      })
+
+      const signature = await signTypedData(client, {
+        account: accounts[1],
+        domain: Proof.domain(chain.id),
+        types: Proof.types,
+        primaryType: 'Proof',
+        message: Proof.message(challenge.id),
+      })
+
+      const credential = Credential.serialize(
+        Credential.from({
+          challenge,
+          payload: { signature, type: 'proof' as const },
+          source: `did:pkh:eip155:${chain.id}:${accounts[1].address}`,
+        }),
+      )
+
+      const [resA, resB] = await Promise.all([
+        fetch(httpServer.url, { headers: { Authorization: credential } }),
+        fetch(httpServer.url, { headers: { Authorization: credential } }),
+      ])
+
+      expect([resA.status, resB.status].sort()).toEqual([200, 402])
 
       httpServer.close()
     })
