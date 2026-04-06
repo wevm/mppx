@@ -7,7 +7,6 @@ import { nodeEnv } from './config.js'
 import { rpcUrl } from './tempo/prool.js'
 import { accounts, asset, chain, client, fundAccount } from './tempo/viem.js'
 
-const stopTimeoutMs = 2_000
 const setupTimeoutMs = 120_000
 const warmupAttempts = 5
 const warmupRetryDelayMs = 1_000
@@ -25,6 +24,21 @@ const warmupClient = createClient({
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
+
+type LocalnetSetupState = {
+  done: boolean
+  promise: Promise<void> | undefined
+}
+
+const localnetSetupState = (() => {
+  const globalState = globalThis as typeof globalThis & {
+    __mppxLocalnetSetup__?: LocalnetSetupState
+  }
+  return (globalState.__mppxLocalnetSetup__ ??= {
+    done: false,
+    promise: undefined,
+  })
+})()
 
 async function warmupLocalnet() {
   let lastError: unknown
@@ -46,32 +60,48 @@ async function warmupLocalnet() {
 beforeAll(async () => {
   if (nodeEnv !== 'localnet') return
 
-  // Send noop tx to trigger block.
-  await warmupLocalnet()
+  if (localnetSetupState.done) return
+  if (localnetSetupState.promise) {
+    await localnetSetupState.promise
+    return
+  }
 
-  // Mint liquidity for fee tokens.
-  await Promise.all(
-    [1n, 2n, 3n].map((id) =>
-      Actions.amm.mintSync(client, {
-        account: accounts[0],
-        feeToken: Addresses.pathUsd,
-        nonceKey: 'expiring',
-        userTokenAddress: id,
-        validatorTokenAddress: Addresses.pathUsd,
-        validatorTokenAmount: parseUnits('1000', 6),
-        to: accounts[0].address,
-      }),
-    ),
-  )
+  localnetSetupState.promise = (async () => {
+    // Send noop tx to trigger block.
+    await warmupLocalnet()
 
-  await fundAccount({ address: accounts[1].address, token: asset })
-  await fundAccount({ address: accounts[2].address, token: asset })
+    // Mint liquidity for fee tokens.
+    await Promise.all(
+      [1n, 2n, 3n].map((id) =>
+        Actions.amm.mintSync(client, {
+          account: accounts[0],
+          feeToken: Addresses.pathUsd,
+          nonceKey: 'expiring',
+          userTokenAddress: id,
+          validatorTokenAddress: Addresses.pathUsd,
+          validatorTokenAmount: parseUnits('1000', 6),
+          to: accounts[0].address,
+        }),
+      ),
+    )
+
+    await fundAccount({ address: accounts[1].address, token: asset })
+    await fundAccount({ address: accounts[2].address, token: asset })
+    localnetSetupState.done = true
+  })()
+
+  try {
+    await localnetSetupState.promise
+  } catch (error) {
+    localnetSetupState.promise = undefined
+    throw error
+  }
 }, setupTimeoutMs)
 
 afterAll(async () => {
   if (nodeEnv !== 'localnet') return
 
-  // Teardown is best-effort: when the localnet instance is already unhealthy,
-  // waiting forever here can keep the whole Vitest worker alive.
-  await fetch(`${rpcUrl}/stop`, { signal: AbortSignal.timeout(stopTimeoutMs) }).catch(() => {})
+  // The localnet instance is shared across many setup-file executions in a worker.
+  // Global test teardown stops the backing server, so avoid per-file /stop calls
+  // that can race with subsequent files and force repeated bootstrap transactions.
 })
