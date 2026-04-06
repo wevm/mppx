@@ -37,7 +37,7 @@ function seedChannel(
   return store.updateChannel(channelId, () => makeChannel(overrides))
 }
 
-function stripUpdateMethod(store: Store.Store): Store.Store {
+function stripUpdateMethod(store: Store.Store | Store.AtomicStore): Store.Store {
   return {
     get: store.get.bind(store),
     put: store.put.bind(store),

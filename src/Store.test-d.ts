@@ -7,7 +7,6 @@ test('default Store accepts any string key', () => {
   expectTypeOf(store.get).parameter(0).toBeString()
   expectTypeOf(store.put).parameter(0).toBeString()
   expectTypeOf(store.delete).parameter(0).toBeString()
-  expectTypeOf(store.update).parameter(0).toBeString()
 })
 
 test('default Store get returns unknown', async () => {
@@ -16,9 +15,25 @@ test('default Store get returns unknown', async () => {
   expectTypeOf(value).toEqualTypeOf<unknown>()
 })
 
+test('default AtomicStore accepts any string key on update', () => {
+  const store = {} as Store.AtomicStore
+  expectTypeOf(store.update).parameter(0).toBeString()
+})
+
 test('memory returns AtomicStore', () => {
   const store = Store.memory()
   expectTypeOf(store).toEqualTypeOf<Store.AtomicStore>()
+})
+
+test('AtomicStore is assignable to Store', () => {
+  const atomic = {} as Store.AtomicStore
+  expectTypeOf(atomic).toMatchTypeOf<Store.Store>()
+})
+
+test('Store is not assignable to AtomicStore', () => {
+  const store = {} as Store.Store
+  // @ts-expect-error — Store has no update method
+  const _atomic: Store.AtomicStore = store
 })
 
 test('typed Store constrains keys', () => {
@@ -28,6 +43,12 @@ test('typed Store constrains keys', () => {
   expectTypeOf(store.get).parameter(0).toEqualTypeOf<`mppx:charge:${string}`>()
   expectTypeOf(store.put).parameter(0).toEqualTypeOf<`mppx:charge:${string}`>()
   expectTypeOf(store.delete).parameter(0).toEqualTypeOf<`mppx:charge:${string}`>()
+})
+
+test('typed AtomicStore constrains keys on update', () => {
+  type ItemMap = { [key: `mppx:charge:${string}`]: number }
+  const store = {} as Store.AtomicStore<ItemMap>
+
   expectTypeOf(store.update).parameter(0).toEqualTypeOf<`mppx:charge:${string}`>()
 })
 
@@ -47,11 +68,11 @@ test('typed Store enforces value type on put', () => {
   store.put('mppx:charge:0x123', 'wrong')
 })
 
-test('typed Store update infers value and result types', () => {
+test('typed AtomicStore update infers value and result types', () => {
   type ItemMap = { [key: `mppx:charge:${string}`]: number }
-  const store = {} as Store.Store<ItemMap>
+  const store = {} as Store.AtomicStore<ItemMap>
 
-  const result = store.update!('mppx:charge:0x123', (current) => {
+  const result = store.update('mppx:charge:0x123', (current) => {
     if (current === null) return { op: 'set', value: 1, result: 'inserted' as const }
     return { op: 'noop', result: 'existing' as const }
   })
@@ -59,12 +80,12 @@ test('typed Store update infers value and result types', () => {
   expectTypeOf(result).toEqualTypeOf<Promise<'inserted' | 'existing'>>()
 })
 
-test('typed Store update enforces set value type', () => {
+test('typed AtomicStore update enforces set value type', () => {
   type ItemMap = { [key: `mppx:charge:${string}`]: number }
-  const store = {} as Store.Store<ItemMap>
+  const store = {} as Store.AtomicStore<ItemMap>
 
   // @ts-expect-error — update set value must be number, not string
-  store.update!('mppx:charge:0x123', (_current) => ({ op: 'set', value: 'wrong', result: true }))
+  store.update('mppx:charge:0x123', (_current) => ({ op: 'set', value: 'wrong', result: true }))
 })
 
 test('cloudflare returns generic Store', () => {

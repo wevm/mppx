@@ -177,9 +177,11 @@ export async function deductFromChannel(
  */
 const storeCache = new WeakMap<Store.Store, ChannelStore>()
 
-export function fromStore(store: Store.Store): ChannelStore {
+export function fromStore(store: Store.Store | Store.AtomicStore): ChannelStore {
   const cached = storeCache.get(store)
   if (cached) return cached
+
+  const atomicUpdate = 'update' in store ? (store as Store.AtomicStore).update : undefined
 
   const waiters = new Map<string, Set<() => void>>()
   const locks = new Map<string, Promise<void>>()
@@ -208,8 +210,8 @@ export function fromStore(store: Store.Store): ChannelStore {
   ): Promise<result> {
     let change: Store.Change<State, result> | undefined
 
-    if (store.update) {
-      const result = await store.update(channelId, (current) => {
+    if (atomicUpdate) {
+      const result = await atomicUpdate(channelId, (current) => {
         change = fn((current as State | null) ?? null)
         if (change.op !== 'set') return change
         return { ...change, value: change.value as never }
