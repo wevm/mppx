@@ -1,5 +1,11 @@
 # mppx
 
+## 0.5.7
+
+### Patch Changes
+
+- 9cffd24: Added `Config`, `Text`, and `Theme` type exports to `mppx/html` entrypoint.
+
 ## 0.5.6
 
 ### Patch Changes
