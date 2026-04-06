@@ -1,15 +1,25 @@
-import { parseUnits } from 'viem'
+import { createClient, http as viem_http, parseUnits } from 'viem'
 import { sendTransactionSync } from 'viem/actions'
 import { Actions, Addresses } from 'viem/tempo'
 import { afterAll, beforeAll } from 'vp/test'
 
 import { nodeEnv } from './config.js'
 import { rpcUrl } from './tempo/prool.js'
-import { accounts, asset, client, fundAccount } from './tempo/viem.js'
+import { accounts, asset, chain, client, fundAccount } from './tempo/viem.js'
 
 const stopTimeoutMs = 2_000
-const warmupAttempts = 3
+const warmupAttempts = 5
 const warmupRetryDelayMs = 1_000
+const warmupRequestTimeoutMs = 10_000
+
+const warmupClient = createClient({
+  account: accounts[0],
+  chain,
+  transport: viem_http(rpcUrl, {
+    retryCount: 0,
+    timeout: warmupRequestTimeoutMs,
+  }),
+})
 
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms))
@@ -20,7 +30,7 @@ async function warmupLocalnet() {
 
   for (let attempt = 1; attempt <= warmupAttempts; attempt++) {
     try {
-      await sendTransactionSync(client, {})
+      await sendTransactionSync(warmupClient, {})
       return
     } catch (error) {
       lastError = error
