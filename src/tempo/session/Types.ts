@@ -50,6 +50,24 @@ export type SessionCredentialPayload =
     }
 
 /**
+ * Optional session state hints carried in `challenge.request.methodDetails`.
+ *
+ * These fields are additive reconciliation hints, not protocol requirements.
+ * Amounts are serialized in raw base units so clients can reuse them directly.
+ */
+export interface SessionChallengeMethodDetails {
+  acceptedCumulative?: string | undefined
+  chainId?: number | undefined
+  channelId?: Hex | undefined
+  deposit?: string | undefined
+  escrowContract?: Address | undefined
+  feePayer?: boolean | undefined
+  minVoucherDelta?: string | undefined
+  requiredCumulative?: string | undefined
+  spent?: string | undefined
+}
+
+/**
  * SSE event emitted when session balance is exhausted mid-stream.
  * The client responds by sending a new voucher credential.
  *

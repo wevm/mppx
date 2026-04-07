@@ -21,16 +21,27 @@ import * as Credential from '../../Credential.js'
 import * as defaults from '../internal/defaults.js'
 import { escrowAbi, getOnChainChannel } from '../session/Chain.js'
 import * as Channel from '../session/Channel.js'
-import type { SessionCredentialPayload } from '../session/Types.js'
+import type {
+  SessionChallengeMethodDetails,
+  SessionCredentialPayload,
+  SessionReceipt,
+} from '../session/Types.js'
 import { signVoucher } from '../session/Voucher.js'
 
 export type ChannelEntry = {
-  channelId: Hex.Hex
-  salt: Hex.Hex
-  cumulativeAmount: bigint
-  escrowContract: Address
+  /** Highest voucher amount observed from server accounting hints or receipts. */
+  acceptedCumulative: bigint
   chainId: number
+  channelId: Hex.Hex
+  /** Highest cumulative amount the client itself has signed for this channel. */
+  cumulativeAmount: bigint
+  /** Latest known deposit ceiling. */
+  deposit?: bigint | undefined
+  escrowContract: Address
   opened: boolean
+  salt: Hex.Hex
+  /** Latest server-reported spent amount for the session. */
+  spent: bigint
 }
 
 export function resolveChainId(challenge: Challenge): number {
@@ -66,6 +77,95 @@ export function serializeCredential(
     challenge,
     payload,
     source: `did:pkh:eip155:${chainId}:${account.address}`,
+  })
+}
+
+/**
+ * Server-provided advisory channel state from receipts or hints.
+ *
+ * Values are monotonically reconciled into the local {@link ChannelEntry} —
+ * only upward adjustments are applied. These are **never** used directly for
+ * signing authorization; they inform the client's view of server-side
+ * accounting only.
+ */
+type ChannelSnapshot = {
+  /** Server-acknowledged cumulative voucher amount. */
+  acceptedCumulative?: bigint | string | undefined
+  /** Current on-chain deposit as observed by the server. */
+  deposit?: bigint | string | undefined
+  /** Cumulative amount the server considers consumed. */
+  spent?: bigint | string | undefined
+}
+
+function toBigInt(value: bigint | string): bigint {
+  return typeof value === 'bigint' ? value : BigInt(value)
+}
+
+function maxBigInt(current: bigint, next: bigint): bigint {
+  return current > next ? current : next
+}
+
+export function createHintedChannelEntry(options: {
+  chainId: number
+  channelId: Hex.Hex
+  escrowContract: Address
+  hints: Pick<SessionChallengeMethodDetails, 'acceptedCumulative' | 'deposit' | 'spent'>
+}): ChannelEntry {
+  const spent = BigInt(options.hints.spent ?? options.hints.acceptedCumulative ?? '0')
+  const acceptedCumulative = maxBigInt(BigInt(options.hints.acceptedCumulative ?? '0'), spent)
+
+  return {
+    acceptedCumulative,
+    chainId: options.chainId,
+    channelId: options.channelId,
+    // Hints are advisory only. Start signing from locally authorized state.
+    cumulativeAmount: 0n,
+    ...(options.hints.deposit !== undefined && { deposit: BigInt(options.hints.deposit) }),
+    escrowContract: options.escrowContract,
+    opened: true,
+    salt: '0x' as Hex.Hex,
+    spent,
+  }
+}
+
+export function reconcileChannelEntry(entry: ChannelEntry, snapshot: ChannelSnapshot): boolean {
+  let changed = false
+
+  if (snapshot.acceptedCumulative !== undefined) {
+    const acceptedCumulative = toBigInt(snapshot.acceptedCumulative)
+    if (acceptedCumulative > entry.acceptedCumulative) {
+      entry.acceptedCumulative = acceptedCumulative
+      changed = true
+    }
+  }
+
+  if (snapshot.spent !== undefined) {
+    const spent = toBigInt(snapshot.spent)
+    if (spent > entry.spent) {
+      entry.spent = spent
+      changed = true
+    }
+    if (snapshot.acceptedCumulative === undefined && entry.acceptedCumulative < spent) {
+      entry.acceptedCumulative = spent
+      changed = true
+    }
+  }
+
+  if (snapshot.deposit !== undefined) {
+    const deposit = toBigInt(snapshot.deposit)
+    if (entry.deposit === undefined || deposit > entry.deposit) {
+      entry.deposit = deposit
+      changed = true
+    }
+  }
+
+  return changed
+}
+
+export function reconcileChannelReceipt(entry: ChannelEntry, receipt: SessionReceipt): boolean {
+  return reconcileChannelEntry(entry, {
+    acceptedCumulative: receipt.acceptedCumulative,
+    spent: receipt.spent,
   })
 }
 
@@ -181,12 +281,15 @@ export async function createOpenPayload(
 
   return {
     entry: {
-      channelId,
-      salt,
-      cumulativeAmount: initialAmount,
-      escrowContract,
+      acceptedCumulative: initialAmount,
       chainId,
+      channelId,
+      cumulativeAmount: initialAmount,
+      deposit,
+      escrowContract,
       opened: true,
+      salt,
+      spent: 0n,
     },
     payload: {
       action: 'open',
@@ -221,12 +324,15 @@ export async function tryRecoverChannel(
 
     if (onChain.deposit > 0n && !onChain.finalized) {
       return {
-        channelId,
-        salt: '0x' as Hex.Hex,
-        cumulativeAmount: onChain.settled,
-        escrowContract,
+        acceptedCumulative: onChain.settled,
         chainId,
+        channelId,
+        cumulativeAmount: onChain.settled,
+        deposit: onChain.deposit,
+        escrowContract,
         opened: true,
+        salt: '0x' as Hex.Hex,
+        spent: onChain.settled,
       }
     }
   } catch {}

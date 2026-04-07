@@ -90,6 +90,23 @@ export type ChannelStore = {
    * When not implemented, callers fall back to polling.
    */
   waitForUpdate?(channelId: Hex): Promise<void>
+
+  /**
+   * Finds the best reusable channel for a payer and session dimensions.
+   *
+   * Implementations may return `null` when no reusable channel exists or when
+   * reverse lookup is not supported by the backing store.
+   */
+  findReusableChannel?(options: ReusableChannelQuery): Promise<State | null>
+}
+
+export type ReusableChannelQuery = {
+  amount?: bigint | undefined
+  chainId?: number | undefined
+  escrowContract: Address
+  payee: Address
+  payer: Address
+  token: Address
 }
 
 export type DeductResult = { ok: true; channel: State } | { ok: false; channel: State }
@@ -121,6 +138,77 @@ export async function deductFromChannel(
   return { ok: deducted, channel }
 }
 
+export async function findReusableChannel(
+  store: ChannelStore,
+  options: ReusableChannelQuery,
+): Promise<State | null> {
+  if (!store.findReusableChannel) return null
+  return store.findReusableChannel(options)
+}
+
+function payerIndexKey(payer: Address): `mppx:session:payer:${string}` {
+  return `mppx:session:payer:${payer.toLowerCase()}`
+}
+
+function normalizeChannelIds(channelIds: readonly Hex[]): Hex[] {
+  return [...new Set(channelIds.map((channelId) => channelId.toLowerCase() as Hex))]
+}
+
+function sameChannelIds(left: readonly Hex[], right: readonly Hex[]): boolean {
+  if (left.length !== right.length) return false
+  for (let index = 0; index < left.length; index++) {
+    if (left[index]!.toLowerCase() !== right[index]!.toLowerCase()) return false
+  }
+  return true
+}
+
+function compareHexDesc(left: Hex, right: Hex): number {
+  return right.localeCompare(left)
+}
+
+function compareBigIntDesc(left: bigint, right: bigint): number {
+  if (left === right) return 0
+  return left > right ? -1 : 1
+}
+
+function compareNumberDesc(left: number, right: number): number {
+  if (left === right) return 0
+  return left > right ? -1 : 1
+}
+
+function createdAtScore(channel: State): number {
+  const timestamp = Date.parse(channel.createdAt)
+  return Number.isNaN(timestamp) ? 0 : timestamp
+}
+
+function isReusableChannel(channel: State, options: ReusableChannelQuery): boolean {
+  if (channel.finalized || channel.deposit === 0n || channel.closeRequestedAt !== 0n) return false
+  if (channel.payer.toLowerCase() !== options.payer.toLowerCase()) return false
+  if (channel.payee.toLowerCase() !== options.payee.toLowerCase()) return false
+  if (channel.token.toLowerCase() !== options.token.toLowerCase()) return false
+  if (channel.escrowContract.toLowerCase() !== options.escrowContract.toLowerCase()) return false
+  if (options.chainId !== undefined && channel.chainId !== options.chainId) return false
+
+  if (options.amount !== undefined) {
+    const requiredCumulative =
+      channel.spent + options.amount > channel.highestVoucherAmount
+        ? channel.spent + options.amount
+        : channel.highestVoucherAmount
+    if (requiredCumulative > channel.deposit) return false
+  }
+
+  return true
+}
+
+function compareReusableChannels(left: State, right: State): number {
+  return (
+    compareNumberDesc(createdAtScore(left), createdAtScore(right)) ||
+    compareBigIntDesc(left.highestVoucherAmount, right.highestVoucherAmount) ||
+    compareBigIntDesc(left.spent, right.spent) ||
+    compareHexDesc(left.channelId, right.channelId)
+  )
+}
+
 /**
  * Wraps a generic {@link Store} into the internal {@link Store}
  * interface used by server handlers and the SSE metering loop.
@@ -147,6 +235,25 @@ export function fromStore(store: Store.Store): ChannelStore {
   const waiters = new Map<string, Set<() => void>>()
   const locks = new Map<string, Promise<void>>()
 
+  async function withLock<value>(key: string, fn: () => Promise<value>): Promise<value> {
+    while (locks.has(key)) await locks.get(key)
+
+    let release!: () => void
+    locks.set(
+      key,
+      new Promise<void>((r) => {
+        release = r
+      }),
+    )
+
+    try {
+      return await fn()
+    } finally {
+      locks.delete(key)
+      release()
+    }
+  }
+
   function notify(channelId: string) {
     const set = waiters.get(channelId)
     if (!set) return
@@ -154,30 +261,59 @@ export function fromStore(store: Store.Store): ChannelStore {
     waiters.delete(channelId)
   }
 
+  async function updatePayerIndex(
+    payer: Address,
+    update: (current: readonly Hex[]) => readonly Hex[],
+  ): Promise<void> {
+    const key = payerIndexKey(payer)
+    await withLock(key, async () => {
+      const current = ((await store.get(key as never)) as Hex[] | null) ?? []
+      const next = normalizeChannelIds(update(current))
+      if (sameChannelIds(current, next)) return
+      if (next.length === 0) {
+        await store.delete(key as never)
+        return
+      }
+      await store.put(key as never, next as never)
+    })
+  }
+
+  async function syncPayerIndex(
+    channelId: Hex,
+    current: State | null,
+    next: State | null,
+  ): Promise<void> {
+    const normalizedChannelId = channelId.toLowerCase() as Hex
+    const currentPayer = current?.payer.toLowerCase() as Address | undefined
+    const nextPayer = next?.payer.toLowerCase() as Address | undefined
+
+    if (currentPayer && currentPayer !== nextPayer) {
+      await updatePayerIndex(currentPayer, (entries) =>
+        entries.filter((entry) => entry.toLowerCase() !== normalizedChannelId),
+      )
+    }
+
+    if (!nextPayer) return
+
+    await updatePayerIndex(nextPayer, (entries) =>
+      entries.some((entry) => entry.toLowerCase() === normalizedChannelId)
+        ? entries
+        : [...entries, normalizedChannelId],
+    )
+  }
+
   async function update(
     channelId: Hex,
     fn: (current: State | null) => State | null,
   ): Promise<State | null> {
-    while (locks.has(channelId)) await locks.get(channelId)
-
-    let release!: () => void
-    locks.set(
-      channelId,
-      new Promise<void>((r) => {
-        release = r
-      }),
-    )
-
-    try {
+    return withLock(channelId, async () => {
       const current = (await store.get(channelId)) as State | null
       const next = fn(current)
       if (next) await store.put(channelId, next as never)
       else await store.delete(channelId)
+      await syncPayerIndex(channelId, current, next)
       return next
-    } finally {
-      locks.delete(channelId)
-      release()
-    }
+    })
   }
 
   const cs: ChannelStore = {
@@ -198,6 +334,27 @@ export function fromStore(store: Store.Store): ChannelStore {
         }
         set.add(resolve)
       })
+    },
+    async findReusableChannel(options) {
+      const key = payerIndexKey(options.payer)
+      const channelIds = ((await store.get(key as never)) as Hex[] | null) ?? []
+      if (channelIds.length === 0) return null
+
+      const channels = await Promise.all(channelIds.map((channelId) => cs.getChannel(channelId)))
+      const missing = channelIds.filter((_channelId, index) => !channels[index])
+      if (missing.length > 0) {
+        const missingSet = new Set(missing.map((channelId) => channelId.toLowerCase()))
+        await updatePayerIndex(options.payer, (entries) =>
+          entries.filter((entry) => !missingSet.has(entry.toLowerCase())),
+        )
+      }
+
+      const reusable = channels
+        .filter((channel): channel is State => channel !== null)
+        .filter((channel) => isReusableChannel(channel, options))
+        .sort(compareReusableChannels)
+
+      return reusable[0] ?? null
     },
   }
 

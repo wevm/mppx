@@ -210,6 +210,49 @@ describe('channelStore', () => {
       expect(ch1Resolved).toBe(false)
     })
   })
+
+  describe('findReusableChannel', () => {
+    test('selects the newest viable channel for matching payer and session dimensions', async () => {
+      const cs = ChannelStore.fromStore(Store.memory())
+
+      await cs.updateChannel(channelId, () =>
+        makeChannel({
+          channelId,
+          createdAt: '2025-01-01T00:00:00.000Z',
+          highestVoucherAmount: 6_000_000n,
+          spent: 5_000_000n,
+        }),
+      )
+      await cs.updateChannel(channelId2, () =>
+        makeChannel({
+          channelId: channelId2,
+          closeRequestedAt: 1n,
+          createdAt: '2025-02-01T00:00:00.000Z',
+        }),
+      )
+
+      const channelId3 = '0x0000000000000000000000000000000000000000000000000000000000000003' as Hex
+      await cs.updateChannel(channelId3, () =>
+        makeChannel({
+          channelId: channelId3,
+          createdAt: '2025-03-01T00:00:00.000Z',
+          highestVoucherAmount: 7_000_000n,
+          spent: 5_000_000n,
+        }),
+      )
+
+      const reusable = await ChannelStore.findReusableChannel(cs, {
+        amount: 1_000_000n,
+        chainId: 42431,
+        escrowContract: escrowContractDefaults[chainId.testnet] as Address,
+        payee: '0x0000000000000000000000000000000000000002' as Address,
+        payer: '0x0000000000000000000000000000000000000001' as Address,
+        token: '0x0000000000000000000000000000000000000003' as Address,
+      })
+
+      expect(reusable?.channelId).toBe(channelId3)
+    })
+  })
 })
 
 // ---------- ChannelStore.deductFromChannel ----------

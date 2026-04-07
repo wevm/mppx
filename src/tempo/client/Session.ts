@@ -9,12 +9,20 @@ import * as Client from '../../viem/Client.js'
 import * as z from '../../zod.js'
 import * as defaults from '../internal/defaults.js'
 import * as Methods from '../Methods.js'
-import type { SessionCredentialPayload } from '../session/Types.js'
+import { deserializeSessionReceipt } from '../session/Receipt.js'
+import type {
+  SessionChallengeMethodDetails,
+  SessionCredentialPayload,
+  SessionReceipt,
+} from '../session/Types.js'
 import { signVoucher } from '../session/Voucher.js'
 import {
   type ChannelEntry,
+  createHintedChannelEntry,
   createOpenPayload,
   createVoucherPayload,
+  reconcileChannelEntry,
+  reconcileChannelReceipt,
   resolveEscrow,
   serializeCredential,
   tryRecoverChannel,
@@ -110,14 +118,104 @@ export function session(parameters: session.Parameters = {}) {
     return resolveEscrow(challenge, chainId, parameters.escrowContract)
   }
 
+  function rememberChannel(key: string, entry: ChannelEntry) {
+    const previous = channels.get(key)
+    if (previous && previous.channelId !== entry.channelId) {
+      channelIdToKey.delete(previous.channelId)
+    }
+    channels.set(key, entry)
+    channelIdToKey.set(entry.channelId, key)
+    escrowContractMap.set(entry.channelId, entry.escrowContract)
+  }
+
+  function getChallengeHints(
+    challenge: Challenge.Challenge,
+  ): SessionChallengeMethodDetails | undefined {
+    return challenge.request.methodDetails as SessionChallengeMethodDetails | undefined
+  }
+
+  function getContextCumulative(context?: SessionContext): bigint | undefined {
+    return context?.cumulativeAmountRaw
+      ? BigInt(context.cumulativeAmountRaw)
+      : context?.cumulativeAmount
+        ? parseUnits(context.cumulativeAmount, decimals)
+        : undefined
+  }
+
+  function hydrateChannelFromHints(
+    channelId: Hex.Hex,
+    chainId: number,
+    escrowContract: Address,
+    hints: SessionChallengeMethodDetails | undefined,
+  ): ChannelEntry | undefined {
+    if (hints?.acceptedCumulative === undefined && hints?.spent === undefined) {
+      return undefined
+    }
+
+    return createHintedChannelEntry({
+      chainId,
+      channelId,
+      escrowContract,
+      hints: {
+        acceptedCumulative: hints.acceptedCumulative,
+        deposit: hints.deposit,
+        spent: hints.spent,
+      },
+    })
+  }
+
+  async function resolveSuggestedChannel(parameters: {
+    chainId: number
+    client: Awaited<ReturnType<typeof getClient>>
+    context?: SessionContext | undefined
+    escrowContract: Address
+    key: string
+    snapshot: Pick<SessionChallengeMethodDetails, 'acceptedCumulative' | 'deposit' | 'spent'>
+    suggestedChannelId: Hex.Hex
+    allowHintHydration?: boolean | undefined
+  }): Promise<ChannelEntry | undefined> {
+    const {
+      chainId,
+      client,
+      context,
+      escrowContract,
+      key,
+      snapshot,
+      suggestedChannelId,
+      allowHintHydration = false,
+    } = parameters
+
+    let entry = await tryRecoverChannel(client, escrowContract, suggestedChannelId, chainId)
+    if (!entry && allowHintHydration) {
+      entry = hydrateChannelFromHints(suggestedChannelId, chainId, escrowContract, snapshot)
+    }
+    if (!entry) return undefined
+
+    const contextCumulative = getContextCumulative(context)
+    if (contextCumulative !== undefined) entry.cumulativeAmount = contextCumulative
+
+    reconcileChannelEntry(entry, snapshot)
+    rememberChannel(key, entry)
+    notifyUpdate(entry)
+    return entry
+  }
+
+  function reconcileReceipt(receipt: SessionReceipt) {
+    const key = channelIdToKey.get(receipt.channelId)
+    if (!key) return
+
+    const entry = channels.get(key)
+    if (!entry || entry.channelId !== receipt.channelId) return
+
+    if (reconcileChannelReceipt(entry, receipt)) notifyUpdate(entry)
+  }
+
   async function autoManageCredential(
     challenge: Challenge.Challenge,
     account: viem_Account,
     context?: SessionContext,
   ): Promise<string> {
-    const md = challenge.request.methodDetails as
-      | { chainId?: number; escrowContract?: string; channelId?: string; feePayer?: boolean }
-      | undefined
+    const md = getChallengeHints(challenge)
     const chainId = md?.chainId ?? 0
     const client = await getClient({ chainId })
     const escrowContract = resolveEscrowCached(challenge, chainId)
@@ -145,34 +243,38 @@ export function session(parameters: session.Parameters = {}) {
 
     const key = channelKey(payee, currency, escrowContract)
     let entry = channels.get(key)
+    const suggestedChannelId = (context?.channelId ?? md?.channelId) as Hex.Hex | undefined
+    const snapshot = {
+      acceptedCumulative: md?.acceptedCumulative,
+      deposit: md?.deposit,
+      spent: md?.spent,
+    }
 
-    if (!entry) {
-      const suggestedChannelId = (context?.channelId ?? md?.channelId) as Hex.Hex | undefined
-      if (suggestedChannelId) {
-        const recovered = await tryRecoverChannel(
-          client,
-          escrowContract,
-          suggestedChannelId,
-          chainId,
+    if (suggestedChannelId && (!entry || entry.channelId !== suggestedChannelId)) {
+      const resolved = await resolveSuggestedChannel({
+        chainId,
+        client,
+        context,
+        escrowContract,
+        key,
+        snapshot,
+        suggestedChannelId,
+        allowHintHydration: !entry,
+      })
+      if (resolved) entry = resolved
+      else if (!entry) {
+        throw new Error(
+          `Channel ${suggestedChannelId} cannot be reused (closed or not found on-chain).`,
         )
-        if (recovered) {
-          const contextCumulative = context?.cumulativeAmountRaw
-            ? BigInt(context.cumulativeAmountRaw)
-            : context?.cumulativeAmount
-              ? parseUnits(context.cumulativeAmount, decimals)
-              : undefined
-          if (contextCumulative !== undefined) recovered.cumulativeAmount = contextCumulative
-          channels.set(key, recovered)
-          channelIdToKey.set(recovered.channelId, key)
-          escrowContractMap.set(recovered.channelId, escrowContract)
-          entry = recovered
-          notifyUpdate(entry)
-        } else if (context?.channelId) {
-          throw new Error(
-            `Channel ${context.channelId} cannot be reused (closed or not found on-chain).`,
-          )
-        }
       }
+    }
+
+    if (
+      entry &&
+      (!suggestedChannelId || entry.channelId === suggestedChannelId) &&
+      reconcileChannelEntry(entry, snapshot)
+    ) {
+      notifyUpdate(entry)
     }
 
     let payload: SessionCredentialPayload
@@ -200,9 +302,7 @@ export function session(parameters: session.Parameters = {}) {
         chainId,
         feePayer: md?.feePayer,
       })
-      channels.set(key, result.entry)
-      channelIdToKey.set(result.entry.channelId, key)
-      escrowContractMap.set(result.entry.channelId, escrowContract)
+      rememberChannel(key, result.entry)
       payload = result.payload
       notifyUpdate(result.entry)
     }
@@ -215,9 +315,7 @@ export function session(parameters: session.Parameters = {}) {
     account: viem_Account,
     context: SessionContext,
   ): Promise<string> {
-    const md = challenge.request.methodDetails as
-      | { chainId?: number; escrowContract?: string; channelId?: string }
-      | undefined
+    const md = getChallengeHints(challenge)
     const chainId = md?.chainId ?? 0
     const client = await getClient({ chainId })
 
@@ -341,24 +439,36 @@ export function session(parameters: session.Parameters = {}) {
     return serializeCredential(challenge, payload, chainId, account)
   }
 
-  return Method.toClient(Methods.session, {
-    context: sessionContextSchema,
+  return Object.assign(
+    Method.toClient(Methods.session, {
+      context: sessionContextSchema,
 
-    async createCredential({ challenge, context }) {
-      const chainId = challenge.request.methodDetails?.chainId ?? 0
-      const client = await getClient({ chainId })
-      const account = getAccount(client, context)
+      async createCredential({ challenge, context }) {
+        const chainId = challenge.request.methodDetails?.chainId ?? 0
+        const client = await getClient({ chainId })
+        const account = getAccount(client, context)
 
-      if (!context?.action && (parameters.deposit !== undefined || maxDeposit !== undefined))
-        return autoManageCredential(challenge, account, context)
+        if (!context?.action && (parameters.deposit !== undefined || maxDeposit !== undefined))
+          return autoManageCredential(challenge, account, context)
 
-      if (context?.action) return manualCredential(challenge, account, context)
+        if (context?.action) return manualCredential(challenge, account, context)
 
-      throw new Error(
-        'No `action` in context and no `deposit` or `maxDeposit` configured. Either provide context with action/channelId/cumulativeAmount, or configure `deposit`/`maxDeposit` for auto-management.',
-      )
+        throw new Error(
+          'No `action` in context and no `deposit` or `maxDeposit` configured. Either provide context with action/channelId/cumulativeAmount, or configure `deposit`/`maxDeposit` for auto-management.',
+        )
+      },
+    }),
+    {
+      onResponse(response: Response) {
+        const receiptHeader = response.headers.get('Payment-Receipt')
+        if (!receiptHeader) return
+
+        try {
+          reconcileReceipt(deserializeSessionReceipt(receiptHeader))
+        } catch {}
+      },
     },
-  })
+  )
 }
 
 export declare namespace session {
