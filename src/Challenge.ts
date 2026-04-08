@@ -78,7 +78,7 @@ export type FromMethods<methods extends readonly Method.Method[]> = {
  * Creates a challenge from the given parameters.
  *
  * If `secretKey` option is provided, the challenge ID is computed as HMAC-SHA256
- * over the canonical challenge binding input
+ * over the canonical challenge ID input
  * (`realm|method|intent|request|expires|digest|opaque`),
  * cryptographically binding the ID to its contents.
  *
@@ -190,7 +190,7 @@ export declare namespace from {
  * Creates a validated challenge from a method intent.
  *
  * If `secretKey` option is provided, the challenge ID is computed as HMAC-SHA256
- * over the canonical challenge binding input, cryptographically binding the ID to its contents.
+ * over the canonical challenge ID input, cryptographically binding the ID to its contents.
  *
  * @param intent - The method intent to validate against.
  * @param parameters - Challenge parameters (realm, request, optional expires/digest, and id if no secretKey).

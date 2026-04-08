@@ -67,7 +67,13 @@ export type Client<
 }
 export type AnyClient = Client<any, any>
 
-/** Immutable projection of the challenge-bound request parameters. */
+/**
+ * Immutable projection of the challenge-bound request parameters.
+ *
+ * `amount`, `currency`, and `recipient` are protocol-level core bindings.
+ * `chainId`, `memo`, and `splits` are method-specific bindings that the core
+ * compares and surfaces to hooks, but does not interpret generically.
+ */
 export type PinnedRequestBinding = {
   readonly amount?: string
   readonly chainId?: string
@@ -99,7 +105,7 @@ export const PinnedRequestBinding = {
   },
 } as const
 
-/** Minimum economic facts the core always binds. */
+/** Protocol-level facts the core always binds across methods. */
 export type CoreBinding = Pick<PinnedRequestBinding, 'amount' | 'currency' | 'recipient'>
 
 /** Transport-captured request metadata used as the authoritative request snapshot. */

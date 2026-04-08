@@ -591,6 +591,10 @@ function getPinnedRequestBindingMismatch(
 }
 
 type MethodBindingField = 'chainId' | 'memo' | 'splits'
+
+// Method-specific pinned fields are passed through additively so individual
+// method implementations can use them without the core needing to interpret
+// every binding generically.
 type MethodBinding = Partial<Record<MethodBindingField, unknown>>
 
 function getCoreBinding(binding: Method.PinnedRequestBinding): Method.CoreBinding {
