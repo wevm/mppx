@@ -391,13 +391,13 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
           challenge: credential.challenge,
           credential,
         })
-        const pinnedRequestBinding = Method.PinnedRequestBinding.from(
+        const { coreBinding, methodBinding } = Method.PinnedRequestBinding.from(
           credential.challenge.request as Record<string, unknown>,
         )
         const verifiedContext = Object.freeze({
-          coreBinding: getCoreBinding(pinnedRequestBinding),
+          coreBinding,
           envelope,
-          methodBinding: getMethodBinding(pinnedRequestBinding),
+          methodBinding,
         })
 
         // User-provided verification (e.g., check signature, submit tx, verify payment).
@@ -551,17 +551,13 @@ function captureRequestFromInput(input: unknown): Method.CapturedRequest {
   }
 }
 
-const pinnedRequestBindingFields = [
-  'amount',
-  'currency',
-  'recipient',
-  'chainId',
-  'memo',
-  'splits',
-] as const
+const coreBindingFields = ['amount', 'currency', 'recipient'] as const
+const methodBindingFields = ['chainId', 'memo', 'splits'] as const
+const pinnedRequestBindingFields = [...coreBindingFields, ...methodBindingFields] as const
 
+type CoreBindingField = (typeof coreBindingFields)[number]
+type MethodBindingField = (typeof methodBindingFields)[number]
 type PinnedRequestBindingField = (typeof pinnedRequestBindingFields)[number]
-
 type PinnedChallengeField = 'method' | 'intent' | 'realm' | PinnedRequestBindingField
 
 function getPinnedChallengeMismatch(
@@ -585,32 +581,24 @@ function getPinnedRequestBindingMismatch(
   const expected = Method.PinnedRequestBinding.from(expectedRequest)
   const actual = Method.PinnedRequestBinding.from(actualRequest)
 
-  return pinnedRequestBindingFields.find(
-    (field) => !isDeepStrictEqual(expected[field], actual[field]),
+  return (
+    getCoreBindingMismatch(expected.coreBinding, actual.coreBinding) ??
+    getMethodBindingMismatch(expected.methodBinding, actual.methodBinding)
   )
 }
 
-type MethodBindingField = 'chainId' | 'memo' | 'splits'
-
-// Method-specific pinned fields are passed through additively so individual
-// method implementations can use them without the core needing to interpret
-// every binding generically.
-type MethodBinding = Partial<Record<MethodBindingField, unknown>>
-
-function getCoreBinding(binding: Method.PinnedRequestBinding): Method.CoreBinding {
-  return Object.freeze({
-    ...(binding.amount !== undefined ? { amount: binding.amount } : {}),
-    ...(binding.currency !== undefined ? { currency: binding.currency } : {}),
-    ...(binding.recipient !== undefined ? { recipient: binding.recipient } : {}),
-  })
+function getCoreBindingMismatch(
+  expected: Method.CoreBinding,
+  actual: Method.CoreBinding,
+): CoreBindingField | undefined {
+  return coreBindingFields.find((field) => !isDeepStrictEqual(expected[field], actual[field]))
 }
 
-function getMethodBinding(binding: Method.PinnedRequestBinding): MethodBinding {
-  return Object.freeze({
-    ...(binding.chainId !== undefined ? { chainId: binding.chainId } : {}),
-    ...(binding.memo !== undefined ? { memo: binding.memo } : {}),
-    ...(binding.splits !== undefined ? { splits: binding.splits } : {}),
-  })
+function getMethodBindingMismatch(
+  expected: Method.MethodBinding,
+  actual: Method.MethodBinding,
+): MethodBindingField | undefined {
+  return methodBindingFields.find((field) => !isDeepStrictEqual(expected[field], actual[field]))
 }
 
 function freezeVerifiedChallengeEnvelope(

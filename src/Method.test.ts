@@ -76,7 +76,7 @@ describe('from', () => {
 })
 
 describe('PinnedRequestBinding', () => {
-  test('from: normalizes bound fields into a readonly object', () => {
+  test('from: separates core and method-specific bindings into readonly objects', () => {
     const binding = Method.PinnedRequestBinding.from({
       amount: 1000,
       currency: '0xABCD',
@@ -88,13 +88,19 @@ describe('PinnedRequestBinding', () => {
     })
 
     expect(binding).toEqual({
-      amount: '1000',
-      chainId: '10',
-      currency: '0xABCD',
-      memo: '0xabcd',
-      recipient: '0xEf01',
+      coreBinding: {
+        amount: '1000',
+        currency: '0xABCD',
+        recipient: '0xEf01',
+      },
+      methodBinding: {
+        chainId: '10',
+        memo: '0xabcd',
+      },
     })
     expect(Object.isFrozen(binding)).toBe(true)
+    expect(Object.isFrozen(binding.coreBinding)).toBe(true)
+    expect(Object.isFrozen(binding.methodBinding)).toBe(true)
   })
 
   test('from: deeply freezes comparable splits data', () => {
@@ -113,18 +119,25 @@ describe('PinnedRequestBinding', () => {
     })
 
     expect(binding).toEqual({
-      splits: [
-        {
-          amount: '2',
-          enabled: true,
-          note: null,
-          recipient: '0xbeef',
-          ratio: 2,
-        },
-      ],
+      coreBinding: {},
+      methodBinding: {
+        splits: [
+          {
+            amount: '2',
+            enabled: true,
+            note: null,
+            recipient: '0xbeef',
+            ratio: 2,
+          },
+        ],
+      },
     })
     expect(Object.isFrozen(binding)).toBe(true)
-    expect(Object.isFrozen(binding.splits as object)).toBe(true)
-    expect(Object.isFrozen((binding.splits as Array<Record<string, unknown>>)[0]!)).toBe(true)
+    expect(Object.isFrozen(binding.coreBinding)).toBe(true)
+    expect(Object.isFrozen(binding.methodBinding)).toBe(true)
+    expect(Object.isFrozen(binding.methodBinding.splits as object)).toBe(true)
+    expect(
+      Object.isFrozen((binding.methodBinding.splits as Array<Record<string, unknown>>)[0]!),
+    ).toBe(true)
   })
 })

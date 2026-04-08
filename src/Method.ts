@@ -68,19 +68,34 @@ export type Client<
 export type AnyClient = Client<any, any>
 
 /**
- * Immutable projection of the challenge-bound request parameters.
+ * Protocol-level facts the core always binds across methods.
+ */
+export type CoreBinding = {
+  readonly amount?: string
+  readonly currency?: string
+  readonly recipient?: string
+}
+
+/**
+ * Method-specific pinned fields that the core compares and passes through
+ * additively without interpreting generically.
+ */
+export type MethodBinding = {
+  readonly chainId?: string
+  readonly memo?: string
+  readonly splits?: unknown
+}
+
+/**
+ * Immutable projection of the challenge-bound request parameters split into
+ * core protocol bindings and method-specific bindings.
  *
- * `amount`, `currency`, and `recipient` are protocol-level core bindings.
- * `chainId`, `memo`, and `splits` are method-specific bindings that the core
- * compares and surfaces to hooks, but does not interpret generically.
+ * The core only reasons about `coreBinding` directly. `methodBinding` stays an
+ * opaque passthrough for comparison and method hooks.
  */
 export type PinnedRequestBinding = {
-  readonly amount?: string
-  readonly chainId?: string
-  readonly currency?: string
-  readonly memo?: string
-  readonly recipient?: string
-  readonly splits?: unknown
+  readonly coreBinding: CoreBinding
+  readonly methodBinding: MethodBinding
 }
 
 /** Shared constructor for the normalized request fields the core pins. */
@@ -95,18 +110,19 @@ export const PinnedRequestBinding = {
     const splits = normalizeComparable(methodDetails.splits)
 
     return Object.freeze({
-      ...(amount !== undefined ? { amount } : {}),
-      ...(chainId !== undefined ? { chainId } : {}),
-      ...(currency !== undefined ? { currency } : {}),
-      ...(memo !== undefined ? { memo } : {}),
-      ...(recipient !== undefined ? { recipient } : {}),
-      ...(splits !== undefined ? { splits: deepFreeze(splits) } : {}),
+      coreBinding: Object.freeze({
+        ...(amount !== undefined ? { amount } : {}),
+        ...(currency !== undefined ? { currency } : {}),
+        ...(recipient !== undefined ? { recipient } : {}),
+      }) as CoreBinding,
+      methodBinding: Object.freeze({
+        ...(chainId !== undefined ? { chainId } : {}),
+        ...(memo !== undefined ? { memo } : {}),
+        ...(splits !== undefined ? { splits: deepFreeze(splits) } : {}),
+      }) as MethodBinding,
     }) as PinnedRequestBinding
   },
 } as const
-
-/** Protocol-level facts the core always binds across methods. */
-export type CoreBinding = Pick<PinnedRequestBinding, 'amount' | 'currency' | 'recipient'>
 
 /** Transport-captured request metadata used as the authoritative request snapshot. */
 export type CapturedRequest = {
@@ -134,7 +150,7 @@ export type VerifiedChallengeEnvelope<
 export type VerifiedPaymentContext<
   request extends Record<string, unknown> = Record<string, unknown>,
   payload = unknown,
-  binding = Record<string, unknown>,
+  binding = MethodBinding,
   intent extends string = string,
   MethodName extends string = string,
 > = {
@@ -145,7 +161,7 @@ export type VerifiedPaymentContext<
 
 type VerifiedPaymentContextOf<
   method extends Method,
-  binding = Record<string, unknown>,
+  binding = MethodBinding,
 > = VerifiedPaymentContext<
   z.output<method['schema']['request']>,
   z.output<method['schema']['credential']['payload']>,
@@ -162,7 +178,7 @@ export type RequestContext<method extends Method> = {
 }
 
 /** Verification hook parameters for a single method. */
-export type VerifyContext<method extends Method, binding = Record<string, unknown>> = {
+export type VerifyContext<method extends Method, binding = MethodBinding> = {
   credential: Credential.Credential<
     z.output<method['schema']['credential']['payload']>,
     Challenge.Challenge<z.output<method['schema']['request']>, method['intent'], method['name']>
@@ -171,10 +187,10 @@ export type VerifyContext<method extends Method, binding = Record<string, unknow
 } & Partial<VerifiedPaymentContextOf<method, binding>>
 
 /** Response hook parameters for a single method. */
-export type RespondContext<
-  method extends Method,
-  binding = Record<string, unknown>,
-> = VerifyContext<method, binding> & {
+export type RespondContext<method extends Method, binding = MethodBinding> = VerifyContext<
+  method,
+  binding
+> & {
   input: globalThis.Request
   receipt: Receipt.Receipt
 }
