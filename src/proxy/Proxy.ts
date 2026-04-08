@@ -1,7 +1,5 @@
 import type * as http from 'node:http'
 
-import { createFetchProxy } from '@remix-run/fetch-proxy'
-
 import * as Credential from '../Credential.js'
 import { generateProxy } from '../discovery/OpenApi.js'
 import * as Request from '../server/Request.js'
@@ -48,11 +46,7 @@ export function create(config: create.Config): Proxy {
 
   const services = new Map(
     config.services.map((s) => {
-      const proxy = createFetchProxy(s.baseUrl, {
-        fetch: fetchImpl,
-        rewriteCookieDomain: false,
-        rewriteCookiePath: false,
-      })
+      const proxy = createFetchProxy(s.baseUrl, { fetch: fetchImpl })
       return [s.id, { service: s, proxy }] as const
     }),
   )
@@ -294,4 +288,35 @@ function matchesPaymentBinding(endpoint: unknown, binding: PaymentBinding | null
   const payment = Service.paymentOf(endpoint as Exclude<Service.Endpoint, true>)
   if (!payment) return true
   return payment.method === binding.method && payment.intent === binding.intent
+}
+
+function createFetchProxy(
+  target: string | URL,
+  options?: { fetch?: typeof globalThis.fetch },
+): (input: URL | RequestInfo, init?: RequestInit) => Promise<Response> {
+  const localFetch = options?.fetch ?? globalThis.fetch
+  const targetUrl = new URL(target)
+  if (targetUrl.pathname.endsWith('/')) targetUrl.pathname = targetUrl.pathname.replace(/\/+$/, '')
+
+  return async (input, init) => {
+    const request = new globalThis.Request(input, init)
+    const url = new URL(request.url)
+    const proxyUrl = new URL(url.search, targetUrl)
+    if (url.pathname !== '/')
+      proxyUrl.pathname =
+        proxyUrl.pathname === '/' ? url.pathname : proxyUrl.pathname + url.pathname
+
+    const proxyInit: RequestInit & { duplex?: 'half' } = {
+      method: request.method,
+      headers: new globalThis.Headers(request.headers),
+      signal: request.signal,
+      redirect: request.redirect,
+      ...init,
+    }
+    if (request.method !== 'GET' && request.method !== 'HEAD') {
+      proxyInit.body = request.body
+      proxyInit.duplex = 'half'
+    }
+    return localFetch(proxyUrl, proxyInit)
+  }
 }

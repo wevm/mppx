@@ -33,12 +33,6 @@ importers:
 
   .:
     dependencies:
-      '@remix-run/fetch-proxy':
-        specifier: ^0.7.1
-        version: 0.7.1
-      '@remix-run/node-fetch-server':
-        specifier: ^0.13.0
-        version: 0.13.0
       incur:
         specifier: ^0.3.23
         version: 0.3.23
