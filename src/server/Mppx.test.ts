@@ -169,17 +169,12 @@ describe('request handler', () => {
         if (credential) requestCapturedRequest = capturedRequest
         return request
       },
-      async verify({ coreBinding, envelope, methodBinding, request }) {
+      async verify({ envelope, request }) {
         verifyEnvelope = envelope
         expect(envelope?.capturedRequest).toBe(requestCapturedRequest)
-        expect(coreBinding).toEqual({
-          amount: request.amount,
-          currency: request.currency,
-          recipient: request.recipient,
-        })
-        expect(methodBinding).toEqual({})
-        expect(Object.isFrozen(coreBinding!)).toBe(true)
-        expect(Object.isFrozen(methodBinding!)).toBe(true)
+        expect(request.amount).toBe('1000')
+        expect(request.currency).toBe('0x0000000000000000000000000000000000000001')
+        expect(request.recipient).toBe('0x0000000000000000000000000000000000000002')
         expect(envelope).toBeDefined()
         expect(Object.isFrozen(envelope!)).toBe(true)
 

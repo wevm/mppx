@@ -67,63 +67,6 @@ export type Client<
 }
 export type AnyClient = Client<any, any>
 
-/**
- * Protocol-level facts the core always binds across methods.
- */
-export type CoreBinding = {
-  readonly amount?: string
-  readonly currency?: string
-  readonly recipient?: string
-}
-
-/**
- * Method-specific pinned fields that the core compares and passes through
- * additively without interpreting generically.
- */
-export type MethodBinding = {
-  readonly chainId?: string
-  readonly memo?: string
-  readonly splits?: unknown
-}
-
-/**
- * Immutable projection of the challenge-bound request parameters split into
- * core protocol bindings and method-specific bindings.
- *
- * The core only reasons about `coreBinding` directly. `methodBinding` stays an
- * opaque passthrough for comparison and method hooks.
- */
-export type PinnedRequestBinding = {
-  readonly coreBinding: CoreBinding
-  readonly methodBinding: MethodBinding
-}
-
-/** Shared constructor for the normalized request fields the core pins. */
-export const PinnedRequestBinding = {
-  from(request: Record<string, unknown>): PinnedRequestBinding {
-    const methodDetails = (request.methodDetails ?? {}) as Record<string, unknown>
-    const amount = normalizeScalar(request.amount ?? methodDetails.amount)
-    const chainId = normalizeScalar(request.chainId ?? methodDetails.chainId)
-    const currency = normalizeScalar(request.currency ?? methodDetails.currency)
-    const memo = normalizeHex(methodDetails.memo)
-    const recipient = normalizeScalar(request.recipient ?? methodDetails.recipient)
-    const splits = normalizeComparable(methodDetails.splits)
-
-    return Object.freeze({
-      coreBinding: Object.freeze({
-        ...(amount !== undefined ? { amount } : {}),
-        ...(currency !== undefined ? { currency } : {}),
-        ...(recipient !== undefined ? { recipient } : {}),
-      }) as CoreBinding,
-      methodBinding: Object.freeze({
-        ...(chainId !== undefined ? { chainId } : {}),
-        ...(memo !== undefined ? { memo } : {}),
-        ...(splits !== undefined ? { splits: deepFreeze(splits) } : {}),
-      }) as MethodBinding,
-    }) as PinnedRequestBinding
-  },
-} as const
-
 /** Transport-captured request metadata used as the authoritative request snapshot. */
 export type CapturedRequest = {
   readonly headers: Headers
@@ -146,26 +89,19 @@ export type VerifiedChallengeEnvelope<
   >
 }
 
-/** Authoritative verified context shared across verification and response hooks. */
+/** Verified challenge envelope shared across verification and response hooks. */
 export type VerifiedPaymentContext<
   request extends Record<string, unknown> = Record<string, unknown>,
   payload = unknown,
-  binding = MethodBinding,
   intent extends string = string,
   MethodName extends string = string,
 > = {
-  readonly coreBinding: CoreBinding
   readonly envelope: VerifiedChallengeEnvelope<request, payload, intent, MethodName>
-  readonly methodBinding: binding
 }
 
-type VerifiedPaymentContextOf<
-  method extends Method,
-  binding = MethodBinding,
-> = VerifiedPaymentContext<
+type VerifiedPaymentContextOf<method extends Method> = VerifiedPaymentContext<
   z.output<method['schema']['request']>,
   z.output<method['schema']['credential']['payload']>,
-  binding,
   method['intent'],
   method['name']
 >
@@ -178,19 +114,16 @@ export type RequestContext<method extends Method> = {
 }
 
 /** Verification hook parameters for a single method. */
-export type VerifyContext<method extends Method, binding = MethodBinding> = {
+export type VerifyContext<method extends Method> = {
   credential: Credential.Credential<
     z.output<method['schema']['credential']['payload']>,
     Challenge.Challenge<z.output<method['schema']['request']>, method['intent'], method['name']>
   >
   request: z.input<method['schema']['request']>
-} & Partial<VerifiedPaymentContextOf<method, binding>>
+} & Partial<VerifiedPaymentContextOf<method>>
 
 /** Response hook parameters for a single method. */
-export type RespondContext<method extends Method, binding = MethodBinding> = VerifyContext<
-  method,
-  binding
-> & {
+export type RespondContext<method extends Method> = VerifyContext<method> & {
   input: globalThis.Request
   receipt: Receipt.Receipt
 }
@@ -347,44 +280,4 @@ export declare namespace toServer {
     transport?: transportOverride | undefined
     verify: VerifyFn<method>
   }
-}
-
-function normalizeScalar(value: unknown): string | undefined {
-  return value === undefined ? undefined : String(value)
-}
-
-function normalizeHex(value: unknown): string | undefined {
-  if (value === undefined) return undefined
-
-  const normalized = String(value)
-  return normalized.startsWith('0x') ? normalized.toLowerCase() : normalized
-}
-
-function normalizeComparable(value: unknown): unknown {
-  if (value === undefined) return undefined
-  if (Array.isArray(value)) return value.map(normalizeComparable)
-
-  if (value && typeof value === 'object') {
-    return Object.fromEntries(
-      Object.entries(value as Record<string, unknown>)
-        .sort(([left], [right]) => left.localeCompare(right))
-        .map(([key, nested]) => [key, normalizeComparable(nested)]),
-    )
-  }
-
-  return typeof value === 'string' ? normalizeHex(value) : value
-}
-
-function deepFreeze(value: unknown): unknown {
-  if (Array.isArray(value)) {
-    for (const entry of value) deepFreeze(entry)
-    return Object.freeze(value)
-  }
-
-  if (value && typeof value === 'object') {
-    for (const entry of Object.values(value as Record<string, unknown>)) deepFreeze(entry)
-    return Object.freeze(value)
-  }
-
-  return value
 }

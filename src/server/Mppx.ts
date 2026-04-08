@@ -391,14 +391,7 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
           challenge: credential.challenge,
           credential,
         })
-        const { coreBinding, methodBinding } = Method.PinnedRequestBinding.from(
-          credential.challenge.request as Record<string, unknown>,
-        )
-        const verifiedContext = Object.freeze({
-          coreBinding,
-          envelope,
-          methodBinding,
-        })
+        const verifiedContext = Object.freeze({ envelope })
 
         // User-provided verification (e.g., check signature, submit tx, verify payment).
         // If verification fails, re-issue the challenge so the client can retry.
@@ -578,8 +571,8 @@ function getPinnedRequestBindingMismatch(
   expectedRequest: Record<string, unknown>,
   actualRequest: Record<string, unknown>,
 ): PinnedRequestBindingField | undefined {
-  const expected = Method.PinnedRequestBinding.from(expectedRequest)
-  const actual = Method.PinnedRequestBinding.from(actualRequest)
+  const expected = getPinnedRequestBinding(expectedRequest)
+  const actual = getPinnedRequestBinding(actualRequest)
 
   return (
     getCoreBindingMismatch(expected.coreBinding, actual.coreBinding) ??
@@ -588,23 +581,85 @@ function getPinnedRequestBindingMismatch(
 }
 
 function getCoreBindingMismatch(
-  expected: Method.CoreBinding,
-  actual: Method.CoreBinding,
+  expected: CoreBinding,
+  actual: CoreBinding,
 ): CoreBindingField | undefined {
   return coreBindingFields.find((field) => !isDeepStrictEqual(expected[field], actual[field]))
 }
 
 function getMethodBindingMismatch(
-  expected: Method.MethodBinding,
-  actual: Method.MethodBinding,
+  expected: MethodBinding,
+  actual: MethodBinding,
 ): MethodBindingField | undefined {
   return methodBindingFields.find((field) => !isDeepStrictEqual(expected[field], actual[field]))
+}
+
+function getPinnedRequestBinding(request: Record<string, unknown>): PinnedRequestBinding {
+  const methodDetails = (request.methodDetails ?? {}) as Record<string, unknown>
+  const amount = normalizeScalar(request.amount ?? methodDetails.amount)
+  const chainId = normalizeScalar(request.chainId ?? methodDetails.chainId)
+  const currency = normalizeScalar(request.currency ?? methodDetails.currency)
+  const memo = normalizeHex(methodDetails.memo)
+  const recipient = normalizeScalar(request.recipient ?? methodDetails.recipient)
+  const splits = normalizeComparable(methodDetails.splits)
+
+  return {
+    coreBinding: {
+      ...(amount !== undefined ? { amount } : {}),
+      ...(currency !== undefined ? { currency } : {}),
+      ...(recipient !== undefined ? { recipient } : {}),
+    },
+    methodBinding: {
+      ...(chainId !== undefined ? { chainId } : {}),
+      ...(memo !== undefined ? { memo } : {}),
+      ...(splits !== undefined ? { splits } : {}),
+    },
+  }
+}
+
+function normalizeScalar(value: unknown): string | undefined {
+  return value === undefined ? undefined : String(value)
+}
+
+function normalizeHex(value: unknown): string | undefined {
+  if (value === undefined) return undefined
+
+  const normalized = String(value)
+  return normalized.startsWith('0x') ? normalized.toLowerCase() : normalized
+}
+
+function normalizeComparable(value: unknown): unknown {
+  if (value === undefined) return undefined
+  if (Array.isArray(value)) return value.map(normalizeComparable)
+
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>)
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([key, nested]) => [key, normalizeComparable(nested)]),
+    )
+  }
+
+  return typeof value === 'string' ? normalizeHex(value) : value
 }
 
 function freezeVerifiedChallengeEnvelope(
   envelope: Method.VerifiedChallengeEnvelope,
 ): Method.VerifiedChallengeEnvelope {
   return Object.freeze(envelope)
+}
+
+type CoreBinding = {
+  [field in CoreBindingField]?: string
+}
+
+type MethodBinding = {
+  [field in MethodBindingField]?: unknown
+}
+
+type PinnedRequestBinding = {
+  coreBinding: CoreBinding
+  methodBinding: MethodBinding
 }
 
 export type MethodFn<
