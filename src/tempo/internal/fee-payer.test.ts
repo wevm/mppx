@@ -2,11 +2,17 @@ import { encodeFunctionData } from 'viem'
 import { Abis, Addresses } from 'viem/tempo'
 import { describe, expect, test } from 'vp/test'
 
-import { callScopes, FeePayerValidationError, validateCalls } from './fee-payer.js'
+import {
+  callScopes,
+  FeePayerValidationError,
+  prepareSponsoredTransaction,
+  validateCalls,
+} from './fee-payer.js'
 import * as Selectors from './selectors.js'
 
 const details = { amount: '1', currency: '0x01', recipient: '0x02' }
 const bogus = '0x0000000000000000000000000000000000000001' as const
+const sponsor = { address: bogus, type: 'local' } as any
 
 describe('callScopes', () => {
   test('has 4 allowed patterns', () => {
@@ -239,5 +245,113 @@ describe('validateCalls', () => {
         details,
       ),
     ).toThrow('disallowed call pattern')
+  })
+})
+
+describe('prepareSponsoredTransaction', () => {
+  const baseTransaction = {
+    accessList: [],
+    calls: [
+      {
+        data: encodeFunctionData({
+          abi: Abis.tip20,
+          functionName: 'transfer',
+          args: [bogus, 100n],
+        }),
+        to: bogus,
+      },
+    ],
+    chainId: 42431,
+    feeToken: bogus,
+    from: bogus,
+    gas: 150_000n,
+    maxFeePerGas: 1_000_000_000n,
+    maxPriorityFeePerGas: 1_000_000_000n,
+    nonce: 1n,
+    nonceKey: 1n,
+    signature: { r: 1n, s: 1n, yParity: 0 } as any,
+    validBefore: Math.floor(Date.now() / 1_000) + 300,
+  } as const
+
+  test('accepts bounded sponsored transaction fields', () => {
+    expect(() =>
+      prepareSponsoredTransaction({
+        account: sponsor,
+        chainId: 42431,
+        details,
+        expectedFeeToken: bogus,
+        transaction: baseTransaction as any,
+      }),
+    ).not.toThrow()
+  })
+
+  test('drops unknown top-level fields from the sponsored transaction', () => {
+    const sponsored = prepareSponsoredTransaction({
+      account: sponsor,
+      chainId: 42431,
+      details,
+      expectedFeeToken: bogus,
+      transaction: { ...baseTransaction, unexpectedField: 'ignored' } as any,
+    }) as Record<string, unknown>
+
+    expect(sponsored.unexpectedField).toBeUndefined()
+  })
+
+  test('error: rejects excessive maxFeePerGas', () => {
+    expect(() =>
+      prepareSponsoredTransaction({
+        account: sponsor,
+        chainId: 42431,
+        details,
+        expectedFeeToken: bogus,
+        transaction: {
+          ...baseTransaction,
+          maxFeePerGas: 200_000_000_000n,
+        } as any,
+      }),
+    ).toThrow('maxFeePerGas exceeds sponsor policy')
+  })
+
+  test('error: rejects combined gas and fee budget outside policy', () => {
+    expect(() =>
+      prepareSponsoredTransaction({
+        account: sponsor,
+        chainId: 42431,
+        details,
+        expectedFeeToken: bogus,
+        transaction: {
+          ...baseTransaction,
+          gas: 1_500_000n,
+          maxFeePerGas: 10_000_000_000n,
+        } as any,
+      }),
+    ).toThrow('total fee budget exceeds sponsor policy')
+  })
+
+  test('error: rejects mismatched feeToken', () => {
+    expect(() =>
+      prepareSponsoredTransaction({
+        account: sponsor,
+        chainId: 42431,
+        details,
+        expectedFeeToken: '0x0000000000000000000000000000000000000002',
+        transaction: baseTransaction as any,
+      }),
+    ).toThrow('feeToken is not allowed')
+  })
+
+  test('error: rejects long-lived sponsored transactions', () => {
+    expect(() =>
+      prepareSponsoredTransaction({
+        account: sponsor,
+        chainId: 42431,
+        details,
+        expectedFeeToken: bogus,
+        transaction: {
+          ...baseTransaction,
+          validBefore: Math.floor(Date.now() / 1_000) + 3_600,
+        } as any,
+      }),
+    ).toThrow('validity window exceeds sponsor policy')
   })
 })

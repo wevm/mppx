@@ -1,7 +1,8 @@
 import type { TempoAddress } from 'ox/tempo'
 import { TxEnvelopeTempo } from 'ox/tempo'
+import type { Account } from 'viem'
 import { decodeFunctionData } from 'viem'
-import { Abis, Addresses } from 'viem/tempo'
+import { Abis, Addresses, Transaction } from 'viem/tempo'
 
 import * as TempoAddress_internal from './address.js'
 import * as Selectors from './selectors.js'
@@ -24,6 +25,14 @@ export const callScopes = [
   [Selectors.approve, Selectors.swapExactAmountOut, Selectors.transfer],
   [Selectors.approve, Selectors.swapExactAmountOut, Selectors.transferWithMemo],
 ]
+
+const policy = {
+  maxGas: 2_000_000n,
+  maxFeePerGas: 100_000_000_000n,
+  maxPriorityFeePerGas: 10_000_000_000n,
+  maxTotalFee: 10_000_000_000_000_000n,
+  maxValidityWindowSeconds: 15 * 60,
+} as const
 
 /** Validates that a set of transaction calls matches an allowed fee-payer pattern. */
 export function validateCalls(
@@ -67,6 +76,134 @@ export function validateCalls(
     (!buyCall.to || !TempoAddress_internal.isEqual(buyCall.to, Addresses.stablecoinDex))
   )
     throw new FeePayerValidationError('buy target is not the DEX', details)
+}
+
+export function prepareSponsoredTransaction(parameters: {
+  account: Account
+  challengeExpires?: string | undefined
+  chainId: number
+  details: Record<string, string>
+  expectedFeeToken?: TempoAddress.Address | undefined
+  now?: Date | undefined
+  transaction: ReturnType<(typeof Transaction)['deserialize']>
+}) {
+  const {
+    account,
+    challengeExpires,
+    chainId,
+    details,
+    expectedFeeToken,
+    now = new Date(),
+    transaction,
+  } = parameters
+
+  const {
+    accessList,
+    calls,
+    chainId: transactionChainId,
+    feeToken,
+    from,
+    gas,
+    maxFeePerGas,
+    maxPriorityFeePerGas,
+    nonce,
+    nonceKey,
+    signature,
+    validAfter,
+    validBefore,
+  } = transaction
+
+  const fail = (reason: string, extra: Record<string, string> = {}) => {
+    throw new FeePayerValidationError(reason, { ...details, ...extra })
+  }
+
+  if (transactionChainId !== chainId)
+    fail('fee-sponsored transaction chainId does not match challenge', {
+      chainId: String(transactionChainId),
+    })
+
+  if (gas === undefined || gas <= 0n) fail('fee-sponsored transaction must declare gas')
+  if (gas > policy.maxGas)
+    fail('fee-sponsored transaction gas exceeds sponsor policy', {
+      gas: gas.toString(),
+    })
+
+  if (maxFeePerGas === undefined || maxFeePerGas <= 0n)
+    fail('fee-sponsored transaction must declare maxFeePerGas')
+  if (maxFeePerGas > policy.maxFeePerGas)
+    fail('fee-sponsored transaction maxFeePerGas exceeds sponsor policy', {
+      maxFeePerGas: maxFeePerGas.toString(),
+    })
+
+  const maxTotalFee = gas * maxFeePerGas
+  if (maxTotalFee > policy.maxTotalFee)
+    fail('fee-sponsored transaction total fee budget exceeds sponsor policy', {
+      gas: gas.toString(),
+      maxFeePerGas: maxFeePerGas.toString(),
+      totalFee: maxTotalFee.toString(),
+    })
+
+  if (maxPriorityFeePerGas !== undefined && maxPriorityFeePerGas > maxFeePerGas)
+    fail('fee-sponsored transaction maxPriorityFeePerGas exceeds maxFeePerGas', {
+      maxFeePerGas: maxFeePerGas.toString(),
+      maxPriorityFeePerGas: maxPriorityFeePerGas.toString(),
+    })
+  if (maxPriorityFeePerGas !== undefined && maxPriorityFeePerGas > policy.maxPriorityFeePerGas)
+    fail('fee-sponsored transaction maxPriorityFeePerGas exceeds sponsor policy', {
+      maxPriorityFeePerGas: maxPriorityFeePerGas.toString(),
+    })
+
+  if (nonceKey === undefined) fail('fee-sponsored transaction must use an expiring nonce')
+  if (validBefore === undefined)
+    fail('fee-sponsored transaction must declare validBefore for the expiring nonce')
+
+  const nowSeconds = Math.floor(now.getTime() / 1_000)
+  if (validBefore <= nowSeconds)
+    fail('fee-sponsored transaction has already expired', {
+      validBefore: String(validBefore),
+    })
+
+  const challengeExpirySeconds = challengeExpires
+    ? Math.floor(new Date(challengeExpires).getTime() / 1_000)
+    : undefined
+  const maxValidBefore = Math.min(
+    nowSeconds + policy.maxValidityWindowSeconds,
+    challengeExpirySeconds ? challengeExpirySeconds + 60 : Number.MAX_SAFE_INTEGER,
+  )
+  if (validBefore > maxValidBefore)
+    fail('fee-sponsored transaction validity window exceeds sponsor policy', {
+      validBefore: String(validBefore),
+    })
+
+  if (feeToken !== undefined) {
+    if (typeof feeToken !== 'string') fail('fee-sponsored transaction feeToken is invalid')
+    if (expectedFeeToken && !TempoAddress_internal.isEqual(feeToken, expectedFeeToken))
+      fail('fee-sponsored transaction feeToken is not allowed', {
+        feeToken,
+      })
+  }
+
+  return {
+    accessList,
+    account,
+    calls,
+    chainId: transactionChainId,
+    feePayer: account,
+    ...(feeToken ? { feeToken } : {}),
+    ...(from ? { from } : {}),
+    gas,
+    ...(nonce !== undefined ? { nonce } : {}),
+    maxFeePerGas,
+    ...(maxPriorityFeePerGas !== undefined ? { maxPriorityFeePerGas } : {}),
+    nonceKey,
+    ...(signature ? { signature } : {}),
+    type: 'tempo' as const,
+    ...(validAfter !== undefined ? { validAfter } : {}),
+    validBefore,
+  } satisfies ReturnType<(typeof Transaction)['deserialize']> & {
+    account: Account
+    feePayer: Account
+  }
 }
 
 export class FeePayerValidationError extends Error {

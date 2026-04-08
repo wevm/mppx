@@ -154,7 +154,7 @@ export function charge<const parameters extends charge.Parameters>(
       const { challenge } = credential
       const resolvedRequest = Methods.charge.schema.request.parse(request)
       const chainId = resolvedRequest.methodDetails?.chainId ?? request.chainId
-      const feePayer = request.feePayer
+      const feePayer = typeof request.feePayer === 'object' ? request.feePayer : undefined
 
       const client = await getClient({ chainId })
 
@@ -274,17 +274,23 @@ export function charge<const parameters extends charge.Parameters>(
             if (isFeePayerTx)
               FeePayer.validateCalls(transaction.calls, { amount, currency, recipient })
 
-            const resolvedFeeToken =
-              transaction.feeToken ?? defaults.currency[chainId as keyof typeof defaults.currency]
+            const expectedFeeToken = defaults.currency[chainId as keyof typeof defaults.currency]
+            const resolvedFeeToken = transaction.feeToken ?? expectedFeeToken
 
             const serializedTransaction_final = await (async () => {
               if (feePayer && methodDetails?.feePayer !== false) {
-                return signTransaction(client, {
-                  ...transaction,
+                const sponsored = FeePayer.prepareSponsoredTransaction({
                   account: feePayer,
-                  feePayer,
-                  feeToken: resolvedFeeToken,
-                } as never)
+                  challengeExpires: expires,
+                  chainId: chainId ?? client.chain!.id,
+                  details: { amount, currency, recipient },
+                  expectedFeeToken,
+                  transaction: {
+                    ...transaction,
+                    ...(resolvedFeeToken ? { feeToken: resolvedFeeToken } : {}),
+                  },
+                })
+                return signTransaction(client, sponsored as never)
               }
               return serializedTransaction
             })()
