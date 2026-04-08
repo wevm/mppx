@@ -325,8 +325,17 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
           return { challenge: response, status: 402 }
         }
 
-        // Verify the echoed challenge was issued by us by recomputing its HMAC.
-        // This is stateless—no database lookup needed.
+        // ── Tier 1: HMAC provenance check (primary gate) ──────────────────
+        //
+        // Recompute the HMAC-SHA256 over the credential's echoed challenge
+        // parameters (realm|method|intent|request|expires|digest|opaque) and
+        // compare to the echoed `id`. This proves the challenge was issued by
+        // this server with these exact parameters — including opaque/meta,
+        // expires, and the full serialized request blob.
+        //
+        // This is the authoritative binding per §5.1.2.1.1 of the spec
+        // (https://paymentauth.org/draft-httpauth-payment-00.html#section-5.1.2.1.1).
+        // No database lookup is needed; the HMAC is stateless verification.
         if (!Challenge.verify(credential.challenge, { secretKey })) {
           const response = await transport.respondChallenge({
             challenge,
@@ -340,13 +349,28 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
           return { challenge: response, status: 402 }
         }
 
-        // Verify the credential's challenge matches this route's configured
-        // pinned challenge requirements. Prevents cross-route scope
-        // confusion where a credential issued for a cheap route (or different
-        // method/intent) is presented at an expensive route.
-        // Note: we compare specific payment parameters rather than the full
-        // request because the `request` hook may produce credential-dependent
-        // output (e.g. `feePayer` differs between 402 and credential calls).
+        // ── Tier 2: Pinned field safety net ──────────────────────────────
+        //
+        // The HMAC check above (Tier 1) is the primary gate — it already
+        // covers ALL challenge fields including opaque, digest, and the full
+        // serialized request. So why this second check?
+        //
+        // The `request()` hook can produce credential-dependent output: for
+        // example, `feePayer` may differ between the 402 challenge call (no
+        // credential) and the credential-bearing call. This means the
+        // recomputed challenge here has a different `request` blob — and
+        // thus a different HMAC — than the original challenge the client
+        // echoes back. The HMAC check above verifies the *echoed* challenge
+        // was signed by us, but it cannot verify that the echoed challenge
+        // matches *this route's current configuration* when the request
+        // hook transforms fields between calls.
+        //
+        // This check compares only the economically significant "pinned"
+        // fields (method, intent, realm, amount, currency, recipient, etc.)
+        // that MUST be stable across both calls. Fields like `opaque`,
+        // `digest`, and `expires` don't need explicit pinning here because
+        // they are set by server config (not derived from the request hook)
+        // and are already fully covered by the HMAC binding in Tier 1.
         {
           const mismatch = getPinnedChallengeMismatch(challenge, credential.challenge)
           if (mismatch) {
@@ -512,6 +536,17 @@ function resolveRealmFromCapturedRequest(capturedRequest: Method.CapturedRequest
   return defaultRealm
 }
 
+/**
+ * Captures the transport request into a frozen snapshot at the start of the
+ * verification flow. This snapshot is threaded through request() → verify() →
+ * respond() → respondReceipt() so every hook sees the same authoritative
+ * request state — preventing the raw transport input from being re-read or
+ * mutated between verification steps.
+ *
+ * Note: Object.freeze is shallow — it prevents reassigning top-level properties
+ * but does not deep-freeze mutable class instances like Headers or URL. This is
+ * an accidental-mutation guard for trusted server hooks, not a security boundary.
+ */
 async function captureRequest(
   transport: Transport.AnyTransport,
   input: unknown,
@@ -546,6 +581,17 @@ type MethodBindingField = (typeof methodBindingFields)[number]
 type PinnedRequestBindingField = (typeof pinnedRequestBindingFields)[number]
 type PinnedChallengeField = 'method' | 'intent' | 'realm' | PinnedRequestBindingField
 
+/**
+ * Compares only the fields that MUST be stable across request-hook transforms.
+ *
+ * This is NOT the primary integrity check — the HMAC binding (Challenge.verify)
+ * already covers every challenge field including opaque, digest, and the full
+ * serialized request. This function exists as a secondary safety net for the
+ * case where the `request()` hook produces credential-dependent output, causing
+ * the recomputed challenge to differ from the original in non-economic fields
+ * (e.g. `feePayer`). We only need to verify that the economically significant
+ * subset hasn't drifted.
+ */
 function getPinnedChallengeMismatch(
   expectedChallenge: Challenge.Challenge,
   actualChallenge: Challenge.Challenge,

@@ -609,6 +609,20 @@ export function meta(challenge: Challenge): Record<string, string> | undefined {
   return challenge.opaque
 }
 
+/**
+ * Canonical HMAC input for challenge ID binding per §5.1.2.1.1 of the spec.
+ *
+ * Seven fixed positional slots, pipe-delimited. Optional fields use empty
+ * string when absent so the slot count is stable. This is the single source
+ * of truth for what the challenge ID binds to — used by both `computeId()`
+ * (challenge creation) and `verify()` (credential verification).
+ *
+ * Slots: realm | method | intent | request | expires | digest | opaque
+ *
+ * Because the HMAC covers ALL fields, the server does not need to separately
+ * pin opaque, digest, or expires during verification — any change to those
+ * fields produces a different HMAC and fails the ID comparison.
+ */
 function idBindingInput(challenge: Omit<Challenge, 'id'>): string {
   return [
     challenge.realm,
