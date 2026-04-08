@@ -178,6 +178,8 @@ describe('request handler', () => {
           recipient: request.recipient,
         })
         expect(methodBinding).toEqual({})
+        expect(Object.isFrozen(coreBinding!)).toBe(true)
+        expect(Object.isFrozen(methodBinding!)).toBe(true)
         expect(envelope).toBeDefined()
         expect(Object.isFrozen(envelope!)).toBe(true)
 

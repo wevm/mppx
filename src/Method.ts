@@ -67,12 +67,40 @@ export type Client<
 }
 export type AnyClient = Client<any, any>
 
-/** Minimum economic facts the core always binds. */
-export type CoreBinding = {
+/** Immutable projection of the challenge-bound request parameters. */
+export type PinnedRequestBinding = {
   readonly amount?: string | undefined
+  readonly chainId?: string | undefined
   readonly currency?: string | undefined
+  readonly memo?: string | undefined
   readonly recipient?: string | undefined
+  readonly splits?: unknown
 }
+
+/** Shared constructor for the normalized request fields the core pins. */
+export const PinnedRequestBinding = {
+  from(request: Record<string, unknown>): PinnedRequestBinding {
+    const methodDetails = (request.methodDetails ?? {}) as Record<string, unknown>
+    const amount = normalizeScalar(request.amount ?? methodDetails.amount)
+    const chainId = normalizeScalar(request.chainId ?? methodDetails.chainId)
+    const currency = normalizeScalar(request.currency ?? methodDetails.currency)
+    const memo = normalizeHex(methodDetails.memo)
+    const recipient = normalizeScalar(request.recipient ?? methodDetails.recipient)
+    const splits = normalizeComparable(methodDetails.splits)
+
+    return Object.freeze({
+      ...(amount !== undefined ? { amount } : {}),
+      ...(chainId !== undefined ? { chainId } : {}),
+      ...(currency !== undefined ? { currency } : {}),
+      ...(memo !== undefined ? { memo } : {}),
+      ...(recipient !== undefined ? { recipient } : {}),
+      ...(splits !== undefined ? { splits: deepFreeze(splits) } : {}),
+    }) as PinnedRequestBinding
+  },
+} as const
+
+/** Minimum economic facts the core always binds. */
+export type CoreBinding = Pick<PinnedRequestBinding, 'amount' | 'currency' | 'recipient'>
 
 /** Transport-captured request metadata used as the authoritative request snapshot. */
 export type CapturedRequest = {
@@ -297,4 +325,44 @@ export declare namespace toServer {
     transport?: transportOverride | undefined
     verify: VerifyFn<method>
   }
+}
+
+function normalizeScalar(value: unknown): string | undefined {
+  return value === undefined ? undefined : String(value)
+}
+
+function normalizeHex(value: unknown): string | undefined {
+  if (value === undefined) return undefined
+
+  const normalized = String(value)
+  return normalized.startsWith('0x') ? normalized.toLowerCase() : normalized
+}
+
+function normalizeComparable(value: unknown): unknown {
+  if (value === undefined) return undefined
+  if (Array.isArray(value)) return value.map(normalizeComparable)
+
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>)
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([key, nested]) => [key, normalizeComparable(nested)]),
+    )
+  }
+
+  return normalizeHex(value)
+}
+
+function deepFreeze(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    for (const entry of value) deepFreeze(entry)
+    return Object.freeze(value)
+  }
+
+  if (value && typeof value === 'object') {
+    for (const entry of Object.values(value as Record<string, unknown>)) deepFreeze(entry)
+    return Object.freeze(value)
+  }
+
+  return value
 }

@@ -6,7 +6,7 @@ import * as Credential from '../Credential.js'
 import * as Errors from '../Errors.js'
 import * as Expires from '../Expires.js'
 import * as Env from '../internal/env.js'
-import type * as Method from '../Method.js'
+import * as Method from '../Method.js'
 import * as PaymentRequest from '../PaymentRequest.js'
 import type * as Receipt from '../Receipt.js'
 import type * as z from '../zod.js'
@@ -391,10 +391,13 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
           challenge: credential.challenge,
           credential,
         })
+        const pinnedRequestBinding = Method.PinnedRequestBinding.from(
+          credential.challenge.request as Record<string, unknown>,
+        )
         const verifiedContext = freezeVerifiedPaymentContext({
-          coreBinding: getCoreBinding(credential.challenge.request as Record<string, unknown>),
+          coreBinding: getCoreBinding(pinnedRequestBinding),
           envelope,
-          methodBinding: getMethodBinding(credential.challenge.request as Record<string, unknown>),
+          methodBinding: getMethodBinding(pinnedRequestBinding),
         })
 
         // User-provided verification (e.g., check signature, submit tx, verify payment).
@@ -564,20 +567,18 @@ function safeUrl(url: string | URL | undefined): URL {
   return new URL('about:blank')
 }
 
-type RequestBindingField = 'amount' | 'currency' | 'recipient' | 'chainId' | 'memo' | 'splits'
-
-const requestBindingFields = [
+const pinnedRequestBindingFields = [
   'amount',
   'currency',
   'recipient',
   'chainId',
   'memo',
   'splits',
-] as const satisfies readonly RequestBindingField[]
+] as const
 
-type RequestBinding = Partial<Record<RequestBindingField, unknown>>
+type PinnedRequestBindingField = (typeof pinnedRequestBindingFields)[number]
 
-type PinnedChallengeField = 'method' | 'intent' | 'realm' | RequestBindingField
+type PinnedChallengeField = 'method' | 'intent' | 'realm' | PinnedRequestBindingField
 
 function getPinnedChallengeMismatch(
   expectedChallenge: Challenge.Challenge,
@@ -587,100 +588,41 @@ function getPinnedChallengeMismatch(
     if (actualChallenge[field] !== expectedChallenge[field]) return field
   }
 
-  return getRequestBindingMismatch(
+  return getPinnedRequestBindingMismatch(
     expectedChallenge.request as Record<string, unknown>,
     actualChallenge.request as Record<string, unknown>,
   )
 }
 
-function getRequestBindingMismatch(
+function getPinnedRequestBindingMismatch(
   expectedRequest: Record<string, unknown>,
   actualRequest: Record<string, unknown>,
-): RequestBindingField | undefined {
-  const expected = getRequestBinding(expectedRequest)
-  const actual = getRequestBinding(actualRequest)
+): PinnedRequestBindingField | undefined {
+  const expected = Method.PinnedRequestBinding.from(expectedRequest)
+  const actual = Method.PinnedRequestBinding.from(actualRequest)
 
-  return requestBindingFields.find(
-    (field) => !requestBindingValuesMatch(field, expected[field], actual[field]),
+  return pinnedRequestBindingFields.find(
+    (field) => !isDeepStrictEqual(expected[field], actual[field]),
   )
-}
-
-function getRequestBinding(request: Record<string, unknown>): RequestBinding {
-  const methodDetails = (request.methodDetails ?? {}) as Record<string, unknown>
-
-  return {
-    amount: request.amount ?? methodDetails.amount,
-    currency: request.currency ?? methodDetails.currency,
-    recipient: request.recipient ?? methodDetails.recipient,
-    chainId: request.chainId ?? methodDetails.chainId,
-    memo: methodDetails.memo,
-    splits: methodDetails.splits,
-  }
 }
 
 type MethodBindingField = 'chainId' | 'memo' | 'splits'
 type MethodBinding = Partial<Record<MethodBindingField, unknown>>
 
-function getCoreBinding(request: Record<string, unknown>): Method.CoreBinding {
-  const binding = getRequestBinding(request)
-  return {
-    amount: normalizeScalar(binding.amount),
-    currency: normalizeScalar(binding.currency),
-    recipient: normalizeScalar(binding.recipient),
-  }
+function getCoreBinding(binding: Method.PinnedRequestBinding): Method.CoreBinding {
+  return Object.freeze({
+    ...(binding.amount !== undefined ? { amount: binding.amount } : {}),
+    ...(binding.currency !== undefined ? { currency: binding.currency } : {}),
+    ...(binding.recipient !== undefined ? { recipient: binding.recipient } : {}),
+  })
 }
 
-function getMethodBinding(request: Record<string, unknown>): MethodBinding {
-  const binding = getRequestBinding(request)
-  return {
-    chainId: binding.chainId,
-    memo: binding.memo,
-    splits: binding.splits,
-  }
-}
-
-function requestBindingValuesMatch(
-  field: RequestBindingField,
-  expected: unknown,
-  actual: unknown,
-): boolean {
-  return isDeepStrictEqual(
-    normalizeRequestBindingValue(field, expected),
-    normalizeRequestBindingValue(field, actual),
-  )
-}
-
-function normalizeRequestBindingValue(field: RequestBindingField, value: unknown): unknown {
-  switch (field) {
-    case 'memo':
-      return normalizeHex(value)
-    case 'splits':
-      return normalizeComparable(value)
-    default:
-      return normalizeScalar(value)
-  }
-}
-
-function normalizeScalar(value: unknown): string | undefined {
-  return value === undefined ? undefined : String(value)
-}
-
-function normalizeHex(value: unknown): unknown {
-  return typeof value === 'string' && value.startsWith('0x') ? value.toLowerCase() : value
-}
-
-function normalizeComparable(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(normalizeComparable)
-
-  if (value && typeof value === 'object') {
-    return Object.fromEntries(
-      Object.entries(value as Record<string, unknown>)
-        .sort(([left], [right]) => left.localeCompare(right))
-        .map(([key, nested]) => [key, normalizeComparable(nested)]),
-    )
-  }
-
-  return normalizeHex(value)
+function getMethodBinding(binding: Method.PinnedRequestBinding): MethodBinding {
+  return Object.freeze({
+    ...(binding.chainId !== undefined ? { chainId: binding.chainId } : {}),
+    ...(binding.memo !== undefined ? { memo: binding.memo } : {}),
+    ...(binding.splits !== undefined ? { splits: binding.splits } : {}),
+  })
 }
 
 function freezeVerifiedChallengeEnvelope(
@@ -867,7 +809,7 @@ export function compose(
           if (!meta || meta.name !== credMethod || meta.intent !== credIntent) return false
           const canonical = meta._canonicalRequest
           if (!canonical) return true
-          return !getRequestBindingMismatch(canonical, credReq)
+          return !getPinnedRequestBindingMismatch(canonical, credReq)
         })
 
         const match =

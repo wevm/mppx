@@ -74,3 +74,51 @@ describe('from', () => {
     expectTypeOf(method.schema.credential.payload).toEqualTypeOf(payloadSchema)
   })
 })
+
+describe('PinnedRequestBinding', () => {
+  test('from: normalizes bound fields into a readonly object', () => {
+    const binding = Method.PinnedRequestBinding.from({
+      amount: 1000,
+      currency: '0xABCD',
+      recipient: '0xEf01',
+      methodDetails: {
+        chainId: 10,
+        memo: '0xABCD',
+      },
+    })
+
+    expect(binding).toEqual({
+      amount: '1000',
+      chainId: '10',
+      currency: '0xABCD',
+      memo: '0xabcd',
+      recipient: '0xEf01',
+    })
+    expect(Object.isFrozen(binding)).toBe(true)
+  })
+
+  test('from: deeply freezes comparable splits data', () => {
+    const binding = Method.PinnedRequestBinding.from({
+      methodDetails: {
+        splits: [
+          {
+            recipient: '0xBEEF',
+            amount: '2',
+          },
+        ],
+      },
+    })
+
+    expect(binding).toEqual({
+      splits: [
+        {
+          amount: '2',
+          recipient: '0xbeef',
+        },
+      ],
+    })
+    expect(Object.isFrozen(binding)).toBe(true)
+    expect(Object.isFrozen(binding.splits as object)).toBe(true)
+    expect(Object.isFrozen((binding.splits as Array<Record<string, unknown>>)[0]!)).toBe(true)
+  })
+})
