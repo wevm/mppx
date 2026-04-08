@@ -1,5 +1,13 @@
 # mppx
 
+## 0.5.8
+
+### Patch Changes
+
+- 00572a0: Normalized Tempo fee-payer co-signing for charge flows so the final sponsored transaction is rebuilt from validated fields with centralized fee-payer policy checks.
+- 7d4fdab: Centralize the authoritative challenge verification inputs by adding captured-request and verified-envelope context plumbing, shared canonical HMAC input generation, and a single pinned-request comparison path without changing the existing server hook model.
+- b087c21: Add an optional atomic `Store.update()` primitive for custom store backends and use it to make Tempo replay protection and channel state updates safe across distributed deployments.
+
 ## 0.5.7
 
 ### Patch Changes
