@@ -280,12 +280,12 @@ function mcpErrorCode(error?: Errors.PaymentError): number {
   return core_Mcp.paymentVerificationFailedCode
 }
 
-function safeUrl(url: string): URL {
+export function safeUrl(url: string | URL | undefined): URL {
   try {
-    return new URL(url)
-  } catch {
-    return new URL('about:blank')
-  }
+    if (url instanceof URL) return new URL(url.toString())
+    if (url) return new URL(url)
+  } catch {}
+  return new URL('about:blank')
 }
 
 /** @internal Distributes over the receipt response union to create overloads. */

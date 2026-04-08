@@ -394,7 +394,7 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
         const pinnedRequestBinding = Method.PinnedRequestBinding.from(
           credential.challenge.request as Record<string, unknown>,
         )
-        const verifiedContext = freezeVerifiedPaymentContext({
+        const verifiedContext = Object.freeze({
           coreBinding: getCoreBinding(pinnedRequestBinding),
           envelope,
           methodBinding: getMethodBinding(pinnedRequestBinding),
@@ -534,15 +534,7 @@ async function captureRequest(
     ? await transport.captureRequest(input)
     : captureRequestFromInput(input)
 
-  return freezeCapturedRequest(capturedRequest)
-}
-
-function freezeCapturedRequest(capturedRequest: Method.CapturedRequest): Method.CapturedRequest {
-  return Object.freeze({
-    headers: new Headers(capturedRequest.headers),
-    method: capturedRequest.method,
-    url: safeUrl(capturedRequest.url),
-  }) as Method.CapturedRequest
+  return Object.freeze(capturedRequest)
 }
 
 function captureRequestFromInput(input: unknown): Method.CapturedRequest {
@@ -555,16 +547,8 @@ function captureRequestFromInput(input: unknown): Method.CapturedRequest {
   return {
     headers: new Headers(source.headers),
     method: source.method ?? 'POST',
-    url: safeUrl(source.url),
+    url: Transport.safeUrl(source.url),
   }
-}
-
-function safeUrl(url: string | URL | undefined): URL {
-  try {
-    if (url instanceof URL) return new URL(url.toString())
-    if (url) return new URL(url)
-  } catch {}
-  return new URL('about:blank')
 }
 
 const pinnedRequestBindingFields = [
@@ -629,16 +613,6 @@ function freezeVerifiedChallengeEnvelope(
   envelope: Method.VerifiedChallengeEnvelope,
 ): Method.VerifiedChallengeEnvelope {
   return Object.freeze(envelope)
-}
-
-function freezeVerifiedPaymentContext(
-  context: Method.VerifiedPaymentContext<Record<string, unknown>, unknown, MethodBinding>,
-): Method.VerifiedPaymentContext<Record<string, unknown>, unknown, MethodBinding> {
-  return Object.freeze({
-    coreBinding: Object.freeze({ ...context.coreBinding }),
-    envelope: context.envelope,
-    methodBinding: Object.freeze({ ...context.methodBinding }),
-  })
 }
 
 export type MethodFn<

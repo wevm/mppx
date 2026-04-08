@@ -69,11 +69,11 @@ export type AnyClient = Client<any, any>
 
 /** Immutable projection of the challenge-bound request parameters. */
 export type PinnedRequestBinding = {
-  readonly amount?: string | undefined
-  readonly chainId?: string | undefined
-  readonly currency?: string | undefined
-  readonly memo?: string | undefined
-  readonly recipient?: string | undefined
+  readonly amount?: string
+  readonly chainId?: string
+  readonly currency?: string
+  readonly memo?: string
+  readonly recipient?: string
   readonly splits?: unknown
 }
 
@@ -114,13 +114,13 @@ export type VerifiedChallengeEnvelope<
   request extends Record<string, unknown> = Record<string, unknown>,
   payload = unknown,
   intent extends string = string,
-  method_name extends string = string,
+  MethodName extends string = string,
 > = {
   readonly capturedRequest: CapturedRequest
-  readonly challenge: Challenge.Challenge<request, intent, method_name>
+  readonly challenge: Challenge.Challenge<request, intent, MethodName>
   readonly credential: Credential.Credential<
     payload,
-    Challenge.Challenge<request, intent, method_name>
+    Challenge.Challenge<request, intent, MethodName>
   >
 }
 
@@ -130,10 +130,10 @@ export type VerifiedPaymentContext<
   payload = unknown,
   binding = Record<string, unknown>,
   intent extends string = string,
-  method_name extends string = string,
+  MethodName extends string = string,
 > = {
   readonly coreBinding: CoreBinding
-  readonly envelope: VerifiedChallengeEnvelope<request, payload, intent, method_name>
+  readonly envelope: VerifiedChallengeEnvelope<request, payload, intent, MethodName>
   readonly methodBinding: binding
 }
 
@@ -150,8 +150,8 @@ type VerifiedPaymentContextOf<
 
 /** Request hook parameters for a single method. */
 export type RequestContext<method extends Method> = {
-  capturedRequest?: CapturedRequest | undefined
-  credential?: Credential.Credential | null | undefined
+  capturedRequest?: CapturedRequest
+  credential?: Credential.Credential | null
   request: z.input<method['schema']['request']>
 }
 
@@ -350,7 +350,7 @@ function normalizeComparable(value: unknown): unknown {
     )
   }
 
-  return normalizeHex(value)
+  return typeof value === 'string' ? normalizeHex(value) : value
 }
 
 function deepFreeze(value: unknown): unknown {

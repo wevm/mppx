@@ -104,6 +104,9 @@ describe('PinnedRequestBinding', () => {
           {
             recipient: '0xBEEF',
             amount: '2',
+            enabled: true,
+            ratio: 2,
+            note: null,
           },
         ],
       },
@@ -113,7 +116,10 @@ describe('PinnedRequestBinding', () => {
       splits: [
         {
           amount: '2',
+          enabled: true,
+          note: null,
           recipient: '0xbeef',
+          ratio: 2,
         },
       ],
     })

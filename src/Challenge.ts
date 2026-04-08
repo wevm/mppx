@@ -609,33 +609,16 @@ export function meta(challenge: Challenge): Record<string, string> | undefined {
   return challenge.opaque
 }
 
-const idBindingFields = [
-  'realm',
-  'method',
-  'intent',
-  'request',
-  'expires',
-  'digest',
-  'opaque',
-] as const
-
-function idBindingSegments(
-  challenge: Omit<Challenge, 'id'>,
-): Record<(typeof idBindingFields)[number], string> {
-  return {
-    realm: challenge.realm,
-    method: challenge.method,
-    intent: challenge.intent,
-    request: PaymentRequest.serialize(challenge.request),
-    expires: challenge.expires ?? '',
-    digest: challenge.digest ?? '',
-    opaque: challenge.opaque ? PaymentRequest.serialize(challenge.opaque) : '',
-  }
-}
-
 function idBindingInput(challenge: Omit<Challenge, 'id'>): string {
-  const segments = idBindingSegments(challenge)
-  return idBindingFields.map((field) => segments[field]).join('|')
+  return [
+    challenge.realm,
+    challenge.method,
+    challenge.intent,
+    PaymentRequest.serialize(challenge.request),
+    challenge.expires ?? '',
+    challenge.digest ?? '',
+    challenge.opaque ? PaymentRequest.serialize(challenge.opaque) : '',
+  ].join('|')
 }
 
 /** @internal Computes HMAC-SHA256 challenge ID from parameters. */
