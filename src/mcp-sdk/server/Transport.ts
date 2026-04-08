@@ -51,6 +51,14 @@ export function mcpSdk(): McpSdk {
   return Transport.from<Extra, McpError, CallToolResult>({
     name: 'mcp-sdk',
 
+    captureRequest() {
+      return {
+        headers: new Headers(),
+        method: 'POST',
+        url: new URL('mcp://request/sdk'),
+      }
+    },
+
     getCredential(extra) {
       const credential = extra._meta?.[core_Mcp.credentialMetaKey]
       if (!credential) return null

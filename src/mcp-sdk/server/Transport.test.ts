@@ -26,6 +26,18 @@ const credential: Credential = {
 }
 
 describe('mcpSdk', () => {
+  describe('captureRequest', () => {
+    test('captures a stable synthetic MCP SDK request snapshot', async () => {
+      const transport = mcpSdk()
+
+      expect(await transport.captureRequest?.({})).toEqual({
+        headers: new Headers(),
+        method: 'POST',
+        url: new URL('mcp://request/sdk'),
+      })
+    })
+  })
+
   describe('getCredential', () => {
     test('returns credential from _meta', () => {
       const transport = mcpSdk()

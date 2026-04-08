@@ -67,6 +67,84 @@ export type Client<
 }
 export type AnyClient = Client<any, any>
 
+/** Minimum economic facts the core always binds. */
+export type CoreBinding = {
+  readonly amount?: string | undefined
+  readonly currency?: string | undefined
+  readonly recipient?: string | undefined
+}
+
+/** Transport-captured request metadata used as the authoritative request snapshot. */
+export type CapturedRequest = {
+  readonly headers: Headers
+  readonly method: string
+  readonly url: URL
+}
+
+/** Verified challenge + credential pair, bound to the captured request snapshot. */
+export type VerifiedChallengeEnvelope<
+  request extends Record<string, unknown> = Record<string, unknown>,
+  payload = unknown,
+  intent extends string = string,
+  method_name extends string = string,
+> = {
+  readonly capturedRequest: CapturedRequest
+  readonly challenge: Challenge.Challenge<request, intent, method_name>
+  readonly credential: Credential.Credential<
+    payload,
+    Challenge.Challenge<request, intent, method_name>
+  >
+}
+
+/** Authoritative verified context shared across verification and response hooks. */
+export type VerifiedPaymentContext<
+  request extends Record<string, unknown> = Record<string, unknown>,
+  payload = unknown,
+  binding = Record<string, unknown>,
+  intent extends string = string,
+  method_name extends string = string,
+> = {
+  readonly coreBinding: CoreBinding
+  readonly envelope: VerifiedChallengeEnvelope<request, payload, intent, method_name>
+  readonly methodBinding: binding
+}
+
+type VerifiedPaymentContextOf<
+  method extends Method,
+  binding = Record<string, unknown>,
+> = VerifiedPaymentContext<
+  z.output<method['schema']['request']>,
+  z.output<method['schema']['credential']['payload']>,
+  binding,
+  method['intent'],
+  method['name']
+>
+
+/** Request hook parameters for a single method. */
+export type RequestContext<method extends Method> = {
+  capturedRequest?: CapturedRequest | undefined
+  credential?: Credential.Credential | null | undefined
+  request: z.input<method['schema']['request']>
+}
+
+/** Verification hook parameters for a single method. */
+export type VerifyContext<method extends Method, binding = Record<string, unknown>> = {
+  credential: Credential.Credential<
+    z.output<method['schema']['credential']['payload']>,
+    Challenge.Challenge<z.output<method['schema']['request']>, method['intent'], method['name']>
+  >
+  request: z.input<method['schema']['request']>
+} & Partial<VerifiedPaymentContextOf<method, binding>>
+
+/** Response hook parameters for a single method. */
+export type RespondContext<
+  method extends Method,
+  binding = Record<string, unknown>,
+> = VerifyContext<method, binding> & {
+  input: globalThis.Request
+  receipt: Receipt.Receipt
+}
+
 /**
  * A server-side configured method with verification logic.
  */
@@ -96,19 +174,14 @@ export type CreateCredentialFn<method extends Method, context = unknown> = (
 ) => Promise<string>
 
 /** Request transform function for a single method. */
-export type RequestFn<method extends Method> = (options: {
-  credential?: Credential.Credential | null | undefined
-  request: z.input<method['schema']['request']>
-}) => MaybePromise<z.input<method['schema']['request']>>
+export type RequestFn<method extends Method> = (
+  options: RequestContext<method>,
+) => MaybePromise<z.input<method['schema']['request']>>
 
 /** Verification function for a single method. */
-export type VerifyFn<method extends Method> = (parameters: {
-  credential: Credential.Credential<
-    z.output<method['schema']['credential']['payload']>,
-    Challenge.Challenge<z.output<method['schema']['request']>, method['intent'], method['name']>
-  >
-  request: z.input<method['schema']['request']>
-}) => Promise<Receipt.Receipt>
+export type VerifyFn<method extends Method> = (
+  parameters: VerifyContext<method>,
+) => Promise<Receipt.Receipt>
 
 /**
  * Optional respond function for a server-side method.
@@ -123,15 +196,9 @@ export type VerifyFn<method extends Method> = (parameters: {
  * **HTTP-only.** The `input` parameter is a `Request` object; MCP transports
  * do not invoke this hook.
  */
-export type RespondFn<method extends Method> = (parameters: {
-  credential: Credential.Credential<
-    z.output<method['schema']['credential']['payload']>,
-    Challenge.Challenge<z.output<method['schema']['request']>, method['intent'], method['name']>
-  >
-  input: globalThis.Request
-  receipt: Receipt.Receipt
-  request: z.input<method['schema']['request']>
-}) => MaybePromise<globalThis.Response | undefined>
+export type RespondFn<method extends Method> = (
+  parameters: RespondContext<method>,
+) => MaybePromise<globalThis.Response | undefined>
 
 /** Partial request type for defaults. */
 export type RequestDefaults<method extends Method> = ExactPartial<

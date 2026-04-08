@@ -56,7 +56,7 @@ describe('from', () => {
   // ---------------------------------------------------------------------------
   // HMAC Challenge ID Test Vectors
   //
-  // HMAC input: realm | method | intent | base64url(canonicalize(request)) | expires | digest
+  // HMAC input: realm | method | intent | base64url(canonicalize(request)) | expires | digest | opaque
   // HMAC key:   UTF-8 bytes of secretKey
   // Output:     base64url(HMAC-SHA256(key, input), no padding)
   //

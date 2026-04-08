@@ -38,6 +38,16 @@ export function sse(options: sse.Options & { store: ChannelStore.ChannelStore })
   return Transport.from<Request, Response, Transport.ReceiptResponseOf<Sse>, Response>({
     name: 'sse',
 
+    captureRequest(request) {
+      return (
+        base.captureRequest?.(request) ?? {
+          headers: new Headers(request.headers),
+          method: request.method,
+          url: new URL(request.url),
+        }
+      )
+    },
+
     getCredential(request) {
       return base.getCredential(request)
     },
@@ -46,11 +56,13 @@ export function sse(options: sse.Options & { store: ChannelStore.ChannelStore })
       return base.respondChallenge(options) as Response
     },
 
-    respondReceipt({ credential, receipt, response, challengeId, input }) {
-      const payload = credential.payload as Partial<SessionCredentialPayload>
+    respondReceipt({ credential, envelope, receipt, response, challengeId, input }) {
+      const verifiedCredential = envelope?.credential ?? credential
+      const verifiedChallengeId = envelope?.challenge.id ?? challengeId
+      const payload = verifiedCredential.payload as Partial<SessionCredentialPayload>
       if (!payload.channelId) throw new Error('No SSE context available')
       const channelId = payload.channelId
-      const tickCost = BigInt(credential.challenge.request.amount as string)
+      const tickCost = BigInt(verifiedCredential.challenge.request.amount as string)
 
       // Auto-detect upstream SSE responses and parse them into an
       // AsyncIterable so they flow through the metered pipeline.
@@ -71,7 +83,7 @@ export function sse(options: sse.Options & { store: ChannelStore.ChannelStore })
         const stream = Sse_core.serve({
           store,
           channelId,
-          challengeId,
+          challengeId: verifiedChallengeId,
           tickCost,
           pollIntervalMs: pollingInterval,
           generate,
@@ -81,11 +93,12 @@ export function sse(options: sse.Options & { store: ChannelStore.ChannelStore })
       }
 
       const baseResponse = base.respondReceipt({
-        credential,
+        credential: verifiedCredential,
+        envelope,
         input,
         receipt,
         response: response as Response,
-        challengeId,
+        challengeId: verifiedChallengeId,
       })
 
       // Non-SSE response (e.g. upstream returned JSON instead of event-stream).

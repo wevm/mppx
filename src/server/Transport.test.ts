@@ -33,6 +33,25 @@ const receipt = Receipt.from({
 })
 
 describe('http', () => {
+  describe('captureRequest', () => {
+    test('captures method, url, and headers into a cloned snapshot', async () => {
+      const transport = Transport.http()
+      const request = new Request('https://example.com/resource?foo=bar', {
+        method: 'POST',
+        headers: { Authorization: Credential.serialize(credential), 'X-Test': '1' },
+      })
+
+      const captured = await transport.captureRequest?.(request)
+      expect(captured).toEqual({
+        headers: new Headers(request.headers),
+        method: 'POST',
+        url: new URL('https://example.com/resource?foo=bar'),
+      })
+      expect(captured).not.toBe(request)
+      expect(captured?.headers).not.toBe(request.headers)
+    })
+  })
+
   describe('getCredential', () => {
     test('returns credential from Authorization header', () => {
       const transport = Transport.http()
@@ -386,6 +405,18 @@ describe('mcp', () => {
       name: 'test-tool',
     },
   }
+
+  describe('captureRequest', () => {
+    test('captures MCP method into a synthetic request snapshot', async () => {
+      const transport = Transport.mcp()
+
+      expect(await transport.captureRequest?.(mcpRequest)).toEqual({
+        headers: new Headers(),
+        method: 'POST',
+        url: new URL('mcp://request/tools%2Fcall'),
+      })
+    })
+  })
 
   describe('getCredential', () => {
     test('returns credential from _meta', () => {

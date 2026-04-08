@@ -125,6 +125,114 @@ describe('request handler', () => {
     expect(body.detail).not.toContain('rpc.example.com')
   })
 
+  test('captures each transport request once and threads the verified envelope additively', async () => {
+    const requestMethod = Method.from({
+      name: 'mock',
+      intent: 'charge',
+      schema: {
+        credential: { payload: z.object({ token: z.string() }) },
+        request: z.object({
+          amount: z.string(),
+          currency: z.string(),
+          recipient: z.string(),
+        }),
+      },
+    })
+
+    let captureCount = 0
+    let requestCapturedRequest: Method.CapturedRequest | undefined
+    let verifyEnvelope: Method.VerifiedChallengeEnvelope | undefined
+    let respondEnvelope: Method.VerifiedChallengeEnvelope | undefined
+    let receiptEnvelope: Method.VerifiedChallengeEnvelope | undefined
+
+    const baseTransport = Transport.http()
+    const transport = Transport.from({
+      ...baseTransport,
+      captureRequest(request) {
+        captureCount++
+        return (
+          baseTransport.captureRequest?.(request) ?? {
+            headers: new Headers(request.headers),
+            method: request.method,
+            url: new URL(request.url),
+          }
+        )
+      },
+      respondReceipt(options) {
+        receiptEnvelope = options.envelope
+        return baseTransport.respondReceipt(options)
+      },
+    })
+
+    const serverMethod = Method.toServer(requestMethod, {
+      request({ capturedRequest, credential, request }) {
+        if (credential) requestCapturedRequest = capturedRequest
+        return request
+      },
+      async verify({ coreBinding, envelope, methodBinding, request }) {
+        verifyEnvelope = envelope
+        expect(envelope?.capturedRequest).toBe(requestCapturedRequest)
+        expect(coreBinding).toEqual({
+          amount: request.amount,
+          currency: request.currency,
+          recipient: request.recipient,
+        })
+        expect(methodBinding).toEqual({})
+        expect(envelope).toBeDefined()
+        expect(Object.isFrozen(envelope!)).toBe(true)
+
+        return {
+          method: 'mock',
+          reference: 'tx-ref',
+          status: 'success',
+          timestamp: new Date().toISOString(),
+        }
+      },
+      respond({ envelope }) {
+        respondEnvelope = envelope
+        return new Response('ok')
+      },
+    })
+
+    const handler = Mppx.create({ methods: [serverMethod], realm, secretKey, transport })
+    const options = {
+      amount: '1000',
+      currency: '0x0000000000000000000000000000000000000001',
+      expires: new Date(Date.now() + 60_000).toISOString(),
+      recipient: '0x0000000000000000000000000000000000000002',
+    } as const
+
+    const challengeResult = await handler.charge(options)(
+      new Request('https://example.com/resource?first=1'),
+    )
+    expect(challengeResult.status).toBe(402)
+    if (challengeResult.status !== 402) throw new Error()
+
+    const credential = Credential.from({
+      challenge: Challenge.fromResponse(challengeResult.challenge),
+      payload: { token: 'valid' },
+    })
+
+    const result = await handler.charge(options)(
+      new Request('https://example.com/resource?second=1', {
+        headers: { Authorization: Credential.serialize(credential) },
+      }),
+    )
+
+    expect(result.status).toBe(200)
+    if (result.status !== 200) throw new Error()
+
+    const response = result.withReceipt()
+    expect(response.status).toBe(200)
+    expect(captureCount).toBe(2)
+    expect(requestCapturedRequest?.url.pathname).toBe('/resource')
+    expect(requestCapturedRequest?.url.search).toBe('?second=1')
+    expect(verifyEnvelope?.capturedRequest).toBe(requestCapturedRequest)
+    expect(respondEnvelope?.capturedRequest).toBe(requestCapturedRequest)
+    expect(receiptEnvelope?.capturedRequest).toBe(requestCapturedRequest)
+    expect(receiptEnvelope?.challenge.id).toBe(credential.challenge.id)
+  })
+
   test('returns 402 when challenge ID mismatch', async () => {
     const wrongChallenge = Challenge.from({
       id: 'wrong-id',

@@ -266,6 +266,7 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
       async (input: Transport.InputOf): Promise<MethodFn.Response> => {
         const expires =
           'expires' in options ? (options.expires as string | undefined) : Expires.minutes(5)
+        const capturedRequest = await captureRequest(transport, input)
 
         // Extract credential once — getCredential may have side effects (e.g. SSE transports).
         const [credential, credentialError] = (() => {
@@ -282,12 +283,12 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
         // Transform request if method provides a `request` function.
         const request = (
           parameters.request
-            ? await parameters.request({ credential, request: merged } as never)
+            ? await parameters.request({ capturedRequest, credential, request: merged } as never)
             : merged
         ) as never
 
         // Resolve realm: explicit > env var > request Host header.
-        const effectiveRealm = realm ?? resolveRealmFromRequest(input)
+        const effectiveRealm = realm ?? resolveRealmFromCapturedRequest(capturedRequest)
 
         // Recompute challenge from options. The HMAC-bound ID means we don't need to
         // store challenges server-side—if the client echoes back a credential with
@@ -340,32 +341,14 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
         }
 
         // Verify the credential's challenge matches this route's configured
-        // method, intent, realm, and request. Prevents cross-route scope
+        // pinned challenge requirements. Prevents cross-route scope
         // confusion where a credential issued for a cheap route (or different
         // method/intent) is presented at an expensive route.
         // Note: we compare specific payment parameters rather than the full
         // request because the `request` hook may produce credential-dependent
         // output (e.g. `feePayer` differs between 402 and credential calls).
         {
-          for (const field of ['method', 'intent', 'realm'] as const) {
-            if (credential.challenge[field] !== challenge[field]) {
-              const response = await transport.respondChallenge({
-                challenge,
-                input,
-                error: new Errors.InvalidChallengeError({
-                  id: credential.challenge.id,
-                  reason: `credential ${field} does not match this route's requirements`,
-                }),
-                html: method.html,
-              })
-              return { challenge: response, status: 402 }
-            }
-          }
-
-          const mismatch = getRequestBindingMismatch(
-            challenge.request as Record<string, unknown>,
-            credential.challenge.request as Record<string, unknown>,
-          )
+          const mismatch = getPinnedChallengeMismatch(challenge, credential.challenge)
           if (mismatch) {
             const response = await transport.respondChallenge({
               challenge,
@@ -374,6 +357,7 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
                 id: credential.challenge.id,
                 reason: `credential ${mismatch} does not match this route's requirements`,
               }),
+              html: method.html,
             })
             return { challenge: response, status: 402 }
           }
@@ -402,11 +386,22 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
           return { challenge: response, status: 402 }
         }
 
+        const envelope = freezeVerifiedChallengeEnvelope({
+          capturedRequest,
+          challenge: credential.challenge,
+          credential,
+        })
+        const verifiedContext = freezeVerifiedPaymentContext({
+          coreBinding: getCoreBinding(credential.challenge.request as Record<string, unknown>),
+          envelope,
+          methodBinding: getMethodBinding(credential.challenge.request as Record<string, unknown>),
+        })
+
         // User-provided verification (e.g., check signature, submit tx, verify payment).
         // If verification fails, re-issue the challenge so the client can retry.
         let receiptData: Receipt.Receipt
         try {
-          receiptData = await verify({ credential, request } as never)
+          receiptData = await verify({ ...verifiedContext, credential, request } as never)
         } catch (e) {
           if (!(e instanceof Errors.PaymentError))
             console.error('mppx: internal verification error', e)
@@ -425,7 +420,13 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
         // return the management response directly. If undefined, `withReceipt()`
         // expects the caller to pass the user handler's response instead.
         const managementResponse = respond
-          ? await respond({ credential, input, receipt: receiptData, request } as never)
+          ? await respond({
+              ...verifiedContext,
+              credential,
+              input,
+              receipt: receiptData,
+              request,
+            } as never)
           : undefined
 
         return {
@@ -434,6 +435,7 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
             if (managementResponse) {
               return transport.respondReceipt({
                 credential,
+                envelope,
                 input,
                 receipt: receiptData,
                 response: managementResponse as never,
@@ -443,6 +445,7 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
             if (!response) throw new Error('withReceipt() requires a response argument')
             return transport.respondReceipt({
               credential,
+              envelope,
               input,
               receipt: receiptData,
               response: response as never,
@@ -507,20 +510,58 @@ function warnOnce(key: string, message: string) {
   console.warn(`[mppx] ${message}`)
 }
 
-/** Extracts hostname from the request URL, falling back to a default. */
-function resolveRealmFromRequest(input: unknown): string {
+/** Extracts hostname from the captured request URL, falling back to a default. */
+function resolveRealmFromCapturedRequest(capturedRequest: Method.CapturedRequest): string {
   try {
-    const url = typeof (input as any)?.url === 'string' ? (input as any).url : undefined
-    if (url) {
-      const { protocol, hostname } = new URL(url)
-      if (/^https?:$/.test(protocol) && hostname) return hostname
-    }
+    const { protocol, hostname } = capturedRequest.url
+    if (/^https?:$/.test(protocol) && hostname) return hostname
   } catch {}
   warnOnce(
     Warnings.realmFallback,
     `Could not auto-detect realm from request. Falling back to "${defaultRealm}". Set \`realm\` in Mppx.create() or the MPP_REALM env var.`,
   )
   return defaultRealm
+}
+
+async function captureRequest(
+  transport: Transport.AnyTransport,
+  input: unknown,
+): Promise<Method.CapturedRequest> {
+  const capturedRequest = transport.captureRequest
+    ? await transport.captureRequest(input)
+    : captureRequestFromInput(input)
+
+  return freezeCapturedRequest(capturedRequest)
+}
+
+function freezeCapturedRequest(capturedRequest: Method.CapturedRequest): Method.CapturedRequest {
+  return Object.freeze({
+    headers: new Headers(capturedRequest.headers),
+    method: capturedRequest.method,
+    url: safeUrl(capturedRequest.url),
+  }) as Method.CapturedRequest
+}
+
+function captureRequestFromInput(input: unknown): Method.CapturedRequest {
+  const source = input as {
+    headers?: HeadersInit | undefined
+    method?: string | undefined
+    url?: string | URL | undefined
+  }
+
+  return {
+    headers: new Headers(source.headers),
+    method: source.method ?? 'POST',
+    url: safeUrl(source.url),
+  }
+}
+
+function safeUrl(url: string | URL | undefined): URL {
+  try {
+    if (url instanceof URL) return new URL(url.toString())
+    if (url) return new URL(url)
+  } catch {}
+  return new URL('about:blank')
 }
 
 type RequestBindingField = 'amount' | 'currency' | 'recipient' | 'chainId' | 'memo' | 'splits'
@@ -535,6 +576,22 @@ const requestBindingFields = [
 ] as const satisfies readonly RequestBindingField[]
 
 type RequestBinding = Partial<Record<RequestBindingField, unknown>>
+
+type PinnedChallengeField = 'method' | 'intent' | 'realm' | RequestBindingField
+
+function getPinnedChallengeMismatch(
+  expectedChallenge: Challenge.Challenge,
+  actualChallenge: Challenge.Challenge,
+): PinnedChallengeField | undefined {
+  for (const field of ['method', 'intent', 'realm'] as const) {
+    if (actualChallenge[field] !== expectedChallenge[field]) return field
+  }
+
+  return getRequestBindingMismatch(
+    expectedChallenge.request as Record<string, unknown>,
+    actualChallenge.request as Record<string, unknown>,
+  )
+}
 
 function getRequestBindingMismatch(
   expectedRequest: Record<string, unknown>,
@@ -558,6 +615,27 @@ function getRequestBinding(request: Record<string, unknown>): RequestBinding {
     chainId: request.chainId ?? methodDetails.chainId,
     memo: methodDetails.memo,
     splits: methodDetails.splits,
+  }
+}
+
+type MethodBindingField = 'chainId' | 'memo' | 'splits'
+type MethodBinding = Partial<Record<MethodBindingField, unknown>>
+
+function getCoreBinding(request: Record<string, unknown>): Method.CoreBinding {
+  const binding = getRequestBinding(request)
+  return {
+    amount: normalizeScalar(binding.amount),
+    currency: normalizeScalar(binding.currency),
+    recipient: normalizeScalar(binding.recipient),
+  }
+}
+
+function getMethodBinding(request: Record<string, unknown>): MethodBinding {
+  const binding = getRequestBinding(request)
+  return {
+    chainId: binding.chainId,
+    memo: binding.memo,
+    splits: binding.splits,
   }
 }
 
@@ -603,6 +681,22 @@ function normalizeComparable(value: unknown): unknown {
   }
 
   return normalizeHex(value)
+}
+
+function freezeVerifiedChallengeEnvelope(
+  envelope: Method.VerifiedChallengeEnvelope,
+): Method.VerifiedChallengeEnvelope {
+  return Object.freeze(envelope)
+}
+
+function freezeVerifiedPaymentContext(
+  context: Method.VerifiedPaymentContext<Record<string, unknown>, unknown, MethodBinding>,
+): Method.VerifiedPaymentContext<Record<string, unknown>, unknown, MethodBinding> {
+  return Object.freeze({
+    coreBinding: Object.freeze({ ...context.coreBinding }),
+    envelope: context.envelope,
+    methodBinding: Object.freeze({ ...context.methodBinding }),
+  })
 }
 
 export type MethodFn<
