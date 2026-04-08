@@ -1,5 +1,11 @@
 # mppx
 
+## 0.5.9
+
+### Patch Changes
+
+- 4d7fe94: Bumped internal deps
+
 ## 0.5.8
 
 ### Patch Changes
