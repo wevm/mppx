@@ -89,23 +89,6 @@ export type VerifiedChallengeEnvelope<
   >
 }
 
-/** Verified challenge envelope shared across verification and response hooks. */
-export type VerifiedPaymentContext<
-  request extends Record<string, unknown> = Record<string, unknown>,
-  payload = unknown,
-  intent extends string = string,
-  MethodName extends string = string,
-> = {
-  readonly envelope: VerifiedChallengeEnvelope<request, payload, intent, MethodName>
-}
-
-type VerifiedPaymentContextOf<method extends Method> = VerifiedPaymentContext<
-  z.output<method['schema']['request']>,
-  z.output<method['schema']['credential']['payload']>,
-  method['intent'],
-  method['name']
->
-
 /** Request hook parameters for a single method. */
 export type RequestContext<method extends Method> = {
   capturedRequest?: CapturedRequest
@@ -119,8 +102,16 @@ export type VerifyContext<method extends Method> = {
     z.output<method['schema']['credential']['payload']>,
     Challenge.Challenge<z.output<method['schema']['request']>, method['intent'], method['name']>
   >
+  envelope?:
+    | VerifiedChallengeEnvelope<
+        z.output<method['schema']['request']>,
+        z.output<method['schema']['credential']['payload']>,
+        method['intent'],
+        method['name']
+      >
+    | undefined
   request: z.input<method['schema']['request']>
-} & Partial<VerifiedPaymentContextOf<method>>
+}
 
 /** Response hook parameters for a single method. */
 export type RespondContext<method extends Method> = VerifyContext<method> & {

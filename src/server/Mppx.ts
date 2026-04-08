@@ -386,18 +386,17 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
           return { challenge: response, status: 402 }
         }
 
-        const envelope = freezeVerifiedChallengeEnvelope({
+        const envelope: Method.VerifiedChallengeEnvelope = Object.freeze({
           capturedRequest,
           challenge: credential.challenge,
           credential,
         })
-        const verifiedContext = Object.freeze({ envelope })
 
         // User-provided verification (e.g., check signature, submit tx, verify payment).
         // If verification fails, re-issue the challenge so the client can retry.
         let receiptData: Receipt.Receipt
         try {
-          receiptData = await verify({ ...verifiedContext, credential, request } as never)
+          receiptData = await verify({ credential, envelope, request } as never)
         } catch (e) {
           if (!(e instanceof Errors.PaymentError))
             console.error('mppx: internal verification error', e)
@@ -416,13 +415,7 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
         // return the management response directly. If undefined, `withReceipt()`
         // expects the caller to pass the user handler's response instead.
         const managementResponse = respond
-          ? await respond({
-              ...verifiedContext,
-              credential,
-              input,
-              receipt: receiptData,
-              request,
-            } as never)
+          ? await respond({ credential, envelope, input, receipt: receiptData, request } as never)
           : undefined
 
         return {
@@ -641,12 +634,6 @@ function normalizeComparable(value: unknown): unknown {
   }
 
   return typeof value === 'string' ? normalizeHex(value) : value
-}
-
-function freezeVerifiedChallengeEnvelope(
-  envelope: Method.VerifiedChallengeEnvelope,
-): Method.VerifiedChallengeEnvelope {
-  return Object.freeze(envelope)
 }
 
 type CoreBinding = {
