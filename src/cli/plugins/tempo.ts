@@ -46,6 +46,9 @@ export function tempo() {
 
   return createPlugin({
     method: 'tempo',
+    supports(challenge) {
+      return challenge.method === 'tempo' && ['charge', 'session'].includes(challenge.intent)
+    },
 
     async setup({ challenge, options, methodOpts }) {
       const accountName = resolveAccountName(options.account)

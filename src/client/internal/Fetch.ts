@@ -1,4 +1,5 @@
 import * as Challenge from '../../Challenge.js'
+import * as AcceptPayment from '../../internal/AcceptPayment.js'
 import type * as Method from '../../Method.js'
 import type * as z from '../../zod.js'
 
@@ -37,14 +38,18 @@ let originalFetch: typeof globalThis.fetch | undefined
 export function from<const methods extends readonly Method.AnyClient[]>(
   config: from.Config<methods>,
 ): from.Fetch<methods> {
-  const { fetch = globalThis.fetch, methods, onChallenge } = config
+  const { acceptPayment, fetch = globalThis.fetch, methods, onChallenge } = config
+  const resolvedAcceptPayment = acceptPayment ?? AcceptPayment.resolve(methods)
   // Always operate on the true underlying fetch to avoid wrapper-on-wrapper stacking,
   // which can duplicate retries and make restore semantics fragile.
   const baseFetch = unwrapFetch(fetch)
 
   const wrappedFetch = async (input: RequestInfo | URL, init?: from.RequestInit<methods>) => {
-    // Pass init through untouched to preserve object identity for non-402 responses.
-    const response = await baseFetch(input, init)
+    const paymentPreferences = resolvePaymentPreferences(init?.headers, resolvedAcceptPayment)
+    const response = await baseFetch(
+      input,
+      withAcceptPaymentHeader(init, paymentPreferences.header),
+    )
 
     if (response.status !== 402) return response
 
@@ -53,24 +58,15 @@ export function from<const methods extends readonly Method.AnyClient[]>(
     const { context: _, ...fetchInit } = (init ?? {}) as Record<string, unknown>
 
     // Parse all challenges from the response (supports merged WWW-Authenticate headers).
-    // Match in client preference order: iterate the client's methods array and pick the
-    // first method that has a matching challenge, so the client controls priority.
     const challenges = Challenge.fromResponseList(response)
 
-    let challenge: Challenge.Challenge | undefined
-    let mi: (typeof methods)[number] | undefined
-    for (const m of methods) {
-      const match = challenges.find((c) => c.method === m.name && c.intent === m.intent)
-      if (match) {
-        challenge = match
-        mi = m
-        break
-      }
-    }
-    if (!challenge || !mi)
+    const selected = AcceptPayment.selectChallenge(challenges, methods, paymentPreferences.entries)
+    if (!selected)
       throw new Error(
         `No method found for challenges: ${challenges.map((c) => `${c.method}.${c.intent}`).join(', ')}. Available: ${methods.map((m) => `${m.name}.${m.intent}`).join(', ')}`,
       )
+
+    const { challenge, method: mi } = selected
 
     const onChallengeCredential = onChallenge
       ? await onChallenge(challenge, {
@@ -104,6 +100,8 @@ type AnyContextFor<methods extends readonly Method.AnyClient[]> = {
 
 export declare namespace from {
   type Config<methods extends readonly Method.AnyClient[] = readonly Method.AnyClient[]> = {
+    /** Resolved `Accept-Payment` header and selection preferences. */
+    acceptPayment?: AcceptPayment.Resolved<methods> | undefined
     /** Custom fetch function to wrap. Defaults to `globalThis.fetch`. */
     fetch?: typeof globalThis.fetch
     /** Array of methods to use. */
@@ -219,6 +217,23 @@ function withAuthorizationHeader(headers: unknown, credential: string): Record<s
 }
 
 /** @internal */
+function withAcceptPaymentHeader<methods extends readonly Method.AnyClient[]>(
+  init: from.RequestInit<methods> | undefined,
+  header: string,
+): from.RequestInit<methods> | undefined {
+  if (!header) return init
+
+  const headers = new Headers(init?.headers)
+  if (headers.has('Accept-Payment')) return init
+
+  headers.set('Accept-Payment', header)
+  return {
+    ...(init ?? {}),
+    headers,
+  }
+}
+
+/** @internal */
 function unwrapFetch(fetch: typeof globalThis.fetch): typeof globalThis.fetch {
   let current = fetch as WrappedFetch
   while (current[MPPX_FETCH_WRAPPER]) {
@@ -250,4 +265,22 @@ async function resolveCredential(
   return mi.createCredential(
     parsedContext !== undefined ? { challenge, context: parsedContext } : ({ challenge } as never),
   )
+}
+
+function resolvePaymentPreferences<methods extends readonly Method.AnyClient[]>(
+  headers: HeadersInit | undefined,
+  acceptPayment: AcceptPayment.Resolved<methods>,
+): AcceptPayment.Resolved<methods> {
+  const header = headers ? new Headers(headers).get('Accept-Payment') : null
+  if (!header) return acceptPayment
+
+  try {
+    return {
+      ...acceptPayment,
+      entries: AcceptPayment.parse(header),
+      header,
+    }
+  } catch {
+    return acceptPayment
+  }
 }

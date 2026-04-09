@@ -125,111 +125,6 @@ describe('request handler', () => {
     expect(body.detail).not.toContain('rpc.example.com')
   })
 
-  test('captures each transport request once and threads the verified envelope additively', async () => {
-    const requestMethod = Method.from({
-      name: 'mock',
-      intent: 'charge',
-      schema: {
-        credential: { payload: z.object({ token: z.string() }) },
-        request: z.object({
-          amount: z.string(),
-          currency: z.string(),
-          recipient: z.string(),
-        }),
-      },
-    })
-
-    let captureCount = 0
-    let requestCapturedRequest: Method.CapturedRequest | undefined
-    let verifyEnvelope: Method.VerifiedChallengeEnvelope | undefined
-    let respondEnvelope: Method.VerifiedChallengeEnvelope | undefined
-    let receiptEnvelope: Method.VerifiedChallengeEnvelope | undefined
-
-    const baseTransport = Transport.http()
-    const transport = Transport.from({
-      ...baseTransport,
-      captureRequest(request) {
-        captureCount++
-        return (
-          baseTransport.captureRequest?.(request) ?? {
-            headers: new Headers(request.headers),
-            method: request.method,
-            url: new URL(request.url),
-          }
-        )
-      },
-      respondReceipt(options) {
-        receiptEnvelope = options.envelope
-        return baseTransport.respondReceipt(options)
-      },
-    })
-
-    const serverMethod = Method.toServer(requestMethod, {
-      request({ capturedRequest, credential, request }) {
-        if (credential) requestCapturedRequest = capturedRequest
-        return request
-      },
-      async verify({ envelope, request }) {
-        verifyEnvelope = envelope
-        expect(envelope?.capturedRequest).toBe(requestCapturedRequest)
-        expect(request.amount).toBe('1000')
-        expect(request.currency).toBe('0x0000000000000000000000000000000000000001')
-        expect(request.recipient).toBe('0x0000000000000000000000000000000000000002')
-        expect(envelope).toBeDefined()
-        expect(Object.isFrozen(envelope!)).toBe(true)
-
-        return {
-          method: 'mock',
-          reference: 'tx-ref',
-          status: 'success',
-          timestamp: new Date().toISOString(),
-        }
-      },
-      respond({ envelope }) {
-        respondEnvelope = envelope
-        return new Response('ok')
-      },
-    })
-
-    const handler = Mppx.create({ methods: [serverMethod], realm, secretKey, transport })
-    const options = {
-      amount: '1000',
-      currency: '0x0000000000000000000000000000000000000001',
-      expires: new Date(Date.now() + 60_000).toISOString(),
-      recipient: '0x0000000000000000000000000000000000000002',
-    } as const
-
-    const challengeResult = await handler.charge(options)(
-      new Request('https://example.com/resource?first=1'),
-    )
-    expect(challengeResult.status).toBe(402)
-    if (challengeResult.status !== 402) throw new Error()
-
-    const credential = Credential.from({
-      challenge: Challenge.fromResponse(challengeResult.challenge),
-      payload: { token: 'valid' },
-    })
-
-    const result = await handler.charge(options)(
-      new Request('https://example.com/resource?second=1', {
-        headers: { Authorization: Credential.serialize(credential) },
-      }),
-    )
-
-    expect(result.status).toBe(200)
-    if (result.status !== 200) throw new Error()
-
-    const response = result.withReceipt()
-    expect(response.status).toBe(200)
-    expect(captureCount).toBe(2)
-    expect(requestCapturedRequest?.url.pathname).toBe('/resource')
-    expect(requestCapturedRequest?.url.search).toBe('?second=1')
-    expect(verifyEnvelope?.capturedRequest).toBe(requestCapturedRequest)
-    expect(respondEnvelope?.capturedRequest).toBe(requestCapturedRequest)
-    expect(receiptEnvelope?.capturedRequest).toBe(requestCapturedRequest)
-    expect(receiptEnvelope?.challenge.id).toBe(credential.challenge.id)
-  })
-
   test('returns 402 when challenge ID mismatch', async () => {
     const wrongChallenge = Challenge.from({
       id: 'wrong-id',
@@ -978,6 +873,64 @@ describe('compose', () => {
     const wwwAuth = result.challenge.headers.get('WWW-Authenticate')!
     expect(wwwAuth).toContain('method="alpha"')
     expect(wwwAuth).toContain('method="beta"')
+  })
+
+  test('filters compose challenges using Accept-Payment', async () => {
+    const mppx = Mppx.create({ methods: [alphaMethod, betaMethod], realm, secretKey })
+
+    const result = await mppx.compose(
+      [alphaMethod, challengeOpts],
+      [betaMethod, challengeOpts],
+    )(
+      new Request('https://example.com/resource', {
+        headers: { 'Accept-Payment': 'beta/charge' },
+      }),
+    )
+
+    expect(result.status).toBe(402)
+    if (result.status !== 402) throw new Error()
+
+    const challenges = Challenge.fromResponseList(result.challenge)
+    expect(challenges).toHaveLength(1)
+    expect(challenges[0]?.method).toBe('beta')
+  })
+
+  test('orders compose challenges by Accept-Payment q-value', async () => {
+    const mppx = Mppx.create({ methods: [alphaMethod, betaMethod], realm, secretKey })
+
+    const result = await mppx.compose(
+      [alphaMethod, challengeOpts],
+      [betaMethod, challengeOpts],
+    )(
+      new Request('https://example.com/resource', {
+        headers: { 'Accept-Payment': 'beta/charge;q=0.9, alpha/charge;q=0.3' },
+      }),
+    )
+
+    expect(result.status).toBe(402)
+    if (result.status !== 402) throw new Error()
+
+    const challenges = Challenge.fromResponseList(result.challenge)
+    expect(challenges.map((challenge) => challenge.method)).toEqual(['beta', 'alpha'])
+  })
+
+  test('falls back to all compose challenges when Accept-Payment has no matches', async () => {
+    const mppx = Mppx.create({ methods: [alphaMethod, betaMethod], realm, secretKey })
+
+    const result = await mppx.compose(
+      [alphaMethod, challengeOpts],
+      [betaMethod, challengeOpts],
+    )(
+      new Request('https://example.com/resource', {
+        headers: { 'Accept-Payment': 'gamma/charge' },
+      }),
+    )
+
+    expect(result.status).toBe(402)
+    if (result.status !== 402) throw new Error()
+
+    const challenges = Challenge.fromResponseList(result.challenge)
+    expect(challenges.map((challenge) => challenge.method)).toEqual(['alpha', 'beta'])
   })
 
   test('dispatches to matching handler when credential matches alpha', async () => {
@@ -2179,6 +2132,287 @@ describe('cross-route credential replay via scope binding flaw', () => {
 
     const result = await composed(
       new Request('https://example.com/resource', {
+        headers: { Authorization: Credential.serialize(credential) },
+      }),
+    )
+
+    expect(result.status).toBe(200)
+  })
+})
+
+describe('challenge scope binding: opaque', () => {
+  const simpleMethod = Method.from({
+    name: 'mock',
+    intent: 'charge',
+    schema: {
+      credential: { payload: z.object({ token: z.string() }) },
+      request: z.object({
+        amount: z.string(),
+        currency: z.string(),
+        recipient: z.string(),
+      }),
+    },
+  })
+
+  const serverMethod = Method.toServer(simpleMethod, {
+    async verify() {
+      return {
+        method: 'mock',
+        reference: 'ref',
+        status: 'success' as const,
+        timestamp: new Date().toISOString(),
+      }
+    },
+  })
+
+  test('rejects credential with different opaque', async () => {
+    const handler = Mppx.create({ methods: [serverMethod], realm, secretKey })
+
+    // Route A: meta = { pi: 'pi_111' }
+    const handleA = handler.charge({
+      amount: '1000',
+      currency: '0xabc',
+      recipient: '0x001',
+      meta: { pi: 'pi_111' },
+      expires: new Date(Date.now() + 60_000).toISOString(),
+    })
+    const resultA = await handleA(new Request('https://example.com/a'))
+    expect(resultA.status).toBe(402)
+    if (resultA.status !== 402) throw new Error()
+
+    const challengeA = Challenge.fromResponse(resultA.challenge)
+    const credential = Credential.from({
+      challenge: challengeA,
+      payload: { token: 'valid' },
+    })
+
+    // Route B: same request, different meta
+    const handleB = handler.charge({
+      amount: '1000',
+      currency: '0xabc',
+      recipient: '0x001',
+      meta: { pi: 'pi_222' },
+      expires: new Date(Date.now() + 60_000).toISOString(),
+    })
+    const result = await handleB(
+      new Request('https://example.com/b', {
+        headers: { Authorization: Credential.serialize(credential) },
+      }),
+    )
+
+    expect(result.status).toBe(402)
+    if (result.status !== 402) throw new Error()
+    const body = (await result.challenge.json()) as { detail: string }
+    expect(body.detail).toContain('opaque')
+    expect(body.detail).toContain('does not match')
+  })
+
+  test('rejects credential with opaque when route has no opaque', async () => {
+    const handler = Mppx.create({ methods: [serverMethod], realm, secretKey })
+
+    // Route with opaque
+    const handleWithMeta = handler.charge({
+      amount: '1000',
+      currency: '0xabc',
+      recipient: '0x001',
+      meta: { pi: 'pi_111' },
+      expires: new Date(Date.now() + 60_000).toISOString(),
+    })
+    const resultWithMeta = await handleWithMeta(new Request('https://example.com/a'))
+    expect(resultWithMeta.status).toBe(402)
+    if (resultWithMeta.status !== 402) throw new Error()
+
+    const challengeWithMeta = Challenge.fromResponse(resultWithMeta.challenge)
+    const credential = Credential.from({
+      challenge: challengeWithMeta,
+      payload: { token: 'valid' },
+    })
+
+    // Route without opaque
+    const handleNoMeta = handler.charge({
+      amount: '1000',
+      currency: '0xabc',
+      recipient: '0x001',
+      expires: new Date(Date.now() + 60_000).toISOString(),
+    })
+    const result = await handleNoMeta(
+      new Request('https://example.com/b', {
+        headers: { Authorization: Credential.serialize(credential) },
+      }),
+    )
+
+    expect(result.status).toBe(402)
+    if (result.status !== 402) throw new Error()
+    const body = (await result.challenge.json()) as { detail: string }
+    expect(body.detail).toContain('does not match')
+  })
+
+  test('accepts credential when opaque matches', async () => {
+    const handler = Mppx.create({ methods: [serverMethod], realm, secretKey })
+
+    const handle = handler.charge({
+      amount: '1000',
+      currency: '0xabc',
+      recipient: '0x001',
+      meta: { pi: 'pi_111' },
+      expires: new Date(Date.now() + 60_000).toISOString(),
+    })
+
+    // Get challenge
+    const challengeResult = await handle(new Request('https://example.com/a'))
+    expect(challengeResult.status).toBe(402)
+    if (challengeResult.status !== 402) throw new Error()
+
+    const challenge = Challenge.fromResponse(challengeResult.challenge)
+    const credential = Credential.from({
+      challenge,
+      payload: { token: 'valid' },
+    })
+
+    // Present at same route with same meta — should pass scope check
+    const result = await handle(
+      new Request('https://example.com/a', {
+        headers: { Authorization: Credential.serialize(credential) },
+      }),
+    )
+
+    expect(result.status).toBe(200)
+  })
+
+  test('rejects credential replayed to a different path with the same request and meta', async () => {
+    const handler = Mppx.create({ methods: [serverMethod], realm, secretKey })
+
+    const handle = handler.charge({
+      amount: '1000',
+      currency: '0xabc',
+      recipient: '0x001',
+      meta: { pi: 'pi_111' },
+      expires: new Date(Date.now() + 60_000).toISOString(),
+    })
+
+    const challengeResult = await handle(new Request('https://example.com/a'))
+    expect(challengeResult.status).toBe(402)
+    if (challengeResult.status !== 402) throw new Error()
+
+    const credential = Credential.from({
+      challenge: Challenge.fromResponse(challengeResult.challenge),
+      payload: { token: 'valid' },
+    })
+
+    const result = await handle(
+      new Request('https://example.com/b', {
+        headers: { Authorization: Credential.serialize(credential) },
+      }),
+    )
+
+    expect(result.status).toBe(402)
+    if (result.status !== 402) throw new Error()
+    const body = (await result.challenge.json()) as { detail: string }
+    expect(body.detail).toContain('opaque')
+  })
+})
+
+describe('challenge scope binding: full request comparison', () => {
+  const methodWithExtras = Method.from({
+    name: 'mock',
+    intent: 'charge',
+    schema: {
+      credential: { payload: z.object({ token: z.string() }) },
+      request: z.object({
+        amount: z.string(),
+        currency: z.string(),
+        recipient: z.string(),
+        sessionId: z.optional(z.string()),
+      }),
+    },
+  })
+
+  const serverMethod = Method.toServer(methodWithExtras, {
+    async verify() {
+      return {
+        method: 'mock',
+        reference: 'ref',
+        status: 'success' as const,
+        timestamp: new Date().toISOString(),
+      }
+    },
+  })
+
+  test('rejects credential with same core fields but different extra request field', async () => {
+    const handler = Mppx.create({ methods: [serverMethod], realm, secretKey })
+
+    // Route A: with sessionId
+    const handleA = handler.charge({
+      amount: '1000',
+      currency: '0xabc',
+      recipient: '0x001',
+      sessionId: 'sess_aaa',
+      expires: new Date(Date.now() + 60_000).toISOString(),
+    })
+    const resultA = await handleA(new Request('https://example.com/a'))
+    expect(resultA.status).toBe(402)
+    if (resultA.status !== 402) throw new Error()
+
+    const challengeA = Challenge.fromResponse(resultA.challenge)
+    const credential = Credential.from({
+      challenge: challengeA,
+      payload: { token: 'valid' },
+    })
+
+    // Route B: same core fields, different sessionId
+    const handleB = handler.charge({
+      amount: '1000',
+      currency: '0xabc',
+      recipient: '0x001',
+      sessionId: 'sess_bbb',
+      expires: new Date(Date.now() + 60_000).toISOString(),
+    })
+    const result = await handleB(
+      new Request('https://example.com/b', {
+        headers: { Authorization: Credential.serialize(credential) },
+      }),
+    )
+
+    expect(result.status).toBe(402)
+    if (result.status !== 402) throw new Error()
+    const body = (await result.challenge.json()) as { detail: string }
+    expect(body.detail).toContain('request')
+    expect(body.detail).toContain('does not match')
+  })
+
+  test('accepts credential with different expires (freshness is separate from scope)', async () => {
+    const handler = Mppx.create({ methods: [serverMethod], realm, secretKey })
+
+    const futureExpires = new Date(Date.now() + 120_000).toISOString()
+
+    // Get a challenge with one expiration
+    const handle1 = handler.charge({
+      amount: '1000',
+      currency: '0xabc',
+      recipient: '0x001',
+      expires: futureExpires,
+    })
+    const result1 = await handle1(new Request('https://example.com/a'))
+    expect(result1.status).toBe(402)
+    if (result1.status !== 402) throw new Error()
+
+    const challenge = Challenge.fromResponse(result1.challenge)
+    const credential = Credential.from({
+      challenge,
+      payload: { token: 'valid' },
+    })
+
+    // Present to a handler with a different (but still valid) expiration
+    // Same route parameters — only expires differs. The credential's expires
+    // is still valid, so this should succeed (scope check ignores expires).
+    const handle2 = handler.charge({
+      amount: '1000',
+      currency: '0xabc',
+      recipient: '0x001',
+      expires: new Date(Date.now() + 300_000).toISOString(),
+    })
+    const result = await handle2(
+      new Request('https://example.com/a', {
         headers: { Authorization: Credential.serialize(credential) },
       }),
     )

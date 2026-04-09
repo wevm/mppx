@@ -46,6 +46,23 @@ describe('create.Config', () => {
 
     expectTypeOf<Config>().toHaveProperty('methods')
   })
+
+  test('paymentPreferences callback exposes typed method keys', () => {
+    const mppx = Mppx.create({
+      methods: [tempo({ account: {} as Account })],
+      paymentPreferences: ({ tempo }) => {
+        expectTypeOf(tempo.charge).toEqualTypeOf<'tempo/charge'>()
+        expectTypeOf(tempo.session).toEqualTypeOf<'tempo/session'>()
+
+        return {
+          [tempo.charge]: 0.5,
+          [tempo.session]: 0,
+        }
+      },
+    })
+
+    expectTypeOf(mppx.fetch).toBeFunction()
+  })
 })
 
 describe('Method.toClient', () => {

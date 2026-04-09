@@ -2,6 +2,7 @@ import { spawnSync } from 'node:child_process'
 import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
+import { pathToFileURL } from 'node:url'
 
 import { parseUnits } from 'viem'
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts'
@@ -14,6 +15,7 @@ import { accounts, asset, chain, client, fundAccount } from '~test/tempo/viem.js
 
 import * as Challenge from '../Challenge.js'
 import * as Credential from '../Credential.js'
+import * as Method from '../Method.js'
 import * as Receipt from '../Receipt.js'
 import * as Mppx_server from '../server/Mppx.js'
 import { toNodeListener } from '../server/Mppx.js'
@@ -21,6 +23,7 @@ import * as Store from '../Store.js'
 import { stripe as stripe_server } from '../stripe/server/Methods.js'
 import { tempo } from '../tempo/server/Methods.js'
 import type { SessionCredentialPayload } from '../tempo/session/Types.js'
+import * as z from '../zod.js'
 import cli from './cli.js'
 
 const testPrivateKey = generatePrivateKey()
@@ -76,6 +79,24 @@ async function serve(argv: string[], options?: { env?: Record<string, string | u
     }
   }
   return { output, stderr, exitCode }
+}
+
+function createMockChargeMethod(name: string) {
+  return Method.from({
+    name,
+    intent: 'charge',
+    schema: {
+      credential: {
+        payload: z.object({ token: z.string() }),
+      },
+      request: z.object({
+        amount: z.string(),
+        currency: z.string(),
+        decimals: z.number(),
+        recipient: z.string(),
+      }),
+    },
+  })
 }
 
 describe('discover validate', () => {
@@ -326,6 +347,196 @@ describe('basic charge (examples/basic)', () => {
       expect(output).toContain('paid')
     } finally {
       httpServer.close()
+    }
+  })
+
+  test('selects a later supported challenge when the first offer is unsupported', async () => {
+    const unsupportedMethod = Method.toServer(createMockChargeMethod('unknown'), {
+      async verify() {
+        return {
+          method: 'unknown',
+          reference: 'unknown-ref',
+          status: 'success' as const,
+          timestamp: new Date().toISOString(),
+        }
+      },
+    })
+    const tempoMethod = tempo.charge({ getClient: () => client })
+
+    const server = Mppx_server.create({
+      methods: [unsupportedMethod, tempoMethod],
+      realm: 'cli-test-multi-offer',
+      secretKey: 'cli-test-secret',
+    })
+
+    const httpServer = await Http.createServer(async (req, res) => {
+      const result = await toNodeListener(
+        server.compose(
+          [
+            unsupportedMethod,
+            {
+              amount: '1',
+              currency: asset,
+              decimals: 6,
+              expires: new Date(Date.now() + 60_000).toISOString(),
+              recipient: accounts[0].address,
+            },
+          ],
+          [
+            tempoMethod,
+            {
+              amount: '1',
+              currency: asset,
+              decimals: 6,
+              expires: new Date(Date.now() + 60_000).toISOString(),
+              recipient: accounts[0].address,
+            },
+          ],
+        ),
+      )(req, res)
+      if (result.status === 402) return
+      res.end('paid-from-second-offer')
+    })
+
+    try {
+      const { output, exitCode } = await serve([httpServer.url, '--rpc-url', rpcUrl, '-s'], {
+        env: { MPPX_PRIVATE_KEY: testPrivateKey },
+      })
+
+      expect(exitCode).toBeUndefined()
+      expect(output).toContain('paid-from-second-offer')
+    } finally {
+      httpServer.close()
+    }
+  })
+
+  test('config methods emit Accept-Payment and select the preferred challenge', async () => {
+    const alphaMethod = Method.toServer(createMockChargeMethod('alpha'), {
+      async verify({ envelope }) {
+        if ((envelope.credential.payload as { token: string }).token !== 'alpha-token') {
+          throw new Error('expected alpha credential')
+        }
+
+        return {
+          method: 'alpha',
+          reference: 'alpha-ref',
+          status: 'success' as const,
+          timestamp: new Date().toISOString(),
+        }
+      },
+    })
+    const betaMethod = Method.toServer(createMockChargeMethod('beta'), {
+      async verify({ envelope }) {
+        if ((envelope.credential.payload as { token: string }).token !== 'beta-token') {
+          throw new Error('expected beta credential')
+        }
+
+        return {
+          method: 'beta',
+          reference: 'beta-ref',
+          status: 'success' as const,
+          timestamp: new Date().toISOString(),
+        }
+      },
+    })
+
+    const server = Mppx_server.create({
+      methods: [betaMethod, alphaMethod],
+      realm: 'cli-test-config-offers',
+      secretKey: 'cli-test-secret',
+    })
+
+    const configDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mppx-cli-config-'))
+    const configPath = path.join(configDir, 'mppx.config.mjs')
+    const mppxModuleUrl = pathToFileURL(path.join(process.cwd(), 'src/index.ts')).href
+    const cliModuleUrl = pathToFileURL(path.join(process.cwd(), 'src/cli/config.ts')).href
+    fs.writeFileSync(
+      configPath,
+      `
+import { Credential, Method, z } from '${mppxModuleUrl}'
+import { defineConfig } from '${cliModuleUrl}'
+
+const alpha = Method.toClient(Method.from({
+  name: 'alpha',
+  intent: 'charge',
+  schema: {
+    credential: { payload: z.object({ token: z.string() }) },
+    request: z.object({ amount: z.string(), currency: z.string(), decimals: z.number(), recipient: z.string() }),
+  },
+}), {
+  async createCredential({ challenge }) {
+    return Credential.serialize({ challenge, payload: { token: 'alpha-token' } })
+  },
+})
+
+const beta = Method.toClient(Method.from({
+  name: 'beta',
+  intent: 'charge',
+  schema: {
+    credential: { payload: z.object({ token: z.string() }) },
+    request: z.object({ amount: z.string(), currency: z.string(), decimals: z.number(), recipient: z.string() }),
+  },
+}), {
+  async createCredential({ challenge }) {
+    return Credential.serialize({ challenge, payload: { token: 'beta-token' } })
+  },
+})
+
+export default defineConfig({
+  methods: [beta, alpha],
+  paymentPreferences: ({ alpha, beta }) => ({
+    [alpha.charge]: 1,
+    [beta.charge]: 0.2,
+  }),
+})
+      `.trim(),
+    )
+
+    let acceptPaymentHeader: string | undefined
+    let authorization: string | undefined
+    const httpServer = await Http.createServer(async (req, res) => {
+      if (!req.headers.authorization)
+        acceptPaymentHeader = req.headers['accept-payment'] as string | undefined
+      else authorization = req.headers.authorization
+
+      const result = await toNodeListener(
+        server.compose(
+          [
+            betaMethod,
+            {
+              amount: '1',
+              currency: asset,
+              decimals: 6,
+              expires: new Date(Date.now() + 60_000).toISOString(),
+              recipient: accounts[0].address,
+            },
+          ],
+          [
+            alphaMethod,
+            {
+              amount: '1',
+              currency: asset,
+              decimals: 6,
+              expires: new Date(Date.now() + 60_000).toISOString(),
+              recipient: accounts[0].address,
+            },
+          ],
+        ),
+      )(req, res)
+      if (result.status === 402) return
+      res.end('paid-from-config-preference')
+    })
+
+    try {
+      const { output, exitCode } = await serve([httpServer.url, '--config', configPath, '-s'])
+
+      expect(exitCode).toBeUndefined()
+      expect(output).toContain('paid-from-config-preference')
+      expect(acceptPaymentHeader).toBe('beta/charge;q=0.2, alpha/charge')
+      expect(Credential.deserialize(authorization!).payload).toEqual({ token: 'alpha-token' })
+    } finally {
+      httpServer.close()
+      fs.rmSync(configDir, { recursive: true, force: true })
     }
   })
 
@@ -1118,6 +1329,20 @@ describe('sign', () => {
     const { exitCode, output } = await serve(['sign', '--challenge', challenge])
     expect(exitCode).toBe(2)
     expect(output).toContain('Unsupported payment method')
+  })
+
+  test('selects a later supported challenge from a merged challenge value', async () => {
+    const merged = [
+      'Payment id="x", realm="x", method="unknown", intent="charge", request="e30"',
+      validChallenge,
+    ].join(', ')
+
+    const { output, exitCode } = await serve(['sign', '--challenge', merged, '--rpc-url', rpcUrl], {
+      env: { MPPX_PRIVATE_KEY: testPrivateKey },
+    })
+
+    expect(exitCode).toBeUndefined()
+    expect(output.trim()).toMatch(/^Payment\s+\S+/)
   })
 
   test('error: no account for tempo', async () => {

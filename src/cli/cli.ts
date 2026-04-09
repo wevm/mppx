@@ -13,7 +13,7 @@ import { normalizeHeaders } from '../client/internal/Fetch.js'
 import * as Mppx from '../client/Mppx.js'
 import { validate as validateDiscovery } from '../discovery/Validate.js'
 import { createDefaultStore, createKeychain, resolveAccountName } from './account.js'
-import { loadConfig, resolvePlugin } from './internal.js'
+import { loadConfig, resolveAcceptPayment, selectChallenge } from './internal.js'
 import type { Plugin } from './plugins/plugin.js'
 import { readTempoKeystore, resolveTempoAccount } from './plugins/tempo.js'
 import {
@@ -128,6 +128,13 @@ const cli = Cli.create('mppx', {
         headers[header.slice(0, index).trim()] = header.slice(index + 1).trim()
       }
     }
+    const acceptPayment = resolveAcceptPayment(loaded?.config)
+    if (
+      acceptPayment &&
+      !Object.keys(headers).some((key) => key.toLowerCase() === 'accept-payment')
+    ) {
+      headers['Accept-Payment'] = acceptPayment
+    }
 
     const url = (() => {
       const hasProtocol = /^https?:\/\//.test(c.args.url)
@@ -200,8 +207,26 @@ const cli = Cli.create('mppx', {
         return
       }
 
-      const challenge = Challenge.fromResponse(challengeResponse)
-      const { plugin, method: configMethod } = resolvePlugin(challenge, loaded?.config)
+      const selected = selectChallenge(
+        Challenge.fromResponseList(challengeResponse),
+        loaded?.config,
+      )
+      if (!selected) {
+        const offers = Challenge.fromResponseList(challengeResponse)
+          .map((challenge) => `${challenge.method}/${challenge.intent}`)
+          .join(', ')
+        return c.error({
+          code: 'UNSUPPORTED_METHOD',
+          message: `Unsupported payment method. Server offers: ${offers}. Add it to mppx.config.ts using defineConfig().`,
+          exitCode: 2,
+        })
+      }
+
+      const { challenge, plugin, method: configMethod } = selected
+      const selectedChallengeResponse = new Response(null, {
+        status: 402,
+        headers: { 'WWW-Authenticate': Challenge.serialize(challenge) },
+      })
 
       let tokenSymbol = (challenge.request.currency as string | undefined) ?? ''
       let tokenDecimals = (challenge.request.decimals as number | undefined) ?? 6
@@ -297,23 +322,17 @@ const cli = Cli.create('mppx', {
       // Create credential
       let credential: string
       if (pluginResult?.createCredential)
-        credential = await pluginResult.createCredential(challengeResponse)
+        credential = await pluginResult.createCredential(selectedChallengeResponse)
       else if (pluginResult) {
         const mppx = Mppx.create({ methods: pluginResult.methods, polyfill: false })
         credential = await mppx.createCredential(
-          challengeResponse,
+          selectedChallengeResponse,
           pluginResult.credentialContext as undefined,
         )
       } else if (configMethod) {
         const mppx = Mppx.create({ methods: [configMethod], polyfill: false })
-        credential = await mppx.createCredential(challengeResponse)
-      } else {
-        return c.error({
-          code: 'UNSUPPORTED_METHOD',
-          message: `Unsupported payment method: ${challenge.method}/${challenge.intent}. Add it to mppx.config.ts using defineConfig().`,
-          exitCode: 2,
-        })
-      }
+        credential = await mppx.createCredential(selectedChallengeResponse)
+      } else throw new Error('unreachable')
 
       // Send credential and get response
       const credentialHeaders = {
@@ -815,9 +834,9 @@ const sign = Cli.create('sign', {
       })
     }
 
-    let challenge: Challenge.Challenge
+    let challenges: Challenge.Challenge[]
     try {
-      challenge = Challenge.deserialize(raw)
+      challenges = Challenge.deserializeList(raw)
     } catch (err) {
       return c.error({
         code: 'INVALID_CHALLENGE',
@@ -832,7 +851,19 @@ const sign = Cli.create('sign', {
     }
 
     const loaded = await loadConfig(c.options.config)
-    const { plugin, method: configMethod } = resolvePlugin(challenge, loaded?.config)
+    const selected = selectChallenge(challenges, loaded?.config)
+    if (!selected) {
+      const offers = challenges
+        .map((challenge) => `${challenge.method}/${challenge.intent}`)
+        .join(', ')
+      return c.error({
+        code: 'UNSUPPORTED_METHOD',
+        message: `Unsupported payment method. Server offers: ${offers}. Add it to mppx.config.ts using defineConfig().`,
+        exitCode: 2,
+      })
+    }
+
+    const { challenge, plugin, method: configMethod } = selected
     const methodOpts = parseMethodOpts(c.options.methodOpt)
 
     const wwwAuth = Challenge.serialize(challenge)

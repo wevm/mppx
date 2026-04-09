@@ -130,7 +130,7 @@ describe('createCredential', () => {
     })
 
     await expect(mppx.createCredential(response)).rejects.toThrow(
-      'No method found for "unknown.charge". Available: tempo.charge, tempo.session',
+      'No method found for challenges: unknown.charge. Available: tempo.charge, tempo.session',
     )
   })
 
@@ -185,6 +185,71 @@ describe('createCredential', () => {
 
     expect(parsed.payload).toEqual({ signature: '0xstripe', type: 'transaction' })
     expect(parsed.challenge.method).toBe('stripe')
+  })
+
+  test('behavior: selects the preferred challenge from a multi-challenge response', async () => {
+    const stripeCharge = Method.from({
+      name: 'stripe',
+      intent: 'charge',
+      schema: {
+        credential: {
+          payload: Methods.charge.schema.credential.payload,
+        },
+        request: Methods.charge.schema.request,
+      },
+    })
+
+    const stripe = Method.toClient(stripeCharge, {
+      async createCredential({ challenge }) {
+        return Credential.serialize({
+          challenge,
+          payload: { signature: '0xstripe', type: 'transaction' },
+        })
+      },
+    })
+
+    const mppx = Mppx.create({
+      polyfill: false,
+      methods: [tempo({ account: accounts[1], getClient: () => client }), stripe],
+      paymentPreferences: ({ stripe }) => ({
+        [stripe.charge]: 0.5,
+      }),
+    })
+
+    const tempoChallenge = Challenge.fromMethod(Methods.charge, {
+      realm,
+      secretKey,
+      expires: new Date(Date.now() + 60_000).toISOString(),
+      request: {
+        amount: '1000',
+        currency: '0x1234567890123456789012345678901234567890',
+        decimals: 6,
+        recipient: '0x1234567890123456789012345678901234567890',
+      },
+    })
+    const stripeChallenge = Challenge.from({
+      id: 'stripe-challenge-id',
+      realm,
+      method: 'stripe',
+      intent: 'charge',
+      request: {
+        amount: '2000',
+        currency: '0xabcd',
+        recipient: '0xefgh',
+      },
+    })
+
+    const response = new Response(null, {
+      status: 402,
+      headers: {
+        'WWW-Authenticate': `${Challenge.serialize(stripeChallenge)}, ${Challenge.serialize(tempoChallenge)}`,
+      },
+    })
+
+    const credential = await mppx.createCredential(response)
+    const parsed = Credential.deserialize(credential)
+
+    expect(parsed.challenge.method).toBe('tempo')
   })
 
   test('behavior: passes context to createCredential', async () => {

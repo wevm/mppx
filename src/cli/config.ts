@@ -28,17 +28,23 @@ import type { Plugin } from './plugins/plugin.js'
  * })
  * ```
  */
-export function defineConfig(config: defineConfig.Config): defineConfig.Config {
+export function defineConfig<const methods extends Mppx.Methods | undefined = undefined>(
+  config: defineConfig.Config<methods>,
+): defineConfig.Config<methods> {
   return config
 }
 
 export declare namespace defineConfig {
-  type Config = {
+  type Config<methods extends Mppx.Methods | undefined = undefined> = {
     /** Array of methods to use. */
-    methods?: Mppx.create.Config['methods'] | undefined
+    methods?: methods
+    /** Optional payment preferences for configured client methods. */
+    paymentPreferences?: methods extends Mppx.Methods
+      ? Mppx.create.Config<methods>['paymentPreferences']
+      : undefined
     /** Array of plugins to use. */
     plugins?: Plugin[] | undefined
   }
 }
 
-export type Config = defineConfig.Config
+export type Config = defineConfig.Config<Mppx.Methods>

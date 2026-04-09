@@ -3,6 +3,7 @@ import type { McpError } from '@modelcontextprotocol/sdk/types.js'
 
 import type * as Challenge from '../../Challenge.js'
 import * as Credential from '../../Credential.js'
+import * as AcceptPayment from '../../internal/AcceptPayment.js'
 import * as core_Mcp from '../../Mcp.js'
 import type * as Method from '../../Method.js'
 import type * as z from '../../zod.js'
@@ -51,6 +52,7 @@ export function wrap<
   const methods extends readonly Method.AnyClient[],
 >(client: client, config: wrap.Config<methods>): wrap.McpClient<client, methods> {
   const { methods } = config
+  const paymentPreferences = AcceptPayment.resolve(methods)
 
   return {
     ...client,
@@ -76,11 +78,12 @@ export function wrap<
         const challenges = (error.data as { challenges?: Challenge.Challenge[] })?.challenges
         if (!challenges?.length) throw error
 
-        // Select first challenge that matches an installed method intent
-        const challenge = challenges.find((c) =>
-          methods.some((m) => m.name === c.method && m.intent === c.intent),
+        const selected = AcceptPayment.selectChallenge(
+          challenges,
+          methods,
+          paymentPreferences.entries,
         )
-        if (!challenge) {
+        if (!selected) {
           const available = challenges.map((c) => `${c.method}.${c.intent}`).join(', ')
           const installed = methods.map((m) => `${m.name}.${m.intent}`).join(', ')
           throw new Error(
@@ -89,7 +92,10 @@ export function wrap<
           )
         }
 
-        const credential = await createCredential(challenge, { context, methods })
+        const credential = await createCredential(selected.challenge, {
+          context,
+          methods,
+        })
         const parsed = Credential.deserialize(credential)
 
         const retryResult = await client.callTool(
