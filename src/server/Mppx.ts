@@ -175,7 +175,6 @@ export function create<
   for (const mi of methods) {
     intentCount[mi.intent] = (intentCount[mi.intent] ?? 0) + 1
     handlers[`${mi.name}/${mi.intent}`] = createMethodFn({
-      challenge: mi.challenge as never,
       defaults: mi.defaults,
       method: mi,
       realm,
@@ -267,7 +266,7 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
       async (input: Transport.InputOf): Promise<MethodFn.Response> => {
         const expires =
           'expires' in options ? (options.expires as string | undefined) : Expires.minutes(5)
-        const capturedRequest = await transport.captureRequest(input)
+        const capturedRequest = await captureRequest(transport, input)
 
         // Extract credential once — getCredential may have side effects (e.g. SSE transports).
         const [credential, credentialError] = (() => {
@@ -281,10 +280,10 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
           }
         })()
 
-        // Derive the canonical request used for challenge issuance and binding.
-        const challengeRequest = (
-          parameters.challenge
-            ? await parameters.challenge({ capturedRequest, request: merged } as never)
+        // Transform request if method provides a `request` function.
+        const request = (
+          parameters.request
+            ? await parameters.request({ capturedRequest, credential, request: merged } as never)
             : merged
         ) as never
 
@@ -299,7 +298,7 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
           expires,
           meta,
           realm: effectiveRealm,
-          request: challengeRequest,
+          request,
           secretKey,
         })
 
@@ -387,27 +386,17 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
           return { challenge: response, status: 402 }
         }
 
-        const context = {
-          coreBinding: getCoreBinding(credential.challenge.request as Record<string, unknown>),
-          envelope: {
-            capturedRequest,
-            challenge: credential.challenge,
-            credential,
-          },
-          methodBinding: getMethodBinding(credential.challenge.request as Record<string, unknown>),
-        } satisfies Method.VerifiedPaymentContext
-
-        const request = (
-          parameters.request
-            ? await parameters.request({ ...context, requestInput: merged } as never)
-            : credential.challenge.request
-        ) as never
+        const envelope: Method.VerifiedChallengeEnvelope = Object.freeze({
+          capturedRequest,
+          challenge: credential.challenge,
+          credential,
+        })
 
         // User-provided verification (e.g., check signature, submit tx, verify payment).
         // If verification fails, re-issue the challenge so the client can retry.
         let receiptData: Receipt.Receipt
         try {
-          receiptData = await verify({ ...context, request } as never)
+          receiptData = await verify({ credential, envelope, request } as never)
         } catch (e) {
           if (!(e instanceof Errors.PaymentError))
             console.error('mppx: internal verification error', e)
@@ -425,23 +414,30 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
         // and the user's route handler should NOT run. `withReceipt()` will
         // return the management response directly. If undefined, `withReceipt()`
         // expects the caller to pass the user handler's response instead.
-        const respondContext = { ...context, receipt: receiptData, request } as never
-        const managementResponse = respond ? await respond(respondContext) : undefined
+        const managementResponse = respond
+          ? await respond({ credential, envelope, input, receipt: receiptData, request } as never)
+          : undefined
 
         return {
           status: 200,
           withReceipt<response>(response?: response) {
             if (managementResponse) {
               return transport.respondReceipt({
-                context: respondContext,
+                challengeId: credential.challenge.id,
+                credential,
+                envelope,
                 input,
+                receipt: receiptData,
                 response: managementResponse as never,
               }) as response
             }
             if (!response) throw new Error('withReceipt() requires a response argument')
             return transport.respondReceipt({
-              context: respondContext,
+              challengeId: credential.challenge.id,
+              credential,
+              envelope,
               input,
+              receipt: receiptData,
               response: response as never,
             }) as response
           },
@@ -475,7 +471,6 @@ declare namespace createMethodFn {
     transport extends Transport.AnyTransport = Transport.Http,
     defaults extends Record<string, unknown> = Record<string, unknown>,
   > = {
-    challenge?: Method.ChallengeFn<method>
     defaults?: defaults
     method: method
     realm: string | undefined
@@ -518,6 +513,31 @@ function resolveRealmFromCapturedRequest(capturedRequest: Method.CapturedRequest
   return defaultRealm
 }
 
+async function captureRequest(
+  transport: Transport.AnyTransport,
+  input: unknown,
+): Promise<Method.CapturedRequest> {
+  const capturedRequest = transport.captureRequest
+    ? await transport.captureRequest(input)
+    : captureRequestFromInput(input)
+
+  return Object.freeze(capturedRequest)
+}
+
+function captureRequestFromInput(input: unknown): Method.CapturedRequest {
+  const source = input as {
+    headers?: HeadersInit | undefined
+    method?: string | undefined
+    url?: string | URL | undefined
+  }
+
+  return {
+    headers: new Headers(source.headers),
+    method: source.method ?? 'POST',
+    url: Transport.safeUrl(source.url),
+  }
+}
+
 type ChallengeScopeField = 'method' | 'intent' | 'realm' | 'request' | 'opaque'
 
 function getChallengeScopeMismatch(
@@ -533,44 +553,6 @@ function getChallengeScopeMismatch(
   const actualOpaque = actual.opaque ? PaymentRequest.serialize(actual.opaque) : ''
   if (actualOpaque !== expectedOpaque) return 'opaque'
   return undefined
-}
-
-type MethodBindingField = 'chainId' | 'memo' | 'splits'
-type MethodBinding = Partial<Record<MethodBindingField, unknown>>
-
-function getRequestBinding(request: Record<string, unknown>) {
-  const methodDetails = (request.methodDetails ?? {}) as Record<string, unknown>
-
-  return {
-    amount: request.amount ?? methodDetails.amount,
-    currency: request.currency ?? methodDetails.currency,
-    recipient: request.recipient ?? methodDetails.recipient,
-    chainId: request.chainId ?? methodDetails.chainId,
-    memo: methodDetails.memo,
-    splits: methodDetails.splits,
-  }
-}
-
-function getCoreBinding(request: Record<string, unknown>): Method.CoreBinding {
-  const binding = getRequestBinding(request)
-  return {
-    amount: normalizeScalar(binding.amount),
-    currency: normalizeScalar(binding.currency),
-    recipient: normalizeScalar(binding.recipient),
-  }
-}
-
-function getMethodBinding(request: Record<string, unknown>): MethodBinding {
-  const binding = getRequestBinding(request)
-  return {
-    chainId: binding.chainId,
-    memo: binding.memo,
-    splits: binding.splits,
-  }
-}
-
-function normalizeScalar(value: unknown): string | undefined {
-  return value === undefined ? undefined : String(value)
 }
 
 export type MethodFn<
