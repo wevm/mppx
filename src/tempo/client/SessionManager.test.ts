@@ -225,13 +225,10 @@ describe('Session', () => {
         // drain
       }
 
-      const calledHeaders = (mockFetch.mock.calls[0]![1] as RequestInit).headers as Record<
-        string,
-        string
-      >
-      expect(calledHeaders['content-type']).toBe('application/json')
-      expect(calledHeaders['x-custom']).toBe('value')
-      expect(calledHeaders.Accept).toBe('text/event-stream')
+      const calledHeaders = new Headers((mockFetch.mock.calls[0]![1] as RequestInit).headers)
+      expect(calledHeaders.get('content-type')).toBe('application/json')
+      expect(calledHeaders.get('x-custom')).toBe('value')
+      expect(calledHeaders.get('accept')).toBe('text/event-stream')
     })
   })
 
