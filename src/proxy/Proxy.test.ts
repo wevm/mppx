@@ -250,6 +250,28 @@ describe('create', () => {
     expect(await res.json()).toEqual({ path: '/v1/status' })
   })
 
+  test('behavior: joins upstream base paths with request paths', async () => {
+    upstream = await createUpstream((req) =>
+      Response.json({
+        path: new URL(req.url).pathname,
+        search: new URL(req.url).search,
+      }),
+    )
+    const proxy = ApiProxy.create({
+      services: [
+        Service.from('api', {
+          baseUrl: `${upstream.url}/prefix/`,
+          routes: { 'GET /v1/status': true },
+        }),
+      ],
+    })
+    proxyServer = await Http.createServer(proxy.listener)
+
+    const res = await fetch(`${proxyServer.url}/api/v1/status?q=ok`)
+    expect(res.status).toBe(200)
+    expect(await res.json()).toEqual({ path: '/prefix/v1/status', search: '?q=ok' })
+  })
+
   test('behavior: returns 402 when no credential', async () => {
     upstream = await createUpstream(() => Response.json({ result: 'ok' }))
     const proxy = ApiProxy.create({

@@ -62,6 +62,32 @@ describe('fromNodeListener', () => {
     expect(request.url).toBe('http://localhost/')
   })
 
+  test('normalizes absolute-form request targets to the host header', () => {
+    const [req, res] = createMockRequest({
+      url: 'http://unexpected.example/api/resource?q=1',
+      rawHeaders: ['Host', 'example.com'],
+    })
+
+    const request = Request.fromNodeListener(req, res)
+
+    expect(request.url).toBe('http://example.com/api/resource?q=1')
+  })
+
+  test('uses explicit protocol and host overrides', () => {
+    const [req, res] = createMockRequest({
+      url: '/api/resource',
+      rawHeaders: ['Host', 'internal.local'],
+      socket: { encrypted: false },
+    })
+
+    const request = Request.fromNodeListener(req, res, {
+      host: 'api.example.com',
+      protocol: 'https:',
+    })
+
+    expect(request.url).toBe('https://api.example.com/api/resource')
+  })
+
   test('preserves multi-value headers via append', () => {
     const [req, res] = createMockRequest({
       rawHeaders: ['Host', 'example.com', 'Set-Cookie', 'a=1', 'Set-Cookie', 'b=2'],
