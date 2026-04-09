@@ -914,6 +914,26 @@ describe('compose', () => {
     expect(challenges.map((challenge) => challenge.method)).toEqual(['beta', 'alpha'])
   })
 
+  test('applies a specific Accept-Payment opt-out before broader wildcards', async () => {
+    const mppx = Mppx.create({ methods: [alphaMethod, betaMethod], realm, secretKey })
+
+    const result = await mppx.compose(
+      [alphaMethod, challengeOpts],
+      [betaMethod, challengeOpts],
+    )(
+      new Request('https://example.com/resource', {
+        headers: { 'Accept-Payment': 'alpha/*;q=1, alpha/charge;q=0, beta/*;q=0.5' },
+      }),
+    )
+
+    expect(result.status).toBe(402)
+    if (result.status !== 402) throw new Error()
+
+    const challenges = Challenge.fromResponseList(result.challenge)
+    expect(challenges).toHaveLength(1)
+    expect(challenges[0]?.method).toBe('beta')
+  })
+
   test('falls back to all compose challenges when Accept-Payment has no matches', async () => {
     const mppx = Mppx.create({ methods: [alphaMethod, betaMethod], realm, secretKey })
 
@@ -923,6 +943,25 @@ describe('compose', () => {
     )(
       new Request('https://example.com/resource', {
         headers: { 'Accept-Payment': 'gamma/charge' },
+      }),
+    )
+
+    expect(result.status).toBe(402)
+    if (result.status !== 402) throw new Error()
+
+    const challenges = Challenge.fromResponseList(result.challenge)
+    expect(challenges.map((challenge) => challenge.method)).toEqual(['alpha', 'beta'])
+  })
+
+  test('falls back to all compose challenges when Accept-Payment is invalid', async () => {
+    const mppx = Mppx.create({ methods: [alphaMethod, betaMethod], realm, secretKey })
+
+    const result = await mppx.compose(
+      [alphaMethod, challengeOpts],
+      [betaMethod, challengeOpts],
+    )(
+      new Request('https://example.com/resource', {
+        headers: { 'Accept-Payment': 'not a valid header' },
       }),
     )
 

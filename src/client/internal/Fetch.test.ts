@@ -456,6 +456,102 @@ describe('Fetch.from: init passthrough (non-402)', () => {
     expect(new Headers(receivedInits[0]?.headers).get('Accept-Payment')).toBe('custom/charge;q=0.5')
   })
 
+  test('uses an explicit Accept-Payment header to reprioritize challenge selection', async () => {
+    let callCount = 0
+    const mockFetch: typeof globalThis.fetch = async (_input, init) => {
+      callCount++
+      if (callCount === 1) {
+        expect(new Headers(init?.headers).get('Accept-Payment')).toBe(
+          'stripe/charge, tempo/charge;q=0.1',
+        )
+
+        return new Response(null, {
+          status: 402,
+          headers: {
+            'WWW-Authenticate': [
+              'Payment id="tempo", realm="test", method="tempo", intent="charge", request="eyJhbW91bnQiOiIxIn0"',
+              'Payment id="stripe", realm="test", method="stripe", intent="charge", request="eyJhbW91bnQiOiIxIn0"',
+            ].join(', '),
+          },
+        })
+      }
+
+      expect(new Headers(init?.headers).get('Authorization')).toBe('stripe-credential')
+      return new Response('OK', { status: 200 })
+    }
+
+    const fetch = Fetch.from({
+      fetch: mockFetch,
+      methods: [
+        {
+          name: 'tempo',
+          intent: 'charge',
+          context: undefined,
+          createCredential: async () => 'tempo-credential',
+        },
+        {
+          name: 'stripe',
+          intent: 'charge',
+          context: undefined,
+          createCredential: async () => 'stripe-credential',
+        },
+      ] as const,
+    })
+
+    const response = await fetch('https://example.com/api', {
+      headers: { 'Accept-Payment': 'stripe/charge, tempo/charge;q=0.1' },
+    })
+    expect(response.status).toBe(200)
+  })
+
+  test('applies an explicit method opt-out before broader wildcard preferences', async () => {
+    let callCount = 0
+    const mockFetch: typeof globalThis.fetch = async (_input, init) => {
+      callCount++
+      if (callCount === 1) {
+        expect(new Headers(init?.headers).get('Accept-Payment')).toBe(
+          'tempo/*;q=1, tempo/charge;q=0, stripe/*;q=0.5',
+        )
+
+        return new Response(null, {
+          status: 402,
+          headers: {
+            'WWW-Authenticate': [
+              'Payment id="tempo", realm="test", method="tempo", intent="charge", request="eyJhbW91bnQiOiIxIn0"',
+              'Payment id="stripe", realm="test", method="stripe", intent="charge", request="eyJhbW91bnQiOiIxIn0"',
+            ].join(', '),
+          },
+        })
+      }
+
+      expect(new Headers(init?.headers).get('Authorization')).toBe('stripe-credential')
+      return new Response('OK', { status: 200 })
+    }
+
+    const fetch = Fetch.from({
+      fetch: mockFetch,
+      methods: [
+        {
+          name: 'tempo',
+          intent: 'charge',
+          context: undefined,
+          createCredential: async () => 'tempo-credential',
+        },
+        {
+          name: 'stripe',
+          intent: 'charge',
+          context: undefined,
+          createCredential: async () => 'stripe-credential',
+        },
+      ] as const,
+    })
+
+    const response = await fetch('https://example.com/api', {
+      headers: { 'Accept-Payment': 'tempo/*;q=1, tempo/charge;q=0, stripe/*;q=0.5' },
+    })
+    expect(response.status).toBe(200)
+  })
+
   test('preserves non-header init fields across all non-402 status codes', async () => {
     for (const status of [200, 201, 204, 301, 400, 401, 403, 404, 500, 503]) {
       const receivedInits: (RequestInit | undefined)[] = []
@@ -657,6 +753,64 @@ describe('Fetch.from: 402 retry path', () => {
     })
 
     const response = await fetch('https://example.com/api')
+    expect(response.status).toBe(200)
+  })
+
+  test('falls back to configured preferences when explicit Accept-Payment is invalid', async () => {
+    let callCount = 0
+    const mockFetch: typeof globalThis.fetch = async (_input, init) => {
+      callCount++
+      if (callCount === 1) {
+        expect(new Headers(init?.headers).get('Accept-Payment')).toBe('not a valid header')
+
+        return new Response(null, {
+          status: 402,
+          headers: {
+            'WWW-Authenticate': [
+              'Payment id="stripe", realm="test", method="stripe", intent="charge", request="eyJhbW91bnQiOiIxIn0"',
+              'Payment id="tempo", realm="test", method="tempo", intent="charge", request="eyJhbW91bnQiOiIxIn0"',
+            ].join(', '),
+          },
+        })
+      }
+
+      expect(new Headers(init?.headers).get('Authorization')).toBe('tempo-credential')
+      return new Response('OK', { status: 200 })
+    }
+
+    const fetch = Fetch.from({
+      fetch: mockFetch,
+      methods: [
+        {
+          name: 'tempo',
+          intent: 'charge',
+          context: undefined,
+          createCredential: async () => 'tempo-credential',
+        },
+        {
+          name: 'stripe',
+          intent: 'charge',
+          context: undefined,
+          createCredential: async () => 'stripe-credential',
+        },
+      ] as const,
+      acceptPayment: {
+        definition: { 'stripe/charge': 0.5 },
+        entries: [
+          { intent: 'charge', method: 'tempo', q: 1, index: 0 },
+          { intent: 'charge', method: 'stripe', q: 0.5, index: 1 },
+        ],
+        header: 'tempo/charge, stripe/charge;q=0.5',
+        keys: {
+          stripe: { charge: 'stripe/charge' },
+          tempo: { charge: 'tempo/charge' },
+        },
+      },
+    })
+
+    const response = await fetch('https://example.com/api', {
+      headers: { 'Accept-Payment': 'not a valid header' },
+    })
     expect(response.status).toBe(200)
   })
 

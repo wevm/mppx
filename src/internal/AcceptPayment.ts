@@ -159,10 +159,10 @@ function bestMatch(
     const candidate = { ...preference, specificity: specificity(preference) }
     if (
       !best ||
-      candidate.q > best.q ||
-      (candidate.q === best.q && candidate.specificity > best.specificity) ||
-      (candidate.q === best.q &&
-        candidate.specificity === best.specificity &&
+      candidate.specificity > best.specificity ||
+      (candidate.specificity === best.specificity && candidate.q > best.q) ||
+      (candidate.specificity === best.specificity &&
+        candidate.q === best.q &&
         candidate.index < best.index)
     ) {
       best = candidate
