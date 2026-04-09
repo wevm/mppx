@@ -1370,7 +1370,13 @@ export default defineConfig({
       'Payment id="x", realm="x", method="alpha", intent="charge", request="eyJhbW91bnQiOiIxIn0"'
 
     try {
-      const { exitCode, output } = await serve(['sign', '--challenge', challenge, '--config', configPath])
+      const { exitCode, output } = await serve([
+        'sign',
+        '--challenge',
+        challenge,
+        '--config',
+        configPath,
+      ])
       expect(exitCode).toBe(2)
       expect(output).toContain('Unsupported payment method')
     } finally {

@@ -210,9 +210,8 @@ function specificity(preference: Pick<Entry, 'intent' | 'method'>): number {
 }
 
 function parseEntry(part: string, index: number): Entry {
-  const match = /^(?<method>[^/;\s]+|\*)\s*\/\s*(?<intent>[^/;\s]+|\*)(?<params>(?:\s*;\s*.+)?)$/u.exec(
-    part,
-  )
+  const match =
+    /^(?<method>[^/;\s]+|\*)\s*\/\s*(?<intent>[^/;\s]+|\*)(?<params>(?:\s*;\s*.+)?)$/u.exec(part)
   const method = match?.groups?.method
   const intent = match?.groups?.intent
 
