@@ -1,5 +1,11 @@
 # mppx
 
+## 0.5.10
+
+### Patch Changes
+
+- d95c01c: Pruned internal dependencies.
+
 ## 0.5.9
 
 ### Patch Changes
