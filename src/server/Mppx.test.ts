@@ -2278,38 +2278,6 @@ describe('challenge scope binding: opaque', () => {
 
     expect(result.status).toBe(200)
   })
-
-  test('rejects credential replayed to a different path with the same request and meta', async () => {
-    const handler = Mppx.create({ methods: [serverMethod], realm, secretKey })
-
-    const handle = handler.charge({
-      amount: '1000',
-      currency: '0xabc',
-      recipient: '0x001',
-      meta: { pi: 'pi_111' },
-      expires: new Date(Date.now() + 60_000).toISOString(),
-    })
-
-    const challengeResult = await handle(new Request('https://example.com/a'))
-    expect(challengeResult.status).toBe(402)
-    if (challengeResult.status !== 402) throw new Error()
-
-    const credential = Credential.from({
-      challenge: Challenge.fromResponse(challengeResult.challenge),
-      payload: { token: 'valid' },
-    })
-
-    const result = await handle(
-      new Request('https://example.com/b', {
-        headers: { Authorization: Credential.serialize(credential) },
-      }),
-    )
-
-    expect(result.status).toBe(402)
-    if (result.status !== 402) throw new Error()
-    const body = (await result.challenge.json()) as { detail: string }
-    expect(body.detail).toContain('opaque')
-  })
 })
 
 describe('challenge scope binding: full request comparison', () => {

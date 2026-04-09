@@ -261,7 +261,6 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
 
   return (options) => {
     const { description, meta, ...rest } = options
-    assertNoReservedMetaKeys(meta)
     const merged = { ...defaults, ...rest }
 
     return Object.assign(
@@ -295,11 +294,10 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
         // Recompute challenge from options. The HMAC-bound ID means we don't need to
         // store challenges server-side—if the client echoes back a credential with
         // a matching ID, we know it was issued by us with these exact parameters.
-        const scopeMeta = getRequestScopeMeta(capturedRequest, meta)
         const challenge = Challenge.fromMethod(method, {
           description,
           expires,
-          meta: scopeMeta,
+          meta,
           realm: effectiveRealm,
           request: challengeRequest,
           secretKey,
@@ -348,7 +346,8 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
         // cross-route scope confusion where a credential issued for one route
         // (or different method/intent/opaque) is presented at another.
         // Fields not compared: expires (per-issuance freshness, checked separately),
-        // digest and description (intentionally not part of binding).
+        // digest (request-body binding, deferred to a separate layer), description
+        // (intentionally not part of binding).
         {
           const mismatch = getChallengeScopeMismatch(challenge, credential.challenge)
           if (mismatch) {
@@ -456,7 +455,7 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
           name: method.name,
           intent: method.intent,
           _canonicalRequest: PaymentRequest.fromMethod(method, merged),
-          _canonicalOpaque: stripInternalMeta(options.meta),
+          _canonicalOpaque: options.meta,
         },
       },
     )
@@ -517,60 +516,6 @@ function resolveRealmFromCapturedRequest(capturedRequest: Method.CapturedRequest
     `Could not auto-detect realm from request. Falling back to "${defaultRealm}". Set \`realm\` in Mppx.create() or the MPP_REALM env var.`,
   )
   return defaultRealm
-}
-
-const InternalMeta = {
-  bodyDigest: '__mppx_body_digest',
-  path: '__mppx_path',
-  query: '__mppx_query',
-} as const
-
-const reservedMetaKeys = new Set(Object.values(InternalMeta))
-
-function assertNoReservedMetaKeys(meta: Record<string, string> | undefined) {
-  if (!meta) return
-
-  for (const key of Object.keys(meta)) {
-    if (reservedMetaKeys.has(key as (typeof InternalMeta)[keyof typeof InternalMeta])) {
-      throw new Error(`Meta key "${key}" is reserved for internal mppx bindings.`)
-    }
-  }
-}
-
-function canonicalizeQuery(url: URL): string | undefined {
-  if (!url.search) return undefined
-  const params = new URLSearchParams(url.search)
-  params.sort()
-  const query = params.toString()
-  return query || undefined
-}
-
-function getRequestScopeMeta(
-  capturedRequest: Method.CapturedRequest,
-  meta: Record<string, string> | undefined,
-): Record<string, string> {
-  return {
-    ...(meta ?? {}),
-    [InternalMeta.path]: capturedRequest.url.pathname || '/',
-    ...(canonicalizeQuery(capturedRequest.url)
-      ? { [InternalMeta.query]: canonicalizeQuery(capturedRequest.url)! }
-      : {}),
-    ...(capturedRequest.bodyDigest
-      ? { [InternalMeta.bodyDigest]: capturedRequest.bodyDigest }
-      : {}),
-  }
-}
-
-function stripInternalMeta(
-  meta: Record<string, string> | undefined,
-): Record<string, string> | undefined {
-  if (!meta) return undefined
-
-  const stripped = Object.fromEntries(
-    Object.entries(meta).filter(([key]) => !reservedMetaKeys.has(key as never)),
-  )
-
-  return Object.keys(stripped).length > 0 ? stripped : undefined
 }
 
 type ChallengeScopeField = 'method' | 'intent' | 'realm' | 'request' | 'opaque'
@@ -804,8 +749,8 @@ export function compose(
           const canonicalOpaque = meta._canonicalOpaque
             ? PaymentRequest.serialize(meta._canonicalOpaque)
             : ''
-          const credOpaque = stripInternalMeta(credential.challenge.opaque)
-            ? PaymentRequest.serialize(stripInternalMeta(credential.challenge.opaque)!)
+          const credOpaque = credential.challenge.opaque
+            ? PaymentRequest.serialize(credential.challenge.opaque)
             : ''
           return canonicalOpaque === credOpaque
         })
