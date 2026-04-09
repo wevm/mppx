@@ -1,3 +1,5 @@
+import * as http from 'node:http'
+
 import { Challenge, Credential, Method, z } from 'mppx'
 import { Mppx, Transport, tempo } from 'mppx/server'
 import { describe, expect, test } from 'vp/test'
@@ -2420,6 +2422,73 @@ describe('realm auto-detection', () => {
 
     const challenge = Challenge.fromResponse(result.challenge)
     expect(challenge.realm).toBe(expected)
+  })
+
+  test('ignores absolute-form request targets when deriving realm in node listeners', async () => {
+    const handler = Mppx.create({ methods: [mockMethod], secretKey })
+    const server = await Http.createServer(async (req, res) => {
+      const result = await Mppx.toNodeListener(
+        handler.charge({
+          amount: '100',
+          currency: '0x0000000000000000000000000000000000000001',
+          recipient: '0x0000000000000000000000000000000000000002',
+        }),
+      )(req, res)
+
+      if (result.status !== 402) res.end('OK')
+    })
+
+    try {
+      const rawResponse = await new Promise<{
+        body: string
+        headers: http.IncomingHttpHeaders
+        statusCode: number
+      }>((resolve, reject) => {
+        const request = http.request(
+          {
+            host: '127.0.0.1',
+            port: server.port,
+            method: 'GET',
+            path: 'http://unexpected.example/resource',
+            headers: { Host: `localhost:${server.port}` },
+          },
+          (response) => {
+            const chunks: Buffer[] = []
+            response.on('data', (chunk) => chunks.push(Buffer.from(chunk)))
+            response.on('end', () => {
+              resolve({
+                body: Buffer.concat(chunks).toString('utf8'),
+                headers: response.headers,
+                statusCode: response.statusCode ?? 0,
+              })
+            })
+          },
+        )
+
+        request.on('error', reject)
+        request.end()
+      })
+
+      const headers = new Headers()
+      for (const [name, value] of Object.entries(rawResponse.headers)) {
+        if (Array.isArray(value)) {
+          for (const item of value) headers.append(name, item)
+        } else if (value !== undefined) {
+          headers.append(name, value)
+        }
+      }
+
+      const challenge = Challenge.fromResponse(
+        new Response(rawResponse.body, {
+          status: rawResponse.statusCode,
+          headers,
+        }),
+      )
+
+      expect(challenge.realm).toBe('localhost')
+    } finally {
+      server.close()
+    }
   })
 
   test('credential verifies across different casing of same host', async () => {

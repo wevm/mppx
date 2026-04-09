@@ -86,7 +86,7 @@ export function fromNodeListener(
     headers.get('Host') ??
     (req.headers as Record<string, string>)[':authority'] ??
     'localhost'
-  const url = new URL(req.url!, `${protocol}//${host}`)
+  const url = new URL(normalizeRequestTarget(req.url), `${protocol}//${host}`)
 
   const init: RequestInit & { duplex?: string } = {
     method,
@@ -109,6 +109,20 @@ export function fromNodeListener(
   }
 
   return new Request(url, init)
+}
+
+function normalizeRequestTarget(url: string | undefined): string {
+  if (!url) return '/'
+
+  try {
+    const absoluteUrl = new URL(url)
+    // Absolute-form request targets can carry a different origin than the socket host.
+    // Keep only path+query so realm detection stays bound to Host/:authority.
+    if (absoluteUrl.protocol === 'http:' || absoluteUrl.protocol === 'https:')
+      return `${absoluteUrl.pathname}${absoluteUrl.search}`
+  } catch {}
+
+  return url
 }
 
 function createHeaders(req: IncomingMessage): Headers {
