@@ -6,7 +6,7 @@ export type FetchHandler = (request: Request) => Promise<Response> | Response
 
 export type RequestListenerOptions = {
   host?: string | undefined
-  onError?: ((error: unknown) => Response | Promise<Response>) | undefined
+  onError?: ((error: unknown) => void | Response | Promise<void | Response>) | undefined
   protocol?: string | undefined
 }
 
