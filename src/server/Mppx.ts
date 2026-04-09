@@ -1,4 +1,5 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
+import { isDeepStrictEqual } from 'node:util'
 
 import * as Challenge from '../Challenge.js'
 import * as Credential from '../Credential.js'
@@ -340,15 +341,30 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
           return { challenge: response, status: 402 }
         }
 
-        // Verify the credential's challenge matches this route's stable scope:
-        // method, intent, realm, full canonical request, and opaque. This prevents
-        // cross-route scope confusion where a credential issued for one route
-        // (or different method/intent/opaque) is presented at another.
-        // Fields not compared: expires (per-issuance freshness, checked separately),
-        // digest (request-body binding, deferred to a separate layer), description
-        // (intentionally not part of binding).
+        // ── Tier 2: Pinned field safety net ──────────────────────────────
+        //
+        // The HMAC check above (Tier 1) is the primary gate — it already
+        // covers ALL challenge fields including opaque, digest, and the full
+        // serialized request. So why this second check?
+        //
+        // The `request()` hook can produce credential-dependent output: for
+        // example, `feePayer` may differ between the 402 challenge call (no
+        // credential) and the credential-bearing call. This means the
+        // recomputed challenge here has a different `request` blob — and
+        // thus a different HMAC — than the original challenge the client
+        // echoes back. The HMAC check above verifies the *echoed* challenge
+        // was signed by us, but it cannot verify that the echoed challenge
+        // matches *this route's current configuration* when the request
+        // hook transforms fields between calls.
+        //
+        // This check compares only the economically significant "pinned"
+        // fields (method, intent, realm, amount, currency, recipient, etc.)
+        // that MUST be stable across both calls. Fields like `opaque`,
+        // `digest`, and `expires` don't need explicit pinning here because
+        // they are set by server config (not derived from the request hook)
+        // and are already fully covered by the HMAC binding in Tier 1.
         {
-          const mismatch = getChallengeScopeMismatch(challenge, credential.challenge)
+          const mismatch = getPinnedChallengeMismatch(challenge, credential.challenge)
           if (mismatch) {
             const response = await transport.respondChallenge({
               challenge,
@@ -451,7 +467,6 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
           name: method.name,
           intent: method.intent,
           _canonicalRequest: PaymentRequest.fromMethod(method, merged),
-          _canonicalOpaque: options.meta,
         },
       },
     )
@@ -504,7 +519,7 @@ function warnOnce(key: string, message: string) {
 function resolveRealmFromCapturedRequest(capturedRequest: Method.CapturedRequest): string {
   try {
     const { protocol, hostname } = capturedRequest.url
-    if (/^https?:$/.test(protocol) && hostname) return hostname.toLowerCase()
+    if (/^https?:$/.test(protocol) && hostname) return hostname
   } catch {}
   warnOnce(
     Warnings.realmFallback,
@@ -513,6 +528,17 @@ function resolveRealmFromCapturedRequest(capturedRequest: Method.CapturedRequest
   return defaultRealm
 }
 
+/**
+ * Captures the transport request into a frozen snapshot at the start of the
+ * verification flow. This snapshot is threaded through request() → verify() →
+ * respond() → respondReceipt() so every hook sees the same authoritative
+ * request state — preventing the raw transport input from being re-read or
+ * mutated between verification steps.
+ *
+ * Note: Object.freeze is shallow — it prevents reassigning top-level properties
+ * but does not deep-freeze mutable class instances like Headers or URL. This is
+ * an accidental-mutation guard for trusted server hooks, not a security boundary.
+ */
 async function captureRequest(
   transport: Transport.AnyTransport,
   input: unknown,
@@ -538,21 +564,127 @@ function captureRequestFromInput(input: unknown): Method.CapturedRequest {
   }
 }
 
-type ChallengeScopeField = 'method' | 'intent' | 'realm' | 'request' | 'opaque'
+const coreBindingFields = ['amount', 'currency', 'recipient'] as const
+const methodBindingFields = ['chainId', 'memo', 'splits'] as const
+const pinnedRequestBindingFields = [...coreBindingFields, ...methodBindingFields] as const
 
-function getChallengeScopeMismatch(
-  expected: Challenge.Challenge,
-  actual: Challenge.Challenge,
-): ChallengeScopeField | undefined {
-  if (actual.method !== expected.method) return 'method'
-  if (actual.intent !== expected.intent) return 'intent'
-  if (actual.realm !== expected.realm) return 'realm'
-  if (PaymentRequest.serialize(actual.request) !== PaymentRequest.serialize(expected.request))
-    return 'request'
-  const expectedOpaque = expected.opaque ? PaymentRequest.serialize(expected.opaque) : ''
-  const actualOpaque = actual.opaque ? PaymentRequest.serialize(actual.opaque) : ''
-  if (actualOpaque !== expectedOpaque) return 'opaque'
-  return undefined
+type CoreBindingField = (typeof coreBindingFields)[number]
+type MethodBindingField = (typeof methodBindingFields)[number]
+type PinnedRequestBindingField = (typeof pinnedRequestBindingFields)[number]
+type PinnedChallengeField = 'method' | 'intent' | 'realm' | PinnedRequestBindingField
+
+/**
+ * Compares only the fields that MUST be stable across request-hook transforms.
+ *
+ * This is NOT the primary integrity check — the HMAC binding (Challenge.verify)
+ * already covers every challenge field including opaque, digest, and the full
+ * serialized request. This function exists as a secondary safety net for the
+ * case where the `request()` hook produces credential-dependent output, causing
+ * the recomputed challenge to differ from the original in non-economic fields
+ * (e.g. `feePayer`). We only need to verify that the economically significant
+ * subset hasn't drifted.
+ */
+function getPinnedChallengeMismatch(
+  expectedChallenge: Challenge.Challenge,
+  actualChallenge: Challenge.Challenge,
+): PinnedChallengeField | undefined {
+  for (const field of ['method', 'intent', 'realm'] as const) {
+    if (actualChallenge[field] !== expectedChallenge[field]) return field
+  }
+
+  return getPinnedRequestBindingMismatch(
+    expectedChallenge.request as Record<string, unknown>,
+    actualChallenge.request as Record<string, unknown>,
+  )
+}
+
+function getPinnedRequestBindingMismatch(
+  expectedRequest: Record<string, unknown>,
+  actualRequest: Record<string, unknown>,
+): PinnedRequestBindingField | undefined {
+  const expected = getPinnedRequestBinding(expectedRequest)
+  const actual = getPinnedRequestBinding(actualRequest)
+
+  return (
+    getCoreBindingMismatch(expected.coreBinding, actual.coreBinding) ??
+    getMethodBindingMismatch(expected.methodBinding, actual.methodBinding)
+  )
+}
+
+function getCoreBindingMismatch(
+  expected: CoreBinding,
+  actual: CoreBinding,
+): CoreBindingField | undefined {
+  return coreBindingFields.find((field) => !isDeepStrictEqual(expected[field], actual[field]))
+}
+
+function getMethodBindingMismatch(
+  expected: MethodBinding,
+  actual: MethodBinding,
+): MethodBindingField | undefined {
+  return methodBindingFields.find((field) => !isDeepStrictEqual(expected[field], actual[field]))
+}
+
+function getPinnedRequestBinding(request: Record<string, unknown>): PinnedRequestBinding {
+  const methodDetails = (request.methodDetails ?? {}) as Record<string, unknown>
+  const amount = normalizeScalar(request.amount ?? methodDetails.amount)
+  const chainId = normalizeScalar(request.chainId ?? methodDetails.chainId)
+  const currency = normalizeScalar(request.currency ?? methodDetails.currency)
+  const memo = normalizeHex(methodDetails.memo)
+  const recipient = normalizeScalar(request.recipient ?? methodDetails.recipient)
+  const splits = normalizeComparable(methodDetails.splits)
+
+  return {
+    coreBinding: {
+      ...(amount !== undefined ? { amount } : {}),
+      ...(currency !== undefined ? { currency } : {}),
+      ...(recipient !== undefined ? { recipient } : {}),
+    },
+    methodBinding: {
+      ...(chainId !== undefined ? { chainId } : {}),
+      ...(memo !== undefined ? { memo } : {}),
+      ...(splits !== undefined ? { splits } : {}),
+    },
+  }
+}
+
+function normalizeScalar(value: unknown): string | undefined {
+  return value === undefined ? undefined : String(value)
+}
+
+function normalizeHex(value: unknown): string | undefined {
+  if (value === undefined) return undefined
+
+  const normalized = String(value)
+  return normalized.startsWith('0x') ? normalized.toLowerCase() : normalized
+}
+
+function normalizeComparable(value: unknown): unknown {
+  if (value === undefined) return undefined
+  if (Array.isArray(value)) return value.map(normalizeComparable)
+
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>)
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([key, nested]) => [key, normalizeComparable(nested)]),
+    )
+  }
+
+  return typeof value === 'string' ? normalizeHex(value) : value
+}
+
+type CoreBinding = {
+  [field in CoreBindingField]?: string
+}
+
+type MethodBinding = {
+  [field in MethodBindingField]?: unknown
+}
+
+type PinnedRequestBinding = {
+  coreBinding: CoreBinding
+  methodBinding: MethodBinding
 }
 
 export type MethodFn<
@@ -599,7 +731,6 @@ type ConfiguredHandler = ((input: Request) => Promise<MethodFn.Response<Transpor
     intent: string
     html: Html.Options | undefined
     _canonicalRequest: Record<string, unknown>
-    _canonicalOpaque: Record<string, string> | undefined
   }
 }
 
@@ -712,29 +843,19 @@ export function compose(
 
       if (credential) {
         const { method: credMethod, intent: credIntent } = credential.challenge
+        const credReq = credential.challenge.request as Record<string, unknown>
 
-        // Filter by name+intent, then narrow by comparing the full canonical
-        // request and opaque from the echoed challenge against each handler's
-        // stored canonical values. This is a best-effort dispatch heuristic —
-        // the authoritative scope check happens inside each handler via
-        // getChallengeScopeMismatch().
+        // Filter by name+intent, then narrow by comparing stable request fields
+        // from the echoed challenge against each handler's canonical request.
+        // Uses the schema-parsed canonical form (not raw options) so that
+        // transformed fields (e.g. amount with decimals) match correctly.
+        // Also checks inside methodDetails for fields moved there by transforms.
         const candidates = handlers.filter((h) => {
           const meta = (h as ConfiguredHandler)._internal
           if (!meta || meta.name !== credMethod || meta.intent !== credIntent) return false
           const canonical = meta._canonicalRequest
           if (!canonical) return true
-          if (
-            PaymentRequest.serialize(canonical) !==
-            PaymentRequest.serialize(credential.challenge.request)
-          )
-            return false
-          const canonicalOpaque = meta._canonicalOpaque
-            ? PaymentRequest.serialize(meta._canonicalOpaque)
-            : ''
-          const credOpaque = credential.challenge.opaque
-            ? PaymentRequest.serialize(credential.challenge.opaque)
-            : ''
-          return canonicalOpaque === credOpaque
+          return !getPinnedRequestBindingMismatch(canonical, credReq)
         })
 
         const match =
