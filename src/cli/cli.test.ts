@@ -413,6 +413,7 @@ describe('basic charge (examples/basic)', () => {
   test('config methods emit Accept-Payment and select the preferred challenge', async () => {
     const alphaMethod = Method.toServer(createMockChargeMethod('alpha'), {
       async verify({ envelope }) {
+        if (!envelope) throw new Error('expected envelope')
         if ((envelope.credential.payload as { token: string }).token !== 'alpha-token') {
           throw new Error('expected alpha credential')
         }
@@ -427,6 +428,7 @@ describe('basic charge (examples/basic)', () => {
     })
     const betaMethod = Method.toServer(createMockChargeMethod('beta'), {
       async verify({ envelope }) {
+        if (!envelope) throw new Error('expected envelope')
         if ((envelope.credential.payload as { token: string }).token !== 'beta-token') {
           throw new Error('expected beta credential')
         }
