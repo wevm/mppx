@@ -350,7 +350,7 @@ function make402(overrides?: { method?: string; intent?: string }) {
 }
 
 describe('Fetch.from: init passthrough (non-402)', () => {
-  test('adds Accept-Payment on the initial request', async () => {
+  test('preserves init object identity while adding Accept-Payment', async () => {
     const receivedInits: (RequestInit | undefined)[] = []
     const mockFetch: typeof globalThis.fetch = async (_input, init) => {
       receivedInits.push(init)
@@ -370,6 +370,7 @@ describe('Fetch.from: init passthrough (non-402)', () => {
 
     await fetch('https://example.com/ws-upgrade', customInit)
 
+    expect(receivedInits[0]).toBe(customInit)
     const headers = new Headers(receivedInits[0]?.headers)
     expect(headers.get('X-Custom')).toBe('value')
     expect(headers.get('Accept-Payment')).toBe('test/test')
@@ -433,8 +434,36 @@ describe('Fetch.from: init passthrough (non-402)', () => {
     const customInit = { method: 'POST', context: { account: '0xabc' } }
     await fetch('https://example.com/api', customInit as any)
 
+    expect(receivedInits[0]).toBe(customInit)
     expect((receivedInits[0] as Record<string, unknown>).context).toEqual({ account: '0xabc' })
     expect(new Headers(receivedInits[0]?.headers).get('Accept-Payment')).toBe('test/test')
+  })
+
+  test('preserves Request-carried headers when injecting Accept-Payment', async () => {
+    const receivedInputs: (RequestInfo | URL)[] = []
+    const receivedInits: (RequestInit | undefined)[] = []
+    const mockFetch: typeof globalThis.fetch = async (input, init) => {
+      receivedInputs.push(input)
+      receivedInits.push(init)
+      return new Response('OK', { status: 200 })
+    }
+
+    const fetch = Fetch.from({
+      fetch: mockFetch,
+      methods: [noopMethod],
+    })
+
+    const request = new Request('https://example.com/api', {
+      headers: { Authorization: 'Bearer token123', 'X-Custom': 'value' },
+    })
+
+    await fetch(request)
+
+    expect(receivedInputs[0]).toBe(request)
+    const headers = new Headers(receivedInits[0]?.headers)
+    expect(headers.get('Authorization')).toBe('Bearer token123')
+    expect(headers.get('X-Custom')).toBe('value')
+    expect(headers.get('Accept-Payment')).toBe('test/test')
   })
 
   test('does not overwrite an explicit Accept-Payment header', async () => {
@@ -641,10 +670,11 @@ describe('Fetch.from: 402 retry path', () => {
     })
 
     const retryInit = calls[1]!.init as Record<string, unknown>
-    const headers = retryInit.headers as Record<string, string>
-    expect(headers['X-Custom']).toBe('value')
-    expect(headers['Content-Type']).toBe('application/json')
-    expect(headers.Authorization).toBe('credential')
+    const headers = new Headers(retryInit.headers as HeadersInit)
+    expect(headers.get('X-Custom')).toBe('value')
+    expect(headers.get('Content-Type')).toBe('application/json')
+    expect(headers.get('Accept-Payment')).toBe('test/test')
+    expect(headers.get('Authorization')).toBe('credential')
   })
 
   test('preserves method and other init properties on retry', async () => {
@@ -695,7 +725,38 @@ describe('Fetch.from: 402 retry path', () => {
 
     expect(calls).toHaveLength(2)
     const retryInit = calls[1]!.init as Record<string, unknown>
-    expect(retryInit.headers).toEqual({ Authorization: 'credential' })
+    const headers = new Headers(retryInit.headers as HeadersInit)
+    expect(headers.get('Accept-Payment')).toBe('test/test')
+    expect(headers.get('Authorization')).toBe('credential')
+  })
+
+  test('preserves Request-carried headers on retry after injecting Accept-Payment', async () => {
+    let callCount = 0
+    const calls: { init: RequestInit | undefined; input: RequestInfo | URL }[] = []
+    const mockFetch: typeof globalThis.fetch = async (input, init) => {
+      calls.push({ init, input })
+      callCount++
+      if (callCount === 1) return make402()
+      return new Response('OK', { status: 200 })
+    }
+
+    const fetch = Fetch.from({
+      fetch: mockFetch,
+      methods: [noopMethod],
+    })
+
+    const request = new Request('https://example.com/api', {
+      headers: { Authorization: 'Bearer token123', 'X-Custom': 'value' },
+    })
+
+    await fetch(request)
+
+    expect(calls[0]?.input).toBe(request)
+    expect(calls[1]?.input).toBe(request)
+    const headers = new Headers(calls[1]?.init?.headers)
+    expect(headers.get('X-Custom')).toBe('value')
+    expect(headers.get('Accept-Payment')).toBe('test/test')
+    expect(headers.get('Authorization')).toBe('credential')
   })
 
   test('selects the highest-ranked supported challenge', async () => {

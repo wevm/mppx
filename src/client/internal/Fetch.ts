@@ -45,17 +45,23 @@ export function from<const methods extends readonly Method.AnyClient[]>(
   const baseFetch = unwrapFetch(fetch)
 
   const wrappedFetch = async (input: RequestInfo | URL, init?: from.RequestInit<methods>) => {
-    const paymentPreferences = resolvePaymentPreferences(init?.headers, resolvedAcceptPayment)
-    const response = await baseFetch(
+    const callerHeaders = getCallerHeaders(input, init?.headers)
+    const hasExplicitAcceptPayment = callerHeaders.has('Accept-Payment')
+    const paymentPreferences = resolvePaymentPreferences(callerHeaders, resolvedAcceptPayment)
+    const initialRequest = prepareInitialRequest(
       input,
-      withAcceptPaymentHeader(init, paymentPreferences.header),
+      init,
+      callerHeaders,
+      paymentPreferences.header,
+      hasExplicitAcceptPayment,
     )
+    const response = await baseFetch(initialRequest.input, initialRequest.init)
 
     if (response.status !== 402) return response
 
     // Only extract context for payment handling after confirming 402.
     const context = (init as Record<string, unknown> | undefined)?.context
-    const { context: _, ...fetchInit } = (init ?? {}) as Record<string, unknown>
+    const { context: _, ...fetchInit } = (initialRequest.init ?? {}) as Record<string, unknown>
 
     // Parse all challenges from the response (supports merged WWW-Authenticate headers).
     const challenges = Challenge.fromResponseList(response)
@@ -77,9 +83,9 @@ export function from<const methods extends readonly Method.AnyClient[]>(
     const credential = onChallengeCredential ?? (await resolveCredential(challenge, mi, context))
     validateCredentialHeaderValue(credential)
 
-    return baseFetch(input, {
+    return baseFetch(initialRequest.input, {
       ...fetchInit,
-      headers: withAuthorizationHeader(fetchInit.headers, credential),
+      headers: withAuthorizationHeader(initialRequest.headers, credential),
     })
   }
 
@@ -217,20 +223,44 @@ function withAuthorizationHeader(headers: unknown, credential: string): Record<s
 }
 
 /** @internal */
-function withAcceptPaymentHeader<methods extends readonly Method.AnyClient[]>(
+function prepareInitialRequest<methods extends readonly Method.AnyClient[]>(
+  input: RequestInfo | URL,
   init: from.RequestInit<methods> | undefined,
+  callerHeaders: Headers,
   header: string,
-): from.RequestInit<methods> | undefined {
-  if (!header) return init
+  hasExplicitAcceptPayment: boolean,
+): { headers: Headers; init: from.RequestInit<methods> | undefined; input: RequestInfo | URL } {
+  const shouldInjectAcceptPayment = Boolean(header) && !hasExplicitAcceptPayment
+  if (!shouldInjectAcceptPayment) return { headers: callerHeaders, init, input }
 
-  const headers = new Headers(init?.headers)
-  if (headers.has('Accept-Payment')) return init
-
+  const headers = new Headers(input instanceof Request ? input.headers : undefined)
+  callerHeaders.forEach((value, key) => {
+    headers.set(key, value)
+  })
   headers.set('Accept-Payment', header)
-  return {
-    ...(init ?? {}),
-    headers,
+
+  if (init) {
+    // Preserve init identity for callers like websocket upgrade helpers that
+    // depend on the original RequestInit object reaching the underlying fetch.
+    ;(init as from.RequestInit<methods> & { headers?: HeadersInit }).headers = headers
+    return {
+      headers,
+      init,
+      input,
+    }
   }
+
+  return {
+    headers,
+    init: shouldInjectAcceptPayment ? ({ headers } as from.RequestInit<methods>) : undefined,
+    input,
+  }
+}
+
+/** @internal */
+function getCallerHeaders(input: RequestInfo | URL, headers: HeadersInit | undefined): Headers {
+  if (headers) return new Headers(headers)
+  return new Headers(input instanceof Request ? input.headers : undefined)
 }
 
 /** @internal */
@@ -268,10 +298,10 @@ async function resolveCredential(
 }
 
 function resolvePaymentPreferences<methods extends readonly Method.AnyClient[]>(
-  headers: HeadersInit | undefined,
+  headers: Headers,
   acceptPayment: AcceptPayment.Resolved<methods>,
 ): AcceptPayment.Resolved<methods> {
-  const header = headers ? new Headers(headers).get('Accept-Payment') : null
+  const header = headers.get('Accept-Payment')
   if (!header) return acceptPayment
 
   try {
@@ -281,6 +311,9 @@ function resolvePaymentPreferences<methods extends readonly Method.AnyClient[]>(
       header,
     }
   } catch {
+    // Fail open for explicit malformed headers: preserve the caller's header on
+    // the wire, but continue automatic challenge selection with configured
+    // defaults instead of throwing from the wrapper.
     return acceptPayment
   }
 }

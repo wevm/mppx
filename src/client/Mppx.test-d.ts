@@ -116,6 +116,22 @@ describe('Mppx with context', () => {
     expectTypeOf(mppx.createCredential).toBeFunction()
     expectTypeOf(mppx.createCredential).returns.toMatchTypeOf<Promise<string>>()
   })
+
+  test('createCredential accepts an optional Accept-Payment override', () => {
+    const method = charge({
+      account: {} as Account,
+    })
+
+    const mppx = Mppx.create({ methods: [method] })
+
+    const createCredential: (
+      response: Response,
+      context?: Parameters<typeof mppx.createCredential>[1],
+      options?: Parameters<typeof mppx.createCredential>[2],
+    ) => Promise<string> = mppx.createCredential
+
+    expectTypeOf(createCredential).toBeFunction()
+  })
 })
 
 describe('fetch context', () => {

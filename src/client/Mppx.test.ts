@@ -252,6 +252,70 @@ describe('createCredential', () => {
     expect(parsed.challenge.method).toBe('tempo')
   })
 
+  test('behavior: createCredential accepts a request-local Accept-Payment override', async () => {
+    const stripeCharge = Method.from({
+      name: 'stripe',
+      intent: 'charge',
+      schema: {
+        credential: {
+          payload: Methods.charge.schema.credential.payload,
+        },
+        request: Methods.charge.schema.request,
+      },
+    })
+
+    const stripe = Method.toClient(stripeCharge, {
+      async createCredential({ challenge }) {
+        return Credential.serialize({
+          challenge,
+          payload: { signature: '0xstripe', type: 'transaction' },
+        })
+      },
+    })
+
+    const mppx = Mppx.create({
+      polyfill: false,
+      methods: [tempo({ account: accounts[1], getClient: () => client }), stripe],
+    })
+
+    const tempoChallenge = Challenge.fromMethod(Methods.charge, {
+      realm,
+      secretKey,
+      expires: new Date(Date.now() + 60_000).toISOString(),
+      request: {
+        amount: '1000',
+        currency: '0x1234567890123456789012345678901234567890',
+        decimals: 6,
+        recipient: '0x1234567890123456789012345678901234567890',
+      },
+    })
+    const stripeChallenge = Challenge.from({
+      id: 'stripe-challenge-id',
+      realm,
+      method: 'stripe',
+      intent: 'charge',
+      request: {
+        amount: '2000',
+        currency: '0xabcd',
+        recipient: '0xefgh',
+      },
+    })
+
+    const response = new Response(null, {
+      status: 402,
+      headers: {
+        'WWW-Authenticate': `${Challenge.serialize(stripeChallenge)}, ${Challenge.serialize(tempoChallenge)}`,
+      },
+    })
+
+    const credential = await mppx.createCredential(response, undefined, {
+      acceptPayment: 'stripe/charge, tempo/charge;q=0.1',
+    })
+    const parsed = Credential.deserialize(credential)
+
+    expect(parsed.challenge.method).toBe('stripe')
+  })
+
   test('behavior: passes context to createCredential', async () => {
     const mppx = Mppx.create({
       polyfill: false,

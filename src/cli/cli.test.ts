@@ -1333,6 +1333,51 @@ describe('sign', () => {
     expect(output).toContain('Unsupported payment method')
   })
 
+  test('paymentPreferences opt-out is not bypassed by CLI fallback selection', async () => {
+    const configDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mppx-sign-config-'))
+    const configPath = path.join(configDir, 'mppx.config.mjs')
+    const mppxModuleUrl = pathToFileURL(path.join(process.cwd(), 'src/index.ts')).href
+    const cliModuleUrl = pathToFileURL(path.join(process.cwd(), 'src/cli/config.ts')).href
+    fs.writeFileSync(
+      configPath,
+      `
+import { Credential, Method, z } from '${mppxModuleUrl}'
+import { defineConfig } from '${cliModuleUrl}'
+
+const alpha = Method.toClient(Method.from({
+  name: 'alpha',
+  intent: 'charge',
+  schema: {
+    credential: { payload: z.object({ token: z.string() }) },
+    request: z.object({ amount: z.string() }),
+  },
+}), {
+  async createCredential({ challenge }) {
+    return Credential.serialize({ challenge, payload: { token: 'alpha-token' } })
+  },
+})
+
+export default defineConfig({
+  methods: [alpha],
+  paymentPreferences: ({ alpha }) => ({
+    [alpha.charge]: 0,
+  }),
+})
+      `.trim(),
+    )
+
+    const challenge =
+      'Payment id="x", realm="x", method="alpha", intent="charge", request="eyJhbW91bnQiOiIxIn0"'
+
+    try {
+      const { exitCode, output } = await serve(['sign', '--challenge', challenge, '--config', configPath])
+      expect(exitCode).toBe(2)
+      expect(output).toContain('Unsupported payment method')
+    } finally {
+      fs.rmSync(configDir, { recursive: true, force: true })
+    }
+  })
+
   test('selects a later supported challenge from a merged challenge value', async () => {
     const merged = [
       'Payment id="x", realm="x", method="unknown", intent="charge", request="e30"',

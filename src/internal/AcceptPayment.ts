@@ -5,12 +5,14 @@ type MethodLike = {
   name: string
 }
 
+/** Typed `method/intent` key for a configured payment capability. */
 export type Key<methods extends readonly MethodLike[]> = methods[number] extends infer mi
   ? mi extends { name: infer name extends string; intent: infer intent extends string }
     ? `${name}/${intent}`
     : never
   : never
 
+/** Method keys grouped by method name for ergonomic config callbacks. */
 export type KeyTree<methods extends readonly MethodLike[]> = {
   [name in methods[number]['name']]: {
     [mi in Extract<
@@ -20,14 +22,22 @@ export type KeyTree<methods extends readonly MethodLike[]> = {
   }
 }
 
+/** Per-capability q-values keyed by typed `method/intent` strings. */
 export type Definition<methods extends readonly MethodLike[]> = Partial<
   Record<Key<methods>, number>
 >
 
+/**
+ * Accept-Payment configuration.
+ *
+ * Callers may provide a plain definition map or a callback that receives a
+ * typed key tree for authoring preferences without string literals.
+ */
 export type Config<methods extends readonly MethodLike[]> =
   | Definition<methods>
   | ((keys: KeyTree<methods>) => Definition<methods>)
 
+/** Parsed Accept-Payment entry with its original declaration order. */
 export type Entry = {
   intent: string | '*'
   method: string | '*'
@@ -35,6 +45,7 @@ export type Entry = {
   index: number
 }
 
+/** Resolved negotiation data derived from client methods and config. */
 export type Resolved<methods extends readonly MethodLike[]> = {
   definition: Definition<methods>
   entries: Entry[]
@@ -44,6 +55,7 @@ export type Resolved<methods extends readonly MethodLike[]> = {
 
 type Match = Entry & { specificity: number }
 
+/** Builds the typed key tree used by callback-style preference config. */
 export function buildKeys<const methods extends readonly MethodLike[]>(
   methods: methods,
 ): KeyTree<methods> {
@@ -57,6 +69,7 @@ export function buildKeys<const methods extends readonly MethodLike[]>(
   return keys as KeyTree<methods>
 }
 
+/** Resolves configured payment preferences into a header string and parsed entries. */
 export function resolve<const methods extends readonly MethodLike[]>(
   methods: methods,
   config?: Config<methods>,
@@ -78,9 +91,10 @@ export function resolve<const methods extends readonly MethodLike[]>(
   }
 }
 
+/** Parses an `Accept-Payment` header into normalized preference entries. */
 export function parse(header: string): Entry[] {
   const parts = header
-    .split(',')
+    .split(/\s*,\s*/)
     .map((part) => part.trim())
     .filter(Boolean)
 
@@ -89,6 +103,7 @@ export function parse(header: string): Entry[] {
   return parts.map((part, index) => parseEntry(part, index))
 }
 
+/** Serializes preference entries to an `Accept-Payment` header value. */
 export function serialize(entries: readonly Omit<Entry, 'index'>[] | readonly Entry[]): string {
   return entries
     .map(({ method, intent, q }) => {
@@ -98,6 +113,12 @@ export function serialize(entries: readonly Omit<Entry, 'index'>[] | readonly En
     .join(', ')
 }
 
+/**
+ * Orders offered payment methods by the best matching client preference.
+ *
+ * More specific matches win before comparing q-values, so an explicit opt-out
+ * like `tempo/charge;q=0` overrides a broader wildcard such as `tempo/*;q=1`.
+ */
 export function rank<const offer extends { intent: string; method: string }>(
   offers: readonly offer[],
   preferences: readonly Entry[],
@@ -112,6 +133,7 @@ export function rank<const offer extends { intent: string; method: string }>(
     .map(({ offer }) => offer)
 }
 
+/** Selects the best supported challenge from a set of server offers. */
 export function selectChallenge<const methods extends readonly MethodLike[]>(
   challenges: readonly Challenge.Challenge[],
   methods: methods,
@@ -141,6 +163,7 @@ export function selectChallenge<const methods extends readonly MethodLike[]>(
   }
 }
 
+/** Returns the canonical `method/intent` key for a method or challenge-like value. */
 export function keyOf(value: { intent: string; method?: string; name?: string }): string {
   const method = value.method ?? value.name
   if (!method) throw new Error('Missing payment method name.')
@@ -187,11 +210,13 @@ function specificity(preference: Pick<Entry, 'intent' | 'method'>): number {
 }
 
 function parseEntry(part: string, index: number): Entry {
-  const [rawValue, ...params] = part.split(';').map((segment) => segment.trim())
-  const value = rawValue ?? ''
-  const [method, intent, ...rest] = value.split('/').map((segment) => segment.trim())
+  const match = /^(?<method>[^/;\s]+|\*)\s*\/\s*(?<intent>[^/;\s]+|\*)(?<params>(?:\s*;\s*.+)?)$/u.exec(
+    part,
+  )
+  const method = match?.groups?.method
+  const intent = match?.groups?.intent
 
-  if (!method || !intent || rest.length > 0) {
+  if (!method || !intent) {
     throw new Error(`Invalid Accept-Payment entry: ${part}`)
   }
 
@@ -199,11 +224,14 @@ function parseEntry(part: string, index: number): Entry {
   assertToken(intent, 'intent')
 
   let q = 1
-  for (const param of params) {
+  for (const param of splitParameters(match.groups?.params)) {
     if (!param) continue
 
-    const [name, rawValue, ...extra] = param.split('=').map((segment) => segment.trim())
-    if (!name || !rawValue || extra.length > 0) {
+    const parameterMatch = /^(?<name>[A-Za-z0-9_-]+)\s*=\s*(?<value>\S+)$/u.exec(param)
+    const name = parameterMatch?.groups?.name
+    const rawValue = parameterMatch?.groups?.value
+
+    if (!name || !rawValue) {
       throw new Error(`Invalid Accept-Payment parameter: ${param}`)
     }
     if (name !== 'q') continue
@@ -211,6 +239,10 @@ function parseEntry(part: string, index: number): Entry {
   }
 
   return { intent, method, q, index }
+}
+
+function splitParameters(value?: string): string[] {
+  return value ? value.split(/\s*;\s*/).filter(Boolean) : []
 }
 
 function resolveDefinition<const methods extends readonly MethodLike[]>(

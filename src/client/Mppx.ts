@@ -26,6 +26,7 @@ export type Mppx<
   createCredential: (
     response: Transport.ResponseOf<transport>,
     context?: AnyContextFor<FlattenMethods<methods>> | undefined,
+    options?: createCredential.Options | undefined,
   ) => Promise<string>
 }
 
@@ -81,12 +82,17 @@ export function create<
     rawFetch,
     methods,
     transport,
-    async createCredential(response: Transport.ResponseOf<transport>, context?: unknown) {
+    async createCredential(
+      response: Transport.ResponseOf<transport>,
+      context?: unknown,
+      options?: createCredential.Options,
+    ) {
       const challenges = transport.getChallenges
         ? transport.getChallenges(response as never)
         : [transport.getChallenge(response as never)]
+      const preferences = resolveChallengePreferences(acceptPayment.entries, options?.acceptPayment)
 
-      const selected = AcceptPayment.selectChallenge(challenges, methods, acceptPayment.entries)
+      const selected = AcceptPayment.selectChallenge(challenges, methods, preferences)
       if (!selected)
         throw new Error(
           `No method found for challenges: ${challenges.map((challenge) => `${challenge.method}.${challenge.intent}`).join(', ')}. Available: ${methods.map((m) => `${m.name}.${m.intent}`).join(', ')}`,
@@ -103,6 +109,13 @@ export function create<
           : ({ challenge } as never),
       )
     },
+  }
+}
+
+export declare namespace createCredential {
+  type Options = {
+    /** Request-local Accept-Payment override for manual rawFetch + createCredential flows. */
+    acceptPayment?: string | readonly AcceptPayment.Entry[] | undefined
   }
 }
 
@@ -177,3 +190,11 @@ type FlattenMethods<methods extends Methods> = methods extends readonly [
       ? readonly [head, ...FlattenMethods<tail>]
       : never
   : readonly []
+
+function resolveChallengePreferences(
+  fallback: readonly AcceptPayment.Entry[],
+  override?: string | readonly AcceptPayment.Entry[] | undefined,
+): readonly AcceptPayment.Entry[] {
+  if (!override) return fallback
+  return typeof override === 'string' ? AcceptPayment.parse(override) : override
+}

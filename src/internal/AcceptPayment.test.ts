@@ -2,6 +2,11 @@ import { describe, expect, test } from 'vp/test'
 
 import * as AcceptPayment from './AcceptPayment.js'
 
+function stripIndex(entry: AcceptPayment.Entry) {
+  const { index: _index, ...rest } = entry
+  return rest
+}
+
 describe('AcceptPayment', () => {
   test('resolve builds a typed header from methods and overrides', () => {
     const resolved = AcceptPayment.resolve(
@@ -24,14 +29,45 @@ describe('AcceptPayment', () => {
 
   test('parse supports q-values and wildcards', () => {
     expect(
-      AcceptPayment.parse('tempo/*, stripe/charge;q=0.5, */session;q=0').map(
-        ({ index: _index, ...entry }) => entry,
-      ),
+      AcceptPayment.parse('tempo/*, stripe/charge;q=0.5, */session;q=0').map(stripIndex),
     ).toEqual([
       { intent: '*', method: 'tempo', q: 1 },
       { intent: 'charge', method: 'stripe', q: 0.5 },
       { intent: 'session', method: '*', q: 0 },
     ])
+  })
+
+  test('parse raw header vectors into normalized entries', () => {
+    const vectors = [
+      {
+        header: 'tempo/charge',
+        entries: [{ intent: 'charge', method: 'tempo', q: 1 }],
+        normalized: 'tempo/charge',
+      },
+      {
+        header: ' stripe/charge ; q = 0.25 , */session ; q=0 ',
+        entries: [
+          { intent: 'charge', method: 'stripe', q: 0.25 },
+          { intent: 'session', method: '*', q: 0 },
+        ],
+        normalized: 'stripe/charge;q=0.25, */session;q=0',
+      },
+      {
+        header: 'tempo/*;q=1, tempo/charge;q=0, stripe/*;q=0.5',
+        entries: [
+          { intent: '*', method: 'tempo', q: 1 },
+          { intent: 'charge', method: 'tempo', q: 0 },
+          { intent: '*', method: 'stripe', q: 0.5 },
+        ],
+        normalized: 'tempo/*, tempo/charge;q=0, stripe/*;q=0.5',
+      },
+    ] as const
+
+    for (const { entries, header, normalized } of vectors) {
+      const parsed = AcceptPayment.parse(header)
+      expect(parsed.map(stripIndex)).toEqual(entries)
+      expect(AcceptPayment.serialize(parsed)).toBe(normalized)
+    }
   })
 
   test('parse rejects empty and malformed headers', () => {

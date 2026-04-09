@@ -52,6 +52,8 @@ export function selectChallenge(
     if (selected) {
       return { challenge: selected.challenge, ...resolvePlugin(selected.challenge, config) }
     }
+
+    return undefined
   }
 
   for (const challenge of challenges) {
