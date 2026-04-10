@@ -55,7 +55,7 @@
     "vite": "^8.0.5",
     "vp": "npm:vite-plus@~0.1.14",
     "ws": "^8.20.0",
-    "zile": "^0.0.19"
+    "zile": "^0.0.24"
   },
   "packageManager": "pnpm@10.28.0",
   "[!start-pkg]": "",
