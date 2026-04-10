@@ -1,4 +1,5 @@
 import * as Challenge from '../../Challenge.js'
+import * as Errors from '../../Errors.js'
 import type * as Method from '../../Method.js'
 import type * as z from '../../zod.js'
 
@@ -71,6 +72,9 @@ export function from<const methods extends readonly Method.AnyClient[]>(
       throw new Error(
         `No method found for challenges: ${challenges.map((c) => `${c.method}.${c.intent}`).join(', ')}. Available: ${methods.map((m) => `${m.name}.${m.intent}`).join(', ')}`,
       )
+
+    // Validate challenge expiration before creating credential (client-side early rejection)
+    validateChallengeExpiration(challenge)
 
     const onChallengeCredential = onChallenge
       ? await onChallenge(challenge, {
@@ -237,6 +241,13 @@ function validateCredentialHeaderValue(credential: string): void {
   if (!credential.trim()) throw new Error('Credential header value must be non-empty')
   if (credential.includes('\r') || credential.includes('\n')) {
     throw new Error('Credential header value contains illegal newline characters')
+  }
+}
+
+/** @internal Validates that a challenge has not expired. */
+function validateChallengeExpiration(challenge: Challenge.Challenge): void {
+  if (challenge.expires && new Date(challenge.expires) < new Date()) {
+    throw new Errors.PaymentExpiredError({ expires: challenge.expires })
   }
 }
 
