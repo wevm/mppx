@@ -26,12 +26,16 @@ export const callScopes = [
   [Selectors.approve, Selectors.swapExactAmountOut, Selectors.transferWithMemo],
 ]
 
+/**
+ * maxTotalFee must be high enough to cover `transferWithMemo` and
+ * swap transactions at peak gas prices. Bumped from 0.01 ETH in #327.
+ */
 const policy = {
-  maxGas: 2_000_000n, // 2M gas units
-  maxFeePerGas: 100_000_000_000n, // 100 gwei
-  maxPriorityFeePerGas: 10_000_000_000n, // 10 gwei
-  maxTotalFee: 50_000_000_000_000_000n, // 0.05 ETH
-  maxValidityWindowSeconds: 15 * 60, // 15 minutes
+  maxGas: 2_000_000n,
+  maxFeePerGas: 100_000_000_000n,
+  maxPriorityFeePerGas: 10_000_000_000n,
+  maxTotalFee: 50_000_000_000_000_000n,
+  maxValidityWindowSeconds: 15 * 60,
 } as const
 
 /** Validates that a set of transaction calls matches an allowed fee-payer pattern. */
