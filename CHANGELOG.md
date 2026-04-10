@@ -1,5 +1,11 @@
 # mppx
 
+## 0.5.11
+
+### Patch Changes
+
+- 2aff2c0: Handled malformed Host headers in the Node request listener instead of letting them crash the process.
+
 ## 0.5.10
 
 ### Patch Changes
