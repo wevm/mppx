@@ -326,8 +326,17 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
           return { challenge: response, status: 402 }
         }
 
-        // Verify the echoed challenge was issued by us by recomputing its HMAC.
-        // This is stateless—no database lookup needed.
+        // ── Tier 1: HMAC provenance check (primary gate) ──────────────────
+        //
+        // Recompute the HMAC-SHA256 over the credential's echoed challenge
+        // parameters (realm|method|intent|request|expires|digest|opaque) and
+        // compare to the echoed `id`. This proves the challenge was issued by
+        // this server with these exact parameters — including opaque/meta,
+        // expires, and the full serialized request blob.
+        //
+        // This is the authoritative binding per §5.1.2.1.1 of the spec
+        // (https://paymentauth.org/draft-httpauth-payment-00.html#section-5.1.2.1.1).
+        // No database lookup is needed; the HMAC is stateless verification.
         if (!Challenge.verify(credential.challenge, { secretKey })) {
           const response = await transport.respondChallenge({
             challenge,

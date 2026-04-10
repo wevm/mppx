@@ -166,7 +166,7 @@ export function session<const parameters extends session.Parameters>(
       const resolvedFeePayer = (() => {
         const account = typeof request.feePayer === 'object' ? request.feePayer : feePayer
         const requested = request.feePayer !== false && (account ?? feePayer ?? feePayerUrl)
-        if (credential) return account ?? (requested ? true : undefined)
+        if (credential) return account
         if (requested) return true
         return undefined
       })()
