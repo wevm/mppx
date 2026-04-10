@@ -67,6 +67,8 @@ export function payment<const intent extends Mppx_internal.AnyMethodFn>(
     const receipt = result.withReceipt(new Response())
     const header = receipt.headers.get('Payment-Receipt')
     if (header) set.headers['Payment-Receipt'] = header
+    const cacheControl = receipt.headers.get('Cache-Control')
+    if (cacheControl) set.headers['Cache-Control'] = cacheControl
   }
 }
 

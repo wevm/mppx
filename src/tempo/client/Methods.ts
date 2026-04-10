@@ -1,6 +1,7 @@
 import { charge as charge_ } from './Charge.js'
 import { session as sessionIntent_ } from './Session.js'
 import { sessionManager as session_ } from './SessionManager.js'
+import { subscription as subscription_ } from './Subscription.js'
 
 /**
  * Creates both Tempo `charge` and `session` client methods from shared parameters.
@@ -25,4 +26,6 @@ export namespace tempo {
   export const charge = charge_
   /** Creates a client-side streaming session for managing payment channels. */
   export const session = session_
+  /** Creates a Tempo `subscription` client method for recurring TIP-20 payments. */
+  export const subscription = subscription_
 }

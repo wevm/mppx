@@ -386,12 +386,31 @@ describe('http', () => {
       }).toMatchInlineSnapshot(`
         {
           "headers": {
+            "cache-control": "private",
             "content-type": "text/plain;charset=UTF-8",
             "payment-receipt": "eyJtZXRob2QiOiJ0ZW1wbyIsInJlZmVyZW5jZSI6IjB4dHhoYXNoIiwic3RhdHVzIjoic3VjY2VzcyIsInRpbWVzdGFtcCI6IjIwMjUtMDEtMDFUMDA6MDA6MDAuMDAwWiJ9",
           },
           "status": 200,
         }
       `)
+    })
+
+    test('appends private cache control when the response already has cache directives', () => {
+      const transport = Transport.http()
+      const originalResponse = new Response('OK', {
+        headers: { 'Cache-Control': 'no-store' },
+        status: 200,
+      })
+
+      const response = transport.respondReceipt({
+        credential,
+        input: new Request('https://example.com'),
+        receipt,
+        response: originalResponse,
+        challengeId: challenge.id,
+      })
+
+      expect(response.headers.get('Cache-Control')).toBe('no-store, private')
     })
   })
 })
