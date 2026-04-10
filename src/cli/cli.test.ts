@@ -19,6 +19,7 @@ import * as Mppx_server from '../server/Mppx.js'
 import { toNodeListener } from '../server/Mppx.js'
 import * as Store from '../Store.js'
 import { stripe as stripe_server } from '../stripe/server/Methods.js'
+import * as TempoProof from '../tempo/Proof.js'
 import { tempo } from '../tempo/server/Methods.js'
 import type { SessionCredentialPayload } from '../tempo/session/Types.js'
 import cli from './cli.js'
@@ -76,6 +77,40 @@ async function serve(argv: string[], options?: { env?: Record<string, string | u
     }
   }
   return { output, stderr, exitCode }
+}
+
+function runTempo(args: string[]) {
+  const result = spawnSync('tempo', args, {
+    encoding: 'utf8',
+    cwd: path.resolve(import.meta.dirname, '../..'),
+    timeout: 120_000,
+    env: { ...process.env, NODE_NO_WARNINGS: '1' },
+  })
+
+  return {
+    status: result.status,
+    stdout: result.stdout ?? '',
+    stderr: result.stderr ?? '',
+  }
+}
+
+function getLiveTempoWalletIdentity() {
+  const result = runTempo(['wallet', '-t', 'whoami'])
+  if (result.status !== 0) {
+    throw new Error(`tempo wallet whoami failed with status ${result.status ?? 'unknown'}`)
+  }
+
+  if (!/ready:\s*true/.test(result.stdout)) {
+    throw new Error('tempo wallet is not ready.')
+  }
+
+  const walletAddress = result.stdout.match(/wallet:\s*"?(0x[0-9a-fA-F]{40})"?/)?.[1]
+  const keyAddress = result.stdout.match(/key:\s*\n\s+address:\s*"?(0x[0-9a-fA-F]{40})"?/m)?.[1]
+  if (!walletAddress || !keyAddress) {
+    throw new Error('Could not parse tempo wallet identity.')
+  }
+
+  return { keyAddress, walletAddress }
 }
 
 describe('discover validate', () => {
@@ -204,6 +239,74 @@ describe('discover validate', () => {
     },
   )
 })
+
+describe.skipIf(process.env.MPPX_TEST_LIVE_TEMPO_WALLET !== '1')(
+  'tempo wallet live integration',
+  () => {
+    test(
+      'happy path: delegated zero-amount proof is accepted by a live server when source is wallet DID',
+      { timeout: 120_000 },
+      async () => {
+        const { walletAddress, keyAddress } = getLiveTempoWalletIdentity()
+        expect(walletAddress.toLowerCase()).not.toBe(keyAddress.toLowerCase())
+
+        const mainnetUsdc = '0x20C000000000000000000000b9537d11c60E8b50' as const
+        const server = Mppx_server.create({
+          methods: [
+            tempo.charge({
+              currency: mainnetUsdc,
+              recipient: accounts[0].address,
+            }),
+          ],
+          realm: 'cli-live-tempo-wallet',
+          secretKey: 'cli-test-secret',
+        })
+
+        let authorization: string | undefined
+        const httpServer = await Http.createServer(async (req, res) => {
+          authorization = req.headers.authorization
+          const result = await toNodeListener(
+            server.charge({
+              amount: '0',
+              currency: mainnetUsdc,
+              expires: new Date(Date.now() + 60_000).toISOString(),
+              recipient: accounts[0].address,
+            }),
+          )(req, res)
+          if (result.status === 402) return
+          res.end('live-wallet-proof-ok')
+        })
+        const liveUrl = httpServer.url.replace('localhost', '127.0.0.1')
+
+        try {
+          const request = runTempo(['request', '-s', liveUrl])
+          expect(request.status).toBe(0)
+          expect(request.stdout).toContain('live-wallet-proof-ok')
+          expect(authorization).toBeDefined()
+
+          const credential = Credential.deserialize<{ signature: string; type: 'proof' }>(
+            authorization!,
+          )
+          expect(credential.payload.type).toBe('proof')
+          expect(TempoProof.parseProofSource(credential.source!)).not.toBe(null)
+
+          const rewritten = Credential.serialize({
+            ...credential,
+            source: `did:pkh:eip155:4217:${walletAddress}`,
+          })
+
+          const response = await fetch(liveUrl, {
+            headers: { Authorization: rewritten },
+          })
+          expect(response.status).toBe(200)
+          expect(await response.text()).toBe('live-wallet-proof-ok')
+        } finally {
+          httpServer.close()
+        }
+      },
+    )
+  },
+)
 
 describe('discover generate', () => {
   test('generates from a pre-built OpenAPI document module', async () => {

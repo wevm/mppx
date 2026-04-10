@@ -1,6 +1,8 @@
+import * as SignatureEnvelope from 'ox/tempo/SignatureEnvelope'
 import {
   decodeFunctionData,
   formatUnits,
+  hashTypedData,
   keccak256,
   parseEventLogs,
   type TransactionReceipt,
@@ -227,7 +229,21 @@ export function charge<const parameters extends charge.Parameters>(
             message: Proof.message(challenge.id),
             signature: payload.signature as `0x${string}`,
           })
-          if (!valid) throw new MismatchError('Proof signature does not match source.', {})
+          if (!valid) {
+            const proofSigner = recoverAuthorizedProofSigner({
+              chainId: resolvedChainId,
+              challengeId: challenge.id,
+              signature: payload.signature as `0x${string}`,
+              sourceAddress: source.address,
+            })
+            const authorized = proofSigner
+              ? await isActiveAccessKey(client, {
+                  accessKey: proofSigner,
+                  account: source.address,
+                })
+              : false
+            if (!authorized) throw new MismatchError('Proof signature does not match source.', {})
+          }
 
           if (proofStore && !(await markProofUsed(proofStore, challenge.id))) {
             throw new VerificationFailedError({ reason: 'Proof credential has already been used' })
@@ -649,6 +665,56 @@ async function markProofUsed(
     if (current !== null) return { op: 'noop', result: false }
     return { op: 'set', value: Date.now(), result: true }
   })
+}
+
+function recoverAuthorizedProofSigner(parameters: {
+  chainId: number
+  challengeId: string
+  signature: `0x${string}`
+  sourceAddress: `0x${string}`
+}): `0x${string}` | null {
+  const { chainId, challengeId, signature, sourceAddress } = parameters
+
+  try {
+    const envelope = SignatureEnvelope.from(signature)
+    const proofHash = hashTypedData({
+      domain: Proof.domain(chainId),
+      types: Proof.types,
+      primaryType: 'Proof',
+      message: Proof.message(challengeId),
+    })
+
+    if (envelope.type === 'keychain') {
+      if (!TempoAddress.isEqual(envelope.userAddress, sourceAddress)) return null
+
+      const keychainPayload =
+        envelope.version === 'v2'
+          ? keccak256(`0x04${proofHash.slice(2)}${sourceAddress.slice(2)}` as `0x${string}`)
+          : proofHash
+
+      return SignatureEnvelope.extractAddress({
+        payload: keychainPayload,
+        signature: envelope.inner,
+      })
+    }
+
+    return SignatureEnvelope.extractAddress({ payload: proofHash, signature: envelope })
+  } catch {
+    return null
+  }
+}
+
+async function isActiveAccessKey(
+  client: Awaited<ReturnType<ReturnType<typeof Client.getResolver>>>,
+  parameters: { account: `0x${string}`; accessKey: `0x${string}` },
+): Promise<boolean> {
+  try {
+    const metadata = await Actions.accessKey.getMetadata(client, parameters)
+    const nowSeconds = BigInt(Math.floor(Date.now() / 1000))
+    return !metadata.isRevoked && metadata.expiry > nowSeconds
+  } catch {
+    return false
+  }
 }
 
 /** @internal */

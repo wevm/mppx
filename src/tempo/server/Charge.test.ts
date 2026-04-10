@@ -2114,6 +2114,55 @@ describe('tempo', () => {
       httpServer.close()
     })
 
+    test('behavior: accepts proof signed by an authorized access key for the root source', async () => {
+      const rootAccount = accounts[1]
+      const accessKey = Account.fromSecp256k1(Secp256k1.randomPrivateKey(), {
+        access: rootAccount,
+      })
+
+      await Actions.accessKey.authorizeSync(client, {
+        account: rootAccount,
+        accessKey,
+        feeToken: asset,
+      })
+
+      const httpServer = await Http.createServer(async (req, res) => {
+        const result = await Mppx_server.toNodeListener(
+          server.charge({ amount: '0', decimals: 6 }),
+        )(req, res)
+        if (result.status === 402) return
+        res.end('OK')
+      })
+
+      const response1 = await fetch(httpServer.url)
+      expect(response1.status).toBe(402)
+
+      const challenge = Challenge.fromResponse(response1, {
+        methods: [tempo_client.charge()],
+      })
+
+      const signature = await signTypedData(client, {
+        account: accessKey,
+        domain: Proof.domain(chain.id),
+        types: Proof.types,
+        primaryType: 'Proof',
+        message: Proof.message(challenge.id),
+      })
+
+      const credential = Credential.from({
+        challenge,
+        payload: { signature, type: 'proof' as const },
+        source: `did:pkh:eip155:${chain.id}:${rootAccount.address}`,
+      })
+
+      const response2 = await fetch(httpServer.url, {
+        headers: { Authorization: Credential.serialize(credential) },
+      })
+      expect(response2.status).toBe(200)
+
+      httpServer.close()
+    })
+
     test('behavior: rejects replayed proof credential when store is configured', async () => {
       const replayStore = Store.memory()
       const server_ = Mppx_server.create({
