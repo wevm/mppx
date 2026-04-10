@@ -322,7 +322,7 @@ describe('prepareSponsoredTransaction', () => {
         transaction: {
           ...baseTransaction,
           gas: 1_500_000n,
-          maxFeePerGas: 10_000_000_000n,
+          maxFeePerGas: 50_000_000_000n,
         } as any,
       }),
     ).toThrow('total fee budget exceeds sponsor policy')
