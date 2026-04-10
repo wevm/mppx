@@ -25,6 +25,11 @@ import { signVoucher } from '../session/Voucher.js'
 const realm = 'api.example.com'
 const secretKey = 'test-secret-key'
 
+type ProofAccessKeyContext = {
+  accessKey: ReturnType<typeof Account.fromSecp256k1>
+  rootAccount: (typeof accounts)[number]
+}
+
 const server = Mppx_server.create({
   methods: [
     tempo_server.charge({
@@ -2114,219 +2119,123 @@ describe('tempo', () => {
       httpServer.close()
     })
 
-    test('behavior: accepts proof signed by an authorized access key for the root source', async () => {
-      const rootAccount = accounts[1]
-      const accessKey = Account.fromSecp256k1(Secp256k1.randomPrivateKey(), {
-        access: rootAccount,
-      })
+    for (const testCase of [
+      {
+        name: 'accepts proof signed by an authorized access key for the root source',
+        expectedStatus: 200,
+        async prepare({ accessKey, rootAccount }: ProofAccessKeyContext) {
+          await Actions.accessKey.authorizeSync(client, {
+            account: rootAccount,
+            accessKey,
+            feeToken: asset,
+          })
+        },
+      },
+      {
+        name: 'rejects proof signed by an unauthorized access key for the root source',
+        expectedDetail: 'Proof signature does not match source.',
+        expectedStatus: 402,
+      },
+      {
+        name: 'rejects proof signed by a revoked access key for the root source',
+        expectedDetail: 'Proof signature does not match source.',
+        expectedStatus: 402,
+        async prepare({ accessKey, rootAccount }: ProofAccessKeyContext) {
+          await Actions.accessKey.authorizeSync(client, {
+            account: rootAccount,
+            accessKey,
+            feeToken: asset,
+          })
+          await fundAccount({ address: rootAccount.address, token: asset })
+          await Actions.accessKey.revokeSync(client, {
+            account: rootAccount,
+            accessKey,
+            feeToken: asset,
+          })
+        },
+      },
+      {
+        name: 'rejects proof signed by an expired access key for the root source',
+        expectedDetail: 'Proof signature does not match source.',
+        expectedStatus: 402,
+        async prepare({ accessKey, rootAccount }: ProofAccessKeyContext) {
+          await Actions.accessKey.authorizeSync(client, {
+            account: rootAccount,
+            accessKey,
+            expiry: Math.floor(Date.now() / 1000) + 10,
+            feeToken: asset,
+          })
 
-      await Actions.accessKey.authorizeSync(client, {
-        account: rootAccount,
-        accessKey,
-        feeToken: asset,
-      })
+          const metadata = await Actions.accessKey.getMetadata(client, {
+            account: rootAccount.address,
+            accessKey,
+          })
+          const originalNow = Date.now
+          Date.now = () => (Number(metadata.expiry) + 5) * 1000
 
-      const httpServer = await Http.createServer(async (req, res) => {
-        const result = await Mppx_server.toNodeListener(
-          server.charge({ amount: '0', decimals: 6 }),
-        )(req, res)
-        if (result.status === 402) return
-        res.end('OK')
-      })
-
-      const response1 = await fetch(httpServer.url)
-      expect(response1.status).toBe(402)
-
-      const challenge = Challenge.fromResponse(response1, {
-        methods: [tempo_client.charge()],
-      })
-
-      const signature = await signTypedData(client, {
-        account: accessKey,
-        domain: Proof.domain(chain.id),
-        types: Proof.types,
-        primaryType: 'Proof',
-        message: Proof.message(challenge.id),
-      })
-
-      const credential = Credential.from({
-        challenge,
-        payload: { signature, type: 'proof' as const },
-        source: `did:pkh:eip155:${chain.id}:${rootAccount.address}`,
-      })
-
-      const response2 = await fetch(httpServer.url, {
-        headers: { Authorization: Credential.serialize(credential) },
-      })
-      expect(response2.status).toBe(200)
-
-      httpServer.close()
-    })
-
-    test('behavior: rejects proof signed by an unauthorized access key for the root source', async () => {
-      const rootAccount = accounts[1]
-      const accessKey = Account.fromSecp256k1(Secp256k1.randomPrivateKey(), {
-        access: rootAccount,
-      })
-
-      const httpServer = await Http.createServer(async (req, res) => {
-        const result = await Mppx_server.toNodeListener(
-          server.charge({ amount: '0', decimals: 6 }),
-        )(req, res)
-        if (result.status === 402) return
-        res.end('OK')
-      })
-
-      const response1 = await fetch(httpServer.url)
-      expect(response1.status).toBe(402)
-
-      const challenge = Challenge.fromResponse(response1, {
-        methods: [tempo_client.charge()],
-      })
-
-      const signature = await signTypedData(client, {
-        account: accessKey,
-        domain: Proof.domain(chain.id),
-        types: Proof.types,
-        primaryType: 'Proof',
-        message: Proof.message(challenge.id),
-      })
-
-      const credential = Credential.from({
-        challenge,
-        payload: { signature, type: 'proof' as const },
-        source: `did:pkh:eip155:${chain.id}:${rootAccount.address}`,
-      })
-
-      const response2 = await fetch(httpServer.url, {
-        headers: { Authorization: Credential.serialize(credential) },
-      })
-      expect(response2.status).toBe(402)
-      const body = (await response2.json()) as { detail: string }
-      expect(body.detail).toContain('Proof signature does not match source.')
-
-      httpServer.close()
-    })
-
-    test('behavior: rejects proof signed by a revoked access key for the root source', async () => {
-      const rootAccount = accounts[1]
-      const accessKey = Account.fromSecp256k1(Secp256k1.randomPrivateKey(), {
-        access: rootAccount,
-      })
-
-      await Actions.accessKey.authorizeSync(client, {
-        account: rootAccount,
-        accessKey,
-        feeToken: asset,
-      })
-      await fundAccount({ address: rootAccount.address, token: asset })
-      await Actions.accessKey.revokeSync(client, {
-        account: rootAccount,
-        accessKey,
-        feeToken: asset,
-      })
-
-      const httpServer = await Http.createServer(async (req, res) => {
-        const result = await Mppx_server.toNodeListener(
-          server.charge({ amount: '0', decimals: 6 }),
-        )(req, res)
-        if (result.status === 402) return
-        res.end('OK')
-      })
-
-      const response1 = await fetch(httpServer.url)
-      expect(response1.status).toBe(402)
-
-      const challenge = Challenge.fromResponse(response1, {
-        methods: [tempo_client.charge()],
-      })
-
-      const signature = await signTypedData(client, {
-        account: accessKey,
-        domain: Proof.domain(chain.id),
-        types: Proof.types,
-        primaryType: 'Proof',
-        message: Proof.message(challenge.id),
-      })
-
-      const credential = Credential.from({
-        challenge,
-        payload: { signature, type: 'proof' as const },
-        source: `did:pkh:eip155:${chain.id}:${rootAccount.address}`,
-      })
-
-      const response2 = await fetch(httpServer.url, {
-        headers: { Authorization: Credential.serialize(credential) },
-      })
-      expect(response2.status).toBe(402)
-      const body = (await response2.json()) as { detail: string }
-      expect(body.detail).toContain('Proof signature does not match source.')
-
-      httpServer.close()
-    })
-
-    test('behavior: rejects proof signed by an expired access key for the root source', async () => {
-      const rootAccount = accounts[1]
-      const accessKey = Account.fromSecp256k1(Secp256k1.randomPrivateKey(), {
-        access: rootAccount,
-      })
-
-      await Actions.accessKey.authorizeSync(client, {
-        account: rootAccount,
-        accessKey,
-        expiry: Math.floor(Date.now() / 1000) + 10,
-        feeToken: asset,
-      })
-
-      const metadata = await Actions.accessKey.getMetadata(client, {
-        account: rootAccount.address,
-        accessKey,
-      })
-      const originalNow = Date.now
-      Date.now = () => (Number(metadata.expiry) + 5) * 1000
-
-      try {
-        const httpServer = await Http.createServer(async (req, res) => {
-          const result = await Mppx_server.toNodeListener(
-            server.charge({ amount: '0', decimals: 6 }),
-          )(req, res)
-          if (result.status === 402) return
-          res.end('OK')
+          return () => {
+            Date.now = originalNow
+          }
+        },
+      },
+    ] as const) {
+      test(`behavior: ${testCase.name}`, async () => {
+        const rootAccount = accounts[1]
+        const accessKey = Account.fromSecp256k1(Secp256k1.randomPrivateKey(), {
+          access: rootAccount,
         })
 
-        const response1 = await fetch(httpServer.url)
-        expect(response1.status).toBe(402)
+        let cleanup: (() => void) | undefined
+        let httpServer: Awaited<ReturnType<typeof Http.createServer>> | undefined
 
-        const challenge = Challenge.fromResponse(response1, {
-          methods: [tempo_client.charge()],
-        })
+        try {
+          const maybeCleanup = await testCase.prepare?.({ accessKey, rootAccount })
+          cleanup = typeof maybeCleanup === 'function' ? maybeCleanup : undefined
 
-        const signature = await signTypedData(client, {
-          account: accessKey,
-          domain: Proof.domain(chain.id),
-          types: Proof.types,
-          primaryType: 'Proof',
-          message: Proof.message(challenge.id),
-        })
+          httpServer = await Http.createServer(async (req, res) => {
+            const result = await Mppx_server.toNodeListener(
+              server.charge({ amount: '0', decimals: 6 }),
+            )(req, res)
+            if (result.status === 402) return
+            res.end('OK')
+          })
 
-        const credential = Credential.from({
-          challenge,
-          payload: { signature, type: 'proof' as const },
-          source: `did:pkh:eip155:${chain.id}:${rootAccount.address}`,
-        })
+          const response1 = await fetch(httpServer.url)
+          expect(response1.status).toBe(402)
 
-        const response2 = await fetch(httpServer.url, {
-          headers: { Authorization: Credential.serialize(credential) },
-        })
-        expect(response2.status).toBe(402)
-        const body = (await response2.json()) as { detail: string }
-        expect(body.detail).toContain('Proof signature does not match source.')
+          const challenge = Challenge.fromResponse(response1, {
+            methods: [tempo_client.charge()],
+          })
 
-        httpServer.close()
-      } finally {
-        Date.now = originalNow
-      }
-    })
+          const signature = await signTypedData(client, {
+            account: accessKey,
+            domain: Proof.domain(chain.id),
+            types: Proof.types,
+            primaryType: 'Proof',
+            message: Proof.message(challenge.id),
+          })
+
+          const credential = Credential.from({
+            challenge,
+            payload: { signature, type: 'proof' as const },
+            source: `did:pkh:eip155:${chain.id}:${rootAccount.address}`,
+          })
+
+          const response2 = await fetch(httpServer.url, {
+            headers: { Authorization: Credential.serialize(credential) },
+          })
+          expect(response2.status).toBe(testCase.expectedStatus)
+
+          if (testCase.expectedDetail) {
+            const body = (await response2.json()) as { detail: string }
+            expect(body.detail).toContain(testCase.expectedDetail)
+          }
+        } finally {
+          cleanup?.()
+          httpServer?.close()
+        }
+      })
+    }
 
     test('behavior: rejects replayed proof credential when store is configured', async () => {
       const replayStore = Store.memory()
