@@ -27,11 +27,11 @@ export const callScopes = [
 ]
 
 const policy = {
-  maxGas: 2_000_000n,
-  maxFeePerGas: 100_000_000_000n,
-  maxPriorityFeePerGas: 10_000_000_000n,
-  maxTotalFee: 50_000_000_000_000_000n,
-  maxValidityWindowSeconds: 15 * 60,
+  maxGas: 2_000_000n, // 2M gas units
+  maxFeePerGas: 100_000_000_000n, // 100 gwei
+  maxPriorityFeePerGas: 10_000_000_000n, // 10 gwei
+  maxTotalFee: 50_000_000_000_000_000n, // 0.05 ETH
+  maxValidityWindowSeconds: 15 * 60, // 15 minutes
 } as const
 
 /** Validates that a set of transaction calls matches an allowed fee-payer pattern. */
