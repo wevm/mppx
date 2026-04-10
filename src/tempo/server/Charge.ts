@@ -692,10 +692,17 @@ function recoverAuthorizedProofSigner(parameters: {
           ? keccak256(`0x04${proofHash.slice(2)}${sourceAddress.slice(2)}` as `0x${string}`)
           : proofHash
 
-      return SignatureEnvelope.extractAddress({
+      const signer = SignatureEnvelope.extractAddress({
         payload: keychainPayload,
         signature: envelope.inner,
       })
+      const valid = SignatureEnvelope.verify(envelope.inner, {
+        address: signer,
+        payload: keychainPayload,
+      })
+      if (!valid) return null
+
+      return signer
     }
 
     return SignatureEnvelope.extractAddress({ payload: proofHash, signature: envelope })
