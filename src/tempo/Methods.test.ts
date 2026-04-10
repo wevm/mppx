@@ -209,3 +209,47 @@ describe('session', () => {
     expect(request.methodDetails?.minVoucherDelta).toBe('100000')
   })
 })
+
+describe('subscription', () => {
+  test('has correct name and intent', () => {
+    expect(Methods.subscription.intent).toBe('subscription')
+    expect(Methods.subscription.name).toBe('tempo')
+  })
+
+  test('schema: validates request and encodes amount in base units', () => {
+    const request = Methods.subscription.schema.request.parse({
+      amount: '10',
+      chainId: 4217,
+      currency: '0x20c0000000000000000000000000000000000001',
+      decimals: 6,
+      periodSeconds: '3600',
+      recipient: '0x1234567890abcdef1234567890abcdef12345678',
+      subscriptionExpires: '2026-01-01T00:00:00Z',
+    })
+
+    expect(request.amount).toBe('10000000')
+    expect(request.methodDetails?.chainId).toBe(4217)
+  })
+
+  test('schema: rejects non-numeric periodSeconds', () => {
+    const result = Methods.subscription.schema.request.safeParse({
+      amount: '10',
+      currency: '0x20c0000000000000000000000000000000000001',
+      decimals: 6,
+      periodSeconds: 'month',
+      recipient: '0x1234567890abcdef1234567890abcdef12345678',
+      subscriptionExpires: '2026-01-01T00:00:00Z',
+    })
+
+    expect(result.success).toBe(false)
+  })
+
+  test('schema: validates key authorization payload', () => {
+    const result = Methods.subscription.schema.credential.payload.safeParse({
+      signature: '0x1234',
+      type: 'keyAuthorization',
+    })
+
+    expect(result.success).toBe(true)
+  })
+})

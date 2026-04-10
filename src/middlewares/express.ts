@@ -80,6 +80,8 @@ export function payment<const intent extends Mppx_internal.AnyMethodFn>(
     res.json = (body: any) => {
       const wrapped = result.withReceipt(Response.json(body))
       res.setHeader('Payment-Receipt', wrapped.headers.get('Payment-Receipt')!)
+      const cacheControl = wrapped.headers.get('Cache-Control')
+      if (cacheControl) res.setHeader('Cache-Control', cacheControl)
       return originalJson(body)
     }
 

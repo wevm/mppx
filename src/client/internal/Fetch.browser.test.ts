@@ -67,13 +67,22 @@ describe('Fetch.from: browser header normalization', () => {
     expect(h.Authorization).toBe('credential')
   })
 
-  test('replaces authorization case-insensitively', async () => {
+  test('preserves non-Payment authorization schemes when retrying', async () => {
     const { retryHeaders } = setup()
     const h = await retryHeaders('https://example.com', {
       headers: { authorization: 'Bearer stale', 'X-Custom': 'value' },
     })
     expect(h.authorization).toBeUndefined()
-    expect(h.Authorization).toBe('credential')
+    expect(h.Authorization).toBe('Bearer stale, credential')
+    expect(h['X-Custom']).toBe('value')
+  })
+
+  test('replaces stale Payment credentials while preserving bearer auth', async () => {
+    const { retryHeaders } = setup()
+    const h = await retryHeaders('https://example.com', {
+      headers: { Authorization: 'Bearer live, Payment stale', 'X-Custom': 'value' },
+    })
+    expect(h.Authorization).toBe('Bearer live, credential')
     expect(h['X-Custom']).toBe('value')
   })
 

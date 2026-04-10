@@ -196,6 +196,10 @@ export function http(): Http {
     respondReceipt({ receipt, response }) {
       const headers = new Headers(response.headers)
       headers.set('Payment-Receipt', Receipt.serialize(receipt))
+      const cacheControl = headers.get('Cache-Control')
+      if (!cacheControl) headers.set('Cache-Control', 'private')
+      else if (!cacheControl.split(',').some((value) => value.trim().toLowerCase() === 'private'))
+        headers.set('Cache-Control', `${cacheControl}, private`)
       return new Response(response.body, {
         status: response.status,
         statusText: response.statusText,

@@ -175,12 +175,14 @@ export function create<
   for (const mi of methods) {
     intentCount[mi.intent] = (intentCount[mi.intent] ?? 0) + 1
     handlers[`${mi.name}/${mi.intent}`] = createMethodFn({
+      authorize: mi.authorize as never,
       defaults: mi.defaults,
       method: mi,
       realm,
       request: mi.request as never,
       respond: mi.respond as never,
       secretKey,
+      stableBinding: mi.stableBinding as never,
       transport: (mi.transport ?? transport) as never,
       verify: mi.verify as never,
     })
@@ -256,7 +258,8 @@ function createMethodFn<
 ): createMethodFn.ReturnType<method, transport, defaults>
 // biome-ignore lint/correctness/noUnusedVariables: _
 function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.ReturnType {
-  const { defaults, method, realm, respond, secretKey, transport, verify } = parameters
+  const { authorize, defaults, method, realm, respond, secretKey, stableBinding, transport, verify } =
+    parameters
 
   return (options) => {
     const { description, meta, ...rest } = options
@@ -314,8 +317,76 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
           return { challenge: response, status: 402 }
         }
 
+        const success = (
+          receiptData: Receipt.Receipt,
+          options: {
+            challengeId?: string | undefined
+            credentialForReceipt?: Credential.Credential | undefined
+            envelopeForReceipt?: Method.VerifiedChallengeEnvelope | undefined
+            managementResponse?: globalThis.Response | undefined
+          } = {},
+        ): MethodFn.Response => {
+          const {
+            challengeId = challenge.id,
+            credentialForReceipt = ({ challenge, payload: {} } as Credential.Credential),
+            envelopeForReceipt,
+            managementResponse,
+          } = options
+
+          return {
+            status: 200,
+            withReceipt<response>(response?: response) {
+              if (managementResponse) {
+                return transport.respondReceipt({
+                  challengeId,
+                  credential: credentialForReceipt,
+                  ...(envelopeForReceipt ? { envelope: envelopeForReceipt } : {}),
+                  input,
+                  receipt: receiptData,
+                  response: managementResponse as never,
+                }) as response
+              }
+              if (!response) throw new Error('withReceipt() requires a response argument')
+              return transport.respondReceipt({
+                challengeId,
+                credential: credentialForReceipt,
+                ...(envelopeForReceipt ? { envelope: envelopeForReceipt } : {}),
+                input,
+                receipt: receiptData,
+                response: response as never,
+              }) as response
+            },
+          }
+        }
+
         // No credential provided—issue challenge
         if (!credential) {
+          if (authorize && input instanceof globalThis.Request) {
+            try {
+              const authorized = await authorize({
+                challenge,
+                input,
+                request: challenge.request,
+              } as never)
+              if (authorized) {
+                return success(authorized.receipt, {
+                  managementResponse: authorized.response,
+                })
+              }
+            } catch (e) {
+              if (!(e instanceof Errors.PaymentError))
+                console.error('mppx: internal authorization error', e)
+              const error = e instanceof Errors.PaymentError ? e : new Errors.VerificationFailedError()
+              const response = await transport.respondChallenge({
+                challenge,
+                input,
+                error,
+                html: method.html,
+              })
+              return { challenge: response, status: 402 }
+            }
+          }
+
           const response = await transport.respondChallenge({
             challenge,
             input,
@@ -372,7 +443,28 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
         // they are set by server config (not derived from the request hook)
         // and are already fully covered by the HMAC binding in Tier 1.
         {
-          const mismatch = getPinnedChallengeMismatch(challenge, credential.challenge)
+          for (const field of ['method', 'intent', 'realm'] as const) {
+            if (credential.challenge[field] !== challenge[field]) {
+              const response = await transport.respondChallenge({
+                challenge,
+                input,
+                error: new Errors.InvalidChallengeError({
+                  id: credential.challenge.id,
+                  reason: `credential ${field} does not match this route's requirements`,
+                }),
+                html: method.html,
+              })
+              return { challenge: response, status: 402 }
+            }
+          }
+
+          const mismatch = getRequestBindingMismatch(
+            getStableBinding(challenge.request as Record<string, unknown>, stableBinding as never),
+            getStableBinding(
+              credential.challenge.request as Record<string, unknown>,
+              stableBinding as never,
+            ),
+          )
           if (mismatch) {
             const response = await transport.respondChallenge({
               challenge,
@@ -442,30 +534,12 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
           ? await respond({ credential, envelope, input, receipt: receiptData, request } as never)
           : undefined
 
-        return {
-          status: 200,
-          withReceipt<response>(response?: response) {
-            if (managementResponse) {
-              return transport.respondReceipt({
-                credential,
-                envelope,
-                input,
-                receipt: receiptData,
-                response: managementResponse as never,
-                challengeId: credential.challenge.id,
-              }) as response
-            }
-            if (!response) throw new Error('withReceipt() requires a response argument')
-            return transport.respondReceipt({
-              credential,
-              envelope,
-              input,
-              receipt: receiptData,
-              response: response as never,
-              challengeId: credential.challenge.id,
-            }) as response
-          },
-        }
+        return success(receiptData, {
+          challengeId: credential.challenge.id,
+          credentialForReceipt: credential,
+          envelopeForReceipt: envelope,
+          managementResponse,
+        })
       },
       {
         _internal: {
@@ -475,6 +549,10 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
           name: method.name,
           intent: method.intent,
           _canonicalRequest: PaymentRequest.fromMethod(method, merged),
+          _stableBinding: getStableBinding(
+            PaymentRequest.fromMethod(method, merged),
+            stableBinding as never,
+          ),
         },
       },
     )
@@ -494,12 +572,14 @@ declare namespace createMethodFn {
     transport extends Transport.AnyTransport = Transport.Http,
     defaults extends Record<string, unknown> = Record<string, unknown>,
   > = {
+    authorize?: Method.AuthorizeFn<method>
     defaults?: defaults
     method: method
     realm: string | undefined
     request?: Method.RequestFn<method>
     respond?: Method.RespondFn<method>
     secretKey: string
+    stableBinding?: Method.StableBindingFn<method>
     transport: transport
     verify: Method.VerifyFn<method>
   }
@@ -572,87 +652,35 @@ function captureRequestFromInput(input: unknown): Method.CapturedRequest {
   }
 }
 
-const coreBindingFields = ['amount', 'currency', 'recipient'] as const
-const methodBindingFields = ['chainId', 'memo', 'splits'] as const
-const pinnedRequestBindingFields = [...coreBindingFields, ...methodBindingFields] as const
+type StableBinding = Record<string, unknown>
 
-type CoreBindingField = (typeof coreBindingFields)[number]
-type MethodBindingField = (typeof methodBindingFields)[number]
-type PinnedRequestBindingField = (typeof pinnedRequestBindingFields)[number]
-type PinnedChallengeField = 'method' | 'intent' | 'realm' | PinnedRequestBindingField
+function getRequestBindingMismatch(expected: StableBinding, actual: StableBinding): string | undefined {
+  const fields = [
+    ...Object.keys(expected),
+    ...Object.keys(actual).filter((key) => !(key in expected)),
+  ]
 
-/**
- * Compares only the fields that MUST be stable across request-hook transforms.
- *
- * This is NOT the primary integrity check — the HMAC binding (Challenge.verify)
- * already covers every challenge field including opaque, digest, and the full
- * serialized request. This function exists as a secondary safety net for the
- * case where the `request()` hook produces credential-dependent output, causing
- * the recomputed challenge to differ from the original in non-economic fields
- * (e.g. `feePayer`). We only need to verify that the economically significant
- * subset hasn't drifted.
- */
-function getPinnedChallengeMismatch(
-  expectedChallenge: Challenge.Challenge,
-  actualChallenge: Challenge.Challenge,
-): PinnedChallengeField | undefined {
-  for (const field of ['method', 'intent', 'realm'] as const) {
-    if (actualChallenge[field] !== expectedChallenge[field]) return field
-  }
-
-  return getPinnedRequestBindingMismatch(
-    expectedChallenge.request as Record<string, unknown>,
-    actualChallenge.request as Record<string, unknown>,
+  return fields.find(
+    (field) =>
+      !isDeepStrictEqual(normalizeComparable(expected[field]), normalizeComparable(actual[field])),
   )
 }
 
-function getPinnedRequestBindingMismatch(
-  expectedRequest: Record<string, unknown>,
-  actualRequest: Record<string, unknown>,
-): PinnedRequestBindingField | undefined {
-  const expected = getPinnedRequestBinding(expectedRequest)
-  const actual = getPinnedRequestBinding(actualRequest)
+function getStableBinding(
+  request: Record<string, unknown>,
+  stableBinding?: Method.StableBindingFn<Method.Method> | undefined,
+): StableBinding {
+  if (stableBinding) return stableBinding(request as never)
 
-  return (
-    getCoreBindingMismatch(expected.coreBinding, actual.coreBinding) ??
-    getMethodBindingMismatch(expected.methodBinding, actual.methodBinding)
-  )
-}
-
-function getCoreBindingMismatch(
-  expected: CoreBinding,
-  actual: CoreBinding,
-): CoreBindingField | undefined {
-  return coreBindingFields.find((field) => !isDeepStrictEqual(expected[field], actual[field]))
-}
-
-function getMethodBindingMismatch(
-  expected: MethodBinding,
-  actual: MethodBinding,
-): MethodBindingField | undefined {
-  return methodBindingFields.find((field) => !isDeepStrictEqual(expected[field], actual[field]))
-}
-
-function getPinnedRequestBinding(request: Record<string, unknown>): PinnedRequestBinding {
   const methodDetails = (request.methodDetails ?? {}) as Record<string, unknown>
-  const amount = normalizeScalar(request.amount ?? methodDetails.amount)
-  const chainId = normalizeScalar(request.chainId ?? methodDetails.chainId)
-  const currency = normalizeScalar(request.currency ?? methodDetails.currency)
-  const memo = normalizeHex(methodDetails.memo)
-  const recipient = normalizeScalar(request.recipient ?? methodDetails.recipient)
-  const splits = normalizeComparable(methodDetails.splits)
 
   return {
-    coreBinding: {
-      ...(amount !== undefined ? { amount } : {}),
-      ...(currency !== undefined ? { currency } : {}),
-      ...(recipient !== undefined ? { recipient } : {}),
-    },
-    methodBinding: {
-      ...(chainId !== undefined ? { chainId } : {}),
-      ...(memo !== undefined ? { memo } : {}),
-      ...(splits !== undefined ? { splits } : {}),
-    },
+    amount: normalizeScalar(request.amount ?? methodDetails.amount),
+    chainId: normalizeScalar(request.chainId ?? methodDetails.chainId),
+    currency: normalizeScalar(request.currency ?? methodDetails.currency),
+    memo: normalizeHex(methodDetails.memo),
+    recipient: normalizeScalar(request.recipient ?? methodDetails.recipient),
+    splits: normalizeComparable(methodDetails.splits),
   }
 }
 
@@ -680,19 +708,6 @@ function normalizeComparable(value: unknown): unknown {
   }
 
   return typeof value === 'string' ? normalizeHex(value) : value
-}
-
-type CoreBinding = {
-  [field in CoreBindingField]?: string
-}
-
-type MethodBinding = {
-  [field in MethodBindingField]?: unknown
-}
-
-type PinnedRequestBinding = {
-  coreBinding: CoreBinding
-  methodBinding: MethodBinding
 }
 
 export type MethodFn<
@@ -739,6 +754,7 @@ type ConfiguredHandler = ((input: Request) => Promise<MethodFn.Response<Transpor
     intent: string
     html: Html.Options | undefined
     _canonicalRequest: Record<string, unknown>
+    _stableBinding: StableBinding
   }
 }
 
@@ -861,9 +877,7 @@ export function compose(
         const candidates = handlers.filter((h) => {
           const meta = (h as ConfiguredHandler)._internal
           if (!meta || meta.name !== credMethod || meta.intent !== credIntent) return false
-          const canonical = meta._canonicalRequest
-          if (!canonical) return true
-          return !getPinnedRequestBindingMismatch(canonical, credReq)
+          return !getRequestBindingMismatch(meta._stableBinding, getStableBinding(credReq))
         })
 
         const match =
@@ -880,8 +894,14 @@ export function compose(
       return handlers[0]!(input)
     }
 
-    // No credential — call all handlers and merge 402 challenges.
-    const results = await Promise.all(handlers.map((h) => h(input)))
+    // No credential — evaluate handlers sequentially so authorize()/renewal hooks
+    // can safely claim the request without racing each other.
+    const results: MethodFn.Response<Transport.Http>[] = []
+    for (const handler of handlers) {
+      const result = await handler(input)
+      if (result.status === 200) return result
+      results.push(result)
+    }
 
     // Merge WWW-Authenticate headers from all 402 responses.
     const mergedHeaders = new Headers()
@@ -1015,6 +1035,8 @@ export function toNodeListener(
     } else {
       const wrapped = result.withReceipt(new globalThis.Response()) as globalThis.Response
       res.setHeader('Payment-Receipt', wrapped.headers.get('Payment-Receipt')!)
+      const cacheControl = wrapped.headers.get('Cache-Control')
+      if (cacheControl) res.setHeader('Cache-Control', cacheControl)
     }
 
     return result
