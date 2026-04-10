@@ -46,6 +46,23 @@ describe('create.Config', () => {
 
     expectTypeOf<Config>().toHaveProperty('methods')
   })
+
+  test('paymentPreferences callback exposes typed method keys', () => {
+    const mppx = Mppx.create({
+      methods: [tempo({ account: {} as Account })],
+      paymentPreferences: ({ tempo }) => {
+        expectTypeOf(tempo.charge).toEqualTypeOf<'tempo/charge'>()
+        expectTypeOf(tempo.session).toEqualTypeOf<'tempo/session'>()
+
+        return {
+          [tempo.charge]: 0.5,
+          [tempo.session]: 0,
+        }
+      },
+    })
+
+    expectTypeOf(mppx.fetch).toBeFunction()
+  })
 })
 
 describe('Method.toClient', () => {
@@ -98,6 +115,22 @@ describe('Mppx with context', () => {
 
     expectTypeOf(mppx.createCredential).toBeFunction()
     expectTypeOf(mppx.createCredential).returns.toMatchTypeOf<Promise<string>>()
+  })
+
+  test('createCredential accepts an optional Accept-Payment override', () => {
+    const method = charge({
+      account: {} as Account,
+    })
+
+    const mppx = Mppx.create({ methods: [method] })
+
+    const createCredential: (
+      response: Response,
+      context?: Parameters<typeof mppx.createCredential>[1],
+      options?: Parameters<typeof mppx.createCredential>[2],
+    ) => Promise<string> = mppx.createCredential
+
+    expectTypeOf(createCredential).toBeFunction()
   })
 })
 

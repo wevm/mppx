@@ -13,6 +13,8 @@ export type Transport<in out request = unknown, in out response = unknown> = {
   name: string
   /** Checks if a response indicates payment is required. */
   isPaymentRequired: (response: response) => boolean
+  /** Extracts all challenges from a payment-required response, when the transport supports multiple offers. */
+  getChallenges?: (response: response) => Challenge.Challenge[]
   /** Extracts the challenge from a payment-required response. */
   getChallenge: (response: response) => Challenge.Challenge
   /** Attaches a credential to a request. */
@@ -64,6 +66,10 @@ export function http() {
       return response.status === 402
     },
 
+    getChallenges(response) {
+      return Challenge.fromResponseList(response)
+    },
+
     getChallenge(response) {
       return Challenge.fromResponse(response)
     },
@@ -89,6 +95,13 @@ export function mcp() {
 
     isPaymentRequired(response) {
       return 'error' in response && response.error?.code === Mcp.paymentRequiredCode
+    },
+
+    getChallenges(response) {
+      if (!('error' in response) || !response.error) throw new Error('Response is not an error.')
+      const challenges = response.error.data?.challenges
+      if (!challenges?.length) throw new Error('No challenge in error response.')
+      return challenges
     },
 
     getChallenge(response) {

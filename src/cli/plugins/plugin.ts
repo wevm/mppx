@@ -9,6 +9,9 @@ export interface Plugin {
   /** Payment method name (e.g., 'tempo', 'stripe') */
   method: string
 
+  /** Optional predicate for challenge support when a plugin does not support every intent for its method. */
+  supports?(challenge: Challenge.Challenge): boolean
+
   /**
    * Resolve account, client, and display info for a challenge.
    * Returns methods for credential creation.

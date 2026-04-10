@@ -22,6 +22,10 @@ function make402() {
   })
 }
 
+function toHeaders(headers: unknown): Headers {
+  return new Headers((headers ?? {}) as HeadersInit)
+}
+
 /** Returns a fetch wrapper and the init captured from the 402 retry call. */
 function setup() {
   const calls: (RequestInit | undefined)[] = []
@@ -38,7 +42,7 @@ function setup() {
     /** Headers sent on the retry (second) request. */
     retryHeaders: async (input: RequestInfo | URL, init?: RequestInit) => {
       await fetch(input, init)
-      return (calls[1] as Record<string, unknown>)?.headers as Record<string, string>
+      return toHeaders((calls[1] as Record<string, unknown>)?.headers)
     },
   }
 }
@@ -49,9 +53,9 @@ describe('Fetch.from: browser header normalization', () => {
     const h = await retryHeaders('https://example.com', {
       headers: new Headers({ 'X-Custom': 'value', 'Content-Type': 'application/json' }),
     })
-    expect(h['x-custom']).toBe('value')
-    expect(h['content-type']).toBe('application/json')
-    expect(h.Authorization).toBe('credential')
+    expect(h.get('x-custom')).toBe('value')
+    expect(h.get('content-type')).toBe('application/json')
+    expect(h.get('authorization')).toBe('credential')
   })
 
   test('preserves header tuples', async () => {
@@ -62,9 +66,9 @@ describe('Fetch.from: browser header normalization', () => {
         ['Accept', 'application/json'],
       ],
     })
-    expect(h['X-Custom']).toBe('value')
-    expect(h.Accept).toBe('application/json')
-    expect(h.Authorization).toBe('credential')
+    expect(h.get('x-custom')).toBe('value')
+    expect(h.get('accept')).toBe('application/json')
+    expect(h.get('authorization')).toBe('credential')
   })
 
   test('replaces authorization case-insensitively', async () => {
@@ -72,22 +76,21 @@ describe('Fetch.from: browser header normalization', () => {
     const h = await retryHeaders('https://example.com', {
       headers: { authorization: 'Bearer stale', 'X-Custom': 'value' },
     })
-    expect(h.authorization).toBeUndefined()
-    expect(h.Authorization).toBe('credential')
-    expect(h['X-Custom']).toBe('value')
+    expect(h.get('authorization')).toBe('credential')
+    expect(h.get('x-custom')).toBe('value')
   })
 
   test('preserves plain object headers', async () => {
     const { retryHeaders } = setup()
     const h = await retryHeaders('https://example.com', { headers: { 'X-Custom': 'val' } })
-    expect(h['X-Custom']).toBe('val')
-    expect(h.Authorization).toBe('credential')
+    expect(h.get('x-custom')).toBe('val')
+    expect(h.get('authorization')).toBe('credential')
   })
 
   test('adds Authorization when no headers provided', async () => {
     const { retryHeaders } = setup()
     const h = await retryHeaders('https://example.com')
-    expect(h.Authorization).toBe('credential')
+    expect(h.get('authorization')).toBe('credential')
   })
 })
 

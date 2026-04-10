@@ -7,6 +7,9 @@ import { createPlugin } from './plugin.js'
 export function stripe() {
   return createPlugin({
     method: 'stripe',
+    supports(challenge) {
+      return challenge.method === 'stripe' && challenge.intent === 'charge'
+    },
 
     async setup({ challenge, methodOpts }) {
       const challengeRequest = challenge.request as Record<string, unknown>

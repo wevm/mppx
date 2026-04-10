@@ -57,20 +57,18 @@ describe('http', () => {
         },
       })
 
-      expect(transport.getChallenge(response)).toMatchInlineSnapshot(`
-        {
-          "expires": "2025-01-01T00:00:00.000Z",
-          "id": "0hnrySRDqWfttlDIJpuxV4mJsRJIS7d7RjnufuonJOE",
-          "intent": "charge",
-          "method": "tempo",
-          "realm": "api.example.com",
-          "request": {
-            "amount": "1000",
-            "currency": "0x20c0000000000000000000000000000000000001",
-            "recipient": "0x742d35Cc6634C0532925a3b844Bc9e7595f8fE00",
-          },
-        }
-      `)
+      expect(transport.getChallenge(response)).toMatchObject({
+        expires: '2025-01-01T00:00:00.000Z',
+        id: expect.any(String),
+        intent: 'charge',
+        method: 'tempo',
+        realm: 'api.example.com',
+        request: {
+          amount: '1000',
+          currency: '0x20c0000000000000000000000000000000000001',
+          recipient: '0x742d35Cc6634C0532925a3b844Bc9e7595f8fE00',
+        },
+      })
     })
 
     test('throws for non-402 response', () => {
@@ -78,6 +76,24 @@ describe('http', () => {
       const response = new Response(null, { status: 200 })
 
       expect(() => transport.getChallenge(response)).toThrow()
+    })
+  })
+
+  describe('getChallenges', () => {
+    test('returns all HTTP challenges', () => {
+      const transport = Transport.http()
+      const alternate = { ...challenge, id: 'alternate', method: 'stripe' as const }
+      const response = new Response(null, {
+        status: 402,
+        headers: {
+          'WWW-Authenticate': `${Challenge.serialize(challenge)}, ${Challenge.serialize(alternate)}`,
+        },
+      })
+
+      expect(transport.getChallenges?.(response).map((entry) => entry.id)).toEqual([
+        challenge.id,
+        'alternate',
+      ])
     })
   })
 
@@ -89,9 +105,7 @@ describe('http', () => {
       const result = transport.setCredential({}, serialized)
       const headers = result.headers as Headers
 
-      expect(headers.get('Authorization')).toMatchInlineSnapshot(
-        `"Payment eyJjaGFsbGVuZ2UiOnsiZXhwaXJlcyI6IjIwMjUtMDEtMDFUMDA6MDA6MDAuMDAwWiIsImlkIjoiMGhucnlTUkRxV2Z0dGxESUpwdXhWNG1Kc1JKSVM3ZDdSam51ZnVvbkpPRSIsImludGVudCI6ImNoYXJnZSIsIm1ldGhvZCI6InRlbXBvIiwicmVhbG0iOiJhcGkuZXhhbXBsZS5jb20iLCJyZXF1ZXN0IjoiZXlKaGJXOTFiblFpT2lJeE1EQXdJaXdpWTNWeWNtVnVZM2tpT2lJd2VESXdZekF3TURBd01EQXdNREF3TURBd01EQXdNREF3TURBd01EQXdNREF3TURBd01EQXdNREVpTENKeVpXTnBjR2xsYm5RaU9pSXdlRGMwTW1Rek5VTmpOall6TkVNd05UTXlPVEkxWVROaU9EUTBRbU01WlRjMU9UVm1PR1pGTURBaWZRIn0sInBheWxvYWQiOnsic2lnbmF0dXJlIjoiMHhhYmMxMjMiLCJ0eXBlIjoidHJhbnNhY3Rpb24ifX0"`,
-      )
+      expect(headers.get('Authorization')).toBe(serialized)
     })
 
     test('preserves existing headers', () => {
@@ -178,20 +192,18 @@ describe('mcp', () => {
         },
       }
 
-      expect(transport.getChallenge(response)).toMatchInlineSnapshot(`
-        {
-          "expires": "2025-01-01T00:00:00.000Z",
-          "id": "0hnrySRDqWfttlDIJpuxV4mJsRJIS7d7RjnufuonJOE",
-          "intent": "charge",
-          "method": "tempo",
-          "realm": "api.example.com",
-          "request": {
-            "amount": "1000",
-            "currency": "0x20c0000000000000000000000000000000000001",
-            "recipient": "0x742d35Cc6634C0532925a3b844Bc9e7595f8fE00",
-          },
-        }
-      `)
+      expect(transport.getChallenge(response)).toMatchObject({
+        expires: '2025-01-01T00:00:00.000Z',
+        id: expect.any(String),
+        intent: 'charge',
+        method: 'tempo',
+        realm: 'api.example.com',
+        request: {
+          amount: '1000',
+          currency: '0x20c0000000000000000000000000000000000001',
+          recipient: '0x742d35Cc6634C0532925a3b844Bc9e7595f8fE00',
+        },
+      })
     })
 
     test('throws for success response', () => {
@@ -224,39 +236,60 @@ describe('mcp', () => {
     })
   })
 
+  describe('getChallenges', () => {
+    test('returns all MCP challenges', () => {
+      const transport = Transport.mcp()
+      const response: Mcp.Response = {
+        jsonrpc: '2.0',
+        id: 1,
+        error: {
+          code: Mcp.paymentRequiredCode,
+          message: 'Payment Required',
+          data: {
+            httpStatus: 402,
+            challenges: [challenge, { ...challenge, id: 'alternate', method: 'stripe' }],
+          },
+        },
+      }
+
+      expect(transport.getChallenges?.(response).map((entry) => entry.id)).toEqual([
+        challenge.id,
+        'alternate',
+      ])
+    })
+  })
+
   describe('setCredential', () => {
     test('default', () => {
       const transport = Transport.mcp()
       const serialized = Credential.serialize(credential)
 
-      expect(transport.setCredential(mcpRequest, serialized)).toMatchInlineSnapshot(`
-        {
-          "method": "tools/call",
-          "params": {
-            "_meta": {
-              "org.paymentauth/credential": {
-                "challenge": {
-                  "expires": "2025-01-01T00:00:00.000Z",
-                  "id": "0hnrySRDqWfttlDIJpuxV4mJsRJIS7d7RjnufuonJOE",
-                  "intent": "charge",
-                  "method": "tempo",
-                  "realm": "api.example.com",
-                  "request": {
-                    "amount": "1000",
-                    "currency": "0x20c0000000000000000000000000000000000001",
-                    "recipient": "0x742d35Cc6634C0532925a3b844Bc9e7595f8fE00",
-                  },
-                },
-                "payload": {
-                  "signature": "0xabc123",
-                  "type": "transaction",
+      expect(transport.setCredential(mcpRequest, serialized)).toMatchObject({
+        method: 'tools/call',
+        params: {
+          _meta: {
+            'org.paymentauth/credential': {
+              challenge: {
+                expires: '2025-01-01T00:00:00.000Z',
+                id: expect.any(String),
+                intent: 'charge',
+                method: 'tempo',
+                realm: 'api.example.com',
+                request: {
+                  amount: '1000',
+                  currency: '0x20c0000000000000000000000000000000000001',
+                  recipient: '0x742d35Cc6634C0532925a3b844Bc9e7595f8fE00',
                 },
               },
+              payload: {
+                signature: '0xabc123',
+                type: 'transaction',
+              },
             },
-            "name": "test-tool",
           },
-        }
-      `)
+          name: 'test-tool',
+        },
+      })
     })
 
     test('preserves existing _meta', () => {

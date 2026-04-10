@@ -127,6 +127,50 @@ describe('request handler', () => {
     expect(body.detail).not.toContain('rpc.example.com')
   })
 
+  test('returns 402 when challenge ID mismatch', async () => {
+    const wrongChallenge = Challenge.from({
+      id: 'wrong-id',
+      intent: 'charge',
+      method: 'tempo',
+      realm,
+      request: { amount: '1000', currency: asset, recipient: accounts[0].address },
+    })
+    const credential = Credential.from({
+      challenge: wrongChallenge,
+      payload: { signature: '0x123', type: 'transaction' },
+    })
+
+    const request = new Request('https://example.com/resource', {
+      headers: { Authorization: Credential.serialize(credential) },
+    })
+
+    const result = await Mppx.create({ methods: [method], realm, secretKey }).charge({
+      amount: '1000',
+      currency: asset,
+      expires: new Date(Date.now() + 60_000).toISOString(),
+      recipient: accounts[0].address,
+    })(request)
+
+    expect(result.status).toBe(402)
+    if (result.status !== 402) throw new Error()
+
+    const body = (await result.challenge.json()) as object
+    expect({
+      ...body,
+      challengeId: '[challengeId]',
+      instance: '[instance]',
+    }).toMatchInlineSnapshot(`
+      {
+        "challengeId": "[challengeId]",
+        "detail": "Challenge "wrong-id" is invalid: challenge was not issued by this server.",
+        "instance": "[instance]",
+        "status": 402,
+        "title": "Invalid Challenge",
+        "type": "https://paymentauth.org/problems/invalid-challenge",
+      }
+    `)
+  })
+
   test('captures each transport request once and threads the verified envelope additively', async () => {
     const requestMethod = Method.from({
       name: 'mock',
@@ -230,50 +274,6 @@ describe('request handler', () => {
     expect(respondEnvelope?.capturedRequest).toBe(requestCapturedRequest)
     expect(receiptEnvelope?.capturedRequest).toBe(requestCapturedRequest)
     expect(receiptEnvelope?.challenge.id).toBe(credential.challenge.id)
-  })
-
-  test('returns 402 when challenge ID mismatch', async () => {
-    const wrongChallenge = Challenge.from({
-      id: 'wrong-id',
-      intent: 'charge',
-      method: 'tempo',
-      realm,
-      request: { amount: '1000', currency: asset, recipient: accounts[0].address },
-    })
-    const credential = Credential.from({
-      challenge: wrongChallenge,
-      payload: { signature: '0x123', type: 'transaction' },
-    })
-
-    const request = new Request('https://example.com/resource', {
-      headers: { Authorization: Credential.serialize(credential) },
-    })
-
-    const result = await Mppx.create({ methods: [method], realm, secretKey }).charge({
-      amount: '1000',
-      currency: asset,
-      expires: new Date(Date.now() + 60_000).toISOString(),
-      recipient: accounts[0].address,
-    })(request)
-
-    expect(result.status).toBe(402)
-    if (result.status !== 402) throw new Error()
-
-    const body = (await result.challenge.json()) as object
-    expect({
-      ...body,
-      challengeId: '[challengeId]',
-      instance: '[instance]',
-    }).toMatchInlineSnapshot(`
-      {
-        "challengeId": "[challengeId]",
-        "detail": "Challenge "wrong-id" is invalid: challenge was not issued by this server.",
-        "instance": "[instance]",
-        "status": 402,
-        "title": "Invalid Challenge",
-        "type": "https://paymentauth.org/problems/invalid-challenge",
-      }
-    `)
   })
 
   test('returns 402 when credential is from a different route (cross-route scope confusion)', async () => {
@@ -980,6 +980,103 @@ describe('compose', () => {
     const wwwAuth = result.challenge.headers.get('WWW-Authenticate')!
     expect(wwwAuth).toContain('method="alpha"')
     expect(wwwAuth).toContain('method="beta"')
+  })
+
+  test('filters compose challenges using Accept-Payment', async () => {
+    const mppx = Mppx.create({ methods: [alphaMethod, betaMethod], realm, secretKey })
+
+    const result = await mppx.compose(
+      [alphaMethod, challengeOpts],
+      [betaMethod, challengeOpts],
+    )(
+      new Request('https://example.com/resource', {
+        headers: { 'Accept-Payment': 'beta/charge' },
+      }),
+    )
+
+    expect(result.status).toBe(402)
+    if (result.status !== 402) throw new Error()
+
+    const challenges = Challenge.fromResponseList(result.challenge)
+    expect(challenges).toHaveLength(1)
+    expect(challenges[0]?.method).toBe('beta')
+  })
+
+  test('orders compose challenges by Accept-Payment q-value', async () => {
+    const mppx = Mppx.create({ methods: [alphaMethod, betaMethod], realm, secretKey })
+
+    const result = await mppx.compose(
+      [alphaMethod, challengeOpts],
+      [betaMethod, challengeOpts],
+    )(
+      new Request('https://example.com/resource', {
+        headers: { 'Accept-Payment': 'beta/charge;q=0.9, alpha/charge;q=0.3' },
+      }),
+    )
+
+    expect(result.status).toBe(402)
+    if (result.status !== 402) throw new Error()
+
+    const challenges = Challenge.fromResponseList(result.challenge)
+    expect(challenges.map((challenge) => challenge.method)).toEqual(['beta', 'alpha'])
+  })
+
+  test('applies a specific Accept-Payment opt-out before broader wildcards', async () => {
+    const mppx = Mppx.create({ methods: [alphaMethod, betaMethod], realm, secretKey })
+
+    const result = await mppx.compose(
+      [alphaMethod, challengeOpts],
+      [betaMethod, challengeOpts],
+    )(
+      new Request('https://example.com/resource', {
+        headers: { 'Accept-Payment': 'alpha/*;q=1, alpha/charge;q=0, beta/*;q=0.5' },
+      }),
+    )
+
+    expect(result.status).toBe(402)
+    if (result.status !== 402) throw new Error()
+
+    const challenges = Challenge.fromResponseList(result.challenge)
+    expect(challenges).toHaveLength(1)
+    expect(challenges[0]?.method).toBe('beta')
+  })
+
+  test('falls back to all compose challenges when Accept-Payment has no matches', async () => {
+    const mppx = Mppx.create({ methods: [alphaMethod, betaMethod], realm, secretKey })
+
+    const result = await mppx.compose(
+      [alphaMethod, challengeOpts],
+      [betaMethod, challengeOpts],
+    )(
+      new Request('https://example.com/resource', {
+        headers: { 'Accept-Payment': 'gamma/charge' },
+      }),
+    )
+
+    expect(result.status).toBe(402)
+    if (result.status !== 402) throw new Error()
+
+    const challenges = Challenge.fromResponseList(result.challenge)
+    expect(challenges.map((challenge) => challenge.method)).toEqual(['alpha', 'beta'])
+  })
+
+  test('falls back to all compose challenges when Accept-Payment is invalid', async () => {
+    const mppx = Mppx.create({ methods: [alphaMethod, betaMethod], realm, secretKey })
+
+    const result = await mppx.compose(
+      [alphaMethod, challengeOpts],
+      [betaMethod, challengeOpts],
+    )(
+      new Request('https://example.com/resource', {
+        headers: { 'Accept-Payment': 'not a valid header' },
+      }),
+    )
+
+    expect(result.status).toBe(402)
+    if (result.status !== 402) throw new Error()
+
+    const challenges = Challenge.fromResponseList(result.challenge)
+    expect(challenges.map((challenge) => challenge.method)).toEqual(['alpha', 'beta'])
   })
 
   test('dispatches to matching handler when credential matches alpha', async () => {

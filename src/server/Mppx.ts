@@ -5,8 +5,9 @@ import * as Challenge from '../Challenge.js'
 import * as Credential from '../Credential.js'
 import * as Errors from '../Errors.js'
 import * as Expires from '../Expires.js'
+import * as AcceptPayment from '../internal/AcceptPayment.js'
 import * as Env from '../internal/env.js'
-import * as Method from '../Method.js'
+import type * as Method from '../Method.js'
 import * as PaymentRequest from '../PaymentRequest.js'
 import type * as Receipt from '../Receipt.js'
 import type * as z from '../zod.js'
@@ -447,22 +448,22 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
           withReceipt<response>(response?: response) {
             if (managementResponse) {
               return transport.respondReceipt({
+                challengeId: credential.challenge.id,
                 credential,
                 envelope,
                 input,
                 receipt: receiptData,
                 response: managementResponse as never,
-                challengeId: credential.challenge.id,
               }) as response
             }
             if (!response) throw new Error('withReceipt() requires a response argument')
             return transport.respondReceipt({
+              challengeId: credential.challenge.id,
               credential,
               envelope,
               input,
               receipt: receiptData,
               response: response as never,
-              challengeId: credential.challenge.id,
             }) as response
           },
         }
@@ -883,37 +884,57 @@ export function compose(
     // No credential — call all handlers and merge 402 challenges.
     const results = await Promise.all(handlers.map((h) => h(input)))
 
+    const challengeEntries = (() => {
+      const entries: {
+        handler: ConfiguredHandler
+        challenge: Challenge.Challenge
+        result: Extract<MethodFn.Response<Transport.Http>, { status: 402 }>
+      }[] = []
+
+      for (let i = 0; i < handlers.length; i++) {
+        const result = results[i]
+        if (result?.status !== 402) continue
+
+        const response = result.challenge as Response
+        const wwwAuth = response.headers.get('WWW-Authenticate')
+        if (!wwwAuth) continue
+
+        entries.push({
+          handler: handlers[i] as ConfiguredHandler,
+          challenge: Challenge.deserialize(wwwAuth),
+          result,
+        })
+      }
+
+      const acceptPayment = input.headers.get('Accept-Payment')
+      if (!acceptPayment) return entries
+
+      try {
+        const ranked = AcceptPayment.rank(
+          entries.map((entry) => entry.challenge),
+          AcceptPayment.parse(acceptPayment),
+        )
+        if (ranked.length === 0) return entries
+
+        const entriesById = new Map(entries.map((entry) => [entry.challenge.id, entry] as const))
+        return ranked.map((challenge) => entriesById.get(challenge.id)!)
+      } catch {
+        return entries
+      }
+    })()
+
     // Merge WWW-Authenticate headers from all 402 responses.
     const mergedHeaders = new Headers()
     mergedHeaders.set('Cache-Control', 'no-store')
 
-    for (const result of results) {
-      if (result.status !== 402) continue
-      const response = result.challenge as Response
+    for (const entry of challengeEntries) {
+      const response = entry.result.challenge as Response
       const wwwAuth = response.headers.get('WWW-Authenticate')
       if (wwwAuth) mergedHeaders.append('WWW-Authenticate', wwwAuth)
     }
 
     // Collect html-enabled handlers and their challenges
-    const htmlEntries = (() => {
-      const entries: {
-        handler: ConfiguredHandler
-        challenge: Challenge.Challenge
-      }[] = []
-      for (let i = 0; i < handlers.length; i++) {
-        const meta = (handlers[i] as ConfiguredHandler)._internal
-        if (!meta?.html) continue
-        const result = results[i]
-        if (result?.status !== 402) continue
-        const wwwAuth = result.challenge.headers.get('WWW-Authenticate')
-        if (!wwwAuth) continue
-        entries.push({
-          handler: handlers[i] as ConfiguredHandler,
-          challenge: Challenge.deserialize(wwwAuth),
-        })
-      }
-      return entries
-    })()
+    const htmlEntries = challengeEntries.filter((entry) => entry.handler._internal?.html)
 
     const wantsHtml = input.headers.get('Accept')?.includes('text/html')
     if (wantsHtml && htmlEntries.length > 0) {
@@ -962,10 +983,9 @@ export function compose(
 
     // Non-HTML fallback: use first handler's body
     let body: string | null = null
-    for (const result of results) {
-      if (result.status !== 402) continue
+    for (const entry of challengeEntries) {
       if (!body) {
-        const response = result.challenge as Response
+        const response = entry.result.challenge as Response
         const contentType = response.headers.get('Content-Type')
         if (contentType) mergedHeaders.set('Content-Type', contentType)
         body = await response.text()

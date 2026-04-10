@@ -1,4 +1,5 @@
 import type * as Challenge from '../Challenge.js'
+import * as AcceptPayment from '../internal/AcceptPayment.js'
 import type * as Method from '../Method.js'
 import type * as z from '../zod.js'
 import * as Fetch from './internal/Fetch.js'
@@ -25,6 +26,7 @@ export type Mppx<
   createCredential: (
     response: Transport.ResponseOf<transport>,
     context?: AnyContextFor<FlattenMethods<methods>> | undefined,
+    options?: createCredential.Options | undefined,
   ) => Promise<string>
 }
 
@@ -61,11 +63,13 @@ export function create<
   const rawFetch = config.fetch ?? globalThis.fetch
 
   const methods = config.methods.flat() as unknown as FlattenMethods<methods>
+  const acceptPayment = AcceptPayment.resolve(methods, config.paymentPreferences)
 
   const resolvedOnChallenge = onChallenge as Fetch.from.Config<
     FlattenMethods<methods>
   >['onChallenge']
   const config_fetch = {
+    acceptPayment,
     ...(config.fetch && { fetch: config.fetch }),
     ...(resolvedOnChallenge && { onChallenge: resolvedOnChallenge }),
     methods,
@@ -78,14 +82,23 @@ export function create<
     rawFetch,
     methods,
     transport,
-    async createCredential(response: Transport.ResponseOf<transport>, context?: unknown) {
-      const challenge = transport.getChallenge(response as never) as Challenge.Challenge
+    async createCredential(
+      response: Transport.ResponseOf<transport>,
+      context?: unknown,
+      options?: createCredential.Options,
+    ) {
+      const challenges = transport.getChallenges
+        ? transport.getChallenges(response as never)
+        : [transport.getChallenge(response as never)]
+      const preferences = resolveChallengePreferences(acceptPayment.entries, options?.acceptPayment)
 
-      const mi = methods.find((m) => m.name === challenge.method && m.intent === challenge.intent)
-      if (!mi)
+      const selected = AcceptPayment.selectChallenge(challenges, methods, preferences)
+      if (!selected)
         throw new Error(
-          `No method found for "${challenge.method}.${challenge.intent}". Available: ${methods.map((m) => `${m.name}.${m.intent}`).join(', ')}`,
+          `No method found for challenges: ${challenges.map((challenge) => `${challenge.method}.${challenge.intent}`).join(', ')}. Available: ${methods.map((m) => `${m.name}.${m.intent}`).join(', ')}`,
         )
+
+      const { challenge, method: mi } = selected
 
       const parsedContext =
         mi.context && context !== undefined ? mi.context.parse(context) : undefined
@@ -96,6 +109,13 @@ export function create<
           : ({ challenge } as never),
       )
     },
+  }
+}
+
+export declare namespace createCredential {
+  type Options = {
+    /** Request-local Accept-Payment override for manual rawFetch + createCredential flows. */
+    acceptPayment?: string | readonly AcceptPayment.Entry[] | undefined
   }
 }
 
@@ -133,6 +153,8 @@ export declare namespace create {
           },
         ) => Promise<string | undefined>)
       | undefined
+    /** Client-declared supported payment methods, keyed by typed `method/intent` strings. */
+    paymentPreferences?: AcceptPayment.Config<FlattenMethods<methods>> | undefined
     /** Array of methods to use. Accepts individual clients or tuples (e.g. from `tempo()`). */
     methods: methods
     /** Whether to polyfill `globalThis.fetch` with the payment-aware wrapper. @default true */
@@ -168,3 +190,11 @@ type FlattenMethods<methods extends Methods> = methods extends readonly [
       ? readonly [head, ...FlattenMethods<tail>]
       : never
   : readonly []
+
+function resolveChallengePreferences(
+  fallback: readonly AcceptPayment.Entry[],
+  override?: string | readonly AcceptPayment.Entry[] | undefined,
+): readonly AcceptPayment.Entry[] {
+  if (!override) return fallback
+  return typeof override === 'string' ? AcceptPayment.parse(override) : override
+}

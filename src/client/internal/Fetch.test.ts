@@ -350,7 +350,7 @@ function make402(overrides?: { method?: string; intent?: string }) {
 }
 
 describe('Fetch.from: init passthrough (non-402)', () => {
-  test('passes unmodified init to underlying fetch for non-402 responses', async () => {
+  test('preserves init object identity while adding Accept-Payment', async () => {
     const receivedInits: (RequestInit | undefined)[] = []
     const mockFetch: typeof globalThis.fetch = async (_input, init) => {
       receivedInits.push(init)
@@ -371,6 +371,9 @@ describe('Fetch.from: init passthrough (non-402)', () => {
     await fetch('https://example.com/ws-upgrade', customInit)
 
     expect(receivedInits[0]).toBe(customInit)
+    const headers = new Headers(receivedInits[0]?.headers)
+    expect(headers.get('X-Custom')).toBe('value')
+    expect(headers.get('Accept-Payment')).toBe('test/test')
   })
 
   test('preserves extra properties on init for non-402 responses', async () => {
@@ -395,7 +398,8 @@ describe('Fetch.from: init passthrough (non-402)', () => {
 
     const received = receivedInits[0]!
     expect(received.method).toBe('GET')
-    expect((received.headers as Record<string, string>).Authorization).toBe('Bearer token123')
+    expect(new Headers(received.headers).get('Authorization')).toBe('Bearer token123')
+    expect(new Headers(received.headers).get('Accept-Payment')).toBe('test/test')
     expect(received.signal).toBe(customInit.signal)
   })
 
@@ -412,7 +416,7 @@ describe('Fetch.from: init passthrough (non-402)', () => {
     })
 
     await fetch('https://example.com/api')
-    expect(receivedInits[0]).toBeUndefined()
+    expect(new Headers(receivedInits[0]?.headers).get('Accept-Payment')).toBe('test/test')
   })
 
   test('passes init with context through untouched', async () => {
@@ -431,9 +435,153 @@ describe('Fetch.from: init passthrough (non-402)', () => {
     await fetch('https://example.com/api', customInit as any)
 
     expect(receivedInits[0]).toBe(customInit)
+    expect((receivedInits[0] as Record<string, unknown>).context).toEqual({ account: '0xabc' })
+    expect(new Headers(receivedInits[0]?.headers).get('Accept-Payment')).toBe('test/test')
   })
 
-  test('preserves object identity across all non-402 status codes', async () => {
+  test('preserves Request-carried headers when injecting Accept-Payment', async () => {
+    const receivedInputs: (RequestInfo | URL)[] = []
+    const receivedInits: (RequestInit | undefined)[] = []
+    const mockFetch: typeof globalThis.fetch = async (input, init) => {
+      receivedInputs.push(input)
+      receivedInits.push(init)
+      return new Response('OK', { status: 200 })
+    }
+
+    const fetch = Fetch.from({
+      fetch: mockFetch,
+      methods: [noopMethod],
+    })
+
+    const request = new Request('https://example.com/api', {
+      headers: { Authorization: 'Bearer token123', 'X-Custom': 'value' },
+    })
+
+    await fetch(request)
+
+    expect(receivedInputs[0]).toBe(request)
+    const headers = new Headers(receivedInits[0]?.headers)
+    expect(headers.get('Authorization')).toBe('Bearer token123')
+    expect(headers.get('X-Custom')).toBe('value')
+    expect(headers.get('Accept-Payment')).toBe('test/test')
+  })
+
+  test('does not overwrite an explicit Accept-Payment header', async () => {
+    const receivedInits: (RequestInit | undefined)[] = []
+    const mockFetch: typeof globalThis.fetch = async (_input, init) => {
+      receivedInits.push(init)
+      return new Response('OK', { status: 200 })
+    }
+
+    const fetch = Fetch.from({
+      fetch: mockFetch,
+      methods: [noopMethod],
+    })
+
+    await fetch('https://example.com/api', {
+      headers: { 'Accept-Payment': 'custom/charge;q=0.5' },
+    })
+
+    expect(new Headers(receivedInits[0]?.headers).get('Accept-Payment')).toBe('custom/charge;q=0.5')
+  })
+
+  test('uses an explicit Accept-Payment header to reprioritize challenge selection', async () => {
+    let callCount = 0
+    const mockFetch: typeof globalThis.fetch = async (_input, init) => {
+      callCount++
+      if (callCount === 1) {
+        expect(new Headers(init?.headers).get('Accept-Payment')).toBe(
+          'stripe/charge, tempo/charge;q=0.1',
+        )
+
+        return new Response(null, {
+          status: 402,
+          headers: {
+            'WWW-Authenticate': [
+              'Payment id="tempo", realm="test", method="tempo", intent="charge", request="eyJhbW91bnQiOiIxIn0"',
+              'Payment id="stripe", realm="test", method="stripe", intent="charge", request="eyJhbW91bnQiOiIxIn0"',
+            ].join(', '),
+          },
+        })
+      }
+
+      expect(new Headers(init?.headers).get('Authorization')).toBe('stripe-credential')
+      return new Response('OK', { status: 200 })
+    }
+
+    const fetch = Fetch.from({
+      fetch: mockFetch,
+      methods: [
+        {
+          name: 'tempo',
+          intent: 'charge',
+          context: undefined,
+          createCredential: async () => 'tempo-credential',
+        },
+        {
+          name: 'stripe',
+          intent: 'charge',
+          context: undefined,
+          createCredential: async () => 'stripe-credential',
+        },
+      ] as const,
+    })
+
+    const response = await fetch('https://example.com/api', {
+      headers: { 'Accept-Payment': 'stripe/charge, tempo/charge;q=0.1' },
+    })
+    expect(response.status).toBe(200)
+  })
+
+  test('applies an explicit method opt-out before broader wildcard preferences', async () => {
+    let callCount = 0
+    const mockFetch: typeof globalThis.fetch = async (_input, init) => {
+      callCount++
+      if (callCount === 1) {
+        expect(new Headers(init?.headers).get('Accept-Payment')).toBe(
+          'tempo/*;q=1, tempo/charge;q=0, stripe/*;q=0.5',
+        )
+
+        return new Response(null, {
+          status: 402,
+          headers: {
+            'WWW-Authenticate': [
+              'Payment id="tempo", realm="test", method="tempo", intent="charge", request="eyJhbW91bnQiOiIxIn0"',
+              'Payment id="stripe", realm="test", method="stripe", intent="charge", request="eyJhbW91bnQiOiIxIn0"',
+            ].join(', '),
+          },
+        })
+      }
+
+      expect(new Headers(init?.headers).get('Authorization')).toBe('stripe-credential')
+      return new Response('OK', { status: 200 })
+    }
+
+    const fetch = Fetch.from({
+      fetch: mockFetch,
+      methods: [
+        {
+          name: 'tempo',
+          intent: 'charge',
+          context: undefined,
+          createCredential: async () => 'tempo-credential',
+        },
+        {
+          name: 'stripe',
+          intent: 'charge',
+          context: undefined,
+          createCredential: async () => 'stripe-credential',
+        },
+      ] as const,
+    })
+
+    const response = await fetch('https://example.com/api', {
+      headers: { 'Accept-Payment': 'tempo/*;q=1, tempo/charge;q=0, stripe/*;q=0.5' },
+    })
+    expect(response.status).toBe(200)
+  })
+
+  test('preserves non-header init fields across all non-402 status codes', async () => {
     for (const status of [200, 201, 204, 301, 400, 401, 403, 404, 500, 503]) {
       const receivedInits: (RequestInit | undefined)[] = []
       const mockFetch: typeof globalThis.fetch = async (_input, init) => {
@@ -448,7 +596,8 @@ describe('Fetch.from: init passthrough (non-402)', () => {
 
       const customInit = { method: 'GET' }
       await fetch('https://example.com/api', customInit)
-      expect(receivedInits[0]).toBe(customInit)
+      expect(receivedInits[0]?.method).toBe(customInit.method)
+      expect(new Headers(receivedInits[0]?.headers).get('Accept-Payment')).toBe('test/test')
     }
   })
 })
@@ -521,10 +670,11 @@ describe('Fetch.from: 402 retry path', () => {
     })
 
     const retryInit = calls[1]!.init as Record<string, unknown>
-    const headers = retryInit.headers as Record<string, string>
-    expect(headers['X-Custom']).toBe('value')
-    expect(headers['Content-Type']).toBe('application/json')
-    expect(headers.Authorization).toBe('credential')
+    const headers = new Headers(retryInit.headers as HeadersInit)
+    expect(headers.get('X-Custom')).toBe('value')
+    expect(headers.get('Content-Type')).toBe('application/json')
+    expect(headers.get('Accept-Payment')).toBe('test/test')
+    expect(headers.get('Authorization')).toBe('credential')
   })
 
   test('preserves method and other init properties on retry', async () => {
@@ -575,7 +725,154 @@ describe('Fetch.from: 402 retry path', () => {
 
     expect(calls).toHaveLength(2)
     const retryInit = calls[1]!.init as Record<string, unknown>
-    expect(retryInit.headers).toEqual({ Authorization: 'credential' })
+    const headers = new Headers(retryInit.headers as HeadersInit)
+    expect(headers.get('Accept-Payment')).toBe('test/test')
+    expect(headers.get('Authorization')).toBe('credential')
+  })
+
+  test('preserves Request-carried headers on retry after injecting Accept-Payment', async () => {
+    let callCount = 0
+    const calls: { init: RequestInit | undefined; input: RequestInfo | URL }[] = []
+    const mockFetch: typeof globalThis.fetch = async (input, init) => {
+      calls.push({ init, input })
+      callCount++
+      if (callCount === 1) return make402()
+      return new Response('OK', { status: 200 })
+    }
+
+    const fetch = Fetch.from({
+      fetch: mockFetch,
+      methods: [noopMethod],
+    })
+
+    const request = new Request('https://example.com/api', {
+      headers: { Authorization: 'Bearer token123', 'X-Custom': 'value' },
+    })
+
+    await fetch(request)
+
+    expect(calls[0]?.input).toBe(request)
+    expect(calls[1]?.input).toBe(request)
+    const headers = new Headers(calls[1]?.init?.headers)
+    expect(headers.get('X-Custom')).toBe('value')
+    expect(headers.get('Accept-Payment')).toBe('test/test')
+    expect(headers.get('Authorization')).toBe('credential')
+  })
+
+  test('selects the highest-ranked supported challenge', async () => {
+    let callCount = 0
+    const mockFetch: typeof globalThis.fetch = async (_input, init) => {
+      callCount++
+      if (callCount === 1) {
+        expect(new Headers(init?.headers).get('Accept-Payment')).toBe(
+          'tempo/charge, stripe/charge;q=0.5',
+        )
+
+        return new Response(null, {
+          status: 402,
+          headers: {
+            'WWW-Authenticate': [
+              'Payment id="stripe", realm="test", method="stripe", intent="charge", request="eyJhbW91bnQiOiIxIn0"',
+              'Payment id="tempo", realm="test", method="tempo", intent="charge", request="eyJhbW91bnQiOiIxIn0"',
+            ].join(', '),
+          },
+        })
+      }
+
+      expect(new Headers(init?.headers).get('Authorization')).toBe('tempo-credential')
+      return new Response('OK', { status: 200 })
+    }
+
+    const fetch = Fetch.from({
+      fetch: mockFetch,
+      methods: [
+        {
+          name: 'tempo',
+          intent: 'charge',
+          context: undefined,
+          createCredential: async () => 'tempo-credential',
+        },
+        {
+          name: 'stripe',
+          intent: 'charge',
+          context: undefined,
+          createCredential: async () => 'stripe-credential',
+        },
+      ] as const,
+      acceptPayment: {
+        definition: { 'stripe/charge': 0.5 },
+        entries: [
+          { intent: 'charge', method: 'tempo', q: 1, index: 0 },
+          { intent: 'charge', method: 'stripe', q: 0.5, index: 1 },
+        ],
+        header: 'tempo/charge, stripe/charge;q=0.5',
+        keys: {
+          stripe: { charge: 'stripe/charge' },
+          tempo: { charge: 'tempo/charge' },
+        },
+      },
+    })
+
+    const response = await fetch('https://example.com/api')
+    expect(response.status).toBe(200)
+  })
+
+  test('falls back to configured preferences when explicit Accept-Payment is invalid', async () => {
+    let callCount = 0
+    const mockFetch: typeof globalThis.fetch = async (_input, init) => {
+      callCount++
+      if (callCount === 1) {
+        expect(new Headers(init?.headers).get('Accept-Payment')).toBe('not a valid header')
+
+        return new Response(null, {
+          status: 402,
+          headers: {
+            'WWW-Authenticate': [
+              'Payment id="stripe", realm="test", method="stripe", intent="charge", request="eyJhbW91bnQiOiIxIn0"',
+              'Payment id="tempo", realm="test", method="tempo", intent="charge", request="eyJhbW91bnQiOiIxIn0"',
+            ].join(', '),
+          },
+        })
+      }
+
+      expect(new Headers(init?.headers).get('Authorization')).toBe('tempo-credential')
+      return new Response('OK', { status: 200 })
+    }
+
+    const fetch = Fetch.from({
+      fetch: mockFetch,
+      methods: [
+        {
+          name: 'tempo',
+          intent: 'charge',
+          context: undefined,
+          createCredential: async () => 'tempo-credential',
+        },
+        {
+          name: 'stripe',
+          intent: 'charge',
+          context: undefined,
+          createCredential: async () => 'stripe-credential',
+        },
+      ] as const,
+      acceptPayment: {
+        definition: { 'stripe/charge': 0.5 },
+        entries: [
+          { intent: 'charge', method: 'tempo', q: 1, index: 0 },
+          { intent: 'charge', method: 'stripe', q: 0.5, index: 1 },
+        ],
+        header: 'tempo/charge, stripe/charge;q=0.5',
+        keys: {
+          stripe: { charge: 'stripe/charge' },
+          tempo: { charge: 'tempo/charge' },
+        },
+      },
+    })
+
+    const response = await fetch('https://example.com/api', {
+      headers: { 'Accept-Payment': 'not a valid header' },
+    })
+    expect(response.status).toBe(200)
   })
 
   test('throws when no matching method for 402 challenge', async () => {
