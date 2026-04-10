@@ -907,14 +907,8 @@ export function compose(
         )
         if (ranked.length === 0) return entries
 
-        const rankedIds = new Set(ranked.map((challenge) => challenge.id))
-        return entries
-          .filter((entry) => rankedIds.has(entry.challenge.id))
-          .sort(
-            (left, right) =>
-              ranked.findIndex((challenge) => challenge.id === left.challenge.id) -
-              ranked.findIndex((challenge) => challenge.id === right.challenge.id),
-          )
+        const entriesById = new Map(entries.map((entry) => [entry.challenge.id, entry] as const))
+        return ranked.map((challenge) => entriesById.get(challenge.id)!)
       } catch {
         return entries
       }
