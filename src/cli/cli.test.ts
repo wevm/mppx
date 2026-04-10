@@ -19,7 +19,7 @@ import * as Mppx_server from '../server/Mppx.js'
 import { toNodeListener } from '../server/Mppx.js'
 import * as Store from '../Store.js'
 import { stripe as stripe_server } from '../stripe/server/Methods.js'
-import * as TempoProof from '../tempo/Proof.js'
+import * as Proof from '../tempo/Proof.js'
 import { tempo } from '../tempo/server/Methods.js'
 import type { SessionCredentialPayload } from '../tempo/session/Types.js'
 import cli from './cli.js'
@@ -288,7 +288,7 @@ describe.skipIf(process.env.MPPX_TEST_LIVE_TEMPO_WALLET !== '1')(
             authorization!,
           )
           expect(credential.payload.type).toBe('proof')
-          expect(TempoProof.parseProofSource(credential.source!)).not.toBe(null)
+          expect(Proof.parseProofSource(credential.source!)).not.toBe(null)
 
           const rewritten = Credential.serialize({
             ...credential,
