@@ -207,8 +207,11 @@ async function createWithClient(parameters: {
     // https://docs.stripe.com/error-low-level#idempotency
     const replayed = result.lastResponse?.headers?.['idempotent-replayed'] === 'true'
     return { id: result.id, status: result.status, replayed }
-  } catch {
-    throw new VerificationFailedError({ reason: 'Stripe PaymentIntent failed' })
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error)
+    throw new VerificationFailedError({
+      reason: `Stripe PaymentIntent failed: ${detail}`,
+    })
   }
 }
 
@@ -244,7 +247,20 @@ async function createWithSecretKey(parameters: {
     body,
   })
 
-  if (!response.ok) throw new VerificationFailedError({ reason: 'Stripe PaymentIntent failed' })
+  if (!response.ok) {
+    const body = await response.text().catch(() => '')
+    const detail = (() => {
+      try {
+        const parsed = JSON.parse(body) as { error?: { message?: string } }
+        return parsed.error?.message ?? body
+      } catch {
+        return body
+      }
+    })()
+    throw new VerificationFailedError({
+      reason: `Stripe PaymentIntent failed: ${detail}`,
+    })
+  }
   // https://docs.stripe.com/error-low-level#idempotency
   const replayed = response.headers.get('idempotent-replayed') === 'true'
   const result = (await response.json()) as { id: string; status: string }
