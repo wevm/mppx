@@ -1,5 +1,13 @@
 # mppx
 
+## 0.5.12
+
+### Patch Changes
+
+- f6ce313: Add typed `paymentPreferences` support that emits `Accept-Payment` on client requests and filters composed server challenges accordingly.
+- 7059598: Accept zero-dollar proof credentials signed by authorized Tempo access keys and export Tempo proof DID helpers from `mppx/tempo`.
+- b6a18c4: Raised too low fee-payer `maxTotalFee` policy
+
 ## 0.5.11
 
 ### Patch Changes
