@@ -6,6 +6,8 @@ import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts'
 import { tempoModerato } from 'viem/chains'
 import { Actions } from 'viem/tempo'
 
+import { stripePreviewVersion } from '../../src/stripe/internal/constants.js'
+
 export async function startServer(port: number): Promise<HtmlTestServer> {
   const stripePublishableKey = process.env.VITE_STRIPE_PUBLIC_KEY
   const stripeSecretKey = process.env.VITE_STRIPE_SECRET_KEY
@@ -190,6 +192,7 @@ async function createSharedPaymentToken(request: Request, secretKey: string): Pr
       headers: {
         Authorization: `Basic ${btoa(`${secretKey}:`)}`,
         'Content-Type': 'application/x-www-form-urlencoded',
+        'Stripe-Version': stripePreviewVersion,
       },
       body: bodyParams,
     })

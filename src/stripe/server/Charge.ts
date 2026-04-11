@@ -5,6 +5,7 @@ import type { LooseOmit, OneOf } from '../../internal/types.js'
 import * as Method from '../../Method.js'
 import type * as Html from '../../server/internal/html/config.ts'
 import type * as z from '../../zod.js'
+import { stripePreviewVersion } from '../internal/constants.js'
 import type {
   StripeClient,
   CreatePaymentMethodFromElements,
@@ -202,7 +203,7 @@ async function createWithClient(parameters: {
         // `shared_payment_granted_token` is not yet in the Stripe SDK types (SPTs are in private preview).
         shared_payment_granted_token: spt,
       } as any,
-      { idempotencyKey: `mppx_${challenge.id}_${spt}` },
+      { idempotencyKey: `mppx_${challenge.id}_${spt}`, apiVersion: stripePreviewVersion },
     )
     // https://docs.stripe.com/error-low-level#idempotency
     const replayed = result.lastResponse?.headers?.['idempotent-replayed'] === 'true'
@@ -243,6 +244,7 @@ async function createWithSecretKey(parameters: {
       Authorization: `Basic ${btoa(`${secretKey}:`)}`,
       'Content-Type': 'application/x-www-form-urlencoded',
       'Idempotency-Key': `mppx_${challenge.id}_${spt}`,
+      'Stripe-Version': stripePreviewVersion,
     },
     body,
   })
