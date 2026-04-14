@@ -94,9 +94,7 @@ export type Mppx<
      * const receipt = await mppx.verifyCredential(credential)
      * ```
      */
-    verifyCredential(
-      credential: string | Credential.Credential,
-    ): Promise<Receipt.Receipt>
+    verifyCredential(credential: string | Credential.Credential): Promise<Receipt.Receipt>
   }
 
 /** Extracts the transport override from a method, if any. */
@@ -174,10 +172,9 @@ type ChallengeHandlers<methods extends readonly Method.AnyServer[]> = {
 }
 
 /** A function that generates a Challenge object from intent options. */
-type ChallengeFn<
-  method extends Method.Method,
-  defaults extends Record<string, unknown>,
-> = (options: MethodFn.Options<method, defaults>) => Challenge.Challenge
+type ChallengeFn<method extends Method.Method, defaults extends Record<string, unknown>> = (
+  options: MethodFn.Options<method, defaults>,
+) => Challenge.Challenge
 
 /**
  * Creates a server-side payment handler from methods.
@@ -260,8 +257,7 @@ export function create<
   async function verifyCredentialFn(
     input: string | Credential.Credential,
   ): Promise<Receipt.Receipt> {
-    const credential =
-      typeof input === 'string' ? Credential.deserialize(input) : input
+    const credential = typeof input === 'string' ? Credential.deserialize(input) : input
 
     // HMAC provenance check (secretKey is guaranteed non-null by the guard at the top of create())
     if (!Challenge.verify(credential.challenge, { secretKey: secretKey! }))
@@ -289,9 +285,7 @@ export function create<
 
     // The challenge already contains the request params (HMAC-bound),
     // so we use them directly — no need for the caller to re-supply.
-    const request = credential.challenge.request as z.input<
-      typeof mi.schema.request
-    >
+    const request = credential.challenge.request as z.input<typeof mi.schema.request>
 
     return mi.verify({ credential, request } as never)
   }
