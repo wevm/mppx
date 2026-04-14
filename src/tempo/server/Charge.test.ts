@@ -156,7 +156,7 @@ describe('tempo', () => {
 
     test('behavior: falls back to pull when push is not advertised', async () => {
       const jsonRpcClient = createClient({
-        account: accounts[1].address,
+        account: accounts[0].address,
         chain,
         transport: http(),
       })
@@ -172,7 +172,12 @@ describe('tempo', () => {
 
       const httpServer = await Http.createServer(async (req, res) => {
         const result = await Mppx_server.toNodeListener(
-          server.charge({ amount: '1', decimals: 6, supportedModes: ['pull'] }),
+          server.charge({
+            amount: '1',
+            decimals: 6,
+            recipient: accounts[2].address,
+            supportedModes: ['pull'],
+          }),
         )(req, res)
         if (result.status === 402) return
         res.end('OK')
@@ -181,9 +186,9 @@ describe('tempo', () => {
       const response = await fetch(httpServer.url)
       expect(response.status).toBe(402)
 
-      const credential = Credential.deserialize<
-        { type: 'hash' | 'proof' | 'transaction' }
-      >(await mppx.createCredential(response))
+      const credential = Credential.deserialize<{ type: 'hash' | 'proof' | 'transaction' }>(
+        await mppx.createCredential(response),
+      )
       expect(credential.payload.type).toBe('transaction')
 
       const authResponse = await fetch(httpServer.url, {
