@@ -3,7 +3,7 @@ import * as node_http from 'node:http'
 import type { z } from 'mppx'
 import { Challenge, Credential } from 'mppx'
 import { Mppx as Mppx_server, tempo as tempo_server } from 'mppx/server'
-import { Base64 } from 'ox'
+import { Base64, Secp256k1 } from 'ox'
 import {
   type Address,
   createClient,
@@ -13,7 +13,7 @@ import {
   signatureToCompactSignature,
 } from 'viem'
 import { waitForTransactionReceipt } from 'viem/actions'
-import { Addresses } from 'viem/tempo'
+import { Account as TempoAccount, Actions, Addresses } from 'viem/tempo'
 import { beforeAll, beforeEach, describe, expect, expectTypeOf, test } from 'vp/test'
 import { WebSocketServer } from 'ws'
 import { nodeEnv } from '~test/config.js'
@@ -45,7 +45,8 @@ import {
 } from '../internal/defaults.js'
 import type * as Methods from '../Methods.js'
 import * as ChannelStore from '../session/ChannelStore.js'
-import type { SessionReceipt } from '../session/Types.js'
+import { serializeSessionReceipt } from '../session/Receipt.js'
+import type { SessionCredentialPayload, SessionReceipt } from '../session/Types.js'
 import { signVoucher } from '../session/Voucher.js'
 import * as TempoWs from '../session/Ws.js'
 import { charge, session, settle } from './Session.js'
@@ -1727,12 +1728,272 @@ describe.runIf(isLocalnet)('session', () => {
       expect(ch!.settledOnChain).toBe(5000000n)
     })
 
+    test('accepts a Tempo access-key account for settlement', async () => {
+      const { channelId, serializedTransaction } = await createSignedOpenTransaction(10000000n)
+      const server = createServer()
+
+      await server.verify({
+        credential: {
+          challenge: makeChallenge({ id: 'settle-access-key-open', channelId }),
+          payload: {
+            action: 'open' as const,
+            type: 'transaction' as const,
+            channelId,
+            transaction: serializedTransaction,
+            cumulativeAmount: '5000000',
+            signature: await signTestVoucher(channelId, 5000000n),
+          },
+        },
+        request: makeRequest(),
+      })
+
+      const privateKey = Secp256k1.randomPrivateKey()
+      const accessKey = TempoAccount.fromSecp256k1(privateKey, {
+        access: recipientAccount,
+      })
+
+      await Actions.accessKey.authorizeSync(client, {
+        account: recipientAccount,
+        accessKey,
+        feeToken: currency,
+      })
+
+      const settleTxHash = await settle(store, client, channelId, {
+        escrowContract,
+        account: accessKey,
+      })
+      expect(settleTxHash).toMatch(/^0x/)
+
+      const ch = await store.getChannel(channelId)
+      expect(ch!.settledOnChain).toBe(5000000n)
+    })
+
+    test('rejects a raw delegated key account with a helpful error', async () => {
+      const { channelId, serializedTransaction } = await createSignedOpenTransaction(10000000n)
+      const server = createServer()
+
+      await server.verify({
+        credential: {
+          challenge: makeChallenge({ id: 'settle-raw-access-key-open', channelId }),
+          payload: {
+            action: 'open' as const,
+            type: 'transaction' as const,
+            channelId,
+            transaction: serializedTransaction,
+            cumulativeAmount: '5000000',
+            signature: await signTestVoucher(channelId, 5000000n),
+          },
+        },
+        request: makeRequest(),
+      })
+
+      const rawAccessKey = TempoAccount.fromSecp256k1(Secp256k1.randomPrivateKey())
+
+      await expect(
+        settle(store, client, channelId, {
+          escrowContract,
+          account: rawAccessKey,
+        }),
+      ).rejects.toThrow(
+        `Cannot settle channel ${channelId}: tx sender ${rawAccessKey.address} is not the channel payee ${recipientAccount.address}. If using an access key, pass a Tempo access-key account whose address is the payee wallet, not the raw delegated key address.`,
+      )
+    })
+
     test('settle rejects when no channel found', async () => {
       const fakeChannelId =
         '0x0000000000000000000000000000000000000000000000000000000000000000' as Hex
       await expect(settle(store, client, fakeChannelId, { escrowContract })).rejects.toThrow(
         ChannelNotFoundError,
       )
+    })
+  })
+
+  describe('close account shapes', () => {
+    test('root payee account closes successfully', async () => {
+      const { channelId, serializedTransaction } = await createSignedOpenTransaction(10000000n)
+      const server = createServer()
+      await server.verify({
+        credential: {
+          challenge: makeChallenge({ id: 'close-root-payee-open', channelId }),
+          payload: {
+            action: 'open' as const,
+            type: 'transaction' as const,
+            channelId,
+            transaction: serializedTransaction,
+            cumulativeAmount: '1000000',
+            signature: await signTestVoucher(channelId, 1000000n),
+          },
+        },
+        request: makeRequest(),
+      })
+
+      const closeReceipt = await server.verify({
+        credential: {
+          challenge: makeChallenge({ id: 'close-root-payee', channelId }),
+          payload: {
+            action: 'close' as const,
+            channelId,
+            cumulativeAmount: '1000000',
+            signature: await signTestVoucher(channelId, 1000000n),
+          },
+        },
+        request: makeRequest(),
+      })
+
+      expect(closeReceipt.status).toBe('success')
+      expect((await store.getChannel(channelId))?.finalized).toBe(true)
+    })
+
+    test('payee access-key account closes successfully', async () => {
+      const accessKey = TempoAccount.fromSecp256k1(Secp256k1.randomPrivateKey(), {
+        access: recipientAccount,
+      })
+
+      await Actions.accessKey.authorizeSync(client, {
+        account: recipientAccount,
+        accessKey,
+        feeToken: currency,
+      })
+
+      const { channelId, serializedTransaction } = await createSignedOpenTransaction(10000000n)
+      const server = createServer({ account: accessKey })
+      await server.verify({
+        credential: {
+          challenge: makeChallenge({ id: 'close-access-key-open', channelId }),
+          payload: {
+            action: 'open' as const,
+            type: 'transaction' as const,
+            channelId,
+            transaction: serializedTransaction,
+            cumulativeAmount: '1000000',
+            signature: await signTestVoucher(channelId, 1000000n),
+          },
+        },
+        request: makeRequest(),
+      })
+
+      const closeReceipt = await server.verify({
+        credential: {
+          challenge: makeChallenge({ id: 'close-access-key', channelId }),
+          payload: {
+            action: 'close' as const,
+            channelId,
+            cumulativeAmount: '1000000',
+            signature: await signTestVoucher(channelId, 1000000n),
+          },
+        },
+        request: makeRequest(),
+      })
+
+      expect(closeReceipt.status).toBe('success')
+      expect((await store.getChannel(channelId))?.finalized).toBe(true)
+    })
+
+    test('raw delegated server key fails clearly during close', async () => {
+      const rawAccessKey = TempoAccount.fromSecp256k1(Secp256k1.randomPrivateKey())
+      const { channelId, serializedTransaction } = await createSignedOpenTransaction(10000000n)
+      const server = createServer({ account: rawAccessKey, recipient })
+      await server.verify({
+        credential: {
+          challenge: makeChallenge({ id: 'close-raw-access-key-open', channelId }),
+          payload: {
+            action: 'open' as const,
+            type: 'transaction' as const,
+            channelId,
+            transaction: serializedTransaction,
+            cumulativeAmount: '1000000',
+            signature: await signTestVoucher(channelId, 1000000n),
+          },
+        },
+        request: makeRequest(),
+      })
+
+      await expect(
+        server.verify({
+          credential: {
+            challenge: makeChallenge({ id: 'close-raw-access-key', channelId }),
+            payload: {
+              action: 'close' as const,
+              channelId,
+              cumulativeAmount: '1000000',
+              signature: await signTestVoucher(channelId, 1000000n),
+            },
+          },
+          request: makeRequest(),
+        }),
+      ).rejects.toThrow(
+        `Cannot close channel ${channelId}: tx sender ${rawAccessKey.address} is not the channel payee ${recipientAccount.address}. If using an access key, pass a Tempo access-key account whose address is the payee wallet, not the raw delegated key address.`,
+      )
+    })
+
+    test('sessionManager.close surfaces problem details from HTTP close failures', async () => {
+      const challenge = makeChallenge({
+        id: 'close-http-failure',
+        channelId:
+          '0x0000000000000000000000000000000000000000000000000000000000000001' as Hex,
+      })
+      let requests = 0
+
+      const fetch = async (_input: RequestInfo | URL, init?: RequestInit) => {
+        requests++
+
+        const authorization = new Headers(init?.headers).get('Authorization')
+        if (!authorization) {
+          return new Response(null, {
+            status: 402,
+            headers: { 'WWW-Authenticate': Challenge.serialize(challenge) },
+          })
+        }
+
+        const credential = Credential.deserialize<SessionCredentialPayload>(authorization)
+        if (credential.payload.action === 'open') {
+          return new Response('ok', {
+            status: 200,
+            headers: {
+              'Payment-Receipt': serializeSessionReceipt({
+                method: 'tempo',
+                intent: 'session',
+                status: 'success',
+                timestamp: new Date().toISOString(),
+                reference: credential.payload.channelId,
+                challengeId: credential.challenge.id,
+                channelId: credential.payload.channelId,
+                acceptedCumulative: credential.payload.cumulativeAmount,
+                spent: credential.payload.cumulativeAmount,
+                units: 1,
+              }),
+            },
+          })
+        }
+
+        if (credential.payload.action === 'close') {
+          return new Response(
+            JSON.stringify({ detail: 'raw delegated key is not the payee wallet' }),
+            {
+              status: 400,
+              headers: { 'Content-Type': 'application/problem+json' },
+            },
+          )
+        }
+
+        throw new Error(`unexpected payment action ${(credential.payload as { action: string }).action}`)
+      }
+
+      const manager = sessionManager({
+        account: payer,
+        client,
+        escrowContract,
+        fetch,
+        maxDeposit: '1',
+      })
+
+      const response = await manager.fetch('https://api.example.com/resource')
+      expect(response.status).toBe(200)
+
+      await expect(manager.close()).rejects.toThrow(
+        'Close request failed with status 400: raw delegated key is not the payee wallet',
+      )
+      expect(requests).toBe(3)
     })
   })
 

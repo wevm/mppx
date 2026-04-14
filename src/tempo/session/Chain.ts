@@ -16,7 +16,6 @@ import {
   sendRawTransaction,
   sendRawTransactionSync,
   signTransaction,
-  writeContract,
 } from 'viem/actions'
 import { Transaction } from 'viem/tempo'
 
@@ -118,14 +117,13 @@ export async function settleOnChain(
     const data = encodeFunctionData({ abi: escrowAbi, functionName: 'settle', args })
     return sendFeePayerTx(client, resolved, options.feePayer, escrowContract, data, 'settle')
   }
-  return writeContract(client, {
-    account: resolved,
-    chain: client.chain,
-    address: escrowContract,
-    abi: escrowAbi,
-    functionName: 'settle',
-    args,
-  })
+  return sendAccountTx(
+    client,
+    resolved,
+    escrowContract,
+    encodeFunctionData({ abi: escrowAbi, functionName: 'settle', args }),
+    'settle',
+  )
 }
 
 /** Options for {@link closeOnChain}. */
@@ -153,14 +151,43 @@ export async function closeOnChain(
     const data = encodeFunctionData({ abi: escrowAbi, functionName: 'close', args })
     return sendFeePayerTx(client, resolved, options.feePayer, escrowContract, data, 'close')
   }
-  return writeContract(client, {
-    account: resolved,
-    chain: client.chain,
-    address: escrowContract,
-    abi: escrowAbi,
-    functionName: 'close',
-    args,
+  return sendAccountTx(
+    client,
+    resolved,
+    escrowContract,
+    encodeFunctionData({ abi: escrowAbi, functionName: 'close', args }),
+    'close',
+  )
+}
+
+async function sendAccountTx(
+  client: Client,
+  account: Account,
+  to: Address,
+  data: Hex,
+  label: string,
+): Promise<Hex> {
+  const prepared = await prepareTransactionRequest(client, {
+    account,
+    calls: [{ to, data }],
+  } as never)
+
+  const serialized = (await signTransaction(client, {
+    ...prepared,
+    account,
+  } as never)) as Hex
+
+  const receipt = await sendRawTransactionSync(client, {
+    serializedTransaction: serialized as Transaction.TransactionSerializedTempo,
   })
+
+  if (receipt.status !== 'success') {
+    throw new VerificationFailedError({
+      reason: `${label} transaction reverted: ${receipt.transactionHash}`,
+    })
+  }
+
+  return receipt.transactionHash
 }
 
 /**

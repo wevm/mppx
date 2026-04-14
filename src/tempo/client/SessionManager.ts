@@ -759,6 +759,24 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
           method: 'POST',
           headers: { Authorization: credential },
         })
+        if (!response.ok) {
+          const body = await response.text().catch(() => '')
+          const detail = (() => {
+            if (!body) return ''
+            if (!response.headers.get('Content-Type')?.includes('application/problem+json')) {
+              return body
+            }
+            try {
+              const problem = JSON.parse(body) as { detail?: string }
+              return problem.detail ?? body
+            } catch {
+              return body
+            }
+          })()
+          throw new Error(
+            `Close request failed with status ${response.status}${detail ? `: ${detail}` : ''}`,
+          )
+        }
         const receiptHeader = response.headers.get('Payment-Receipt')
         if (receiptHeader) receipt = deserializeSessionReceipt(receiptHeader)
       }
