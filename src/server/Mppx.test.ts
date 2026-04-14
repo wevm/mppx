@@ -2741,3 +2741,563 @@ describe('realm auto-detection', () => {
     expect(body.detail).toContain('realm')
   })
 })
+
+// ── mppx.challenge ──────────────────────────────────────────────────────
+
+describe('challenge', () => {
+  const mockCharge = Method.from({
+    name: 'alpha',
+    intent: 'charge',
+    schema: {
+      credential: { payload: z.object({ token: z.string() }) },
+      request: z.object({
+        amount: z.string(),
+        currency: z.string(),
+        decimals: z.number(),
+        recipient: z.string(),
+      }),
+    },
+  })
+
+  const mockSession = Method.from({
+    name: 'alpha',
+    intent: 'session',
+    schema: {
+      credential: {
+        payload: z.discriminatedUnion('action', [
+          z.object({ action: z.literal('open'), token: z.string() }),
+          z.object({ action: z.literal('voucher'), amount: z.string() }),
+        ]),
+      },
+      request: z.object({
+        amount: z.string(),
+        currency: z.string(),
+        recipient: z.string(),
+        unitType: z.string(),
+      }),
+    },
+  })
+
+  const betaCharge = Method.from({
+    name: 'beta',
+    intent: 'charge',
+    schema: {
+      credential: { payload: z.object({ token: z.string() }) },
+      request: z.object({
+        amount: z.string(),
+        currency: z.string(),
+        decimals: z.number(),
+        recipient: z.string(),
+      }),
+    },
+  })
+
+  function mockReceipt(name: string) {
+    return {
+      method: name,
+      reference: `tx-${name}`,
+      status: 'success' as const,
+      timestamp: new Date().toISOString(),
+    }
+  }
+
+  const alphaChargeServer = Method.toServer(mockCharge, {
+    async verify() {
+      return mockReceipt('alpha')
+    },
+  })
+
+  const alphaSessionServer = Method.toServer(mockSession, {
+    async verify() {
+      return mockReceipt('alpha-session')
+    },
+  })
+
+  const betaChargeServer = Method.toServer(betaCharge, {
+    async verify() {
+      return mockReceipt('beta')
+    },
+  })
+
+  const challengeOpts = {
+    amount: '1000',
+    currency: '0x0000000000000000000000000000000000000001',
+    decimals: 6,
+    expires: new Date(Date.now() + 60_000).toISOString(),
+    recipient: '0x0000000000000000000000000000000000000002',
+  }
+
+  test('mppx.challenge.alpha.charge returns a valid Challenge object', () => {
+    const mppx = Mppx.create({
+      methods: [alphaChargeServer, alphaSessionServer, betaChargeServer],
+      realm,
+      secretKey,
+    })
+
+    const challenge = mppx.challenge.alpha.charge(challengeOpts)
+
+    expect(challenge.method).toBe('alpha')
+    expect(challenge.intent).toBe('charge')
+    expect(challenge.realm).toBe(realm)
+    expect(challenge.request.amount).toBe('1000')
+    expect(challenge.request.currency).toBe('0x0000000000000000000000000000000000000001')
+    expect(challenge.request.recipient).toBe('0x0000000000000000000000000000000000000002')
+    expect(challenge.id).toBeDefined()
+  })
+
+  test('mppx.challenge.alpha.session returns a valid Challenge object', () => {
+    const mppx = Mppx.create({
+      methods: [alphaChargeServer, alphaSessionServer, betaChargeServer],
+      realm,
+      secretKey,
+    })
+
+    const challenge = mppx.challenge.alpha.session({
+      amount: '500',
+      currency: '0x0000000000000000000000000000000000000001',
+      recipient: '0x0000000000000000000000000000000000000002',
+      unitType: 'token',
+    })
+
+    expect(challenge.method).toBe('alpha')
+    expect(challenge.intent).toBe('session')
+    expect(challenge.realm).toBe(realm)
+    expect(challenge.request.unitType).toBe('token')
+  })
+
+  test('mppx.challenge.beta.charge returns challenge for a different method', () => {
+    const mppx = Mppx.create({
+      methods: [alphaChargeServer, betaChargeServer],
+      realm,
+      secretKey,
+    })
+
+    const challenge = mppx.challenge.beta.charge(challengeOpts)
+
+    expect(challenge.method).toBe('beta')
+    expect(challenge.intent).toBe('charge')
+  })
+
+  test('challenge ID is HMAC-bound and verifiable', () => {
+    const mppx = Mppx.create({
+      methods: [alphaChargeServer],
+      realm,
+      secretKey,
+    })
+
+    const challenge = mppx.challenge.alpha.charge(challengeOpts)
+    expect(Challenge.verify(challenge, { secretKey })).toBe(true)
+  })
+
+  test('challenge includes description and meta when provided', () => {
+    const mppx = Mppx.create({
+      methods: [alphaChargeServer],
+      realm,
+      secretKey,
+    })
+
+    const challenge = mppx.challenge.alpha.charge({
+      ...challengeOpts,
+      description: 'Order #123',
+      meta: { checkout_id: 'chk_abc' },
+    })
+
+    expect(challenge.description).toBe('Order #123')
+    expect(challenge.opaque).toEqual({ checkout_id: 'chk_abc' })
+  })
+
+  test('challenge applies schema transforms', () => {
+    // Method with a z.transform that converts decimals
+    const transformMethod = Method.from({
+      name: 'transform',
+      intent: 'charge',
+      schema: {
+        credential: { payload: z.object({ token: z.string() }) },
+        request: z.pipe(
+          z.object({
+            amount: z.string(),
+            currency: z.string(),
+            decimals: z.number(),
+            recipient: z.string(),
+          }),
+          z.transform(({ amount, currency, decimals, recipient }) => ({
+            amount: String(Number(amount) * 10 ** decimals),
+            currency,
+            recipient,
+          })),
+        ),
+      },
+    })
+
+    const serverMethod = Method.toServer(transformMethod, {
+      async verify() {
+        return mockReceipt('transform')
+      },
+    })
+
+    const mppx = Mppx.create({ methods: [serverMethod], realm, secretKey })
+
+    const challenge = mppx.challenge.transform.charge({
+      amount: '25.92',
+      currency: '0x0000000000000000000000000000000000000001',
+      decimals: 6,
+      recipient: '0x0000000000000000000000000000000000000002',
+    })
+
+    // Schema transform should apply: 25.92 * 10^6 = 25920000
+    expect(challenge.request.amount).toBe('25920000')
+  })
+
+  test('challenge produced by mppx.challenge is accepted by the 402 handler', async () => {
+    const mppx = Mppx.create({
+      methods: [alphaChargeServer],
+      realm,
+      secretKey,
+    })
+
+    // Generate challenge via the new API
+    const challenge = mppx.challenge.alpha.charge(challengeOpts)
+
+    // Build a credential from it
+    const credential = Credential.from({ challenge, payload: { token: 'valid' } })
+
+    // Present it to the 402 handler
+    const result = await mppx.charge(challengeOpts)(
+      new Request('https://example.com/resource', {
+        headers: { Authorization: Credential.serialize(credential) },
+      }),
+    )
+
+    expect(result.status).toBe(200)
+  })
+})
+
+// ── mppx.verifyCredential ───────────────────────────────────────────────
+
+describe('verifyCredential', () => {
+  const mockCharge = Method.from({
+    name: 'alpha',
+    intent: 'charge',
+    schema: {
+      credential: { payload: z.object({ token: z.string() }) },
+      request: z.object({
+        amount: z.string(),
+        currency: z.string(),
+        decimals: z.number(),
+        recipient: z.string(),
+      }),
+    },
+  })
+
+  const mockSession = Method.from({
+    name: 'alpha',
+    intent: 'session',
+    schema: {
+      credential: {
+        payload: z.discriminatedUnion('action', [
+          z.object({ action: z.literal('open'), token: z.string() }),
+          z.object({ action: z.literal('voucher'), amount: z.string() }),
+        ]),
+      },
+      request: z.object({
+        amount: z.string(),
+        currency: z.string(),
+        recipient: z.string(),
+        unitType: z.string(),
+      }),
+    },
+  })
+
+  const betaCharge = Method.from({
+    name: 'beta',
+    intent: 'charge',
+    schema: {
+      credential: { payload: z.object({ token: z.string() }) },
+      request: z.object({
+        amount: z.string(),
+        currency: z.string(),
+        decimals: z.number(),
+        recipient: z.string(),
+      }),
+    },
+  })
+
+  function mockReceipt(name: string) {
+    return {
+      method: name,
+      reference: `tx-${name}`,
+      status: 'success' as const,
+      timestamp: new Date().toISOString(),
+    }
+  }
+
+  let verifyArgs: Record<string, unknown> | undefined
+
+  const alphaChargeServer = Method.toServer(mockCharge, {
+    async verify({ credential, request }) {
+      verifyArgs = { credential, request }
+      return mockReceipt('alpha')
+    },
+  })
+
+  const alphaSessionServer = Method.toServer(mockSession, {
+    async verify({ credential, request }) {
+      verifyArgs = { credential, request }
+      return mockReceipt('alpha-session')
+    },
+  })
+
+  const betaChargeServer = Method.toServer(betaCharge, {
+    async verify() {
+      return mockReceipt('beta')
+    },
+  })
+
+  const challengeOpts = {
+    amount: '1000',
+    currency: '0x0000000000000000000000000000000000000001',
+    decimals: 6,
+    expires: new Date(Date.now() + 60_000).toISOString(),
+    recipient: '0x0000000000000000000000000000000000000002',
+  }
+
+  test('verifies a serialized credential string (charge)', async () => {
+    verifyArgs = undefined
+    const mppx = Mppx.create({
+      methods: [alphaChargeServer, alphaSessionServer, betaChargeServer],
+      realm,
+      secretKey,
+    })
+
+    const challenge = mppx.challenge.alpha.charge(challengeOpts)
+    const credential = Credential.from({ challenge, payload: { token: 'valid' } })
+    const serialized = Credential.serialize(credential)
+
+    const receipt = await mppx.verifyCredential(serialized)
+
+    expect(receipt.status).toBe('success')
+    expect(receipt.method).toBe('alpha')
+    expect(verifyArgs).toBeDefined()
+  })
+
+  test('verifies a parsed Credential object (charge)', async () => {
+    verifyArgs = undefined
+    const mppx = Mppx.create({
+      methods: [alphaChargeServer],
+      realm,
+      secretKey,
+    })
+
+    const challenge = mppx.challenge.alpha.charge(challengeOpts)
+    const credential = Credential.from({ challenge, payload: { token: 'valid' } })
+
+    const receipt = await mppx.verifyCredential(credential)
+
+    expect(receipt.status).toBe('success')
+    expect(receipt.method).toBe('alpha')
+  })
+
+  test('verifies a credential for session intent', async () => {
+    verifyArgs = undefined
+    const mppx = Mppx.create({
+      methods: [alphaChargeServer, alphaSessionServer],
+      realm,
+      secretKey,
+    })
+
+    const challenge = mppx.challenge.alpha.session({
+      amount: '500',
+      currency: '0x0000000000000000000000000000000000000001',
+      recipient: '0x0000000000000000000000000000000000000002',
+      unitType: 'token',
+    })
+    const credential = Credential.from({
+      challenge,
+      payload: { action: 'open', token: 'valid' },
+    })
+
+    const receipt = await mppx.verifyCredential(credential)
+
+    expect(receipt.status).toBe('success')
+    expect(receipt.method).toBe('alpha-session')
+  })
+
+  test('dispatches to correct method when multiple methods are registered', async () => {
+    const mppx = Mppx.create({
+      methods: [alphaChargeServer, betaChargeServer],
+      realm,
+      secretKey,
+    })
+
+    const challenge = mppx.challenge.beta.charge(challengeOpts)
+    const credential = Credential.from({ challenge, payload: { token: 'valid' } })
+
+    const receipt = await mppx.verifyCredential(credential)
+
+    expect(receipt.method).toBe('beta')
+  })
+
+  test('rejects credential with wrong HMAC (not issued by this server)', async () => {
+    const mppx = Mppx.create({
+      methods: [alphaChargeServer],
+      realm,
+      secretKey,
+    })
+
+    const wrongChallenge = Challenge.from({
+      id: 'tampered-id',
+      intent: 'charge',
+      method: 'alpha',
+      realm,
+      request: {
+        amount: '1000',
+        currency: '0x0000000000000000000000000000000000000001',
+        decimals: 6,
+        recipient: '0x0000000000000000000000000000000000000002',
+      },
+    })
+    const credential = Credential.from({
+      challenge: wrongChallenge,
+      payload: { token: 'valid' },
+    })
+
+    await expect(mppx.verifyCredential(credential)).rejects.toThrow(
+      'challenge was not issued by this server',
+    )
+  })
+
+  test('rejects credential with expired challenge', async () => {
+    const mppx = Mppx.create({
+      methods: [alphaChargeServer],
+      realm,
+      secretKey,
+    })
+
+    const challenge = mppx.challenge.alpha.charge({
+      ...challengeOpts,
+      expires: new Date(Date.now() - 1000).toISOString(), // already expired
+    })
+    const credential = Credential.from({ challenge, payload: { token: 'valid' } })
+
+    await expect(mppx.verifyCredential(credential)).rejects.toThrow()
+  })
+
+  test('rejects credential with invalid payload schema', async () => {
+    const mppx = Mppx.create({
+      methods: [alphaChargeServer],
+      realm,
+      secretKey,
+    })
+
+    const challenge = mppx.challenge.alpha.charge(challengeOpts)
+    const credential = Credential.from({
+      challenge,
+      payload: { wrong_field: 123 }, // doesn't match z.object({ token: z.string() })
+    })
+
+    await expect(mppx.verifyCredential(credential)).rejects.toThrow()
+  })
+
+  test('rejects credential for unregistered method/intent', async () => {
+    const mppx = Mppx.create({
+      methods: [alphaChargeServer],
+      realm,
+      secretKey,
+    })
+
+    // Forge a challenge for an unregistered method using the same secret
+    const challenge = Challenge.from({
+      secretKey,
+      intent: 'charge',
+      method: 'unknown',
+      realm,
+      expires: new Date(Date.now() + 60_000).toISOString(),
+      request: {
+        amount: '1000',
+        currency: '0x0000000000000000000000000000000000000001',
+      },
+    })
+    const credential = Credential.from({ challenge, payload: { token: 'valid' } })
+
+    await expect(mppx.verifyCredential(credential)).rejects.toThrow(
+      'no registered method for unknown/charge',
+    )
+  })
+
+  test('rejects malformed credential string', async () => {
+    const mppx = Mppx.create({
+      methods: [alphaChargeServer],
+      realm,
+      secretKey,
+    })
+
+    await expect(mppx.verifyCredential('not-valid-base64')).rejects.toThrow()
+  })
+
+  test('challenge + verifyCredential round-trip with schema transforms', async () => {
+    const transformMethod = Method.from({
+      name: 'transform',
+      intent: 'charge',
+      schema: {
+        credential: { payload: z.object({ token: z.string() }) },
+        request: z.pipe(
+          z.object({
+            amount: z.string(),
+            currency: z.string(),
+            decimals: z.number(),
+            recipient: z.string(),
+          }),
+          z.transform(({ amount, currency, decimals, recipient }) => ({
+            amount: String(Number(amount) * 10 ** decimals),
+            currency,
+            recipient,
+          })),
+        ),
+      },
+    })
+
+    const serverMethod = Method.toServer(transformMethod, {
+      async verify() {
+        return mockReceipt('transform')
+      },
+    })
+
+    const mppx = Mppx.create({ methods: [serverMethod], realm, secretKey })
+
+    // Generate challenge with human-readable amount
+    const challenge = mppx.challenge.transform.charge({
+      amount: '25.92',
+      currency: '0x0000000000000000000000000000000000000001',
+      decimals: 6,
+      recipient: '0x0000000000000000000000000000000000000002',
+    })
+
+    // Verify the transform was applied
+    expect(challenge.request.amount).toBe('25920000')
+
+    // Build credential and verify end-to-end
+    const credential = Credential.from({ challenge, payload: { token: 'valid' } })
+    const receipt = await mppx.verifyCredential(credential)
+
+    expect(receipt.status).toBe('success')
+    expect(receipt.method).toBe('transform')
+  })
+
+  test('challenge + verifyCredential round-trip with serialized string', async () => {
+    const mppx = Mppx.create({
+      methods: [alphaChargeServer, alphaSessionServer],
+      realm,
+      secretKey,
+    })
+
+    // Generate, serialize, verify — the full UCP flow
+    const challenge = mppx.challenge.alpha.charge(challengeOpts)
+    const credential = Credential.from({ challenge, payload: { token: 'valid' } })
+    const serialized = Credential.serialize(credential)
+
+    // Simulate receiving the credential string from a UCP instrument
+    const receipt = await mppx.verifyCredential(serialized)
+
+    expect(receipt.status).toBe('success')
+  })
+})
