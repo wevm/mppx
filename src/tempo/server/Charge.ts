@@ -163,7 +163,7 @@ export function charge<const parameters extends charge.Parameters>(
       const { amount, methodDetails } = resolvedRequest
       const expires = challenge.expires
       const supportedModes = methodDetails?.supportedModes as
-        | readonly ('push' | 'pull')[]
+        | readonly Methods.ChargeMode[]
         | undefined
 
       const currency = resolvedRequest.currency as `0x${string}`

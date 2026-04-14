@@ -4,6 +4,9 @@ import { parseUnits } from 'viem'
 import * as Method from '../Method.js'
 import * as z from '../zod.js'
 
+export const chargeModes = ['push', 'pull'] as const
+export type ChargeMode = (typeof chargeModes)[number]
+
 const split = z.object({
   amount: z.amount(),
   memo: z.optional(z.hash()),
@@ -47,7 +50,7 @@ export const charge = Method.from({
           memo: z.optional(z.hash()),
           recipient: z.optional(z.string()),
           splits: z.optional(z.array(split).check(z.minLength(1), z.maxLength(10))),
-          supportedModes: z.optional(z.array(z.enum(['push', 'pull'])).check(z.minLength(1))),
+          supportedModes: z.optional(z.array(z.enum(chargeModes)).check(z.minLength(1))),
         })
         .check(
           z.refine(({ amount, decimals, splits }) => {
@@ -65,30 +68,32 @@ export const charge = Method.from({
             )
           }, 'Invalid splits'),
         ),
-      z.transform(({ amount, chainId, decimals, feePayer, memo, splits, supportedModes, ...rest }) => ({
-        ...rest,
-        amount: parseUnits(amount, decimals).toString(),
-        ...(chainId !== undefined ||
-        feePayer !== undefined ||
-        memo !== undefined ||
-        splits !== undefined ||
-        supportedModes !== undefined
-          ? {
-              methodDetails: {
-                ...(chainId !== undefined && { chainId }),
-                ...(feePayer !== undefined && { feePayer }),
-                ...(memo !== undefined && { memo }),
-                ...(splits !== undefined && {
-                  splits: splits.map((split) => ({
-                    ...split,
-                    amount: parseUnits(split.amount, decimals).toString(),
-                  })),
-                }),
-                ...(supportedModes !== undefined && { supportedModes }),
-              },
-            }
-          : {}),
-      })),
+      z.transform(
+        ({ amount, chainId, decimals, feePayer, memo, splits, supportedModes, ...rest }) => ({
+          ...rest,
+          amount: parseUnits(amount, decimals).toString(),
+          ...(chainId !== undefined ||
+          feePayer !== undefined ||
+          memo !== undefined ||
+          splits !== undefined ||
+          supportedModes !== undefined
+            ? {
+                methodDetails: {
+                  ...(chainId !== undefined && { chainId }),
+                  ...(feePayer !== undefined && { feePayer }),
+                  ...(memo !== undefined && { memo }),
+                  ...(splits !== undefined && {
+                    splits: splits.map((split) => ({
+                      ...split,
+                      amount: parseUnits(split.amount, decimals).toString(),
+                    })),
+                  }),
+                  ...(supportedModes !== undefined && { supportedModes }),
+                },
+              }
+            : {}),
+        }),
+      ),
     ),
   },
 })

@@ -47,7 +47,7 @@ export function charge(parameters: charge.Parameters = {}) {
     context: z.object({
       account: z.optional(z.custom<Account.getResolver.Parameters['account']>()),
       autoSwap: z.optional(z.custom<charge.AutoSwap>()),
-      mode: z.optional(z.enum(['push', 'pull'])),
+      mode: z.optional(z.enum(Methods.chargeModes)),
     }),
 
     async createCredential({ challenge, context }) {
@@ -86,7 +86,7 @@ export function charge(parameters: charge.Parameters = {}) {
         }
       }
       const supportedModes = (methodDetails?.supportedModes as
-        | readonly ('push' | 'pull')[]
+        | readonly Methods.ChargeMode[]
         | undefined) ?? ['pull', 'push']
       const mode = (() => {
         const explicitMode = context?.mode ?? parameters.mode
@@ -209,7 +209,7 @@ export declare namespace charge {
      *
      * @default `'push'` for JSON-RPC accounts, `'pull'` for local accounts.
      */
-    mode?: 'push' | 'pull' | undefined
+    mode?: Methods.ChargeMode | undefined
   } & Account.getResolver.Parameters &
     Client.getResolver.Parameters
 }
