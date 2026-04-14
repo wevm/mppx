@@ -39,6 +39,20 @@ describe('charge', () => {
     expect(result.success).toBe(true)
   })
 
+  test('schema: validates request with supportedModes', () => {
+    const result = Methods.charge.schema.request.safeParse({
+      amount: '1',
+      currency: '0x20c0000000000000000000000000000000000001',
+      decimals: 6,
+      recipient: '0x1234567890abcdef1234567890abcdef12345678',
+      supportedModes: ['pull'],
+    })
+    expect(result.success).toBe(true)
+    if (!result.success) return
+
+    expect(result.data.methodDetails?.supportedModes).toEqual(['pull'])
+  })
+
   test('schema: validates request with memo', () => {
     const result = Methods.charge.schema.request.safeParse({
       amount: '1',

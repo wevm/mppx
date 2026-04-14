@@ -162,6 +162,9 @@ export function charge<const parameters extends charge.Parameters>(
 
       const { amount, methodDetails } = resolvedRequest
       const expires = challenge.expires
+      const supportedModes = methodDetails?.supportedModes as
+        | readonly ('push' | 'pull')[]
+        | undefined
 
       const currency = resolvedRequest.currency as `0x${string}`
       const recipient = resolvedRequest.recipient as `0x${string}`
@@ -178,6 +181,9 @@ export function charge<const parameters extends charge.Parameters>(
 
       switch (payload.type) {
         case 'hash': {
+          if (supportedModes && !supportedModes.includes('push'))
+            throw new MismatchError('Hash credentials are not supported for this challenge.', {})
+
           const hash = payload.hash as `0x${string}`
           if (!(await markHashUsed(store, hash))) {
             throw new VerificationFailedError({ reason: 'Transaction hash has already been used' })
@@ -258,6 +264,12 @@ export function charge<const parameters extends charge.Parameters>(
         }
 
         case 'transaction': {
+          if (supportedModes && !supportedModes.includes('pull'))
+            throw new MismatchError(
+              'Transaction credentials are not supported for this challenge.',
+              {},
+            )
+
           const serializedTransaction = payload.signature as Transaction.TransactionSerializedTempo
 
           // Pre-broadcast dedup: catch exact byte-for-byte replays early.

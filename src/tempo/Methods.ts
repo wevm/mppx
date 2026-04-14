@@ -47,6 +47,7 @@ export const charge = Method.from({
           memo: z.optional(z.hash()),
           recipient: z.optional(z.string()),
           splits: z.optional(z.array(split).check(z.minLength(1), z.maxLength(10))),
+          supportedModes: z.optional(z.array(z.enum(['push', 'pull'])).check(z.minLength(1))),
         })
         .check(
           z.refine(({ amount, decimals, splits }) => {
@@ -64,13 +65,14 @@ export const charge = Method.from({
             )
           }, 'Invalid splits'),
         ),
-      z.transform(({ amount, chainId, decimals, feePayer, memo, splits, ...rest }) => ({
+      z.transform(({ amount, chainId, decimals, feePayer, memo, splits, supportedModes, ...rest }) => ({
         ...rest,
         amount: parseUnits(amount, decimals).toString(),
         ...(chainId !== undefined ||
         feePayer !== undefined ||
         memo !== undefined ||
-        splits !== undefined
+        splits !== undefined ||
+        supportedModes !== undefined
           ? {
               methodDetails: {
                 ...(chainId !== undefined && { chainId }),
@@ -82,6 +84,7 @@ export const charge = Method.from({
                     amount: parseUnits(split.amount, decimals).toString(),
                   })),
                 }),
+                ...(supportedModes !== undefined && { supportedModes }),
               },
             }
           : {}),
