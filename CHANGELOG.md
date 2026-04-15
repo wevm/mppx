@@ -1,5 +1,13 @@
 # mppx
 
+## 0.5.13
+
+### Patch Changes
+
+- 7e16df7: Make Tempo charge fee-sponsorship policy resolve per chain and allow overriding it with `feePayerPolicy`.
+- 13d2851: Fixed Tempo HTML pay button text overrides and make the HTML page title follow a custom `paymentRequired` label when `title` is omitted.
+- e81f45c: Add Tempo charge `supportedModes` request support so clients and servers can explicitly negotiate `push` vs `pull` settlement.
+
 ## 0.5.12
 
 ### Patch Changes
