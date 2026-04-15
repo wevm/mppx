@@ -403,6 +403,9 @@ export declare namespace charge {
      * Override the fee-sponsor policy used when co-signing Tempo charge
      * transactions. Defaults resolve per chain, including a higher
      * priority-fee ceiling on Moderato.
+     *
+     * If you increase `maxGas` or `maxFeePerGas`, you may also need to raise
+     * `maxTotalFee` so the combined fee budget remains valid.
      */
     feePayerPolicy?: FeePayerPolicy | undefined
     /** Testnet mode. */
@@ -445,13 +448,7 @@ export declare namespace charge {
     decimals: number
   }
 
-  type FeePayerPolicy = {
-    maxGas?: bigint
-    maxFeePerGas?: bigint
-    maxPriorityFeePerGas?: bigint
-    maxTotalFee?: bigint
-    maxValidityWindowSeconds?: number
-  }
+  type FeePayerPolicy = Partial<FeePayer.Policy>
 }
 
 type ExpectedTransfer = {

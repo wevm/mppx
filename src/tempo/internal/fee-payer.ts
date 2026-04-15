@@ -57,9 +57,15 @@ const policyByChainId = {
 } as const satisfies Record<defaults.ChainId, Policy>
 
 function getPolicy(chainId: number, overrides: Partial<Policy> | undefined): Policy {
+  const base = policyByChainId[chainId as defaults.ChainId] ?? defaultPolicy
+  if (!overrides) return base
+
   return {
-    ...(policyByChainId[chainId as defaults.ChainId] ?? defaultPolicy),
-    ...overrides,
+    maxGas: overrides.maxGas ?? base.maxGas,
+    maxFeePerGas: overrides.maxFeePerGas ?? base.maxFeePerGas,
+    maxPriorityFeePerGas: overrides.maxPriorityFeePerGas ?? base.maxPriorityFeePerGas,
+    maxTotalFee: overrides.maxTotalFee ?? base.maxTotalFee,
+    maxValidityWindowSeconds: overrides.maxValidityWindowSeconds ?? base.maxValidityWindowSeconds,
   }
 }
 

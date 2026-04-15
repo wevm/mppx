@@ -321,6 +321,44 @@ describe('prepareSponsoredTransaction', () => {
     ).not.toThrow()
   })
 
+  test('error: rejects excessive priority fee under a custom policy override', () => {
+    expect(() =>
+      prepareSponsoredTransaction({
+        account: sponsor,
+        chainId: 4217,
+        details,
+        expectedFeeToken: bogus,
+        policy: { maxPriorityFeePerGas: 20_000_000_000n },
+        transaction: {
+          ...baseTransaction,
+          chainId: 4217,
+          gas: 626_497n,
+          maxFeePerGas: 24_000_000_000n,
+          maxPriorityFeePerGas: 24_000_000_000n,
+        } as any,
+      }),
+    ).toThrow('maxPriorityFeePerGas exceeds sponsor policy')
+  })
+
+  test('ignores undefined policy override values', () => {
+    expect(() =>
+      prepareSponsoredTransaction({
+        account: sponsor,
+        chainId: 4217,
+        details,
+        expectedFeeToken: bogus,
+        policy: { maxPriorityFeePerGas: undefined } as any,
+        transaction: {
+          ...baseTransaction,
+          chainId: 4217,
+          gas: 626_497n,
+          maxFeePerGas: 24_000_000_000n,
+          maxPriorityFeePerGas: 24_000_000_000n,
+        } as any,
+      }),
+    ).toThrow('maxPriorityFeePerGas exceeds sponsor policy')
+  })
+
   test('drops unknown top-level fields from the sponsored transaction', () => {
     const sponsored = prepareSponsoredTransaction({
       account: sponsor,
