@@ -341,6 +341,22 @@ export declare namespace session {
   }
 }
 
+function assertSettlementSender(parameters: {
+  operation: 'close' | 'settle'
+  channelId: Hex
+  payee: Address
+  sender: Address | undefined
+}) {
+  const { operation, channelId, payee, sender } = parameters
+  if (!sender) return
+  if (sender.toLowerCase() === payee.toLowerCase()) return
+  throw new BadRequestError({
+    reason:
+      `Cannot ${operation} channel ${channelId}: tx sender ${sender} is not the channel payee ${payee}. ` +
+      'If using an access key, pass a Tempo access-key account whose address is the payee wallet, not the raw delegated key address.',
+  })
+}
+
 /**
  * One-shot settle: reads highest voucher from store and submits on-chain.
  */
@@ -364,6 +380,13 @@ export async function settle(
     options?.escrowContract ??
     defaults.escrowContract[chainId as keyof typeof defaults.escrowContract]
   if (!resolvedEscrow) throw new Error(`No escrow contract for chainId ${chainId}.`)
+
+  assertSettlementSender({
+    operation: 'settle',
+    channelId,
+    payee: channel.payee,
+    sender: options?.account?.address ?? client.account?.address,
+  })
 
   const settledAmount = channel.highestVoucher.cumulativeAmount
   const txHash = await settleOnChain(client, resolvedEscrow, channel.highestVoucher, {
@@ -862,6 +885,13 @@ async function handleClose(
   if (!isValid) {
     throw new InvalidSignatureError({ reason: 'invalid voucher signature' })
   }
+
+  assertSettlementSender({
+    operation: 'close',
+    channelId: payload.channelId,
+    payee: onChain.payee,
+    sender: account?.address ?? client.account?.address,
+  })
 
   const txHash = await closeOnChain(client, methodDetails.escrowContract, voucher, {
     ...(feePayer && account ? { feePayer, account } : { account }),
