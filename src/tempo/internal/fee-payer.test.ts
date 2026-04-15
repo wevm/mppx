@@ -285,6 +285,42 @@ describe('prepareSponsoredTransaction', () => {
     ).not.toThrow()
   })
 
+  test('accepts higher Moderato priority fees by default', () => {
+    expect(() =>
+      prepareSponsoredTransaction({
+        account: sponsor,
+        chainId: 42431,
+        details,
+        expectedFeeToken: bogus,
+        transaction: {
+          ...baseTransaction,
+          gas: 626_497n,
+          maxFeePerGas: 24_000_000_000n,
+          maxPriorityFeePerGas: 24_000_000_000n,
+        } as any,
+      }),
+    ).not.toThrow()
+  })
+
+  test('accepts fee-payer policy overrides', () => {
+    expect(() =>
+      prepareSponsoredTransaction({
+        account: sponsor,
+        chainId: 4217,
+        details,
+        expectedFeeToken: bogus,
+        policy: { maxPriorityFeePerGas: 50_000_000_000n },
+        transaction: {
+          ...baseTransaction,
+          chainId: 4217,
+          gas: 626_497n,
+          maxFeePerGas: 24_000_000_000n,
+          maxPriorityFeePerGas: 24_000_000_000n,
+        } as any,
+      }),
+    ).not.toThrow()
+  })
+
   test('drops unknown top-level fields from the sponsored transaction', () => {
     const sponsored = prepareSponsoredTransaction({
       account: sponsor,

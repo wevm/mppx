@@ -5,6 +5,7 @@ import { decodeFunctionData } from 'viem'
 import { Abis, Addresses, Transaction } from 'viem/tempo'
 
 import * as TempoAddress_internal from './address.js'
+import * as defaults from './defaults.js'
 import * as Selectors from './selectors.js'
 
 /** Returns true if the serialized transaction has a Tempo envelope prefix. */
@@ -26,17 +27,41 @@ export const callScopes = [
   [Selectors.approve, Selectors.swapExactAmountOut, Selectors.transferWithMemo],
 ]
 
+export type Policy = {
+  maxGas: bigint
+  maxFeePerGas: bigint
+  maxPriorityFeePerGas: bigint
+  maxTotalFee: bigint
+  maxValidityWindowSeconds: number
+}
+
 /**
  * maxTotalFee must be high enough to cover `transferWithMemo` and
  * swap transactions at peak gas prices. Bumped from 0.01 ETH in #327.
  */
-const policy = {
+const defaultPolicy: Policy = {
   maxGas: 2_000_000n,
   maxFeePerGas: 100_000_000_000n,
   maxPriorityFeePerGas: 10_000_000_000n,
   maxTotalFee: 50_000_000_000_000_000n,
   maxValidityWindowSeconds: 15 * 60,
-} as const
+}
+
+const policyByChainId = {
+  [defaults.chainId.mainnet]: defaultPolicy,
+  // Moderato regularly needs a higher priority fee than mainnet.
+  [defaults.chainId.testnet]: {
+    ...defaultPolicy,
+    maxPriorityFeePerGas: 50_000_000_000n,
+  },
+} as const satisfies Record<defaults.ChainId, Policy>
+
+function getPolicy(chainId: number, overrides: Partial<Policy> | undefined): Policy {
+  return {
+    ...(policyByChainId[chainId as defaults.ChainId] ?? defaultPolicy),
+    ...overrides,
+  }
+}
 
 /** Validates that a set of transaction calls matches an allowed fee-payer pattern. */
 export function validateCalls(
@@ -89,6 +114,7 @@ export function prepareSponsoredTransaction(parameters: {
   details: Record<string, string>
   expectedFeeToken?: TempoAddress.Address | undefined
   now?: Date | undefined
+  policy?: Partial<Policy> | undefined
   transaction: ReturnType<(typeof Transaction)['deserialize']>
 }) {
   const {
@@ -98,8 +124,10 @@ export function prepareSponsoredTransaction(parameters: {
     details,
     expectedFeeToken,
     now = new Date(),
+    policy: policyOverrides,
     transaction,
   } = parameters
+  const policy = getPolicy(chainId, policyOverrides)
 
   const {
     accessList,

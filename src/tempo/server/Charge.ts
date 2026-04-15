@@ -60,6 +60,7 @@ export function charge<const parameters extends charge.Parameters>(
     decimals = defaults.decimals,
     description,
     externalId,
+    feePayerPolicy,
     html,
     memo,
     waitForConfirmation = true,
@@ -313,6 +314,7 @@ export function charge<const parameters extends charge.Parameters>(
                   chainId: chainId ?? client.chain!.id,
                   details: { amount, currency, recipient },
                   expectedFeeToken,
+                  policy: feePayerPolicy,
                   transaction: {
                     ...transaction,
                     ...(resolvedFeeToken ? { feeToken: resolvedFeeToken } : {}),
@@ -397,6 +399,12 @@ export declare namespace charge {
   type Parameters = {
     /** Render payment page when Accept header is text/html (e.g. in browsers) */
     html?: boolean | Html.Config | undefined
+    /**
+     * Override the fee-sponsor policy used when co-signing Tempo charge
+     * transactions. Defaults resolve per chain, including a higher
+     * priority-fee ceiling on Moderato.
+     */
+    feePayerPolicy?: FeePayerPolicy | undefined
     /** Testnet mode. */
     testnet?: boolean | undefined
     /**
@@ -435,6 +443,14 @@ export declare namespace charge {
     Defaults
   > & {
     decimals: number
+  }
+
+  type FeePayerPolicy = {
+    maxGas?: bigint
+    maxFeePerGas?: bigint
+    maxPriorityFeePerGas?: bigint
+    maxTotalFee?: bigint
+    maxValidityWindowSeconds?: number
   }
 }
 
