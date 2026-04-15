@@ -94,7 +94,13 @@ export function charge<const parameters extends charge.Parameters>(parameters: p
 
     async verify({ credential, request }) {
       const { challenge } = credential
-      const resolvedRequest = Methods.charge.schema.request.parse(request)
+      const resolvedRequest = (() => {
+        const parsed = Methods.charge.schema.request.safeParse(request)
+        if (parsed.success) return parsed.data
+        // verifyCredential() passes the HMAC-bound challenge request, which is
+        // already in canonical output form and should not be transformed again.
+        return request as unknown as z.output<typeof Methods.charge.schema.request>
+      })()
 
       Expires.assert(challenge.expires, challenge.id)
 

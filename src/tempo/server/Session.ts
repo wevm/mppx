@@ -35,6 +35,7 @@ import type { LooseOmit, NoExtraKeys } from '../../internal/types.js'
 import * as Method from '../../Method.js'
 import * as Store from '../../Store.js'
 import * as Client from '../../viem/Client.js'
+import type * as z from '../../zod.js'
 import * as Account from '../internal/account.js'
 import * as defaults from '../internal/defaults.js'
 import * as FeePayer from '../internal/fee-payer.js'
@@ -184,7 +185,13 @@ export function session<const parameters extends session.Parameters>(
     async verify({ credential, envelope, request }) {
       const { challenge, payload } = credential as Credential.Credential<SessionCredentialPayload>
 
-      const resolvedRequest = Methods.session.schema.request.parse(request)
+      const resolvedRequest = (() => {
+        const parsed = Methods.session.schema.request.safeParse(request)
+        if (parsed.success) return parsed.data
+        // verifyCredential() passes the HMAC-bound challenge request, which is
+        // already in canonical output form and should not be transformed again.
+        return request as unknown as z.output<typeof Methods.session.schema.request>
+      })()
       const methodDetails = resolvedRequest.methodDetails as SessionMethodDetails
       const client = await getClient({ chainId: methodDetails.chainId })
 

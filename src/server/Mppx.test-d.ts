@@ -144,7 +144,7 @@ describe('Mppx type tests', () => {
     expectTypeOf(mppx.challenge.beta.charge).toBeFunction()
   })
 
-  test('challenge functions return Challenge type', () => {
+  test('challenge functions return Promise<Challenge>', () => {
     const mppx = Mppx.create({ methods: [alphaMethod], realm, secretKey })
 
     const challenge = mppx.challenge.alpha.charge({
@@ -154,11 +154,14 @@ describe('Mppx type tests', () => {
       recipient: '0x02',
     })
 
-    expectTypeOf(challenge).toHaveProperty('id')
-    expectTypeOf(challenge).toHaveProperty('realm')
-    expectTypeOf(challenge).toHaveProperty('method')
-    expectTypeOf(challenge).toHaveProperty('intent')
-    expectTypeOf(challenge).toHaveProperty('request')
+    expectTypeOf(challenge).toMatchTypeOf<Promise<unknown>>()
+
+    type AwaitedChallenge = Awaited<typeof challenge>
+    expectTypeOf<AwaitedChallenge>().toHaveProperty('id')
+    expectTypeOf<AwaitedChallenge>().toHaveProperty('realm')
+    expectTypeOf<AwaitedChallenge>().toHaveProperty('method')
+    expectTypeOf<AwaitedChallenge>().toHaveProperty('intent')
+    expectTypeOf<AwaitedChallenge>().toHaveProperty('request')
   })
 
   test('verifyCredential exists and returns Promise<Receipt>', () => {

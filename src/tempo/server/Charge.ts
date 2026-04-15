@@ -155,13 +155,24 @@ export function charge<const parameters extends charge.Parameters>(
 
     async verify({ credential, request }) {
       const { challenge } = credential
-      const resolvedRequest = Methods.charge.schema.request.parse(request)
+      const resolvedRequest = (() => {
+        const parsed = Methods.charge.schema.request.safeParse(request)
+        if (parsed.success) return parsed.data
+        // verifyCredential() passes the HMAC-bound challenge request, which is
+        // already in canonical output form and should not be transformed again.
+        return request as unknown as z.output<typeof Methods.charge.schema.request>
+      })()
       const chainId = resolvedRequest.methodDetails?.chainId ?? request.chainId
-      const feePayer = typeof request.feePayer === 'object' ? request.feePayer : undefined
 
       const client = await getClient({ chainId })
 
       const { amount, methodDetails } = resolvedRequest
+      const feePayerAccount =
+        typeof request.feePayer === 'object'
+          ? request.feePayer
+          : methodDetails?.feePayer === true
+            ? feePayer
+            : undefined
       const expires = challenge.expires
       const supportedModes = methodDetails?.supportedModes as
         | readonly Methods.ChargeMode[]
@@ -307,9 +318,9 @@ export function charge<const parameters extends charge.Parameters>(
             const resolvedFeeToken = transaction.feeToken ?? expectedFeeToken
 
             const serializedTransaction_final = await (async () => {
-              if (feePayer && methodDetails?.feePayer !== false) {
+              if (feePayerAccount && methodDetails?.feePayer !== false) {
                 const sponsored = FeePayer.prepareSponsoredTransaction({
-                  account: feePayer,
+                  account: feePayerAccount,
                   challengeExpires: expires,
                   chainId: chainId ?? client.chain!.id,
                   details: { amount, currency, recipient },
