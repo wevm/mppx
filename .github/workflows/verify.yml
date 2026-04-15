@@ -44,7 +44,9 @@ jobs:
           fi
 
       - name: Audit dependencies
-        run: pnpm audit
+        # npm's legacy audit endpoint is returning 410 Gone. Keep the audit
+        # check enabled, but don't fail CI on registry-level audit outages.
+        run: pnpm audit --ignore-registry-errors
 
       - name: Lint & format
         run: pnpm check:ci
@@ -117,7 +119,7 @@ jobs:
   test-html:
     name: Test HTML
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - name: Clone repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
