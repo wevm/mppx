@@ -133,4 +133,40 @@ describe('Mppx type tests', () => {
   test('static Mppx.compose accepts configured handlers', () => {
     expectTypeOf(Mppx.compose).toBeFunction()
   })
+
+  test('challenge namespace has nested accessors matching methods', () => {
+    const mppx = Mppx.create({ methods: [alphaMethod, betaMethod], realm, secretKey })
+
+    expectTypeOf(mppx.challenge).toBeObject()
+    expectTypeOf(mppx.challenge.alpha).toBeObject()
+    expectTypeOf(mppx.challenge.alpha.charge).toBeFunction()
+    expectTypeOf(mppx.challenge.beta).toBeObject()
+    expectTypeOf(mppx.challenge.beta.charge).toBeFunction()
+  })
+
+  test('challenge functions return Promise<Challenge>', () => {
+    const mppx = Mppx.create({ methods: [alphaMethod], realm, secretKey })
+
+    const challenge = mppx.challenge.alpha.charge({
+      amount: '100',
+      currency: '0x01',
+      decimals: 6,
+      recipient: '0x02',
+    })
+
+    expectTypeOf(challenge).toMatchTypeOf<Promise<unknown>>()
+
+    type AwaitedChallenge = Awaited<typeof challenge>
+    expectTypeOf<AwaitedChallenge>().toHaveProperty('id')
+    expectTypeOf<AwaitedChallenge>().toHaveProperty('realm')
+    expectTypeOf<AwaitedChallenge>().toHaveProperty('method')
+    expectTypeOf<AwaitedChallenge>().toHaveProperty('intent')
+    expectTypeOf<AwaitedChallenge>().toHaveProperty('request')
+  })
+
+  test('verifyCredential exists and returns Promise<Receipt>', () => {
+    const mppx = Mppx.create({ methods: [alphaMethod], realm, secretKey })
+
+    expectTypeOf(mppx.verifyCredential).toBeFunction()
+  })
 })
