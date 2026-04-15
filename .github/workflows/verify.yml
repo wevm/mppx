@@ -44,7 +44,9 @@ jobs:
           fi
 
       - name: Audit dependencies
-        run: pnpm audit
+        # npm's legacy audit endpoint is returning 410 Gone. Keep the audit
+        # check enabled, but don't fail CI on registry-level audit outages.
+        run: pnpm audit --ignore-registry-errors
 
       - name: Lint & format
         run: pnpm check:ci
