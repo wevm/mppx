@@ -78,7 +78,7 @@ export type Mppx<
      *
      * @example
      * ```ts
-     * const challenge = mppx.challenge.tempo.charge({ amount: '25.92' })
+     * const challenge = await mppx.challenge.tempo.charge({ amount: '25.92' })
      * ```
      */
     challenge: ChallengeHandlers<FlattenMethods<methods>>
@@ -174,7 +174,7 @@ type ChallengeHandlers<methods extends readonly Method.AnyServer[]> = {
 /** A function that generates a Challenge object from intent options. */
 type ChallengeFn<method extends Method.Method, defaults extends Record<string, unknown>> = (
   options: MethodFn.Options<method, defaults>,
-) => Challenge.Challenge
+) => Promise<Challenge.Challenge>
 
 /**
  * Creates a server-side payment handler from methods.
@@ -585,10 +585,10 @@ function createChallengeFn(parameters: {
   realm: string | undefined
   request?: Method.RequestFn<Method.Method>
   secretKey: string
-}): (options: Record<string, unknown>) => Challenge.Challenge {
+}): (options: Record<string, unknown>) => Promise<Challenge.Challenge> {
   const { defaults, method, realm, secretKey } = parameters
 
-  return (options) => {
+  return async (options) => {
     const { description, meta, ...rest } = options as {
       description?: string
       expires?: string
@@ -602,7 +602,7 @@ function createChallengeFn(parameters: {
     // Transform request if method provides a `request` function.
     const request = (
       parameters.request
-        ? (parameters.request as (opts: { request: unknown }) => unknown)({
+        ? await (parameters.request as (opts: { request: unknown }) => unknown)({
             request: merged,
           })
         : merged
