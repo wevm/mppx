@@ -840,7 +840,9 @@ async function handleClose(
       reason: `close voucher amount must be >= ${channel.spent} (spent)`,
     })
   }
-  if (voucher.cumulativeAmount <= onChain.settled) {
+  const isUntouchedZeroClose =
+    voucher.cumulativeAmount === 0n && channel.spent === 0n && onChain.settled === 0n
+  if (!isUntouchedZeroClose && voucher.cumulativeAmount <= onChain.settled) {
     throw new VerificationFailedError({
       reason: `close voucher amount must be > ${onChain.settled} (on-chain settled)`,
     })
