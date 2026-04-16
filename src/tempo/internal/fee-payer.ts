@@ -35,6 +35,11 @@ export type Policy = {
   maxValidityWindowSeconds: number
 }
 
+// Reuse the exact object shape returned by `Transaction.deserialize()`.
+// `typeof Transaction` gets the module value type, `['deserialize']` picks the
+// deserialize function off that module, and `ReturnType<...>` asks TypeScript
+// for that function's return type so this helper stays aligned with upstream
+// Tempo transaction fields.
 type SponsoredTransaction = ReturnType<(typeof Transaction)['deserialize']>
 
 const preservedTransactionKeys = [
