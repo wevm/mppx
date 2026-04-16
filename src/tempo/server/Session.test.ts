@@ -1268,6 +1268,32 @@ describe.runIf(isLocalnet)('session', () => {
       ).rejects.toThrow('close voucher amount must be >')
     })
 
+    test('allows zero close for an untouched channel', async () => {
+      const { channelId, serializedTransaction } = await createSignedOpenTransaction(10000000n)
+      const server = createServer()
+
+      await openServerChannel(server, channelId, serializedTransaction)
+
+      const receipt = await server.verify({
+        credential: {
+          challenge: makeChallenge({ id: 'challenge-zero-close', channelId }),
+          payload: {
+            action: 'close' as const,
+            channelId,
+            cumulativeAmount: '0',
+            signature: await signTestVoucher(channelId, 0n),
+          },
+        },
+        request: makeRequest(),
+      })
+
+      expect(receipt.status).toBe('success')
+
+      const ch = await store.getChannel(channelId)
+      expect(ch).not.toBeNull()
+      expect(ch!.finalized).toBe(true)
+    })
+
     test('rejects close exceeding on-chain deposit', async () => {
       const { channelId, serializedTransaction } = await createSignedOpenTransaction(10000000n)
       const server = createServer()
