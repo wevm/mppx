@@ -35,6 +35,55 @@ export type Policy = {
   maxValidityWindowSeconds: number
 }
 
+// Reuse the exact object shape returned by `Transaction.deserialize()`.
+// `typeof Transaction` gets the module value type, `['deserialize']` picks the
+// deserialize function off that module, and `ReturnType<...>` asks TypeScript
+// for that function's return type so this helper stays aligned with upstream
+// Tempo transaction fields.
+type SponsoredTransaction = ReturnType<(typeof Transaction)['deserialize']>
+
+const preservedTransactionKeys = [
+  'accessList',
+  'calls',
+  'chainId',
+  'feeToken',
+  'from',
+  'gas',
+  'keyAuthorization',
+  'maxFeePerGas',
+  'maxPriorityFeePerGas',
+  'nonce',
+  'nonceKey',
+  'signature',
+  'validAfter',
+  'validBefore',
+] as const satisfies readonly (keyof SponsoredTransaction)[]
+
+const rejectedTransactionKeys = [
+  'blobVersionedHashes',
+  'blobs',
+  'data',
+  'feePayerSignature',
+  'gasPrice',
+  'kzg',
+  'maxFeePerBlobGas',
+  'r',
+  's',
+  'sidecars',
+  'to',
+  'v',
+  'value',
+  'yParity',
+] as const
+
+const rewrittenTransactionKeys = ['type'] as const
+
+const supportedTransactionKeys = new Set<string>([
+  ...preservedTransactionKeys,
+  ...rejectedTransactionKeys,
+  ...rewrittenTransactionKeys,
+])
+
 /**
  * maxTotalFee must be high enough to cover `transferWithMemo` and
  * swap transactions at peak gas prices. Bumped from 0.01 ETH in #327.
@@ -132,7 +181,7 @@ export function prepareSponsoredTransaction(parameters: {
   expectedFeeToken?: TempoAddress.Address | undefined
   now?: Date | undefined
   policy?: Partial<Policy> | undefined
-  transaction: ReturnType<(typeof Transaction)['deserialize']>
+  transaction: SponsoredTransaction
 }) {
   const {
     account,
@@ -145,6 +194,7 @@ export function prepareSponsoredTransaction(parameters: {
     transaction,
   } = parameters
   const policy = getPolicy(chainId, policyOverrides)
+  const transactionRecord = transaction as Record<string, unknown>
 
   const {
     accessList,
@@ -153,6 +203,7 @@ export function prepareSponsoredTransaction(parameters: {
     feeToken,
     from,
     gas,
+    keyAuthorization,
     maxFeePerGas,
     maxPriorityFeePerGas,
     nonce,
@@ -166,35 +217,61 @@ export function prepareSponsoredTransaction(parameters: {
     throw new FeePayerValidationError(reason, { ...details, ...extra })
   }
 
+  const unsupportedKeys = Object.entries(transaction).flatMap(([key, value]) => {
+    if (value === undefined) return []
+    if (supportedTransactionKeys.has(key)) return []
+    return [key]
+  })
+  if (unsupportedKeys.length > 0)
+    fail('fee-sponsored transaction contains unsupported fields', {
+      unsupportedFields: unsupportedKeys.join(', '),
+    })
+
+  const rejectedKeys = rejectedTransactionKeys.filter((key) => {
+    const value = transactionRecord[key]
+    return value !== undefined && value !== null
+  })
+  if (rejectedKeys.length > 0)
+    fail('fee-sponsored transaction contains rejected fields', {
+      rejectedFields: rejectedKeys.join(', '),
+    })
+
+  if (transaction.type !== undefined && transaction.type !== 'tempo')
+    fail('fee-sponsored transaction type is invalid', {
+      type: String(transaction.type),
+    })
+
   if (transactionChainId !== chainId)
     fail('fee-sponsored transaction chainId does not match challenge', {
       chainId: String(transactionChainId),
     })
 
   if (gas === undefined || gas <= 0n) fail('fee-sponsored transaction must declare gas')
-  if (gas > policy.maxGas)
+  const gasLimit = gas
+  if (gasLimit > policy.maxGas)
     fail('fee-sponsored transaction gas exceeds sponsor policy', {
-      gas: gas.toString(),
+      gas: gasLimit.toString(),
     })
 
   if (maxFeePerGas === undefined || maxFeePerGas <= 0n)
     fail('fee-sponsored transaction must declare maxFeePerGas')
-  if (maxFeePerGas > policy.maxFeePerGas)
+  const maxFeePerGasValue = maxFeePerGas
+  if (maxFeePerGasValue > policy.maxFeePerGas)
     fail('fee-sponsored transaction maxFeePerGas exceeds sponsor policy', {
-      maxFeePerGas: maxFeePerGas.toString(),
+      maxFeePerGas: maxFeePerGasValue.toString(),
     })
 
-  const maxTotalFee = gas * maxFeePerGas
+  const maxTotalFee = gasLimit * maxFeePerGasValue
   if (maxTotalFee > policy.maxTotalFee)
     fail('fee-sponsored transaction total fee budget exceeds sponsor policy', {
-      gas: gas.toString(),
-      maxFeePerGas: maxFeePerGas.toString(),
+      gas: gasLimit.toString(),
+      maxFeePerGas: maxFeePerGasValue.toString(),
       totalFee: maxTotalFee.toString(),
     })
 
-  if (maxPriorityFeePerGas !== undefined && maxPriorityFeePerGas > maxFeePerGas)
+  if (maxPriorityFeePerGas !== undefined && maxPriorityFeePerGas > maxFeePerGasValue)
     fail('fee-sponsored transaction maxPriorityFeePerGas exceeds maxFeePerGas', {
-      maxFeePerGas: maxFeePerGas.toString(),
+      maxFeePerGas: maxFeePerGasValue.toString(),
       maxPriorityFeePerGas: maxPriorityFeePerGas.toString(),
     })
   if (maxPriorityFeePerGas !== undefined && maxPriorityFeePerGas > policy.maxPriorityFeePerGas)
@@ -205,11 +282,12 @@ export function prepareSponsoredTransaction(parameters: {
   if (nonceKey === undefined) fail('fee-sponsored transaction must use an expiring nonce')
   if (validBefore === undefined)
     fail('fee-sponsored transaction must declare validBefore for the expiring nonce')
+  const validBeforeValue = validBefore
 
   const nowSeconds = Math.floor(now.getTime() / 1_000)
-  if (validBefore <= nowSeconds)
+  if (validBeforeValue <= nowSeconds)
     fail('fee-sponsored transaction has already expired', {
-      validBefore: String(validBefore),
+      validBefore: String(validBeforeValue),
     })
 
   const challengeExpirySeconds = challengeExpires
@@ -219,16 +297,21 @@ export function prepareSponsoredTransaction(parameters: {
     nowSeconds + policy.maxValidityWindowSeconds,
     challengeExpirySeconds ? challengeExpirySeconds + 60 : Number.MAX_SAFE_INTEGER,
   )
-  if (validBefore > maxValidBefore)
+  if (validBeforeValue > maxValidBefore)
     fail('fee-sponsored transaction validity window exceeds sponsor policy', {
-      validBefore: String(validBefore),
+      validBefore: String(validBeforeValue),
     })
 
-  if (feeToken !== undefined) {
+  const normalizedFeeToken = (() => {
+    if (feeToken === undefined) return undefined
     if (typeof feeToken !== 'string') fail('fee-sponsored transaction feeToken is invalid')
-    if (expectedFeeToken && !TempoAddress_internal.isEqual(feeToken, expectedFeeToken))
+    return feeToken
+  })()
+
+  if (normalizedFeeToken !== undefined) {
+    if (expectedFeeToken && !TempoAddress_internal.isEqual(normalizedFeeToken, expectedFeeToken))
       fail('fee-sponsored transaction feeToken is not allowed', {
-        feeToken,
+        feeToken: normalizedFeeToken,
       })
   }
 
@@ -238,17 +321,18 @@ export function prepareSponsoredTransaction(parameters: {
     calls,
     chainId: transactionChainId,
     feePayer: account,
-    ...(feeToken ? { feeToken } : {}),
+    ...(normalizedFeeToken ? { feeToken: normalizedFeeToken } : {}),
     ...(from ? { from } : {}),
-    gas,
+    gas: gasLimit,
+    ...(keyAuthorization !== undefined ? { keyAuthorization } : {}),
     ...(nonce !== undefined ? { nonce } : {}),
-    maxFeePerGas,
+    maxFeePerGas: maxFeePerGasValue,
     ...(maxPriorityFeePerGas !== undefined ? { maxPriorityFeePerGas } : {}),
     nonceKey,
     ...(signature ? { signature } : {}),
     type: 'tempo' as const,
     ...(validAfter !== undefined ? { validAfter } : {}),
-    validBefore,
+    validBefore: validBeforeValue,
   } satisfies ReturnType<(typeof Transaction)['deserialize']> & {
     account: Account
     feePayer: Account

@@ -395,16 +395,52 @@ describe('prepareSponsoredTransaction', () => {
     ).toThrow('maxPriorityFeePerGas exceeds sponsor policy')
   })
 
-  test('drops unknown top-level fields from the sponsored transaction', () => {
+  test('preserves keyAuthorization', () => {
+    const keyAuthorization = {
+      address: bogus,
+      chainId: 42431,
+      nonce: 1n,
+      r: 1n,
+      s: 2n,
+      yParity: 0,
+    }
+
     const sponsored = prepareSponsoredTransaction({
       account: sponsor,
       chainId: 42431,
       details,
       expectedFeeToken: bogus,
-      transaction: { ...baseTransaction, unexpectedField: 'ignored' } as any,
-    }) as Record<string, unknown>
+      transaction: { ...baseTransaction, keyAuthorization } as any,
+    }) as { keyAuthorization?: unknown }
 
-    expect(sponsored.unexpectedField).toBeUndefined()
+    expect(sponsored.keyAuthorization).toEqual(keyAuthorization)
+  })
+
+  test('error: rejects unknown top-level fields from the sponsored transaction', () => {
+    expect(() =>
+      prepareSponsoredTransaction({
+        account: sponsor,
+        chainId: 42431,
+        details,
+        expectedFeeToken: bogus,
+        transaction: { ...baseTransaction, unexpectedField: 'ignored' } as any,
+      }),
+    ).toThrow('contains unsupported fields')
+  })
+
+  test('error: rejects feePayerSignature on client-submitted transactions', () => {
+    expect(() =>
+      prepareSponsoredTransaction({
+        account: sponsor,
+        chainId: 42431,
+        details,
+        expectedFeeToken: bogus,
+        transaction: {
+          ...baseTransaction,
+          feePayerSignature: { r: 2n, s: 3n, yParity: 1 },
+        } as any,
+      }),
+    ).toThrow('contains rejected fields')
   })
 
   test('error: rejects excessive maxFeePerGas', () => {

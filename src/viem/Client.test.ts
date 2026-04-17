@@ -2,7 +2,7 @@ import { createClient, custom, defineChain, type Hex } from 'viem'
 import { privateKeyToAccount } from 'viem/accounts'
 import { signTransaction } from 'viem/actions'
 import { tempoLocalnet } from 'viem/chains'
-import { Transaction } from 'viem/tempo'
+import { Account as TempoAccount, Transaction } from 'viem/tempo'
 import { describe, expect, test } from 'vp/test'
 
 import * as Client from './Client.js'
@@ -167,6 +167,57 @@ describe('feePayer transaction serialization', () => {
       feeToken: '0x20c0000000000000000000000000000000000001' as const,
     } as never)
     expect(serverSigned).toMatch(/^0x7[68]/)
+  })
+
+  test('behavior: deserialized + re-signed tx preserves keyAuthorization', async () => {
+    const rootAccount = TempoAccount.fromSecp256k1(
+      '0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80',
+    )
+    const accessKey = TempoAccount.fromSecp256k1(
+      '0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d',
+      { access: rootAccount },
+    )
+    const feePayerAccount = privateKeyToAccount(
+      '0x5de4111afa1a4b94908f83103f52c5de640f0e4f465f975fa6d6640d3c5e3b48',
+    )
+    const accessKeyClient = createClient({
+      account: accessKey,
+      chain: tempoLocalnet,
+      transport: mockTransport,
+    })
+
+    const keyAuthorization = await rootAccount.signKeyAuthorization(
+      {
+        accessKeyAddress: accessKey.accessKeyAddress,
+        keyType: accessKey.keyType,
+      },
+      {
+        chainId: BigInt(tempoLocalnet.id),
+      },
+    )
+
+    const clientSigned = await signTransaction(accessKeyClient, {
+      account: accessKey,
+      ...feePayer_prepared,
+      keyAuthorization,
+    } as never)
+    const deserialized = Transaction.deserialize(
+      clientSigned as Transaction.TransactionSerializedTempo,
+    )
+
+    expect(deserialized.keyAuthorization).toEqual(keyAuthorization)
+
+    const serverSigned = await signTransaction(tempoClient, {
+      ...deserialized,
+      account: feePayerAccount,
+      feePayer: feePayerAccount,
+      feeToken: '0x20c0000000000000000000000000000000000001' as const,
+    } as never)
+    const serverDeserialized = Transaction.deserialize(
+      serverSigned as Transaction.TransactionSerializedTempo,
+    )
+
+    expect(serverDeserialized.keyAuthorization).toEqual(keyAuthorization)
   })
 })
 
