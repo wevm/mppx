@@ -160,8 +160,8 @@ importers:
   examples/charge-wagmi:
     dependencies:
       '@metamask/sdk':
-        specifier: ~0.34.0
-        version: 0.34.0(bufferutil@4.1.0)(utf-8-validate@5.0.10)
+        specifier: ~0.33.1
+        version: 0.33.1(bufferutil@4.1.0)(utf-8-validate@5.0.10)
       '@remix-run/node-fetch-server':
         specifier: latest
         version: 0.13.0
@@ -759,8 +759,8 @@ packages:
     resolution: {integrity: sha512-MGmAo6qSjf1tuYXhCu2EZLftq+DSt5Z7fsIKr2P+lDgdTPWgLfZB1tJKzNcwKKOdf6q9Qmmxn7lJuI/gq5LrKw==}
     deprecated: No longer maintained, superseded by https://docs.metamask.io/metamask-connect
 
-  '@metamask/sdk@0.34.0':
-    resolution: {integrity: sha512-8dkJUShZ5zFqYjNmhJaqKgDzZVne+F2rNjMQJ3pxs89n3oOUNuJ8dsTo08Grf9vlQ6Ldpdt2RTwqbrxKWyyqlw==}
+  '@metamask/sdk@0.33.1':
+    resolution: {integrity: sha512-1mcOQVGr9rSrVcbKPNVzbZ8eCl1K0FATsYH3WJ/MH4WcZDWGECWrXJPNMZoEAkLxWiMe8jOQBumg2pmcDa9zpQ==}
     deprecated: No longer maintained, superseded by https://docs.metamask.io/metamask-connect
 
   '@metamask/superstruct@3.2.1':
@@ -4427,7 +4427,7 @@ snapshots:
     dependencies:
       '@paulmillr/qr': 0.2.1
 
-  '@metamask/sdk@0.34.0(bufferutil@4.1.0)(utf-8-validate@5.0.10)':
+  '@metamask/sdk@0.33.1(bufferutil@4.1.0)(utf-8-validate@5.0.10)':
     dependencies:
       '@babel/runtime': 7.29.2
       '@metamask/onboarding': 1.0.1

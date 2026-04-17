@@ -36,15 +36,9 @@ function App() {
               <div key={connector.uid}>
                 <button
                   type="button"
-                  onClick={() => connect({ connector, capabilities: { type: 'sign-in' } })}
+                  onClick={() => connect({ connector })}
                 >
-                  Sign in (Passkey)
-                </button>
-                <button
-                  type="button"
-                  onClick={() => connect({ connector, capabilities: { type: 'sign-up' } })}
-                >
-                  Sign up (Passkey)
+                  Connect (Passkey)
                 </button>
               </div>
             ) : (
