@@ -1,5 +1,13 @@
 # mppx
 
+## 0.5.14
+
+### Patch Changes
+
+- 1ba7af2: Hardened sponsored Tempo session `open` and `topUp` flows by enforcing fee-payer policy limits, blocking call smuggling, and adding `feePayerPolicy` support.
+- 1ba7af2: Fixed fee-sponsored Tempo charge flows by simulating sponsored transactions before broadcast and binding swap approvals to the DEX input token.
+- 1ba7af2: Normalized Tempo session channel IDs across storage and verification paths, preventing case-variant aliases from creating duplicate channel state.
+
 ## 0.5.13
 
 ### Patch Changes
