@@ -36,7 +36,7 @@
     "@types/node": "^25.5.0",
     "@types/ws": "^8.18.1",
     "@typescript/native-preview": "7.0.0-dev.20260323.1",
-    "browserslist": "^4.28.1",
+    "browserslist": "^4.28.2",
     "elysia": "^1.4.27",
     "eslint-plugin-compat": "^7.0.1",
     "express": "^5.2.1",
