@@ -42,7 +42,7 @@
     "express": "^5.2.1",
     "fast-check": "^4.6.0",
     "file-type": "^21.3.2",
-    "hono": "4.12.12",
+    "hono": "4.12.14",
     "isows": "^1.0.7",
     "playwright": "^1.58.2",
     "prool": "^0.2.4",
@@ -53,7 +53,7 @@
     "typescript": "~5.9.3",
     "viem": "^2.47.6",
     "vite": "^8.0.5",
-    "vp": "npm:vite-plus@~0.1.14",
+    "vp": "npm:vite-plus@~0.1.17",
     "ws": "^8.20.0",
     "zile": "^0.0.24"
   },
@@ -165,7 +165,7 @@
     "@modelcontextprotocol/sdk": ">=1.25.0",
     "elysia": ">=1",
     "express": ">=5",
-    "hono": ">=4.12.12",
+    "hono": ">=4.12.14",
     "viem": ">=2.47.5"
   },
   "peerDependenciesMeta": {
