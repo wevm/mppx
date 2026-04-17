@@ -9,7 +9,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "@metamask/sdk": "~0.33.1",
+    "@metamask/sdk": "~0.34.0",
     "@remix-run/node-fetch-server": "latest",
     "@tanstack/react-query": "latest",
     "@types/node": "latest",

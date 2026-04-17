@@ -9,7 +9,7 @@
   },
   "dependencies": {
     "@remix-run/node-fetch-server": "^0.13.0",
-    "@types/node": "^25.5.0",
+    "@types/node": "^25.6.0",
     "@types/ws": "^8.18.1",
     "@typescript/native-preview": "7.0.0-dev.20260323.1",
     "isows": "^1.0.7",
