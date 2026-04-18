@@ -1,5 +1,12 @@
 # mppx
 
+## 0.5.15
+
+### Patch Changes
+
+- 7aff8ab: Prevented default HTTP `tempo.session()` content requests from replaying the same accepted voucher without advancing request/response accounting.
+- 7aff8ab: Pinned credential verification and compose dispatch to challenge `opaque` metadata so same-economics sibling routes could not replay each other's credentials.
+
 ## 0.5.14
 
 ### Patch Changes
