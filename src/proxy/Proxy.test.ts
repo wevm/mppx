@@ -1,16 +1,22 @@
 import { Challenge, Credential, Method, Receipt, z } from 'mppx'
 import { Mppx as Mppx_client, tempo as tempo_client } from 'mppx/client'
 import { Mppx as Mppx_server, tempo as tempo_server } from 'mppx/server'
-import { afterEach, describe, expect, test } from 'vp/test'
+import type { Address } from 'viem'
+import { afterEach, beforeAll, describe, expect, test } from 'vp/test'
+import { nodeEnv } from '~test/config.js'
 import * as Http from '~test/Http.js'
+import { deployEscrow } from '~test/tempo/session.js'
 import { accounts, asset, client } from '~test/tempo/viem.js'
 
+import { sessionManager } from '../tempo/client/SessionManager.js'
+import { deserializeSessionReceipt } from '../tempo/session/Receipt.js'
 import * as ApiProxy from './Proxy.js'
 import * as Service from './Service.js'
 import { anthropic } from './services/anthropic.js'
 import { openai } from './services/openai.js'
 
 const secretKey = 'test-secret-key'
+const isLocalnet = nodeEnv === 'localnet'
 
 const mppx_server = Mppx_server.create({
   methods: [
@@ -36,6 +42,12 @@ const mppx_client = Mppx_client.create({
 
 let upstream: Awaited<ReturnType<typeof Http.createServer>> | undefined
 let proxyServer: Awaited<ReturnType<typeof Http.createServer>> | undefined
+let sessionEscrow: Address
+
+beforeAll(async () => {
+  if (!isLocalnet) return
+  sessionEscrow = await deployEscrow()
+})
 
 afterEach(() => {
   upstream?.close()
@@ -694,5 +706,141 @@ describe('create', () => {
 
     const res = await fetch(`${proxyServer.url}/api/v1/search?q=hello&limit=10`)
     expect(await res.json()).toEqual({ search: '?q=hello&limit=10' })
+  })
+})
+
+describe.runIf(isLocalnet)('plain HTTP session proxy', () => {
+  test('charges proxied content requests and keeps management POSTs off the upstream', async () => {
+    let upstreamRequests = 0
+    upstream = await createUpstream((req) => {
+      upstreamRequests += 1
+      return Response.json({
+        method: req.method,
+        path: new URL(req.url).pathname,
+      })
+    })
+
+    const sessionHandler = Mppx_server.create({
+      methods: [
+        tempo_server.session({
+          account: accounts[0],
+          currency: asset,
+          escrowContract: sessionEscrow,
+          getClient: () => client,
+          chainId: client.chain!.id,
+        }),
+      ],
+      secretKey,
+    })
+
+    const proxy = ApiProxy.create({
+      services: [
+        Service.from('api', {
+          baseUrl: upstream.url,
+          routes: {
+            'GET /v1/scrape': sessionHandler.session({
+              amount: '1',
+              decimals: 6,
+              unitType: 'page',
+            }),
+          },
+        }),
+      ],
+    })
+    proxyServer = await Http.createServer(proxy.listener)
+
+    const manager = sessionManager({
+      account: accounts[1],
+      client,
+      escrowContract: sessionEscrow,
+      fetch: globalThis.fetch,
+      maxDeposit: '3',
+    })
+
+    const first = await manager.fetch(`${proxyServer.url}/api/v1/scrape`)
+    expect(first.status).toBe(200)
+    expect(await first.json()).toEqual({ method: 'GET', path: '/v1/scrape' })
+    expect(first.receipt?.spent).toBe('1000000')
+    expect(first.receipt?.units).toBe(1)
+
+    const second = await manager.fetch(`${proxyServer.url}/api/v1/scrape`)
+    expect(second.status).toBe(200)
+    expect(await second.json()).toEqual({ method: 'GET', path: '/v1/scrape' })
+    expect(second.receipt?.spent).toBe('2000000')
+    expect(second.receipt?.units).toBe(2)
+
+    const closeReceipt = await manager.close()
+    expect(closeReceipt?.status).toBe('success')
+    expect(closeReceipt?.spent).toBe('2000000')
+    expect(upstreamRequests).toBe(2)
+  })
+
+  test('attaches receipts to proxied error responses and rejects same-voucher replay', async () => {
+    upstream = await createUpstream(() =>
+      Response.json({ error: 'upstream failed' }, { status: 500 }),
+    )
+
+    const sessionHandler = Mppx_server.create({
+      methods: [
+        tempo_server.session({
+          account: accounts[0],
+          currency: asset,
+          escrowContract: sessionEscrow,
+          getClient: () => client,
+          chainId: client.chain!.id,
+        }),
+      ],
+      secretKey,
+    })
+
+    const proxy = ApiProxy.create({
+      services: [
+        Service.from('api', {
+          baseUrl: upstream.url,
+          routes: {
+            'GET /v1/scrape': sessionHandler.session({
+              amount: '1',
+              decimals: 6,
+              unitType: 'page',
+            }),
+          },
+        }),
+      ],
+    })
+    proxyServer = await Http.createServer(proxy.listener)
+
+    const sessionClient = Mppx_client.create({
+      polyfill: false,
+      methods: [
+        tempo_client({
+          account: accounts[1],
+          getClient: () => client,
+          maxDeposit: '2',
+        }),
+      ],
+    })
+
+    const challengeResponse = await fetch(`${proxyServer.url}/api/v1/scrape`)
+    expect(challengeResponse.status).toBe(402)
+
+    const authorization = await sessionClient.createCredential(challengeResponse)
+
+    const first = await fetch(`${proxyServer.url}/api/v1/scrape`, {
+      headers: { Authorization: authorization },
+    })
+    expect(first.status).toBe(500)
+    expect(await first.json()).toEqual({ error: 'upstream failed' })
+
+    const receiptHeader = first.headers.get('Payment-Receipt')
+    expect(receiptHeader).toBeTruthy()
+    const receipt = deserializeSessionReceipt(receiptHeader!)
+    expect(receipt.spent).toBe('1000000')
+    expect(receipt.units).toBe(1)
+
+    const replay = await fetch(`${proxyServer.url}/api/v1/scrape`, {
+      headers: { Authorization: authorization },
+    })
+    expect(replay.status).toBe(402)
+    expect(replay.headers.get('Payment-Receipt')).toBeNull()
   })
 })

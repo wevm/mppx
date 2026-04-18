@@ -219,6 +219,19 @@ describe('session', () => {
     expect(Methods.session.name).toBe('tempo')
   })
 
+  test('schema: rejects zero-amount request', () => {
+    const result = Methods.session.schema.request.safeParse({
+      amount: '0',
+      currency: '0x20c0000000000000000000000000000000000001',
+      decimals: 6,
+      escrowContract: '0x1234567890abcdef1234567890abcdef12345678',
+      recipient: '0x1234567890abcdef1234567890abcdef12345678',
+      unitType: 'token',
+    })
+
+    expect(result.success).toBe(false)
+  })
+
   test('schema: encodes minVoucherDelta in base units', () => {
     const request = Methods.session.schema.request.parse({
       amount: '1',

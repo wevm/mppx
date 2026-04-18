@@ -5,10 +5,12 @@
  *
  * @internal
  */
+import * as Challenge from '../../../Challenge.js'
+import * as Errors from '../../../Errors.js'
 import * as Transport from '../../../server/Transport.js'
 import * as ChannelStore from '../../session/ChannelStore.js'
 import * as Sse_core from '../../session/Sse.js'
-import type { SessionCredentialPayload } from '../../session/Types.js'
+import type { SessionCredentialPayload, SessionReceipt } from '../../session/Types.js'
 
 /** SSE transport with Tempo session controller. */
 export type Sse = Transport.Sse<Sse_core.SessionController>
@@ -101,23 +103,69 @@ export function sse(options: sse.Options & { store: ChannelStore.ChannelStore })
         challengeId: verifiedChallengeId,
       })
 
+      if (!shouldChargePlainResponse(input, payload)) {
+        return baseResponse
+      }
+
+      const currentReceipt = receipt as SessionReceipt
+      const available =
+        BigInt(currentReceipt.acceptedCumulative) - BigInt(currentReceipt.spent)
+      if (available < tickCost) {
+        const error = new Errors.InsufficientBalanceError({
+          reason: `requested ${tickCost}, available ${available}`,
+        })
+        return new Response(JSON.stringify(error.toProblemDetails(verifiedCredential.challenge.id)), {
+          status: error.status,
+          headers: {
+            'WWW-Authenticate': Challenge.serialize(verifiedCredential.challenge),
+            'Cache-Control': 'no-store',
+            'Content-Type': 'application/problem+json',
+          },
+        })
+      }
+
+      const chargedReceipt: SessionReceipt = {
+        ...currentReceipt,
+        spent: (BigInt(currentReceipt.spent) + tickCost).toString(),
+        units: (currentReceipt.units ?? 0) + 1,
+      }
+      const chargedResponse = base.respondReceipt({
+        credential: verifiedCredential,
+        envelope,
+        input,
+        receipt: chargedReceipt,
+        response: response as Response,
+        challengeId: verifiedChallengeId,
+      })
+
       // Non-SSE response (e.g. upstream returned JSON instead of event-stream).
       // Need to deduct tickCost so request isn't free.
-      // Null-body statuses (e.g. 204 from management actions) cannot carry a
-      // response body per Fetch/HTTP semantics.
-      if (isNullBodyStatus(baseResponse.status)) {
-        return baseResponse
+      // For null-body statuses, the request shape determines whether the
+      // response is management (no charge) or plain content (charge one tick).
+      if (isNullBodyStatus(chargedResponse.status)) {
+        void ChannelStore.deductFromChannel(store, channelId, tickCost)
+        return chargedResponse
       }
 
       const stream = new ReadableStream<Uint8Array>({
         async start(controller) {
           // deduction completes before consumer reads
-          await ChannelStore.deductFromChannel(store, channelId, tickCost)
-          if (!baseResponse.body) {
+          const result = await ChannelStore.deductFromChannel(store, channelId, tickCost)
+          if (!result.ok) {
+            controller.error(
+              new Errors.InsufficientBalanceError({
+                reason: `requested ${tickCost}, available ${
+                  result.channel.highestVoucherAmount - result.channel.spent
+                }`,
+              }),
+            )
+            return
+          }
+          if (!chargedResponse.body) {
             controller.close()
             return
           }
-          const reader = baseResponse.body.getReader()
+          const reader = chargedResponse.body.getReader()
           try {
             while (true) {
               const { done, value } = await reader.read()
@@ -131,9 +179,9 @@ export function sse(options: sse.Options & { store: ChannelStore.ChannelStore })
         },
       })
       return new Response(stream, {
-        status: baseResponse.status,
-        statusText: baseResponse.statusText,
-        headers: baseResponse.headers,
+        status: chargedResponse.status,
+        statusText: chargedResponse.statusText,
+        headers: chargedResponse.headers,
       })
     },
   })
@@ -200,4 +248,18 @@ function isAsyncIterable(value: unknown): value is AsyncIterable<string> {
 
 function isNullBodyStatus(status: number): boolean {
   return [101, 204, 205, 304].includes(status)
+}
+
+function shouldChargePlainResponse(
+  input: Request,
+  payload: Partial<SessionCredentialPayload>,
+): boolean {
+  if (payload.action === 'close' || payload.action === 'topUp') return false
+  if (input.method !== 'POST') return true
+
+  const contentLength = input.headers.get('content-length')
+  if (contentLength !== null && contentLength !== '0') return true
+  if (input.headers.has('transfer-encoding')) return true
+
+  return false
 }

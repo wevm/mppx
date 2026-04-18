@@ -154,8 +154,8 @@ for (const url of urls) {
   // `s.cumulative` tracks the running cumulative voucher amount.
   // After 3 requests at 0.01 each, cumulative = 0.03 (30000 raw units).
   //
-  // Note: receipt.reference (the channel-open tx hash) stays constant for the
-  // entire session — it's always the same channel. And challenge.id (the HMAC
+  // Note: receipt.reference is the channel ID, so it stays constant for the
+  // entire session. And challenge.id (the HMAC
   // over realm|method|intent|request params) is also the same every time,
   // because the server is issuing identical challenges for the same endpoint.
   // This is what makes the protocol stateless: the server recomputes the HMAC

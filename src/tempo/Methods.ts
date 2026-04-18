@@ -141,24 +141,31 @@ export const session = Method.from({
       ]),
     },
     request: z.pipe(
-      z.object({
-        amount: z.amount(),
-        chainId: z.optional(z.number()),
-        channelId: z.optional(z.hash()),
-        currency: z.string(),
-        decimals: z.number(),
-        escrowContract: z.optional(z.string()),
-        feePayer: z.optional(
-          z.pipe(
-            z.union([z.boolean(), z.custom<Account>()]),
-            z.transform((v): boolean => (typeof v === 'object' ? true : v)),
+      z
+        .object({
+          amount: z.amount(),
+          chainId: z.optional(z.number()),
+          channelId: z.optional(z.hash()),
+          currency: z.string(),
+          decimals: z.number(),
+          escrowContract: z.optional(z.string()),
+          feePayer: z.optional(
+            z.pipe(
+              z.union([z.boolean(), z.custom<Account>()]),
+              z.transform((v): boolean => (typeof v === 'object' ? true : v)),
+            ),
+          ),
+          minVoucherDelta: z.optional(z.amount()),
+          recipient: z.optional(z.string()),
+          suggestedDeposit: z.optional(z.amount()),
+          unitType: z.string(),
+        })
+        .check(
+          z.refine(
+            ({ amount, decimals }) => parseUnits(amount, decimals) > 0n,
+            'Session amount must be greater than 0',
           ),
         ),
-        minVoucherDelta: z.optional(z.amount()),
-        recipient: z.optional(z.string()),
-        suggestedDeposit: z.optional(z.amount()),
-        unitType: z.string(),
-      }),
       z.transform(
         ({
           amount,

@@ -181,7 +181,7 @@ export function session<const parameters extends session.Parameters>(
       }
     },
 
-    async verify({ credential, request }) {
+    async verify({ credential, envelope, request }) {
       const { challenge, payload } = credential as Credential.Credential<SessionCredentialPayload>
 
       const resolvedRequest = Methods.session.schema.request.parse(request)
@@ -253,6 +253,19 @@ export function session<const parameters extends session.Parameters>(
           throw new BadRequestError({
             reason: `unknown action: ${(payload as { action: string }).action}`,
           })
+      }
+
+      if (!parameters.sse && shouldChargeContentRequest(envelope?.capturedRequest, payload)) {
+        const charged = await charge(
+          store,
+          sessionReceipt.channelId,
+          BigInt(resolvedRequest.amount),
+        )
+        sessionReceipt = {
+          ...sessionReceipt,
+          spent: charged.spent.toString(),
+          units: charged.units,
+        }
       }
 
       return sessionReceipt
@@ -450,6 +463,21 @@ function validateOnChainChannel(
       reason: 'channel available balance insufficient for requested amount',
     })
   }
+}
+
+function shouldChargeContentRequest(
+  capturedRequest: Method.CapturedRequest | undefined,
+  payload: SessionCredentialPayload,
+): boolean {
+  if (!capturedRequest) return false
+  if (payload.action === 'close' || payload.action === 'topUp') return false
+  if (capturedRequest.method !== 'POST') return true
+
+  const contentLength = capturedRequest.headers.get('content-length')
+  if (contentLength !== null && contentLength !== '0') return true
+  if (capturedRequest.headers.has('transfer-encoding')) return true
+
+  return false
 }
 
 /**
