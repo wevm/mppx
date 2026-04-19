@@ -10,12 +10,14 @@ import { session as tempo_session_client, tempo as tempo_client } from 'mppx/cli
 import { Mppx as Mppx_server, tempo as tempo_server } from 'mppx/server'
 import type { Address } from 'viem'
 import { readContract } from 'viem/actions'
-import { Actions } from 'viem/tempo'
+import { Actions, Addresses } from 'viem/tempo'
 import { beforeAll, describe, expect, test } from 'vp/test'
 import { nodeEnv } from '~test/config.js'
-import { deployEscrow } from '~test/tempo/session.js'
-import { accounts, asset, client as testClient } from '~test/tempo/viem.js'
+import { deployEscrow, signTopUpChannel } from '~test/tempo/session.js'
+import { accounts, asset, client as testClient, fundAccount } from '~test/tempo/viem.js'
 
+import * as Credential from '../../Credential.js'
+import * as core_Mcp from '../../Mcp.js'
 import * as Store from '../../Store.js'
 import * as ChannelStore from '../../tempo/session/ChannelStore.js'
 import type { SessionReceipt } from '../../tempo/session/Types.js'
@@ -25,15 +27,21 @@ import * as McpClient from './McpClient.js'
 const realm = 'api.example.com'
 const secretKey = 'test-secret-key'
 const chargeAmountRaw = 1_000_000n
+const doubleSessionAmountRaw = chargeAmountRaw * 2n
+const topUpAmountRaw = chargeAmountRaw * 3n
 
 let escrowContract: Address
 
 beforeAll(async () => {
   escrowContract = await deployEscrow()
+  await fundAccount({ address: accounts[4].address, token: Addresses.pathUsd })
+  await fundAccount({ address: accounts[4].address, token: asset })
+  await fundAccount({ address: accounts[2].address, token: Addresses.pathUsd })
+  await fundAccount({ address: accounts[2].address, token: asset })
 }, 60_000)
 
 describe.runIf(nodeEnv === 'localnet')('McpClient.wrap integration', () => {
-  const scenarios = [
+  const scenarios: readonly Scenario[] = [
     {
       name: 'charge intent settles a paid MCP tool against the live chain',
       async run(harness: Harness) {
@@ -98,16 +106,265 @@ describe.runIf(nodeEnv === 'localnet')('McpClient.wrap integration', () => {
         expect(channel?.highestVoucherAmount).toBe(chargeAmountRaw)
       },
     },
-  ] as const satisfies readonly {
-    name: string
-    run: (harness: Harness) => Promise<void>
-  }[]
+    {
+      name: 'session intent reuses one live channel across multiple MCP tools with different costs',
+      async run(harness: Harness) {
+        const first = await harness.mcp.callTool({ name: 'session_tool', arguments: {} })
+        const second = await harness.mcp.callTool({ name: 'session_tool_double', arguments: {} })
+        const third = await harness.mcp.callTool({ name: 'session_tool', arguments: {} })
+
+        const firstReceipt = first.receipt as SessionReceipt | undefined
+        const secondReceipt = second.receipt as SessionReceipt | undefined
+        const thirdReceipt = third.receipt as SessionReceipt | undefined
+
+        expect(first.content).toEqual([{ type: 'text', text: 'session tool executed' }])
+        expect(second.content).toEqual([{ type: 'text', text: 'session double tool executed' }])
+        expect(third.content).toEqual([{ type: 'text', text: 'session tool executed' }])
+        expect(secondReceipt?.channelId).toBe(firstReceipt?.channelId)
+        expect(thirdReceipt?.channelId).toBe(firstReceipt?.channelId)
+        expect(firstReceipt?.acceptedCumulative).toBe(chargeAmountRaw.toString())
+        expect(secondReceipt?.acceptedCumulative).toBe(
+          (chargeAmountRaw + doubleSessionAmountRaw).toString(),
+        )
+        expect(thirdReceipt?.acceptedCumulative).toBe(
+          (chargeAmountRaw * 2n + doubleSessionAmountRaw).toString(),
+        )
+
+        const channel = await harness.sessionStore.getChannel(thirdReceipt!.channelId)
+        expect(channel?.highestVoucherAmount).toBe(chargeAmountRaw * 2n + doubleSessionAmountRaw)
+      },
+    },
+    {
+      name: 'session intent accepts replayed vouchers without advancing cumulative state',
+      async run(harness: Harness) {
+        const openChallenge = await getPaymentChallenge(harness.sdkClient, 'session_tool')
+        const openCredential = await harness.sessionMethod.createCredential({
+          challenge: openChallenge,
+          context: {},
+        })
+        const opened = await callToolWithCredential(harness.sdkClient, 'session_tool', openCredential)
+
+        const openReceipt = opened.receipt as SessionReceipt | undefined
+        expect(openReceipt?.acceptedCumulative).toBe(chargeAmountRaw.toString())
+
+        const voucherChallenge = await getPaymentChallenge(harness.sdkClient, 'session_tool')
+        const voucherCredential = await harness.sessionMethod.createCredential({
+          challenge: voucherChallenge,
+          context: {},
+        })
+        const firstVoucher = await callToolWithCredential(
+          harness.sdkClient,
+          'session_tool',
+          voucherCredential,
+        )
+        const replayedVoucher = await callToolWithCredential(
+          harness.sdkClient,
+          'session_tool',
+          voucherCredential,
+        )
+
+        const firstReceipt = firstVoucher.receipt as SessionReceipt | undefined
+        const replayReceipt = replayedVoucher.receipt as SessionReceipt | undefined
+
+        expect(firstVoucher.content).toEqual([{ type: 'text', text: 'session tool executed' }])
+        expect(replayedVoucher.content).toEqual([{ type: 'text', text: 'session tool executed' }])
+        expect(firstReceipt?.channelId).toBe(openReceipt?.channelId)
+        expect(replayReceipt?.channelId).toBe(openReceipt?.channelId)
+        expect(firstReceipt?.acceptedCumulative).toBe((chargeAmountRaw * 2n).toString())
+        expect(replayReceipt?.acceptedCumulative).toBe((chargeAmountRaw * 2n).toString())
+
+        const channel = await harness.sessionStore.getChannel(openReceipt!.channelId)
+        expect(channel?.highestVoucherAmount).toBe(chargeAmountRaw * 2n)
+      },
+    },
+    {
+      name: 'session intent rejects replaying a credential across a different MCP tool',
+      async run(harness: Harness) {
+        const openChallenge = await getPaymentChallenge(harness.sdkClient, 'session_tool')
+        const openCredential = await harness.sessionMethod.createCredential({
+          challenge: openChallenge,
+          context: {},
+        })
+        const opened = await callToolWithCredential(harness.sdkClient, 'session_tool', openCredential)
+
+        const openReceipt = opened.receipt as SessionReceipt | undefined
+        expect(openReceipt?.acceptedCumulative).toBe(chargeAmountRaw.toString())
+
+        const mismatch = await getPaymentRequiredError(
+          harness.sdkClient,
+          'session_tool_double',
+          openCredential,
+        )
+
+        expect(mismatch.data.problem?.type).toBe(
+          'https://paymentauth.org/problems/invalid-challenge',
+        )
+        expect(mismatch.data.challenges).toHaveLength(1)
+        expect(mismatch.data.challenges[0]?.method).toBe('tempo')
+        expect(mismatch.data.challenges[0]?.intent).toBe('session')
+        expect(mismatch.data.challenges[0]?.request.amount).toBe(doubleSessionAmountRaw.toString())
+
+        const channel = await harness.sessionStore.getChannel(openReceipt!.channelId)
+        expect(channel?.highestVoucherAmount).toBe(chargeAmountRaw)
+      },
+    },
+    {
+      name: 'session intent can top up a live MCP channel and continue metering on the same channel',
+      sessionFeePayer: true,
+      sessionMaxDeposit: '2',
+      async run(harness: Harness) {
+        const openChallenge = await getPaymentChallenge(harness.sdkClient, 'session_tool')
+        const openCredential = await harness.sessionMethod.createCredential({
+          challenge: openChallenge,
+          context: {},
+        })
+        const opened = await callToolWithCredential(harness.sdkClient, 'session_tool', openCredential)
+
+        const openReceipt = opened.receipt as SessionReceipt | undefined
+        expect(opened.content).toEqual([{ type: 'text', text: 'session tool executed' }])
+        expect(openReceipt?.acceptedCumulative).toBe(chargeAmountRaw.toString())
+
+        const voucherChallenge = await getPaymentChallenge(harness.sdkClient, 'session_tool')
+        const voucherCredential = await harness.sessionMethod.createCredential({
+          challenge: voucherChallenge,
+          context: {},
+        })
+        const metered = await callToolWithCredential(
+          harness.sdkClient,
+          'session_tool',
+          voucherCredential,
+        )
+
+        const meteredReceipt = metered.receipt as SessionReceipt | undefined
+        expect(metered.content).toEqual([{ type: 'text', text: 'session tool executed' }])
+        expect(meteredReceipt?.channelId).toBe(openReceipt?.channelId)
+        expect(meteredReceipt?.acceptedCumulative).toBe((chargeAmountRaw * 2n).toString())
+
+        const { serializedTransaction } = await signTopUpChannel({
+          escrow: escrowContract,
+          feePayer: true,
+          payer: accounts[2],
+          channelId: openReceipt!.channelId,
+          token: asset,
+          amount: topUpAmountRaw,
+        })
+        const topUpChallenge = await getPaymentChallenge(harness.sdkClient, 'session_tool')
+        const topUpCredential = await harness.sessionMethod.createCredential({
+          challenge: topUpChallenge,
+          context: {
+            action: 'topUp',
+            additionalDepositRaw: topUpAmountRaw.toString(),
+            channelId: openReceipt!.channelId,
+            transaction: serializedTransaction,
+          },
+        })
+        const toppedUp = await callToolWithCredential(harness.sdkClient, 'session_tool', topUpCredential)
+
+        const topUpReceipt = toppedUp.receipt as SessionReceipt | undefined
+        expect(toppedUp.content).toEqual([])
+        expect(topUpReceipt?.channelId).toBe(openReceipt?.channelId)
+        expect(topUpReceipt?.acceptedCumulative).toBe((chargeAmountRaw * 2n).toString())
+        expect(topUpReceipt?.spent).toBe('0')
+        expect(topUpReceipt?.units).toBe(0)
+
+        const afterTopUpChallenge = await getPaymentChallenge(harness.sdkClient, 'session_tool')
+        const afterTopUpCredential = await harness.sessionMethod.createCredential({
+          challenge: afterTopUpChallenge,
+          context: {},
+        })
+        const resumed = await callToolWithCredential(
+          harness.sdkClient,
+          'session_tool',
+          afterTopUpCredential,
+        )
+
+        const resumedReceipt = resumed.receipt as SessionReceipt | undefined
+        expect(resumed.content).toEqual([{ type: 'text', text: 'session tool executed' }])
+        expect(resumedReceipt?.channelId).toBe(openReceipt?.channelId)
+        expect(resumedReceipt?.acceptedCumulative).toBe((chargeAmountRaw * 3n).toString())
+
+        const channel = await harness.sessionStore.getChannel(openReceipt!.channelId)
+        expect(channel?.deposit).toBe(chargeAmountRaw * 2n + topUpAmountRaw)
+        expect(channel?.highestVoucherAmount).toBe(chargeAmountRaw * 3n)
+        expect(channel?.spent).toBe(0n)
+        expect(channel?.units).toBe(0)
+      },
+    },
+    {
+      name: 'session intent can close a live MCP channel and reopen on the next request',
+      async run(harness: Harness) {
+        const openChallenge = await getPaymentChallenge(harness.sdkClient, 'session_tool')
+        const openCredential = await harness.sessionMethod.createCredential({
+          challenge: openChallenge,
+          context: {},
+        })
+        const opened = await callToolWithCredential(harness.sdkClient, 'session_tool', openCredential)
+
+        const openReceipt = opened.receipt as SessionReceipt | undefined
+        expect(openReceipt?.acceptedCumulative).toBe(chargeAmountRaw.toString())
+
+        const voucherChallenge = await getPaymentChallenge(harness.sdkClient, 'session_tool')
+        const voucherCredential = await harness.sessionMethod.createCredential({
+          challenge: voucherChallenge,
+          context: {},
+        })
+        const metered = await callToolWithCredential(
+          harness.sdkClient,
+          'session_tool',
+          voucherCredential,
+        )
+
+        const meteredReceipt = metered.receipt as SessionReceipt | undefined
+        expect(meteredReceipt?.channelId).toBe(openReceipt?.channelId)
+        expect(meteredReceipt?.acceptedCumulative).toBe((chargeAmountRaw * 2n).toString())
+
+        const closeChallenge = await getPaymentChallenge(harness.sdkClient, 'session_tool')
+        const closeCredential = await harness.sessionMethod.createCredential({
+          challenge: closeChallenge,
+          context: {
+            action: 'close',
+            channelId: openReceipt!.channelId,
+            cumulativeAmountRaw: (chargeAmountRaw * 2n).toString(),
+          },
+        })
+        const closed = await callToolWithCredential(harness.sdkClient, 'session_tool', closeCredential)
+
+        const closeReceipt = closed.receipt as SessionReceipt | undefined
+        expect(closed.content).toEqual([])
+        expect(closeReceipt?.channelId).toBe(openReceipt?.channelId)
+        expect(closeReceipt?.acceptedCumulative).toBe((chargeAmountRaw * 2n).toString())
+        expect(closeReceipt?.txHash).toMatch(/^0x[0-9a-f]+$/)
+
+        const closedChannel = await harness.sessionStore.getChannel(openReceipt!.channelId)
+        expect(closedChannel?.finalized).toBe(true)
+
+        const reopenedChallenge = await getPaymentChallenge(harness.sdkClient, 'session_tool')
+        const reopenedCredential = await harness.sessionMethod.createCredential({
+          challenge: reopenedChallenge,
+          context: {},
+        })
+        const reopened = await callToolWithCredential(
+          harness.sdkClient,
+          'session_tool',
+          reopenedCredential,
+        )
+
+        const reopenedReceipt = reopened.receipt as SessionReceipt | undefined
+        expect(reopened.content).toEqual([{ type: 'text', text: 'session tool executed' }])
+        expect(reopenedReceipt?.acceptedCumulative).toBe(chargeAmountRaw.toString())
+        expect(reopenedReceipt?.channelId).not.toBe(openReceipt?.channelId)
+      },
+    },
+  ]
 
   for (const scenario of scenarios) {
     test(
       scenario.name,
       async () => {
-        const harness = await createHarness()
+        const harness = await createHarness({
+          sessionFeePayer: scenario.sessionFeePayer,
+          sessionMaxDeposit: scenario.sessionMaxDeposit,
+        })
 
         try {
           await scenario.run(harness)
@@ -127,18 +384,48 @@ type WrappedClient = {
   ) => Promise<McpClient.CallToolResult>
 }
 
+type SessionMethod = ReturnType<typeof tempo_session_client>
+type SessionChallenge = Parameters<SessionMethod['createCredential']>[0]['challenge']
+type PaymentRequiredMcpError = Error & {
+  data: {
+    challenges: SessionChallenge[]
+    problem?: { type?: string | undefined } | undefined
+  }
+}
+
+type Scenario = {
+  name: string
+  run: (harness: Harness) => Promise<void>
+  sessionFeePayer?: boolean | undefined
+  sessionMaxDeposit?: string | undefined
+}
+
 type Harness = {
   close: () => Promise<void>
   mcp: WrappedClient
+  sdkClient: Client
+  sessionMethod: SessionMethod
   sessionStore: ChannelStore.ChannelStore
 }
 
-async function createHarness(): Promise<Harness> {
+async function createHarness(options?: {
+  sessionFeePayer?: boolean | undefined
+  sessionDeposit?: string | undefined
+  sessionMaxDeposit?: string | undefined
+}): Promise<Harness> {
   const sessionBackingStore = Store.memory()
   const sessionStore = ChannelStore.fromStore(sessionBackingStore)
   const [chargeMethod] = tempo_client({
     account: accounts[1],
     getClient: () => testClient,
+  })
+  const sessionMethod = tempo_session_client({
+    account: accounts[2],
+    escrowContract,
+    getClient: () => testClient,
+    ...(options?.sessionMaxDeposit
+      ? { maxDeposit: options.sessionMaxDeposit }
+      : { deposit: options?.sessionDeposit ?? '5' }),
   })
 
   const payment = Mppx_server.create({
@@ -154,6 +441,7 @@ async function createHarness(): Promise<Harness> {
         escrowContract,
         getClient: () => testClient,
         store: sessionBackingStore,
+        ...(options?.sessionFeePayer ? { feePayer: accounts[4] } : {}),
       }),
     ],
     realm,
@@ -187,6 +475,23 @@ async function createHarness(): Promise<Harness> {
     }) as never
   })
 
+  mcpServer.registerTool(
+    'session_tool_double',
+    { description: 'Session metered tool charging two units' },
+    async (extra) => {
+      const result = await (
+        payment.session({ amount: '2', suggestedDeposit: '5', unitType: 'tool-call' }) as (
+          input: unknown,
+        ) => Promise<any>
+      )(extra)
+      if (result.status === 402) throw result.challenge
+
+      return (result as { withReceipt: (response: unknown) => unknown }).withReceipt({
+        content: [{ type: 'text' as const, text: 'session double tool executed' }],
+      }) as never
+    },
+  )
+
   const app = createMcpExpressApp()
   const serverTransport = new StreamableHTTPServerTransport({
     sessionIdGenerator: randomUUID,
@@ -213,12 +518,7 @@ async function createHarness(): Promise<Harness> {
   const mcp = McpClient.wrap(sdkClient, {
     methods: [
       chargeMethod,
-      tempo_session_client({
-        account: accounts[2],
-        deposit: '5',
-        escrowContract,
-        getClient: () => testClient,
-      }),
+      sessionMethod,
     ],
   })
 
@@ -228,8 +528,64 @@ async function createHarness(): Promise<Harness> {
       await Promise.allSettled([sdkClient.close(), mcpServer.close(), serverTransport.close()])
     },
     mcp,
+    sdkClient,
+    sessionMethod,
     sessionStore,
   }
+}
+
+async function getPaymentChallenge(
+  client: Client,
+  toolName: string,
+): Promise<SessionChallenge> {
+  try {
+    await client.callTool({ name: toolName, arguments: {} })
+  } catch (error) {
+    if (!McpClient.isPaymentRequiredError(error)) throw error
+
+    const challenge = error.data.challenges.find(
+      (challenge) => challenge.method === 'tempo' && challenge.intent === 'session',
+    )
+    if (!challenge)
+      throw new Error(`No tempo.session challenge returned for ${toolName}`, { cause: error })
+    return challenge as SessionChallenge
+  }
+
+  throw new Error(`Expected ${toolName} to require payment`)
+}
+
+async function callToolWithCredential(
+  client: Client,
+  toolName: string,
+  serializedCredential: string,
+): Promise<McpClient.CallToolResult> {
+  const result = await client.callTool({
+    name: toolName,
+    arguments: {},
+    _meta: {
+      [core_Mcp.credentialMetaKey]: Credential.deserialize(serializedCredential),
+    },
+  })
+
+  return {
+    ...result,
+    receipt: result._meta?.[core_Mcp.receiptMetaKey] as McpClient.CallToolResult['receipt'],
+  }
+}
+
+async function getPaymentRequiredError(
+  client: Client,
+  toolName: string,
+  serializedCredential: string,
+): Promise<PaymentRequiredMcpError> {
+  try {
+    await callToolWithCredential(client, toolName, serializedCredential)
+  } catch (error) {
+    if (!McpClient.isPaymentRequiredError(error)) throw error
+    return error as unknown as PaymentRequiredMcpError
+  }
+
+  throw new Error(`Expected ${toolName} to return a payment-required error`)
 }
 
 async function getTokenBalance(account: Address): Promise<bigint> {

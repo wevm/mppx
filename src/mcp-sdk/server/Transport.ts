@@ -92,10 +92,15 @@ export function mcpSdk(): McpSdk {
         challengeId,
       }
 
+      const normalizedResponse =
+        response instanceof globalThis.Response
+          ? ({ content: [] } as CallToolResult)
+          : (response as CallToolResult)
+
       return {
-        ...response,
+        ...normalizedResponse,
         _meta: {
-          ...response._meta,
+          ...normalizedResponse._meta,
           [core_Mcp.receiptMetaKey]: mcpReceipt,
         },
       }
