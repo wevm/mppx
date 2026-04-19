@@ -152,9 +152,14 @@ describe.runIf(nodeEnv === 'localnet')('McpClient.wrap integration', () => {
         expect(openReceipt?.acceptedCumulative).toBe(chargeAmountRaw.toString())
 
         const voucherChallenge = await getPaymentChallenge(harness.sdkClient, 'session_tool')
+        const replayedCumulativeRaw = (chargeAmountRaw * 3n).toString()
         const voucherCredential = await harness.sessionMethod.createCredential({
           challenge: voucherChallenge,
-          context: {},
+          context: {
+            action: 'voucher',
+            channelId: openReceipt!.channelId,
+            cumulativeAmountRaw: replayedCumulativeRaw,
+          },
         })
         const firstVoucher = await callToolWithCredential(
           harness.sdkClient,
@@ -174,11 +179,11 @@ describe.runIf(nodeEnv === 'localnet')('McpClient.wrap integration', () => {
         expect(replayedVoucher.content).toEqual([{ type: 'text', text: 'session tool executed' }])
         expect(firstReceipt?.channelId).toBe(openReceipt?.channelId)
         expect(replayReceipt?.channelId).toBe(openReceipt?.channelId)
-        expect(firstReceipt?.acceptedCumulative).toBe((chargeAmountRaw * 2n).toString())
-        expect(replayReceipt?.acceptedCumulative).toBe((chargeAmountRaw * 2n).toString())
+        expect(firstReceipt?.acceptedCumulative).toBe(replayedCumulativeRaw)
+        expect(replayReceipt?.acceptedCumulative).toBe(replayedCumulativeRaw)
 
         const channel = await harness.sessionStore.getChannel(openReceipt!.channelId)
-        expect(channel?.highestVoucherAmount).toBe(chargeAmountRaw * 2n)
+        expect(channel?.highestVoucherAmount).toBe(chargeAmountRaw * 3n)
       },
     },
     {
