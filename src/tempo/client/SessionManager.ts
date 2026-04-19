@@ -759,6 +759,13 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
           method: 'POST',
           headers: { Authorization: credential },
         })
+        if (!response.ok) {
+          const body = await response.text().catch(() => '')
+          const wwwAuth = response.headers.get('WWW-Authenticate') ?? ''
+          throw new Error(
+            `Close request failed with status ${response.status}${body ? `: ${body}` : ''}${wwwAuth ? ` [WWW-Authenticate: ${wwwAuth}]` : ''}`,
+          )
+        }
         const receiptHeader = response.headers.get('Payment-Receipt')
         if (receiptHeader) receipt = deserializeSessionReceipt(receiptHeader)
       }

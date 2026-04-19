@@ -5,6 +5,7 @@ import { describe, expect, test } from 'vp/test'
 import * as Store from '../../../Store.js'
 import { chainId, escrowContract as escrowContractDefaults } from '../../internal/defaults.js'
 import * as ChannelStore from '../../session/ChannelStore.js'
+import { deserializeSessionReceipt } from '../../session/Receipt.js'
 import { sse } from './transport.js'
 
 const channelId = '0x0000000000000000000000000000000000000000000000000000000000000001' as Hex
@@ -95,12 +96,51 @@ function makeAuthorizedRequest(
   })
 }
 
-function makeReceipt() {
+function makeManagementRequest(action: 'close' | 'topUp' = 'close'): Request {
+  const credential = Credential.from({
+    challenge: makeChallenge(),
+    payload:
+      action === 'close'
+        ? {
+            action: 'close' as const,
+            channelId,
+            cumulativeAmount: '10000000',
+            signature: '0xdeadbeef',
+          }
+        : {
+            action: 'topUp' as const,
+            channelId,
+            type: 'transaction' as const,
+            transaction: '0xdeadbeef',
+            additionalDeposit: '1000000',
+          },
+  })
+  const header = Credential.serialize(credential)
+  return new Request('https://test.example.com/session', {
+    method: 'POST',
+    headers: { Authorization: header },
+  })
+}
+
+type ReceiptOverrides = Partial<{
+  acceptedCumulative: string
+  spent: string
+  units: number
+}>
+
+function makeReceipt(overrides: ReceiptOverrides = {}) {
   return {
     method: 'tempo',
+    intent: 'session' as const,
     status: 'success' as const,
     timestamp: new Date().toISOString(),
     reference: channelId,
+    challengeId,
+    channelId,
+    acceptedCumulative: '10000000',
+    spent: '0',
+    units: 0,
+    ...overrides,
   }
 }
 
@@ -540,25 +580,56 @@ describe('sse transport', () => {
     })
 
     const body = await response.text()
+    const receipt = deserializeSessionReceipt(response.headers.get('Payment-Receipt')!)
 
     const channel = await store.getChannel(channelId)
     expect(channel!.spent).toBe(1000000n)
     expect(channel!.units).toBe(1)
+    expect(receipt.spent).toBe('1000000')
+    expect(receipt.units).toBe(1)
 
     expect(JSON.parse(body)).toEqual({ content: 'hello' })
     expect(response.headers.get('Content-Type')).toBe('application/json')
     expect(response.headers.get('Payment-Receipt')).toBeTruthy()
   })
 
-  test('respondReceipt with 204 management response keeps null body and receipt', async () => {
+  test('respondReceipt with 204 content response still deducts from channel', async () => {
     const store = memoryStore()
     await seedChannel(store, 10000000n)
     const transport = sse({ store })
     const request = makeAuthorizedRequest()
 
-    const managementResponse = new Response(null, { status: 204 })
+    const contentResponse = new Response(null, { status: 204 })
     const response = transport.respondReceipt({
       credential: makeCredential(),
+      input: request,
+      receipt: makeReceipt(),
+      response: contentResponse,
+      challengeId,
+    })
+
+    expect(response.status).toBe(204)
+    expect(await response.text()).toBe('')
+    const receipt = deserializeSessionReceipt(response.headers.get('Payment-Receipt')!)
+
+    await Promise.resolve()
+
+    const channel = await store.getChannel(channelId)
+    expect(channel!.spent).toBe(1000000n)
+    expect(channel!.units).toBe(1)
+    expect(receipt.spent).toBe('1000000')
+    expect(receipt.units).toBe(1)
+  })
+
+  test('respondReceipt with management response keeps null body and does not deduct', async () => {
+    const store = memoryStore()
+    await seedChannel(store, 10000000n)
+    const transport = sse({ store })
+    const request = makeManagementRequest()
+
+    const managementResponse = new Response(null, { status: 204 })
+    const response = transport.respondReceipt({
+      credential: Credential.fromRequest(makeManagementRequest())!,
       input: request,
       receipt: makeReceipt(),
       response: managementResponse,
@@ -572,6 +643,24 @@ describe('sse transport', () => {
     const channel = await store.getChannel(channelId)
     expect(channel!.spent).toBe(0n)
     expect(channel!.units).toBe(0)
+  })
+
+  test('respondReceipt rejects replayed plain responses with no remaining balance', async () => {
+    const store = memoryStore()
+    await seedChannel(store, 10000000n)
+    const transport = sse({ store })
+    const request = makeAuthorizedRequest()
+
+    const response = transport.respondReceipt({
+      credential: makeCredential(),
+      input: request,
+      receipt: makeReceipt({ acceptedCumulative: '1000000', spent: '1000000', units: 1 }),
+      response: new Response('ok'),
+      challengeId,
+    })
+
+    expect(response.status).toBe(402)
+    expect(response.headers.get('Payment-Receipt')).toBeNull()
   })
 
   test('poll: true strips waitForUpdate from store', async () => {

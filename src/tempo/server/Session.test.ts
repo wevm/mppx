@@ -2839,6 +2839,99 @@ describe.runIf(isLocalnet)('session', () => {
       expect(second.status).toBe(200)
     })
 
+    test('plain HTTP session charges content requests and rejects same-voucher replay', async () => {
+      const { channelId, serializedTransaction } = await createSignedOpenTransaction(10000000n)
+      const handler = createHandler()
+      const route = handler.session({
+        amount: '1',
+        decimals: 6,
+        unitType: 'token',
+      })
+
+      const first = await route(new Request('https://api.example.com/resource'))
+      if (first.status !== 402) throw new Error('expected challenge')
+      const issuedChallenge = Challenge.fromResponse(first.challenge)
+
+      const authorization = Credential.serialize({
+        challenge: issuedChallenge,
+        payload: {
+          action: 'open',
+          type: 'transaction',
+          channelId,
+          transaction: serializedTransaction,
+          cumulativeAmount: '1000000',
+          signature: await signTestVoucher(channelId, 1000000n),
+        },
+      })
+
+      const second = await route(
+        new Request('https://api.example.com/resource', {
+          headers: { Authorization: authorization },
+        }),
+      )
+      if (second.status !== 200) throw new Error('expected paid response')
+
+      const paidResponse = second.withReceipt(new Response('ok'))
+      const receipt = deserializeSessionReceipt(paidResponse.headers.get('Payment-Receipt')!)
+      expect(receipt.spent).toBe('1000000')
+      expect(receipt.units).toBe(1)
+
+      const persisted = await store.getChannel(channelId)
+      expect(persisted?.spent).toBe(1000000n)
+      expect(persisted?.units).toBe(1)
+
+      const replay = await route(
+        new Request('https://api.example.com/resource', {
+          headers: { Authorization: authorization },
+        }),
+      )
+      expect(replay.status).toBe(402)
+    })
+
+    test('sessionManager fetch/close tracks spent from plain HTTP receipts', async () => {
+      const handler = createHandler()
+      const route = handler.session({
+        amount: '1',
+        decimals: 6,
+        unitType: 'token',
+      })
+
+      let contentRequests = 0
+      const fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+        const request = new Request(input, init)
+        const result = await route(request)
+        if (result.status === 402) return result.challenge
+        if (request.method === 'GET') contentRequests++
+        return result.withReceipt(new Response('ok'))
+      }
+
+      const manager = sessionManager({
+        account: payer,
+        client,
+        escrowContract,
+        fetch,
+        maxDeposit: '3',
+      })
+
+      const first = await manager.fetch('https://api.example.com/resource')
+      expect(first.status).toBe(200)
+      expect(first.receipt?.spent).toBe('1000000')
+      expect(first.receipt?.units).toBe(1)
+
+      const second = await manager.fetch('https://api.example.com/resource')
+      expect(second.status).toBe(200)
+      expect(second.receipt?.spent).toBe('2000000')
+      expect(second.receipt?.units).toBe(2)
+
+      const closeReceipt = await manager.close()
+      expect(closeReceipt?.status).toBe('success')
+      expect(closeReceipt?.spent).toBe('2000000')
+      expect(contentRequests).toBe(2)
+
+      const persisted = await store.getChannel(manager.channelId!)
+      expect(persisted?.finalized).toBe(true)
+    })
+
     test('does not return Payment-Receipt on verification errors', async () => {
       const { channelId, serializedTransaction } = await createSignedOpenTransaction(10000000n)
       const handler = createHandler()
@@ -3403,6 +3496,187 @@ describe.runIf(isLocalnet)('session', () => {
       } as any)
       expect(result).toBeInstanceOf(Response)
       expect((result as Response).status).toBe(204)
+    })
+  })
+
+  describe('HTTP session manager', () => {
+    test('tracks spent from HTTP error receipts and closes at that amount', async () => {
+      const backingStore = Store.memory()
+      const routeHandler = Mppx_server.create({
+        methods: [
+          tempo_server.session({
+            store: backingStore,
+            getClient: () => client,
+            account: recipientAccount,
+            currency,
+            escrowContract,
+            chainId: chain.id,
+          }),
+        ],
+        realm: 'api.example.com',
+        secretKey: 'secret',
+      }).session({ amount: '1', decimals: 6, unitType: 'token' })
+
+      const fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+        const request = new Request(input, init)
+        const result = await routeHandler(request)
+        if (result.status === 402) return result.challenge
+        return result.withReceipt(new Response('upstream failed', { status: 500 }))
+      }
+
+      const manager = sessionManager({
+        account: payer,
+        client,
+        escrowContract,
+        fetch,
+        maxDeposit: '2',
+      })
+
+      const response = await manager.fetch('https://api.example.com/resource')
+      expect(response.status).toBe(500)
+      expect(response.receipt?.spent).toBe('1000000')
+      expect(response.receipt?.units).toBe(1)
+
+      const closeReceipt = await manager.close()
+      expect(closeReceipt?.status).toBe('success')
+      expect(closeReceipt?.spent).toBe('1000000')
+    })
+
+    test('tracks spent from null-body HTTP content receipts and closes at that amount', async () => {
+      const backingStore = Store.memory()
+      const routeHandler = Mppx_server.create({
+        methods: [
+          tempo_server.session({
+            store: backingStore,
+            getClient: () => client,
+            account: recipientAccount,
+            currency,
+            escrowContract,
+            chainId: chain.id,
+          }),
+        ],
+        realm: 'api.example.com',
+        secretKey: 'secret',
+      }).session({ amount: '1', decimals: 6, unitType: 'token' })
+
+      const fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+        const request = new Request(input, init)
+        const result = await routeHandler(request)
+        if (result.status === 402) return result.challenge
+        return result.withReceipt(new Response(null, { status: 204 }))
+      }
+
+      const manager = sessionManager({
+        account: payer,
+        client,
+        escrowContract,
+        fetch,
+        maxDeposit: '2',
+      })
+
+      const response = await manager.fetch('https://api.example.com/resource')
+      expect(response.status).toBe(204)
+      expect(await response.text()).toBe('')
+      expect(response.receipt?.spent).toBe('1000000')
+      expect(response.receipt?.units).toBe(1)
+
+      const closeReceipt = await manager.close()
+      expect(closeReceipt?.status).toBe('success')
+      expect(closeReceipt?.spent).toBe('1000000')
+    })
+
+    test('throws when fallback close returns a non-ok response', async () => {
+      const backingStore = Store.memory()
+      const routeHandler = Mppx_server.create({
+        methods: [
+          tempo_server.session({
+            store: backingStore,
+            getClient: () => client,
+            account: recipientAccount,
+            currency,
+            escrowContract,
+            chainId: chain.id,
+          }),
+        ],
+        realm: 'api.example.com',
+        secretKey: 'secret',
+      }).session({ amount: '1', decimals: 6, unitType: 'token' })
+
+      const fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+        const request = new Request(input, init)
+        const action = request.headers.has('Authorization')
+          ? Credential.fromRequest<any>(request).payload?.action
+          : undefined
+        const result = await routeHandler(request)
+        if (result.status === 402) return result.challenge
+        if (action === 'close') {
+          return new Response('close failed', {
+            status: 500,
+            headers: { 'WWW-Authenticate': 'Payment error="close_failed"' },
+          })
+        }
+        return result.withReceipt(new Response('ok'))
+      }
+
+      const manager = sessionManager({
+        account: payer,
+        client,
+        escrowContract,
+        fetch,
+        maxDeposit: '2',
+      })
+
+      const response = await manager.fetch('https://api.example.com/resource')
+      expect(response.status).toBe(200)
+      expect(response.receipt?.spent).toBe('1000000')
+
+      await expect(manager.close()).rejects.toThrow(
+        'Close request failed with status 500: close failed [WWW-Authenticate: Payment error="close_failed"]',
+      )
+    })
+
+    test('sse transport charges plain HTTP fallback responses and closes at receipt.spent', async () => {
+      const backingStore = Store.memory()
+      const routeHandler = Mppx_server.create({
+        methods: [
+          tempo_server.session({
+            store: backingStore,
+            getClient: () => client,
+            account: recipientAccount,
+            currency,
+            escrowContract,
+            chainId: chain.id,
+            sse: true,
+          }),
+        ],
+        realm: 'api.example.com',
+        secretKey: 'secret',
+      }).session({ amount: '1', decimals: 6, unitType: 'token' })
+
+      const fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+        const request = new Request(input, init)
+        const result = await routeHandler(request)
+        if (result.status === 402) return result.challenge
+        return result.withReceipt(new Response('ok'))
+      }
+
+      const manager = sessionManager({
+        account: payer,
+        client,
+        escrowContract,
+        fetch,
+        maxDeposit: '2',
+      })
+
+      const response = await manager.fetch('https://api.example.com/resource')
+      expect(response.status).toBe(200)
+      expect(await response.text()).toBe('ok')
+      expect(response.receipt?.spent).toBe('1000000')
+      expect(response.receipt?.units).toBe(1)
+
+      const closeReceipt = await manager.close()
+      expect(closeReceipt?.status).toBe('success')
+      expect(closeReceipt?.spent).toBe('1000000')
     })
   })
 
@@ -5075,6 +5349,30 @@ describe('session default currency resolution', () => {
 
     const challenge = Challenge.fromResponse(result.challenge)
     expect(challenge.request.currency).toBe('0xcustom')
+  })
+
+  test('handler.session throws for zero-amount routes', () => {
+    const handler = Mppx_server.create({
+      methods: [
+        tempo_server.session({
+          store: Store.memory(),
+          getClient: () => mockClient,
+          account: mockAccount,
+          escrowContract: '0x0000000000000000000000000000000000000002',
+          chainId: 4217,
+        }),
+      ],
+      realm: 'api.example.com',
+      secretKey: 'secret',
+    })
+
+    expect(() =>
+      (handler.session as Function)({
+        amount: '0',
+        decimals: 6,
+        unitType: 'token',
+      }),
+    ).toThrow('Session amount must be greater than 0')
   })
 })
 
