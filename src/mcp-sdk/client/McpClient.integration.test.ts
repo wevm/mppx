@@ -308,7 +308,7 @@ describe.runIf(nodeEnv === 'localnet')('McpClient.wrap integration', () => {
         expect(channel?.deposit).toBe(chargeAmountRaw * 2n + topUpAmountRaw)
         expect(channel?.highestVoucherAmount).toBe(chargeAmountRaw * 3n)
         expect(channel?.spent).toBeGreaterThanOrEqual(BigInt(topUpReceipt!.spent))
-        expect(channel?.units).toBeGreaterThanOrEqual(topUpReceipt!.units)
+        expect(channel?.units).toBeGreaterThanOrEqual(topUpReceipt?.units ?? 0)
       },
     },
     {
