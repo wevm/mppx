@@ -432,7 +432,7 @@ describe('mcp', () => {
       const transport = Transport.mcp()
 
       expect(await transport.captureRequest?.(mcpRequest)).toEqual({
-        hasBody: false,
+        hasBody: true,
         headers: new Headers(),
         method: 'POST',
         url: new URL('mcp://request/tools%2Fcall'),

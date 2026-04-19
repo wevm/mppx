@@ -31,7 +31,7 @@ describe('mcpSdk', () => {
       const transport = mcpSdk()
 
       expect(await transport.captureRequest?.({})).toEqual({
-        hasBody: false,
+        hasBody: true,
         headers: new Headers(),
         method: 'POST',
         url: new URL('mcp://request/sdk'),

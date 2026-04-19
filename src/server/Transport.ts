@@ -222,7 +222,7 @@ export function mcp() {
 
     captureRequest(request) {
       return {
-        hasBody: false,
+        hasBody: true,
         headers: new Headers(),
         method: 'POST',
         url: new URL(`mcp://request/${encodeURIComponent(request.method ?? 'unknown')}`),

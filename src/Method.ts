@@ -168,8 +168,10 @@ export type VerifyFn<method extends Method> = (
  * response or generator. If it returns `undefined`, the server handler
  * is expected to serve content via `withReceipt(response)`.
  *
- * **HTTP-only.** The `input` parameter is a `Request` object; MCP transports
- * do not invoke this hook.
+ * Use `parameters.envelope?.capturedRequest` for any transport-agnostic
+ * authorization, billing, or routing decisions. The raw `input` should only
+ * be used for transport-specific response shaping (for example, HTTP content
+ * negotiation).
  */
 export type RespondFn<method extends Method> = (
   parameters: RespondContext<method>,

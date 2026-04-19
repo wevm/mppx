@@ -287,26 +287,24 @@ export function session<const parameters extends session.Parameters>(
     //
     // close and topUp are always gated (204) — they are pure management.
     //
-    // open and voucher are gated only for bodyless POSTs (management
-    // updates). POSTs with a body are content requests — the client's
-    // original request piggybacked on the credential — so they fall
-    // through to serve content. GETs always fall through so auto-mode
-    // clients (whose fetch wrapper bundles open+voucher into a single
-    // GET retry) receive content as expected.
-    respond({ credential, input }) {
+    // open and voucher share the same captured-request classifier used
+    // during verification. Non-billable requests are treated as management
+    // updates; billable requests fall through to the application handler.
+    respond({ credential, envelope, input }) {
       const { payload } = credential as Credential.Credential<SessionCredentialPayload>
 
       if (payload.action === 'close') return new Response(null, { status: 204 })
       if (payload.action === 'topUp') return new Response(null, { status: 204 })
 
-      // open and voucher: gate only bodyless POSTs (management updates).
-      // POSTs with a body are content requests — fall through so the
-      // upstream response is returned to the client.
-      if (input.method === 'POST') {
-        if (hasRequestBody(input)) return undefined
-        return new Response(null, { status: 204 })
+      const capturedRequest = envelope?.capturedRequest ?? {
+        hasBody: input.body !== null,
+        headers: input.headers,
+        method: input.method,
+        url: new URL(input.url),
       }
-      return undefined
+
+      if (isBillableContentRequest(capturedRequest)) return undefined
+      return new Response(null, { status: 204 })
     },
   })
 }
@@ -494,14 +492,6 @@ function hasCapturedRequestBody(input: {
 
   if (input.hasBody === true) return true
   return headerIndicatesBody
-}
-
-function hasRequestBody(input: Request): boolean {
-  return (
-    input.body !== null ||
-    input.headers.has('transfer-encoding') ||
-    (input.headers.get('content-length') !== null && input.headers.get('content-length') !== '0')
-  )
 }
 
 /**

@@ -2,7 +2,11 @@ import * as node_http from 'node:http'
 
 import type { z } from 'mppx'
 import { Challenge, Credential } from 'mppx'
-import { Mppx as Mppx_server, tempo as tempo_server } from 'mppx/server'
+import {
+  Mppx as Mppx_server,
+  Transport as ServerTransport,
+  tempo as tempo_server,
+} from 'mppx/server'
 import { Base64 } from 'ox'
 import {
   type Address,
@@ -2641,7 +2645,7 @@ describe.runIf(isLocalnet)('session', () => {
   })
 
   describe('protocol compatibility', () => {
-    test('HEAD voucher management request falls through to content handler', () => {
+    test('HEAD voucher request is gated as a non-billable management request', () => {
       const server = createServer()
       const response = server.respond!({
         credential: {
@@ -2650,12 +2654,135 @@ describe.runIf(isLocalnet)('session', () => {
           }),
           payload: { action: 'voucher' },
         },
+        envelope: {
+          capturedRequest: {
+            hasBody: false,
+            headers: new Headers(),
+            method: 'HEAD',
+            url: new URL('https://api.example.com/resource'),
+          },
+        },
         input: new Request('https://api.example.com/resource', {
           method: 'HEAD',
         }),
       } as never)
 
+      expect(response).toBeInstanceOf(Response)
+      expect((response as Response).status).toBe(204)
+    })
+
+    test('captured request classification wins over the raw input method', () => {
+      const server = createServer()
+      const response = server.respond!({
+        credential: {
+          challenge: makeChallenge({
+            channelId: '0x0000000000000000000000000000000000000000000000000000000000000001' as Hex,
+          }),
+          payload: { action: 'voucher' },
+        },
+        envelope: {
+          capturedRequest: {
+            hasBody: false,
+            headers: new Headers(),
+            method: 'POST',
+            url: new URL('mcp://request/tools%2Fcall'),
+          },
+        },
+        input: new Request('https://api.example.com/resource', {
+          method: 'GET',
+        }),
+      } as never)
+
+      expect(response).toBeInstanceOf(Response)
+      expect((response as Response).status).toBe(204)
+    })
+
+    test('captured request body metadata wins over a bodyless raw input', () => {
+      const server = createServer()
+      const response = server.respond!({
+        credential: {
+          challenge: makeChallenge({
+            channelId: '0x0000000000000000000000000000000000000000000000000000000000000001' as Hex,
+          }),
+          payload: { action: 'voucher' },
+        },
+        envelope: {
+          capturedRequest: {
+            hasBody: true,
+            headers: new Headers(),
+            method: 'POST',
+            url: new URL('mcp://request/tools%2Fcall'),
+          },
+        },
+        input: new Request('https://api.example.com/resource', {
+          method: 'POST',
+        }),
+      } as never)
+
       expect(response).toBeUndefined()
+    })
+
+    test('bills repeated MCP voucher replays using the captured request snapshot', async () => {
+      const { channelId, serializedTransaction } = await createSignedOpenTransaction(5000000n)
+      const server = createServer()
+      const mcpCapturedRequest = await ServerTransport.mcp().captureRequest?.({
+        id: 1,
+        jsonrpc: '2.0',
+        method: 'tools/call',
+        params: {},
+      })
+      if (!mcpCapturedRequest) throw new Error('missing MCP captured request')
+
+      const openChallenge = makeChallenge({ id: 'mcp-open', channelId })
+      const openCredential = {
+        challenge: openChallenge,
+        payload: {
+          action: 'open' as const,
+          type: 'transaction' as const,
+          channelId,
+          transaction: serializedTransaction,
+          cumulativeAmount: '2000000',
+          signature: await signTestVoucher(channelId, 2000000n),
+        },
+      }
+      const openReceipt = (await server.verify({
+        credential: openCredential,
+        envelope: {
+          capturedRequest: mcpCapturedRequest,
+          challenge: openChallenge,
+          credential: openCredential,
+        },
+        request: makeRequest({ amount: '1' }),
+      } as never)) as SessionReceipt
+      expect(openReceipt.spent).toBe('1000000')
+      expect(openReceipt.units).toBe(1)
+
+      const replayChallenge = makeChallenge({ id: 'mcp-replay', channelId })
+      const replayCredential = {
+        challenge: replayChallenge,
+        payload: {
+          action: 'voucher' as const,
+          channelId,
+          cumulativeAmount: '2000000',
+          signature: await signTestVoucher(channelId, 2000000n),
+        },
+      }
+      const replayReceipt = (await server.verify({
+        credential: replayCredential,
+        envelope: {
+          capturedRequest: mcpCapturedRequest,
+          challenge: replayChallenge,
+          credential: replayCredential,
+        },
+        request: makeRequest({ amount: '1' }),
+      } as never)) as SessionReceipt
+
+      expect(replayReceipt.spent).toBe('2000000')
+      expect(replayReceipt.units).toBe(2)
+
+      const channel = await store.getChannel(channelId)
+      expect(channel?.spent).toBe(2000000n)
+      expect(channel?.units).toBe(2)
     })
 
     test('ignores unknown challenge and credential fields for forward compatibility', async () => {

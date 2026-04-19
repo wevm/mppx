@@ -53,7 +53,7 @@ export function mcpSdk(): McpSdk {
 
     captureRequest() {
       return {
-        hasBody: false,
+        hasBody: true,
         headers: new Headers(),
         method: 'POST',
         url: new URL('mcp://request/sdk'),
