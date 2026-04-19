@@ -244,6 +244,36 @@ describe('sse transport', () => {
     expect(terminalReceipt.units).toBe(1)
   })
 
+  test('respondReceipt with AsyncIterable and non-request unitType still charges per chunk', async () => {
+    const store = memoryStore()
+    await seedChannel(store, 10000000n)
+    const transport = sse({ store })
+    const request = makeAuthorizedRequest({ unitType: 'token' })
+
+    async function* gen() {
+      yield 'hello'
+      yield 'world'
+      yield 'again'
+    }
+
+    const response = transport.respondReceipt({
+      credential: makeCredential({ unitType: 'token' }),
+      input: request,
+      receipt: makeReceipt(),
+      response: gen(),
+      challengeId,
+    })
+
+    const body = await readResponseText(response)
+    const terminalReceipt = readTerminalReceipt(body)
+    const channel = await store.getChannel(channelId)
+
+    expect(channel!.spent).toBe(3000000n)
+    expect(channel!.units).toBe(3)
+    expect(terminalReceipt.spent).toBe('3000000')
+    expect(terminalReceipt.units).toBe(3)
+  })
+
   test('respondReceipt with unitType=request does not charge an empty AsyncIterable', async () => {
     const store = memoryStore()
     await seedChannel(store, 10000000n)
@@ -287,6 +317,35 @@ describe('sse transport', () => {
       challengeId,
     })
     expect(response.headers.get('Content-Type')).toContain('text/event-stream')
+  })
+
+  test('respondReceipt with AsyncGeneratorFunction and unitType=request preserves manual charge calls', async () => {
+    const store = memoryStore()
+    await seedChannel(store, 10000000n)
+    const transport = sse({ store })
+    const request = makeAuthorizedRequest({ unitType: 'request' })
+
+    const response = transport.respondReceipt({
+      credential: makeCredential({ unitType: 'request' }),
+      input: request,
+      receipt: makeReceipt(),
+      response: async function* (stream) {
+        await stream.charge()
+        yield 'hello'
+        await stream.charge()
+        yield 'world'
+      },
+      challengeId,
+    })
+
+    const body = await readResponseText(response)
+    const terminalReceipt = readTerminalReceipt(body)
+    const channel = await store.getChannel(channelId)
+
+    expect(channel!.spent).toBe(2000000n)
+    expect(channel!.units).toBe(2)
+    expect(terminalReceipt.spent).toBe('2000000')
+    expect(terminalReceipt.units).toBe(2)
   })
 
   test('respondReceipt with upstream SSE Response auto-detects and iterates', async () => {
@@ -361,6 +420,41 @@ describe('sse transport', () => {
     expect(body).toContain('event: message\ndata: chunk3\n\n')
     expect(terminalReceipt.spent).toBe('1000000')
     expect(terminalReceipt.units).toBe(1)
+  })
+
+  test('respondReceipt with empty upstream SSE Response and unitType=request does not charge', async () => {
+    const store = memoryStore()
+    await seedChannel(store, 10000000n)
+    const transport = sse({ store })
+    const request = makeAuthorizedRequest({ unitType: 'request' })
+
+    const encoder = new TextEncoder()
+    const upstream = new Response(
+      new ReadableStream({
+        start(controller) {
+          controller.enqueue(encoder.encode('event: message\ndata: [DONE]\n\n'))
+          controller.close()
+        },
+      }),
+      { headers: { 'Content-Type': 'text/event-stream; charset=utf-8' } },
+    )
+
+    const response = transport.respondReceipt({
+      credential: makeCredential({ unitType: 'request' }),
+      input: request,
+      receipt: makeReceipt(),
+      response: upstream,
+      challengeId,
+    })
+
+    const body = await readResponseText(response)
+    const terminalReceipt = readTerminalReceipt(body)
+    const channel = await store.getChannel(channelId)
+
+    expect(channel!.spent).toBe(0n)
+    expect(channel!.units).toBe(0)
+    expect(terminalReceipt.spent).toBe('0')
+    expect(terminalReceipt.units).toBe(0)
   })
 
   test('respondReceipt with plain Response delegates to base http transport', () => {
