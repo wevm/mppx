@@ -38,7 +38,14 @@ function seedChannel(
   }))
 }
 
-function makeChallenge() {
+function makeChallenge(
+  request: Partial<{
+    amount: string
+    currency: string
+    recipient: string
+    unitType: string
+  }> = {},
+) {
   return Challenge.from({
     id: challengeId,
     realm: 'test.example.com',
@@ -48,12 +55,20 @@ function makeChallenge() {
       amount: '1000000',
       currency: '0x20c0000000000000000000000000000000000001',
       recipient: '0x0000000000000000000000000000000000000002',
+      ...request,
     },
   })
 }
 
-function makeCredential() {
-  const challenge = makeChallenge()
+function makeCredential(
+  request: Partial<{
+    amount: string
+    currency: string
+    recipient: string
+    unitType: string
+  }> = {},
+) {
+  const challenge = makeChallenge(request)
   return Credential.from({
     challenge,
     payload: {
@@ -65,8 +80,15 @@ function makeCredential() {
   })
 }
 
-function makeAuthorizedRequest(): Request {
-  const credential = makeCredential()
+function makeAuthorizedRequest(
+  request: Partial<{
+    amount: string
+    currency: string
+    recipient: string
+    unitType: string
+  }> = {},
+): Request {
+  const credential = makeCredential(request)
   const header = Credential.serialize(credential)
   return new Request('https://test.example.com/session', {
     headers: { Authorization: header },
@@ -93,6 +115,17 @@ async function readResponseText(response: Response): Promise<string> {
     result += decoder.decode(value, { stream: true })
   }
   return result
+}
+
+function readTerminalReceipt(output: string) {
+  const receiptRaw = output.split('event: payment-receipt\ndata: ')[1]?.split('\n\n')[0]
+  if (!receiptRaw) throw new Error('expected terminal receipt')
+  return JSON.parse(receiptRaw) as {
+    challengeId: string
+    channelId: string
+    spent: string
+    units?: number
+  }
 }
 
 describe('sse transport', () => {
@@ -169,8 +202,7 @@ describe('sse transport', () => {
     expect(response.headers.get('Content-Type')).toContain('text/event-stream')
 
     const body = await readResponseText(response)
-    const receiptRaw = body.split('event: payment-receipt\ndata: ')[1]?.split('\n\n')[0]
-    const terminalReceipt = JSON.parse(receiptRaw!)
+    const terminalReceipt = readTerminalReceipt(body)
 
     expect(response.headers.get('Payment-Receipt')).toBeNull()
     expect(body).toContain('event: message\ndata: hello\n\n')
@@ -180,6 +212,62 @@ describe('sse transport', () => {
     expect(terminalReceipt.channelId).toBe(channelId)
     expect(terminalReceipt.units).toBe(2)
     expect(terminalReceipt.spent).toBe('2000000')
+  })
+
+  test('respondReceipt with AsyncIterable and unitType=request charges once', async () => {
+    const store = memoryStore()
+    await seedChannel(store, 10000000n)
+    const transport = sse({ store })
+    const request = makeAuthorizedRequest({ unitType: 'request' })
+
+    async function* gen() {
+      yield 'hello'
+      yield 'world'
+      yield 'again'
+    }
+
+    const response = transport.respondReceipt({
+      credential: makeCredential({ unitType: 'request' }),
+      input: request,
+      receipt: makeReceipt(),
+      response: gen(),
+      challengeId,
+    })
+
+    const body = await readResponseText(response)
+    const terminalReceipt = readTerminalReceipt(body)
+    const channel = await store.getChannel(channelId)
+
+    expect(channel!.spent).toBe(1000000n)
+    expect(channel!.units).toBe(1)
+    expect(terminalReceipt.spent).toBe('1000000')
+    expect(terminalReceipt.units).toBe(1)
+  })
+
+  test('respondReceipt with unitType=request does not charge an empty AsyncIterable', async () => {
+    const store = memoryStore()
+    await seedChannel(store, 10000000n)
+    const transport = sse({ store })
+    const request = makeAuthorizedRequest({ unitType: 'request' })
+
+    async function* gen() {}
+
+    const response = transport.respondReceipt({
+      credential: makeCredential({ unitType: 'request' }),
+      input: request,
+      receipt: makeReceipt(),
+      response: gen(),
+      challengeId,
+    })
+
+    const body = await readResponseText(response)
+    const terminalReceipt = readTerminalReceipt(body)
+    const channel = await store.getChannel(channelId)
+
+    expect(channel!.spent).toBe(0n)
+    expect(channel!.units).toBe(0)
+    expect(terminalReceipt.spent).toBe('0')
+    expect(terminalReceipt.units).toBe(0)
   })
 
   test('respondReceipt with AsyncGeneratorFunction passes stream controller', async () => {
@@ -233,6 +321,46 @@ describe('sse transport', () => {
     expect(body).toContain('event: message\ndata: chunk1\n\n')
     expect(body).toContain('event: message\ndata: chunk2\n\n')
     expect(body).toContain('event: payment-receipt\n')
+  })
+
+  test('respondReceipt with upstream SSE Response and unitType=request charges once', async () => {
+    const store = memoryStore()
+    await seedChannel(store, 10000000n)
+    const transport = sse({ store })
+    const request = makeAuthorizedRequest({ unitType: 'request' })
+
+    const encoder = new TextEncoder()
+    const upstream = new Response(
+      new ReadableStream({
+        start(controller) {
+          controller.enqueue(encoder.encode('event: message\ndata: chunk1\n\n'))
+          controller.enqueue(encoder.encode('event: message\ndata: chunk2\n\n'))
+          controller.enqueue(encoder.encode('event: message\ndata: chunk3\n\n'))
+          controller.close()
+        },
+      }),
+      { headers: { 'Content-Type': 'text/event-stream; charset=utf-8' } },
+    )
+
+    const response = transport.respondReceipt({
+      credential: makeCredential({ unitType: 'request' }),
+      input: request,
+      receipt: makeReceipt(),
+      response: upstream,
+      challengeId,
+    })
+
+    const body = await readResponseText(response)
+    const terminalReceipt = readTerminalReceipt(body)
+    const channel = await store.getChannel(channelId)
+
+    expect(channel!.spent).toBe(1000000n)
+    expect(channel!.units).toBe(1)
+    expect(body).toContain('event: message\ndata: chunk1\n\n')
+    expect(body).toContain('event: message\ndata: chunk2\n\n')
+    expect(body).toContain('event: message\ndata: chunk3\n\n')
+    expect(terminalReceipt.spent).toBe('1000000')
+    expect(terminalReceipt.units).toBe(1)
   })
 
   test('respondReceipt with plain Response delegates to base http transport', () => {

@@ -3429,6 +3429,91 @@ describe.runIf(isLocalnet)('session', () => {
       expect(persisted?.finalized).toBe(true)
     })
 
+    test('unitType=request auto-metered SSE responses charge once across the stream', async () => {
+      const backingStore = Store.memory()
+      const routeHandler = Mppx_server.create({
+        methods: [
+          tempo_server.session({
+            store: backingStore,
+            getClient: () => client,
+            account: recipientAccount,
+            currency,
+            escrowContract,
+            chainId: chain.id,
+            sse: true,
+          }),
+        ],
+        realm: 'api.example.com',
+        secretKey: 'secret',
+      }).session({ amount: '1', decimals: 6, unitType: 'request' })
+
+      let voucherPosts = 0
+      const fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+        const request = new Request(input, init)
+        let action: 'open' | 'topUp' | 'voucher' | 'close' | undefined
+
+        if (request.method === 'POST' && request.headers.has('Authorization')) {
+          try {
+            const credential = Credential.fromRequest<any>(request)
+            action = credential.payload?.action
+            if (action === 'voucher') voucherPosts++
+          } catch {}
+        }
+
+        const result = await routeHandler(request)
+        if (result.status === 402) return result.challenge
+
+        if (action === 'voucher') {
+          return new Response(null, { status: 200 })
+        }
+
+        if (request.headers.get('Accept')?.includes('text/event-stream')) {
+          const encoder = new TextEncoder()
+          const upstream = new Response(
+            new ReadableStream({
+              start(controller) {
+                controller.enqueue(encoder.encode('event: message\ndata: chunk-1\n\n'))
+                controller.enqueue(encoder.encode('event: message\ndata: chunk-2\n\n'))
+                controller.enqueue(encoder.encode('event: message\ndata: chunk-3\n\n'))
+                controller.close()
+              },
+            }),
+            { headers: { 'Content-Type': 'text/event-stream; charset=utf-8' } },
+          )
+          return result.withReceipt(upstream)
+        }
+
+        return result.withReceipt(new Response('ok'))
+      }
+
+      const manager = sessionManager({
+        account: payer,
+        client,
+        escrowContract,
+        fetch,
+        maxDeposit: '1',
+      })
+
+      const chunks: string[] = []
+      const stream = await manager.sse('https://api.example.com/stream')
+      for await (const chunk of stream) chunks.push(chunk)
+
+      expect(chunks).toEqual(['chunk-1', 'chunk-2', 'chunk-3'])
+      expect(voucherPosts).toBe(0)
+
+      const closeReceipt = await manager.close()
+      expect(closeReceipt?.status).toBe('success')
+      expect(closeReceipt?.spent).toBe('1000000')
+
+      const channelId = manager.channelId
+      expect(channelId).toBeTruthy()
+
+      const persisted = await ChannelStore.fromStore(backingStore).getChannel(channelId!)
+      expect(persisted?.spent).toBe(1000000n)
+      expect(persisted?.units).toBe(1)
+      expect(persisted?.finalized).toBe(true)
+    })
+
     test('handles repeated exhaustion/resume cycles within one stream', async () => {
       const backingStore = Store.memory()
       const routeHandler = Mppx_server.create({
