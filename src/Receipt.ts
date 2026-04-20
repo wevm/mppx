@@ -19,6 +19,8 @@ export const Schema = z.object({
   reference: z.string(),
   /** Optional external reference ID echoed from the credential payload. */
   externalId: z.optional(z.string()),
+  /** Optional server-issued subscription identifier for recurring payments. */
+  subscriptionId: z.optional(z.string()),
   /** Payment status. Always "success" — failures use 402 + Problem Details. */
   status: z.literal('success'),
   /** RFC 3339 settlement timestamp. */

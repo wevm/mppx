@@ -4,7 +4,7 @@ import { Mppx, Request as ServerRequest, stripe, tempo } from 'mppx/server'
 import { createClient, http as createHttpTransport } from 'viem'
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts'
 import { tempoModerato } from 'viem/chains'
-import { Actions } from 'viem/tempo'
+import { Account, Actions } from 'viem/tempo'
 
 import { stripePreviewVersion } from '../../src/stripe/internal/constants.js'
 
@@ -28,6 +28,8 @@ export async function startServer(port: number): Promise<HtmlTestServer> {
     }
 
   const createTokenUrl = '/stripe/create-spt'
+  const subscriptionAccessKey = Account.fromP256(generatePrivateKey())
+  const subscriptionExpires = new Date(Date.now() + 365 * 24 * 60 * 60 * 1_000).toISOString()
   const tempoMppx = Mppx.create({
     methods: [
       tempo.charge({
@@ -36,6 +38,47 @@ export async function startServer(port: number): Promise<HtmlTestServer> {
         feePayer: true,
         html: true,
         recipient: account.address,
+        testnet: true,
+      }),
+      tempo.subscription({
+        activate: async ({ request }) => ({
+          receipt: {
+            method: 'tempo',
+            reference: '0xsubscription',
+            status: 'success',
+            subscriptionId: 'sub_pro',
+            timestamp: new Date().toISOString(),
+          },
+          subscription: {
+            amount: request.amount,
+            billingAnchor: new Date().toISOString(),
+            chainId: request.methodDetails?.chainId,
+            currency: request.currency,
+            identityId: 'user-1',
+            lastChargedPeriod: 0,
+            periodSeconds: request.periodSeconds,
+            recipient: request.recipient,
+            reference: '0xsubscription',
+            resourceId: 'plan:pro',
+            subscriptionExpires: request.subscriptionExpires,
+            subscriptionId: 'sub_pro',
+            timestamp: new Date().toISOString(),
+          },
+        }),
+        amount: '1',
+        chainId: tempoModerato.id,
+        currency: '0x20c0000000000000000000000000000000000000',
+        getIdentity: async () => ({ id: 'user-1' }),
+        getResource: async () => ({ id: 'plan:pro' }),
+        html: {
+          accessKey: {
+            accessKeyAddress: subscriptionAccessKey.address,
+            keyType: subscriptionAccessKey.keyType,
+          },
+        },
+        periodSeconds: '2592000',
+        recipient: account.address,
+        subscriptionExpires,
         testnet: true,
       }),
     ],
@@ -103,6 +146,17 @@ export async function startServer(port: number): Promise<HtmlTestServer> {
         if (result.status === 402) return result.challenge
 
         return result.withReceipt(Response.json({ url: 'https://example.com/photo.jpg' }))
+      }
+
+      if (url.pathname === '/tempo/subscription') {
+        const result = await tempoMppx.tempo.subscription({
+          description: 'Tempo Pro',
+          externalId: 'plan_pro',
+        })(request)
+
+        if (result.status === 402) return result.challenge
+
+        return result.withReceipt(Response.json({ plan: 'pro' }))
       }
 
       if (url.pathname === '/stripe/charge') {

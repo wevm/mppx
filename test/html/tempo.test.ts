@@ -25,6 +25,25 @@ test('charge via tempo html payment page respects custom pay text', async ({ pag
   await expect(page.getByRole('button', { name: /buy now tempo/i })).toBeVisible()
 })
 
+test('subscription via tempo html payment page', async ({ page }) => {
+  await page.goto('/tempo/subscription', {
+    waitUntil: 'domcontentloaded',
+  })
+
+  await expect(page.getByText('Payment Required')).toBeVisible()
+  await expect(page.getByRole('button', { name: /authorize with tempo/i })).toBeVisible()
+
+  const paidResponsePromise = page.waitForResponse(
+    (response) => response.url().includes('/tempo/subscription') && response.status() === 200,
+  )
+
+  await page.getByRole('button', { name: /authorize with tempo/i }).click()
+
+  const paidResponse = await paidResponsePromise
+  expect(paidResponse.headers()['payment-receipt']).toBeTruthy()
+  await expect(page.locator('body')).toContainText('"plan":"pro"', { timeout: 30_000 })
+})
+
 test('service worker endpoint returns javascript', async ({ page }) => {
   const response = await page.goto('/tempo/charge?__mppx_worker')
   expect(response?.headers()['content-type']).toContain('application/javascript')
