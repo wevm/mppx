@@ -61,7 +61,7 @@
   "[!start-pkg]": "",
   "name": "mppx",
   "type": "module",
-  "version": "0.5.15",
+  "version": "0.5.16",
   "main": "./dist/index.js",
   "license": "MIT",
   "files": [

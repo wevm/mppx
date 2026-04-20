@@ -1,5 +1,13 @@
 # mppx
 
+## 0.5.16
+
+### Patch Changes
+
+- 5b6a938: Thread context through pinned requests so MCP tool calls and HEAD requests cannot bypass the shared management-vs-content gate.
+- 22be301: Preserve `keyAuthorization` in fee-sponsored Tempo charge transactions and reject unsupported transaction fields instead of silently dropping them.
+- 3e7320d: Charge `tempo/session` SSE streams with `unitType: "request"` once per streamed response instead of once per emitted SSE data event.
+
 ## 0.5.15
 
 ### Patch Changes
