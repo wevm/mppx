@@ -1,5 +1,11 @@
 # mppx
 
+## 0.5.17
+
+### Patch Changes
+
+- 3259157: Added `mppx account export` command for exporting the private key of local keychain-backed accounts.
+
 ## 0.5.16
 
 ### Patch Changes
