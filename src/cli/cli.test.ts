@@ -28,18 +28,22 @@ import cli from './cli.js'
 
 const testPrivateKey = generatePrivateKey()
 const testAccount = privateKeyToAccount(testPrivateKey)
+const cliTestXdgDataHome = fs.mkdtempSync(path.join(os.tmpdir(), 'mppx-cli-xdg-'))
+
+afterAll(() => {
+  fs.rmSync(cliTestXdgDataHome, { recursive: true, force: true })
+})
 
 async function serve(argv: string[], options?: { env?: Record<string, string | undefined> }) {
   let output = ''
   let stderr = ''
   let exitCode: number | undefined
   const saved: Record<string, string | undefined> = {}
-  if (options?.env) {
-    for (const [key, value] of Object.entries(options.env)) {
-      saved[key] = process.env[key]
-      if (value === undefined) delete process.env[key]
-      else process.env[key] = value
-    }
+  const env = { XDG_DATA_HOME: cliTestXdgDataHome, ...options?.env }
+  for (const [key, value] of Object.entries(env)) {
+    saved[key] = process.env[key]
+    if (value === undefined) delete process.env[key]
+    else process.env[key] = value
   }
   const origStdoutWrite = process.stdout.write
   const origStderrWrite = process.stderr.write
@@ -1053,7 +1057,11 @@ describe('stripe charge', () => {
 describe.skipIf(!!process.env.CI)('account', () => {
   const binPath = path.resolve(import.meta.dirname, '../bin.ts')
   const cwd = path.resolve(import.meta.dirname, '../..')
-  const accountEnv = { ...process.env, NODE_NO_WARNINGS: '1' }
+  const accountEnv = {
+    ...process.env,
+    NODE_NO_WARNINGS: '1',
+    XDG_DATA_HOME: cliTestXdgDataHome,
+  }
   const prefix = `__mppx_test_${Date.now()}`
   const createdAccounts: string[] = []
 
