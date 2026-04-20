@@ -366,12 +366,12 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
         // matches *this route's current configuration* when the request
         // hook transforms fields between calls.
         //
-        // This check compares only the economically significant "pinned"
-        // fields (method, intent, realm, amount, currency, recipient, etc.)
-        // that MUST be stable across both calls. Fields like `opaque`,
-        // `digest`, and `expires` don't need explicit pinning here because
-        // they are set by server config (not derived from the request hook)
-        // and are already fully covered by the HMAC binding in Tier 1.
+        // This check compares the fields that MUST be stable across both
+        // calls. That includes the economically significant request fields
+        // plus `opaque`, which can carry route-scoping metadata (for example,
+        // sibling route identity) that must not be replayable across handlers.
+        // `expires` still is not pinned here because its default is generated
+        // per invocation, and `digest` is already bound by the echoed HMAC.
         {
           const mismatch = getPinnedChallengeMismatch(challenge, credential.challenge)
           if (mismatch) {
@@ -561,12 +561,14 @@ async function captureRequest(
 
 function captureRequestFromInput(input: unknown): Method.CapturedRequest {
   const source = input as {
+    body?: unknown
     headers?: HeadersInit | undefined
     method?: string | undefined
     url?: string | URL | undefined
   }
 
   return {
+    hasBody: source.body !== undefined && source.body !== null,
     headers: new Headers(source.headers),
     method: source.method ?? 'POST',
     url: Transport.safeUrl(source.url),
@@ -580,7 +582,7 @@ const pinnedRequestBindingFields = [...coreBindingFields, ...methodBindingFields
 type CoreBindingField = (typeof coreBindingFields)[number]
 type MethodBindingField = (typeof methodBindingFields)[number]
 type PinnedRequestBindingField = (typeof pinnedRequestBindingFields)[number]
-type PinnedChallengeField = 'method' | 'intent' | 'realm' | PinnedRequestBindingField
+type PinnedChallengeField = 'method' | 'intent' | 'realm' | 'opaque' | PinnedRequestBindingField
 
 /**
  * Compares only the fields that MUST be stable across request-hook transforms.
@@ -600,6 +602,8 @@ function getPinnedChallengeMismatch(
   for (const field of ['method', 'intent', 'realm'] as const) {
     if (actualChallenge[field] !== expectedChallenge[field]) return field
   }
+
+  if (!opaqueValuesMatch(expectedChallenge.opaque, actualChallenge.opaque)) return 'opaque'
 
   return getPinnedRequestBindingMismatch(
     expectedChallenge.request as Record<string, unknown>,
@@ -683,6 +687,13 @@ function normalizeComparable(value: unknown): unknown {
   return typeof value === 'string' ? normalizeHex(value) : value
 }
 
+function opaqueValuesMatch(
+  expected: Record<string, string> | undefined,
+  actual: Record<string, string> | undefined,
+): boolean {
+  return isDeepStrictEqual(expected, actual)
+}
+
 type CoreBinding = {
   [field in CoreBindingField]?: string
 }
@@ -739,6 +750,7 @@ type ConfiguredHandler = ((input: Request) => Promise<MethodFn.Response<Transpor
     name: string
     intent: string
     html: Html.Options | undefined
+    meta?: Record<string, string> | undefined
     _canonicalRequest: Record<string, unknown>
   }
 }
@@ -860,11 +872,15 @@ export function compose(
         // transformed fields (e.g. amount with decimals) match correctly.
         // Also checks inside methodDetails for fields moved there by transforms.
         const candidates = handlers.filter((h) => {
-          const meta = (h as ConfiguredHandler)._internal
-          if (!meta || meta.name !== credMethod || meta.intent !== credIntent) return false
-          const canonical = meta._canonicalRequest
+          const internal = (h as ConfiguredHandler)._internal
+          if (!internal || internal.name !== credMethod || internal.intent !== credIntent)
+            return false
+          const canonical = internal._canonicalRequest
           if (!canonical) return true
-          return !getPinnedRequestBindingMismatch(canonical, credReq)
+          return (
+            !getPinnedRequestBindingMismatch(canonical, credReq) &&
+            opaqueValuesMatch(internal.meta, credential.challenge.opaque)
+          )
         })
 
         const match =

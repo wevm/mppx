@@ -3,16 +3,11 @@ import { createConfig, http } from 'wagmi'
 import { getConnectorClient } from 'wagmi/actions'
 import { tempoModerato } from 'wagmi/chains'
 import { metaMask } from 'wagmi/connectors'
-import { KeyManager, webAuthn } from 'wagmi/tempo'
+import { webAuthn } from 'wagmi/tempo'
 
 export const config = createConfig({
   chains: [tempoModerato],
-  connectors: [
-    webAuthn({
-      keyManager: KeyManager.localStorage(),
-    }),
-    metaMask(),
-  ],
+  connectors: [webAuthn(), metaMask()],
   transports: {
     [tempoModerato.id]: http(),
   },

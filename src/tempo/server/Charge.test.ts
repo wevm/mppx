@@ -1504,6 +1504,79 @@ describe('tempo', () => {
       httpServer.close()
     })
 
+    test('behavior: fee payer simulates before broadcasting in confirmation mode', async () => {
+      const rpcMethods: string[] = []
+      const interceptingClient = createClient({
+        account: accounts[0],
+        chain: client.chain,
+        transport: custom({
+          async request(args: any) {
+            rpcMethods.push(args.method)
+            return client.transport.request(args)
+          },
+        }),
+      })
+
+      const serverWithRpcTrace = Mppx_server.create({
+        methods: [
+          tempo_server.charge({
+            getClient() {
+              return interceptingClient
+            },
+            currency: asset,
+            account: accounts[0],
+          }),
+        ],
+        realm,
+        secretKey,
+      })
+
+      const mppx = Mppx_client.create({
+        polyfill: false,
+        methods: [
+          tempo_client({
+            account: accounts[1],
+            getClient() {
+              return client
+            },
+          }),
+        ],
+      })
+
+      const httpServer = await Http.createServer(async (req, res) => {
+        const result = await Mppx_server.toNodeListener(
+          serverWithRpcTrace.charge({
+            feePayer: accounts[0],
+            amount: '1',
+            currency: asset,
+            recipient: accounts[0].address,
+          }),
+        )(req, res)
+        if (result.status === 402) return
+        res.end('OK')
+      })
+
+      const challengeResponse = await fetch(httpServer.url)
+      expect(challengeResponse.status).toBe(402)
+
+      const credential = await mppx.createCredential(challengeResponse)
+      rpcMethods.length = 0
+
+      const authResponse = await fetch(httpServer.url, {
+        headers: { Authorization: credential },
+      })
+      expect(authResponse.status).toBe(200)
+
+      const broadcastIndex = rpcMethods.indexOf('eth_sendRawTransactionSync')
+      const simulationIndex = rpcMethods.indexOf('eth_call')
+
+      expect(broadcastIndex).toBeGreaterThan(-1)
+      expect(simulationIndex).toBeGreaterThan(-1)
+      expect(simulationIndex).toBeLessThan(broadcastIndex)
+
+      httpServer.close()
+    })
+
     test('behavior: fee payer with splits', async () => {
       const mppx = Mppx_client.create({
         polyfill: false,

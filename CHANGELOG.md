@@ -1,5 +1,28 @@
 # mppx
 
+## 0.5.16
+
+### Patch Changes
+
+- 5b6a938: Thread context through pinned requests so MCP tool calls and HEAD requests cannot bypass the shared management-vs-content gate.
+- 22be301: Preserve `keyAuthorization` in fee-sponsored Tempo charge transactions and reject unsupported transaction fields instead of silently dropping them.
+- 3e7320d: Charge `tempo/session` SSE streams with `unitType: "request"` once per streamed response instead of once per emitted SSE data event.
+
+## 0.5.15
+
+### Patch Changes
+
+- 7aff8ab: Prevented default HTTP `tempo.session()` content requests from replaying the same accepted voucher without advancing request/response accounting.
+- 7aff8ab: Pinned credential verification and compose dispatch to challenge `opaque` metadata so same-economics sibling routes could not replay each other's credentials.
+
+## 0.5.14
+
+### Patch Changes
+
+- 1ba7af2: Hardened sponsored Tempo session `open` and `topUp` flows by enforcing fee-payer policy limits, blocking call smuggling, and adding `feePayerPolicy` support.
+- 1ba7af2: Fixed fee-sponsored Tempo charge flows by simulating sponsored transactions before broadcast and binding swap approvals to the DEX input token.
+- 1ba7af2: Normalized Tempo session channel IDs across storage and verification paths, preventing case-variant aliases from creating duplicate channel state.
+
 ## 0.5.13
 
 ### Patch Changes

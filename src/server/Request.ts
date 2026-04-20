@@ -94,7 +94,7 @@ export function fromNodeListener(
     signal: controller.signal,
   }
 
-  if (method !== 'GET' && method !== 'HEAD') {
+  if (method !== 'GET' && method !== 'HEAD' && hasBody(headers)) {
     init.body = new ReadableStream({
       start(c) {
         req.on('data', (chunk: Buffer) => {
@@ -109,6 +109,11 @@ export function fromNodeListener(
   }
 
   return new Request(url, init)
+}
+
+function hasBody(headers: Headers): boolean {
+  const contentLength = headers.get('content-length')
+  return (contentLength !== null && contentLength !== '0') || headers.has('transfer-encoding')
 }
 
 function normalizeRequestTarget(url: string | undefined): string {

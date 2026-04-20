@@ -112,7 +112,14 @@ describe('fromNodeListener', () => {
   test('streams body for POST requests', async () => {
     const [req, res] = createMockRequest({
       method: 'POST',
-      rawHeaders: ['Host', 'example.com', 'Content-Type', 'application/json'],
+      rawHeaders: [
+        'Host',
+        'example.com',
+        'Content-Length',
+        '17',
+        'Content-Type',
+        'application/json',
+      ],
     })
 
     const request = Request.fromNodeListener(req, res)
@@ -125,5 +132,43 @@ describe('fromNodeListener', () => {
 
     const body = await request.text()
     expect(body).toBe('{"hello":"world"}')
+  })
+
+  test('does not attach a body stream for empty POST requests', () => {
+    const [req, res] = createMockRequest({
+      method: 'POST',
+      rawHeaders: ['Host', 'example.com'],
+    })
+
+    const request = Request.fromNodeListener(req, res)
+
+    expect(request.body).toBeNull()
+  })
+
+  test('does not attach a body stream for content-length: 0', () => {
+    const [req, res] = createMockRequest({
+      method: 'POST',
+      rawHeaders: ['Host', 'example.com', 'Content-Length', '0'],
+    })
+
+    const request = Request.fromNodeListener(req, res)
+
+    expect(request.body).toBeNull()
+  })
+
+  test('attaches a body stream for chunked POST requests', async () => {
+    const [req, res] = createMockRequest({
+      method: 'POST',
+      rawHeaders: ['Host', 'example.com', 'Transfer-Encoding', 'chunked'],
+    })
+
+    const request = Request.fromNodeListener(req, res)
+
+    setImmediate(() => {
+      req.emit('data', Buffer.from('hello'))
+      req.emit('end')
+    })
+
+    expect(await request.text()).toBe('hello')
   })
 })

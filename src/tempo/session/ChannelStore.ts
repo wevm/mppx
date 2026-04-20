@@ -109,6 +109,18 @@ export type ChannelStore = {
 
 export type DeductResult = { ok: true; channel: State } | { ok: false; channel: State }
 
+export function normalizeChannelId(channelId: Hex): Hex {
+  return channelId.toLowerCase() as Hex
+}
+
+function normalizeState(channelId: Hex, state: State): State {
+  return state.channelId === channelId ? state : { ...state, channelId }
+}
+
+function normalizeMaybeState(channelId: Hex, state: State | null): State | null {
+  return state ? normalizeState(channelId, state) : null
+}
+
 /**
  * Atomically deduct `amount` from a channel's available balance.
  *
@@ -208,54 +220,75 @@ export function fromStore(store: Store.Store | Store.AtomicStore): ChannelStore 
     channelId: Hex,
     fn: (current: State | null) => Store.Change<State, result>,
   ): Promise<result> {
+    const normalizedChannelId = normalizeChannelId(channelId)
     let change: Store.Change<State, result> | undefined
 
     if (atomicUpdate) {
-      const result = await atomicUpdate(channelId, (current) => {
-        change = fn((current as State | null) ?? null)
+      const result = await atomicUpdate(normalizedChannelId, (current) => {
+        change = fn(normalizeMaybeState(normalizedChannelId, (current as State | null) ?? null))
+        if (change.op === 'set') {
+          change = {
+            ...change,
+            value: normalizeState(normalizedChannelId, change.value),
+          }
+        }
         if (change.op !== 'set') return change
         return { ...change, value: change.value as never }
       })
-      if (change?.op !== 'noop') notify(channelId)
+      if (change?.op !== 'noop') notify(normalizedChannelId)
       return result
     }
 
-    while (locks.has(channelId)) await locks.get(channelId)
+    while (locks.has(normalizedChannelId)) await locks.get(normalizedChannelId)
 
     let release!: () => void
     locks.set(
-      channelId,
+      normalizedChannelId,
       new Promise<void>((r) => {
         release = r
       }),
     )
 
     try {
-      const current = (await store.get(channelId)) as State | null
+      const current = normalizeMaybeState(
+        normalizedChannelId,
+        (await store.get(normalizedChannelId)) as State | null,
+      )
       change = fn(current)
-      if (change.op === 'set') await store.put(channelId, change.value as never)
-      if (change.op === 'delete') await store.delete(channelId)
-      if (change.op !== 'noop') notify(channelId)
+      if (change.op === 'set') {
+        change = {
+          ...change,
+          value: normalizeState(normalizedChannelId, change.value),
+        }
+        await store.put(normalizedChannelId, change.value as never)
+      }
+      if (change.op === 'delete') await store.delete(normalizedChannelId)
+      if (change.op !== 'noop') notify(normalizedChannelId)
       return change.result
     } finally {
-      locks.delete(channelId)
+      locks.delete(normalizedChannelId)
       release()
     }
   }
 
   const cs: ChannelStore = {
     async getChannel(channelId) {
-      return (await store.get(channelId)) as State | null
+      const normalizedChannelId = normalizeChannelId(channelId)
+      return normalizeMaybeState(
+        normalizedChannelId,
+        (await store.get(normalizedChannelId)) as State | null,
+      )
     },
     async updateChannel(channelId, fn) {
       return update(channelId, fn)
     },
     waitForUpdate(channelId) {
       return new Promise<void>((resolve) => {
-        let set = waiters.get(channelId)
+        const normalizedChannelId = normalizeChannelId(channelId)
+        let set = waiters.get(normalizedChannelId)
         if (!set) {
           set = new Set()
-          waiters.set(channelId, set)
+          waiters.set(normalizedChannelId, set)
         }
         set.add(resolve)
       })

@@ -701,7 +701,20 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
     async close() {
       const closeChallenge = activeSocketChallenge ?? lastChallenge
       const closeChannelId = activeSocketChannelId ?? channel?.channelId
-      if (!channel?.opened || !closeChallenge || !closeChannelId) return undefined
+
+      if (!channel?.opened) return undefined
+
+      if (!closeChallenge) {
+        throw new Error(
+          'Cannot close session: no challenge available. This usually means close() was called on a SessionManager instance that was recreated after the session was opened. Use the same SessionManager instance that opened the session, or make a request first to receive a fresh 402 challenge.',
+        )
+      }
+      if (!closeChannelId) {
+        throw new Error(
+          'Cannot close session: no channel ID available. The session may not have been fully opened.',
+        )
+      }
+
       if (activeSocket?.readyState === WebSocketReadyState.OPEN) {
         const ready =
           closeReadyReceipt ??
@@ -753,15 +766,25 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
         },
       })
 
-      let receipt: SessionReceipt | undefined
-      if (lastUrl) {
-        const response = await fetchFn(lastUrl, {
-          method: 'POST',
-          headers: { Authorization: credential },
-        })
-        const receiptHeader = response.headers.get('Payment-Receipt')
-        if (receiptHeader) receipt = deserializeSessionReceipt(receiptHeader)
+      if (!lastUrl) {
+        throw new Error(
+          'Cannot close session: no URL available. This usually means close() was called on a SessionManager instance that was recreated after the session was opened. Use the same SessionManager instance that opened the session, or call fetch()/sse() before close().',
+        )
       }
+
+      const response = await fetchFn(lastUrl, {
+        method: 'POST',
+        headers: { Authorization: credential },
+      })
+      if (!response.ok) {
+        const body = await response.text().catch(() => '')
+        const wwwAuth = response.headers.get('WWW-Authenticate') ?? ''
+        throw new Error(
+          `Close request failed with status ${response.status}${body ? `: ${body}` : ''}${wwwAuth ? ` [WWW-Authenticate: ${wwwAuth}]` : ''}`,
+        )
+      }
+      const receiptHeader = response.headers.get('Payment-Receipt')
+      const receipt = receiptHeader ? deserializeSessionReceipt(receiptHeader) : undefined
 
       return receipt
     },

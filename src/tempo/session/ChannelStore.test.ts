@@ -7,6 +7,10 @@ import * as ChannelStore from './ChannelStore.js'
 
 const channelId = '0x0000000000000000000000000000000000000000000000000000000000000001' as Hex
 const channelId2 = '0x0000000000000000000000000000000000000000000000000000000000000002' as Hex
+const lowerCaseAliasChannelId = `0x${'ab'.repeat(31)}cd` as Hex
+const mixedCaseAliasChannelId = lowerCaseAliasChannelId.replace(/[a-f]/g, (character, index) =>
+  index % 2 === 0 ? character.toUpperCase() : character,
+) as Hex
 
 function makeChannel(overrides?: Partial<ChannelStore.State>): ChannelStore.State {
   return {
@@ -111,6 +115,25 @@ describe('channelStore', () => {
       expect(loaded!.deposit).toBe(10_000_000n)
       expect(typeof loaded!.deposit).toBe('bigint')
       expect(typeof loaded!.createdAt).toBe('string')
+    })
+
+    test('treats case-variant channelIds as the same record', async () => {
+      const cs = ChannelStore.fromStore(Store.memory())
+      await cs.updateChannel(mixedCaseAliasChannelId, () =>
+        makeChannel({ channelId: mixedCaseAliasChannelId }),
+      )
+
+      const loaded = await cs.getChannel(lowerCaseAliasChannelId)
+      expect(loaded).not.toBeNull()
+      expect(loaded!.channelId).toBe(lowerCaseAliasChannelId)
+
+      await cs.updateChannel(lowerCaseAliasChannelId, (current) =>
+        current ? { ...current, spent: 1_000_000n } : null,
+      )
+
+      const aliased = await cs.getChannel(mixedCaseAliasChannelId)
+      expect(aliased!.channelId).toBe(lowerCaseAliasChannelId)
+      expect(aliased!.spent).toBe(1_000_000n)
     })
   })
 

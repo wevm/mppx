@@ -4,6 +4,7 @@ import {
   type Client,
   decodeFunctionData,
   encodeFunctionData,
+  erc20Abi,
   getAbiItem,
   type Hex,
   type ReadContractReturnType,
@@ -23,7 +24,7 @@ import { Transaction } from 'viem/tempo'
 import { BadRequestError, ChannelClosedError, VerificationFailedError } from '../../Errors.js'
 import * as TempoAddress from '../internal/address.js'
 import * as defaults from '../internal/defaults.js'
-import { isTempoTransaction } from '../internal/fee-payer.js'
+import * as FeePayer from '../internal/fee-payer.js'
 import * as Channel from './Channel.js'
 import { escrowAbi } from './escrow.abi.js'
 import type { SignedVoucher } from './Types.js'
@@ -230,6 +231,159 @@ export type BroadcastResult = {
   onChain: OnChainChannel
 }
 
+type TempoCall = NonNullable<ReturnType<(typeof Transaction)['deserialize']>['calls']>[number]
+
+function assertCallHasTargetAndData(call: TempoCall): { to: Address; data: Hex } {
+  if (!call.to || !call.data) {
+    throw new BadRequestError({
+      reason: 'fee-sponsored transactions must not contain calls without target or data',
+    })
+  }
+  return { to: call.to, data: call.data }
+}
+
+function validateSponsoredApproveCall(parameters: {
+  action: 'open' | 'topUp'
+  call: TempoCall
+  currency: Address
+  escrowContract: Address
+  expectedAmount: bigint
+}) {
+  const { action, call, currency, escrowContract, expectedAmount } = parameters
+  const { to, data } = assertCallHasTargetAndData(call)
+
+  if (!TempoAddress.isEqual(to, currency) || data.slice(0, 10) !== erc20ApproveSelector) {
+    throw new BadRequestError({
+      reason: `fee-sponsored ${action} transaction contains an unauthorized call`,
+    })
+  }
+
+  const { args } = decodeFunctionData({ abi: erc20Abi, data })
+  const [spender, amount] = args as readonly [Address, bigint]
+
+  if (!TempoAddress.isEqual(spender, escrowContract)) {
+    throw new BadRequestError({
+      reason: `fee-sponsored ${action} transaction approve spender does not match escrow contract`,
+    })
+  }
+
+  if (amount !== expectedAmount) {
+    throw new BadRequestError({
+      reason: `fee-sponsored ${action} transaction approve amount does not match requested amount`,
+    })
+  }
+}
+
+function validateSponsoredOpenCalls(parameters: {
+  calls: readonly TempoCall[]
+  currency: Address
+  escrowContract: Address
+  deposit: bigint
+}) {
+  const { calls, currency, escrowContract, deposit } = parameters
+
+  let openCall: TempoCall | undefined
+  let approveCall: TempoCall | undefined
+
+  for (const call of calls) {
+    const { to, data } = assertCallHasTargetAndData(call)
+    const selector = data.slice(0, 10)
+    const isOpen = TempoAddress.isEqual(to, escrowContract) && selector === escrowOpenSelector
+    const isApprove = TempoAddress.isEqual(to, currency) && selector === erc20ApproveSelector
+
+    if (isApprove) {
+      if (approveCall || openCall) {
+        throw new BadRequestError({
+          reason: 'fee-sponsored open transaction contains a smuggled call',
+        })
+      }
+      approveCall = call
+      continue
+    }
+
+    if (isOpen) {
+      if (openCall) {
+        throw new BadRequestError({
+          reason: 'fee-sponsored open transaction contains a smuggled call',
+        })
+      }
+      openCall = call
+      continue
+    }
+
+    throw new BadRequestError({
+      reason: 'fee-sponsored open transaction contains an unauthorized call',
+    })
+  }
+
+  if (approveCall) {
+    validateSponsoredApproveCall({
+      action: 'open',
+      call: approveCall,
+      currency,
+      escrowContract,
+      expectedAmount: deposit,
+    })
+  }
+
+  return openCall
+}
+
+function validateSponsoredTopUpCalls(parameters: {
+  calls: readonly TempoCall[]
+  currency: Address
+  escrowContract: Address
+  topUpAmount: bigint
+}) {
+  const { calls, currency, escrowContract, topUpAmount } = parameters
+
+  let topUpCall: TempoCall | undefined
+  let approveCall: TempoCall | undefined
+
+  for (const call of calls) {
+    const { to, data } = assertCallHasTargetAndData(call)
+    const selector = data.slice(0, 10)
+    const isTopUp = TempoAddress.isEqual(to, escrowContract) && selector === escrowTopUpSelector
+    const isApprove = TempoAddress.isEqual(to, currency) && selector === erc20ApproveSelector
+
+    if (isApprove) {
+      if (approveCall || topUpCall) {
+        throw new BadRequestError({
+          reason: 'fee-sponsored topUp transaction contains a smuggled call',
+        })
+      }
+      approveCall = call
+      continue
+    }
+
+    if (isTopUp) {
+      if (topUpCall) {
+        throw new BadRequestError({
+          reason: 'fee-sponsored topUp transaction contains a smuggled call',
+        })
+      }
+      topUpCall = call
+      continue
+    }
+
+    throw new BadRequestError({
+      reason: 'fee-sponsored topUp transaction contains an unauthorized call',
+    })
+  }
+
+  if (approveCall) {
+    validateSponsoredApproveCall({
+      action: 'topUp',
+      call: approveCall,
+      currency,
+      escrowContract,
+      expectedAmount: topUpAmount,
+    })
+  }
+
+  return topUpCall
+}
+
 export async function broadcastOpenTransaction(parameters: {
   client: Client
   serializedTransaction: Hex
@@ -237,6 +391,8 @@ export async function broadcastOpenTransaction(parameters: {
   channelId: Hex
   recipient: Address
   currency: Address
+  challengeExpires?: string | undefined
+  feePayerPolicy?: Partial<FeePayer.Policy> | undefined
   feePayer?: Account | undefined
   /** When false, simulates instead of waiting for confirmation and returns derived on-chain state. @default true */
   waitForConfirmation?: boolean | undefined
@@ -248,11 +404,13 @@ export async function broadcastOpenTransaction(parameters: {
     channelId,
     recipient,
     currency,
+    challengeExpires,
+    feePayerPolicy,
     feePayer,
     waitForConfirmation = true,
   } = parameters
 
-  if (feePayer && !isTempoTransaction(serializedTransaction))
+  if (feePayer && !FeePayer.isTempoTransaction(serializedTransaction))
     throw new BadRequestError({
       reason: 'Only Tempo (0x76/0x78) transactions are supported',
     })
@@ -265,36 +423,39 @@ export async function broadcastOpenTransaction(parameters: {
 
   const calls = transaction.calls ?? []
 
-  const openCall = calls.find((call) => {
-    if (!call.to || !TempoAddress.isEqual(call.to, escrowContract)) return false
-    if (!call.data) return false
-    return call.data.slice(0, 10) === escrowOpenSelector
-  })
+  const sponsoredOpenCall = feePayer
+    ? validateSponsoredOpenCalls({
+        calls,
+        currency,
+        escrowContract,
+        deposit: (() => {
+          const candidate = calls.find((call) => {
+            if (!call.to || !TempoAddress.isEqual(call.to, escrowContract)) return false
+            if (!call.data) return false
+            return call.data.slice(0, 10) === escrowOpenSelector
+          })
+          if (!candidate?.data)
+            throw new BadRequestError({
+              reason: 'transaction does not contain a valid escrow open call',
+            })
+          const { args } = decodeFunctionData({ abi: escrowAbi, data: candidate.data })
+          return (args as readonly [Address, Address, bigint, Hex, Address])[2]
+        })(),
+      })
+    : undefined
+
+  const openCall =
+    sponsoredOpenCall ??
+    calls.find((call) => {
+      if (!call.to || !TempoAddress.isEqual(call.to, escrowContract)) return false
+      if (!call.data) return false
+      return call.data.slice(0, 10) === escrowOpenSelector
+    })
 
   if (!openCall)
     throw new BadRequestError({
       reason: 'transaction does not contain a valid escrow open call',
     })
-
-  if (feePayer) {
-    for (const call of calls) {
-      if (!call.to || !call.data) {
-        throw new BadRequestError({
-          reason: 'fee-sponsored transactions must not contain calls without target or data',
-        })
-      }
-      const selector = call.data.slice(0, 10)
-      const isEscrowOpen =
-        TempoAddress.isEqual(call.to, escrowContract) && selector === escrowOpenSelector
-      const isTokenApprove =
-        TempoAddress.isEqual(call.to, currency) && selector === erc20ApproveSelector
-      if (!isEscrowOpen && !isTokenApprove) {
-        throw new BadRequestError({
-          reason: 'fee-sponsored open transaction contains an unauthorized call',
-        })
-      }
-    }
-  }
 
   const { args: openArgs } = decodeFunctionData({ abi: escrowAbi, data: openCall.data! })
   const [payee, token, deposit, salt, authorizedSigner] = openArgs as readonly [
@@ -337,12 +498,24 @@ export async function broadcastOpenTransaction(parameters: {
 
   const serializedTransaction_final = await (async () => {
     if (feePayer) {
-      return signTransaction(client, {
-        ...transaction,
+      if (!sponsoredOpenCall)
+        throw new BadRequestError({
+          reason: 'transaction does not contain a valid escrow open call',
+        })
+
+      const sponsored = FeePayer.prepareSponsoredTransaction({
         account: feePayer,
-        feePayer,
-        feeToken: resolvedFeeToken,
-      } as never)
+        challengeExpires,
+        chainId: client.chain!.id,
+        details: { channelId, currency, recipient },
+        expectedFeeToken: defaults.currency[client.chain?.id as keyof typeof defaults.currency],
+        policy: feePayerPolicy,
+        transaction: {
+          ...transaction,
+          ...(resolvedFeeToken ? { feeToken: resolvedFeeToken } : {}),
+        },
+      })
+      return signTransaction(client, sponsored as never)
     }
     return serializedTransaction
   })()
@@ -407,6 +580,8 @@ export async function broadcastTopUpTransaction(parameters: {
   currency: Address
   declaredDeposit: bigint
   previousDeposit: bigint
+  challengeExpires?: string | undefined
+  feePayerPolicy?: Partial<FeePayer.Policy> | undefined
   feePayer?: Account | undefined
 }): Promise<{ txHash: Hex; newDeposit: bigint }> {
   const {
@@ -417,10 +592,12 @@ export async function broadcastTopUpTransaction(parameters: {
     currency,
     declaredDeposit,
     previousDeposit,
+    challengeExpires,
+    feePayerPolicy,
     feePayer,
   } = parameters
 
-  if (feePayer && !isTempoTransaction(serializedTransaction))
+  if (feePayer && !FeePayer.isTempoTransaction(serializedTransaction))
     throw new BadRequestError({
       reason: 'Only Tempo (0x76/0x78) transactions are supported',
     })
@@ -433,36 +610,27 @@ export async function broadcastTopUpTransaction(parameters: {
 
   const calls = transaction.calls ?? []
 
-  const topUpCall = calls.find((call) => {
-    if (!call.to || !TempoAddress.isEqual(call.to, escrowContract)) return false
-    if (!call.data) return false
-    return call.data.slice(0, 10) === escrowTopUpSelector
-  })
+  const sponsoredTopUpCall = feePayer
+    ? validateSponsoredTopUpCalls({
+        calls,
+        currency,
+        escrowContract,
+        topUpAmount: declaredDeposit,
+      })
+    : undefined
+
+  const topUpCall =
+    sponsoredTopUpCall ??
+    calls.find((call) => {
+      if (!call.to || !TempoAddress.isEqual(call.to, escrowContract)) return false
+      if (!call.data) return false
+      return call.data.slice(0, 10) === escrowTopUpSelector
+    })
 
   if (!topUpCall)
     throw new BadRequestError({
       reason: 'transaction does not contain a valid escrow topUp call',
     })
-
-  if (feePayer) {
-    for (const call of calls) {
-      if (!call.to || !call.data) {
-        throw new BadRequestError({
-          reason: 'fee-sponsored transactions must not contain calls without target or data',
-        })
-      }
-      const selector = call.data.slice(0, 10)
-      const isEscrowTopUp =
-        TempoAddress.isEqual(call.to, escrowContract) && selector === escrowTopUpSelector
-      const isTokenApprove =
-        TempoAddress.isEqual(call.to, currency) && selector === erc20ApproveSelector
-      if (!isEscrowTopUp && !isTokenApprove) {
-        throw new BadRequestError({
-          reason: 'fee-sponsored topUp transaction contains an unauthorized call',
-        })
-      }
-    }
-  }
 
   const { args: topUpArgs } = decodeFunctionData({ abi: escrowAbi, data: topUpCall.data! })
   const [txChannelId, txAmount] = topUpArgs as [Hex, bigint]
@@ -480,14 +648,31 @@ export async function broadcastTopUpTransaction(parameters: {
 
   const serializedTransaction_final = await (async () => {
     if (feePayer) {
-      return signTransaction(client, {
-        ...transaction,
+      if (!sponsoredTopUpCall)
+        throw new BadRequestError({
+          reason: 'transaction does not contain a valid escrow topUp call',
+        })
+
+      const expectedFeeToken = defaults.currency[client.chain?.id as keyof typeof defaults.currency]
+      const sponsored = FeePayer.prepareSponsoredTransaction({
         account: feePayer,
-        feePayer,
-        feeToken:
-          transaction.feeToken ??
-          defaults.currency[client.chain?.id as keyof typeof defaults.currency],
-      } as never)
+        challengeExpires,
+        chainId: client.chain!.id,
+        details: {
+          additionalDeposit: declaredDeposit.toString(),
+          channelId,
+          currency,
+        },
+        expectedFeeToken,
+        policy: feePayerPolicy,
+        transaction: {
+          ...transaction,
+          ...((transaction.feeToken ?? expectedFeeToken)
+            ? { feeToken: transaction.feeToken ?? expectedFeeToken }
+            : {}),
+        },
+      })
+      return signTransaction(client, sponsored as never)
     }
     return serializedTransaction
   })()

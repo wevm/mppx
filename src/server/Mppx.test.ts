@@ -198,6 +198,7 @@ describe('request handler', () => {
         captureCount++
         return (
           baseTransport.captureRequest?.(request) ?? {
+            hasBody: request.body !== null,
             headers: new Headers(request.headers),
             method: request.method,
             url: new URL(request.url),
@@ -1389,6 +1390,38 @@ describe('compose', () => {
     expect(result.status).toBe(200)
   })
 
+  test('dispatches correctly with same name/intent and same economics but different meta', async () => {
+    const mppx = Mppx.create({ methods: [alphaMethod], realm, secretKey })
+
+    const handle = mppx.compose(
+      [alphaMethod, { ...challengeOpts, meta: { route: 'a' } }],
+      [alphaMethod, { ...challengeOpts, meta: { route: 'b' } }],
+    )
+
+    const firstResult = await handle(new Request('https://example.com/resource'))
+    expect(firstResult.status).toBe(402)
+    if (firstResult.status !== 402) throw new Error()
+
+    const challenges = Challenge.fromResponseList(firstResult.challenge)
+    expect(challenges).toHaveLength(2)
+    expect(challenges[0]?.opaque).toEqual({ route: 'a' })
+    expect(challenges[1]?.opaque).toEqual({ route: 'b' })
+
+    const secondChallenge = challenges[1]!
+    const credential = Credential.from({
+      challenge: secondChallenge,
+      payload: { token: 'valid' },
+    })
+
+    const result = await handle(
+      new Request('https://example.com/resource', {
+        headers: { Authorization: Credential.serialize(credential) },
+      }),
+    )
+
+    expect(result.status).toBe(200)
+  })
+
   describe('html', () => {
     const htmlOptionsA = {
       config: { providerA: true },
@@ -1976,6 +2009,93 @@ describe('cross-route credential replay via scope binding flaw', () => {
     )
 
     // Should be 402 (credential was for $0.01, not $100)
+    expect(result.status).toBe(402)
+  })
+
+  test('rejects same-economics credential replayed across sibling routes with different meta', async () => {
+    const handler = Mppx.create({ methods: [serverMethod], realm, secretKey })
+
+    const routeA = handler.charge({
+      amount: '0.01',
+      currency: '0x0000000000000000000000000000000000000001',
+      decimals: 6,
+      expires: new Date(Date.now() + 60_000).toISOString(),
+      recipient: '0x0000000000000000000000000000000000000002',
+      meta: { route: 'a' },
+    })
+    const routeB = handler.charge({
+      amount: '0.01',
+      currency: '0x0000000000000000000000000000000000000001',
+      decimals: 6,
+      expires: new Date(Date.now() + 60_000).toISOString(),
+      recipient: '0x0000000000000000000000000000000000000002',
+      meta: { route: 'b' },
+    })
+
+    const routeAChallengeResult = await routeA(new Request('https://example.com/a'))
+    expect(routeAChallengeResult.status).toBe(402)
+    if (routeAChallengeResult.status !== 402) throw new Error()
+
+    const routeBChallengeResult = await routeB(new Request('https://example.com/b'))
+    expect(routeBChallengeResult.status).toBe(402)
+    if (routeBChallengeResult.status !== 402) throw new Error()
+
+    const routeAChallenge = Challenge.fromResponse(routeAChallengeResult.challenge)
+    const routeBChallenge = Challenge.fromResponse(routeBChallengeResult.challenge)
+
+    expect(routeAChallenge.opaque).toEqual({ route: 'a' })
+    expect(routeBChallenge.opaque).toEqual({ route: 'b' })
+
+    const credential = Credential.from({
+      challenge: routeAChallenge,
+      payload: { token: 'valid' },
+    })
+
+    const result = await routeB(
+      new Request('https://example.com/b', {
+        headers: { Authorization: Credential.serialize(credential) },
+      }),
+    )
+
+    expect(result.status).toBe(402)
+  })
+
+  test('rejects same-economics credential replayed across sibling routes when meta differs only by case', async () => {
+    const handler = Mppx.create({ methods: [serverMethod], realm, secretKey })
+
+    const routeA = handler.charge({
+      amount: '0.01',
+      currency: '0x0000000000000000000000000000000000000001',
+      decimals: 6,
+      expires: new Date(Date.now() + 60_000).toISOString(),
+      recipient: '0x0000000000000000000000000000000000000002',
+      meta: { route: '0xAbC123' },
+    })
+    const routeB = handler.charge({
+      amount: '0.01',
+      currency: '0x0000000000000000000000000000000000000001',
+      decimals: 6,
+      expires: new Date(Date.now() + 60_000).toISOString(),
+      recipient: '0x0000000000000000000000000000000000000002',
+      meta: { route: '0xabc123' },
+    })
+
+    const routeAChallengeResult = await routeA(new Request('https://example.com/a'))
+    expect(routeAChallengeResult.status).toBe(402)
+    if (routeAChallengeResult.status !== 402) throw new Error()
+
+    const routeAChallenge = Challenge.fromResponse(routeAChallengeResult.challenge)
+    const credential = Credential.from({
+      challenge: routeAChallenge,
+      payload: { token: 'valid' },
+    })
+
+    const result = await routeB(
+      new Request('https://example.com/b', {
+        headers: { Authorization: Credential.serialize(credential) },
+      }),
+    )
+
     expect(result.status).toBe(402)
   })
 

@@ -1,5 +1,5 @@
-import { type Address, encodeFunctionData, erc20Abi, type Hex } from 'viem'
-import { waitForTransactionReceipt } from 'viem/actions'
+import { type Address, encodeFunctionData, erc20Abi, type Hex, zeroAddress } from 'viem'
+import { prepareTransactionRequest, signTransaction, waitForTransactionReceipt } from 'viem/actions'
 import { Addresses, Transaction } from 'viem/tempo'
 import { beforeAll, describe, expect, test } from 'vp/test'
 import { nodeEnv } from '~test/config.js'
@@ -17,10 +17,12 @@ import {
   broadcastOpenTransaction,
   broadcastTopUpTransaction,
   closeOnChain,
+  escrowAbi,
   getOnChainChannel,
   settleOnChain,
   verifyTopUpTransaction,
 } from './Chain.js'
+import * as Channel from './Channel.js'
 import { signVoucher } from './Voucher.js'
 
 const isLocalnet = nodeEnv === 'localnet'
@@ -397,6 +399,116 @@ describe.runIf(isLocalnet)('on-chain', () => {
       ).rejects.toThrow('Only Tempo (0x76/0x78) transactions are supported')
     })
 
+    test('fee-payer: rejects transactions whose gas budget exceeds sponsor policy', async () => {
+      const salt = nextSalt()
+      const deposit = 5_000_000n
+
+      const approveData = encodeFunctionData({
+        abi: erc20Abi,
+        functionName: 'approve',
+        args: [escrowContract, deposit],
+      })
+      const openData = encodeFunctionData({
+        abi: escrowAbi,
+        functionName: 'open',
+        args: [recipient, currency, deposit, salt, zeroAddress],
+      })
+
+      const channelId = Channel.computeId({
+        authorizedSigner: zeroAddress,
+        chainId: chain.id,
+        escrowContract,
+        payee: recipient,
+        payer: payer.address,
+        salt,
+        token: currency,
+      }) as Hex
+
+      const prepared = await prepareTransactionRequest(client, {
+        account: payer,
+        calls: [
+          { to: currency, data: approveData },
+          { to: escrowContract, data: openData },
+        ],
+        feePayer: true,
+        feeToken: currency,
+      } as never)
+      prepared.gas = 2_000_001n
+
+      const serializedTransaction = await signTransaction(client, prepared as never)
+
+      await expect(
+        broadcastOpenTransaction({
+          client,
+          serializedTransaction: serializedTransaction as Hex,
+          escrowContract,
+          channelId,
+          recipient,
+          currency,
+          feePayer: accounts[0],
+        }),
+      ).rejects.toThrow('gas exceeds sponsor policy')
+    })
+
+    test('fee-payer: rejects smuggled second open call', async () => {
+      const deposit = 5_000_000n
+      const smuggledDeposit = 7_000_000n
+      const salt = nextSalt()
+      const smuggledSalt = nextSalt()
+
+      const approveData = encodeFunctionData({
+        abi: erc20Abi,
+        functionName: 'approve',
+        args: [escrowContract, deposit + smuggledDeposit],
+      })
+      const openData = encodeFunctionData({
+        abi: escrowAbi,
+        functionName: 'open',
+        args: [recipient, currency, deposit, salt, zeroAddress],
+      })
+      const smuggledOpenData = encodeFunctionData({
+        abi: escrowAbi,
+        functionName: 'open',
+        args: [accounts[3].address, currency, smuggledDeposit, smuggledSalt, zeroAddress],
+      })
+
+      const channelId = Channel.computeId({
+        authorizedSigner: zeroAddress,
+        chainId: chain.id,
+        escrowContract,
+        payee: recipient,
+        payer: payer.address,
+        salt,
+        token: currency,
+      }) as Hex
+
+      const prepared = await prepareTransactionRequest(client, {
+        account: payer,
+        calls: [
+          { to: currency, data: approveData },
+          { to: escrowContract, data: openData },
+          { to: escrowContract, data: smuggledOpenData },
+        ],
+        feePayer: true,
+        feeToken: currency,
+      } as never)
+      prepared.gas = prepared.gas! + 5_000n
+
+      const serializedTransaction = await signTransaction(client, prepared as never)
+
+      await expect(
+        broadcastOpenTransaction({
+          client,
+          serializedTransaction: serializedTransaction as Hex,
+          escrowContract,
+          channelId,
+          recipient,
+          currency,
+          feePayer: accounts[0],
+        }),
+      ).rejects.toThrow('fee-sponsored open transaction contains a smuggled call')
+    })
+
     test('duplicate broadcast returns fallback with txHash undefined', async () => {
       const salt = nextSalt()
       const deposit = 5_000_000n
@@ -726,6 +838,117 @@ describe.runIf(isLocalnet)('on-chain', () => {
           feePayer: accounts[0],
         }),
       ).rejects.toThrow('Only Tempo (0x76/0x78) transactions are supported')
+    })
+
+    test('fee-payer: rejects topUp transactions whose gas budget exceeds sponsor policy', async () => {
+      const salt = nextSalt()
+      const deposit = 5_000_000n
+      const topUpAmount = 3_000_000n
+
+      const { channelId } = await openChannel({
+        escrow: escrowContract,
+        payer,
+        payee: recipient,
+        token: currency,
+        deposit,
+        salt,
+      })
+
+      const approveData = encodeFunctionData({
+        abi: erc20Abi,
+        functionName: 'approve',
+        args: [escrowContract, topUpAmount],
+      })
+      const topUpData = encodeFunctionData({
+        abi: escrowAbi,
+        functionName: 'topUp',
+        args: [channelId, topUpAmount],
+      })
+
+      const prepared = await prepareTransactionRequest(client, {
+        account: payer,
+        calls: [
+          { to: currency, data: approveData },
+          { to: escrowContract, data: topUpData },
+        ],
+        feePayer: true,
+        feeToken: currency,
+      } as never)
+      prepared.gas = 2_000_001n
+
+      const serializedTransaction = await signTransaction(client, prepared as never)
+
+      await expect(
+        broadcastTopUpTransaction({
+          client,
+          serializedTransaction: serializedTransaction as Hex,
+          escrowContract,
+          channelId,
+          currency: asset,
+          declaredDeposit: topUpAmount,
+          previousDeposit: deposit,
+          feePayer: accounts[0],
+        }),
+      ).rejects.toThrow('gas exceeds sponsor policy')
+    })
+
+    test('fee-payer: rejects smuggled second topUp call', async () => {
+      const salt = nextSalt()
+      const deposit = 5_000_000n
+      const topUpAmount = 3_000_000n
+      const smuggledAmount = 4_000_000n
+
+      const { channelId } = await openChannel({
+        escrow: escrowContract,
+        payer,
+        payee: recipient,
+        token: currency,
+        deposit,
+        salt,
+      })
+
+      const approveData = encodeFunctionData({
+        abi: erc20Abi,
+        functionName: 'approve',
+        args: [escrowContract, topUpAmount + smuggledAmount],
+      })
+      const topUpData = encodeFunctionData({
+        abi: escrowAbi,
+        functionName: 'topUp',
+        args: [channelId, topUpAmount],
+      })
+      const smuggledTopUpData = encodeFunctionData({
+        abi: escrowAbi,
+        functionName: 'topUp',
+        args: [channelId, smuggledAmount],
+      })
+
+      const prepared = await prepareTransactionRequest(client, {
+        account: payer,
+        calls: [
+          { to: currency, data: approveData },
+          { to: escrowContract, data: topUpData },
+          { to: escrowContract, data: smuggledTopUpData },
+        ],
+        feePayer: true,
+        feeToken: currency,
+      } as never)
+      prepared.gas = prepared.gas! + 5_000n
+
+      const serializedTransaction = await signTransaction(client, prepared as never)
+
+      await expect(
+        broadcastTopUpTransaction({
+          client,
+          serializedTransaction: serializedTransaction as Hex,
+          escrowContract,
+          channelId,
+          currency: asset,
+          declaredDeposit: topUpAmount,
+          previousDeposit: deposit,
+          feePayer: accounts[0],
+        }),
+      ).rejects.toThrow('fee-sponsored topUp transaction contains a smuggled call')
     })
   })
 

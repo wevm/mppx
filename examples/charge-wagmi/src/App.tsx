@@ -34,17 +34,8 @@ function App() {
           {connectors.map((connector) =>
             connector.type === 'webAuthn' ? (
               <div key={connector.uid}>
-                <button
-                  type="button"
-                  onClick={() => connect({ connector, capabilities: { type: 'sign-in' } })}
-                >
-                  Sign in (Passkey)
-                </button>
-                <button
-                  type="button"
-                  onClick={() => connect({ connector, capabilities: { type: 'sign-up' } })}
-                >
-                  Sign up (Passkey)
+                <button type="button" onClick={() => connect({ connector })}>
+                  Connect (Passkey)
                 </button>
               </div>
             ) : (

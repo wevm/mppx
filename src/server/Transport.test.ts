@@ -43,6 +43,7 @@ describe('http', () => {
 
       const captured = await transport.captureRequest?.(request)
       expect(captured).toEqual({
+        hasBody: false,
         headers: new Headers(request.headers),
         method: 'POST',
         url: new URL('https://example.com/resource?foo=bar'),
@@ -431,6 +432,7 @@ describe('mcp', () => {
       const transport = Transport.mcp()
 
       expect(await transport.captureRequest?.(mcpRequest)).toEqual({
+        hasBody: true,
         headers: new Headers(),
         method: 'POST',
         url: new URL('mcp://request/tools%2Fcall'),

@@ -20,7 +20,7 @@ onlyBuiltDependencies:
 
 overrides:
   mppx: 'workspace:*'
-  vitest: 'npm:@voidzero-dev/vite-plus-test@~0.1.14'
+  vitest: 'npm:@voidzero-dev/vite-plus-test@~0.1.17'
   typescript: '~5.9.3'
   ox: '0.14.7'
   viem: '^2.47.5'
@@ -28,7 +28,7 @@ overrides:
   tar@<=7.5.10: '7.5.11'
   '@modelcontextprotocol/sdk@>=1.10.0 <=1.25.3': '1.26.0'
   qs@>=6.7.0 <=6.14.1: '6.14.2'
-  hono@<4.12.12: '4.12.12'
+  hono@<4.12.14: '4.12.14'
   minimatch@>=5.0.0 <5.1.8: '5.1.8'
   minimatch@>=9.0.0 <9.0.7: '9.0.7'
   rollup@>=4.0.0 <4.59.0: '4.59.0'
@@ -43,5 +43,6 @@ overrides:
   yaml@<2.8.3: '>=2.8.3'
   brace-expansion@<5.0.5: '>=5.0.5'
   lodash@<=4.17.23: '>=4.18.0'
+  protobufjs@<7.5.5: '7.5.5'
 
 nodeOptions: '--disable-warning=ExperimentalWarning --disable-warning=DeprecationWarning'

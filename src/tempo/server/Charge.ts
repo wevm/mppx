@@ -326,6 +326,12 @@ export function charge<const parameters extends charge.Parameters>(
             })()
 
             if (waitForConfirmation) {
+              await viem_call(client, {
+                ...transaction,
+                account: transaction.from,
+                feeToken: resolvedFeeToken,
+                calls: transaction.calls,
+              } as never)
               const receipt = await sendRawTransactionSync(client, {
                 serializedTransaction: serializedTransaction_final,
               })

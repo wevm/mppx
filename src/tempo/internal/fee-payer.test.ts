@@ -12,6 +12,13 @@ import * as Selectors from './selectors.js'
 
 const details = { amount: '1', currency: '0x01', recipient: '0x02' }
 const bogus = '0x0000000000000000000000000000000000000001' as const
+const swapTokenIn = '0x0000000000000000000000000000000000000003' as const
+const swapTokenOut = '0x0000000000000000000000000000000000000004' as const
+const swapData = encodeFunctionData({
+  abi: Abis.stablecoinDex,
+  functionName: 'swapExactAmountOut',
+  args: [swapTokenIn, swapTokenOut, 100n, 100n],
+})
 const sponsor = { address: bogus, type: 'local' } as any
 
 describe('callScopes', () => {
@@ -48,11 +55,11 @@ describe('validateCalls', () => {
   })
 
   test('accepts approve + buy + transfer', () => {
-    const swapSelector = Selectors.swapExactAmountOut
     expect(() =>
       validateCalls(
         [
           {
+            to: swapTokenIn,
             data: encodeFunctionData({
               abi: Abis.tip20,
               functionName: 'approve',
@@ -61,7 +68,7 @@ describe('validateCalls', () => {
           },
           {
             to: Addresses.stablecoinDex,
-            data: `${swapSelector}${'00'.repeat(128)}` as `0x${string}`,
+            data: swapData,
           },
           {
             data: encodeFunctionData({
@@ -77,11 +84,11 @@ describe('validateCalls', () => {
   })
 
   test('accepts multiple transfers after swap prefix', () => {
-    const swapSelector = Selectors.swapExactAmountOut
     expect(() =>
       validateCalls(
         [
           {
+            to: swapTokenIn,
             data: encodeFunctionData({
               abi: Abis.tip20,
               functionName: 'approve',
@@ -90,7 +97,7 @@ describe('validateCalls', () => {
           },
           {
             to: Addresses.stablecoinDex,
-            data: `${swapSelector}${'00'.repeat(128)}` as `0x${string}`,
+            data: swapData,
           },
           {
             data: encodeFunctionData({
@@ -142,7 +149,6 @@ describe('validateCalls', () => {
   })
 
   test('error: rejects wrong order (transfer before approve + buy)', () => {
-    const swapSelector = Selectors.swapExactAmountOut
     expect(() =>
       validateCalls(
         [
@@ -154,6 +160,7 @@ describe('validateCalls', () => {
             }),
           },
           {
+            to: swapTokenIn,
             data: encodeFunctionData({
               abi: Abis.tip20,
               functionName: 'approve',
@@ -162,7 +169,7 @@ describe('validateCalls', () => {
           },
           {
             to: Addresses.stablecoinDex,
-            data: `${swapSelector}${'00'.repeat(128)}` as `0x${string}`,
+            data: swapData,
           },
         ],
         details,
@@ -171,11 +178,11 @@ describe('validateCalls', () => {
   })
 
   test('error: rejects approve with non-DEX spender', () => {
-    const swapSelector = Selectors.swapExactAmountOut
     expect(() =>
       validateCalls(
         [
           {
+            to: swapTokenIn,
             data: encodeFunctionData({
               abi: Abis.tip20,
               functionName: 'approve',
@@ -184,7 +191,7 @@ describe('validateCalls', () => {
           },
           {
             to: Addresses.stablecoinDex,
-            data: `${swapSelector}${'00'.repeat(128)}` as `0x${string}`,
+            data: swapData,
           },
           {
             data: encodeFunctionData({
@@ -199,19 +206,48 @@ describe('validateCalls', () => {
     ).toThrow('approve spender is not the DEX')
   })
 
-  test('error: rejects buy targeting non-DEX address', () => {
-    const swapSelector = Selectors.swapExactAmountOut
+  test('behavior: rejects approve targeting a non-token contract', () => {
     expect(() =>
       validateCalls(
         [
           {
+            to: bogus,
             data: encodeFunctionData({
               abi: Abis.tip20,
               functionName: 'approve',
               args: [Addresses.stablecoinDex, 100n],
             }),
           },
-          { to: bogus, data: `${swapSelector}${'00'.repeat(128)}` as `0x${string}` },
+          {
+            to: Addresses.stablecoinDex,
+            data: swapData,
+          },
+          {
+            data: encodeFunctionData({
+              abi: Abis.tip20,
+              functionName: 'transfer',
+              args: [bogus, 100n],
+            }),
+          },
+        ],
+        details,
+      ),
+    ).toThrow(FeePayerValidationError)
+  })
+
+  test('error: rejects buy targeting non-DEX address', () => {
+    expect(() =>
+      validateCalls(
+        [
+          {
+            to: swapTokenIn,
+            data: encodeFunctionData({
+              abi: Abis.tip20,
+              functionName: 'approve',
+              args: [Addresses.stablecoinDex, 100n],
+            }),
+          },
+          { to: bogus, data: swapData },
           {
             data: encodeFunctionData({
               abi: Abis.tip20,
@@ -226,11 +262,11 @@ describe('validateCalls', () => {
   })
 
   test('error: rejects approve + buy without transfer', () => {
-    const swapSelector = Selectors.swapExactAmountOut
     expect(() =>
       validateCalls(
         [
           {
+            to: swapTokenIn,
             data: encodeFunctionData({
               abi: Abis.tip20,
               functionName: 'approve',
@@ -239,7 +275,7 @@ describe('validateCalls', () => {
           },
           {
             to: Addresses.stablecoinDex,
-            data: `${swapSelector}${'00'.repeat(128)}` as `0x${string}`,
+            data: swapData,
           },
         ],
         details,
@@ -359,16 +395,52 @@ describe('prepareSponsoredTransaction', () => {
     ).toThrow('maxPriorityFeePerGas exceeds sponsor policy')
   })
 
-  test('drops unknown top-level fields from the sponsored transaction', () => {
+  test('preserves keyAuthorization', () => {
+    const keyAuthorization = {
+      address: bogus,
+      chainId: 42431,
+      nonce: 1n,
+      r: 1n,
+      s: 2n,
+      yParity: 0,
+    }
+
     const sponsored = prepareSponsoredTransaction({
       account: sponsor,
       chainId: 42431,
       details,
       expectedFeeToken: bogus,
-      transaction: { ...baseTransaction, unexpectedField: 'ignored' } as any,
-    }) as Record<string, unknown>
+      transaction: { ...baseTransaction, keyAuthorization } as any,
+    }) as { keyAuthorization?: unknown }
 
-    expect(sponsored.unexpectedField).toBeUndefined()
+    expect(sponsored.keyAuthorization).toEqual(keyAuthorization)
+  })
+
+  test('error: rejects unknown top-level fields from the sponsored transaction', () => {
+    expect(() =>
+      prepareSponsoredTransaction({
+        account: sponsor,
+        chainId: 42431,
+        details,
+        expectedFeeToken: bogus,
+        transaction: { ...baseTransaction, unexpectedField: 'ignored' } as any,
+      }),
+    ).toThrow('contains unsupported fields')
+  })
+
+  test('error: rejects feePayerSignature on client-submitted transactions', () => {
+    expect(() =>
+      prepareSponsoredTransaction({
+        account: sponsor,
+        chainId: 42431,
+        details,
+        expectedFeeToken: bogus,
+        transaction: {
+          ...baseTransaction,
+          feePayerSignature: { r: 2n, s: 3n, yParity: 1 },
+        } as any,
+      }),
+    ).toThrow('contains rejected fields')
   })
 
   test('error: rejects excessive maxFeePerGas', () => {

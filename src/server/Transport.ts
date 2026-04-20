@@ -125,6 +125,7 @@ export function http(): Http {
 
     captureRequest(request) {
       return {
+        hasBody: request.body !== null,
         headers: new Headers(request.headers),
         method: request.method,
         url: safeUrl(request.url),
@@ -221,6 +222,9 @@ export function mcp() {
 
     captureRequest(request) {
       return {
+        // MCP tool invocations are application content requests even though
+        // they do not carry HTTP body headers on the transport boundary.
+        hasBody: true,
         headers: new Headers(),
         method: 'POST',
         url: new URL(`mcp://request/${encodeURIComponent(request.method ?? 'unknown')}`),

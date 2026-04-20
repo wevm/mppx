@@ -53,6 +53,9 @@ export function mcpSdk(): McpSdk {
 
     captureRequest() {
       return {
+        // MCP tool invocations are application content requests even though
+        // they do not carry HTTP body headers on the transport boundary.
+        hasBody: true,
         headers: new Headers(),
         method: 'POST',
         url: new URL('mcp://request/sdk'),
@@ -91,10 +94,15 @@ export function mcpSdk(): McpSdk {
         challengeId,
       }
 
+      const normalizedResponse =
+        response instanceof globalThis.Response
+          ? ({ content: [] } as CallToolResult)
+          : (response as CallToolResult)
+
       return {
-        ...response,
+        ...normalizedResponse,
         _meta: {
-          ...response._meta,
+          ...normalizedResponse._meta,
           [core_Mcp.receiptMetaKey]: mcpReceipt,
         },
       }

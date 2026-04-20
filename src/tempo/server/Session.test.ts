@@ -2,7 +2,11 @@ import * as node_http from 'node:http'
 
 import type { z } from 'mppx'
 import { Challenge, Credential } from 'mppx'
-import { Mppx as Mppx_server, tempo as tempo_server } from 'mppx/server'
+import {
+  Mppx as Mppx_server,
+  Transport as ServerTransport,
+  tempo as tempo_server,
+} from 'mppx/server'
 import { Base64 } from 'ox'
 import {
   type Address,
@@ -45,6 +49,7 @@ import {
 } from '../internal/defaults.js'
 import type * as Methods from '../Methods.js'
 import * as ChannelStore from '../session/ChannelStore.js'
+import { deserializeSessionReceipt } from '../session/Receipt.js'
 import type { SessionReceipt } from '../session/Types.js'
 import { signVoucher } from '../session/Voucher.js'
 import * as TempoWs from '../session/Ws.js'
@@ -147,6 +152,40 @@ describe.runIf(isLocalnet)('session', () => {
       const ch = await store.getChannel(channelId)
       expect(ch).not.toBeNull()
       expect(ch!.highestVoucherAmount).toBe(1000000n)
+    })
+
+    test('fee-payer policy override is enforced for sponsored open', async () => {
+      const salt = nextSalt()
+      const { channelId, serializedTransaction } = await signOpenChannel({
+        escrow: escrowContract,
+        payer,
+        payee: recipient,
+        token: currency,
+        deposit: 10000000n,
+        salt,
+        feePayer: true,
+      })
+      const server = createServer({
+        feePayer: recipientAccount,
+        feePayerPolicy: { maxGas: 1n },
+      })
+
+      await expect(
+        server.verify({
+          credential: {
+            challenge: makeChallenge({ channelId }),
+            payload: {
+              action: 'open' as const,
+              type: 'transaction' as const,
+              channelId,
+              transaction: serializedTransaction,
+              cumulativeAmount: '1000000',
+              signature: await signTestVoucher(channelId, 1000000n),
+            },
+          },
+          request: makeRequest({ feePayer: true }),
+        }),
+      ).rejects.toThrow('gas exceeds sponsor policy')
     })
 
     test('rejects open when payee mismatch', async () => {
@@ -297,6 +336,66 @@ describe.runIf(isLocalnet)('session', () => {
       expect(receipt.status).toBe('success')
       const ch = await store.getChannel(channelId)
       expect(ch!.highestVoucherAmount).toBe(1000000n)
+    })
+
+    test('reopen with a case-variant channelId does not reset available balance', async () => {
+      let open:
+        | {
+            channelId: Hex
+            serializedTransaction: Hex
+          }
+        | undefined
+      for (let i = 0; i < 10; i++) {
+        const candidate = await createSignedOpenTransaction(10000000n)
+        if (/[a-f]/.test(candidate.channelId)) {
+          open = candidate
+          break
+        }
+      }
+      if (!open) throw new Error('failed to generate channelId with alphabetic hex characters')
+
+      const { channelId, serializedTransaction } = open
+      const caseVariantChannelId = channelId.replace(/[a-f]/, (character) =>
+        character.toUpperCase(),
+      ) as Hex
+      const server = createServer()
+
+      await server.verify({
+        credential: {
+          challenge: makeChallenge({ id: 'open-1', channelId }),
+          payload: {
+            action: 'open' as const,
+            type: 'transaction' as const,
+            channelId,
+            transaction: serializedTransaction,
+            cumulativeAmount: '5000000',
+            signature: await signTestVoucher(channelId, 5000000n),
+          },
+        },
+        request: makeRequest(),
+      })
+
+      await charge(store, channelId, 4000000n)
+
+      const reopenReceipt = (await server.verify({
+        credential: {
+          challenge: makeChallenge({ id: 'open-2', channelId: caseVariantChannelId }),
+          payload: {
+            action: 'open' as const,
+            type: 'transaction' as const,
+            channelId: caseVariantChannelId,
+            transaction: serializedTransaction,
+            cumulativeAmount: '5000000',
+            signature: await signTestVoucher(caseVariantChannelId, 5000000n),
+          },
+        },
+        request: makeRequest(),
+      })) as SessionReceipt
+
+      expect(reopenReceipt.spent).toBe('4000000')
+      await expect(charge(store, caseVariantChannelId, 2000000n)).rejects.toThrow(
+        'requested 2000000, available 1000000',
+      )
     })
 
     test('rejects voucher below settledOnChain', async () => {
@@ -1034,6 +1133,40 @@ describe.runIf(isLocalnet)('session', () => {
 
       const ch = await store.getChannel(channelId)
       expect(ch!.deposit).toBe(20000000n)
+    })
+
+    test('fee-payer policy override is enforced for sponsored topUp', async () => {
+      const { channelId, serializedTransaction } = await createSignedOpenTransaction(10000000n)
+      const server = createServer({
+        feePayer: recipientAccount,
+        feePayerPolicy: { maxGas: 1n },
+      })
+      await openServerChannel(server, channelId, serializedTransaction)
+
+      const { serializedTransaction: topUpTx } = await signTopUpChannel({
+        escrow: escrowContract,
+        payer,
+        channelId,
+        token: currency,
+        amount: 10000000n,
+        feePayer: true,
+      })
+
+      await expect(
+        server.verify({
+          credential: {
+            challenge: makeChallenge({ id: 'challenge-topup-policy', channelId }),
+            payload: {
+              action: 'topUp' as const,
+              type: 'transaction' as const,
+              channelId,
+              transaction: topUpTx,
+              additionalDeposit: '10000000',
+            },
+          },
+          request: makeRequest({ feePayer: true }),
+        }),
+      ).rejects.toThrow('gas exceeds sponsor policy')
     })
 
     test('topUp receipt preserves spent and units from prior charges', async () => {
@@ -2538,7 +2671,7 @@ describe.runIf(isLocalnet)('session', () => {
   })
 
   describe('protocol compatibility', () => {
-    test('HEAD voucher management request falls through to content handler', () => {
+    test('HEAD voucher request is gated as a non-billable management request', () => {
       const server = createServer()
       const response = server.respond!({
         credential: {
@@ -2547,12 +2680,135 @@ describe.runIf(isLocalnet)('session', () => {
           }),
           payload: { action: 'voucher' },
         },
+        envelope: {
+          capturedRequest: {
+            hasBody: false,
+            headers: new Headers(),
+            method: 'HEAD',
+            url: new URL('https://api.example.com/resource'),
+          },
+        },
         input: new Request('https://api.example.com/resource', {
           method: 'HEAD',
         }),
       } as never)
 
+      expect(response).toBeInstanceOf(Response)
+      expect((response as Response).status).toBe(204)
+    })
+
+    test('captured request classification wins over the raw input method', () => {
+      const server = createServer()
+      const response = server.respond!({
+        credential: {
+          challenge: makeChallenge({
+            channelId: '0x0000000000000000000000000000000000000000000000000000000000000001' as Hex,
+          }),
+          payload: { action: 'voucher' },
+        },
+        envelope: {
+          capturedRequest: {
+            hasBody: false,
+            headers: new Headers(),
+            method: 'POST',
+            url: new URL('mcp://request/tools%2Fcall'),
+          },
+        },
+        input: new Request('https://api.example.com/resource', {
+          method: 'GET',
+        }),
+      } as never)
+
+      expect(response).toBeInstanceOf(Response)
+      expect((response as Response).status).toBe(204)
+    })
+
+    test('captured request body metadata wins over a bodyless raw input', () => {
+      const server = createServer()
+      const response = server.respond!({
+        credential: {
+          challenge: makeChallenge({
+            channelId: '0x0000000000000000000000000000000000000000000000000000000000000001' as Hex,
+          }),
+          payload: { action: 'voucher' },
+        },
+        envelope: {
+          capturedRequest: {
+            hasBody: true,
+            headers: new Headers(),
+            method: 'POST',
+            url: new URL('mcp://request/tools%2Fcall'),
+          },
+        },
+        input: new Request('https://api.example.com/resource', {
+          method: 'POST',
+        }),
+      } as never)
+
       expect(response).toBeUndefined()
+    })
+
+    test('bills repeated MCP voucher replays using the captured request snapshot', async () => {
+      const { channelId, serializedTransaction } = await createSignedOpenTransaction(5000000n)
+      const server = createServer()
+      const mcpCapturedRequest = await ServerTransport.mcp().captureRequest?.({
+        id: 1,
+        jsonrpc: '2.0',
+        method: 'tools/call',
+        params: {},
+      })
+      if (!mcpCapturedRequest) throw new Error('missing MCP captured request')
+
+      const openChallenge = makeChallenge({ id: 'mcp-open', channelId })
+      const openCredential = {
+        challenge: openChallenge,
+        payload: {
+          action: 'open' as const,
+          type: 'transaction' as const,
+          channelId,
+          transaction: serializedTransaction,
+          cumulativeAmount: '2000000',
+          signature: await signTestVoucher(channelId, 2000000n),
+        },
+      }
+      const openReceipt = (await server.verify({
+        credential: openCredential,
+        envelope: {
+          capturedRequest: mcpCapturedRequest,
+          challenge: openChallenge,
+          credential: openCredential,
+        },
+        request: makeRequest({ amount: '1' }),
+      } as never)) as SessionReceipt
+      expect(openReceipt.spent).toBe('1000000')
+      expect(openReceipt.units).toBe(1)
+
+      const replayChallenge = makeChallenge({ id: 'mcp-replay', channelId })
+      const replayCredential = {
+        challenge: replayChallenge,
+        payload: {
+          action: 'voucher' as const,
+          channelId,
+          cumulativeAmount: '2000000',
+          signature: await signTestVoucher(channelId, 2000000n),
+        },
+      }
+      const replayReceipt = (await server.verify({
+        credential: replayCredential,
+        envelope: {
+          capturedRequest: mcpCapturedRequest,
+          challenge: replayChallenge,
+          credential: replayCredential,
+        },
+        request: makeRequest({ amount: '1' }),
+      } as never)) as SessionReceipt
+
+      expect(replayReceipt.spent).toBe('2000000')
+      expect(replayReceipt.units).toBe(2)
+
+      const channel = await store.getChannel(channelId)
+      expect(channel?.spent).toBe(2000000n)
+      expect(channel?.units).toBe(2)
     })
 
     test('ignores unknown challenge and credential fields for forward compatibility', async () => {
@@ -2609,6 +2865,99 @@ describe.runIf(isLocalnet)('session', () => {
       expect(second.status).toBe(200)
     })
 
+    test('plain HTTP session charges content requests and rejects same-voucher replay', async () => {
+      const { channelId, serializedTransaction } = await createSignedOpenTransaction(10000000n)
+      const handler = createHandler()
+      const route = handler.session({
+        amount: '1',
+        decimals: 6,
+        unitType: 'token',
+      })
+
+      const first = await route(new Request('https://api.example.com/resource'))
+      if (first.status !== 402) throw new Error('expected challenge')
+      const issuedChallenge = Challenge.fromResponse(first.challenge)
+
+      const authorization = Credential.serialize({
+        challenge: issuedChallenge,
+        payload: {
+          action: 'open',
+          type: 'transaction',
+          channelId,
+          transaction: serializedTransaction,
+          cumulativeAmount: '1000000',
+          signature: await signTestVoucher(channelId, 1000000n),
+        },
+      })
+
+      const second = await route(
+        new Request('https://api.example.com/resource', {
+          headers: { Authorization: authorization },
+        }),
+      )
+      if (second.status !== 200) throw new Error('expected paid response')
+
+      const paidResponse = second.withReceipt(new Response('ok'))
+      const receipt = deserializeSessionReceipt(paidResponse.headers.get('Payment-Receipt')!)
+      expect(receipt.spent).toBe('1000000')
+      expect(receipt.units).toBe(1)
+
+      const persisted = await store.getChannel(channelId)
+      expect(persisted?.spent).toBe(1000000n)
+      expect(persisted?.units).toBe(1)
+
+      const replay = await route(
+        new Request('https://api.example.com/resource', {
+          headers: { Authorization: authorization },
+        }),
+      )
+      expect(replay.status).toBe(402)
+    })
+
+    test('sessionManager fetch/close tracks spent from plain HTTP receipts', async () => {
+      const handler = createHandler()
+      const route = handler.session({
+        amount: '1',
+        decimals: 6,
+        unitType: 'token',
+      })
+
+      let contentRequests = 0
+      const fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+        const request = new Request(input, init)
+        const result = await route(request)
+        if (result.status === 402) return result.challenge
+        if (request.method === 'GET') contentRequests++
+        return result.withReceipt(new Response('ok'))
+      }
+
+      const manager = sessionManager({
+        account: payer,
+        client,
+        escrowContract,
+        fetch,
+        maxDeposit: '3',
+      })
+
+      const first = await manager.fetch('https://api.example.com/resource')
+      expect(first.status).toBe(200)
+      expect(first.receipt?.spent).toBe('1000000')
+      expect(first.receipt?.units).toBe(1)
+
+      const second = await manager.fetch('https://api.example.com/resource')
+      expect(second.status).toBe(200)
+      expect(second.receipt?.spent).toBe('2000000')
+      expect(second.receipt?.units).toBe(2)
+
+      const closeReceipt = await manager.close()
+      expect(closeReceipt?.status).toBe('success')
+      expect(closeReceipt?.spent).toBe('2000000')
+      expect(contentRequests).toBe(2)
+
+      const persisted = await store.getChannel(manager.channelId!)
+      expect(persisted?.finalized).toBe(true)
+    })
+
     test('does not return Payment-Receipt on verification errors', async () => {
       const { channelId, serializedTransaction } = await createSignedOpenTransaction(10000000n)
       const handler = createHandler()
@@ -2643,6 +2992,219 @@ describe.runIf(isLocalnet)('session', () => {
       expect(second.status).toBe(402)
       if (second.status !== 402) throw new Error('expected challenge')
       expect(second.challenge.headers.get('Payment-Receipt')).toBeNull()
+    })
+
+    test('default HTTP GET flow does not serve a replayed voucher without advancing accounting', async () => {
+      const { channelId, serializedTransaction } = await createSignedOpenTransaction(10000000n)
+      const signature = await signTestVoucher(channelId, 1000000n)
+      const handler = createHandler()
+      const route = handler.session({
+        amount: '1',
+        decimals: 6,
+        unitType: 'token',
+      })
+
+      const serve = async (request: Request) => {
+        const result = await route(request)
+        if (result.status === 402) return result.challenge
+        return result.withReceipt(new Response('paid-content'))
+      }
+
+      const issueChallenge = () => route(new Request('https://api.example.com/resource'))
+
+      const first = await issueChallenge()
+      expect(first.status).toBe(402)
+      if (first.status !== 402) throw new Error('expected challenge')
+
+      const open = await serve(
+        new Request('https://api.example.com/resource', {
+          headers: {
+            Authorization: Credential.serialize({
+              challenge: Challenge.fromResponse(first.challenge),
+              payload: {
+                action: 'open',
+                type: 'transaction',
+                channelId,
+                transaction: serializedTransaction,
+                cumulativeAmount: '1000000',
+                signature,
+              },
+            }),
+          },
+        }),
+      )
+      expect(open.status).toBe(200)
+      expect(await open.text()).toBe('paid-content')
+      const openReceipt = deserializeSessionReceipt(open.headers.get('Payment-Receipt') as string)
+      expect(openReceipt.acceptedCumulative).toBe('1000000')
+      expect(openReceipt.spent).toBe('1000000')
+      expect(openReceipt.units).toBe(1)
+
+      const replayChallenge = await issueChallenge()
+      expect(replayChallenge.status).toBe(402)
+      if (replayChallenge.status !== 402) throw new Error('expected challenge')
+
+      const replay = await serve(
+        new Request('https://api.example.com/resource', {
+          headers: {
+            Authorization: Credential.serialize({
+              challenge: Challenge.fromResponse(replayChallenge.challenge),
+              payload: {
+                action: 'voucher',
+                channelId,
+                cumulativeAmount: '1000000',
+                signature,
+              },
+            }),
+          },
+        }),
+      )
+      expect(replay.status).toBe(402)
+      expect(replay.headers.get('Payment-Receipt')).toBeNull()
+    })
+
+    test('default HTTP POST content flow does not serve a replayed voucher without advancing accounting', async () => {
+      const { channelId, serializedTransaction } = await createSignedOpenTransaction(10000000n)
+      const signature = await signTestVoucher(channelId, 1000000n)
+      const handler = createHandler()
+      const route = handler.session({
+        amount: '1',
+        decimals: 6,
+        unitType: 'token',
+      })
+
+      const serve = async (request: Request) => {
+        const result = await route(request)
+        if (result.status === 402) return result.challenge
+        return result.withReceipt(new Response('paid-content'))
+      }
+
+      const makeRequest = (authorization?: string) =>
+        new Request('https://api.example.com/resource', {
+          method: 'POST',
+          body: '{}',
+          headers: {
+            'content-length': '2',
+            'content-type': 'application/json',
+            ...(authorization ? { Authorization: authorization } : {}),
+          },
+        })
+
+      const first = await route(makeRequest())
+      expect(first.status).toBe(402)
+      if (first.status !== 402) throw new Error('expected challenge')
+
+      const open = await serve(
+        makeRequest(
+          Credential.serialize({
+            challenge: Challenge.fromResponse(first.challenge),
+            payload: {
+              action: 'open',
+              type: 'transaction',
+              channelId,
+              transaction: serializedTransaction,
+              cumulativeAmount: '1000000',
+              signature,
+            },
+          }),
+        ),
+      )
+      expect(open.status).toBe(200)
+      expect(await open.text()).toBe('paid-content')
+      const openReceipt = deserializeSessionReceipt(open.headers.get('Payment-Receipt') as string)
+      expect(openReceipt.acceptedCumulative).toBe('1000000')
+      expect(openReceipt.spent).toBe('1000000')
+      expect(openReceipt.units).toBe(1)
+
+      const replayChallenge = await route(makeRequest())
+      expect(replayChallenge.status).toBe(402)
+      if (replayChallenge.status !== 402) throw new Error('expected challenge')
+
+      const replay = await serve(
+        makeRequest(
+          Credential.serialize({
+            challenge: Challenge.fromResponse(replayChallenge.challenge),
+            payload: {
+              action: 'voucher',
+              channelId,
+              cumulativeAmount: '1000000',
+              signature,
+            },
+          }),
+        ),
+      )
+      expect(replay.status).toBe(402)
+      expect(replay.headers.get('Payment-Receipt')).toBeNull()
+    })
+
+    test('default HTTP POST content flow with body and no body headers does not serve a replayed voucher', async () => {
+      const { channelId, serializedTransaction } = await createSignedOpenTransaction(10000000n)
+      const signature = await signTestVoucher(channelId, 1000000n)
+      const handler = createHandler()
+      const route = handler.session({
+        amount: '1',
+        decimals: 6,
+        unitType: 'token',
+      })
+
+      const serve = async (request: Request) => {
+        const result = await route(request)
+        if (result.status === 402) return result.challenge
+        return result.withReceipt(new Response('paid-content'))
+      }
+
+      const makeRequest = (authorization?: string) =>
+        new Request('https://api.example.com/resource', {
+          method: 'POST',
+          body: '{}',
+          ...(authorization ? { headers: { Authorization: authorization } } : {}),
+        })
+
+      const first = await route(makeRequest())
+      expect(first.status).toBe(402)
+      if (first.status !== 402) throw new Error('expected challenge')
+
+      const open = await serve(
+        makeRequest(
+          Credential.serialize({
+            challenge: Challenge.fromResponse(first.challenge),
+            payload: {
+              action: 'open',
+              type: 'transaction',
+              channelId,
+              transaction: serializedTransaction,
+              cumulativeAmount: '1000000',
+              signature,
+            },
+          }),
+        ),
+      )
+      expect(open.status).toBe(200)
+      expect(await open.text()).toBe('paid-content')
+      const openReceipt = deserializeSessionReceipt(open.headers.get('Payment-Receipt') as string)
+      expect(openReceipt.acceptedCumulative).toBe('1000000')
+      expect(openReceipt.spent).toBe('1000000')
+      expect(openReceipt.units).toBe(1)
+
+      const replayChallenge = await route(makeRequest())
+      expect(replayChallenge.status).toBe(402)
+      if (replayChallenge.status !== 402) throw new Error('expected challenge')
+
+      const replay = await serve(
+        makeRequest(
+          Credential.serialize({
+            challenge: Challenge.fromResponse(replayChallenge.challenge),
+            payload: {
+              action: 'voucher',
+              channelId,
+              cumulativeAmount: '1000000',
+              signature,
+            },
+          }),
+        ),
+      )
+      expect(replay.status).toBe(402)
+      expect(replay.headers.get('Payment-Receipt')).toBeNull()
     })
 
     test('converts amount/suggestedDeposit/minVoucherDelta with decimals=18', async () => {
@@ -2861,6 +3423,23 @@ describe.runIf(isLocalnet)('session', () => {
       expect(result).toBeUndefined()
     })
 
+    test('returns undefined for open POST with body and no body headers (content request)', () => {
+      const server = createServer()
+      const result = server.respond!({
+        credential: {
+          challenge: makeChallenge({
+            channelId: '0x0000000000000000000000000000000000000000000000000000000000000001' as Hex,
+          }),
+          payload: { action: 'open' },
+        },
+        input: new Request('http://localhost', {
+          method: 'POST',
+          body: '{}',
+        }),
+      } as any)
+      expect(result).toBeUndefined()
+    })
+
     test('returns 204 for GET with topUp action', () => {
       const server = createServer()
       const result = server.respond!({
@@ -2910,6 +3489,23 @@ describe.runIf(isLocalnet)('session', () => {
       expect(result).toBeUndefined()
     })
 
+    test('returns undefined for voucher POST with body and no body headers (content request)', () => {
+      const server = createServer()
+      const result = server.respond!({
+        credential: {
+          challenge: makeChallenge({
+            channelId: '0x0000000000000000000000000000000000000000000000000000000000000001' as Hex,
+          }),
+          payload: { action: 'voucher' },
+        },
+        input: new Request('http://localhost', {
+          method: 'POST',
+          body: '{}',
+        }),
+      } as any)
+      expect(result).toBeUndefined()
+    })
+
     test('returns 204 for voucher POST with content-length: 0', () => {
       const server = createServer()
       const result = server.respond!({
@@ -2926,6 +3522,187 @@ describe.runIf(isLocalnet)('session', () => {
       } as any)
       expect(result).toBeInstanceOf(Response)
       expect((result as Response).status).toBe(204)
+    })
+  })
+
+  describe('HTTP session manager', () => {
+    test('tracks spent from HTTP error receipts and closes at that amount', async () => {
+      const backingStore = Store.memory()
+      const routeHandler = Mppx_server.create({
+        methods: [
+          tempo_server.session({
+            store: backingStore,
+            getClient: () => client,
+            account: recipientAccount,
+            currency,
+            escrowContract,
+            chainId: chain.id,
+          }),
+        ],
+        realm: 'api.example.com',
+        secretKey: 'secret',
+      }).session({ amount: '1', decimals: 6, unitType: 'token' })
+
+      const fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+        const request = new Request(input, init)
+        const result = await routeHandler(request)
+        if (result.status === 402) return result.challenge
+        return result.withReceipt(new Response('upstream failed', { status: 500 }))
+      }
+
+      const manager = sessionManager({
+        account: payer,
+        client,
+        escrowContract,
+        fetch,
+        maxDeposit: '2',
+      })
+
+      const response = await manager.fetch('https://api.example.com/resource')
+      expect(response.status).toBe(500)
+      expect(response.receipt?.spent).toBe('1000000')
+      expect(response.receipt?.units).toBe(1)
+
+      const closeReceipt = await manager.close()
+      expect(closeReceipt?.status).toBe('success')
+      expect(closeReceipt?.spent).toBe('1000000')
+    })
+
+    test('tracks spent from null-body HTTP content receipts and closes at that amount', async () => {
+      const backingStore = Store.memory()
+      const routeHandler = Mppx_server.create({
+        methods: [
+          tempo_server.session({
+            store: backingStore,
+            getClient: () => client,
+            account: recipientAccount,
+            currency,
+            escrowContract,
+            chainId: chain.id,
+          }),
+        ],
+        realm: 'api.example.com',
+        secretKey: 'secret',
+      }).session({ amount: '1', decimals: 6, unitType: 'token' })
+
+      const fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+        const request = new Request(input, init)
+        const result = await routeHandler(request)
+        if (result.status === 402) return result.challenge
+        return result.withReceipt(new Response(null, { status: 204 }))
+      }
+
+      const manager = sessionManager({
+        account: payer,
+        client,
+        escrowContract,
+        fetch,
+        maxDeposit: '2',
+      })
+
+      const response = await manager.fetch('https://api.example.com/resource')
+      expect(response.status).toBe(204)
+      expect(await response.text()).toBe('')
+      expect(response.receipt?.spent).toBe('1000000')
+      expect(response.receipt?.units).toBe(1)
+
+      const closeReceipt = await manager.close()
+      expect(closeReceipt?.status).toBe('success')
+      expect(closeReceipt?.spent).toBe('1000000')
+    })
+
+    test('throws when fallback close returns a non-ok response', async () => {
+      const backingStore = Store.memory()
+      const routeHandler = Mppx_server.create({
+        methods: [
+          tempo_server.session({
+            store: backingStore,
+            getClient: () => client,
+            account: recipientAccount,
+            currency,
+            escrowContract,
+            chainId: chain.id,
+          }),
+        ],
+        realm: 'api.example.com',
+        secretKey: 'secret',
+      }).session({ amount: '1', decimals: 6, unitType: 'token' })
+
+      const fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+        const request = new Request(input, init)
+        const action = request.headers.has('Authorization')
+          ? Credential.fromRequest<any>(request).payload?.action
+          : undefined
+        const result = await routeHandler(request)
+        if (result.status === 402) return result.challenge
+        if (action === 'close') {
+          return new Response('close failed', {
+            status: 500,
+            headers: { 'WWW-Authenticate': 'Payment error="close_failed"' },
+          })
+        }
+        return result.withReceipt(new Response('ok'))
+      }
+
+      const manager = sessionManager({
+        account: payer,
+        client,
+        escrowContract,
+        fetch,
+        maxDeposit: '2',
+      })
+
+      const response = await manager.fetch('https://api.example.com/resource')
+      expect(response.status).toBe(200)
+      expect(response.receipt?.spent).toBe('1000000')
+
+      await expect(manager.close()).rejects.toThrow(
+        'Close request failed with status 500: close failed [WWW-Authenticate: Payment error="close_failed"]',
+      )
+    })
+
+    test('sse transport charges plain HTTP fallback responses and closes at receipt.spent', async () => {
+      const backingStore = Store.memory()
+      const routeHandler = Mppx_server.create({
+        methods: [
+          tempo_server.session({
+            store: backingStore,
+            getClient: () => client,
+            account: recipientAccount,
+            currency,
+            escrowContract,
+            chainId: chain.id,
+            sse: true,
+          }),
+        ],
+        realm: 'api.example.com',
+        secretKey: 'secret',
+      }).session({ amount: '1', decimals: 6, unitType: 'token' })
+
+      const fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+        const request = new Request(input, init)
+        const result = await routeHandler(request)
+        if (result.status === 402) return result.challenge
+        return result.withReceipt(new Response('ok'))
+      }
+
+      const manager = sessionManager({
+        account: payer,
+        client,
+        escrowContract,
+        fetch,
+        maxDeposit: '2',
+      })
+
+      const response = await manager.fetch('https://api.example.com/resource')
+      expect(response.status).toBe(200)
+      expect(await response.text()).toBe('ok')
+      expect(response.receipt?.spent).toBe('1000000')
+      expect(response.receipt?.units).toBe(1)
+
+      const closeReceipt = await manager.close()
+      expect(closeReceipt?.status).toBe('success')
+      expect(closeReceipt?.spent).toBe('1000000')
     })
   })
 
@@ -3076,6 +3853,91 @@ describe.runIf(isLocalnet)('session', () => {
       expect(channelId).toBeTruthy()
 
       const persisted = await ChannelStore.fromStore(backingStore).getChannel(channelId!)
+      expect(persisted?.finalized).toBe(true)
+    })
+
+    test('unitType=request auto-metered SSE responses charge once across the stream', async () => {
+      const backingStore = Store.memory()
+      const routeHandler = Mppx_server.create({
+        methods: [
+          tempo_server.session({
+            store: backingStore,
+            getClient: () => client,
+            account: recipientAccount,
+            currency,
+            escrowContract,
+            chainId: chain.id,
+            sse: true,
+          }),
+        ],
+        realm: 'api.example.com',
+        secretKey: 'secret',
+      }).session({ amount: '1', decimals: 6, unitType: 'request' })
+
+      let voucherPosts = 0
+      const fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+        const request = new Request(input, init)
+        let action: 'open' | 'topUp' | 'voucher' | 'close' | undefined
+
+        if (request.method === 'POST' && request.headers.has('Authorization')) {
+          try {
+            const credential = Credential.fromRequest<any>(request)
+            action = credential.payload?.action
+            if (action === 'voucher') voucherPosts++
+          } catch {}
+        }
+
+        const result = await routeHandler(request)
+        if (result.status === 402) return result.challenge
+
+        if (action === 'voucher') {
+          return new Response(null, { status: 200 })
+        }
+
+        if (request.headers.get('Accept')?.includes('text/event-stream')) {
+          const encoder = new TextEncoder()
+          const upstream = new Response(
+            new ReadableStream({
+              start(controller) {
+                controller.enqueue(encoder.encode('event: message\ndata: chunk-1\n\n'))
+                controller.enqueue(encoder.encode('event: message\ndata: chunk-2\n\n'))
+                controller.enqueue(encoder.encode('event: message\ndata: chunk-3\n\n'))
+                controller.close()
+              },
+            }),
+            { headers: { 'Content-Type': 'text/event-stream; charset=utf-8' } },
+          )
+          return result.withReceipt(upstream)
+        }
+
+        return result.withReceipt(new Response('ok'))
+      }
+
+      const manager = sessionManager({
+        account: payer,
+        client,
+        escrowContract,
+        fetch,
+        maxDeposit: '1',
+      })
+
+      const chunks: string[] = []
+      const stream = await manager.sse('https://api.example.com/stream')
+      for await (const chunk of stream) chunks.push(chunk)
+
+      expect(chunks).toEqual(['chunk-1', 'chunk-2', 'chunk-3'])
+      expect(voucherPosts).toBe(0)
+
+      const closeReceipt = await manager.close()
+      expect(closeReceipt?.status).toBe('success')
+      expect(closeReceipt?.spent).toBe('1000000')
+
+      const channelId = manager.channelId
+      expect(channelId).toBeTruthy()
+
+      const persisted = await ChannelStore.fromStore(backingStore).getChannel(channelId!)
+      expect(persisted?.spent).toBe(1000000n)
+      expect(persisted?.units).toBe(1)
       expect(persisted?.finalized).toBe(true)
     })
 
@@ -4514,6 +5376,30 @@ describe('session default currency resolution', () => {
     const challenge = Challenge.fromResponse(result.challenge)
     expect(challenge.request.currency).toBe('0xcustom')
   })
+
+  test('handler.session throws for zero-amount routes', () => {
+    const handler = Mppx_server.create({
+      methods: [
+        tempo_server.session({
+          store: Store.memory(),
+          getClient: () => mockClient,
+          account: mockAccount,
+          escrowContract: '0x0000000000000000000000000000000000000002',
+          chainId: 4217,
+        }),
+      ],
+      realm: 'api.example.com',
+      secretKey: 'secret',
+    })
+
+    expect(() =>
+      (handler.session as Function)({
+        amount: '0',
+        decimals: 6,
+        unitType: 'token',
+      }),
+    ).toThrow('Session amount must be greater than 0')
+  })
 })
 
 function nextSalt(): Hex {
@@ -4540,7 +5426,7 @@ function makeChallenge(opts: { id?: string; channelId: Hex }) {
   } as Challenge.Challenge<z.output<typeof Methods.session.schema.request>, 'session', 'tempo'>
 }
 
-function makeRequest() {
+function makeRequest(overrides: Partial<Record<string, unknown>> = {}) {
   return {
     amount: '1000000',
     unitType: 'token',
@@ -4549,6 +5435,7 @@ function makeRequest() {
     recipient: recipient as string,
     escrowContract: escrowContract as string,
     chainId: chain.id,
+    ...overrides,
   }
 }
 
