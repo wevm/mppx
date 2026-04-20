@@ -70,7 +70,32 @@ export type Mppx<
       ): (input: Request) => Promise<MethodFn.Response<Transport.Http>>
     }
   : {}) &
-  Handlers<FlattenMethods<methods>, transport>
+  Handlers<FlattenMethods<methods>, transport> & {
+    /**
+     * Generate Challenge objects for registered methods without going through
+     * the HTTP 402 request lifecycle. Uses the same options, defaults, and
+     * schema transforms as the corresponding intent handler.
+     *
+     * @example
+     * ```ts
+     * const challenge = await mppx.challenge.tempo.charge({ amount: '25.92' })
+     * ```
+     */
+    challenge: ChallengeHandlers<FlattenMethods<methods>>
+
+    /**
+     * Verify a credential string or object end-to-end: deserialize,
+     * HMAC-check, match to a registered method, validate payload schema,
+     * check expiry, and call the method's verify function.
+     *
+     * @example
+     * ```ts
+     * const receipt = await mppx.verifyCredential('eyJjaGFsbGVuZ2...')
+     * const receipt = await mppx.verifyCredential(credential)
+     * ```
+     */
+    verifyCredential(credential: string | Credential.Credential): Promise<Receipt.Receipt>
+  }
 
 /** Extracts the transport override from a method, if any. */
 type TransportOverrideOf<mi> = mi extends { transport?: infer transport }
@@ -136,6 +161,21 @@ type Handlers<
 } & UniqueIntentHandlers<methods, transport> &
   NestedHandlers<methods, transport>
 
+/** Nested challenge generators: `mppx.challenge.tempo.charge(...)`. */
+type ChallengeHandlers<methods extends readonly Method.AnyServer[]> = {
+  [name in methods[number]['name']]: {
+    [mi in Extract<methods[number], { name: name }> as mi['intent']]: ChallengeFn<
+      mi,
+      NonNullable<mi['defaults']>
+    >
+  }
+}
+
+/** A function that generates a Challenge object from intent options. */
+type ChallengeFn<method extends Method.Method, defaults extends Record<string, unknown>> = (
+  options: MethodFn.Options<method, defaults>,
+) => Promise<Challenge.Challenge>
+
 /**
  * Creates a server-side payment handler from methods.
  *
@@ -200,6 +240,56 @@ export function create<
     ;(handlers[mi.name] as Record<string, unknown>)[mi.intent] = fn
   }
 
+  // Build challenge generators: mppx.challenge.tempo.charge(...)
+  const challengeHandlers: Record<string, Record<string, unknown>> = {}
+  for (const mi of methods) {
+    if (!challengeHandlers[mi.name]) challengeHandlers[mi.name] = {}
+    challengeHandlers[mi.name]![mi.intent] = createChallengeFn({
+      defaults: mi.defaults,
+      method: mi,
+      realm,
+      request: mi.request as never,
+      secretKey,
+    })
+  }
+
+  // verifyCredential: single-call end-to-end verification
+  async function verifyCredentialFn(
+    input: string | Credential.Credential,
+  ): Promise<Receipt.Receipt> {
+    const credential = typeof input === 'string' ? Credential.deserialize(input) : input
+
+    // HMAC provenance check (secretKey is guaranteed non-null by the guard at the top of create())
+    if (!Challenge.verify(credential.challenge, { secretKey: secretKey! }))
+      throw new Errors.InvalidChallengeError({
+        id: credential.challenge.id,
+        reason: 'challenge was not issued by this server',
+      })
+
+    // Expiry check
+    Expires.assert(credential.challenge.expires, credential.challenge.id)
+
+    // Find matching method by name + intent
+    const { method: credMethod, intent: credIntent } = credential.challenge
+    const mi = (methods as readonly Method.AnyServer[]).find(
+      (m) => m.name === credMethod && m.intent === credIntent,
+    )
+    if (!mi)
+      throw new Errors.InvalidChallengeError({
+        id: credential.challenge.id,
+        reason: `no registered method for ${credMethod}/${credIntent}`,
+      })
+
+    // Validate payload against method schema
+    mi.schema.credential.payload.parse(credential.payload)
+
+    // The challenge already contains the request params (HMAC-bound),
+    // so we use them directly — no need for the caller to re-supply.
+    const request = credential.challenge.request as z.input<typeof mi.schema.request>
+
+    return mi.verify({ credential, request } as never)
+  }
+
   function composeFn(
     ...entries: readonly [
       Method.AnyServer | AnyMethodFnWithMethod | string,
@@ -225,9 +315,11 @@ export function create<
 
   return {
     methods,
+    challenge: challengeHandlers,
     compose: composeFn,
     realm: realm as string | undefined,
     transport,
+    verifyCredential: verifyCredentialFn,
     ...handlers,
   } as never
 }
@@ -479,6 +571,53 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
         },
       },
     )
+  }
+}
+
+/**
+ * Creates a challenge generator for a single method+intent.
+ * Applies the same defaults and request transform as createMethodFn,
+ * but returns a Challenge object directly instead of a request handler.
+ */
+function createChallengeFn(parameters: {
+  defaults?: Record<string, unknown>
+  method: Method.Method
+  realm: string | undefined
+  request?: Method.RequestFn<Method.Method>
+  secretKey: string
+}): (options: Record<string, unknown>) => Promise<Challenge.Challenge> {
+  const { defaults, method, realm, secretKey } = parameters
+
+  return async (options) => {
+    const { description, meta, ...rest } = options as {
+      description?: string
+      expires?: string
+      meta?: Record<string, string>
+      [key: string]: unknown
+    }
+    const merged = { ...defaults, ...rest }
+    const expires =
+      'expires' in options ? (options.expires as string | undefined) : Expires.minutes(5)
+
+    // Transform request if method provides a `request` function.
+    const request = (
+      parameters.request
+        ? await (parameters.request as (opts: { request: unknown }) => unknown)({
+            request: merged,
+          })
+        : merged
+    ) as never
+
+    const effectiveRealm = realm ?? defaultRealm
+
+    return Challenge.fromMethod(method, {
+      description,
+      expires,
+      meta,
+      realm: effectiveRealm,
+      request,
+      secretKey,
+    })
   }
 }
 
