@@ -130,10 +130,12 @@ export type Server<
   defaults extends ExactPartial<z.input<method['schema']['request']>> = {},
   transportOverride = undefined,
 > = method & {
+  authorize?: AuthorizeFn<method> | undefined
   defaults?: defaults | undefined
   html?: Html.Options | undefined
   request?: RequestFn<method> | undefined
   respond?: RespondFn<method> | undefined
+  stableBinding?: StableBindingFn<method> | undefined
   transport?: transportOverride | undefined
   verify: VerifyFn<method>
 }
@@ -154,6 +156,42 @@ export type CreateCredentialFn<method extends Method, context = unknown> = (
 export type RequestFn<method extends Method> = (
   options: RequestContext<method>,
 ) => MaybePromise<z.input<method['schema']['request']>>
+
+/**
+ * Optional authorization hook for a server-side method.
+ *
+ * Called after request normalization but before the 402 challenge path. This lets
+ * a server grant access based on existing application state (for example, an
+ * active subscription) without requiring a fresh `Payment` credential.
+ *
+ * **HTTP-only.** The `input` parameter is a Fetch `Request`; non-HTTP transports
+ * do not invoke this hook.
+ */
+export type AuthorizeFn<method extends Method> = (parameters: {
+  challenge: Challenge.Challenge<
+    z.output<method['schema']['request']>,
+    method['intent'],
+    method['name']
+  >
+  input: globalThis.Request
+  request: z.output<method['schema']['request']>
+}) => MaybePromise<AuthorizeResult | undefined>
+
+/** Successful result returned from an {@link AuthorizeFn}. */
+export type AuthorizeResult = {
+  receipt: Receipt.Receipt
+  response?: globalThis.Response | undefined
+}
+
+/**
+ * Produces the stable request fields used to bind credentials to a route.
+ *
+ * Methods can override this to opt into additional request fields beyond the
+ * default amount/currency/recipient binding used by generic methods.
+ */
+export type StableBindingFn<method extends Method> = (
+  request: z.output<method['schema']['request']>,
+) => Record<string, unknown>
 
 /** Verification function for a single method. */
 export type VerifyFn<method extends Method> = (
@@ -251,13 +289,15 @@ export function toServer<
   method: method,
   options: toServer.Options<method, defaults, transportOverride>,
 ): Server<method, defaults, transportOverride> {
-  const { defaults, html, request, respond, transport, verify } = options
+  const { authorize, defaults, html, request, respond, stableBinding, transport, verify } = options
   return {
     ...method,
+    authorize,
     defaults,
     html,
     request,
     respond,
+    stableBinding,
     transport,
     verify,
   } as Server<method, defaults, transportOverride>
@@ -269,10 +309,12 @@ export declare namespace toServer {
     defaults extends RequestDefaults<method> = {},
     transportOverride extends Transport.AnyTransport | undefined = undefined,
   > = {
+    authorize?: AuthorizeFn<method> | undefined
     defaults?: defaults | undefined
     html?: Html.Options | undefined
     request?: RequestFn<method> | undefined
     respond?: RespondFn<method> | undefined
+    stableBinding?: StableBindingFn<method> | undefined
     transport?: transportOverride | undefined
     verify: VerifyFn<method>
   }

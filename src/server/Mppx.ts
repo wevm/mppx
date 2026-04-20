@@ -231,12 +231,14 @@ export function create<
   for (const mi of methods) {
     intentCount[mi.intent] = (intentCount[mi.intent] ?? 0) + 1
     handlers[`${mi.name}/${mi.intent}`] = createMethodFn({
+      authorize: mi.authorize as never,
       defaults: mi.defaults,
       method: mi,
       realm,
       request: mi.request as never,
       respond: mi.respond as never,
       secretKey,
+      stableBinding: mi.stableBinding as never,
       transport: (mi.transport ?? transport) as never,
       verify: mi.verify as never,
     })
@@ -331,7 +333,11 @@ export function create<
           routeRequest: options?.request ?? {},
           secretKey: secretKey!,
         }).then((resolved) => {
-          const mismatch = getPinnedChallengeMismatch(resolved.challenge, credential.challenge)
+          const mismatch = getChallengeBindingMismatch(
+            resolved.challenge,
+            credential.challenge,
+            mi.stableBinding as never,
+          )
           if (mismatch)
             throw new Errors.InvalidChallengeError({
               id: credential.challenge.id,
@@ -413,7 +419,17 @@ function createMethodFn<
 ): createMethodFn.ReturnType<method, transport, defaults>
 // biome-ignore lint/correctness/noUnusedVariables: _
 function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.ReturnType {
-  const { defaults, method, realm, respond, secretKey, transport, verify } = parameters
+  const {
+    authorize,
+    defaults,
+    method,
+    realm,
+    respond,
+    secretKey,
+    stableBinding,
+    transport,
+    verify,
+  } = parameters
 
   return (options) => {
     const { description, meta, scope, ...rest } = options
@@ -466,8 +482,77 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
           return { challenge: response, status: 402 }
         }
 
+        const success = (
+          receiptData: Receipt.Receipt,
+          options: {
+            challengeId?: string | undefined
+            credentialForReceipt?: Credential.Credential | undefined
+            envelopeForReceipt?: Method.VerifiedChallengeEnvelope | undefined
+            managementResponse?: globalThis.Response | undefined
+          } = {},
+        ): MethodFn.Response => {
+          const {
+            challengeId = challenge.id,
+            credentialForReceipt = { challenge, payload: {} } as Credential.Credential,
+            envelopeForReceipt,
+            managementResponse,
+          } = options
+
+          return {
+            status: 200,
+            withReceipt<response>(response?: response) {
+              if (managementResponse) {
+                return transport.respondReceipt({
+                  challengeId,
+                  credential: credentialForReceipt,
+                  ...(envelopeForReceipt ? { envelope: envelopeForReceipt } : {}),
+                  input,
+                  receipt: receiptData,
+                  response: managementResponse as never,
+                }) as response
+              }
+              if (!response) throw new Error('withReceipt() requires a response argument')
+              return transport.respondReceipt({
+                challengeId,
+                credential: credentialForReceipt,
+                ...(envelopeForReceipt ? { envelope: envelopeForReceipt } : {}),
+                input,
+                receipt: receiptData,
+                response: response as never,
+              }) as response
+            },
+          }
+        }
+
         // No credential provided—issue challenge
         if (!credential) {
+          if (authorize && input instanceof globalThis.Request) {
+            try {
+              const authorized = await authorize({
+                challenge,
+                input,
+                request: challenge.request,
+              } as never)
+              if (authorized) {
+                return success(authorized.receipt, {
+                  managementResponse: authorized.response,
+                })
+              }
+            } catch (e) {
+              if (!(e instanceof Errors.PaymentError))
+                console.error('mppx: internal authorization error', e)
+              const error =
+                e instanceof Errors.PaymentError ? e : new Errors.VerificationFailedError()
+              const response = await transport.respondChallenge({
+                challenge,
+                input,
+                error,
+                html: method.html,
+              })
+              return { challenge: response, status: 402 }
+            }
+          }
+
           const response = await transport.respondChallenge({
             challenge,
             input,
@@ -524,7 +609,11 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
         // `expires` still is not pinned here because its default is generated
         // per invocation, and `digest` is already bound by the echoed HMAC.
         {
-          const mismatch = getPinnedChallengeMismatch(challenge, credential.challenge)
+          const mismatch = getChallengeBindingMismatch(
+            challenge,
+            credential.challenge,
+            stableBinding as never,
+          )
           if (mismatch) {
             const response = await transport.respondChallenge({
               challenge,
@@ -595,30 +684,12 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
           ? await respond({ credential, envelope, input, receipt: receiptData, request } as never)
           : undefined
 
-        return {
-          status: 200,
-          withReceipt<response>(response?: response) {
-            if (managementResponse) {
-              return transport.respondReceipt({
-                challengeId: credential.challenge.id,
-                credential,
-                envelope,
-                input,
-                receipt: receiptData,
-                response: managementResponse as never,
-              }) as response
-            }
-            if (!response) throw new Error('withReceipt() requires a response argument')
-            return transport.respondReceipt({
-              challengeId: credential.challenge.id,
-              credential,
-              envelope,
-              input,
-              receipt: receiptData,
-              response: response as never,
-            }) as response
-          },
-        }
+        return success(receiptData, {
+          challengeId: credential.challenge.id,
+          credentialForReceipt: credential,
+          envelopeForReceipt: envelope,
+          managementResponse,
+        })
       },
       {
         _internal: {
@@ -629,6 +700,7 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
           name: method.name,
           intent: method.intent,
           _canonicalRequest: PaymentRequest.fromMethod(method, { ...defaults, ...rest }),
+          _stableBinding: stableBinding as never,
         },
       },
     )
@@ -688,12 +760,14 @@ declare namespace createMethodFn {
     transport extends Transport.AnyTransport = Transport.Http,
     defaults extends Record<string, unknown> = Record<string, unknown>,
   > = {
+    authorize?: Method.AuthorizeFn<method>
     defaults?: defaults
     method: method
     realm: string | undefined
     request?: Method.RequestFn<method>
     respond?: Method.RespondFn<method>
     secretKey: string
+    stableBinding?: Method.StableBindingFn<method>
     transport: transport
     verify: Method.VerifyFn<method>
   }
@@ -825,6 +899,26 @@ type CoreBindingField = (typeof coreBindingFields)[number]
 type MethodBindingField = (typeof methodBindingFields)[number]
 type PinnedRequestBindingField = (typeof pinnedRequestBindingFields)[number]
 type PinnedChallengeField = 'method' | 'intent' | 'realm' | 'opaque' | PinnedRequestBindingField
+type StableBinding = Record<string, unknown>
+
+function getChallengeBindingMismatch(
+  expectedChallenge: Challenge.Challenge,
+  actualChallenge: Challenge.Challenge,
+  stableBinding?: Method.StableBindingFn<Method.Method> | undefined,
+): string | undefined {
+  if (!stableBinding) return getPinnedChallengeMismatch(expectedChallenge, actualChallenge)
+
+  for (const field of ['method', 'intent', 'realm'] as const) {
+    if (actualChallenge[field] !== expectedChallenge[field]) return field
+  }
+
+  if (!opaqueValuesMatch(expectedChallenge.opaque, actualChallenge.opaque)) return 'opaque'
+
+  return getRequestBindingMismatch(
+    getStableBinding(expectedChallenge.request as Record<string, unknown>, stableBinding),
+    getStableBinding(actualChallenge.request as Record<string, unknown>, stableBinding),
+  )
+}
 
 /**
  * Compares only the fields that MUST be stable across request-hook transforms.
@@ -905,6 +999,41 @@ function getPinnedRequestBinding(request: Record<string, unknown>): PinnedReques
   }
 }
 
+function getRequestBindingMismatch(
+  expected: StableBinding,
+  actual: StableBinding,
+): string | undefined {
+  const fields = [
+    ...Object.keys(expected),
+    ...Object.keys(actual).filter((key) => !(key in expected)),
+  ]
+
+  return fields.find(
+    (field) =>
+      !isDeepStrictEqual(normalizeComparable(expected[field]), normalizeComparable(actual[field])),
+  )
+}
+
+function getStableBinding(
+  request: Record<string, unknown>,
+  stableBinding: Method.StableBindingFn<Method.Method>,
+): StableBinding {
+  return stableBinding(request as never)
+}
+
+type CoreBinding = {
+  [field in CoreBindingField]?: string
+}
+
+type MethodBinding = {
+  [field in MethodBindingField]?: unknown
+}
+
+type PinnedRequestBinding = {
+  coreBinding: CoreBinding
+  methodBinding: MethodBinding
+}
+
 function normalizeScalar(value: unknown): string | undefined {
   return value === undefined ? undefined : String(value)
 }
@@ -936,19 +1065,6 @@ function opaqueValuesMatch(
   actual: Record<string, string> | undefined,
 ): boolean {
   return isDeepStrictEqual(expected, actual)
-}
-
-type CoreBinding = {
-  [field in CoreBindingField]?: string
-}
-
-type MethodBinding = {
-  [field in MethodBindingField]?: unknown
-}
-
-type PinnedRequestBinding = {
-  coreBinding: CoreBinding
-  methodBinding: MethodBinding
 }
 
 export type MethodFn<
@@ -999,6 +1115,7 @@ type ConfiguredHandler = ((input: Request) => Promise<MethodFn.Response<Transpor
     meta?: Record<string, string> | undefined
     scope?: string | undefined
     _canonicalRequest: Record<string, unknown>
+    _stableBinding?: Method.StableBindingFn<Method.Method> | undefined
   }
 }
 
@@ -1122,12 +1239,13 @@ export function compose(
           const internal = (h as ConfiguredHandler)._internal
           if (!internal || internal.name !== credMethod || internal.intent !== credIntent)
             return false
-          const canonical = internal._canonicalRequest
-          if (!canonical) return true
-          return (
-            !getPinnedRequestBindingMismatch(canonical, credReq) &&
-            opaqueValuesMatch(internal.meta, credential.challenge.opaque)
-          )
+          const mismatch = internal._stableBinding
+            ? getRequestBindingMismatch(
+                getStableBinding(internal._canonicalRequest, internal._stableBinding),
+                getStableBinding(credReq, internal._stableBinding),
+              )
+            : getPinnedRequestBindingMismatch(internal._canonicalRequest, credReq)
+          return !mismatch && opaqueValuesMatch(internal.meta, credential.challenge.opaque)
         })
 
         const match =
@@ -1144,8 +1262,14 @@ export function compose(
       return handlers[0]!(input)
     }
 
-    // No credential — call all handlers and merge 402 challenges.
-    const results = await Promise.all(handlers.map((h) => h(input)))
+    // No credential — evaluate handlers sequentially so authorize()/renewal hooks
+    // can safely claim the request without racing each other.
+    const results: MethodFn.Response<Transport.Http>[] = []
+    for (const handler of handlers) {
+      const result = await handler(input)
+      if (result.status === 200) return result
+      results.push(result)
+    }
 
     const challengeEntries = (() => {
       const entries: {
