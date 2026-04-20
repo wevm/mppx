@@ -127,7 +127,6 @@ export function http(): Http {
       return {
         hasBody: request.body !== null,
         headers: new Headers(request.headers),
-        hasBody: request.body !== null,
         method: request.method,
         url: safeUrl(request.url),
       }

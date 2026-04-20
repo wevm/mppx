@@ -23,6 +23,7 @@ export function hasCapturedRequestBody(
 }
 
 export function isSessionContentRequest(input: RequestBodyProbe): boolean {
+  if (input.method === 'HEAD') return false
   if (input.method !== 'POST') return true
   return hasCapturedRequestBody(input)
 }

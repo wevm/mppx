@@ -44,7 +44,6 @@ describe('http', () => {
 
       const captured = await transport.captureRequest?.(request)
       expect(captured).toEqual({
-        hasBody: false,
         headers: new Headers(request.headers),
         hasBody: true,
         method: 'POST',

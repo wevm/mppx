@@ -54,6 +54,15 @@ describe('request-body', () => {
       ).toBe(true)
     })
 
+    test('treats HEAD requests as management requests', () => {
+      expect(
+        isSessionContentRequest({
+          headers: new Headers(),
+          method: 'HEAD',
+        }),
+      ).toBe(false)
+    })
+
     test('treats POST requests with a body stream and no content-length as content requests', () => {
       expect(
         isSessionContentRequest({
