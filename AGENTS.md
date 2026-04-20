@@ -160,6 +160,8 @@ Create a `.changeset/<name>.md` file with frontmatter specifying the package and
 Description of the change.
 ```
 
+Changeset descriptions **must use past tense** (e.g. "Added support for …", "Fixed parsing of …"). Describe what the changeset _did_, not what it _does_.
+
 The changelog is auto-generated from changesets during `changeset version`.
 
 ## Commands
