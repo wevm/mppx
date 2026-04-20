@@ -61,7 +61,9 @@ export function create<
   const {
     onChallenge,
     polyfill = true,
-    acceptPaymentPolicy = polyfill ? 'same-origin' : 'always',
+    acceptPaymentPolicy = polyfill && typeof globalThis.location !== 'undefined'
+      ? 'same-origin'
+      : 'always',
     transport = Transport.http() as transport,
   } = config
 

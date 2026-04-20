@@ -181,7 +181,7 @@ export function polyfill<const methods extends readonly Method.AnyClient[]>(
   if (!originalFetch) originalFetch = globalThis.fetch
   globalThis.fetch = from({
     ...config,
-    acceptPaymentPolicy: config.acceptPaymentPolicy ?? 'same-origin',
+    acceptPaymentPolicy: config.acceptPaymentPolicy ?? (isBrowser() ? 'same-origin' : 'always'),
     fetch: globalThis.fetch,
   }) as typeof globalThis.fetch
 }
@@ -349,7 +349,7 @@ function shouldInjectForPolicy(
   const url = resolveRequestUrl(input)
 
   if (policy === 'same-origin') {
-    if (typeof globalThis.location === 'undefined') return true
+    if (!isBrowser()) return true
     return url.origin === globalThis.location.origin
   }
 
@@ -366,11 +366,13 @@ function matchesOrigin(url: URL, pattern: string): boolean {
 }
 
 /** @internal */
+function isBrowser(): boolean {
+  return typeof globalThis.location !== 'undefined'
+}
+
+/** @internal */
 function resolveRequestUrl(input: RequestInfo | URL): URL {
   if (input instanceof URL) return input
   if (input instanceof Request) return new URL(input.url)
-  return new URL(
-    input,
-    typeof globalThis.location !== 'undefined' ? globalThis.location.href : undefined,
-  )
+  return new URL(input, isBrowser() ? globalThis.location.href : undefined)
 }
