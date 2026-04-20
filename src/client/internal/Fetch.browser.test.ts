@@ -94,6 +94,64 @@ describe('Fetch.from: browser header normalization', () => {
   })
 })
 
+describe('Fetch.from: acceptPaymentPolicy (browser)', () => {
+  test('policy: "same-origin" injects for same-origin requests', async () => {
+    const receivedInits: (RequestInit | undefined)[] = []
+    const mockFetch: typeof globalThis.fetch = async (_input, init) => {
+      receivedInits.push(init)
+      return new Response('OK', { status: 200 })
+    }
+
+    const fetch = Fetch.from({
+      fetch: mockFetch,
+      methods: [noopMethod],
+      acceptPaymentPolicy: 'same-origin',
+    })
+
+    await fetch(`${globalThis.location.origin}/api`)
+    expect(toHeaders(receivedInits[0]?.headers).get('Accept-Payment')).toBe('test/test')
+  })
+
+  test('policy: "same-origin" skips for cross-origin requests', async () => {
+    const receivedInits: (RequestInit | undefined)[] = []
+    const mockFetch: typeof globalThis.fetch = async (_input, init) => {
+      receivedInits.push(init)
+      return new Response('OK', { status: 200 })
+    }
+
+    const fetch = Fetch.from({
+      fetch: mockFetch,
+      methods: [noopMethod],
+      acceptPaymentPolicy: 'same-origin',
+    })
+
+    await fetch('https://cross-origin.example.com/api')
+    expect(toHeaders(receivedInits[0]?.headers).get('Accept-Payment')).toBeNull()
+  })
+
+  test('policy: "same-origin" still handles 402 on cross-origin', async () => {
+    let callCount = 0
+    const mockFetch: typeof globalThis.fetch = async (_input, init) => {
+      callCount++
+      if (callCount === 1) {
+        expect(toHeaders(init?.headers).get('Accept-Payment')).toBeNull()
+        return make402()
+      }
+      expect(toHeaders(init?.headers).get('Authorization')).toBe('credential')
+      return new Response('OK', { status: 200 })
+    }
+
+    const fetch = Fetch.from({
+      fetch: mockFetch,
+      methods: [noopMethod],
+      acceptPaymentPolicy: 'same-origin',
+    })
+
+    const response = await fetch('https://cross-origin.example.com/api')
+    expect(response.status).toBe(200)
+  })
+})
+
 describe('Fetch.polyfill / restore: browser', () => {
   test('restore is a no-op when polyfill was never called', () => {
     const before = globalThis.fetch

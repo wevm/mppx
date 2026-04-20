@@ -38,7 +38,13 @@ let originalFetch: typeof globalThis.fetch | undefined
 export function from<const methods extends readonly Method.AnyClient[]>(
   config: from.Config<methods>,
 ): from.Fetch<methods> {
-  const { acceptPayment, fetch = globalThis.fetch, methods, onChallenge } = config
+  const {
+    acceptPayment,
+    acceptPaymentPolicy = 'always',
+    fetch = globalThis.fetch,
+    methods,
+    onChallenge,
+  } = config
   const resolvedAcceptPayment = acceptPayment ?? AcceptPayment.resolve(methods)
   // Always operate on the true underlying fetch to avoid wrapper-on-wrapper stacking,
   // which can duplicate retries and make restore semantics fragile.
@@ -54,6 +60,7 @@ export function from<const methods extends readonly Method.AnyClient[]>(
       callerHeaders,
       paymentPreferences.header,
       hasExplicitAcceptPayment,
+      acceptPaymentPolicy,
     )
     const response = await baseFetch(initialRequest.input, initialRequest.init)
 
@@ -108,6 +115,13 @@ export declare namespace from {
   type Config<methods extends readonly Method.AnyClient[] = readonly Method.AnyClient[]> = {
     /** Resolved `Accept-Payment` header and selection preferences. */
     acceptPayment?: AcceptPayment.Resolved<methods> | undefined
+    /** Controls when `Accept-Payment` is injected. @default 'always' */
+    acceptPaymentPolicy?:
+      | 'always'
+      | 'same-origin'
+      | 'never'
+      | { origins: readonly string[] }
+      | undefined
     /** Custom fetch function to wrap. Defaults to `globalThis.fetch`. */
     fetch?: typeof globalThis.fetch
     /** Array of methods to use. */
@@ -165,7 +179,11 @@ export function polyfill<const methods extends readonly Method.AnyClient[]>(
   }
 
   if (!originalFetch) originalFetch = globalThis.fetch
-  globalThis.fetch = from({ ...config, fetch: globalThis.fetch }) as typeof globalThis.fetch
+  globalThis.fetch = from({
+    ...config,
+    acceptPaymentPolicy: config.acceptPaymentPolicy ?? 'same-origin',
+    fetch: globalThis.fetch,
+  }) as typeof globalThis.fetch
 }
 
 export declare namespace polyfill {
@@ -229,8 +247,10 @@ function prepareInitialRequest<methods extends readonly Method.AnyClient[]>(
   callerHeaders: Headers,
   header: string,
   hasExplicitAcceptPayment: boolean,
+  policy: NonNullable<from.Config['acceptPaymentPolicy']>,
 ): { headers: Headers; init: from.RequestInit<methods> | undefined; input: RequestInfo | URL } {
-  const shouldInjectAcceptPayment = Boolean(header) && !hasExplicitAcceptPayment
+  const shouldInjectAcceptPayment =
+    Boolean(header) && !hasExplicitAcceptPayment && shouldInjectForPolicy(input, policy)
   if (!shouldInjectAcceptPayment) return { headers: callerHeaders, init, input }
 
   const headers = new Headers(input instanceof Request ? input.headers : undefined)
@@ -316,4 +336,41 @@ function resolvePaymentPreferences<methods extends readonly Method.AnyClient[]>(
     // defaults instead of throwing from the wrapper.
     return acceptPayment
   }
+}
+
+/** @internal */
+function shouldInjectForPolicy(
+  input: RequestInfo | URL,
+  policy: NonNullable<from.Config['acceptPaymentPolicy']>,
+): boolean {
+  if (policy === 'always') return true
+  if (policy === 'never') return false
+
+  const url = resolveRequestUrl(input)
+
+  if (policy === 'same-origin') {
+    if (typeof globalThis.location === 'undefined') return true
+    return url.origin === globalThis.location.origin
+  }
+
+  return policy.origins.some((origin) => matchesOrigin(url, origin))
+}
+
+/** @internal Matches an origin pattern, supporting `*.` prefix for subdomain wildcards. */
+function matchesOrigin(url: URL, pattern: string): boolean {
+  if (pattern.startsWith('*.')) {
+    const suffix = pattern.slice(1) // e.g. ".example.com"
+    return url.hostname.endsWith(suffix) || url.hostname === pattern.slice(2)
+  }
+  return url.origin === new URL(pattern).origin
+}
+
+/** @internal */
+function resolveRequestUrl(input: RequestInfo | URL): URL {
+  if (input instanceof URL) return input
+  if (input instanceof Request) return new URL(input.url)
+  return new URL(
+    input,
+    typeof globalThis.location !== 'undefined' ? globalThis.location.href : undefined,
+  )
 }

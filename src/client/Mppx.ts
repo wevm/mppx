@@ -58,10 +58,14 @@ export function create<
     Response
   >,
 >(config: create.Config<methods, transport>): Mppx<methods, transport> {
-  const { onChallenge, polyfill = true, transport = Transport.http() as transport } = config
+  const {
+    onChallenge,
+    polyfill = true,
+    acceptPaymentPolicy = polyfill ? 'same-origin' : 'always',
+    transport = Transport.http() as transport,
+  } = config
 
   const rawFetch = config.fetch ?? globalThis.fetch
-
   const methods = config.methods.flat() as unknown as FlattenMethods<methods>
   const acceptPayment = AcceptPayment.resolve(methods, config.paymentPreferences)
 
@@ -70,6 +74,7 @@ export function create<
   >['onChallenge']
   const config_fetch = {
     acceptPayment,
+    acceptPaymentPolicy,
     ...(config.fetch && { fetch: config.fetch }),
     ...(resolvedOnChallenge && { onChallenge: resolvedOnChallenge }),
     methods,
@@ -142,6 +147,8 @@ export declare namespace create {
     methods extends Methods = Methods,
     transport extends Transport.Transport = Transport.Transport,
   > = {
+    /** Controls when `Accept-Payment` is injected. */
+    acceptPaymentPolicy?: Fetch.from.Config['acceptPaymentPolicy'] | undefined
     /** Custom fetch function to wrap. Defaults to `globalThis.fetch`. */
     fetch?: typeof globalThis.fetch
     /** Called when a 402 challenge is received, before credential creation. */
