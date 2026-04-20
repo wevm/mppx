@@ -71,6 +71,7 @@ export type AnyClient = Client<any, any>
 export type CapturedRequest = {
   readonly hasBody?: boolean | undefined
   readonly headers: Headers
+  readonly hasBody?: boolean | undefined
   readonly method: string
   readonly url: URL
 }

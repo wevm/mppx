@@ -38,6 +38,7 @@ describe('http', () => {
       const transport = Transport.http()
       const request = new Request('https://example.com/resource?foo=bar', {
         method: 'POST',
+        body: JSON.stringify({ prompt: 'hello' }),
         headers: { Authorization: Credential.serialize(credential), 'X-Test': '1' },
       })
 
@@ -45,6 +46,7 @@ describe('http', () => {
       expect(captured).toEqual({
         hasBody: false,
         headers: new Headers(request.headers),
+        hasBody: true,
         method: 'POST',
         url: new URL('https://example.com/resource?foo=bar'),
       })

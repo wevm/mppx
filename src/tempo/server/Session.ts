@@ -53,6 +53,7 @@ import * as ChannelStore from '../session/ChannelStore.js'
 import { createSessionReceipt } from '../session/Receipt.js'
 import type { SessionCredentialPayload, SessionReceipt, SignedVoucher } from '../session/Types.js'
 import { parseVoucherFromPayload, verifyVoucher } from '../session/Voucher.js'
+import { captureRequestBodyProbe, isSessionContentRequest } from './internal/request-body.js'
 import * as Transport from './internal/transport.js'
 
 /** Challenge methodDetails shape for session methods. */
@@ -269,7 +270,7 @@ export function session<const parameters extends session.Parameters>(
       if (
         !parameters.sse &&
         envelope &&
-        isBillableContentRequest(envelope.capturedRequest) &&
+        isSessionContentRequest(envelope.capturedRequest) &&
         (payload.action === 'open' || payload.action === 'voucher')
       ) {
         const charged = await charge(
@@ -303,14 +304,8 @@ export function session<const parameters extends session.Parameters>(
       if (payload.action === 'close') return new Response(null, { status: 204 })
       if (payload.action === 'topUp') return new Response(null, { status: 204 })
 
-      const capturedRequest = envelope?.capturedRequest ?? {
-        hasBody: input.body !== null,
-        headers: input.headers,
-        method: input.method,
-        url: new URL(input.url),
-      }
-
-      if (isBillableContentRequest(capturedRequest)) return undefined
+      const request = envelope?.capturedRequest ?? captureRequestBodyProbe(input)
+      if (isSessionContentRequest(request)) return undefined
       return new Response(null, { status: 204 })
     },
   })
@@ -475,30 +470,6 @@ function validateOnChainChannel(
       reason: 'channel available balance insufficient for requested amount',
     })
   }
-}
-
-function isBillableContentRequest(input: {
-  hasBody?: boolean | undefined
-  headers: Headers
-  method: string
-}): boolean {
-  if (input.method === 'POST') return hasCapturedRequestBody(input)
-
-  if (input.method === 'HEAD') return false
-
-  return true
-}
-
-function hasCapturedRequestBody(input: {
-  hasBody?: boolean | undefined
-  headers: Headers
-}): boolean {
-  const contentLength = input.headers.get('content-length')
-  const headerIndicatesBody =
-    (contentLength !== null && contentLength !== '0') || input.headers.has('transfer-encoding')
-
-  if (input.hasBody === true) return true
-  return headerIndicatesBody
 }
 
 /**

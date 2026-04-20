@@ -565,7 +565,13 @@ describe('sse transport', () => {
     const store = memoryStore()
     await seedChannel(store, 10000000n)
     const transport = sse({ store })
-    const request = makeAuthorizedRequest()
+    const request = new Request('https://test.example.com/session', {
+      body: JSON.stringify({ prompt: 'hello' }),
+      headers: makeAuthorizedRequest().headers,
+      method: 'POST',
+    })
+
+    expect(request.headers.get('content-length')).toBeNull()
 
     const plainResponse = new Response(JSON.stringify({ content: 'hello' }), {
       headers: { 'Content-Type': 'application/json' },
@@ -593,11 +599,45 @@ describe('sse transport', () => {
     expect(response.headers.get('Payment-Receipt')).toBeTruthy()
   })
 
+  test('respondReceipt with bodyless POST management request does not deduct from channel', async () => {
+    const store = memoryStore()
+    await seedChannel(store, 10000000n)
+    const transport = sse({ store })
+
+    const response = transport.respondReceipt({
+      credential: Credential.from({
+        challenge: makeChallenge(),
+        payload: {
+          action: 'voucher',
+          channelId,
+          cumulativeAmount: '1000000',
+          signature: '0xdeadbeef',
+        },
+      }),
+      input: new Request('https://test.example.com/session', { method: 'POST' }),
+      receipt: makeReceipt(),
+      response: new Response(JSON.stringify({ ok: true }), {
+        headers: { 'Content-Type': 'application/json' },
+      }),
+      challengeId,
+    })
+
+    expect(await response.text()).toBe('{"ok":true}')
+
+    const channel = await store.getChannel(channelId)
+    expect(channel!.spent).toBe(0n)
+    expect(channel!.units).toBe(0)
+  })
+
   test('respondReceipt with 204 content response still deducts from channel', async () => {
     const store = memoryStore()
     await seedChannel(store, 10000000n)
     const transport = sse({ store })
-    const request = makeAuthorizedRequest()
+    const request = new Request('https://test.example.com/session', {
+      body: JSON.stringify({ prompt: 'hello' }),
+      headers: makeAuthorizedRequest().headers,
+      method: 'POST',
+    })
 
     const contentResponse = new Response(null, { status: 204 })
     const response = transport.respondReceipt({

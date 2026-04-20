@@ -11,6 +11,7 @@ import * as Transport from '../../../server/Transport.js'
 import * as ChannelStore from '../../session/ChannelStore.js'
 import * as Sse_core from '../../session/Sse.js'
 import type { SessionCredentialPayload, SessionReceipt } from '../../session/Types.js'
+import { captureRequestBodyProbe, shouldChargePlainResponse } from './request-body.js'
 
 /** SSE transport with Tempo session controller. */
 export type Sse = Transport.Sse<Sse_core.SessionController>
@@ -43,8 +44,8 @@ export function sse(options: sse.Options & { store: ChannelStore.ChannelStore })
     captureRequest(request) {
       return (
         base.captureRequest?.(request) ?? {
-          hasBody: request.body !== null,
           headers: new Headers(request.headers),
+          hasBody: request.body !== null,
           method: request.method,
           url: new URL(request.url),
         }
@@ -106,7 +107,8 @@ export function sse(options: sse.Options & { store: ChannelStore.ChannelStore })
         challengeId: verifiedChallengeId,
       })
 
-      if (!shouldChargePlainResponse(input, payload)) {
+      const request = envelope?.capturedRequest ?? captureRequestBodyProbe(input)
+      if (!shouldChargePlainResponse(request, payload)) {
         return baseResponse
       }
 
@@ -273,18 +275,4 @@ function resolveMeteredGenerate(
 
 function isNullBodyStatus(status: number): boolean {
   return [101, 204, 205, 304].includes(status)
-}
-
-function shouldChargePlainResponse(
-  input: Request,
-  payload: Partial<SessionCredentialPayload>,
-): boolean {
-  if (payload.action === 'close' || payload.action === 'topUp') return false
-  if (input.method !== 'POST') return true
-
-  const contentLength = input.headers.get('content-length')
-  if (contentLength !== null && contentLength !== '0') return true
-  if (input.headers.has('transfer-encoding')) return true
-
-  return false
 }

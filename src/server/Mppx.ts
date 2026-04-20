@@ -709,6 +709,7 @@ function captureRequestFromInput(input: unknown): Method.CapturedRequest {
   return {
     hasBody: source.body !== undefined && source.body !== null,
     headers: new Headers(source.headers),
+    hasBody: source.body === undefined ? undefined : source.body !== null,
     method: source.method ?? 'POST',
     url: Transport.safeUrl(source.url),
   }

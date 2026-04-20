@@ -3406,6 +3406,27 @@ describe.runIf(isLocalnet)('session', () => {
       expect(result).toBeUndefined()
     })
 
+    test('returns undefined for open POST with a body stream and no framing headers', () => {
+      const server = createServer()
+      const input = new Request('http://localhost', {
+        body: JSON.stringify({ prompt: 'hello' }),
+        method: 'POST',
+      })
+
+      expect(input.headers.get('content-length')).toBeNull()
+
+      const result = server.respond!({
+        credential: {
+          challenge: makeChallenge({
+            channelId: '0x0000000000000000000000000000000000000000000000000000000000000001' as Hex,
+          }),
+          payload: { action: 'open' },
+        },
+        input,
+      } as any)
+      expect(result).toBeUndefined()
+    })
+
     test('returns undefined for open POST with transfer-encoding header (content request)', () => {
       const server = createServer()
       const result = server.respond!({
@@ -3468,6 +3489,27 @@ describe.runIf(isLocalnet)('session', () => {
           method: 'POST',
           headers: { 'content-length': '42' },
         }),
+      } as any)
+      expect(result).toBeUndefined()
+    })
+
+    test('returns undefined for voucher POST with a body stream and no framing headers', () => {
+      const server = createServer()
+      const input = new Request('http://localhost', {
+        body: JSON.stringify({ prompt: 'hello' }),
+        method: 'POST',
+      })
+
+      expect(input.headers.get('content-length')).toBeNull()
+
+      const result = server.respond!({
+        credential: {
+          challenge: makeChallenge({
+            channelId: '0x0000000000000000000000000000000000000000000000000000000000000001' as Hex,
+          }),
+          payload: { action: 'voucher' },
+        },
+        input,
       } as any)
       expect(result).toBeUndefined()
     })
