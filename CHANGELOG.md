@@ -1,5 +1,21 @@
 # mppx
 
+## 0.6.0
+
+### Minor Changes
+
+- e606fa9: **Breaking:** Removed default `Accept-Payment` headers on every outgoing request for polyfilled fetch in browsers. Now defaults to same-origin requests in browser environments. Non-browser environments are unaffected. Use `acceptPaymentPolicy` to control supported payment origins.
+
+### Patch Changes
+
+- e606fa9: Added `acceptPaymentPolicy` option to control when the `Accept-Payment` header is injected on outgoing requests, mitigating CORS preflight failures on non-payment-aware servers.
+  - In browsers, `Fetch.polyfill` and `Mppx.create` (with `polyfill: true`) default to `'same-origin'`, preventing cross-origin CORS issues.
+  - Non-browser environments and `Mppx.create` with `polyfill: false` default to `'always'`.
+  - Supported values: `'always'`, `'same-origin'`, `'never'`, `{ origins: string[] }` (with `*.` wildcard support).
+  - Exported `Fetch` namespace from `mppx/client`.
+
+- 1a831eb: Fixed Tempo session content gating and SSE plain-response billing to share request-body detection so HTTP/2 POST requests without Content-Length were classified consistently.
+
 ## 0.5.17
 
 ### Patch Changes
