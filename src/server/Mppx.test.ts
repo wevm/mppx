@@ -3438,6 +3438,33 @@ describe('verifyCredential', () => {
     )
   })
 
+  test('verifies route requirements using the echoed challenge realm when host was auto-detected', async () => {
+    const mppx = Mppx.create({
+      methods: [alphaChargeServer],
+      secretKey,
+    })
+    const request = {
+      amount: '1000',
+      currency: '0x0000000000000000000000000000000000000001',
+      decimals: 6,
+      recipient: '0x0000000000000000000000000000000000000002',
+    }
+
+    const firstResult = await mppx.charge(request)(new Request('https://api.example.com/premium'))
+    expect(firstResult.status).toBe(402)
+    if (firstResult.status !== 402) throw new Error()
+
+    const challenge = Challenge.fromResponse(firstResult.challenge)
+    expect(challenge.realm).toBe('api.example.com')
+
+    const credential = Credential.from({ challenge, payload: { token: 'valid' } })
+
+    const receipt = await mppx.verifyCredential(credential, { request })
+
+    expect(receipt.status).toBe('success')
+    expect(receipt.method).toBe('alpha')
+  })
+
   test('verifies a credential for session intent', async () => {
     verifyArgs = undefined
     const mppx = Mppx.create({

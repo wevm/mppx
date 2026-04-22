@@ -313,6 +313,10 @@ export function create<
       options?.meta !== undefined ||
       options?.realm !== undefined ||
       options?.request !== undefined
+    const expectedRealm =
+      options?.realm ??
+      realm ??
+      (options?.capturedRequest === undefined ? credential.challenge.realm : undefined)
 
     const request = shouldValidateRoute
       ? await resolveRouteChallenge({
@@ -322,7 +326,7 @@ export function create<
           expires: credential.challenge.expires,
           meta: expectedMeta,
           method: mi,
-          realm: options?.realm ?? realm,
+          realm: expectedRealm,
           request: mi.request as never,
           routeRequest: options?.request ?? {},
           secretKey: secretKey!,
