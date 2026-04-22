@@ -1,5 +1,11 @@
 # mppx
 
+## 0.6.2
+
+### Patch Changes
+
+- 57354de: Added scope-bound challenge metadata for route replay protection, scope-aware `verifyCredential()` checks, and adapter auto-scoping for Hono and proxy routes.
+
 ## 0.6.1
 
 ### Patch Changes
