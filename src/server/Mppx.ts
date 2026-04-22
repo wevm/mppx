@@ -13,11 +13,22 @@ import type * as Receipt from '../Receipt.js'
 import type * as z from '../zod.js'
 import * as Html from './internal/html/config.js'
 import { serviceWorker } from './internal/html/serviceWorker.gen.js'
+import * as Scope from './internal/scope.js'
 import * as NodeListener from './NodeListener.js'
 import * as Request from './Request.js'
 import * as Transport from './Transport.js'
 
 export type Methods = readonly (Method.AnyServer | readonly Method.AnyServer[])[]
+
+/** Options for standalone credential verification. */
+export type VerifyCredentialOptions = {
+  capturedRequest?: Method.CapturedRequest | undefined
+  meta?: Record<string, string> | undefined
+  realm?: string | undefined
+  request?: Record<string, unknown> | undefined
+  /** Optional expected route/resource scope bound via challenge `opaque`. */
+  scope?: string | undefined
+}
 
 /**
  * Payment handler.
@@ -180,13 +191,6 @@ type ChallengeFn<method extends Method.Method, defaults extends Record<string, u
   options: MethodFn.Options<method, defaults>,
 ) => Promise<Challenge.Challenge>
 
-export type VerifyCredentialOptions = {
-  capturedRequest?: Method.CapturedRequest | undefined
-  meta?: Record<string, string> | undefined
-  realm?: string | undefined
-  request?: Record<string, unknown> | undefined
-}
-
 /**
  * Creates a server-side payment handler from methods.
  *
@@ -295,6 +299,15 @@ export function create<
     // Validate payload against method schema
     mi.schema.credential.payload.parse(credential.payload)
 
+    const expectedMeta = Scope.merge({ meta: options?.meta, scope: options?.scope })
+
+    if (options?.scope !== undefined && Scope.read(credential.challenge.opaque) !== options.scope) {
+      throw new Errors.InvalidChallengeError({
+        id: credential.challenge.id,
+        reason: "credential scope does not match this route's requirements",
+      })
+    }
+
     const shouldValidateRoute =
       options?.capturedRequest !== undefined ||
       options?.meta !== undefined ||
@@ -307,7 +320,7 @@ export function create<
           credential,
           defaults: mi.defaults,
           expires: credential.challenge.expires,
-          meta: options?.meta,
+          meta: expectedMeta,
           method: mi,
           realm: options?.realm ?? realm,
           request: mi.request as never,
@@ -399,13 +412,19 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
   const { defaults, method, realm, respond, secretKey, transport, verify } = parameters
 
   return (options) => {
-    const { description, meta, ...rest } = options
+    const { description, meta, scope, ...rest } = options
+    const staticMeta = Scope.merge({ meta, scope })
+    const merged = { ...defaults, ...rest }
 
     return Object.assign(
       async (input: Transport.InputOf): Promise<MethodFn.Response> => {
         const expires =
           'expires' in options ? (options.expires as string | undefined) : Expires.minutes(5)
         const capturedRequest = await captureRequest(transport, input)
+        const effectiveMeta =
+          scope === undefined && input instanceof globalThis.Request
+            ? Scope.merge({ meta: staticMeta, scope: Scope.get(input) })
+            : staticMeta
 
         // Extract credential once — getCredential may have side effects (e.g. SSE transports).
         const [credential, credentialError] = (() => {
@@ -424,7 +443,7 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
           defaults,
           description,
           expires,
-          meta,
+          meta: effectiveMeta,
           method,
           realm,
           request: parameters.request,
@@ -603,6 +622,7 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
           ...method,
           ...defaults,
           ...options,
+          ...(staticMeta !== undefined ? { meta: staticMeta } : {}),
           name: method.name,
           intent: method.intent,
           _canonicalRequest: PaymentRequest.fromMethod(method, { ...defaults, ...rest }),
@@ -627,12 +647,14 @@ function createChallengeFn(parameters: {
   const { defaults, method, realm, secretKey } = parameters
 
   return async (options) => {
-    const { description, meta, ...rest } = options as {
+    const { description, meta, scope, ...rest } = options as {
       description?: string
       expires?: string
       meta?: Record<string, string>
+      scope?: string
       [key: string]: unknown
     }
+    const effectiveMeta = Scope.merge({ meta, scope })
     const expires =
       'expires' in options ? (options.expires as string | undefined) : Expires.minutes(5)
 
@@ -640,7 +662,7 @@ function createChallengeFn(parameters: {
       defaults,
       description,
       expires,
-      meta,
+      meta: effectiveMeta,
       method,
       realm,
       request: parameters.request,
@@ -950,6 +972,8 @@ declare namespace MethodFn {
     expires?: string | undefined
     /** Optional server-defined correlation data (serialized as `opaque` in the request). Flat string-to-string map; clients MUST NOT modify. */
     meta?: Record<string, string> | undefined
+    /** Optional route/resource scope bound via reserved challenge metadata. */
+    scope?: string | undefined
   } & Method.WithDefaults<z.input<method['schema']['request']>, defaults>
 
   export type Response<transport extends Transport.AnyTransport = Transport.Http> =
@@ -970,6 +994,7 @@ type ConfiguredHandler = ((input: Request) => Promise<MethodFn.Response<Transpor
     intent: string
     html: Html.Options | undefined
     meta?: Record<string, string> | undefined
+    scope?: string | undefined
     _canonicalRequest: Record<string, unknown>
   }
 }

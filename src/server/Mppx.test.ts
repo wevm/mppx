@@ -2108,6 +2108,47 @@ describe('cross-route credential replay via scope binding flaw', () => {
     expect(result.status).toBe(402)
   })
 
+  test('rejects same-economics credential replayed across sibling routes with different scope', async () => {
+    const handler = Mppx.create({ methods: [serverMethod], realm, secretKey })
+
+    const routeA = handler.charge({
+      amount: '0.01',
+      currency: '0x0000000000000000000000000000000000000001',
+      decimals: 6,
+      expires: new Date(Date.now() + 60_000).toISOString(),
+      recipient: '0x0000000000000000000000000000000000000002',
+      scope: 'GET /a',
+    })
+    const routeB = handler.charge({
+      amount: '0.01',
+      currency: '0x0000000000000000000000000000000000000001',
+      decimals: 6,
+      expires: new Date(Date.now() + 60_000).toISOString(),
+      recipient: '0x0000000000000000000000000000000000000002',
+      scope: 'GET /b',
+    })
+
+    const routeAChallengeResult = await routeA(new Request('https://example.com/a'))
+    expect(routeAChallengeResult.status).toBe(402)
+    if (routeAChallengeResult.status !== 402) throw new Error()
+
+    const routeAChallenge = Challenge.fromResponse(routeAChallengeResult.challenge)
+    expect(routeAChallenge.opaque).toEqual({ _mppx_scope: 'GET /a' })
+
+    const credential = Credential.from({
+      challenge: routeAChallenge,
+      payload: { token: 'valid' },
+    })
+
+    const result = await routeB(
+      new Request('https://example.com/b', {
+        headers: { Authorization: Credential.serialize(credential) },
+      }),
+    )
+
+    expect(result.status).toBe(402)
+  })
+
   test('rejects request-billed credential replayed at token-billed route', async () => {
     const sessionMethod = Method.from({
       name: 'mock',
@@ -3091,6 +3132,37 @@ describe('challenge', () => {
     expect(challenge.opaque).toEqual({ checkout_id: 'chk_abc' })
   })
 
+  test('challenge binds scope via reserved opaque metadata', async () => {
+    const mppx = Mppx.create({
+      methods: [alphaChargeServer],
+      realm,
+      secretKey,
+    })
+
+    const challenge = await mppx.challenge.alpha.charge({
+      ...challengeOpts,
+      scope: 'GET /premium',
+    })
+
+    expect(challenge.opaque).toEqual({ _mppx_scope: 'GET /premium' })
+  })
+
+  test('scope throws when it conflicts with reserved meta scope', async () => {
+    const mppx = Mppx.create({
+      methods: [alphaChargeServer],
+      realm,
+      secretKey,
+    })
+
+    await expect(
+      mppx.challenge.alpha.charge({
+        ...challengeOpts,
+        meta: { _mppx_scope: 'GET /other' },
+        scope: 'GET /premium',
+      }),
+    ).rejects.toThrow('Conflicting scope values')
+  })
+
   test('challenge applies schema transforms', async () => {
     // Method with a z.transform that converts decimals
     const transformMethod = Method.from({
@@ -3327,6 +3399,43 @@ describe('verifyCredential', () => {
 
     expect(receipt.status).toBe('success')
     expect(receipt.method).toBe('alpha')
+  })
+
+  test('verifies a credential when the expected scope matches', async () => {
+    const mppx = Mppx.create({
+      methods: [alphaChargeServer],
+      realm,
+      secretKey,
+    })
+
+    const challenge = await mppx.challenge.alpha.charge({
+      ...challengeOpts,
+      scope: 'GET /premium',
+    })
+    const credential = Credential.from({ challenge, payload: { token: 'valid' } })
+
+    const receipt = await mppx.verifyCredential(credential, { scope: 'GET /premium' })
+
+    expect(receipt.status).toBe('success')
+    expect(receipt.method).toBe('alpha')
+  })
+
+  test('rejects a credential when the expected scope mismatches', async () => {
+    const mppx = Mppx.create({
+      methods: [alphaChargeServer],
+      realm,
+      secretKey,
+    })
+
+    const challenge = await mppx.challenge.alpha.charge({
+      ...challengeOpts,
+      scope: 'GET /premium',
+    })
+    const credential = Credential.from({ challenge, payload: { token: 'valid' } })
+
+    await expect(mppx.verifyCredential(credential, { scope: 'GET /other' })).rejects.toThrow(
+      "credential scope does not match this route's requirements",
+    )
   })
 
   test('verifies a credential for session intent', async () => {

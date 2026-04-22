@@ -54,7 +54,8 @@ export function matchPath(
   return match
 }
 
-function parseRouteKey(key: string): { method: string | undefined; pattern: string } {
+/** Parses a proxy route key like `"POST /v1/messages"` into method + pathname pattern. */
+export function parseRouteKey(key: string): { method: string | undefined; pattern: string } {
   const tokens = key.trim().split(/\s+/)
   if (tokens.length >= 2 && httpMethods.has(tokens[0]!.toUpperCase())) {
     return { method: tokens[0]!.toUpperCase(), pattern: tokens.slice(1).join(' ') }
