@@ -2088,8 +2088,7 @@ describe.runIf(isLocalnet)('session', () => {
     test('sessionManager.close surfaces problem details from HTTP close failures', async () => {
       const challenge = makeChallenge({
         id: 'close-http-failure',
-        channelId:
-          '0x0000000000000000000000000000000000000000000000000000000000000001' as Hex,
+        channelId: '0x0000000000000000000000000000000000000000000000000000000000000001' as Hex,
       })
       let requests = 0
 
@@ -2135,7 +2134,9 @@ describe.runIf(isLocalnet)('session', () => {
           )
         }
 
-        throw new Error(`unexpected payment action ${(credential.payload as { action: string }).action}`)
+        throw new Error(
+          `unexpected payment action ${(credential.payload as { action: string }).action}`,
+        )
       }
 
       const manager = sessionManager({
