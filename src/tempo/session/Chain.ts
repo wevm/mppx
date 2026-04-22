@@ -94,7 +94,9 @@ function assertUint128(amount: bigint): void {
   }
 }
 
-function isTempoAccessKeyAccount(account: Account): account is Account & { accessKeyAddress: Address } {
+function isTempoAccessKeyAccount(
+  account: Account,
+): account is Account & { accessKeyAddress: Address } {
   return 'accessKeyAddress' in account && typeof account.accessKeyAddress === 'string'
 }
 
