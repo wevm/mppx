@@ -414,7 +414,6 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
   return (options) => {
     const { description, meta, scope, ...rest } = options
     const staticMeta = Scope.merge({ meta, scope })
-    const merged = { ...defaults, ...rest }
 
     return Object.assign(
       async (input: Transport.InputOf): Promise<MethodFn.Response> => {
