@@ -110,11 +110,15 @@ describe('generate', () => {
                 },
               },
               "x-payment-info": {
-                "amount": "100",
-                "currency": "0xUSDC",
-                "intent": "charge",
-                "method": "tempo",
-                "recipient": "0x123",
+                "offers": [
+                  {
+                    "amount": "100",
+                    "currency": "0xUSDC",
+                    "intent": "charge",
+                    "method": "tempo",
+                    "recipient": "0x123",
+                  },
+                ],
               },
             },
           },
@@ -161,11 +165,15 @@ describe('generate', () => {
                 },
               },
               "x-payment-info": {
-                "amount": "50",
-                "currency": "usd",
-                "intent": "charge",
-                "method": "tempo",
-                "recipient": "0x1",
+                "offers": [
+                  {
+                    "amount": "50",
+                    "currency": "usd",
+                    "intent": "charge",
+                    "method": "tempo",
+                    "recipient": "0x1",
+                  },
+                ],
               },
             },
           },
@@ -206,10 +214,14 @@ describe('generate', () => {
                 },
               },
               "x-payment-info": {
-                "amount": null,
-                "intent": "session",
-                "method": "tempo",
-                "recipient": "0x123",
+                "offers": [
+                  {
+                    "amount": null,
+                    "intent": "session",
+                    "method": "tempo",
+                    "recipient": "0x123",
+                  },
+                ],
               },
             },
           },
@@ -305,11 +317,15 @@ describe('generate', () => {
                 },
               },
               "x-payment-info": {
-                "amount": "100",
-                "currency": "0xUSDC",
-                "intent": "charge",
-                "method": "tempo",
-                "recipient": "0xABC",
+                "offers": [
+                  {
+                    "amount": "100",
+                    "currency": "0xUSDC",
+                    "intent": "charge",
+                    "method": "tempo",
+                    "recipient": "0xABC",
+                  },
+                ],
               },
             },
           },
@@ -334,11 +350,15 @@ describe('generate', () => {
               },
               "summary": "Search the index",
               "x-payment-info": {
-                "amount": "500",
-                "currency": "0xUSDC",
-                "intent": "charge",
-                "method": "tempo",
-                "recipient": "0xABC",
+                "offers": [
+                  {
+                    "amount": "500",
+                    "currency": "0xUSDC",
+                    "intent": "charge",
+                    "method": "tempo",
+                    "recipient": "0xABC",
+                  },
+                ],
               },
             },
           },
@@ -353,10 +373,14 @@ describe('generate', () => {
                 },
               },
               "x-payment-info": {
-                "amount": null,
-                "intent": "session",
-                "method": "tempo",
-                "recipient": "0xABC",
+                "offers": [
+                  {
+                    "amount": null,
+                    "intent": "session",
+                    "method": "tempo",
+                    "recipient": "0xABC",
+                  },
+                ],
               },
             },
           },
@@ -410,11 +434,15 @@ describe('generate', () => {
               },
               "summary": "Monthly subscription",
               "x-payment-info": {
-                "amount": "100",
-                "intent": "subscribe",
-                "interval": "monthly",
-                "method": "tempo",
-                "recipient": "0xABC",
+                "offers": [
+                  {
+                    "amount": "100",
+                    "intent": "subscribe",
+                    "interval": "monthly",
+                    "method": "tempo",
+                    "recipient": "0xABC",
+                  },
+                ],
               },
             },
           },

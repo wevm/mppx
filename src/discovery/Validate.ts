@@ -40,9 +40,10 @@ export function validate(doc: unknown): ValidationError[] {
       const paymentResult = PaymentInfo.safeParse(rawPaymentInfo)
       if (!paymentResult.success) {
         for (const issue of paymentResult.error.issues) {
+          const issuePath = issue.path.length > 0 ? `.${issue.path.map(String).join('.')}` : ''
           errors.push({
             message: issue.message,
-            path: `${opPath}.x-payment-info.${issue.path.map(String).join('.')}`,
+            path: `${opPath}.x-payment-info${issuePath}`,
             severity: 'error',
           })
         }
