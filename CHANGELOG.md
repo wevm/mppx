@@ -1,5 +1,12 @@
 # mppx
 
+## 0.6.4
+
+### Patch Changes
+
+- 0d1e548: Fixed credential `opaque` serialization to use the spec-compliant base64url string shape, while keeping deserialization backward-compatible with legacy object-shaped credentials.
+- 9536014: Added canonical discovery output using `x-payment-info.offers[]` while continuing to accept the legacy flat shorthand during validation and parsing.
+
 ## 0.6.3
 
 ### Patch Changes
