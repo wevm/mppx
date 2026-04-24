@@ -1,5 +1,12 @@
 # mppx
 
+## 0.6.5
+
+### Patch Changes
+
+- 3c5cd4b: Fixed zero-amount Tempo proof credentials to bind signatures to the challenge realm.
+- 24604ff: Fixed MCP stdio startup and returned structured CLI command results without writing raw tool output to stdout.
+
 ## 0.6.4
 
 ### Patch Changes
