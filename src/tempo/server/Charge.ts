@@ -244,13 +244,14 @@ export function charge<const parameters extends charge.Parameters>(
             domain: Proof.domain(resolvedChainId),
             types: Proof.types,
             primaryType: 'Proof',
-            message: Proof.message(challenge.id),
+            message: Proof.message(challenge.id, challenge.realm),
             signature: payload.signature as `0x${string}`,
           })
           if (!valid) {
             const proofSigner = recoverAuthorizedProofSigner({
               chainId: resolvedChainId,
               challengeId: challenge.id,
+              realm: challenge.realm,
               signature: payload.signature as `0x${string}`,
               sourceAddress: source.address,
             })
@@ -712,10 +713,11 @@ async function markProofUsed(
 function recoverAuthorizedProofSigner(parameters: {
   chainId: number
   challengeId: string
+  realm: string
   signature: `0x${string}`
   sourceAddress: `0x${string}`
 }): `0x${string}` | null {
-  const { chainId, challengeId, signature, sourceAddress } = parameters
+  const { chainId, challengeId, realm, signature, sourceAddress } = parameters
 
   try {
     const envelope = SignatureEnvelope.from(signature)
@@ -723,7 +725,7 @@ function recoverAuthorizedProofSigner(parameters: {
       domain: Proof.domain(chainId),
       types: Proof.types,
       primaryType: 'Proof',
-      message: Proof.message(challengeId),
+      message: Proof.message(challengeId, realm),
     })
 
     if (envelope.type === 'keychain') {

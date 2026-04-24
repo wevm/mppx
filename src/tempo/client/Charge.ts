@@ -65,7 +65,7 @@ export function charge(parameters: charge.Parameters = {}) {
           domain: Proof.domain(chainId!),
           types: Proof.types,
           primaryType: 'Proof',
-          message: Proof.message(challenge.id),
+          message: Proof.message(challenge.id, challenge.realm),
         })
         return Credential.serialize({
           challenge,
