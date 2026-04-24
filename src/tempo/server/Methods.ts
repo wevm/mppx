@@ -1,6 +1,7 @@
 import * as Ws_ from '../session/Ws.js'
 import { charge as charge_ } from './Charge.js'
 import { session as session_, settle as settle_ } from './Session.js'
+import { subscription as subscription_ } from './Subscription.js'
 
 /**
  * Creates both Tempo `charge` and `session` methods from shared parameters.
@@ -28,6 +29,8 @@ export namespace tempo {
   export const charge = charge_
   /** Creates a Tempo `session` method for session-based TIP-20 token payments. */
   export const session = session_
+  /** Creates a Tempo `subscription` method for recurring TIP-20 token payments. */
+  export const subscription = subscription_
   /** One-shot settle: reads highest voucher from storage and submits on-chain. */
   export const settle = settle_
   /** Experimental websocket helpers for Tempo sessions. */

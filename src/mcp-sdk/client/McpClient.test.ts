@@ -50,6 +50,7 @@ describe('McpClient.wrap', () => {
         })(extra)
 
         if (result.status === 402) throw result.challenge
+        if (result.status === 'pending') throw result.response
 
         return result.withReceipt({
           content: [{ type: 'text' as const, text: 'Premium tool executed' }],

@@ -141,6 +141,7 @@ export function create(config: create.Config): Proxy {
       getConfiguredScope(handler) ? request : Scope.attach(request, scope),
     )
     if (result.status === 402) return result.challenge
+    if (result.status === 'pending') return result.response
 
     const managementResponse = (() => {
       try {

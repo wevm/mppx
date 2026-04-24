@@ -171,6 +171,10 @@ Changeset descriptions **must use past tense** (e.g. "Added support for …", "F
 
 The changelog is auto-generated from changesets during `changeset version`.
 
+## JSDoc
+
+All public interfaces — exported functions, types, classes, constants, and namespace members — **must** have JSDoc comments. Keep descriptions concise (one sentence is fine). Include `@param` / `@returns` only when the meaning isn't obvious from the name and type.
+
 ## Commands
 
 ```bash

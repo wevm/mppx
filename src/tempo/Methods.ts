@@ -199,3 +199,45 @@ export const session = Method.from({
     ),
   },
 })
+
+/**
+ * Tempo subscription intent for recurring TIP-20 token transfers.
+ *
+ * Uses a signed key authorization that delegates one transfer per billing period.
+ */
+export const subscription = Method.from({
+  name: 'tempo',
+  intent: 'subscription',
+  schema: {
+    credential: {
+      payload: z.object({
+        signature: z.signature(),
+        type: z.literal('keyAuthorization'),
+      }),
+    },
+    request: z.pipe(
+      z.object({
+        amount: z.amount(),
+        chainId: z.optional(z.number()),
+        currency: z.string(),
+        decimals: z.number(),
+        description: z.optional(z.string()),
+        externalId: z.optional(z.string()),
+        periodSeconds: z.string().check(z.regex(/^[1-9]\d*$/, 'Invalid periodSeconds')),
+        recipient: z.string(),
+        subscriptionExpires: z.datetime(),
+      }),
+      z.transform(({ amount, chainId, decimals, ...rest }) => ({
+        ...rest,
+        amount: parseUnits(amount, decimals).toString(),
+        ...(chainId !== undefined
+          ? {
+              methodDetails: {
+                chainId,
+              },
+            }
+          : {}),
+      })),
+    ),
+  },
+})

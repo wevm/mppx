@@ -154,6 +154,7 @@ export async function handler(request: Request): Promise<Response | null> {
     // verified here if you choose to mix transports.
     const result = await route(request)
     if (result.status === 402) return result.challenge
+    if (result.status === 'pending') return result.response
 
     // Once a route has already been paid over HTTP, return a simple message so
     // it is obvious that WebSocket is the intended content path for this demo.

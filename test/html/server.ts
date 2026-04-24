@@ -4,9 +4,21 @@ import { Mppx, Request as ServerRequest, stripe, tempo } from 'mppx/server'
 import { createClient, http as createHttpTransport } from 'viem'
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts'
 import { tempoModerato } from 'viem/chains'
-import { Actions } from 'viem/tempo'
+import { Account, Actions } from 'viem/tempo'
 
 import { stripePreviewVersion } from '../../src/stripe/internal/constants.js'
+
+function unwrapHttpResult(
+  result:
+    | { challenge: Response; status: 402 }
+    | { response: Response; status: 'pending' }
+    | { status: 200; withReceipt: (response?: Response) => Response },
+  response?: Response,
+) {
+  if (result.status === 402) return result.challenge
+  if (result.status === 'pending') return result.response
+  return result.withReceipt(response)
+}
 
 export async function startServer(port: number): Promise<HtmlTestServer> {
   const stripePublishableKey = process.env.VITE_STRIPE_PUBLIC_KEY
@@ -28,6 +40,8 @@ export async function startServer(port: number): Promise<HtmlTestServer> {
     }
 
   const createTokenUrl = '/stripe/create-spt'
+  const subscriptionAccessKey = Account.fromP256(generatePrivateKey())
+  const subscriptionExpires = new Date(Date.now() + 365 * 24 * 60 * 60 * 1_000).toISOString()
   const tempoMppx = Mppx.create({
     methods: [
       tempo.charge({
@@ -36,6 +50,46 @@ export async function startServer(port: number): Promise<HtmlTestServer> {
         feePayer: true,
         html: true,
         recipient: account.address,
+        testnet: true,
+      }),
+      tempo.subscription({
+        activate: async ({ request }) => ({
+          receipt: {
+            method: 'tempo',
+            reference: '0xsubscription',
+            status: 'success',
+            subscriptionId: 'sub_pro',
+            timestamp: new Date().toISOString(),
+          },
+          subscription: {
+            amount: request.amount,
+            billingAnchor: new Date().toISOString(),
+            chainId: request.methodDetails?.chainId,
+            currency: request.currency,
+            identityId: 'user-1',
+            lastChargedPeriod: 0,
+            periodSeconds: request.periodSeconds,
+            recipient: request.recipient,
+            reference: '0xsubscription',
+            resourceId: 'plan:pro',
+            subscriptionExpires: request.subscriptionExpires,
+            subscriptionId: 'sub_pro',
+            timestamp: new Date().toISOString(),
+          },
+        }),
+        amount: '1',
+        chainId: tempoModerato.id,
+        currency: '0x20c0000000000000000000000000000000000000',
+        html: {
+          accessKey: {
+            accessKeyAddress: subscriptionAccessKey.address,
+            keyType: subscriptionAccessKey.keyType,
+          },
+        },
+        periodSeconds: '2592000',
+        recipient: account.address,
+        resolve: async () => ({ identity: { id: 'user-1' }, resource: { id: 'plan:pro' } }),
+        subscriptionExpires,
         testnet: true,
       }),
     ],
@@ -88,10 +142,7 @@ export async function startServer(port: number): Promise<HtmlTestServer> {
           amount: '0.01',
           description: 'Random stock photo',
         })(request)
-
-        if (result.status === 402) return result.challenge
-
-        return result.withReceipt(Response.json({ url: 'https://example.com/photo.jpg' }))
+        return unwrapHttpResult(result, Response.json({ url: 'https://example.com/photo.jpg' }))
       }
 
       if (url.pathname === '/tempo/charge-custom-text') {
@@ -99,10 +150,16 @@ export async function startServer(port: number): Promise<HtmlTestServer> {
           amount: '0.01',
           description: 'Random stock photo',
         })(request)
+        return unwrapHttpResult(result, Response.json({ url: 'https://example.com/photo.jpg' }))
+      }
 
-        if (result.status === 402) return result.challenge
-
-        return result.withReceipt(Response.json({ url: 'https://example.com/photo.jpg' }))
+      if (url.pathname === '/tempo/subscription') {
+        const result = await tempoMppx.tempo.subscription({
+          description: 'Tempo Pro',
+          externalId: 'plan_pro',
+          recipient: account.address,
+        })(request)
+        return unwrapHttpResult(result, Response.json({ plan: 'pro' }))
       }
 
       if (url.pathname === '/stripe/charge') {
@@ -113,8 +170,6 @@ export async function startServer(port: number): Promise<HtmlTestServer> {
           currency: 'usd',
           decimals: 2,
         })(request)
-
-        if (result.status === 402) return result.challenge
 
         const fortunes = [
           'A beautiful, smart, and loving person will come into your life.',
@@ -130,7 +185,7 @@ export async function startServer(port: number): Promise<HtmlTestServer> {
         ] as const
 
         const fortune = fortunes[Math.floor(Math.random() * fortunes.length)]
-        return result.withReceipt(Response.json({ fortune }))
+        return unwrapHttpResult(result, Response.json({ fortune }))
       }
 
       if (url.pathname === createTokenUrl) {
@@ -145,10 +200,7 @@ export async function startServer(port: number): Promise<HtmlTestServer> {
           ['tempo/charge', { amount: '0.01', description: 'Composed payment' }],
           ['stripe/charge', { amount: '1', currency: 'usd', decimals: 2 }],
         )(request)
-
-        if (result.status === 402) return result.challenge
-
-        return result.withReceipt(Response.json({ ok: true }))
+        return unwrapHttpResult(result, Response.json({ ok: true }))
       }
 
       if (url.pathname === '/compose-duplicates') {
@@ -159,10 +211,7 @@ export async function startServer(port: number): Promise<HtmlTestServer> {
           ['stripe/charge', { amount: '1', currency: 'usd', decimals: 2 }],
           ['stripe/charge', { amount: '2', currency: 'usd', decimals: 2 }],
         )(request)
-
-        if (result.status === 402) return result.challenge
-
-        return result.withReceipt(Response.json({ ok: true }))
+        return unwrapHttpResult(result, Response.json({ ok: true }))
       }
 
       return new Response('Not Found', { status: 404 })
