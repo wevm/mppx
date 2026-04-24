@@ -136,6 +136,7 @@ export async function handler(request: Request): Promise<Response | null> {
     // Return the challenge response (402 + WWW-Authenticate header) to the client.
     // The client's session will automatically parse this, open a channel, and retry.
     if (result.status === 402) return result.challenge
+    if (result.status === 'pending') return result.response
 
     // If we get here, the credential was valid — the client paid for this request.
     // Generate the content they paid for.

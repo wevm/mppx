@@ -121,7 +121,6 @@ export declare namespace subscription {
   type Parameters = Account.getResolver.Parameters &
     Client.getResolver.Parameters & {
       accessKey?: SubscriptionAccessKey | undefined
-      allowMemo?: boolean | undefined
       expectedRecipients?: readonly Address[] | undefined
     }
 }

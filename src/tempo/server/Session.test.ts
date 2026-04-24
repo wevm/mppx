@@ -64,6 +64,18 @@ const currency = asset
 let escrowContract: Address
 let saltCounter = 0
 
+function expectSettledReceipt(receipt: unknown): SessionReceipt {
+  if (
+    receipt &&
+    typeof receipt === 'object' &&
+    'response' in receipt &&
+    (receipt as { response?: unknown }).response instanceof Response
+  ) {
+    throw new Error('expected settled receipt')
+  }
+  return receipt as SessionReceipt
+}
+
 beforeAll(async () => {
   if (!isLocalnet) return
   escrowContract = await deployEscrow()
@@ -130,20 +142,22 @@ describe.runIf(isLocalnet)('session', () => {
       const { channelId, serializedTransaction } = await createSignedOpenTransaction(10000000n)
       const server = createServer()
 
-      const receipt = await server.verify({
-        credential: {
-          challenge: makeChallenge({ channelId }),
-          payload: {
-            action: 'open' as const,
-            type: 'transaction' as const,
-            channelId,
-            transaction: serializedTransaction,
-            cumulativeAmount: '1000000',
-            signature: await signTestVoucher(channelId, 1000000n),
+      const receipt = expectSettledReceipt(
+        await server.verify({
+          credential: {
+            challenge: makeChallenge({ channelId }),
+            payload: {
+              action: 'open' as const,
+              type: 'transaction' as const,
+              channelId,
+              transaction: serializedTransaction,
+              cumulativeAmount: '1000000',
+              signature: await signTestVoucher(channelId, 1000000n),
+            },
           },
-        },
-        request: makeRequest(),
-      })
+          request: makeRequest(),
+        }),
+      )
 
       expect(receipt.method).toBe('tempo')
       expect(receipt.status).toBe('success')
@@ -279,20 +293,22 @@ describe.runIf(isLocalnet)('session', () => {
       const ch1 = await store.getChannel(channelId)
       expect(ch1!.highestVoucherAmount).toBe(1000000n)
 
-      const receipt = await server.verify({
-        credential: {
-          challenge: makeChallenge({ id: 'open-2', channelId }),
-          payload: {
-            action: 'open' as const,
-            type: 'transaction' as const,
-            channelId,
-            transaction: serializedTransaction,
-            cumulativeAmount: '5000000',
-            signature: await signTestVoucher(channelId, 5000000n),
+      const receipt = expectSettledReceipt(
+        await server.verify({
+          credential: {
+            challenge: makeChallenge({ id: 'open-2', channelId }),
+            payload: {
+              action: 'open' as const,
+              type: 'transaction' as const,
+              channelId,
+              transaction: serializedTransaction,
+              cumulativeAmount: '5000000',
+              signature: await signTestVoucher(channelId, 5000000n),
+            },
           },
-        },
-        request: makeRequest(),
-      })
+          request: makeRequest(),
+        }),
+      )
 
       expect(receipt.status).toBe('success')
       const ch2 = await store.getChannel(channelId)
@@ -318,20 +334,22 @@ describe.runIf(isLocalnet)('session', () => {
         request: makeRequest(),
       })
 
-      const receipt = await server.verify({
-        credential: {
-          challenge: makeChallenge({ id: 'open-2', channelId }),
-          payload: {
-            action: 'open' as const,
-            type: 'transaction' as const,
-            channelId,
-            transaction: serializedTransaction,
-            cumulativeAmount: '1000000',
-            signature: await signTestVoucher(channelId, 1000000n),
+      const receipt = expectSettledReceipt(
+        await server.verify({
+          credential: {
+            challenge: makeChallenge({ id: 'open-2', channelId }),
+            payload: {
+              action: 'open' as const,
+              type: 'transaction' as const,
+              channelId,
+              transaction: serializedTransaction,
+              cumulativeAmount: '1000000',
+              signature: await signTestVoucher(channelId, 1000000n),
+            },
           },
-        },
-        request: makeRequest(),
-      })
+          request: makeRequest(),
+        }),
+      )
 
       expect(receipt.status).toBe('success')
       const ch = await store.getChannel(channelId)
@@ -377,20 +395,22 @@ describe.runIf(isLocalnet)('session', () => {
 
       await charge(store, channelId, 4000000n)
 
-      const reopenReceipt = (await server.verify({
-        credential: {
-          challenge: makeChallenge({ id: 'open-2', channelId: caseVariantChannelId }),
-          payload: {
-            action: 'open' as const,
-            type: 'transaction' as const,
-            channelId: caseVariantChannelId,
-            transaction: serializedTransaction,
-            cumulativeAmount: '5000000',
-            signature: await signTestVoucher(caseVariantChannelId, 5000000n),
+      const reopenReceipt = expectSettledReceipt(
+        await server.verify({
+          credential: {
+            challenge: makeChallenge({ id: 'open-2', channelId: caseVariantChannelId }),
+            payload: {
+              action: 'open' as const,
+              type: 'transaction' as const,
+              channelId: caseVariantChannelId,
+              transaction: serializedTransaction,
+              cumulativeAmount: '5000000',
+              signature: await signTestVoucher(caseVariantChannelId, 5000000n),
+            },
           },
-        },
-        request: makeRequest(),
-      })) as SessionReceipt
+          request: makeRequest(),
+        }),
+      )
 
       expect(reopenReceipt.spent).toBe('4000000')
       await expect(charge(store, caseVariantChannelId, 2000000n)).rejects.toThrow(
@@ -445,20 +465,22 @@ describe.runIf(isLocalnet)('session', () => {
       })
       const server = createServer()
 
-      const receipt = await server.verify({
-        credential: {
-          challenge: makeChallenge({ channelId }),
-          payload: {
-            action: 'open' as const,
-            type: 'transaction' as const,
-            channelId,
-            transaction: serializedTransaction,
-            cumulativeAmount: '1000000',
-            signature: await signTestVoucher(channelId, 1000000n),
+      const receipt = expectSettledReceipt(
+        await server.verify({
+          credential: {
+            challenge: makeChallenge({ channelId }),
+            payload: {
+              action: 'open' as const,
+              type: 'transaction' as const,
+              channelId,
+              transaction: serializedTransaction,
+              cumulativeAmount: '1000000',
+              signature: await signTestVoucher(channelId, 1000000n),
+            },
           },
-        },
-        request: makeRequest(),
-      })
+          request: makeRequest(),
+        }),
+      )
 
       expect(receipt.status).toBe('success')
     })
@@ -496,20 +518,22 @@ describe.runIf(isLocalnet)('session', () => {
 
       // 4. Re-open with a new voucher above the settled amount
       const server2 = createServer()
-      const receipt = await server2.verify({
-        credential: {
-          challenge: makeChallenge({ id: 'reopen', channelId }),
-          payload: {
-            action: 'open' as const,
-            type: 'transaction' as const,
-            channelId,
-            transaction: serializedTransaction,
-            cumulativeAmount: '7000000',
-            signature: await signTestVoucher(channelId, 7000000n),
+      const receipt = expectSettledReceipt(
+        await server2.verify({
+          credential: {
+            challenge: makeChallenge({ id: 'reopen', channelId }),
+            payload: {
+              action: 'open' as const,
+              type: 'transaction' as const,
+              channelId,
+              transaction: serializedTransaction,
+              cumulativeAmount: '7000000',
+              signature: await signTestVoucher(channelId, 7000000n),
+            },
           },
-        },
-        request: makeRequest(),
-      })
+          request: makeRequest(),
+        }),
+      )
 
       expect(receipt.status).toBe('success')
 
@@ -551,20 +575,22 @@ describe.runIf(isLocalnet)('session', () => {
 
       // Re-open — receipt.spent must reflect unsettled portion
       const server2 = createServer()
-      const receipt = (await server2.verify({
-        credential: {
-          challenge: makeChallenge({ id: 'reopen', channelId }),
-          payload: {
-            action: 'open' as const,
-            type: 'transaction' as const,
-            channelId,
-            transaction: serializedTransaction,
-            cumulativeAmount: '8000000',
-            signature: await signTestVoucher(channelId, 8000000n),
+      const receipt = expectSettledReceipt(
+        await server2.verify({
+          credential: {
+            challenge: makeChallenge({ id: 'reopen', channelId }),
+            payload: {
+              action: 'open' as const,
+              type: 'transaction' as const,
+              channelId,
+              transaction: serializedTransaction,
+              cumulativeAmount: '8000000',
+              signature: await signTestVoucher(channelId, 8000000n),
+            },
           },
-        },
-        request: makeRequest(),
-      })) as SessionReceipt
+          request: makeRequest(),
+        }),
+      )
 
       // spent reflects on-chain settled (3M) so only unsettled portion is available
       expect(receipt.spent).toBe('3000000')
@@ -599,18 +625,20 @@ describe.runIf(isLocalnet)('session', () => {
       const server = createServer()
       await openServerChannel(server, channelId, serializedTransaction)
 
-      const receipt = await server.verify({
-        credential: {
-          challenge: makeChallenge({ id: 'challenge-2', channelId }),
-          payload: {
-            action: 'voucher' as const,
-            channelId,
-            cumulativeAmount: '2000000',
-            signature: await signTestVoucher(channelId, 2000000n),
+      const receipt = expectSettledReceipt(
+        await server.verify({
+          credential: {
+            challenge: makeChallenge({ id: 'challenge-2', channelId }),
+            payload: {
+              action: 'voucher' as const,
+              channelId,
+              cumulativeAmount: '2000000',
+              signature: await signTestVoucher(channelId, 2000000n),
+            },
           },
-        },
-        request: makeRequest(),
-      })
+          request: makeRequest(),
+        }),
+      )
 
       expect(receipt.status).toBe('success')
 
@@ -797,13 +825,15 @@ describe.runIf(isLocalnet)('session', () => {
 
       const channelAfterFirstAccept = await store.getChannel(channelId)
 
-      const replayReceipt = (await server.verify({
-        credential: {
-          challenge: makeChallenge({ id: 'challenge-3', channelId }),
-          payload,
-        },
-        request: makeRequest(),
-      })) as SessionReceipt
+      const replayReceipt = expectSettledReceipt(
+        await server.verify({
+          credential: {
+            challenge: makeChallenge({ id: 'challenge-3', channelId }),
+            payload,
+          },
+          request: makeRequest(),
+        }),
+      )
 
       expect(replayReceipt.status).toBe('success')
       expect(replayReceipt.acceptedCumulative).toBe('2000000')
@@ -1115,19 +1145,21 @@ describe.runIf(isLocalnet)('session', () => {
         amount: 10000000n,
       })
 
-      const receipt = await server.verify({
-        credential: {
-          challenge: makeChallenge({ id: 'challenge-2', channelId }),
-          payload: {
-            action: 'topUp' as const,
-            type: 'transaction' as const,
-            channelId,
-            transaction: topUpTx,
-            additionalDeposit: '10000000',
+      const receipt = expectSettledReceipt(
+        await server.verify({
+          credential: {
+            challenge: makeChallenge({ id: 'challenge-2', channelId }),
+            payload: {
+              action: 'topUp' as const,
+              type: 'transaction' as const,
+              channelId,
+              transaction: topUpTx,
+              additionalDeposit: '10000000',
+            },
           },
-        },
-        request: makeRequest(),
-      })
+          request: makeRequest(),
+        }),
+      )
 
       expect(receipt.status).toBe('success')
 
@@ -1189,19 +1221,21 @@ describe.runIf(isLocalnet)('session', () => {
         amount: 5000000n,
       })
 
-      const receipt = (await server.verify({
-        credential: {
-          challenge: makeChallenge({ id: 'challenge-topup', channelId }),
-          payload: {
-            action: 'topUp' as const,
-            type: 'transaction' as const,
-            channelId,
-            transaction: topUpTx,
-            additionalDeposit: '5000000',
+      const receipt = expectSettledReceipt(
+        await server.verify({
+          credential: {
+            challenge: makeChallenge({ id: 'challenge-topup', channelId }),
+            payload: {
+              action: 'topUp' as const,
+              type: 'transaction' as const,
+              channelId,
+              transaction: topUpTx,
+              additionalDeposit: '5000000',
+            },
           },
-        },
-        request: makeRequest(),
-      })) as SessionReceipt
+          request: makeRequest(),
+        }),
+      )
 
       expect(receipt.status).toBe('success')
       expect(receipt.spent).toBe('800000')
@@ -1262,18 +1296,20 @@ describe.runIf(isLocalnet)('session', () => {
       const server = createServer()
       await openServerChannel(server, channelId, serializedTransaction)
 
-      const receipt = await server.verify({
-        credential: {
-          challenge: makeChallenge({ id: 'challenge-2', channelId }),
-          payload: {
-            action: 'close' as const,
-            channelId,
-            cumulativeAmount: '1000000',
-            signature: await signTestVoucher(channelId, 1000000n),
+      const receipt = expectSettledReceipt(
+        await server.verify({
+          credential: {
+            challenge: makeChallenge({ id: 'challenge-2', channelId }),
+            payload: {
+              action: 'close' as const,
+              channelId,
+              cumulativeAmount: '1000000',
+              signature: await signTestVoucher(channelId, 1000000n),
+            },
           },
-        },
-        request: makeRequest(),
-      })
+          request: makeRequest(),
+        }),
+      )
 
       expect(receipt.status).toBe('success')
 
@@ -1287,18 +1323,20 @@ describe.runIf(isLocalnet)('session', () => {
       const server = createServer()
       await openServerChannel(server, channelId, serializedTransaction)
 
-      const receipt = await server.verify({
-        credential: {
-          challenge: makeChallenge({ id: 'challenge-2', channelId }),
-          payload: {
-            action: 'close' as const,
-            channelId,
-            cumulativeAmount: '5000000',
-            signature: await signTestVoucher(channelId, 5000000n),
+      const receipt = expectSettledReceipt(
+        await server.verify({
+          credential: {
+            challenge: makeChallenge({ id: 'challenge-2', channelId }),
+            payload: {
+              action: 'close' as const,
+              channelId,
+              cumulativeAmount: '5000000',
+              signature: await signTestVoucher(channelId, 5000000n),
+            },
           },
-        },
-        request: makeRequest(),
-      })
+          request: makeRequest(),
+        }),
+      )
 
       expect(receipt.status).toBe('success')
 
@@ -1326,18 +1364,20 @@ describe.runIf(isLocalnet)('session', () => {
 
       await charge(store, channelId, 500000n)
 
-      const receipt = await server.verify({
-        credential: {
-          challenge: makeChallenge({ id: 'challenge-3', channelId }),
-          payload: {
-            action: 'close' as const,
-            channelId,
-            cumulativeAmount: '500000',
-            signature: await signTestVoucher(channelId, 500000n),
+      const receipt = expectSettledReceipt(
+        await server.verify({
+          credential: {
+            challenge: makeChallenge({ id: 'challenge-3', channelId }),
+            payload: {
+              action: 'close' as const,
+              channelId,
+              cumulativeAmount: '500000',
+              signature: await signTestVoucher(channelId, 500000n),
+            },
           },
-        },
-        request: makeRequest(),
-      })
+          request: makeRequest(),
+        }),
+      )
 
       expect(receipt.status).toBe('success')
 
@@ -1407,18 +1447,20 @@ describe.runIf(isLocalnet)('session', () => {
 
       await openServerChannel(server, channelId, serializedTransaction)
 
-      const receipt = await server.verify({
-        credential: {
-          challenge: makeChallenge({ id: 'challenge-zero-close', channelId }),
-          payload: {
-            action: 'close' as const,
-            channelId,
-            cumulativeAmount: '0',
-            signature: await signTestVoucher(channelId, 0n),
+      const receipt = expectSettledReceipt(
+        await server.verify({
+          credential: {
+            challenge: makeChallenge({ id: 'challenge-zero-close', channelId }),
+            payload: {
+              action: 'close' as const,
+              channelId,
+              cumulativeAmount: '0',
+              signature: await signTestVoucher(channelId, 0n),
+            },
           },
-        },
-        request: makeRequest(),
-      })
+          request: makeRequest(),
+        }),
+      )
 
       expect(receipt.status).toBe('success')
 
@@ -1461,18 +1503,20 @@ describe.runIf(isLocalnet)('session', () => {
         amount: 10000000n,
       })
 
-      const receipt = await server.verify({
-        credential: {
-          challenge: makeChallenge({ id: 'challenge-2', channelId }),
-          payload: {
-            action: 'close' as const,
-            channelId,
-            cumulativeAmount: '15000000',
-            signature: await signTestVoucher(channelId, 15000000n),
+      const receipt = expectSettledReceipt(
+        await server.verify({
+          credential: {
+            challenge: makeChallenge({ id: 'challenge-2', channelId }),
+            payload: {
+              action: 'close' as const,
+              channelId,
+              cumulativeAmount: '15000000',
+              signature: await signTestVoucher(channelId, 15000000n),
+            },
           },
-        },
-        request: makeRequest(),
-      })
+          request: makeRequest(),
+        }),
+      )
 
       expect(receipt.status).toBe('success')
     })
@@ -1502,18 +1546,20 @@ describe.runIf(isLocalnet)('session', () => {
       const server = createServer({ getClient: () => client })
       await openServerChannel(server, channelId, serializedTransaction)
 
-      const receipt = await server.verify({
-        credential: {
-          challenge: makeChallenge({ id: 'challenge-2', channelId }),
-          payload: {
-            action: 'close' as const,
-            channelId,
-            cumulativeAmount: '1000000',
-            signature: await signTestVoucher(channelId, 1000000n),
+      const receipt = expectSettledReceipt(
+        await server.verify({
+          credential: {
+            challenge: makeChallenge({ id: 'challenge-2', channelId }),
+            payload: {
+              action: 'close' as const,
+              channelId,
+              cumulativeAmount: '1000000',
+              signature: await signTestVoucher(channelId, 1000000n),
+            },
           },
-        },
-        request: makeRequest(),
-      })
+          request: makeRequest(),
+        }),
+      )
 
       expect(receipt.status).toBe('success')
       expect((receipt as SessionReceipt).txHash).toMatch(/^0x/)
@@ -1568,49 +1614,55 @@ describe.runIf(isLocalnet)('session', () => {
         request: makeRequest(),
       })
 
-      const r2 = await server.verify({
-        credential: {
-          challenge: makeChallenge({ id: 'c2', channelId }),
-          payload: {
-            action: 'voucher' as const,
-            channelId,
-            cumulativeAmount: '3000000',
-            signature: await signTestVoucher(channelId, 3000000n),
+      const r2 = expectSettledReceipt(
+        await server.verify({
+          credential: {
+            challenge: makeChallenge({ id: 'c2', channelId }),
+            payload: {
+              action: 'voucher' as const,
+              channelId,
+              cumulativeAmount: '3000000',
+              signature: await signTestVoucher(channelId, 3000000n),
+            },
           },
-        },
-        request: makeRequest(),
-      })
+          request: makeRequest(),
+        }),
+      )
       expect(r2.status).toBe('success')
 
-      const r3 = await server.verify({
-        credential: {
-          challenge: makeChallenge({ id: 'c3', channelId }),
-          payload: {
-            action: 'voucher' as const,
-            channelId,
-            cumulativeAmount: '7000000',
-            signature: await signTestVoucher(channelId, 7000000n),
+      const r3 = expectSettledReceipt(
+        await server.verify({
+          credential: {
+            challenge: makeChallenge({ id: 'c3', channelId }),
+            payload: {
+              action: 'voucher' as const,
+              channelId,
+              cumulativeAmount: '7000000',
+              signature: await signTestVoucher(channelId, 7000000n),
+            },
           },
-        },
-        request: makeRequest(),
-      })
+          request: makeRequest(),
+        }),
+      )
       expect(r3.status).toBe('success')
 
       const ch = await store.getChannel(channelId)
       expect(ch!.highestVoucherAmount).toBe(7000000n)
 
-      const r4 = await server.verify({
-        credential: {
-          challenge: makeChallenge({ id: 'c4', channelId }),
-          payload: {
-            action: 'close' as const,
-            channelId,
-            cumulativeAmount: '7000000',
-            signature: await signTestVoucher(channelId, 7000000n),
+      const r4 = expectSettledReceipt(
+        await server.verify({
+          credential: {
+            challenge: makeChallenge({ id: 'c4', channelId }),
+            payload: {
+              action: 'close' as const,
+              channelId,
+              cumulativeAmount: '7000000',
+              signature: await signTestVoucher(channelId, 7000000n),
+            },
           },
-        },
-        request: makeRequest(),
-      })
+          request: makeRequest(),
+        }),
+      )
       expect(r4.status).toBe('success')
       expect(r4.reference).toBe(channelId)
 
@@ -1625,51 +1677,57 @@ describe.runIf(isLocalnet)('session', () => {
       })
       const server = createServer()
 
-      const openReceipt = await server.verify({
-        credential: {
-          challenge: makeChallenge({ id: 'open-delegated', channelId }),
-          payload: {
-            action: 'open' as const,
-            type: 'transaction' as const,
-            channelId,
-            transaction: serializedTransaction,
-            cumulativeAmount: '1000000',
-            signature: await signTestVoucher(channelId, 1000000n, delegatedSigner),
+      const openReceipt = expectSettledReceipt(
+        await server.verify({
+          credential: {
+            challenge: makeChallenge({ id: 'open-delegated', channelId }),
+            payload: {
+              action: 'open' as const,
+              type: 'transaction' as const,
+              channelId,
+              transaction: serializedTransaction,
+              cumulativeAmount: '1000000',
+              signature: await signTestVoucher(channelId, 1000000n, delegatedSigner),
+            },
           },
-        },
-        request: makeRequest(),
-      })
+          request: makeRequest(),
+        }),
+      )
       expect(openReceipt.status).toBe('success')
 
       const channel = await store.getChannel(channelId)
       expect(channel?.authorizedSigner).toBe(delegatedSigner.address)
 
-      const voucherReceipt = (await server.verify({
-        credential: {
-          challenge: makeChallenge({ id: 'voucher-delegated', channelId }),
-          payload: {
-            action: 'voucher' as const,
-            channelId,
-            cumulativeAmount: '2000000',
-            signature: await signTestVoucher(channelId, 2000000n, delegatedSigner),
+      const voucherReceipt = expectSettledReceipt(
+        await server.verify({
+          credential: {
+            challenge: makeChallenge({ id: 'voucher-delegated', channelId }),
+            payload: {
+              action: 'voucher' as const,
+              channelId,
+              cumulativeAmount: '2000000',
+              signature: await signTestVoucher(channelId, 2000000n, delegatedSigner),
+            },
           },
-        },
-        request: makeRequest(),
-      })) as SessionReceipt
+          request: makeRequest(),
+        }),
+      )
       expect(voucherReceipt.acceptedCumulative).toBe('2000000')
 
-      const closeReceipt = await server.verify({
-        credential: {
-          challenge: makeChallenge({ id: 'close-delegated', channelId }),
-          payload: {
-            action: 'close' as const,
-            channelId,
-            cumulativeAmount: '2000000',
-            signature: await signTestVoucher(channelId, 2000000n, delegatedSigner),
+      const closeReceipt = expectSettledReceipt(
+        await server.verify({
+          credential: {
+            challenge: makeChallenge({ id: 'close-delegated', channelId }),
+            payload: {
+              action: 'close' as const,
+              channelId,
+              cumulativeAmount: '2000000',
+              signature: await signTestVoucher(channelId, 2000000n, delegatedSigner),
+            },
           },
-        },
-        request: makeRequest(),
-      })
+          request: makeRequest(),
+        }),
+      )
       expect(closeReceipt.status).toBe('success')
     })
 
@@ -1677,20 +1735,22 @@ describe.runIf(isLocalnet)('session', () => {
       const { channelId, serializedTransaction } = await createSignedOpenTransaction(4000000n)
       const server = createServer()
 
-      const openReceipt = await server.verify({
-        credential: {
-          challenge: makeChallenge({ id: 'open-multi-topup', channelId }),
-          payload: {
-            action: 'open' as const,
-            type: 'transaction' as const,
-            channelId,
-            transaction: serializedTransaction,
-            cumulativeAmount: '1000000',
-            signature: await signTestVoucher(channelId, 1000000n),
+      const openReceipt = expectSettledReceipt(
+        await server.verify({
+          credential: {
+            challenge: makeChallenge({ id: 'open-multi-topup', channelId }),
+            payload: {
+              action: 'open' as const,
+              type: 'transaction' as const,
+              channelId,
+              transaction: serializedTransaction,
+              cumulativeAmount: '1000000',
+              signature: await signTestVoucher(channelId, 1000000n),
+            },
           },
-        },
-        request: makeRequest(),
-      })
+          request: makeRequest(),
+        }),
+      )
       expect(openReceipt.status).toBe('success')
 
       await charge(store, channelId, 1000000n)
@@ -1705,34 +1765,38 @@ describe.runIf(isLocalnet)('session', () => {
         amount: topUp1Amount,
       })
 
-      const topUp1Receipt = await server.verify({
-        credential: {
-          challenge: makeChallenge({ id: 'topup-1', channelId }),
-          payload: {
-            action: 'topUp' as const,
-            type: 'transaction' as const,
-            channelId,
-            transaction: topUp1,
-            additionalDeposit: topUp1Amount.toString(),
+      const topUp1Receipt = expectSettledReceipt(
+        await server.verify({
+          credential: {
+            challenge: makeChallenge({ id: 'topup-1', channelId }),
+            payload: {
+              action: 'topUp' as const,
+              type: 'transaction' as const,
+              channelId,
+              transaction: topUp1,
+              additionalDeposit: topUp1Amount.toString(),
+            },
           },
-        },
-        request: makeRequest(),
-      })
+          request: makeRequest(),
+        }),
+      )
       expect(topUp1Receipt.status).toBe('success')
       expect((await store.getChannel(channelId))?.deposit).toBe(6000000n)
 
-      const voucher1 = (await server.verify({
-        credential: {
-          challenge: makeChallenge({ id: 'voucher-after-topup-1', channelId }),
-          payload: {
-            action: 'voucher' as const,
-            channelId,
-            cumulativeAmount: '3000000',
-            signature: await signTestVoucher(channelId, 3000000n),
+      const voucher1 = expectSettledReceipt(
+        await server.verify({
+          credential: {
+            challenge: makeChallenge({ id: 'voucher-after-topup-1', channelId }),
+            payload: {
+              action: 'voucher' as const,
+              channelId,
+              cumulativeAmount: '3000000',
+              signature: await signTestVoucher(channelId, 3000000n),
+            },
           },
-        },
-        request: makeRequest(),
-      })) as SessionReceipt
+          request: makeRequest(),
+        }),
+      )
       expect(voucher1.acceptedCumulative).toBe('3000000')
 
       await charge(store, channelId, 2000000n)
@@ -1747,50 +1811,56 @@ describe.runIf(isLocalnet)('session', () => {
         amount: topUp2Amount,
       })
 
-      const topUp2Receipt = await server.verify({
-        credential: {
-          challenge: makeChallenge({ id: 'topup-2', channelId }),
-          payload: {
-            action: 'topUp' as const,
-            type: 'transaction' as const,
-            channelId,
-            transaction: topUp2,
-            additionalDeposit: topUp2Amount.toString(),
+      const topUp2Receipt = expectSettledReceipt(
+        await server.verify({
+          credential: {
+            challenge: makeChallenge({ id: 'topup-2', channelId }),
+            payload: {
+              action: 'topUp' as const,
+              type: 'transaction' as const,
+              channelId,
+              transaction: topUp2,
+              additionalDeposit: topUp2Amount.toString(),
+            },
           },
-        },
-        request: makeRequest(),
-      })
+          request: makeRequest(),
+        }),
+      )
       expect(topUp2Receipt.status).toBe('success')
       expect((await store.getChannel(channelId))?.deposit).toBe(8000000n)
 
-      const voucher2 = (await server.verify({
-        credential: {
-          challenge: makeChallenge({ id: 'voucher-after-topup-2', channelId }),
-          payload: {
-            action: 'voucher' as const,
-            channelId,
-            cumulativeAmount: '5000000',
-            signature: await signTestVoucher(channelId, 5000000n),
+      const voucher2 = expectSettledReceipt(
+        await server.verify({
+          credential: {
+            challenge: makeChallenge({ id: 'voucher-after-topup-2', channelId }),
+            payload: {
+              action: 'voucher' as const,
+              channelId,
+              cumulativeAmount: '5000000',
+              signature: await signTestVoucher(channelId, 5000000n),
+            },
           },
-        },
-        request: makeRequest(),
-      })) as SessionReceipt
+          request: makeRequest(),
+        }),
+      )
       expect(voucher2.acceptedCumulative).toBe('5000000')
 
       await charge(store, channelId, 2000000n)
 
-      const closeReceipt = await server.verify({
-        credential: {
-          challenge: makeChallenge({ id: 'close-multi-topup', channelId }),
-          payload: {
-            action: 'close' as const,
-            channelId,
-            cumulativeAmount: '5000000',
-            signature: await signTestVoucher(channelId, 5000000n),
+      const closeReceipt = expectSettledReceipt(
+        await server.verify({
+          credential: {
+            challenge: makeChallenge({ id: 'close-multi-topup', channelId }),
+            payload: {
+              action: 'close' as const,
+              channelId,
+              cumulativeAmount: '5000000',
+              signature: await signTestVoucher(channelId, 5000000n),
+            },
           },
-        },
-        request: makeRequest(),
-      })
+          request: makeRequest(),
+        }),
+      )
       expect(closeReceipt.status).toBe('success')
 
       const finalized = await store.getChannel(channelId)
@@ -1929,20 +1999,22 @@ describe.runIf(isLocalnet)('session', () => {
 
       // Re-open with a new (fresh) server instance using the same store.
       const server2 = createServer()
-      const receipt = (await server2.verify({
-        credential: {
-          challenge: makeChallenge({ id: 'c2', channelId }),
-          payload: {
-            action: 'open' as const,
-            type: 'transaction' as const,
-            channelId,
-            transaction: serializedTransaction,
-            cumulativeAmount: '7000000',
-            signature: await signTestVoucher(channelId, 7000000n),
+      const receipt = expectSettledReceipt(
+        await server2.verify({
+          credential: {
+            challenge: makeChallenge({ id: 'c2', channelId }),
+            payload: {
+              action: 'open' as const,
+              type: 'transaction' as const,
+              channelId,
+              transaction: serializedTransaction,
+              cumulativeAmount: '7000000',
+              signature: await signTestVoucher(channelId, 7000000n),
+            },
           },
-        },
-        request: makeRequest(),
-      })) as SessionReceipt
+          request: makeRequest(),
+        }),
+      )
 
       expect(receipt.status).toBe('success')
 
@@ -2216,18 +2288,20 @@ describe.runIf(isLocalnet)('session', () => {
 
       // Close must succeed with voucher >= max(spent=5M, settled=4M) = 5M.
       // Use 8M (the full authorization).
-      const receipt = await server2.verify({
-        credential: {
-          challenge: makeChallenge({ id: 'close', channelId }),
-          payload: {
-            action: 'close' as const,
-            channelId,
-            cumulativeAmount: '8000000',
-            signature: await signTestVoucher(channelId, 8000000n),
+      const receipt = expectSettledReceipt(
+        await server2.verify({
+          credential: {
+            challenge: makeChallenge({ id: 'close', channelId }),
+            payload: {
+              action: 'close' as const,
+              channelId,
+              cumulativeAmount: '8000000',
+              signature: await signTestVoucher(channelId, 8000000n),
+            },
           },
-        },
-        request: makeRequest(),
-      })
+          request: makeRequest(),
+        }),
+      )
 
       expect(receipt.status).toBe('success')
       const ch = await store.getChannel(channelId)
@@ -2416,13 +2490,15 @@ describe.runIf(isLocalnet)('session', () => {
       expect(await afterCrashStore.getChannel(channelId)).toBeNull()
 
       const healthyServer = createServerWithStore(baseStore)
-      const recovered = await healthyServer.verify({
-        credential: {
-          challenge: makeChallenge({ id: 'open-crash-retry', channelId }),
-          payload: openPayload,
-        },
-        request: makeRequest(),
-      })
+      const recovered = expectSettledReceipt(
+        await healthyServer.verify({
+          credential: {
+            challenge: makeChallenge({ id: 'open-crash-retry', channelId }),
+            payload: openPayload,
+          },
+          request: makeRequest(),
+        }),
+      )
 
       expect(recovered.status).toBe('success')
       const channel = await afterCrashStore.getChannel(channelId)
@@ -2569,18 +2645,20 @@ describe.runIf(isLocalnet)('session', () => {
       })
 
       hooks.dropOnRead(channelId, 1)
-      const closeReceipt = (await server.verify({
-        credential: {
-          challenge: makeChallenge({ id: 'close-racy-missing', channelId }),
-          payload: {
-            action: 'close' as const,
-            channelId,
-            cumulativeAmount: '1000000',
-            signature: await signTestVoucher(channelId, 1000000n),
+      const closeReceipt = expectSettledReceipt(
+        await server.verify({
+          credential: {
+            challenge: makeChallenge({ id: 'close-racy-missing', channelId }),
+            payload: {
+              action: 'close' as const,
+              channelId,
+              cumulativeAmount: '1000000',
+              signature: await signTestVoucher(channelId, 1000000n),
+            },
           },
-        },
-        request: makeRequest(),
-      })) as SessionReceipt
+          request: makeRequest(),
+        }),
+      )
 
       expect(closeReceipt.status).toBe('success')
       expect(closeReceipt.spent).toBe('0')
@@ -2771,15 +2849,17 @@ describe.runIf(isLocalnet)('session', () => {
           signature: await signTestVoucher(channelId, 2000000n),
         },
       }
-      const openReceipt = (await server.verify({
-        credential: openCredential,
-        envelope: {
-          capturedRequest: mcpCapturedRequest,
-          challenge: openChallenge,
+      const openReceipt = expectSettledReceipt(
+        await server.verify({
           credential: openCredential,
-        },
-        request: makeRequest({ amount: '1' }),
-      } as never)) as SessionReceipt
+          envelope: {
+            capturedRequest: mcpCapturedRequest,
+            challenge: openChallenge,
+            credential: openCredential,
+          },
+          request: makeRequest({ amount: '1' }),
+        } as never),
+      )
       expect(openReceipt.spent).toBe('1000000')
       expect(openReceipt.units).toBe(1)
 
@@ -2793,15 +2873,17 @@ describe.runIf(isLocalnet)('session', () => {
           signature: await signTestVoucher(channelId, 2000000n),
         },
       }
-      const replayReceipt = (await server.verify({
-        credential: replayCredential,
-        envelope: {
-          capturedRequest: mcpCapturedRequest,
-          challenge: replayChallenge,
+      const replayReceipt = expectSettledReceipt(
+        await server.verify({
           credential: replayCredential,
-        },
-        request: makeRequest({ amount: '1' }),
-      } as never)) as SessionReceipt
+          envelope: {
+            capturedRequest: mcpCapturedRequest,
+            challenge: replayChallenge,
+            credential: replayCredential,
+          },
+          request: makeRequest({ amount: '1' }),
+        } as never),
+      )
 
       expect(replayReceipt.spent).toBe('2000000')
       expect(replayReceipt.units).toBe(2)
@@ -2927,6 +3009,7 @@ describe.runIf(isLocalnet)('session', () => {
         const request = new Request(input, init)
         const result = await route(request)
         if (result.status === 402) return result.challenge
+        if (result.status === 'pending') return result.response
         if (request.method === 'GET') contentRequests++
         return result.withReceipt(new Response('ok'))
       }
@@ -3007,6 +3090,7 @@ describe.runIf(isLocalnet)('session', () => {
       const serve = async (request: Request) => {
         const result = await route(request)
         if (result.status === 402) return result.challenge
+        if (result.status === 'pending') return result.response
         return result.withReceipt(new Response('paid-content'))
       }
 
@@ -3076,6 +3160,7 @@ describe.runIf(isLocalnet)('session', () => {
       const serve = async (request: Request) => {
         const result = await route(request)
         if (result.status === 402) return result.challenge
+        if (result.status === 'pending') return result.response
         return result.withReceipt(new Response('paid-content'))
       }
 
@@ -3150,6 +3235,7 @@ describe.runIf(isLocalnet)('session', () => {
       const serve = async (request: Request) => {
         const result = await route(request)
         if (result.status === 402) return result.challenge
+        if (result.status === 'pending') return result.response
         return result.withReceipt(new Response('paid-content'))
       }
 
@@ -3589,6 +3675,7 @@ describe.runIf(isLocalnet)('session', () => {
         const request = new Request(input, init)
         const result = await routeHandler(request)
         if (result.status === 402) return result.challenge
+        if (result.status === 'pending') return result.response
         return result.withReceipt(new Response('upstream failed', { status: 500 }))
       }
 
@@ -3631,6 +3718,7 @@ describe.runIf(isLocalnet)('session', () => {
         const request = new Request(input, init)
         const result = await routeHandler(request)
         if (result.status === 402) return result.challenge
+        if (result.status === 'pending') return result.response
         return result.withReceipt(new Response(null, { status: 204 }))
       }
 
@@ -3677,6 +3765,7 @@ describe.runIf(isLocalnet)('session', () => {
           : undefined
         const result = await routeHandler(request)
         if (result.status === 402) return result.challenge
+        if (result.status === 'pending') return result.response
         if (action === 'close') {
           return new Response('close failed', {
             status: 500,
@@ -3725,6 +3814,7 @@ describe.runIf(isLocalnet)('session', () => {
         const request = new Request(input, init)
         const result = await routeHandler(request)
         if (result.status === 402) return result.challenge
+        if (result.status === 'pending') return result.response
         return result.withReceipt(new Response('ok'))
       }
 
@@ -3853,6 +3943,7 @@ describe.runIf(isLocalnet)('session', () => {
 
         const result = await routeHandler(request)
         if (result.status === 402) return result.challenge
+        if (result.status === 'pending') return result.response
 
         if (action === 'voucher') {
           return new Response(null, { status: 200 })
@@ -3931,6 +4022,7 @@ describe.runIf(isLocalnet)('session', () => {
 
         const result = await routeHandler(request)
         if (result.status === 402) return result.challenge
+        if (result.status === 'pending') return result.response
 
         if (action === 'voucher') {
           return new Response(null, { status: 200 })
@@ -4016,6 +4108,7 @@ describe.runIf(isLocalnet)('session', () => {
 
         const result = await routeHandler(request)
         if (result.status === 402) return result.challenge
+        if (result.status === 'pending') return result.response
 
         if (action === 'voucher') {
           return new Response(null, { status: 200 })
@@ -4079,6 +4172,7 @@ describe.runIf(isLocalnet)('session', () => {
         const request = new Request(input, init)
         const result = await routeHandler(request)
         if (result.status === 402) return result.challenge
+        if (result.status === 'pending') return result.response
 
         if (request.headers.get('Accept')?.includes('text/event-stream')) {
           return result.withReceipt(async function* (stream) {
@@ -4160,6 +4254,7 @@ describe.runIf(isLocalnet)('session', () => {
       const httpHandler = NodeRequest.toNodeListener(async (request) => {
         const result = await route(request)
         if (result.status === 402) return result.challenge
+        if (result.status === 'pending') return result.response
         return result.withReceipt(new Response('ok'))
       })
 
@@ -4273,6 +4368,7 @@ describe.runIf(isLocalnet)('session', () => {
       const httpHandler = NodeRequest.toNodeListener(async (request) => {
         const result = await route(request)
         if (result.status === 402) return result.challenge
+        if (result.status === 'pending') return result.response
         return result.withReceipt(new Response('ok'))
       })
 
@@ -4377,6 +4473,7 @@ describe.runIf(isLocalnet)('session', () => {
       const httpHandler = NodeRequest.toNodeListener(async (request) => {
         const result = await route(request)
         if (result.status === 402) return result.challenge
+        if (result.status === 'pending') return result.response
         return result.withReceipt(new Response('ok'))
       })
 
@@ -4485,6 +4582,7 @@ describe.runIf(isLocalnet)('session', () => {
       const httpHandler = NodeRequest.toNodeListener(async (request) => {
         const result = await routeHandler(request)
         if (result.status === 402) return result.challenge
+        if (result.status === 'pending') return result.response
         return result.withReceipt(new Response('ok'))
       })
 
@@ -4574,6 +4672,7 @@ describe.runIf(isLocalnet)('session', () => {
       const httpHandler = NodeRequest.toNodeListener(async (request) => {
         const result = await route(request)
         if (result.status === 402) return result.challenge
+        if (result.status === 'pending') return result.response
         return result.withReceipt(new Response('ok'))
       })
 
@@ -4665,6 +4764,7 @@ describe.runIf(isLocalnet)('session', () => {
       const httpHandler = NodeRequest.toNodeListener(async (request) => {
         const result = await routeHandler(request)
         if (result.status === 402) return result.challenge
+        if (result.status === 'pending') return result.response
         return result.withReceipt(new Response('ok'))
       })
 
@@ -4776,6 +4876,7 @@ describe.runIf(isLocalnet)('session', () => {
       const httpHandler = NodeRequest.toNodeListener(async (request) => {
         const result = await route(request)
         if (result.status === 402) return result.challenge
+        if (result.status === 'pending') return result.response
         return result.withReceipt(new Response('ok'))
       })
 
@@ -4876,6 +4977,7 @@ describe.runIf(isLocalnet)('session', () => {
       const httpHandler = NodeRequest.toNodeListener(async (request) => {
         const result = await routeHandler(request)
         if (result.status === 402) return result.challenge
+        if (result.status === 'pending') return result.response
         return result.withReceipt(new Response('ok'))
       })
 

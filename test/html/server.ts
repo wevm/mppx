@@ -8,6 +8,18 @@ import { Account, Actions } from 'viem/tempo'
 
 import { stripePreviewVersion } from '../../src/stripe/internal/constants.js'
 
+function unwrapHttpResult(
+  result:
+    | { challenge: Response; status: 402 }
+    | { response: Response; status: 'pending' }
+    | { status: 200; withReceipt: (response?: Response) => Response },
+  response?: Response,
+) {
+  if (result.status === 402) return result.challenge
+  if (result.status === 'pending') return result.response
+  return result.withReceipt(response)
+}
+
 export async function startServer(port: number): Promise<HtmlTestServer> {
   const stripePublishableKey = process.env.VITE_STRIPE_PUBLIC_KEY
   const stripeSecretKey = process.env.VITE_STRIPE_SECRET_KEY
@@ -68,8 +80,6 @@ export async function startServer(port: number): Promise<HtmlTestServer> {
         amount: '1',
         chainId: tempoModerato.id,
         currency: '0x20c0000000000000000000000000000000000000',
-        getIdentity: async () => ({ id: 'user-1' }),
-        getResource: async () => ({ id: 'plan:pro' }),
         html: {
           accessKey: {
             accessKeyAddress: subscriptionAccessKey.address,
@@ -78,6 +88,7 @@ export async function startServer(port: number): Promise<HtmlTestServer> {
         },
         periodSeconds: '2592000',
         recipient: account.address,
+        resolve: async () => ({ identity: { id: 'user-1' }, resource: { id: 'plan:pro' } }),
         subscriptionExpires,
         testnet: true,
       }),
@@ -131,10 +142,7 @@ export async function startServer(port: number): Promise<HtmlTestServer> {
           amount: '0.01',
           description: 'Random stock photo',
         })(request)
-
-        if (result.status === 402) return result.challenge
-
-        return result.withReceipt(Response.json({ url: 'https://example.com/photo.jpg' }))
+        return unwrapHttpResult(result, Response.json({ url: 'https://example.com/photo.jpg' }))
       }
 
       if (url.pathname === '/tempo/charge-custom-text') {
@@ -142,21 +150,16 @@ export async function startServer(port: number): Promise<HtmlTestServer> {
           amount: '0.01',
           description: 'Random stock photo',
         })(request)
-
-        if (result.status === 402) return result.challenge
-
-        return result.withReceipt(Response.json({ url: 'https://example.com/photo.jpg' }))
+        return unwrapHttpResult(result, Response.json({ url: 'https://example.com/photo.jpg' }))
       }
 
       if (url.pathname === '/tempo/subscription') {
         const result = await tempoMppx.tempo.subscription({
           description: 'Tempo Pro',
           externalId: 'plan_pro',
+          recipient: account.address,
         })(request)
-
-        if (result.status === 402) return result.challenge
-
-        return result.withReceipt(Response.json({ plan: 'pro' }))
+        return unwrapHttpResult(result, Response.json({ plan: 'pro' }))
       }
 
       if (url.pathname === '/stripe/charge') {
@@ -167,8 +170,6 @@ export async function startServer(port: number): Promise<HtmlTestServer> {
           currency: 'usd',
           decimals: 2,
         })(request)
-
-        if (result.status === 402) return result.challenge
 
         const fortunes = [
           'A beautiful, smart, and loving person will come into your life.',
@@ -184,7 +185,7 @@ export async function startServer(port: number): Promise<HtmlTestServer> {
         ] as const
 
         const fortune = fortunes[Math.floor(Math.random() * fortunes.length)]
-        return result.withReceipt(Response.json({ fortune }))
+        return unwrapHttpResult(result, Response.json({ fortune }))
       }
 
       if (url.pathname === createTokenUrl) {
@@ -199,10 +200,7 @@ export async function startServer(port: number): Promise<HtmlTestServer> {
           ['tempo/charge', { amount: '0.01', description: 'Composed payment' }],
           ['stripe/charge', { amount: '1', currency: 'usd', decimals: 2 }],
         )(request)
-
-        if (result.status === 402) return result.challenge
-
-        return result.withReceipt(Response.json({ ok: true }))
+        return unwrapHttpResult(result, Response.json({ ok: true }))
       }
 
       if (url.pathname === '/compose-duplicates') {
@@ -213,10 +211,7 @@ export async function startServer(port: number): Promise<HtmlTestServer> {
           ['stripe/charge', { amount: '1', currency: 'usd', decimals: 2 }],
           ['stripe/charge', { amount: '2', currency: 'usd', decimals: 2 }],
         )(request)
-
-        if (result.status === 402) return result.challenge
-
-        return result.withReceipt(Response.json({ ok: true }))
+        return unwrapHttpResult(result, Response.json({ ok: true }))
       }
 
       return new Response('Not Found', { status: 404 })

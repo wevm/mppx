@@ -131,6 +131,7 @@ export function create(config: create.Config): Proxy {
     const handler = typeof endpoint === 'function' ? endpoint : endpoint.pay
     const result = await handler(request)
     if (result.status === 402) return result.challenge
+    if (result.status === 'pending') return result.response
 
     const managementResponse = (() => {
       try {

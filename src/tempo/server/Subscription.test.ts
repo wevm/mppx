@@ -1,15 +1,33 @@
-import { Challenge, Credential, Receipt } from 'mppx'
+import { Receipt } from 'mppx'
 import { Mppx } from 'mppx/server'
 import { describe, expect, test } from 'vp/test'
 
 import * as Store from '../../Store.js'
+import * as SubscriptionStore from '../subscription/Store.js'
 import type { SubscriptionRecord } from '../subscription/Types.js'
-import { subscription } from './Subscription.js'
+import {
+  cancel,
+  captureActive,
+  completeCapture,
+  failCapture,
+  revoke,
+  subscription,
+} from './Subscription.js'
 
 const realm = 'api.example.com'
 const secretKey = 'test-secret-key'
-const activeBillingAnchor = new Date().toISOString()
+const activeBillingAnchor = new Date(Date.now() - 1_000).toISOString()
 const activeSubscriptionExpires = new Date(Date.now() + 365 * 24 * 60 * 60 * 1_000).toISOString()
+const identity = { id: 'user-1' } as const
+const requestOptions = {
+  amount: '10',
+  chainId: 4217,
+  currency: '0x20c0000000000000000000000000000000000001',
+  periodSeconds: '3600',
+  recipient: '0x1234567890abcdef1234567890abcdef12345678',
+  subscriptionExpires: activeSubscriptionExpires,
+} as const
+const resource = { id: 'resource:alpha' } as const
 
 function createReceipt(subscriptionId: string, reference = '0xreceipt') {
   return {
@@ -40,158 +58,69 @@ function createRecord(overrides: Partial<SubscriptionRecord> = {}): Subscription
   }
 }
 
+function createDeferred() {
+  let resolve!: () => void
+  const promise = new Promise<void>((value) => {
+    resolve = value
+  })
+  return { promise, resolve }
+}
+
+function createHandler(parameters: {
+  capture?: Parameters<typeof subscription>[0]['capture']
+  resolve?: Parameters<typeof subscription>[0]['resolve']
+  store: Store.AtomicStore<Record<string, unknown>>
+}) {
+  const method = subscription({
+    activate: async ({ request, resolution, source }) => ({
+      receipt: createReceipt('sub_123', '0xactivate'),
+      subscription: createRecord({
+        amount: request.amount,
+        chainId: request.methodDetails?.chainId,
+        currency: request.currency,
+        identityId: resolution.identity.id,
+        periodSeconds: request.periodSeconds,
+        recipient: request.recipient,
+        resourceId: resolution.resource.id,
+        subscriptionExpires: request.subscriptionExpires,
+        timestamp: new Date().toISOString(),
+        ...(source ? { externalId: source.address } : {}),
+      }),
+    }),
+    ...requestOptions,
+    ...(parameters.capture ? { capture: parameters.capture } : {}),
+    resolve: parameters.resolve ?? (async () => ({ identity, resource })),
+    store: parameters.store,
+  })
+
+  return Mppx.create({ methods: [method], realm, secretKey })['tempo/subscription'](requestOptions)
+}
+
+function createRequest() {
+  return new Request('https://example.com/resource')
+}
+
 describe('tempo.subscription', () => {
-  test('stores an activated subscription and reuses it on later requests', async () => {
+  test('concurrent request-time renewals only capture once for the same period', async () => {
     const store = Store.memory()
-    const method = subscription({
-      activate: async ({ request, source }) => ({
-        receipt: createReceipt('sub_123', '0xactivate'),
-        subscription: createRecord({
-          amount: request.amount,
-          chainId: request.methodDetails?.chainId,
-          currency: request.currency,
-          identityId: source?.address ?? 'anon',
-          periodSeconds: request.periodSeconds,
-          recipient: request.recipient,
-          reference: '0xactivate',
-          subscriptionExpires: request.subscriptionExpires,
-        }),
-      }),
-      amount: '10',
-      chainId: 4217,
-      currency: '0x20c0000000000000000000000000000000000001',
-      getIdentity: async ({ input }) => ({ id: input.headers.get('X-User') ?? 'anon' }),
-      getResource: async () => ({ id: 'resource:alpha' }),
-      periodSeconds: '3600',
-      recipient: '0x1234567890abcdef1234567890abcdef12345678',
-      store,
-      subscriptionExpires: activeSubscriptionExpires,
-    })
-
-    const mppx = Mppx.create({ methods: [method], realm, secretKey })
-    const challengeResult = await mppx['tempo/subscription']({})(
-      new Request('https://example.com/resource', { headers: { 'X-User': 'user-1' } }),
-    )
-
-    expect(challengeResult.status).toBe(402)
-    if (challengeResult.status !== 402) throw new Error('expected activation challenge')
-
-    const challenge = Challenge.fromResponse(challengeResult.challenge)
-    const credential = Credential.from({
-      challenge,
-      payload: { signature: '0x1234', type: 'keyAuthorization' },
-      source: 'did:pkh:eip155:4217:0x1234567890abcdef1234567890abcdef12345678',
-    })
-
-    const activated = await mppx['tempo/subscription']({})(
-      new Request('https://example.com/resource', {
-        headers: {
-          Authorization: Credential.serialize(credential),
-          'X-User': '0x1234567890abcdef1234567890abcdef12345678',
-        },
+    const subscriptionStore = SubscriptionStore.fromStore(store)
+    await subscriptionStore.activate(
+      createRecord({
+        billingAnchor: new Date(Date.now() - 3 * 3_600_000).toISOString(),
+        lastChargedPeriod: 0,
+        reference: '0xstale',
+        subscriptionId: 'sub_due',
       }),
     )
 
-    expect(activated.status).toBe(200)
-
-    const reused = await mppx['tempo/subscription']({})(
-      new Request('https://example.com/resource', {
-        headers: {
-          'X-User': '0x1234567890abcdef1234567890abcdef12345678',
-        },
-      }),
-    )
-
-    expect(reused.status).toBe(200)
-    if (reused.status !== 200) throw new Error('expected authorize reuse')
-
-    const response = reused.withReceipt(new Response('OK'))
-    const receipt = response.headers.get('Payment-Receipt')
-    expect(receipt).toBeTruthy()
-  })
-
-  test('new activation replaces previous subscription for same resource', async () => {
-    const store = Store.memory()
-
-    // Seed an expired subscription so authorize() falls through to a new challenge.
-    const expiredDate = new Date(Date.now() - 1_000).toISOString()
-    await store.put('tempo:subscription:record:sub_old', createRecord({
-      subscriptionId: 'sub_old',
-      reference: '0xold',
-      subscriptionExpires: expiredDate,
-    }))
-    await store.put('tempo:subscription:resource:user-1:resource:alpha', 'sub_old')
-
-    const method = subscription({
-      activate: async ({ request, source }) => ({
-        receipt: createReceipt('sub_new', '0xnew'),
-        subscription: createRecord({
-          amount: request.amount,
-          chainId: request.methodDetails?.chainId,
-          currency: request.currency,
-          identityId: source?.address ?? 'anon',
-          periodSeconds: request.periodSeconds,
-          recipient: request.recipient,
-          reference: '0xnew',
-          subscriptionExpires: request.subscriptionExpires,
-          subscriptionId: 'sub_new',
-        }),
-      }),
-      amount: '10',
-      chainId: 4217,
-      currency: '0x20c0000000000000000000000000000000000001',
-      getIdentity: async () => ({ id: 'user-1' }),
-      getResource: async () => ({ id: 'resource:alpha' }),
-      periodSeconds: '3600',
-      recipient: '0x1234567890abcdef1234567890abcdef12345678',
-      store,
-      subscriptionExpires: activeSubscriptionExpires,
-    })
-
-    const mppx = Mppx.create({ methods: [method], realm, secretKey })
-
-    const challengeResult = await mppx['tempo/subscription']({})(
-      new Request('https://example.com/resource'),
-    )
-    expect(challengeResult.status).toBe(402)
-    if (challengeResult.status !== 402) throw new Error('expected challenge')
-
-    const challenge = Challenge.fromResponse(challengeResult.challenge)
-    const credential = Credential.from({
-      challenge,
-      payload: { signature: '0x1234', type: 'keyAuthorization' },
-      source: 'did:pkh:eip155:4217:0x1234567890abcdef1234567890abcdef12345678',
-    })
-
-    const activated = await mppx['tempo/subscription']({})(
-      new Request('https://example.com/resource', {
-        headers: { Authorization: Credential.serialize(credential) },
-      }),
-    )
-    expect(activated.status).toBe(200)
-    if (activated.status !== 200) throw new Error('expected activation')
-
-    const receipt = Receipt.fromResponse(activated.withReceipt(new Response('OK')))
-    expect(receipt.subscriptionId).toBe('sub_new')
-  })
-
-  test('renews an overdue matching subscription before falling back to 402', async () => {
-    const store = Store.memory()
-    const renewCalls: number[] = []
-    const method = subscription({
-      activate: async () => ({
-        receipt: createReceipt('unused'),
-        subscription: createRecord({ subscriptionId: 'unused' }),
-      }),
-      amount: '10',
-      chainId: 4217,
-      currency: '0x20c0000000000000000000000000000000000001',
-      getIdentity: async () => ({ id: 'user-1' }),
-      getResource: async () => ({ id: 'resource:alpha' }),
-      periodSeconds: '3600',
-      recipient: '0x1234567890abcdef1234567890abcdef12345678',
-      renew: async ({ periodIndex, subscription }) => {
-        renewCalls.push(periodIndex)
+    const release = createDeferred()
+    const started = createDeferred()
+    let captureCalls = 0
+    const handler = createHandler({
+      capture: async ({ periodIndex, subscription }) => {
+        captureCalls++
+        started.resolve()
+        await release.promise
         return {
           receipt: createReceipt(subscription.subscriptionId, '0xrenewed'),
           subscription: {
@@ -202,11 +131,38 @@ describe('tempo.subscription', () => {
         }
       },
       store,
-      subscriptionExpires: activeSubscriptionExpires,
     })
 
-    await store.put(
-      'tempo:subscription:record:sub_due',
+    const first = handler(createRequest())
+    const second = handler(createRequest())
+    await started.promise
+    release.resolve()
+
+    const [firstResult, secondResult] = await Promise.all([first, second])
+    expect(captureCalls).toBe(1)
+    expect(
+      [firstResult.status, secondResult.status].filter((status) => status === 200),
+    ).toHaveLength(1)
+    expect(
+      [firstResult.status, secondResult.status].filter((status) => status === 402),
+    ).toHaveLength(1)
+
+    const followUp = await handler(createRequest())
+    expect(followUp.status).toBe(200)
+    if (followUp.status !== 200) throw new Error('expected renewed access')
+
+    const receipt = Receipt.fromResponse(followUp.withReceipt(new Response('OK')))
+    expect(receipt.reference).toBe('0xrenewed')
+
+    const saved = await subscriptionStore.get('sub_due')
+    expect(saved?.lastChargedPeriod).toBeGreaterThan(0)
+    expect(saved?.pendingPeriod).toBeUndefined()
+  })
+
+  test('background capture races request-time renewal without double charging', async () => {
+    const store = Store.memory()
+    const subscriptionStore = SubscriptionStore.fromStore(store)
+    await subscriptionStore.activate(
       createRecord({
         billingAnchor: new Date(Date.now() - 3 * 3_600_000).toISOString(),
         lastChargedPeriod: 0,
@@ -214,19 +170,210 @@ describe('tempo.subscription', () => {
         subscriptionId: 'sub_due',
       }),
     )
-    await store.put('tempo:subscription:resource:user-1:resource:alpha', 'sub_due')
 
-    const mppx = Mppx.create({ methods: [method], realm, secretKey })
-    const result = await mppx['tempo/subscription']({})(new Request('https://example.com/resource'))
+    const release = createDeferred()
+    const started = createDeferred()
+    const reasons: string[] = []
+    const capture = async ({
+      periodIndex,
+      reason,
+      subscription,
+    }: {
+      periodIndex: number
+      reason: 'background' | 'request'
+      subscription: SubscriptionRecord
+    }) => {
+      reasons.push(reason)
+      started.resolve()
+      await release.promise
+      return {
+        receipt: createReceipt(subscription.subscriptionId, '0xbackground'),
+        subscription: {
+          ...subscription,
+          lastChargedPeriod: periodIndex,
+          reference: '0xbackground',
+        },
+      }
+    }
+    const handler = createHandler({ capture, store })
 
-    expect(result.status).toBe(200)
-    expect(renewCalls.length).toBe(1)
-    expect(renewCalls[0]).toBeGreaterThan(0)
-    if (result.status !== 200) throw new Error('expected renewal success')
+    const background = captureActive({ capture, identity, resource, store })
+    await started.promise
+    const requestResult = await handler(createRequest())
+    release.resolve()
 
-    const receipt = Receipt.fromResponse(result.withReceipt(new Response('OK')))
-    expect(receipt.reference).toBe('0xrenewed')
-    expect(receipt.subscriptionId).toBe('sub_due')
+    const backgroundResult = await background
+    expect(reasons).toEqual(['background'])
+    expect(backgroundResult?.receipt.reference).toBe('0xbackground')
+    expect(requestResult.status).toBe(402)
+
+    const followUp = await handler(createRequest())
+    expect(followUp.status).toBe(200)
+    if (followUp.status !== 200) throw new Error('expected post-background access')
+
+    const receipt = Receipt.fromResponse(followUp.withReceipt(new Response('OK')))
+    expect(receipt.reference).toBe('0xbackground')
   })
 
+  test('cancel stays active until its effective time, while revoke blocks immediately', async () => {
+    const store = Store.memory()
+    const subscriptionStore = SubscriptionStore.fromStore(store)
+    await subscriptionStore.activate(createRecord())
+
+    const cancelEffectiveAt = new Date(Date.now() + 60_000).toISOString()
+    const canceled = await cancel({ cancelEffectiveAt, store, subscriptionId: 'sub_123' })
+    expect(canceled?.cancelEffectiveAt).toBe(cancelEffectiveAt)
+
+    const handler = createHandler({ store })
+    const beforeRevocation = await handler(createRequest())
+    expect(beforeRevocation.status).toBe(200)
+
+    const revokedAt = new Date().toISOString()
+    const revoked = await revoke({ revokedAt, store, subscriptionId: 'sub_123' })
+    expect(revoked?.revokedAt).toBe(revokedAt)
+
+    const afterRevocation = await handler(createRequest())
+    expect(afterRevocation.status).toBe(402)
+  })
+
+  test('activation atomically replaces the previous active subscription', async () => {
+    const store = Store.memory()
+    const subscriptionStore = SubscriptionStore.fromStore(store)
+    await subscriptionStore.activate(
+      createRecord({
+        pendingPeriod: 2,
+        pendingPeriodStartedAt: new Date().toISOString(),
+        reference: '0xold',
+        subscriptionId: 'sub_old',
+      }),
+    )
+
+    const replacementTimestamp = new Date().toISOString()
+    await subscriptionStore.activate(
+      createRecord({
+        pendingPeriod: 9,
+        pendingPeriodStartedAt: new Date().toISOString(),
+        reference: '0xnew',
+        subscriptionId: 'sub_new',
+        timestamp: replacementTimestamp,
+      }),
+    )
+
+    const active = await subscriptionStore.getActive(identity.id, resource.id)
+    expect(active?.subscriptionId).toBe('sub_new')
+    expect(active?.pendingPeriod).toBeUndefined()
+
+    const replaced = await subscriptionStore.get('sub_old')
+    expect(replaced?.cancelEffectiveAt).toBe(replacementTimestamp)
+    expect(replaced?.pendingPeriod).toBeUndefined()
+    expect(replaced?.pendingPeriodStartedAt).toBeUndefined()
+  })
+
+  test('completeCapture finalizes a pending request-time renewal', async () => {
+    const store = Store.memory()
+    const subscriptionStore = SubscriptionStore.fromStore(store)
+    await subscriptionStore.activate(
+      createRecord({
+        billingAnchor: new Date(Date.now() - 3 * 3_600_000).toISOString(),
+        lastChargedPeriod: 0,
+        reference: '0xstale',
+        subscriptionId: 'sub_due',
+      }),
+    )
+
+    const handler = createHandler({
+      capture: async () => ({
+        response: new Response('capture pending', {
+          headers: { Location: '/subscriptions/sub_due/capture' },
+          status: 202,
+        }),
+      }),
+      store,
+    })
+
+    const pending = await handler(createRequest())
+    expect(pending.status).toBe('pending')
+    if (pending.status !== 'pending') throw new Error('expected pending capture')
+    expect(pending.response.status).toBe(202)
+    expect(pending.response.headers.get('location')).toBe('/subscriptions/sub_due/capture')
+
+    const claimed = await subscriptionStore.get('sub_due')
+    expect(claimed?.pendingPeriod).toBeGreaterThan(0)
+    expect(claimed?.lastChargedPeriod).toBe(0)
+    if (!claimed?.pendingPeriod) throw new Error('expected claimed capture period')
+
+    await completeCapture({
+      periodIndex: claimed.pendingPeriod,
+      store,
+      subscription: {
+        ...claimed,
+        lastChargedPeriod: claimed.pendingPeriod,
+        reference: '0xcompleted',
+      },
+    })
+
+    const completed = await subscriptionStore.get('sub_due')
+    expect(completed?.pendingPeriod).toBeUndefined()
+    expect(completed?.pendingPeriodStartedAt).toBeUndefined()
+    expect(completed?.reference).toBe('0xcompleted')
+
+    const followUp = await handler(createRequest())
+    expect(followUp.status).toBe(200)
+    if (followUp.status !== 200) throw new Error('expected completed capture access')
+
+    const receipt = Receipt.fromResponse(followUp.withReceipt(new Response('OK')))
+    expect(receipt.reference).toBe('0xcompleted')
+  })
+
+  test('failCapture clears the claim so a later request can retry the period', async () => {
+    const store = Store.memory()
+    const subscriptionStore = SubscriptionStore.fromStore(store)
+    await subscriptionStore.activate(
+      createRecord({
+        billingAnchor: new Date(Date.now() - 3 * 3_600_000).toISOString(),
+        lastChargedPeriod: 0,
+        reference: '0xstale',
+        subscriptionId: 'sub_due',
+      }),
+    )
+
+    let captureCalls = 0
+    const handler = createHandler({
+      capture: async ({ periodIndex, subscription }) => {
+        captureCalls++
+        if (captureCalls === 1) {
+          return { response: new Response('capture pending', { status: 202 }) }
+        }
+        return {
+          receipt: createReceipt(subscription.subscriptionId, '0xretried'),
+          subscription: {
+            ...subscription,
+            lastChargedPeriod: periodIndex,
+            reference: '0xretried',
+          },
+        }
+      },
+      store,
+    })
+
+    const first = await handler(createRequest())
+    expect(first.status).toBe('pending')
+
+    const claimed = await subscriptionStore.get('sub_due')
+    if (!claimed?.pendingPeriod) throw new Error('expected pending claim')
+
+    await failCapture({ periodIndex: claimed.pendingPeriod, store, subscriptionId: 'sub_due' })
+
+    const cleared = await subscriptionStore.get('sub_due')
+    expect(cleared?.pendingPeriod).toBeUndefined()
+    expect(cleared?.pendingPeriodStartedAt).toBeUndefined()
+
+    const retried = await handler(createRequest())
+    expect(captureCalls).toBe(2)
+    expect(retried.status).toBe(200)
+    if (retried.status !== 200) throw new Error('expected retry success')
+
+    const receipt = Receipt.fromResponse(retried.withReceipt(new Response('OK')))
+    expect(receipt.reference).toBe('0xretried')
+  })
 })

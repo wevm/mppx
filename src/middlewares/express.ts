@@ -76,6 +76,14 @@ export function payment<const intent extends Mppx_internal.AnyMethodFn>(
       return
     }
 
+    if (result.status === 'pending') {
+      const response = result.response as Response
+      res.status(response.status)
+      for (const [key, value] of response.headers) res.setHeader(key, value)
+      res.send(await response.text())
+      return
+    }
+
     const originalJson = res.json.bind(res)
     res.json = (body: any) => {
       const wrapped = result.withReceipt(Response.json(body))

@@ -173,11 +173,21 @@ export type AuthorizeFn<method extends Method> = (parameters: {
   >
   input: globalThis.Request
   request: z.output<method['schema']['request']>
-}) => MaybePromise<AuthorizeResult | undefined>
+}) => MaybePromise<AuthorizeResult | PendingResult | undefined>
 
 export type AuthorizeResult = {
   receipt: Receipt.Receipt
   response?: globalThis.Response | undefined
+}
+
+/**
+ * A non-402 response returned before payment capture has fully settled.
+ *
+ * Methods can use this for async activation/capture flows that need to hand the
+ * client off to a processor or pollable resource before a receipt exists.
+ */
+export type PendingResult = {
+  response: globalThis.Response
 }
 
 /**
@@ -193,7 +203,7 @@ export type StableBindingFn<method extends Method> = (
 /** Verification function for a single method. */
 export type VerifyFn<method extends Method> = (
   parameters: VerifyContext<method>,
-) => Promise<Receipt.Receipt>
+) => Promise<Receipt.Receipt | PendingResult>
 
 /**
  * Optional respond function for a server-side method.

@@ -226,7 +226,6 @@ export const subscription = Method.from({
         periodSeconds: z.string().check(z.regex(/^[1-9]\d*$/, 'Invalid periodSeconds')),
         recipient: z.string(),
         subscriptionExpires: z.datetime(),
-        subscriptionId: z.optional(z.string()),
       }),
       z.transform(({ amount, chainId, decimals, ...rest }) => ({
         ...rest,

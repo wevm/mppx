@@ -8,6 +8,11 @@ export type SubscriptionResource = {
   id: string
 }
 
+export type SubscriptionResolution = {
+  identity: SubscriptionIdentity
+  resource: SubscriptionResource
+}
+
 export type SubscriptionAccessKey = {
   accessKeyAddress: Address
   keyType: 'p256' | 'secp256k1' | 'webAuthn'
@@ -28,7 +33,9 @@ export type SubscriptionRecord = {
   subscriptionExpires: string
   subscriptionId: string
   timestamp: string
-  canceledAt?: string | undefined
+  cancelEffectiveAt?: string | undefined
+  pendingPeriod?: number | undefined
+  pendingPeriodStartedAt?: string | undefined
   revokedAt?: string | undefined
 }
 

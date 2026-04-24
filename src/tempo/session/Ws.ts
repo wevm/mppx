@@ -9,6 +9,7 @@ export type { SessionController } from './Sse.js'
 
 export type SessionRouteResult =
   | { status: 402; challenge: Response }
+  | { status: 'pending'; response: Response }
   | { status: 200; withReceipt(response?: Response): Response }
 
 export type SessionRoute = (request: Request) => Promise<SessionRouteResult>
@@ -262,6 +263,22 @@ export async function serve(options: serve.Options): Promise<void> {
         response.statusText ||
         'payment verification failed'
       await send(socket, formatErrorMessage({ message, status: response.status }))
+      await close(1008, message)
+      return
+    }
+
+    if (result.status === 'pending') {
+      const message =
+        (await result.response.text().catch(() => '')) ||
+        result.response.statusText ||
+        'payment is pending'
+      await send(
+        socket,
+        formatErrorMessage({
+          message,
+          status: result.response.status || 202,
+        }),
+      )
       await close(1008, message)
       return
     }

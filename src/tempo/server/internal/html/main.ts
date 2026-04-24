@@ -11,7 +11,6 @@ const c = Html.init<
   typeof Methods.charge | typeof Methods.subscription,
   {
     accessKey?: SubscriptionAccessKey | undefined
-    allowMemo?: boolean | undefined
   }
 >('tempo')
 
@@ -121,7 +120,6 @@ button.onclick = async () => {
         const method = tempo.subscription({
           accessKey: c.config.accessKey,
           account,
-          ...(c.config.allowMemo !== undefined ? { allowMemo: c.config.allowMemo } : {}),
           getClient,
         })
 

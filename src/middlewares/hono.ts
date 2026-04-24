@@ -58,6 +58,7 @@ export function payment<const intent extends Mppx_internal.AnyMethodFn>(
   return async (c, next) => {
     const result = await intent(options)(c.req.raw)
     if (result.status === 402) return result.challenge
+    if (result.status === 'pending') return result.response as Response
     await next()
     c.res = result.withReceipt(c.res)
   }

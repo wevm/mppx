@@ -6,5 +6,6 @@ export type {
   SubscriptionIdentity,
   SubscriptionRecord,
   SubscriptionReceipt,
+  SubscriptionResolution,
   SubscriptionResource,
 } from './Types.js'

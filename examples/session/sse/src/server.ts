@@ -211,6 +211,7 @@ export async function handler(request: Request): Promise<Response | null> {
     // `result.challenge` is a Response object with the WWW-Authenticate header
     // containing the base64url-encoded challenge parameters.
     if (result.status === 402) return result.challenge
+    if (result.status === 'pending') return result.response
 
     // Phases 2–4: `withReceipt` handles everything.
     //

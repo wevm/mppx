@@ -4,4 +4,11 @@ export * as Ws from '../session/Ws.js'
 export { charge } from './Charge.js'
 export { tempo } from './Methods.js'
 export { session, settle } from './Session.js'
-export { charge as chargeSubscription, subscription } from './Subscription.js'
+export {
+  cancel,
+  captureActive,
+  completeCapture,
+  failCapture,
+  revoke,
+  subscription,
+} from './Subscription.js'

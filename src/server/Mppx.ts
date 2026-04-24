@@ -289,7 +289,13 @@ export function create<
     // so we use them directly — no need for the caller to re-supply.
     const request = credential.challenge.request as z.input<typeof mi.schema.request>
 
-    return mi.verify({ credential, request } as never)
+    const result = await mi.verify({ credential, request } as never)
+    if (isPendingResult(result)) {
+      throw new Error(
+        'verifyCredential() does not support pending verification results. Use the route handler flow instead.',
+      )
+    }
+    return result
   }
 
   function composeFn(
@@ -350,7 +356,7 @@ function createMethodFn<
   parameters: createMethodFn.Parameters<method, transport, defaults>,
 ): createMethodFn.ReturnType<method, transport, defaults>
 // biome-ignore lint/correctness/noUnusedVariables: _
-function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.ReturnType {
+function createMethodFn(parameters: createMethodFn.Parameters): any {
   const {
     authorize,
     defaults,
@@ -363,12 +369,12 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
     verify,
   } = parameters
 
-  return (options) => {
+  return (options: any) => {
     const { description, meta, ...rest } = options
     const merged = { ...defaults, ...rest }
 
     return Object.assign(
-      async (input: Transport.InputOf): Promise<MethodFn.Response> => {
+      async (input: Transport.InputOf): Promise<MethodFn.Response<any>> => {
         const expires =
           'expires' in options ? (options.expires as string | undefined) : Expires.minutes(5)
         const capturedRequest = await captureRequest(transport, input)
@@ -461,6 +467,12 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
           }
         }
 
+        const pending = (response: Transport.ChallengeOutputOf<typeof transport>) =>
+          ({
+            response,
+            status: 'pending',
+          }) as MethodFn.Response<any>
+
         // No credential provided—issue challenge
         if (!credential) {
           if (authorize && input instanceof globalThis.Request) {
@@ -471,6 +483,7 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
                 request: challenge.request,
               } as never)
               if (authorized) {
+                if (isPendingResult(authorized)) return pending(authorized.response as never)
                 return success(authorized.receipt, {
                   managementResponse: authorized.response,
                 })
@@ -598,7 +611,9 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
         // If verification fails, re-issue the challenge so the client can retry.
         let receiptData: Receipt.Receipt
         try {
-          receiptData = await verify({ credential, envelope, request } as never)
+          const verification = await verify({ credential, envelope, request } as never)
+          if (isPendingResult(verification)) return pending(verification.response as never)
+          receiptData = verification
         } catch (e) {
           if (!(e instanceof Errors.PaymentError))
             console.error('mppx: internal verification error', e)
@@ -872,6 +887,10 @@ function opaqueValuesMatch(
   return isDeepStrictEqual(expected, actual)
 }
 
+function isPendingResult(value: unknown): value is Method.PendingResult {
+  return !!value && typeof value === 'object' && 'response' in value && !('receipt' in value)
+}
+
 export type MethodFn<
   method extends Method.Method,
   transport extends Transport.AnyTransport,
@@ -902,6 +921,10 @@ declare namespace MethodFn {
     | {
         challenge: Transport.ChallengeOutputOf<transport>
         status: 402
+      }
+    | {
+        response: Transport.ChallengeOutputOf<transport>
+        status: 'pending'
       }
     | {
         status: 200
@@ -1218,6 +1241,8 @@ export function toNodeListener(
 
     if (result.status === 402) {
       await NodeListener.sendResponse(res, result.challenge as globalThis.Response)
+    } else if (result.status === 'pending') {
+      await NodeListener.sendResponse(res, result.response as globalThis.Response)
     } else {
       const wrapped = result.withReceipt(new globalThis.Response()) as globalThis.Response
       res.setHeader('Payment-Receipt', wrapped.headers.get('Payment-Receipt')!)

@@ -31,6 +31,7 @@ export async function handler(request: Request): Promise<Response | null> {
     })(request)
 
     if (result.status === 402) return result.challenge
+    if (result.status === 'pending') return result.response
 
     const res = await fetch('https://picsum.photos/1024/1024')
     const photoUrl = res.url
