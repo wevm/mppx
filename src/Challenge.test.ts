@@ -110,6 +110,29 @@ describe('from', () => {
       expectedId: 'm39jbWWCIfmfJZSwCfvKFFtBl0Qwf9X4nOmDb21peLA',
     },
     {
+      label: 'with opaque',
+      params: {
+        realm: 'api.example.com',
+        method: 'tempo',
+        intent: 'charge',
+        request: { amount: '1000000' },
+        meta: { pi: 'pi_3abc123XYZ' },
+      },
+      expectedId: 'rxzKZ2qjXvinqCH96RORTZEPs1KXsA-0AUjrCAPFOWc',
+    },
+    {
+      label: 'with opaque and expires',
+      params: {
+        realm: 'api.example.com',
+        method: 'tempo',
+        intent: 'charge',
+        request: { amount: '1000000' },
+        expires: '2025-01-06T12:00:00Z',
+        meta: { pi: 'pi_3abc123XYZ' },
+      },
+      expectedId: 'KAfoMrA4fnzS1DPWN_cUv_b3_yHxCizdp6OhH7gluMY',
+    },
+    {
       label: 'with description (not in HMAC input)',
       params: {
         realm: 'api.example.com',
@@ -151,6 +174,17 @@ describe('from', () => {
       expectedId: 'yLN7yChAejW9WNmb54HpJIWpdb1WWXeA3_aCx4dxmkU',
     },
     {
+      label: 'with empty opaque',
+      params: {
+        realm: 'api.example.com',
+        method: 'tempo',
+        intent: 'charge',
+        request: { amount: '1000000' },
+        meta: {},
+      },
+      expectedId: 'vb4IyH-0LdJ3s7L0QAw8jIzcZkyxksPhIvEfmHmzA9k',
+    },
+    {
       label: 'different realm',
       params: {
         realm: 'payments.other.com',
@@ -179,6 +213,17 @@ describe('from', () => {
         request: { amount: '1000000' },
       },
       expectedId: 'aAY7_IEDzsznNYplhOSE8cERQxvjFcT4Lcn-7FHjLVE',
+    },
+    {
+      label: 'with multi-key opaque',
+      params: {
+        realm: 'api.example.com',
+        method: 'tempo',
+        intent: 'charge',
+        request: { amount: '1000000' },
+        meta: { deposit: 'dep_456', pi: 'pi_3abc123XYZ' },
+      },
+      expectedId: 'aKskU8sadR5ZuFbUCsIwhO-ENxuVpTw17FdwHEXsJDk',
     },
   ] as const
 

@@ -124,6 +124,13 @@ Canonical specs live at [tempoxyz/payment-auth-spec](https://github.com/tempoxyz
 - **Receipt**: `Payment-Receipt: <base64url>` → `{ status, method, timestamp, reference }`
 - **Encoding**: All JSON payloads use base64url without padding (RFC 4648)
 
+Follow `paymentauth.org` as the source of truth for wire-format details:
+
+- `request` and `opaque` are base64url-encoded JCS JSON on the wire.
+- In the credential `challenge` object, `opaque` is a `string`, not an expanded JSON object.
+- Clients MUST return `id` unchanged and MUST return `opaque` unchanged when present.
+- Challenge binding includes `opaque` as the final optional slot, using an empty string when absent.
+
 ### Challenge ID Binding
 
 The challenge `id` is an HMAC-SHA256 over the challenge parameters, cryptographically binding the ID to its contents. This prevents tampering and ensures the server can verify challenge integrity without storing state.
@@ -131,7 +138,7 @@ The challenge `id` is an HMAC-SHA256 over the challenge parameters, cryptographi
 **HMAC input** (concatenated, pipe-delimited):
 
 ```
-realm | method | intent | request | expires | digest
+realm | method | intent | request | expires | digest | opaque
 ```
 
 **Generation:**

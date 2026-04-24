@@ -30,6 +30,40 @@ const mppx_server = Mppx_server.create({
   secretKey,
 })
 
+const scopeMethod = Method.toServer(
+  Method.from({
+    name: 'mock',
+    intent: 'charge',
+    schema: {
+      credential: { payload: z.object({ token: z.string() }) },
+      request: z.object({
+        amount: z.string(),
+        currency: z.string(),
+        decimals: z.number(),
+        recipient: z.string(),
+      }),
+    },
+  }),
+  {
+    async verify() {
+      return {
+        method: 'mock',
+        reference: 'tx-mock',
+        status: 'success' as const,
+        timestamp: new Date().toISOString(),
+      }
+    },
+  },
+)
+
+function createScopeServer() {
+  return Mppx_server.create({
+    methods: [scopeMethod],
+    realm: 'api.example.com',
+    secretKey,
+  })
+}
+
 const mppx_client = Mppx_client.create({
   polyfill: false,
   methods: [
@@ -121,14 +155,14 @@ describe('create', () => {
     expect(body.paths['/api/v1/models'].get.responses['200']).toEqual({
       description: 'Successful response',
     })
-    expect(body.paths['/api/v1/generate'].post['x-payment-info']).toMatchObject({
+    expect(body.paths['/api/v1/generate'].post['x-payment-info'].offers[0]).toMatchObject({
       amount: '1000000',
       currency: asset,
       description: 'Generate text',
       intent: 'charge',
       method: 'tempo',
     })
-    expect(body.paths['/api/v1/stream'].post['x-payment-info']).toMatchObject({
+    expect(body.paths['/api/v1/stream'].post['x-payment-info'].offers[0]).toMatchObject({
       amount: '1000000',
       currency: asset,
       description: 'Stream text',
@@ -207,7 +241,7 @@ describe('create', () => {
     const res = await fetch(`${proxyServer.url}/proxy/openapi.json`)
     expect(res.status).toBe(200)
     const body = (await res.json()) as Record<string, any>
-    expect(body.paths['/proxy/api/v1/generate'].post['x-payment-info']).toMatchObject({
+    expect(body.paths['/proxy/api/v1/generate'].post['x-payment-info'].offers[0]).toMatchObject({
       amount: '1000000',
       currency: asset,
       description: 'Generate text',
@@ -706,6 +740,88 @@ describe('create', () => {
 
     const res = await fetch(`${proxyServer.url}/api/v1/search?q=hello&limit=10`)
     expect(await res.json()).toEqual({ search: '?q=hello&limit=10' })
+  })
+
+  test('auto-injects proxy route scope and blocks same-economics replay across routes', async () => {
+    const scopedServer = createScopeServer()
+    const proxy = ApiProxy.create({
+      services: [
+        Service.from('api', {
+          baseUrl: 'https://api.example.com',
+          routes: {
+            'GET /v1/alpha': scopedServer.charge({
+              amount: '1',
+              currency: '0x0000000000000000000000000000000000000001',
+              decimals: 6,
+              recipient: '0x0000000000000000000000000000000000000002',
+            }),
+            'GET /v1/beta': scopedServer.charge({
+              amount: '1',
+              currency: '0x0000000000000000000000000000000000000001',
+              decimals: 6,
+              recipient: '0x0000000000000000000000000000000000000002',
+            }),
+          },
+        }),
+      ],
+    })
+    proxyServer = await Http.createServer(proxy.listener)
+
+    const challengeResponse = await fetch(`${proxyServer.url}/api/v1/alpha`)
+    expect(challengeResponse.status).toBe(402)
+
+    const challenge = Challenge.fromResponse(challengeResponse)
+    expect(challenge.opaque).toEqual({ _mppx_scope: 'GET /api/v1/alpha' })
+
+    const credential = Credential.from({ challenge, payload: { token: 'valid' } })
+    const replay = await fetch(`${proxyServer.url}/api/v1/beta`, {
+      headers: { Authorization: Credential.serialize(credential) },
+    })
+
+    expect(replay.status).toBe(402)
+  })
+
+  test('manual scope overrides proxy route scope', async () => {
+    const scopedServer = createScopeServer()
+    upstream = await createUpstream(() => Response.json({ ok: true }))
+    const proxy = ApiProxy.create({
+      services: [
+        Service.from('api', {
+          baseUrl: upstream.url,
+          routes: {
+            'GET /v1/alpha': scopedServer.charge({
+              amount: '1',
+              currency: '0x0000000000000000000000000000000000000001',
+              decimals: 6,
+              recipient: '0x0000000000000000000000000000000000000002',
+              scope: 'shared-scope',
+            }),
+            'GET /v1/beta': scopedServer.charge({
+              amount: '1',
+              currency: '0x0000000000000000000000000000000000000001',
+              decimals: 6,
+              recipient: '0x0000000000000000000000000000000000000002',
+              scope: 'shared-scope',
+            }),
+          },
+        }),
+      ],
+    })
+    proxyServer = await Http.createServer(proxy.listener)
+
+    const challengeResponse = await fetch(`${proxyServer.url}/api/v1/alpha`)
+    expect(challengeResponse.status).toBe(402)
+
+    const challenge = Challenge.fromResponse(challengeResponse)
+    expect(challenge.opaque).toEqual({ _mppx_scope: 'shared-scope' })
+
+    const credential = Credential.from({ challenge, payload: { token: 'valid' } })
+    const replay = await fetch(`${proxyServer.url}/api/v1/beta`, {
+      headers: { Authorization: Credential.serialize(credential) },
+    })
+
+    expect(replay.status).toBe(200)
+    expect(await replay.json()).toEqual({ ok: true })
   })
 })
 

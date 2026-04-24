@@ -1,5 +1,5 @@
 import type * as Method from '../Method.js'
-import type { ServiceInfo } from './Discovery.js'
+import { PaymentInfo, type ServiceInfo } from './Discovery.js'
 
 export type DiscoveryHandler = ((...args: any[]) => unknown) & {
   _internal?: {
@@ -121,7 +121,7 @@ function createDocument(config: {
       },
     }
 
-    if (route.payment) operation['x-payment-info'] = route.payment
+    if (route.payment) operation['x-payment-info'] = PaymentInfo.parse(route.payment)
     if (route.summary) operation.summary = route.summary
     if (route.requestBody) operation.requestBody = route.requestBody
 

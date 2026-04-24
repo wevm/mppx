@@ -1,6 +1,6 @@
 import { serve } from '@hono/node-server'
 import { Hono } from 'hono'
-import { Receipt } from 'mppx'
+import { Challenge, Credential, Method, Receipt, z } from 'mppx'
 import { Mppx as Mppx_client, session as sessionIntent, tempo as tempo_client } from 'mppx/client'
 import { Mppx, discovery } from 'mppx/hono'
 import { tempo as tempo_server } from 'mppx/server'
@@ -25,6 +25,40 @@ function createServer(app: Hono) {
 }
 
 const secretKey = 'test-secret-key'
+
+const scopeMethod = Method.toServer(
+  Method.from({
+    name: 'mock',
+    intent: 'charge',
+    schema: {
+      credential: { payload: z.object({ token: z.string() }) },
+      request: z.object({
+        amount: z.string(),
+        currency: z.string(),
+        decimals: z.number(),
+        recipient: z.string(),
+      }),
+    },
+  }),
+  {
+    async verify() {
+      return {
+        method: 'mock',
+        reference: 'tx-mock',
+        status: 'success' as const,
+        timestamp: new Date().toISOString(),
+      }
+    },
+  },
+)
+
+function createScopeHarness() {
+  return Mppx.create({
+    methods: [scopeMethod],
+    realm: 'api.example.com',
+    secretKey,
+  })
+}
 
 function createChargeHarness(feePayer: boolean) {
   const mppx = Mppx.create({
@@ -115,13 +149,73 @@ describe('charge', () => {
 
     const body = (await response.json()) as Record<string, any>
     expect(body.info).toEqual({ title: 'Auto API', version: '2.0.0' })
-    expect(body.paths['/'].get['x-payment-info']).toMatchObject({
+    expect(body.paths['/'].get['x-payment-info'].offers[0]).toMatchObject({
       amount: '1000000',
       currency: asset,
       intent: 'charge',
       method: 'tempo',
     })
 
+    server.close()
+  })
+})
+
+describe('scope binding', () => {
+  const scopeOpts = {
+    amount: '1',
+    currency: '0x0000000000000000000000000000000000000001',
+    decimals: 6,
+    recipient: '0x0000000000000000000000000000000000000002',
+  }
+
+  test('auto-injects route scope and blocks same-economics replay across routes', async () => {
+    const mppx = createScopeHarness()
+
+    const app = new Hono()
+    app.get('/alpha/:id', mppx.charge(scopeOpts), (c) => c.json({ route: 'alpha' }))
+    app.get('/beta/:id', mppx.charge(scopeOpts), (c) => c.json({ route: 'beta' }))
+
+    const server = await createServer(app)
+    const challengeResponse = await fetch(`${server.url}/alpha/1`)
+    expect(challengeResponse.status).toBe(402)
+
+    const challenge = Challenge.fromResponse(challengeResponse)
+    expect(challenge.opaque).toEqual({ _mppx_scope: 'GET /alpha/:id' })
+
+    const credential = Credential.from({ challenge, payload: { token: 'valid' } })
+    const replay = await fetch(`${server.url}/beta/1`, {
+      headers: { Authorization: Credential.serialize(credential) },
+    })
+
+    expect(replay.status).toBe(402)
+    server.close()
+  })
+
+  test('manual scope overrides adapter-derived route scope', async () => {
+    const mppx = createScopeHarness()
+
+    const app = new Hono()
+    app.get('/alpha/:id', mppx.charge({ ...scopeOpts, scope: 'shared-scope' }), (c) =>
+      c.json({ route: 'alpha' }),
+    )
+    app.get('/beta/:id', mppx.charge({ ...scopeOpts, scope: 'shared-scope' }), (c) =>
+      c.json({ route: 'beta' }),
+    )
+
+    const server = await createServer(app)
+    const challengeResponse = await fetch(`${server.url}/alpha/1`)
+    expect(challengeResponse.status).toBe(402)
+
+    const challenge = Challenge.fromResponse(challengeResponse)
+    expect(challenge.opaque).toEqual({ _mppx_scope: 'shared-scope' })
+
+    const credential = Credential.from({ challenge, payload: { token: 'valid' } })
+    const replay = await fetch(`${server.url}/beta/2`, {
+      headers: { Authorization: Credential.serialize(credential) },
+    })
+
+    expect(replay.status).toBe(200)
+    expect(await replay.json()).toEqual({ route: 'beta' })
     server.close()
   })
 })

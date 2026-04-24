@@ -63,14 +63,14 @@ export function sse(options: sse.Options & { store: ChannelStore.ChannelStore })
     respondReceipt({ credential, envelope, receipt, response, challengeId, input }) {
       const verifiedCredential = envelope?.credential ?? credential
       const verifiedChallengeId = envelope?.challenge.id ?? challengeId
+      const verifiedRequest = envelope?.request ?? verifiedCredential.challenge.request
       const payload = verifiedCredential.payload as Partial<SessionCredentialPayload>
       if (!payload.channelId) throw new Error('No SSE context available')
+
       const channelId = payload.channelId
       const tickCost = BigInt(verifiedCredential.challenge.request.amount as string)
       const unitType =
-        typeof verifiedCredential.challenge.request.unitType === 'string'
-          ? verifiedCredential.challenge.request.unitType
-          : undefined
+        typeof verifiedRequest.unitType === 'string' ? verifiedRequest.unitType : undefined
 
       // Auto-detect upstream SSE responses and parse them into an
       // AsyncIterable so they flow through the metered pipeline.

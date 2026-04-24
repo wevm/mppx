@@ -32,6 +32,31 @@ describe('validate', () => {
     expect(errors.filter((error) => error.severity === 'error')).toHaveLength(0)
   })
 
+  test('accepts offers-based x-payment-info', () => {
+    const errors = validate(
+      makeDoc({
+        paths: {
+          '/search': {
+            post: {
+              'x-payment-info': {
+                offers: [{ amount: '100', intent: 'charge', method: 'tempo' }],
+              },
+              requestBody: {
+                content: { 'application/json': { schema: { type: 'object' } } },
+              },
+              responses: {
+                '200': { description: 'OK' },
+                '402': { description: 'Payment Required' },
+              },
+            },
+          },
+        },
+      }),
+    )
+
+    expect(errors.filter((error) => error.severity === 'error')).toHaveLength(0)
+  })
+
   test('returns error for missing 402 response', () => {
     const errors = validate(
       makeDoc({
@@ -110,6 +135,98 @@ describe('validate', () => {
     )
 
     expect(errors.some((error) => error.severity === 'error')).toBe(true)
+  })
+
+  test('returns errors for mixed shorthand and offers shapes', () => {
+    const errors = validate(
+      makeDoc({
+        paths: {
+          '/search': {
+            post: {
+              'x-payment-info': {
+                amount: '100',
+                offers: [{ amount: '100', intent: 'charge', method: 'tempo' }],
+              },
+              requestBody: {
+                content: { 'application/json': { schema: { type: 'object' } } },
+              },
+              responses: {
+                '200': { description: 'OK' },
+                '402': { description: 'Payment Required' },
+              },
+            },
+          },
+        },
+      }),
+    )
+
+    expect(errors).toContainEqual(
+      expect.objectContaining({
+        message: 'Cannot mix offers with flat payment info fields',
+        path: 'paths./search.post.x-payment-info',
+        severity: 'error',
+      }),
+    )
+  })
+
+  test('returns errors for empty offers arrays', () => {
+    const errors = validate(
+      makeDoc({
+        paths: {
+          '/search': {
+            post: {
+              'x-payment-info': {
+                offers: [],
+              },
+              requestBody: {
+                content: { 'application/json': { schema: { type: 'object' } } },
+              },
+              responses: {
+                '200': { description: 'OK' },
+                '402': { description: 'Payment Required' },
+              },
+            },
+          },
+        },
+      }),
+    )
+
+    expect(errors).toContainEqual(
+      expect.objectContaining({
+        path: 'paths./search.post.x-payment-info.offers',
+        severity: 'error',
+      }),
+    )
+  })
+
+  test('returns errors for malformed offers', () => {
+    const errors = validate(
+      makeDoc({
+        paths: {
+          '/search': {
+            post: {
+              'x-payment-info': {
+                offers: [{ amount: '01', intent: 'charge', method: 'tempo' }],
+              },
+              requestBody: {
+                content: { 'application/json': { schema: { type: 'object' } } },
+              },
+              responses: {
+                '200': { description: 'OK' },
+                '402': { description: 'Payment Required' },
+              },
+            },
+          },
+        },
+      }),
+    )
+
+    expect(errors).toContainEqual(
+      expect.objectContaining({
+        path: 'paths./search.post.x-payment-info.offers.0.amount',
+        severity: 'error',
+      }),
+    )
   })
 
   test('ignores path-item-level fields like summary and parameters', () => {

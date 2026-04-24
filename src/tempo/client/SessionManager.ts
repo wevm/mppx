@@ -778,9 +778,21 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
       })
       if (!response.ok) {
         const body = await response.text().catch(() => '')
+        const detail = (() => {
+          if (!body) return ''
+          if (!response.headers.get('Content-Type')?.includes('application/problem+json')) {
+            return body
+          }
+          try {
+            const problem = JSON.parse(body) as { detail?: string }
+            return problem.detail ?? body
+          } catch {
+            return body
+          }
+        })()
         const wwwAuth = response.headers.get('WWW-Authenticate') ?? ''
         throw new Error(
-          `Close request failed with status ${response.status}${body ? `: ${body}` : ''}${wwwAuth ? ` [WWW-Authenticate: ${wwwAuth}]` : ''}`,
+          `Close request failed with status ${response.status}${detail ? `: ${detail}` : ''}${wwwAuth ? ` [WWW-Authenticate: ${wwwAuth}]` : ''}`,
         )
       }
       const receiptHeader = response.headers.get('Payment-Receipt')

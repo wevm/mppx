@@ -88,6 +88,8 @@ export type VerifiedChallengeEnvelope<
     payload,
     Challenge.Challenge<request, intent, MethodName>
   >
+  /** The authoritative route request after defaults and request-hook transforms. */
+  readonly request: request
 }
 
 /** Request hook parameters for a single method. */

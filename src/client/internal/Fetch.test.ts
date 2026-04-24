@@ -907,6 +907,179 @@ describe('Fetch.from: 402 retry path', () => {
   })
 })
 
+describe('Fetch.from: acceptPaymentPolicy', () => {
+  test('policy: "always" injects Accept-Payment on all requests', async () => {
+    const receivedInits: (RequestInit | undefined)[] = []
+    const mockFetch: typeof globalThis.fetch = async (_input, init) => {
+      receivedInits.push(init)
+      return new Response('OK', { status: 200 })
+    }
+
+    const fetch = Fetch.from({
+      fetch: mockFetch,
+      methods: [noopMethod],
+      acceptPaymentPolicy: 'always',
+    })
+
+    await fetch('https://cross-origin.com/api')
+    expect(new Headers(receivedInits[0]?.headers).get('Accept-Payment')).toBe('test/test')
+  })
+
+  test('policy: "never" skips Accept-Payment on all requests', async () => {
+    const receivedInits: (RequestInit | undefined)[] = []
+    const mockFetch: typeof globalThis.fetch = async (_input, init) => {
+      receivedInits.push(init)
+      return new Response('OK', { status: 200 })
+    }
+
+    const fetch = Fetch.from({
+      fetch: mockFetch,
+      methods: [noopMethod],
+      acceptPaymentPolicy: 'never',
+    })
+
+    await fetch('https://example.com/api')
+    expect(new Headers(receivedInits[0]?.headers).get('Accept-Payment')).toBeNull()
+  })
+
+  test('policy: "same-origin" injects when no globalThis.location (server-side)', async () => {
+    const receivedInits: (RequestInit | undefined)[] = []
+    const mockFetch: typeof globalThis.fetch = async (_input, init) => {
+      receivedInits.push(init)
+      return new Response('OK', { status: 200 })
+    }
+
+    const fetch = Fetch.from({
+      fetch: mockFetch,
+      methods: [noopMethod],
+      acceptPaymentPolicy: 'same-origin',
+    })
+
+    await fetch('https://example.com/api')
+    expect(new Headers(receivedInits[0]?.headers).get('Accept-Payment')).toBe('test/test')
+  })
+
+  test('policy: { origins } injects only for matching origins', async () => {
+    const receivedInits: (RequestInit | undefined)[] = []
+    const mockFetch: typeof globalThis.fetch = async (_input, init) => {
+      receivedInits.push(init)
+      return new Response('OK', { status: 200 })
+    }
+
+    const fetch = Fetch.from({
+      fetch: mockFetch,
+      methods: [noopMethod],
+      acceptPaymentPolicy: { origins: ['https://pay.example.com'] },
+    })
+
+    await fetch('https://pay.example.com/resource')
+    expect(new Headers(receivedInits[0]?.headers).get('Accept-Payment')).toBe('test/test')
+
+    await fetch('https://other.example.com/resource')
+    expect(new Headers(receivedInits[1]?.headers).get('Accept-Payment')).toBeNull()
+  })
+
+  test('policy: { origins } matches origin regardless of path', async () => {
+    const receivedInits: (RequestInit | undefined)[] = []
+    const mockFetch: typeof globalThis.fetch = async (_input, init) => {
+      receivedInits.push(init)
+      return new Response('OK', { status: 200 })
+    }
+
+    const fetch = Fetch.from({
+      fetch: mockFetch,
+      methods: [noopMethod],
+      acceptPaymentPolicy: { origins: ['https://pay.example.com/some/path'] },
+    })
+
+    await fetch('https://pay.example.com/different/path')
+    expect(new Headers(receivedInits[0]?.headers).get('Accept-Payment')).toBe('test/test')
+  })
+
+  test('policy: { origins } supports wildcard subdomains', async () => {
+    const receivedInits: (RequestInit | undefined)[] = []
+    const mockFetch: typeof globalThis.fetch = async (_input, init) => {
+      receivedInits.push(init)
+      return new Response('OK', { status: 200 })
+    }
+
+    const fetch = Fetch.from({
+      fetch: mockFetch,
+      methods: [noopMethod],
+      acceptPaymentPolicy: { origins: ['*.example.com'] },
+    })
+
+    await fetch('https://pay.example.com/resource')
+    expect(new Headers(receivedInits[0]?.headers).get('Accept-Payment')).toBe('test/test')
+
+    await fetch('https://api.pay.example.com/resource')
+    expect(new Headers(receivedInits[1]?.headers).get('Accept-Payment')).toBe('test/test')
+
+    await fetch('https://example.com/resource')
+    expect(new Headers(receivedInits[2]?.headers).get('Accept-Payment')).toBe('test/test')
+
+    await fetch('https://notexample.com/resource')
+    expect(new Headers(receivedInits[3]?.headers).get('Accept-Payment')).toBeNull()
+  })
+
+  test('policy: "never" still handles 402 responses', async () => {
+    let callCount = 0
+    const mockFetch: typeof globalThis.fetch = async (_input, init) => {
+      callCount++
+      if (callCount === 1) {
+        expect(new Headers(init?.headers).get('Accept-Payment')).toBeNull()
+        return make402()
+      }
+      expect(new Headers(init?.headers).get('Authorization')).toBe('credential')
+      return new Response('OK', { status: 200 })
+    }
+
+    const fetch = Fetch.from({
+      fetch: mockFetch,
+      methods: [noopMethod],
+      acceptPaymentPolicy: 'never',
+    })
+
+    const response = await fetch('https://example.com/api')
+    expect(response.status).toBe(200)
+  })
+
+  test('policy: explicit Accept-Payment header always takes precedence over "never"', async () => {
+    const receivedInits: (RequestInit | undefined)[] = []
+    const mockFetch: typeof globalThis.fetch = async (_input, init) => {
+      receivedInits.push(init)
+      return new Response('OK', { status: 200 })
+    }
+
+    const fetch = Fetch.from({
+      fetch: mockFetch,
+      methods: [noopMethod],
+      acceptPaymentPolicy: 'never',
+    })
+
+    await fetch('https://example.com/api', {
+      headers: { 'Accept-Payment': 'custom/charge' },
+    })
+    expect(new Headers(receivedInits[0]?.headers).get('Accept-Payment')).toBe('custom/charge')
+  })
+
+  test('defaults to "always" for Fetch.from', async () => {
+    const receivedInits: (RequestInit | undefined)[] = []
+    const mockFetch: typeof globalThis.fetch = async (_input, init) => {
+      receivedInits.push(init)
+      return new Response('OK', { status: 200 })
+    }
+
+    const fetch = Fetch.from({
+      fetch: mockFetch,
+      methods: [noopMethod],
+    })
+
+    await fetch('https://cross-origin.com/api')
+    expect(new Headers(receivedInits[0]?.headers).get('Accept-Payment')).toBe('test/test')
+  })
+})
+
 describe('Fetch.from: input passthrough', () => {
   test('passes URL input through on both initial and retry calls', async () => {
     let callCount = 0

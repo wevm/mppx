@@ -169,4 +169,22 @@ describe('Mppx type tests', () => {
 
     expectTypeOf(mppx.verifyCredential).toBeFunction()
   })
+
+  test('handler options and verifyCredential accept scope', () => {
+    const mppx = Mppx.create({ methods: [alphaMethod], realm, secretKey })
+
+    expectTypeOf(
+      mppx.charge({
+        amount: '100',
+        currency: '0x01',
+        decimals: 6,
+        recipient: '0x02',
+        scope: 'GET /premium',
+      }),
+    ).toBeFunction()
+
+    expectTypeOf(mppx.verifyCredential('credential', { scope: 'GET /premium' })).toMatchTypeOf<
+      Promise<unknown>
+    >()
+  })
 })

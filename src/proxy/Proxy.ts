@@ -2,6 +2,7 @@ import type * as http from 'node:http'
 
 import * as Credential from '../Credential.js'
 import { generateProxy } from '../discovery/OpenApi.js'
+import * as Scope from '../server/internal/scope.js'
 import * as Request from '../server/Request.js'
 import * as Headers from './internal/Headers.js'
 import * as Route from './internal/Route.js'
@@ -129,7 +130,16 @@ export function create(config: create.Config): Proxy {
     if (endpoint === true) return proxyUpstream({ request, service, ctx, proxy })
 
     const handler = typeof endpoint === 'function' ? endpoint : endpoint.pay
-    const result = await handler(request)
+    const scope =
+      getConfiguredScope(handler) ??
+      deriveRouteScope({
+        basePath: config.basePath,
+        routeKey: matched.key,
+        serviceId,
+      })
+    const result = await handler(
+      getConfiguredScope(handler) ? request : Scope.attach(request, scope),
+    )
     if (result.status === 402) return result.challenge
     if (result.status === 'pending') return result.response
 
@@ -241,6 +251,22 @@ function buildDiscoveryRoutes(services: Service.Service[]) {
       }
     }),
   )
+}
+
+function getConfiguredScope(handler: Service.IntentHandler): string | undefined {
+  if (!('_internal' in handler)) return undefined
+  const internal = handler._internal as { meta?: Record<string, string>; scope?: string }
+  return Scope.read(internal.meta) ?? internal.scope
+}
+
+function deriveRouteScope(parameters: {
+  basePath?: string | undefined
+  routeKey: string
+  serviceId: string
+}): string {
+  const { basePath, routeKey, serviceId } = parameters
+  const { method, pattern } = Route.parseRouteKey(routeKey)
+  return `${method ?? '*'} ${withBasePath(basePath, `/${serviceId}${pattern}`)}`
 }
 
 function buildServiceInfo(config: create.Config): { categories?: string[]; docs?: Service.Docs } {

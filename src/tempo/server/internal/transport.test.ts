@@ -284,6 +284,90 @@ describe('sse transport', () => {
     expect(terminalReceipt.units).toBe(1)
   })
 
+  test('respondReceipt uses the verified route unitType instead of the echoed credential unitType', async () => {
+    const store = memoryStore()
+    await seedChannel(store, 10000000n)
+    const transport = sse({ store })
+    const request = makeAuthorizedRequest({ unitType: 'token' })
+    const credential = makeCredential({ unitType: 'request' })
+
+    async function* gen() {
+      yield 'hello'
+      yield 'world'
+      yield 'again'
+    }
+
+    const response = transport.respondReceipt({
+      credential,
+      envelope: {
+        capturedRequest: {
+          headers: new Headers(request.headers),
+          hasBody: request.body !== null,
+          method: request.method,
+          url: new URL(request.url),
+        },
+        challenge: makeChallenge({ unitType: 'token' }),
+        credential,
+        request: makeChallenge({ unitType: 'token' }).request,
+      },
+      input: request,
+      receipt: makeReceipt(),
+      response: gen(),
+      challengeId,
+    })
+
+    const body = await readResponseText(response)
+    const terminalReceipt = readTerminalReceipt(body)
+    const channel = await store.getChannel(channelId)
+
+    expect(channel!.spent).toBe(3000000n)
+    expect(channel!.units).toBe(3)
+    expect(terminalReceipt.spent).toBe('3000000')
+    expect(terminalReceipt.units).toBe(3)
+  })
+
+  test('respondReceipt uses the canonical challenge amount instead of the raw verified route amount', async () => {
+    const store = memoryStore()
+    await seedChannel(store, 10000000n)
+    const transport = sse({ store })
+    const request = makeAuthorizedRequest({ unitType: 'token' })
+    const credential = makeCredential({ unitType: 'token' })
+
+    const response = transport.respondReceipt({
+      credential,
+      envelope: {
+        capturedRequest: {
+          headers: new Headers(request.headers),
+          hasBody: request.body !== null,
+          method: request.method,
+          url: new URL(request.url),
+        },
+        challenge: credential.challenge,
+        credential,
+        request: {
+          ...credential.challenge.request,
+          amount: '1',
+        },
+      },
+      input: request,
+      receipt: makeReceipt(),
+      response: new Response('ok', {
+        headers: { 'Content-Type': 'text/plain' },
+      }),
+      challengeId,
+    })
+
+    expect(await response.text()).toBe('ok')
+
+    const receipt = deserializeSessionReceipt(response.headers.get('Payment-Receipt')!)
+    const channel = await store.getChannel(channelId)
+
+    expect(channel!.spent).toBe(1000000n)
+    expect(channel!.units).toBe(1)
+    expect(receipt.spent).toBe('1000000')
+    expect(receipt.units).toBe(1)
+  })
+
   test('respondReceipt with AsyncIterable and non-request unitType still charges per chunk', async () => {
     const store = memoryStore()
     await seedChannel(store, 10000000n)

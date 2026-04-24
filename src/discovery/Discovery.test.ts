@@ -1,14 +1,26 @@
 import { DiscoveryDocument, PaymentInfo, ServiceInfo } from './Discovery.js'
 
 describe('PaymentInfo', () => {
-  test('parses a valid charge payment info', () => {
+  test('normalizes legacy shorthand to offers', () => {
     const result = PaymentInfo.safeParse({
       amount: '1000',
       intent: 'charge',
       method: 'tempo',
     })
     expect(result.success).toBe(true)
-    expect(result.data).toEqual({ amount: '1000', intent: 'charge', method: 'tempo' })
+    expect(result.data).toEqual({
+      offers: [{ amount: '1000', intent: 'charge', method: 'tempo' }],
+    })
+  })
+
+  test('parses offers format without modification', () => {
+    const result = PaymentInfo.safeParse({
+      offers: [{ amount: '1000', intent: 'charge', method: 'tempo' }],
+    })
+    expect(result.success).toBe(true)
+    expect(result.data).toEqual({
+      offers: [{ amount: '1000', intent: 'charge', method: 'tempo' }],
+    })
   })
 
   test('parses a session with null amount', () => {
@@ -18,7 +30,7 @@ describe('PaymentInfo', () => {
       method: 'tempo',
     })
     expect(result.success).toBe(true)
-    expect(result.data?.amount).toBeNull()
+    expect(result.data?.offers[0]?.amount).toBeNull()
   })
 
   test('accepts custom intents', () => {
@@ -28,7 +40,7 @@ describe('PaymentInfo', () => {
       method: 'tempo',
     })
     expect(result.success).toBe(true)
-    expect(result.data?.intent).toBe('subscribe')
+    expect(result.data?.offers[0]?.intent).toBe('subscribe')
   })
 
   test('rejects invalid amount pattern', () => {
@@ -40,6 +52,26 @@ describe('PaymentInfo', () => {
     expect(result.success).toBe(false)
   })
 
+  test('rejects mixed shorthand and offers shapes', () => {
+    const result = PaymentInfo.safeParse({
+      amount: '100',
+      offers: [{ amount: '100', intent: 'charge', method: 'tempo' }],
+    })
+    expect(result.success).toBe(false)
+  })
+
+  test('rejects empty offers arrays', () => {
+    const result = PaymentInfo.safeParse({ offers: [] })
+    expect(result.success).toBe(false)
+  })
+
+  test('rejects malformed offers', () => {
+    const result = PaymentInfo.safeParse({
+      offers: [{ amount: '01', intent: 'charge', method: 'tempo' }],
+    })
+    expect(result.success).toBe(false)
+  })
+
   test('accepts x402 format with unknown fields', () => {
     const result = PaymentInfo.safeParse({
       price: '0.54',
@@ -47,6 +79,9 @@ describe('PaymentInfo', () => {
       protocols: ['x402', 'mpp'],
     })
     expect(result.success).toBe(true)
+    expect(result.data).toEqual({
+      offers: [{ price: '0.54', pricingMode: 'fixed', protocols: ['x402', 'mpp'] }],
+    })
   })
 })
 
@@ -118,6 +153,33 @@ describe('DiscoveryDocument', () => {
       },
     })
     expect(result.success).toBe(true)
+    expect(result.data?.paths?.['/search']?.post?.['x-payment-info']).toEqual({
+      offers: [{ amount: '100', intent: 'charge', method: 'tempo' }],
+    })
+  })
+
+  test('normalizes offers-based discovery documents', () => {
+    const result = DiscoveryDocument.safeParse({
+      info: { title: 'Test', version: '1.0.0' },
+      openapi: '3.1.0',
+      paths: {
+        '/search': {
+          post: {
+            'x-payment-info': {
+              offers: [{ amount: '100', intent: 'charge', method: 'tempo' }],
+            },
+            responses: {
+              '200': { description: 'OK' },
+              '402': { description: 'Payment Required' },
+            },
+          },
+        },
+      },
+    })
+    expect(result.success).toBe(true)
+    expect(result.data?.paths?.['/search']?.post?.['x-payment-info']).toEqual({
+      offers: [{ amount: '100', intent: 'charge', method: 'tempo' }],
+    })
   })
 
   test('accepts path items with summary, parameters, and extensions', () => {

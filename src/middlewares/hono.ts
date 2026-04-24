@@ -1,6 +1,7 @@
 import type { Hono, MiddlewareHandler } from 'hono'
 
 import { generate, type GenerateConfig, type RouteConfig } from '../discovery/OpenApi.js'
+import * as Scope from '../server/internal/scope.js'
 import * as Mppx_core from '../server/Mppx.js'
 import * as Mppx_internal from './internal/mppx.js'
 
@@ -56,7 +57,11 @@ export function payment<const intent extends Mppx_internal.AnyMethodFn>(
   options: intent extends (options: infer options) => any ? options : never,
 ): MiddlewareHandler {
   return async (c, next) => {
-    const result = await intent(options)(c.req.raw)
+    const request =
+      options.scope === undefined && Scope.read(options.meta) === undefined
+        ? Scope.attach(c.req.raw, `${c.req.method.toUpperCase()} ${c.req.routePath || c.req.path}`)
+        : c.req.raw
+    const result = await intent(options)(request)
     if (result.status === 402) return result.challenge
     if (result.status === 'pending') return result.response as Response
     await next()

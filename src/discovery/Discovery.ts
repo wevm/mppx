@@ -1,18 +1,13 @@
 import * as z from '../zod.js'
 
 const uriOrPathPattern = /^([a-zA-Z][a-zA-Z\d+.-]*:\/\/\S+|\/\S*)$/
+const paymentInfoFieldNames = new Set(['amount', 'currency', 'description', 'intent', 'method'])
 
 function uriOrPath() {
   return z.string().check(z.regex(uriOrPathPattern, 'Invalid URI or path'))
 }
 
-/**
- * Schema for the `x-payment-info` OpenAPI extension on an operation.
- *
- * Only validates spec-defined fields when present; unknown fields are ignored.
- * Discovery is advisory only. Runtime 402 challenges remain authoritative.
- */
-export const PaymentInfo = z.looseObject({
+const PaymentOffer = z.looseObject({
   amount: z.optional(
     z.union([z.null(), z.string().check(z.regex(/^(0|[1-9][0-9]*)$/, 'Invalid amount'))]),
   ),
@@ -21,6 +16,44 @@ export const PaymentInfo = z.looseObject({
   intent: z.optional(z.string()),
   method: z.optional(z.string()),
 })
+
+/**
+ * Schema for the `x-payment-info` OpenAPI extension on an operation.
+ *
+ * Only validates spec-defined fields when present; unknown fields are ignored.
+ * Discovery is advisory only. Runtime 402 challenges remain authoritative.
+ */
+export const PaymentInfo = z.pipe(
+  z
+    .looseObject({
+      amount: z.optional(
+        z.union([z.null(), z.string().check(z.regex(/^(0|[1-9][0-9]*)$/, 'Invalid amount'))]),
+      ),
+      currency: z.optional(z.string()),
+      description: z.optional(z.string()),
+      intent: z.optional(z.string()),
+      method: z.optional(z.string()),
+      offers: z.optional(z.array(PaymentOffer).check(z.minLength(1))),
+    })
+    .check(
+      z.refine(
+        (value) =>
+          value.offers === undefined || Object.keys(value).every((key) => key === 'offers'),
+        'Cannot mix offers with flat payment info fields',
+      ),
+    ),
+  z.transform((value) => {
+    if (value.offers) return { offers: value.offers }
+
+    const offer: Record<string, unknown> = {}
+    for (const [key, field] of Object.entries(value)) {
+      if (key === 'offers') continue
+      if (paymentInfoFieldNames.has(key) || field !== undefined) offer[key] = field
+    }
+
+    return { offers: [offer] }
+  }),
+)
 export type PaymentInfo = z.infer<typeof PaymentInfo>
 
 const ServiceDocs = z.looseObject({

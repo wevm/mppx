@@ -94,6 +94,12 @@ function assertUint128(amount: bigint): void {
   }
 }
 
+function isTempoAccessKeyAccount(
+  account: Account,
+): account is Account & { accessKeyAddress: Address } {
+  return 'accessKeyAddress' in account && typeof account.accessKeyAddress === 'string'
+}
+
 /** Options for {@link settleOnChain}. */
 export type SettleOptions =
   | { feePayer: Account; account: Account }
@@ -118,6 +124,15 @@ export async function settleOnChain(
   if (options?.feePayer) {
     const data = encodeFunctionData({ abi: escrowAbi, functionName: 'settle', args })
     return sendFeePayerTx(client, resolved, options.feePayer, escrowContract, data, 'settle')
+  }
+  if (isTempoAccessKeyAccount(resolved)) {
+    return sendAccountTx(
+      client,
+      resolved,
+      escrowContract,
+      encodeFunctionData({ abi: escrowAbi, functionName: 'settle', args }),
+      'settle',
+    )
   }
   return writeContract(client, {
     account: resolved,
@@ -154,6 +169,15 @@ export async function closeOnChain(
     const data = encodeFunctionData({ abi: escrowAbi, functionName: 'close', args })
     return sendFeePayerTx(client, resolved, options.feePayer, escrowContract, data, 'close')
   }
+  if (isTempoAccessKeyAccount(resolved)) {
+    return sendAccountTx(
+      client,
+      resolved,
+      escrowContract,
+      encodeFunctionData({ abi: escrowAbi, functionName: 'close', args }),
+      'close',
+    )
+  }
   return writeContract(client, {
     account: resolved,
     chain: client.chain,
@@ -162,6 +186,37 @@ export async function closeOnChain(
     functionName: 'close',
     args,
   })
+}
+
+async function sendAccountTx(
+  client: Client,
+  account: Account,
+  to: Address,
+  data: Hex,
+  label: string,
+): Promise<Hex> {
+  const prepared = await prepareTransactionRequest(client, {
+    account,
+    calls: [{ to, data }],
+  } as never)
+  prepared.gas = prepared.gas! + 5_000n
+
+  const serialized = (await signTransaction(client, {
+    ...prepared,
+    account,
+  } as never)) as Hex
+
+  const receipt = await sendRawTransactionSync(client, {
+    serializedTransaction: serialized as Transaction.TransactionSerializedTempo,
+  })
+
+  if (receipt.status !== 'success') {
+    throw new VerificationFailedError({
+      reason: `${label} transaction reverted: ${receipt.transactionHash}`,
+    })
+  }
+
+  return receipt.transactionHash
 }
 
 /**

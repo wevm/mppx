@@ -13,6 +13,8 @@ import * as Http from '~test/Http.js'
 import { deployEscrow } from '~test/tempo/session.js'
 import { accounts, asset, client } from '~test/tempo/viem.js'
 
+import type { SessionReceipt } from '../tempo/session/Types.js'
+
 const realm = 'api.example.com'
 const secretKey = 'test-secret-key'
 
@@ -2106,6 +2108,103 @@ describe('cross-route credential replay via scope binding flaw', () => {
     expect(result.status).toBe(402)
   })
 
+  test('rejects same-economics credential replayed across sibling routes with different scope', async () => {
+    const handler = Mppx.create({ methods: [serverMethod], realm, secretKey })
+
+    const routeA = handler.charge({
+      amount: '0.01',
+      currency: '0x0000000000000000000000000000000000000001',
+      decimals: 6,
+      expires: new Date(Date.now() + 60_000).toISOString(),
+      recipient: '0x0000000000000000000000000000000000000002',
+      scope: 'GET /a',
+    })
+    const routeB = handler.charge({
+      amount: '0.01',
+      currency: '0x0000000000000000000000000000000000000001',
+      decimals: 6,
+      expires: new Date(Date.now() + 60_000).toISOString(),
+      recipient: '0x0000000000000000000000000000000000000002',
+      scope: 'GET /b',
+    })
+
+    const routeAChallengeResult = await routeA(new Request('https://example.com/a'))
+    expect(routeAChallengeResult.status).toBe(402)
+    if (routeAChallengeResult.status !== 402) throw new Error()
+
+    const routeAChallenge = Challenge.fromResponse(routeAChallengeResult.challenge)
+    expect(routeAChallenge.opaque).toEqual({ _mppx_scope: 'GET /a' })
+
+    const credential = Credential.from({
+      challenge: routeAChallenge,
+      payload: { token: 'valid' },
+    })
+
+    const result = await routeB(
+      new Request('https://example.com/b', {
+        headers: { Authorization: Credential.serialize(credential) },
+      }),
+    )
+
+    expect(result.status).toBe(402)
+  })
+
+  test('rejects request-billed credential replayed at token-billed route', async () => {
+    const sessionMethod = Method.from({
+      name: 'mock',
+      intent: 'session',
+      schema: {
+        credential: { payload: z.object({ token: z.string() }) },
+        request: z.object({
+          amount: z.string(),
+          currency: z.string(),
+          recipient: z.string(),
+          unitType: z.string(),
+        }),
+      },
+    })
+
+    const sessionServerMethod = Method.toServer(sessionMethod, {
+      async verify() {
+        return mockReceipt()
+      },
+    })
+
+    const handler = Mppx.create({ methods: [sessionServerMethod], realm, secretKey })
+
+    const requestRoute = handler.session({
+      amount: '1',
+      currency: '0x0000000000000000000000000000000000000001',
+      expires: new Date(Date.now() + 60_000).toISOString(),
+      recipient: '0x0000000000000000000000000000000000000002',
+      unitType: 'request',
+    })
+    const tokenRoute = handler.session({
+      amount: '1',
+      currency: '0x0000000000000000000000000000000000000001',
+      expires: new Date(Date.now() + 60_000).toISOString(),
+      recipient: '0x0000000000000000000000000000000000000002',
+      unitType: 'token',
+    })
+
+    const first = await requestRoute(new Request('https://example.com/request'))
+    expect(first.status).toBe(402)
+    if (first.status !== 402) throw new Error()
+
+    const credential = Credential.from({
+      challenge: Challenge.fromResponse(first.challenge),
+      payload: { token: 'valid' },
+    })
+
+    const result = await tokenRoute(
+      new Request('https://example.com/token', {
+        headers: { Authorization: Credential.serialize(credential) },
+      }),
+    )
+
+    expect(result.status).toBe(402)
+  })
+
   test('rejects credential with mismatched method field', async () => {
     const otherMethod = Method.from({
       name: 'other',
@@ -3033,6 +3132,37 @@ describe('challenge', () => {
     expect(challenge.opaque).toEqual({ checkout_id: 'chk_abc' })
   })
 
+  test('challenge binds scope via reserved opaque metadata', async () => {
+    const mppx = Mppx.create({
+      methods: [alphaChargeServer],
+      realm,
+      secretKey,
+    })
+
+    const challenge = await mppx.challenge.alpha.charge({
+      ...challengeOpts,
+      scope: 'GET /premium',
+    })
+
+    expect(challenge.opaque).toEqual({ _mppx_scope: 'GET /premium' })
+  })
+
+  test('scope throws when it conflicts with reserved meta scope', async () => {
+    const mppx = Mppx.create({
+      methods: [alphaChargeServer],
+      realm,
+      secretKey,
+    })
+
+    await expect(
+      mppx.challenge.alpha.charge({
+        ...challengeOpts,
+        meta: { _mppx_scope: 'GET /other' },
+        scope: 'GET /premium',
+      }),
+    ).rejects.toThrow('Conflicting scope values')
+  })
+
   test('challenge applies schema transforms', async () => {
     // Method with a z.transform that converts decimals
     const transformMethod = Method.from({
@@ -3271,6 +3401,70 @@ describe('verifyCredential', () => {
     expect(receipt.method).toBe('alpha')
   })
 
+  test('verifies a credential when the expected scope matches', async () => {
+    const mppx = Mppx.create({
+      methods: [alphaChargeServer],
+      realm,
+      secretKey,
+    })
+
+    const challenge = await mppx.challenge.alpha.charge({
+      ...challengeOpts,
+      scope: 'GET /premium',
+    })
+    const credential = Credential.from({ challenge, payload: { token: 'valid' } })
+
+    const receipt = await mppx.verifyCredential(credential, { scope: 'GET /premium' })
+
+    expect(receipt.status).toBe('success')
+    expect(receipt.method).toBe('alpha')
+  })
+
+  test('rejects a credential when the expected scope mismatches', async () => {
+    const mppx = Mppx.create({
+      methods: [alphaChargeServer],
+      realm,
+      secretKey,
+    })
+
+    const challenge = await mppx.challenge.alpha.charge({
+      ...challengeOpts,
+      scope: 'GET /premium',
+    })
+    const credential = Credential.from({ challenge, payload: { token: 'valid' } })
+
+    await expect(mppx.verifyCredential(credential, { scope: 'GET /other' })).rejects.toThrow(
+      "credential scope does not match this route's requirements",
+    )
+  })
+
+  test('verifies route requirements using the echoed challenge realm when host was auto-detected', async () => {
+    const mppx = Mppx.create({
+      methods: [alphaChargeServer],
+      secretKey,
+    })
+    const request = {
+      amount: '1000',
+      currency: '0x0000000000000000000000000000000000000001',
+      decimals: 6,
+      recipient: '0x0000000000000000000000000000000000000002',
+    }
+
+    const firstResult = await mppx.charge(request)(new Request('https://api.example.com/premium'))
+    expect(firstResult.status).toBe(402)
+    if (firstResult.status !== 402) throw new Error()
+
+    const challenge = Challenge.fromResponse(firstResult.challenge)
+    expect(challenge.realm).toBe('api.example.com')
+
+    const credential = Credential.from({ challenge, payload: { token: 'valid' } })
+
+    const receipt = await mppx.verifyCredential(credential, { request })
+
+    expect(receipt.status).toBe('success')
+    expect(receipt.method).toBe('alpha')
+  })
+
   test('verifies a credential for session intent', async () => {
     verifyArgs = undefined
     const mppx = Mppx.create({
@@ -3309,6 +3503,28 @@ describe('verifyCredential', () => {
     const receipt = await mppx.verifyCredential(credential)
 
     expect(receipt.method).toBe('beta')
+  })
+
+  test('rejects credential when verified against different route economics', async () => {
+    const mppx = Mppx.create({
+      methods: [alphaChargeServer],
+      realm,
+      secretKey,
+    })
+
+    const challenge = await mppx.challenge.alpha.charge(challengeOpts)
+    const credential = Credential.from({ challenge, payload: { token: 'valid' } })
+
+    await expect(
+      mppx.verifyCredential(credential, {
+        request: {
+          amount: '100000',
+          currency: '0x0000000000000000000000000000000000000001',
+          decimals: 6,
+          recipient: '0x0000000000000000000000000000000000000002',
+        },
+      }),
+    ).rejects.toThrow()
   })
 
   test('rejects credential with wrong HMAC (not issued by this server)', async () => {
@@ -3696,6 +3912,73 @@ describe('verifyCredential', () => {
     expect(voucherReceipt.reference).toBe(openReceipt.reference)
 
     httpServer.close()
+  })
+
+  test('verifyCredential charges repeated session voucher content requests when capturedRequest is provided', async () => {
+    const escrowContract = await deployEscrow()
+    const server = Mppx.create({
+      methods: [
+        tempo.session({
+          store: Store.memory(),
+          getClient: () => client,
+          account: accounts[0],
+          currency: asset,
+          escrowContract,
+          chainId: client.chain!.id,
+        }),
+      ],
+      realm,
+      secretKey,
+    })
+    const route = server.session({ amount: '1', unitType: 'request' })
+    const clientMppx = Mppx_client.create({
+      polyfill: false,
+      methods: [
+        tempo_session_client({
+          account: accounts[1],
+          deposit: '10',
+          getClient: () => client,
+        }),
+      ],
+    })
+
+    const openChallengeResponse = await route(new Request('https://example.com/session'))
+    expect(openChallengeResponse.status).toBe(402)
+    if (openChallengeResponse.status !== 402) throw new Error()
+
+    const serializedOpenCredential = await clientMppx.createCredential(
+      openChallengeResponse.challenge,
+    )
+    await server.verifyCredential(serializedOpenCredential)
+
+    const voucherChallengeResponse = await route(new Request('https://example.com/session'))
+    expect(voucherChallengeResponse.status).toBe(402)
+    if (voucherChallengeResponse.status !== 402) throw new Error()
+
+    const serializedVoucherCredential = await clientMppx.createCredential(
+      voucherChallengeResponse.challenge,
+    )
+    const contentRequest = {
+      headers: new Headers(),
+      hasBody: false,
+      method: 'GET',
+      url: new URL('https://example.com/session'),
+    } as const
+    const routeRequest = { amount: '1', unitType: 'request' } as const
+
+    const firstReceipt = (await server.verifyCredential(serializedVoucherCredential, {
+      capturedRequest: contentRequest,
+      request: routeRequest,
+    })) as SessionReceipt
+    const secondReceipt = (await server.verifyCredential(serializedVoucherCredential, {
+      capturedRequest: contentRequest,
+      request: routeRequest,
+    })) as SessionReceipt
+
+    expect(BigInt(firstReceipt.spent)).toBeGreaterThan(0n)
+    expect(firstReceipt.units).toBe(1)
+    expect(BigInt(secondReceipt.spent)).toBeGreaterThan(BigInt(firstReceipt.spent))
+    expect(secondReceipt.units).toBe(2)
   })
 
   test('verifies a sponsored tempo credential created by the real client', async () => {

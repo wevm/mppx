@@ -44,15 +44,18 @@ const parseProofSourceCases = [
 ] as const
 
 describe('Proof', () => {
-  test('types has Proof with challengeId field', () => {
+  test('types has Proof with challengeId and realm fields', () => {
     expect(Proof.types).toEqual({
-      Proof: [{ name: 'challengeId', type: 'string' }],
+      Proof: [
+        { name: 'challengeId', type: 'string' },
+        { name: 'realm', type: 'string' },
+      ],
     })
   })
 
   test('domain returns EIP-712 domain with name, version, chainId', () => {
     const d = Proof.domain(42431)
-    expect(d).toEqual({ name: 'MPP', version: '1', chainId: 42431 })
+    expect(d).toEqual({ name: 'MPP', version: '2', chainId: 42431 })
   })
 
   test('domain uses provided chainId', () => {
@@ -60,8 +63,11 @@ describe('Proof', () => {
     expect(Proof.domain(99999).chainId).toBe(99999)
   })
 
-  test('message wraps challengeId', () => {
-    expect(Proof.message('abc123')).toEqual({ challengeId: 'abc123' })
+  test('message wraps challengeId and realm', () => {
+    expect(Proof.message('abc123', 'api.example.com')).toEqual({
+      challengeId: 'abc123',
+      realm: 'api.example.com',
+    })
   })
 
   test('proofSource constructs did:pkh DID', () => {
