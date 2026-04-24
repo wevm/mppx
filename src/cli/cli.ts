@@ -40,6 +40,45 @@ const packageJson = createRequire(import.meta.url)('../../package.json') as {
   version: string
 }
 
+const accountSummarySchema = z.object({
+  address: z.string(),
+  isDefault: z.boolean().optional(),
+  name: z.string(),
+  source: z.string().optional(),
+})
+
+const accountViewSchema = z.object({
+  address: z.string(),
+  balances: z.array(z.string()).optional(),
+  name: z.string(),
+  type: z.string().optional(),
+})
+
+const discoveryIssueSchema = z.object({
+  message: z.string(),
+  path: z.string(),
+  severity: z.string(),
+})
+
+function shouldReturnStructured(c: { format: string; formatExplicit: boolean }) {
+  return c.format === 'json' && c.formatExplicit
+}
+
+function outputResult<Data>(
+  c: { format: string; formatExplicit: boolean; ok: (data: Data) => never },
+  data: Data,
+  print: () => void,
+): Data {
+  if (shouldReturnStructured(c)) return c.ok(data)
+  print()
+  return undefined as unknown as Data
+}
+
+function canReadCommandStdin() {
+  if (process.stdin.isTTY !== false) return false
+  return process.stdin.listenerCount('data') === 0 && process.stdin.listenerCount('readable') === 0
+}
+
 const cli = Cli.create('mppx', {
   version: packageJson.version,
   description: 'Make HTTP requests with automatic payment handling',
@@ -505,23 +544,37 @@ const account = Cli.create('account', {
       account: z.string().optional().describe('Account name (env: MPPX_ACCOUNT)'),
       rpcUrl: z.string().optional().describe('RPC endpoint (env: MPPX_RPC_URL)'),
     }),
+    output: z.object({ address: z.string(), name: z.string() }),
     alias: { account: 'a', rpcUrl: 'r' },
     async run(c) {
+      const structured = shouldReturnStructured(c)
       let resolvedName = c.options.account
       if (!resolvedName) {
         const existing = await createKeychain().list()
         if (existing.length === 0) resolvedName = 'main'
         else {
+          if (structured)
+            return c.error({
+              code: 'ACCOUNT_REQUIRED',
+              message: 'Account name is required in structured mode.',
+              exitCode: 2,
+            })
           const input = await prompt('Account name')
-          if (!input) return
+          if (!input) return undefined as never
           resolvedName = input
         }
       }
       let keychain = createKeychain(resolvedName)
       while (await keychain.get()) {
+        if (structured)
+          return c.error({
+            code: 'ACCOUNT_EXISTS',
+            message: `Account "${resolvedName}" already exists.`,
+            exitCode: 1,
+          })
         process.stderr.write(`${pc.dim(`Account "${resolvedName}" already exists.`)}\n\n`)
         const input = await prompt('Enter different name')
-        if (!input) return
+        if (!input) return undefined as never
         resolvedName = input
         keychain = createKeychain(resolvedName)
       }
@@ -530,12 +583,10 @@ const account = Cli.create('account', {
       await keychain.set(privateKey)
       const accounts = await createKeychain().list()
       if (accounts.length === 1) createDefaultStore().set(resolvedName)
-      console.log(`Account "${resolvedName}" saved to keychain.`)
       const explorerUrl = tempoMainnet.blockExplorers?.default?.url
       const addrDisplay = explorerUrl
         ? link(`${explorerUrl}/address/${acct.address}`, acct.address)
         : acct.address
-      console.log(pc.dim(`Address ${addrDisplay}`))
       const rpcUrl = resolveRpcUrl(c.options.rpcUrl)
       resolveChain({ rpcUrl })
         .then((chain) => createClient({ chain, transport: http(rpcUrl) }))
@@ -544,6 +595,10 @@ const account = Cli.create('account', {
             Actions.faucet.fund(client, { account: acct }).catch(() => {}),
           ),
         )
+      return outputResult(c, { address: acct.address, name: resolvedName }, () => {
+        console.log(`Account "${resolvedName}" saved to keychain.`)
+        console.log(pc.dim(`Address ${addrDisplay}`))
+      })
     },
   })
   .command('default', {
@@ -551,6 +606,7 @@ const account = Cli.create('account', {
     options: z.object({
       account: z.string().describe('Account name'),
     }),
+    output: z.object({ name: z.string() }),
     alias: { account: 'a' },
     async run(c) {
       const accountName = c.options.account
@@ -564,8 +620,9 @@ const account = Cli.create('account', {
           })
         }
         createDefaultStore().set(accountName)
-        console.log(`Default account set to "${accountName}"`)
-        return
+        return outputResult(c, { name: accountName }, () => {
+          console.log(`Default account set to "${accountName}"`)
+        })
       }
       const key = await createKeychain(accountName).get()
       if (!key) {
@@ -576,7 +633,9 @@ const account = Cli.create('account', {
         })
       }
       createDefaultStore().set(accountName)
-      console.log(`Default account set to "${accountName}"`)
+      return outputResult(c, { name: accountName }, () => {
+        console.log(`Default account set to "${accountName}"`)
+      })
     },
   })
   .command('delete', {
@@ -585,6 +644,7 @@ const account = Cli.create('account', {
       account: z.string().describe('Account name'),
       yes: z.boolean().optional().describe('DANGER!! Skip confirmation prompts'),
     }),
+    output: z.object({ defaultAccount: z.string().optional(), name: z.string() }),
     alias: { account: 'a' },
     async run(c) {
       const keychain = createKeychain(c.options.account)
@@ -599,6 +659,12 @@ const account = Cli.create('account', {
       const acct = privateKeyToAccount(key as `0x${string}`)
       const balanceLines = await fetchBalanceLines(acct.address, { includeTestnet: false })
       if (!c.options.yes) {
+        if (shouldReturnStructured(c))
+          return c.error({
+            code: 'CONFIRMATION_REQUIRED',
+            message: 'Pass --yes to delete an account in structured mode.',
+            exitCode: 2,
+          })
         const explorerUrl = tempoMainnet.blockExplorers?.default?.url
         const addrDisplay = explorerUrl
           ? link(`${explorerUrl}/address/${acct.address}`, acct.address)
@@ -611,21 +677,25 @@ const account = Cli.create('account', {
         const confirmed = await confirm('Confirm delete?')
         if (!confirmed) {
           console.log('Canceled')
-          return
+          return undefined as never
         }
       }
       await keychain.delete()
       const currentDefault = createDefaultStore().get()
+      let defaultAccount: string | undefined
       if (currentDefault === c.options.account) {
         const remaining = await createKeychain().list()
         if (remaining.length > 0) {
-          createDefaultStore().set(remaining[0]!)
-          console.log(`Default account set to "${remaining[0]}"`)
+          defaultAccount = remaining[0]!
+          createDefaultStore().set(defaultAccount)
         } else {
           createDefaultStore().clear()
         }
       }
-      console.log(`Account "${c.options.account}" deleted`)
+      return outputResult(c, { defaultAccount, name: c.options.account }, () => {
+        if (defaultAccount) console.log(`Default account set to "${defaultAccount}"`)
+        console.log(`Account "${c.options.account}" deleted`)
+      })
     },
   })
   .command('fund', {
@@ -634,8 +704,10 @@ const account = Cli.create('account', {
       account: z.string().optional().describe('Account name (env: MPPX_ACCOUNT)'),
       rpcUrl: z.string().optional().describe('RPC endpoint (env: MPPX_RPC_URL)'),
     }),
+    output: z.object({ account: z.string(), chain: z.string(), transactions: z.array(z.string()) }),
     alias: { account: 'a', rpcUrl: 'r' },
     async run(c) {
+      const structured = shouldReturnStructured(c)
       const accountName = resolveAccountName(c.options.account)
       const keychain = createKeychain(accountName)
       const key = await keychain.get()
@@ -653,26 +725,42 @@ const account = Cli.create('account', {
       const rpcUrl = resolveRpcUrl(c.options.rpcUrl)
       const chain = await resolveChain({ rpcUrl })
       const client = createClient({ chain, transport: http(rpcUrl) })
-      console.log(`Funding "${accountName}" on ${chainName(chain)}`)
+      if (!structured) console.log(`Funding "${accountName}" on ${chainName(chain)}`)
       try {
         const { Actions } = await import('viem/tempo')
         const hashes = await Actions.faucet.fund(client, { account: acct })
         const explorerUrl = chain.blockExplorers?.default?.url
-        for (const hash of hashes) {
-          const label = explorerUrl ? link(`${explorerUrl}/tx/${hash}`, pc.gray(hash)) : hash
-          console.log(`  ${label}`)
+        if (!structured) {
+          for (const hash of hashes) {
+            const label = explorerUrl ? link(`${explorerUrl}/tx/${hash}`, pc.gray(hash)) : hash
+            console.log(`  ${label}`)
+          }
         }
         const { waitForTransactionReceipt } = await import('viem/actions')
         await Promise.all(hashes.map((hash) => waitForTransactionReceipt(client, { hash })))
-        console.log('Funded successfully')
+        return outputResult(
+          c,
+          { account: accountName, chain: chainName(chain), transactions: [...hashes] },
+          () => {
+            console.log('Funded successfully')
+          },
+        )
       } catch (err) {
+        if (structured)
+          return c.error({
+            code: 'FUNDING_FAILED',
+            message: err instanceof Error ? err.message : String(err),
+            exitCode: 1,
+          })
         console.error('Funding failed:', err instanceof Error ? err.message : err)
+        return undefined as never
       }
     },
   })
   .command('list', {
     description: 'List all accounts',
-    async run() {
+    output: z.object({ accounts: z.array(accountSummarySchema) }),
+    async run(c) {
       const currentDefault = createDefaultStore().get()
       const accounts = (await createKeychain().list()).sort()
       const resolved: { name: string; address: string; source?: string }[] = []
@@ -692,25 +780,37 @@ const account = Cli.create('account', {
           resolved.push({ name: tempoName, address: entry.wallet_address, source: 'tempo wallet' })
       }
       if (resolved.length === 0) {
-        console.log(`No accounts found.`)
-        return
+        return outputResult(c, { accounts: [] }, () => {
+          console.log(`No accounts found.`)
+        })
       }
       const explorerUrl = tempoMainnet.blockExplorers?.default?.url
       const maxWidth = Math.max(
         ...resolved.map((e) => e.name.length + (e.name === currentDefault ? 1 : 0)),
       )
-      for (const entry of resolved) {
-        const isDefault = entry.name === currentDefault
-        const label = isDefault ? `${entry.name}${pc.dim('*')}` : entry.name
-        const width = entry.name.length + (isDefault ? 1 : 0)
-        const addrDisplay = explorerUrl
-          ? link(`${explorerUrl}/address/${entry.address}`, entry.address)
-          : entry.address
-        const sourceLabel = entry.source ? `  ${pc.dim(`(${entry.source})`)}` : ''
-        console.log(
-          `${label}${' '.repeat(maxWidth - width + 2)}${pc.dim(addrDisplay)}${sourceLabel}`,
-        )
-      }
+      return outputResult(
+        c,
+        {
+          accounts: resolved.map((entry) => ({
+            ...entry,
+            ...(entry.name === currentDefault ? { isDefault: true } : undefined),
+          })),
+        },
+        () => {
+          for (const entry of resolved) {
+            const isDefault = entry.name === currentDefault
+            const label = isDefault ? `${entry.name}${pc.dim('*')}` : entry.name
+            const width = entry.name.length + (isDefault ? 1 : 0)
+            const addrDisplay = explorerUrl
+              ? link(`${explorerUrl}/address/${entry.address}`, entry.address)
+              : entry.address
+            const sourceLabel = entry.source ? `  ${pc.dim(`(${entry.source})`)}` : ''
+            console.log(
+              `${label}${' '.repeat(maxWidth - width + 2)}${pc.dim(addrDisplay)}${sourceLabel}`,
+            )
+          }
+        },
+      )
     },
   })
   .command('export', {
@@ -718,6 +818,7 @@ const account = Cli.create('account', {
     options: z.object({
       account: z.string().optional().describe('Account name (env: MPPX_ACCOUNT)'),
     }),
+    output: z.object({ privateKey: z.string() }),
     alias: { account: 'a' },
     async run(c) {
       const accountName = resolveAccountName(c.options.account)
@@ -742,7 +843,9 @@ const account = Cli.create('account', {
           return c.error({ code: 'ACCOUNT_NOT_FOUND', message: 'No account found.', exitCode: 69 })
       }
 
-      console.log(key)
+      return outputResult(c, { privateKey: key }, () => {
+        console.log(key)
+      })
     },
   })
   .command('view', {
@@ -751,6 +854,7 @@ const account = Cli.create('account', {
       account: z.string().optional().describe('Account name (env: MPPX_ACCOUNT)'),
       rpcUrl: z.string().optional().describe('RPC endpoint (env: MPPX_RPC_URL)'),
     }),
+    output: accountViewSchema,
     alias: { account: 'a', rpcUrl: 'r' },
     async run(c) {
       const accountName = resolveAccountName(c.options.account)
@@ -771,18 +875,29 @@ const account = Cli.create('account', {
         const addrDisplay = explorerUrl
           ? link(`${explorerUrl}/address/${address}`, address)
           : address
-        console.log(`${pc.dim('Address')}  ${addrDisplay}`)
 
         const balanceLines = await fetchBalanceLines(
           address,
           chain && rpcUrl ? { chain, rpcUrl } : undefined,
         )
-        for (let i = 0; i < balanceLines.length; i++)
-          console.log(`${pc.dim(i === 0 ? 'Balance' : '       ')}  ${balanceLines[i]}`)
-
-        console.log(`${pc.dim('Name')}     ${accountName}`)
-        console.log(`${pc.dim('Type')}     ${tempoEntry.wallet_type} ${pc.dim('(tempo wallet)')}`)
-        return
+        return outputResult(
+          c,
+          {
+            address,
+            balances: balanceLines,
+            name: accountName,
+            type: `${tempoEntry.wallet_type} (tempo wallet)`,
+          },
+          () => {
+            console.log(`${pc.dim('Address')}  ${addrDisplay}`)
+            for (let i = 0; i < balanceLines.length; i++)
+              console.log(`${pc.dim(i === 0 ? 'Balance' : '       ')}  ${balanceLines[i]}`)
+            console.log(`${pc.dim('Name')}     ${accountName}`)
+            console.log(
+              `${pc.dim('Type')}     ${tempoEntry.wallet_type} ${pc.dim('(tempo wallet)')}`,
+            )
+          },
+        )
       }
 
       const keychain = createKeychain(accountName)
@@ -804,16 +919,21 @@ const account = Cli.create('account', {
       const addrDisplay = explorerUrl
         ? link(`${explorerUrl}/address/${acct.address}`, acct.address)
         : acct.address
-      console.log(`${pc.dim('Address')}  ${addrDisplay}`)
 
       const balanceLines = await fetchBalanceLines(
         acct.address,
         chain && rpcUrl ? { chain, rpcUrl } : undefined,
       )
-      for (let i = 0; i < balanceLines.length; i++)
-        console.log(`${pc.dim(i === 0 ? 'Balance' : '       ')}  ${balanceLines[i]}`)
-
-      console.log(`${pc.dim('Name')}     ${accountName}`)
+      return outputResult(
+        c,
+        { address: acct.address, balances: balanceLines, name: accountName },
+        () => {
+          console.log(`${pc.dim('Address')}  ${addrDisplay}`)
+          for (let i = 0; i < balanceLines.length; i++)
+            console.log(`${pc.dim(i === 0 ? 'Balance' : '       ')}  ${balanceLines[i]}`)
+          console.log(`${pc.dim('Name')}     ${accountName}`)
+        },
+      )
     },
   })
 
@@ -837,6 +957,7 @@ const sign = Cli.create('sign', {
       .optional()
       .describe('RPC endpoint, defaults to public RPC for chain (env: MPPX_RPC_URL)'),
   }),
+  output: z.object({ authorization: z.string() }),
   alias: {
     account: 'a',
     challenge: 'C',
@@ -847,7 +968,7 @@ const sign = Cli.create('sign', {
   async run(c) {
     const raw =
       c.options.challenge ||
-      (process.stdin.isTTY === false
+      (canReadCommandStdin()
         ? await new Promise<string>((resolve, reject) => {
             let data = ''
             process.stdin.setEncoding('utf-8')
@@ -879,7 +1000,7 @@ const sign = Cli.create('sign', {
 
     if (c.options.dryRun) {
       process.stderr.write('Challenge is valid.\n')
-      return
+      return undefined as never
     }
 
     const loaded = await loadConfig(c.options.config)
@@ -931,11 +1052,9 @@ const sign = Cli.create('sign', {
       })
     }
 
-    if (c.format === 'json') {
-      console.log(JSON.stringify({ authorization: credential }))
-    } else {
+    return outputResult(c, { authorization: credential }, () => {
       console.log(credential)
-    }
+    })
   },
 })
 
@@ -944,6 +1063,7 @@ const init = Cli.create('init', {
   options: z.object({
     force: z.boolean().optional().describe('Overwrite existing config file'),
   }),
+  output: z.object({ file: z.string() }),
   alias: { force: 'f' },
   async run(c) {
     const cwd = process.cwd()
@@ -978,7 +1098,9 @@ export default defineConfig({
 `
 
     fs.writeFileSync(dest, template)
-    console.log(`Created ${filename}`)
+    return outputResult(c, { file: dest }, () => {
+      console.log(`Created ${filename}`)
+    })
   },
 })
 
@@ -993,6 +1115,7 @@ const discover = Cli.create('discover', {
     options: z.object({
       output: z.string().optional().describe('Write output to a file instead of stdout'),
     }),
+    output: z.record(z.string(), z.unknown()),
     alias: { output: 'o' },
     async run(c) {
       const modulePath = path.resolve(c.args.module)
@@ -1041,8 +1164,11 @@ const discover = Cli.create('discover', {
         const outPath = path.resolve(c.options.output)
         fs.writeFileSync(outPath, `${json}\n`)
         process.stderr.write(`Wrote ${outPath}\n`)
+        return outputResult(c, doc, () => {})
       } else {
-        console.log(json)
+        return outputResult(c, doc, () => {
+          console.log(json)
+        })
       }
     },
   })
@@ -1050,6 +1176,12 @@ const discover = Cli.create('discover', {
     description: 'Validate an OpenAPI discovery document from a file or URL',
     args: z.object({
       input: z.string().describe('Path or URL to a discovery document'),
+    }),
+    output: z.object({
+      errorCount: z.number(),
+      issues: z.array(discoveryIssueSchema),
+      valid: z.boolean(),
+      warningCount: z.number(),
     }),
     async run(c) {
       const input = c.args.input
@@ -1121,7 +1253,9 @@ const discover = Cli.create('discover', {
       }
 
       const issues = validateDiscovery(doc)
-      for (const issue of issues) console.log(`[${issue.severity}] ${issue.path}: ${issue.message}`)
+      if (!shouldReturnStructured(c))
+        for (const issue of issues)
+          console.log(`[${issue.severity}] ${issue.path}: ${issue.message}`)
 
       const errorCount = issues.filter((issue) => issue.severity === 'error').length
       const warningCount = issues.filter((issue) => issue.severity === 'warning').length
@@ -1134,11 +1268,13 @@ const discover = Cli.create('discover', {
         })
       }
 
-      console.log(
-        warningCount > 0
-          ? `Discovery document is valid with ${warningCount} warning(s).`
-          : 'Discovery document is valid.',
-      )
+      return outputResult(c, { errorCount, issues, valid: true, warningCount }, () => {
+        console.log(
+          warningCount > 0
+            ? `Discovery document is valid with ${warningCount} warning(s).`
+            : 'Discovery document is valid.',
+        )
+      })
     },
   })
 
