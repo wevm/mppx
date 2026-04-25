@@ -22,7 +22,7 @@ overrides:
   mppx: 'workspace:*'
   vitest: 'npm:@voidzero-dev/vite-plus-test@~0.1.17'
   typescript: '~5.9.3'
-  ox: '0.14.7'
+  ox: '0.14.18'
   viem: '^2.47.5'
   path-to-regexp@<8.4.0: '8.4.0'
   tar@<=7.5.10: '7.5.11'
