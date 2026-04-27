@@ -11,20 +11,20 @@
   "dependencies": {
     "@metamask/sdk": "~0.34.0",
     "@remix-run/node-fetch-server": "^0.13.0",
-    "@tanstack/react-query": "^5.99.0",
+    "@tanstack/react-query": "^5.99.2",
     "@types/node": "^25.6.0",
     "mppx": "latest",
     "react": "^19.2.5",
     "react-dom": "^19.2.5",
     "viem": "^2.47.6",
-    "wagmi": "^3.6.2"
+    "wagmi": "^3.6.3"
   },
   "devDependencies": {
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
     "@typescript/native-preview": "^7.0.0-dev.20260416.1",
     "@vitejs/plugin-react": "^6.0.1",
-    "typescript": "~5.9.3",
+    "typescript": "~6.0.3",
     "vite": "^8.0.8"
   }
 }
