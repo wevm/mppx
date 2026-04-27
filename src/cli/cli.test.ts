@@ -849,6 +849,73 @@ describe('session multi-fetch (examples/session/multi-fetch)', () => {
     }
   })
 
+  test('reports already-settled close races as benign', { timeout: 120_000 }, async () => {
+    await fundAccount({ address: testAccount.address, token: Addresses.pathUsd })
+    await fundAccount({ address: testAccount.address, token: asset })
+
+    const escrow = await deployEscrow()
+    const store = Store.memory()
+    const server = Mppx_server.create({
+      methods: [
+        tempo.session({
+          account: accounts[0],
+          store,
+          getClient: () => client,
+          currency: asset,
+          escrowContract: escrow,
+          chainId: client.chain.id,
+          feePayer: true,
+        }),
+      ],
+      realm: 'cli-test-close-race',
+      secretKey: 'cli-test-secret',
+    })
+
+    const httpServer = await Http.createServer(async (req, res) => {
+      const authHeader = req.headers.authorization
+      if (authHeader) {
+        try {
+          const cred = Credential.deserialize<SessionCredentialPayload>(authHeader)
+          if (cred.payload.action === 'close') {
+            res.writeHead(410, { 'Content-Type': 'application/json' })
+            res.end(
+              JSON.stringify({
+                detail: 'Channel closed: channel is finalized on-chain.',
+                status: 410,
+                title: 'Channel Closed',
+                type: 'https://paymentauth.org/problems/session/channel-finalized',
+              }),
+            )
+            return
+          }
+        } catch {}
+      }
+
+      const result = await toNodeListener(
+        server.session({
+          amount: '0.001',
+          recipient: accounts[0].address,
+          unitType: 'page',
+        }),
+      )(req, res)
+      if (result.status === 402) return
+      res.end('scraped-content')
+    })
+
+    try {
+      const { exitCode, output, stderr } = await serve([httpServer.url, '--rpc-url', rpcUrl], {
+        env: { MPPX_PRIVATE_KEY: testPrivateKey },
+      })
+
+      expect(exitCode).toBeUndefined()
+      expect(output).toContain('scraped-content')
+      expect(stderr).toContain('Channel already settled.')
+      expect(stderr).not.toContain('Channel close failed')
+    } finally {
+      httpServer.close()
+    }
+  })
+
   test('error: --fail exits on server error', { timeout: 60_000 }, async () => {
     const httpServer = await Http.createServer(async (_req, res) => {
       res.writeHead(500)

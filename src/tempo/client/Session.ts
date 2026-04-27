@@ -328,7 +328,6 @@ export function session(parameters: session.Parameters = {}) {
         if (closeKey) {
           const entry = channels.get(closeKey)
           if (entry) {
-            entry.opened = false
             entry.cumulativeAmount =
               entry.cumulativeAmount > cumulativeAmount ? entry.cumulativeAmount : cumulativeAmount
             notifyUpdate(entry)

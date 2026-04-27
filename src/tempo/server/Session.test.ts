@@ -3220,6 +3220,144 @@ describe.runIf(isLocalnet)('session', () => {
       expect(persisted?.finalized).toBe(true)
     })
 
+    test('retries close after a transient close failure', async () => {
+      const handler = createHandler()
+      const route = handler.session({
+        amount: '1',
+        decimals: 6,
+        unitType: 'token',
+      })
+
+      let closeAttempts = 0
+      const fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+        const request = new Request(input, init)
+
+        if (request.method === 'POST' && request.headers.has('Authorization')) {
+          try {
+            const credential = Credential.fromRequest<any>(request)
+            if (credential.payload?.action === 'close') {
+              closeAttempts += 1
+              if (closeAttempts === 1) {
+                return new Response('temporary close failure', { status: 500 })
+              }
+            }
+          } catch {}
+        }
+
+        const result = await route(request)
+        if (result.status === 402) return result.challenge
+        return result.withReceipt(new Response('ok'))
+      }
+
+      const manager = sessionManager({
+        account: payer,
+        client,
+        escrowContract,
+        fetch,
+        maxDeposit: '3',
+      })
+
+      const response = await manager.fetch('https://api.example.com/resource')
+      expect(response.status).toBe(200)
+      expect(manager.opened).toBe(true)
+
+      await expect(manager.close()).rejects.toThrow('Close request failed with status 500')
+      expect(closeAttempts).toBe(1)
+      expect(manager.opened).toBe(true)
+
+      const closeReceipt = await manager.close()
+      expect(closeAttempts).toBe(2)
+      if (closeReceipt) expect(closeReceipt.status).toBe('success')
+      expect(manager.opened).toBe(false)
+    })
+
+    test('preserves caller headers for SSE voucher and close follow-ups', async () => {
+      const backingStore = Store.memory()
+      const routeHandler = Mppx_server.create({
+        methods: [
+          tempo_server.session({
+            store: backingStore,
+            getClient: () => client,
+            account: recipientAccount,
+            currency,
+            escrowContract,
+            chainId: chain.id,
+            sse: true,
+          }),
+        ],
+        realm: 'api.example.com',
+        secretKey: 'secret',
+      }).session({ amount: '1', decimals: 6, unitType: 'token' })
+
+      const followUpHeaders: Array<{ action: string; authorization: string | null; token: string | null }> = []
+
+      const fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+        const request = new Request(input, init)
+        let action: 'open' | 'topUp' | 'voucher' | 'close' | undefined
+
+        if (request.method === 'POST' && request.headers.has('Authorization')) {
+          try {
+            const credential = Credential.fromRequest<any>(request)
+            action = credential.payload?.action
+            followUpHeaders.push({
+              action: action ?? 'unknown',
+              authorization: request.headers.get('Authorization'),
+              token: request.headers.get('X-Session-Token'),
+            })
+          } catch {}
+        }
+
+        const result = await routeHandler(request)
+        if (result.status === 402) return result.challenge
+
+        if (action === 'voucher') {
+          return new Response(null, { status: 200 })
+        }
+
+        if (request.headers.get('Accept')?.includes('text/event-stream')) {
+          return result.withReceipt(async function* (stream) {
+            await stream.charge()
+            yield 'chunk-1'
+            await stream.charge()
+            yield 'chunk-2'
+          })
+        }
+
+        return result.withReceipt(new Response('ok'))
+      }
+
+      const manager = sessionManager({
+        account: payer,
+        client,
+        escrowContract,
+        fetch,
+        maxDeposit: '3',
+      })
+
+      const stream = await manager.sse('https://api.example.com/stream', {
+        headers: {
+          Authorization: 'Bearer session-token',
+          'X-Session-Token': 'session-123',
+        },
+      })
+
+      for await (const _chunk of stream) {
+      }
+
+      await manager.close()
+
+      const voucherHeader = followUpHeaders.find((entry) => entry.action === 'voucher')
+      const closeHeader = followUpHeaders.find((entry) => entry.action === 'close')
+
+      expect(voucherHeader?.token).toBe('session-123')
+      expect(voucherHeader?.authorization).toContain('Bearer session-token')
+      expect(voucherHeader?.authorization).toContain('Payment ')
+
+      expect(closeHeader?.token).toBe('session-123')
+      expect(closeHeader?.authorization).toContain('Bearer session-token')
+      expect(closeHeader?.authorization).toContain('Payment ')
+    })
+
     test('does not return Payment-Receipt on verification errors', async () => {
       const { channelId, serializedTransaction } = await createSignedOpenTransaction(10000000n)
       const handler = createHandler()

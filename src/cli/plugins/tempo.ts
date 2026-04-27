@@ -10,7 +10,7 @@ import type { Address } from 'viem'
 import { createClient, http } from 'viem'
 import { privateKeyToAccount } from 'viem/accounts'
 
-import { normalizeHeaders } from '../../client/internal/Fetch.js'
+import { withAuthorizationHeader } from '../../client/internal/Fetch.js'
 import * as Credential from '../../Credential.js'
 import { tempo as tempoMethods } from '../../tempo/client/index.js'
 import type { SessionCredentialPayload } from '../../tempo/session/Types.js'
@@ -509,10 +509,7 @@ async function handleSseStream(
             escrowContract: opts.escrowContract,
             chainId: opts.chainId,
           })
-          await globalThis.fetch(opts.fetchUrl, {
-            method: 'POST',
-            headers: { Authorization: voucherCred },
-          })
+          await globalThis.fetch(opts.fetchUrl, buildFollowUpRequestInit(opts.fetchInit, voucherCred))
         } catch (e) {
           opts.info(pc.dim(pc.yellow(` [voucher failed: ${e instanceof Error ? e.message : e}]`)))
         }
@@ -614,13 +611,10 @@ async function closeChannel(opts: {
     chainId: opts.chainId,
     action: 'close',
   })
-  const closeRes = await globalThis.fetch(opts.fetchUrl, {
-    ...opts.fetchInit,
-    headers: {
-      ...normalizeHeaders(opts.fetchInit.headers),
-      Authorization: closeCred,
-    },
-  })
+  const closeRes = await globalThis.fetch(
+    opts.fetchUrl,
+    buildFollowUpRequestInit(opts.fetchInit, closeCred),
+  )
   if (closeRes.ok) {
     deleteChannelState(opts.channelId)
     if (opts.verbose >= 1) {
@@ -642,6 +636,11 @@ async function closeChannel(opts: {
     }
   } else {
     const closeBody = await closeRes.text().catch(() => '')
+    if (isBenignCloseFailure(closeRes.status, closeBody)) {
+      deleteChannelState(opts.channelId)
+      opts.info(`${pc.dim('Channel already settled.')}\n`)
+      return
+    }
     opts.info(`\n${pc.dim(pc.yellow('Channel close failed'))} ${pc.dim(`(${closeRes.status})`)}\n`)
     opts.info(
       `${pc.dim(`  channelId:          ${opts.channelId}`)}\n` +
@@ -651,6 +650,42 @@ async function closeChannel(opts: {
         `${pc.dim(`  response:           ${closeBody || '(empty)'}`)}\n`,
     )
   }
+}
+
+function buildFollowUpRequestInit(fetchInit: RequestInit, credential: string): RequestInit {
+  const { body: _body, duplex: _duplex, method: _method, ...requestInit } = fetchInit as RequestInit & {
+    duplex?: string
+  }
+  return {
+    ...requestInit,
+    method: 'POST',
+    headers: withAuthorizationHeader(requestInit.headers, credential),
+  }
+}
+
+function isBenignCloseFailure(status: number, body: string): boolean {
+  if (status !== 402 && status !== 410) return false
+
+  let text = body.toLowerCase()
+  try {
+    const parsed = JSON.parse(body) as {
+      detail?: string | undefined
+      title?: string | undefined
+      type?: string | undefined
+    }
+    text = [text, parsed.detail, parsed.title, parsed.type].filter(Boolean).join(' ').toLowerCase()
+  } catch {}
+
+  return (
+    text.includes('already settled') ||
+    text.includes('already finalized') ||
+    text.includes('channel closed') ||
+    text.includes('channel is finalized') ||
+    text.includes('channel not found') ||
+    text.includes('on-chain settled') ||
+    text.includes('channel-finalized') ||
+    text.includes('channel-not-found')
+  )
 }
 
 function detectTerminalBg(

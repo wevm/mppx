@@ -28,6 +28,11 @@ type CloseReadyWaiter = {
   resolve(receipt: SessionReceipt): void
 }
 
+type SavedRequest = {
+  input: RequestInfo | URL
+  init?: RequestInit | undefined
+}
+
 const WebSocketReadyState = {
   CONNECTING: 0,
   OPEN: 1,
@@ -102,7 +107,7 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
 
   let channel: ChannelEntry | null = null
   let lastChallenge: Challenge.Challenge | null = null
-  let lastUrl: RequestInfo | URL | null = null
+  let lastRequest: SavedRequest | null = null
   let spent = 0n
   let activeSocketChallenge: Challenge.Challenge | null = null
   let activeSocketChannelId: Hex.Hex | null = null
@@ -140,6 +145,86 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
     if (!receipt || receipt.channelId !== channel?.channelId) return
     const next = BigInt(receipt.spent)
     spent = spent > next ? spent : next
+  }
+
+  function snapshotRequest(input: RequestInfo | URL, init?: RequestInit): SavedRequest {
+    const mergedHeaders = new Headers(input instanceof Request ? input.headers : undefined)
+    for (const [key, value] of Object.entries(Fetch.normalizeHeaders(init?.headers))) {
+      mergedHeaders.set(key, value)
+    }
+
+    const requestInit: RequestInit = {
+      ...init,
+      headers: mergedHeaders,
+    }
+
+    if (input instanceof Request) {
+      requestInit.cache = input.cache
+      requestInit.credentials = input.credentials
+      requestInit.integrity = input.integrity
+      requestInit.keepalive = input.keepalive
+      requestInit.mode = input.mode
+      requestInit.redirect = input.redirect
+      requestInit.referrerPolicy = input.referrerPolicy
+      requestInit.signal = input.signal
+      if (input.referrer !== 'about:client') requestInit.referrer = input.referrer
+    }
+
+    return {
+      input: input instanceof Request ? input.url : input,
+      init: requestInit,
+    }
+  }
+
+  function buildFollowUpRequest(credential: string): SavedRequest {
+    if (!lastRequest) {
+      throw new Error('No request context available — call fetch() or sse() before open().')
+    }
+
+    const { body: _body, duplex: _duplex, method: _method, ...requestInit } =
+      (lastRequest.init ?? {}) as RequestInit & { duplex?: string }
+
+    return {
+      input: lastRequest.input,
+      init: {
+        ...requestInit,
+        method: 'POST',
+        headers: Fetch.withAuthorizationHeader(requestInit.headers, credential),
+      },
+    }
+  }
+
+  function markChannelClosed(cumulativeAmount: bigint) {
+    if (!channel) return
+    channel.opened = false
+    channel.cumulativeAmount =
+      channel.cumulativeAmount > cumulativeAmount ? channel.cumulativeAmount : cumulativeAmount
+    spent = spent > cumulativeAmount ? spent : cumulativeAmount
+  }
+
+  function isBenignCloseFailure(status: number, body: string): boolean {
+    if (status !== 402 && status !== 410) return false
+
+    let text = body.toLowerCase()
+    try {
+      const parsed = JSON.parse(body) as {
+        detail?: string | undefined
+        title?: string | undefined
+        type?: string | undefined
+      }
+      text = [text, parsed.detail, parsed.title, parsed.type].filter(Boolean).join(' ').toLowerCase()
+    } catch {}
+
+    return (
+      text.includes('already settled') ||
+      text.includes('already finalized') ||
+      text.includes('channel closed') ||
+      text.includes('channel is finalized') ||
+      text.includes('channel not found') ||
+      text.includes('on-chain settled') ||
+      text.includes('channel-finalized') ||
+      text.includes('channel-not-found')
+    )
   }
 
   function waitForReceipt(predicate: (receipt: SessionReceipt) => boolean = () => true) {
@@ -235,7 +320,7 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
   }
 
   async function doFetch(input: RequestInfo | URL, init?: RequestInit): Promise<PaymentResponse> {
-    lastUrl = input
+    lastRequest = snapshotRequest(input, init)
     const response = await wrappedFetch(input, init)
     return toPaymentResponse(response)
   }
@@ -392,11 +477,8 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
         },
       })
 
-      if (!lastUrl) throw new Error('No URL available — call fetch() or sse() before open().')
-      const response = await fetchFn(lastUrl, {
-        method: 'POST',
-        headers: { Authorization: credential },
-      })
+      const { input, init } = buildFollowUpRequest(credential)
+      const response = await fetchFn(input, init)
       if (!response.ok) {
         const body = await response.text().catch(() => '')
         const wwwAuth = response.headers.get('WWW-Authenticate') ?? ''
@@ -472,10 +554,8 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
                       cumulativeAmountRaw: channel.cumulativeAmount.toString(),
                     },
                   })
-                  const voucherResponse = await fetchFn(input, {
-                    method: 'POST',
-                    headers: { Authorization: credential },
-                  })
+                  const followUpRequest = buildFollowUpRequest(credential)
+                  const voucherResponse = await fetchFn(followUpRequest.input, followUpRequest.init)
                   if (!voucherResponse.ok) {
                     throw new Error(`Voucher POST failed with status ${voucherResponse.status}`)
                   }
@@ -510,7 +590,7 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
       if (httpUrl.protocol === 'ws:') httpUrl.protocol = 'http:'
       if (httpUrl.protocol === 'wss:') httpUrl.protocol = 'https:'
 
-      lastUrl = httpUrl.toString()
+      lastRequest = snapshotRequest(httpUrl.toString())
       const probe = await fetchFn(httpUrl, signal ? { signal } : undefined)
       if (probe.status !== 402) {
         throw new Error(
@@ -749,6 +829,7 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
           )
           activeSocket.send(Ws.formatAuthorizationMessage(credential))
           const receipt = await pendingReceipt
+          markChannelClosed(BigInt(receipt.spent))
           activeSocket.close()
           closeReadyReceipt = null
           return receipt
@@ -766,23 +847,17 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
         },
       })
 
-      if (!lastUrl) {
-        throw new Error(
-          'Cannot close session: no URL available. This usually means close() was called on a SessionManager instance that was recreated after the session was opened. Use the same SessionManager instance that opened the session, or call fetch()/sse() before close().',
-        )
-      }
-
-      const response = await fetchFn(lastUrl, {
-        method: 'POST',
-        headers: { Authorization: credential },
-      })
+      const closeAmount = BigInt(getFallbackCloseAmount(closeChallenge, closeChannelId))
+      const followUpRequest = buildFollowUpRequest(credential)
+      const response = await fetchFn(followUpRequest.input, followUpRequest.init)
       if (!response.ok) {
         const body = await response.text().catch(() => '')
+        if (isBenignCloseFailure(response.status, body)) {
+          markChannelClosed(closeAmount)
+          return undefined
+        }
         const detail = (() => {
           if (!body) return ''
-          if (!response.headers.get('Content-Type')?.includes('application/problem+json')) {
-            return body
-          }
           try {
             const problem = JSON.parse(body) as { detail?: string }
             return problem.detail ?? body
@@ -797,6 +872,7 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
       }
       const receiptHeader = response.headers.get('Payment-Receipt')
       const receipt = receiptHeader ? deserializeSessionReceipt(receiptHeader) : undefined
+      markChannelClosed(receipt ? BigInt(receipt.spent) : closeAmount)
 
       return receipt
     },

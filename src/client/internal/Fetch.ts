@@ -229,14 +229,30 @@ export function normalizeHeaders(headers: unknown): Record<string, string> {
 }
 
 /** @internal */
-function withAuthorizationHeader(headers: unknown, credential: string): Record<string, string> {
+export function withAuthorizationHeader(headers: unknown, credential: string): Record<string, string> {
   const normalized = normalizeHeaders(headers)
-  // Remove any existing Authorization header regardless of casing to avoid
-  // duplicate/conflicting credentials on retry.
+  const existingSchemes: string[] = []
+
+  // Preserve non-Payment Authorization schemes (for example Bearer identity
+  // tokens) while replacing any stale Payment credential on retry.
   for (const key of Object.keys(normalized)) {
-    if (key.toLowerCase() === 'authorization') delete normalized[key]
+    if (key.toLowerCase() !== 'authorization') continue
+
+    const value = normalized[key]
+    delete normalized[key]
+    if (!value) continue
+
+    existingSchemes.push(
+      ...value
+        .split(',')
+        .map((scheme) => scheme.trim())
+        .filter((scheme) => scheme && !/^Payment\s+/i.test(scheme)),
+    )
   }
-  normalized.Authorization = credential
+
+  normalized.Authorization = existingSchemes.length
+    ? [...existingSchemes, credential].join(', ')
+    : credential
   return normalized
 }
 
