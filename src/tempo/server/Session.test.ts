@@ -3358,6 +3358,64 @@ describe.runIf(isLocalnet)('session', () => {
       expect(closeHeader?.authorization).toContain('Payment ')
     })
 
+    test('treats already-settled close races as benign and closes locally', async () => {
+      const handler = createHandler()
+      const route = handler.session({
+        amount: '1',
+        decimals: 6,
+        unitType: 'token',
+      })
+
+      let closeAttempts = 0
+      const fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+        const request = new Request(input, init)
+
+        if (request.method === 'POST' && request.headers.has('Authorization')) {
+          try {
+            const credential = Credential.fromRequest<any>(request)
+            if (credential.payload?.action === 'close') {
+              closeAttempts += 1
+              return new Response(
+                JSON.stringify({
+                  detail: 'Channel closed: channel is finalized on-chain.',
+                  status: 410,
+                  title: 'Channel Closed',
+                  type: 'https://paymentauth.org/problems/session/channel-finalized',
+                }),
+                {
+                  status: 410,
+                  headers: { 'Content-Type': 'application/problem+json' },
+                },
+              )
+            }
+          } catch {}
+        }
+
+        const result = await route(request)
+        if (result.status === 402) return result.challenge
+        return result.withReceipt(new Response('ok'))
+      }
+
+      const manager = sessionManager({
+        account: payer,
+        client,
+        escrowContract,
+        fetch,
+        maxDeposit: '3',
+      })
+
+      const response = await manager.fetch('https://api.example.com/resource')
+      expect(response.status).toBe(200)
+      expect(manager.opened).toBe(true)
+
+      await expect(manager.close()).resolves.toBeUndefined()
+      expect(closeAttempts).toBe(1)
+      expect(manager.opened).toBe(false)
+
+      await expect(manager.close()).resolves.toBeUndefined()
+      expect(closeAttempts).toBe(1)
+    })
+
     test('does not return Payment-Receipt on verification errors', async () => {
       const { channelId, serializedTransaction } = await createSignedOpenTransaction(10000000n)
       const handler = createHandler()
@@ -4630,6 +4688,7 @@ describe.runIf(isLocalnet)('session', () => {
         const closeReceipt = await manager.close()
         expect(closeReceipt?.status).toBe('success')
         expect(closeReceipt?.spent).toBe('3000000')
+        expect(manager.opened).toBe(false)
 
         const channelId = manager.channelId
         expect(channelId).toBeTruthy()
@@ -5248,6 +5307,7 @@ describe.runIf(isLocalnet)('session', () => {
         const deliveredCost = 2n * 1000000n
         expect(settledAmount).toBeLessThanOrEqual(deliveredCost)
         expect(settledAmount).toBeGreaterThan(0n)
+        expect(manager.opened).toBe(false)
 
         const fullDeposit = 3000000n
         expect(settledAmount).toBeLessThan(fullDeposit)

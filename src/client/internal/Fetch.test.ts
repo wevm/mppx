@@ -756,7 +756,35 @@ describe('Fetch.from: 402 retry path', () => {
     const headers = new Headers(calls[1]?.init?.headers)
     expect(headers.get('X-Custom')).toBe('value')
     expect(headers.get('Accept-Payment')).toBe('test/test')
-    expect(headers.get('Authorization')).toBe('credential')
+    expect(headers.get('Authorization')).toBe('Bearer token123, credential')
+  })
+
+  test('preserves non-Payment Authorization schemes while replacing stale Payment credentials', async () => {
+    let callCount = 0
+    const calls: { init: RequestInit | undefined }[] = []
+    const mockFetch: typeof globalThis.fetch = async (_input, init) => {
+      calls.push({ init })
+      callCount++
+      if (callCount === 1) return make402()
+      return new Response('OK', { status: 200 })
+    }
+
+    const fetch = Fetch.from({
+      fetch: mockFetch,
+      methods: [
+        {
+          ...noopMethod,
+          createCredential: async () => 'Payment fresh-credential',
+        },
+      ],
+    })
+
+    await fetch('https://example.com/api', {
+      headers: { Authorization: 'Bearer token123, Payment stale-credential' },
+    })
+
+    const headers = new Headers(calls[1]!.init?.headers)
+    expect(headers.get('Authorization')).toBe('Bearer token123, Payment fresh-credential')
   })
 
   test('selects the highest-ranked supported challenge', async () => {
