@@ -501,13 +501,13 @@ async function resolveChargeRecipient(parameters: {
   const { externalId, fallbackRecipient, recipient, virtualAddress, virtualAddressId } = parameters
 
   if (virtualAddressId) {
-    if (recipient)
-      throw new Error(
-        'tempo.charge() cannot combine `virtualAddressId` with an explicit `recipient`.',
-      )
     if (!virtualAddress)
       throw new Error(
         'tempo.charge() received `virtualAddressId`, but no `virtualAddress.masterId` was configured.',
+      )
+    if (recipient)
+      throw new Error(
+        'tempo.charge() cannot combine `virtualAddressId` with an explicit `recipient`.',
       )
     return await deriveVirtualRecipient({
       id: virtualAddressId,

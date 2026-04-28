@@ -3524,6 +3524,29 @@ describe('tempo', () => {
       expect(resolver.calls).toEqual([])
     })
 
+    test('virtualAddressId requires virtualAddress configuration', async () => {
+      const handler = Mppx_server.create({
+        methods: [
+          tempo_server.charge({
+            getClient: () => client,
+            currency: asset,
+            account: accounts[0],
+          }),
+        ],
+        realm,
+        secretKey,
+      })
+
+      await expect(
+        handler.challenge.tempo.charge({
+          amount: '1',
+          virtualAddressId: 'customer_456',
+        }),
+      ).rejects.toThrow(
+        'tempo.charge() received `virtualAddressId`, but no `virtualAddress.masterId` was configured.',
+      )
+    })
+
     test('stateful resolver returns the same recipient for the same externalId', async () => {
       const resolver = createStatefulResolver()
       const handler = Mppx_server.create({
