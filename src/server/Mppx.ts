@@ -61,15 +61,21 @@ export type Mppx<
        * const mppx = Mppx.create({
        *   methods: [
        *     tempo.charge({ currency: USDC, recipient: '0x...' }),
-       *     stripe.charge({ currency: 'usd' }),
+       *     stripe.charge({
+       *       client: stripeClient,
+       *       networkId: 'internal',
+       *       currency: 'usd',
+       *       decimals: 2,
+       *       paymentMethodTypes: ['card'],
+       *     }),
        *   ],
        *   secretKey,
        * })
        *
        * app.get('/api/resource', async (req) => {
        *   const result = await mppx.compose(
-       *     mppx.tempo.charge({ amount: '100' }),
-       *     mppx.stripe.charge({ amount: '100' }),
+       *     ['tempo/charge', { amount: '100' }],
+       *     ['stripe/charge', { amount: '100' }],
        *   )(req)
        *   if (result.status === 402) return result.challenge
        *   return result.withReceipt(new Response('OK'))
