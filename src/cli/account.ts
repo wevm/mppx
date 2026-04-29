@@ -3,12 +3,34 @@ import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
 
+import { Errors } from 'incur'
+
 const SERVICE_NAME = 'mppx'
 const defaultCommandTimeoutMs = 10_000
 
 function commandTimeoutMs() {
   const value = Number.parseInt(process.env.MPPX_KEYCHAIN_COMMAND_TIMEOUT_MS ?? '', 10)
   return Number.isFinite(value) && value > 0 ? value : defaultCommandTimeoutMs
+}
+
+function isMissingCommand(error: Error, command: string) {
+  return 'code' in error && error.code === 'ENOENT' && error.message.includes(command)
+}
+
+function keyringUnavailableError(cause: Error) {
+  return new Errors.IncurError({
+    code: 'KEYCHAIN_UNAVAILABLE',
+    message: 'Linux keyring requires secret-tool. Install libsecret-tools.',
+    hint: 'On Debian/Ubuntu, run: sudo apt install libsecret-tools gnome-keyring dbus-x11',
+    exitCode: 69,
+    cause,
+  })
+}
+
+function assertSecretToolAvailable(
+  error: Error | null | undefined,
+): asserts error is null | undefined {
+  if (error && isMissingCommand(error, 'secret-tool')) throw keyringUnavailableError(error)
 }
 
 export function execCommand(
@@ -80,6 +102,7 @@ export function createKeychain(account = 'main') {
           'service',
           service,
         ])
+        assertSecretToolAvailable(error)
         if (error) return []
         const combined = `${stdout}\n${stderr}`
         const accounts: string[] = []
@@ -110,6 +133,7 @@ export function createKeychain(account = 'main') {
           'account',
           account,
         ])
+        assertSecretToolAvailable(error)
         return error ? undefined : stdout || undefined
       }
       throw new Error(`Unsupported platform: ${platform}`)
@@ -151,7 +175,7 @@ export function createKeychain(account = 'main') {
           })
           proc.on('error', (error) => {
             clearTimeout(timeout)
-            reject(error)
+            reject(isMissingCommand(error, 'secret-tool') ? keyringUnavailableError(error) : error)
           })
         })
       }
@@ -164,7 +188,14 @@ export function createKeychain(account = 'main') {
         return
       }
       if (platform === 'linux') {
-        await execCommand('secret-tool', ['clear', 'service', service, 'account', account])
+        const { error } = await execCommand('secret-tool', [
+          'clear',
+          'service',
+          service,
+          'account',
+          account,
+        ])
+        assertSecretToolAvailable(error)
         return
       }
       throw new Error(`Unsupported platform: ${platform}`)
