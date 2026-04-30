@@ -1,5 +1,11 @@
 # mppx
 
+## 0.6.8
+
+### Patch Changes
+
+- b5561f5: Added an actionable error when Linux account storage cannot find secret-tool.
+
 ## 0.6.7
 
 ### Patch Changes
