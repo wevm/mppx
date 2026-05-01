@@ -51,12 +51,12 @@ function makeChallenge(overrides?: Partial<Challenge>): Challenge {
 }
 
 describe('resolveEscrow', () => {
-  test('prefers challenge.request.methodDetails.escrowContract', () => {
+  test('prefers escrowContractOverride over challenge.request.methodDetails.escrowContract', () => {
     const challenge = {
       request: { methodDetails: { escrowContract: '0xChallengeEscrow' } },
     }
     const result = resolveEscrow(challenge, 42431, '0xOverride' as Address)
-    expect(result).toBe('0xChallengeEscrow')
+    expect(result).toBe('0xOverride')
   })
 
   test('falls back to escrowContractOverride', () => {

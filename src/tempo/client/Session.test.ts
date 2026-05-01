@@ -1,6 +1,6 @@
-import { type Address, createClient, type Hex, http } from 'viem'
+import { type Address, createClient, decodeFunctionData, erc20Abi, type Hex, http } from 'viem'
 import { privateKeyToAccount } from 'viem/accounts'
-import { Addresses } from 'viem/tempo'
+import { Addresses, Transaction } from 'viem/tempo'
 import { beforeAll, describe, expect, test } from 'vp/test'
 import { nodeEnv } from '~test/config.js'
 import { deployEscrow, openChannel } from '~test/tempo/session.js'
@@ -11,6 +11,7 @@ const isLocalnet = nodeEnv === 'localnet'
 import * as Challenge from '../../Challenge.js'
 import * as Credential from '../../Credential.js'
 import { chainId, escrowContract as escrowContractDefaults } from '../internal/defaults.js'
+import { escrowAbi } from '../session/Chain.js'
 import type { SessionCredentialPayload } from '../session/Types.js'
 import { session } from './Session.js'
 
@@ -287,11 +288,11 @@ describe.runIf(isLocalnet)('session (on-chain)', () => {
       expect(cred.source).toContain(`did:pkh:eip155:${chain.id}:`)
     })
 
-    test('suggestedDeposit alone', async () => {
+    test('suggestedDeposit used when below maxDeposit', async () => {
       const method = session({
         getClient: () => client,
         account: payer,
-        deposit: '99',
+        maxDeposit: '10',
         escrowContract,
       })
 
@@ -304,6 +305,61 @@ describe.runIf(isLocalnet)('session (on-chain)', () => {
       if (cred.payload.action === 'open') {
         expect(cred.payload.cumulativeAmount).toBe('1000000')
       }
+    })
+
+    test('prefers local escrowContract and deposit over server challenge overrides', async () => {
+      const maliciousEscrow = '0x4444444444444444444444444444444444444444' as Address
+      const method = session({
+        getClient: () => client,
+        account: payer,
+        deposit: '10',
+        escrowContract,
+      })
+
+      const result = await method.createCredential({
+        challenge: makeLiveChallenge({
+          suggestedDeposit: '7000000',
+          methodDetails: {
+            chainId: chain.id,
+            escrowContract: maliciousEscrow,
+          },
+        }),
+        context: {},
+      })
+
+      const cred = deserializePayload(result)
+      expect(cred.payload.action).toBe('open')
+      if (cred.payload.action !== 'open') throw new Error('unexpected action')
+
+      const transaction = Transaction.deserialize(cred.payload.transaction)
+      if (!('calls' in transaction)) throw new Error('unexpected transaction type')
+      const [approveCall, openCall] = transaction.calls as readonly [
+        { to?: Address; data?: Hex },
+        { to?: Address; data?: Hex },
+      ]
+      const approve = decodeFunctionData({
+        abi: erc20Abi,
+        data: approveCall.data ?? '0x',
+      })
+      const open = decodeFunctionData({
+        abi: escrowAbi,
+        data: openCall.data ?? '0x',
+      })
+      const approveArgs = approve.args as readonly [Address, bigint]
+      const openArgs = open.args as readonly [Address, Address, bigint, string, Address]
+
+      expect(approveCall.to).toBe(asset)
+      expect(approve.functionName).toBe('approve')
+      expect(approveArgs[0].toLowerCase()).toBe(escrowContract.toLowerCase())
+      expect(approveArgs[1]).toBe(10_000_000n)
+
+      expect(openCall.to?.toLowerCase()).toBe(escrowContract.toLowerCase())
+      expect(open.functionName).toBe('open')
+      expect(openArgs[0].toLowerCase()).toBe(payee.toLowerCase())
+      expect(openArgs[1].toLowerCase()).toBe(asset.toLowerCase())
+      expect(openArgs[2]).toBe(10_000_000n)
+      expect(openArgs[3]).toEqual(expect.any(String))
+      expect(openArgs[4].toLowerCase()).toBe(payer.address.toLowerCase())
     })
 
     test('maxDeposit alone', async () => {

@@ -4,13 +4,13 @@ import * as os from 'node:os'
 import * as path from 'node:path'
 import { pathToFileURL } from 'node:url'
 
-import { parseUnits } from 'viem'
+import { decodeFunctionData, erc20Abi, parseUnits, type Address } from 'viem'
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts'
-import { Addresses } from 'viem/tempo'
+import { Addresses, Transaction } from 'viem/tempo'
 import { afterAll, describe, expect, test } from 'vp/test'
 import * as Http from '~test/Http.js'
 import { rpcUrl } from '~test/tempo/prool.js'
-import { deployEscrow } from '~test/tempo/session.js'
+import { deployEscrow, escrowAbi } from '~test/tempo/session.js'
 import { accounts, asset, chain, client, fundAccount } from '~test/tempo/viem.js'
 
 import * as Challenge from '../Challenge.js'
@@ -29,6 +29,10 @@ import cli from './cli.js'
 const testPrivateKey = generatePrivateKey()
 const testAccount = privateKeyToAccount(testPrivateKey)
 const cliTestXdgDataHome = fs.mkdtempSync(path.join(os.tmpdir(), 'mppx-cli-xdg-'))
+const cliSessionFeePayerPolicy = {
+  maxGas: 2_250_000n,
+  maxTotalFee: 60_000_000_000_000_000n,
+}
 
 afterAll(() => {
   fs.rmSync(cliTestXdgDataHome, { recursive: true, force: true })
@@ -698,6 +702,7 @@ describe('session multi-fetch (examples/session/multi-fetch)', () => {
           escrowContract: escrow,
           chainId: client.chain.id,
           feePayer: true,
+          feePayerPolicy: cliSessionFeePayerPolicy,
         }),
       ],
       realm: 'cli-test-multifetch',
@@ -727,6 +732,89 @@ describe('session multi-fetch (examples/session/multi-fetch)', () => {
     }
   })
 
+  test('prefers CLI deposit over server suggestedDeposit', { timeout: 120_000 }, async () => {
+    await fundAccount({ address: testAccount.address, token: Addresses.pathUsd })
+    await fundAccount({ address: testAccount.address, token: asset })
+
+    const escrow = await deployEscrow()
+    let openCredential: SessionCredentialPayload | undefined
+
+    const httpServer = await Http.createServer(async (req, res) => {
+      const authHeader = req.headers.authorization
+      if (!authHeader) {
+        res.writeHead(402, {
+          'WWW-Authenticate': Challenge.serialize(
+            Challenge.from({
+              id: 'cli-deposit-override',
+              realm: 'cli-test-deposit-override',
+              method: 'tempo',
+              intent: 'session',
+              request: {
+                amount: '1000000',
+                currency: asset,
+                decimals: 6,
+                recipient: accounts[0].address,
+                suggestedDeposit: '7000000',
+                unitType: 'token',
+                methodDetails: {
+                  chainId: chain.id,
+                  escrowContract: escrow,
+                },
+              },
+            }),
+          ),
+        })
+        res.end()
+        return
+      }
+
+      try {
+        const cred = Credential.deserialize<SessionCredentialPayload>(authHeader)
+        if (cred.payload.action === 'open') openCredential = cred.payload
+      } catch {}
+
+      res.writeHead(200)
+      res.end('scraped-content')
+    })
+
+    try {
+      await serve([httpServer.url, '--rpc-url', rpcUrl, '-s', '-M', 'deposit=10'], {
+        env: { MPPX_PRIVATE_KEY: testPrivateKey },
+      })
+
+      expect(openCredential).toBeDefined()
+      expect(openCredential?.action).toBe('open')
+      if (!openCredential || openCredential.action !== 'open')
+        throw new Error('missing open credential')
+
+      const transaction = Transaction.deserialize(openCredential.transaction)
+      if (!('calls' in transaction)) throw new Error('unexpected transaction type')
+      const [approveCall, openCall] = transaction.calls as readonly [
+        { to?: Address; data?: `0x${string}` },
+        { to?: Address; data?: `0x${string}` },
+      ]
+      const approve = decodeFunctionData({ abi: erc20Abi, data: approveCall.data ?? '0x' })
+      const open = decodeFunctionData({ abi: escrowAbi, data: openCall.data ?? '0x' })
+      const approveArgs = approve.args as readonly [Address, bigint]
+      const openArgs = open.args as readonly [Address, Address, bigint, string, Address]
+
+      expect(approveCall.to).toBe(asset)
+      expect(approve.functionName).toBe('approve')
+      expect(approveArgs[0].toLowerCase()).toBe(escrow.toLowerCase())
+      expect(approveArgs[1]).toBe(10_000_000n)
+
+      expect(openCall.to?.toLowerCase()).toBe(escrow.toLowerCase())
+      expect(open.functionName).toBe('open')
+      expect(openArgs[0].toLowerCase()).toBe(accounts[0].address.toLowerCase())
+      expect(openArgs[1].toLowerCase()).toBe(asset.toLowerCase())
+      expect(openArgs[2]).toBe(10_000_000n)
+      expect(openArgs[3]).toEqual(expect.any(String))
+      expect(openArgs[4].toLowerCase()).toBe(testAccount.address.toLowerCase())
+    } finally {
+      httpServer.close()
+    }
+  })
+
   test('bug: non-SSE open should not double-charge tick amount', { timeout: 120_000 }, async () => {
     await fundAccount({ address: testAccount.address, token: Addresses.pathUsd })
     await fundAccount({ address: testAccount.address, token: asset })
@@ -744,6 +832,7 @@ describe('session multi-fetch (examples/session/multi-fetch)', () => {
           escrowContract: escrow,
           chainId: client.chain.id,
           feePayer: true,
+          feePayerPolicy: cliSessionFeePayerPolicy,
         }),
       ],
       realm: 'cli-test-double-charge',
@@ -806,6 +895,7 @@ describe('session multi-fetch (examples/session/multi-fetch)', () => {
           escrowContract: escrow,
           chainId: client.chain.id,
           feePayer: true,
+          feePayerPolicy: cliSessionFeePayerPolicy,
         }),
       ],
       realm: 'cli-test-close-action',
@@ -883,6 +973,7 @@ describe('session sse (examples/session/sse)', () => {
           escrowContract: escrow,
           chainId: client.chain.id,
           feePayer: true,
+          feePayerPolicy: cliSessionFeePayerPolicy,
         }),
       ],
       realm: 'cli-test-sse',

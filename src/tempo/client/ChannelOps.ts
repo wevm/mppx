@@ -46,8 +46,8 @@ export function resolveEscrow(
   const challengeEscrow = (challenge.request.methodDetails as { escrowContract?: string })
     ?.escrowContract as Address | undefined
   const escrow =
-    challengeEscrow ??
     escrowContractOverride ??
+    challengeEscrow ??
     defaults.escrowContract[chainId as keyof typeof defaults.escrowContract]
   if (!escrow)
     throw new Error(

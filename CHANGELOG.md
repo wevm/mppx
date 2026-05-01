@@ -1,5 +1,11 @@
 # mppx
 
+## 0.6.11
+
+### Patch Changes
+
+- Fixed Tempo clients and the CLI to prioritize local escrow and deposit configuration over server-provided session challenge overrides.
+
 ## 0.6.10
 
 ### Patch Changes

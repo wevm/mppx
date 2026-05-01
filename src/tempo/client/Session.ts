@@ -131,11 +131,11 @@ export function session(parameters: session.Parameters = {}) {
 
     const deposit = (() => {
       if (context?.depositRaw) return BigInt(context.depositRaw)
+      if (parameters.deposit !== undefined) return parseUnits(parameters.deposit, decimals)
       if (suggestedDeposit !== undefined && maxDeposit !== undefined)
         return suggestedDeposit < maxDeposit ? suggestedDeposit : maxDeposit
-      if (suggestedDeposit !== undefined) return suggestedDeposit
       if (maxDeposit !== undefined) return maxDeposit
-      if (parameters.deposit !== undefined) return parseUnits(parameters.deposit, decimals)
+      if (suggestedDeposit !== undefined) return suggestedDeposit
       throw new Error(
         'No deposit amount available. Set `deposit`, `maxDeposit`, or ensure the server challenge includes `suggestedDeposit`.',
       )

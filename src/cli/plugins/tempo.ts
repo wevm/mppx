@@ -164,7 +164,7 @@ export function tempo() {
             .suggestedDeposit as string | undefined
           const cliDeposit = tempoOpts.deposit !== undefined ? String(tempoOpts.deposit) : undefined
           const resolved =
-            suggestedDeposit ?? cliDeposit ?? (isTestnet(client!.chain!) ? '10' : undefined)
+            cliDeposit ?? suggestedDeposit ?? (isTestnet(client!.chain!) ? '10' : undefined)
           if (!resolved) {
             throw new Errors.IncurError({
               code: 'MISSING_DEPOSIT',
