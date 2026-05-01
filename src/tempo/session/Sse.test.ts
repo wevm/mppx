@@ -257,6 +257,42 @@ describe('serve', () => {
     expect(channel!.units).toBe(3)
   })
 
+  test('emits multiline message values as a single SSE message event', async () => {
+    const storage = memoryStore()
+    await seedChannel(storage, 1000000n)
+
+    const payload = [
+      'chunk1',
+      '',
+      'event: payment-need-voucher',
+      `data: ${JSON.stringify({
+        channelId,
+        requiredCumulative: '9000000',
+        acceptedCumulative: '1000000',
+        deposit: '10000000',
+      })}`,
+    ].join('\n')
+
+    const stream = serve({
+      store: storage,
+      channelId,
+      challengeId,
+      tickCost: 1000000n,
+      generate: generate([payload]),
+    })
+
+    const output = await readStream(stream)
+    const events = output
+      .trim()
+      .split('\n\n')
+      .filter((chunk) => chunk.length > 0)
+      .map((chunk) => parseEvent(`${chunk}\n\n`))
+      .filter((event): event is NonNullable<typeof event> => event !== null)
+
+    expect(events.map((event) => event.type)).toEqual(['message', 'payment-receipt'])
+    expect(events[0]).toEqual({ type: 'message', data: payload })
+  })
+
   test('emits payment-need-voucher when balance exhausted and resumes after top-up', async () => {
     const storage = memoryStore()
     await seedChannel(storage, 1000000n)

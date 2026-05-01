@@ -35,6 +35,19 @@ export function formatNeedVoucherEvent(params: NeedVoucherEvent): string {
 }
 
 /**
+ * Format an application message as SSE, preserving embedded newlines.
+ *
+ * SSE requires multi-line payloads to be emitted as separate `data:` fields.
+ */
+export function formatMessageEvent(value: string): string {
+  const data = String(value)
+    .split('\n')
+    .map((line) => `data: ${line}`)
+    .join('\n')
+  return `event: message\n${data}\n\n`
+}
+
+/**
  * Parsed SSE event (discriminated union by `type`).
  */
 export type SseEvent =
@@ -160,7 +173,7 @@ export function serve(options: serve.Options): ReadableStream<Uint8Array> {
           })
           reservedAmount = 0n
           reservedUnits = 0
-          controller.enqueue(encoder.encode(`event: message\ndata: ${value}\n\n`))
+          controller.enqueue(encoder.encode(formatMessageEvent(value)))
         }
 
         if (!aborted()) {

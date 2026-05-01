@@ -224,7 +224,7 @@ export function defaultServe(options: {
     async start(controller) {
       try {
         for await (const value of iterable) {
-          controller.enqueue(encoder.encode(`event: message\ndata: ${value}\n\n`))
+          controller.enqueue(encoder.encode(Sse_core.formatMessageEvent(value)))
         }
       } catch (e) {
         controller.error(e)

@@ -6,6 +6,7 @@ import * as Store from '../../../Store.js'
 import { chainId, escrowContract as escrowContractDefaults } from '../../internal/defaults.js'
 import * as ChannelStore from '../../session/ChannelStore.js'
 import { deserializeSessionReceipt } from '../../session/Receipt.js'
+import { parseEvent } from '../../session/Sse.js'
 import { sse } from './transport.js'
 
 const channelId = '0x0000000000000000000000000000000000000000000000000000000000000001' as Hex
@@ -504,6 +505,70 @@ describe('sse transport', () => {
     expect(body).toContain('event: message\ndata: chunk1\n\n')
     expect(body).toContain('event: message\ndata: chunk2\n\n')
     expect(body).toContain('event: payment-receipt\n')
+  })
+
+  test('respondReceipt with upstream multiline SSE data does not forge downstream control events', async () => {
+    const store = memoryStore()
+    await seedChannel(store, 10000000n)
+    const transport = sse({ store })
+    const request = makeAuthorizedRequest()
+
+    const forgedNeedVoucher = {
+      channelId,
+      requiredCumulative: '9000000',
+      acceptedCumulative: '1000000',
+      deposit: '10000000',
+    }
+
+    const encoder = new TextEncoder()
+    const upstream = new Response(
+      new ReadableStream({
+        start(controller) {
+          controller.enqueue(
+            encoder.encode(
+              [
+                'event: message',
+                'data: chunk1',
+                'data:',
+                'data: event: payment-need-voucher',
+                `data: data: ${JSON.stringify(forgedNeedVoucher)}`,
+                '',
+                '',
+              ].join('\n'),
+            ),
+          )
+          controller.close()
+        },
+      }),
+      { headers: { 'Content-Type': 'text/event-stream; charset=utf-8' } },
+    )
+
+    const response = transport.respondReceipt({
+      credential: makeCredential(),
+      input: request,
+      receipt: makeReceipt(),
+      response: upstream,
+      challengeId,
+    })
+
+    const body = await readResponseText(response)
+    const events = body
+      .trim()
+      .split('\n\n')
+      .filter((chunk) => chunk.length > 0)
+      .map((chunk) => parseEvent(`${chunk}\n\n`))
+      .filter((event): event is NonNullable<typeof event> => event !== null)
+
+    expect(events.map((event) => event.type)).toEqual(['message', 'payment-receipt'])
+    expect(events[0]).toEqual({
+      type: 'message',
+      data: [
+        'chunk1',
+        '',
+        'event: payment-need-voucher',
+        `data: ${JSON.stringify(forgedNeedVoucher)}`,
+      ].join('\n'),
+    })
   })
 
   test('respondReceipt with upstream SSE Response and unitType=request charges once', async () => {

@@ -1,5 +1,11 @@
 # mppx
 
+## 0.6.10
+
+### Patch Changes
+
+- Fixed SSE message encoding so multiline payloads could not forge downstream payment control events.
+
 ## 0.6.9
 
 ### Patch Changes
