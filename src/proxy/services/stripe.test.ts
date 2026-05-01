@@ -81,6 +81,49 @@ describe('stripe', () => {
     expect(receipt.method).toBe('tempo')
   })
 
+  test('security: strips caller-supplied Stripe-Account header before proxying', async () => {
+    upstreamServer = await Http.createServer((req, res) => {
+      res.writeHead(200, { 'Content-Type': 'application/json' })
+      res.end(
+        JSON.stringify({
+          headers: {
+            authorization: req.headers.authorization,
+            stripeAccount: req.headers['stripe-account'],
+          },
+        }),
+      )
+    })
+
+    const proxy = ApiProxy.create({
+      services: [
+        stripe({
+          apiKey,
+          baseUrl: upstreamServer.url,
+          routes: {
+            'POST /v1/charges': true,
+          },
+        }),
+      ],
+    })
+    proxyServer = await Http.createServer(proxy.listener)
+
+    const res = await fetch(`${proxyServer.url}/stripe/v1/charges`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'Stripe-Account': 'acct_123',
+      },
+      body: 'amount=100&currency=usd',
+    })
+    expect(res.status).toBe(200)
+
+    const body = (await res.json()) as {
+      headers: { authorization: string; stripeAccount?: string | string[] | undefined }
+    }
+    expect(body.headers.authorization).toBe(`Basic ${btoa(`${apiKey}:`)}`)
+    expect(body.headers.stripeAccount).toBeUndefined()
+  })
+
   test('behavior: returns 402 without credential', async () => {
     upstreamServer = await Http.createServer((_req, res) => {
       res.writeHead(200, { 'Content-Type': 'application/json' })

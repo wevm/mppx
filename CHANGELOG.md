@@ -1,5 +1,11 @@
 # mppx
 
+## 0.6.9
+
+### Patch Changes
+
+- Fixed Stripe proxy to strip caller-supplied `Stripe-Account` headers before forwarding requests upstream.
+
 ## 0.6.8
 
 ### Patch Changes
