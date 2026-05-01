@@ -1,6 +1,7 @@
 import type { Address, Hex } from 'viem'
 import { describe, expect, test } from 'vp/test'
 
+import { ChannelClosedError } from '../../Errors.js'
 import { chainId, escrowContract as escrowContractDefaults } from '../internal/defaults.js'
 import type * as ChannelStore from './ChannelStore.js'
 import { formatNeedVoucherEvent, formatReceiptEvent, parseEvent, serve } from './Sse.js'
@@ -467,5 +468,31 @@ describe('serve', () => {
 
     const reader = stream.getReader()
     await expect(reader.read()).rejects.toThrow('channel not found')
+  })
+
+  test('rejects a reserved charge when channel close is requested before commit', async () => {
+    const storage = memoryStore()
+    await seedChannel(storage, 1000000n)
+
+    const stream = serve({
+      store: storage,
+      channelId,
+      challengeId,
+      tickCost: 1000000n,
+      generate: async function* (stream) {
+        await stream.charge()
+        await storage.updateChannel(channelId, (current) =>
+          current ? { ...current, closeRequestedAt: 1n } : null,
+        )
+        yield 'blocked'
+      },
+    })
+
+    const reader = stream.getReader()
+    await expect(reader.read()).rejects.toThrow(ChannelClosedError)
+
+    const channel = await storage.getChannel(channelId)
+    expect(channel!.spent).toBe(0n)
+    expect(channel!.units).toBe(0)
   })
 })

@@ -1,5 +1,11 @@
 # mppx
 
+## 0.6.13
+
+### Patch Changes
+
+- Blocked Tempo session charges after a channel force-close was requested and rejected reserved SSE charges during pending close.
+
 ## 0.6.12
 
 ### Patch Changes

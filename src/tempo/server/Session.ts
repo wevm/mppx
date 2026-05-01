@@ -454,6 +454,9 @@ export async function charge(
     throw new ChannelClosedError({ reason: 'channel not found' })
   }
   if (!result.ok) {
+    if (result.channel.finalized) throw new ChannelClosedError({ reason: 'channel is finalized' })
+    if (result.channel.closeRequestedAt !== 0n)
+      throw new ChannelClosedError({ reason: 'channel has a pending close request' })
     const available = result.channel.highestVoucherAmount - result.channel.spent
     throw new InsufficientBalanceError({
       reason: `requested ${amount}, available ${available}`,

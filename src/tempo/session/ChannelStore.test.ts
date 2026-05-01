@@ -292,6 +292,27 @@ describe('ChannelStore.deductFromChannel', () => {
     expect(result.channel.spent).toBe(0n)
   })
 
+  test.each([
+    { label: 'atomic backend', create: () => ChannelStore.fromStore(Store.memory()) },
+    {
+      label: 'mutex fallback',
+      create: () => ChannelStore.fromStore(stripUpdateMethod(Store.memory())),
+    },
+  ])('rejects deduction when channel close has been requested ($label)', async ({ create }) => {
+    const cs = create()
+    await seedChannel(cs, {
+      highestVoucherAmount: 10_000_000n,
+      spent: 0n,
+      closeRequestedAt: 1n,
+    })
+
+    const result = await ChannelStore.deductFromChannel(cs, channelId, 1_000_000n)
+    expect(result.ok).toBe(false)
+    expect(result.channel.closeRequestedAt).toBe(1n)
+    expect(result.channel.spent).toBe(0n)
+    expect(result.channel.units).toBe(0)
+  })
+
   test('exact balance succeeds', async () => {
     const cs = ChannelStore.fromStore(Store.memory())
     await seedChannel(cs, { highestVoucherAmount: 1_000_000n, spent: 0n })

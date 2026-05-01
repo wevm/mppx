@@ -140,6 +140,8 @@ export async function deductFromChannel(
         if (!current) return { op: 'noop', result: null }
         if (current.finalized)
           return { op: 'noop', result: { ok: false, channel: current } as const }
+        if (current.closeRequestedAt !== 0n)
+          return { op: 'noop', result: { ok: false, channel: current } as const }
         if (current.highestVoucherAmount - current.spent >= amount) {
           const next = { ...current, spent: current.spent + amount, units: current.units + 1 }
           return { op: 'set', value: next, result: { ok: true, channel: next } as const }
@@ -155,6 +157,10 @@ export async function deductFromChannel(
   const channel = await store.updateChannel(channelId, (current) => {
     if (!current) return null
     if (current.finalized) {
+      result = { ok: false, channel: current }
+      return current
+    }
+    if (current.closeRequestedAt !== 0n) {
       result = { ok: false, channel: current }
       return current
     }
