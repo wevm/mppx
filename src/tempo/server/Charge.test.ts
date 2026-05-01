@@ -890,6 +890,7 @@ describe('tempo', () => {
       const splits = challenge.request.methodDetails?.splits ?? []
       const primaryAmount =
         BigInt(challenge.request.amount) - BigInt(splits[0]!.amount) - BigInt(splits[1]!.amount)
+      const memo = Attribution.encode({ challengeId: challenge.id, serverId: challenge.realm })
 
       const prepared = await prepareTransactionRequest(client, {
         account: accounts[1]!,
@@ -901,6 +902,7 @@ describe('tempo', () => {
           }),
           Actions.token.transfer.call({
             amount: primaryAmount,
+            memo: memo as Hex.Hex,
             to: challenge.request.recipient as Hex.Hex,
             token: challenge.request.currency as Hex.Hex,
           }),
@@ -2139,6 +2141,7 @@ describe('tempo', () => {
       const splits = challenge.request.methodDetails?.splits ?? []
       const primaryAmount =
         BigInt(challenge.request.amount) - BigInt(splits[0]!.amount) - BigInt(splits[1]!.amount)
+      const memo = Attribution.encode({ challengeId: challenge.id, serverId: challenge.realm })
 
       const prepared = await prepareTransactionRequest(client, {
         account: accounts[1]!,
@@ -2150,6 +2153,7 @@ describe('tempo', () => {
           }),
           Actions.token.transfer.call({
             amount: primaryAmount,
+            memo: memo as Hex.Hex,
             to: challenge.request.recipient as Hex.Hex,
             token: challenge.request.currency as Hex.Hex,
           }),
@@ -3636,6 +3640,147 @@ describe('tempo', () => {
 
       const response = await mppx.fetch(httpServer.url)
       expect(response.status).toBe(200)
+
+      httpServer.close()
+    })
+
+    test('server rejects transaction with wrong challenge nonce (stolen signed tx)', async () => {
+      const chargeServer = Mppx_server.create({
+        methods: [
+          tempo_server.charge({
+            getClient() {
+              return client
+            },
+            currency: asset,
+            account: accounts[0],
+            store: Store.memory(),
+          }),
+        ],
+        realm,
+        secretKey,
+      })
+
+      const mppx = Mppx_client.create({
+        polyfill: false,
+        methods: [
+          tempo_client({
+            account: accounts[1],
+            mode: 'pull',
+            getClient() {
+              return client
+            },
+          }),
+        ],
+      })
+
+      const httpServer = await Http.createServer(async (req, res) => {
+        const result = await Mppx_server.toNodeListener(
+          chargeServer.charge({ amount: '1', currency: asset, recipient: accounts[0].address }),
+        )(req, res)
+        if (result.status === 402) return
+        res.end('OK')
+      })
+
+      const [challengeResponse1, challengeResponse2] = await Promise.all([
+        fetch(httpServer.url),
+        fetch(httpServer.url),
+      ])
+      expect(challengeResponse1.status).toBe(402)
+      expect(challengeResponse2.status).toBe(402)
+
+      const credential1 = await mppx.createCredential(challengeResponse1)
+      const decoded1 = Credential.deserialize<{
+        signature: string
+        type: 'transaction'
+      }>(credential1)
+      const challenge2 = Challenge.fromResponse(challengeResponse2, {
+        methods: [tempo_client.charge()],
+      })
+
+      const replayCredential = Credential.serialize(
+        Credential.from({
+          challenge: challenge2,
+          payload: decoded1.payload,
+        }),
+      )
+
+      const replayResponse = await fetch(httpServer.url, {
+        headers: { Authorization: replayCredential },
+      })
+      expect(replayResponse.status).toBe(402)
+      const body = (await replayResponse.json()) as { detail: string }
+      expect(body.detail).toContain('memo is not bound to this challenge')
+
+      httpServer.close()
+    })
+
+    test('server rejects optimistic transaction with wrong challenge nonce', async () => {
+      const chargeServer = Mppx_server.create({
+        methods: [
+          tempo_server.charge({
+            getClient() {
+              return client
+            },
+            currency: asset,
+            account: accounts[0],
+            store: Store.memory(),
+            waitForConfirmation: false,
+          }),
+        ],
+        realm,
+        secretKey,
+      })
+
+      const mppx = Mppx_client.create({
+        polyfill: false,
+        methods: [
+          tempo_client({
+            account: accounts[1],
+            mode: 'pull',
+            getClient() {
+              return client
+            },
+          }),
+        ],
+      })
+
+      const httpServer = await Http.createServer(async (req, res) => {
+        const result = await Mppx_server.toNodeListener(
+          chargeServer.charge({ amount: '1', currency: asset, recipient: accounts[0].address }),
+        )(req, res)
+        if (result.status === 402) return
+        res.end('OK')
+      })
+
+      const [challengeResponse1, challengeResponse2] = await Promise.all([
+        fetch(httpServer.url),
+        fetch(httpServer.url),
+      ])
+      expect(challengeResponse1.status).toBe(402)
+      expect(challengeResponse2.status).toBe(402)
+
+      const credential1 = await mppx.createCredential(challengeResponse1)
+      const decoded1 = Credential.deserialize<{
+        signature: string
+        type: 'transaction'
+      }>(credential1)
+      const challenge2 = Challenge.fromResponse(challengeResponse2, {
+        methods: [tempo_client.charge()],
+      })
+
+      const replayCredential = Credential.serialize(
+        Credential.from({
+          challenge: challenge2,
+          payload: decoded1.payload,
+        }),
+      )
+
+      const replayResponse = await fetch(httpServer.url, {
+        headers: { Authorization: replayCredential },
+      })
+      expect(replayResponse.status).toBe(402)
+      const body = (await replayResponse.json()) as { detail: string }
+      expect(body.detail).toContain('memo is not bound to this challenge')
 
       httpServer.close()
     })

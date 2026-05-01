@@ -1,5 +1,11 @@
 # mppx
 
+## 0.6.12
+
+### Patch Changes
+
+- Fixed missing challenge-bound memo validation for Tempo pull transactions.
+
 ## 0.6.11
 
 ### Patch Changes

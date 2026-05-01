@@ -310,7 +310,16 @@ export function charge<const parameters extends charge.Parameters>(
             }[]
             const transfers = getExpectedTransfers({ amount, memo, methodDetails, recipient })
             const isFeePayerTx = !!(feePayer || feePayerUrl) && methodDetails?.feePayer !== false
-            assertTransferCalls(calls, { currency, exactCount: isFeePayerTx, transfers })
+            const matchedCalls = assertTransferCalls(calls, {
+              currency,
+              exactCount: isFeePayerTx,
+              transfers,
+            })
+            if (!memo)
+              assertChallengeBoundCallMemo(matchedCalls, {
+                challengeId: challenge.id,
+                realm: challenge.realm,
+              })
 
             if (isFeePayerTx)
               FeePayer.validateCalls(transaction.calls, { amount, currency, recipient })
@@ -347,11 +356,16 @@ export function charge<const parameters extends charge.Parameters>(
               const receipt = await sendRawTransactionSync(client, {
                 serializedTransaction: serializedTransaction_final,
               })
-              assertTransferLogs(receipt, {
+              const matchedLogs = assertTransferLogs(receipt, {
                 currency,
                 sender: transaction.from! as `0x${string}`,
                 transfers,
               })
+              if (!memo)
+                assertChallengeBoundMemo(matchedLogs, {
+                  challengeId: challenge.id,
+                  realm: challenge.realm,
+                })
               // Post-broadcast dedup: catch malleable input variants
               // (different serialized bytes, same underlying tx) that
               // bypass the pre-broadcast check. Skip if the broadcast
@@ -511,8 +525,6 @@ function assertTransferCalls(
       actualCalls: String(transferCalls.length),
     })
 
-  const used = new Set<number>()
-
   // Match memo-specific transfers before wildcards to avoid greedy
   // consumption of memo-bearing calls by allowAnyMemo entries.
   const sorted = [...parameters.transfers].sort((a, b) => {
@@ -521,6 +533,8 @@ function assertTransferCalls(
     return 0
   })
 
+  const used = new Set<number>()
+  const matched: Charge_internal.Transfer[] = []
   for (const expected of sorted) {
     const matchIndex = transferCalls.findIndex((call, index) => {
       if (used.has(index)) return false
@@ -545,7 +559,10 @@ function assertTransferCalls(
     }
 
     used.add(matchIndex)
+    matched.push(decodeTransferCall(transferCalls[matchIndex]!, parameters.currency)!)
   }
+
+  return matched
 }
 
 function getTransferCalls(
@@ -808,6 +825,21 @@ function assertChallengeBoundMemo(
     if (log.kind !== 'memo') return false
     if (!Attribution.verifyServer(log.args.memo, parameters.realm)) return false
     return Attribution.verifyChallengeBinding(log.args.memo, parameters.challengeId)
+  })
+
+  if (!bound)
+    throw new MismatchError('Payment verification failed: memo is not bound to this challenge.', {})
+}
+
+function assertChallengeBoundCallMemo(
+  matchedCalls: readonly Charge_internal.Transfer[],
+  parameters: { challengeId: string; realm: string },
+) {
+  const bound = matchedCalls.some((call) => {
+    if (!call.memo) return false
+    const memo = call.memo as `0x${string}`
+    if (!Attribution.verifyServer(memo, parameters.realm)) return false
+    return Attribution.verifyChallengeBinding(memo, parameters.challengeId)
   })
 
   if (!bound)
