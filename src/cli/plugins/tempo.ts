@@ -247,6 +247,7 @@ export function tempo() {
       const channelId = parsed.payload.channelId
       const escrowContract = sessionMd?.escrowContract as Address | undefined
       const chainId = sessionMd?.chainId ?? 0
+      const tickCost = BigInt(challengeRequest.amount as string)
       let cumulativeAmount =
         'cumulativeAmount' in parsed.payload && parsed.payload.cumulativeAmount
           ? BigInt(parsed.payload.cumulativeAmount)
@@ -287,11 +288,11 @@ export function tempo() {
       if (receiptHeader) {
         try {
           const receiptJson = JSON.parse(Base64.toString(receiptHeader)) as Record<string, unknown>
+          assertReceiptWithinCliState(receiptJson, cumulativeAmount)
           if (
             typeof receiptJson.acceptedCumulative === 'string' &&
             receiptJson.acceptedCumulative
           ) {
-            cumulativeAmount = BigInt(receiptJson.acceptedCumulative)
             writeChannelCumulative(channelId, cumulativeAmount)
           }
           if (verbose >= 1)
@@ -315,6 +316,7 @@ export function tempo() {
           escrowContract,
           chainId,
           cumulativeAmount,
+          tickCost,
           fetchUrl,
           fetchInit,
           session: _session,
@@ -415,6 +417,24 @@ function printReceipt(
   if (opts.prefix) opts.info('\n')
 }
 
+function assertReceiptWithinCliState(
+  receiptJson: Record<string, unknown>,
+  cumulativeAmount: bigint,
+) {
+  if (typeof receiptJson.acceptedCumulative !== 'string') return
+  const acceptedCumulative = BigInt(receiptJson.acceptedCumulative)
+  const spent = typeof receiptJson.spent === 'string' ? BigInt(receiptJson.spent) : 0n
+  if (spent > acceptedCumulative) {
+    throw new Error('receipt spent exceeds accepted cumulative voucher amount')
+  }
+  if (acceptedCumulative > cumulativeAmount) {
+    throw new Error('receipt accepted cumulative exceeds locally signed voucher amount')
+  }
+  if (spent > cumulativeAmount) {
+    throw new Error('receipt spent exceeds locally signed voucher amount')
+  }
+}
+
 async function handleSseStream(
   response: Response,
   opts: {
@@ -423,6 +443,7 @@ async function handleSseStream(
     escrowContract: Address | undefined
     chainId: number
     cumulativeAmount: bigint
+    tickCost: bigint
     fetchUrl: string
     fetchInit: RequestInit
     session: {
@@ -500,7 +521,13 @@ async function handleSseStream(
             channelId: string
             requiredCumulative: string
           }
+          if (event.channelId !== opts.channelId) {
+            throw new Error('payment-need-voucher channelId does not match current session')
+          }
           const required = BigInt(event.requiredCumulative)
+          if (required > cumulativeAmount + opts.tickCost) {
+            throw new Error('payment-need-voucher exceeds next locally billable amount')
+          }
           cumulativeAmount = cumulativeAmount > required ? cumulativeAmount : required
 
           const voucherCred = await opts.session.signVoucher({

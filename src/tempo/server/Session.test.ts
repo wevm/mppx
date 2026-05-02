@@ -2083,6 +2083,10 @@ describe.runIf(isLocalnet)('session', () => {
       ).rejects.toThrow(
         `Cannot close channel ${channelId}: tx sender ${rawAccessKey.address} is not the channel payee ${recipientAccount.address}. If using an access key, pass a Tempo access-key account whose address is the payee wallet, not the raw delegated key address.`,
       )
+
+      const persisted = await store.getChannel(channelId)
+      expect(persisted?.closeRequestedAt).toBe(0n)
+      expect(persisted?.finalized).toBe(false)
     })
 
     test('sessionManager.close surfaces problem details from HTTP close failures', async () => {
@@ -2645,6 +2649,77 @@ describe.runIf(isLocalnet)('session', () => {
       const channel = await store.getChannel(channelId)
       expect(channel?.highestVoucherAmount).toBe(5000000n)
       expect(channel?.spent).toBe(0n)
+    })
+
+    test('close marks the channel pending before on-chain close so concurrent charges fail', async () => {
+      const baseStore = Store.memory()
+      let pendingChargeError: unknown
+      let probedPendingClose = false
+
+      const probingStore = Store.from<Store.AtomicStore>({
+        get: (key) => baseStore.get(key),
+        put: (key, value) => baseStore.put(key, value),
+        delete: (key) => baseStore.delete(key),
+        async update(key, fn) {
+          const result = await baseStore.update(key, fn)
+          const current = await baseStore.get(key)
+          if (
+            current &&
+            typeof current === 'object' &&
+            'closeRequestedAt' in current &&
+            (current as ChannelStore.State).closeRequestedAt !== 0n &&
+            !(current as ChannelStore.State).finalized &&
+            !probedPendingClose
+          ) {
+            probedPendingClose = true
+            try {
+              await charge(ChannelStore.fromStore(probingStore), channelId, 1000000n)
+            } catch (error) {
+              pendingChargeError = error
+            }
+          }
+          return result
+        },
+      })
+
+      const probedStore = ChannelStore.fromStore(baseStore)
+      const server = createServerWithStore(probingStore)
+      const { channelId, serializedTransaction } = await createSignedOpenTransaction(10000000n)
+
+      await server.verify({
+        credential: {
+          challenge: makeChallenge({ id: 'open-before-pending-close', channelId }),
+          payload: {
+            action: 'open' as const,
+            type: 'transaction' as const,
+            channelId,
+            transaction: serializedTransaction,
+            cumulativeAmount: '3000000',
+            signature: await signTestVoucher(channelId, 3000000n),
+          },
+        },
+        request: makeRequest(),
+      })
+
+      await charge(probedStore, channelId, 1000000n)
+
+      const receipt = await server.verify({
+        credential: {
+          challenge: makeChallenge({ id: 'pending-close', channelId }),
+          payload: {
+            action: 'close' as const,
+            channelId,
+            cumulativeAmount: '3000000',
+            signature: await signTestVoucher(channelId, 3000000n),
+          },
+        },
+        request: makeRequest(),
+      })
+
+      expect(receipt.status).toBe('success')
+      expect(probedPendingClose).toBe(true)
+      expect(pendingChargeError).toBeInstanceOf(ChannelClosedError)
+      expect((pendingChargeError as Error).message).toContain('pending close request')
     })
   })
 
@@ -3220,6 +3295,47 @@ describe.runIf(isLocalnet)('session', () => {
       expect(persisted?.finalized).toBe(true)
     })
 
+    test('sessionManager rejects receipts that exceed the locally signed voucher', async () => {
+      const handler = createHandler()
+      const route = handler.session({
+        amount: '1',
+        decimals: 6,
+        unitType: 'token',
+      })
+
+      const fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+        const request = new Request(input, init)
+        const result = await route(request)
+        if (result.status === 402) return result.challenge
+
+        const response = result.withReceipt(new Response('ok'))
+        const receipt = deserializeSessionReceipt(response.headers.get('Payment-Receipt')!)
+        return new Response(response.body, {
+          status: response.status,
+          statusText: response.statusText,
+          headers: {
+            'Payment-Receipt': serializeSessionReceipt({
+              ...receipt,
+              acceptedCumulative: '3000000',
+              spent: '3000000',
+            }),
+          },
+        })
+      }
+
+      const manager = sessionManager({
+        account: payer,
+        client,
+        escrowContract,
+        fetch,
+        maxDeposit: '3',
+      })
+
+      await expect(manager.fetch('https://api.example.com/resource')).rejects.toThrow(
+        'receipt accepted cumulative exceeds local voucher state',
+      )
+    })
+
     test('does not return Payment-Receipt on verification errors', async () => {
       const { channelId, serializedTransaction } = await createSignedOpenTransaction(10000000n)
       const handler = createHandler()
@@ -3467,6 +3583,79 @@ describe.runIf(isLocalnet)('session', () => {
       )
       expect(replay.status).toBe(402)
       expect(replay.headers.get('Payment-Receipt')).toBeNull()
+    })
+
+    test('default HTTP bodyless POST query flow charges instead of treating voucher as management', async () => {
+      const { channelId, serializedTransaction } = await createSignedOpenTransaction(10000000n)
+      const signature = await signTestVoucher(channelId, 1000000n)
+      const handler = createHandler()
+      const route = handler.session({
+        amount: '1',
+        decimals: 6,
+        unitType: 'token',
+      })
+
+      const first = await route(
+        new Request('https://api.example.com/search?q=paid', {
+          method: 'POST',
+        }),
+      )
+      expect(first.status).toBe(402)
+      if (first.status !== 402) throw new Error('expected challenge')
+
+      const open = await route(
+        new Request('https://api.example.com/search?q=paid', {
+          method: 'POST',
+          headers: {
+            Authorization: Credential.serialize({
+              challenge: Challenge.fromResponse(first.challenge),
+              payload: {
+                action: 'open',
+                type: 'transaction',
+                channelId,
+                transaction: serializedTransaction,
+                cumulativeAmount: '1000000',
+                signature,
+              },
+            }),
+          },
+        }),
+      )
+      expect(open.status).toBe(200)
+      if (open.status !== 200) throw new Error('expected paid response')
+      const paid = open.withReceipt(new Response('query-result'))
+      expect(await paid.text()).toBe('query-result')
+      const receipt = deserializeSessionReceipt(paid.headers.get('Payment-Receipt') as string)
+      expect(receipt.spent).toBe('1000000')
+      expect(receipt.units).toBe(1)
+
+      const replayChallenge = await route(
+        new Request('https://api.example.com/search?q=paid', {
+          method: 'POST',
+        }),
+      )
+      expect(replayChallenge.status).toBe(402)
+      if (replayChallenge.status !== 402) throw new Error('expected challenge')
+
+      const replay = await route(
+        new Request('https://api.example.com/search?q=paid', {
+          method: 'POST',
+          headers: {
+            Authorization: Credential.serialize({
+              challenge: Challenge.fromResponse(replayChallenge.challenge),
+              payload: {
+                action: 'voucher',
+                channelId,
+                cumulativeAmount: '1000000',
+                signature,
+              },
+            }),
+          },
+        }),
+      )
+      expect(replay.status).toBe(402)
+      if (replay.status !== 402) throw new Error('expected challenge')
+      expect(replay.challenge.headers.get('Payment-Receipt')).toBeNull()
     })
 
     test('converts amount/suggestedDeposit/minVoucherDelta with decimals=18', async () => {
@@ -4243,6 +4432,89 @@ describe.runIf(isLocalnet)('session', () => {
       expect(persisted?.spent).toBe(1000000n)
       expect(persisted?.units).toBe(1)
       expect(persisted?.finalized).toBe(true)
+    })
+
+    test('plain-response SSE fallback precharges before running concurrent paid handlers', async () => {
+      const backingStore = Store.memory()
+      const route = Mppx_server.create({
+        methods: [
+          tempo_server.session({
+            store: backingStore,
+            getClient: () => client,
+            account: recipientAccount,
+            currency,
+            escrowContract,
+            chainId: chain.id,
+            sse: true,
+          }),
+        ],
+        realm: 'api.example.com',
+        secretKey: 'secret',
+      }).session({ amount: '1', decimals: 6, unitType: 'token' })
+
+      const { channelId, serializedTransaction } = await createSignedOpenTransaction(10000000n)
+
+      const openChallenge = await route(new Request('https://api.example.com/fallback'))
+      expect(openChallenge.status).toBe(402)
+      if (openChallenge.status !== 402) throw new Error('expected challenge')
+
+      const openResult = await route(
+        new Request('https://api.example.com/fallback', {
+          method: 'POST',
+          headers: {
+            Authorization: Credential.serialize({
+              challenge: Challenge.fromResponse(openChallenge.challenge),
+              payload: {
+                action: 'open',
+                type: 'transaction',
+                channelId,
+                transaction: serializedTransaction,
+                cumulativeAmount: '1000000',
+                signature: await signTestVoucher(channelId, 1000000n),
+              },
+            }),
+          },
+        }),
+      )
+      expect(openResult.status).toBe(200)
+      if (openResult.status !== 200) throw new Error('expected open response')
+      expect(openResult.withReceipt().status).toBe(204)
+
+      const replayChallenge = await route(new Request('https://api.example.com/fallback'))
+      expect(replayChallenge.status).toBe(402)
+      if (replayChallenge.status !== 402) throw new Error('expected challenge')
+
+      const authorization = Credential.serialize({
+        challenge: Challenge.fromResponse(replayChallenge.challenge),
+        payload: {
+          action: 'voucher',
+          channelId,
+          cumulativeAmount: '1000000',
+          signature: await signTestVoucher(channelId, 1000000n),
+        },
+      })
+
+      let handlerRuns = 0
+      const serve = async () => {
+        const result = await route(
+          new Request('https://api.example.com/fallback', {
+            headers: { Authorization: authorization },
+          }),
+        )
+        if (result.status === 402) return result.challenge
+        handlerRuns++
+        return result.withReceipt(new Response('paid-fallback'))
+      }
+
+      const [first, second] = await Promise.all([serve(), serve()])
+      const statuses = [first.status, second.status].sort()
+
+      expect(statuses).toEqual([200, 402])
+      expect(handlerRuns).toBe(1)
+
+      const persisted = await ChannelStore.fromStore(backingStore).getChannel(channelId)
+      expect(persisted?.spent).toBe(1000000n)
+      expect(persisted?.units).toBe(1)
     })
 
     test('handles repeated exhaustion/resume cycles within one stream', async () => {

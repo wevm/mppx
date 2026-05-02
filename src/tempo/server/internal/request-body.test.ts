@@ -82,6 +82,17 @@ describe('request-body', () => {
         }),
       ).toBe(false)
     })
+
+    test('treats bodyless POST requests with query parameters as content requests', () => {
+      expect(
+        isSessionContentRequest({
+          hasBody: false,
+          headers: new Headers(),
+          method: 'POST',
+          url: new URL('https://api.example.com/search?q=paid'),
+        }),
+      ).toBe(true)
+    })
   })
 
   describe('shouldChargePlainResponse', () => {
@@ -121,6 +132,20 @@ describe('request-body', () => {
         ),
       ).toBe(false)
     })
+
+    test('charges bodyless POST query requests', () => {
+      expect(
+        shouldChargePlainResponse(
+          {
+            hasBody: false,
+            headers: new Headers(),
+            method: 'POST',
+            url: new URL('https://api.example.com/search?q=paid'),
+          },
+          { action: 'voucher' },
+        ),
+      ).toBe(true)
+    })
   })
 
   describe('captureRequestBodyProbe', () => {
@@ -136,6 +161,7 @@ describe('request-body', () => {
         headers: request.headers,
         hasBody: true,
         method: 'POST',
+        url: new URL('https://example.com/'),
       })
     })
   })
