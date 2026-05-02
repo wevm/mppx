@@ -141,11 +141,16 @@ export function serve(options: serve.Options): ReadableStream<Uint8Array> {
     async start(controller) {
       const aborted = () => signal?.aborted ?? false
       const emit = (event: string) => controller.enqueue(encoder.encode(event))
+      let prepaidUnits = options.prepaidUnits ?? 0
       let reservedAmount = 0n
       let reservedUnits = 0
 
-      const charge = () =>
-        reserveChargeOrWait({
+      const charge = () => {
+        if (prepaidUnits > 0) {
+          prepaidUnits -= 1
+          return Promise.resolve()
+        }
+        return reserveChargeOrWait({
           store,
           channelId,
           amount: tickCost,
@@ -157,6 +162,7 @@ export function serve(options: serve.Options): ReadableStream<Uint8Array> {
           reservedAmount += tickCost
           reservedUnits += 1
         })
+      }
 
       const iterable: AsyncIterable<string> =
         typeof generate === 'function' ? generate({ charge }) : generate
@@ -207,6 +213,7 @@ export declare namespace serve {
     tickCost: bigint
     generate: AsyncIterable<string> | ((stream: SessionController) => AsyncIterable<string>)
     pollIntervalMs?: number | undefined
+    prepaidUnits?: number | undefined
     signal?: AbortSignal | undefined
   }
 }

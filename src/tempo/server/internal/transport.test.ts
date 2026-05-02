@@ -7,7 +7,8 @@ import { chainId, escrowContract as escrowContractDefaults } from '../../interna
 import * as ChannelStore from '../../session/ChannelStore.js'
 import { deserializeSessionReceipt } from '../../session/Receipt.js'
 import { parseEvent } from '../../session/Sse.js'
-import { sse } from './transport.js'
+import type { SessionReceipt } from '../../session/Types.js'
+import { markPrepaidSessionTick, sse } from './transport.js'
 
 const channelId = '0x0000000000000000000000000000000000000000000000000000000000000001' as Hex
 const challengeId = 'challenge-1'
@@ -129,7 +130,7 @@ type ReceiptOverrides = Partial<{
   units: number
 }>
 
-function makeReceipt(overrides: ReceiptOverrides = {}) {
+function makeReceipt(overrides: ReceiptOverrides = {}): SessionReceipt {
   return {
     method: 'tempo',
     intent: 'session' as const,
@@ -664,6 +665,31 @@ describe('sse transport', () => {
     })
     expect(response).toBeInstanceOf(Response)
     expect(response.headers.get('Payment-Receipt')).toBeTruthy()
+  })
+
+  test('respondReceipt with prepaid plain Response does not deduct again', async () => {
+    const store = memoryStore()
+    await seedChannel(store, 10000000n)
+    const transport = sse({ store })
+
+    const response = transport.respondReceipt({
+      credential: makeCredential(),
+      input: makeAuthorizedRequest(),
+      receipt: markPrepaidSessionTick(makeReceipt({ spent: '1000000', units: 1 })),
+      response: new Response('ok', {
+        headers: { 'Content-Type': 'application/json' },
+      }),
+      challengeId,
+    })
+
+    expect(await response.text()).toBe('ok')
+    const receipt = deserializeSessionReceipt(response.headers.get('Payment-Receipt')!)
+    const channel = await store.getChannel(channelId)
+
+    expect(channel!.spent).toBe(0n)
+    expect(channel!.units).toBe(0)
+    expect(receipt.spent).toBe('1000000')
+    expect(receipt.units).toBe(1)
   })
 
   test('respondReceipt no longer depends on prior getCredential side effects', async () => {

@@ -258,6 +258,31 @@ describe('serve', () => {
     expect(channel!.units).toBe(3)
   })
 
+  test('uses a prepaid unit for the first generated value', async () => {
+    const storage = memoryStore()
+    await seedChannel(storage, 3000000n)
+    await storage.updateChannel(channelId, (current) =>
+      current ? { ...current, spent: 1000000n, units: 1 } : current,
+    )
+
+    const stream = serve({
+      store: storage,
+      channelId,
+      challengeId,
+      tickCost: 1000000n,
+      generate: generate(['hello', 'world']),
+      prepaidUnits: 1,
+    })
+
+    const output = await readStream(stream)
+    expect(output).toContain('event: message\ndata: hello\n\n')
+    expect(output).toContain('event: message\ndata: world\n\n')
+
+    const channel = await storage.getChannel(channelId)
+    expect(channel!.spent).toBe(2000000n)
+    expect(channel!.units).toBe(2)
+  })
+
   test('emits multiline message values as a single SSE message event', async () => {
     const storage = memoryStore()
     await seedChannel(storage, 1000000n)

@@ -138,8 +138,26 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
 
   function updateSpentFromReceipt(receipt: SessionReceipt | null | undefined) {
     if (!receipt || receipt.channelId !== channel?.channelId) return
+    assertReceiptWithinLocalState(receipt)
     const next = BigInt(receipt.spent)
     spent = spent > next ? spent : next
+  }
+
+  function assertReceiptWithinLocalState(receipt: SessionReceipt) {
+    if (!channel || receipt.channelId !== channel.channelId) return
+    const acceptedCumulative = BigInt(receipt.acceptedCumulative)
+    const receiptSpent = BigInt(receipt.spent)
+    if (receiptSpent > acceptedCumulative) {
+      throw new Error('receipt spent exceeds accepted cumulative voucher amount')
+    }
+    if (acceptedCumulative > channel.cumulativeAmount) {
+      throw new Error('receipt accepted cumulative exceeds local voucher state')
+    }
+    if (receiptSpent > channel.cumulativeAmount) {
+      throw new Error('receipt spent exceeds local voucher state')
+    }
+    assertVoucherWithinLocalLimit(acceptedCumulative)
+    assertVoucherWithinLocalLimit(receiptSpent)
   }
 
   function waitForReceipt(predicate: (receipt: SessionReceipt) => boolean = () => true) {
@@ -762,7 +780,14 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
         context: {
           action: 'close',
           channelId: closeChannelId,
-          cumulativeAmountRaw: getFallbackCloseAmount(closeChallenge, closeChannelId),
+          cumulativeAmountRaw: (() => {
+            const closeAmount = BigInt(getFallbackCloseAmount(closeChallenge, closeChannelId))
+            if (closeAmount > channel.cumulativeAmount) {
+              throw new Error('fallback close amount exceeds local voucher state')
+            }
+            assertVoucherWithinLocalLimit(closeAmount)
+            return closeAmount.toString()
+          })(),
         },
       })
 

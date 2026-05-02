@@ -1,13 +1,15 @@
 import type * as Method from '../../../Method.js'
 import type { SessionCredentialPayload } from '../../session/Types.js'
 
-export type RequestBodyProbe = Pick<Method.CapturedRequest, 'headers' | 'hasBody' | 'method'>
+export type RequestBodyProbe = Pick<Method.CapturedRequest, 'headers' | 'hasBody' | 'method'> &
+  Partial<Pick<Method.CapturedRequest, 'url'>>
 
 export function captureRequestBodyProbe(input: Request): RequestBodyProbe {
   return {
     headers: input.headers,
     hasBody: input.body !== null,
     method: input.method,
+    url: new URL(input.url),
   }
 }
 
@@ -25,6 +27,7 @@ export function hasCapturedRequestBody(
 export function isSessionContentRequest(input: RequestBodyProbe): boolean {
   if (input.method === 'HEAD') return false
   if (input.method !== 'POST') return true
+  if (input.url?.search) return true
   return hasCapturedRequestBody(input)
 }
 

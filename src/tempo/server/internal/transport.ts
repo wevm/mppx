@@ -13,8 +13,27 @@ import * as Sse_core from '../../session/Sse.js'
 import type { SessionCredentialPayload, SessionReceipt } from '../../session/Types.js'
 import { captureRequestBodyProbe, shouldChargePlainResponse } from './request-body.js'
 
+const prepaidSessionTick = Symbol('mppx.prepaidSessionTick')
+
 /** SSE transport with Tempo session controller. */
 export type Sse = Transport.Sse<Sse_core.SessionController>
+
+export type PrepaidSessionReceipt = SessionReceipt & {
+  [prepaidSessionTick]?: true | undefined
+}
+
+export function markPrepaidSessionTick(receipt: SessionReceipt): SessionReceipt {
+  Object.defineProperty(receipt, prepaidSessionTick, {
+    configurable: false,
+    enumerable: false,
+    value: true,
+  })
+  return receipt
+}
+
+function hasPrepaidSessionTick(receipt: SessionReceipt): boolean {
+  return (receipt as PrepaidSessionReceipt)[prepaidSessionTick] === true
+}
 
 /**
  * Creates a Tempo-metered SSE transport.
@@ -93,6 +112,7 @@ export function sse(options: sse.Options & { store: ChannelStore.ChannelStore })
           tickCost,
           pollIntervalMs: pollingInterval,
           generate,
+          prepaidUnits: hasPrepaidSessionTick(receipt as SessionReceipt) ? 1 : 0,
           signal: input.signal,
         })
         return Sse_core.toResponse(stream)
@@ -113,6 +133,9 @@ export function sse(options: sse.Options & { store: ChannelStore.ChannelStore })
       }
 
       const currentReceipt = receipt as SessionReceipt
+      if (hasPrepaidSessionTick(currentReceipt)) {
+        return baseResponse
+      }
       const available = BigInt(currentReceipt.acceptedCumulative) - BigInt(currentReceipt.spent)
       if (available < tickCost) {
         const error = new Errors.InsufficientBalanceError({

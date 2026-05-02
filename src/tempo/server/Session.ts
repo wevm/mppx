@@ -268,7 +268,6 @@ export function session<const parameters extends session.Parameters>(
       // This keeps equal-voucher replays bounded by the voucher's remaining
       // balance instead of serving repeated responses for free.
       if (
-        !parameters.sse &&
         envelope &&
         isSessionContentRequest(envelope.capturedRequest) &&
         (payload.action === 'open' || payload.action === 'voucher')
@@ -283,6 +282,7 @@ export function session<const parameters extends session.Parameters>(
           spent: charged.spent.toString(),
           units: charged.units,
         }
+        if (parameters.sse) sessionReceipt = Transport.markPrepaidSessionTick(sessionReceipt)
       }
 
       return sessionReceipt
@@ -917,16 +917,45 @@ async function handleClose(
     throw new InvalidSignatureError({ reason: 'invalid voucher signature' })
   }
 
-  assertSettlementSender({
-    operation: 'close',
-    channelId: payload.channelId,
-    payee: onChain.payee,
-    sender: account?.address ?? client.account?.address,
+  const pendingCloseStartedAt = BigInt(Math.floor(Date.now() / 1000) || 1)
+  const previousCloseRequestedAt = channel.closeRequestedAt
+  let pendingCloseMarked = false
+  await store.updateChannel(channelId, (current) => {
+    if (!current) return null
+    if (current.finalized) throw new ChannelClosedError({ reason: 'channel is already finalized' })
+    if (current.closeRequestedAt !== 0n)
+      throw new ChannelClosedError({ reason: 'channel has a pending close request' })
+    if (voucher.cumulativeAmount < current.spent) {
+      throw new VerificationFailedError({
+        reason: `close voucher amount must be >= ${current.spent} (spent)`,
+      })
+    }
+    pendingCloseMarked = true
+    return { ...current, closeRequestedAt: pendingCloseStartedAt }
   })
 
-  const txHash = await closeOnChain(client, methodDetails.escrowContract, voucher, {
-    ...(feePayer && account ? { feePayer, account } : { account }),
-  })
+  let txHash: Hex | undefined
+  try {
+    assertSettlementSender({
+      operation: 'close',
+      channelId: payload.channelId,
+      payee: onChain.payee,
+      sender: account?.address ?? client.account?.address,
+    })
+
+    txHash = await closeOnChain(client, methodDetails.escrowContract, voucher, {
+      ...(feePayer && account ? { feePayer, account } : { account }),
+    })
+  } catch (error) {
+    if (pendingCloseMarked) {
+      await store.updateChannel(channelId, (current) =>
+        current && current.closeRequestedAt === pendingCloseStartedAt
+          ? { ...current, closeRequestedAt: previousCloseRequestedAt }
+          : current,
+      )
+    }
+    throw error
+  }
 
   const updated = await store.updateChannel(channelId, (current) => {
     if (!current) return null
