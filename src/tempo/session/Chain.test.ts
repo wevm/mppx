@@ -1,4 +1,12 @@
-import { type Address, encodeFunctionData, erc20Abi, type Hex, zeroAddress } from 'viem'
+import {
+  type Address,
+  createClient,
+  custom,
+  encodeFunctionData,
+  erc20Abi,
+  type Hex,
+  zeroAddress,
+} from 'viem'
 import { prepareTransactionRequest, signTransaction, waitForTransactionReceipt } from 'viem/actions'
 import { Addresses, Transaction } from 'viem/tempo'
 import { beforeAll, describe, expect, test } from 'vp/test'
@@ -450,6 +458,70 @@ describe.runIf(isLocalnet)('on-chain', () => {
       ).rejects.toThrow('gas exceeds sponsor policy')
     })
 
+    test('fee-payer: simulates open before broadcasting', async () => {
+      const rpcMethods: string[] = []
+      const interceptingClient = createClient({
+        account: accounts[0],
+        chain: client.chain,
+        transport: custom({
+          async request(args: any) {
+            rpcMethods.push(args.method)
+            return client.transport.request(args)
+          },
+        }),
+      })
+
+      const salt = nextSalt()
+      const deposit = 5_000_000n
+      const approveData = encodeFunctionData({
+        abi: erc20Abi,
+        functionName: 'approve',
+        args: [escrowContract, deposit],
+      })
+      const openData = encodeFunctionData({
+        abi: escrowAbi,
+        functionName: 'open',
+        args: [recipient, currency, deposit, salt, zeroAddress],
+      })
+      const channelId = Channel.computeId({
+        authorizedSigner: zeroAddress,
+        chainId: chain.id,
+        escrowContract,
+        payee: recipient,
+        payer: payer.address,
+        salt,
+        token: currency,
+      }) as Hex
+      const prepared = await prepareTransactionRequest(client, {
+        account: payer,
+        calls: [
+          { to: currency, data: approveData },
+          { to: escrowContract, data: openData },
+        ],
+        feePayer: true,
+        feeToken: currency,
+      } as never)
+      prepared.gas = prepared.gas! + 5_000n
+      const serializedTransaction = await signTransaction(client, prepared as never)
+
+      await broadcastOpenTransaction({
+        client: interceptingClient,
+        serializedTransaction,
+        escrowContract,
+        channelId,
+        recipient,
+        currency,
+        feePayer: accounts[0],
+      })
+
+      const broadcastIndex = rpcMethods.indexOf('eth_sendRawTransactionSync')
+      const simulationIndex = rpcMethods.indexOf('eth_call')
+
+      expect(broadcastIndex).toBeGreaterThan(-1)
+      expect(simulationIndex).toBeGreaterThan(-1)
+      expect(simulationIndex).toBeLessThan(broadcastIndex)
+    })
+
     test('fee-payer: rejects smuggled second open call', async () => {
       const deposit = 5_000_000n
       const smuggledDeposit = 7_000_000n
@@ -890,6 +962,73 @@ describe.runIf(isLocalnet)('on-chain', () => {
           feePayer: accounts[0],
         }),
       ).rejects.toThrow('gas exceeds sponsor policy')
+    })
+
+    test('fee-payer: simulates topUp before broadcasting', async () => {
+      const rpcMethods: string[] = []
+      const interceptingClient = createClient({
+        account: accounts[0],
+        chain: client.chain,
+        transport: custom({
+          async request(args: any) {
+            rpcMethods.push(args.method)
+            return client.transport.request(args)
+          },
+        }),
+      })
+
+      const salt = nextSalt()
+      const deposit = 5_000_000n
+      const topUpAmount = 3_000_000n
+
+      const { channelId } = await openChannel({
+        escrow: escrowContract,
+        payer,
+        payee: recipient,
+        token: currency,
+        deposit,
+        salt,
+      })
+
+      const approveData = encodeFunctionData({
+        abi: erc20Abi,
+        functionName: 'approve',
+        args: [escrowContract, topUpAmount],
+      })
+      const topUpData = encodeFunctionData({
+        abi: escrowAbi,
+        functionName: 'topUp',
+        args: [channelId, topUpAmount],
+      })
+      const prepared = await prepareTransactionRequest(client, {
+        account: payer,
+        calls: [
+          { to: currency, data: approveData },
+          { to: escrowContract, data: topUpData },
+        ],
+        feePayer: true,
+        feeToken: currency,
+      } as never)
+      prepared.gas = prepared.gas! + 5_000n
+      const serializedTransaction = await signTransaction(client, prepared as never)
+
+      await broadcastTopUpTransaction({
+        client: interceptingClient,
+        serializedTransaction,
+        escrowContract,
+        channelId,
+        currency: asset,
+        declaredDeposit: topUpAmount,
+        previousDeposit: deposit,
+        feePayer: accounts[0],
+      })
+
+      const broadcastIndex = rpcMethods.indexOf('eth_sendRawTransactionSync')
+      const simulationIndex = rpcMethods.indexOf('eth_call')
+
+      expect(broadcastIndex).toBeGreaterThan(-1)
+      expect(simulationIndex).toBeGreaterThan(-1)
+      expect(simulationIndex).toBeLessThan(broadcastIndex)
     })
 
     test('fee-payer: rejects smuggled second topUp call', async () => {

@@ -168,9 +168,10 @@ export function session<const parameters extends session.Parameters>(
 
       // Extract feePayer.
       const resolvedFeePayer = (() => {
+        if (request.feePayer === false) return credential ? false : undefined
         const account = typeof request.feePayer === 'object' ? request.feePayer : feePayer
-        const requested = request.feePayer !== false && (account ?? feePayer ?? feePayerUrl)
-        if (credential) return account
+        const requested = account ?? feePayer ?? feePayerUrl
+        if (credential) return account ?? (feePayerUrl ? true : undefined)
         if (requested) return true
         return undefined
       })()
@@ -196,7 +197,17 @@ export function session<const parameters extends session.Parameters>(
       const methodDetails = resolvedRequest.methodDetails as SessionMethodDetails
       const client = await getClient({ chainId: methodDetails.chainId })
 
-      const resolvedFeePayer = methodDetails.feePayer === true ? feePayer : undefined
+      const requestAllowsFeePayer =
+        request.feePayer !== false &&
+        (request.feePayer === undefined ||
+          request.feePayer === true ||
+          typeof request.feePayer === 'object')
+      const resolvedFeePayer =
+        methodDetails.feePayer === true && requestAllowsFeePayer
+          ? typeof request.feePayer === 'object'
+            ? request.feePayer
+            : feePayer
+          : undefined
       const minVoucherDelta = parseUnits(parameters.minVoucherDelta ?? '0', decimals)
       const effectiveMinVoucherDelta = methodDetails.minVoucherDelta
         ? BigInt(methodDetails.minVoucherDelta)
@@ -625,6 +636,38 @@ async function handleOpen(
   const currency = challenge.request.currency as Address
   const amount = challenge.request.amount ? BigInt(challenge.request.amount as string) : undefined
 
+  const validateOpenVoucher = async (onChain: OnChainChannel) => {
+    validateOnChainChannel(onChain, recipient, currency, amount)
+
+    const authorizedSigner =
+      onChain.authorizedSigner === '0x0000000000000000000000000000000000000000'
+        ? onChain.payer
+        : onChain.authorizedSigner
+
+    if (voucher.cumulativeAmount > onChain.deposit) {
+      throw new AmountExceedsDepositError({ reason: 'voucher amount exceeds on-chain deposit' })
+    }
+
+    if (voucher.cumulativeAmount <= onChain.settled) {
+      throw new VerificationFailedError({
+        reason: 'voucher cumulativeAmount is below on-chain settled amount',
+      })
+    }
+
+    const isValid = await verifyVoucher(
+      methodDetails.escrowContract,
+      methodDetails.chainId,
+      voucher,
+      authorizedSigner,
+    )
+
+    if (!isValid) {
+      throw new InvalidSignatureError({ reason: 'invalid voucher signature' })
+    }
+
+    return authorizedSigner
+  }
+
   const { onChain, txHash } = await broadcastOpenTransaction({
     client,
     serializedTransaction: payload.transaction,
@@ -635,36 +678,13 @@ async function handleOpen(
     challengeExpires: challenge.expires,
     feePayerPolicy,
     feePayer,
+    beforeBroadcast: async (pendingOnChain) => {
+      await validateOpenVoucher(pendingOnChain)
+    },
     waitForConfirmation,
   })
 
-  validateOnChainChannel(onChain, recipient, currency, amount)
-
-  const authorizedSigner =
-    onChain.authorizedSigner === '0x0000000000000000000000000000000000000000'
-      ? onChain.payer
-      : onChain.authorizedSigner
-
-  if (voucher.cumulativeAmount > onChain.deposit) {
-    throw new AmountExceedsDepositError({ reason: 'voucher amount exceeds on-chain deposit' })
-  }
-
-  if (voucher.cumulativeAmount <= onChain.settled) {
-    throw new VerificationFailedError({
-      reason: 'voucher cumulativeAmount is below on-chain settled amount',
-    })
-  }
-
-  const isValid = await verifyVoucher(
-    methodDetails.escrowContract,
-    methodDetails.chainId,
-    voucher,
-    authorizedSigner,
-  )
-
-  if (!isValid) {
-    throw new InvalidSignatureError({ reason: 'invalid voucher signature' })
-  }
+  const authorizedSigner = await validateOpenVoucher(onChain)
 
   const updated = await store.updateChannel(channelId, (existing) => {
     if (existing) {

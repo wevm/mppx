@@ -123,6 +123,145 @@ describe('validateCalls', () => {
     ).not.toThrow()
   })
 
+  test('accepts approve + buy + exact expected split transfers', () => {
+    expect(() =>
+      validateCalls(
+        [
+          {
+            to: swapTokenIn,
+            data: encodeFunctionData({
+              abi: Abis.tip20,
+              functionName: 'approve',
+              args: [Addresses.stablecoinDex, 100n],
+            }),
+          },
+          {
+            to: Addresses.stablecoinDex,
+            data: swapData,
+          },
+          {
+            to: swapTokenOut,
+            data: encodeFunctionData({
+              abi: Abis.tip20,
+              functionName: 'transfer',
+              args: [bogus, 90n],
+            }),
+          },
+          {
+            to: swapTokenOut,
+            data: encodeFunctionData({
+              abi: Abis.tip20,
+              functionName: 'transferWithMemo',
+              args: [
+                '0x0000000000000000000000000000000000000002',
+                10n,
+                '0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef',
+              ],
+            }),
+          },
+        ],
+        details,
+        {
+          currency: swapTokenOut,
+          expectedTransfers: [
+            { amount: '90', recipient: bogus },
+            {
+              amount: '10',
+              memo: '0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef',
+              recipient: '0x0000000000000000000000000000000000000002',
+            },
+          ],
+        },
+      ),
+    ).not.toThrow()
+  })
+
+  test('error: rejects extra transfers when expected payments are supplied', () => {
+    expect(() =>
+      validateCalls(
+        [
+          {
+            to: swapTokenOut,
+            data: encodeFunctionData({
+              abi: Abis.tip20,
+              functionName: 'transfer',
+              args: [bogus, 100n],
+            }),
+          },
+          {
+            to: swapTokenOut,
+            data: encodeFunctionData({
+              abi: Abis.tip20,
+              functionName: 'transfer',
+              args: ['0x0000000000000000000000000000000000000002', 1n],
+            }),
+          },
+        ],
+        details,
+        {
+          currency: swapTokenOut,
+          expectedTransfers: [{ amount: '100', recipient: bogus }],
+        },
+      ),
+    ).toThrow('disallowed call pattern')
+  })
+
+  test('error: rejects expected transfers to the wrong token', () => {
+    expect(() =>
+      validateCalls(
+        [
+          {
+            to: swapTokenIn,
+            data: encodeFunctionData({
+              abi: Abis.tip20,
+              functionName: 'transfer',
+              args: [bogus, 100n],
+            }),
+          },
+        ],
+        details,
+        {
+          currency: swapTokenOut,
+          expectedTransfers: [{ amount: '100', recipient: bogus }],
+        },
+      ),
+    ).toThrow('payment transfer does not match challenge')
+  })
+
+  test('error: rejects swaps whose output token does not fund the payment', () => {
+    expect(() =>
+      validateCalls(
+        [
+          {
+            to: swapTokenIn,
+            data: encodeFunctionData({
+              abi: Abis.tip20,
+              functionName: 'approve',
+              args: [Addresses.stablecoinDex, 100n],
+            }),
+          },
+          {
+            to: Addresses.stablecoinDex,
+            data: swapData,
+          },
+          {
+            to: bogus,
+            data: encodeFunctionData({
+              abi: Abis.tip20,
+              functionName: 'transfer',
+              args: [bogus, 100n],
+            }),
+          },
+        ],
+        details,
+        {
+          currency: bogus,
+          expectedTransfers: [{ amount: '100', recipient: bogus }],
+        },
+      ),
+    ).toThrow('swap tokenOut does not match payment currency')
+  })
+
   test('error: rejects empty calls', () => {
     expect(() => validateCalls([], details)).toThrow(FeePayerValidationError)
   })
