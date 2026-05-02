@@ -1,5 +1,6 @@
 import type { TempoAddress } from 'ox/tempo'
 import { TxEnvelopeTempo } from 'ox/tempo'
+import type { Hex } from 'viem'
 import type { Account } from 'viem'
 import { decodeFunctionData } from 'viem'
 import { Abis, Addresses, Transaction } from 'viem/tempo'
@@ -41,6 +42,13 @@ export type Policy = {
 // for that function's return type so this helper stays aligned with upstream
 // Tempo transaction fields.
 type SponsoredTransaction = ReturnType<(typeof Transaction)['deserialize']>
+
+type ExpectedTransfer = {
+  amount: string
+  allowAnyMemo?: boolean | undefined
+  memo?: Hex | undefined
+  recipient: TempoAddress.Address
+}
 
 const preservedTransactionKeys = [
   'accessList',
@@ -122,6 +130,10 @@ function getPolicy(chainId: number, overrides: Partial<Policy> | undefined): Pol
 export function validateCalls(
   calls: readonly { data?: `0x${string}` | undefined; to?: TempoAddress.Address | undefined }[],
   details: Record<string, string>,
+  options?: {
+    currency?: TempoAddress.Address | undefined
+    expectedTransfers?: readonly ExpectedTransfer[] | undefined
+  },
 ) {
   if (calls.length === 0)
     throw new FeePayerValidationError('disallowed call pattern in fee-payer transaction', details)
@@ -137,15 +149,19 @@ export function validateCalls(
   }
 
   const transferSelectors = callSelectors.slice(hasSwapPrefix ? 2 : 0)
+  if (transferSelectors.length === 0)
+    throw new FeePayerValidationError('disallowed call pattern in fee-payer transaction', details)
+
+  const expectedTransfers = options?.expectedTransfers
+  const transferLimit = expectedTransfers?.length ?? 11
   if (
-    transferSelectors.length === 0 ||
-    transferSelectors.length > 11 ||
+    transferSelectors.length > transferLimit ||
     transferSelectors.some(
       (selector) => selector !== Selectors.transfer && selector !== Selectors.transferWithMemo,
-    )
-  ) {
+    ) ||
+    (expectedTransfers && transferSelectors.length !== expectedTransfers.length)
+  )
     throw new FeePayerValidationError('disallowed call pattern in fee-payer transaction', details)
-  }
 
   // Bind the swap approval to the token the DEX call will actually spend.
   const buyCall = calls.find((c) => c.data?.slice(0, 10) === Selectors.swapExactAmountOut)
@@ -161,16 +177,79 @@ export function validateCalls(
   const approveCall = calls.find((c) => c.data?.slice(0, 10) === Selectors.approve)
   if (approveCall) {
     const { args } = decodeFunctionData({ abi: Abis.tip20, data: approveCall.data! })
+    const [spender, amount] = args as [`0x${string}`, bigint]
     if (!approveCall.to || (buyArgs && !TempoAddress_internal.isEqual(approveCall.to, buyArgs[0])))
       throw new FeePayerValidationError('approve target does not match swap tokenIn', details)
-    if (!TempoAddress_internal.isEqual((args as [`0x${string}`])[0]!, Addresses.stablecoinDex))
+    if (!TempoAddress_internal.isEqual(spender, Addresses.stablecoinDex))
       throw new FeePayerValidationError('approve spender is not the DEX', details)
+    if (buyArgs && amount !== buyArgs[3])
+      throw new FeePayerValidationError('approve amount does not match swap max input', details)
   }
   if (
     buyCall &&
     (!buyCall.to || !TempoAddress_internal.isEqual(buyCall.to, Addresses.stablecoinDex))
   )
     throw new FeePayerValidationError('buy target is not the DEX', details)
+
+  if (!expectedTransfers) return
+
+  const currency = options?.currency ?? (details.currency as TempoAddress.Address | undefined)
+  if (!currency) throw new FeePayerValidationError('missing payment currency', details)
+
+  if (buyArgs) {
+    const [, tokenOut, amountOut] = buyArgs
+    const expectedAmountOut = expectedTransfers.reduce(
+      (sum, transfer) => sum + BigInt(transfer.amount),
+      0n,
+    )
+    if (!TempoAddress_internal.isEqual(tokenOut, currency))
+      throw new FeePayerValidationError('swap tokenOut does not match payment currency', details)
+    if (amountOut !== expectedAmountOut)
+      throw new FeePayerValidationError('swap output does not match payment amount', details)
+  }
+
+  const transferCalls = calls.slice(hasSwapPrefix ? 2 : 0)
+  const sorted = [...expectedTransfers].sort((a, b) => {
+    if (a.memo && !b.memo) return -1
+    if (!a.memo && b.memo) return 1
+    return 0
+  })
+
+  const used = new Set<number>()
+  for (const expected of sorted) {
+    const matchIndex = transferCalls.findIndex((call, index) => {
+      if (used.has(index)) return false
+      if (!call.to || !TempoAddress_internal.isEqual(call.to, currency) || !call.data) return false
+
+      try {
+        const selector = call.data.slice(0, 10)
+        const { args } = decodeFunctionData({ abi: Abis.tip20, data: call.data })
+        if (selector === Selectors.transfer) {
+          const [recipient, amount] = args as [`0x${string}`, bigint]
+          if (!TempoAddress_internal.isEqual(recipient, expected.recipient)) return false
+          if (amount.toString() !== expected.amount) return false
+          return expected.memo === undefined
+        }
+
+        if (selector === Selectors.transferWithMemo) {
+          const [recipient, amount, memo] = args as [`0x${string}`, bigint, Hex]
+          if (!TempoAddress_internal.isEqual(recipient, expected.recipient)) return false
+          if (amount.toString() !== expected.amount) return false
+          if (expected.memo) return memo.toLowerCase() === expected.memo.toLowerCase()
+          return expected.allowAnyMemo === true
+        }
+      } catch {
+        return false
+      }
+
+      return false
+    })
+
+    if (matchIndex === -1)
+      throw new FeePayerValidationError('payment transfer does not match challenge', details)
+
+    used.add(matchIndex)
+  }
 }
 
 export function prepareSponsoredTransaction(parameters: {

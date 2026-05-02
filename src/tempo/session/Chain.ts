@@ -449,6 +449,7 @@ export async function broadcastOpenTransaction(parameters: {
   challengeExpires?: string | undefined
   feePayerPolicy?: Partial<FeePayer.Policy> | undefined
   feePayer?: Account | undefined
+  beforeBroadcast?: ((onChain: OnChainChannel) => Promise<void> | void) | undefined
   /** When false, simulates instead of waiting for confirmation and returns derived on-chain state. @default true */
   waitForConfirmation?: boolean | undefined
 }): Promise<BroadcastResult> {
@@ -462,6 +463,7 @@ export async function broadcastOpenTransaction(parameters: {
     challengeExpires,
     feePayerPolicy,
     feePayer,
+    beforeBroadcast,
     waitForConfirmation = true,
   } = parameters
 
@@ -551,6 +553,19 @@ export async function broadcastOpenTransaction(parameters: {
   const resolvedFeeToken =
     transaction.feeToken ?? defaults.currency[client.chain?.id as keyof typeof defaults.currency]
 
+  const pendingOnChain = {
+    finalized: false,
+    closeRequestedAt: 0n,
+    payer: transaction.from,
+    payee,
+    token,
+    authorizedSigner,
+    deposit,
+    settled: 0n,
+  } as OnChainChannel
+
+  await beforeBroadcast?.(pendingOnChain)
+
   const serializedTransaction_final = await (async () => {
     if (feePayer) {
       if (!sponsoredOpenCall)
@@ -588,21 +603,20 @@ export async function broadcastOpenTransaction(parameters: {
 
     return {
       txHash,
-      onChain: {
-        finalized: false,
-        closeRequestedAt: 0n,
-        payer: transaction.from,
-        payee,
-        token,
-        authorizedSigner,
-        deposit,
-        settled: 0n,
-      } as OnChainChannel,
+      onChain: pendingOnChain,
     }
   }
 
   let txHash: Hex | undefined
   try {
+    if (feePayer)
+      await call(client, {
+        ...transaction,
+        account: transaction.from,
+        feeToken: resolvedFeeToken,
+        calls,
+      } as never)
+
     const receipt = await sendRawTransactionSync(client, {
       serializedTransaction: serializedTransaction_final as Transaction.TransactionSerializedTempo,
     })
@@ -731,6 +745,16 @@ export async function broadcastTopUpTransaction(parameters: {
     }
     return serializedTransaction
   })()
+
+  if (feePayer)
+    await call(client, {
+      ...transaction,
+      account: transaction.from,
+      feeToken:
+        transaction.feeToken ??
+        defaults.currency[client.chain?.id as keyof typeof defaults.currency],
+      calls,
+    } as never)
 
   const receipt = await sendRawTransactionSync(client, {
     serializedTransaction: serializedTransaction_final as Transaction.TransactionSerializedTempo,

@@ -1579,6 +1579,104 @@ describe('tempo', () => {
       httpServer.close()
     })
 
+    test('behavior: fee payer rejects concurrent in-flight transactions from one sender', async () => {
+      let releaseSimulation!: () => void
+      let resolveSimulationStarted!: () => void
+      const simulationStarted = new Promise<void>((resolve) => {
+        resolveSimulationStarted = resolve
+      })
+      const releaseSimulationPromise = new Promise<void>((resolve) => {
+        releaseSimulation = resolve
+      })
+      let heldFirstSimulation = false
+
+      const interceptingClient = createClient({
+        account: accounts[0],
+        chain: client.chain,
+        transport: custom({
+          async request(args: any) {
+            if (args.method === 'eth_call' && !heldFirstSimulation) {
+              heldFirstSimulation = true
+              resolveSimulationStarted()
+              await releaseSimulationPromise
+            }
+            return client.transport.request(args)
+          },
+        }),
+      })
+
+      const sponsoredStore = Store.memory()
+      const serverWithSlowSimulation = Mppx_server.create({
+        methods: [
+          tempo_server.charge({
+            getClient() {
+              return interceptingClient
+            },
+            currency: asset,
+            account: accounts[0],
+            store: sponsoredStore,
+          }),
+        ],
+        realm,
+        secretKey,
+      })
+
+      const mppx = Mppx_client.create({
+        polyfill: false,
+        methods: [
+          tempo_client({
+            account: accounts[1],
+            getClient() {
+              return client
+            },
+          }),
+        ],
+      })
+
+      const httpServer = await Http.createServer(async (req, res) => {
+        const result = await Mppx_server.toNodeListener(
+          serverWithSlowSimulation.charge({
+            feePayer: accounts[0],
+            amount: '1',
+            currency: asset,
+            recipient: accounts[0].address,
+          }),
+        )(req, res)
+        if (result.status === 402) return
+        res.end('OK')
+      })
+
+      const [challengeResponse1, challengeResponse2] = await Promise.all([
+        fetch(httpServer.url),
+        fetch(httpServer.url),
+      ])
+      expect(challengeResponse1.status).toBe(402)
+      expect(challengeResponse2.status).toBe(402)
+
+      const [credential1, credential2] = await Promise.all([
+        mppx.createCredential(challengeResponse1),
+        mppx.createCredential(challengeResponse2),
+      ])
+
+      const first = fetch(httpServer.url, { headers: { Authorization: credential1 } })
+      await simulationStarted
+      const second = fetch(httpServer.url, { headers: { Authorization: credential2 } })
+
+      try {
+        const secondResponse = await second
+        expect(secondResponse.status).toBe(402)
+        const body = (await secondResponse.json()) as { detail: string }
+        expect(body.detail).toContain('Sponsored transaction from this sender is already in flight')
+      } finally {
+        releaseSimulation()
+      }
+
+      const firstResponse = await first
+      expect(firstResponse.status).toBe(200)
+
+      httpServer.close()
+    })
+
     test('behavior: fee payer with splits', async () => {
       const mppx = Mppx_client.create({
         polyfill: false,
@@ -3337,6 +3435,27 @@ describe('tempo', () => {
         account: accounts[0].address,
       })
       expect(method.defaults?.recipient).toBe(accounts[0].address)
+    })
+
+    test('request keeps explicit feePayer false disabled during verification', async () => {
+      const method = tempo_server.charge({
+        getClient: () => client,
+        account: accounts[0],
+        currency: asset,
+        feePayer: accounts[0],
+      })
+
+      const normalized = await method.request!({
+        credential: { challenge: {}, payload: {} } as never,
+        request: {
+          amount: '1',
+          currency: asset,
+          decimals: 6,
+          feePayer: false,
+        },
+      } as never)
+
+      expect(normalized.feePayer).toBe(false)
     })
   })
 

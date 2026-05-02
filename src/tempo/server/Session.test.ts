@@ -11,6 +11,7 @@ import { Base64, Secp256k1 } from 'ox'
 import {
   type Address,
   createClient,
+  custom,
   type Hex,
   parseSignature,
   serializeCompactSignature,
@@ -256,6 +257,54 @@ describe.runIf(isLocalnet)('session', () => {
           request: makeRequest(),
         }),
       ).rejects.toThrow('invalid voucher signature')
+    })
+
+    test('rejects sponsored open with invalid voucher before broadcasting', async () => {
+      const rpcMethods: string[] = []
+      const interceptingClient = createClient({
+        account: recipientAccount,
+        chain,
+        transport: custom({
+          async request(args: any) {
+            rpcMethods.push(args.method)
+            return client.transport.request(args)
+          },
+        }),
+      })
+
+      const salt = nextSalt()
+      const { channelId, serializedTransaction } = await signOpenChannel({
+        escrow: escrowContract,
+        payer,
+        payee: recipient,
+        token: currency,
+        deposit: 10000000n,
+        salt,
+        feePayer: true,
+      })
+      const server = createServer({
+        feePayer: recipientAccount,
+        getClient: () => interceptingClient,
+      })
+
+      await expect(
+        server.verify({
+          credential: {
+            challenge: makeChallenge({ channelId }),
+            payload: {
+              action: 'open' as const,
+              type: 'transaction' as const,
+              channelId,
+              transaction: serializedTransaction,
+              cumulativeAmount: '1000000',
+              signature: `0x${'ab'.repeat(65)}` as Hex,
+            },
+          },
+          request: makeRequest({ feePayer: true }),
+        }),
+      ).rejects.toThrow('invalid voucher signature')
+
+      expect(rpcMethods).not.toContain('eth_sendRawTransactionSync')
     })
 
     test('reopen existing channel with higher voucher updates state', async () => {
@@ -5709,6 +5758,12 @@ describe('session request and verify guardrails', () => {
       request: makeRequest({ feePayer: false }),
     } as never)
     expect(normalized.feePayer).toBeUndefined()
+
+    const verificationRequest = await server.request!({
+      credential: { challenge: {}, payload: {} } as never,
+      request: makeRequest({ feePayer: false }),
+    } as never)
+    expect(verificationRequest.feePayer).toBe(false)
   })
 
   test('request leaves escrowContract undefined when chain has no configured default', async () => {

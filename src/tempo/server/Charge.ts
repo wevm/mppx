@@ -138,9 +138,10 @@ export function charge<const parameters extends charge.Parameters>(
         throw new Error(`Client not configured with chainId ${chainId}.`)
 
       const resolvedFeePayer = (() => {
+        if (request.feePayer === false) return credential ? false : undefined
         const account = typeof request.feePayer === 'object' ? request.feePayer : feePayer
-        const requested = request.feePayer !== false && (account ?? feePayer ?? feePayerUrl)
-        if (credential) return account
+        const requested = account ?? feePayer ?? feePayerUrl
+        if (credential) return account ?? (feePayerUrl ? true : undefined)
         if (requested) return true
         return undefined
       })()
@@ -167,12 +168,17 @@ export function charge<const parameters extends charge.Parameters>(
       const client = await getClient({ chainId })
 
       const { amount, methodDetails } = resolvedRequest
+      const requestAllowsFeePayer =
+        request.feePayer !== false &&
+        (request.feePayer === undefined ||
+          request.feePayer === true ||
+          typeof request.feePayer === 'object')
       const feePayerAccount =
-        typeof request.feePayer === 'object'
-          ? request.feePayer
-          : methodDetails?.feePayer === true
-            ? feePayer
-            : undefined
+        methodDetails?.feePayer === true && requestAllowsFeePayer
+          ? typeof request.feePayer === 'object'
+            ? request.feePayer
+            : feePayer
+          : undefined
       const expires = challenge.expires
       const supportedModes = methodDetails?.supportedModes as
         | readonly Methods.ChargeMode[]
@@ -292,6 +298,7 @@ export function charge<const parameters extends charge.Parameters>(
           }
 
           let releaseReservation = true
+          let sponsoredSenderReservation: { chainId: number; sender: `0x${string}` } | undefined
 
           try {
             if (!FeePayer.isTempoTransaction(serializedTransaction))
@@ -309,7 +316,10 @@ export function charge<const parameters extends charge.Parameters>(
               to?: `0x${string}` | undefined
             }[]
             const transfers = getExpectedTransfers({ amount, memo, methodDetails, recipient })
-            const isFeePayerTx = !!(feePayer || feePayerUrl) && methodDetails?.feePayer !== false
+            const isFeePayerTx =
+              methodDetails?.feePayer === true &&
+              requestAllowsFeePayer &&
+              !!(feePayerAccount || feePayerUrl)
             const matchedCalls = assertTransferCalls(calls, {
               currency,
               exactCount: isFeePayerTx,
@@ -321,8 +331,28 @@ export function charge<const parameters extends charge.Parameters>(
                 realm: challenge.realm,
               })
 
-            if (isFeePayerTx)
-              FeePayer.validateCalls(transaction.calls, { amount, currency, recipient })
+            if (isFeePayerTx) {
+              const reservationChainId = chainId ?? client.chain!.id
+              if (
+                !(await markSponsoredSenderInFlight(store, {
+                  chainId: reservationChainId,
+                  sender: transaction.from as `0x${string}`,
+                }))
+              ) {
+                throw new VerificationFailedError({
+                  reason: 'Sponsored transaction from this sender is already in flight',
+                })
+              }
+              sponsoredSenderReservation = {
+                chainId: reservationChainId,
+                sender: transaction.from as `0x${string}`,
+              }
+              FeePayer.validateCalls(
+                transaction.calls,
+                { amount, currency, recipient },
+                { currency, expectedTransfers: transfers },
+              )
+            }
 
             const expectedFeeToken = defaults.currency[chainId as keyof typeof defaults.currency]
             const resolvedFeeToken = transaction.feeToken ?? expectedFeeToken
@@ -413,6 +443,9 @@ export function charge<const parameters extends charge.Parameters>(
           } catch (error) {
             if (releaseReservation) await releaseHashUse(store, hash)
             throw error
+          } finally {
+            if (sponsoredSenderReservation)
+              await releaseSponsoredSenderInFlight(store, sponsoredSenderReservation)
           }
         }
 
@@ -698,6 +731,14 @@ function getProofStoreKey(challengeId: string): `mppx:charge:${string}` {
   return `mppx:charge:proof:${challengeId}`
 }
 
+/** @internal */
+function getSponsoredSenderStoreKey(parameters: {
+  chainId: number
+  sender: `0x${string}`
+}): `mppx:charge:${string}` {
+  return `mppx:charge:sponsor:${parameters.chainId}:${parameters.sender.toLowerCase()}`
+}
+
 async function markHashUsed(
   store: Store.AtomicStore<charge.StoreItemMap>,
   hash: `0x${string}`,
@@ -714,6 +755,25 @@ async function releaseHashUse(
   hash: `0x${string}`,
 ): Promise<void> {
   await store.delete(getHashStoreKey(hash))
+}
+
+/** @internal */
+async function markSponsoredSenderInFlight(
+  store: Store.AtomicStore<charge.StoreItemMap>,
+  parameters: { chainId: number; sender: `0x${string}` },
+): Promise<boolean> {
+  return store.update(getSponsoredSenderStoreKey(parameters), (current) => {
+    if (current !== null) return { op: 'noop', result: false }
+    return { op: 'set', value: Date.now(), result: true }
+  })
+}
+
+/** @internal */
+async function releaseSponsoredSenderInFlight(
+  store: Store.AtomicStore<charge.StoreItemMap>,
+  parameters: { chainId: number; sender: `0x${string}` },
+): Promise<void> {
+  await store.delete(getSponsoredSenderStoreKey(parameters))
 }
 
 /** @internal */
