@@ -76,6 +76,30 @@ export function payment<const intent extends Mppx_internal.AnyMethodFn>(
       return
     }
 
+    const managementResponse = (() => {
+      try {
+        return (result.withReceipt as () => Response)()
+      } catch (error) {
+        if (
+          error instanceof Error &&
+          error.message === 'withReceipt() requires a response argument'
+        )
+          return null
+        throw error
+      }
+    })()
+
+    if (managementResponse) {
+      res.status(managementResponse.status)
+      for (const [key, value] of managementResponse.headers) res.setHeader(key, value)
+      if (managementResponse.body === null) {
+        res.end()
+        return
+      }
+      res.send(Buffer.from(await managementResponse.arrayBuffer()))
+      return
+    }
+
     const originalJson = res.json.bind(res)
     res.json = (body: any) => {
       const wrapped = result.withReceipt(Response.json(body))

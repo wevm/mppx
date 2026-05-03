@@ -253,6 +253,33 @@ describe('session', () => {
 })
 
 describe('payment', () => {
+  test('short-circuits management responses', async () => {
+    let handlerRan = false
+    const managementResponse = new Response(null, {
+      status: 204,
+      headers: { 'Payment-Receipt': 'management-receipt' },
+    })
+    const intent = () => async () => ({
+      status: 200 as const,
+      withReceipt: () => managementResponse,
+    })
+
+    const app = express()
+    app.get('/', payment(intent as any, {} as any), (_req, res) => {
+      handlerRan = true
+      res.json({ data: 'content' })
+    })
+
+    const server = await createServer(app)
+    const response = await globalThis.fetch(server.url)
+    expect(response.status).toBe(204)
+    expect(response.headers.get('Payment-Receipt')).toBe('management-receipt')
+    expect(await response.text()).toBe('')
+    expect(handlerRan).toBe(false)
+
+    server.close()
+  })
+
   test('returns 402 when no credential', async () => {
     const { mppx } = createCoreChargeHarness(false)
 
