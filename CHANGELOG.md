@@ -1,5 +1,13 @@
 # mppx
 
+## 0.6.14
+
+### Patch Changes
+
+- ddf590e: Hardened Tempo session billing against concurrent replay, bodyless POST bypasses, inflated receipts, and close races.
+- e53d3cd: Fixed Express middleware to short-circuit Tempo session management responses before route handlers run.
+- 02663ab: Hardened fee-payer gas sponsorship validation.
+
 ## 0.6.13
 
 ### Patch Changes
