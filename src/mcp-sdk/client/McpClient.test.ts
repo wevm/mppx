@@ -2,11 +2,12 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { McpError } from '@modelcontextprotocol/sdk/types.js'
-import { Challenge, Mcp as core_Mcp } from 'mppx'
+import { Challenge, Credential, Errors, Mcp as core_Mcp, Method } from 'mppx'
 import { tempo as tempo_client } from 'mppx/client'
 import { Mppx as Mppx_server, tempo as tempo_server } from 'mppx/server'
+import { Methods } from 'mppx/tempo'
 import { createClient } from 'viem'
-import { afterEach, beforeEach, describe, expect, test } from 'vp/test'
+import { afterEach, beforeEach, describe, expect, test, vi } from 'vp/test'
 import { accounts, asset, chain, http, client as testClient } from '~test/tempo/viem.js'
 
 import * as McpServer_transport from '../server/Transport.js'
@@ -186,6 +187,42 @@ describe('McpClient.wrap', () => {
     await expect(mcp.callTool({ name: 'tool_unknown_method', arguments: {} })).rejects.toThrow(
       'No compatible payment method. Server offers: unknown_method.charge. Client has: tempo.charge',
     )
+  })
+
+  test('behavior: rejects expired challenges before creating credential', async () => {
+    const challenge = Challenge.fromMethod(Methods.charge, {
+      realm,
+      secretKey,
+      expires: new Date(Date.now() - 60_000).toISOString(),
+      request: {
+        amount: '1',
+        currency: asset,
+        decimals: 6,
+        recipient: accounts[0].address,
+      },
+    })
+
+    server.registerTool('expired_tool', { description: 'Tool' }, async () => {
+      throw new McpError(core_Mcp.paymentRequiredCode, 'Payment Required', {
+        httpStatus: 402,
+        challenges: [challenge],
+      })
+    })
+
+    const createCredential = vi.fn(async ({ challenge }) =>
+      Credential.serialize({
+        challenge,
+        payload: { signature: '0xsignature', type: 'transaction' },
+      }),
+    )
+    const mcp = McpClient.wrap(client, {
+      methods: [Method.toClient(Methods.charge, { createCredential })],
+    })
+
+    await expect(mcp.callTool({ name: 'expired_tool', arguments: {} })).rejects.toThrow(
+      Errors.PaymentExpiredError,
+    )
+    expect(createCredential).not.toHaveBeenCalled()
   })
 })
 

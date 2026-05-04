@@ -3,6 +3,7 @@ import type { McpError } from '@modelcontextprotocol/sdk/types.js'
 
 import type * as Challenge from '../../Challenge.js'
 import * as Credential from '../../Credential.js'
+import * as Expires from '../../Expires.js'
 import * as AcceptPayment from '../../internal/AcceptPayment.js'
 import * as core_Mcp from '../../Mcp.js'
 import type * as Method from '../../Method.js'
@@ -185,6 +186,8 @@ async function createCredential<methods extends readonly Method.AnyClient[]>(
     throw new Error(
       `No method found for "${challenge.method}.${challenge.intent}". Available: ${methods.map((m) => `${m.name}.${m.intent}`).join(', ')}`,
     )
+
+  if (challenge.expires) Expires.assert(challenge.expires, challenge.id)
 
   const parsedContext = mi.context && context !== undefined ? mi.context.parse(context) : undefined
   return mi.createCredential(

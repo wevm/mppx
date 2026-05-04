@@ -1,4 +1,4 @@
-import { Receipt } from 'mppx'
+import { Errors, Receipt } from 'mppx'
 import { tempo } from 'mppx/client'
 import { Mppx as Mppx_server, tempo as tempo_server } from 'mppx/server'
 import { createClient, defineChain } from 'viem'
@@ -335,14 +335,15 @@ const noopMethod = {
 } as any
 
 /** Builds a valid 402 response with a WWW-Authenticate header. */
-function make402(overrides?: { method?: string; intent?: string }) {
+function make402(overrides?: { expires?: string; intent?: string; method?: string }) {
   const method = overrides?.method ?? 'test'
   const intent = overrides?.intent ?? 'test'
+  const expires = overrides?.expires ? `, expires="${overrides.expires}"` : ''
   const request = btoa(JSON.stringify({ amount: '1' }))
     .replace(/\+/g, '-')
     .replace(/\//g, '_')
     .replace(/=+$/, '')
-  const header = `Payment id="abc", realm="test", method="${method}", intent="${intent}", request="${request}"`
+  const header = `Payment id="abc", realm="test", method="${method}", intent="${intent}", request="${request}"${expires}`
   return new Response(null, {
     status: 402,
     headers: { 'WWW-Authenticate': header },
@@ -603,6 +604,24 @@ describe('Fetch.from: init passthrough (non-402)', () => {
 })
 
 describe('Fetch.from: 402 retry path', () => {
+  test('rejects expired challenges before hooks or credential creation', async () => {
+    const createCredential = vi.fn(async () => 'credential')
+    const onChallenge = vi.fn(async () => undefined)
+    const mockFetch = vi.fn(async () =>
+      make402({ expires: new Date(Date.now() - 60_000).toISOString() }),
+    )
+    const fetch = Fetch.from({
+      fetch: mockFetch as typeof globalThis.fetch,
+      methods: [{ ...noopMethod, createCredential }],
+      onChallenge,
+    })
+
+    await expect(fetch('https://example.com/api')).rejects.toThrow(Errors.PaymentExpiredError)
+    expect(onChallenge).not.toHaveBeenCalled()
+    expect(createCredential).not.toHaveBeenCalled()
+    expect(mockFetch).toHaveBeenCalledTimes(1)
+  })
+
   test('strips context from init on retry', async () => {
     const calls: { init: RequestInit | undefined }[] = []
     let callCount = 0

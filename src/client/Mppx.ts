@@ -1,4 +1,5 @@
 import type * as Challenge from '../Challenge.js'
+import * as Expires from '../Expires.js'
 import * as AcceptPayment from '../internal/AcceptPayment.js'
 import type * as Method from '../Method.js'
 import type * as z from '../zod.js'
@@ -106,6 +107,7 @@ export function create<
         )
 
       const { challenge, method: mi } = selected
+      if (challenge.expires) Expires.assert(challenge.expires, challenge.id)
 
       const parsedContext =
         mi.context && context !== undefined ? mi.context.parse(context) : undefined
