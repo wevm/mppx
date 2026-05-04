@@ -1,4 +1,5 @@
 import * as Challenge from '../../Challenge.js'
+import * as Expires from '../../Expires.js'
 import * as AcceptPayment from '../../internal/AcceptPayment.js'
 import type * as Method from '../../Method.js'
 import type * as z from '../../zod.js'
@@ -80,6 +81,7 @@ export function from<const methods extends readonly Method.AnyClient[]>(
       )
 
     const { challenge, method: mi } = selected
+    if (challenge.expires) Expires.assert(challenge.expires, challenge.id)
 
     const onChallengeCredential = onChallenge
       ? await onChallenge(challenge, {

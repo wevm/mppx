@@ -1,8 +1,8 @@
-import { Challenge, Credential, Mcp, Method, Receipt } from 'mppx'
+import { Challenge, Credential, Errors, Mcp, Method, Receipt } from 'mppx'
 import { Mppx, Transport, tempo } from 'mppx/client'
 import { Mppx as Mppx_server, tempo as tempo_server } from 'mppx/server'
 import { Methods } from 'mppx/tempo'
-import { afterEach, describe, expect, test } from 'vp/test'
+import { afterEach, describe, expect, test, vi } from 'vp/test'
 import * as Http from '~test/Http.js'
 import { accounts, asset, client } from '~test/tempo/viem.js'
 
@@ -134,6 +134,42 @@ describe('createCredential', () => {
     )
   })
 
+  test('behavior: rejects expired challenges before creating credential', async () => {
+    const createCredential = vi.fn(async ({ challenge }) =>
+      Credential.serialize({
+        challenge,
+        payload: { signature: '0xsignature', type: 'transaction' },
+      }),
+    )
+    const method = Method.toClient(Methods.charge, { createCredential })
+    const mppx = Mppx.create({
+      polyfill: false,
+      methods: [method],
+    })
+
+    const challenge = Challenge.fromMethod(Methods.charge, {
+      realm,
+      secretKey,
+      expires: new Date(Date.now() - 60_000).toISOString(),
+      request: {
+        amount: '1000',
+        currency: '0x1234567890123456789012345678901234567890',
+        decimals: 6,
+        recipient: '0x1234567890123456789012345678901234567890',
+      },
+    })
+
+    const response = new Response(null, {
+      status: 402,
+      headers: {
+        'WWW-Authenticate': Challenge.serialize(challenge),
+      },
+    })
+
+    await expect(mppx.createCredential(response)).rejects.toThrow(Errors.PaymentExpiredError)
+    expect(createCredential).not.toHaveBeenCalled()
+  })
+
   test('behavior: routes to correct method with multiple methods', async () => {
     const stripeCharge = Method.from({
       name: 'stripe',
@@ -165,7 +201,6 @@ describe('createCredential', () => {
       realm,
       method: 'stripe',
       intent: 'charge',
-      expires: new Date(Date.now() + 60_000).toISOString(),
       request: {
         amount: '2000',
         currency: '0xabcd',
@@ -294,6 +329,7 @@ describe('createCredential', () => {
       realm,
       method: 'stripe',
       intent: 'charge',
+      expires: new Date(Date.now() + 60_000).toISOString(),
       request: {
         amount: '2000',
         currency: '0xabcd',
