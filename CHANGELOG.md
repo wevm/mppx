@@ -1,5 +1,11 @@
 # mppx
 
+## 0.6.15
+
+### Patch Changes
+
+- 2b1cf51: Rejected expired challenges before client-side credential creation.
+
 ## 0.6.14
 
 ### Patch Changes
