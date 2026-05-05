@@ -203,14 +203,22 @@ export function charge<const parameters extends charge.Parameters>(
             throw new MismatchError('Hash credentials are not supported for this challenge.', {})
 
           const hash = payload.hash as `0x${string}`
+          // Validate client-supplied identity before reserving the hash so a
+          // malformed source cannot burn an otherwise valid payment attempt.
           const source = parseHashCredentialSource({
             chainId: chainId ?? client.chain?.id,
             source: credential.source,
           })
+          // Reserve the hash while we verify it. This blocks concurrent
+          // requests from racing to reuse the same on-chain payment.
           if (!(await markHashUsed(store, hash))) {
             throw new VerificationFailedError({ reason: 'Transaction hash has already been used' })
           }
 
+          // If verification fails after reservation, release it so transient
+          // RPC/log-validation errors do not force the payer to pay again.
+          // Once we have proven the receipt is a successful matching payment,
+          // keep the marker to enforce single-use semantics.
           let releaseReservation = true
 
           try {
@@ -238,6 +246,8 @@ export function charge<const parameters extends charge.Parameters>(
               })
 
             const paymentReceipt = toReceipt(receipt)
+            // `toReceipt` can throw for reverted transactions. Only keep the
+            // reservation after it confirms the referenced transaction settled.
             releaseReservation = false
             return paymentReceipt
           } catch (error) {
