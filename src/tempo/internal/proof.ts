@@ -23,8 +23,8 @@ export function proofSource(parameters: { address: string; chainId: number }): s
   return `did:pkh:eip155:${parameters.chainId}:${parameters.address}`
 }
 
-/** Parses a proof credential `did:pkh:eip155` source DID. */
-export function parseProofSource(source: string): { address: Address; chainId: number } | null {
+/** Parses a `did:pkh:eip155` source DID. */
+export function parsePkhSource(source: string): { address: Address; chainId: number } | null {
   const match = /^did:pkh:eip155:(0|[1-9]\d*):([^:]+)$/.exec(source)
   if (!match) return null
 

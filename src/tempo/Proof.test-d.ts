@@ -7,6 +7,10 @@ test('Proof exports public proof source helpers', () => {
     (parameters: { address: string; chainId: number }) => string
   >()
 
+  expectTypeOf(Proof.parsePkhSource).toEqualTypeOf<
+    (source: string) => { address: `0x${string}`; chainId: number } | null
+  >()
+
   expectTypeOf(Proof.parseProofSource).toEqualTypeOf<
     (source: string) => { address: `0x${string}`; chainId: number } | null
   >()

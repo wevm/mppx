@@ -203,33 +203,47 @@ export function charge<const parameters extends charge.Parameters>(
             throw new MismatchError('Hash credentials are not supported for this challenge.', {})
 
           const hash = payload.hash as `0x${string}`
+          const source = parseHashCredentialSource({
+            chainId: chainId ?? client.chain?.id,
+            source: credential.source,
+          })
           if (!(await markHashUsed(store, hash))) {
             throw new VerificationFailedError({ reason: 'Transaction hash has already been used' })
           }
 
-          const expectedTransfers = getExpectedTransfers({ amount, memo, methodDetails, recipient })
-          const receipt = await getTransactionReceipt(client, { hash })
-          const sender = getHashCredentialSender({
-            chainId: chainId ?? client.chain?.id,
-            receiptFrom: receipt.from,
-            source: credential.source,
-          })
-          const matchedLogs = assertTransferLogs(receipt, {
-            currency,
-            sender,
-            transfers: expectedTransfers,
-          })
-          // Only verify challenge binding when using auto-generated attribution memos.
-          // Explicit memos (set by the server) are strictly matched by assertTransferLogs
-          // but are NOT challenge-bound — callers that set explicit memos are responsible
-          // for ensuring memo uniqueness per challenge to prevent cross-challenge hash reuse.
-          if (!memo)
-            assertChallengeBoundMemo(matchedLogs, {
-              challengeId: challenge.id,
-              realm: challenge.realm,
-            })
+          let releaseReservation = true
 
-          return toReceipt(receipt)
+          try {
+            const expectedTransfers = getExpectedTransfers({
+              amount,
+              memo,
+              methodDetails,
+              recipient,
+            })
+            const receipt = await getTransactionReceipt(client, { hash })
+            const sender = source?.address ?? receipt.from
+            const matchedLogs = assertTransferLogs(receipt, {
+              currency,
+              sender,
+              transfers: expectedTransfers,
+            })
+            // Only verify challenge binding when using auto-generated attribution memos.
+            // Explicit memos (set by the server) are strictly matched by assertTransferLogs
+            // but are NOT challenge-bound — callers that set explicit memos are responsible
+            // for ensuring memo uniqueness per challenge to prevent cross-challenge hash reuse.
+            if (!memo)
+              assertChallengeBoundMemo(matchedLogs, {
+                challengeId: challenge.id,
+                realm: challenge.realm,
+              })
+
+            const paymentReceipt = toReceipt(receipt)
+            releaseReservation = false
+            return paymentReceipt
+          } catch (error) {
+            if (releaseReservation) await releaseHashUse(store, hash)
+            throw error
+          }
         }
 
         case 'proof': {
@@ -244,7 +258,7 @@ export function charge<const parameters extends charge.Parameters>(
             throw new MismatchError('Proof credential must include a source.', {})
 
           const resolvedChainId = challenge.request.methodDetails?.chainId ?? chainId!
-          const source = Proof.parseProofSource(expectedSource)
+          const source = Proof.parsePkhSource(expectedSource)
 
           if (!source || source.chainId !== resolvedChainId) {
             throw new MismatchError('Proof credential source is invalid.', {})
@@ -762,20 +776,19 @@ async function releaseHashUse(
   await store.delete(getHashStoreKey(hash))
 }
 
-function getHashCredentialSender(parameters: {
+function parseHashCredentialSource(parameters: {
   chainId: number | undefined
-  receiptFrom: `0x${string}`
   source: string | undefined
-}): `0x${string}` {
-  const { chainId, receiptFrom, source } = parameters
-  if (!source) return receiptFrom
+}): { address: `0x${string}`; chainId: number } | undefined {
+  const { chainId, source } = parameters
+  if (!source) return undefined
 
-  const parsed = Proof.parseProofSource(source)
+  const parsed = Proof.parsePkhSource(source)
   if (!parsed || (chainId !== undefined && parsed.chainId !== chainId)) {
     throw new MismatchError('Hash credential source is invalid.', {})
   }
 
-  return parsed.address
+  return parsed
 }
 
 /** @internal */

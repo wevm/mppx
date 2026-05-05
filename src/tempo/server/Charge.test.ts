@@ -8,6 +8,7 @@ import { createClient, custom, encodeFunctionData, parseUnits } from 'viem'
 import {
   getTransactionReceipt,
   prepareTransactionRequest,
+  sendRawTransactionSync,
   signTypedData,
   signTransaction,
 } from 'viem/actions'
@@ -3728,6 +3729,115 @@ describe('tempo', () => {
       httpServer.close()
     })
 
+    test('server verifies hash transfers from receipt sender when source is omitted', async () => {
+      const httpServer = await Http.createServer(async (req, res) => {
+        const result = await Mppx_server.toNodeListener(
+          server.charge({ amount: '1', decimals: 6 }),
+        )(req, res)
+        if (result.status === 402) return
+        res.end('OK')
+      })
+
+      const response = await fetch(httpServer.url)
+      expect(response.status).toBe(402)
+
+      const challenge = Challenge.fromResponse(response, {
+        methods: [tempo_client.charge()],
+      })
+      const memo = Attribution.encode({ challengeId: challenge.id, serverId: challenge.realm })
+
+      const { receipt } = await Actions.token.transferSync(client, {
+        account: accounts[1],
+        amount: BigInt(challenge.request.amount),
+        memo: memo as Hex.Hex,
+        to: challenge.request.recipient as Hex.Hex,
+        token: challenge.request.currency as Hex.Hex,
+      })
+
+      const credential = Credential.from({
+        challenge,
+        payload: { hash: receipt.transactionHash, type: 'hash' as const },
+      })
+
+      {
+        const response = await fetch(httpServer.url, {
+          headers: { Authorization: Credential.serialize(credential) },
+        })
+        expect(response.status).toBe(200)
+      }
+
+      httpServer.close()
+    })
+
+    test('server verifies hash transfers from source when receipt sender differs', async () => {
+      let useRelayerReceiptFrom = false
+      const smartAccountClient = createClient({
+        chain: client.chain,
+        transport: custom({
+          async request(args: any) {
+            const result = await client.transport.request(args)
+            if (useRelayerReceiptFrom && args?.method === 'eth_getTransactionReceipt') {
+              return { ...(result as any), from: accounts[2].address }
+            }
+            return result
+          },
+        }),
+      })
+      const smartAccountServer = Mppx_server.create({
+        methods: [
+          tempo_server.charge({
+            getClient() {
+              return smartAccountClient
+            },
+            currency: asset,
+            account: accounts[0],
+          }),
+        ],
+        realm,
+        secretKey,
+      })
+      const httpServer = await Http.createServer(async (req, res) => {
+        const result = await Mppx_server.toNodeListener(
+          smartAccountServer.charge({ amount: '1', decimals: 6 }),
+        )(req, res)
+        if (result.status === 402) return
+        res.end('OK')
+      })
+
+      const response = await fetch(httpServer.url)
+      expect(response.status).toBe(402)
+
+      const challenge = Challenge.fromResponse(response, {
+        methods: [tempo_client.charge()],
+      })
+      const memo = Attribution.encode({ challengeId: challenge.id, serverId: challenge.realm })
+
+      const { receipt } = await Actions.token.transferSync(client, {
+        account: accounts[1],
+        amount: BigInt(challenge.request.amount),
+        memo: memo as Hex.Hex,
+        to: challenge.request.recipient as Hex.Hex,
+        token: challenge.request.currency as Hex.Hex,
+      })
+
+      useRelayerReceiptFrom = true
+
+      const credential = Credential.from({
+        challenge,
+        payload: { hash: receipt.transactionHash, type: 'hash' as const },
+        source: `did:pkh:eip155:${chain.id}:${accounts[1].address}`,
+      })
+
+      {
+        const response = await fetch(httpServer.url, {
+          headers: { Authorization: Credential.serialize(credential) },
+        })
+        expect(response.status).toBe(200)
+      }
+
+      httpServer.close()
+    })
+
     test('server rejects hash transfers from a different source', async () => {
       const httpServer = await Http.createServer(async (req, res) => {
         const result = await Mppx_server.toNodeListener(
@@ -3766,6 +3876,103 @@ describe('tempo', () => {
         expect(response.status).toBe(402)
         const body = (await response.json()) as { detail: string }
         expect(body.detail).toContain('no matching transfer found')
+      }
+
+      httpServer.close()
+    })
+
+    test('server rejects hash credentials with malformed source', async () => {
+      const httpServer = await Http.createServer(async (req, res) => {
+        const result = await Mppx_server.toNodeListener(
+          server.charge({ amount: '1', decimals: 6 }),
+        )(req, res)
+        if (result.status === 402) return
+        res.end('OK')
+      })
+
+      const response = await fetch(httpServer.url)
+      expect(response.status).toBe(402)
+
+      const challenge = Challenge.fromResponse(response, {
+        methods: [tempo_client.charge()],
+      })
+      const memo = Attribution.encode({ challengeId: challenge.id, serverId: challenge.realm })
+
+      const { receipt } = await Actions.token.transferSync(client, {
+        account: accounts[1],
+        amount: BigInt(challenge.request.amount),
+        memo: memo as Hex.Hex,
+        to: challenge.request.recipient as Hex.Hex,
+        token: challenge.request.currency as Hex.Hex,
+      })
+
+      const credential = Credential.from({
+        challenge,
+        payload: { hash: receipt.transactionHash, type: 'hash' as const },
+        source: 'not-a-valid-did',
+      })
+
+      {
+        const response = await fetch(httpServer.url, {
+          headers: { Authorization: Credential.serialize(credential) },
+        })
+        expect(response.status).toBe(402)
+        const body = (await response.json()) as { detail: string }
+        expect(body.detail).toContain('Hash credential source is invalid')
+      }
+
+      httpServer.close()
+    })
+
+    test('server does not consume a hash when credential source is malformed', async () => {
+      const httpServer = await Http.createServer(async (req, res) => {
+        const result = await Mppx_server.toNodeListener(
+          server.charge({ amount: '1', decimals: 6 }),
+        )(req, res)
+        if (result.status === 402) return
+        res.end('OK')
+      })
+
+      const response = await fetch(httpServer.url)
+      expect(response.status).toBe(402)
+
+      const challenge = Challenge.fromResponse(response, {
+        methods: [tempo_client.charge()],
+      })
+      const memo = Attribution.encode({ challengeId: challenge.id, serverId: challenge.realm })
+
+      const { receipt } = await Actions.token.transferSync(client, {
+        account: accounts[1],
+        amount: BigInt(challenge.request.amount),
+        memo: memo as Hex.Hex,
+        to: challenge.request.recipient as Hex.Hex,
+        token: challenge.request.currency as Hex.Hex,
+      })
+
+      {
+        const credential = Credential.from({
+          challenge,
+          payload: { hash: receipt.transactionHash, type: 'hash' as const },
+          source: 'not-a-valid-did',
+        })
+        const response = await fetch(httpServer.url, {
+          headers: { Authorization: Credential.serialize(credential) },
+        })
+        expect(response.status).toBe(402)
+        const body = (await response.json()) as { detail: string }
+        expect(body.detail).toContain('Hash credential source is invalid')
+      }
+
+      {
+        const credential = Credential.from({
+          challenge,
+          payload: { hash: receipt.transactionHash, type: 'hash' as const },
+          source: `did:pkh:eip155:${chain.id}:${accounts[1].address}`,
+        })
+        const response = await fetch(httpServer.url, {
+          headers: { Authorization: Credential.serialize(credential) },
+        })
+        expect(response.status).toBe(200)
       }
 
       httpServer.close()
@@ -3810,6 +4017,148 @@ describe('tempo', () => {
         const body = (await response.json()) as { detail: string }
         expect(body.detail).toContain('Hash credential source is invalid')
       }
+
+      httpServer.close()
+    })
+
+    test('server verifies split hash transfers from credential source', async () => {
+      const httpServer = await Http.createServer(async (req, res) => {
+        const result = await Mppx_server.toNodeListener(
+          server.charge({
+            amount: '1',
+            currency: asset,
+            recipient: accounts[0].address,
+            splits: [
+              { amount: '0.2', recipient: accounts[2].address },
+              { amount: '0.1', recipient: accounts[3].address },
+            ],
+          }),
+        )(req, res)
+        if (result.status === 402) return
+        res.end('OK')
+      })
+
+      const response = await fetch(httpServer.url)
+      expect(response.status).toBe(402)
+
+      const challenge = Challenge.fromResponse(response, {
+        methods: [tempo_client.charge()],
+      })
+      const splits = challenge.request.methodDetails?.splits ?? []
+      const primaryAmount =
+        BigInt(challenge.request.amount) - BigInt(splits[0]!.amount) - BigInt(splits[1]!.amount)
+      const memo = Attribution.encode({ challengeId: challenge.id, serverId: challenge.realm })
+
+      const prepared = await prepareTransactionRequest(client, {
+        account: accounts[1]!,
+        calls: [
+          Actions.token.transfer.call({
+            amount: BigInt(splits[0]!.amount),
+            to: splits[0]!.recipient as Hex.Hex,
+            token: challenge.request.currency as Hex.Hex,
+          }),
+          Actions.token.transfer.call({
+            amount: primaryAmount,
+            memo: memo as Hex.Hex,
+            to: challenge.request.recipient as Hex.Hex,
+            token: challenge.request.currency as Hex.Hex,
+          }),
+          Actions.token.transfer.call({
+            amount: BigInt(splits[1]!.amount),
+            to: splits[1]!.recipient as Hex.Hex,
+            token: challenge.request.currency as Hex.Hex,
+          }),
+        ],
+        nonceKey: 'expiring',
+      } as never)
+      prepared.gas = prepared.gas! + 5_000n
+      const signature = await signTransaction(client, prepared as never)
+      const { transactionHash } = await sendRawTransactionSync(client, {
+        serializedTransaction: signature,
+      })
+
+      const credential = Credential.from({
+        challenge,
+        payload: { hash: transactionHash, type: 'hash' as const },
+        source: `did:pkh:eip155:${chain.id}:${accounts[1].address}`,
+      })
+
+      const authResponse = await fetch(httpServer.url, {
+        headers: { Authorization: Credential.serialize(credential) },
+      })
+      expect(authResponse.status).toBe(200)
+
+      httpServer.close()
+    })
+
+    test('server rejects split hash transfers from a different source', async () => {
+      const httpServer = await Http.createServer(async (req, res) => {
+        const result = await Mppx_server.toNodeListener(
+          server.charge({
+            amount: '1',
+            currency: asset,
+            recipient: accounts[0].address,
+            splits: [
+              { amount: '0.2', recipient: accounts[2].address },
+              { amount: '0.1', recipient: accounts[3].address },
+            ],
+          }),
+        )(req, res)
+        if (result.status === 402) return
+        res.end('OK')
+      })
+
+      const response = await fetch(httpServer.url)
+      expect(response.status).toBe(402)
+
+      const challenge = Challenge.fromResponse(response, {
+        methods: [tempo_client.charge()],
+      })
+      const splits = challenge.request.methodDetails?.splits ?? []
+      const primaryAmount =
+        BigInt(challenge.request.amount) - BigInt(splits[0]!.amount) - BigInt(splits[1]!.amount)
+      const memo = Attribution.encode({ challengeId: challenge.id, serverId: challenge.realm })
+
+      const prepared = await prepareTransactionRequest(client, {
+        account: accounts[1]!,
+        calls: [
+          Actions.token.transfer.call({
+            amount: BigInt(splits[0]!.amount),
+            to: splits[0]!.recipient as Hex.Hex,
+            token: challenge.request.currency as Hex.Hex,
+          }),
+          Actions.token.transfer.call({
+            amount: primaryAmount,
+            memo: memo as Hex.Hex,
+            to: challenge.request.recipient as Hex.Hex,
+            token: challenge.request.currency as Hex.Hex,
+          }),
+          Actions.token.transfer.call({
+            amount: BigInt(splits[1]!.amount),
+            to: splits[1]!.recipient as Hex.Hex,
+            token: challenge.request.currency as Hex.Hex,
+          }),
+        ],
+        nonceKey: 'expiring',
+      } as never)
+      prepared.gas = prepared.gas! + 5_000n
+      const signature = await signTransaction(client, prepared as never)
+      const { transactionHash } = await sendRawTransactionSync(client, {
+        serializedTransaction: signature,
+      })
+
+      const credential = Credential.from({
+        challenge,
+        payload: { hash: transactionHash, type: 'hash' as const },
+        source: `did:pkh:eip155:${chain.id}:${accounts[4].address}`,
+      })
+
+      const authResponse = await fetch(httpServer.url, {
+        headers: { Authorization: Credential.serialize(credential) },
+      })
+      expect(authResponse.status).toBe(402)
+      const body = (await authResponse.json()) as { detail: string }
+      expect(body.detail).toContain('no matching transfer found')
 
       httpServer.close()
     })
