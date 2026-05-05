@@ -61,7 +61,7 @@ const provider = Provider.create({
             })
             await Actions.faucet.fundSync(client, { account })
             return {
-              accounts: [account],
+              accounts: [{ address: account.address, keyType: 'secp256k1', privateKey }],
             }
           },
         }),
@@ -80,19 +80,26 @@ button.onclick = async () => {
     c.error()
     button.disabled = true
 
-    const account = await (async () => {
+    const accountAddress = await (async () => {
       const accounts = await provider.request({ method: 'eth_accounts' })
       if (accounts.length > 0) return accounts.at(0)
       const result = await provider.request({ method: 'wallet_connect' })
       return result.accounts[0]?.address
     })()
+    const account =
+      import.meta.env.MODE === 'test'
+        ? provider.getAccount({ address: accountAddress, signable: true })
+        : accountAddress
     type TempoParameters = NonNullable<Parameters<typeof tempo>[0]>
     const getClient: NonNullable<TempoParameters['getClient']> = (opts) => {
       const chainId = opts.chainId ?? c.challenge.request.methodDetails?.chainId
       const chain = [...(provider?.chains ?? []), tempoModerato, tempoLocalnet].find(
         (x) => x.id === chainId,
       )
-      return createClient({ chain, transport: custom(provider) }) as never
+      return createClient({
+        chain,
+        transport: import.meta.env.MODE === 'test' ? http() : custom(provider),
+      }) as never
     }
     const method = tempo({ account, getClient })[0]
 
