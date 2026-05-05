@@ -209,9 +209,14 @@ export function charge<const parameters extends charge.Parameters>(
 
           const expectedTransfers = getExpectedTransfers({ amount, memo, methodDetails, recipient })
           const receipt = await getTransactionReceipt(client, { hash })
+          const sender = getHashCredentialSender({
+            chainId: chainId ?? client.chain?.id,
+            receiptFrom: receipt.from,
+            source: credential.source,
+          })
           const matchedLogs = assertTransferLogs(receipt, {
             currency,
-            sender: receipt.from,
+            sender,
             transfers: expectedTransfers,
           })
           // Only verify challenge binding when using auto-generated attribution memos.
@@ -755,6 +760,22 @@ async function releaseHashUse(
   hash: `0x${string}`,
 ): Promise<void> {
   await store.delete(getHashStoreKey(hash))
+}
+
+function getHashCredentialSender(parameters: {
+  chainId: number | undefined
+  receiptFrom: `0x${string}`
+  source: string | undefined
+}): `0x${string}` {
+  const { chainId, receiptFrom, source } = parameters
+  if (!source) return receiptFrom
+
+  const parsed = Proof.parseProofSource(source)
+  if (!parsed || (chainId !== undefined && parsed.chainId !== chainId)) {
+    throw new MismatchError('Hash credential source is invalid.', {})
+  }
+
+  return parsed.address
 }
 
 /** @internal */
