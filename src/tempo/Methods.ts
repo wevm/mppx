@@ -3,6 +3,7 @@ import { parseUnits } from 'viem'
 
 import * as Method from '../Method.js'
 import * as z from '../zod.js'
+import type { SubscriptionPeriodUnit } from './subscription/Types.js'
 
 export const chargeModes = ['push', 'pull'] as const
 export type ChargeMode = (typeof chargeModes)[number]
@@ -15,6 +16,71 @@ const split = z.object({
     z.transform((v) => v as Address),
   ),
 })
+
+const uint64Max = (1n << 64n) - 1n
+const secondsPerDay = 86_400n
+const secondsPerWeek = 604_800n
+
+const normalizedAddress = z.pipe(
+  z.address(),
+  z.transform((value) => value.toLowerCase() as Address),
+)
+
+const subscriptionAccessKey = z.object({
+  accessKeyAddress: normalizedAddress,
+  keyType: z.enum(['p256', 'secp256k1', 'webAuthn']),
+})
+
+const subscriptionMethodDetails = z.object({
+  accessKey: z.optional(subscriptionAccessKey),
+  chainId: z.optional(z.number()),
+})
+
+const subscriptionExpires = z
+  .pipe(
+    z.datetime(),
+    z.transform((value) => new Date(value)),
+  )
+  .check(
+    z.refine(
+      (value) => value.getTime() % 1_000 === 0,
+      'subscriptionExpires must be representable as whole seconds',
+    ),
+  )
+
+const subscriptionPeriodUnits = ['day', 'week'] as const satisfies readonly SubscriptionPeriodUnit[]
+const subscriptionPeriodUnit = z.enum(subscriptionPeriodUnits)
+
+const uint64String = z.string().check(
+  z.regex(/^[1-9]\d*$/, 'Invalid periodCount'),
+  z.refine((value) => {
+    try {
+      return BigInt(value) <= uint64Max
+    } catch {
+      return false
+    }
+  }, 'periodCount exceeds uint64'),
+)
+
+function positiveParsedAmount(message: string) {
+  return z.refine((value) => {
+    const { amount, decimals } = value as { amount: string; decimals: number }
+    return parseUnits(amount, decimals) > 0n
+  }, message)
+}
+
+function subscriptionPeriodFitsUint64(value: unknown) {
+  const { periodCount, periodUnit } = value as {
+    periodCount: string
+    periodUnit: SubscriptionPeriodUnit
+  }
+  try {
+    const unitSeconds = periodUnit === 'day' ? secondsPerDay : secondsPerWeek
+    return BigInt(periodCount) * unitSeconds <= uint64Max
+  } catch {
+    return false
+  }
+}
 
 /**
  * Tempo charge intent for one-time TIP-20 token transfers.
@@ -195,6 +261,69 @@ export const session = Method.from({
             ...(feePayer !== undefined && { feePayer }),
           },
         }),
+      ),
+    ),
+  },
+})
+
+/**
+ * Tempo subscription intent for recurring TIP-20 token transfers.
+ *
+ * Uses a signed key authorization that delegates one transfer per billing period.
+ */
+export const subscription = Method.from({
+  name: 'tempo',
+  intent: 'subscription',
+  schema: {
+    credential: {
+      payload: z.object({
+        signature: z.signature(),
+        type: z.literal('keyAuthorization'),
+      }),
+    },
+    request: z.pipe(
+      z
+        .object({
+          amount: z.amount(),
+          accessKey: z.optional(subscriptionAccessKey),
+          chainId: z.optional(z.number()),
+          currency: normalizedAddress,
+          decimals: z.number(),
+          description: z.optional(z.string()),
+          externalId: z.optional(z.string()),
+          methodDetails: z.optional(subscriptionMethodDetails),
+          periodCount: uint64String,
+          periodUnit: subscriptionPeriodUnit,
+          recipient: normalizedAddress,
+          subscriptionExpires,
+        })
+        .check(
+          positiveParsedAmount('Subscription amount must be greater than 0'),
+          z.refine(subscriptionPeriodFitsUint64, 'Subscription period exceeds uint64'),
+        ),
+      z.transform(
+        ({ accessKey, amount, chainId, decimals, methodDetails, subscriptionExpires, ...rest }) => {
+          // Accept top-level convenience input, but serialize Tempo-specific fields under methodDetails.
+          const nextMethodDetails: {
+            accessKey?: z.infer<typeof subscriptionAccessKey> | undefined
+            chainId?: number | undefined
+          } = {
+            ...methodDetails,
+            ...(accessKey !== undefined && { accessKey }),
+            ...(chainId !== undefined && { chainId }),
+          }
+
+          return {
+            ...rest,
+            amount: parseUnits(amount, decimals).toString(),
+            subscriptionExpires: subscriptionExpires.toISOString(),
+            ...(Object.keys(nextMethodDetails).length > 0
+              ? {
+                  methodDetails: nextMethodDetails,
+                }
+              : {}),
+          }
+        },
       ),
     ),
   },
