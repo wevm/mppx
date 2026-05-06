@@ -64,6 +64,25 @@ export async function handler(request: Request) {
 }
 ```
 
+EVM ERC-20 charges are also available:
+
+```ts
+import { Mppx, evm } from 'mppx/server'
+
+const mppx = Mppx.create({
+  methods: [
+    evm({
+      amount: '1',
+      chainId: 1,
+      currency: '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48',
+      decimals: 6,
+      recipient: '0x742d35Cc6634c0532925a3b844bC9e7595F8fE00',
+      rpcUrl: { 1: process.env.MPPX_RPC_URL! },
+    }),
+  ],
+})
+```
+
 ### Client
 
 ```ts
@@ -84,6 +103,7 @@ const res = await fetch('https://mpp.dev/api/ping/paid')
 | ------------------------------------------------------ | ---------------------------------------------------- |
 | [charge](./examples/charge/)                           | Payment-gated photo generation API                   |
 | [charge-wagmi](./examples/charge-wagmi/)               | Payment-gated charge with Wagmi + React              |
+| [evm-charge](./examples/evm-charge/)                   | ERC-20 charge on an EVM-compatible chain             |
 | [session/multi-fetch](./examples/session/multi-fetch/) | Multiple paid requests over a single payment channel |
 | [session/sse](./examples/session/sse/)                 | Pay-per-token LLM streaming with SSE                 |
 | [stripe](./examples/stripe/)                           | Stripe SPT charge with automatic client              |

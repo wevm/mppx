@@ -10,3 +10,5 @@ coverage
 !.env.example
 test-results/
 .cursor
+test/evm/foundry/cache
+test/evm/foundry/out

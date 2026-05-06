@@ -130,6 +130,21 @@
       "src": "./src/stripe/server/index.ts",
       "default": "./dist/stripe/server/index.js"
     },
+    "./evm": {
+      "types": "./dist/evm/index.d.ts",
+      "src": "./src/evm/index.ts",
+      "default": "./dist/evm/index.js"
+    },
+    "./evm/client": {
+      "types": "./dist/evm/client/index.d.ts",
+      "src": "./src/evm/client/index.ts",
+      "default": "./dist/evm/client/index.js"
+    },
+    "./evm/server": {
+      "types": "./dist/evm/server/index.d.ts",
+      "src": "./src/evm/server/index.ts",
+      "default": "./dist/evm/server/index.js"
+    },
     "./tempo": {
       "types": "./dist/tempo/index.d.ts",
       "src": "./src/tempo/index.ts",

@@ -6,7 +6,7 @@ import type { Plugin } from './plugins/plugin.js'
 /**
  * Define mppx configuration file
  *
- * @example Add plugins for more custom logging/handling (default: [stripe(), tempo()])
+ * @example Add plugins for more custom logging/handling (default: [tempo(), stripe(), evm()])
  * ```ts
  * // mppx.config.ts
  * import { defineConfig } from 'mppx/cli'

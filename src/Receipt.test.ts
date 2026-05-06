@@ -30,6 +30,28 @@ describe('from', () => {
       }),
     ).toThrow()
   })
+
+  test('behavior: accepts optional EVM settlement fields', () => {
+    const receipt = Receipt.from({
+      challengeId: 'challenge-1',
+      chainId: 4326,
+      method: 'evm',
+      reference: '0xabc123',
+      status: 'success',
+      timestamp: '2026-04-01T12:04:58.000Z',
+    })
+
+    expect(receipt).toMatchInlineSnapshot(`
+      {
+        "challengeId": "challenge-1",
+        "chainId": 4326,
+        "method": "evm",
+        "reference": "0xabc123",
+        "status": "success",
+        "timestamp": "2026-04-01T12:04:58.000Z",
+      }
+    `)
+  })
 })
 
 describe('serialize', () => {
