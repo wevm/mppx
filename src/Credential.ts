@@ -63,27 +63,20 @@ export function deserialize<payload = unknown>(value: string): Credential<payloa
   try {
     const json = Base64.toString(prefixMatch[1])
     const parsed = JSON.parse(json) as {
-      challenge: Omit<Challenge.Challenge, 'opaque' | 'request'> & {
-        opaque?: Record<string, string> | string
+      challenge: Omit<Challenge.Challenge, 'meta' | 'opaque' | 'request'> & {
+        opaque?: unknown
         request: string
       }
       payload: payload
       source?: string
     }
+    const { opaque: challengeOpaque, request, ...challengeFields } = parsed.challenge
+    const { meta, opaque } = normalizeCredentialOpaque(challengeOpaque)
     const challenge = Challenge.Schema.parse({
-      ...parsed.challenge,
-      ...(parsed.challenge.opaque !== undefined && {
-        // TODO: Drop the legacy object-shaped `opaque` fallback after old mppx
-        // clients are no longer in circulation. Older mppx versions echoed
-        // `opaque` as an expanded JSON object in credentials, but the Payment
-        // auth spec requires clients to return the original base64url string
-        // unchanged in the credential challenge object.
-        opaque:
-          typeof parsed.challenge.opaque === 'string'
-            ? (PaymentRequest.deserialize(parsed.challenge.opaque) as Record<string, string>)
-            : parsed.challenge.opaque,
-      }),
-      request: PaymentRequest.deserialize(parsed.challenge.request),
+      ...challengeFields,
+      ...(meta !== undefined && { meta }),
+      ...(opaque !== undefined && { opaque }),
+      request: PaymentRequest.deserialize(request),
     })
     return {
       challenge,
@@ -93,6 +86,28 @@ export function deserialize<payload = unknown>(value: string): Credential<payloa
   } catch {
     throw new InvalidCredentialEncodingError()
   }
+}
+
+function normalizeCredentialOpaque(value: unknown): {
+  meta?: Record<string, string> | undefined
+  opaque?: string | undefined
+} {
+  if (value === undefined) return {}
+  if (typeof value === 'string') return { opaque: value }
+  if (!isStringRecord(value)) throw new Error('Invalid opaque.')
+
+  // Older mppx clients emitted credential challenge `opaque` as an expanded
+  // object. Keep accepting that legacy shape, but normalize it back to the
+  // spec-required base64url string.
+  return {
+    meta: value,
+    opaque: PaymentRequest.serialize(value),
+  }
+}
+
+function isStringRecord(value: unknown): value is Record<string, string> {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false
+  return Object.values(value).every((entry) => typeof entry === 'string')
 }
 
 /**
@@ -156,8 +171,8 @@ export function fromRequest<payload = unknown>(request: Request): Credential<pay
 
 /**
  * Serializes a credential to the Authorization header format.
- * When present, `challenge.opaque` is encoded as the base64url string required
- * by the Payment auth credential format.
+ * When present, `challenge.opaque` is emitted unchanged as the base64url string
+ * required by the Payment auth credential format.
  *
  * @param credential - The credential to serialize.
  * @returns A string suitable for the Authorization header value.
@@ -171,11 +186,12 @@ export function fromRequest<payload = unknown>(request: Request): Credential<pay
  * ```
  */
 export function serialize(credential: Credential): string {
-  const { opaque, request, ...challenge } = credential.challenge
+  const { meta, opaque, request, ...challenge } = credential.challenge
+  const wireOpaque = opaque ?? (meta !== undefined ? PaymentRequest.serialize(meta) : undefined)
   const wire = {
     challenge: {
       ...challenge,
-      ...(opaque !== undefined && { opaque: PaymentRequest.serialize(opaque) }),
+      ...(wireOpaque !== undefined && { opaque: wireOpaque }),
       request: PaymentRequest.serialize(request),
     },
     payload: credential.payload,

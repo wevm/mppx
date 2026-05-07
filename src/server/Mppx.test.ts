@@ -588,7 +588,7 @@ describe('request handler', () => {
       method: rest.method,
       intent: rest.intent,
       request: rest.request,
-      ...(rest.opaque && { meta: rest.opaque }),
+      ...(rest.meta && { meta: rest.meta }),
     })
 
     const credential = Credential.from({
@@ -1413,8 +1413,8 @@ describe('compose', () => {
 
     const challenges = Challenge.fromResponseList(firstResult.challenge)
     expect(challenges).toHaveLength(2)
-    expect(challenges[0]?.opaque).toEqual({ route: 'a' })
-    expect(challenges[1]?.opaque).toEqual({ route: 'b' })
+    expect(challenges[0]?.opaque).toBe('eyJyb3V0ZSI6ImEifQ')
+    expect(challenges[1]?.opaque).toBe('eyJyb3V0ZSI6ImIifQ')
 
     const secondChallenge = challenges[1]!
     const credential = Credential.from({
@@ -2052,8 +2052,8 @@ describe('cross-route credential replay via scope binding flaw', () => {
     const routeAChallenge = Challenge.fromResponse(routeAChallengeResult.challenge)
     const routeBChallenge = Challenge.fromResponse(routeBChallengeResult.challenge)
 
-    expect(routeAChallenge.opaque).toEqual({ route: 'a' })
-    expect(routeBChallenge.opaque).toEqual({ route: 'b' })
+    expect(routeAChallenge.opaque).toBe('eyJyb3V0ZSI6ImEifQ')
+    expect(routeBChallenge.opaque).toBe('eyJyb3V0ZSI6ImIifQ')
 
     const credential = Credential.from({
       challenge: routeAChallenge,
@@ -2133,7 +2133,7 @@ describe('cross-route credential replay via scope binding flaw', () => {
     if (routeAChallengeResult.status !== 402) throw new Error()
 
     const routeAChallenge = Challenge.fromResponse(routeAChallengeResult.challenge)
-    expect(routeAChallenge.opaque).toEqual({ _mppx_scope: 'GET /a' })
+    expect(routeAChallenge.opaque).toBe('eyJfbXBweF9zY29wZSI6IkdFVCAvYSJ9')
 
     const credential = Credential.from({
       challenge: routeAChallenge,
@@ -3129,7 +3129,7 @@ describe('challenge', () => {
     })
 
     expect(challenge.description).toBe('Order #123')
-    expect(challenge.opaque).toEqual({ checkout_id: 'chk_abc' })
+    expect(challenge.meta).toEqual({ checkout_id: 'chk_abc' })
   })
 
   test('challenge binds scope via reserved opaque metadata', async () => {
@@ -3144,7 +3144,7 @@ describe('challenge', () => {
       scope: 'GET /premium',
     })
 
-    expect(challenge.opaque).toEqual({ _mppx_scope: 'GET /premium' })
+    expect(challenge.meta).toEqual({ _mppx_scope: 'GET /premium' })
   })
 
   test('scope throws when it conflicts with reserved meta scope', async () => {
@@ -3413,6 +3413,26 @@ describe('verifyCredential', () => {
       scope: 'GET /premium',
     })
     const credential = Credential.from({ challenge, payload: { token: 'valid' } })
+
+    const receipt = await mppx.verifyCredential(credential, { scope: 'GET /premium' })
+
+    expect(receipt.status).toBe('success')
+    expect(receipt.method).toBe('alpha')
+  })
+
+  test('verifies a parsed raw-opaque credential object when the expected scope matches', async () => {
+    const mppx = Mppx.create({
+      methods: [alphaChargeServer],
+      realm,
+      secretKey,
+    })
+
+    const challenge = await mppx.challenge.alpha.charge({
+      ...challengeOpts,
+      scope: 'GET /premium',
+    })
+    const rawChallenge = Challenge.deserialize(Challenge.serialize(challenge))
+    const credential = Credential.from({ challenge: rawChallenge, payload: { token: 'valid' } })
 
     const receipt = await mppx.verifyCredential(credential, { scope: 'GET /premium' })
 
