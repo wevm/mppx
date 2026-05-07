@@ -2,7 +2,7 @@ import { describe, expect, test } from 'vp/test'
 
 import * as Proof from './proof.js'
 
-const parseProofSourceCases = [
+const parsePkhSourceCases = [
   {
     expected: {
       address: '0xa5cc3c03994db5b0d9ba5e4f6d2efbd9f213b141',
@@ -81,9 +81,9 @@ describe('Proof', () => {
     expect(Proof.proofSource({ address, chainId: 1 })).toBe(`did:pkh:eip155:1:${address}`)
   })
 
-  for (const { expected, name, source } of parseProofSourceCases) {
-    test(`parseProofSource ${name}`, () => {
-      expect(Proof.parseProofSource(source)).toEqual(expected)
+  for (const { expected, name, source } of parsePkhSourceCases) {
+    test(`parsePkhSource ${name}`, () => {
+      expect(Proof.parsePkhSource(source)).toEqual(expected)
     })
   }
 })

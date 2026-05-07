@@ -203,28 +203,57 @@ export function charge<const parameters extends charge.Parameters>(
             throw new MismatchError('Hash credentials are not supported for this challenge.', {})
 
           const hash = payload.hash as `0x${string}`
+          // Validate client-supplied identity before reserving the hash so a
+          // malformed source cannot burn an otherwise valid payment attempt.
+          const source = parseHashCredentialSource({
+            chainId: chainId ?? client.chain?.id,
+            source: credential.source,
+          })
+          // Reserve the hash while we verify it. This blocks concurrent
+          // requests from racing to reuse the same on-chain payment.
           if (!(await markHashUsed(store, hash))) {
             throw new VerificationFailedError({ reason: 'Transaction hash has already been used' })
           }
 
-          const expectedTransfers = getExpectedTransfers({ amount, memo, methodDetails, recipient })
-          const receipt = await getTransactionReceipt(client, { hash })
-          const matchedLogs = assertTransferLogs(receipt, {
-            currency,
-            sender: receipt.from,
-            transfers: expectedTransfers,
-          })
-          // Only verify challenge binding when using auto-generated attribution memos.
-          // Explicit memos (set by the server) are strictly matched by assertTransferLogs
-          // but are NOT challenge-bound — callers that set explicit memos are responsible
-          // for ensuring memo uniqueness per challenge to prevent cross-challenge hash reuse.
-          if (!memo)
-            assertChallengeBoundMemo(matchedLogs, {
-              challengeId: challenge.id,
-              realm: challenge.realm,
-            })
+          // If verification fails after reservation, release it so transient
+          // RPC/log-validation errors do not force the payer to pay again.
+          // Once we have proven the receipt is a successful matching payment,
+          // keep the marker to enforce single-use semantics.
+          let releaseReservation = true
 
-          return toReceipt(receipt)
+          try {
+            const expectedTransfers = getExpectedTransfers({
+              amount,
+              memo,
+              methodDetails,
+              recipient,
+            })
+            const receipt = await getTransactionReceipt(client, { hash })
+            const sender = source?.address ?? receipt.from
+            const matchedLogs = assertTransferLogs(receipt, {
+              currency,
+              sender,
+              transfers: expectedTransfers,
+            })
+            // Only verify challenge binding when using auto-generated attribution memos.
+            // Explicit memos (set by the server) are strictly matched by assertTransferLogs
+            // but are NOT challenge-bound — callers that set explicit memos are responsible
+            // for ensuring memo uniqueness per challenge to prevent cross-challenge hash reuse.
+            if (!memo)
+              assertChallengeBoundMemo(matchedLogs, {
+                challengeId: challenge.id,
+                realm: challenge.realm,
+              })
+
+            const paymentReceipt = toReceipt(receipt)
+            // `toReceipt` can throw for reverted transactions. Only keep the
+            // reservation after it confirms the referenced transaction settled.
+            releaseReservation = false
+            return paymentReceipt
+          } catch (error) {
+            if (releaseReservation) await releaseHashUse(store, hash)
+            throw error
+          }
         }
 
         case 'proof': {
@@ -239,7 +268,7 @@ export function charge<const parameters extends charge.Parameters>(
             throw new MismatchError('Proof credential must include a source.', {})
 
           const resolvedChainId = challenge.request.methodDetails?.chainId ?? chainId!
-          const source = Proof.parseProofSource(expectedSource)
+          const source = Proof.parsePkhSource(expectedSource)
 
           if (!source || source.chainId !== resolvedChainId) {
             throw new MismatchError('Proof credential source is invalid.', {})
@@ -755,6 +784,21 @@ async function releaseHashUse(
   hash: `0x${string}`,
 ): Promise<void> {
   await store.delete(getHashStoreKey(hash))
+}
+
+function parseHashCredentialSource(parameters: {
+  chainId: number | undefined
+  source: string | undefined
+}): { address: `0x${string}`; chainId: number } | undefined {
+  const { chainId, source } = parameters
+  if (!source) return undefined
+
+  const parsed = Proof.parsePkhSource(source)
+  if (!parsed || (chainId !== undefined && parsed.chainId !== chainId)) {
+    throw new MismatchError('Hash credential source is invalid.', {})
+  }
+
+  return parsed
 }
 
 /** @internal */
