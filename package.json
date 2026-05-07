@@ -42,7 +42,7 @@
     "express": "^5.2.1",
     "fast-check": "^4.7.0",
     "file-type": "^22.0.1",
-    "hono": "4.12.15",
+    "hono": "4.12.16",
     "isows": "^1.0.7",
     "playwright": "^1.59.1",
     "prool": "^0.2.4",
@@ -165,7 +165,7 @@
     "@modelcontextprotocol/sdk": ">=1.25.0",
     "elysia": ">=1",
     "express": ">=5",
-    "hono": ">=4.12.14",
+    "hono": ">=4.12.16",
     "viem": ">=2.47.5"
   },
   "peerDependenciesMeta": {
