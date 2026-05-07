@@ -1,5 +1,12 @@
 # mppx
 
+## 0.6.16
+
+### Patch Changes
+
+- b711dc5: Preserved raw challenge opaque values when parsing and echoing credentials.
+- 5059bfa: Fixed Tempo charge push verification for smart-account transaction hashes.
+
 ## 0.6.15
 
 ### Patch Changes
