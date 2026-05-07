@@ -693,7 +693,8 @@ describe('opaque', () => {
       meta: { pi: 'pi_3abc123XYZ' },
     })
 
-    expect(challenge.opaque).toEqual({ pi: 'pi_3abc123XYZ' })
+    expect(challenge.meta).toEqual({ pi: 'pi_3abc123XYZ' })
+    expect(challenge.opaque).toBe('eyJwaSI6InBpXzNhYmMxMjNYWVoifQ')
     expect((challenge.request as Record<string, unknown>).opaque).toBeUndefined()
   })
 
@@ -710,10 +711,11 @@ describe('opaque', () => {
       meta: { payment_intent: 'pi_3abc123XYZ' },
     })
 
-    expect(challenge.opaque).toEqual({ payment_intent: 'pi_3abc123XYZ' })
+    expect(challenge.meta).toEqual({ payment_intent: 'pi_3abc123XYZ' })
+    expect(challenge.opaque).toBe('eyJwYXltZW50X2ludGVudCI6InBpXzNhYmMxMjNYWVoifQ')
   })
 
-  test('behavior: challenge.opaque is undefined when no meta', () => {
+  test('behavior: challenge opaque and meta are undefined when no meta', () => {
     const challenge = Challenge.from({
       id: 'abc123',
       realm: 'api.example.com',
@@ -723,9 +725,10 @@ describe('opaque', () => {
     })
 
     expect(challenge.opaque).toBeUndefined()
+    expect(challenge.meta).toBeUndefined()
   })
 
-  test('behavior: opaque roundtrips through serialize/deserialize', () => {
+  test('behavior: opaque roundtrips through serialize/deserialize as a raw string', () => {
     const original = Challenge.from({
       id: 'abc123',
       realm: 'api.example.com',
@@ -738,10 +741,21 @@ describe('opaque', () => {
     const header = Challenge.serialize(original)
     const deserialized = Challenge.deserialize(header)
 
-    expect(deserialized.opaque).toEqual({ pi: 'pi_3abc123XYZ', deposit: 'dep_456' })
+    expect(deserialized.opaque).toBe('eyJkZXBvc2l0IjoiZGVwXzQ1NiIsInBpIjoicGlfM2FiYzEyM1hZWiJ9')
+    expect(deserialized.meta).toBeUndefined()
   })
 
-  test('behavior: meta with empty object produces opaque: {}', () => {
+  test('behavior: deserialize does not parse non-json opaque', () => {
+    const header =
+      'Payment id="abc123", realm="api.example.com", method="tempo", intent="charge", request="eyJhbW91bnQiOiIxMDAwMDAwIn0", opaque="eXkgd3Jvbmc"'
+
+    const challenge = Challenge.deserialize(header)
+
+    expect(challenge.opaque).toBe('eXkgd3Jvbmc')
+    expect(challenge.meta).toBeUndefined()
+  })
+
+  test('behavior: meta with empty object produces opaque string and meta: {}', () => {
     const challenge = Challenge.from({
       id: 'abc123',
       realm: 'api.example.com',
@@ -751,7 +765,8 @@ describe('opaque', () => {
       meta: {},
     })
 
-    expect(challenge.opaque).toEqual({})
+    expect(challenge.meta).toEqual({})
+    expect(challenge.opaque).toBe('e30')
   })
 
   test('hmac: opaque affects challenge ID', () => {
@@ -844,7 +859,8 @@ describe('opaque', () => {
 
     const tampered = {
       ...challenge,
-      opaque: { pi: 'pi_TAMPERED' },
+      meta: { pi: 'pi_TAMPERED' },
+      opaque: 'eyJwaSI6InBpX1RBTVBFUkVEIn0',
     }
     expect(Challenge.verify(tampered, { secretKey: 'my-secret' })).toBe(false)
   })
@@ -863,7 +879,7 @@ describe('opaque', () => {
       },
     })
 
-    expect(challenge.opaque).toEqual({
+    expect(challenge.meta).toEqual({
       payment_intent: 'pi_3abc123XYZ',
       customer: 'cus_xyz',
       session_id: 'sess_abc',

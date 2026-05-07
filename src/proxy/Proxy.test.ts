@@ -771,7 +771,7 @@ describe('create', () => {
     expect(challengeResponse.status).toBe(402)
 
     const challenge = Challenge.fromResponse(challengeResponse)
-    expect(challenge.opaque).toEqual({ _mppx_scope: 'GET /api/v1/alpha' })
+    expect(challenge.opaque).toBe('eyJfbXBweF9zY29wZSI6IkdFVCAvYXBpL3YxL2FscGhhIn0')
 
     const credential = Credential.from({ challenge, payload: { token: 'valid' } })
     const replay = await fetch(`${proxyServer.url}/api/v1/beta`, {
@@ -813,7 +813,7 @@ describe('create', () => {
     expect(challengeResponse.status).toBe(402)
 
     const challenge = Challenge.fromResponse(challengeResponse)
-    expect(challenge.opaque).toEqual({ _mppx_scope: 'shared-scope' })
+    expect(challenge.opaque).toBe('eyJfbXBweF9zY29wZSI6InNoYXJlZC1zY29wZSJ9')
 
     const credential = Credential.from({ challenge, payload: { token: 'valid' } })
     const replay = await fetch(`${proxyServer.url}/api/v1/beta`, {

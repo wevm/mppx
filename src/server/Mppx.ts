@@ -279,7 +279,9 @@ export function create<
     input: string | Credential.Credential,
     options?: VerifyCredentialOptions,
   ): Promise<Receipt.Receipt> {
-    const credential = typeof input === 'string' ? Credential.deserialize(input) : input
+    const credential = hydrateCredentialMeta(
+      typeof input === 'string' ? Credential.deserialize(input) : input,
+    )
 
     // HMAC provenance check (secretKey is guaranteed non-null by the guard at the top of create())
     if (!Challenge.verify(credential.challenge, { secretKey: secretKey! }))
@@ -307,7 +309,7 @@ export function create<
 
     const expectedMeta = Scope.merge({ meta: options?.meta, scope: options?.scope })
 
-    if (options?.scope !== undefined && Scope.read(credential.challenge.opaque) !== options.scope) {
+    if (options?.scope !== undefined && Scope.read(credential.challenge.meta) !== options.scope) {
       throw new Errors.InvalidChallengeError({
         id: credential.challenge.id,
         reason: "credential scope does not match this route's requirements",
@@ -438,10 +440,8 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
         // Extract credential once — getCredential may have side effects (e.g. SSE transports).
         const [credential, credentialError] = (() => {
           try {
-            return [
-              transport.getCredential(input) as Credential.Credential | null,
-              undefined,
-            ] as const
+            const credential = transport.getCredential(input) as Credential.Credential | null
+            return [credential ? hydrateCredentialMeta(credential) : null, undefined] as const
           } catch (e) {
             return [null, e as Error] as const
           }
@@ -851,7 +851,7 @@ function getPinnedChallengeMismatch(
     if (actualChallenge[field] !== expectedChallenge[field]) return field
   }
 
-  if (!opaqueValuesMatch(expectedChallenge.opaque, actualChallenge.opaque)) return 'opaque'
+  if (!opaqueValuesMatch(expectedChallenge.meta, actualChallenge.meta)) return 'opaque'
 
   return getPinnedRequestBindingMismatch(
     expectedChallenge.request as Record<string, unknown>,
@@ -942,6 +942,20 @@ function opaqueValuesMatch(
   actual: Record<string, string> | undefined,
 ): boolean {
   return isDeepStrictEqual(expected, actual)
+}
+
+function hydrateCredentialMeta<payload>(
+  credential: Credential.Credential<payload>,
+): Credential.Credential<payload> {
+  const { challenge } = credential
+  if (challenge.meta !== undefined || challenge.opaque === undefined) return credential
+  return {
+    ...credential,
+    challenge: {
+      ...challenge,
+      meta: PaymentRequest.deserialize(challenge.opaque) as Record<string, string>,
+    },
+  }
 }
 
 type CoreBinding = {
@@ -1112,7 +1126,7 @@ export function compose(
       // Parse the credential to find method+intent for dispatch.
       let credential: Credential.Credential | undefined
       try {
-        credential = Credential.deserialize(paymentHeader)
+        credential = hydrateCredentialMeta(Credential.deserialize(paymentHeader))
       } catch {}
 
       if (credential) {
@@ -1132,7 +1146,7 @@ export function compose(
           if (!canonical) return true
           return (
             !getPinnedRequestBindingMismatch(canonical, credReq) &&
-            opaqueValuesMatch(internal.meta, credential.challenge.opaque)
+            opaqueValuesMatch(internal.meta, credential.challenge.meta)
           )
         })
 

@@ -111,6 +111,24 @@ describe('serialize', () => {
 
     expect(parsed.challenge.opaque).toBe('eyJwaSI6InBpXzNhYmMxMjNYWVoifQ')
   })
+
+  test('behavior: echoes raw opaque unchanged', () => {
+    const rawChallenge = Challenge.deserialize(
+      'Payment id="opaque123", realm="api.example.com", method="tempo", intent="charge", request="eyJhbW91bnQiOiIxMDAwIn0", opaque="eXkgd3Jvbmc"',
+    )
+    const credential = Credential.from({
+      challenge: rawChallenge,
+      payload: { signature: '0x1234' },
+    })
+
+    const header = Credential.serialize(credential)
+    const encoded = header.replace(/^Payment\s+/i, '')
+    const parsed = JSON.parse(Base64.toString(encoded)) as {
+      challenge: { opaque?: unknown }
+    }
+
+    expect(parsed.challenge.opaque).toBe('eXkgd3Jvbmc')
+  })
 })
 
 describe('deserialize', () => {
@@ -175,7 +193,31 @@ describe('deserialize', () => {
 
     const credential = Credential.deserialize(`Payment ${encoded}`)
 
-    expect(credential.challenge.opaque).toEqual({ pi: 'pi_3abc123XYZ' })
+    expect(credential.challenge.opaque).toBe('eyJwaSI6InBpXzNhYmMxMjNYWVoifQ')
+    expect(credential.challenge.meta).toBeUndefined()
+    expect(credential.challenge.request).toEqual({ amount: '1000' })
+  })
+
+  test('behavior: preserves non-json opaque string credentials', () => {
+    const encoded = Base64.fromString(
+      JSON.stringify({
+        challenge: {
+          id: 'opaque123',
+          intent: 'charge',
+          method: 'tempo',
+          opaque: 'eXkgd3Jvbmc',
+          realm: 'api.example.com',
+          request: 'eyJhbW91bnQiOiIxMDAwIn0',
+        },
+        payload: { signature: '0x1234' },
+      }),
+      { pad: false, url: true },
+    )
+
+    const credential = Credential.deserialize(`Payment ${encoded}`)
+
+    expect(credential.challenge.opaque).toBe('eXkgd3Jvbmc')
+    expect(credential.challenge.meta).toBeUndefined()
     expect(credential.challenge.request).toEqual({ amount: '1000' })
   })
 
@@ -197,7 +239,27 @@ describe('deserialize', () => {
 
     const credential = Credential.deserialize(`Payment ${encoded}`)
 
-    expect(credential.challenge.opaque).toEqual({ pi: 'pi_3abc123XYZ' })
+    expect(credential.challenge.opaque).toBe('eyJwaSI6InBpXzNhYmMxMjNYWVoifQ')
+    expect(credential.challenge.meta).toEqual({ pi: 'pi_3abc123XYZ' })
+  })
+
+  test('error: rejects legacy object-shaped opaque with non-string values', () => {
+    const encoded = Base64.fromString(
+      JSON.stringify({
+        challenge: {
+          id: 'opaque123',
+          intent: 'charge',
+          method: 'tempo',
+          opaque: { pi: 123 },
+          realm: 'api.example.com',
+          request: 'eyJhbW91bnQiOiIxMDAwIn0',
+        },
+        payload: { signature: '0x1234' },
+      }),
+      { pad: false, url: true },
+    )
+
+    expect(() => Credential.deserialize(`Payment ${encoded}`)).toThrow('Invalid base64url or JSON.')
   })
 
   test('error: throws for missing Payment scheme', () => {

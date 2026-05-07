@@ -180,7 +180,7 @@ describe('scope binding', () => {
     expect(challengeResponse.status).toBe(402)
 
     const challenge = Challenge.fromResponse(challengeResponse)
-    expect(challenge.opaque).toEqual({ _mppx_scope: 'GET /alpha/:id' })
+    expect(challenge.opaque).toBe('eyJfbXBweF9zY29wZSI6IkdFVCAvYWxwaGEvOmlkIn0')
 
     const credential = Credential.from({ challenge, payload: { token: 'valid' } })
     const replay = await fetch(`${server.url}/beta/1`, {
@@ -207,7 +207,7 @@ describe('scope binding', () => {
     expect(challengeResponse.status).toBe(402)
 
     const challenge = Challenge.fromResponse(challengeResponse)
-    expect(challenge.opaque).toEqual({ _mppx_scope: 'shared-scope' })
+    expect(challenge.opaque).toBe('eyJfbXBweF9zY29wZSI6InNoYXJlZC1zY29wZSJ9')
 
     const credential = Credential.from({ challenge, payload: { token: 'valid' } })
     const replay = await fetch(`${server.url}/beta/2`, {

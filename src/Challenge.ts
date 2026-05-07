@@ -29,8 +29,10 @@ export const Schema = z.object({
   intent: z.string(),
   /** Payment method (e.g., "tempo", "stripe"). */
   method: z.string(),
-  /** Optional server-defined correlation data. Flat string-to-string map; clients MUST NOT modify. */
-  opaque: z.optional(z.record(z.string(), z.string())),
+  /** Optional parsed server-defined correlation data. */
+  meta: z.optional(z.record(z.string(), z.string())),
+  /** Optional server-defined correlation data. Raw base64url string; clients MUST NOT modify. */
+  opaque: z.optional(z.string()),
   /** Server realm (e.g., hostname). */
   realm: z.string(),
   /** Method-specific request data. */
@@ -128,8 +130,13 @@ export function from<
   } = parameters
 
   const expires = parameters.expires as string
+  const opaque =
+    parameters.opaque ?? (meta !== undefined ? PaymentRequest.serialize(meta) : undefined)
   const id = secretKey
-    ? computeId({ ...parameters, expires, ...(meta && { opaque: meta }) }, { secretKey })
+    ? computeId(
+        { ...parameters, expires, ...(meta !== undefined && { meta }), opaque },
+        { secretKey },
+      )
     : (parameters as { id: string }).id
 
   return Schema.parse({
@@ -141,7 +148,8 @@ export function from<
     ...(description && { description }),
     ...(digest && { digest }),
     ...(expires && { expires }),
-    ...(meta && { opaque: meta }),
+    ...(meta !== undefined && { meta }),
+    ...(opaque !== undefined && { opaque }),
   }) as from.ReturnType<parameters, methods>
 }
 
@@ -170,6 +178,8 @@ export declare namespace from {
     intent: string
     /** Optional server-defined correlation data (serialized as `opaque` on the challenge). Flat string-to-string map; clients MUST NOT modify. */
     meta?: Record<string, string> | undefined
+    /** Optional raw base64url-encoded server-defined correlation data. Clients MUST NOT modify. */
+    opaque?: string | undefined
     /** Payment method (e.g., "tempo", "stripe"). */
     method: string
     /** Server realm (e.g., hostname). */
@@ -294,8 +304,9 @@ export function serialize(challenge: Challenge): string {
   if (challenge.description !== undefined) parts.push(`description="${challenge.description}"`)
   if (challenge.digest !== undefined) parts.push(`digest="${challenge.digest}"`)
   if (challenge.expires !== undefined) parts.push(`expires="${challenge.expires}"`)
-  if (challenge.opaque !== undefined)
-    parts.push(`opaque="${PaymentRequest.serialize(challenge.opaque)}"`)
+  if (challenge.opaque !== undefined) parts.push(`opaque="${challenge.opaque}"`)
+  else if (challenge.meta !== undefined)
+    parts.push(`opaque="${PaymentRequest.serialize(challenge.meta)}"`)
 
   return `Payment ${parts.join(', ')}`
 }
@@ -335,7 +346,7 @@ export function deserialize<const methods extends readonly Method.Method[] | und
     {
       ...rest,
       request: PaymentRequest.deserialize(request),
-      ...(opaque && { meta: PaymentRequest.deserialize(opaque) as Record<string, string> }),
+      ...(opaque && { opaque }),
     } as from.Parameters,
     options,
   )
@@ -604,9 +615,9 @@ export declare namespace verify {
   }
 }
 
-/** Alias for `challenge.opaque`. Extracts server-defined correlation data from a challenge. */
+/** Extracts parsed server-defined correlation data from a challenge when available. */
 export function meta(challenge: Challenge): Record<string, string> | undefined {
-  return challenge.opaque
+  return challenge.meta
 }
 
 /**
@@ -631,7 +642,7 @@ function idBindingInput(challenge: Omit<Challenge, 'id'>): string {
     PaymentRequest.serialize(challenge.request),
     challenge.expires ?? '',
     challenge.digest ?? '',
-    challenge.opaque ? PaymentRequest.serialize(challenge.opaque) : '',
+    challenge.opaque ?? (challenge.meta ? PaymentRequest.serialize(challenge.meta) : ''),
   ].join('|')
 }
 
