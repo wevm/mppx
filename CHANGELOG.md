@@ -1,5 +1,11 @@
 # mppx
 
+## 0.6.17
+
+### Patch Changes
+
+- 33df58b: Fixed Tempo session close and settle transactions to resolve funded Tempo fee tokens before signing.
+
 ## 0.6.16
 
 ### Patch Changes
