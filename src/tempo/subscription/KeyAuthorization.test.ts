@@ -152,6 +152,25 @@ describe('tempo subscription key authorization', () => {
     ).toThrow('keyAuthorization access key mismatch')
   })
 
+  test('requires transferWithMemo authorization', async () => {
+    const request = parseRequest()
+    const payload = await createPayload(request)
+    const authorization = KeyAuthorization.deserialize(payload.signature)
+    const transferOnly = KeyAuthorization.serialize({
+      ...authorization,
+      scopes: authorization.scopes?.slice(0, 1),
+    })
+
+    expect(() =>
+      verifySubscriptionKeyAuthorization({
+        accessKey,
+        chainId: 4217,
+        payload: { ...payload, signature: transferOnly },
+        request,
+      }),
+    ).toThrow('keyAuthorization must allow transferWithMemo')
+  })
+
   test('rejects subscription periods that cannot be represented by the Tempo client', () => {
     expect(() => toSubscriptionPeriodSeconds({ periodCount: '0', periodUnit: 'day' })).toThrow(
       'periodCount is invalid',

@@ -3,7 +3,7 @@ import * as http from 'node:http'
 import { Elysia } from 'elysia'
 import { Receipt } from 'mppx'
 import { Mppx as Mppx_client, session as sessionIntent, tempo as tempo_client } from 'mppx/client'
-import { Mppx, discovery } from 'mppx/elysia'
+import { Mppx, discovery, payment } from 'mppx/elysia'
 import { tempo as tempo_server } from 'mppx/server'
 import type { Address } from 'viem'
 import { Addresses } from 'viem/tempo'
@@ -34,6 +34,36 @@ function createServer(app: Elysia<any, any, any, any, any, any, any>) {
 }
 
 const secretKey = 'test-secret-key'
+
+describe('payment', () => {
+  test('short-circuits management responses', async () => {
+    let handlerRan = false
+    const intent = () => async () => ({
+      status: 200 as const,
+      withReceipt: () =>
+        new Response(null, {
+          headers: { 'Payment-Receipt': 'management-receipt' },
+          status: 204,
+        }),
+    })
+
+    const app = new Elysia().guard({ beforeHandle: payment(intent as any, {} as any) }, (app) =>
+      app.get('/', () => {
+        handlerRan = true
+        return { data: 'content' }
+      }),
+    )
+
+    const server = await createServer(app)
+    const response = await globalThis.fetch(server.url)
+    expect(response.status).toBe(204)
+    expect(response.headers.get('Payment-Receipt')).toBe('management-receipt')
+    expect(await response.text()).toBe('')
+    expect(handlerRan).toBe(false)
+
+    server.close()
+  })
+})
 
 function createChargeHarness(feePayer: boolean) {
   const mppx = Mppx.create({

@@ -356,6 +356,9 @@ function assertAuthorizationScopes(
   if (!seen.has(transferSelector)) {
     throw new VerificationFailedError({ reason: 'keyAuthorization must allow transfer' })
   }
+  if (!seen.has(transferWithMemoSelector)) {
+    throw new VerificationFailedError({ reason: 'keyAuthorization must allow transferWithMemo' })
+  }
 }
 
 function recoverAuthorizationSource(

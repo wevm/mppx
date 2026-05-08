@@ -32,7 +32,7 @@ export type SubscriptionRecord = {
   /** Stable idempotency/reconciliation reference for a renewal currently in progress. */
   inFlightReference?: string | undefined
   inFlightStartedAt?: string | undefined
-  /** Signed key authorization used by automatic renewals. */
+  /** Signed key authorization used to activate the access key. */
   keyAuthorization?: `0x${string}` | undefined
   lastChargedPeriod: number
   lookupKey: string

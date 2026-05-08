@@ -166,6 +166,9 @@ export type RequestFn<method extends Method> = (
  *
  * **HTTP-only.** The `input` parameter is a Fetch `Request`; non-HTTP transports
  * do not invoke this hook.
+ *
+ * Transports that require credential context for `withReceipt()` should return a
+ * `response` from this hook so adapters can short-circuit protected handlers.
  */
 export type AuthorizeFn<method extends Method> = (parameters: {
   challenge: Challenge.Challenge<

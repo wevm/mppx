@@ -2,7 +2,7 @@ import { serve } from '@hono/node-server'
 import { Hono } from 'hono'
 import { Challenge, Credential, Method, Receipt, z } from 'mppx'
 import { Mppx as Mppx_client, session as sessionIntent, tempo as tempo_client } from 'mppx/client'
-import { Mppx, discovery } from 'mppx/hono'
+import { Mppx, discovery, payment } from 'mppx/hono'
 import { tempo as tempo_server } from 'mppx/server'
 import type { Address } from 'viem'
 import { Addresses } from 'viem/tempo'
@@ -25,6 +25,35 @@ function createServer(app: Hono) {
 }
 
 const secretKey = 'test-secret-key'
+
+describe('payment', () => {
+  test('short-circuits management responses', async () => {
+    let handlerRan = false
+    const intent = () => async () => ({
+      status: 200 as const,
+      withReceipt: () =>
+        new Response(null, {
+          headers: { 'Payment-Receipt': 'management-receipt' },
+          status: 204,
+        }),
+    })
+
+    const app = new Hono()
+    app.get('/', payment(intent as any, {} as any), (c) => {
+      handlerRan = true
+      return c.json({ data: 'content' })
+    })
+
+    const server = await createServer(app)
+    const response = await globalThis.fetch(server.url)
+    expect(response.status).toBe(204)
+    expect(response.headers.get('Payment-Receipt')).toBe('management-receipt')
+    expect(await response.text()).toBe('')
+    expect(handlerRan).toBe(false)
+
+    server.close()
+  })
+})
 
 const scopeMethod = Method.toServer(
   Method.from({

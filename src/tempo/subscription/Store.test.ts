@@ -100,6 +100,27 @@ describe('tempo subscription store', () => {
     expect(await first).toEqual({ status: 'claimMismatch' })
   })
 
+  test('clears the activation marker when creation fails', async () => {
+    const store = fromStore(Store.memory())
+
+    await expect(
+      store.activate({
+        challengeId: 'challenge-1',
+        create: async () => {
+          throw new Error('activation failed')
+        },
+        lookupKey: 'user-1:plan:pro',
+      }),
+    ).rejects.toThrow('activation failed')
+
+    const retried = await store.activate({
+      challengeId: 'challenge-2',
+      create: async () => ({ subscription: createRecord() }),
+      lookupKey: 'user-1:plan:pro',
+    })
+    expect(retried.status).toBe('activated')
+  })
+
   test('tracks an in-flight renewal and commits it once', async () => {
     const store = fromStore(Store.memory())
     await store.put(createRecord())
@@ -174,6 +195,41 @@ describe('tempo subscription store', () => {
     expect((await first).status).toBe('renewed')
   })
 
+  test('replaces a stale in-flight renewal after the timeout', async () => {
+    const store = fromStore(Store.memory(), { renewalTimeoutMs: 0 })
+    await store.put(createRecord())
+    let finishRenewal!: () => void
+    const pendingRenewal = new Promise<void>((resolve) => {
+      finishRenewal = resolve
+    })
+
+    const first = store.renew({
+      inFlightReference: '0xfirst',
+      periodIndex: 1,
+      renew: async ({ subscription }) => {
+        await pendingRenewal
+        return { subscription }
+      },
+      subscriptionId,
+    })
+
+    const second = await store.renew({
+      inFlightReference: '0xsecond',
+      periodIndex: 1,
+      renew: async ({ subscription }) => ({
+        subscription: {
+          ...subscription,
+          reference: `0x${'b'.repeat(64)}`,
+        },
+      }),
+      subscriptionId,
+    })
+    expect(second.status).toBe('renewed')
+
+    finishRenewal()
+    expect(await first).toEqual({ status: 'claimMismatch' })
+  })
+
   test('clears an in-flight renewal after failure', async () => {
     const store = fromStore(Store.memory())
     await store.put(createRecord())
@@ -200,5 +256,35 @@ describe('tempo subscription store', () => {
         })
       ).status,
     ).toBe('renewed')
+  })
+
+  test('preserves cancellation that lands during an in-flight renewal', async () => {
+    const store = fromStore(Store.memory())
+    await store.put(createRecord())
+
+    const renewed = await store.renew({
+      inFlightReference: '0xrenewal',
+      periodIndex: 1,
+      renew: async ({ subscription }) => {
+        await store.put({
+          ...subscription,
+          canceledAt: '2025-01-02T00:00:00.000Z',
+        })
+        return {
+          subscription: {
+            ...subscription,
+            lastChargedPeriod: 1,
+            reference: `0x${'b'.repeat(64)}`,
+          },
+        }
+      },
+      subscriptionId,
+    })
+    expect(renewed.status).toBe('renewed')
+
+    const committed = await store.get(subscriptionId)
+    expect(committed?.canceledAt).toBe('2025-01-02T00:00:00.000Z')
+    expect(committed?.lastChargedPeriod).toBe(1)
+    expect(committed?.inFlightPeriod).toBe(undefined)
   })
 })

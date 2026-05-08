@@ -1,6 +1,6 @@
 import * as http from 'node:http'
 
-import { Challenge, Credential, Method, z } from 'mppx'
+import { Challenge, Credential, Errors, Method, z } from 'mppx'
 import {
   Mppx as Mppx_client,
   session as tempo_session_client,
@@ -3250,6 +3250,37 @@ describe('challenge', () => {
 
     expect(challenge.request.amount).toBe('25920000')
     expect(challenge.request.methodDetails).toEqual({ chainId: 42431 })
+  })
+
+  test('request hook payment errors are normalized to 402 responses', async () => {
+    const errorMethod = Method.toServer(
+      Method.from({
+        name: 'error',
+        intent: 'charge',
+        schema: {
+          credential: { payload: z.object({ token: z.string() }) },
+          request: z.object({ amount: z.string() }),
+        },
+      }),
+      {
+        request() {
+          throw new Errors.VerificationFailedError({ reason: 'request rejected' })
+        },
+        async verify() {
+          return mockReceipt('error')
+        },
+      },
+    )
+    const mppx = Mppx.create({ methods: [errorMethod], realm, secretKey })
+
+    const result = await mppx.error.charge({ amount: '1' })(
+      new Request('https://example.com/resource'),
+    )
+
+    expect(result.status).toBe(402)
+    if (result.status !== 402) throw new Error('expected challenge')
+    const body = (await result.challenge.json()) as { detail?: string }
+    expect(body.detail).toBe('Payment verification failed: request rejected.')
   })
 
   test('challenge produced by mppx.challenge is accepted by the 402 handler', async () => {

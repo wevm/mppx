@@ -10,6 +10,7 @@ const defaultActivationPrefix = 'tempo:subscription:activation:'
 const defaultAccessKeyPrefix = 'tempo:subscription:access-key:'
 const defaultCredentialPrefix = 'tempo:subscription:credential:'
 const defaultActivationTimeoutMs = 15 * 60 * 1_000
+const defaultRenewalTimeoutMs = 15 * 60 * 1_000
 
 /** Subscription-aware wrapper around a generic key-value store. */
 export type SubscriptionStore = {
@@ -82,6 +83,7 @@ export function fromStore(
     credentialPrefix = defaultCredentialPrefix,
     keyPrefix = defaultKeyPrefix,
     recordPrefix = defaultRecordPrefix,
+    renewalTimeoutMs = defaultRenewalTimeoutMs,
   } = options ?? {}
 
   function recordKey(subscriptionId: string): string {
@@ -160,7 +162,14 @@ export function fromStore(
       )
       if (started.status !== 'started') return { status: 'inFlight' }
 
-      const result = await create()
+      const result = await create().catch(async (error) => {
+        await store.update(activationKey(lookupKey), (current) => {
+          const marker = current as ActivationMarker | null
+          if (marker?.challengeId !== challengeId) return { op: 'noop', result: undefined }
+          return { op: 'delete', result: undefined }
+        })
+        throw error
+      })
       const { subscription } = result
       const committed = await store.update(activationKey(subscription.lookupKey), (current) => {
         const marker = current as ActivationMarker | null
@@ -239,7 +248,10 @@ export function fromStore(
               result: { status: 'charged' as const, subscription },
             }
           }
-          if (subscription.inFlightPeriod === periodIndex) {
+          if (
+            subscription.inFlightPeriod === periodIndex &&
+            !isStaleRenewal(subscription, renewalTimeoutMs)
+          ) {
             return {
               op: 'noop',
               result: { status: 'inFlight' as const, subscription },
@@ -276,10 +288,15 @@ export function fromStore(
           return { op: 'noop', result: false }
         }
 
+        const terminal = {
+          ...(existing.canceledAt ? { canceledAt: existing.canceledAt } : {}),
+          ...(existing.revokedAt ? { revokedAt: existing.revokedAt } : {}),
+        }
         return {
           op: 'set',
           value: clearRenewal({
             ...result.subscription,
+            ...terminal,
             lastChargedPeriod: periodIndex,
             subscriptionId,
           }),
@@ -306,16 +323,22 @@ export declare namespace fromStore {
     credentialPrefix?: string | undefined
     /** Key prefix for subscription records. @default `'tempo:subscription:record:'` */
     recordPrefix?: string | undefined
+    /** Milliseconds before a stuck renewal lock can be replaced. @default `900000` */
+    renewalTimeoutMs?: number | undefined
     /** Key prefix for resolved request keys. @default `'tempo:subscription:key:'` */
     keyPrefix?: string | undefined
   }
 }
 
-function isStaleActivation(marker: { startedAt?: string }, timeoutMs: number) {
+function isStaleActivation(marker: { startedAt?: string | undefined }, timeoutMs: number) {
   if (!Number.isFinite(timeoutMs) || timeoutMs < 0) return false
   const startedAt = new Date(marker.startedAt ?? '').getTime()
   if (!Number.isFinite(startedAt)) return true
   return Date.now() - startedAt >= timeoutMs
+}
+
+function isStaleRenewal(subscription: SubscriptionRecord, timeoutMs: number) {
+  return isStaleActivation({ startedAt: subscription.inFlightStartedAt }, timeoutMs)
 }
 
 function clearRenewal(subscription: SubscriptionRecord): SubscriptionRecord {

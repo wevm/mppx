@@ -70,6 +70,7 @@ export function subscription<const parameters extends subscription.Parameters>(
 
   const store = SubscriptionStore.fromStore(rawStore, {
     activationTimeoutMs: parameters.activationTimeoutMs,
+    renewalTimeoutMs: parameters.renewalTimeoutMs,
   })
   const { recipient } = Account.resolve(parameters)
   const getClient = ClientResolver.getResolver({
@@ -98,6 +99,7 @@ export function subscription<const parameters extends subscription.Parameters>(
 
       const subscription = await store.getByKey(resolved.key)
       if (!subscription || !isActive(subscription)) return undefined
+      if (!subscriptionMatchesRequest(subscription, request)) return undefined
 
       const periodIndex = getPeriodIndex(subscription)
       if (periodIndex > subscription.lastChargedPeriod) {
@@ -215,7 +217,7 @@ export function subscription<const parameters extends subscription.Parameters>(
 
       const activation = await store.activate({
         challengeId: credential.challenge.id,
-        isReusable: isActive,
+        isReusable: (subscription) => isReusableSubscription(subscription, parsedRequest),
         lookupKey: resolved.key,
         async create() {
           const activation = withSubscriptionAccessKey(
@@ -509,6 +511,43 @@ function isActive(subscription: SubscriptionRecord): boolean {
   return new Date(subscription.subscriptionExpires).getTime() > Date.now()
 }
 
+function isReusableSubscription(
+  subscription: SubscriptionRecord,
+  request: SubscriptionRequest,
+): boolean {
+  return (
+    isActive(subscription) &&
+    getPeriodIndex(subscription) <= subscription.lastChargedPeriod &&
+    subscriptionMatchesRequest(subscription, request)
+  )
+}
+
+function subscriptionMatchesRequest(
+  subscription: SubscriptionRecord,
+  request: SubscriptionRequest,
+): boolean {
+  const actual = comparableSubscriptionBinding(subscription)
+  const expected = comparableSubscriptionBinding(request)
+  return (Object.keys(expected) as (keyof typeof expected)[]).every(
+    (key) => actual[key] === expected[key],
+  )
+}
+
+function comparableSubscriptionBinding(value: SubscriptionRecord | SubscriptionRequest) {
+  const chainId =
+    'chainId' in value ? value.chainId : (value as SubscriptionRequest).methodDetails?.chainId
+  return {
+    amount: value.amount,
+    chainId,
+    currency: value.currency.toLowerCase(),
+    externalId: value.externalId,
+    periodCount: value.periodCount,
+    periodUnit: value.periodUnit,
+    recipient: value.recipient.toLowerCase(),
+    subscriptionExpires: value.subscriptionExpires,
+  }
+}
+
 function validateSubscriptionSettlement(
   result: subscription.ActivationResult | subscription.RenewalResult,
   options: {
@@ -588,17 +627,7 @@ function assertSubscriptionRequestMatch(
   subscription: SubscriptionRecord,
   request: SubscriptionRequest,
 ) {
-  const matches =
-    subscription.amount === request.amount &&
-    subscription.chainId === request.methodDetails?.chainId &&
-    subscription.currency.toLowerCase() === request.currency.toLowerCase() &&
-    subscription.externalId === request.externalId &&
-    subscription.periodCount === request.periodCount &&
-    subscription.periodUnit === request.periodUnit &&
-    subscription.recipient.toLowerCase() === request.recipient.toLowerCase() &&
-    subscription.subscriptionExpires === request.subscriptionExpires
-
-  if (!matches) {
+  if (!subscriptionMatchesRequest(subscription, request)) {
     throw new VerificationFailedError({ reason: 'subscription record does not match request' })
   }
 }
@@ -671,13 +700,11 @@ function resolveRenewalHandler(parameters: {
     waitForConfirmation,
   } = parameters
   if (subscriptionParameters.renew) return subscriptionParameters.renew
-  if (!subscription.accessKey || !subscription.keyAuthorization || !subscription.payer)
-    return undefined
+  if (!subscription.accessKey || !subscription.payer) return undefined
   return async ({ inFlightReference, periodIndex, subscription }) => {
     const reference = await submitSubscriptionPayment({
       accessKey: subscription.accessKey!,
       getClient,
-      keyAuthorization: subscription.keyAuthorization!,
       lookupKey: subscription.lookupKey,
       memoServerId: subscription.lookupKey,
       request: subscription,
@@ -702,7 +729,7 @@ function resolveRenewalHandler(parameters: {
 async function submitSubscriptionPayment(parameters: {
   accessKey: SubscriptionAccessKey
   getClient: (parameters: { chainId?: number | undefined }) => MaybePromise<ViemClient>
-  keyAuthorization: `0x${string}`
+  keyAuthorization?: `0x${string}` | undefined
   lookupKey: string
   memoServerId: string
   request: Pick<SubscriptionRequest, 'amount'> & {
@@ -758,7 +785,9 @@ async function submitSubscriptionPayment(parameters: {
       },
     ],
     chainId,
-    keyAuthorization: KeyAuthorization.deserialize(keyAuthorization),
+    ...(keyAuthorization
+      ? { keyAuthorization: KeyAuthorization.deserialize(keyAuthorization) }
+      : {}),
   } as never)
   const transaction = Transaction.deserialize(
     serializedTransaction as Transaction.TransactionSerializedTempo,
@@ -800,7 +829,9 @@ function createSubscriptionId() {
  */
 export async function renew(parameters: renew.Parameters): Promise<renew.Result | null> {
   const { store: rawStore, waitForConfirmation = true } = parameters
-  const store = SubscriptionStore.fromStore(rawStore)
+  const store = SubscriptionStore.fromStore(rawStore, {
+    renewalTimeoutMs: parameters.renewalTimeoutMs,
+  })
   const getClient = ClientResolver.getResolver({
     chain: tempo_chain,
     getClient: parameters.getClient,
@@ -849,6 +880,11 @@ export declare namespace renew {
       | undefined
     /** Store containing subscription records. */
     store: Store.AtomicStore<Record<string, unknown>>
+    /**
+     * Milliseconds before an in-flight renewal lock can be replaced.
+     * Keeps concurrent renewal safe while allowing recovery from abandoned attempts.
+     */
+    renewalTimeoutMs?: number | undefined
     waitForConfirmation?: boolean | undefined
   } & Client.getResolver.Parameters
 
@@ -893,8 +929,14 @@ export declare namespace subscription {
        * Keeps concurrent activation safe while allowing recovery from abandoned attempts.
        */
       activationTimeoutMs?: number | undefined
+      /**
+       * Milliseconds before an in-flight renewal lock can be replaced.
+       * Keeps concurrent renewal safe while allowing recovery from abandoned attempts.
+       */
+      renewalTimeoutMs?: number | undefined
       activate?:
         | ((parameters: {
+            /** Custom activation must verify this access key matches the resolved subscription. */
             accessKey: SubscriptionAccessKey
             credential: {
               payload: SubscriptionCredentialPayload

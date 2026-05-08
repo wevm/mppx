@@ -64,9 +64,22 @@ export function payment<const intent extends Mppx_internal.AnyMethodFn>(
   return async ({ request, set }) => {
     const result = await intent(options)(request)
     if (result.status === 402) return result.challenge
+    const managementResponse = getManagementResponse(result)
+    if (managementResponse) return managementResponse
     const receipt = result.withReceipt(new Response())
     const header = receipt.headers.get('Payment-Receipt')
     if (header) set.headers['Payment-Receipt'] = header
+  }
+}
+
+function getManagementResponse(result: { withReceipt: (response?: Response) => Response }) {
+  try {
+    return result.withReceipt()
+  } catch (error) {
+    if (error instanceof Error && error.message === 'withReceipt() requires a response argument') {
+      return null
+    }
+    throw error
   }
 }
 

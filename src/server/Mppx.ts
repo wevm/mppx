@@ -53,6 +53,8 @@ export type Mppx<
        * server methods passed to `Mppx.create()`, looked up by `name`+`intent`.
        *
        * Only available on HTTP transports.
+       * No-credential authorize hooks run in entry order; the first 200 response
+       * wins, and earlier hooks may have already run side effects.
        *
        * @example
        * ```ts
@@ -104,6 +106,9 @@ export type Mppx<
      * Verify a credential string or object end-to-end: deserialize,
      * HMAC-check, match to a registered method, validate payload schema,
      * check expiry, and call the method's verify function.
+     *
+     * Method verification can settle payments and persist state. For example,
+     * subscription credentials may activate or renew a subscription.
      *
      * @example
      * ```ts
@@ -462,7 +467,7 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
             return [null, e as Error] as const
           }
         })()
-        const { challenge, request } = await resolveRouteChallenge({
+        const routeChallenge = await resolveRouteChallenge({
           capturedRequest,
           credential,
           defaults,
@@ -474,7 +479,29 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
           request: parameters.request,
           routeRequest: rest,
           secretKey,
+        }).catch(async (e) => {
+          if (!(e instanceof Errors.PaymentError)) throw e
+          const challenge = createFallbackChallenge({
+            capturedRequest,
+            defaults: defaults ?? {},
+            description,
+            expires,
+            meta: effectiveMeta,
+            method,
+            realm,
+            routeRequest: rest,
+            secretKey,
+          })
+          const response = await transport.respondChallenge({
+            challenge,
+            input,
+            error: e,
+            html: method.html,
+          })
+          return { response }
         })
+        if ('response' in routeChallenge) return { challenge: routeChallenge.response, status: 402 }
+        const { challenge, request } = routeChallenge
 
         // Credential was provided but malformed
         if (credentialError) {
@@ -857,6 +884,31 @@ async function resolveRouteChallenge(parameters: {
     }),
     request,
   }
+}
+
+function createFallbackChallenge(parameters: {
+  capturedRequest?: Method.CapturedRequest | undefined
+  defaults: Record<string, unknown>
+  description?: string | undefined
+  expires?: string | undefined
+  meta?: Record<string, string> | undefined
+  method: Method.Method
+  realm?: string | undefined
+  routeRequest: Record<string, unknown>
+  secretKey: string
+}) {
+  return Challenge.fromMethod(parameters.method, {
+    description: parameters.description,
+    expires: parameters.expires,
+    meta: parameters.meta,
+    realm:
+      parameters.realm ??
+      (parameters.capturedRequest
+        ? resolveRealmFromCapturedRequest(parameters.capturedRequest)
+        : defaultRealm),
+    request: { ...parameters.defaults, ...parameters.routeRequest } as never,
+    secretKey: parameters.secretKey,
+  })
 }
 
 /**
