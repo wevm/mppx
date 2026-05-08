@@ -17,7 +17,6 @@ import {
   sendRawTransaction,
   sendRawTransactionSync,
   signTransaction,
-  writeContract,
 } from 'viem/actions'
 import { Transaction } from 'viem/tempo'
 
@@ -25,6 +24,7 @@ import { BadRequestError, ChannelClosedError, VerificationFailedError } from '..
 import * as TempoAddress from '../internal/address.js'
 import * as defaults from '../internal/defaults.js'
 import * as FeePayer from '../internal/fee-payer.js'
+import { resolveFeeToken } from '../internal/fee-token.js'
 import * as Channel from './Channel.js'
 import { escrowAbi } from './escrow.abi.js'
 import type { SignedVoucher } from './Types.js'
@@ -94,16 +94,14 @@ function assertUint128(amount: bigint): void {
   }
 }
 
-function isTempoAccessKeyAccount(
-  account: Account,
-): account is Account & { accessKeyAddress: Address } {
-  return 'accessKeyAddress' in account && typeof account.accessKeyAddress === 'string'
-}
-
 /** Options for {@link settleOnChain}. */
 export type SettleOptions =
-  | { feePayer: Account; account: Account }
-  | { feePayer?: undefined; account?: Account | undefined }
+  | { candidateFeeTokens?: readonly Address[] | undefined; feePayer: Account; account: Account }
+  | {
+      candidateFeeTokens?: readonly Address[] | undefined
+      feePayer?: undefined
+      account?: Account | undefined
+    }
 
 /**
  * Submit a settle transaction on-chain.
@@ -123,31 +121,38 @@ export async function settleOnChain(
   const args = [voucher.channelId, voucher.cumulativeAmount, voucher.signature] as const
   if (options?.feePayer) {
     const data = encodeFunctionData({ abi: escrowAbi, functionName: 'settle', args })
-    return sendFeePayerTx(client, resolved, options.feePayer, escrowContract, data, 'settle')
-  }
-  if (isTempoAccessKeyAccount(resolved)) {
-    return sendAccountTx(
+    return sendFeePayerTx(
       client,
       resolved,
+      options.feePayer,
       escrowContract,
-      encodeFunctionData({ abi: escrowAbi, functionName: 'settle', args }),
+      data,
       'settle',
+      options.candidateFeeTokens,
     )
   }
-  return writeContract(client, {
-    account: resolved,
-    chain: client.chain,
-    address: escrowContract,
-    abi: escrowAbi,
-    functionName: 'settle',
-    args,
-  })
+  return sendAccountTx(
+    client,
+    resolved,
+    escrowContract,
+    encodeFunctionData({ abi: escrowAbi, functionName: 'settle', args }),
+    'settle',
+    options?.candidateFeeTokens,
+  )
 }
 
 /** Options for {@link closeOnChain}. */
 export type CloseOptions =
-  | { feePayer: Account; account: Account }
-  | { feePayer?: undefined; account?: Account | undefined }
+  | {
+      candidateFeeTokens?: readonly Address[] | undefined
+      feePayer: Account
+      account: Account
+    }
+  | {
+      candidateFeeTokens?: readonly Address[] | undefined
+      feePayer?: undefined
+      account?: Account | undefined
+    }
 
 /**
  * Submit a close transaction on-chain.
@@ -167,25 +172,24 @@ export async function closeOnChain(
   const args = [voucher.channelId, voucher.cumulativeAmount, voucher.signature] as const
   if (options?.feePayer) {
     const data = encodeFunctionData({ abi: escrowAbi, functionName: 'close', args })
-    return sendFeePayerTx(client, resolved, options.feePayer, escrowContract, data, 'close')
-  }
-  if (isTempoAccessKeyAccount(resolved)) {
-    return sendAccountTx(
+    return sendFeePayerTx(
       client,
       resolved,
+      options.feePayer,
       escrowContract,
-      encodeFunctionData({ abi: escrowAbi, functionName: 'close', args }),
+      data,
       'close',
+      options.candidateFeeTokens,
     )
   }
-  return writeContract(client, {
-    account: resolved,
-    chain: client.chain,
-    address: escrowContract,
-    abi: escrowAbi,
-    functionName: 'close',
-    args,
-  })
+  return sendAccountTx(
+    client,
+    resolved,
+    escrowContract,
+    encodeFunctionData({ abi: escrowAbi, functionName: 'close', args }),
+    'close',
+    options?.candidateFeeTokens,
+  )
 }
 
 async function sendAccountTx(
@@ -194,10 +198,17 @@ async function sendAccountTx(
   to: Address,
   data: Hex,
   label: string,
+  candidateFeeTokens?: readonly Address[] | undefined,
 ): Promise<Hex> {
+  const feeToken = await resolveFeeToken({
+    account: account.address,
+    candidateTokens: candidateFeeTokens,
+    client,
+  })
   const prepared = await prepareTransactionRequest(client, {
     account,
     calls: [{ to, data }],
+    ...(feeToken ? { feeToken } : {}),
   } as never)
   prepared.gas = prepared.gas! + 5_000n
 
@@ -236,12 +247,13 @@ async function sendFeePayerTx(
   to: Address,
   data: Hex,
   label: string,
+  candidateFeeTokens?: readonly Address[] | undefined,
 ): Promise<Hex> {
-  // Resolve the fee token for this chain so the tx pays gas in the correct
-  // token.  `feePayer: true` tells the prepare hook to use expiring nonces but
-  // does NOT set feeToken automatically, so we must provide it explicitly.
-  const chainId = client.chain?.id
-  const feeToken = chainId ? defaults.resolveCurrency({ chainId }) : undefined
+  const feeToken = await resolveFeeToken({
+    account: feePayer.address,
+    candidateTokens: candidateFeeTokens,
+    client,
+  })
 
   const prepared = await prepareTransactionRequest(client, {
     account,

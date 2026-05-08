@@ -432,6 +432,7 @@ export async function settle(
     ...(options?.feePayer && options?.account
       ? { feePayer: options.feePayer, account: options.account }
       : { account: options?.account }),
+    candidateFeeTokens: [channel.token],
   })
 
   await store.updateChannel(channelId, (current) => {
@@ -965,6 +966,7 @@ async function handleClose(
 
     txHash = await closeOnChain(client, methodDetails.escrowContract, voucher, {
       ...(feePayer && account ? { feePayer, account } : { account }),
+      candidateFeeTokens: [channel.token],
     })
   } catch (error) {
     if (pendingCloseMarked) {
