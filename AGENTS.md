@@ -171,6 +171,10 @@ Changeset descriptions **must use past tense** (e.g. "Added support for …", "F
 
 The changelog is auto-generated from changesets during `changeset version`.
 
+## Code Documentation
+
+You MUST add JSDoc to exported functions and to any complicated functions.
+
 ## Commands
 
 ```bash
