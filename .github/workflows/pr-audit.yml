@@ -45,7 +45,6 @@ jobs:
           REPOSITORY: ${{ github.repository }}
           EVENTS_KEY: ${{ secrets.EVENTS_KEY }}
           EVENTS_CERT: ${{ secrets.EVENTS_CERT }}
-          EVENTS_ARGS: ${{ secrets.EVENTS_ARGS }}
         run: |
           set -euo pipefail
 
@@ -58,7 +57,7 @@ jobs:
             --argjson pr_number "$PR_NUMBER" \
             '{repository:$repository,event:"pr_audit",data:{pr_number:$pr_number,sha:$sha}}')"
 
-          HTTP_CODE=$(curl -s -o /dev/null -w '%{http_code}' -X POST $EVENTS_ARGS \
+          HTTP_CODE=$(curl -s -o /dev/null -w '%{http_code}' -X POST ${{ secrets.EVENTS_ARGS }} \
             -H "Content-Type: application/json" \
             --key "$RUNNER_TEMP/key" \
             --cert "$RUNNER_TEMP/cert" \
