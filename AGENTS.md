@@ -173,7 +173,7 @@ The changelog is auto-generated from changesets during `changeset version`.
 
 ## Code Documentation
 
-Add JSDoc to exported functions and to any complicated functions.
+ You MUST add JSDoc to exported functions and to any complicated functions. 
 
 ## Commands
 
