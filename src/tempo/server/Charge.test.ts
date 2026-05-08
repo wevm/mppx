@@ -4268,9 +4268,17 @@ describe('tempo', () => {
         ],
       })
 
+      let challengeNonce = 0
       const httpServer = await Http.createServer(async (req, res) => {
+        // This replay check requires distinct challenge IDs. Default expires can collide
+        // when the paired 402s are issued in the same millisecond.
         const result = await Mppx_server.toNodeListener(
-          chargeServer.charge({ amount: '1', currency: asset, recipient: accounts[0].address }),
+          chargeServer.charge({
+            amount: '1',
+            currency: asset,
+            expires: new Date(Date.now() + 300_000 + challengeNonce++).toISOString(),
+            recipient: accounts[0].address,
+          }),
         )(req, res)
         if (result.status === 402) return
         res.end('OK')
@@ -4339,9 +4347,17 @@ describe('tempo', () => {
         ],
       })
 
+      let challengeNonce = 0
       const httpServer = await Http.createServer(async (req, res) => {
+        // This replay check requires distinct challenge IDs. Default expires can collide
+        // when the paired 402s are issued in the same millisecond.
         const result = await Mppx_server.toNodeListener(
-          chargeServer.charge({ amount: '1', currency: asset, recipient: accounts[0].address }),
+          chargeServer.charge({
+            amount: '1',
+            currency: asset,
+            expires: new Date(Date.now() + 300_000 + challengeNonce++).toISOString(),
+            recipient: accounts[0].address,
+          }),
         )(req, res)
         if (result.status === 402) return
         res.end('OK')
