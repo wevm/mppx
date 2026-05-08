@@ -41,7 +41,7 @@
     "eslint-plugin-compat": "^7.0.1",
     "express": "^5.2.1",
     "fast-check": "^4.7.0",
-    "file-type": "^22.0.1",
+    "file-type": "21.3.2",
     "hono": "4.12.16",
     "isows": "^1.0.7",
     "playwright": "^1.59.1",
@@ -50,7 +50,7 @@
     "tempo.ts": "^0.14.2",
     "testcontainers": "^11.14.0",
     "tsx": "^4.21.0",
-    "typescript": "~6.0.3",
+    "typescript": "~5.9.3",
     "viem": "^2.47.6",
     "vite": "^8.0.10",
     "vp": "npm:vite-plus@~0.1.17",
@@ -184,7 +184,7 @@
   },
   "dependencies": {
     "incur": "^0.4.5",
-    "ox": "0.14.20",
+    "ox": "0.14.18",
     "zod": "^4.3.6"
   },
   "repository": {
