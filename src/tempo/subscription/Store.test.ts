@@ -26,96 +26,179 @@ function createRecord(overrides: Partial<SubscriptionRecord> = {}): Subscription
 }
 
 describe('tempo subscription store', () => {
-  test('claims an activation challenge once', async () => {
+  test('rejects a replayed activation challenge', async () => {
     const store = fromStore(Store.memory())
 
-    expect(await store.claimActivation('challenge-1')).toBe(true)
-    expect(await store.claimActivation('challenge-1')).toBe(false)
-    expect(await store.claimActivation('challenge-2')).toBe(true)
+    const first = await store.activate({
+      challengeId: 'challenge-1',
+      create: async () => ({ subscription: createRecord() }),
+      lookupKey: 'user-1:plan:pro',
+    })
+    expect(first.status).toBe('activated')
+
+    expect(
+      await store.activate({
+        challengeId: 'challenge-1',
+        create: async () => ({ subscription: createRecord() }),
+        lookupKey: 'user-1:plan:pro',
+      }),
+    ).toEqual({ status: 'replayed' })
   })
 
   test('tracks a resolved lookup key activation until committed', async () => {
     const store = fromStore(Store.memory())
-
-    expect(await store.beginActivation('user-1:plan:pro', 'challenge-1')).toEqual({
-      status: 'started',
-    })
-    expect(await store.beginActivation('user-1:plan:pro', 'challenge-2')).toEqual({
-      status: 'inFlight',
+    let finishActivation!: () => void
+    const pendingActivation = new Promise<void>((resolve) => {
+      finishActivation = resolve
     })
 
-    expect(await store.commitActivation(createRecord(), 'challenge-2')).toBe(false)
-    expect(await store.commitActivation(createRecord(), 'challenge-1')).toBe(true)
+    const first = store.activate({
+      challengeId: 'challenge-1',
+      create: async () => {
+        await pendingActivation
+        return { subscription: createRecord() }
+      },
+      lookupKey: 'user-1:plan:pro',
+    })
+    expect(
+      await store.activate({
+        challengeId: 'challenge-2',
+        create: async () => ({ subscription: createRecord() }),
+        lookupKey: 'user-1:plan:pro',
+      }),
+    ).toEqual({ status: 'inFlight' })
 
+    finishActivation()
+    expect((await first).status).toBe('activated')
     expect((await store.getByKey('user-1:plan:pro'))?.subscriptionId).toBe(subscriptionId)
-    expect(await store.beginActivation('user-1:plan:pro', 'challenge-3')).toEqual({
-      status: 'started',
-    })
   })
 
   test('replaces a stale activation marker after the timeout', async () => {
     const store = fromStore(Store.memory(), { activationTimeoutMs: 0 })
+    let finishActivation!: () => void
+    const pendingActivation = new Promise<void>((resolve) => {
+      finishActivation = resolve
+    })
 
-    expect(await store.beginActivation('user-1:plan:pro', 'challenge-1')).toEqual({
-      status: 'started',
+    const first = store.activate({
+      challengeId: 'challenge-1',
+      create: async () => {
+        await pendingActivation
+        return { subscription: createRecord({ reference: `0x${'b'.repeat(64)}` }) }
+      },
+      lookupKey: 'user-1:plan:pro',
     })
-    expect(await store.beginActivation('user-1:plan:pro', 'challenge-2')).toEqual({
-      status: 'started',
+
+    const second = await store.activate({
+      challengeId: 'challenge-2',
+      create: async () => ({ subscription: createRecord() }),
+      lookupKey: 'user-1:plan:pro',
     })
-    expect(await store.commitActivation(createRecord(), 'challenge-1')).toBe(false)
-    expect(await store.commitActivation(createRecord(), 'challenge-2')).toBe(true)
+    expect(second.status).toBe('activated')
+
+    finishActivation()
+    expect(await first).toEqual({ status: 'claimMismatch' })
   })
 
   test('tracks an in-flight renewal and commits it once', async () => {
     const store = fromStore(Store.memory())
     await store.put(createRecord())
 
-    const started = await store.beginRenewal(subscriptionId, 1, '0xrenewal')
-    expect(started.status).toBe('started')
-    expect((await store.get(subscriptionId))?.inFlightPeriod).toBe(1)
-    expect((await store.get(subscriptionId))?.inFlightReference).toBe('0xrenewal')
-
-    const duplicate = await store.beginRenewal(subscriptionId, 1)
-    expect(duplicate.status).toBe('inFlight')
+    const renewed = await store.renew({
+      inFlightReference: '0xrenewal',
+      periodIndex: 1,
+      renew: async ({ inFlightReference, subscription }) => {
+        expect(inFlightReference).toBe('0xrenewal')
+        return {
+          subscription: {
+            ...subscription,
+            lastChargedPeriod: 1,
+            reference: `0x${'b'.repeat(64)}`,
+          },
+        }
+      },
+      subscriptionId,
+    })
+    expect(renewed.status).toBe('renewed')
+    expect((await store.get(subscriptionId))?.inFlightPeriod).toBe(undefined)
 
     expect(
-      await store.commitRenewal(
-        subscriptionId,
-        createRecord({
-          lastChargedPeriod: 1,
-          reference: `0x${'b'.repeat(64)}`,
-        }),
-        1,
-      ),
-    ).toBe(true)
-
-    expect(
-      await store.commitRenewal(
-        'sub_missing',
-        createRecord({
-          lastChargedPeriod: 2,
-          reference: `0x${'c'.repeat(64)}`,
-        }),
-        2,
-      ),
-    ).toBe(false)
+      await store.renew({
+        inFlightReference: '0xmissing',
+        periodIndex: 2,
+        renew: async () => ({ subscription: createRecord() }),
+        subscriptionId: 'sub_missing',
+      }),
+    ).toEqual({ status: 'missing' })
 
     const committed = await store.get(subscriptionId)
     expect(committed?.lastChargedPeriod).toBe(1)
     expect(committed?.inFlightPeriod).toBe(undefined)
 
-    const charged = await store.beginRenewal(subscriptionId, 1)
+    const charged = await store.renew({
+      inFlightReference: '0xrenewal',
+      periodIndex: 1,
+      renew: async () => ({ subscription: createRecord() }),
+      subscriptionId,
+    })
     expect(charged.status).toBe('charged')
+  })
+
+  test('returns in-flight for a duplicate renewal period', async () => {
+    const store = fromStore(Store.memory())
+    await store.put(createRecord())
+    let finishRenewal!: () => void
+    const pendingRenewal = new Promise<void>((resolve) => {
+      finishRenewal = resolve
+    })
+
+    const first = store.renew({
+      inFlightReference: '0xrenewal',
+      periodIndex: 1,
+      renew: async ({ subscription }) => {
+        await pendingRenewal
+        return { subscription }
+      },
+      subscriptionId,
+    })
+
+    const duplicate = await store.renew({
+      inFlightReference: '0xrenewal',
+      periodIndex: 1,
+      renew: async ({ subscription }) => ({ subscription }),
+      subscriptionId,
+    })
+    expect(duplicate.status).toBe('inFlight')
+
+    finishRenewal()
+    expect((await first).status).toBe('renewed')
   })
 
   test('clears an in-flight renewal after failure', async () => {
     const store = fromStore(Store.memory())
     await store.put(createRecord())
 
-    await store.beginRenewal(subscriptionId, 1)
-    await store.failRenewal(subscriptionId, 1)
+    await expect(
+      store.renew({
+        inFlightReference: '0xrenewal',
+        periodIndex: 1,
+        renew: async () => {
+          throw new Error('renewal failed')
+        },
+        subscriptionId,
+      }),
+    ).rejects.toThrow('renewal failed')
 
     expect((await store.get(subscriptionId))?.inFlightPeriod).toBe(undefined)
-    expect((await store.beginRenewal(subscriptionId, 1)).status).toBe('started')
+    expect(
+      (
+        await store.renew({
+          inFlightReference: '0xrenewal',
+          periodIndex: 1,
+          renew: async ({ subscription }) => ({ subscription }),
+          subscriptionId,
+        })
+      ).status,
+    ).toBe('renewed')
   })
 })

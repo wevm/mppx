@@ -11,7 +11,7 @@ export {
   verifySubscriptionKeyAuthorization,
 } from './KeyAuthorization.js'
 export { fromStore } from './Store.js'
-export type { BeginRenewalResult, SubscriptionStore } from './Store.js'
+export type { ActivateResult, RenewResult, SubscriptionStore } from './Store.js'
 export type {
   SubscriptionAccessKey,
   SubscriptionAccessKeyRecord,

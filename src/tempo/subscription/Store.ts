@@ -13,59 +13,76 @@ const defaultActivationTimeoutMs = 15 * 60 * 1_000
 
 /** Subscription-aware wrapper around a generic key-value store. */
 export type SubscriptionStore = {
-  /** Atomically marks a resolved subscription key as being activated. */
-  beginActivation: (lookupKey: string, challengeId: string) => Promise<BeginActivationResult>
-  /** Atomically marks a subscription period as being renewed. */
-  beginRenewal: (
-    subscriptionId: string,
-    periodIndex: number,
-    inFlightReference?: string | undefined,
-  ) => Promise<BeginRenewalResult>
-  /** Atomically claims a subscription activation challenge for single-use credentials. */
-  claimActivation: (challengeId: string) => Promise<boolean>
-  /** Stores an activated subscription and clears its in-flight activation marker. */
-  commitActivation: (subscription: SubscriptionRecord, challengeId: string) => Promise<boolean>
-  /** Atomically stores a successful renewal and clears the in-flight marker. */
-  commitRenewal: (
-    subscriptionId: string,
-    subscription: SubscriptionRecord,
-    periodIndex: number,
-  ) => Promise<boolean>
-  /** Clears an in-flight renewal marker after a failed renewal attempt. */
-  failRenewal: (subscriptionId: string, periodIndex: number) => Promise<void>
+  /** Runs activation once for a challenge and resolved lookup key. */
+  activate<result extends { subscription: SubscriptionRecord }>(
+    parameters: ActivateParameters<result>,
+  ): Promise<ActivateResult<result>>
   /** Looks up a subscription by subscription ID. */
-  get: (subscriptionId: string) => Promise<SubscriptionRecord | null>
+  get(subscriptionId: string): Promise<SubscriptionRecord | null>
   /** Looks up a generated access key for a resolved request key. */
-  getAccessKey: (key: string) => Promise<SubscriptionAccessKeyRecord | null>
+  getAccessKey(key: string): Promise<SubscriptionAccessKeyRecord | null>
   /** Looks up the active subscription for a resolved request key. */
-  getByKey: (key: string) => Promise<SubscriptionRecord | null>
+  getByKey(key: string): Promise<SubscriptionRecord | null>
   /** Gets or creates the server-owned access key for a resolved request key. */
-  getOrCreateAccessKey: (key: string) => Promise<SubscriptionAccessKeyRecord>
+  getOrCreateAccessKey(key: string): Promise<SubscriptionAccessKeyRecord>
   /** Upserts a subscription record and marks it as active for its lookup key. */
-  put: (record: SubscriptionRecord) => Promise<void>
+  put(record: SubscriptionRecord): Promise<void>
+  /** Runs renewal once for a subscription period. */
+  renew<result extends { subscription: SubscriptionRecord }>(
+    parameters: RenewParameters<result>,
+  ): Promise<RenewResult<result>>
 }
 
-/** Result from attempting to mark a resolved subscription key as in-flight. */
-export type BeginActivationResult = { status: 'started' } | { status: 'inFlight' }
+type ActivateParameters<result extends { subscription: SubscriptionRecord }> = {
+  challengeId: string
+  create: () => Promise<result>
+  isReusable?: ((subscription: SubscriptionRecord) => boolean) | undefined
+  lookupKey: string
+}
 
-/** Result from attempting to mark a subscription period as in-flight. */
-export type BeginRenewalResult =
-  | { status: 'started'; subscription: SubscriptionRecord }
+export type ActivateResult<result extends { subscription: SubscriptionRecord }> =
+  | { status: 'activated'; result: result }
+  | { status: 'claimMismatch' }
+  | { status: 'existing'; subscription: SubscriptionRecord }
+  | { status: 'inFlight' }
+  | { status: 'replayed' }
+
+type RenewParameters<result extends { subscription: SubscriptionRecord }> = {
+  inFlightReference: string
+  periodIndex: number
+  renew: (parameters: {
+    inFlightReference: string
+    periodIndex: number
+    subscription: SubscriptionRecord
+  }) => Promise<result>
+  subscriptionId: string
+}
+
+export type RenewResult<result extends { subscription: SubscriptionRecord }> =
   | { status: 'charged'; subscription: SubscriptionRecord }
   | { status: 'inFlight'; subscription: SubscriptionRecord }
   | { status: 'missing' }
+  | { status: 'renewed'; result: result }
+  | { status: 'claimMismatch' }
+
+type ActivationMarker = {
+  challengeId?: string
+  startedAt?: string
+}
 
 /** Wraps a generic key-value {@link Store.Store} with subscription-specific accessors. */
 export function fromStore(
   store: Store.AtomicStore<Record<string, unknown>>,
   options?: fromStore.Options,
 ): SubscriptionStore {
-  const recordPrefix = options?.recordPrefix ?? defaultRecordPrefix
-  const keyPrefix = options?.keyPrefix ?? defaultKeyPrefix
-  const activationPrefix = options?.activationPrefix ?? defaultActivationPrefix
-  const accessKeyPrefix = options?.accessKeyPrefix ?? defaultAccessKeyPrefix
-  const activationTimeoutMs = options?.activationTimeoutMs ?? defaultActivationTimeoutMs
-  const credentialPrefix = options?.credentialPrefix ?? defaultCredentialPrefix
+  const {
+    accessKeyPrefix = defaultAccessKeyPrefix,
+    activationPrefix = defaultActivationPrefix,
+    activationTimeoutMs = defaultActivationTimeoutMs,
+    credentialPrefix = defaultCredentialPrefix,
+    keyPrefix = defaultKeyPrefix,
+    recordPrefix = defaultRecordPrefix,
+  } = options ?? {}
 
   function recordKey(subscriptionId: string): string {
     return `${recordPrefix}${subscriptionId}`
@@ -83,22 +100,51 @@ export function fromStore(
     return `${accessKeyPrefix}${key}`
   }
 
-  function lookupKey(key: string): string {
+  function lookupRecordKey(key: string): string {
     return `${keyPrefix}${key}`
   }
 
   async function getByLookupKey(key: string): Promise<SubscriptionRecord | null> {
-    const id = (await store.get(lookupKey(key))) as string | null
-    if (!id) return null
-    return (await store.get(recordKey(id))) as SubscriptionRecord | null
+    const subscriptionId = (await store.get(lookupRecordKey(key))) as string | null
+    if (!subscriptionId) return null
+    return (await store.get(recordKey(subscriptionId))) as SubscriptionRecord | null
+  }
+
+  async function clearRenewalState(subscriptionId: string, periodIndex: number) {
+    await store.update(recordKey(subscriptionId), (current) => {
+      const subscription = current as SubscriptionRecord | null
+      if (!subscription || subscription.inFlightPeriod !== periodIndex) {
+        return { op: 'noop', result: undefined }
+      }
+      return {
+        op: 'set',
+        value: clearRenewal(subscription),
+        result: undefined,
+      }
+    })
   }
 
   return {
-    async beginActivation(key, challengeId) {
-      return store.update(
-        activationKey(key),
-        (current): Store.Change<unknown, BeginActivationResult> => {
-          const marker = current as { startedAt?: string } | null
+    async activate({ challengeId, create, isReusable, lookupKey }) {
+      const claimed = await store.update(credentialKey(challengeId), (current) => {
+        if (current) return { op: 'noop', result: false }
+        return {
+          op: 'set',
+          value: { claimedAt: timestamp() },
+          result: true,
+        }
+      })
+      if (!claimed) return { status: 'replayed' }
+
+      const existing = await getByLookupKey(lookupKey)
+      if (existing && isReusable?.(existing)) {
+        return { status: 'existing', subscription: existing }
+      }
+
+      const started = await store.update(
+        activationKey(lookupKey),
+        (current): Store.Change<unknown, { status: 'started' } | { status: 'inFlight' }> => {
+          const marker = current as ActivationMarker | null
           if (marker && !isStaleActivation(marker, activationTimeoutMs)) {
             return { op: 'noop', result: { status: 'inFlight' as const } }
           }
@@ -106,123 +152,35 @@ export function fromStore(
             op: 'set',
             value: {
               challengeId,
-              startedAt: new Date().toISOString(),
+              startedAt: timestamp(),
             },
             result: { status: 'started' as const },
           }
         },
       )
-    },
+      if (started.status !== 'started') return { status: 'inFlight' }
 
-    async beginRenewal(subscriptionId, periodIndex, inFlightReference) {
-      return store.update(
-        recordKey(subscriptionId),
-        (current): Store.Change<unknown, BeginRenewalResult> => {
-          const subscription = current as SubscriptionRecord | null
-          if (!subscription) return { op: 'noop', result: { status: 'missing' as const } }
-          if (subscription.lastChargedPeriod >= periodIndex) {
-            return {
-              op: 'noop',
-              result: { status: 'charged' as const, subscription },
-            }
-          }
-          if (subscription.inFlightPeriod === periodIndex) {
-            return {
-              op: 'noop',
-              result: { status: 'inFlight' as const, subscription },
-            }
-          }
-
-          const next = {
-            ...subscription,
-            inFlightPeriod: periodIndex,
-            inFlightReference,
-            inFlightStartedAt: new Date().toISOString(),
-          }
-          return {
-            op: 'set',
-            value: next,
-            result: { status: 'started' as const, subscription: next },
-          }
-        },
-      )
-    },
-
-    async claimActivation(challengeId) {
-      return store.update(credentialKey(challengeId), (current) => {
-        // Challenge IDs are single-use for activation credentials.
-        if (current) return { op: 'noop', result: false }
-        return {
-          op: 'set',
-          value: { claimedAt: new Date().toISOString() },
-          result: true,
-        }
-      })
-    },
-
-    async commitActivation(subscription, challengeId) {
-      const claimed = await store.update(activationKey(subscription.lookupKey), (current) => {
-        const marker = current as { challengeId?: string; startedAt?: string } | null
+      const result = await create()
+      const { subscription } = result
+      const committed = await store.update(activationKey(subscription.lookupKey), (current) => {
+        const marker = current as ActivationMarker | null
         if (marker?.challengeId !== challengeId) return { op: 'noop', result: false }
         return {
           op: 'set',
-          value: { ...marker, committingAt: new Date().toISOString() },
+          value: { ...marker, committingAt: timestamp() },
           result: true,
         }
       })
-      if (!claimed) return false
+      if (!committed) return { status: 'claimMismatch' }
 
       await store.put(recordKey(subscription.subscriptionId), subscription)
-      await store.put(lookupKey(subscription.lookupKey), subscription.subscriptionId)
+      await store.put(lookupRecordKey(subscription.lookupKey), subscription.subscriptionId)
       await store.update(activationKey(subscription.lookupKey), (current) => {
-        const marker = current as { challengeId?: string } | null
+        const marker = current as ActivationMarker | null
         if (marker?.challengeId !== challengeId) return { op: 'noop', result: undefined }
         return { op: 'delete', result: undefined }
       })
-      return true
-    },
-
-    async commitRenewal(subscriptionId, subscription, periodIndex) {
-      const committed = await store.update(recordKey(subscriptionId), (current) => {
-        const existing = current as SubscriptionRecord | null
-        if (!existing || existing.inFlightPeriod !== periodIndex) {
-          return { op: 'noop', result: false }
-        }
-
-        return {
-          op: 'set',
-          value: {
-            ...subscription,
-            inFlightPeriod: undefined,
-            inFlightReference: undefined,
-            inFlightStartedAt: undefined,
-            lastChargedPeriod: periodIndex,
-            subscriptionId,
-          },
-          result: true,
-        }
-      })
-      if (committed) await store.put(lookupKey(subscription.lookupKey), subscriptionId)
-      return committed
-    },
-
-    async failRenewal(subscriptionId, periodIndex) {
-      await store.update(recordKey(subscriptionId), (current) => {
-        const subscription = current as SubscriptionRecord | null
-        if (!subscription || subscription.inFlightPeriod !== periodIndex) {
-          return { op: 'noop', result: undefined }
-        }
-        return {
-          op: 'set',
-          value: {
-            ...subscription,
-            inFlightPeriod: undefined,
-            inFlightReference: undefined,
-            inFlightStartedAt: undefined,
-          },
-          result: undefined,
-        }
-      })
+      return { status: 'activated', result }
     },
 
     async get(subscriptionId) {
@@ -233,7 +191,6 @@ export function fromStore(
       return (await store.get(accessKeyKey(key))) as SubscriptionAccessKeyRecord | null
     },
 
-    /** Looks up the active subscription for a resolved request key. */
     async getByKey(key) {
       return getByLookupKey(key)
     },
@@ -257,10 +214,82 @@ export function fromStore(
       )
     },
 
-    /** Upserts a subscription record and marks it as active for its lookup key. */
     async put(record) {
       await store.put(recordKey(record.subscriptionId), record)
-      await store.put(lookupKey(record.lookupKey), record.subscriptionId)
+      await store.put(lookupRecordKey(record.lookupKey), record.subscriptionId)
+    },
+
+    async renew({ inFlightReference, periodIndex, renew, subscriptionId }) {
+      const started = await store.update(
+        recordKey(subscriptionId),
+        (
+          current,
+        ): Store.Change<
+          unknown,
+          | { status: 'started'; subscription: SubscriptionRecord }
+          | { status: 'charged'; subscription: SubscriptionRecord }
+          | { status: 'inFlight'; subscription: SubscriptionRecord }
+          | { status: 'missing' }
+        > => {
+          const subscription = current as SubscriptionRecord | null
+          if (!subscription) return { op: 'noop', result: { status: 'missing' as const } }
+          if (subscription.lastChargedPeriod >= periodIndex) {
+            return {
+              op: 'noop',
+              result: { status: 'charged' as const, subscription },
+            }
+          }
+          if (subscription.inFlightPeriod === periodIndex) {
+            return {
+              op: 'noop',
+              result: { status: 'inFlight' as const, subscription },
+            }
+          }
+
+          const next = {
+            ...subscription,
+            inFlightPeriod: periodIndex,
+            inFlightReference,
+            inFlightStartedAt: timestamp(),
+          }
+          return {
+            op: 'set',
+            value: next,
+            result: { status: 'started' as const, subscription: next },
+          }
+        },
+      )
+      if (started.status !== 'started') return started
+
+      const result = await renew({
+        inFlightReference,
+        periodIndex,
+        subscription: started.subscription,
+      }).catch(async (error) => {
+        await clearRenewalState(subscriptionId, periodIndex)
+        throw error
+      })
+
+      const committed = await store.update(recordKey(subscriptionId), (current) => {
+        const existing = current as SubscriptionRecord | null
+        if (!existing || existing.inFlightPeriod !== periodIndex) {
+          return { op: 'noop', result: false }
+        }
+
+        return {
+          op: 'set',
+          value: clearRenewal({
+            ...result.subscription,
+            lastChargedPeriod: periodIndex,
+            subscriptionId,
+          }),
+          result: true,
+        }
+      })
+      if (!committed) return { status: 'claimMismatch' }
+
+      await store.put(lookupRecordKey(result.subscription.lookupKey), subscriptionId)
+      return { status: 'renewed', result }
     },
   }
 }
@@ -287,4 +316,17 @@ function isStaleActivation(marker: { startedAt?: string }, timeoutMs: number) {
   const startedAt = new Date(marker.startedAt ?? '').getTime()
   if (!Number.isFinite(startedAt)) return true
   return Date.now() - startedAt >= timeoutMs
+}
+
+function clearRenewal(subscription: SubscriptionRecord): SubscriptionRecord {
+  return {
+    ...subscription,
+    inFlightPeriod: undefined,
+    inFlightReference: undefined,
+    inFlightStartedAt: undefined,
+  }
+}
+
+function timestamp() {
+  return new Date().toISOString()
 }

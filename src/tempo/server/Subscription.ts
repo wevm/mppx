@@ -138,23 +138,16 @@ export function subscription<const parameters extends subscription.Parameters>(
 
     async request({ capturedRequest, credential, request }) {
       const credentialRequest = credential?.challenge.request as SubscriptionRequest | undefined
-      const chainId = await (async () => {
-        if (request.chainId) return request.chainId
-        if (parameters.chainId) return parameters.chainId
-        if (credentialRequest?.methodDetails?.chainId)
-          return credentialRequest.methodDetails.chainId
-        return defaults.chainId.testnet
-      })()
+      const chainId =
+        request.chainId ??
+        parameters.chainId ??
+        credentialRequest?.methodDetails?.chainId ??
+        defaults.chainId.testnet
       const parsedRequest = Methods.subscription.schema.request.parse({
         ...request,
         chainId,
       })
-      const input = capturedRequest
-        ? new Request(capturedRequest.url, {
-            headers: capturedRequest.headers,
-            method: capturedRequest.method,
-          })
-        : new Request('https://subscription.invalid')
+      const input = requestFromCaptured(capturedRequest)
       const resolved = await parameters.resolve({ input, request: parsedRequest })
       const existing = resolved ? await store.getByKey(resolved.key) : null
       const accessKey =
@@ -183,17 +176,10 @@ export function subscription<const parameters extends subscription.Parameters>(
       }
     },
 
-    stableBinding(request) {
-      return subscriptionBinding(request)
-    },
+    stableBinding: subscriptionBinding,
 
     async verify({ credential, envelope, request }) {
-      const input = envelope
-        ? new Request(envelope.capturedRequest.url, {
-            headers: envelope.capturedRequest.headers,
-            method: envelope.capturedRequest.method,
-          })
-        : new Request('https://subscription.invalid')
+      const input = requestFromCaptured(envelope?.capturedRequest)
       const parsedRequest = Methods.subscription.schema.request.parse(request)
       assertSubscriptionTiming({
         challengeExpires: credential.challenge.expires,
@@ -227,72 +213,72 @@ export function subscription<const parameters extends subscription.Parameters>(
         throw new VerificationFailedError({ reason: 'credential source does not match signature' })
       }
 
-      // Claim the challenge before activation so replayed credentials cannot reach the charge hook.
-      const activationClaimed = await store.claimActivation(credential.challenge.id)
-      if (!activationClaimed) {
+      const activation = await store.activate({
+        challengeId: credential.challenge.id,
+        isReusable: isActive,
+        lookupKey: resolved.key,
+        async create() {
+          const activation = withSubscriptionAccessKey(
+            await activateSubscription({
+              accessKey,
+              auto: {
+                challengeId: credential.challenge.id,
+                getClient,
+                keyAuthorization: (credential.payload as SubscriptionCredentialPayload).signature,
+                realm: credential.challenge.realm,
+                store,
+                waitForConfirmation,
+              },
+              credential: credential as typeof credential & {
+                payload: SubscriptionCredentialPayload
+              },
+              input,
+              parameters,
+              request: parsedRequest,
+              resolved,
+              source: verified.source,
+            }),
+            accessKey,
+          )
+          validateSubscriptionSettlement(activation, {
+            expectedLookupKey: resolved.key,
+            expectedPeriodIndex: 0,
+            request: parsedRequest,
+          })
+          return activation
+        },
+      })
+      if (activation.status === 'replayed') {
         throw new VerificationFailedError({
           reason: 'subscription credential has already been used',
         })
       }
-
-      const existing = await store.getByKey(resolved.key)
-      if (existing && isActive(existing)) {
-        return SubscriptionReceipt.fromRecord(existing)
-      }
-
-      // Distinct challenges can target the same subscription key; serialize activation by key
-      // before the first-period charge hook so concurrent fresh credentials cannot double-charge.
-      const activationStarted = await store.beginActivation(resolved.key, credential.challenge.id)
-      if (activationStarted.status !== 'started') {
+      if (activation.status === 'inFlight') {
         throw new VerificationFailedError({
           reason: 'subscription activation is already in flight',
         })
       }
-
-      const activation = withSubscriptionAccessKey(
-        await activateSubscription({
-          accessKey,
-          auto: {
-            challengeId: credential.challenge.id,
-            getClient,
-            keyAuthorization: (credential.payload as SubscriptionCredentialPayload).signature,
-            realm: credential.challenge.realm,
-            store,
-            waitForConfirmation,
-          },
-          credential: credential as typeof credential & {
-            payload: SubscriptionCredentialPayload
-          },
-          input,
-          parameters,
-          request: parsedRequest,
-          resolved,
-          source: verified.source,
-        }),
-        accessKey,
-      )
-
-      validateSubscriptionSettlement(activation, {
-        expectedLookupKey: resolved.key,
-        expectedPeriodIndex: 0,
-        request: parsedRequest,
-      })
-
-      const activationCommitted = await store.commitActivation(
-        activation.subscription,
-        credential.challenge.id,
-      )
-      if (!activationCommitted) {
-        throw new VerificationFailedError({
-          reason: 'subscription activation claim mismatch',
-        })
+      if (activation.status === 'claimMismatch') {
+        throw new VerificationFailedError({ reason: 'subscription activation claim mismatch' })
       }
+      if (activation.status === 'existing') {
+        return SubscriptionReceipt.fromRecord(activation.subscription)
+      }
+
       await parameters.hooks?.activated?.({
-        receipt: activation.receipt,
-        subscription: activation.subscription,
+        receipt: activation.result.receipt,
+        subscription: activation.result.subscription,
       })
-      return activation.receipt
+      return activation.result.receipt
     },
+  })
+}
+
+function requestFromCaptured(capturedRequest: Method.CapturedRequest | undefined): Request {
+  if (!capturedRequest) return new Request('https://subscription.invalid')
+  return new Request(capturedRequest.url, {
+    headers: capturedRequest.headers,
+    method: capturedRequest.method,
   })
 }
 
@@ -448,42 +434,37 @@ async function settleRenewal(parameters: {
 > {
   const { expectedLookupKey, periodIndex, renew, request, store, subscription } = parameters
   const inFlightReference = renewalReference(subscription.subscriptionId, periodIndex)
-  const started = await store.beginRenewal(
-    subscription.subscriptionId,
-    periodIndex,
+  const renewal = await store.renew({
     inFlightReference,
-  )
-  if (started.status === 'charged') {
-    return { receipt: SubscriptionReceipt.fromRecord(started.subscription), status: 'charged' }
-  }
-  if (started.status !== 'started') return null
-
-  const renewed = withSubscriptionAccessKey(
-    await renew({
-      inFlightReference,
-      periodIndex,
-      subscription: started.subscription,
-    }).catch(async (error) => {
-      await store.failRenewal(subscription.subscriptionId, periodIndex)
-      throw error
-    }),
-    started.subscription.accessKey,
-  )
-  validateSubscriptionSettlement(renewed, {
-    expectedLookupKey,
-    expectedPeriodIndex: periodIndex,
-    expectedSubscriptionId: subscription.subscriptionId,
-    request,
-  })
-  const committed = await store.commitRenewal(
-    subscription.subscriptionId,
-    renewed.subscription,
     periodIndex,
-  )
-  if (!committed) {
+    async renew({ inFlightReference, periodIndex, subscription: started }) {
+      const renewed = withSubscriptionAccessKey(
+        await renew({
+          inFlightReference,
+          periodIndex,
+          subscription: started,
+        }),
+        started.accessKey,
+      )
+      validateSubscriptionSettlement(renewed, {
+        expectedLookupKey,
+        expectedPeriodIndex: periodIndex,
+        expectedSubscriptionId: subscription.subscriptionId,
+        request,
+      })
+      return renewed
+    },
+    subscriptionId: subscription.subscriptionId,
+  })
+
+  if (renewal.status === 'charged') {
+    return { receipt: SubscriptionReceipt.fromRecord(renewal.subscription), status: 'charged' }
+  }
+  if (renewal.status === 'renewed') return { result: renewal.result, status: 'renewed' }
+  if (renewal.status === 'claimMismatch') {
     throw new VerificationFailedError({ reason: 'subscription renewal claim mismatch' })
   }
-  return { result: renewed, status: 'renewed' }
+  return null
 }
 
 function renewalReference(subscriptionId: string, periodIndex: number): string {
