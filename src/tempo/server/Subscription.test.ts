@@ -271,6 +271,36 @@ describe('tempo.subscription', () => {
     expect(rpcMethods.filter((method) => method === 'eth_sendRawTransaction')).toHaveLength(1)
   })
 
+  test('verifyCredential activates a subscription credential with a canonical challenge request', async () => {
+    const store = Store.memory()
+    const { client } = createBillingClient([hashActivate])
+    const method = subscription({
+      amount: subscriptionAmount,
+      chainId,
+      currency: subscriptionCurrency,
+      getClient: async () => client,
+      periodCount: subscriptionPeriodCount,
+      periodUnit: subscriptionPeriodUnit,
+      recipient: subscriptionRecipient,
+      resolve: async () => ({ key: subscriptionKey }),
+      store,
+      subscriptionExpires: activeSubscriptionExpires,
+      waitForConfirmation: false,
+    })
+    const mppx = Mppx.create({ methods: [method], realm, secretKey })
+    const challenge = await mppx.challenge.tempo.subscription({})
+    const generatedAccessKey = (
+      challenge.request as ReturnType<typeof Methods.subscription.schema.request.parse>
+    ).methodDetails?.accessKey
+    if (!generatedAccessKey) throw new Error('expected generated access key')
+    const credential = await createCredential(challenge, rootAccount.address, generatedAccessKey)
+
+    const receipt = await mppx.verifyCredential(credential)
+
+    expect(receipt.status).toBe('success')
+    expect(receipt.reference).toBe(hashActivate)
+  })
+
   test('automatically renews overdue subscriptions on the request path', async () => {
     const store = Store.memory()
     const subscriptions = SubscriptionStore.fromStore(store)
@@ -325,6 +355,48 @@ describe('tempo.subscription', () => {
     expect(receipt.reference).toBe(hashRenewed)
     expect(rpcMethods.filter((method) => method === 'eth_sendRawTransaction')).toHaveLength(2)
     expect((await subscriptions.get(record.subscriptionId))?.lastChargedPeriod).toBeGreaterThan(0)
+  })
+
+  test('returns a management response while renewal is already in flight', async () => {
+    const store = Store.memory()
+    const subscriptions = SubscriptionStore.fromStore(store)
+    const method = subscription({
+      accessKey: async () => accessKey,
+      activate: async () => ({
+        receipt: createReceipt('unused'),
+        subscription: createRecord({ subscriptionId: 'unused' }),
+      }),
+      amount: subscriptionAmount,
+      chainId,
+      currency: subscriptionCurrency,
+      periodCount: subscriptionPeriodCount,
+      periodUnit: subscriptionPeriodUnit,
+      recipient: subscriptionRecipient,
+      resolve: async () => ({ key: subscriptionKey }),
+      renew: async () => {
+        throw new Error('renew should not run')
+      },
+      store,
+      subscriptionExpires: activeSubscriptionExpires,
+    })
+    await subscriptions.put(
+      createRecord({
+        billingAnchor: new Date(Date.now() - 3 * subscriptionPeriodMilliseconds).toISOString(),
+        inFlightPeriod: 1,
+        inFlightStartedAt: new Date().toISOString(),
+        lastChargedPeriod: 0,
+        subscriptionId: 'sub_due',
+      }),
+    )
+    const mppx = Mppx.create({ methods: [method], realm, secretKey })
+
+    const result = await mppx.tempo.subscription({})(new Request('https://example.com/resource'))
+
+    expect(result.status).toBe(200)
+    if (result.status !== 200) throw new Error('expected management response')
+    const response = (result.withReceipt as () => Response)()
+    expect(response.status).toBe(409)
+    expect(response.headers.get('Retry-After')).toBe('1')
   })
 
   test('does not authorize an active subscription whose request binding differs', async () => {
@@ -1201,6 +1273,43 @@ describe('tempo.subscription', () => {
     expect(result?.receipt.reference).toBe(hashBackground)
     expect(renewCalls.length).toBe(1)
     expect((await subscriptions.get('sub_background'))?.reference).toBe(hashBackground)
+  })
+
+  test('does not charge a superseded subscription outside the request path', async () => {
+    const store = Store.memory()
+    const subscriptions = SubscriptionStore.fromStore(store)
+    let renewCalls = 0
+
+    await subscriptions.put(
+      createRecord({
+        billingAnchor: new Date(Date.now() - 3 * subscriptionPeriodMilliseconds).toISOString(),
+        lastChargedPeriod: 0,
+        reference: hashStale,
+        subscriptionId: 'sub_old',
+      }),
+    )
+    await subscriptions.put(
+      createRecord({
+        reference: hashBackground,
+        subscriptionId: 'sub_new',
+      }),
+    )
+
+    const result = await renew({
+      renew: async ({ subscription }) => {
+        renewCalls += 1
+        return {
+          receipt: createReceipt(subscription.subscriptionId, hashBackground),
+          subscription,
+        }
+      },
+      store,
+      subscriptionId: 'sub_old',
+    })
+
+    expect(result).toBe(null)
+    expect(renewCalls).toBe(0)
+    expect((await subscriptions.getByKey(subscriptionKey))?.subscriptionId).toBe('sub_new')
   })
 
   test('automatically renews an overdue subscription outside the request path', async () => {

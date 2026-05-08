@@ -64,6 +64,7 @@ export type RenewResult<result extends { subscription: SubscriptionRecord }> =
   | { status: 'inFlight'; subscription: SubscriptionRecord }
   | { status: 'missing' }
   | { status: 'renewed'; result: result }
+  | { status: 'superseded'; subscription: SubscriptionRecord }
   | { status: 'claimMismatch' }
 
 type ActivationMarker = {
@@ -126,6 +127,14 @@ export function fromStore(
     })
   }
 
+  async function clearActivationState(lookupKey: string, challengeId: string) {
+    await store.update(activationKey(lookupKey), (current) => {
+      const marker = current as ActivationMarker | null
+      if (marker?.challengeId !== challengeId) return { op: 'noop', result: undefined }
+      return { op: 'delete', result: undefined }
+    })
+  }
+
   return {
     async activate({ challengeId, create, isReusable, lookupKey }) {
       const claimed = await store.update(credentialKey(challengeId), (current) => {
@@ -162,12 +171,14 @@ export function fromStore(
       )
       if (started.status !== 'started') return { status: 'inFlight' }
 
+      const claimedExisting = await getByLookupKey(lookupKey)
+      if (claimedExisting && isReusable?.(claimedExisting)) {
+        await clearActivationState(lookupKey, challengeId)
+        return { status: 'existing', subscription: claimedExisting }
+      }
+
       const result = await create().catch(async (error) => {
-        await store.update(activationKey(lookupKey), (current) => {
-          const marker = current as ActivationMarker | null
-          if (marker?.challengeId !== challengeId) return { op: 'noop', result: undefined }
-          return { op: 'delete', result: undefined }
-        })
+        await clearActivationState(lookupKey, challengeId)
         throw error
       })
       const { subscription } = result
@@ -182,13 +193,16 @@ export function fromStore(
       })
       if (!committed) return { status: 'claimMismatch' }
 
+      const previous = await getByLookupKey(subscription.lookupKey)
+      if (previous && previous.subscriptionId !== subscription.subscriptionId) {
+        await store.put(recordKey(previous.subscriptionId), {
+          ...previous,
+          canceledAt: previous.canceledAt ?? timestamp(),
+        })
+      }
       await store.put(recordKey(subscription.subscriptionId), subscription)
       await store.put(lookupRecordKey(subscription.lookupKey), subscription.subscriptionId)
-      await store.update(activationKey(subscription.lookupKey), (current) => {
-        const marker = current as ActivationMarker | null
-        if (marker?.challengeId !== challengeId) return { op: 'noop', result: undefined }
-        return { op: 'delete', result: undefined }
-      })
+      await clearActivationState(subscription.lookupKey, challengeId)
       return { status: 'activated', result }
     },
 
@@ -249,7 +263,7 @@ export function fromStore(
             }
           }
           if (
-            subscription.inFlightPeriod === periodIndex &&
+            subscription.inFlightPeriod !== undefined &&
             !isStaleRenewal(subscription, renewalTimeoutMs)
           ) {
             return {
@@ -272,6 +286,11 @@ export function fromStore(
         },
       )
       if (started.status !== 'started') return started
+      const active = await getByLookupKey(started.subscription.lookupKey)
+      if (active?.subscriptionId !== subscriptionId) {
+        await clearRenewalState(subscriptionId, periodIndex)
+        return { status: 'superseded', subscription: started.subscription }
+      }
 
       const result = await renew({
         inFlightReference,
@@ -281,6 +300,12 @@ export function fromStore(
         await clearRenewalState(subscriptionId, periodIndex)
         throw error
       })
+
+      const activeAfterRenew = await getByLookupKey(result.subscription.lookupKey)
+      if (activeAfterRenew?.subscriptionId !== subscriptionId) {
+        await clearRenewalState(subscriptionId, periodIndex)
+        return { status: 'superseded', subscription: started.subscription }
+      }
 
       const committed = await store.update(recordKey(subscriptionId), (current) => {
         const existing = current as SubscriptionRecord | null
@@ -305,7 +330,14 @@ export function fromStore(
       })
       if (!committed) return { status: 'claimMismatch' }
 
-      await store.put(lookupRecordKey(result.subscription.lookupKey), subscriptionId)
+      const ownsLookup = await store.update(
+        lookupRecordKey(result.subscription.lookupKey),
+        (current) => {
+          if (current !== subscriptionId) return { op: 'noop', result: false }
+          return { op: 'set', value: subscriptionId, result: true }
+        },
+      )
+      if (!ownsLookup) return { status: 'superseded', subscription: started.subscription }
       return { status: 'renewed', result }
     },
   }

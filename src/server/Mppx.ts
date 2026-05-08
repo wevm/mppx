@@ -1310,16 +1310,20 @@ export function compose(
         // transformed fields (e.g. amount with decimals) match correctly.
         // Also checks inside methodDetails for fields moved there by transforms.
         const candidates = handlers.filter((h) => {
-          const internal = (h as ConfiguredHandler)._internal
-          if (!internal || internal.name !== credMethod || internal.intent !== credIntent)
+          try {
+            const internal = (h as ConfiguredHandler)._internal
+            if (!internal || internal.name !== credMethod || internal.intent !== credIntent)
+              return false
+            const mismatch = internal._stableBinding
+              ? getRequestBindingMismatch(
+                  getStableBinding(internal._canonicalRequest, internal._stableBinding),
+                  getStableBinding(credReq, internal._stableBinding),
+                )
+              : getPinnedRequestBindingMismatch(internal._canonicalRequest, credReq)
+            return !mismatch && opaqueValuesMatch(internal.meta, credential.challenge.meta)
+          } catch {
             return false
-          const mismatch = internal._stableBinding
-            ? getRequestBindingMismatch(
-                getStableBinding(internal._canonicalRequest, internal._stableBinding),
-                getStableBinding(credReq, internal._stableBinding),
-              )
-            : getPinnedRequestBindingMismatch(internal._canonicalRequest, credReq)
-          return !mismatch && opaqueValuesMatch(internal.meta, credential.challenge.meta)
+          }
         })
 
         const match =

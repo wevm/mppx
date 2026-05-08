@@ -1779,6 +1779,37 @@ describe('compose: pre-dispatch narrowing edge cases', () => {
     expect(result.status).toBe(402)
   })
 
+  test('ignores compose candidates whose stable binding throws on forged credentials', async () => {
+    const bindingMethod = Method.toServer(mockCharge, {
+      stableBinding(request) {
+        return { currency: request.currency.toLowerCase() }
+      },
+      async verify() {
+        return mockReceipt()
+      },
+    })
+    const mppx = Mppx.create({ methods: [bindingMethod], realm, secretKey })
+    const handle = mppx.compose([bindingMethod, challengeOpts])
+    const credential = Credential.from({
+      challenge: {
+        id: 'forged',
+        intent: 'charge',
+        method: 'alpha',
+        realm,
+        request: {},
+      },
+      payload: { token: 'valid' },
+    })
+
+    const result = await handle(
+      new Request('https://example.com/resource', {
+        headers: { Authorization: Credential.serialize(credential) },
+      }),
+    )
+
+    expect(result.status).toBe(402)
+  })
+
   test('single handler in compose() returns 402 and then 200', async () => {
     const mppx = Mppx.create({ methods: [alphaMethod], realm, secretKey })
     const handle = mppx.compose([alphaMethod, challengeOpts])

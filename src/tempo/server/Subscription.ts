@@ -122,6 +122,15 @@ export function subscription<const parameters extends subscription.Parameters>(
         })
         if (!renewal) return undefined
         if (renewal.status === 'charged') return { receipt: renewal.receipt }
+        if (renewal.status === 'inFlight') {
+          return {
+            receipt: renewal.receipt,
+            response: new Response(null, {
+              headers: { 'Retry-After': '1' },
+              status: 409,
+            }),
+          }
+        }
 
         await parameters.hooks?.renewed?.({
           periodIndex,
@@ -182,7 +191,8 @@ export function subscription<const parameters extends subscription.Parameters>(
 
     async verify({ credential, envelope, request }) {
       const input = requestFromCaptured(envelope?.capturedRequest)
-      const parsedRequest = Methods.subscription.schema.request.parse(request)
+      const parsed = Methods.subscription.schema.request.safeParse(request)
+      const parsedRequest = parsed.success ? parsed.data : (request as SubscriptionRequest)
       assertSubscriptionTiming({
         challengeExpires: credential.challenge.expires,
         request: parsedRequest,
@@ -431,6 +441,7 @@ async function settleRenewal(parameters: {
   subscription: SubscriptionRecord
 }): Promise<
   | { status: 'charged'; receipt: SubscriptionReceiptValue }
+  | { status: 'inFlight'; receipt: SubscriptionReceiptValue }
   | { status: 'renewed'; result: subscription.RenewalResult }
   | null
 > {
@@ -461,6 +472,9 @@ async function settleRenewal(parameters: {
 
   if (renewal.status === 'charged') {
     return { receipt: SubscriptionReceipt.fromRecord(renewal.subscription), status: 'charged' }
+  }
+  if (renewal.status === 'inFlight') {
+    return { receipt: SubscriptionReceipt.fromRecord(renewal.subscription), status: 'inFlight' }
   }
   if (renewal.status === 'renewed') return { result: renewal.result, status: 'renewed' }
   if (renewal.status === 'claimMismatch') {
@@ -841,6 +855,8 @@ export async function renew(parameters: renew.Parameters): Promise<renew.Result 
   const record = await store.get(parameters.subscriptionId)
   if (!record) return null
   if (!isActive(record)) return null
+  const active = await store.getByKey(record.lookupKey)
+  if (active?.subscriptionId !== record.subscriptionId) return null
 
   const periodIndex = getPeriodIndex(record)
   if (periodIndex <= record.lastChargedPeriod) return null

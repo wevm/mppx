@@ -100,6 +100,35 @@ describe('tempo subscription store', () => {
     expect(await first).toEqual({ status: 'claimMismatch' })
   })
 
+  test('rechecks the lookup key after claiming activation', async () => {
+    const rawStore = Store.memory()
+    const seeded = fromStore(rawStore)
+    const store = fromStore({
+      ...rawStore,
+      async update(key, change) {
+        const result = await rawStore.update(key, change)
+        if (key === 'tempo:subscription:activation:user-1:plan:pro') {
+          await seeded.put(createRecord())
+        }
+        return result
+      },
+    })
+    let createCalled = false
+
+    const activated = await store.activate({
+      challengeId: 'challenge-1',
+      create: async () => {
+        createCalled = true
+        return { subscription: createRecord({ subscriptionId: 'sub_new' }) }
+      },
+      isReusable: () => true,
+      lookupKey: 'user-1:plan:pro',
+    })
+
+    expect(activated).toEqual({ status: 'existing', subscription: createRecord() })
+    expect(createCalled).toBe(false)
+  })
+
   test('clears the activation marker when creation fails', async () => {
     const store = fromStore(Store.memory())
 
@@ -195,6 +224,27 @@ describe('tempo subscription store', () => {
     expect((await first).status).toBe('renewed')
   })
 
+  test('returns in-flight when any non-stale renewal is active', async () => {
+    const store = fromStore(Store.memory())
+    await store.put(
+      createRecord({ inFlightPeriod: 1, inFlightStartedAt: new Date().toISOString() }),
+    )
+    let renewCalled = false
+
+    const renewal = await store.renew({
+      inFlightReference: '0xrenewal',
+      periodIndex: 2,
+      renew: async ({ subscription }) => {
+        renewCalled = true
+        return { subscription }
+      },
+      subscriptionId,
+    })
+
+    expect(renewal.status).toBe('inFlight')
+    expect(renewCalled).toBe(false)
+  })
+
   test('replaces a stale in-flight renewal after the timeout', async () => {
     const store = fromStore(Store.memory(), { renewalTimeoutMs: 0 })
     await store.put(createRecord())
@@ -286,5 +336,51 @@ describe('tempo subscription store', () => {
     expect(committed?.canceledAt).toBe('2025-01-02T00:00:00.000Z')
     expect(committed?.lastChargedPeriod).toBe(1)
     expect(committed?.inFlightPeriod).toBe(undefined)
+  })
+
+  test('does not renew a superseded subscription record', async () => {
+    const store = fromStore(Store.memory())
+    await store.put(createRecord({ subscriptionId: 'sub_old' }))
+    await store.put(createRecord({ reference: `0x${'b'.repeat(64)}`, subscriptionId: 'sub_new' }))
+    let renewCalled = false
+
+    const renewal = await store.renew({
+      inFlightReference: '0xrenewal',
+      periodIndex: 1,
+      renew: async ({ subscription }) => {
+        renewCalled = true
+        return { subscription }
+      },
+      subscriptionId: 'sub_old',
+    })
+
+    expect(renewal.status).toBe('superseded')
+    expect(renewCalled).toBe(false)
+    expect((await store.getByKey('user-1:plan:pro'))?.subscriptionId).toBe('sub_new')
+  })
+
+  test('does not reclaim lookup ownership when superseded during renewal', async () => {
+    const store = fromStore(Store.memory())
+    await store.put(createRecord({ subscriptionId: 'sub_old' }))
+
+    const renewal = await store.renew({
+      inFlightReference: '0xrenewal',
+      periodIndex: 1,
+      renew: async ({ subscription }) => {
+        await store.put(
+          createRecord({ reference: `0x${'c'.repeat(64)}`, subscriptionId: 'sub_new' }),
+        )
+        return {
+          subscription: {
+            ...subscription,
+            reference: `0x${'b'.repeat(64)}`,
+          },
+        }
+      },
+      subscriptionId: 'sub_old',
+    })
+
+    expect(renewal.status).toBe('superseded')
+    expect((await store.getByKey('user-1:plan:pro'))?.subscriptionId).toBe('sub_new')
   })
 })
