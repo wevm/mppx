@@ -1,5 +1,6 @@
 import type * as Challenge from '../../Challenge.js'
 import type * as Method from '../../Method.js'
+import type { Network } from '../utils.js'
 
 export function createPlugin(plugin: Plugin): Plugin {
   return plugin
@@ -18,7 +19,11 @@ export interface Plugin {
    */
   setup(ctx: {
     challenge: Challenge.Challenge
-    options: { account?: string | undefined; rpcUrl?: string | undefined }
+    options: {
+      account?: string | undefined
+      network?: Network | undefined
+      rpcUrl?: string | undefined
+    }
     methodOpts: Record<string, string>
   }): Promise<{
     /** Token symbol for display (e.g., 'PathUSD', 'USD') */

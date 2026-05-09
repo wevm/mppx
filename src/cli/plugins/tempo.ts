@@ -71,11 +71,12 @@ export function tempo() {
         useTempoCliSign = true
         const tempoEntry = resolveTempoAccount(accountName)
         if (tempoEntry) {
-          const rpcUrl = resolveRpcUrl(options.rpcUrl)
+          const rpcUrl = resolveRpcUrl(options.rpcUrl, { network: options.network })
           client = createClient({
-            chain: await resolveChain({ rpcUrl }),
+            chain: await resolveChain({ network: options.network, rpcUrl }),
             transport: http(rpcUrl),
           })
+          assertChallengeChain({ challenge, clientChainId: client.chain?.id })
           explorerUrl = client.chain?.blockExplorers?.default?.url
           const tokenInfo = currency
             ? await fetchTokenInfo(
@@ -111,11 +112,12 @@ export function tempo() {
       } else account = privateKeyToAccount(privateKey as `0x${string}`)
 
       if (!useTempoCliSign && account) {
-        const rpcUrl = resolveRpcUrl(options.rpcUrl)
+        const rpcUrl = resolveRpcUrl(options.rpcUrl, { network: options.network })
         client = createClient({
-          chain: await resolveChain({ rpcUrl }),
+          chain: await resolveChain({ network: options.network, rpcUrl }),
           transport: http(rpcUrl),
         })
+        assertChallengeChain({ challenge, clientChainId: client.chain?.id })
         explorerUrl = client.chain?.blockExplorers?.default?.url
         const tokenInfo = currency
           ? await fetchTokenInfo(client, currency as Address, account.address).catch(
@@ -728,6 +730,28 @@ function parseOptions<const schema extends z.ZodType>(
     })
     .join(', ')
   throw new Error(`Invalid CLI options (${summary})`)
+}
+
+function assertChallengeChain(opts: {
+  challenge: { request: Record<string, unknown> }
+  clientChainId?: number | undefined
+}) {
+  const methodDetails = opts.challenge.request.methodDetails as
+    | { chainId?: number | undefined }
+    | undefined
+  const requiredChainId = methodDetails?.chainId
+  if (!requiredChainId || !opts.clientChainId || requiredChainId === opts.clientChainId) return
+  const hint =
+    requiredChainId === 4217
+      ? ' Use --network mainnet or --rpc-url https://rpc.tempo.xyz.'
+      : requiredChainId === 42431
+        ? ' Use --network testnet or --rpc-url https://rpc.moderato.tempo.xyz.'
+        : ''
+  throw new Errors.IncurError({
+    code: 'CHAIN_MISMATCH',
+    message: `Challenge requires chainId ${requiredChainId}, but RPC is chainId ${opts.clientChainId}.${hint}`,
+    exitCode: 2,
+  })
 }
 
 function channelStateDir() {
