@@ -318,6 +318,114 @@ describe('discover generate', () => {
   })
 })
 
+describe('services', () => {
+  const registry = {
+    version: 1,
+    services: [
+      {
+        id: 'fal',
+        name: 'fal',
+        serviceUrl: 'https://fal.mpp.dev',
+        description: 'Image generation',
+        tags: ['image'],
+        status: 'active',
+        docs: { homepage: 'https://docs.fal.ai' },
+        endpoints: [
+          {
+            method: 'POST',
+            path: '/fal-ai/fast-sdxl',
+            description: 'Generate an image',
+            payment: {
+              amount: '3000',
+              currency: '0x20c000000000000000000000b9537d11c60e8b50',
+              decimals: 6,
+              intent: 'charge',
+              method: 'tempo',
+            },
+          },
+          {
+            method: 'GET',
+            path: '/health',
+            description: 'Health check',
+            payment: null,
+          },
+        ],
+      },
+      {
+        id: 'freebie',
+        name: 'Freebie',
+        serviceUrl: 'https://freebie.example',
+        endpoints: [],
+      },
+    ],
+  }
+
+  async function withRegistry<T>(fn: (url: string) => Promise<T>) {
+    const server = await Http.createServer((_req, res) => {
+      res.setHeader('Content-Type', 'application/json')
+      res.end(JSON.stringify(registry))
+    })
+    try {
+      return await fn(server.url)
+    } finally {
+      server.close()
+    }
+  }
+
+  test('list: prints registered services', async () => {
+    await withRegistry(async (url) => {
+      const { output, exitCode } = await serve(['services', 'list'], {
+        env: { MPPX_SERVICES_URL: url },
+      })
+
+      expect(exitCode).toBeUndefined()
+      expect(output).toContain('fal')
+      expect(output).toContain('1 paid')
+      expect(output).toContain('https://fal.mpp.dev')
+    })
+  })
+
+  test('list: supports structured output and filtering', async () => {
+    await withRegistry(async (url) => {
+      const { output, exitCode } = await serve(['services', 'list', '--query', 'image', '--json'], {
+        env: { MPPX_SERVICES_URL: url },
+      })
+
+      expect(exitCode).toBeUndefined()
+      const parsed = JSON.parse(output)
+      expect(parsed.services).toHaveLength(1)
+      expect(parsed.services[0]).toMatchObject({ id: 'fal', paidEndpoints: 1 })
+    })
+  })
+
+  test('show: prints service metadata', async () => {
+    await withRegistry(async (url) => {
+      const { output, exitCode } = await serve(['services', 'show', 'fal'], {
+        env: { MPPX_SERVICES_URL: url },
+      })
+
+      expect(exitCode).toBeUndefined()
+      expect(output).toContain('Image generation')
+      expect(output).toContain('https://docs.fal.ai')
+      expect(output).toContain('2 (1 paid)')
+    })
+  })
+
+  test('endpoints: prints paid endpoint details', async () => {
+    await withRegistry(async (url) => {
+      const { output, exitCode } = await serve(['services', 'endpoints', 'fal'], {
+        env: { MPPX_SERVICES_URL: url },
+      })
+
+      expect(exitCode).toBeUndefined()
+      expect(output).toContain('POST')
+      expect(output).toContain('/fal-ai/fast-sdxl')
+      expect(output).toContain('3000')
+      expect(output).toContain('tempo/charge')
+    })
+  })
+})
+
 describe('basic charge (examples/basic)', () => {
   test('happy path: makes payment and receives response', { timeout: 120_000 }, async () => {
     const { Actions } = await import('viem/tempo')
@@ -1413,6 +1521,7 @@ test('mppx --help', async () => {
   expect(output).toContain('mppx')
   expect(output).toContain('<url>')
   expect(output).toContain('account')
+  expect(output).toContain('services')
   expect(output).toContain('sign')
 })
 
