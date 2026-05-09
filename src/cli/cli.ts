@@ -4,7 +4,7 @@ import * as path from 'node:path'
 
 import { Cli, Errors, z } from 'incur'
 import { Base64 } from 'ox'
-import { type Address, createClient, http } from 'viem'
+import { type Address, type Chain, createClient, http } from 'viem'
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts'
 import { tempo as tempoMainnet } from 'viem/chains'
 
@@ -25,6 +25,7 @@ import {
   fmtChallengeValue,
   fmtRequestValue,
   isTempoAccount,
+  isTestnet,
   link,
   parseMethodOpts,
   pc,
@@ -77,6 +78,33 @@ function outputResult<Data>(
 function canReadCommandStdin() {
   if (process.stdin.isTTY !== false) return false
   return process.stdin.listenerCount('data') === 0 && process.stdin.listenerCount('readable') === 0
+}
+
+function resolveEnvPrivateKey(account?: string | undefined) {
+  const privateKey = process.env.MPPX_PRIVATE_KEY?.trim()
+  if (!privateKey) return undefined
+  if (account && account !== 'env:MPPX_PRIVATE_KEY') return undefined
+  return privateKey as `0x${string}`
+}
+
+function resolveEnvAccount(account?: string | undefined) {
+  const privateKey = resolveEnvPrivateKey(account)
+  if (!privateKey) return undefined
+  return {
+    account: privateKeyToAccount(privateKey),
+    name: account ?? 'env:MPPX_PRIVATE_KEY',
+  }
+}
+
+function formatFundingError(error: unknown, chain: Chain) {
+  const message = error instanceof Error ? error.message : String(error)
+  if (!isTestnet(chain) && /FeeAMM|liquidity/i.test(message))
+    return [
+      'Mainnet faucet/funding failed due to FeeAMM liquidity.',
+      'This command is primarily intended for testnet. For mainnet, fund the address manually with PathUSD or USDC.e.',
+      `Cause: ${message}`,
+    ].join(' ')
+  return message
 }
 
 const cli = Cli.create('mppx', {
@@ -709,9 +737,9 @@ const account = Cli.create('account', {
     async run(c) {
       const structured = shouldReturnStructured(c)
       const accountName = resolveAccountName(c.options.account)
-      const keychain = createKeychain(accountName)
-      const key = await keychain.get()
-      if (!key) {
+      const envAccount = resolveEnvAccount(c.options.account)
+      const key = envAccount ? undefined : await createKeychain(accountName).get()
+      if (!envAccount && !key) {
         if (c.options.account)
           return c.error({
             code: 'ACCOUNT_NOT_FOUND',
@@ -721,11 +749,20 @@ const account = Cli.create('account', {
         else
           return c.error({ code: 'ACCOUNT_NOT_FOUND', message: 'No account found.', exitCode: 69 })
       }
-      const acct = privateKeyToAccount(key as `0x${string}`)
+      const acct = envAccount?.account ?? privateKeyToAccount(key as `0x${string}`)
+      const resolvedAccountName = envAccount?.name ?? accountName
       const rpcUrl = resolveRpcUrl(c.options.rpcUrl)
       const chain = await resolveChain({ rpcUrl })
       const client = createClient({ chain, transport: http(rpcUrl) })
-      if (!structured) console.log(`Funding "${accountName}" on ${chainName(chain)}`)
+      if (!structured) {
+        console.log(`Funding "${resolvedAccountName}" on ${chainName(chain)}`)
+        if (!isTestnet(chain))
+          console.log(
+            pc.dim(
+              'This command is primarily intended for testnet. Mainnet funding may require manually funding PathUSD or USDC.e.',
+            ),
+          )
+      }
       try {
         const { Actions } = await import('viem/tempo')
         const hashes = await Actions.faucet.fund(client, { account: acct })
@@ -740,20 +777,14 @@ const account = Cli.create('account', {
         await Promise.all(hashes.map((hash) => waitForTransactionReceipt(client, { hash })))
         return outputResult(
           c,
-          { account: accountName, chain: chainName(chain), transactions: [...hashes] },
+          { account: resolvedAccountName, chain: chainName(chain), transactions: [...hashes] },
           () => {
             console.log('Funded successfully')
           },
         )
       } catch (err) {
-        if (structured)
-          return c.error({
-            code: 'FUNDING_FAILED',
-            message: err instanceof Error ? err.message : String(err),
-            exitCode: 1,
-          })
-        console.error('Funding failed:', err instanceof Error ? err.message : err)
-        return undefined as never
+        const message = formatFundingError(err, chain)
+        return c.error({ code: 'FUNDING_FAILED', message, exitCode: 1 })
       }
     },
   })
@@ -762,8 +793,20 @@ const account = Cli.create('account', {
     output: z.object({ accounts: z.array(accountSummarySchema) }),
     async run(c) {
       const currentDefault = createDefaultStore().get()
-      const accounts = (await createKeychain().list()).sort()
+      const envAccount = resolveEnvAccount()
+      let accounts: string[] = []
+      try {
+        accounts = (await createKeychain().list()).sort()
+      } catch (err) {
+        if (!envAccount) throw err
+      }
       const resolved: { name: string; address: string; source?: string }[] = []
+      if (envAccount)
+        resolved.push({
+          name: envAccount.name,
+          address: envAccount.account.address,
+          source: 'MPPX_PRIVATE_KEY',
+        })
       for (const accountName of accounts) {
         const key = await createKeychain(accountName).get()
         if (!key) continue
@@ -822,6 +865,11 @@ const account = Cli.create('account', {
     alias: { account: 'a' },
     async run(c) {
       const accountName = resolveAccountName(c.options.account)
+      const envPrivateKey = resolveEnvPrivateKey(c.options.account)
+      if (envPrivateKey)
+        return outputResult(c, { privateKey: envPrivateKey }, () => {
+          console.log(envPrivateKey)
+        })
 
       if (isTempoAccount(accountName)) {
         return c.error({
@@ -858,6 +906,38 @@ const account = Cli.create('account', {
     alias: { account: 'a', rpcUrl: 'r' },
     async run(c) {
       const accountName = resolveAccountName(c.options.account)
+      const envAccount = resolveEnvAccount(c.options.account)
+
+      if (envAccount) {
+        const address = envAccount.account.address
+        const rpcUrl = resolveRpcUrl(c.options.rpcUrl)
+        const chain = await resolveChain({ rpcUrl })
+        const explorerUrl = chain.blockExplorers?.default?.url
+        const addrDisplay = explorerUrl
+          ? link(`${explorerUrl}/address/${address}`, address)
+          : address
+
+        const balanceLines = await fetchBalanceLines(
+          address,
+          chain && rpcUrl ? { chain, rpcUrl } : undefined,
+        )
+        return outputResult(
+          c,
+          {
+            address,
+            balances: balanceLines,
+            name: envAccount.name,
+            type: 'MPPX_PRIVATE_KEY',
+          },
+          () => {
+            console.log(`${pc.dim('Address')}  ${addrDisplay}`)
+            for (let i = 0; i < balanceLines.length; i++)
+              console.log(`${pc.dim(i === 0 ? 'Balance' : '       ')}  ${balanceLines[i]}`)
+            console.log(`${pc.dim('Name')}     ${envAccount.name}`)
+            console.log(`${pc.dim('Type')}     MPPX_PRIVATE_KEY`)
+          },
+        )
+      }
 
       if (isTempoAccount(accountName)) {
         const tempoEntry = resolveTempoAccount(accountName)
