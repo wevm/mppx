@@ -60,6 +60,24 @@ const discoveryIssueSchema = z.object({
   severity: z.string(),
 })
 
+const serviceSummarySchema = z.object({
+  description: z.string().optional(),
+  id: z.string(),
+  name: z.string().optional(),
+  paidEndpoints: z.number(),
+  status: z.string().optional(),
+  url: z.string().optional(),
+})
+
+const serviceEndpointSchema = z.object({
+  description: z.string().optional(),
+  method: z.string(),
+  path: z.string(),
+  payment: z.unknown().optional(),
+})
+
+const servicesRegistryUrl = 'https://mpp.dev/api/services'
+
 function shouldReturnStructured(c: { format: string; formatExplicit: boolean }) {
   return c.format === 'json' && c.formatExplicit
 }
@@ -77,6 +95,93 @@ function outputResult<Data>(
 function canReadCommandStdin() {
   if (process.stdin.isTTY !== false) return false
   return process.stdin.listenerCount('data') === 0 && process.stdin.listenerCount('readable') === 0
+}
+
+type ServiceRegistryService = Record<string, unknown>
+type ServiceRegistryEndpoint = Record<string, unknown>
+
+function getString(value: unknown): string | undefined {
+  return typeof value === 'string' ? value : undefined
+}
+
+function getEndpoints(service: ServiceRegistryService): ServiceRegistryEndpoint[] {
+  return Array.isArray(service.endpoints)
+    ? service.endpoints.filter(
+        (endpoint): endpoint is ServiceRegistryEndpoint =>
+          typeof endpoint === 'object' && endpoint !== null,
+      )
+    : []
+}
+
+function summarizeService(service: ServiceRegistryService) {
+  const endpoints = getEndpoints(service)
+  return {
+    ...(getString(service.description) ? { description: getString(service.description) } : {}),
+    id: getString(service.id) ?? getString(service.name) ?? 'unknown',
+    ...(getString(service.name) ? { name: getString(service.name) } : {}),
+    paidEndpoints: endpoints.filter((endpoint) => endpoint.payment).length,
+    ...(getString(service.status) ? { status: getString(service.status) } : {}),
+    ...(getString(service.serviceUrl) || getString(service.url)
+      ? { url: getString(service.serviceUrl) ?? getString(service.url) }
+      : {}),
+  }
+}
+
+function summarizeEndpoint(endpoint: ServiceRegistryEndpoint) {
+  return {
+    ...(getString(endpoint.description) ? { description: getString(endpoint.description) } : {}),
+    method: getString(endpoint.method) ?? 'GET',
+    path: getString(endpoint.path) ?? '/',
+    ...(endpoint.payment !== undefined ? { payment: endpoint.payment } : {}),
+  }
+}
+
+function formatPayment(payment: unknown): string {
+  if (!payment) return 'free'
+  if (typeof payment !== 'object') return String(payment)
+  const p = payment as Record<string, unknown>
+  const amount = getString(p.amount)
+  const currency = getString(p.currency)
+  const method = getString(p.method)
+  const intent = getString(p.intent)
+  return [amount, currency, method && intent ? `${method}/${intent}` : (method ?? intent)]
+    .filter(Boolean)
+    .join(' ')
+}
+
+async function fetchServicesRegistry(): Promise<ServiceRegistryService[]> {
+  const url = process.env.MPPX_SERVICES_URL ?? servicesRegistryUrl
+  const response = await globalThis.fetch(url)
+  if (!response.ok)
+    throw new Errors.IncurError({
+      code: 'SERVICES_FETCH_FAILED',
+      message: `Failed to fetch services registry: HTTP ${response.status}`,
+      exitCode: 1,
+    })
+  const json = (await response.json()) as unknown
+  if (
+    !json ||
+    typeof json !== 'object' ||
+    !Array.isArray((json as { services?: unknown }).services)
+  )
+    throw new Errors.IncurError({
+      code: 'SERVICES_INVALID',
+      message: 'Services registry response did not contain a services array.',
+      exitCode: 1,
+    })
+  return (json as { services: ServiceRegistryService[] }).services
+}
+
+function findService(
+  services: ServiceRegistryService[],
+  id: string,
+): ServiceRegistryService | undefined {
+  const needle = id.toLowerCase()
+  return services.find((service) => {
+    const serviceId = getString(service.id)?.toLowerCase()
+    const serviceName = getString(service.name)?.toLowerCase()
+    return serviceId === needle || serviceName === needle
+  })
 }
 
 const cli = Cli.create('mppx', {
@@ -1117,6 +1222,119 @@ export default defineConfig({
   },
 })
 
+const services = Cli.create('services', {
+  description: 'Browse the MPP services registry',
+})
+  .command('list', {
+    description: 'List registered MPP services',
+    options: z.object({
+      query: z.string().optional().describe('Filter by id, name, category, tag, or description'),
+    }),
+    output: z.object({ services: z.array(serviceSummarySchema) }),
+    alias: { query: 'q' },
+    async run(c) {
+      const query = c.options.query?.toLowerCase()
+      const registry = await fetchServicesRegistry()
+      const filtered = query
+        ? registry.filter((service) =>
+            [
+              service.id,
+              service.name,
+              service.description,
+              ...(Array.isArray(service.categories) ? service.categories : []),
+              ...(Array.isArray(service.tags) ? service.tags : []),
+            ]
+              .filter((value): value is string => typeof value === 'string')
+              .some((value) => value.toLowerCase().includes(query)),
+          )
+        : registry
+      const summaries = filtered.map(summarizeService).sort((a, b) => a.id.localeCompare(b.id))
+      return outputResult(c, { services: summaries }, () => {
+        if (summaries.length === 0) {
+          console.log('No services found.')
+          return
+        }
+        const idWidth = Math.max(...summaries.map((service) => service.id.length))
+        const paidWidth = Math.max(
+          ...summaries.map((service) => String(service.paidEndpoints).length),
+        )
+        for (const service of summaries) {
+          const name = service.name && service.name !== service.id ? `  ${service.name}` : ''
+          const url = service.url ? `  ${pc.dim(service.url)}` : ''
+          console.log(
+            `${service.id.padEnd(idWidth)}  ${String(service.paidEndpoints).padStart(paidWidth)} paid${name}${url}`,
+          )
+        }
+      })
+    },
+  })
+  .command('show', {
+    description: 'Show one registered MPP service',
+    args: z.object({
+      service: z.string().describe('Service id or name'),
+    }),
+    output: z.object({ service: z.record(z.string(), z.unknown()) }),
+    async run(c) {
+      const registry = await fetchServicesRegistry()
+      const service = findService(registry, c.args.service)
+      if (!service)
+        return c.error({
+          code: 'SERVICE_NOT_FOUND',
+          message: `Service not found: ${c.args.service}`,
+          exitCode: 1,
+        })
+      const summary = summarizeService(service)
+      const endpoints = getEndpoints(service)
+      return outputResult(c, { service }, () => {
+        console.log(`${summary.name ?? summary.id} ${pc.dim(`(${summary.id})`)}`)
+        if (summary.description) console.log(summary.description)
+        if (summary.url) console.log(`${pc.dim('URL')}       ${link(summary.url, summary.url)}`)
+        if (summary.status) console.log(`${pc.dim('Status')}    ${summary.status}`)
+        console.log(`${pc.dim('Endpoints')} ${endpoints.length} (${summary.paidEndpoints} paid)`)
+        const docs = service.docs as Record<string, unknown> | undefined
+        const homepage = docs && getString(docs.homepage)
+        if (homepage) console.log(`${pc.dim('Docs')}      ${link(homepage, homepage)}`)
+      })
+    },
+  })
+  .command('endpoints', {
+    description: 'List endpoints for a registered MPP service',
+    args: z.object({
+      service: z.string().describe('Service id or name'),
+    }),
+    output: z.object({
+      endpoints: z.array(serviceEndpointSchema),
+      service: serviceSummarySchema,
+    }),
+    async run(c) {
+      const registry = await fetchServicesRegistry()
+      const service = findService(registry, c.args.service)
+      if (!service)
+        return c.error({
+          code: 'SERVICE_NOT_FOUND',
+          message: `Service not found: ${c.args.service}`,
+          exitCode: 1,
+        })
+      const summary = summarizeService(service)
+      const endpoints = getEndpoints(service).map(summarizeEndpoint)
+      return outputResult(c, { endpoints, service: summary }, () => {
+        if (endpoints.length === 0) {
+          console.log(`No endpoints found for ${summary.id}.`)
+          return
+        }
+        const methodWidth = Math.max(...endpoints.map((endpoint) => endpoint.method.length))
+        const pathWidth = Math.max(...endpoints.map((endpoint) => endpoint.path.length))
+        for (const endpoint of endpoints) {
+          const payment = formatPayment(endpoint.payment)
+          const description = endpoint.description ? `  ${pc.dim(endpoint.description)}` : ''
+          console.log(
+            `${endpoint.method.padEnd(methodWidth)}  ${endpoint.path.padEnd(pathWidth)}  ${payment}${description}`,
+          )
+        }
+      })
+    },
+  })
+
 const discover = Cli.create('discover', {
   description: 'Discovery tooling',
 })
@@ -1294,6 +1512,7 @@ const discover = Cli.create('discover', {
 cli.command(account)
 cli.command(discover)
 cli.command(init)
+cli.command(services)
 cli.command(sign)
 
 export default cli
