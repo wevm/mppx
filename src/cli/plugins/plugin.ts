@@ -21,8 +21,11 @@ export interface Plugin {
     challenge: Challenge.Challenge
     options: {
       account?: string | undefined
+      autoSwap?: boolean | undefined
       network?: Network | undefined
+      payWith?: string | undefined
       rpcUrl?: string | undefined
+      slippage?: number | undefined
     }
     methodOpts: Record<string, string>
   }): Promise<{

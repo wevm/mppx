@@ -193,6 +193,7 @@ const cli = Cli.create('mppx', {
   }),
   options: z.object({
     account: z.string().optional().describe('Account name (env: MPPX_ACCOUNT)'),
+    autoSwap: z.boolean().optional().describe('Auto-swap source tokens into payment currency'),
     config: z.string().optional().describe('Path to config file'),
     confirm: z.boolean().optional().default(false).describe('Show confirmation prompts'),
     data: z.string().optional().describe('Send request body (implies POST unless -X is set)'),
@@ -214,11 +215,13 @@ const cli = Cli.create('mppx', {
       .optional()
       .describe('Method-specific option (key=value, repeatable)'),
     network: z.enum(['mainnet', 'testnet']).optional().describe('Tempo network'),
+    payWith: z.string().optional().describe('Source token for Tempo auto-swap'),
     rpcUrl: z
       .string()
       .optional()
       .describe('RPC endpoint, defaults to public RPC for chain (env: MPPX_RPC_URL)'),
     silent: z.boolean().default(false).describe('Silent mode (suppress progress and info)'),
+    slippage: z.number().optional().describe('Tempo auto-swap max slippage percentage'),
     userAgent: z
       .string()
       .optional()
@@ -382,8 +385,11 @@ const cli = Cli.create('mppx', {
           challenge,
           options: {
             account: c.options.account,
+            autoSwap: c.options.autoSwap,
             network: c.options.network,
+            payWith: c.options.payWith,
             rpcUrl: c.options.rpcUrl,
+            slippage: c.options.slippage,
           },
           methodOpts: parseMethodOpts(c.options.methodOpt),
         })
@@ -1061,15 +1067,18 @@ const sign = Cli.create('sign', {
     challenge: z.string().optional().describe('WWW-Authenticate challenge value'),
     config: z.string().optional().describe('Path to config file'),
     dryRun: z.boolean().optional().describe('Validate and parse the challenge without signing'),
+    autoSwap: z.boolean().optional().describe('Auto-swap source tokens into payment currency'),
     methodOpt: z
       .array(z.string())
       .optional()
       .describe('Method-specific option (key=value, repeatable)'),
     network: z.enum(['mainnet', 'testnet']).optional().describe('Tempo network'),
+    payWith: z.string().optional().describe('Source token for Tempo auto-swap'),
     rpcUrl: z
       .string()
       .optional()
       .describe('RPC endpoint, defaults to public RPC for chain (env: MPPX_RPC_URL)'),
+    slippage: z.number().optional().describe('Tempo auto-swap max slippage percentage'),
   }),
   output: z.object({ authorization: z.string() }),
   alias: {
@@ -1145,8 +1154,11 @@ const sign = Cli.create('sign', {
         challenge,
         options: {
           account: c.options.account,
+          autoSwap: c.options.autoSwap,
           network: c.options.network,
+          payWith: c.options.payWith,
           rpcUrl: c.options.rpcUrl,
+          slippage: c.options.slippage,
         },
         methodOpts,
       })
