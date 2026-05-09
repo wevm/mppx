@@ -9,15 +9,6 @@ blockExoticSubdeps: true
 minimumReleaseAge: 1440
 trustPolicy: no-downgrade
 
-onlyBuiltDependencies:
-  - bufferutil
-  - bun
-  - cpu-features
-  - esbuild
-  - protobufjs
-  - ssh2
-  - utf-8-validate
-
 overrides:
   mppx: 'workspace:*'
   vitest: 'npm:@voidzero-dev/vite-plus-test@~0.1.17'
@@ -49,3 +40,12 @@ overrides:
   uuid@<14.0.0: '14.0.0'
 
 nodeOptions: '--disable-warning=ExperimentalWarning --disable-warning=DeprecationWarning'
+
+allowBuilds:
+  bufferutil: true
+  bun: true
+  cpu-features: true
+  esbuild: true
+  protobufjs: true
+  ssh2: true
+  utf-8-validate: true
