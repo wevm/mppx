@@ -108,6 +108,7 @@ const cli = Cli.create('mppx', {
       .array(z.string())
       .optional()
       .describe('Method-specific option (key=value, repeatable)'),
+    network: z.enum(['mainnet', 'testnet']).optional().describe('Tempo network'),
     rpcUrl: z
       .string()
       .optional()
@@ -274,7 +275,11 @@ const cli = Cli.create('mppx', {
       if (plugin) {
         pluginResult = await plugin.setup({
           challenge,
-          options: { account: c.options.account, rpcUrl: c.options.rpcUrl },
+          options: {
+            account: c.options.account,
+            network: c.options.network,
+            rpcUrl: c.options.rpcUrl,
+          },
           methodOpts: parseMethodOpts(c.options.methodOpt),
         })
         tokenSymbol = pluginResult.tokenSymbol
@@ -542,6 +547,7 @@ const account = Cli.create('account', {
     description: 'Create new account',
     options: z.object({
       account: z.string().optional().describe('Account name (env: MPPX_ACCOUNT)'),
+      network: z.enum(['mainnet', 'testnet']).optional().describe('Tempo network'),
       rpcUrl: z.string().optional().describe('RPC endpoint (env: MPPX_RPC_URL)'),
     }),
     output: z.object({ address: z.string(), name: z.string() }),
@@ -587,8 +593,8 @@ const account = Cli.create('account', {
       const addrDisplay = explorerUrl
         ? link(`${explorerUrl}/address/${acct.address}`, acct.address)
         : acct.address
-      const rpcUrl = resolveRpcUrl(c.options.rpcUrl)
-      resolveChain({ rpcUrl })
+      const rpcUrl = resolveRpcUrl(c.options.rpcUrl, { network: c.options.network })
+      resolveChain({ network: c.options.network, rpcUrl })
         .then((chain) => createClient({ chain, transport: http(rpcUrl) }))
         .then((client) =>
           import('viem/tempo').then(({ Actions }) =>
@@ -702,6 +708,7 @@ const account = Cli.create('account', {
     description: 'Fund account with testnet tokens',
     options: z.object({
       account: z.string().optional().describe('Account name (env: MPPX_ACCOUNT)'),
+      network: z.enum(['mainnet', 'testnet']).optional().describe('Tempo network'),
       rpcUrl: z.string().optional().describe('RPC endpoint (env: MPPX_RPC_URL)'),
     }),
     output: z.object({ account: z.string(), chain: z.string(), transactions: z.array(z.string()) }),
@@ -722,8 +729,8 @@ const account = Cli.create('account', {
           return c.error({ code: 'ACCOUNT_NOT_FOUND', message: 'No account found.', exitCode: 69 })
       }
       const acct = privateKeyToAccount(key as `0x${string}`)
-      const rpcUrl = resolveRpcUrl(c.options.rpcUrl)
-      const chain = await resolveChain({ rpcUrl })
+      const rpcUrl = resolveRpcUrl(c.options.rpcUrl, { network: c.options.network })
+      const chain = await resolveChain({ network: c.options.network, rpcUrl })
       const client = createClient({ chain, transport: http(rpcUrl) })
       if (!structured) console.log(`Funding "${accountName}" on ${chainName(chain)}`)
       try {
@@ -852,6 +859,7 @@ const account = Cli.create('account', {
     description: 'View account address',
     options: z.object({
       account: z.string().optional().describe('Account name (env: MPPX_ACCOUNT)'),
+      network: z.enum(['mainnet', 'testnet']).optional().describe('Tempo network'),
       rpcUrl: z.string().optional().describe('RPC endpoint (env: MPPX_RPC_URL)'),
     }),
     output: accountViewSchema,
@@ -869,8 +877,8 @@ const account = Cli.create('account', {
           })
         }
         const address = tempoEntry.wallet_address as Address
-        const rpcUrl = resolveRpcUrl(c.options.rpcUrl)
-        const chain = await resolveChain({ rpcUrl })
+        const rpcUrl = resolveRpcUrl(c.options.rpcUrl, { network: c.options.network })
+        const chain = await resolveChain({ network: c.options.network, rpcUrl })
         const explorerUrl = chain.blockExplorers?.default?.url
         const addrDisplay = explorerUrl
           ? link(`${explorerUrl}/address/${address}`, address)
@@ -913,8 +921,8 @@ const account = Cli.create('account', {
           return c.error({ code: 'ACCOUNT_NOT_FOUND', message: 'No account found.', exitCode: 69 })
       }
       const acct = privateKeyToAccount(key as `0x${string}`)
-      const rpcUrl = resolveRpcUrl(c.options.rpcUrl)
-      const chain = await resolveChain({ rpcUrl })
+      const rpcUrl = resolveRpcUrl(c.options.rpcUrl, { network: c.options.network })
+      const chain = await resolveChain({ network: c.options.network, rpcUrl })
       const explorerUrl = chain.blockExplorers?.default?.url
       const addrDisplay = explorerUrl
         ? link(`${explorerUrl}/address/${acct.address}`, acct.address)
@@ -952,6 +960,7 @@ const sign = Cli.create('sign', {
       .array(z.string())
       .optional()
       .describe('Method-specific option (key=value, repeatable)'),
+    network: z.enum(['mainnet', 'testnet']).optional().describe('Tempo network'),
     rpcUrl: z
       .string()
       .optional()
@@ -1029,7 +1038,11 @@ const sign = Cli.create('sign', {
     if (plugin) {
       const result = await plugin.setup({
         challenge,
-        options: { account: c.options.account, rpcUrl: c.options.rpcUrl },
+        options: {
+          account: c.options.account,
+          network: c.options.network,
+          rpcUrl: c.options.rpcUrl,
+        },
         methodOpts,
       })
       if (result.createCredential) {

@@ -1,7 +1,7 @@
 import { tempo as tempoMainnet, tempoModerato } from 'viem/chains'
 import { afterEach, describe, expect, test } from 'vp/test'
 
-import { resolveChain, resolveRpcUrl } from './utils.js'
+import { networkRpcUrls, resolveChain, resolveRpcUrl } from './utils.js'
 
 describe('resolveRpcUrl', () => {
   afterEach(() => {
@@ -12,6 +12,17 @@ describe('resolveRpcUrl', () => {
   test('returns explicit value when provided', () => {
     process.env.MPPX_RPC_URL = 'https://env.example.com'
     expect(resolveRpcUrl('https://explicit.example.com')).toBe('https://explicit.example.com')
+  })
+
+  test('uses network default before env vars', () => {
+    process.env.MPPX_RPC_URL = 'https://env.example.com'
+    expect(resolveRpcUrl(undefined, { network: 'testnet' })).toBe(networkRpcUrls.testnet)
+  })
+
+  test('prefers explicit rpc url over network default', () => {
+    expect(resolveRpcUrl('https://explicit.example.com', { network: 'mainnet' })).toBe(
+      'https://explicit.example.com',
+    )
   })
 
   test('falls back to MPPX_RPC_URL env var', () => {

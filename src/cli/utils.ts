@@ -4,6 +4,8 @@ import type { Chain } from 'viem'
 import { type Address, createClient, http } from 'viem'
 import { tempo as tempoMainnet, tempoModerato } from 'viem/chains'
 
+import * as defaults from '../tempo/internal/defaults.js'
+
 // Inlined from https://github.com/alexeyraspopov/picocolors (ISC License)
 export const pc = (() => {
   const p = process || ({} as NodeJS.Process)
@@ -221,13 +223,29 @@ export function fmtBalance(
   return `${dec ? `${formatted}.${dec}` : formatted} ${sym}`
 }
 
-/** Resolve RPC URL from explicit option, then MPPX_RPC_URL, then RPC_URL env vars. */
-export function resolveRpcUrl(explicit?: string | undefined): string | undefined {
-  return explicit ?? (process.env.MPPX_RPC_URL?.trim() || process.env.RPC_URL?.trim() || undefined)
+export type Network = 'mainnet' | 'testnet'
+
+export const networkRpcUrls = {
+  mainnet: defaults.rpcUrl[defaults.chainId.mainnet],
+  testnet: defaults.rpcUrl[defaults.chainId.testnet],
+} as const satisfies Record<Network, string>
+
+/** Resolve RPC URL from explicit option, network option, then MPPX_RPC_URL/RPC_URL env vars. */
+export function resolveRpcUrl(
+  explicit?: string | undefined,
+  options: { network?: Network | undefined } = {},
+): string | undefined {
+  return (
+    explicit ??
+    (options.network ? networkRpcUrls[options.network] : undefined) ??
+    (process.env.MPPX_RPC_URL?.trim() || process.env.RPC_URL?.trim() || undefined)
+  )
 }
 
-export async function resolveChain(opts: { rpcUrl?: string | undefined } = {}): Promise<Chain> {
-  const rpcUrl = resolveRpcUrl(opts.rpcUrl)
+export async function resolveChain(
+  opts: { network?: Network | undefined; rpcUrl?: string | undefined } = {},
+): Promise<Chain> {
+  const rpcUrl = resolveRpcUrl(opts.rpcUrl, { network: opts.network })
   if (!rpcUrl) return tempoMainnet
   const { getChainId } = await import('viem/actions')
   const chainId = await getChainId(createClient({ transport: http(rpcUrl) }))
