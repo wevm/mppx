@@ -54,6 +54,29 @@ export function tempo() {
       const accountName = resolveAccountName(options.account)
       const challengeRequest = challenge.request as Record<string, unknown>
       const currency = challengeRequest.currency as string | undefined
+      const booleanOption = z.union([
+        z.boolean(),
+        z.literal('true').transform(() => true),
+        z.literal('false').transform(() => false),
+      ])
+      const tempoOpts = parseOptions(
+        z.object({
+          autoSwap: z.optional(booleanOption),
+          channel: z.optional(z.coerce.string()),
+          deposit: z.optional(z.union([z.string(), z.number()])),
+          payWith: z.optional(z.string()),
+          slippage: z.optional(z.coerce.number()),
+          tokenIn: z.optional(z.string()),
+        }),
+        methodOpts,
+        ['autoSwap', 'channel', 'deposit', 'payWith', 'slippage', 'tokenIn'],
+      )
+      const autoSwap = resolveAutoSwap({
+        autoSwap: tempoOpts.autoSwap ?? options.autoSwap,
+        payWith: tempoOpts.payWith ?? options.payWith,
+        slippage: tempoOpts.slippage ?? options.slippage,
+        tokenIn: tempoOpts.tokenIn,
+      })
 
       let tokenSymbol = currency ?? ''
       let tokenDecimals = (challengeRequest.decimals as number | undefined) ?? 6
@@ -149,17 +172,10 @@ export function tempo() {
           exitCode: 69,
         })
 
-      const tempoOpts = parseOptions(
-        z.object({
-          channel: z.optional(z.coerce.string()),
-          deposit: z.optional(z.union([z.string(), z.number()])),
-        }),
-        methodOpts,
-      )
-
       const methods = tempoMethods({
         account,
         getClient: () => client!,
+        ...(autoSwap !== undefined ? { autoSwap } : {}),
         deposit: (() => {
           if (challenge.intent !== 'session') return undefined
           const suggestedDeposit = (challenge.request as Record<string, unknown>)
@@ -720,7 +736,13 @@ function detectTerminalBg(
 function parseOptions<const schema extends z.ZodType>(
   schema: schema,
   rawOptions: unknown,
+  allowedKeys: readonly string[],
 ): z.output<schema> {
+  if (rawOptions && typeof rawOptions === 'object' && !Array.isArray(rawOptions)) {
+    const unknownKeys = Object.keys(rawOptions).filter((key) => !allowedKeys.includes(key))
+    if (unknownKeys.length)
+      throw new Error(`Unsupported CLI method option(s): ${unknownKeys.join(', ')}`)
+  }
   const result = schema.safeParse(rawOptions ?? {})
   if (result.success) return result.data
   const summary = result.error.issues
@@ -752,6 +774,31 @@ function assertChallengeChain(opts: {
     message: `Challenge requires chainId ${requiredChainId}, but RPC is chainId ${opts.clientChainId}.${hint}`,
     exitCode: 2,
   })
+}
+
+function parseTokenList(value: string | undefined): Address[] | undefined {
+  if (!value) return undefined
+  return value
+    .split(',')
+    .map((token) => token.trim())
+    .filter(Boolean) as Address[]
+}
+
+function resolveAutoSwap(opts: {
+  autoSwap?: boolean | undefined
+  payWith?: string | undefined
+  slippage?: number | undefined
+  tokenIn?: string | undefined
+}) {
+  const tokenIn = parseTokenList(opts.tokenIn) ?? parseTokenList(opts.payWith)
+  if (!opts.autoSwap && !tokenIn && opts.slippage === undefined) return undefined
+  if (opts.autoSwap === false && !tokenIn && opts.slippage === undefined) return false
+  if (opts.slippage !== undefined && (!Number.isFinite(opts.slippage) || opts.slippage < 0))
+    throw new Error('Invalid CLI options (slippage: expected a non-negative number)')
+  return {
+    ...(tokenIn ? { tokenIn } : {}),
+    ...(opts.slippage !== undefined ? { slippage: opts.slippage } : {}),
+  }
 }
 
 function channelStateDir() {

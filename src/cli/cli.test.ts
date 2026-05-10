@@ -1646,6 +1646,17 @@ export default defineConfig({
     expect(output.trim()).toMatch(/^Payment\s+\S+/)
   })
 
+  test('rejects unsupported tempo method options', async () => {
+    const { output, exitCode } = await serve(
+      ['sign', '--challenge', validChallenge, '--rpc-url', rpcUrl, '-M', 'feeToken=0xabc'],
+      { env: { MPPX_PRIVATE_KEY: testPrivateKey } },
+    )
+
+    expect(exitCode).toBeDefined()
+    expect(output).toContain('Unsupported CLI method option')
+    expect(output).toContain('feeToken')
+  })
+
   test('happy path: --json outputs authorization', { timeout: 120_000 }, async () => {
     const { output, stderr, exitCode } = await serve(
       ['sign', '--challenge', validChallenge, '--rpc-url', rpcUrl, '--json'],

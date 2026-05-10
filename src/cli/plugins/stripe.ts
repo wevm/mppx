@@ -20,6 +20,7 @@ export function stripe() {
           paymentMethod: z.string(),
         }),
         methodOpts,
+        ['paymentMethod'],
       )
 
       const stripeSecretKey = process.env.MPPX_STRIPE_SECRET_KEY
@@ -134,7 +135,13 @@ export function stripe() {
 function parseOptions<const schema extends z.ZodType>(
   schema: schema,
   rawOptions: unknown,
+  allowedKeys: readonly string[],
 ): z.output<schema> {
+  if (rawOptions && typeof rawOptions === 'object' && !Array.isArray(rawOptions)) {
+    const unknownKeys = Object.keys(rawOptions).filter((key) => !allowedKeys.includes(key))
+    if (unknownKeys.length)
+      throw new Error(`Unsupported CLI method option(s): ${unknownKeys.join(', ')}`)
+  }
   const result = schema.safeParse(rawOptions ?? {})
   if (result.success) return result.data
   const summary = result.error.issues
