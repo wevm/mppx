@@ -1,5 +1,13 @@
 # mppx
 
+## 0.6.18
+
+### Patch Changes
+
+- d365b41: Added Tempo CLI auto-swap and payment source token options.
+- 9f660c2: Added Tempo CLI network shortcuts and challenge chain mismatch checks.
+- 538c7fb: Added CLI commands for browsing the MPP services registry.
+
 ## 0.6.17
 
 ### Patch Changes
