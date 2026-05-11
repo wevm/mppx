@@ -399,7 +399,6 @@ async function activateSubscription(parameters: {
     source,
     store: auto.store,
     waitForConfirmation: auto.waitForConfirmation,
-    memoServerId: auto.realm,
   })
   const timestamp = new Date().toISOString()
   const subscription = {
@@ -724,7 +723,6 @@ function resolveRenewalHandler(parameters: {
       accessKey: subscription.accessKey!,
       getClient,
       lookupKey: subscription.lookupKey,
-      memoServerId: subscription.lookupKey,
       request: subscription,
       settlementReference: inFlightReference,
       source: subscription.payer!,
@@ -749,7 +747,6 @@ async function submitSubscriptionPayment(parameters: {
   getClient: (parameters: { chainId?: number | undefined }) => MaybePromise<ViemClient>
   keyAuthorization?: `0x${string}` | undefined
   lookupKey: string
-  memoServerId: string
   request: Pick<SubscriptionRequest, 'amount'> & {
     methodDetails?: { chainId?: number | undefined } | undefined
   } & { currency: Address | string; recipient: Address | string }
@@ -763,7 +760,6 @@ async function submitSubscriptionPayment(parameters: {
     getClient,
     keyAuthorization,
     lookupKey,
-    memoServerId,
     request,
     settlementReference,
     source,
@@ -788,7 +784,7 @@ async function submitSubscriptionPayment(parameters: {
   })
   const memo = Attribution.encode({
     challengeId: settlementReference,
-    serverId: memoServerId,
+    serverId: lookupKey,
   })
   const serializedTransaction = await signTransaction(client, {
     account,

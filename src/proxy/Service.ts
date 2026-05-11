@@ -220,6 +220,7 @@ export function paymentOf(endpoint: Endpoint): Record<string, unknown> | null {
     authorize: _a,
     request: _r,
     respond: _re,
+    stableBinding: _st,
     transport: _t,
     verify: _v,
     ...rest

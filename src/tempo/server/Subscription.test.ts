@@ -1404,6 +1404,7 @@ describe('tempo.subscription', () => {
 
     expect(result?.receipt.reference).toBe(hashBackground)
     expect(rpcMethods.filter((method) => method === 'eth_sendRawTransaction')).toHaveLength(2)
-    expect((await subscriptions.get(record.subscriptionId))?.reference).toBe(hashBackground)
+    const renewed = await subscriptions.get(record.subscriptionId)
+    expect(renewed?.reference).toBe(hashBackground)
   })
 })

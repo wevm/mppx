@@ -142,6 +142,7 @@ describe('paymentOf', () => {
           request: () => ({}),
           respond: () => undefined,
           schema: {},
+          stableBinding: () => ({}),
           transport: {},
           verify: () => undefined,
         },
