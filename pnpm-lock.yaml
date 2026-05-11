@@ -42,10 +42,10 @@ importers:
         version: 0.4.5
       ox:
         specifier: 0.14.18
-        version: 0.14.18(typescript@5.9.3)(zod@4.4.2)
+        version: 0.14.18(typescript@5.9.3)(zod@4.4.3)
       zod:
-        specifier: ^4.3.6
-        version: 4.4.2
+        specifier: ^4.4.3
+        version: 4.4.3
     devDependencies:
       '@changesets/cli':
         specifier: ^2.31.0
@@ -55,7 +55,7 @@ importers:
         version: 2.0.2(hono@4.12.18)
       '@modelcontextprotocol/sdk':
         specifier: 1.29.0
-        version: 1.29.0(@cfworker/json-schema@4.1.1)(zod@4.4.2)
+        version: 1.29.0(@cfworker/json-schema@4.1.1)(zod@4.4.3)
       '@playwright/test':
         specifier: ^1.59.1
         version: 1.59.1
@@ -106,7 +106,7 @@ importers:
         version: 1.0.0-rc.18
       tempo.ts:
         specifier: ^0.14.2
-        version: 0.14.2(typescript@5.9.3)(viem@2.47.6(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.4.2))(zod@4.4.2)
+        version: 0.14.2(typescript@5.9.3)(viem@2.47.6(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.4.3))(zod@4.4.3)
       testcontainers:
         specifier: ^11.14.0
         version: 11.14.0
@@ -118,7 +118,7 @@ importers:
         version: 5.9.3
       viem:
         specifier: ^2.47.5
-        version: 2.47.6(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.4.2)
+        version: 2.47.6(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.4.3)
       vite:
         specifier: ^8.0.10
         version: 8.0.10(@types/node@25.6.0)(esbuild@0.27.2)(tsx@4.21.0)(yaml@2.8.4)
@@ -218,7 +218,7 @@ importers:
         version: 25.6.2
       '@typescript/native-preview':
         specifier: latest
-        version: 7.0.0-dev.20260509.2
+        version: 7.0.0-dev.20260510.1
       mppx:
         specifier: workspace:*
         version: link:../../..
@@ -245,7 +245,7 @@ importers:
         version: 25.6.2
       '@typescript/native-preview':
         specifier: latest
-        version: 7.0.0-dev.20260509.2
+        version: 7.0.0-dev.20260510.1
       mppx:
         specifier: workspace:*
         version: link:../../..
@@ -1604,8 +1604,8 @@ packages:
     cpu: [arm64]
     os: [darwin]
 
-  '@typescript/native-preview-darwin-arm64@7.0.0-dev.20260509.2':
-    resolution: {integrity: sha512-oG9KahiCpx4q70Ood/rRJhYio4oIMHEHfX0g0LhfenlSIjIonitZWjUmUVG9N9q1ev9QWcM8pWpDrGGP0Osp3Q==}
+  '@typescript/native-preview-darwin-arm64@7.0.0-dev.20260510.1':
+    resolution: {integrity: sha512-YpG99bf/Va1aLGP8SUQy1ClUvi4c6uTFrEQ0B5KzZb9TsOwH1RIrc/2n8UO3IAuilvwEA0EU4q8fEO3otVP2Sw==}
     engines: {node: '>=16.20.0'}
     cpu: [arm64]
     os: [darwin]
@@ -1621,8 +1621,8 @@ packages:
     cpu: [x64]
     os: [darwin]
 
-  '@typescript/native-preview-darwin-x64@7.0.0-dev.20260509.2':
-    resolution: {integrity: sha512-xdEkp23Gu8I7PJCMmSMYtSLX76NKODWj74AoWFPi6MM59ICsjnTSqZf/HmXKSvuNZ5MGb4CMpP3c40dLjGB2PQ==}
+  '@typescript/native-preview-darwin-x64@7.0.0-dev.20260510.1':
+    resolution: {integrity: sha512-NUwhwHpQn7aSX2GGBuY2bjec+hFnIz2DAna4ksVneexVE20h2U0MFzBvWrqH2C0PzPxVvGOMg4fGCvhTs93nlw==}
     engines: {node: '>=16.20.0'}
     cpu: [x64]
     os: [darwin]
@@ -1638,8 +1638,8 @@ packages:
     cpu: [arm64]
     os: [linux]
 
-  '@typescript/native-preview-linux-arm64@7.0.0-dev.20260509.2':
-    resolution: {integrity: sha512-rd+bMRtUAFBClOAKi9p2rOu6jPmnrjZVljoFyxHw+6bIRLerEQlxP+nIH1olC3HOZPyZ6/x75WtfzTHYeqffiQ==}
+  '@typescript/native-preview-linux-arm64@7.0.0-dev.20260510.1':
+    resolution: {integrity: sha512-T7Zuy6h0sU+38w+N3A+YgW0XVqxIMjeHyu+945rJkiP9zk52Mwp663t1ndyeAE/N2zV+q0SWQmHNuFSXl99wJw==}
     engines: {node: '>=16.20.0'}
     cpu: [arm64]
     os: [linux]
@@ -1655,8 +1655,8 @@ packages:
     cpu: [arm]
     os: [linux]
 
-  '@typescript/native-preview-linux-arm@7.0.0-dev.20260509.2':
-    resolution: {integrity: sha512-ar5HN/V/4HLF4FZCoVVFj+ET1Soi758hb4WhhzYQfSUXQ/bpVGUGP86JAy8EhVMoeN6qxqWet93MkLSszJOIVg==}
+  '@typescript/native-preview-linux-arm@7.0.0-dev.20260510.1':
+    resolution: {integrity: sha512-UE+PIWWg7vvszSU0gS9rzgIIHCWexz3hMZDHpHRSLAleAvULCNI3EzwTRFOA4BHyQ8eReD1KZ8e76BuStEPspw==}
     engines: {node: '>=16.20.0'}
     cpu: [arm]
     os: [linux]
@@ -1672,8 +1672,8 @@ packages:
     cpu: [x64]
     os: [linux]
 
-  '@typescript/native-preview-linux-x64@7.0.0-dev.20260509.2':
-    resolution: {integrity: sha512-lB26mGzdolYIZiOdBII8roVJCxCUR8zkYszvvHyjB1IPs7d5fmOhT6OzI1zYPYujiSRJi4HVYM1iXTcIfp7KDg==}
+  '@typescript/native-preview-linux-x64@7.0.0-dev.20260510.1':
+    resolution: {integrity: sha512-gJu4q4YREvjR2Lx1jUaCd/bRbTuyKf2r3rJ4tReuHyAvNse23HdGI0a9w4Z3wUbvRznxYt640IIItWsr/f3LEQ==}
     engines: {node: '>=16.20.0'}
     cpu: [x64]
     os: [linux]
@@ -1689,8 +1689,8 @@ packages:
     cpu: [arm64]
     os: [win32]
 
-  '@typescript/native-preview-win32-arm64@7.0.0-dev.20260509.2':
-    resolution: {integrity: sha512-gH3UmtyxHiRNEP0LgQXCVlB5+ZN/U+/Z7jM/zULQtTOxIIFK3Y4b8gbGLvP7uW3u2cqYOg2hc2nuN8OdsCmOig==}
+  '@typescript/native-preview-win32-arm64@7.0.0-dev.20260510.1':
+    resolution: {integrity: sha512-00DtjrtkdAHOU/soYr8ncrjUvIsple8nvb29ZUATnLraNnzUgv5AS3yMve/pG/N7rVLlKy2FrXlVyVW7WAx29w==}
     engines: {node: '>=16.20.0'}
     cpu: [arm64]
     os: [win32]
@@ -1706,8 +1706,8 @@ packages:
     cpu: [x64]
     os: [win32]
 
-  '@typescript/native-preview-win32-x64@7.0.0-dev.20260509.2':
-    resolution: {integrity: sha512-kZV0Vh64hp10saOghPlFZE1qahonqvRgU3iubt8pUY4XLe8IQIofwWCN5vzNNeULE4W4mRtAJbHuvP/muOFomw==}
+  '@typescript/native-preview-win32-x64@7.0.0-dev.20260510.1':
+    resolution: {integrity: sha512-27UeujQTEPFxhfkZL7aHnA1TlNol3nwDVFp5d6jFoP14yTXMe47kBnAJLEU2ta3REZE5PzLCs7HLV8H4VdxGgA==}
     engines: {node: '>=16.20.0'}
     cpu: [x64]
     os: [win32]
@@ -1721,8 +1721,8 @@ packages:
     engines: {node: '>=16.20.0'}
     hasBin: true
 
-  '@typescript/native-preview@7.0.0-dev.20260509.2':
-    resolution: {integrity: sha512-JAJpEX0yBaEle2zzbX5z9QAhmEfML1SyQafLwbKCdcOtnkGdk5xD8NKIVxq+nTwYjRwuV7kKnQ+fqU3gpWY0qQ==}
+  '@typescript/native-preview@7.0.0-dev.20260510.1':
+    resolution: {integrity: sha512-05U6/Im+vmqGrFAVrHSeuoXBCwShhbiA+93VpSwEBYP4LMWk2JW9q87MydamL5g6ISEjIVlwQ4Dx35CauPAwpA==}
     engines: {node: '>=16.20.0'}
     hasBin: true
 
@@ -4042,9 +4042,6 @@ packages:
     peerDependencies:
       zod: ^3.25.28 || ^4
 
-  zod@4.4.2:
-    resolution: {integrity: sha512-IynmDyxsEsb9RKzO3J9+4SxXnl2FTFSzNBaKKaMV6tsSk0rw9gYw9gs+JFCq/qk2LCZ78KDwyj+Z289TijSkUw==}
-
   zod@4.4.3:
     resolution: {integrity: sha512-ytENFjIJFl2UwYglde2jchW2Hwm4GJFLDiSXWdTrJQBIN9Fcyp7n4DhxJEiWNAJMV1/BqWfW/kkg71UDcHJyTQ==}
 
@@ -4624,7 +4621,7 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  '@modelcontextprotocol/sdk@1.29.0(@cfworker/json-schema@4.1.1)(zod@4.4.2)':
+  '@modelcontextprotocol/sdk@1.29.0(@cfworker/json-schema@4.1.1)(zod@4.4.3)':
     dependencies:
       '@hono/node-server': 1.19.13(hono@4.12.18)
       ajv: 8.18.0
@@ -4641,8 +4638,8 @@ snapshots:
       json-schema-typed: 8.0.2
       pkce-challenge: 5.0.1
       raw-body: 3.0.2
-      zod: 4.4.2
-      zod-to-json-schema: 3.25.2(zod@4.4.2)
+      zod: 4.4.3
+      zod-to-json-schema: 3.25.2(zod@4.4.3)
     optionalDependencies:
       '@cfworker/json-schema': 4.1.1
     transitivePeerDependencies:
@@ -4650,7 +4647,7 @@ snapshots:
 
   '@modelcontextprotocol/server@2.0.0-alpha.2(@cfworker/json-schema@4.1.1)':
     dependencies:
-      zod: 4.4.2
+      zod: 4.4.3
     optionalDependencies:
       '@cfworker/json-schema': 4.1.1
 
@@ -5189,7 +5186,7 @@ snapshots:
   '@typescript/native-preview-darwin-arm64@7.0.0-dev.20260503.1':
     optional: true
 
-  '@typescript/native-preview-darwin-arm64@7.0.0-dev.20260509.2':
+  '@typescript/native-preview-darwin-arm64@7.0.0-dev.20260510.1':
     optional: true
 
   '@typescript/native-preview-darwin-x64@7.0.0-dev.20260323.1':
@@ -5198,7 +5195,7 @@ snapshots:
   '@typescript/native-preview-darwin-x64@7.0.0-dev.20260503.1':
     optional: true
 
-  '@typescript/native-preview-darwin-x64@7.0.0-dev.20260509.2':
+  '@typescript/native-preview-darwin-x64@7.0.0-dev.20260510.1':
     optional: true
 
   '@typescript/native-preview-linux-arm64@7.0.0-dev.20260323.1':
@@ -5207,7 +5204,7 @@ snapshots:
   '@typescript/native-preview-linux-arm64@7.0.0-dev.20260503.1':
     optional: true
 
-  '@typescript/native-preview-linux-arm64@7.0.0-dev.20260509.2':
+  '@typescript/native-preview-linux-arm64@7.0.0-dev.20260510.1':
     optional: true
 
   '@typescript/native-preview-linux-arm@7.0.0-dev.20260323.1':
@@ -5216,7 +5213,7 @@ snapshots:
   '@typescript/native-preview-linux-arm@7.0.0-dev.20260503.1':
     optional: true
 
-  '@typescript/native-preview-linux-arm@7.0.0-dev.20260509.2':
+  '@typescript/native-preview-linux-arm@7.0.0-dev.20260510.1':
     optional: true
 
   '@typescript/native-preview-linux-x64@7.0.0-dev.20260323.1':
@@ -5225,7 +5222,7 @@ snapshots:
   '@typescript/native-preview-linux-x64@7.0.0-dev.20260503.1':
     optional: true
 
-  '@typescript/native-preview-linux-x64@7.0.0-dev.20260509.2':
+  '@typescript/native-preview-linux-x64@7.0.0-dev.20260510.1':
     optional: true
 
   '@typescript/native-preview-win32-arm64@7.0.0-dev.20260323.1':
@@ -5234,7 +5231,7 @@ snapshots:
   '@typescript/native-preview-win32-arm64@7.0.0-dev.20260503.1':
     optional: true
 
-  '@typescript/native-preview-win32-arm64@7.0.0-dev.20260509.2':
+  '@typescript/native-preview-win32-arm64@7.0.0-dev.20260510.1':
     optional: true
 
   '@typescript/native-preview-win32-x64@7.0.0-dev.20260323.1':
@@ -5243,7 +5240,7 @@ snapshots:
   '@typescript/native-preview-win32-x64@7.0.0-dev.20260503.1':
     optional: true
 
-  '@typescript/native-preview-win32-x64@7.0.0-dev.20260509.2':
+  '@typescript/native-preview-win32-x64@7.0.0-dev.20260510.1':
     optional: true
 
   '@typescript/native-preview@7.0.0-dev.20260323.1':
@@ -5266,15 +5263,15 @@ snapshots:
       '@typescript/native-preview-win32-arm64': 7.0.0-dev.20260503.1
       '@typescript/native-preview-win32-x64': 7.0.0-dev.20260503.1
 
-  '@typescript/native-preview@7.0.0-dev.20260509.2':
+  '@typescript/native-preview@7.0.0-dev.20260510.1':
     optionalDependencies:
-      '@typescript/native-preview-darwin-arm64': 7.0.0-dev.20260509.2
-      '@typescript/native-preview-darwin-x64': 7.0.0-dev.20260509.2
-      '@typescript/native-preview-linux-arm': 7.0.0-dev.20260509.2
-      '@typescript/native-preview-linux-arm64': 7.0.0-dev.20260509.2
-      '@typescript/native-preview-linux-x64': 7.0.0-dev.20260509.2
-      '@typescript/native-preview-win32-arm64': 7.0.0-dev.20260509.2
-      '@typescript/native-preview-win32-x64': 7.0.0-dev.20260509.2
+      '@typescript/native-preview-darwin-arm64': 7.0.0-dev.20260510.1
+      '@typescript/native-preview-darwin-x64': 7.0.0-dev.20260510.1
+      '@typescript/native-preview-linux-arm': 7.0.0-dev.20260510.1
+      '@typescript/native-preview-linux-arm64': 7.0.0-dev.20260510.1
+      '@typescript/native-preview-linux-x64': 7.0.0-dev.20260510.1
+      '@typescript/native-preview-win32-arm64': 7.0.0-dev.20260510.1
+      '@typescript/native-preview-win32-x64': 7.0.0-dev.20260510.1
 
   '@vitejs/plugin-react@6.0.1(vite@8.0.10(@types/node@25.6.0)(esbuild@0.27.2)(tsx@4.21.0)(yaml@2.8.4))':
     dependencies:
@@ -5382,20 +5379,10 @@ snapshots:
       - react
       - use-sync-external-store
 
-  abitype@1.2.3(typescript@5.9.3)(zod@4.4.2):
-    optionalDependencies:
-      typescript: 5.9.3
-      zod: 4.4.2
-
   abitype@1.2.3(typescript@5.9.3)(zod@4.4.3):
     optionalDependencies:
       typescript: 5.9.3
       zod: 4.4.3
-
-  abitype@1.2.4(typescript@5.9.3)(zod@4.4.2):
-    optionalDependencies:
-      typescript: 5.9.3
-      zod: 4.4.2
 
   abitype@1.2.4(typescript@5.9.3)(zod@4.4.3):
     optionalDependencies:
@@ -6329,7 +6316,7 @@ snapshots:
       '@toon-format/toon': 2.1.0
       tokenx: 1.3.0
       yaml: 2.8.4
-      zod: 4.4.2
+      zod: 4.4.3
 
   inherits@2.0.4: {}
 
@@ -6633,21 +6620,6 @@ snapshots:
       word-wrap: 1.2.5
 
   outdent@0.5.0: {}
-
-  ox@0.14.18(typescript@5.9.3)(zod@4.4.2):
-    dependencies:
-      '@adraffy/ens-normalize': 1.11.1
-      '@noble/ciphers': 1.3.0
-      '@noble/curves': 1.9.1
-      '@noble/hashes': 1.8.0
-      '@scure/bip32': 1.7.0
-      '@scure/bip39': 1.6.0
-      abitype: 1.2.4(typescript@5.9.3)(zod@4.4.2)
-      eventemitter3: 5.0.1
-    optionalDependencies:
-      typescript: 5.9.3
-    transitivePeerDependencies:
-      - zod
 
   ox@0.14.18(typescript@5.9.3)(zod@4.4.3):
     dependencies:
@@ -7256,12 +7228,12 @@ snapshots:
       - bare-abort-controller
       - react-native-b4a
 
-  tempo.ts@0.14.2(typescript@5.9.3)(viem@2.47.6(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.4.2))(zod@4.4.2):
+  tempo.ts@0.14.2(typescript@5.9.3)(viem@2.47.6(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.4.3))(zod@4.4.3):
     dependencies:
       '@remix-run/fetch-router': 0.17.0
-      ox: 0.14.18(typescript@5.9.3)(zod@4.4.2)
+      ox: 0.14.18(typescript@5.9.3)(zod@4.4.3)
     optionalDependencies:
-      viem: 2.47.6(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.4.2)
+      viem: 2.47.6(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.4.3)
     transitivePeerDependencies:
       - typescript
       - zod
@@ -7400,23 +7372,6 @@ snapshots:
   uuid@14.0.0: {}
 
   vary@1.1.2: {}
-
-  viem@2.47.6(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.4.2):
-    dependencies:
-      '@noble/curves': 1.9.1
-      '@noble/hashes': 1.8.0
-      '@scure/bip32': 1.7.0
-      '@scure/bip39': 1.6.0
-      abitype: 1.2.3(typescript@5.9.3)(zod@4.4.2)
-      isows: 1.0.7(ws@8.18.3(bufferutil@4.1.0)(utf-8-validate@5.0.10))
-      ox: 0.14.18(typescript@5.9.3)(zod@4.4.2)
-      ws: 8.18.3(bufferutil@4.1.0)(utf-8-validate@5.0.10)
-    optionalDependencies:
-      typescript: 5.9.3
-    transitivePeerDependencies:
-      - bufferutil
-      - utf-8-validate
-      - zod
 
   viem@2.47.6(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.4.3):
     dependencies:
@@ -7642,11 +7597,9 @@ snapshots:
       compress-commons: 6.0.2
       readable-stream: 4.7.0
 
-  zod-to-json-schema@3.25.2(zod@4.4.2):
+  zod-to-json-schema@3.25.2(zod@4.4.3):
     dependencies:
-      zod: 4.4.2
-
-  zod@4.4.2: {}
+      zod: 4.4.3
 
   zod@4.4.3: {}
 
