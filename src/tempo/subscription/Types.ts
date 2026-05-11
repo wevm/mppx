@@ -29,6 +29,8 @@ export type SubscriptionRecord = {
   externalId?: string | undefined
   accessKey?: SubscriptionAccessKey | undefined
   inFlightPeriod?: number | undefined
+  /** Per-attempt ownership token for the renewal currently in progress. */
+  inFlightAttempt?: string | undefined
   /** Stable idempotency/reconciliation reference for a renewal currently in progress. */
   inFlightReference?: string | undefined
   inFlightStartedAt?: string | undefined

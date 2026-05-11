@@ -281,12 +281,58 @@ describe('subscription', () => {
     expect('accessKey' in request).toBe(false)
   })
 
+  test('schema: accepts subscriptionExpires as a Date', () => {
+    const request = Methods.subscription.schema.request.parse({
+      amount: '10',
+      chainId: 4217,
+      currency: '0x20c0000000000000000000000000000000000001',
+      decimals: 6,
+      periodCount: '1',
+      periodUnit: 'day',
+      recipient: '0x1234567890abcdef1234567890abcdef12345678',
+      subscriptionExpires: new Date('2026-01-01T00:00:00Z'),
+    })
+
+    expect(request.subscriptionExpires).toBe('2026-01-01T00:00:00.000Z')
+  })
+
+  test.each([
+    { input: 1, expected: '1', desc: 'number' },
+    { input: 1n, expected: '1', desc: 'bigint' },
+  ])('schema: accepts periodCount as $desc', ({ input, expected }) => {
+    const request = Methods.subscription.schema.request.parse({
+      amount: '10',
+      currency: '0x20c0000000000000000000000000000000000001',
+      decimals: 6,
+      periodCount: input,
+      periodUnit: 'day',
+      recipient: '0x1234567890abcdef1234567890abcdef12345678',
+      subscriptionExpires: '2026-01-01T00:00:00Z',
+    })
+
+    expect(request.periodCount).toBe(expected)
+  })
+
   test('schema: rejects non-numeric periodCount', () => {
     const result = Methods.subscription.schema.request.safeParse({
       amount: '10',
       currency: '0x20c0000000000000000000000000000000000001',
       decimals: 6,
       periodCount: 'month',
+      periodUnit: 'day',
+      recipient: '0x1234567890abcdef1234567890abcdef12345678',
+      subscriptionExpires: '2026-01-01T00:00:00Z',
+    })
+
+    expect(result.success).toBe(false)
+  })
+
+  test('schema: rejects unsafe number periodCount', () => {
+    const result = Methods.subscription.schema.request.safeParse({
+      amount: '10',
+      currency: '0x20c0000000000000000000000000000000000001',
+      decimals: 6,
+      periodCount: Number.MAX_SAFE_INTEGER + 1,
       periodUnit: 'day',
       recipient: '0x1234567890abcdef1234567890abcdef12345678',
       subscriptionExpires: '2026-01-01T00:00:00Z',

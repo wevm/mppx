@@ -69,6 +69,7 @@ export type RenewResult<result extends { subscription: SubscriptionRecord }> =
 
 type ActivationMarker = {
   challengeId?: string
+  committingAt?: string
   startedAt?: string
 }
 
@@ -113,10 +114,14 @@ export function fromStore(
     return (await store.get(recordKey(subscriptionId))) as SubscriptionRecord | null
   }
 
-  async function clearRenewalState(subscriptionId: string, periodIndex: number) {
+  async function clearRenewalState(subscriptionId: string, periodIndex: number, attempt: string) {
     await store.update(recordKey(subscriptionId), (current) => {
       const subscription = current as SubscriptionRecord | null
-      if (!subscription || subscription.inFlightPeriod !== periodIndex) {
+      if (
+        !subscription ||
+        subscription.inFlightPeriod !== periodIndex ||
+        subscription.inFlightAttempt !== attempt
+      ) {
         return { op: 'noop', result: undefined }
       }
       return {
@@ -133,6 +138,11 @@ export function fromStore(
       if (marker?.challengeId !== challengeId) return { op: 'noop', result: undefined }
       return { op: 'delete', result: undefined }
     })
+  }
+
+  async function ownsActivation(lookupKey: string, challengeId: string): Promise<boolean> {
+    const marker = (await store.get(activationKey(lookupKey))) as ActivationMarker | null
+    return marker?.challengeId === challengeId
   }
 
   return {
@@ -187,20 +197,39 @@ export function fromStore(
         if (marker?.challengeId !== challengeId) return { op: 'noop', result: false }
         return {
           op: 'set',
-          value: { ...marker, committingAt: timestamp() },
+          value: {
+            ...marker,
+            committingAt: timestamp(),
+            startedAt: timestamp(),
+          },
           result: true,
         }
       })
-      if (!committed) return { status: 'claimMismatch' }
+      if (!committed) {
+        await store.put(recordKey(subscription.subscriptionId), {
+          ...subscription,
+          canceledAt: subscription.canceledAt ?? timestamp(),
+        })
+        return { status: 'claimMismatch' }
+      }
 
       const previous = await getByLookupKey(subscription.lookupKey)
       if (previous && previous.subscriptionId !== subscription.subscriptionId) {
+        if (!(await ownsActivation(subscription.lookupKey, challengeId))) {
+          return { status: 'claimMismatch' }
+        }
         await store.put(recordKey(previous.subscriptionId), {
           ...previous,
           canceledAt: previous.canceledAt ?? timestamp(),
         })
       }
+      if (!(await ownsActivation(subscription.lookupKey, challengeId))) {
+        return { status: 'claimMismatch' }
+      }
       await store.put(recordKey(subscription.subscriptionId), subscription)
+      if (!(await ownsActivation(subscription.lookupKey, challengeId))) {
+        return { status: 'claimMismatch' }
+      }
       await store.put(lookupRecordKey(subscription.lookupKey), subscription.subscriptionId)
       await clearActivationState(subscription.lookupKey, challengeId)
       return { status: 'activated', result }
@@ -219,6 +248,9 @@ export function fromStore(
     },
 
     async getOrCreateAccessKey(key) {
+      const existing = (await store.get(accessKeyKey(key))) as SubscriptionAccessKeyRecord | null
+      if (existing) return existing
+
       const privateKey = Secp256k1.randomPrivateKey()
       const account = TempoAccount.fromSecp256k1(privateKey)
       const candidate = {
@@ -243,6 +275,7 @@ export function fromStore(
     },
 
     async renew({ inFlightReference, periodIndex, renew, subscriptionId }) {
+      const attempt = createAttemptToken()
       const started = await store.update(
         recordKey(subscriptionId),
         (
@@ -274,6 +307,7 @@ export function fromStore(
 
           const next = {
             ...subscription,
+            inFlightAttempt: attempt,
             inFlightPeriod: periodIndex,
             inFlightReference,
             inFlightStartedAt: timestamp(),
@@ -288,7 +322,7 @@ export function fromStore(
       if (started.status !== 'started') return started
       const active = await getByLookupKey(started.subscription.lookupKey)
       if (active?.subscriptionId !== subscriptionId) {
-        await clearRenewalState(subscriptionId, periodIndex)
+        await clearRenewalState(subscriptionId, periodIndex, attempt)
         return { status: 'superseded', subscription: started.subscription }
       }
 
@@ -297,19 +331,23 @@ export function fromStore(
         periodIndex,
         subscription: started.subscription,
       }).catch(async (error) => {
-        await clearRenewalState(subscriptionId, periodIndex)
+        await clearRenewalState(subscriptionId, periodIndex, attempt)
         throw error
       })
 
       const activeAfterRenew = await getByLookupKey(result.subscription.lookupKey)
       if (activeAfterRenew?.subscriptionId !== subscriptionId) {
-        await clearRenewalState(subscriptionId, periodIndex)
+        await clearRenewalState(subscriptionId, periodIndex, attempt)
         return { status: 'superseded', subscription: started.subscription }
       }
 
       const committed = await store.update(recordKey(subscriptionId), (current) => {
         const existing = current as SubscriptionRecord | null
-        if (!existing || existing.inFlightPeriod !== periodIndex) {
+        if (
+          !existing ||
+          existing.inFlightPeriod !== periodIndex ||
+          existing.inFlightAttempt !== attempt
+        ) {
           return { op: 'noop', result: false }
         }
 
@@ -364,6 +402,7 @@ export declare namespace fromStore {
 
 function isStaleActivation(marker: { startedAt?: string | undefined }, timeoutMs: number) {
   if (!Number.isFinite(timeoutMs) || timeoutMs < 0) return false
+  if ('committingAt' in marker && marker.committingAt) return false
   const startedAt = new Date(marker.startedAt ?? '').getTime()
   if (!Number.isFinite(startedAt)) return true
   return Date.now() - startedAt >= timeoutMs
@@ -376,6 +415,7 @@ function isStaleRenewal(subscription: SubscriptionRecord, timeoutMs: number) {
 function clearRenewal(subscription: SubscriptionRecord): SubscriptionRecord {
   return {
     ...subscription,
+    inFlightAttempt: undefined,
     inFlightPeriod: undefined,
     inFlightReference: undefined,
     inFlightStartedAt: undefined,
@@ -384,4 +424,8 @@ function clearRenewal(subscription: SubscriptionRecord): SubscriptionRecord {
 
 function timestamp() {
   return new Date().toISOString()
+}
+
+function createAttemptToken() {
+  return globalThis.crypto.randomUUID()
 }

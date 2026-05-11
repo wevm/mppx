@@ -1249,6 +1249,7 @@ describe('tempo.subscription', () => {
         billingAnchor: new Date(Date.now() - 3 * subscriptionPeriodMilliseconds).toISOString(),
         lastChargedPeriod: 0,
         lookupKey: subscriptionKey,
+        amount: subscriptionAmount,
         reference: hashStale,
         subscriptionId: 'sub_background',
       }),
@@ -1273,6 +1274,44 @@ describe('tempo.subscription', () => {
     expect(result?.receipt.reference).toBe(hashBackground)
     expect(renewCalls.length).toBe(1)
     expect((await subscriptions.get('sub_background'))?.reference).toBe(hashBackground)
+  })
+
+  test('rejects background renewals that mutate economic fields', async () => {
+    const store = Store.memory()
+    const subscriptions = SubscriptionStore.fromStore(store)
+
+    await subscriptions.put(
+      createRecord({
+        billingAnchor: new Date(Date.now() - 3 * subscriptionPeriodMilliseconds).toISOString(),
+        lastChargedPeriod: 0,
+        lookupKey: subscriptionKey,
+        amount: subscriptionAmount,
+        reference: hashStale,
+        subscriptionId: 'sub_background',
+      }),
+    )
+
+    await expect(
+      renew({
+        renew: async ({ periodIndex, subscription }) => {
+          const mutated = {
+            ...subscription,
+            amount: '999',
+            lastChargedPeriod: periodIndex,
+            reference: hashBackground,
+          }
+          return {
+            receipt: createReceipt(subscription.subscriptionId, hashBackground),
+            subscription: mutated,
+          }
+        },
+        store,
+        subscriptionId: 'sub_background',
+      }),
+    ).rejects.toThrow('subscription record does not match request')
+
+    expect((await subscriptions.get('sub_background'))?.inFlightReference).toBe(undefined)
+    expect((await subscriptions.get('sub_background'))?.amount).toBe(subscriptionAmount)
   })
 
   test('does not charge a superseded subscription outside the request path', async () => {

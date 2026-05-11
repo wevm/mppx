@@ -1,5 +1,5 @@
 import { Method, z } from 'mppx'
-import { Mppx } from 'mppx/server'
+import { Mppx, tempo } from 'mppx/server'
 import { assertType, describe, expectTypeOf, test } from 'vp/test'
 
 const mockChargeA = Method.from({
@@ -151,6 +151,7 @@ describe('Mppx type tests', () => {
       amount: '100',
       currency: '0x01',
       decimals: 6,
+      expires: new Date('2026-01-01T00:00:00Z'),
       recipient: '0x02',
     })
 
@@ -186,5 +187,26 @@ describe('Mppx type tests', () => {
     expectTypeOf(mppx.verifyCredential('credential', { scope: 'GET /premium' })).toMatchTypeOf<
       Promise<unknown>
     >()
+  })
+
+  test('tempo subscription accepts ergonomic date and period inputs', () => {
+    const method = tempo.subscription({
+      amount: '10',
+      currency: '0x20c0000000000000000000000000000000000001',
+      periodCount: 1,
+      periodUnit: 'day',
+      recipient: '0x1234567890abcdef1234567890abcdef12345678',
+      resolve: async () => ({ key: 'user-1:plan:pro' }),
+      subscriptionExpires: new Date('2026-01-01T00:00:00Z'),
+    })
+    const mppx = Mppx.create({ methods: [method], realm, secretKey })
+
+    expectTypeOf(
+      mppx.tempo.subscription({
+        expires: new Date('2026-01-01T00:00:00Z'),
+        periodCount: 1n,
+        subscriptionExpires: new Date('2026-01-01T00:00:00Z'),
+      }),
+    ).toBeFunction()
   })
 })

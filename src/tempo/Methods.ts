@@ -7,6 +7,7 @@ import type { SubscriptionPeriodUnit } from './subscription/Types.js'
 
 export const chargeModes = ['push', 'pull'] as const
 export type ChargeMode = (typeof chargeModes)[number]
+export type SubscriptionPeriodCountInput = string | number | bigint
 
 const split = z.object({
   amount: z.amount(),
@@ -37,10 +38,7 @@ const subscriptionMethodDetails = z.object({
 })
 
 const subscriptionExpires = z
-  .pipe(
-    z.datetime(),
-    z.transform((value) => new Date(value)),
-  )
+  .datetimeInput('subscriptionExpires must be a valid date')
   .check(
     z.refine(
       (value) => value.getTime() % 1_000 === 0,
@@ -51,16 +49,25 @@ const subscriptionExpires = z
 const subscriptionPeriodUnits = ['day', 'week'] as const satisfies readonly SubscriptionPeriodUnit[]
 const subscriptionPeriodUnit = z.enum(subscriptionPeriodUnits)
 
-const uint64String = z.string().check(
-  z.regex(/^[1-9]\d*$/, 'Invalid periodCount'),
-  z.refine((value) => {
-    try {
-      return BigInt(value) <= uint64Max
-    } catch {
-      return false
-    }
-  }, 'periodCount exceeds uint64'),
-)
+const uint64String = z
+  .pipe(
+    z.union([
+      z.string(),
+      z.bigint(),
+      z.custom<number>((value) => typeof value === 'number' && Number.isSafeInteger(value)),
+    ]),
+    z.transform((value) => value.toString()),
+  )
+  .check(
+    z.regex(/^[1-9]\d*$/, 'Invalid periodCount'),
+    z.refine((value) => {
+      try {
+        return BigInt(value) <= uint64Max
+      } catch {
+        return false
+      }
+    }, 'periodCount exceeds uint64'),
+  )
 
 function positiveParsedAmount(message: string) {
   return z.refine((value) => {

@@ -10,7 +10,7 @@ import * as Env from '../internal/env.js'
 import type * as Method from '../Method.js'
 import * as PaymentRequest from '../PaymentRequest.js'
 import type * as Receipt from '../Receipt.js'
-import type * as z from '../zod.js'
+import * as z from '../zod.js'
 import * as Html from './internal/html/config.js'
 import { serviceWorker } from './internal/html/serviceWorker.gen.js'
 import * as Scope from './internal/scope.js'
@@ -451,7 +451,9 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
     return Object.assign(
       async (input: Transport.InputOf): Promise<MethodFn.Response> => {
         const expires =
-          'expires' in options ? (options.expires as string | undefined) : Expires.minutes(5)
+          'expires' in options
+            ? normalizeExpires(options.expires as z.DatetimeInput | undefined)
+            : Expires.minutes(5)
         const capturedRequest = await captureRequest(transport, input)
         const effectiveMeta =
           scope === undefined && input instanceof globalThis.Request
@@ -757,14 +759,16 @@ function createChallengeFn(parameters: {
   return async (options) => {
     const { description, meta, scope, ...rest } = options as {
       description?: string
-      expires?: string
+      expires?: z.DatetimeInput
       meta?: Record<string, string>
       scope?: string
       [key: string]: unknown
     }
     const effectiveMeta = Scope.merge({ meta, scope })
     const expires =
-      'expires' in options ? (options.expires as string | undefined) : Expires.minutes(5)
+      'expires' in options
+        ? normalizeExpires(options.expires as z.DatetimeInput | undefined)
+        : Expires.minutes(5)
 
     return resolveRouteChallenge({
       defaults,
@@ -816,6 +820,10 @@ const defaultRealm = 'MPP Payment'
 const Warnings = {
   realmFallback: 'realm-fallback',
 } as const
+
+function normalizeExpires(expires: z.DatetimeInput | undefined): string | undefined {
+  return expires === undefined ? undefined : z.toDatetimeString(expires)
+}
 
 const _warned = new Set<string>()
 function warnOnce(key: string, message: string) {
@@ -1161,8 +1169,8 @@ declare namespace MethodFn {
   > = {
     /** Optional human-readable description of the payment. */
     description?: string | undefined
-    /** Optional challenge expiration timestamp (ISO 8601). */
-    expires?: string | undefined
+    /** Optional challenge expiration timestamp (ISO 8601) or Date. */
+    expires?: z.DatetimeInput | undefined
     /** Optional server-defined correlation data (serialized as `opaque` in the request). Flat string-to-string map; clients MUST NOT modify. */
     meta?: Record<string, string> | undefined
     /** Optional route/resource scope bound via reserved challenge metadata. */
@@ -1498,11 +1506,30 @@ export function toNodeListener(
     if (result.status === 402) {
       await NodeListener.sendResponse(res, result.challenge as globalThis.Response)
     } else {
+      const managementResponse = getManagementResponse(result)
+      if (managementResponse) {
+        await NodeListener.sendResponse(res, managementResponse)
+        return { challenge: managementResponse, status: 402 }
+      }
+
       const wrapped = result.withReceipt(new globalThis.Response()) as globalThis.Response
       res.setHeader('Payment-Receipt', wrapped.headers.get('Payment-Receipt')!)
     }
 
     return result
+  }
+}
+
+function getManagementResponse(
+  result: Extract<MethodFn.Response<Transport.Http>, { status: 200 }>,
+): globalThis.Response | null {
+  try {
+    return (result.withReceipt as () => globalThis.Response)()
+  } catch (error) {
+    if (error instanceof Error && error.message === 'withReceipt() requires a response argument') {
+      return null
+    }
+    throw error
   }
 }
 

@@ -463,6 +463,7 @@ async function settleRenewal(parameters: {
         expectedLookupKey,
         expectedPeriodIndex: periodIndex,
         expectedSubscriptionId: subscription.subscriptionId,
+        previous: started,
         request,
       })
       return renewed
@@ -538,7 +539,7 @@ function isReusableSubscription(
 
 function subscriptionMatchesRequest(
   subscription: SubscriptionRecord,
-  request: SubscriptionRequest,
+  request: SubscriptionRequest | SubscriptionRecord,
 ): boolean {
   const actual = comparableSubscriptionBinding(subscription)
   const expected = comparableSubscriptionBinding(request)
@@ -568,6 +569,7 @@ function validateSubscriptionSettlement(
     expectedLookupKey: string
     expectedPeriodIndex: number
     expectedSubscriptionId?: string | undefined
+    previous?: SubscriptionRecord | undefined
     request?: SubscriptionRequest | undefined
   },
 ) {
@@ -577,6 +579,8 @@ function validateSubscriptionSettlement(
 
   if (options.request) {
     assertSubscriptionRequestMatch(subscription, options.request)
+  } else if (options.previous) {
+    assertSubscriptionRequestMatch(subscription, options.previous)
   }
 }
 
@@ -639,7 +643,7 @@ function assertSubscriptionRecord(
 
 function assertSubscriptionRequestMatch(
   subscription: SubscriptionRecord,
-  request: SubscriptionRequest,
+  request: SubscriptionRequest | SubscriptionRecord,
 ) {
   if (!subscriptionMatchesRequest(subscription, request)) {
     throw new VerificationFailedError({ reason: 'subscription record does not match request' })
@@ -981,8 +985,13 @@ export declare namespace subscription {
               | undefined
           }
         | undefined
-      periodCount?: string | undefined
+      periodCount?: Methods.SubscriptionPeriodCountInput | undefined
       periodUnit?: SubscriptionPeriodUnit | undefined
+      /**
+       * Resolves the request identity. This callback must authenticate and
+       * authorize the caller before returning a key; automatic mode may create
+       * a server-owned access key for that key while issuing a challenge.
+       */
       resolve: (parameters: {
         input: Request
         request: SubscriptionRequest
@@ -991,6 +1000,7 @@ export declare namespace subscription {
         /** Stable idempotency/reconciliation reference persisted before the renewal hook runs. */
         inFlightReference: string
         periodIndex: number
+        /** Custom renewal hooks must preserve amount, currency, recipient, period, expiry, and lookup key. */
         subscription: SubscriptionRecord
       }) => Promise<RenewalResult>
       store?: Store.AtomicStore<Record<string, unknown>> | undefined

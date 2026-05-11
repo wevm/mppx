@@ -2,6 +2,8 @@ import { type ZodMiniOptional, type ZodMiniType, z } from 'zod/mini'
 
 export * from 'zod/mini'
 
+export type DatetimeInput = string | Date
+
 /** Numeric string amount (e.g., "1", "1.5", "1000000"). */
 export function amount() {
   return z.string().check(z.regex(/^\d+(\.\d+)?$/, 'Invalid amount'))
@@ -17,6 +19,28 @@ export function datetime() {
         'Invalid ISO 8601 datetime',
       ),
     )
+}
+
+/** ISO 8601 datetime string or Date object, transformed to a Date. */
+export function datetimeInput(message = 'Invalid ISO 8601 datetime') {
+  return z
+    .pipe(
+      z.union([datetime(), z.custom<Date>((value) => value instanceof Date)]),
+      z.transform(toDate),
+    )
+    .check(z.refine((value) => Number.isFinite(value.getTime()), message))
+}
+
+/** Converts an ISO 8601 datetime string or Date object to a Date. */
+export function toDate(value: DatetimeInput): Date {
+  return value instanceof Date ? value : new Date(value)
+}
+
+/** Serializes an ISO 8601 datetime string or Date object for wire output. */
+export function toDatetimeString(value: DatetimeInput): string {
+  if (!(value instanceof Date)) return value
+  if (!Number.isFinite(value.getTime())) return 'Invalid Date'
+  return value.toISOString()
 }
 
 /** Hex-encoded address string (0x-prefixed, 40 hex chars). */

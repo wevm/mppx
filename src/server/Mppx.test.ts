@@ -972,7 +972,7 @@ describe('compose', () => {
     amount: '1000',
     currency: '0x0000000000000000000000000000000000000001',
     decimals: 6,
-    expires: new Date(Date.now() + 60_000).toISOString(),
+    expires: new Date(Date.now() + 60_000),
     recipient: '0x0000000000000000000000000000000000000002',
   }
 

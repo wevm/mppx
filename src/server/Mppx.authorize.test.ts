@@ -1,6 +1,7 @@
 import { Challenge, Credential, Method, z } from 'mppx'
 import { Mppx } from 'mppx/server'
 import { describe, expect, test } from 'vp/test'
+import * as Http from '~test/Http.js'
 
 const realm = 'api.example.com'
 const secretKey = 'test-secret-key'
@@ -45,6 +46,51 @@ describe('authorize hook', () => {
 
     const response = result.withReceipt(new Response('OK'))
     expect(response.headers.get('Payment-Receipt')).toBeTruthy()
+  })
+
+  test('toNodeListener forwards authorize management responses', async () => {
+    const method = Method.toServer(
+      Method.from({
+        name: 'mock',
+        intent: 'subscription',
+        schema: {
+          credential: { payload: z.object({ token: z.string() }) },
+          request: z.object({ amount: z.string() }),
+        },
+      }),
+      {
+        async authorize() {
+          return {
+            receipt: successReceipt(),
+            response: new Response('retry later', {
+              headers: { 'Retry-After': '1' },
+              status: 409,
+            }),
+          }
+        },
+        async verify() {
+          return successReceipt()
+        },
+      },
+    )
+
+    const handler = Mppx.create({ methods: [method], realm, secretKey })
+    const server = await Http.createServer(async (req, res) => {
+      const result = await Mppx.toNodeListener(handler['mock/subscription']({ amount: '1' }))(
+        req,
+        res,
+      )
+      if (result.status === 402) return
+      res.end('OK')
+    })
+
+    const response = await fetch(server.url)
+    expect(response.status).toBe(409)
+    expect(response.headers.get('Retry-After')).toBe('1')
+    expect(response.headers.get('Payment-Receipt')).toBeTruthy()
+    expect(await response.text()).toBe('retry later')
+
+    server.close()
   })
 
   test('compose evaluates authorize hooks sequentially on no-credential requests', async () => {
