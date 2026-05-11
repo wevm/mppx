@@ -409,8 +409,8 @@ export function charge<const parameters extends charge.Parameters>(
               await viem_call(client, {
                 ...transaction,
                 account: transaction.from,
-                feeToken: resolvedFeeToken,
                 calls: transaction.calls,
+                feePayerSignature: undefined,
               } as never)
               const receipt = await sendRawTransactionSync(client, {
                 serializedTransaction: serializedTransaction_final,
@@ -447,8 +447,8 @@ export function charge<const parameters extends charge.Parameters>(
             await viem_call(client, {
               ...transaction,
               account: transaction.from,
-              feeToken: resolvedFeeToken,
               calls: transaction.calls,
+              feePayerSignature: undefined,
             } as never)
             const reference = await sendRawTransaction(client, {
               serializedTransaction: serializedTransaction_final,

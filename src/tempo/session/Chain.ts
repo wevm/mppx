@@ -606,8 +606,8 @@ export async function broadcastOpenTransaction(parameters: {
     await call(client, {
       ...transaction,
       account: transaction.from,
-      feeToken: resolvedFeeToken,
       calls,
+      feePayerSignature: undefined,
     } as never)
     const txHash = await sendRawTransaction(client, {
       serializedTransaction: serializedTransaction_final as Transaction.TransactionSerializedTempo,
@@ -625,8 +625,8 @@ export async function broadcastOpenTransaction(parameters: {
       await call(client, {
         ...transaction,
         account: transaction.from,
-        feeToken: resolvedFeeToken,
         calls,
+        feePayerSignature: undefined,
       } as never)
 
     const receipt = await sendRawTransactionSync(client, {
@@ -762,10 +762,8 @@ export async function broadcastTopUpTransaction(parameters: {
     await call(client, {
       ...transaction,
       account: transaction.from,
-      feeToken:
-        transaction.feeToken ??
-        defaults.currency[client.chain?.id as keyof typeof defaults.currency],
       calls,
+      feePayerSignature: undefined,
     } as never)
 
   const receipt = await sendRawTransactionSync(client, {
