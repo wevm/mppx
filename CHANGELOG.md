@@ -1,5 +1,11 @@
 # mppx
 
+## 0.6.19
+
+### Patch Changes
+
+- 4fffc6a: Fixed pre-broadcast simulation in `tempo.charge` and `tempo.session` by stripping `feeToken` and `feePayerSignature` from the simulation request, so the node does not try to recover `feePayerSignature` against a sender signature that viem's `call` action never includes.
+
 ## 0.6.18
 
 ### Patch Changes
