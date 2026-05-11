@@ -50,7 +50,7 @@
     "tempo.ts": "^0.14.2",
     "testcontainers": "^11.14.0",
     "tsx": "^4.21.0",
-    "typescript": "~5.9.3",
+    "typescript": "~6.0.3",
     "viem": "^2.47.6",
     "vite": "^8.0.10",
     "vp": "npm:vite-plus@~0.1.17",
@@ -184,7 +184,7 @@
   },
   "dependencies": {
     "incur": "^0.4.5",
-    "ox": "0.14.18",
+    "ox": "0.14.20",
     "zod": "^4.3.6"
   },
   "repository": {
