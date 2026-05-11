@@ -546,7 +546,7 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
                   response: managementResponse as never,
                 }) as response
               }
-              if (!response) throw new Error('withReceipt() requires a response argument')
+              if (!response) throw new MissingReceiptResponseError()
               return transport.respondReceipt({
                 challengeId,
                 credential: credentialForReceipt,
@@ -820,6 +820,22 @@ const defaultRealm = 'MPP Payment'
 const Warnings = {
   realmFallback: 'realm-fallback',
 } as const
+
+/** Error thrown when `withReceipt()` needs a response but none was provided. */
+export class MissingReceiptResponseError extends Error {
+  override name = 'MissingReceiptResponseError'
+
+  constructor() {
+    super('withReceipt() requires a response argument')
+  }
+}
+
+/** Returns true when an error is the typed `withReceipt()` no-response sentinel. */
+export function isMissingReceiptResponseError(
+  error: unknown,
+): error is MissingReceiptResponseError {
+  return error instanceof MissingReceiptResponseError
+}
 
 function normalizeExpires(expires: z.DatetimeInput | undefined): string | undefined {
   return expires === undefined ? undefined : z.toDatetimeString(expires)
@@ -1526,7 +1542,7 @@ function getManagementResponse(
   try {
     return (result.withReceipt as () => globalThis.Response)()
   } catch (error) {
-    if (error instanceof Error && error.message === 'withReceipt() requires a response argument') {
+    if (isMissingReceiptResponseError(error)) {
       return null
     }
     throw error

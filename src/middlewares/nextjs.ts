@@ -72,7 +72,7 @@ function getManagementResponse(result: { withReceipt: (response?: Response) => R
   try {
     return result.withReceipt()
   } catch (error) {
-    if (error instanceof Error && error.message === 'withReceipt() requires a response argument') {
+    if (Mppx_core.isMissingReceiptResponseError(error)) {
       return null
     }
     throw error

@@ -3,6 +3,7 @@ import type * as http from 'node:http'
 import * as Credential from '../Credential.js'
 import { generateProxy } from '../discovery/OpenApi.js'
 import * as Scope from '../server/internal/scope.js'
+import * as Mppx from '../server/Mppx.js'
 import * as Request from '../server/Request.js'
 import * as Headers from './internal/Headers.js'
 import * as Route from './internal/Route.js'
@@ -146,11 +147,7 @@ export function create(config: create.Config): Proxy {
       try {
         return (result.withReceipt as () => Response)()
       } catch (error) {
-        if (
-          error instanceof Error &&
-          error.message === 'withReceipt() requires a response argument'
-        )
-          return null
+        if (Mppx.isMissingReceiptResponseError(error)) return null
         throw error
       }
     })()

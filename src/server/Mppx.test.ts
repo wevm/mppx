@@ -2636,7 +2636,7 @@ describe('withReceipt', () => {
     expect(result.status).toBe(200)
     if (result.status !== 200) throw new Error()
 
-    expect(() => result.withReceipt()).toThrow('withReceipt() requires a response argument')
+    expect(() => result.withReceipt()).toThrow(Mppx.MissingReceiptResponseError)
   })
 
   test('returns management response when respond hook returns Response', async () => {
