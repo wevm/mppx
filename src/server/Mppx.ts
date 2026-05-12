@@ -820,13 +820,15 @@ const defaultRealm = 'MPP Payment'
 const Warnings = {
   realmFallback: 'realm-fallback',
 } as const
+const missingReceiptResponseErrorName = 'MissingReceiptResponseError'
+const missingReceiptResponseErrorMessage = 'withReceipt() requires a response argument'
 
 /** Error thrown when `withReceipt()` needs a response but none was provided. */
 export class MissingReceiptResponseError extends Error {
-  override name = 'MissingReceiptResponseError'
+  override name = missingReceiptResponseErrorName
 
   constructor() {
-    super('withReceipt() requires a response argument')
+    super(missingReceiptResponseErrorMessage)
   }
 }
 
@@ -834,7 +836,13 @@ export class MissingReceiptResponseError extends Error {
 export function isMissingReceiptResponseError(
   error: unknown,
 ): error is MissingReceiptResponseError {
-  return error instanceof MissingReceiptResponseError
+  if (error instanceof MissingReceiptResponseError) return true
+  if (!error || typeof error !== 'object') return false
+  const value = error as { message?: unknown; name?: unknown }
+  return (
+    value.name === missingReceiptResponseErrorName &&
+    value.message === missingReceiptResponseErrorMessage
+  )
 }
 
 function normalizeExpires(expires: z.DatetimeInput | undefined): string | undefined {

@@ -2639,6 +2639,14 @@ describe('withReceipt', () => {
     expect(() => result.withReceipt()).toThrow(Mppx.MissingReceiptResponseError)
   })
 
+  test('recognizes missing response sentinel across module instances', () => {
+    const error = new Error('withReceipt() requires a response argument')
+    error.name = 'MissingReceiptResponseError'
+
+    expect(Mppx.isMissingReceiptResponseError(error)).toBe(true)
+    expect(Mppx.isMissingReceiptResponseError(new Error(error.message))).toBe(false)
+  })
+
   test('returns management response when respond hook returns Response', async () => {
     const mockMethodWithRespond = Method.toServer(mockCharge, {
       async verify() {
