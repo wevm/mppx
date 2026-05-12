@@ -56,8 +56,33 @@ jobs:
 
   test:
     name: Test Runtime
+    if: always()
+    needs: [test-runtime]
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    steps:
+      - run: |
+          if [[ "${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}" == "true" ]]; then
+            echo "One or more runtime test shards failed or were cancelled"
+            exit 1
+          fi
+
+  test-runtime:
+    name: Test Runtime / ${{ matrix.name }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Node 1/2
+            artifact: node-1
+            args: --project node --shard=1/2
+          - name: Node 2/2
+            artifact: node-2
+            args: --project node --shard=2/2
+          - name: CLI
+            artifact: cli
+            args: --project cli
     env:
       # GitHub-hosted runners are ephemeral, so we can skip the Ryuk sidecar
       # and avoid Docker Hub rate limits on testcontainers/ryuk pulls.
@@ -112,9 +137,46 @@ jobs:
           eval "$(dbus-launch --sh-syntax)"
           eval "$(printf '\n' | gnome-keyring-daemon --unlock)"
           eval "$(printf '\n' | gnome-keyring-daemon --start)"
-          pnpm exec vp test --run --project node --project cli --bail=1
+
+          log="runtime-tests-${{ matrix.artifact }}.log"
+          touch "${log}"
+          tail -n +1 -f "${log}" &
+          tail_pid=$!
+
+          setsid pnpm exec vp test --run ${{ matrix.args }} --reporter=verbose --bail=1 > "${log}" 2>&1 &
+          test_pid=$!
+
+          (
+            sleep 9m
+            if kill -0 "${test_pid}" 2>/dev/null; then
+              echo "::error::Runtime test shard exceeded 9 minutes" >> "${log}"
+              kill -TERM "-${test_pid}" 2>/dev/null || true
+              sleep 30
+              kill -KILL "-${test_pid}" 2>/dev/null || true
+            fi
+          ) &
+          watchdog_pid=$!
+
+          set +e
+          wait "${test_pid}"
+          test_status=$?
+          set -e
+
+          kill "${watchdog_pid}" 2>/dev/null || true
+          kill "${tail_pid}" 2>/dev/null || true
+          wait "${tail_pid}" 2>/dev/null || true
+          exit "${test_status}"
         env:
           CI: true
+
+      - name: Upload runtime test log
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: runtime-test-log-${{ matrix.artifact }}
+          path: runtime-tests-${{ matrix.artifact }}.log
+          if-no-files-found: ignore
+          retention-days: 7
 
   test-html:
     name: Test HTML
