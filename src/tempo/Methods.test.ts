@@ -1,6 +1,8 @@
 import { Methods } from 'mppx/tempo'
 import { describe, expect, expectTypeOf, test } from 'vp/test'
 
+const secondsPerDay = 86_400n
+
 describe('charge', () => {
   test('has correct name and intent', () => {
     expect(Methods.charge.intent).toBe('charge')
@@ -245,5 +247,134 @@ describe('session', () => {
 
     expect(request.amount).toBe('1000000')
     expect(request.methodDetails?.minVoucherDelta).toBe('100000')
+  })
+})
+
+describe('subscription', () => {
+  test('has correct name and intent', () => {
+    expect(Methods.subscription.intent).toBe('subscription')
+    expect(Methods.subscription.name).toBe('tempo')
+  })
+
+  test('schema: validates request and encodes amount in base units', () => {
+    const request = Methods.subscription.schema.request.parse({
+      accessKey: {
+        accessKeyAddress: '0xabcdefabcdefabcdefabcdefabcdefabcdefabcd',
+        keyType: 'secp256k1',
+      },
+      amount: '10',
+      chainId: 4217,
+      currency: '0x20c0000000000000000000000000000000000001',
+      decimals: 6,
+      periodCount: '1',
+      periodUnit: 'day',
+      recipient: '0x1234567890abcdef1234567890abcdef12345678',
+      subscriptionExpires: '2026-01-01T00:00:00Z',
+    })
+
+    expect(request.amount).toBe('10000000')
+    expect(request.methodDetails?.chainId).toBe(4217)
+    expect(request.methodDetails?.accessKey).toEqual({
+      accessKeyAddress: '0xabcdefabcdefabcdefabcdefabcdefabcdefabcd',
+      keyType: 'secp256k1',
+    })
+    expect('accessKey' in request).toBe(false)
+  })
+
+  test('schema: accepts subscriptionExpires as a Date', () => {
+    const request = Methods.subscription.schema.request.parse({
+      amount: '10',
+      chainId: 4217,
+      currency: '0x20c0000000000000000000000000000000000001',
+      decimals: 6,
+      periodCount: '1',
+      periodUnit: 'day',
+      recipient: '0x1234567890abcdef1234567890abcdef12345678',
+      subscriptionExpires: new Date('2026-01-01T00:00:00Z'),
+    })
+
+    expect(request.subscriptionExpires).toBe('2026-01-01T00:00:00.000Z')
+  })
+
+  test.each([
+    { input: 1, expected: '1', desc: 'number' },
+    { input: 1n, expected: '1', desc: 'bigint' },
+  ])('schema: accepts periodCount as $desc', ({ input, expected }) => {
+    const request = Methods.subscription.schema.request.parse({
+      amount: '10',
+      currency: '0x20c0000000000000000000000000000000000001',
+      decimals: 6,
+      periodCount: input,
+      periodUnit: 'day',
+      recipient: '0x1234567890abcdef1234567890abcdef12345678',
+      subscriptionExpires: '2026-01-01T00:00:00Z',
+    })
+
+    expect(request.periodCount).toBe(expected)
+  })
+
+  test('schema: rejects non-numeric periodCount', () => {
+    const result = Methods.subscription.schema.request.safeParse({
+      amount: '10',
+      currency: '0x20c0000000000000000000000000000000000001',
+      decimals: 6,
+      periodCount: 'month',
+      periodUnit: 'day',
+      recipient: '0x1234567890abcdef1234567890abcdef12345678',
+      subscriptionExpires: '2026-01-01T00:00:00Z',
+    })
+
+    expect(result.success).toBe(false)
+  })
+
+  test('schema: rejects unsafe number periodCount', () => {
+    const result = Methods.subscription.schema.request.safeParse({
+      amount: '10',
+      currency: '0x20c0000000000000000000000000000000000001',
+      decimals: 6,
+      periodCount: Number.MAX_SAFE_INTEGER + 1,
+      periodUnit: 'day',
+      recipient: '0x1234567890abcdef1234567890abcdef12345678',
+      subscriptionExpires: '2026-01-01T00:00:00Z',
+    })
+
+    expect(result.success).toBe(false)
+  })
+
+  test('schema: rejects calendar-month periods that Tempo cannot represent exactly', () => {
+    const result = Methods.subscription.schema.request.safeParse({
+      amount: '10',
+      currency: '0x20c0000000000000000000000000000000000001',
+      decimals: 6,
+      periodCount: '1',
+      periodUnit: 'month',
+      recipient: '0x1234567890abcdef1234567890abcdef12345678',
+      subscriptionExpires: '2026-01-01T00:00:00Z',
+    })
+
+    expect(result.success).toBe(false)
+  })
+
+  test('schema: rejects periods whose mapped seconds exceed uint64', () => {
+    const result = Methods.subscription.schema.request.safeParse({
+      amount: '10',
+      currency: '0x20c0000000000000000000000000000000000001',
+      decimals: 6,
+      periodCount: String((1n << 64n) / secondsPerDay + 1n),
+      periodUnit: 'day',
+      recipient: '0x1234567890abcdef1234567890abcdef12345678',
+      subscriptionExpires: '2026-01-01T00:00:00Z',
+    })
+
+    expect(result.success).toBe(false)
+  })
+
+  test('schema: validates key authorization payload', () => {
+    const result = Methods.subscription.schema.credential.payload.safeParse({
+      signature: '0x1234',
+      type: 'keyAuthorization',
+    })
+
+    expect(result.success).toBe(true)
   })
 })

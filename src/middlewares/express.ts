@@ -80,11 +80,7 @@ export function payment<const intent extends Mppx_internal.AnyMethodFn>(
       try {
         return (result.withReceipt as () => Response)()
       } catch (error) {
-        if (
-          error instanceof Error &&
-          error.message === 'withReceipt() requires a response argument'
-        )
-          return null
+        if (Mppx_core.isMissingReceiptResponseError(error)) return null
         throw error
       }
     })()

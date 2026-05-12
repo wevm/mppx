@@ -122,6 +122,40 @@ describe('paymentOf', () => {
     })
     expect(Service.paymentOf({ pay: handler, options: {} })).toBeNull()
   })
+
+  test('behavior: strips function internals from payment metadata', () => {
+    const handler = Object.assign(
+      async () => ({
+        status: 200 as const,
+        withReceipt: <T>(r: T) => r,
+      }),
+      {
+        _internal: {
+          _canonicalRequest: () => ({}),
+          _stableBinding: () => ({}),
+          amount: '1',
+          authorize: () => undefined,
+          decimals: 6,
+          defaults: {},
+          intent: 'charge',
+          name: 'mock',
+          request: () => ({}),
+          respond: () => undefined,
+          schema: {},
+          stableBinding: () => ({}),
+          transport: {},
+          verify: () => undefined,
+        },
+      },
+    )
+
+    expect(Service.paymentOf(handler as never)).toEqual({
+      amount: '1000000',
+      decimals: 6,
+      intent: 'charge',
+      method: 'mock',
+    })
+  })
 })
 
 describe('getOptions', () => {

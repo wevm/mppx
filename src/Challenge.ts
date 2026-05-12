@@ -129,7 +129,7 @@ export function from<
     secretKey,
   } = parameters
 
-  const expires = parameters.expires as string
+  const expires = parameters.expires ? z.toDatetimeString(parameters.expires) : undefined
   const opaque =
     parameters.opaque ?? (meta !== undefined ? PaymentRequest.serialize(meta) : undefined)
   const id = secretKey
@@ -173,7 +173,7 @@ export declare namespace from {
     /** Optional digest of the request body. */
     digest?: string | undefined
     /** Optional expiration timestamp (ISO 8601). */
-    expires?: string | undefined
+    expires?: z.DatetimeInput | undefined
     /** Intent type (e.g., "charge", "session"). */
     intent: string
     /** Optional server-defined correlation data (serialized as `opaque` on the challenge). Flat string-to-string map; clients MUST NOT modify. */
@@ -266,7 +266,7 @@ export declare namespace fromMethod {
     /** Optional digest of the request body. */
     digest?: string | undefined
     /** Optional expiration timestamp (ISO 8601). */
-    expires?: string | undefined
+    expires?: z.DatetimeInput | undefined
     /** Optional server-defined correlation data (serialized as `opaque` on the challenge). Flat string-to-string map; clients MUST NOT modify. */
     meta?: Record<string, string> | undefined
     /** Server realm (e.g., hostname). */

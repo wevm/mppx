@@ -216,6 +216,13 @@ export function paymentOf(endpoint: Endpoint): Record<string, unknown> | null {
     defaults: _,
     schema: _s,
     _canonicalRequest,
+    _stableBinding: _sb,
+    authorize: _a,
+    request: _r,
+    respond: _re,
+    stableBinding: _st,
+    transport: _t,
+    verify: _v,
     ...rest
   } = handler._internal as Record<string, unknown>
   const amount = (() => {

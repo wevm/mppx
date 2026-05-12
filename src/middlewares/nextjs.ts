@@ -61,8 +61,21 @@ export function payment<const intent extends Mppx_internal.AnyMethodFn>(
   return async (request) => {
     const result = await intent(options)(request)
     if (result.status === 402) return result.challenge
+    const managementResponse = getManagementResponse(result)
+    if (managementResponse) return managementResponse
     const response = await handler(request)
     return result.withReceipt(response)
+  }
+}
+
+function getManagementResponse(result: { withReceipt: (response?: Response) => Response }) {
+  try {
+    return result.withReceipt()
+  } catch (error) {
+    if (Mppx_core.isMissingReceiptResponseError(error)) {
+      return null
+    }
+    throw error
   }
 }
 

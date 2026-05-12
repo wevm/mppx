@@ -53,6 +53,19 @@ describe('from', () => {
     `)
   })
 
+  test('behavior: accepts expires as a Date', () => {
+    const challenge = Challenge.from({
+      id: 'abc123',
+      realm: 'api.example.com',
+      method: 'tempo',
+      intent: 'charge',
+      request: { amount: '1000000' },
+      expires: new Date('2025-01-06T12:00:00Z'),
+    })
+
+    expect(challenge.expires).toBe('2025-01-06T12:00:00.000Z')
+  })
+
   // ---------------------------------------------------------------------------
   // HMAC Challenge ID Test Vectors
   //

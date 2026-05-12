@@ -1,6 +1,6 @@
 import * as http from 'node:http'
 
-import { Challenge, Credential, Method, z } from 'mppx'
+import { Challenge, Credential, Errors, Method, z } from 'mppx'
 import {
   Mppx as Mppx_client,
   session as tempo_session_client,
@@ -972,7 +972,7 @@ describe('compose', () => {
     amount: '1000',
     currency: '0x0000000000000000000000000000000000000001',
     decimals: 6,
-    expires: new Date(Date.now() + 60_000).toISOString(),
+    expires: new Date(Date.now() + 60_000),
     recipient: '0x0000000000000000000000000000000000000002',
   }
 
@@ -1776,6 +1776,37 @@ describe('compose: pre-dispatch narrowing edge cases', () => {
     )
 
     // Credential parse fails silently, falls back to handlers[0]
+    expect(result.status).toBe(402)
+  })
+
+  test('ignores compose candidates whose stable binding throws on forged credentials', async () => {
+    const bindingMethod = Method.toServer(mockCharge, {
+      stableBinding(request) {
+        return { currency: request.currency.toLowerCase() }
+      },
+      async verify() {
+        return mockReceipt()
+      },
+    })
+    const mppx = Mppx.create({ methods: [bindingMethod], realm, secretKey })
+    const handle = mppx.compose([bindingMethod, challengeOpts])
+    const credential = Credential.from({
+      challenge: {
+        id: 'forged',
+        intent: 'charge',
+        method: 'alpha',
+        realm,
+        request: {},
+      },
+      payload: { token: 'valid' },
+    })
+
+    const result = await handle(
+      new Request('https://example.com/resource', {
+        headers: { Authorization: Credential.serialize(credential) },
+      }),
+    )
+
     expect(result.status).toBe(402)
   })
 
@@ -2605,7 +2636,15 @@ describe('withReceipt', () => {
     expect(result.status).toBe(200)
     if (result.status !== 200) throw new Error()
 
-    expect(() => result.withReceipt()).toThrow('withReceipt() requires a response argument')
+    expect(() => result.withReceipt()).toThrow(Mppx.MissingReceiptResponseError)
+  })
+
+  test('recognizes missing response sentinel across module instances', () => {
+    const error = new Error('withReceipt() requires a response argument')
+    error.name = 'MissingReceiptResponseError'
+
+    expect(Mppx.isMissingReceiptResponseError(error)).toBe(true)
+    expect(Mppx.isMissingReceiptResponseError(new Error(error.message))).toBe(false)
   })
 
   test('returns management response when respond hook returns Response', async () => {
@@ -3250,6 +3289,37 @@ describe('challenge', () => {
 
     expect(challenge.request.amount).toBe('25920000')
     expect(challenge.request.methodDetails).toEqual({ chainId: 42431 })
+  })
+
+  test('request hook payment errors are normalized to 402 responses', async () => {
+    const errorMethod = Method.toServer(
+      Method.from({
+        name: 'error',
+        intent: 'charge',
+        schema: {
+          credential: { payload: z.object({ token: z.string() }) },
+          request: z.object({ amount: z.string() }),
+        },
+      }),
+      {
+        request() {
+          throw new Errors.VerificationFailedError({ reason: 'request rejected' })
+        },
+        async verify() {
+          return mockReceipt('error')
+        },
+      },
+    )
+    const mppx = Mppx.create({ methods: [errorMethod], realm, secretKey })
+
+    const result = await mppx.error.charge({ amount: '1' })(
+      new Request('https://example.com/resource'),
+    )
+
+    expect(result.status).toBe(402)
+    if (result.status !== 402) throw new Error('expected challenge')
+    const body = (await result.challenge.json()) as { detail?: string }
+    expect(body.detail).toBe('Payment verification failed: request rejected.')
   })
 
   test('challenge produced by mppx.challenge is accepted by the 402 handler', async () => {

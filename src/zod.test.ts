@@ -1,6 +1,16 @@
 import { describe, expect, test } from 'vp/test'
 
-import { address, amount, datetime, hash, period, signature, unwrapOptional, z } from './zod.js'
+import {
+  address,
+  amount,
+  datetime,
+  datetimeInput,
+  hash,
+  period,
+  signature,
+  unwrapOptional,
+  z,
+} from './zod.js'
 
 describe('amount', () => {
   test.each([
@@ -31,6 +41,18 @@ describe('datetime', () => {
     { input: 'not-a-date', expected: false, desc: 'non-date string' },
   ])('$desc ($input) → $expected', ({ input, expected }) => {
     expect(datetime().safeParse(input).success).toBe(expected)
+  })
+})
+
+describe('datetimeInput', () => {
+  test('accepts Date objects', () => {
+    const result = datetimeInput().parse(new Date('2025-01-06T12:00:00Z'))
+
+    expect(result.toISOString()).toBe('2025-01-06T12:00:00.000Z')
+  })
+
+  test('rejects invalid Date objects', () => {
+    expect(datetimeInput().safeParse(new Date(Number.NaN)).success).toBe(false)
   })
 })
 
