@@ -1,5 +1,0 @@
----
-'mppx': patch
----
-
-Added Tempo subscription key authorization, subscription receipt identifiers, activation replay protection, renewal idempotency, and dynamic access key handling.
