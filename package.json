@@ -185,7 +185,7 @@
   "dependencies": {
     "incur": "^0.4.5",
     "ox": "0.14.20",
-    "zod": "^4.3.6"
+    "zod": "^4.4.3"
   },
   "repository": {
     "type": "git",
