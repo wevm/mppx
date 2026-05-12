@@ -1,5 +1,12 @@
 # mppx
 
+## 0.6.20
+
+### Patch Changes
+
+- 868c2bf: Added Date challenge expirations and numeric Tempo subscription period counts.
+- 868c2bf: Added Tempo subscription key authorization, subscription receipt identifiers, activation replay protection, renewal idempotency, and dynamic access key handling.
+
 ## 0.6.19
 
 ### Patch Changes
