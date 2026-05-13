@@ -171,12 +171,22 @@ describe('Mppx type tests', () => {
     expectTypeOf(mppx.verifyCredential).toBeFunction()
   })
 
-  test('lifecycle hooks receive typed method context', () => {
-    Mppx.create({
+  test('server events receive typed method context', () => {
+    const mppx = Mppx.create({
       methods: [alphaMethod],
       realm,
       secretKey,
-      hooks: {
+      events: {
+        '*'(event) {
+          expectTypeOf(event.name).toMatchTypeOf<
+            'challenge' | 'payment.failed' | 'payment.success'
+          >()
+          if (event.name === 'payment.success')
+            expectTypeOf(event.payload.receipt.status).toEqualTypeOf<'success'>()
+        },
+        'payment.success'(context) {
+          expectTypeOf(context.challenge.method).toEqualTypeOf<'alpha'>()
+        },
         onChallenge(context) {
           expectTypeOf(context.input).toEqualTypeOf<Request>()
           expectTypeOf(context.method.name).toEqualTypeOf<'alpha'>()
@@ -197,6 +207,28 @@ describe('Mppx type tests', () => {
           expectTypeOf(context.request.recipient).toEqualTypeOf<string>()
         },
       },
+    })
+
+    mppx.on('payment.success', (context) => {
+      expectTypeOf(context.challenge.method).toEqualTypeOf<'alpha'>()
+      expectTypeOf(context.credential.payload.token).toEqualTypeOf<string>()
+    })
+    mppx.on('payment.failed', (context) => {
+      expectTypeOf(context.error).toMatchTypeOf<Error>()
+      expectTypeOf(context.credential).toMatchTypeOf<unknown>()
+    })
+    mppx.on('*', (event) => {
+      if (event.name === 'payment.failed') expectTypeOf(event.payload.error).toMatchTypeOf<Error>()
+      if (event.name === 'challenge')
+        expectTypeOf(event.payload.error).toMatchTypeOf<Error | undefined>()
+    })
+    mppx.onPaymentSuccess((context) => {
+      expectTypeOf(context.receipt.status).toEqualTypeOf<'success'>()
+      expectTypeOf(context.request.recipient).toEqualTypeOf<string>()
+    })
+    mppx.onPaymentFailed((context) => {
+      expectTypeOf(context.error).toMatchTypeOf<Error>()
+      expectTypeOf(context.request.currency).toEqualTypeOf<string>()
     })
   })
 

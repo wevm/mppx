@@ -111,7 +111,7 @@ function createUpstream(handler: (req: Request) => Response | Promise<Response>)
 }
 
 describe('create', () => {
-  test('behavior: paid routes emit mppx lifecycle hooks', async () => {
+  test('behavior: paid routes emit mppx server events', async () => {
     const events: string[] = []
     upstream = await createUpstream(() => Response.json({ data: 'ok' }))
 
@@ -138,7 +138,7 @@ describe('create', () => {
       ],
       realm: 'api.example.com',
       secretKey,
-      hooks: {
+      events: {
         onChallenge(context) {
           events.push(`challenge:${context.error?.name}`)
         },

@@ -914,8 +914,8 @@ describe('receipt handling', () => {
   })
 })
 
-describe('lifecycle hooks', () => {
-  const lifecycleCharge = Method.from({
+describe('server events', () => {
+  const eventCharge = Method.from({
     name: 'mock',
     intent: 'charge',
     schema: {
@@ -941,7 +941,7 @@ describe('lifecycle hooks', () => {
     }
   }
 
-  function receipt(reference = 'tx-lifecycle') {
+  function receipt(reference = 'tx-events') {
     return {
       method: 'mock',
       reference,
@@ -950,10 +950,10 @@ describe('lifecycle hooks', () => {
     }
   }
 
-  test('emits challenge then success hooks for a successful request', async () => {
+  test('emits challenge then success events for a successful request', async () => {
     const events: string[] = []
     const seen: Record<string, unknown> = {}
-    const serverMethod = Method.toServer(lifecycleCharge, {
+    const serverMethod = Method.toServer(eventCharge, {
       async verify() {
         return receipt()
       },
@@ -962,7 +962,7 @@ describe('lifecycle hooks', () => {
       methods: [serverMethod],
       realm,
       secretKey,
-      hooks: {
+      events: {
         onChallenge(context) {
           events.push(`challenge:${context.error?.name}`)
           seen.challengeMethod = context.method.name
@@ -1002,7 +1002,7 @@ describe('lifecycle hooks', () => {
     const response = paid.withReceipt(Response.json({ ok: true }))
 
     expect(response.headers.get('Payment-Receipt')).toBeTruthy()
-    expect(events).toEqual(['challenge:PaymentRequiredError', 'payment:tx-lifecycle'])
+    expect(events).toEqual(['challenge:PaymentRequiredError', 'payment:tx-events'])
     expect(seen).toMatchObject({
       challengeAmount: '1000',
       challengeCredential: null,
@@ -1016,9 +1016,175 @@ describe('lifecycle hooks', () => {
     })
   })
 
+  test('does not let server event errors alter payment control flow', async () => {
+    const events: string[] = []
+    const serverMethod = Method.toServer(eventCharge, {
+      async verify() {
+        return receipt('tx-event-error')
+      },
+    })
+    const handler = Mppx.create({
+      methods: [serverMethod],
+      realm,
+      secretKey,
+      events: {
+        async '*'() {
+          events.push('*')
+          throw new Error('catchall event failed')
+        },
+        onChallenge() {
+          events.push('challenge')
+          throw new Error('challenge event failed')
+        },
+        async onPaymentFailed() {
+          events.push('failed')
+          throw new Error('failed event failed')
+        },
+        async onPaymentSuccess() {
+          events.push('success')
+          throw new Error('success event failed')
+        },
+      },
+    })
+    const handle = handler.charge(options())
+
+    const first = await handle(new Request('https://example.com/resource'))
+    expect(first.status).toBe(402)
+    if (first.status !== 402) throw new Error()
+
+    const invalid = await handle(
+      new Request('https://example.com/resource', {
+        headers: {
+          Authorization: Credential.serialize(
+            Credential.from({
+              challenge: Challenge.from({
+                id: 'wrong-id',
+                intent: 'charge',
+                method: 'mock',
+                realm,
+                request: {
+                  amount: '1000',
+                  currency: '0x0000000000000000000000000000000000000001',
+                  decimals: 6,
+                  recipient: '0x0000000000000000000000000000000000000002',
+                },
+              }),
+              payload: { token: 'valid' },
+            }),
+          ),
+        },
+      }),
+    )
+    expect(invalid.status).toBe(402)
+
+    const paid = await handle(
+      new Request('https://example.com/resource', {
+        headers: {
+          Authorization: Credential.serialize(
+            Credential.from({
+              challenge: Challenge.fromResponse(first.challenge),
+              payload: { token: 'valid' },
+            }),
+          ),
+        },
+      }),
+    )
+    expect(paid.status).toBe(200)
+    if (paid.status !== 200) throw new Error()
+    expect(paid.withReceipt(Response.json({ ok: true })).status).toBe(200)
+
+    expect(events).toEqual(['challenge', '*', 'failed', '*', 'challenge', '*', 'success', '*'])
+  })
+
+  test('supports canonical event names and generated registration methods', async () => {
+    const events: string[] = []
+    const serverMethod = Method.toServer(eventCharge, {
+      async verify() {
+        return receipt('tx-registered-event')
+      },
+    })
+    const handler = Mppx.create({
+      methods: [serverMethod],
+      realm,
+      secretKey,
+      events: {
+        '*': (event) => {
+          events.push(`*:${event.name}`)
+        },
+        challenge(context) {
+          events.push(`config:${context.error?.name}`)
+        },
+      },
+    })
+    const offFailed = handler.on('payment.failed', (context) => {
+      events.push(`failed:${context.error.name}`)
+    })
+    const offAll = handler.on('*', (event) => {
+      events.push(`runtime:*:${event.name}`)
+    })
+    const offSuccess = handler.onPaymentSuccess((context) => {
+      events.push(`success:${context.receipt.reference}`)
+    })
+    offFailed()
+
+    const handle = handler.charge(options())
+    const first = await handle(new Request('https://example.com/resource'))
+    expect(first.status).toBe(402)
+    if (first.status !== 402) throw new Error()
+    offAll()
+
+    const badCredential = Credential.from({
+      challenge: Challenge.from({
+        id: 'wrong-id',
+        intent: 'charge',
+        method: 'mock',
+        realm,
+        request: {
+          amount: '1000',
+          currency: '0x0000000000000000000000000000000000000001',
+          decimals: 6,
+          recipient: '0x0000000000000000000000000000000000000002',
+        },
+      }),
+      payload: { token: 'valid' },
+    })
+    const invalid = await handle(
+      new Request('https://example.com/resource', {
+        headers: { Authorization: Credential.serialize(badCredential) },
+      }),
+    )
+    expect(invalid.status).toBe(402)
+
+    const paid = await handle(
+      new Request('https://example.com/resource', {
+        headers: {
+          Authorization: Credential.serialize(
+            Credential.from({
+              challenge: Challenge.fromResponse(first.challenge),
+              payload: { token: 'valid' },
+            }),
+          ),
+        },
+      }),
+    )
+    expect(paid.status).toBe(200)
+    offSuccess()
+
+    expect(events).toEqual([
+      'config:PaymentRequiredError',
+      '*:challenge',
+      'runtime:*:challenge',
+      '*:payment.failed',
+      'config:InvalidChallengeError',
+      '*:challenge',
+      'success:tx-registered-event',
+      '*:payment.success',
+    ])
+  })
+
   test('emits payment failure before reissuing challenge for invalid credentials', async () => {
     const events: string[] = []
-    const serverMethod = Method.toServer(lifecycleCharge, {
+    const serverMethod = Method.toServer(eventCharge, {
       async verify() {
         return receipt()
       },
@@ -1027,7 +1193,7 @@ describe('lifecycle hooks', () => {
       methods: [serverMethod],
       realm,
       secretKey,
-      hooks: {
+      events: {
         onChallenge(context) {
           events.push(`challenge:${context.error?.name}`)
         },
@@ -1072,7 +1238,7 @@ describe('lifecycle hooks', () => {
 
   test('emits payment failure for malformed credentials with no parsed credential', async () => {
     const events: string[] = []
-    const serverMethod = Method.toServer(lifecycleCharge, {
+    const serverMethod = Method.toServer(eventCharge, {
       async verify() {
         return receipt()
       },
@@ -1081,7 +1247,7 @@ describe('lifecycle hooks', () => {
       methods: [serverMethod],
       realm,
       secretKey,
-      hooks: {
+      events: {
         onChallenge(context) {
           events.push(`challenge:${context.error?.name}:${context.credential}`)
         },
@@ -1106,7 +1272,7 @@ describe('lifecycle hooks', () => {
 
   test('emits payment failure when method verification rejects', async () => {
     const events: string[] = []
-    const serverMethod = Method.toServer(lifecycleCharge, {
+    const serverMethod = Method.toServer(eventCharge, {
       async verify() {
         throw new Errors.VerificationFailedError({ reason: 'declined' })
       },
@@ -1115,7 +1281,7 @@ describe('lifecycle hooks', () => {
       methods: [serverMethod],
       realm,
       secretKey,
-      hooks: {
+      events: {
         onChallenge(context) {
           events.push(`challenge:${context.error?.name}`)
         },

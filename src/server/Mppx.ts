@@ -22,31 +22,72 @@ import * as Transport from './Transport.js'
 export type Methods = readonly (Method.AnyServer | readonly Method.AnyServer[])[]
 
 /**
- * Server-side payment lifecycle hooks.
+ * Server-side payment events.
  *
- * Hooks are observe-only lifecycle events. Return values are ignored; throw from
- * a hook only when the application intentionally wants the payment handler to
- * fail.
+ * Events are observe-only. Return values are ignored, and thrown/rejected event
+ * handler errors do not change payment control flow.
  */
-export type LifecycleHooks<
+export type ServerEvents<
+  methods extends readonly Method.Method[] = readonly Method.Method[],
+  transport extends Transport.AnyTransport = Transport.AnyTransport,
+> = Partial<{
+  '*': ServerEventHandler<methods, transport, '*'>
+  challenge: ServerEventHandler<methods, transport, 'challenge'>
+  'payment.failed': ServerEventHandler<methods, transport, 'payment.failed'>
+  'payment.success': ServerEventHandler<methods, transport, 'payment.success'>
+}> & {
+  /** Called whenever the handler issues a payment challenge response. */
+  onChallenge?: ServerEventHandler<methods, transport, 'challenge'> | undefined
+  /** Called when a submitted payment credential fails validation or verification. */
+  onPaymentFailed?: ServerEventHandler<methods, transport, 'payment.failed'> | undefined
+  /** Called after payment verification succeeds and a receipt has been created. */
+  onPaymentSuccess?: ServerEventHandler<methods, transport, 'payment.success'> | undefined
+}
+
+export type ServerEventMap<
   methods extends readonly Method.Method[] = readonly Method.Method[],
   transport extends Transport.AnyTransport = Transport.AnyTransport,
 > = {
-  /** Called whenever the handler issues a payment challenge response. */
-  onChallenge?:
-    | ((context: ChallengeContext<methods[number], transport>) => MaybePromise<void>)
-    | undefined
-  /** Called when a submitted payment credential fails validation or verification. */
-  onPaymentFailed?:
-    | ((context: PaymentFailedContext<methods[number], transport>) => MaybePromise<void>)
-    | undefined
-  /** Called after payment verification succeeds and a receipt has been created. */
-  onPaymentSuccess?:
-    | ((context: PaymentSuccessContext<methods[number], transport>) => MaybePromise<void>)
-    | undefined
+  challenge: ChallengeContext<methods[number], transport>
+  'payment.failed': PaymentFailedContext<methods[number], transport>
+  'payment.success': PaymentSuccessContext<methods[number], transport>
 }
 
-/** Context passed to `hooks.onChallenge`. */
+export type ServerEventName<
+  methods extends readonly Method.Method[] = readonly Method.Method[],
+  transport extends Transport.AnyTransport = Transport.AnyTransport,
+> = keyof ServerEventMap<methods, transport> | '*'
+
+export type ServerEventEnvelope<
+  methods extends readonly Method.Method[] = readonly Method.Method[],
+  transport extends Transport.AnyTransport = Transport.AnyTransport,
+> = {
+  [name in keyof ServerEventMap<methods, transport>]: Readonly<{
+    name: name
+    payload: ServerEventMap<methods, transport>[name]
+  }>
+}[keyof ServerEventMap<methods, transport>]
+
+export type ServerEventPayload<
+  methods extends readonly Method.Method[] = readonly Method.Method[],
+  transport extends Transport.AnyTransport = Transport.AnyTransport,
+  name extends ServerEventName<methods, transport> = ServerEventName<methods, transport>,
+> = name extends '*'
+  ? ServerEventEnvelope<methods, transport>
+  : name extends keyof ServerEventMap<methods, transport>
+    ? ServerEventMap<methods, transport>[name]
+    : never
+
+export type ServerEventHandler<
+  methods extends readonly Method.Method[] = readonly Method.Method[],
+  transport extends Transport.AnyTransport = Transport.AnyTransport,
+  name extends ServerEventName<methods, transport> = ServerEventName<methods, transport>,
+> = (context: ServerEventPayload<methods, transport, name>) => MaybePromise<void>
+
+/** Removes a registered server event handler. */
+export type Unsubscribe = () => void
+
+/** Context passed to `events.onChallenge`. */
 export type ChallengeContext<
   method extends Method.Method = Method.Method,
   transport extends Transport.AnyTransport = Transport.AnyTransport,
@@ -60,7 +101,7 @@ export type ChallengeContext<
   request: z.input<method['schema']['request']>
 }>
 
-/** Context passed to `hooks.onPaymentFailed`. */
+/** Context passed to `events.onPaymentFailed`. */
 export type PaymentFailedContext<
   method extends Method.Method = Method.Method,
   transport extends Transport.AnyTransport = Transport.AnyTransport,
@@ -74,7 +115,7 @@ export type PaymentFailedContext<
   request: z.input<method['schema']['request']>
 }>
 
-/** Context passed to `hooks.onPaymentSuccess`. */
+/** Context passed to `events.onPaymentSuccess`. */
 export type PaymentSuccessContext<
   method extends Method.Method = Method.Method,
   transport extends Transport.AnyTransport = Transport.AnyTransport,
@@ -124,6 +165,23 @@ export type Mppx<
   realm: string
   /** The transport used. */
   transport: transport
+  /** Register a server event handler by canonical event name. */
+  on<name extends ServerEventName<FlattenMethods<methods>, transport>>(
+    name: name,
+    handler: ServerEventHandler<FlattenMethods<methods>, transport, name>,
+  ): Unsubscribe
+  /** Register a handler for issued payment challenges. */
+  onChallenge(
+    handler: ServerEventHandler<FlattenMethods<methods>, transport, 'challenge'>,
+  ): Unsubscribe
+  /** Register a handler for failed submitted payment credentials. */
+  onPaymentFailed(
+    handler: ServerEventHandler<FlattenMethods<methods>, transport, 'payment.failed'>,
+  ): Unsubscribe
+  /** Register a handler for successful verified payments. */
+  onPaymentSuccess(
+    handler: ServerEventHandler<FlattenMethods<methods>, transport, 'payment.success'>,
+  ): Unsubscribe
 } & (transport extends Transport.Http
   ? {
       /**
@@ -304,7 +362,7 @@ export function create<
   const transport extends Transport.AnyTransport = Transport.Http,
 >(config: create.Config<methods, transport>): Mppx<methods, transport> {
   const {
-    hooks,
+    events,
     realm = Env.get('realm'),
     secretKey = Env.get('secretKey'),
     transport = Transport.http() as transport,
@@ -317,6 +375,7 @@ export function create<
   }
 
   const methods = config.methods.flat() as unknown as FlattenMethods<methods>
+  const serverEvents = createServerEventDispatcher<FlattenMethods<methods>, transport>(events)
 
   const handlers: Record<string, unknown> = {}
   const intentCount: Record<string, number> = {}
@@ -328,7 +387,7 @@ export function create<
       defaults: mi.defaults,
       method: mi,
       realm,
-      hooks: hooks as never,
+      events: serverEvents as never,
       request: mi.request as never,
       respond: mi.respond as never,
       secretKey,
@@ -479,10 +538,32 @@ export function create<
     return compose(...(configured as ConfiguredHandler[]))
   }
 
+  function onChallenge(
+    handler: ServerEventHandler<FlattenMethods<methods>, transport, 'challenge'>,
+  ) {
+    return serverEvents.on('challenge', handler)
+  }
+
+  function onPaymentFailed(
+    handler: ServerEventHandler<FlattenMethods<methods>, transport, 'payment.failed'>,
+  ) {
+    return serverEvents.on('payment.failed', handler)
+  }
+
+  function onPaymentSuccess(
+    handler: ServerEventHandler<FlattenMethods<methods>, transport, 'payment.success'>,
+  ) {
+    return serverEvents.on('payment.success', handler)
+  }
+
   return {
     methods,
     challenge: challengeHandlers,
     compose: composeFn,
+    on: serverEvents.on,
+    onChallenge,
+    onPaymentFailed,
+    onPaymentSuccess,
     realm: realm as string | undefined,
     transport,
     verifyCredential: verifyCredentialFn,
@@ -497,8 +578,8 @@ export declare namespace create {
   > = {
     /** Array of configured methods. @example [tempo()] */
     methods: methods
-    /** Server-side payment lifecycle hooks for analytics, logging, and reconciliation. */
-    hooks?: LifecycleHooks<FlattenMethods<methods>, transport> | undefined
+    /** Server-side payment events for analytics, logging, and reconciliation. */
+    events?: ServerEvents<FlattenMethods<methods>, transport> | undefined
     /** Server realm (e.g., hostname). Resolution order: explicit value > env vars (`MPP_REALM`, `FLY_APP_NAME`, `VERCEL_URL`, etc.) > request URL hostname > `"MPP Payment"`. */
     realm?: string | undefined
     /** Secret key for HMAC-bound challenge IDs for stateless verification. Auto-detected from `MPP_SECRET_KEY` environment variable. Throws if neither provided nor set. */
@@ -520,7 +601,7 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
   const {
     authorize,
     defaults,
-    hooks,
+    events,
     method,
     realm,
     respond,
@@ -563,7 +644,8 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
           html?: Method.Method['html'] | undefined
           request: Record<string, unknown>
         }) => {
-          await hooks?.onChallenge?.(
+          await events.emit(
+            'challenge',
             Object.freeze({
               capturedRequest,
               challenge: parameters.challenge,
@@ -620,13 +702,14 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
 
         const emitPaymentFailed = async (
           error: Errors.PaymentError,
-          hookCredential: Credential.Credential | null,
+          failedCredential: Credential.Credential | null,
         ) => {
-          await hooks?.onPaymentFailed?.(
+          await events.emit(
+            'payment.failed',
             Object.freeze({
               capturedRequest,
               challenge,
-              credential: hookCredential,
+              credential: failedCredential,
               error,
               input,
               method,
@@ -858,7 +941,8 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
           return { challenge: response, status: 402 }
         }
 
-        await hooks?.onPaymentSuccess?.(
+        await events.emit(
+          'payment.success',
           Object.freeze({
             capturedRequest,
             challenge: credential.challenge,
@@ -945,13 +1029,6 @@ function createChallengeFn(parameters: {
   }
 }
 
-function getSafeCredentialReason(error: unknown): string | undefined {
-  if (error instanceof Credential.InvalidCredentialEncodingError) return error.message
-  if (error instanceof Credential.MissingAuthorizationHeaderError) return error.message
-  if (error instanceof Credential.MissingPaymentSchemeError) return error.message
-  return undefined
-}
-
 declare namespace createMethodFn {
   type Parameters<
     method extends Method.Method = Method.Method,
@@ -961,7 +1038,7 @@ declare namespace createMethodFn {
     authorize?: Method.AuthorizeFn<method>
     defaults?: defaults
     method: method
-    hooks?: LifecycleHooks<readonly [method], transport>
+    events: ServerEventDispatcher<readonly [method], transport>
     realm: string | undefined
     request?: Method.RequestFn<method>
     respond?: Method.RespondFn<method>
@@ -976,6 +1053,145 @@ declare namespace createMethodFn {
     transport extends Transport.AnyTransport = Transport.Http,
     defaults extends Record<string, unknown> = Record<string, unknown>,
   > = MethodFn<method, transport, defaults>
+}
+
+type ServerEventDispatcher<
+  methods extends readonly Method.Method[],
+  transport extends Transport.AnyTransport,
+> = {
+  emit<name extends keyof ServerEventMap<methods, transport>>(
+    name: name,
+    context: ServerEventMap<methods, transport>[name],
+  ): Promise<void>
+  on<name extends ServerEventName<methods, transport>>(
+    name: name,
+    handler: ServerEventHandler<methods, transport, name>,
+  ): Unsubscribe
+}
+
+type ServerEventListenerSets<
+  methods extends readonly Method.Method[],
+  transport extends Transport.AnyTransport,
+> = {
+  '*': Set<ServerEventHandler<methods, transport, '*'>>
+  challenge: Set<ServerEventHandler<methods, transport, 'challenge'>>
+  'payment.failed': Set<ServerEventHandler<methods, transport, 'payment.failed'>>
+  'payment.success': Set<ServerEventHandler<methods, transport, 'payment.success'>>
+}
+
+function createServerEventDispatcher<
+  methods extends readonly Method.Method[],
+  transport extends Transport.AnyTransport,
+>(
+  initialEvents: ServerEvents<methods, transport> | undefined,
+): ServerEventDispatcher<methods, transport> {
+  const listeners: ServerEventListenerSets<methods, transport> = {
+    '*': new Set<ServerEventHandler<methods, transport, '*'>>(),
+    challenge: new Set<ServerEventHandler<methods, transport, 'challenge'>>(),
+    'payment.failed': new Set<ServerEventHandler<methods, transport, 'payment.failed'>>(),
+    'payment.success': new Set<ServerEventHandler<methods, transport, 'payment.success'>>(),
+  }
+
+  const on: ServerEventDispatcher<methods, transport>['on'] = (name, handler) => {
+    switch (name) {
+      case '*':
+        return addServerEventListener(
+          listeners['*'],
+          handler as ServerEventHandler<methods, transport, '*'>,
+        )
+      case 'challenge':
+        return addServerEventListener(
+          listeners.challenge,
+          handler as ServerEventHandler<methods, transport, 'challenge'>,
+        )
+      case 'payment.failed':
+        return addServerEventListener(
+          listeners['payment.failed'],
+          handler as ServerEventHandler<methods, transport, 'payment.failed'>,
+        )
+      case 'payment.success':
+        return addServerEventListener(
+          listeners['payment.success'],
+          handler as ServerEventHandler<methods, transport, 'payment.success'>,
+        )
+    }
+  }
+
+  if (initialEvents?.['*']) on('*', initialEvents['*'])
+  if (initialEvents?.challenge) on('challenge', initialEvents.challenge)
+  if (initialEvents?.['payment.failed']) on('payment.failed', initialEvents['payment.failed'])
+  if (initialEvents?.['payment.success']) on('payment.success', initialEvents['payment.success'])
+  if (initialEvents?.onChallenge) on('challenge', initialEvents.onChallenge)
+  if (initialEvents?.onPaymentFailed) on('payment.failed', initialEvents.onPaymentFailed)
+  if (initialEvents?.onPaymentSuccess) on('payment.success', initialEvents.onPaymentSuccess)
+
+  return {
+    async emit(name, context) {
+      switch (name) {
+        case 'challenge':
+          for (const handler of listeners.challenge)
+            await emitServerEvent(() =>
+              handler(context as ServerEventMap<methods, transport>['challenge']),
+            )
+          break
+        case 'payment.failed':
+          for (const handler of listeners['payment.failed'])
+            await emitServerEvent(() =>
+              handler(context as ServerEventMap<methods, transport>['payment.failed']),
+            )
+          break
+        case 'payment.success':
+          for (const handler of listeners['payment.success'])
+            await emitServerEvent(() =>
+              handler(context as ServerEventMap<methods, transport>['payment.success']),
+            )
+          break
+      }
+      const event = toServerEventEnvelope(name, context)
+      for (const handler of listeners['*']) await emitServerEvent(() => handler(event))
+    },
+    on,
+  }
+}
+
+function addServerEventListener<
+  methods extends readonly Method.Method[],
+  transport extends Transport.AnyTransport,
+  name extends ServerEventName<methods, transport>,
+>(
+  listeners: Set<ServerEventHandler<methods, transport, name>>,
+  handler: ServerEventHandler<methods, transport, name>,
+): Unsubscribe {
+  listeners.add(handler)
+  return () => {
+    listeners.delete(handler)
+  }
+}
+
+function toServerEventEnvelope<
+  methods extends readonly Method.Method[],
+  transport extends Transport.AnyTransport,
+  name extends keyof ServerEventMap<methods, transport>,
+>(
+  name: name,
+  payload: ServerEventMap<methods, transport>[name],
+): ServerEventPayload<methods, transport, '*'> {
+  return Object.freeze({ name, payload }) as ServerEventPayload<methods, transport, '*'>
+}
+
+async function emitServerEvent(emit: () => MaybePromise<void | undefined>): Promise<void> {
+  try {
+    await emit()
+  } catch {
+    // Server events are observational and must not alter payment control flow.
+  }
+}
+
+function getSafeCredentialReason(error: unknown): string | undefined {
+  if (error instanceof Credential.InvalidCredentialEncodingError) return error.message
+  if (error instanceof Credential.MissingAuthorizationHeaderError) return error.message
+  if (error instanceof Credential.MissingPaymentSchemeError) return error.message
+  return undefined
 }
 
 const defaultRealm = 'MPP Payment'
@@ -1114,7 +1330,7 @@ function createFallbackChallenge(parameters: {
  *
  * Note: Object.freeze is shallow — it prevents reassigning top-level properties
  * but does not deep-freeze mutable class instances like Headers or URL. This is
- * an accidental-mutation guard for trusted server hooks, not a security boundary.
+ * an accidental-mutation guard for trusted server events, not a security boundary.
  */
 async function captureRequest(
   transport: Transport.AnyTransport,
