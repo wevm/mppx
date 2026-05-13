@@ -963,7 +963,7 @@ describe('server events', () => {
       realm,
       secretKey,
       events: {
-        onChallenge(context) {
+        onChallengeCreated(context) {
           events.push(`challenge:${context.error?.name}`)
           seen.challengeMethod = context.method.name
           seen.challengePath = context.capturedRequest.url.pathname
@@ -1032,8 +1032,8 @@ describe('server events', () => {
           events.push('*')
           throw new Error('catchall event failed')
         },
-        onChallenge() {
-          events.push('challenge')
+        onChallengeCreated() {
+          events.push('challenge.created')
           throw new Error('challenge event failed')
         },
         async onPaymentFailed() {
@@ -1093,7 +1093,16 @@ describe('server events', () => {
     if (paid.status !== 200) throw new Error()
     expect(paid.withReceipt(Response.json({ ok: true })).status).toBe(200)
 
-    expect(events).toEqual(['challenge', '*', 'failed', '*', 'challenge', '*', 'success', '*'])
+    expect(events).toEqual([
+      'challenge.created',
+      '*',
+      'failed',
+      '*',
+      'challenge.created',
+      '*',
+      'success',
+      '*',
+    ])
   })
 
   test('supports canonical event names and generated registration methods', async () => {
@@ -1111,13 +1120,16 @@ describe('server events', () => {
         '*': (event) => {
           events.push(`*:${event.name}`)
         },
-        challenge(context) {
+        'challenge.created'(context) {
           events.push(`config:${context.error?.name}`)
         },
       },
     })
     const offFailed = handler.on('payment.failed', (context) => {
       events.push(`failed:${context.error.name}`)
+    })
+    const offChallengeCreated = handler.on('challenge.created', (context) => {
+      events.push(`runtime:${context.error?.name}`)
     })
     const offAll = handler.on('*', (event) => {
       events.push(`runtime:*:${event.name}`)
@@ -1131,6 +1143,7 @@ describe('server events', () => {
     const first = await handle(new Request('https://example.com/resource'))
     expect(first.status).toBe(402)
     if (first.status !== 402) throw new Error()
+    offChallengeCreated()
     offAll()
 
     const badCredential = Credential.from({
@@ -1172,11 +1185,12 @@ describe('server events', () => {
 
     expect(events).toEqual([
       'config:PaymentRequiredError',
-      '*:challenge',
-      'runtime:*:challenge',
+      'runtime:PaymentRequiredError',
+      '*:challenge.created',
+      'runtime:*:challenge.created',
       '*:payment.failed',
       'config:InvalidChallengeError',
-      '*:challenge',
+      '*:challenge.created',
       'success:tx-registered-event',
       '*:payment.success',
     ])
@@ -1194,7 +1208,7 @@ describe('server events', () => {
       realm,
       secretKey,
       events: {
-        onChallenge(context) {
+        onChallengeCreated(context) {
           events.push(`challenge:${context.error?.name}`)
         },
         onPaymentSuccess(context) {
@@ -1248,7 +1262,7 @@ describe('server events', () => {
       realm,
       secretKey,
       events: {
-        onChallenge(context) {
+        onChallengeCreated(context) {
           events.push(`challenge:${context.error?.name}:${context.credential}`)
         },
         onPaymentFailed(context) {
@@ -1282,7 +1296,7 @@ describe('server events', () => {
       realm,
       secretKey,
       events: {
-        onChallenge(context) {
+        onChallengeCreated(context) {
           events.push(`challenge:${context.error?.name}`)
         },
         onPaymentSuccess() {

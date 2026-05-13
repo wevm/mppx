@@ -179,7 +179,7 @@ describe('Mppx type tests', () => {
       events: {
         '*'(event) {
           expectTypeOf(event.name).toMatchTypeOf<
-            'challenge' | 'payment.failed' | 'payment.success'
+            'challenge.created' | 'payment.failed' | 'payment.success'
           >()
           if (event.name === 'payment.success')
             expectTypeOf(event.payload.receipt.status).toEqualTypeOf<'success'>()
@@ -187,7 +187,7 @@ describe('Mppx type tests', () => {
         'payment.success'(context) {
           expectTypeOf(context.challenge.method).toEqualTypeOf<'alpha'>()
         },
-        onChallenge(context) {
+        onChallengeCreated(context) {
           expectTypeOf(context.input).toEqualTypeOf<Request>()
           expectTypeOf(context.method.name).toEqualTypeOf<'alpha'>()
           expectTypeOf(context.request.amount).toEqualTypeOf<string>()
@@ -213,13 +213,17 @@ describe('Mppx type tests', () => {
       expectTypeOf(context.challenge.method).toEqualTypeOf<'alpha'>()
       expectTypeOf(context.credential.payload.token).toEqualTypeOf<string>()
     })
+    mppx.on('challenge.created', (context) => {
+      expectTypeOf(context.method.name).toEqualTypeOf<'alpha'>()
+      expectTypeOf(context.error).toMatchTypeOf<Error | undefined>()
+    })
     mppx.on('payment.failed', (context) => {
       expectTypeOf(context.error).toMatchTypeOf<Error>()
       expectTypeOf(context.credential).toMatchTypeOf<unknown>()
     })
     mppx.on('*', (event) => {
       if (event.name === 'payment.failed') expectTypeOf(event.payload.error).toMatchTypeOf<Error>()
-      if (event.name === 'challenge')
+      if (event.name === 'challenge.created')
         expectTypeOf(event.payload.error).toMatchTypeOf<Error | undefined>()
     })
     mppx.onPaymentSuccess((context) => {

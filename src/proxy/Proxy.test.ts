@@ -139,7 +139,7 @@ describe('create', () => {
       realm: 'api.example.com',
       secretKey,
       events: {
-        onChallenge(context) {
+        onChallengeCreated(context) {
           events.push(`challenge:${context.error?.name}`)
         },
         onPaymentSuccess(context) {

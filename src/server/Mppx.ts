@@ -32,12 +32,12 @@ export type ServerEvents<
   transport extends Transport.AnyTransport = Transport.AnyTransport,
 > = Partial<{
   '*': ServerEventHandler<methods, transport, '*'>
-  challenge: ServerEventHandler<methods, transport, 'challenge'>
+  'challenge.created': ServerEventHandler<methods, transport, 'challenge.created'>
   'payment.failed': ServerEventHandler<methods, transport, 'payment.failed'>
   'payment.success': ServerEventHandler<methods, transport, 'payment.success'>
 }> & {
   /** Called whenever the handler issues a payment challenge response. */
-  onChallenge?: ServerEventHandler<methods, transport, 'challenge'> | undefined
+  onChallengeCreated?: ServerEventHandler<methods, transport, 'challenge.created'> | undefined
   /** Called when a submitted payment credential fails validation or verification. */
   onPaymentFailed?: ServerEventHandler<methods, transport, 'payment.failed'> | undefined
   /** Called after payment verification succeeds and a receipt has been created. */
@@ -48,7 +48,7 @@ export type ServerEventMap<
   methods extends readonly Method.Method[] = readonly Method.Method[],
   transport extends Transport.AnyTransport = Transport.AnyTransport,
 > = {
-  challenge: ChallengeContext<methods[number], transport>
+  'challenge.created': ChallengeContext<methods[number], transport>
   'payment.failed': PaymentFailedContext<methods[number], transport>
   'payment.success': PaymentSuccessContext<methods[number], transport>
 }
@@ -87,7 +87,7 @@ export type ServerEventHandler<
 /** Removes a registered server event handler. */
 export type Unsubscribe = () => void
 
-/** Context passed to `events.onChallenge`. */
+/** Context passed to `events.onChallengeCreated`. */
 export type ChallengeContext<
   method extends Method.Method = Method.Method,
   transport extends Transport.AnyTransport = Transport.AnyTransport,
@@ -171,8 +171,8 @@ export type Mppx<
     handler: ServerEventHandler<FlattenMethods<methods>, transport, name>,
   ): Unsubscribe
   /** Register a handler for issued payment challenges. */
-  onChallenge(
-    handler: ServerEventHandler<FlattenMethods<methods>, transport, 'challenge'>,
+  onChallengeCreated(
+    handler: ServerEventHandler<FlattenMethods<methods>, transport, 'challenge.created'>,
   ): Unsubscribe
   /** Register a handler for failed submitted payment credentials. */
   onPaymentFailed(
@@ -538,10 +538,10 @@ export function create<
     return compose(...(configured as ConfiguredHandler[]))
   }
 
-  function onChallenge(
-    handler: ServerEventHandler<FlattenMethods<methods>, transport, 'challenge'>,
+  function onChallengeCreated(
+    handler: ServerEventHandler<FlattenMethods<methods>, transport, 'challenge.created'>,
   ) {
-    return serverEvents.on('challenge', handler)
+    return serverEvents.on('challenge.created', handler)
   }
 
   function onPaymentFailed(
@@ -561,7 +561,7 @@ export function create<
     challenge: challengeHandlers,
     compose: composeFn,
     on: serverEvents.on,
-    onChallenge,
+    onChallengeCreated,
     onPaymentFailed,
     onPaymentSuccess,
     realm: realm as string | undefined,
@@ -645,7 +645,7 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
           request: Record<string, unknown>
         }) => {
           await events.emit(
-            'challenge',
+            'challenge.created',
             Object.freeze({
               capturedRequest,
               challenge: parameters.challenge,
@@ -1074,7 +1074,7 @@ type ServerEventListenerSets<
   transport extends Transport.AnyTransport,
 > = {
   '*': Set<ServerEventHandler<methods, transport, '*'>>
-  challenge: Set<ServerEventHandler<methods, transport, 'challenge'>>
+  'challenge.created': Set<ServerEventHandler<methods, transport, 'challenge.created'>>
   'payment.failed': Set<ServerEventHandler<methods, transport, 'payment.failed'>>
   'payment.success': Set<ServerEventHandler<methods, transport, 'payment.success'>>
 }
@@ -1087,7 +1087,7 @@ function createServerEventDispatcher<
 ): ServerEventDispatcher<methods, transport> {
   const listeners: ServerEventListenerSets<methods, transport> = {
     '*': new Set<ServerEventHandler<methods, transport, '*'>>(),
-    challenge: new Set<ServerEventHandler<methods, transport, 'challenge'>>(),
+    'challenge.created': new Set<ServerEventHandler<methods, transport, 'challenge.created'>>(),
     'payment.failed': new Set<ServerEventHandler<methods, transport, 'payment.failed'>>(),
     'payment.success': new Set<ServerEventHandler<methods, transport, 'payment.success'>>(),
   }
@@ -1099,10 +1099,10 @@ function createServerEventDispatcher<
           listeners['*'],
           handler as ServerEventHandler<methods, transport, '*'>,
         )
-      case 'challenge':
+      case 'challenge.created':
         return addServerEventListener(
-          listeners.challenge,
-          handler as ServerEventHandler<methods, transport, 'challenge'>,
+          listeners['challenge.created'],
+          handler as ServerEventHandler<methods, transport, 'challenge.created'>,
         )
       case 'payment.failed':
         return addServerEventListener(
@@ -1118,20 +1118,21 @@ function createServerEventDispatcher<
   }
 
   if (initialEvents?.['*']) on('*', initialEvents['*'])
-  if (initialEvents?.challenge) on('challenge', initialEvents.challenge)
+  if (initialEvents?.['challenge.created'])
+    on('challenge.created', initialEvents['challenge.created'])
   if (initialEvents?.['payment.failed']) on('payment.failed', initialEvents['payment.failed'])
   if (initialEvents?.['payment.success']) on('payment.success', initialEvents['payment.success'])
-  if (initialEvents?.onChallenge) on('challenge', initialEvents.onChallenge)
+  if (initialEvents?.onChallengeCreated) on('challenge.created', initialEvents.onChallengeCreated)
   if (initialEvents?.onPaymentFailed) on('payment.failed', initialEvents.onPaymentFailed)
   if (initialEvents?.onPaymentSuccess) on('payment.success', initialEvents.onPaymentSuccess)
 
   return {
     async emit(name, context) {
       switch (name) {
-        case 'challenge':
-          for (const handler of listeners.challenge)
+        case 'challenge.created':
+          for (const handler of listeners['challenge.created'])
             await emitServerEvent(() =>
-              handler(context as ServerEventMap<methods, transport>['challenge']),
+              handler(context as ServerEventMap<methods, transport>['challenge.created']),
             )
           break
         case 'payment.failed':
