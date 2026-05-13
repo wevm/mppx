@@ -1,3 +1,5 @@
+import { Emitter, TypedEvent } from 'rettime'
+
 import * as Challenge from '../../Challenge.js'
 import * as Expires from '../../Expires.js'
 import * as AcceptPayment from '../../internal/AcceptPayment.js'
@@ -126,6 +128,20 @@ export type ClientEventDispatcher<
     name: name,
     handler: ClientEventHandler<methods, name>,
   ): Unsubscribe
+}
+
+type ClientRettimeEventMap<methods extends readonly Method.AnyClient[]> = {
+  'challenge.received': TypedEvent<
+    ChallengeReceivedPayload<methods>,
+    MaybePromise<string | undefined>
+  >
+  'credential.created': TypedEvent<CredentialCreatedPayload<methods>, MaybePromise<void>>
+  'payment.failed': TypedEvent<PaymentFailedPayload<methods>, MaybePromise<void>>
+  'payment.response': TypedEvent<PaymentResponsePayload<methods>, MaybePromise<void>>
+}
+
+type ClientWildcardEventMap<methods extends readonly Method.AnyClient[]> = {
+  event: TypedEvent<ClientEventEnvelope<methods>, MaybePromise<void>>
 }
 
 /**
@@ -415,37 +431,28 @@ export function normalizeHeaders(headers: unknown): Record<string, string> {
 export function createEventDispatcher<
   methods extends readonly Method.AnyClient[] = readonly Method.AnyClient[],
 >(initialEvents?: ClientEvents<methods> | undefined): ClientEventDispatcher<methods> {
-  const listeners = {
-    '*': new Set<ClientEventHandler<methods, '*'>>(),
-    'challenge.received': new Set<ClientEventHandler<methods, 'challenge.received'>>(),
-    'credential.created': new Set<ClientEventHandler<methods, 'credential.created'>>(),
-    'payment.failed': new Set<ClientEventHandler<methods, 'payment.failed'>>(),
-    'payment.response': new Set<ClientEventHandler<methods, 'payment.response'>>(),
-  }
+  const emitter = new Emitter<ClientRettimeEventMap<methods>>()
+  const wildcardEmitter = new Emitter<ClientWildcardEventMap<methods>>()
 
   const on: ClientEventDispatcher<methods>['on'] = (name, handler) => {
     switch (name) {
       case '*':
-        return addEventListener(listeners['*'], handler as ClientEventHandler<methods, '*'>)
+        return addRettimeListener(wildcardEmitter, 'event', (event) => handler(event.data as never))
       case 'challenge.received':
-        return addEventListener(
-          listeners['challenge.received'],
-          handler as ClientEventHandler<methods, 'challenge.received'>,
+        return addRettimeListener(emitter, 'challenge.received', (event) =>
+          handler(event.data as never),
         )
       case 'credential.created':
-        return addEventListener(
-          listeners['credential.created'],
-          handler as ClientEventHandler<methods, 'credential.created'>,
+        return addRettimeListener(emitter, 'credential.created', (event) =>
+          handler(event.data as never),
         )
       case 'payment.failed':
-        return addEventListener(
-          listeners['payment.failed'],
-          handler as ClientEventHandler<methods, 'payment.failed'>,
+        return addRettimeListener(emitter, 'payment.failed', (event) =>
+          handler(event.data as never),
         )
       case 'payment.response':
-        return addEventListener(
-          listeners['payment.response'],
-          handler as ClientEventHandler<methods, 'payment.response'>,
+        return addRettimeListener(emitter, 'payment.response', (event) =>
+          handler(event.data as never),
         )
     }
   }
@@ -463,32 +470,28 @@ export function createEventDispatcher<
       switch (name) {
         case 'challenge.received': {
           let credential: string | undefined
-          for (const handler of listeners['challenge.received']) {
-            const result = await handler(payload as ClientEventMap<methods>['challenge.received'])
-            if (result !== undefined) {
-              credential = result
+          const event = createRettimeEvent(name, payload)
+          for (const result of emitter.emitAsGenerator(event)) {
+            const value = await result
+            if (value !== undefined) {
+              credential = value
               break
             }
           }
-          await emitCatchall(listeners['*'], name, payload)
+          await emitCatchall(wildcardEmitter, name, payload)
           return credential as ClientEventResult<methods, typeof name>
         }
         case 'credential.created':
-          for (const handler of listeners['credential.created'])
-            await emitObserve(() =>
-              handler(payload as ClientEventMap<methods>['credential.created']),
-            )
-          await emitCatchall(listeners['*'], name, payload)
+          await emitObserve(() => emitter.emitAsPromise(createRettimeEvent(name, payload)))
+          await emitCatchall(wildcardEmitter, name, payload)
           return undefined as ClientEventResult<methods, typeof name>
         case 'payment.failed':
-          for (const handler of listeners['payment.failed'])
-            await emitObserve(() => handler(payload as ClientEventMap<methods>['payment.failed']))
-          await emitCatchall(listeners['*'], name, payload)
+          await emitObserve(() => emitter.emitAsPromise(createRettimeEvent(name, payload)))
+          await emitCatchall(wildcardEmitter, name, payload)
           return undefined as ClientEventResult<methods, typeof name>
         case 'payment.response':
-          for (const handler of listeners['payment.response'])
-            await emitObserve(() => handler(payload as ClientEventMap<methods>['payment.response']))
-          await emitCatchall(listeners['*'], name, payload)
+          await emitObserve(() => emitter.emitAsPromise(createRettimeEvent(name, payload)))
+          await emitCatchall(wildcardEmitter, name, payload)
           return undefined as ClientEventResult<methods, typeof name>
       }
     },
@@ -496,32 +499,33 @@ export function createEventDispatcher<
   }
 }
 
-function addEventListener<
-  methods extends readonly Method.AnyClient[],
-  name extends ClientEventName<methods>,
->(
-  listeners: Set<ClientEventHandler<methods, name>>,
-  handler: ClientEventHandler<methods, name>,
+function addRettimeListener(
+  emitter: Emitter<any>,
+  name: string,
+  handler: (event: TypedEvent<any, any>) => unknown,
 ): Unsubscribe {
-  listeners.add(handler)
-  return () => {
-    listeners.delete(handler)
-  }
+  const controller = new AbortController()
+  emitter.on(name, handler as never, { signal: controller.signal })
+  return () => controller.abort()
+}
+
+function createRettimeEvent(name: string, payload: unknown): never {
+  return new TypedEvent<unknown, unknown, string>(name, { data: payload }) as never
 }
 
 async function emitCatchall<
   methods extends readonly Method.AnyClient[],
   name extends keyof ClientEventMap<methods>,
 >(
-  listeners: Set<ClientEventHandler<methods, '*'>>,
+  emitter: Emitter<ClientWildcardEventMap<methods>>,
   name: name,
   payload: ClientEventMap<methods>[name],
 ) {
   const event = Object.freeze({ name, payload }) as ClientEventPayload<methods, '*'>
-  for (const handler of listeners) await emitObserve(() => handler(event))
+  await emitObserve(() => emitter.emitAsPromise(createRettimeEvent('event', event)))
 }
 
-async function emitObserve(emit: () => MaybePromise<void>): Promise<void> {
+async function emitObserve(emit: () => MaybePromise<unknown>): Promise<void> {
   try {
     await emit()
   } catch {
