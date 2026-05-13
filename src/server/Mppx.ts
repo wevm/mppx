@@ -7,6 +7,7 @@ import * as Errors from '../Errors.js'
 import * as Expires from '../Expires.js'
 import * as AcceptPayment from '../internal/AcceptPayment.js'
 import * as Env from '../internal/env.js'
+import type { MaybePromise } from '../internal/types.js'
 import type * as Method from '../Method.js'
 import * as PaymentRequest from '../PaymentRequest.js'
 import type * as Receipt from '../Receipt.js'
@@ -19,6 +20,86 @@ import * as Request from './Request.js'
 import * as Transport from './Transport.js'
 
 export type Methods = readonly (Method.AnyServer | readonly Method.AnyServer[])[]
+
+/**
+ * Server-side payment lifecycle hooks.
+ *
+ * Hooks are observe-only lifecycle events. Return values are ignored; throw from
+ * a hook only when the application intentionally wants the payment handler to
+ * fail.
+ */
+export type LifecycleHooks<
+  methods extends readonly Method.Method[] = readonly Method.Method[],
+  transport extends Transport.AnyTransport = Transport.AnyTransport,
+> = {
+  /** Called whenever the handler issues a payment challenge response. */
+  onChallenge?:
+    | ((context: ChallengeContext<methods[number], transport>) => MaybePromise<void>)
+    | undefined
+  /** Called when a submitted payment credential fails validation or verification. */
+  onPaymentFailed?:
+    | ((context: PaymentFailedContext<methods[number], transport>) => MaybePromise<void>)
+    | undefined
+  /** Called after payment verification succeeds and a receipt has been created. */
+  onPayment?:
+    | ((context: PaymentContext<methods[number], transport>) => MaybePromise<void>)
+    | undefined
+}
+
+/** Context passed to `hooks.onChallenge`. */
+export type ChallengeContext<
+  method extends Method.Method = Method.Method,
+  transport extends Transport.AnyTransport = Transport.AnyTransport,
+> = Readonly<{
+  capturedRequest: Method.CapturedRequest
+  challenge: Challenge.Challenge
+  credential?: Credential.Credential | null | undefined
+  error?: Errors.PaymentError | undefined
+  input: Transport.InputOf<transport>
+  method: method
+  request: z.input<method['schema']['request']>
+}>
+
+/** Context passed to `hooks.onPaymentFailed`. */
+export type PaymentFailedContext<
+  method extends Method.Method = Method.Method,
+  transport extends Transport.AnyTransport = Transport.AnyTransport,
+> = Readonly<{
+  capturedRequest: Method.CapturedRequest
+  challenge: Challenge.Challenge
+  credential: Credential.Credential | null
+  error: Errors.PaymentError
+  input: Transport.InputOf<transport>
+  method: method
+  request: z.input<method['schema']['request']>
+}>
+
+/** Context passed to `hooks.onPayment`. */
+export type PaymentContext<
+  method extends Method.Method = Method.Method,
+  transport extends Transport.AnyTransport = Transport.AnyTransport,
+> = Readonly<{
+  capturedRequest: Method.CapturedRequest
+  challenge: Challenge.Challenge<
+    z.output<method['schema']['request']>,
+    method['intent'],
+    method['name']
+  >
+  credential: Credential.Credential<
+    z.output<method['schema']['credential']['payload']>,
+    Challenge.Challenge<z.output<method['schema']['request']>, method['intent'], method['name']>
+  >
+  envelope: Method.VerifiedChallengeEnvelope<
+    z.output<method['schema']['request']>,
+    z.output<method['schema']['credential']['payload']>,
+    method['intent'],
+    method['name']
+  >
+  input: Transport.InputOf<transport>
+  method: method
+  receipt: Receipt.Receipt
+  request: z.input<method['schema']['request']>
+}>
 
 /** Options for standalone credential verification. */
 export type VerifyCredentialOptions = {
@@ -223,6 +304,7 @@ export function create<
   const transport extends Transport.AnyTransport = Transport.Http,
 >(config: create.Config<methods, transport>): Mppx<methods, transport> {
   const {
+    hooks,
     realm = Env.get('realm'),
     secretKey = Env.get('secretKey'),
     transport = Transport.http() as transport,
@@ -246,6 +328,7 @@ export function create<
       defaults: mi.defaults,
       method: mi,
       realm,
+      hooks: hooks as never,
       request: mi.request as never,
       respond: mi.respond as never,
       secretKey,
@@ -414,6 +497,8 @@ export declare namespace create {
   > = {
     /** Array of configured methods. @example [tempo()] */
     methods: methods
+    /** Server-side payment lifecycle hooks for analytics, logging, and reconciliation. */
+    hooks?: LifecycleHooks<FlattenMethods<methods>, transport> | undefined
     /** Server realm (e.g., hostname). Resolution order: explicit value > env vars (`MPP_REALM`, `FLY_APP_NAME`, `VERCEL_URL`, etc.) > request URL hostname > `"MPP Payment"`. */
     realm?: string | undefined
     /** Secret key for HMAC-bound challenge IDs for stateless verification. Auto-detected from `MPP_SECRET_KEY` environment variable. Throws if neither provided nor set. */
@@ -435,6 +520,7 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
   const {
     authorize,
     defaults,
+    hooks,
     method,
     realm,
     respond,
@@ -469,6 +555,35 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
             return [null, e as Error] as const
           }
         })()
+
+        const emitChallenge = async (
+          parameters: {
+            challenge: Challenge.Challenge
+            credential?: Credential.Credential | null | undefined
+            error?: Errors.PaymentError | undefined
+            html?: Method.Method['html'] | undefined
+            request: Record<string, unknown>
+          },
+        ) => {
+          await hooks?.onChallenge?.(
+            Object.freeze({
+              capturedRequest,
+              challenge: parameters.challenge,
+              credential: parameters.credential,
+              error: parameters.error,
+              input,
+              method,
+              request: parameters.request,
+            }) as never,
+          )
+          return transport.respondChallenge({
+            challenge: parameters.challenge,
+            input,
+            ...(parameters.error && { error: parameters.error }),
+            ...(parameters.html && { html: parameters.html }),
+          })
+        }
+
         const routeChallenge = await resolveRouteChallenge({
           capturedRequest,
           credential,
@@ -494,9 +609,9 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
             routeRequest: rest,
             secretKey,
           })
-          const response = await transport.respondChallenge({
+          const response = await emitChallenge({
             challenge,
-            input,
+            request: challenge.request,
             error: e,
             html: method.html,
           })
@@ -505,13 +620,33 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
         if ('response' in routeChallenge) return { challenge: routeChallenge.response, status: 402 }
         const { challenge, request } = routeChallenge
 
+        const emitPaymentFailed = async (
+          error: Errors.PaymentError,
+          hookCredential: Credential.Credential | null,
+        ) => {
+          await hooks?.onPaymentFailed?.(
+            Object.freeze({
+              capturedRequest,
+              challenge,
+              credential: hookCredential,
+              error,
+              input,
+              method,
+              request,
+            }) as never,
+          )
+        }
+
         // Credential was provided but malformed
         if (credentialError) {
           const reason = getSafeCredentialReason(credentialError)
-          const response = await transport.respondChallenge({
+          const error = new Errors.MalformedCredentialError(reason ? { reason } : {})
+          await emitPaymentFailed(error, null)
+          const response = await emitChallenge({
             challenge,
-            input,
-            error: new Errors.MalformedCredentialError(reason ? { reason } : {}),
+            credential: null,
+            request,
+            error,
             html: method.html,
           })
           return { challenge: response, status: 402 }
@@ -578,9 +713,9 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
                 console.error('mppx: internal authorization error', e)
               const error =
                 e instanceof Errors.PaymentError ? e : new Errors.VerificationFailedError()
-              const response = await transport.respondChallenge({
+              const response = await emitChallenge({
                 challenge,
-                input,
+                request,
                 error,
                 html: method.html,
               })
@@ -588,10 +723,12 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
             }
           }
 
-          const response = await transport.respondChallenge({
+          const error = new Errors.PaymentRequiredError({ description })
+          const response = await emitChallenge({
             challenge,
-            input,
-            error: new Errors.PaymentRequiredError({ description }),
+            credential: null,
+            request,
+            error,
             html: method.html,
           })
           return { challenge: response, status: 402 }
@@ -609,13 +746,16 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
         // (https://paymentauth.org/draft-httpauth-payment-00.html#section-5.1.2.1.1).
         // No database lookup is needed; the HMAC is stateless verification.
         if (!Challenge.verify(credential.challenge, { secretKey })) {
-          const response = await transport.respondChallenge({
+          const error = new Errors.InvalidChallengeError({
+            id: credential.challenge.id,
+            reason: 'challenge was not issued by this server',
+          })
+          await emitPaymentFailed(error, credential)
+          const response = await emitChallenge({
             challenge,
-            input,
-            error: new Errors.InvalidChallengeError({
-              id: credential.challenge.id,
-              reason: 'challenge was not issued by this server',
-            }),
+            credential,
+            request,
+            error,
             html: method.html,
           })
           return { challenge: response, status: 402 }
@@ -650,13 +790,16 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
             stableBinding as never,
           )
           if (mismatch) {
-            const response = await transport.respondChallenge({
+            const error = new Errors.InvalidChallengeError({
+              id: credential.challenge.id,
+              reason: `credential ${mismatch} does not match this route's requirements`,
+            })
+            await emitPaymentFailed(error, credential)
+            const response = await emitChallenge({
               challenge,
-              input,
-              error: new Errors.InvalidChallengeError({
-                id: credential.challenge.id,
-                reason: `credential ${mismatch} does not match this route's requirements`,
-              }),
+              credential,
+              request,
+              error,
               html: method.html,
             })
             return { challenge: response, status: 402 }
@@ -667,9 +810,11 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
         try {
           Expires.assert(credential.challenge.expires, credential.challenge.id)
         } catch (error) {
-          const response = await transport.respondChallenge({
+          await emitPaymentFailed(error as Errors.PaymentError, credential)
+          const response = await emitChallenge({
             challenge,
-            input,
+            credential,
+            request,
             error: error as Errors.PaymentError,
           })
           return { challenge: response, status: 402 }
@@ -678,10 +823,13 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
         try {
           method.schema.credential.payload.parse(credential.payload)
         } catch {
-          const response = await transport.respondChallenge({
+          const error = new Errors.InvalidPayloadError()
+          await emitPaymentFailed(error, credential)
+          const response = await emitChallenge({
             challenge,
-            input,
-            error: new Errors.InvalidPayloadError(),
+            credential,
+            request,
+            error,
           })
           return { challenge: response, status: 402 }
         }
@@ -702,13 +850,28 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
           if (!(e instanceof Errors.PaymentError))
             console.error('mppx: internal verification error', e)
           const error = e instanceof Errors.PaymentError ? e : new Errors.VerificationFailedError()
-          const response = await transport.respondChallenge({
+          await emitPaymentFailed(error, credential)
+          const response = await emitChallenge({
             challenge,
-            input,
+            credential,
+            request,
             error,
           })
           return { challenge: response, status: 402 }
         }
+
+        await hooks?.onPayment?.(
+          Object.freeze({
+            capturedRequest,
+            challenge: credential.challenge,
+            credential,
+            envelope,
+            input,
+            method,
+            receipt: receiptData,
+            request,
+          }) as never,
+        )
 
         // If the method's `respond` hook returns a Response, it means this
         // request is a management action (e.g. channel open, voucher POST)
@@ -800,6 +963,7 @@ declare namespace createMethodFn {
     authorize?: Method.AuthorizeFn<method>
     defaults?: defaults
     method: method
+    hooks?: LifecycleHooks<readonly [method], transport>
     realm: string | undefined
     request?: Method.RequestFn<method>
     respond?: Method.RespondFn<method>

@@ -171,6 +171,35 @@ describe('Mppx type tests', () => {
     expectTypeOf(mppx.verifyCredential).toBeFunction()
   })
 
+  test('lifecycle hooks receive typed method context', () => {
+    Mppx.create({
+      methods: [alphaMethod],
+      realm,
+      secretKey,
+      hooks: {
+        onChallenge(context) {
+          expectTypeOf(context.input).toEqualTypeOf<Request>()
+          expectTypeOf(context.method.name).toEqualTypeOf<'alpha'>()
+          expectTypeOf(context.request.amount).toEqualTypeOf<string>()
+          expectTypeOf(context.error).toMatchTypeOf<Error | undefined>()
+        },
+        onPaymentFailed(context) {
+          expectTypeOf(context.credential).toMatchTypeOf<unknown>()
+          expectTypeOf(context.error).toMatchTypeOf<Error>()
+          expectTypeOf(context.method.intent).toEqualTypeOf<'charge'>()
+          expectTypeOf(context.request.currency).toEqualTypeOf<string>()
+        },
+        onPayment(context) {
+          expectTypeOf(context.challenge.method).toEqualTypeOf<'alpha'>()
+          expectTypeOf(context.credential.payload.token).toEqualTypeOf<string>()
+          expectTypeOf(context.envelope.challenge.intent).toEqualTypeOf<'charge'>()
+          expectTypeOf(context.receipt.status).toEqualTypeOf<'success'>()
+          expectTypeOf(context.request.recipient).toEqualTypeOf<string>()
+        },
+      },
+    })
+  })
+
   test('handler options and verifyCredential accept scope', () => {
     const mppx = Mppx.create({ methods: [alphaMethod], realm, secretKey })
 
