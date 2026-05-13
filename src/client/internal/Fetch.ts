@@ -161,6 +161,7 @@ export function from<const methods extends readonly Method.AnyClient[]>(
     fetch = globalThis.fetch,
     methods,
     onChallenge,
+    orderChallenges,
   } = config
   const events = config.eventDispatcher ?? createEventDispatcher()
   const resolvedAcceptPayment = acceptPayment ?? AcceptPayment.resolve(methods)
@@ -186,7 +187,11 @@ export function from<const methods extends readonly Method.AnyClient[]>(
 
     // Only extract context for payment handling after confirming 402.
     const context = (init as Record<string, unknown> | undefined)?.context
-    const { context: _, ...fetchInit } = (initialRequest.init ?? {}) as Record<string, unknown>
+    const {
+      context: _,
+      orderChallenges: requestOrderChallenges,
+      ...fetchInit
+    } = (initialRequest.init ?? {}) as Record<string, unknown>
 
     let challenge: Challenge.Challenge | undefined
     let challenges: readonly Challenge.Challenge[] | undefined
@@ -196,11 +201,17 @@ export function from<const methods extends readonly Method.AnyClient[]>(
       // Parse all challenges from the response (supports merged WWW-Authenticate headers).
       challenges = Challenge.fromResponseList(response)
 
-      const selected = AcceptPayment.selectChallenge(
+      const candidates = AcceptPayment.selectChallengeCandidates(
         challenges,
         methods,
         paymentPreferences.entries,
       )
+      const orderedCandidates = await resolveChallengeOrder(
+        candidates,
+        (requestOrderChallenges as AcceptPayment.OrderChallenges<methods> | undefined) ??
+          orderChallenges,
+      )
+      const selected = orderedCandidates[0]
       if (!selected)
         throw new Error(
           `No method found for challenges: ${challenges.map((c) => `${c.method}.${c.intent}`).join(', ')}. Available: ${methods.map((m) => `${m.name}.${m.intent}`).join(', ')}`,
@@ -322,6 +333,8 @@ export declare namespace from {
           },
         ) => Promise<string | undefined>)
       | undefined
+    /** Filters and sorts supported challenges before credential creation. */
+    orderChallenges?: AcceptPayment.OrderChallenges<methods> | undefined
   }
 
   type Fetch<methods extends readonly Method.AnyClient[] = readonly Method.AnyClient[]> = (
@@ -333,6 +346,8 @@ export declare namespace from {
     globalThis.RequestInit & {
       /** Context to pass to the method intent's createCredential. */
       context?: AnyContextFor<methods>
+      /** Request-local challenge filtering and sorting. */
+      orderChallenges?: AcceptPayment.OrderChallenges<methods> | undefined
     }
 }
 
@@ -781,6 +796,13 @@ function resolvePaymentPreferences<methods extends readonly Method.AnyClient[]>(
     // defaults instead of throwing from the wrapper.
     return acceptPayment
   }
+}
+
+async function resolveChallengeOrder<methods extends readonly Method.AnyClient[]>(
+  candidates: readonly AcceptPayment.ChallengeCandidate<methods[number]>[],
+  orderChallenges: AcceptPayment.OrderChallenges<methods> | undefined,
+): Promise<readonly AcceptPayment.ChallengeCandidate<methods[number]>[]> {
+  return orderChallenges ? orderChallenges(candidates) : candidates
 }
 
 /** @internal */

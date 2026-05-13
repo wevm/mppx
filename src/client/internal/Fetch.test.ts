@@ -1,4 +1,4 @@
-import { Errors, Receipt } from 'mppx'
+import { Challenge, Errors, Receipt } from 'mppx'
 import { tempo } from 'mppx/client'
 import { Mppx as Mppx_server, tempo as tempo_server } from 'mppx/server'
 import { createClient, defineChain } from 'viem'
@@ -1095,6 +1095,122 @@ describe('Fetch.from: 402 retry path', () => {
 
     const response = await fetch('https://example.com/api')
     expect(response.status).toBe(200)
+  })
+
+  test('orderChallenges filters and sorts supported challenges before signing', async () => {
+    let callCount = 0
+    const pathUsd = Challenge.from({
+      id: 'pathusd',
+      realm: 'test',
+      method: 'test',
+      intent: 'test',
+      request: { chainId: 11155111, currency: 'pathusd' },
+    })
+    const usdc = Challenge.from({
+      id: 'usdc',
+      realm: 'test',
+      method: 'test',
+      intent: 'test',
+      request: { chainId: 8453, currency: 'usdc' },
+    })
+    const createCredential = vi.fn(
+      async ({ challenge }: { challenge: Challenge.Challenge }) => `credential-${challenge.id}`,
+    )
+
+    const mockFetch: typeof globalThis.fetch = async (_input, init) => {
+      callCount++
+      if (callCount === 1) {
+        return new Response(null, {
+          status: 402,
+          headers: {
+            'WWW-Authenticate': `${Challenge.serialize(pathUsd)}, ${Challenge.serialize(usdc)}`,
+          },
+        })
+      }
+
+      expect(new Headers(init?.headers).get('Authorization')).toBe('credential-usdc')
+      return new Response('OK', { status: 200 })
+    }
+
+    const fetch = Fetch.from({
+      fetch: mockFetch,
+      methods: [{ ...noopMethod, createCredential }],
+      orderChallenges: (candidates) =>
+        candidates.filter(({ challenge }) => challenge.request.currency === 'usdc'),
+    })
+
+    const response = await fetch('https://example.com/api')
+
+    expect(response.status).toBe(200)
+    expect(createCredential).toHaveBeenCalledOnce()
+    expect(createCredential.mock.calls[0]?.[0].challenge.id).toBe('usdc')
+  })
+
+  test('request-local orderChallenges overrides configured ordering', async () => {
+    let callCount = 0
+    const first = Challenge.from({
+      id: 'first',
+      realm: 'test',
+      method: 'test',
+      intent: 'test',
+      request: { currency: 'first' },
+    })
+    const second = Challenge.from({
+      id: 'second',
+      realm: 'test',
+      method: 'test',
+      intent: 'test',
+      request: { currency: 'second' },
+    })
+    const createCredential = vi.fn(
+      async ({ challenge }: { challenge: Challenge.Challenge }) => `credential-${challenge.id}`,
+    )
+
+    const mockFetch: typeof globalThis.fetch = async (_input, init) => {
+      callCount++
+      if (callCount === 1) {
+        return new Response(null, {
+          status: 402,
+          headers: {
+            'WWW-Authenticate': `${Challenge.serialize(first)}, ${Challenge.serialize(second)}`,
+          },
+        })
+      }
+
+      expect(new Headers(init?.headers).get('Authorization')).toBe('credential-second')
+      return new Response('OK', { status: 200 })
+    }
+
+    const fetch = Fetch.from({
+      fetch: mockFetch,
+      methods: [{ ...noopMethod, createCredential }],
+      orderChallenges: (candidates) =>
+        candidates.filter(({ challenge }) => challenge.id === 'first'),
+    })
+
+    const response = await fetch('https://example.com/api', {
+      orderChallenges: (candidates) =>
+        candidates.filter(({ challenge }) => challenge.id === 'second'),
+    })
+
+    expect(response.status).toBe(200)
+    expect(createCredential.mock.calls[0]?.[0].challenge.id).toBe('second')
+  })
+
+  test('throws when orderChallenges rejects every supported challenge', async () => {
+    const mockFetch: typeof globalThis.fetch = async () => make402()
+    const createCredential = vi.fn(async () => 'credential')
+
+    const fetch = Fetch.from({
+      fetch: mockFetch,
+      methods: [{ ...noopMethod, createCredential }],
+      orderChallenges: () => [],
+    })
+
+    await expect(fetch('https://example.com/api')).rejects.toThrow(
+      'No method found for challenges: test.test',
+    )
+    expect(createCredential).not.toHaveBeenCalled()
   })
 
   test('falls back to configured preferences when explicit Accept-Payment is invalid', async () => {

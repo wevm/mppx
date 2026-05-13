@@ -68,6 +68,19 @@ describe('create.Config', () => {
     expectTypeOf(mppx.fetch).toBeFunction()
   })
 
+  test('orderChallenges receives supported challenge candidates', () => {
+    const mppx = Mppx.create({
+      methods: [tempo({ account: {} as Account })],
+      orderChallenges: (candidates) => {
+        expectTypeOf(candidates[0]?.challenge.method).toEqualTypeOf<'tempo' | undefined>()
+        expectTypeOf(candidates[0]?.method.name).toEqualTypeOf<'tempo' | undefined>()
+        return candidates
+      },
+    })
+
+    expectTypeOf(mppx.fetch).toBeFunction()
+  })
+
   test('client events expose typed payloads', () => {
     const method = charge()
     const mppx = Mppx.create({

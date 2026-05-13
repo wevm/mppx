@@ -46,6 +46,17 @@ describe('Fetch.from', () => {
     })
   })
 
+  test('behavior: accepts challenge ordering hook', () => {
+    const fetch = Fetch.from({
+      methods: [charge()],
+      orderChallenges: (candidates) => candidates,
+    })
+
+    expectTypeOf(fetch).toBeCallableWith('https://example.com', {
+      orderChallenges: (candidates) => candidates,
+    })
+  })
+
   test('behavior: events infer payload types from methods', () => {
     const method = charge()
     const dispatcher = Fetch.createEventDispatcher<[typeof method]>()

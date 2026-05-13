@@ -485,6 +485,58 @@ describe('createCredential', () => {
     expect(parsed.challenge.method).toBe('stripe')
   })
 
+  test('behavior: createCredential accepts request-local challenge ordering', async () => {
+    const testMethod = Method.toClient(
+      Method.from({
+        name: 'test',
+        intent: 'test',
+        schema: Methods.charge.schema,
+      }),
+      {
+        async createCredential({ challenge }) {
+          return Credential.serialize({
+            challenge,
+            payload: { signature: `0x${challenge.id}`, type: 'transaction' },
+          })
+        },
+      },
+    )
+
+    const mppx = Mppx.create({
+      polyfill: false,
+      methods: [testMethod],
+    })
+
+    const first = Challenge.from({
+      id: '1111',
+      realm,
+      method: 'test',
+      intent: 'test',
+      request: { currency: 'pathusd' },
+    })
+    const second = Challenge.from({
+      id: '2222',
+      realm,
+      method: 'test',
+      intent: 'test',
+      request: { currency: 'usdc' },
+    })
+    const response = new Response(null, {
+      status: 402,
+      headers: {
+        'WWW-Authenticate': `${Challenge.serialize(first)}, ${Challenge.serialize(second)}`,
+      },
+    })
+
+    const credential = await mppx.createCredential(response, undefined, {
+      orderChallenges: (candidates) =>
+        candidates.filter(({ challenge }) => challenge.request.currency === 'usdc'),
+    })
+    const parsed = Credential.deserialize(credential)
+
+    expect(parsed.challenge.id).toBe('2222')
+  })
+
   test('behavior: passes context to createCredential', async () => {
     const mppx = Mppx.create({
       polyfill: false,
