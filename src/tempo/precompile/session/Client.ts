@@ -10,9 +10,6 @@ import * as z from '../../../zod.js'
 import * as defaults from '../../internal/defaults.js'
 import * as Methods from '../../Methods.js'
 import * as Channel from '../Channel.js'
-import { tip20ChannelEscrow } from '../Constants.js'
-import type { SessionCredentialPayload, Uint96 } from '../Types.js'
-import { uint96 } from '../Types.js'
 import {
   createOpen,
   createOpenCredential,
@@ -20,7 +17,10 @@ import {
   createTopUpCredential,
   createVoucherCredential,
   type OpenResult,
-} from './ChannelOps.js'
+} from '../client/ChannelOps.js'
+import { tip20ChannelEscrow } from '../Constants.js'
+import type { SessionCredentialPayload, Uint96 } from '../Types.js'
+import { uint96 } from '../Types.js'
 
 export type ChannelEntry = {
   channelId: Hex
