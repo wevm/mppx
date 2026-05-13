@@ -175,8 +175,10 @@ export async function settle(
   cumulativeAmount: Uint96,
   signature: Hex,
   escrow: Address = tip20ChannelEscrow,
+  options?: { account?: Parameters<typeof sendTransaction>[1]['account'] | undefined },
 ): Promise<Hex> {
   return sendTransaction(client, {
+    ...(options?.account ? { account: options.account } : {}),
     to: escrow,
     data: encodeSettle(descriptor, cumulativeAmount, signature),
   } as never)
@@ -227,8 +229,10 @@ export async function close(
   captureAmount: Uint96,
   signature: Hex,
   escrow: Address = tip20ChannelEscrow,
+  options?: { account?: Parameters<typeof sendTransaction>[1]['account'] | undefined },
 ): Promise<Hex> {
   return sendTransaction(client, {
+    ...(options?.account ? { account: options.account } : {}),
     to: escrow,
     data: encodeClose(descriptor, cumulativeAmount, captureAmount, signature),
   } as never)

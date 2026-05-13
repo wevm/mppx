@@ -44,9 +44,9 @@ function createSigningClient(account = payer) {
   })
 }
 
-function createServerClient(calls: RpcCall[] = []) {
+function createServerClient(calls: RpcCall[] = [], account: typeof payer | null = payer) {
   return createClient({
-    account: payer,
+    ...(account ? { account } : {}),
     chain: { id: chainId } as never,
     transport: custom({
       async request(args) {
@@ -161,6 +161,41 @@ async function createOpenCredential(
     cumulativeAmount: initialAmount.toString(),
     authorizedSigner: descriptor.authorizedSigner,
   }
+}
+
+async function persistPrecompileChannel(
+  store: ChannelStore.ChannelStore,
+  payload: OpenCredentialPayload,
+  overrides: Partial<ChannelStore.State> = {},
+) {
+  await store.updateChannel(payload.channelId, () => ({
+    backend: 'precompile',
+    channelId: payload.channelId,
+    chainId,
+    escrowContract: tip20ChannelEscrow,
+    closeRequestedAt: 0n,
+    payer: payload.descriptor.payer,
+    payee,
+    token,
+    authorizedSigner: payload.descriptor.authorizedSigner,
+    deposit: 1_000n,
+    settledOnChain: 0n,
+    highestVoucherAmount: BigInt(payload.cumulativeAmount),
+    highestVoucher: {
+      channelId: payload.channelId,
+      cumulativeAmount: BigInt(payload.cumulativeAmount),
+      signature: payload.signature,
+    },
+    spent: 0n,
+    units: 0,
+    finalized: false,
+    createdAt: new Date(0).toISOString(),
+    descriptor: payload.descriptor,
+    operator: payload.descriptor.operator,
+    salt: payload.descriptor.salt,
+    expiringNonceHash: payload.descriptor.expiringNonceHash,
+    ...overrides,
+  }))
 }
 
 describe('precompile server session unit guardrails', () => {
@@ -427,26 +462,64 @@ describe('precompile server session unit guardrails', () => {
     ).rejects.toThrow(/exceeds on-chain deposit/)
   })
 
-  test.skip('encodes settle against the persisted descriptor (covered by localnet)', async () => {
-    const { method, store, rpcCalls } = createServer({ channelStateTtl: Number.MAX_SAFE_INTEGER })
+  test('rejects settle when no account is available', async () => {
+    const { store } = createServer()
     const openPayload = await createOpenCredential()
-    await method.verify({
-      credential: { challenge: makeChallenge(openPayload.channelId), payload: openPayload },
-      request: makeRequest(openPayload.channelId) as never,
-    })
-    const voucherPayload = await ClientOps.createVoucherCredential(createSigningClient(), payer, {
-      chainId,
-      cumulativeAmount: Types.uint96(250n),
-      descriptor: openPayload.descriptor,
-    })
-    await method.verify({
-      credential: { challenge: makeChallenge(openPayload.channelId), payload: voucherPayload },
-      request: makeRequest(openPayload.channelId) as never,
+    await persistPrecompileChannel(store, openPayload)
+
+    const { settle } = await import('./Session.js')
+    await expect(
+      settle(store, createServerClient([], null), openPayload.channelId),
+    ).rejects.toThrow(/no account available/)
+  })
+
+  test('rejects settle when sender is not the channel payee', async () => {
+    const { store } = createServer()
+    const openPayload = await createOpenCredential()
+    await persistPrecompileChannel(store, openPayload)
+
+    const { settle } = await import('./Session.js')
+    await expect(
+      settle(store, createServerClient([], wrongPayer), openPayload.channelId),
+    ).rejects.toThrow(/tx sender .* is not the channel payee/)
+  })
+
+  test('rejects unsupported precompile settle fee payer options', async () => {
+    const { store } = createServer()
+    const openPayload = await createOpenCredential()
+    await persistPrecompileChannel(store, openPayload)
+
+    const { settle } = await import('./Session.js')
+    await expect(
+      settle(store, createServerClient([], payer), openPayload.channelId, {
+        feePayer: wrongPayer,
+      } as never),
+    ).rejects.toThrow(/does not support feePayer or feeToken/)
+  })
+
+  test('accepts settle account override matching the channel payee', async () => {
+    const { store } = createServer()
+    const openPayload = await createOpenCredential()
+    await persistPrecompileChannel(store, openPayload, { payee: wrongPayer.address })
+    const calls: RpcCall[] = []
+    const client = createClient({
+      account: payer,
+      chain: { id: chainId } as never,
+      transport: custom({
+        async request(args) {
+          calls.push(args)
+          if (args.method === 'eth_sendTransaction') throw new Error('sent settle transaction')
+          if (args.method === 'eth_chainId') return `0x${chainId.toString(16)}`
+          throw new Error(`unexpected rpc request: ${args.method}`)
+        },
+      }),
     })
 
     const { settle } = await import('./Session.js')
-    await settle(store, createServerClient(rpcCalls), openPayload.channelId)
-
-    expect(rpcCalls.at(-1)?.method).toBe('eth_sendRawTransaction')
+    await expect(
+      settle(store, client, openPayload.channelId, {
+        account: wrongPayer,
+      }),
+    ).rejects.toThrow(/eth_getTransactionCount/)
   })
 })

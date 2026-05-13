@@ -5,6 +5,7 @@ import {
   parseEventLogs,
   parseUnits,
   zeroAddress,
+  type Account as viem_Account,
 } from 'viem'
 import { sendRawTransaction, waitForTransactionReceipt } from 'viem/actions'
 import { tempo as tempo_chain } from 'viem/chains'
@@ -17,6 +18,7 @@ import {
   DeltaTooSmallError,
   InvalidSignatureError,
   VerificationFailedError,
+  BadRequestError,
 } from '../../../Errors.js'
 import type { Challenge } from '../../../index.js'
 import type { LooseOmit, NoExtraKeys } from '../../../internal/types.js'
@@ -114,6 +116,29 @@ type ChannelReceiptEvent = {
   }
 }
 
+function assertSettlementSender(parameters: {
+  operation: 'close' | 'settle'
+  channelId: Hex
+  payee: Address
+  sender: Address | undefined
+}) {
+  const { operation, channelId, payee, sender } = parameters
+  if (!sender)
+    throw new Error(
+      `Cannot ${operation} precompile channel ${channelId}: no account available. Pass an account override, or provide a getClient() that returns an account-bearing client.`,
+    )
+  if (sender.toLowerCase() === payee.toLowerCase()) return
+  throw new BadRequestError({
+    reason:
+      `Cannot ${operation} precompile channel ${channelId}: tx sender ${sender} is not the channel payee ${payee}. ` +
+      'If using an access key, pass a Tempo access-key account whose address is the payee wallet, not the raw delegated key address.',
+  })
+}
+
+function getClientAccount(client: { account?: viem_Account | undefined }) {
+  return client.account
+}
+
 function getChannelEvent(
   receipt: { logs: Parameters<typeof parseEventLogs>[0]['logs'] },
   name: 'ChannelOpened' | 'TopUp' | 'Settled' | 'ChannelClosed',
@@ -208,7 +233,15 @@ export function session<const parameters extends session.Parameters>(
             minVoucherDelta,
           })
         case 'close':
-          return handleClose({ store, client, challenge, payload, chainId, escrow })
+          return handleClose({
+            store,
+            client,
+            challenge,
+            payload,
+            chainId,
+            escrow,
+            account: parameters.account,
+          })
         default:
           throw new VerificationFailedError({ reason: 'unsupported precompile session action' })
       }
@@ -524,6 +557,7 @@ async function handleClose(parameters: {
   payload: ParsedSessionCredentialPayload & { action: 'close' }
   chainId: number
   escrow: Address
+  account?: viem_Account | undefined
 }): Promise<SessionReceipt> {
   const { store, client, challenge, payload, chainId, escrow } = parameters
   const channelId = ChannelStore.normalizeChannelId(payload.channelId)
@@ -542,6 +576,13 @@ async function handleClose(parameters: {
   const captureAmount = uint96(
     payload.cumulativeAmount > state.settled ? payload.cumulativeAmount : state.settled,
   )
+  const account = parameters.account ?? getClientAccount(client)
+  assertSettlementSender({
+    operation: 'close',
+    channelId,
+    payee: channel.payee,
+    sender: account?.address,
+  })
   const txHash = await Chain.close(
     client,
     channel.descriptor,
@@ -549,6 +590,7 @@ async function handleClose(parameters: {
     captureAmount,
     payload.signature,
     escrow,
+    account ? { account } : undefined,
   )
   const receipt = await waitForSuccessfulReceipt(client, txHash)
   const closed = getChannelEvent(receipt, 'ChannelClosed', channelId)
@@ -588,7 +630,12 @@ export async function settle(
   store_: Store.Store<any> | ChannelStore.ChannelStore,
   client: Parameters<typeof sendRawTransaction>[0],
   channelId_: Hex,
-  options?: { escrow?: Address | undefined },
+  options?: {
+    account?: viem_Account | undefined
+    escrow?: Address | undefined
+    feePayer?: never
+    feeToken?: never
+  },
 ): Promise<Hex> {
   const store = 'getChannel' in store_ ? store_ : ChannelStore.fromStore(store_ as never)
   const channelId = ChannelStore.normalizeChannelId(channelId_)
@@ -597,7 +644,18 @@ export async function settle(
   if (!ChannelStore.isPrecompileState(channel))
     throw new VerificationFailedError({ reason: 'channel is not precompile-backed' })
   if (!channel.highestVoucher) throw new VerificationFailedError({ reason: 'no voucher to settle' })
+  if ('feePayer' in (options ?? {}) || 'feeToken' in (options ?? {}))
+    throw new BadRequestError({
+      reason: 'tempo.precompile.settle() does not support feePayer or feeToken options yet',
+    })
   const escrow = options?.escrow ?? channel.escrowContract
+  const account = options?.account ?? getClientAccount(client)
+  assertSettlementSender({
+    operation: 'settle',
+    channelId,
+    payee: channel.payee,
+    sender: account?.address,
+  })
   const amount = uint96(channel.highestVoucher.cumulativeAmount)
   const txHash = await Chain.settle(
     client,
@@ -605,6 +663,7 @@ export async function settle(
     amount,
     channel.highestVoucher.signature,
     escrow,
+    account ? { account } : undefined,
   )
   const receipt = await waitForSuccessfulReceipt(client, txHash)
   const settled = getChannelEvent(receipt, 'Settled', channelId)
@@ -641,6 +700,8 @@ export namespace session {
     store?: Store.Store<any> | undefined
     suggestedDeposit?: string | undefined
     unitType?: string | undefined
+    /** Account used for server-driven close transactions. Defaults to the client account. */
+    account?: viem_Account | undefined
   }
 
   export type Defaults = LooseOmit<
