@@ -142,7 +142,7 @@ describe('create', () => {
         onChallenge(context) {
           events.push(`challenge:${context.error?.name}`)
         },
-        onPayment(context) {
+        onPaymentSuccess(context) {
           events.push(`payment:${context.receipt.reference}`)
         },
         onPaymentFailed(context) {

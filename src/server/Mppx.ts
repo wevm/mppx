@@ -41,8 +41,8 @@ export type LifecycleHooks<
     | ((context: PaymentFailedContext<methods[number], transport>) => MaybePromise<void>)
     | undefined
   /** Called after payment verification succeeds and a receipt has been created. */
-  onPayment?:
-    | ((context: PaymentContext<methods[number], transport>) => MaybePromise<void>)
+  onPaymentSuccess?:
+    | ((context: PaymentSuccessContext<methods[number], transport>) => MaybePromise<void>)
     | undefined
 }
 
@@ -74,8 +74,8 @@ export type PaymentFailedContext<
   request: z.input<method['schema']['request']>
 }>
 
-/** Context passed to `hooks.onPayment`. */
-export type PaymentContext<
+/** Context passed to `hooks.onPaymentSuccess`. */
+export type PaymentSuccessContext<
   method extends Method.Method = Method.Method,
   transport extends Transport.AnyTransport = Transport.AnyTransport,
 > = Readonly<{
@@ -556,15 +556,13 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
           }
         })()
 
-        const emitChallenge = async (
-          parameters: {
-            challenge: Challenge.Challenge
-            credential?: Credential.Credential | null | undefined
-            error?: Errors.PaymentError | undefined
-            html?: Method.Method['html'] | undefined
-            request: Record<string, unknown>
-          },
-        ) => {
+        const emitChallenge = async (parameters: {
+          challenge: Challenge.Challenge
+          credential?: Credential.Credential | null | undefined
+          error?: Errors.PaymentError | undefined
+          html?: Method.Method['html'] | undefined
+          request: Record<string, unknown>
+        }) => {
           await hooks?.onChallenge?.(
             Object.freeze({
               capturedRequest,
@@ -860,7 +858,7 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
           return { challenge: response, status: 402 }
         }
 
-        await hooks?.onPayment?.(
+        await hooks?.onPaymentSuccess?.(
           Object.freeze({
             capturedRequest,
             challenge: credential.challenge,

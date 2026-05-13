@@ -189,7 +189,7 @@ describe('Mppx type tests', () => {
           expectTypeOf(context.method.intent).toEqualTypeOf<'charge'>()
           expectTypeOf(context.request.currency).toEqualTypeOf<string>()
         },
-        onPayment(context) {
+        onPaymentSuccess(context) {
           expectTypeOf(context.challenge.method).toEqualTypeOf<'alpha'>()
           expectTypeOf(context.credential.payload.token).toEqualTypeOf<string>()
           expectTypeOf(context.envelope.challenge.intent).toEqualTypeOf<'charge'>()

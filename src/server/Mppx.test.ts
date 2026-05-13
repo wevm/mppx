@@ -950,7 +950,7 @@ describe('lifecycle hooks', () => {
     }
   }
 
-  test('emits challenge then payment hooks for a successful request', async () => {
+  test('emits challenge then success hooks for a successful request', async () => {
     const events: string[] = []
     const seen: Record<string, unknown> = {}
     const serverMethod = Method.toServer(lifecycleCharge, {
@@ -970,7 +970,7 @@ describe('lifecycle hooks', () => {
           seen.challengeAmount = context.request.amount
           seen.challengeCredential = context.credential
         },
-        onPayment(context) {
+        onPaymentSuccess(context) {
           events.push(`payment:${context.receipt.reference}`)
           seen.paymentMethod = context.method.name
           seen.paymentChallenge = context.challenge.id
@@ -1031,7 +1031,7 @@ describe('lifecycle hooks', () => {
         onChallenge(context) {
           events.push(`challenge:${context.error?.name}`)
         },
-        onPayment(context) {
+        onPaymentSuccess(context) {
           events.push(`payment:${context.receipt.reference}`)
         },
         onPaymentFailed(context) {
@@ -1119,7 +1119,7 @@ describe('lifecycle hooks', () => {
         onChallenge(context) {
           events.push(`challenge:${context.error?.name}`)
         },
-        onPayment() {
+        onPaymentSuccess() {
           events.push('payment')
         },
         onPaymentFailed(context) {
