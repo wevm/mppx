@@ -1,7 +1,17 @@
-import type { Address, Client, Hex } from 'viem'
+import type { Account, Address, Client, Hex } from 'viem'
 import { encodeFunctionData } from 'viem'
-import { readContract, sendTransaction } from 'viem/actions'
+import {
+  prepareTransactionRequest,
+  readContract,
+  sendRawTransactionSync,
+  sendTransaction,
+  signTransaction,
+} from 'viem/actions'
+import { Transaction } from 'viem/tempo'
 
+import { BadRequestError, VerificationFailedError } from '../../Errors.js'
+import type * as FeePayer from '../internal/fee-payer.js'
+import { resolveFeeToken } from '../internal/fee-token.js'
 import type { ChannelDescriptor } from './Channel.js'
 import { tip20ChannelEscrow } from './Constants.js'
 import { escrowAbi } from './escrow.abi.js'
@@ -168,20 +178,102 @@ export async function getChannelStatesBatch(
   return states.map(stateFromTuple)
 }
 
-/** Broadcasts a descriptor-based TIP-1034 settle transaction with the client's account. */
+type SendOptions = {
+  account?: Account | undefined
+  candidateFeeTokens?: readonly Address[] | undefined
+  feePayer?: Account | undefined
+  feePayerPolicy?: Partial<FeePayer.Policy> | undefined
+  feeToken?: Address | undefined
+}
+
+function assertFeePayerPolicy(
+  prepared: {
+    gas?: bigint | undefined
+    maxFeePerGas?: bigint | undefined
+    maxPriorityFeePerGas?: bigint | undefined
+  },
+  policy: Partial<FeePayer.Policy> | undefined,
+) {
+  if (!policy) return
+  if (policy.maxGas !== undefined && (prepared.gas ?? 0n) > policy.maxGas)
+    throw new BadRequestError({ reason: 'fee-payer policy maxGas exceeded' })
+  if (policy.maxFeePerGas !== undefined && (prepared.maxFeePerGas ?? 0n) > policy.maxFeePerGas)
+    throw new BadRequestError({ reason: 'fee-payer policy maxFeePerGas exceeded' })
+  if (
+    policy.maxPriorityFeePerGas !== undefined &&
+    (prepared.maxPriorityFeePerGas ?? 0n) > policy.maxPriorityFeePerGas
+  )
+    throw new BadRequestError({ reason: 'fee-payer policy maxPriorityFeePerGas exceeded' })
+  if (
+    policy.maxTotalFee !== undefined &&
+    (prepared.gas ?? 0n) * (prepared.maxFeePerGas ?? 0n) > policy.maxTotalFee
+  )
+    throw new BadRequestError({ reason: 'fee-payer policy maxTotalFee exceeded' })
+}
+
+async function sendPrecompileTransaction(
+  client: Client,
+  to: Address,
+  data: Hex,
+  label: string,
+  options?: SendOptions,
+): Promise<Hex> {
+  if (options?.feePayer) {
+    const account = options.account ?? client.account
+    if (!account) throw new Error(`Cannot ${label} precompile channel: no account available.`)
+    const feeToken =
+      options.feeToken ??
+      (await resolveFeeToken({
+        account: options.feePayer.address,
+        candidateTokens: options.candidateFeeTokens,
+        client,
+      }))
+    const prepared = await prepareTransactionRequest(client, {
+      account,
+      calls: [{ to, data }],
+      feePayer: true,
+      ...(feeToken ? { feeToken } : {}),
+    } as never)
+    assertFeePayerPolicy(prepared, options.feePayerPolicy)
+    const serialized = (await signTransaction(client, {
+      ...prepared,
+      account,
+      feePayer: options.feePayer,
+    } as never)) as Hex
+    const receipt = await sendRawTransactionSync(client, {
+      serializedTransaction: serialized as Transaction.TransactionSerializedTempo,
+    })
+    if (receipt.status !== 'success')
+      throw new VerificationFailedError({
+        reason: `${label} precompile transaction reverted: ${receipt.transactionHash}`,
+      })
+    return receipt.transactionHash
+  }
+
+  return sendTransaction(client, {
+    ...(options?.account ? { account: options.account } : {}),
+    to,
+    data,
+    ...(options?.feeToken ? { feeToken: options.feeToken } : {}),
+  } as never)
+}
+
+/** Broadcasts a descriptor-based TIP-1034 settle transaction with optional fee sponsorship. */
 export async function settle(
   client: Client,
   descriptor: ChannelDescriptor,
   cumulativeAmount: Uint96,
   signature: Hex,
   escrow: Address = tip20ChannelEscrow,
-  options?: { account?: Parameters<typeof sendTransaction>[1]['account'] | undefined },
+  options?: SendOptions,
 ): Promise<Hex> {
-  return sendTransaction(client, {
-    ...(options?.account ? { account: options.account } : {}),
-    to: escrow,
-    data: encodeSettle(descriptor, cumulativeAmount, signature),
-  } as never)
+  return sendPrecompileTransaction(
+    client,
+    escrow,
+    encodeSettle(descriptor, cumulativeAmount, signature),
+    'settle',
+    options,
+  )
 }
 
 /** Broadcasts a descriptor-based TIP-1034 top-up transaction with the client's account. */
@@ -221,7 +313,7 @@ export async function withdraw(
   } as never)
 }
 
-/** Broadcasts a descriptor-based TIP-1034 close transaction with the client's account. */
+/** Broadcasts a descriptor-based TIP-1034 close transaction with optional fee sponsorship. */
 export async function close(
   client: Client,
   descriptor: ChannelDescriptor,
@@ -229,11 +321,13 @@ export async function close(
   captureAmount: Uint96,
   signature: Hex,
   escrow: Address = tip20ChannelEscrow,
-  options?: { account?: Parameters<typeof sendTransaction>[1]['account'] | undefined },
+  options?: SendOptions,
 ): Promise<Hex> {
-  return sendTransaction(client, {
-    ...(options?.account ? { account: options.account } : {}),
-    to: escrow,
-    data: encodeClose(descriptor, cumulativeAmount, captureAmount, signature),
-  } as never)
+  return sendPrecompileTransaction(
+    client,
+    escrow,
+    encodeClose(descriptor, cumulativeAmount, captureAmount, signature),
+    'close',
+    options,
+  )
 }

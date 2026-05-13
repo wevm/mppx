@@ -26,6 +26,7 @@ import * as Method from '../../../Method.js'
 import * as Store from '../../../Store.js'
 import * as Client from '../../../viem/Client.js'
 import * as defaults from '../../internal/defaults.js'
+import type * as FeePayer from '../../internal/fee-payer.js'
 import type * as types from '../../internal/types.js'
 import * as Methods from '../../Methods.js'
 import * as ChannelStore from '../../session/ChannelStore.js'
@@ -48,6 +49,7 @@ type SessionMethodDetails = {
   chainId: number
   escrowContract?: Address | undefined
   channelId?: Hex | undefined
+  feePayer?: boolean | undefined
   minVoucherDelta?: string | undefined
 }
 
@@ -192,13 +194,25 @@ export function session<const parameters extends session.Parameters>(
       unitType,
     } as unknown as Defaults,
 
-    async request({ request }) {
+    async request({ credential, request }) {
       const chainId = request.chainId ?? parameters.chainId ?? (await getClient({})).chain?.id
       if (!chainId) throw new Error('No chainId configured for tempo.precompile.session().')
+      const client = await getClient({ chainId })
+      if (client.chain?.id !== chainId)
+        throw new Error(`Client not configured with chainId ${chainId}.`)
+      const resolvedFeePayer = (() => {
+        if (request.feePayer === false) return credential ? false : undefined
+        const account =
+          typeof request.feePayer === 'object' ? request.feePayer : parameters.feePayer
+        if (credential) return account ?? undefined
+        if (account) return true
+        return undefined
+      })()
       return {
         ...request,
         chainId,
         escrowContract: request.escrowContract ?? parameters.escrow ?? tip20ChannelEscrow,
+        feePayer: resolvedFeePayer,
       }
     },
 
@@ -211,6 +225,17 @@ export function session<const parameters extends session.Parameters>(
       const chainId = methodDetails.chainId
       const escrow = methodDetails.escrowContract ?? parameters.escrow ?? tip20ChannelEscrow
       const client = await getClient({ chainId })
+      const requestAllowsFeePayer =
+        request.feePayer !== false &&
+        (request.feePayer === undefined ||
+          request.feePayer === true ||
+          typeof request.feePayer === 'object')
+      const resolvedFeePayer =
+        methodDetails.feePayer === true && requestAllowsFeePayer
+          ? typeof request.feePayer === 'object'
+            ? request.feePayer
+            : parameters.feePayer
+          : undefined
       const minVoucherDelta = methodDetails.minVoucherDelta
         ? BigInt(methodDetails.minVoucherDelta)
         : parseUnits(parameters.minVoucherDelta ?? '0', decimals)
@@ -241,6 +266,9 @@ export function session<const parameters extends session.Parameters>(
             chainId,
             escrow,
             account: parameters.account,
+            feePayer: resolvedFeePayer,
+            feePayerPolicy: parameters.feePayerPolicy,
+            feeToken: parameters.feeToken,
           })
         default:
           throw new VerificationFailedError({ reason: 'unsupported precompile session action' })
@@ -558,6 +586,9 @@ async function handleClose(parameters: {
   chainId: number
   escrow: Address
   account?: viem_Account | undefined
+  feePayer?: viem_Account | undefined
+  feePayerPolicy?: Partial<FeePayer.Policy> | undefined
+  feeToken?: Address | undefined
 }): Promise<SessionReceipt> {
   const { store, client, challenge, payload, chainId, escrow } = parameters
   const channelId = ChannelStore.normalizeChannelId(payload.channelId)
@@ -565,8 +596,25 @@ async function handleClose(parameters: {
   if (!channel) throw new ChannelNotFoundError({ reason: 'channel not found' })
   if (!ChannelStore.isPrecompileState(channel))
     throw new VerificationFailedError({ reason: 'channel is not precompile-backed' })
+  if (channel.finalized) throw new ChannelClosedError({ reason: 'channel is already finalized' })
   assertSameDescriptor(payload.descriptor, channel.descriptor)
   const state = await Chain.getChannelState(client, channelId, escrow)
+  if (state.closeRequestedAt !== 0)
+    throw new ChannelClosedError({ reason: 'channel has a pending close request' })
+  if (state.deposit === 0n && (payload.cumulativeAmount !== 0n || channel.spent !== 0n))
+    throw new ChannelClosedError({ reason: 'channel deposit is zero (settled)' })
+  if (payload.cumulativeAmount < channel.spent)
+    throw new VerificationFailedError({
+      reason: `close voucher amount must be >= ${channel.spent} (spent)`,
+    })
+  const isUntouchedZeroClose =
+    payload.cumulativeAmount === 0n && channel.spent === 0n && state.settled === 0n
+  if (!isUntouchedZeroClose && payload.cumulativeAmount <= state.settled)
+    throw new VerificationFailedError({
+      reason: `close voucher amount must be > ${state.settled} (on-chain settled)`,
+    })
+  if (payload.cumulativeAmount > state.deposit)
+    throw new AmountExceedsDepositError({ reason: 'close voucher amount exceeds on-chain deposit' })
   const valid = await Voucher.verify(
     { channelId, cumulativeAmount: payload.cumulativeAmount, signature: payload.signature },
     channel.authorizedSigner,
@@ -576,23 +624,59 @@ async function handleClose(parameters: {
   const captureAmount = uint96(
     payload.cumulativeAmount > state.settled ? payload.cumulativeAmount : state.settled,
   )
-  const account = parameters.account ?? getClientAccount(client)
-  assertSettlementSender({
-    operation: 'close',
-    channelId,
-    payee: channel.payee,
-    sender: account?.address,
+  const pendingCloseStartedAt = BigInt(Math.floor(Date.now() / 1000) || 1)
+  const previousCloseRequestedAt = channel.closeRequestedAt
+  let pendingCloseMarked = false
+  await store.updateChannel(channelId, (current) => {
+    if (!current) return null
+    if (current.finalized) throw new ChannelClosedError({ reason: 'channel is already finalized' })
+    if (current.closeRequestedAt !== 0n)
+      throw new ChannelClosedError({ reason: 'channel has a pending close request' })
+    if (payload.cumulativeAmount < current.spent)
+      throw new VerificationFailedError({
+        reason: `close voucher amount must be >= ${current.spent} (spent)`,
+      })
+    pendingCloseMarked = true
+    return { ...current, closeRequestedAt: pendingCloseStartedAt }
   })
-  const txHash = await Chain.close(
-    client,
-    channel.descriptor,
-    payload.cumulativeAmount,
-    captureAmount,
-    payload.signature,
-    escrow,
-    account ? { account } : undefined,
-  )
-  const receipt = await waitForSuccessfulReceipt(client, txHash)
+  const account = parameters.account ?? getClientAccount(client)
+  let txHash: Hex | undefined
+  let receipt: Awaited<ReturnType<typeof waitForSuccessfulReceipt>>
+  try {
+    assertSettlementSender({
+      operation: 'close',
+      channelId,
+      payee: channel.payee,
+      sender: account?.address,
+    })
+    txHash = await Chain.close(
+      client,
+      channel.descriptor,
+      payload.cumulativeAmount,
+      captureAmount,
+      payload.signature,
+      escrow,
+      account
+        ? {
+            account,
+            ...(parameters.feePayer ? { feePayer: parameters.feePayer } : {}),
+            ...(parameters.feePayerPolicy ? { feePayerPolicy: parameters.feePayerPolicy } : {}),
+            ...(parameters.feeToken ? { feeToken: parameters.feeToken } : {}),
+            candidateFeeTokens: [channel.token],
+          }
+        : undefined,
+    )
+    receipt = await waitForSuccessfulReceipt(client, txHash)
+  } catch (error) {
+    if (pendingCloseMarked) {
+      await store.updateChannel(channelId, (current) =>
+        current && current.closeRequestedAt === pendingCloseStartedAt
+          ? { ...current, closeRequestedAt: previousCloseRequestedAt }
+          : current,
+      )
+    }
+    throw error
+  }
   const closed = getChannelEvent(receipt, 'ChannelClosed', channelId)
   const settledToPayee = uint96(closed.args.settledToPayee as bigint)
   const refundedToPayer = uint96(closed.args.refundedToPayer as bigint)
@@ -632,9 +716,11 @@ export async function settle(
   channelId_: Hex,
   options?: {
     account?: viem_Account | undefined
+    candidateFeeTokens?: readonly Address[] | undefined
     escrow?: Address | undefined
-    feePayer?: never
-    feeToken?: never
+    feePayer?: viem_Account | undefined
+    feePayerPolicy?: Partial<FeePayer.Policy> | undefined
+    feeToken?: Address | undefined
   },
 ): Promise<Hex> {
   const store = 'getChannel' in store_ ? store_ : ChannelStore.fromStore(store_ as never)
@@ -644,10 +730,6 @@ export async function settle(
   if (!ChannelStore.isPrecompileState(channel))
     throw new VerificationFailedError({ reason: 'channel is not precompile-backed' })
   if (!channel.highestVoucher) throw new VerificationFailedError({ reason: 'no voucher to settle' })
-  if ('feePayer' in (options ?? {}) || 'feeToken' in (options ?? {}))
-    throw new BadRequestError({
-      reason: 'tempo.precompile.settle() does not support feePayer or feeToken options yet',
-    })
   const escrow = options?.escrow ?? channel.escrowContract
   const account = options?.account ?? getClientAccount(client)
   assertSettlementSender({
@@ -663,7 +745,15 @@ export async function settle(
     amount,
     channel.highestVoucher.signature,
     escrow,
-    account ? { account } : undefined,
+    account
+      ? {
+          account,
+          ...(options?.feePayer ? { feePayer: options.feePayer } : {}),
+          ...(options?.feePayerPolicy ? { feePayerPolicy: options.feePayerPolicy } : {}),
+          ...(options?.feeToken ? { feeToken: options.feeToken } : {}),
+          candidateFeeTokens: options?.candidateFeeTokens ?? [channel.token],
+        }
+      : undefined,
   )
   const receipt = await waitForSuccessfulReceipt(client, txHash)
   const settled = getChannelEvent(receipt, 'Settled', channelId)
@@ -702,6 +792,12 @@ export namespace session {
     unitType?: string | undefined
     /** Account used for server-driven close transactions. Defaults to the client account. */
     account?: viem_Account | undefined
+    /** Optional fee payer used to sponsor server-driven close transactions. */
+    feePayer?: viem_Account | undefined
+    /** Optional fee-payer policy limits for server-driven close transactions. */
+    feePayerPolicy?: Partial<FeePayer.Policy> | undefined
+    /** Optional fee token used for server-driven close transactions. */
+    feeToken?: Address | undefined
   }
 
   export type Defaults = LooseOmit<
