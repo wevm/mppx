@@ -10,6 +10,7 @@ import * as ChannelStore from '../../session/ChannelStore.js'
 import * as Chain from '../Chain.js'
 import * as Channel from '../Channel.js'
 import {
+  createCloseCredential,
   createOpen,
   createOpenCredential,
   createTopUp,
@@ -292,8 +293,96 @@ describe.runIf(isLocalnet)('precompile server session localnet', () => {
     const txHash = await settle(store, client, channelId)
     const settleReceipt = await waitForTransactionReceipt(client, { hash: txHash })
     expect(settleReceipt.status).toBe('success')
+    const settled = getSingleEvent(settleReceipt, 'Settled')
+    expect(settled.args.channelId).toBe(channelId)
+    expect(settled.args.newSettled).toBe(300n)
 
     const state = await Chain.getChannelState(client, channelId, tip20ChannelEscrow)
     expect(state.settled).toBe(300n)
+    const settledStore = await store.getChannel(channelId)
+    expect(settledStore?.settledOnChain).toBe(300n)
+  })
+
+  test('closes a real precompile channel only after a successful close receipt', async () => {
+    const rawStore = Store.memory()
+    const store = ChannelStore.fromStore(rawStore as never)
+    const { channelId, descriptor, deposit } = await openRealChannel(1_000n)
+
+    await store.updateChannel(channelId, () => ({
+      backend: 'precompile',
+      channelId,
+      chainId: chain.id,
+      escrowContract: tip20ChannelEscrow,
+      closeRequestedAt: 0n,
+      payer: descriptor.payer,
+      payee: descriptor.payee,
+      token: descriptor.token,
+      authorizedSigner: descriptor.authorizedSigner,
+      deposit,
+      settledOnChain: 0n,
+      highestVoucherAmount: 300n,
+      highestVoucher: null,
+      spent: 0n,
+      units: 0,
+      finalized: false,
+      createdAt: new Date().toISOString(),
+      descriptor,
+      operator: descriptor.operator,
+      salt: descriptor.salt,
+      expiringNonceHash: descriptor.expiringNonceHash,
+    }))
+
+    const method = session({
+      amount: '100',
+      chainId: chain.id,
+      currency: asset,
+      decimals: 0,
+      recipient: payee.address,
+      store: rawStore,
+      unitType: 'request',
+      getClient: () => client,
+    })
+    const payload = await createCloseCredential(client, payer, {
+      chainId: chain.id,
+      cumulativeAmount: uint96(300n),
+      descriptor,
+      escrow: tip20ChannelEscrow,
+    })
+
+    const receipt = await method.verify({
+      credential: {
+        challenge: {
+          id: 'localnet-close',
+          realm: 'api.example.com',
+          method: 'tempo',
+          intent: 'session',
+          request: {
+            amount: '100',
+            currency: asset,
+            recipient: payee.address,
+            methodDetails: { chainId: chain.id, escrowContract: tip20ChannelEscrow, channelId },
+          },
+        } as never,
+        payload,
+      },
+      request: {
+        amount: '100',
+        currency: asset,
+        recipient: payee.address,
+        methodDetails: { chainId: chain.id, escrowContract: tip20ChannelEscrow, channelId },
+      } as never,
+    })
+
+    if (!('txHash' in receipt)) throw new Error('expected close txHash')
+    const closeReceipt = await waitForTransactionReceipt(client, {
+      hash: receipt.txHash as Hex.Hex,
+    })
+    expect(closeReceipt.status).toBe('success')
+    const closed = getSingleEvent(closeReceipt, 'ChannelClosed')
+    expect(closed.args.channelId).toBe(channelId)
+    expect(closed.args.settledToPayee).toBe(300n)
+    const stored = await store.getChannel(channelId)
+    expect(stored?.finalized).toBe(true)
+    expect(stored?.settledOnChain).toBe(300n)
   })
 })

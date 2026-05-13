@@ -99,7 +99,7 @@ async function waitForSuccessfulReceipt(
 
 function getChannelEvent(
   receipt: { logs: readonly unknown[] },
-  name: 'ChannelOpened' | 'TopUp',
+  name: 'ChannelOpened' | 'TopUp' | 'Settled' | 'ChannelClosed',
   channelId: Hex,
 ) {
   const logs = parseEventLogs({
@@ -535,11 +535,20 @@ async function handleClose(parameters: {
     payload.signature,
     escrow,
   )
+  const receipt = await waitForSuccessfulReceipt(client, txHash)
+  const closed = getChannelEvent(receipt, 'ChannelClosed', channelId)
+  const settledToPayee = uint96(closed.args.settledToPayee as bigint)
+  const refundedToPayer = uint96(closed.args.refundedToPayer as bigint)
+  if (settledToPayee > captureAmount || settledToPayee + refundedToPayer > state.deposit)
+    throw new VerificationFailedError({ reason: 'ChannelClosed amounts do not match state' })
   const updated = await store.updateChannel(channelId, (current) =>
     current
       ? {
           ...current,
           finalized: true,
+          deposit: state.deposit,
+          settledOnChain:
+            settledToPayee > current.settledOnChain ? settledToPayee : current.settledOnChain,
           highestVoucherAmount: payload.cumulativeAmount,
           highestVoucher: {
             channelId,
@@ -582,11 +591,21 @@ export async function settle(
     channel.highestVoucher.signature,
     escrow,
   )
+  const receipt = await waitForSuccessfulReceipt(client, txHash)
+  const settled = getChannelEvent(receipt, 'Settled', channelId)
+  const newSettled = uint96(settled.args.newSettled as bigint)
+  if (newSettled < amount)
+    throw new VerificationFailedError({ reason: 'Settled event is below voucher amount' })
+  const state = await Chain.getChannelState(client, channelId, escrow)
+  if (state.settled !== newSettled)
+    throw new VerificationFailedError({
+      reason: 'on-chain channel state does not match settle receipt',
+    })
   await store.updateChannel(channelId, (current) =>
     current
       ? {
           ...current,
-          settledOnChain: amount > current.settledOnChain ? amount : current.settledOnChain,
+          settledOnChain: newSettled > current.settledOnChain ? newSettled : current.settledOnChain,
         }
       : current,
   )

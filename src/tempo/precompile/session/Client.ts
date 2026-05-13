@@ -67,8 +67,12 @@ function resolveEscrow(
   challenge: { request: { methodDetails?: unknown } },
   escrowOverride?: Address | undefined,
 ): Address {
-  const challengeEscrow = (challenge.request.methodDetails as { escrow?: string } | undefined)
-    ?.escrow as Address | undefined
+  const methodDetails = challenge.request.methodDetails as
+    | { escrow?: string | undefined; escrowContract?: string | undefined }
+    | undefined
+  const challengeEscrow = (methodDetails?.escrowContract ?? methodDetails?.escrow) as
+    | Address
+    | undefined
   return escrowOverride ?? challengeEscrow ?? tip20ChannelEscrow
 }
 
@@ -129,7 +133,31 @@ export function session(parameters: session.Parameters = {}) {
     const existing = channels.get(key)
 
     let payload: SessionCredentialPayload
-    if (existing?.opened) {
+    if (!existing && context?.channelId && !context.descriptor)
+      throw new Error('descriptor required to reuse precompile channel')
+    if (!existing && context?.descriptor) {
+      const channelId = Channel.computeId(context.descriptor, { chainId, escrow })
+      if (context.channelId && context.channelId.toLowerCase() !== channelId.toLowerCase())
+        throw new Error('context channelId does not match descriptor')
+      const cumulativeAmount = parseContextAmount(context, decimals) ?? amount
+      payload = await createVoucherCredential(client, account, {
+        chainId,
+        cumulativeAmount,
+        descriptor: context.descriptor,
+        escrow,
+      })
+      const entry: ChannelEntry = {
+        channelId,
+        cumulativeAmount,
+        descriptor: context.descriptor,
+        escrow,
+        chainId,
+        opened: true,
+      }
+      channels.set(key, entry)
+      channelIdToKey.set(channelId, key)
+      notifyUpdate(entry)
+    } else if (existing?.opened) {
       const cumulativeAmount = uint96(existing.cumulativeAmount + amount)
       payload = await createVoucherCredential(client, account, {
         chainId,
