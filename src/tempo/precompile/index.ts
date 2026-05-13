@@ -1,4 +1,5 @@
 export * as Client from './client/index.js'
+export { session } from './client/Session.js'
 export * as Chain from './Chain.js'
 export * as Channel from './Channel.js'
 export * as Constants from './Constants.js'

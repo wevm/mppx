@@ -1,6 +1,7 @@
 import type { Address, Hex } from 'viem'
 
 import type * as Store from '../../Store.js'
+import type * as PrecompileChannel from '../precompile/Channel.js'
 import type { SignedVoucher } from './Types.js'
 
 /**
@@ -19,7 +20,31 @@ import type { SignedVoucher } from './Types.js'
  * - `settledOnChain` only increases
  * - `deposit` reflects the latest on-chain value
  */
-export interface State {
+export type State = BaseState & BackendState
+
+export type BackendState = ContractBackendState | PrecompileBackendState
+
+/** State for a smart-contract-backed payment channel. */
+export interface ContractBackendState {
+  /** Channel backend. Omitted for existing contract-backed records. */
+  backend?: 'contract' | undefined
+}
+
+/** State for a TIP-1034 precompile-backed payment channel. */
+export interface PrecompileBackendState {
+  /** Channel backend. */
+  backend: 'precompile'
+  /** Descriptor used to derive the channel's identity. */
+  descriptor: PrecompileChannel.ChannelDescriptor
+  /** Transaction-bound nonce hash used to derive the channel's identity. */
+  expiringNonceHash: Hex
+  /** Address authorized to operate the channel. */
+  operator: Address
+  /** Salt used to derive the channel's identity. */
+  salt: Hex
+}
+
+export interface BaseState {
   /** Address authorized to sign vouchers on behalf of the payer. */
   authorizedSigner: Address
   /** Chain ID the channel was opened on. */
@@ -52,6 +77,16 @@ export interface State {
   token: Address
   /** Number of charge operations (API requests) fulfilled in the current session. */
   units: number
+}
+
+/** Returns whether a channel is backed by the TIP-1034 precompile. */
+export function isPrecompileState(state: State): state is BaseState & PrecompileBackendState {
+  return state.backend === 'precompile'
+}
+
+/** Returns whether a channel is backed by the smart contract escrow. */
+export function isContractState(state: State): state is BaseState & ContractBackendState {
+  return state.backend === undefined || state.backend === 'contract'
 }
 
 /**
