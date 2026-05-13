@@ -22,7 +22,7 @@ import { escrowAbi } from '../escrow.abi.js'
 import { uint96 } from '../Types.js'
 import { session, settle } from './Session.js'
 
-const isLocalnet = nodeEnv === 'localnet'
+const isPrecompileTestnet = nodeEnv === 'localnet' || nodeEnv === 'devnet'
 const payer = accounts[2]
 const payee = accounts[0]
 
@@ -78,7 +78,7 @@ async function openRealChannel(deposit = 1_000n) {
   return { channelId, descriptor, deposit: uint96(deposit) }
 }
 
-describe.runIf(isLocalnet)('precompile server session localnet', () => {
+describe.runIf(isPrecompileTestnet)('precompile server session chain integration', () => {
   test('broadcasts and verifies a real precompile open credential', async () => {
     const rawStore = Store.memory()
     const store = ChannelStore.fromStore(rawStore as never)
@@ -104,7 +104,7 @@ describe.runIf(isLocalnet)('precompile server session localnet', () => {
     const receipt = await method.verify({
       credential: {
         challenge: {
-          id: 'localnet-open-challenge',
+          id: 'chain-open-challenge',
           realm: 'api.example.com',
           method: 'tempo',
           intent: 'session',
@@ -170,7 +170,7 @@ describe.runIf(isLocalnet)('precompile server session localnet', () => {
     await method.verify({
       credential: {
         challenge: {
-          id: 'localnet-topup-open',
+          id: 'chain-topup-open',
           request: { currency: asset, recipient: payee.address },
         } as never,
         payload: openPayload,
@@ -193,7 +193,7 @@ describe.runIf(isLocalnet)('precompile server session localnet', () => {
     const receipt = await method.verify({
       credential: {
         challenge: {
-          id: 'localnet-topup',
+          id: 'chain-topup',
           request: { currency: asset, recipient: payee.address },
         } as never,
         payload: topUpPayload,
@@ -268,7 +268,7 @@ describe.runIf(isLocalnet)('precompile server session localnet', () => {
     const receipt = await method.verify({
       credential: {
         challenge: {
-          id: 'localnet-challenge',
+          id: 'chain-challenge',
           realm: 'api.example.com',
           method: 'tempo',
           intent: 'session',
@@ -352,7 +352,7 @@ describe.runIf(isLocalnet)('precompile server session localnet', () => {
     const receipt = await method.verify({
       credential: {
         challenge: {
-          id: 'localnet-close',
+          id: 'chain-close',
           realm: 'api.example.com',
           method: 'tempo',
           intent: 'session',

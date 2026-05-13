@@ -18,7 +18,8 @@ const localnetTransportOptions =
     : undefined
 
 const accountsMnemonic = (() => {
-  if (nodeEnv === 'localnet') return 'test test test test test test test test test test test junk'
+  if (nodeEnv === 'localnet' || nodeEnv === 'devnet')
+    return 'test test test test test test test test test test test junk'
   return generateMnemonic(english)
 })()
 

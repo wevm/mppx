@@ -12,7 +12,7 @@ import { escrowAbi } from './escrow.abi.js'
 import { uint96 } from './Types.js'
 import * as Voucher from './Voucher.js'
 
-const isLocalnet = nodeEnv === 'localnet'
+const isPrecompileTestnet = nodeEnv === 'localnet' || nodeEnv === 'devnet'
 const payer = accounts[2]
 const payee = accounts[0]
 
@@ -69,7 +69,7 @@ async function openChannel(parameters: { deposit?: bigint | undefined } = {}) {
   return { channelId, descriptor, deposit }
 }
 
-describe.runIf(isLocalnet)('TIP-1034 precompile localnet chain operations', () => {
+describe.runIf(isPrecompileTestnet)('TIP-1034 precompile chain operations', () => {
   test('opens a channel, parses ChannelOpened, and reads channel state', async () => {
     const { channelId, descriptor, deposit } = await openChannel()
 

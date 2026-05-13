@@ -199,7 +199,7 @@ async function persistPrecompileChannel(
 }
 
 describe('precompile server session unit guardrails', () => {
-  test.skip('accepts a valid open with voucher and persists precompile descriptor state (covered by localnet)', async () => {
+  test.skip('accepts a valid open with voucher and persists precompile descriptor state (covered by chain integration)', async () => {
     const { method, store, rpcCalls } = createServer()
     const payload = await createOpenCredential()
 
@@ -244,7 +244,7 @@ describe('precompile server session unit guardrails', () => {
     // Reuse a valid descriptor/signature, but submit a transaction whose calls
     // do not correspond to that descriptor. This exercises the same one-call /
     // smuggling guard as legacy server session tests without requiring a live
-    // localnet precompile.
+    // chain-backed precompile.
     const smuggled = { ...payload, transaction: tampered.transaction }
 
     await expect(
@@ -305,7 +305,7 @@ describe('precompile server session unit guardrails', () => {
     ).rejects.toThrow(/outside uint96 bounds/)
   })
 
-  test.skip('accepts post-open vouchers using the persisted descriptor (covered by localnet)', async () => {
+  test.skip('accepts post-open vouchers using the persisted descriptor (covered by chain integration)', async () => {
     const { method, store } = createServer({ channelStateTtl: Number.MAX_SAFE_INTEGER })
     const openPayload = await createOpenCredential()
     await method.verify({
@@ -329,7 +329,7 @@ describe('precompile server session unit guardrails', () => {
     expect(channel!.highestVoucherAmount).toBe(250n)
   })
 
-  test.skip('rejects post-open voucher descriptor mismatches (covered by localnet-backed state)', async () => {
+  test.skip('rejects post-open voucher descriptor mismatches (covered by chain-backed state)', async () => {
     const { method } = createServer({ channelStateTtl: Number.MAX_SAFE_INTEGER })
     const openPayload = await createOpenCredential()
     await method.verify({
@@ -359,7 +359,7 @@ describe('precompile server session unit guardrails', () => {
     )
   })
 
-  test.skip('accepts top-up credentials and updates cached deposit (covered by localnet)', async () => {
+  test.skip('accepts top-up credentials and updates cached deposit (covered by chain integration)', async () => {
     const { method, store, rpcCalls } = createServer()
     const openPayload = await createOpenCredential({ deposit: 500n })
     await method.verify({
@@ -400,7 +400,7 @@ describe('precompile server session unit guardrails', () => {
     ])
   })
 
-  test.skip('rejects top-up calldata for a different descriptor (covered by localnet-backed state)', async () => {
+  test.skip('rejects top-up calldata for a different descriptor (covered by chain-backed state)', async () => {
     const { method } = createServer()
     const openPayload = await createOpenCredential({ deposit: 500n })
     await method.verify({
@@ -441,7 +441,7 @@ describe('precompile server session unit guardrails', () => {
     ).rejects.toThrow(/topUp descriptor does not match stored channel/)
   })
 
-  test.skip('rejects vouchers above the cached deposit (covered by localnet-backed state)', async () => {
+  test.skip('rejects vouchers above the cached deposit (covered by chain-backed state)', async () => {
     const { method } = createServer({ channelStateTtl: Number.MAX_SAFE_INTEGER })
     const openPayload = await createOpenCredential({ deposit: 200n, initialAmount: 100n })
     await method.verify({
