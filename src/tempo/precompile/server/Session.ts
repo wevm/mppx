@@ -18,7 +18,7 @@ import {
   InvalidSignatureError,
   VerificationFailedError,
 } from '../../../Errors.js'
-import type { Challenge, Credential } from '../../../index.js'
+import type { Challenge } from '../../../index.js'
 import type { LooseOmit, NoExtraKeys } from '../../../internal/types.js'
 import * as Method from '../../../Method.js'
 import * as Store from '../../../Store.js'
@@ -33,7 +33,12 @@ import * as Chain from '../Chain.js'
 import * as Channel from '../Channel.js'
 import { tip20ChannelEscrow } from '../Constants.js'
 import { escrowAbi } from '../escrow.abi.js'
-import { parseCredentialPayload, type ParsedSessionCredentialPayload, uint96 } from '../Types.js'
+import {
+  parseCredentialPayload,
+  type ParsedSessionCredentialPayload,
+  type SessionCredentialPayload,
+  uint96,
+} from '../Types.js'
 import * as Voucher from '../Voucher.js'
 import * as ChannelOps from './ChannelOps.js'
 
@@ -84,7 +89,7 @@ function validateDescriptor(parameters: {
 }
 
 async function sendTransaction(client: Parameters<typeof sendRawTransaction>[0], transaction: Hex) {
-  return sendRawTransaction(client, { serializedTransaction: transaction as never })
+  return sendRawTransaction(client, { serializedTransaction: transaction })
 }
 
 async function waitForSuccessfulReceipt(
@@ -97,27 +102,34 @@ async function waitForSuccessfulReceipt(
   return receipt
 }
 
+type ChannelReceiptEvent = {
+  args: {
+    channelId: Hex
+    expiringNonceHash?: Hex | undefined
+    deposit?: bigint | undefined
+    newDeposit?: bigint | undefined
+    newSettled?: bigint | undefined
+    settledToPayee?: bigint | undefined
+    refundedToPayer?: bigint | undefined
+  }
+}
+
 function getChannelEvent(
-  receipt: { logs: readonly unknown[] },
+  receipt: { logs: Parameters<typeof parseEventLogs>[0]['logs'] },
   name: 'ChannelOpened' | 'TopUp' | 'Settled' | 'ChannelClosed',
   channelId: Hex,
-) {
+): ChannelReceiptEvent {
   const logs = parseEventLogs({
     abi: escrowAbi,
     eventName: name,
-    logs: receipt.logs as never,
-  })
-  const matches = logs.filter(
-    (log) =>
-      (
-        (log as unknown as { args: Record<string, unknown> }).args.channelId as Hex | undefined
-      )?.toLowerCase() === channelId.toLowerCase(),
-  )
+    logs: receipt.logs,
+  }) as ChannelReceiptEvent[]
+  const matches = logs.filter((log) => log.args.channelId.toLowerCase() === channelId.toLowerCase())
   if (matches.length !== 1)
     throw new VerificationFailedError({
       reason: `expected one ${name} event for credential channelId in receipt`,
     })
-  return matches[0] as unknown as { args: Record<string, unknown> }
+  return matches[0]!
 }
 
 /** Creates a server-side TIP-1034 precompile session payment method. */
@@ -166,12 +178,11 @@ export function session<const parameters extends session.Parameters>(
     },
 
     async verify({ credential, request }) {
-      const { challenge, payload: rawPayload } = credential as unknown as Credential.Credential<
-        import('../Types.js').SessionCredentialPayload
-      >
-      const payload = parseCredentialPayload(rawPayload as never) as ParsedSessionCredentialPayload
-      const methodDetails = (request as unknown as { methodDetails: SessionMethodDetails })
+      const { challenge, payload: rawPayload } = credential
+      const payload = parseCredentialPayload(rawPayload as SessionCredentialPayload)
+      const methodDetails = (request as typeof request & { methodDetails?: SessionMethodDetails })
         .methodDetails
+      if (!methodDetails) throw new VerificationFailedError({ reason: 'missing methodDetails' })
       const chainId = methodDetails.chainId
       const escrow = methodDetails.escrowContract ?? parameters.escrow ?? tip20ChannelEscrow
       const client = await getClient({ chainId })
@@ -224,8 +235,10 @@ async function handleOpen(parameters: {
     currency: challenge.request.currency as Address,
   })
 
-  const transaction = Transaction.deserialize(payload.transaction as never) as any
-  const calls = transaction.calls ?? []
+  const transaction = Transaction.deserialize(
+    payload.transaction as Transaction.TransactionSerializedTempo,
+  )
+  const calls = transaction.calls
   if (calls.length !== 1)
     throw new VerificationFailedError({
       reason: 'TIP-1034 open transaction must contain exactly one call',
@@ -356,8 +369,10 @@ async function handleTopUp(parameters: {
     recipient: channel.payee,
     currency: channel.token,
   })
-  const transaction = Transaction.deserialize(payload.transaction as never) as any
-  const calls = transaction.calls ?? []
+  const transaction = Transaction.deserialize(
+    payload.transaction as Transaction.TransactionSerializedTempo,
+  )
+  const calls = transaction.calls
   if (calls.length !== 1)
     throw new VerificationFailedError({
       reason: 'TIP-1034 topUp transaction must contain exactly one call',

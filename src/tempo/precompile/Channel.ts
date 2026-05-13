@@ -69,21 +69,9 @@ export function computeExpiringNonceHash(
   transaction: ExpiringNonceTransaction,
   parameters: { sender: Address },
 ): Hex.Hex {
-  const transactionModule = Transaction as unknown as Record<string, unknown>
-  const getChannelOpenContextHash =
-    transactionModule['getChannelOpenContextHash'] ??
-    transactionModule['getExpiringNonceHash'] ??
-    transactionModule['getSenderScopedHash']
-
-  if (!getChannelOpenContextHash)
-    throw new Error(
-      'viem/tempo Transaction.getChannelOpenContextHash is required to compute TIP-1034 expiringNonceHash.',
-    )
-
-  return (
-    getChannelOpenContextHash as (
-      transaction: ExpiringNonceTransaction,
-      options: { sender: Address },
-    ) => Hex.Hex
-  )(transaction, parameters)
+  const getChannelOpenContextHash = Transaction.getChannelOpenContextHash as (
+    transaction: ExpiringNonceTransaction,
+    options: { sender: Address },
+  ) => Hex.Hex
+  return getChannelOpenContextHash(transaction, parameters)
 }

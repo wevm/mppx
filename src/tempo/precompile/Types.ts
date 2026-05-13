@@ -104,6 +104,9 @@ export function parseCredentialPayload(
 export function parseCredentialPayload(
   payload: CloseCredentialPayload,
 ): ParsedCloseCredentialPayload
+export function parseCredentialPayload(
+  payload: SessionCredentialPayload,
+): ParsedSessionCredentialPayload
 /** Parses and brands decimal string amounts from a precompile session credential payload. */
 export function parseCredentialPayload(
   payload: SessionCredentialPayload,

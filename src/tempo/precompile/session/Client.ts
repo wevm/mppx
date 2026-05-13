@@ -64,12 +64,14 @@ function channelKey(payee: Address, token: Address, escrow: Address): string {
 }
 
 function resolveEscrow(
-  challenge: { request: { methodDetails?: unknown } },
+  challenge: {
+    request: {
+      methodDetails?: { escrow?: string | undefined; escrowContract?: string | undefined }
+    }
+  },
   escrowOverride?: Address | undefined,
 ): Address {
-  const methodDetails = challenge.request.methodDetails as
-    | { escrow?: string | undefined; escrowContract?: string | undefined }
-    | undefined
+  const methodDetails = challenge.request.methodDetails
   const challengeEscrow = (methodDetails?.escrowContract ?? methodDetails?.escrow) as
     | Address
     | undefined
