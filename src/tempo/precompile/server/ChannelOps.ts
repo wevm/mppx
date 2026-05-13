@@ -43,6 +43,51 @@ export function parseOpenCall(parameters: {
   return { payee, operator, token, deposit: validatedDeposit, salt, authorizedSigner }
 }
 
+/** Validates that calldata contains exactly one TIP-1034 descriptor-based `topUp` call. */
+export function parseTopUpCall(parameters: {
+  data: Hex
+  expected?:
+    | {
+        descriptor?: Channel.ChannelDescriptor | undefined
+        additionalDeposit?: Uint96 | undefined
+      }
+    | undefined
+}) {
+  let decoded: ReturnType<typeof decodeFunctionData<typeof escrowAbi>>
+  try {
+    decoded = decodeFunctionData({ abi: escrowAbi, data: parameters.data })
+  } catch {
+    throw new Error('Expected TIP-1034 topUp calldata.')
+  }
+  if (decoded.functionName !== 'topUp') throw new Error('Expected TIP-1034 topUp calldata.')
+  const [descriptor, additionalDeposit] = decoded.args
+  const expected = parameters.expected
+  if (expected?.descriptor) {
+    const actual = descriptor as Channel.ChannelDescriptor
+    const wanted = expected.descriptor
+    if (
+      !isAddressEqual(actual.payer, wanted.payer) ||
+      !isAddressEqual(actual.payee, wanted.payee) ||
+      !isAddressEqual(actual.operator, wanted.operator) ||
+      !isAddressEqual(actual.token, wanted.token) ||
+      !isAddressEqual(actual.authorizedSigner, wanted.authorizedSigner) ||
+      actual.salt.toLowerCase() !== wanted.salt.toLowerCase() ||
+      actual.expiringNonceHash.toLowerCase() !== wanted.expiringNonceHash.toLowerCase()
+    )
+      throw new Error('TIP-1034 topUp descriptor does not match stored channel.')
+  }
+  const validatedAdditionalDeposit = uint96(additionalDeposit)
+  if (
+    expected?.additionalDeposit !== undefined &&
+    validatedAdditionalDeposit !== expected.additionalDeposit
+  )
+    throw new Error('TIP-1034 topUp deposit does not match credential.')
+  return {
+    descriptor: descriptor as Channel.ChannelDescriptor,
+    additionalDeposit: validatedAdditionalDeposit,
+  }
+}
+
 /** Builds and validates a descriptor from an accepted open call and event expiring nonce hash. */
 export function descriptorFromOpen(parameters: {
   chainId: number

@@ -96,6 +96,8 @@ function parseContextAdditionalDeposit(
 /** Creates a client-side TIP-1034 precompile session payment method. */
 export function session(parameters: session.Parameters = {}) {
   const { decimals = defaults.decimals } = parameters
+  const maxDeposit =
+    parameters.maxDeposit !== undefined ? parseUnits(parameters.maxDeposit, decimals) : undefined
 
   const getClient = Client.getResolver({
     chain: tempo_chain,
@@ -141,13 +143,19 @@ export function session(parameters: session.Parameters = {}) {
       const suggestedDepositRaw = (challenge.request as { suggestedDeposit?: string })
         .suggestedDeposit
       const deposit = uint96(
-        context?.depositRaw
-          ? BigInt(context.depositRaw)
-          : parameters.deposit !== undefined
-            ? parseUnits(parameters.deposit, decimals)
-            : suggestedDepositRaw !== undefined
-              ? BigInt(suggestedDepositRaw)
-              : BigInt(challenge.request.amount as string),
+        (() => {
+          if (context?.depositRaw) return BigInt(context.depositRaw)
+          if (parameters.deposit !== undefined) return parseUnits(parameters.deposit, decimals)
+          const suggestedDeposit =
+            suggestedDepositRaw !== undefined ? BigInt(suggestedDepositRaw) : undefined
+          if (suggestedDeposit !== undefined && maxDeposit !== undefined)
+            return suggestedDeposit < maxDeposit ? suggestedDeposit : maxDeposit
+          if (maxDeposit !== undefined) return maxDeposit
+          if (suggestedDeposit !== undefined) return suggestedDeposit
+          throw new Error(
+            'No deposit amount available. Set `deposit`, `maxDeposit`, or ensure the server challenge includes `suggestedDeposit`.',
+          )
+        })(),
       )
       const open = await createOpen(client, account, {
         authorizedSigner: parameters.authorizedSigner,
@@ -285,8 +293,17 @@ export function session(parameters: session.Parameters = {}) {
       const client = await getClient({ chainId })
       const account = getAccount(client, context)
 
-      if (!context?.action) return autoManageCredential(challenge, account, context)
-      return manualCredential(challenge, account, context)
+      if (!context?.action && (parameters.deposit !== undefined || maxDeposit !== undefined))
+        return autoManageCredential(challenge, account, context)
+
+      if (!context?.action && (challenge.request as { suggestedDeposit?: string }).suggestedDeposit)
+        return autoManageCredential(challenge, account, context)
+
+      if (context?.action) return manualCredential(challenge, account, context)
+
+      throw new Error(
+        'No `action` in context and no `deposit` or `maxDeposit` configured. Either provide context with action/descriptor/cumulativeAmount, or configure `deposit`/`maxDeposit` for auto-management.',
+      )
     },
   })
 }
@@ -300,6 +317,8 @@ export declare namespace session {
       decimals?: number | undefined
       /** Initial deposit amount in human-readable units. */
       deposit?: string | undefined
+      /** Maximum deposit in human-readable units. Caps the server suggestedDeposit and enables auto-management. */
+      maxDeposit?: string | undefined
       /** TIP-1034 precompile address override. */
       escrow?: Address | undefined
       /** Address authorized to operate the precompile channel on behalf of the payee. */
