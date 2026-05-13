@@ -669,6 +669,119 @@ describe('Fetch.from: 402 retry path', () => {
     expect(headers.Authorization).toBe('credential')
   })
 
+  test('emits client events and allows challenge handler to provide credential', async () => {
+    const events: string[] = []
+    const createCredential = vi.fn(async () => 'method-credential')
+    let callCount = 0
+    const calls: { init: RequestInit | undefined }[] = []
+    const mockFetch: typeof globalThis.fetch = async (_input, init) => {
+      calls.push({ init })
+      callCount++
+      if (callCount === 1) return make402()
+      return new Response('OK', { status: 200 })
+    }
+
+    const fetch = Fetch.from({
+      fetch: mockFetch,
+      methods: [{ ...noopMethod, createCredential }],
+      events: {
+        '*'(event) {
+          events.push(`*:${event.name}`)
+        },
+        async 'challenge.received'(payload) {
+          events.push(`challenge:${payload.challenge.id}`)
+          return 'event-credential'
+        },
+        'credential.created'(payload) {
+          events.push(`credential:${payload.credential}`)
+          throw new Error('observer failed')
+        },
+        'payment.response'(payload) {
+          events.push(`response:${payload.response.status}`)
+          throw new Error('observer failed')
+        },
+      },
+    })
+
+    const response = await fetch('https://example.com/api')
+
+    expect(response.status).toBe(200)
+    expect(createCredential).not.toHaveBeenCalled()
+    const retryHeaders = new Headers((calls[1]!.init as RequestInit).headers)
+    expect(retryHeaders.get('Authorization')).toBe('event-credential')
+    expect(events).toEqual([
+      'challenge:abc',
+      '*:challenge.received',
+      'credential:event-credential',
+      '*:credential.created',
+      'response:200',
+      '*:payment.response',
+    ])
+  })
+
+  test('uses the first challenge event credential', async () => {
+    const events: string[] = []
+    const createCredential = vi.fn(async () => 'method-credential')
+    const method = { ...noopMethod, createCredential }
+    let callCount = 0
+    const calls: { init: RequestInit | undefined }[] = []
+    const mockFetch: typeof globalThis.fetch = async (_input, init) => {
+      calls.push({ init })
+      callCount++
+      if (callCount === 1) return make402()
+      return new Response('OK', { status: 200 })
+    }
+    const eventDispatcher = Fetch.createEventDispatcher<[typeof method]>()
+    eventDispatcher.on('challenge.received', () => {
+      events.push('first')
+      return 'first-credential'
+    })
+    eventDispatcher.on('challenge.received', () => {
+      events.push('second')
+      return 'second-credential'
+    })
+
+    const fetch = Fetch.from({
+      eventDispatcher,
+      fetch: mockFetch,
+      methods: [method],
+    })
+
+    await fetch('https://example.com/api')
+
+    expect(createCredential).not.toHaveBeenCalled()
+    const retryHeaders = new Headers((calls[1]!.init as RequestInit).headers)
+    expect(retryHeaders.get('Authorization')).toBe('first-credential')
+    expect(events).toEqual(['first'])
+  })
+
+  test('emits payment.failed when automatic payment handling rejects', async () => {
+    const events: string[] = []
+    const createCredential = vi.fn(async () => 'credential')
+    const mockFetch = vi.fn(async () =>
+      make402({ expires: new Date(Date.now() - 60_000).toISOString() }),
+    )
+    const fetch = Fetch.from({
+      fetch: mockFetch as typeof globalThis.fetch,
+      methods: [{ ...noopMethod, createCredential }],
+      events: {
+        '*'(event) {
+          events.push(`*:${event.name}`)
+        },
+        'payment.failed'(payload) {
+          events.push(
+            `failed:${payload.error instanceof Errors.PaymentExpiredError}:${payload.challenge?.id}`,
+          )
+          throw new Error('observer failed')
+        },
+      },
+    })
+
+    await expect(fetch('https://example.com/api')).rejects.toThrow(Errors.PaymentExpiredError)
+    expect(createCredential).not.toHaveBeenCalled()
+    expect(events).toEqual(['failed:true:abc', '*:payment.failed'])
+  })
+
   test('preserves existing headers on retry', async () => {
     let callCount = 0
     const calls: { init: RequestInit | undefined }[] = []

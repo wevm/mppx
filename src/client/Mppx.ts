@@ -29,6 +29,27 @@ export type Mppx<
     context?: AnyContextFor<FlattenMethods<methods>> | undefined,
     options?: createCredential.Options | undefined,
   ) => Promise<string>
+  /** Register a client event handler by canonical event name. */
+  on<name extends Fetch.ClientEventName<FlattenMethods<methods>>>(
+    name: name,
+    handler: Fetch.ClientEventHandler<FlattenMethods<methods>, name>,
+  ): Fetch.Unsubscribe
+  /** Register a handler for received payment challenges. */
+  onChallengeReceived(
+    handler: Fetch.ClientEventHandler<FlattenMethods<methods>, 'challenge.received'>,
+  ): Fetch.Unsubscribe
+  /** Register a handler for created credentials. */
+  onCredentialCreated(
+    handler: Fetch.ClientEventHandler<FlattenMethods<methods>, 'credential.created'>,
+  ): Fetch.Unsubscribe
+  /** Register a handler for failed automatic payment handling. */
+  onPaymentFailed(
+    handler: Fetch.ClientEventHandler<FlattenMethods<methods>, 'payment.failed'>,
+  ): Fetch.Unsubscribe
+  /** Register a handler for payment retry responses. */
+  onPaymentResponse(
+    handler: Fetch.ClientEventHandler<FlattenMethods<methods>, 'payment.response'>,
+  ): Fetch.Unsubscribe
 }
 
 /**
@@ -71,6 +92,7 @@ export function create<
   const rawFetch = config.fetch ?? globalThis.fetch
   const methods = config.methods.flat() as unknown as FlattenMethods<methods>
   const acceptPayment = AcceptPayment.resolve(methods, config.paymentPreferences)
+  const events = Fetch.createEventDispatcher<FlattenMethods<methods>>(config.events)
 
   const resolvedOnChallenge = onChallenge as Fetch.from.Config<
     FlattenMethods<methods>
@@ -79,17 +101,48 @@ export function create<
     acceptPayment,
     acceptPaymentPolicy,
     ...(config.fetch && { fetch: config.fetch }),
+    eventDispatcher: events,
     ...(resolvedOnChallenge && { onChallenge: resolvedOnChallenge }),
     methods,
   } satisfies Fetch.from.Config<FlattenMethods<methods>>
   const fetch = Fetch.from<FlattenMethods<methods>>(config_fetch)
 
   if (polyfill) Fetch.polyfill(config_fetch)
+
+  function onChallengeReceived(
+    handler: Fetch.ClientEventHandler<FlattenMethods<methods>, 'challenge.received'>,
+  ) {
+    return events.on('challenge.received', handler)
+  }
+
+  function onCredentialCreated(
+    handler: Fetch.ClientEventHandler<FlattenMethods<methods>, 'credential.created'>,
+  ) {
+    return events.on('credential.created', handler)
+  }
+
+  function onPaymentFailed(
+    handler: Fetch.ClientEventHandler<FlattenMethods<methods>, 'payment.failed'>,
+  ) {
+    return events.on('payment.failed', handler)
+  }
+
+  function onPaymentResponse(
+    handler: Fetch.ClientEventHandler<FlattenMethods<methods>, 'payment.response'>,
+  ) {
+    return events.on('payment.response', handler)
+  }
+
   return {
     fetch,
     rawFetch,
     methods,
     transport,
+    on: events.on,
+    onChallengeReceived,
+    onCredentialCreated,
+    onPaymentFailed,
+    onPaymentResponse,
     async createCredential(
       response: Transport.ResponseOf<transport>,
       context?: unknown,
@@ -100,23 +153,55 @@ export function create<
         : [transport.getChallenge(response as never)]
       const preferences = resolveChallengePreferences(acceptPayment.entries, options?.acceptPayment)
 
-      const selected = AcceptPayment.selectChallenge(challenges, methods, preferences)
-      if (!selected)
-        throw new Error(
-          `No method found for challenges: ${challenges.map((challenge) => `${challenge.method}.${challenge.intent}`).join(', ')}. Available: ${methods.map((m) => `${m.name}.${m.intent}`).join(', ')}`,
+      let challenge: Challenge.Challenge | undefined
+      let mi: FlattenMethods<methods>[number] | undefined
+      try {
+        const selected = AcceptPayment.selectChallenge(challenges, methods, preferences)
+        if (!selected)
+          throw new Error(
+            `No method found for challenges: ${challenges.map((challenge) => `${challenge.method}.${challenge.intent}`).join(', ')}. Available: ${methods.map((m) => `${m.name}.${m.intent}`).join(', ')}`,
+          )
+
+        challenge = selected.challenge
+        mi = selected.method as FlattenMethods<methods>[number]
+        if (challenge.expires) Expires.assert(challenge.expires, challenge.id)
+
+        const createCredential = async (overrideContext?: AnyContextFor<FlattenMethods<methods>>) =>
+          createCredentialForMethod(challenge!, mi!, overrideContext ?? context)
+        const eventCredential = await events.emit(
+          'challenge.received',
+          Object.freeze({
+            challenge,
+            challenges,
+            createCredential,
+            method: mi,
+            response: response as Response,
+          }),
         )
-
-      const { challenge, method: mi } = selected
-      if (challenge.expires) Expires.assert(challenge.expires, challenge.id)
-
-      const parsedContext =
-        mi.context && context !== undefined ? mi.context.parse(context) : undefined
-
-      return mi.createCredential(
-        parsedContext !== undefined
-          ? { challenge, context: parsedContext }
-          : ({ challenge } as never),
-      )
+        const credential = eventCredential ?? (await createCredential())
+        await events.emit(
+          'credential.created',
+          Object.freeze({
+            challenge,
+            credential,
+            method: mi,
+            response: response as Response,
+          }),
+        )
+        return credential
+      } catch (error) {
+        await events.emit(
+          'payment.failed',
+          Object.freeze({
+            challenge,
+            challenges,
+            error,
+            method: mi,
+            response: response as Response,
+          }),
+        )
+        throw error
+      }
     },
   }
 }
@@ -155,6 +240,8 @@ export declare namespace create {
     acceptPaymentPolicy?: Fetch.from.Config['acceptPaymentPolicy'] | undefined
     /** Custom fetch function to wrap. Defaults to `globalThis.fetch`. */
     fetch?: typeof globalThis.fetch
+    /** Client payment events for logging, analytics, and credential interception. */
+    events?: Fetch.ClientEvents<FlattenMethods<methods>> | undefined
     /** Called when a 402 challenge is received, before credential creation. */
     onChallenge?:
       | ((
@@ -208,4 +295,15 @@ function resolveChallengePreferences(
 ): readonly AcceptPayment.Entry[] {
   if (!override) return fallback
   return typeof override === 'string' ? AcceptPayment.parse(override) : override
+}
+
+async function createCredentialForMethod(
+  challenge: Challenge.Challenge,
+  mi: Method.AnyClient,
+  context: unknown,
+): Promise<string> {
+  const parsedContext = mi.context && context !== undefined ? mi.context.parse(context) : undefined
+  return mi.createCredential(
+    parsedContext !== undefined ? { challenge, context: parsedContext } : ({ challenge } as never),
+  )
 }

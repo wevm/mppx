@@ -1,6 +1,7 @@
 import type { Account } from 'viem'
 import { describe, expectTypeOf, test } from 'vp/test'
 
+import * as Challenge from '../../Challenge.js'
 import { charge } from '../../tempo/client/Charge.js'
 import * as Fetch from './Fetch.js'
 
@@ -43,6 +44,39 @@ describe('Fetch.from', () => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ foo: 'bar' }),
     })
+  })
+
+  test('behavior: events infer payload types from methods', () => {
+    const method = charge()
+    const dispatcher = Fetch.createEventDispatcher<[typeof method]>()
+    dispatcher.on('credential.created', (payload) => {
+      expectTypeOf(payload.method.intent).toEqualTypeOf<'charge'>()
+    })
+
+    const fetch = Fetch.from({
+      methods: [method],
+      events: {
+        '*'(event) {
+          if (event.name === 'challenge.received')
+            expectTypeOf(event.payload.challenge).toEqualTypeOf<Challenge.Challenge>()
+        },
+        'challenge.received'(payload) {
+          expectTypeOf(payload.method.intent).toEqualTypeOf<'charge'>()
+          return payload.createCredential({ account: {} as Account })
+        },
+        'credential.created'(payload) {
+          expectTypeOf(payload.credential).toEqualTypeOf<string>()
+        },
+        'payment.failed'(payload) {
+          expectTypeOf(payload.error).toEqualTypeOf<unknown>()
+        },
+        'payment.response'(payload) {
+          expectTypeOf(payload.response).toEqualTypeOf<Response>()
+        },
+      },
+    })
+
+    expectTypeOf(fetch).toBeFunction()
   })
 })
 
