@@ -10,12 +10,10 @@ import * as ChannelStore from '../../session/ChannelStore.js'
 import { getChannelState } from '../Chain.js'
 import * as Channel from '../Channel.js'
 import {
-  createCloseCredential,
-  createOpen,
-  createOpenCredential,
-  createTopUp,
-  createTopUpCredential,
-  createVoucherCredential,
+  createClosePayload,
+  createOpenPayload,
+  createTopUpPayload,
+  createVoucherPayload,
 } from '../client/ChannelOps.js'
 import { tip20ChannelEscrow } from '../Constants.js'
 import { escrowAbi } from '../escrow.abi.js'
@@ -90,14 +88,14 @@ describe.runIf(isPrecompileTestnet)('precompile server session chain integration
       unitType: 'request',
       getClient: () => client,
     })
-    const open = await createOpen(client, payer, {
+    const payload = await createOpenPayload(client, payer, {
       chainId: chain.id,
       deposit: uint96(1_000n),
       initialAmount: uint96(100n),
       payee: payee.address,
       token: asset,
     })
-    const payload = createOpenCredential(open, uint96(100n))
+    if (payload.action !== 'open') throw new Error('expected open payload')
 
     const receipt = await method.verify({
       credential: {
@@ -157,14 +155,14 @@ describe.runIf(isPrecompileTestnet)('precompile server session chain integration
       unitType: 'request',
       getClient: () => client,
     })
-    const open = await createOpen(client, payer, {
+    const openPayload = await createOpenPayload(client, payer, {
       chainId: chain.id,
       deposit: uint96(500n),
       initialAmount: uint96(100n),
       payee: payee.address,
       token: asset,
     })
-    const openPayload = createOpenCredential(open, uint96(100n))
+    if (openPayload.action !== 'open') throw new Error('expected open payload')
     await method.verify({
       credential: {
         challenge: {
@@ -182,12 +180,13 @@ describe.runIf(isPrecompileTestnet)('precompile server session chain integration
       } as never,
     })
 
-    const topUp = await createTopUp(client, payer, {
-      additionalDeposit: uint96(700n),
-      chainId: chain.id,
-      descriptor: open.descriptor,
-    })
-    const topUpPayload = createTopUpCredential(topUp, uint96(700n))
+    const topUpPayload = await createTopUpPayload(
+      client,
+      payer,
+      openPayload.descriptor,
+      uint96(700n),
+      chain.id,
+    )
     const receipt = await method.verify({
       credential: {
         challenge: {
@@ -256,12 +255,7 @@ describe.runIf(isPrecompileTestnet)('precompile server session chain integration
       unitType: 'request',
       getClient: () => client,
     })
-    const payload = await createVoucherCredential(client, payer, {
-      chainId: chain.id,
-      cumulativeAmount: uint96(300n),
-      descriptor,
-      escrow: tip20ChannelEscrow,
-    })
+    const payload = await createVoucherPayload(client, payer, descriptor, uint96(300n), chain.id)
 
     const receipt = await method.verify({
       credential: {
@@ -306,12 +300,8 @@ describe.runIf(isPrecompileTestnet)('precompile server session chain integration
     const store = ChannelStore.fromStore(rawStore as never)
     const { channelId, descriptor, deposit } = await openRealChannel(1_000n)
 
-    const voucher = await createVoucherCredential(client, payer, {
-      chainId: chain.id,
-      cumulativeAmount: uint96(250n),
-      descriptor,
-      escrow: tip20ChannelEscrow,
-    })
+    const voucher = await createVoucherPayload(client, payer, descriptor, uint96(250n), chain.id)
+    if (voucher.action !== 'voucher') throw new Error('expected voucher payload')
     await store.updateChannel(channelId, () => ({
       backend: 'precompile',
       channelId,
@@ -392,12 +382,7 @@ describe.runIf(isPrecompileTestnet)('precompile server session chain integration
       unitType: 'request',
       getClient: () => client,
     })
-    const payload = await createCloseCredential(client, payer, {
-      chainId: chain.id,
-      cumulativeAmount: uint96(300n),
-      descriptor,
-      escrow: tip20ChannelEscrow,
-    })
+    const payload = await createClosePayload(client, payer, descriptor, uint96(300n), chain.id)
 
     const receipt = await method.verify({
       credential: {
@@ -460,12 +445,7 @@ describe.runIf(isPrecompileTestnet)('precompile server session chain integration
       unitType: 'request',
       getClient: () => client,
     })
-    const payload = await createCloseCredential(client, payer, {
-      chainId: chain.id,
-      cumulativeAmount: uint96(300n),
-      descriptor,
-      escrow: tip20ChannelEscrow,
-    })
+    const payload = await createClosePayload(client, payer, descriptor, uint96(300n), chain.id)
 
     const receipt = await method.verify({
       credential: {

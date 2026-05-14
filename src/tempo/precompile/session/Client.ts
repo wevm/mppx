@@ -7,17 +7,15 @@ import * as Method from '../../../Method.js'
 import * as Account from '../../../viem/Account.js'
 import * as Client from '../../../viem/Client.js'
 import * as z from '../../../zod.js'
+import { resolveChainId } from '../../client/ChannelOps.js'
 import * as defaults from '../../internal/defaults.js'
 import * as Methods from '../../Methods.js'
 import * as Chain from '../Chain.js'
 import * as Channel from '../Channel.js'
 import {
-  createOpen,
-  createOpenCredential,
-  createTopUp,
-  createTopUpCredential,
-  createVoucherCredential,
-  type OpenResult,
+  createOpenPayload,
+  createTopUpPayload,
+  createVoucherPayload,
 } from '../client/ChannelOps.js'
 import { tip20ChannelEscrow } from '../Constants.js'
 import type { SessionCredentialPayload, Uint96 } from '../Types.js'
@@ -129,10 +127,8 @@ export function session(parameters: session.Parameters = {}) {
     account: viem_Account,
     context?: SessionContext,
   ): Promise<string> {
-    const methodDetails = challenge.request.methodDetails as
-      | { chainId?: number; feePayer?: boolean }
-      | undefined
-    const chainId = methodDetails?.chainId ?? 0
+    const methodDetails = challenge.request.methodDetails as { feePayer?: boolean } | undefined
+    const chainId = resolveChainId(challenge)
     const client = await getClient({ chainId })
     const payee = challenge.request.recipient as Address
     const token = challenge.request.currency as Address
@@ -159,12 +155,7 @@ export function session(parameters: session.Parameters = {}) {
         throw new Error(`Channel ${channelId} cannot be reused (pending close request).`)
       const cumulativeAmount =
         parseContextAmount(context, decimals) ?? uint96(state.settled + amount)
-      payload = await createVoucherCredential(client, account, {
-        chainId,
-        cumulativeAmount,
-        descriptor: context.descriptor,
-        escrow,
-      })
+      payload = await createVoucherPayload(client, account, context.descriptor, cumulativeAmount, chainId)
       const entry: ChannelEntry = {
         channelId,
         cumulativeAmount,
@@ -178,12 +169,7 @@ export function session(parameters: session.Parameters = {}) {
       notifyUpdate(entry)
     } else if (existing?.opened) {
       const cumulativeAmount = uint96(existing.cumulativeAmount + amount)
-      payload = await createVoucherCredential(client, account, {
-        chainId,
-        cumulativeAmount,
-        descriptor: existing.descriptor,
-        escrow,
-      })
+      payload = await createVoucherPayload(client, account, existing.descriptor, cumulativeAmount, chainId)
       existing.cumulativeAmount = cumulativeAmount
       notifyUpdate(existing)
     } else {
@@ -204,28 +190,27 @@ export function session(parameters: session.Parameters = {}) {
           )
         })(),
       )
-      const open = await createOpen(client, account, {
+      payload = await createOpenPayload(client, account, {
         authorizedSigner: parameters.authorizedSigner,
         chainId,
         deposit,
-        escrow,
         feePayer: methodDetails?.feePayer,
         initialAmount: amount,
         operator: parameters.operator,
         payee,
         token,
       })
+      if (payload.action !== 'open') throw new Error('expected open payload')
       const entry: ChannelEntry = {
-        channelId: open.channelId,
+        channelId: payload.channelId,
         cumulativeAmount: amount,
-        descriptor: open.descriptor,
+        descriptor: payload.descriptor,
         escrow,
         chainId,
         opened: true,
       }
       channels.set(key, entry)
-      channelIdToKey.set(open.channelId, key)
-      payload = createOpenCredential(open, amount)
+      channelIdToKey.set(payload.channelId, key)
       notifyUpdate(entry)
     }
 
@@ -237,8 +222,7 @@ export function session(parameters: session.Parameters = {}) {
     account: viem_Account,
     context: SessionContext,
   ): Promise<string> {
-    const methodDetails = challenge.request.methodDetails as { chainId?: number } | undefined
-    const chainId = methodDetails?.chainId ?? 0
+    const chainId = resolveChainId(challenge)
     const client = await getClient({ chainId })
     const escrow = resolveEscrow(challenge, parameters.escrow)
     const action = context.action!
@@ -253,22 +237,18 @@ export function session(parameters: session.Parameters = {}) {
         const cumulativeAmount = parseContextAmount(context, decimals)
         if (cumulativeAmount === undefined)
           throw new Error('cumulativeAmount required for open action')
-        payload = createOpenCredential(
-          {
-            channelId,
-            descriptor,
-            transaction: context.transaction as `0x${string}`,
-            voucherSignature: (
-              await createVoucherCredential(client, account, {
-                chainId,
-                cumulativeAmount,
-                descriptor,
-                escrow,
-              })
-            ).signature,
-          } satisfies OpenResult,
-          cumulativeAmount,
-        )
+        const voucher = await createVoucherPayload(client, account, descriptor, cumulativeAmount, chainId)
+        if (voucher.action !== 'voucher') throw new Error('expected voucher payload')
+        payload = {
+          action: 'open',
+          type: 'transaction',
+          channelId,
+          transaction: context.transaction as `0x${string}`,
+          signature: voucher.signature,
+          descriptor,
+          cumulativeAmount: cumulativeAmount.toString(),
+          authorizedSigner: descriptor.authorizedSigner,
+        }
         break
       }
       case 'topUp': {
@@ -285,16 +265,13 @@ export function session(parameters: session.Parameters = {}) {
             additionalDeposit: additionalDeposit.toString(),
           }
         } else {
-          payload = createTopUpCredential(
-            await createTopUp(client, account, {
-              additionalDeposit,
-              chainId,
-              descriptor,
-              escrow,
-              feePayer: (challenge.request.methodDetails as { feePayer?: boolean } | undefined)
-                ?.feePayer,
-            }),
+          payload = await createTopUpPayload(
+            client,
+            account,
+            descriptor,
             additionalDeposit,
+            chainId,
+            (challenge.request.methodDetails as { feePayer?: boolean } | undefined)?.feePayer,
           )
         }
         break
@@ -303,24 +280,15 @@ export function session(parameters: session.Parameters = {}) {
         const cumulativeAmount = parseContextAmount(context, decimals)
         if (cumulativeAmount === undefined)
           throw new Error('cumulativeAmount required for voucher action')
-        payload = await createVoucherCredential(client, account, {
-          chainId,
-          cumulativeAmount,
-          descriptor,
-          escrow,
-        })
+        payload = await createVoucherPayload(client, account, descriptor, cumulativeAmount, chainId)
         break
       }
       case 'close': {
         const cumulativeAmount = parseContextAmount(context, decimals)
         if (cumulativeAmount === undefined)
           throw new Error('cumulativeAmount required for close action')
-        const voucher = await createVoucherCredential(client, account, {
-          chainId,
-          cumulativeAmount,
-          descriptor,
-          escrow,
-        })
+        const voucher = await createVoucherPayload(client, account, descriptor, cumulativeAmount, chainId)
+        if (voucher.action !== 'voucher') throw new Error('expected voucher payload')
         payload = { ...voucher, action: 'close' }
         break
       }
@@ -344,7 +312,7 @@ export function session(parameters: session.Parameters = {}) {
   return Method.toClient(Methods.session, {
     context: sessionContextSchema,
     async createCredential({ challenge, context }) {
-      const chainId = challenge.request.methodDetails?.chainId ?? 0
+      const chainId = resolveChainId(challenge)
       const client = await getClient({ chainId })
       const account = getAccount(client, context)
 

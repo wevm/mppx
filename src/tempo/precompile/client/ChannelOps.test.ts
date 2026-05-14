@@ -35,40 +35,17 @@ const descriptor = {
 const channelId = Channel.computeId({ ...descriptor, chainId, escrow: tip20ChannelEscrow })
 
 describe('precompile client ChannelOps credential builders', () => {
-  test('creates an open credential from a signed open result', () => {
-    const initialAmount = Types.uint96(100n)
-    const payload = ChannelOps.createOpenCredential(
-      {
-        channelId,
-        descriptor,
-        transaction: '0x1234',
-        voucherSignature: '0xabcd',
-      },
-      initialAmount,
-    )
-
-    expect(payload).toEqual({
-      action: 'open',
-      type: 'transaction',
-      channelId,
-      transaction: '0x1234',
-      signature: '0xabcd',
-      descriptor,
-      cumulativeAmount: '100',
-      authorizedSigner: descriptor.authorizedSigner,
-    })
-  })
-
   test('creates a verifiable voucher credential for an existing precompile channel', async () => {
     const cumulativeAmount = Types.uint96(250n)
-    const payload = await ChannelOps.createVoucherCredential(client, account, {
-      chainId,
-      cumulativeAmount,
+    const payload = await ChannelOps.createVoucherPayload(
+      client,
+      account,
       descriptor,
-      escrow: tip20ChannelEscrow,
-    })
+      cumulativeAmount,
+      chainId,
+    )
+    if (payload.action !== 'voucher') throw new Error('expected voucher payload')
 
-    expect(payload.action).toBe('voucher')
     expect(payload.channelId).toBe(channelId)
     expect(payload.descriptor).toEqual(descriptor)
     expect(payload.cumulativeAmount).toBe('250')
@@ -82,27 +59,6 @@ describe('precompile client ChannelOps credential builders', () => {
     ).toBe(true)
   })
 
-  test('creates a top-up credential from a signed top-up result', () => {
-    const additionalDeposit = Types.uint96(500n)
-    const payload = ChannelOps.createTopUpCredential(
-      {
-        channelId,
-        descriptor,
-        transaction: '0x5678',
-      },
-      additionalDeposit,
-    )
-
-    expect(payload).toEqual({
-      action: 'topUp',
-      type: 'transaction',
-      channelId,
-      transaction: '0x5678',
-      descriptor,
-      additionalDeposit: '500',
-    })
-  })
-
   test('uses the payer as voucher signer when descriptor authorizedSigner is zero', async () => {
     const zeroSignerDescriptor = {
       ...descriptor,
@@ -114,12 +70,14 @@ describe('precompile client ChannelOps credential builders', () => {
       escrow: tip20ChannelEscrow,
     })
     const cumulativeAmount = Types.uint96(275n)
-    const payload = await ChannelOps.createVoucherCredential(client, account, {
-      chainId,
+    const payload = await ChannelOps.createVoucherPayload(
+      client,
+      account,
+      zeroSignerDescriptor,
       cumulativeAmount,
-      descriptor: zeroSignerDescriptor,
-      escrow: tip20ChannelEscrow,
-    })
+      chainId,
+    )
+    if (payload.action !== 'voucher') throw new Error('expected voucher payload')
 
     expect(payload.channelId).toBe(zeroSignerChannelId)
     expect(
@@ -134,14 +92,15 @@ describe('precompile client ChannelOps credential builders', () => {
 
   test('creates a close credential with a verifiable voucher signature', async () => {
     const cumulativeAmount = Types.uint96(300n)
-    const payload = await ChannelOps.createCloseCredential(client, account, {
-      chainId,
-      cumulativeAmount,
+    const payload = await ChannelOps.createClosePayload(
+      client,
+      account,
       descriptor,
-      escrow: tip20ChannelEscrow,
-    })
+      cumulativeAmount,
+      chainId,
+    )
+    if (payload.action !== 'close') throw new Error('expected close payload')
 
-    expect(payload.action).toBe('close')
     expect(payload.channelId).toBe(channelId)
     expect(payload.cumulativeAmount).toBe('300')
     expect(

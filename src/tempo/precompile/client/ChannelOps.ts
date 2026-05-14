@@ -1,3 +1,11 @@
+/**
+ * Shared client-side precompile channel operations.
+ *
+ * Provides the low-level helpers that both `precompile.session()` and
+ * `precompile.sessionManager()` rely on: channel ID computation,
+ * transaction-bound descriptor construction, on-chain open/top-up payload
+ * construction, voucher/close payload serialization, and transaction signing.
+ */
 import { Hex } from 'ox'
 import { encodeFunctionData, zeroAddress, type Account, type Address, type Client } from 'viem'
 import { prepareTransactionRequest, signTransaction } from 'viem/actions'
@@ -5,21 +13,8 @@ import { prepareTransactionRequest, signTransaction } from 'viem/actions'
 import * as Channel from '../Channel.js'
 import { tip20ChannelEscrow } from '../Constants.js'
 import { escrowAbi } from '../escrow.abi.js'
-import type { SessionCredentialPayload, Uint96 } from '../Types.js'
+import type { SessionCredentialPayload } from '../Types.js'
 import * as Voucher from '../Voucher.js'
-
-export type OpenResult = {
-  channelId: Hex.Hex
-  descriptor: Channel.ChannelDescriptor
-  transaction: Hex.Hex
-  voucherSignature: Hex.Hex
-}
-
-export type TopUpResult = {
-  channelId: Hex.Hex
-  descriptor: Channel.ChannelDescriptor
-  transaction: Hex.Hex
-}
 
 function voucherAuthorizedSigner(address: Address): Address | undefined {
   return address.toLowerCase() === zeroAddress ? undefined : address
@@ -29,26 +24,73 @@ function defaultAuthorizedSigner(account: Account): Address {
   return (account as unknown as { accessKeyAddress?: Address }).accessKeyAddress ?? account.address
 }
 
+/** Signs and creates a TIP-1034 voucher credential payload for an existing channel. */
+export async function createVoucherPayload(
+  client: Client,
+  account: Account,
+  descriptor: Channel.ChannelDescriptor,
+  cumulativeAmount: bigint,
+  chainId: number,
+): Promise<SessionCredentialPayload> {
+  const channelId = Channel.computeId({
+    ...descriptor,
+    chainId,
+    escrow: tip20ChannelEscrow,
+  })
+  const signature = await Voucher.signVoucher(
+    client,
+    account,
+    { channelId, cumulativeAmount },
+    tip20ChannelEscrow,
+    chainId,
+    voucherAuthorizedSigner(descriptor.authorizedSigner),
+  )
+
+  return {
+    action: 'voucher',
+    channelId,
+    descriptor,
+    cumulativeAmount: cumulativeAmount.toString(),
+    signature,
+  }
+}
+
+/** Signs and creates a TIP-1034 close credential payload for an existing channel. */
+export async function createClosePayload(
+  client: Client,
+  account: Account,
+  descriptor: Channel.ChannelDescriptor,
+  cumulativeAmount: bigint,
+  chainId: number,
+): Promise<SessionCredentialPayload> {
+  const voucher = await createVoucherPayload(client, account, descriptor, cumulativeAmount, chainId)
+  if (voucher.action !== 'voucher') throw new Error('expected voucher payload')
+  return {
+    action: 'close',
+    channelId: voucher.channelId,
+    descriptor,
+    cumulativeAmount: voucher.cumulativeAmount,
+    signature: voucher.signature,
+  }
+}
+
 /**
- * Prepares and signs a one-call TIP-1034 channel-open transaction, computes the
- * transaction-bound `expiringNonceHash` via viem, and signs the initial voucher.
+ * Prepares, signs, and creates a TIP-1034 open credential payload.
  */
-export async function createOpen(
+export async function createOpenPayload(
   client: Client,
   account: Account,
   parameters: {
     authorizedSigner?: Address | undefined
     chainId: number
-    deposit: Uint96
-    escrow?: Address | undefined
+    deposit: bigint
     feePayer?: boolean | undefined
-    initialAmount: Uint96
+    initialAmount: bigint
     operator?: Address | undefined
     payee: Address
     token: Address
   },
-): Promise<OpenResult> {
-  const escrow = parameters.escrow ?? tip20ChannelEscrow
+): Promise<SessionCredentialPayload> {
   const authorizedSigner = parameters.authorizedSigner ?? defaultAuthorizedSigner(account)
   const operator = parameters.operator ?? '0x0000000000000000000000000000000000000000'
   const salt = Hex.random(32)
@@ -60,7 +102,7 @@ export async function createOpen(
   })
   const prepared = await prepareTransactionRequest(client, {
     account,
-    calls: [{ to: escrow, data: openData }],
+    calls: [{ to: tip20ChannelEscrow, data: openData }],
     ...(parameters.feePayer ? { feePayer: true } : {}),
     feeToken: parameters.token,
   } as never)
@@ -81,143 +123,67 @@ export async function createOpen(
   const channelId = Channel.computeId({
     ...descriptor,
     chainId: parameters.chainId,
-    escrow,
+    escrow: tip20ChannelEscrow,
   })
-  const voucherSignature = await Voucher.signVoucher(
+  const signature = await Voucher.signVoucher(
     client,
     account,
     { channelId, cumulativeAmount: parameters.initialAmount },
-    escrow,
+    tip20ChannelEscrow,
     parameters.chainId,
     voucherAuthorizedSigner(authorizedSigner),
   )
   const transaction = (await signTransaction(client, prepared as never)) as Hex.Hex
 
-  return { channelId, descriptor, transaction, voucherSignature }
-}
-
-/** Creates a TIP-1034 open credential payload from a signed open transaction. */
-export function createOpenCredential(
-  result: OpenResult,
-  initialAmount: Uint96,
-): Extract<SessionCredentialPayload, { action: 'open' }> {
   return {
     action: 'open',
     type: 'transaction',
-    channelId: result.channelId,
-    transaction: result.transaction,
-    signature: result.voucherSignature,
-    descriptor: result.descriptor,
-    cumulativeAmount: initialAmount.toString(),
-    authorizedSigner: result.descriptor.authorizedSigner,
-  }
-}
-
-/** Signs and creates a TIP-1034 voucher credential payload for an existing channel. */
-export async function createVoucherCredential(
-  client: Client,
-  account: Account,
-  parameters: {
-    chainId: number
-    cumulativeAmount: Uint96
-    descriptor: Channel.ChannelDescriptor
-    escrow?: Address | undefined
-  },
-): Promise<Extract<SessionCredentialPayload, { action: 'voucher' }>> {
-  const escrow = parameters.escrow ?? tip20ChannelEscrow
-  const channelId = Channel.computeId({
-    ...parameters.descriptor,
-    chainId: parameters.chainId,
-    escrow,
-  })
-  const signature = await Voucher.signVoucher(
-    client,
-    account,
-    { channelId, cumulativeAmount: parameters.cumulativeAmount },
-    escrow,
-    parameters.chainId,
-    voucherAuthorizedSigner(parameters.descriptor.authorizedSigner),
-  )
-
-  return {
-    action: 'voucher',
     channelId,
-    descriptor: parameters.descriptor,
-    cumulativeAmount: parameters.cumulativeAmount.toString(),
+    transaction,
     signature,
+    descriptor,
+    cumulativeAmount: parameters.initialAmount.toString(),
+    authorizedSigner: descriptor.authorizedSigner,
   }
 }
 
-/** Prepares and signs a one-call TIP-1034 top-up transaction for an existing channel. */
-export async function createTopUp(
+/** Prepares, signs, and creates a TIP-1034 top-up credential payload. */
+export async function createTopUpPayload(
   client: Client,
   account: Account,
-  parameters: {
-    additionalDeposit: Uint96
-    chainId: number
-    descriptor: Channel.ChannelDescriptor
-    escrow?: Address | undefined
-    feePayer?: boolean | undefined
-  },
-): Promise<TopUpResult> {
-  const escrow = parameters.escrow ?? tip20ChannelEscrow
+  descriptor: Channel.ChannelDescriptor,
+  additionalDeposit: bigint,
+  chainId: number,
+  feePayer?: boolean | undefined,
+): Promise<SessionCredentialPayload> {
   const channelId = Channel.computeId({
-    ...parameters.descriptor,
-    chainId: parameters.chainId,
-    escrow,
+    ...descriptor,
+    chainId,
+    escrow: tip20ChannelEscrow,
   })
   const prepared = await prepareTransactionRequest(client, {
     account,
     calls: [
       {
-        to: escrow,
+        to: tip20ChannelEscrow,
         data: encodeFunctionData({
           abi: escrowAbi,
           functionName: 'topUp',
-          args: [parameters.descriptor, parameters.additionalDeposit],
+          args: [descriptor, additionalDeposit],
         }),
       },
     ],
-    ...(parameters.feePayer ? { feePayer: true } : {}),
-    feeToken: parameters.descriptor.token,
+    ...(feePayer ? { feePayer: true } : {}),
+    feeToken: descriptor.token,
   } as never)
   const transaction = (await signTransaction(client, prepared as never)) as Hex.Hex
 
-  return { channelId, descriptor: parameters.descriptor, transaction }
-}
-
-/** Creates a TIP-1034 top-up credential payload from a signed top-up transaction. */
-export function createTopUpCredential(
-  result: TopUpResult,
-  additionalDeposit: Uint96,
-): Extract<SessionCredentialPayload, { action: 'topUp' }> {
   return {
     action: 'topUp',
     type: 'transaction',
-    channelId: result.channelId,
-    transaction: result.transaction,
-    descriptor: result.descriptor,
+    channelId,
+    transaction,
+    descriptor,
     additionalDeposit: additionalDeposit.toString(),
-  }
-}
-
-/** Signs and creates a TIP-1034 close credential payload for an existing channel. */
-export async function createCloseCredential(
-  client: Client,
-  account: Account,
-  parameters: {
-    chainId: number
-    cumulativeAmount: Uint96
-    descriptor: Channel.ChannelDescriptor
-    escrow?: Address | undefined
-  },
-): Promise<Extract<SessionCredentialPayload, { action: 'close' }>> {
-  const voucher = await createVoucherCredential(client, account, parameters)
-  return {
-    action: 'close',
-    channelId: voucher.channelId,
-    descriptor: voucher.descriptor,
-    cumulativeAmount: voucher.cumulativeAmount,
-    signature: voucher.signature,
   }
 }

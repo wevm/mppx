@@ -136,10 +136,9 @@ describe('precompile client session', () => {
     expect(openDeposit(payload)).toBe(1000n)
   })
 
-  test('prefers local escrow override over challenge escrowContract', async () => {
-    const escrow = '0x0000000000000000000000000000000000000004' as Address
+  test('uses canonical precompile address for open transactions', async () => {
     const challengeEscrow = '0x0000000000000000000000000000000000000005' as Address
-    const method = session({ account, decimals: 0, deposit: '10', escrow, getClient: () => client })
+    const method = session({ account, decimals: 0, deposit: '10', getClient: () => client })
     const payload = deserialize(
       await method.createCredential({
         challenge: makeChallenge({
@@ -153,7 +152,7 @@ describe('precompile client session', () => {
     const transaction = Transaction.deserialize(payload.transaction)
     if (!('calls' in transaction)) throw new Error('expected tempo calls')
     const calls = transaction.calls as readonly { to?: Address; data?: `0x${string}` }[]
-    expect(calls[0]!.to?.toLowerCase()).toBe(escrow.toLowerCase())
+    expect(calls[0]!.to?.toLowerCase()).toBe(tip20ChannelEscrow.toLowerCase())
   })
 
   test('tracks cumulative amount and calls onChannelUpdate in auto mode', async () => {

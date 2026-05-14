@@ -157,7 +157,7 @@ function makeRequest(channelId?: Hex) {
 
 let saltCounter = 0
 
-async function createOpenCredential(
+async function createOpenPayload(
   parameters: {
     deposit?: bigint | undefined
     initialAmount?: bigint | undefined
@@ -335,7 +335,7 @@ describe('precompile server session unit guardrails', () => {
 
   test('rejects open transactions targeting the wrong address', async () => {
     const { method } = createServer()
-    const payload = await createOpenCredential({ escrow: wrongTarget })
+    const payload = await createOpenPayload({ escrow: wrongTarget })
 
     await expect(
       method.verify({
@@ -347,8 +347,8 @@ describe('precompile server session unit guardrails', () => {
 
   test('rejects smuggled extra calls in open transactions', async () => {
     const { method } = createServer()
-    const payload = await createOpenCredential()
-    const tampered = await createOpenCredential()
+    const payload = await createOpenPayload()
+    const tampered = await createOpenPayload()
 
     // Reuse a valid descriptor/signature, but submit a transaction whose calls
     // do not correspond to that descriptor. This exercises the same one-call /
@@ -369,7 +369,7 @@ describe('precompile server session unit guardrails', () => {
 
   test('rejects descriptors that do not match the challenge channel ID', async () => {
     const { method } = createServer()
-    const payload = await createOpenCredential()
+    const payload = await createOpenPayload()
     const badDescriptor = {
       ...payload.descriptor,
       token: '0x0000000000000000000000000000000000000005' as Address,
@@ -388,10 +388,10 @@ describe('precompile server session unit guardrails', () => {
 
   test('rejects invalid initial voucher signatures', async () => {
     const { method } = createServer()
-    const payload = await createOpenCredential()
+    const payload = await createOpenPayload()
     const badSignaturePayload = {
       ...payload,
-      signature: (await createOpenCredential({ account: wrongPayer })).signature,
+      signature: (await createOpenPayload({ account: wrongPayer })).signature,
     }
 
     await expect(
@@ -407,7 +407,7 @@ describe('precompile server session unit guardrails', () => {
 
   test('rejects missing precompile descriptors with a verification error', async () => {
     const { method } = createServer()
-    const payload = await createOpenCredential()
+    const payload = await createOpenPayload()
     const { descriptor: _descriptor, ...payloadWithoutDescriptor } = payload
 
     await expect(
@@ -423,7 +423,7 @@ describe('precompile server session unit guardrails', () => {
 
   test('rejects uint96 overflow in credential amount parsing', async () => {
     const { method } = createServer()
-    const payload = await createOpenCredential()
+    const payload = await createOpenPayload()
 
     await expect(
       method.verify({
@@ -438,7 +438,7 @@ describe('precompile server session unit guardrails', () => {
 
   test('rejects settle when no account is available', async () => {
     const { store } = createServer()
-    const openPayload = await createOpenCredential()
+    const openPayload = await createOpenPayload()
     await persistPrecompileChannel(store, openPayload)
 
     const { settle } = await import('./Session.js')
@@ -449,7 +449,7 @@ describe('precompile server session unit guardrails', () => {
 
   test('rejects settle when sender is not the channel payee or operator', async () => {
     const { store } = createServer()
-    const openPayload = await createOpenCredential()
+    const openPayload = await createOpenPayload()
     await persistPrecompileChannel(store, openPayload)
 
     const { settle } = await import('./Session.js')
@@ -460,7 +460,7 @@ describe('precompile server session unit guardrails', () => {
 
   test('accepts settle sender matching a nonzero precompile operator', async () => {
     const { store } = createServer()
-    const openPayload = await createOpenCredential({
+    const openPayload = await createOpenPayload({
       operator: wrongPayer.address,
     })
     await persistPrecompileChannel(store, openPayload)
@@ -483,7 +483,7 @@ describe('precompile server session unit guardrails', () => {
 
   test('precompile settle fee payer options still enforce payee sender policy', async () => {
     const { store } = createServer()
-    const openPayload = await createOpenCredential()
+    const openPayload = await createOpenPayload()
     await persistPrecompileChannel(store, openPayload)
 
     const { settle } = await import('./Session.js')
@@ -496,7 +496,7 @@ describe('precompile server session unit guardrails', () => {
 
   test('accepts precompile settle fee token options', async () => {
     const { store } = createServer()
-    const openPayload = await createOpenCredential()
+    const openPayload = await createOpenPayload()
     await persistPrecompileChannel(store, openPayload, {
       payee: payer.address,
     })
@@ -522,7 +522,7 @@ describe('precompile server session unit guardrails', () => {
 
   test('accepts settle account override matching the channel payee', async () => {
     const { store } = createServer()
-    const openPayload = await createOpenCredential()
+    const openPayload = await createOpenPayload()
     await persistPrecompileChannel(store, openPayload, {
       payee: wrongPayer.address,
     })
@@ -548,7 +548,7 @@ describe('precompile server session unit guardrails', () => {
 
   test('rejects precompile settle fee-payer policy violations', async () => {
     const { store } = createServer()
-    const openPayload = await createOpenCredential()
+    const openPayload = await createOpenPayload()
     await persistPrecompileChannel(store, openPayload, {
       payee: payer.address,
     })
@@ -566,7 +566,7 @@ describe('precompile server session unit guardrails', () => {
   test('rejects close voucher below local spent', async () => {
     const rawStore = Store.memory()
     const store = ChannelStore.fromStore(rawStore as never)
-    const openPayload = await createOpenCredential()
+    const openPayload = await createOpenPayload()
     await persistPrecompileChannel(store, openPayload, {
       payee: payer.address,
       spent: 150n,
@@ -582,11 +582,7 @@ describe('precompile server session unit guardrails', () => {
       unitType: 'request',
       getClient: () => createStateClient(payer),
     })
-    const payload = await ClientOps.createCloseCredential(createSigningClient(), payer, {
-      chainId,
-      cumulativeAmount: Types.uint96(100n),
-      descriptor: openPayload.descriptor,
-    })
+    const payload = await ClientOps.createClosePayload(createSigningClient(), payer, openPayload.descriptor, Types.uint96(100n), chainId)
 
     await expect(
       method.verify({
@@ -602,7 +598,7 @@ describe('precompile server session unit guardrails', () => {
   test('rejects close voucher below on-chain settled', async () => {
     const rawStore = Store.memory()
     const store = ChannelStore.fromStore(rawStore as never)
-    const openPayload = await createOpenCredential()
+    const openPayload = await createOpenPayload()
     await persistPrecompileChannel(store, openPayload, {
       payee: payer.address,
     })
@@ -622,11 +618,7 @@ describe('precompile server session unit guardrails', () => {
           closeRequestedAt: 0,
         }),
     })
-    const payload = await ClientOps.createCloseCredential(createSigningClient(), payer, {
-      chainId,
-      cumulativeAmount: Types.uint96(99n),
-      descriptor: openPayload.descriptor,
-    })
+    const payload = await ClientOps.createClosePayload(createSigningClient(), payer, openPayload.descriptor, Types.uint96(99n), chainId)
 
     await expect(
       method.verify({
@@ -642,7 +634,7 @@ describe('precompile server session unit guardrails', () => {
   test('rejects close capture exceeding on-chain precompile deposit', async () => {
     const rawStore = Store.memory()
     const store = ChannelStore.fromStore(rawStore as never)
-    const openPayload = await createOpenCredential()
+    const openPayload = await createOpenPayload()
     await persistPrecompileChannel(store, openPayload, {
       payee: payer.address,
       spent: 100n,
@@ -663,11 +655,7 @@ describe('precompile server session unit guardrails', () => {
           closeRequestedAt: 0,
         }),
     })
-    const payload = await ClientOps.createCloseCredential(createSigningClient(), payer, {
-      chainId,
-      cumulativeAmount: Types.uint96(100n),
-      descriptor: openPayload.descriptor,
-    })
+    const payload = await ClientOps.createClosePayload(createSigningClient(), payer, openPayload.descriptor, Types.uint96(100n), chainId)
 
     await expect(
       method.verify({
@@ -683,12 +671,8 @@ describe('precompile server session unit guardrails', () => {
   test('rejects close for locally finalized and pending precompile channels', async () => {
     const rawStore = Store.memory()
     const store = ChannelStore.fromStore(rawStore as never)
-    const openPayload = await createOpenCredential()
-    const payload = await ClientOps.createCloseCredential(createSigningClient(), payer, {
-      chainId,
-      cumulativeAmount: Types.uint96(100n),
-      descriptor: openPayload.descriptor,
-    })
+    const openPayload = await createOpenPayload()
+    const payload = await ClientOps.createClosePayload(createSigningClient(), payer, openPayload.descriptor, Types.uint96(100n), chainId)
     const method = session({
       account: payer,
       amount: '1',
@@ -731,17 +715,10 @@ describe('precompile server session unit guardrails', () => {
   })
 
   test('does not let a racing lower voucher regress highest accepted precompile voucher', async () => {
-    const openPayload = await createOpenCredential({ initialAmount: 100n })
-    const lowerVoucher = await ClientOps.createVoucherCredential(createSigningClient(), payer, {
-      chainId,
-      cumulativeAmount: Types.uint96(200n),
-      descriptor: openPayload.descriptor,
-    })
-    const higherVoucher = await ClientOps.createVoucherCredential(createSigningClient(), payer, {
-      chainId,
-      cumulativeAmount: Types.uint96(500n),
-      descriptor: openPayload.descriptor,
-    })
+    const openPayload = await createOpenPayload({ initialAmount: 100n })
+    const lowerVoucher = await ClientOps.createVoucherPayload(createSigningClient(), payer, openPayload.descriptor, Types.uint96(200n), chainId)
+    const higherVoucher = await ClientOps.createVoucherPayload(createSigningClient(), payer, openPayload.descriptor, Types.uint96(500n), chainId)
+    if (higherVoucher.action !== 'voucher') throw new Error('expected voucher payload')
 
     const seedStore = ChannelStore.fromStore(Store.memory() as never)
     await persistPrecompileChannel(seedStore, openPayload, {
@@ -808,7 +785,7 @@ describe('precompile server session unit guardrails', () => {
   test('marks pending precompile close before broadcast and restores it when broadcast fails', async () => {
     const rawStore = Store.memory()
     const store = ChannelStore.fromStore(rawStore as never)
-    const openPayload = await createOpenCredential()
+    const openPayload = await createOpenPayload()
     await persistPrecompileChannel(store, openPayload, {
       payee: payer.address,
     })
@@ -848,11 +825,7 @@ describe('precompile server session unit guardrails', () => {
           }),
         }),
     })
-    const payload = await ClientOps.createCloseCredential(createSigningClient(), payer, {
-      chainId,
-      cumulativeAmount: Types.uint96(100n),
-      descriptor: openPayload.descriptor,
-    })
+    const payload = await ClientOps.createClosePayload(createSigningClient(), payer, openPayload.descriptor, Types.uint96(100n), chainId)
 
     await expect(
       method.verify({
@@ -870,7 +843,7 @@ describe('precompile server session unit guardrails', () => {
   test('rejects server-driven close when no account is available', async () => {
     const rawStore = Store.memory()
     const store = ChannelStore.fromStore(rawStore as never)
-    const openPayload = await createOpenCredential()
+    const openPayload = await createOpenPayload()
     await persistPrecompileChannel(store, openPayload)
     const method = session({
       amount: '1',
@@ -882,11 +855,7 @@ describe('precompile server session unit guardrails', () => {
       unitType: 'request',
       getClient: () => createStateClient(null),
     })
-    const payload = await ClientOps.createCloseCredential(createSigningClient(), payer, {
-      chainId,
-      cumulativeAmount: Types.uint96(100n),
-      descriptor: openPayload.descriptor,
-    })
+    const payload = await ClientOps.createClosePayload(createSigningClient(), payer, openPayload.descriptor, Types.uint96(100n), chainId)
 
     await expect(
       method.verify({
@@ -902,7 +871,7 @@ describe('precompile server session unit guardrails', () => {
   test('accepts server-driven close account override matching the channel payee', async () => {
     const rawStore = Store.memory()
     const store = ChannelStore.fromStore(rawStore as never)
-    const openPayload = await createOpenCredential()
+    const openPayload = await createOpenPayload()
     await persistPrecompileChannel(store, openPayload, {
       payee: wrongPayer.address,
     })
@@ -917,11 +886,7 @@ describe('precompile server session unit guardrails', () => {
       unitType: 'request',
       getClient: () => createStateClient(payer),
     })
-    const payload = await ClientOps.createCloseCredential(createSigningClient(), payer, {
-      chainId,
-      cumulativeAmount: Types.uint96(100n),
-      descriptor: openPayload.descriptor,
-    })
+    const payload = await ClientOps.createClosePayload(createSigningClient(), payer, openPayload.descriptor, Types.uint96(100n), chainId)
 
     await expect(
       method.verify({
@@ -937,7 +902,7 @@ describe('precompile server session unit guardrails', () => {
   test('uses request-specified fee payer account for server-driven precompile close', async () => {
     const rawStore = Store.memory()
     const store = ChannelStore.fromStore(rawStore as never)
-    const openPayload = await createOpenCredential()
+    const openPayload = await createOpenPayload()
     await persistPrecompileChannel(store, openPayload, {
       payee: wrongPayer.address,
     })
@@ -953,11 +918,7 @@ describe('precompile server session unit guardrails', () => {
       unitType: 'request',
       getClient: () => createStateClient(payer),
     })
-    const payload = await ClientOps.createCloseCredential(createSigningClient(), payer, {
-      chainId,
-      cumulativeAmount: Types.uint96(100n),
-      descriptor: openPayload.descriptor,
-    })
+    const payload = await ClientOps.createClosePayload(createSigningClient(), payer, openPayload.descriptor, Types.uint96(100n), chainId)
 
     await expect(
       method.verify({
@@ -980,7 +941,7 @@ describe('precompile server session unit guardrails', () => {
   test('accepts server-driven close sender matching a nonzero precompile operator', async () => {
     const rawStore = Store.memory()
     const store = ChannelStore.fromStore(rawStore as never)
-    const openPayload = await createOpenCredential({
+    const openPayload = await createOpenPayload({
       operator: wrongPayer.address,
     })
     await persistPrecompileChannel(store, openPayload)
@@ -995,11 +956,7 @@ describe('precompile server session unit guardrails', () => {
       unitType: 'request',
       getClient: () => createStateClient(payer),
     })
-    const payload = await ClientOps.createCloseCredential(createSigningClient(), payer, {
-      chainId,
-      cumulativeAmount: Types.uint96(100n),
-      descriptor: openPayload.descriptor,
-    })
+    const payload = await ClientOps.createClosePayload(createSigningClient(), payer, openPayload.descriptor, Types.uint96(100n), chainId)
 
     await expect(
       method.verify({
@@ -1015,7 +972,7 @@ describe('precompile server session unit guardrails', () => {
   test('rejects server-driven close when sender is not the channel payee or operator', async () => {
     const rawStore = Store.memory()
     const store = ChannelStore.fromStore(rawStore as never)
-    const openPayload = await createOpenCredential()
+    const openPayload = await createOpenPayload()
     await persistPrecompileChannel(store, openPayload)
     const method = session({
       amount: '1',
@@ -1027,11 +984,7 @@ describe('precompile server session unit guardrails', () => {
       unitType: 'request',
       getClient: () => createStateClient(wrongPayer),
     })
-    const payload = await ClientOps.createCloseCredential(createSigningClient(), payer, {
-      chainId,
-      cumulativeAmount: Types.uint96(100n),
-      descriptor: openPayload.descriptor,
-    })
+    const payload = await ClientOps.createClosePayload(createSigningClient(), payer, openPayload.descriptor, Types.uint96(100n), chainId)
 
     await expect(
       method.verify({
