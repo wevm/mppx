@@ -120,14 +120,9 @@ describe('createCredential', () => {
     const mppx = Mppx.create({
       polyfill: false,
       methods: [method],
-      events: {
-        'challenge.received'(payload) {
-          events.push(`config:${payload.challenge.id}`)
-        },
-        'credential.created'(payload) {
-          events.push(`credential:${payload.credential.startsWith('Payment ')}`)
-        },
-      },
+    })
+    mppx.onCredentialCreated((payload) => {
+      events.push(`credential:${payload.credential.startsWith('Payment ')}`)
     })
     const offCredential = mppx.onCredentialCreated(() => {
       events.push('removed')
@@ -165,7 +160,6 @@ describe('createCredential', () => {
     expect(credential).toMatch(/^Payment /)
     expect(createCredential).toHaveBeenCalledTimes(1)
     expect(events).toEqual([
-      `config:${challenge.id}`,
       'runtime:charge',
       '*:challenge.received',
       'credential:true',
@@ -178,13 +172,11 @@ describe('createCredential', () => {
     const mppx = Mppx.create({
       polyfill: false,
       methods: [tempo({ account: accounts[1], getClient: () => client })],
-      events: {
-        'payment.failed'(payload) {
-          events.push(
-            `failed:${payload.challenge === undefined}:${payload.challenges?.length}:${payload.error instanceof Error}`,
-          )
-        },
-      },
+    })
+    mppx.onPaymentFailed((payload) => {
+      events.push(
+        `failed:${payload.challenge === undefined}:${payload.challenges?.length}:${payload.error instanceof Error}`,
+      )
     })
 
     const challenge = Challenge.from({

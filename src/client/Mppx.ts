@@ -92,7 +92,7 @@ export function create<
   const rawFetch = config.fetch ?? globalThis.fetch
   const methods = config.methods.flat() as unknown as FlattenMethods<methods>
   const acceptPayment = AcceptPayment.resolve(methods, config.paymentPreferences)
-  const events = Fetch.createEventDispatcher<FlattenMethods<methods>>(config.events)
+  const events = Fetch.createEventDispatcher<FlattenMethods<methods>>()
 
   const resolvedOnChallenge = onChallenge as Fetch.from.Config<
     FlattenMethods<methods>
@@ -240,8 +240,6 @@ export declare namespace create {
     acceptPaymentPolicy?: Fetch.from.Config['acceptPaymentPolicy'] | undefined
     /** Custom fetch function to wrap. Defaults to `globalThis.fetch`. */
     fetch?: typeof globalThis.fetch
-    /** Client payment events for logging, analytics, and credential interception. */
-    events?: Fetch.ClientEvents<FlattenMethods<methods>> | undefined
     /** Called when a 402 challenge is received, before credential creation. */
     onChallenge?:
       | ((

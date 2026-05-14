@@ -18,16 +18,6 @@ type WrappedFetch = typeof globalThis.fetch & {
 
 let originalFetch: typeof globalThis.fetch | undefined
 
-export type ClientEvents<
-  methods extends readonly Method.AnyClient[] = readonly Method.AnyClient[],
-> = Partial<{
-  '*': ClientEventHandler<methods, '*'>
-  'challenge.received': ClientEventHandler<methods, 'challenge.received'>
-  'credential.created': ClientEventHandler<methods, 'credential.created'>
-  'payment.failed': ClientEventHandler<methods, 'payment.failed'>
-  'payment.response': ClientEventHandler<methods, 'payment.response'>
-}>
-
 export type ClientEventMap<
   methods extends readonly Method.AnyClient[] = readonly Method.AnyClient[],
 > = {
@@ -175,7 +165,7 @@ export function from<const methods extends readonly Method.AnyClient[]>(
     methods,
     onChallenge,
   } = config
-  const events = config.eventDispatcher ?? createEventDispatcher(config.events)
+  const events = config.eventDispatcher ?? createEventDispatcher()
   const resolvedAcceptPayment = acceptPayment ?? AcceptPayment.resolve(methods)
   // Always operate on the true underlying fetch to avoid wrapper-on-wrapper stacking,
   // which can duplicate retries and make restore semantics fragile.
@@ -319,9 +309,7 @@ export declare namespace from {
       | undefined
     /** Custom fetch function to wrap. Defaults to `globalThis.fetch`. */
     fetch?: typeof globalThis.fetch
-    /** Client payment events for logging, analytics, and credential interception. */
-    events?: ClientEvents<methods> | undefined
-    /** Shared event dispatcher. Used by higher-level client handlers. */
+    /** @internal Shared event dispatcher. Used by higher-level client handlers. */
     eventDispatcher?: ClientEventDispatcher<methods> | undefined
     /** Array of methods to use. */
     methods: methods
@@ -430,7 +418,7 @@ export function normalizeHeaders(headers: unknown): Record<string, string> {
 /** Creates a typed client payment event dispatcher. */
 export function createEventDispatcher<
   methods extends readonly Method.AnyClient[] = readonly Method.AnyClient[],
->(initialEvents?: ClientEvents<methods> | undefined): ClientEventDispatcher<methods> {
+>(): ClientEventDispatcher<methods> {
   const emitter = new Emitter<ClientRettimeEventMap<methods>>()
   const wildcardEmitter = new Emitter<ClientWildcardEventMap<methods>>()
 
@@ -456,14 +444,6 @@ export function createEventDispatcher<
         )
     }
   }
-
-  if (initialEvents?.['*']) on('*', initialEvents['*'])
-  if (initialEvents?.['challenge.received'])
-    on('challenge.received', initialEvents['challenge.received'])
-  if (initialEvents?.['credential.created'])
-    on('credential.created', initialEvents['credential.created'])
-  if (initialEvents?.['payment.failed']) on('payment.failed', initialEvents['payment.failed'])
-  if (initialEvents?.['payment.response']) on('payment.response', initialEvents['payment.response'])
 
   return {
     async emit(name, payload) {

@@ -681,26 +681,28 @@ describe('Fetch.from: 402 retry path', () => {
       return new Response('OK', { status: 200 })
     }
 
+    const method = { ...noopMethod, createCredential }
+    const eventDispatcher = Fetch.createEventDispatcher<[typeof method]>()
+    eventDispatcher.on('*', (event) => {
+      events.push(`*:${event.name}`)
+    })
+    eventDispatcher.on('challenge.received', async (payload) => {
+      events.push(`challenge:${payload.challenge.id}`)
+      return 'event-credential'
+    })
+    eventDispatcher.on('credential.created', (payload) => {
+      events.push(`credential:${payload.credential}`)
+      throw new Error('observer failed')
+    })
+    eventDispatcher.on('payment.response', (payload) => {
+      events.push(`response:${payload.response.status}`)
+      throw new Error('observer failed')
+    })
+
     const fetch = Fetch.from({
+      eventDispatcher,
       fetch: mockFetch,
-      methods: [{ ...noopMethod, createCredential }],
-      events: {
-        '*'(event) {
-          events.push(`*:${event.name}`)
-        },
-        async 'challenge.received'(payload) {
-          events.push(`challenge:${payload.challenge.id}`)
-          return 'event-credential'
-        },
-        'credential.created'(payload) {
-          events.push(`credential:${payload.credential}`)
-          throw new Error('observer failed')
-        },
-        'payment.response'(payload) {
-          events.push(`response:${payload.response.status}`)
-          throw new Error('observer failed')
-        },
-      },
+      methods: [method],
     })
 
     const response = await fetch('https://example.com/api')
@@ -761,20 +763,21 @@ describe('Fetch.from: 402 retry path', () => {
     const mockFetch = vi.fn(async () =>
       make402({ expires: new Date(Date.now() - 60_000).toISOString() }),
     )
+    const method = { ...noopMethod, createCredential }
+    const eventDispatcher = Fetch.createEventDispatcher<[typeof method]>()
+    eventDispatcher.on('*', (event) => {
+      events.push(`*:${event.name}`)
+    })
+    eventDispatcher.on('payment.failed', (payload) => {
+      events.push(
+        `failed:${payload.error instanceof Errors.PaymentExpiredError}:${payload.challenge?.id}`,
+      )
+      throw new Error('observer failed')
+    })
     const fetch = Fetch.from({
+      eventDispatcher,
       fetch: mockFetch as typeof globalThis.fetch,
-      methods: [{ ...noopMethod, createCredential }],
-      events: {
-        '*'(event) {
-          events.push(`*:${event.name}`)
-        },
-        'payment.failed'(payload) {
-          events.push(
-            `failed:${payload.error instanceof Errors.PaymentExpiredError}:${payload.challenge?.id}`,
-          )
-          throw new Error('observer failed')
-        },
-      },
+      methods: [method],
     })
 
     await expect(fetch('https://example.com/api')).rejects.toThrow(Errors.PaymentExpiredError)

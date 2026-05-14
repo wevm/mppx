@@ -70,35 +70,6 @@ describe('create.Config', () => {
     const method = charge()
     const mppx = Mppx.create({
       methods: [method],
-      events: {
-        '*'(event) {
-          if (event.name === 'credential.created')
-            expectTypeOf(event.payload.credential).toEqualTypeOf<string>()
-          if (event.name === 'payment.response')
-            expectTypeOf(event.payload.response).toEqualTypeOf<Response>()
-        },
-        'challenge.received'(payload) {
-          expectTypeOf(payload.challenge.id).toEqualTypeOf<string>()
-          expectTypeOf(payload.challenges).toEqualTypeOf<readonly Challenge.Challenge[]>()
-          expectTypeOf(payload.method.intent).toEqualTypeOf<'charge'>()
-          expectTypeOf(payload.createCredential({ account: {} as Account })).toEqualTypeOf<
-            Promise<string>
-          >()
-          return payload.createCredential({ account: {} as Account })
-        },
-        'credential.created'(payload) {
-          expectTypeOf(payload.credential).toEqualTypeOf<string>()
-          expectTypeOf(payload.method.intent).toEqualTypeOf<'charge'>()
-        },
-        'payment.failed'(payload) {
-          expectTypeOf(payload.error).toEqualTypeOf<unknown>()
-          expectTypeOf(payload.challenge).toEqualTypeOf<Challenge.Challenge | undefined>()
-        },
-        'payment.response'(payload) {
-          expectTypeOf(payload.response).toEqualTypeOf<Response>()
-          expectTypeOf(payload.credential).toEqualTypeOf<string>()
-        },
-      },
     })
 
     const unsubscribe = mppx.on('payment.response', (payload) => {
@@ -106,15 +77,32 @@ describe('create.Config', () => {
     })
     expectTypeOf(unsubscribe).toEqualTypeOf<Fetch.Unsubscribe>()
 
-    mppx.onChallengeReceived((payload) => payload.createCredential({ account: {} as Account }))
+    mppx.on('*', (event) => {
+      if (event.name === 'credential.created')
+        expectTypeOf(event.payload.credential).toEqualTypeOf<string>()
+      if (event.name === 'payment.response')
+        expectTypeOf(event.payload.response).toEqualTypeOf<Response>()
+    })
+    mppx.onChallengeReceived((payload) => {
+      expectTypeOf(payload.challenge.id).toEqualTypeOf<string>()
+      expectTypeOf(payload.challenges).toEqualTypeOf<readonly Challenge.Challenge[]>()
+      expectTypeOf(payload.method.intent).toEqualTypeOf<'charge'>()
+      expectTypeOf(payload.createCredential({ account: {} as Account })).toEqualTypeOf<
+        Promise<string>
+      >()
+      return payload.createCredential({ account: {} as Account })
+    })
     mppx.onCredentialCreated((payload) => {
       expectTypeOf(payload.credential).toEqualTypeOf<string>()
+      expectTypeOf(payload.method.intent).toEqualTypeOf<'charge'>()
     })
     mppx.onPaymentFailed((payload) => {
       expectTypeOf(payload.error).toEqualTypeOf<unknown>()
+      expectTypeOf(payload.challenge).toEqualTypeOf<Challenge.Challenge | undefined>()
     })
     mppx.onPaymentResponse((payload) => {
       expectTypeOf(payload.response).toEqualTypeOf<Response>()
+      expectTypeOf(payload.credential).toEqualTypeOf<string>()
     })
   })
 })
