@@ -1,14 +1,35 @@
-import type { Hex } from 'viem'
+import { createClient, custom, type Hex } from 'viem'
+import { privateKeyToAccount } from 'viem/accounts'
 import { describe, expect, test, vi } from 'vp/test'
 
 import * as Challenge from '../../../Challenge.js'
+import * as Credential from '../../../Credential.js'
 import { formatNeedVoucherEvent, parseEvent } from '../../session/Sse.js'
 import type { NeedVoucherEvent, SessionReceipt } from '../../session/Types.js'
+import type { SessionCredentialPayload } from '../Types.js'
 import { sessionManager } from './SessionManager.js'
 
 const channelId = '0x0000000000000000000000000000000000000000000000000000000000000001' as Hex
 const challengeId = 'test-challenge-1'
 const realm = 'test.example.com'
+const account = privateKeyToAccount(
+  '0xac0974bec39a17e36ba6a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80',
+)
+
+const client = createClient({
+  account,
+  chain: { id: 4217 } as never,
+  transport: custom({
+    async request(args) {
+      if (args.method === 'eth_chainId') return '0x1079'
+      if (args.method === 'eth_getTransactionCount') return '0x0'
+      if (args.method === 'eth_estimateGas') return '0x5208'
+      if (args.method === 'eth_maxPriorityFeePerGas') return '0x1'
+      if (args.method === 'eth_getBlockByNumber') return { baseFeePerGas: '0x1' }
+      throw new Error(`unexpected rpc request: ${args.method}`)
+    },
+  }),
+})
 
 function makeChallenge(overrides: Record<string, unknown> = {}): Challenge.Challenge {
   return Challenge.from({
@@ -19,7 +40,7 @@ function makeChallenge(overrides: Record<string, unknown> = {}): Challenge.Chall
     request: {
       amount: '1000000',
       currency: '0x20c0000000000000000000000000000000000001',
-      recipient: '0x742d35Cc6634C0532925a3b844Bc9e7595f8fE00',
+      recipient: '0x742d35cc6634c0532925a3b844bc9e7595f8fe00',
       decimals: 6,
       methodDetails: {
         escrowContract: '0x9d136eEa063eDE5418A6BC7bEafF009bBb6CFa70',
@@ -171,6 +192,56 @@ describe('Session', () => {
       expect(messages).toEqual(['chunk1', 'chunk2'])
       expect(receiptCb).toHaveBeenCalledOnce()
       expect(receiptCb.mock.calls[0]![0].units).toBe(2)
+    })
+
+    test('posts precompile SSE top-up vouchers with the channel descriptor', async () => {
+      const needVoucher: NeedVoucherEvent = {
+        channelId,
+        requiredCumulative: '2000000',
+        acceptedCumulative: '1000000',
+        deposit: '10000000',
+      }
+      const events = [
+        'event: message\ndata: chunk1\n\n',
+        formatNeedVoucherEvent(needVoucher),
+        'event: message\ndata: chunk2\n\n',
+      ]
+      const postedPayloads: SessionCredentialPayload[] = []
+      let callCount = 0
+      const mockFetch = vi.fn().mockImplementation((_input, init?: RequestInit) => {
+        callCount++
+        const authorization = new Headers(init?.headers).get('Authorization')
+        if (authorization) {
+          postedPayloads.push(
+            Credential.deserialize<SessionCredentialPayload>(authorization).payload,
+          )
+        }
+        if (callCount === 1) return Promise.resolve(make402Response())
+        if (callCount === 2) return Promise.resolve(makeSseResponse(events))
+        return Promise.resolve(makeOkResponse())
+      })
+
+      const s = sessionManager({
+        account,
+        client,
+        fetch: mockFetch as typeof globalThis.fetch,
+        maxDeposit: '10',
+      })
+
+      const iterable = await s.sse('https://api.example.com/stream')
+      const messages: string[] = []
+      for await (const msg of iterable) messages.push(msg)
+
+      expect(messages).toEqual(['chunk1', 'chunk2'])
+      expect(postedPayloads[0]?.action).toBe('open')
+      expect(postedPayloads[1]?.action).toBe('voucher')
+      const openPayload = postedPayloads[0]
+      const voucherPayload = postedPayloads[1]
+      if (openPayload?.action !== 'open' || voucherPayload?.action !== 'voucher')
+        throw new Error('expected open then voucher payloads')
+      expect(voucherPayload.channelId).toBe(openPayload.channelId)
+      expect(voucherPayload.descriptor).toEqual(openPayload.descriptor)
+      expect(voucherPayload.cumulativeAmount).toBe('2000000')
     })
   })
 

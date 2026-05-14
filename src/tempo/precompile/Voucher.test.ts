@@ -1,7 +1,9 @@
+import { P256, Secp256k1 } from 'ox'
 import { SignatureEnvelope } from 'ox/tempo'
 import { createClient, hashTypedData, http } from 'viem'
 import { privateKeyToAccount } from 'viem/accounts'
 import { signTypedData } from 'viem/actions'
+import { Account as TempoAccount } from 'viem/tempo'
 import { describe, expect, test } from 'vp/test'
 
 import { uint96 } from './Types.js'
@@ -214,6 +216,28 @@ describe('Precompile Voucher', () => {
         verifyingContract: escrowContract,
       }),
     ).toBe(false)
+  })
+
+  test('sign rejects p256 keychain access-key voucher delegation explicitly', async () => {
+    const rootAccount = TempoAccount.fromSecp256k1(Secp256k1.randomPrivateKey())
+    const accessKey = TempoAccount.fromP256(P256.randomPrivateKey(), { access: rootAccount })
+    const accessKeyClient = createClient({
+      account: accessKey,
+      transport: http('http://127.0.0.1'),
+    })
+
+    await expect(
+      sign(
+        accessKeyClient,
+        accessKey,
+        { channelId, cumulativeAmount },
+        {
+          authorizedSigner: accessKey.accessKeyAddress,
+          chainId,
+          verifyingContract: escrowContract,
+        },
+      ),
+    ).rejects.toThrow('TIP-1034 voucher signing only supports secp256k1 keychain access keys.')
   })
 
   test('domain and type match TIP-1034', () => {

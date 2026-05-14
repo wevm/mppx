@@ -31,6 +31,10 @@ function voucherAuthorizedSigner(address: Address): Address | undefined {
   return address.toLowerCase() === zeroAddress ? undefined : address
 }
 
+function defaultAuthorizedSigner(account: Account): Address {
+  return (account as unknown as { accessKeyAddress?: Address }).accessKeyAddress ?? account.address
+}
+
 /**
  * Prepares and signs a one-call TIP-1034 channel-open transaction, computes the
  * transaction-bound `expiringNonceHash` via viem, and signs the initial voucher.
@@ -43,6 +47,7 @@ export async function createOpen(
     chainId: number
     deposit: Uint96
     escrow?: Address | undefined
+    feePayer?: boolean | undefined
     initialAmount: Uint96
     operator?: Address | undefined
     payee: Address
@@ -50,7 +55,7 @@ export async function createOpen(
   },
 ): Promise<OpenResult> {
   const escrow = parameters.escrow ?? tip20ChannelEscrow
-  const authorizedSigner = parameters.authorizedSigner ?? account.address
+  const authorizedSigner = parameters.authorizedSigner ?? defaultAuthorizedSigner(account)
   const operator = parameters.operator ?? '0x0000000000000000000000000000000000000000'
   const salt = Hex.random(32)
 
@@ -65,6 +70,7 @@ export async function createOpen(
   const prepared = await prepareTransactionRequest(client, {
     account,
     calls: [{ to: escrow, data: openData }],
+    ...(parameters.feePayer ? { feePayer: true } : {}),
     feeToken: parameters.token,
   } as never)
 
@@ -159,6 +165,7 @@ export async function createTopUp(
     chainId: number
     descriptor: Channel.ChannelDescriptor
     escrow?: Address | undefined
+    feePayer?: boolean | undefined
   },
 ): Promise<TopUpResult> {
   const escrow = parameters.escrow ?? tip20ChannelEscrow
@@ -174,6 +181,7 @@ export async function createTopUp(
         data: Chain.encodeTopUp(parameters.descriptor, parameters.additionalDeposit),
       },
     ],
+    ...(parameters.feePayer ? { feePayer: true } : {}),
     feeToken: parameters.descriptor.token,
   } as never)
   const transaction = (await signTransaction(client, prepared as never)) as Hex.Hex

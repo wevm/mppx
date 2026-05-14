@@ -50,7 +50,14 @@ export const types = {
   ],
 } as const
 
-/** Signs a TIP-1034 voucher and unwraps keychain signatures for delegated secp256k1 signers. */
+/**
+ * Signs a TIP-1034 voucher.
+ *
+ * When `authorizedSigner` is a delegated access key, only secp256k1 keychain
+ * signatures can be unwrapped into the raw ECDSA signature accepted by the
+ * precompile. p256/WebAuthn keychain wrappers are rejected; pass an explicit
+ * secp256k1 authorized signer for voucher delegation.
+ */
 export async function sign(
   client: Client,
   account: Account,
@@ -70,17 +77,29 @@ export async function sign(
   })
 
   if (parameters.authorizedSigner) {
-    try {
-      const envelope = SignatureEnvelope.from(signature as SignatureEnvelope.Serialized)
-      if (envelope.type === 'keychain' && envelope.inner.type === 'secp256k1')
-        return Signature.toHex(envelope.inner.signature)
-    } catch {}
+    const envelope = (() => {
+      try {
+        return SignatureEnvelope.from(signature as SignatureEnvelope.Serialized)
+      } catch {
+        return undefined
+      }
+    })()
+    if (envelope?.type === 'keychain' && envelope.inner.type === 'secp256k1')
+      return Signature.toHex(envelope.inner.signature)
+    if (envelope?.type === 'keychain')
+      throw new Error('TIP-1034 voucher signing only supports secp256k1 keychain access keys.')
   }
 
   return signature
 }
 
-/** Verifies a direct TIP-1034 voucher signature and rejects keychain wrapper signatures. */
+/**
+ * Verifies a direct TIP-1034 voucher signature.
+ *
+ * Only raw secp256k1 signatures are accepted. Keychain wrapper signatures are
+ * rejected because the precompile verifies vouchers with ecrecover against the
+ * channel's authorized signer.
+ */
 export function verify(
   voucher: SignedVoucher,
   expectedSigner: Address,

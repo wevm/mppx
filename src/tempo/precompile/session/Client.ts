@@ -9,6 +9,7 @@ import * as Client from '../../../viem/Client.js'
 import * as z from '../../../zod.js'
 import * as defaults from '../../internal/defaults.js'
 import * as Methods from '../../Methods.js'
+import * as Chain from '../Chain.js'
 import * as Channel from '../Channel.js'
 import {
   createOpen,
@@ -99,6 +100,10 @@ function parseContextAdditionalDeposit(
   return amount === undefined ? undefined : uint96(amount)
 }
 
+function isSameAddress(a: Address, b: Address): boolean {
+  return a.toLowerCase() === b.toLowerCase()
+}
+
 /** Creates a client-side TIP-1034 precompile session payment method. */
 export function session(parameters: session.Parameters = {}) {
   const { decimals = defaults.decimals } = parameters
@@ -124,7 +129,9 @@ export function session(parameters: session.Parameters = {}) {
     account: viem_Account,
     context?: SessionContext,
   ): Promise<string> {
-    const methodDetails = challenge.request.methodDetails as { chainId?: number } | undefined
+    const methodDetails = challenge.request.methodDetails as
+      | { chainId?: number; feePayer?: boolean }
+      | undefined
     const chainId = methodDetails?.chainId ?? 0
     const client = await getClient({ chainId })
     const payee = challenge.request.recipient as Address
@@ -141,7 +148,17 @@ export function session(parameters: session.Parameters = {}) {
       const channelId = Channel.computeId(context.descriptor, { chainId, escrow })
       if (context.channelId && context.channelId.toLowerCase() !== channelId.toLowerCase())
         throw new Error('context channelId does not match descriptor')
-      const cumulativeAmount = parseContextAmount(context, decimals) ?? amount
+      if (!isSameAddress(context.descriptor.payee, payee))
+        throw new Error('context descriptor payee does not match challenge')
+      if (!isSameAddress(context.descriptor.token, token))
+        throw new Error('context descriptor token does not match challenge')
+      const state = await Chain.getChannelState(client, channelId, escrow)
+      if (state.deposit === 0n)
+        throw new Error(`Channel ${channelId} cannot be reused (closed or not found on-chain).`)
+      if (state.closeRequestedAt !== 0)
+        throw new Error(`Channel ${channelId} cannot be reused (pending close request).`)
+      const cumulativeAmount =
+        parseContextAmount(context, decimals) ?? uint96(state.settled + amount)
       payload = await createVoucherCredential(client, account, {
         chainId,
         cumulativeAmount,
@@ -192,6 +209,7 @@ export function session(parameters: session.Parameters = {}) {
         chainId,
         deposit,
         escrow,
+        feePayer: methodDetails?.feePayer,
         initialAmount: amount,
         operator: parameters.operator,
         payee,
@@ -268,7 +286,14 @@ export function session(parameters: session.Parameters = {}) {
           }
         } else {
           payload = createTopUpCredential(
-            await createTopUp(client, account, { additionalDeposit, chainId, descriptor, escrow }),
+            await createTopUp(client, account, {
+              additionalDeposit,
+              chainId,
+              descriptor,
+              escrow,
+              feePayer: (challenge.request.methodDetails as { feePayer?: boolean } | undefined)
+                ?.feePayer,
+            }),
             additionalDeposit,
           )
         }
@@ -341,7 +366,7 @@ export function session(parameters: session.Parameters = {}) {
 export declare namespace session {
   type Parameters = Account.getResolver.Parameters &
     Client.getResolver.Parameters & {
-      /** Address authorized to sign vouchers on behalf of the payer. */
+      /** Address authorized to sign vouchers on behalf of the payer. Defaults to the account access key address when available, otherwise the account address. */
       authorizedSigner?: Address | undefined
       /** Token decimals for parsing human-readable amounts (default: 6). */
       decimals?: number | undefined

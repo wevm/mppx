@@ -1,4 +1,4 @@
-import { type Address, createClient, custom, decodeFunctionData } from 'viem'
+import { type Address, createClient, custom, decodeFunctionData, encodeFunctionResult } from 'viem'
 import { privateKeyToAccount } from 'viem/accounts'
 import { Transaction } from 'viem/tempo'
 import { describe, expect, test } from 'vp/test'
@@ -26,6 +26,12 @@ const client = createClient({
       if (args.method === 'eth_estimateGas') return '0x5208'
       if (args.method === 'eth_maxPriorityFeePerGas') return '0x1'
       if (args.method === 'eth_getBlockByNumber') return { baseFeePerGas: '0x1' }
+      if (args.method === 'eth_call')
+        return encodeFunctionResult({
+          abi: escrowAbi,
+          functionName: 'getChannelState',
+          result: { settled: 0n, deposit: 1_000n, closeRequestedAt: 0 },
+        })
       throw new Error(`unexpected rpc request: ${args.method}`)
     },
   }),
@@ -204,6 +210,34 @@ describe('precompile client session', () => {
     expect(updates).toEqual([100n, 200n])
   })
 
+  test('rejects descriptor recovery for closed or missing channels', async () => {
+    const closedClient = createClient({
+      account,
+      chain: { id: chainId } as never,
+      transport: custom({
+        async request(args) {
+          if (args.method === 'eth_chainId') return `0x${chainId.toString(16)}`
+          if (args.method === 'eth_call')
+            return encodeFunctionResult({
+              abi: escrowAbi,
+              functionName: 'getChannelState',
+              result: { settled: 0n, deposit: 0n, closeRequestedAt: 0 },
+            })
+          throw new Error(`unexpected rpc request: ${args.method}`)
+        },
+      }),
+    })
+    const method = session({ account, decimals: 0, deposit: '1000', getClient: () => closedClient })
+    const channelId = Channel.computeId(descriptor, { chainId, escrow: tip20ChannelEscrow })
+
+    await expect(
+      method.createCredential({
+        challenge: makeChallenge() as never,
+        context: { channelId, descriptor },
+      }),
+    ).rejects.toThrow(/cannot be reused \(closed or not found on-chain\)/)
+  })
+
   test('rejects channel recovery without descriptor', async () => {
     const method = session({ account, decimals: 0, deposit: '1000', getClient: () => client })
 
@@ -213,6 +247,24 @@ describe('precompile client session', () => {
         context: { channelId: `0x${'33'.repeat(32)}` },
       }),
     ).rejects.toThrow('descriptor required to reuse precompile channel')
+  })
+
+  test('defaults precompile authorizedSigner to account access key address', async () => {
+    const accessKeyAddress = '0x0000000000000000000000000000000000000009' as Address
+    const accessKeyAccount = Object.assign({}, account, { accessKeyAddress })
+    const method = session({
+      account: accessKeyAccount,
+      decimals: 0,
+      deposit: '1000',
+      getClient: () => client,
+    })
+    const payload = deserialize(
+      await method.createCredential({ challenge: makeChallenge() as never, context: {} }),
+    )
+
+    expect(payload.action).toBe('open')
+    if (payload.action !== 'open') throw new Error('expected open payload')
+    expect(payload.descriptor.authorizedSigner).toBe(accessKeyAddress)
   })
 
   test('creates manual voucher credentials with descriptor payloads', async () => {

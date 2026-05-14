@@ -839,7 +839,7 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
 export declare namespace sessionManager {
   type Parameters = Account.getResolver.Parameters &
     Client.getResolver.Parameters & {
-      /** Address authorized to sign vouchers. Defaults to the account address. */
+      /** Address authorized to sign vouchers. Defaults to the account access key address when available, otherwise the account address. */
       authorizedSigner?: Address | undefined
       /** Viem client instance. Shorthand for `getClient: () => client`. */
       client?: import('viem').Client | undefined

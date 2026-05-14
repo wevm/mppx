@@ -276,41 +276,47 @@ export async function settle(
   )
 }
 
-/** Broadcasts a descriptor-based TIP-1034 top-up transaction with the client's account. */
+/** Broadcasts a descriptor-based TIP-1034 top-up transaction with optional fee sponsorship. */
 export async function topUp(
   client: Client,
   descriptor: ChannelDescriptor,
   additionalDeposit: Uint96,
   escrow: Address = tip20ChannelEscrow,
+  options?: SendOptions,
 ): Promise<Hex> {
-  return sendTransaction(client, {
-    to: escrow,
-    data: encodeTopUp(descriptor, additionalDeposit),
-  } as never)
+  return sendPrecompileTransaction(
+    client,
+    escrow,
+    encodeTopUp(descriptor, additionalDeposit),
+    'topUp',
+    options,
+  )
 }
 
-/** Broadcasts a descriptor-based TIP-1034 request-close transaction with the client's account. */
+/** Broadcasts a descriptor-based TIP-1034 request-close transaction with optional fee sponsorship. */
 export async function requestClose(
   client: Client,
   descriptor: ChannelDescriptor,
   escrow: Address = tip20ChannelEscrow,
+  options?: SendOptions,
 ): Promise<Hex> {
-  return sendTransaction(client, {
-    to: escrow,
-    data: encodeRequestClose(descriptor),
-  } as never)
+  return sendPrecompileTransaction(
+    client,
+    escrow,
+    encodeRequestClose(descriptor),
+    'requestClose',
+    options,
+  )
 }
 
-/** Broadcasts a descriptor-based TIP-1034 withdraw transaction with the client's account. */
+/** Broadcasts a descriptor-based TIP-1034 withdraw transaction with optional fee sponsorship. */
 export async function withdraw(
   client: Client,
   descriptor: ChannelDescriptor,
   escrow: Address = tip20ChannelEscrow,
+  options?: SendOptions,
 ): Promise<Hex> {
-  return sendTransaction(client, {
-    to: escrow,
-    data: encodeWithdraw(descriptor),
-  } as never)
+  return sendPrecompileTransaction(client, escrow, encodeWithdraw(descriptor), 'withdraw', options)
 }
 
 /** Broadcasts a descriptor-based TIP-1034 close transaction with optional fee sponsorship. */

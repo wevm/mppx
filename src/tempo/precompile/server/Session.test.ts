@@ -12,6 +12,7 @@ import { describe, expect, test } from 'vp/test'
 
 import * as Store from '../../../Store.js'
 import * as ChannelStore from '../../session/ChannelStore.js'
+import type { SessionReceipt } from '../../session/Types.js'
 import * as Chain from '../Chain.js'
 import * as Channel from '../Channel.js'
 import * as ClientOps from '../client/ChannelOps.js'
@@ -161,6 +162,7 @@ async function createOpenCredential(
     initialAmount?: bigint | undefined
     escrow?: Address | undefined
     account?: typeof payer | undefined
+    operator?: Address | undefined
   } = {},
 ): Promise<OpenCredentialPayload> {
   const account = parameters.account ?? payer
@@ -168,23 +170,15 @@ async function createOpenCredential(
   const initialAmount = Types.uint96(parameters.initialAmount ?? 100n)
   const deposit = Types.uint96(parameters.deposit ?? 1_000n)
   const salt = `0x${(++saltCounter).toString(16).padStart(64, '0')}` as Hex
-  const descriptor = {
-    payer: account.address,
-    payee,
-    operator: zeroAddress,
-    token,
-    salt,
-    authorizedSigner: account.address,
-    expiringNonceHash: `0x${saltCounter.toString(16).padStart(64, '0')}` as Hex,
-  } satisfies Channel.ChannelDescriptor
-  const channelId = Channel.computeId(descriptor, { chainId, escrow })
+  const operator = parameters.operator ?? zeroAddress
+  const authorizedSigner = account.address
   const data = Chain.encodeOpen({
     payee,
-    operator: descriptor.operator,
+    operator,
     token,
     deposit,
     salt,
-    authorizedSigner: descriptor.authorizedSigner,
+    authorizedSigner,
   })
   const signingClient = createSigningClient(account)
   const transaction = (await Transaction.serialize({
@@ -193,6 +187,22 @@ async function createOpenCredential(
     feeToken: token,
     nonce: 0,
   })) as Hex
+  const expiringNonceHash = Channel.computeExpiringNonceHash(
+    Transaction.deserialize(
+      transaction as Transaction.TransactionSerializedTempo,
+    ) as Channel.ExpiringNonceTransaction,
+    { sender: account.address },
+  )
+  const descriptor = {
+    payer: account.address,
+    payee,
+    operator,
+    token,
+    salt,
+    authorizedSigner,
+    expiringNonceHash,
+  } satisfies Channel.ChannelDescriptor
+  const channelId = Channel.computeId(descriptor, { chainId, escrow })
   const signature = await Voucher.sign(
     signingClient,
     account,
@@ -390,6 +400,22 @@ describe('precompile server session unit guardrails', () => {
     ).rejects.toThrow(/invalid voucher signature/)
   })
 
+  test('rejects missing precompile descriptors with a verification error', async () => {
+    const { method } = createServer()
+    const payload = await createOpenCredential()
+    const { descriptor: _descriptor, ...payloadWithoutDescriptor } = payload
+
+    await expect(
+      method.verify({
+        credential: {
+          challenge: makeChallenge(payload.channelId),
+          payload: payloadWithoutDescriptor,
+        },
+        request: makeRequest(payload.channelId) as never,
+      }),
+    ).rejects.toThrow(/descriptor required for precompile session action/)
+  })
+
   test('rejects uint96 overflow in credential amount parsing', async () => {
     const { method } = createServer()
     const payload = await createOpenCredential()
@@ -416,7 +442,7 @@ describe('precompile server session unit guardrails', () => {
     ).rejects.toThrow(/no account available/)
   })
 
-  test('rejects settle when sender is not the channel payee', async () => {
+  test('rejects settle when sender is not the channel payee or operator', async () => {
     const { store } = createServer()
     const openPayload = await createOpenCredential()
     await persistPrecompileChannel(store, openPayload)
@@ -425,6 +451,27 @@ describe('precompile server session unit guardrails', () => {
     await expect(
       settle(store, createServerClient([], wrongPayer), openPayload.channelId),
     ).rejects.toThrow(/tx sender .* is not the channel payee/)
+  })
+
+  test('accepts settle sender matching a nonzero precompile operator', async () => {
+    const { store } = createServer()
+    const openPayload = await createOpenCredential({ operator: wrongPayer.address })
+    await persistPrecompileChannel(store, openPayload)
+
+    const { settle } = await import('./Session.js')
+    const client = createClient({
+      account: wrongPayer,
+      chain: { id: chainId } as never,
+      transport: custom({
+        async request(args) {
+          if (args.method === 'eth_chainId') return `0x${chainId.toString(16)}`
+          throw new Error(`unexpected rpc request: ${args.method}`)
+        },
+      }),
+    })
+    await expect(settle(store, client, openPayload.channelId)).rejects.toThrow(
+      /eth_getTransactionCount/,
+    )
   })
 
   test('precompile settle fee payer options still enforce payee sender policy', async () => {
@@ -533,7 +580,7 @@ describe('precompile server session unit guardrails', () => {
     ).rejects.toThrow(/close voucher amount must be >= 150 \(spent\)/)
   })
 
-  test('rejects close voucher at or below on-chain settled except untouched zero-close', async () => {
+  test('rejects close voucher below on-chain settled', async () => {
     const rawStore = Store.memory()
     const store = ChannelStore.fromStore(rawStore as never)
     const openPayload = await createOpenCredential()
@@ -552,7 +599,7 @@ describe('precompile server session unit guardrails', () => {
     })
     const payload = await ClientOps.createCloseCredential(createSigningClient(), payer, {
       chainId,
-      cumulativeAmount: Types.uint96(100n),
+      cumulativeAmount: Types.uint96(99n),
       descriptor: openPayload.descriptor,
     })
 
@@ -561,14 +608,14 @@ describe('precompile server session unit guardrails', () => {
         credential: { challenge: makeChallenge(openPayload.channelId), payload },
         request: makeRequest(openPayload.channelId) as never,
       }),
-    ).rejects.toThrow(/close voucher amount must be > 100 \(on-chain settled\)/)
+    ).rejects.toThrow(/close voucher amount must be >= 100 \(on-chain settled\)/)
   })
 
-  test('rejects close voucher exceeding on-chain precompile deposit', async () => {
+  test('rejects close capture exceeding on-chain precompile deposit', async () => {
     const rawStore = Store.memory()
     const store = ChannelStore.fromStore(rawStore as never)
     const openPayload = await createOpenCredential()
-    await persistPrecompileChannel(store, openPayload, { payee: payer.address })
+    await persistPrecompileChannel(store, openPayload, { payee: payer.address, spent: 100n })
     const method = session({
       account: payer,
       amount: '1',
@@ -591,7 +638,7 @@ describe('precompile server session unit guardrails', () => {
         credential: { challenge: makeChallenge(openPayload.channelId), payload },
         request: makeRequest(openPayload.channelId) as never,
       }),
-    ).rejects.toThrow(/close voucher amount exceeds on-chain deposit/)
+    ).rejects.toThrow(/close capture amount exceeds on-chain deposit/)
   })
 
   test('rejects close for locally finalized and pending precompile channels', async () => {
@@ -633,6 +680,78 @@ describe('precompile server session unit guardrails', () => {
         request: makeRequest(openPayload.channelId) as never,
       }),
     ).rejects.toThrow(/channel has a pending close request/)
+  })
+
+  test('does not let a racing lower voucher regress highest accepted precompile voucher', async () => {
+    const openPayload = await createOpenCredential({ initialAmount: 100n })
+    const lowerVoucher = await ClientOps.createVoucherCredential(createSigningClient(), payer, {
+      chainId,
+      cumulativeAmount: Types.uint96(200n),
+      descriptor: openPayload.descriptor,
+    })
+    const higherVoucher = await ClientOps.createVoucherCredential(createSigningClient(), payer, {
+      chainId,
+      cumulativeAmount: Types.uint96(500n),
+      descriptor: openPayload.descriptor,
+    })
+
+    const seedStore = ChannelStore.fromStore(Store.memory() as never)
+    await persistPrecompileChannel(seedStore, openPayload, {
+      highestVoucherAmount: 100n,
+      highestVoucher: {
+        channelId: openPayload.channelId,
+        cumulativeAmount: 100n,
+        signature: openPayload.signature,
+      },
+    })
+    const stale = (await seedStore.getChannel(openPayload.channelId))!
+    let stored: ChannelStore.State = {
+      ...stale,
+      highestVoucherAmount: 500n,
+      highestVoucher: {
+        channelId: openPayload.channelId,
+        cumulativeAmount: 500n,
+        signature: higherVoucher.signature,
+      },
+    }
+    const racingStore = {
+      async get(_key: string) {
+        return stale as never
+      },
+      async put(_key: string, value: unknown) {
+        stored = value as ChannelStore.State
+      },
+      async delete(_key: string) {},
+      async update<result>(
+        _key: string,
+        fn: (current: unknown | null) => Store.Change<unknown, result>,
+      ): Promise<result> {
+        const change = fn(stored)
+        if (change.op === 'set') stored = change.value as ChannelStore.State
+        return change.result
+      },
+    } as Store.AtomicStore
+    const method = session({
+      account: payer,
+      amount: '1',
+      chainId,
+      channelStateTtl: Number.MAX_SAFE_INTEGER,
+      currency: token,
+      decimals: 0,
+      recipient: payee,
+      store: racingStore,
+      unitType: 'request',
+      getClient: () => createStateClient(payer),
+    })
+
+    const receipt = await method.verify({
+      credential: { challenge: makeChallenge(openPayload.channelId), payload: lowerVoucher },
+      request: makeRequest(openPayload.channelId) as never,
+    })
+
+    expect((receipt as SessionReceipt).acceptedCumulative).toBe('500')
+    expect(stored.highestVoucherAmount).toBe(500n)
+    expect(stored.highestVoucher?.signature).toBe(higherVoucher.signature)
   })
 
   test('marks pending precompile close before broadcast and restores it when broadcast fails', async () => {
@@ -789,7 +908,37 @@ describe('precompile server session unit guardrails', () => {
     ).rejects.toThrow(/eth_sendRawTransaction/)
   })
 
-  test('rejects server-driven close when sender is not the channel payee', async () => {
+  test('accepts server-driven close sender matching a nonzero precompile operator', async () => {
+    const rawStore = Store.memory()
+    const store = ChannelStore.fromStore(rawStore as never)
+    const openPayload = await createOpenCredential({ operator: wrongPayer.address })
+    await persistPrecompileChannel(store, openPayload)
+    const method = session({
+      account: wrongPayer,
+      amount: '1',
+      chainId,
+      currency: token,
+      decimals: 0,
+      recipient: payee,
+      store: rawStore,
+      unitType: 'request',
+      getClient: () => createStateClient(payer),
+    })
+    const payload = await ClientOps.createCloseCredential(createSigningClient(), payer, {
+      chainId,
+      cumulativeAmount: Types.uint96(100n),
+      descriptor: openPayload.descriptor,
+    })
+
+    await expect(
+      method.verify({
+        credential: { challenge: makeChallenge(openPayload.channelId), payload },
+        request: makeRequest(openPayload.channelId) as never,
+      }),
+    ).rejects.toThrow(/eth_sendRawTransaction/)
+  })
+
+  test('rejects server-driven close when sender is not the channel payee or operator', async () => {
     const rawStore = Store.memory()
     const store = ChannelStore.fromStore(rawStore as never)
     const openPayload = await createOpenCredential()
