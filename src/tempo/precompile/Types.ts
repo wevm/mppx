@@ -1,7 +1,5 @@
 import type { Address, Hex } from 'viem'
 
-import type * as Channel from './Channel.js'
-
 const maxUint96 = (1n << 96n) - 1n
 declare const uint96Brand: unique symbol
 
@@ -24,6 +22,16 @@ export function assertUint96(value: bigint): asserts value is Uint96 {
   uint96(value)
 }
 
+export type ChannelDescriptor = {
+  payer: Address
+  payee: Address
+  operator: Address
+  token: Address
+  salt: Hex
+  authorizedSigner: Address
+  expiringNonceHash: Hex
+}
+
 /** TIP-1034 precompile open credential payload before amount branding. */
 export type OpenCredentialPayload = {
   action: 'open'
@@ -31,7 +39,7 @@ export type OpenCredentialPayload = {
   channelId: Hex
   transaction: Hex
   signature: Hex
-  descriptor: Channel.ChannelDescriptor
+  descriptor: ChannelDescriptor
   cumulativeAmount: string
   authorizedSigner?: Address | undefined
 }
@@ -42,7 +50,7 @@ export type TopUpCredentialPayload = {
   type: 'transaction'
   channelId: Hex
   transaction: Hex
-  descriptor: Channel.ChannelDescriptor
+  descriptor: ChannelDescriptor
   additionalDeposit: string
 }
 
@@ -50,7 +58,7 @@ export type TopUpCredentialPayload = {
 export type VoucherCredentialPayload = {
   action: 'voucher'
   channelId: Hex
-  descriptor: Channel.ChannelDescriptor
+  descriptor: ChannelDescriptor
   cumulativeAmount: string
   signature: Hex
 }
@@ -59,7 +67,7 @@ export type VoucherCredentialPayload = {
 export type CloseCredentialPayload = {
   action: 'close'
   channelId: Hex
-  descriptor: Channel.ChannelDescriptor
+  descriptor: ChannelDescriptor
   cumulativeAmount: string
   signature: Hex
 }

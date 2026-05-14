@@ -1,5 +1,4 @@
-import type { Hex } from 'ox'
-import { encodeAbiParameters, keccak256, type Account, type Address } from 'viem'
+import { encodeAbiParameters, keccak256, type Account, type Address, type Hex } from 'viem'
 import {
   Transaction,
   type z_TransactionRequestTempo,
@@ -7,6 +6,9 @@ import {
 } from 'viem/tempo'
 
 import { tip20ChannelEscrow } from './Constants.js'
+import type { ChannelDescriptor } from './Types.js'
+
+export type { ChannelDescriptor } from './Types.js'
 
 export type ExpiringNonceTransaction = (
   | z_TransactionSerializableTempo
@@ -15,21 +17,11 @@ export type ExpiringNonceTransaction = (
   feePayer?: Account | true | undefined
 }
 
-export type ChannelDescriptor = {
-  payer: Address
-  payee: Address
-  operator: Address
-  token: Address
-  salt: Hex.Hex
-  authorizedSigner: Address
-  expiringNonceHash: Hex.Hex
-}
-
 /** Computes the TIP-1034 channel ID for a precompile channel descriptor. */
 export function computeId(
   descriptor: ChannelDescriptor,
   parameters: { chainId: number; escrow?: Address | undefined },
-): Hex.Hex {
+): Hex {
   return keccak256(
     encodeAbiParameters(
       [
@@ -68,10 +60,10 @@ export function computeId(
 export function computeExpiringNonceHash(
   transaction: ExpiringNonceTransaction,
   parameters: { sender: Address },
-): Hex.Hex {
+): Hex {
   const getChannelOpenContextHash = Transaction.getChannelOpenContextHash as (
     transaction: ExpiringNonceTransaction,
     options: { sender: Address },
-  ) => Hex.Hex
+  ) => Hex
   return getChannelOpenContextHash(transaction, parameters)
 }
