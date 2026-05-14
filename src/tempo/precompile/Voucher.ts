@@ -5,26 +5,30 @@ import { hashTypedData } from 'viem'
 import { signTypedData } from 'viem/actions'
 
 import * as TempoAddress from '../internal/address.js'
-import { tip20ChannelEscrow } from './Constants.js'
 import type { Voucher, SignedVoucher } from './Types.js'
 import { uint96 } from './Types.js'
 
-/** Must match the on-chain TempoStreamChannel DOMAIN_SEPARATOR name. */
+/** Must match the on-chain TIP20 channel escrow DOMAIN_SEPARATOR name. */
 const DOMAIN_NAME = 'TIP20 Channel Escrow'
-/** Must match the on-chain TempoStreamChannel DOMAIN_SEPARATOR version. */
+/** Must match the on-chain TIP20 channel escrow DOMAIN_SEPARATOR version. */
 const DOMAIN_VERSION = '1'
 
-/** EIP-712 domain for TIP-1034 channel escrow vouchers. */
-export function getVoucherDomain(chainId: number, verifyingContract: Address = tip20ChannelEscrow) {
+/**
+ * EIP-712 domain for voucher signing.
+ */
+export function getVoucherDomain(escrowContract: Address, chainId: number) {
   return {
     name: DOMAIN_NAME,
     version: DOMAIN_VERSION,
     chainId,
-    verifyingContract,
+    verifyingContract: escrowContract,
   } as const
 }
 
-/** EIP-712 voucher type for TIP-1034 channel escrow vouchers. */
+/**
+ * EIP-712 types for voucher signing.
+ * Matches @tempo/stream-channels/voucher and on-chain VOUCHER_TYPEHASH.
+ */
 export const voucherTypes = {
   Voucher: [
     { name: 'channelId', type: 'bytes32' },
@@ -33,32 +37,29 @@ export const voucherTypes = {
 } as const
 
 /**
- * Signs a TIP-1034 voucher.
- *
- * When `authorizedSigner` is a delegated access key, only secp256k1 keychain
- * signatures can be unwrapped into the raw ECDSA signature accepted by the
- * precompile. p256/WebAuthn keychain wrappers are rejected; pass an explicit
- * secp256k1 authorized signer for voucher delegation.
+ * Sign a voucher with an account.
  */
 export async function signVoucher(
   client: Client,
   account: Account,
   voucher: Voucher,
-  parameters: {
-    chainId: number
-    verifyingContract?: Address | undefined
-    authorizedSigner?: Address | undefined
-  },
+  verifyingContract: Address,
+  chainId: number,
+  authorizedSigner?: Address | undefined,
 ): Promise<Hex> {
   const signature = await signTypedData(client, {
     account,
-    domain: getVoucherDomain(parameters.chainId, parameters.verifyingContract),
+    domain: getVoucherDomain(verifyingContract, chainId),
     types: voucherTypes,
     primaryType: 'Voucher',
     message: voucher,
   })
 
-  if (parameters.authorizedSigner) {
+  // When a separate authorizedSigner is used (e.g. access key), unwrap the
+  // keychain envelope — the escrow contract verifies raw ECDSA signatures
+  // against authorizedSigner, not keychain-wrapped ones.
+  // TODO: when TIP-1020 is implemented, we can remove this.
+  if (authorizedSigner) {
     const envelope = (() => {
       try {
         return SignatureEnvelope.from(signature as SignatureEnvelope.Serialized)
@@ -76,23 +77,26 @@ export async function signVoucher(
 }
 
 /**
- * Verifies a direct TIP-1034 voucher signature.
+ * Verify a voucher signature matches the expected signer.
  *
- * Only raw secp256k1 signatures are accepted. Keychain wrapper signatures are
- * rejected because the precompile verifies vouchers with ecrecover against the
- * channel's authorized signer.
+ * Only accepts raw secp256k1 signatures — the escrow contract verifies
+ * via ecrecover. Keychain, p256, and webAuthn signatures are rejected.
  */
 export function verifyVoucher(
+  escrowContract: Address,
+  chainId: number,
   voucher: SignedVoucher,
   expectedSigner: Address,
-  parameters: { chainId: number; verifyingContract?: Address | undefined },
 ): boolean {
   try {
     const envelope = SignatureEnvelope.from(voucher.signature as SignatureEnvelope.Serialized)
+
+    // Reject keychain signatures — the escrow contract verifies raw ECDSA
+    // signatures against authorizedSigner, not keychain-wrapped ones.
     if (envelope.type === 'keychain') return false
 
     const payload = hashTypedData({
-      domain: getVoucherDomain(parameters.chainId, parameters.verifyingContract),
+      domain: getVoucherDomain(escrowContract, chainId),
       types: voucherTypes,
       primaryType: 'Voucher',
       message: {
@@ -108,7 +112,9 @@ export function verifyVoucher(
   }
 }
 
-/** Parses a signed TIP-1034 voucher payload and brands its uint96 cumulative amount. */
+/**
+ * Parse a voucher from credential payload.
+ */
 export function parseVoucherFromPayload(
   channelId: Hex,
   cumulativeAmount: string,

@@ -530,9 +530,10 @@ async function handleOpen(parameters: {
   if (payload.cumulativeAmount > open.deposit)
     throw new AmountExceedsDepositError({ reason: 'voucher amount exceeds open deposit' })
   const valid = await Voucher.verifyVoucher(
+    escrow,
+    chainId,
     { channelId, cumulativeAmount: payload.cumulativeAmount, signature: payload.signature },
     authorizedSigner(descriptor),
-    { chainId, verifyingContract: escrow },
   )
   if (!valid) throw new InvalidSignatureError({ reason: 'invalid voucher signature' })
   const receipt = await sendCredentialTransaction({
@@ -792,9 +793,10 @@ async function handleVoucher(parameters: {
       reason: 'voucher cumulativeAmount must be strictly greater than highest accepted voucher',
     })
   const valid = await Voucher.verifyVoucher(
+    escrow,
+    chainId,
     { channelId, cumulativeAmount: payload.cumulativeAmount, signature: payload.signature },
     channel.authorizedSigner,
-    { chainId, verifyingContract: escrow },
   )
   if (!valid) throw new InvalidSignatureError({ reason: 'invalid voucher signature' })
   if (payload.cumulativeAmount === channel.highestVoucherAmount)
@@ -880,9 +882,10 @@ async function handleClose(parameters: {
       reason: `close voucher amount must be >= ${state.settled} (on-chain settled)`,
     })
   const valid = await Voucher.verifyVoucher(
+    escrow,
+    chainId,
     { channelId, cumulativeAmount: payload.cumulativeAmount, signature: payload.signature },
     channel.authorizedSigner,
-    { chainId, verifyingContract: escrow },
   )
   if (!valid) throw new InvalidSignatureError({ reason: 'invalid voucher signature' })
   let captureAmount = uint96(channel.spent > state.settled ? channel.spent : state.settled)

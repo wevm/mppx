@@ -111,7 +111,8 @@ describe.runIf(isPrecompileTestnet)('TIP-1034 precompile chain operations', () =
       client,
       payer,
       { channelId, cumulativeAmount },
-      { chainId: chain.id, verifyingContract: tip20ChannelEscrow },
+      tip20ChannelEscrow,
+      chain.id,
     )
 
     const receipt = await sendPrecompileCall(

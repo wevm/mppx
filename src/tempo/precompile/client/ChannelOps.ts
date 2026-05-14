@@ -96,11 +96,9 @@ export async function createOpen(
     client,
     account,
     { channelId, cumulativeAmount: parameters.initialAmount },
-    {
-      authorizedSigner: voucherAuthorizedSigner(authorizedSigner),
-      chainId: parameters.chainId,
-      verifyingContract: escrow,
-    },
+    escrow,
+    parameters.chainId,
+    voucherAuthorizedSigner(authorizedSigner),
   )
   const transaction = (await signTransaction(client, prepared as never)) as Hex.Hex
 
@@ -145,11 +143,9 @@ export async function createVoucherCredential(
     client,
     account,
     { channelId, cumulativeAmount: parameters.cumulativeAmount },
-    {
-      authorizedSigner: voucherAuthorizedSigner(parameters.descriptor.authorizedSigner),
-      chainId: parameters.chainId,
-      verifyingContract: escrow,
-    },
+    escrow,
+    parameters.chainId,
+    voucherAuthorizedSigner(parameters.descriptor.authorizedSigner),
   )
 
   return {

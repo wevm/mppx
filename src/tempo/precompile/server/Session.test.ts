@@ -207,7 +207,8 @@ async function createOpenCredential(
     signingClient,
     account,
     { channelId, cumulativeAmount: initialAmount },
-    { chainId, verifyingContract: escrow },
+    escrow,
+    chainId,
   )
   return {
     action: 'open',

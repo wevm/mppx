@@ -74,12 +74,10 @@ describe('precompile client ChannelOps credential builders', () => {
     expect(payload.cumulativeAmount).toBe('250')
     expect(
       Voucher.verifyVoucher(
+        tip20ChannelEscrow,
+        chainId,
         { channelId, cumulativeAmount, signature: payload.signature },
         descriptor.authorizedSigner,
-        {
-          chainId,
-          verifyingContract: tip20ChannelEscrow,
-        },
       ),
     ).toBe(true)
   })
@@ -126,12 +124,10 @@ describe('precompile client ChannelOps credential builders', () => {
     expect(payload.channelId).toBe(zeroSignerChannelId)
     expect(
       Voucher.verifyVoucher(
+        tip20ChannelEscrow,
+        chainId,
         { channelId: zeroSignerChannelId, cumulativeAmount, signature: payload.signature },
         descriptor.payer,
-        {
-          chainId,
-          verifyingContract: tip20ChannelEscrow,
-        },
       ),
     ).toBe(true)
   })
@@ -150,12 +146,10 @@ describe('precompile client ChannelOps credential builders', () => {
     expect(payload.cumulativeAmount).toBe('300')
     expect(
       Voucher.verifyVoucher(
+        tip20ChannelEscrow,
+        chainId,
         { channelId, cumulativeAmount, signature: payload.signature },
         descriptor.authorizedSigner,
-        {
-          chainId,
-          verifyingContract: tip20ChannelEscrow,
-        },
       ),
     ).toBe(true)
   })
