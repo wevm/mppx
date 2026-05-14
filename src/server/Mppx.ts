@@ -259,7 +259,8 @@ type EffectiveTransportOf<mi, defaultTransport extends Transport.AnyTransport> =
   ? defaultTransport
   : TransportOverrideOf<mi>
 
-type ReservedMppxKey =
+/** Public instance keys that payment method names and shorthand intents cannot shadow. */
+export type ReservedKey =
   | 'challenge'
   | 'compose'
   | 'methods'
@@ -287,7 +288,7 @@ type UniqueIntentHandlers<
   transport extends Transport.AnyTransport,
 > = {
   [method_name in methods[number]['intent'] as IsUniqueIntent<methods, method_name> extends true
-    ? method_name extends ReservedMppxKey
+    ? method_name extends ReservedKey
       ? never
       : method_name
     : never]: MethodFn<
@@ -302,7 +303,7 @@ type NestedHandlers<
   methods extends readonly Method.AnyServer[],
   transport extends Transport.AnyTransport,
 > = {
-  [name in methods[number]['name'] as name extends ReservedMppxKey ? never : name]: {
+  [name in methods[number]['name'] as name extends ReservedKey ? never : name]: {
     [mi in Extract<methods[number], { name: name }> as mi['intent']]: MethodFn<
       mi,
       EffectiveTransportOf<mi, transport>,
@@ -1266,7 +1267,9 @@ async function emitServerEventHandlers(
   }
 }
 
-const reservedMppxKeys = new Set<ReservedMppxKey>([
+// Keep this runtime list aligned with `ReservedKey`; it protects the same
+// public Mppx instance surface that framework wrappers pass through unchanged.
+const reservedMppxKeys = new Set<ReservedKey>([
   'challenge',
   'compose',
   'methods',
@@ -1284,9 +1287,9 @@ function assertNoReservedMppxKeys(
   intentCount: Readonly<Record<string, number>>,
 ) {
   for (const method of methods) {
-    if (reservedMppxKeys.has(method.name as ReservedMppxKey))
+    if (reservedMppxKeys.has(method.name as ReservedKey))
       throw new Error(`Method name "${method.name}" conflicts with a reserved Mppx property.`)
-    if (intentCount[method.intent] === 1 && reservedMppxKeys.has(method.intent as ReservedMppxKey))
+    if (intentCount[method.intent] === 1 && reservedMppxKeys.has(method.intent as ReservedKey))
       throw new Error(`Method intent "${method.intent}" conflicts with a reserved Mppx property.`)
   }
 }
@@ -1397,7 +1400,7 @@ function snapshotNullableValue<value>(value: value | null): value | null {
 
 function snapshotValue<value>(value: value): value {
   try {
-    return deepFreeze(structuredClone(value))
+    return freezeSnapshot(structuredClone(value))
   } catch {
     return value
   }
@@ -1414,10 +1417,11 @@ function snapshotTransportInput<input>(input: input): input {
   return input
 }
 
-function deepFreeze<value>(value: value): value {
+// Event payloads are cloned before listeners see them; shallow freezing keeps
+// the guard simple while preventing top-level mutation of receipts/challenges.
+function freezeSnapshot<value>(value: value): value {
   if (!value || typeof value !== 'object' || Object.isFrozen(value)) return value
   Object.freeze(value)
-  for (const child of Object.values(value as Record<string, unknown>)) deepFreeze(child)
   return value
 }
 

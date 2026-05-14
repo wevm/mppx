@@ -17,17 +17,8 @@ type WrapNested<obj, handler> = {
 export type Wrap<mppx, handler> = {
   // `compose` is omitted — it returns a raw HTTP handler, not a
   // middleware-shaped result. Use `Mppx.compose()` static instead.
-  // `methods`, `realm`, `transport` are data properties — not handlers.
-  // Event helpers and standalone verification are copied through unchanged.
-  [key in keyof mppx as key extends 'compose' ? never : key]: key extends
-    | 'methods'
-    | 'on'
-    | 'onChallengeCreated'
-    | 'onPaymentFailed'
-    | 'onPaymentSuccess'
-    | 'realm'
-    | 'transport'
-    | 'verifyCredential'
+  // Reserved Mppx keys are copied through unchanged, not wrapped as handlers.
+  [key in keyof mppx as key extends 'compose' ? never : key]: key extends Mppx.ReservedKey
     ? mppx[key]
     : mppx[key] extends (options: infer options) => any
       ? (o: options) => handler & DiscoveryMeta
