@@ -185,7 +185,6 @@
   "dependencies": {
     "incur": "^0.4.5",
     "ox": "0.14.20",
-    "rettime": "^0.11.11",
     "zod": "^4.4.3"
   },
   "repository": {

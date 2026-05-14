@@ -757,6 +757,151 @@ describe('Fetch.from: 402 retry path', () => {
     expect(events).toEqual(['first'])
   })
 
+  test('does not emit payment.response for non-ok retry responses', async () => {
+    const events: string[] = []
+    const createCredential = vi.fn(async () => 'method-credential')
+    const method = { ...noopMethod, createCredential }
+    let callCount = 0
+    const mockFetch: typeof globalThis.fetch = async () => {
+      callCount++
+      if (callCount === 1) return make402()
+      return new Response('Internal Server Error', { status: 500 })
+    }
+    const eventDispatcher = Fetch.createEventDispatcher<[typeof method]>()
+    eventDispatcher.on('payment.response', (payload) => {
+      events.push(`response:${payload.response.status}`)
+    })
+
+    const fetch = Fetch.from({
+      eventDispatcher,
+      fetch: mockFetch,
+      methods: [method],
+    })
+
+    const response = await fetch('https://example.com/api')
+
+    expect(response.status).toBe(500)
+    expect(events).toEqual([])
+  })
+
+  test('ignores empty challenge event credentials and continues handlers', async () => {
+    const createCredential = vi.fn(async () => 'method-credential')
+    const method = { ...noopMethod, createCredential }
+    let callCount = 0
+    const calls: { init: RequestInit | undefined }[] = []
+    const mockFetch: typeof globalThis.fetch = async (_input, init) => {
+      calls.push({ init })
+      callCount++
+      if (callCount === 1) return make402()
+      return new Response('OK', { status: 200 })
+    }
+    const eventDispatcher = Fetch.createEventDispatcher<[typeof method]>()
+    eventDispatcher.on('challenge.received', () => '')
+    eventDispatcher.on('challenge.received', () => 'second-credential')
+
+    const fetch = Fetch.from({
+      eventDispatcher,
+      fetch: mockFetch,
+      methods: [method],
+    })
+
+    await fetch('https://example.com/api')
+
+    expect(createCredential).not.toHaveBeenCalled()
+    const retryHeaders = new Headers((calls[1]!.init as RequestInit).headers)
+    expect(retryHeaders.get('Authorization')).toBe('second-credential')
+  })
+
+  test('memoizes createCredential across wildcard observers and fallback', async () => {
+    const createCredential = vi.fn(async () => 'method-credential')
+    const method = { ...noopMethod, createCredential }
+    let callCount = 0
+    const mockFetch: typeof globalThis.fetch = async () => {
+      callCount++
+      if (callCount === 1) return make402()
+      return new Response('OK', { status: 200 })
+    }
+    const eventDispatcher = Fetch.createEventDispatcher<[typeof method]>()
+    eventDispatcher.on('*', async (event) => {
+      if (event.name === 'challenge.received') await event.payload.createCredential()
+    })
+
+    const fetch = Fetch.from({
+      eventDispatcher,
+      fetch: mockFetch,
+      methods: [method],
+    })
+
+    await fetch('https://example.com/api')
+
+    expect(createCredential).toHaveBeenCalledTimes(1)
+  })
+
+  test('does not expose live challenges or init headers to observers', async () => {
+    const createCredential = vi.fn(async ({ challenge }) => `amount:${challenge.request.amount}`)
+    const method = { ...noopMethod, createCredential }
+    let callCount = 0
+    const calls: { init: RequestInit | undefined }[] = []
+    const mockFetch: typeof globalThis.fetch = async (_input, init) => {
+      calls.push({ init })
+      callCount++
+      if (callCount === 1) return make402()
+      return new Response('OK', { status: 200 })
+    }
+    const eventDispatcher = Fetch.createEventDispatcher<[typeof method]>()
+    eventDispatcher.on('*', (event) => {
+      if (event.name !== 'challenge.received') return
+      try {
+        ;(event.payload.challenge.request as { amount: string }).amount = '999'
+      } catch {}
+      const headers = new Headers(event.payload.init?.headers)
+      headers.set('Authorization', 'attacker')
+      if (event.payload.init) event.payload.init.headers = headers
+    })
+
+    const fetch = Fetch.from({
+      eventDispatcher,
+      fetch: mockFetch,
+      methods: [method],
+    })
+
+    await fetch('https://example.com/api', {
+      headers: { 'X-Test': '1' },
+    })
+
+    const retryHeaders = new Headers((calls[1]!.init as RequestInit).headers)
+    expect(retryHeaders.get('Authorization')).toBe('amount:1')
+  })
+
+  test('continues dispatching observer listeners after one throws', async () => {
+    const events: string[] = []
+    const method = { ...noopMethod, createCredential: vi.fn(async () => 'credential') }
+    let callCount = 0
+    const mockFetch: typeof globalThis.fetch = async () => {
+      callCount++
+      if (callCount === 1) return make402()
+      return new Response('OK', { status: 200 })
+    }
+    const eventDispatcher = Fetch.createEventDispatcher<[typeof method]>()
+    eventDispatcher.on('credential.created', () => {
+      events.push('first')
+      throw new Error('observer failed')
+    })
+    eventDispatcher.on('credential.created', () => {
+      events.push('second')
+    })
+
+    const fetch = Fetch.from({
+      eventDispatcher,
+      fetch: mockFetch,
+      methods: [method],
+    })
+
+    await fetch('https://example.com/api')
+
+    expect(events).toEqual(['first', 'second'])
+  })
+
   test('emits payment.failed when automatic payment handling rejects', async () => {
     const events: string[] = []
     const createCredential = vi.fn(async () => 'credential')

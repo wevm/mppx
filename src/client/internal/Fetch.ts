@@ -1,5 +1,3 @@
-import { Emitter, TypedEvent } from 'rettime'
-
 import * as Challenge from '../../Challenge.js'
 import * as Expires from '../../Expires.js'
 import * as AcceptPayment from '../../internal/AcceptPayment.js'
@@ -20,49 +18,58 @@ let originalFetch: typeof globalThis.fetch | undefined
 
 export type ClientEventMap<
   methods extends readonly Method.AnyClient[] = readonly Method.AnyClient[],
+  response = Response,
 > = {
-  'challenge.received': ChallengeReceivedPayload<methods>
-  'credential.created': CredentialCreatedPayload<methods>
-  'payment.failed': PaymentFailedPayload<methods>
-  'payment.response': PaymentResponsePayload<methods>
+  'challenge.received': ChallengeReceivedPayload<methods, response>
+  'credential.created': CredentialCreatedPayload<methods, response>
+  'payment.failed': PaymentFailedPayload<methods, response>
+  'payment.response': PaymentResponsePayload<methods, response>
 }
 
 export type ClientEventName<
   methods extends readonly Method.AnyClient[] = readonly Method.AnyClient[],
-> = keyof ClientEventMap<methods> | '*'
+  response = Response,
+> = keyof ClientEventMap<methods, response> | '*'
 
 export type ClientEventEnvelope<
   methods extends readonly Method.AnyClient[] = readonly Method.AnyClient[],
+  response = Response,
 > = {
-  [name in keyof ClientEventMap<methods>]: Readonly<{
+  [name in keyof ClientEventMap<methods, response>]: Readonly<{
     name: name
-    payload: ClientEventMap<methods>[name]
+    payload: ClientEventMap<methods, response>[name]
   }>
-}[keyof ClientEventMap<methods>]
+}[keyof ClientEventMap<methods, response>]
 
 export type ClientEventPayload<
   methods extends readonly Method.AnyClient[] = readonly Method.AnyClient[],
   name extends ClientEventName<methods> = ClientEventName<methods>,
+  response = Response,
 > = name extends '*'
-  ? ClientEventEnvelope<methods>
-  : name extends keyof ClientEventMap<methods>
-    ? ClientEventMap<methods>[name]
+  ? ClientEventEnvelope<methods, response>
+  : name extends keyof ClientEventMap<methods, response>
+    ? ClientEventMap<methods, response>[name]
     : never
 
 export type ClientEventResult<
   methods extends readonly Method.AnyClient[],
-  name extends ClientEventName<methods>,
+  name extends ClientEventName<methods> = ClientEventName<methods>,
+  _response = Response,
 > = name extends 'challenge.received' ? string | undefined : void
 
 export type ClientEventHandler<
   methods extends readonly Method.AnyClient[] = readonly Method.AnyClient[],
   name extends ClientEventName<methods> = ClientEventName<methods>,
-> = (payload: ClientEventPayload<methods, name>) => MaybePromise<ClientEventResult<methods, name>>
+  response = Response,
+> = (
+  payload: ClientEventPayload<methods, name, response>,
+) => MaybePromise<ClientEventResult<methods, name, response>>
 
 export type Unsubscribe = () => void
 
 export type ChallengeReceivedPayload<
   methods extends readonly Method.AnyClient[] = readonly Method.AnyClient[],
+  response = Response,
 > = Readonly<{
   challenge: Challenge.Challenge
   challenges: readonly Challenge.Challenge[]
@@ -70,33 +77,36 @@ export type ChallengeReceivedPayload<
   init?: from.RequestInit<methods> | undefined
   input?: RequestInfo | URL | undefined
   method: methods[number]
-  response: Response
+  response: response
 }>
 
 export type CredentialCreatedPayload<
   methods extends readonly Method.AnyClient[] = readonly Method.AnyClient[],
+  response = Response,
 > = Readonly<{
   challenge: Challenge.Challenge
   credential: string
   init?: from.RequestInit<methods> | undefined
   input?: RequestInfo | URL | undefined
   method: methods[number]
-  response?: Response | undefined
+  response?: response | undefined
 }>
 
 export type PaymentResponsePayload<
   methods extends readonly Method.AnyClient[] = readonly Method.AnyClient[],
+  response = Response,
 > = Readonly<{
   challenge: Challenge.Challenge
   credential: string
   init?: from.RequestInit<methods> | undefined
   input?: RequestInfo | URL | undefined
   method: methods[number]
-  response: Response
+  response: response
 }>
 
 export type PaymentFailedPayload<
   methods extends readonly Method.AnyClient[] = readonly Method.AnyClient[],
+  response = Response,
 > = Readonly<{
   challenge?: Challenge.Challenge | undefined
   challenges?: readonly Challenge.Challenge[] | undefined
@@ -104,34 +114,21 @@ export type PaymentFailedPayload<
   init?: from.RequestInit<methods> | undefined
   input?: RequestInfo | URL | undefined
   method?: methods[number] | undefined
-  response?: Response | undefined
+  response?: response | undefined
 }>
 
 export type ClientEventDispatcher<
   methods extends readonly Method.AnyClient[] = readonly Method.AnyClient[],
+  response = Response,
 > = {
-  emit<name extends Exclude<ClientEventName<methods>, '*'>>(
+  emit<name extends Exclude<ClientEventName<methods, response>, '*'>>(
     name: name,
-    payload: ClientEventMap<methods>[name],
-  ): Promise<ClientEventResult<methods, name>>
-  on<name extends ClientEventName<methods>>(
+    payload: ClientEventMap<methods, response>[name],
+  ): Promise<ClientEventResult<methods, name, response>>
+  on<name extends ClientEventName<methods, response>>(
     name: name,
-    handler: ClientEventHandler<methods, name>,
+    handler: ClientEventHandler<methods, name, response>,
   ): Unsubscribe
-}
-
-type ClientRettimeEventMap<methods extends readonly Method.AnyClient[]> = {
-  'challenge.received': TypedEvent<
-    ChallengeReceivedPayload<methods>,
-    MaybePromise<string | undefined>
-  >
-  'credential.created': TypedEvent<CredentialCreatedPayload<methods>, MaybePromise<void>>
-  'payment.failed': TypedEvent<PaymentFailedPayload<methods>, MaybePromise<void>>
-  'payment.response': TypedEvent<PaymentResponsePayload<methods>, MaybePromise<void>>
-}
-
-type ClientWildcardEventMap<methods extends readonly Method.AnyClient[]> = {
-  event: TypedEvent<ClientEventEnvelope<methods>, MaybePromise<void>>
 }
 
 /**
@@ -209,21 +206,23 @@ export function from<const methods extends readonly Method.AnyClient[]>(
           `No method found for challenges: ${challenges.map((c) => `${c.method}.${c.intent}`).join(', ')}. Available: ${methods.map((m) => `${m.name}.${m.intent}`).join(', ')}`,
         )
 
-      challenge = selected.challenge
+      const selectedChallenge = selected.challenge
+      challenge = selectedChallenge
       mi = selected.method
       if (challenge.expires) Expires.assert(challenge.expires, challenge.id)
 
-      const createCredential = async (overrideContext?: AnyContextFor<methods>) =>
-        resolveCredential(challenge!, mi!, overrideContext ?? context)
+      const createCredential = memoizeCreateCredential((overrideContext?: AnyContextFor<methods>) =>
+        resolveCredential(selectedChallenge, selected.method, overrideContext ?? context),
+      )
       const eventCredential = await events.emit(
         'challenge.received',
-        Object.freeze({
-          challenge,
+        createChallengeReceivedPayload({
+          challenge: selectedChallenge,
           challenges,
           createCredential,
           init,
           input,
-          method: mi,
+          method: selected.method,
           response,
         }),
       )
@@ -238,12 +237,12 @@ export function from<const methods extends readonly Method.AnyClient[]>(
       validateCredentialHeaderValue(credential)
       await events.emit(
         'credential.created',
-        Object.freeze({
-          challenge,
+        createCredentialCreatedPayload({
+          challenge: selectedChallenge,
           credential,
           init,
           input,
-          method: mi,
+          method: selected.method,
           response,
         }),
       )
@@ -252,22 +251,23 @@ export function from<const methods extends readonly Method.AnyClient[]>(
         ...fetchInit,
         headers: withAuthorizationHeader(initialRequest.headers, credential),
       })
-      await events.emit(
-        'payment.response',
-        Object.freeze({
-          challenge,
-          credential,
-          init,
-          input,
-          method: mi,
-          response: paymentResponse,
-        }),
-      )
+      if (paymentResponse.ok)
+        await events.emit(
+          'payment.response',
+          createPaymentResponsePayload({
+            challenge: selectedChallenge,
+            credential,
+            init,
+            input,
+            method: selected.method,
+            response: paymentResponse,
+          }),
+        )
       return paymentResponse
     } catch (error) {
       await events.emit(
         'payment.failed',
-        Object.freeze({
+        createPaymentFailedPayload({
           challenge,
           challenges,
           error,
@@ -309,11 +309,11 @@ export declare namespace from {
       | undefined
     /** Custom fetch function to wrap. Defaults to `globalThis.fetch`. */
     fetch?: typeof globalThis.fetch
-    /** @internal Shared event dispatcher. Used by higher-level client handlers. */
-    eventDispatcher?: ClientEventDispatcher<methods> | undefined
+    /** Advanced shared event dispatcher. `challenge.received` handlers run before `onChallenge`; the first non-empty credential returned by a handler skips `onChallenge`. */
+    eventDispatcher?: ClientEventDispatcher<methods, any> | undefined
     /** Array of methods to use. */
     methods: methods
-    /** Called when a 402 challenge is received, before credential creation. */
+    /** Called when a 402 challenge is received and no event handler supplies a credential. */
     onChallenge?:
       | ((
           challenge: Challenge.Challenge,
@@ -415,33 +415,36 @@ export function normalizeHeaders(headers: unknown): Record<string, string> {
   return headers as Record<string, string>
 }
 
-/** Creates a typed client payment event dispatcher. */
+/**
+ * Creates a typed client payment event dispatcher.
+ *
+ * `challenge.received` handlers run before `onChallenge`; the first non-empty
+ * credential returned by a handler wins. Observation handlers are isolated, so
+ * thrown listener errors do not stop sibling listeners or payment flow.
+ */
 export function createEventDispatcher<
   methods extends readonly Method.AnyClient[] = readonly Method.AnyClient[],
->(): ClientEventDispatcher<methods> {
-  const emitter = new Emitter<ClientRettimeEventMap<methods>>()
-  const wildcardEmitter = new Emitter<ClientWildcardEventMap<methods>>()
+  response = Response,
+>(): ClientEventDispatcher<methods, response> {
+  const handlers = {
+    '*': new Set<ClientEventHandler<methods, '*', response>>(),
+    'challenge.received': new Set<ClientEventHandler<methods, 'challenge.received', response>>(),
+    'credential.created': new Set<ClientEventHandler<methods, 'credential.created', response>>(),
+    'payment.failed': new Set<ClientEventHandler<methods, 'payment.failed', response>>(),
+    'payment.response': new Set<ClientEventHandler<methods, 'payment.response', response>>(),
+  }
 
-  const on: ClientEventDispatcher<methods>['on'] = (name, handler) => {
+  const on: ClientEventDispatcher<methods, response>['on'] = (name, handler) => {
     switch (name) {
       case '*':
-        return addRettimeListener(wildcardEmitter, 'event', (event) => handler(event.data as never))
       case 'challenge.received':
-        return addRettimeListener(emitter, 'challenge.received', (event) =>
-          handler(event.data as never),
-        )
       case 'credential.created':
-        return addRettimeListener(emitter, 'credential.created', (event) =>
-          handler(event.data as never),
-        )
       case 'payment.failed':
-        return addRettimeListener(emitter, 'payment.failed', (event) =>
-          handler(event.data as never),
-        )
       case 'payment.response':
-        return addRettimeListener(emitter, 'payment.response', (event) =>
-          handler(event.data as never),
-        )
+        handlers[name].add(handler as never)
+        return () => handlers[name].delete(handler as never)
+      default:
+        throw new Error(`Unknown client event "${String(name)}".`)
     }
   }
 
@@ -450,67 +453,224 @@ export function createEventDispatcher<
       switch (name) {
         case 'challenge.received': {
           let credential: string | undefined
-          const event = createRettimeEvent(name, payload)
-          for (const result of emitter.emitAsGenerator(event)) {
-            const value = await result
-            if (value !== undefined) {
+          for (const handler of handlers['challenge.received']) {
+            const value = await emitChallengeReceived(
+              handler,
+              payload as ChallengeReceivedPayload<methods, response>,
+            )
+            if (typeof value === 'string' && value.length > 0) {
               credential = value
               break
             }
           }
-          await emitCatchall(wildcardEmitter, name, payload)
-          return credential as ClientEventResult<methods, typeof name>
+          await emitCatchall(handlers['*'], name, payload)
+          return credential as ClientEventResult<methods, typeof name, response>
         }
         case 'credential.created':
-          await emitObserve(() => emitter.emitAsPromise(createRettimeEvent(name, payload)))
-          await emitCatchall(wildcardEmitter, name, payload)
-          return undefined as ClientEventResult<methods, typeof name>
+          await emitObserveHandlers(handlers['credential.created'], payload)
+          await emitCatchall(handlers['*'], name, payload)
+          return undefined as ClientEventResult<methods, typeof name, response>
         case 'payment.failed':
-          await emitObserve(() => emitter.emitAsPromise(createRettimeEvent(name, payload)))
-          await emitCatchall(wildcardEmitter, name, payload)
-          return undefined as ClientEventResult<methods, typeof name>
+          await emitObserveHandlers(handlers['payment.failed'], payload)
+          await emitCatchall(handlers['*'], name, payload)
+          return undefined as ClientEventResult<methods, typeof name, response>
         case 'payment.response':
-          await emitObserve(() => emitter.emitAsPromise(createRettimeEvent(name, payload)))
-          await emitCatchall(wildcardEmitter, name, payload)
-          return undefined as ClientEventResult<methods, typeof name>
+          await emitObserveHandlers(handlers['payment.response'], payload)
+          await emitCatchall(handlers['*'], name, payload)
+          return undefined as ClientEventResult<methods, typeof name, response>
       }
     },
     on,
   }
 }
 
-function addRettimeListener(
-  emitter: Emitter<any>,
-  name: string,
-  handler: (event: TypedEvent<any, any>) => unknown,
-): Unsubscribe {
-  const controller = new AbortController()
-  emitter.on(name, handler as never, { signal: controller.signal })
-  return () => controller.abort()
+async function emitChallengeReceived<methods extends readonly Method.AnyClient[], response>(
+  handler: ClientEventHandler<methods, 'challenge.received', response>,
+  payload: ChallengeReceivedPayload<methods, response>,
+): Promise<string | undefined> {
+  try {
+    return await handler(payload)
+  } catch {
+    return undefined
+  }
 }
 
-function createRettimeEvent(name: string, payload: unknown): never {
-  return new TypedEvent<unknown, unknown, string>(name, { data: payload }) as never
+async function emitObserveHandlers(
+  handlers: ReadonlySet<(payload: never) => MaybePromise<unknown>>,
+  payload: unknown,
+): Promise<void> {
+  for (const handler of handlers) {
+    try {
+      await handler(payload as never)
+    } catch {
+      // Client observation events must not alter payment flow.
+    }
+  }
 }
 
 async function emitCatchall<
   methods extends readonly Method.AnyClient[],
-  name extends keyof ClientEventMap<methods>,
+  response,
+  name extends keyof ClientEventMap<methods, response>,
 >(
-  emitter: Emitter<ClientWildcardEventMap<methods>>,
+  handlers: ReadonlySet<ClientEventHandler<methods, '*', response>>,
   name: name,
-  payload: ClientEventMap<methods>[name],
+  payload: ClientEventMap<methods, response>[name],
 ) {
-  const event = Object.freeze({ name, payload }) as ClientEventPayload<methods, '*'>
-  await emitObserve(() => emitter.emitAsPromise(createRettimeEvent('event', event)))
+  await emitObserveHandlers(
+    handlers as ReadonlySet<(payload: never) => MaybePromise<unknown>>,
+    Object.freeze({ name, payload }) as ClientEventPayload<methods, '*', response>,
+  )
 }
 
-async function emitObserve(emit: () => MaybePromise<unknown>): Promise<void> {
-  try {
-    await emit()
-  } catch {
-    // Client observation events must not alter payment flow.
+function memoizeCreateCredential<methods extends readonly Method.AnyClient[]>(
+  createCredential: (context?: AnyContextFor<methods>) => Promise<string>,
+) {
+  let promise: Promise<string> | undefined
+  return (context?: AnyContextFor<methods>) => {
+    promise ??= createCredential(context)
+    return promise
   }
+}
+
+function createChallengeReceivedPayload<
+  methods extends readonly Method.AnyClient[],
+  response,
+>(parameters: {
+  challenge: Challenge.Challenge
+  challenges: readonly Challenge.Challenge[]
+  createCredential: (context?: AnyContextFor<methods>) => Promise<string>
+  init?: from.RequestInit<methods> | undefined
+  input?: RequestInfo | URL | undefined
+  method: methods[number]
+  response: response
+}): ChallengeReceivedPayload<methods, response> {
+  return Object.freeze({
+    challenge: snapshotValue(parameters.challenge),
+    challenges: parameters.challenges.map((challenge) => snapshotValue(challenge)),
+    createCredential: parameters.createCredential,
+    init: snapshotInit(parameters.init),
+    input: snapshotInput(parameters.input),
+    method: snapshotMethod(parameters.method),
+    response: snapshotResponse(parameters.response),
+  }) as never
+}
+
+function createCredentialCreatedPayload<
+  methods extends readonly Method.AnyClient[],
+  response,
+>(parameters: {
+  challenge: Challenge.Challenge
+  credential: string
+  init?: from.RequestInit<methods> | undefined
+  input?: RequestInfo | URL | undefined
+  method: methods[number]
+  response?: response | undefined
+}): CredentialCreatedPayload<methods, response> {
+  return Object.freeze({
+    challenge: snapshotValue(parameters.challenge),
+    credential: parameters.credential,
+    init: snapshotInit(parameters.init),
+    input: snapshotInput(parameters.input),
+    method: snapshotMethod(parameters.method),
+    ...(parameters.response !== undefined
+      ? { response: snapshotResponse(parameters.response) }
+      : {}),
+  }) as never
+}
+
+function createPaymentResponsePayload<
+  methods extends readonly Method.AnyClient[],
+  response,
+>(parameters: {
+  challenge: Challenge.Challenge
+  credential: string
+  init?: from.RequestInit<methods> | undefined
+  input?: RequestInfo | URL | undefined
+  method: methods[number]
+  response: response
+}): PaymentResponsePayload<methods, response> {
+  return Object.freeze({
+    challenge: snapshotValue(parameters.challenge),
+    credential: parameters.credential,
+    init: snapshotInit(parameters.init),
+    input: snapshotInput(parameters.input),
+    method: snapshotMethod(parameters.method),
+    response: snapshotResponse(parameters.response),
+  }) as never
+}
+
+function createPaymentFailedPayload<
+  methods extends readonly Method.AnyClient[],
+  response,
+>(parameters: {
+  challenge?: Challenge.Challenge | undefined
+  challenges?: readonly Challenge.Challenge[] | undefined
+  error: unknown
+  init?: from.RequestInit<methods> | undefined
+  input?: RequestInfo | URL | undefined
+  method?: methods[number] | undefined
+  response?: response | undefined
+}): PaymentFailedPayload<methods, response> {
+  return Object.freeze({
+    ...(parameters.challenge ? { challenge: snapshotValue(parameters.challenge) } : {}),
+    ...(parameters.challenges
+      ? { challenges: parameters.challenges.map((challenge) => snapshotValue(challenge)) }
+      : {}),
+    error: parameters.error,
+    init: snapshotInit(parameters.init),
+    input: snapshotInput(parameters.input),
+    ...(parameters.method ? { method: snapshotMethod(parameters.method) } : {}),
+    ...(parameters.response !== undefined
+      ? { response: snapshotResponse(parameters.response) }
+      : {}),
+  }) as never
+}
+
+function snapshotInit<methods extends readonly Method.AnyClient[]>(
+  init: from.RequestInit<methods> | undefined,
+): from.RequestInit<methods> | undefined {
+  if (!init) return undefined
+  return freezeSnapshot({
+    ...init,
+    ...(init.headers ? { headers: new Headers(init.headers) } : {}),
+  }) as from.RequestInit<methods>
+}
+
+function snapshotInput(input: RequestInfo | URL | undefined): RequestInfo | URL | undefined {
+  if (input instanceof Request) return input.clone()
+  if (input instanceof URL) return new URL(input)
+  return input
+}
+
+function snapshotMethod<method extends Method.AnyClient>(method: method): method {
+  return freezeSnapshot(Object.assign({}, method)) as method
+}
+
+function snapshotResponse<response>(response: response): response {
+  if (response instanceof Response) return response.clone() as response
+  return snapshotValue(response)
+}
+
+function snapshotValue<value>(value: value): value {
+  try {
+    return deepFreeze(structuredClone(value))
+  } catch {
+    return value
+  }
+}
+
+function deepFreeze<value>(value: value): value {
+  if (!value || typeof value !== 'object' || Object.isFrozen(value)) return value
+  Object.freeze(value)
+  for (const child of Object.values(value as Record<string, unknown>)) deepFreeze(child)
+  return value
+}
+
+function freezeSnapshot<value>(value: value): value {
+  if (!value || typeof value !== 'object' || Object.isFrozen(value)) return value
+  Object.freeze(value)
+  return value
 }
 
 /** @internal */
@@ -583,7 +743,7 @@ function isWrappedFetch(fetch: typeof globalThis.fetch): fetch is WrappedFetch {
 }
 
 /** @internal */
-function validateCredentialHeaderValue(credential: string): void {
+export function validateCredentialHeaderValue(credential: string): void {
   if (!credential.trim()) throw new Error('Credential header value must be non-empty')
   if (credential.includes('\r') || credential.includes('\n')) {
     throw new Error('Credential header value contains illegal newline characters')
