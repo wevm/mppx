@@ -108,10 +108,142 @@ describe('createCredential', () => {
     expect(parsed.challenge.method).toBe('tempo')
   })
 
-  test('behavior: throws when method not found', async () => {
+  test('behavior: createCredential emits client events and supports runtime handlers', async () => {
+    const events: string[] = []
+    const createCredential = vi.fn(async ({ challenge }) =>
+      Credential.serialize({
+        challenge,
+        payload: { signature: '0xsignature', type: 'transaction' },
+      }),
+    )
+    const method = Method.toClient(Methods.charge, { createCredential })
+    const mppx = Mppx.create({
+      polyfill: false,
+      methods: [method],
+    })
+    mppx.onCredentialCreated((payload) => {
+      events.push(`credential:${payload.credential.startsWith('Payment ')}`)
+    })
+    const offCredential = mppx.onCredentialCreated(() => {
+      events.push('removed')
+    })
+    const offChallenge = mppx.onChallengeReceived((payload) => {
+      events.push(`runtime:${payload.method.intent}`)
+      return payload.createCredential()
+    })
+    mppx.on('*', (event) => {
+      events.push(`*:${event.name}`)
+    })
+    offCredential()
+
+    const challenge = Challenge.fromMethod(Methods.charge, {
+      realm,
+      secretKey,
+      expires: new Date(Date.now() + 60_000).toISOString(),
+      request: {
+        amount: '1000',
+        currency: '0x1234567890123456789012345678901234567890',
+        decimals: 6,
+        recipient: '0x1234567890123456789012345678901234567890',
+      },
+    })
+    const response = new Response(null, {
+      status: 402,
+      headers: {
+        'WWW-Authenticate': Challenge.serialize(challenge),
+      },
+    })
+
+    const credential = await mppx.createCredential(response)
+    offChallenge()
+
+    expect(credential).toMatch(/^Payment /)
+    expect(createCredential).toHaveBeenCalledTimes(1)
+    expect(events).toEqual([
+      'runtime:charge',
+      '*:challenge.received',
+      'credential:true',
+      '*:credential.created',
+    ])
+  })
+
+  test('behavior: createCredential memoizes event helper calls', async () => {
+    const createCredential = vi.fn(async ({ challenge }) =>
+      Credential.serialize({
+        challenge,
+        payload: { signature: '0xsignature', type: 'transaction' },
+      }),
+    )
+    const method = Method.toClient(Methods.charge, { createCredential })
+    const mppx = Mppx.create({
+      polyfill: false,
+      methods: [method],
+    })
+    mppx.on('*', async (event) => {
+      if (event.name === 'challenge.received') await event.payload.createCredential()
+    })
+
+    const challenge = Challenge.fromMethod(Methods.charge, {
+      realm,
+      secretKey,
+      expires: new Date(Date.now() + 60_000).toISOString(),
+      request: {
+        amount: '1000',
+        currency: '0x1234567890123456789012345678901234567890',
+        decimals: 6,
+        recipient: '0x1234567890123456789012345678901234567890',
+      },
+    })
+    const response = new Response(null, {
+      status: 402,
+      headers: {
+        'WWW-Authenticate': Challenge.serialize(challenge),
+      },
+    })
+
+    await mppx.createCredential(response)
+
+    expect(createCredential).toHaveBeenCalledTimes(1)
+  })
+
+  test('behavior: createCredential validates event credentials', async () => {
     const mppx = Mppx.create({
       polyfill: false,
       methods: [tempo({ account: accounts[1], getClient: () => client })],
+    })
+    mppx.onChallengeReceived(() => 'Payment invalid\r\nX-Injected: true')
+
+    const challenge = Challenge.fromMethod(Methods.charge, {
+      realm,
+      secretKey,
+      expires: new Date(Date.now() + 60_000).toISOString(),
+      request: {
+        amount: '1000',
+        currency: '0x1234567890123456789012345678901234567890',
+        decimals: 6,
+        recipient: '0x1234567890123456789012345678901234567890',
+      },
+    })
+    const response = new Response(null, {
+      status: 402,
+      headers: {
+        'WWW-Authenticate': Challenge.serialize(challenge),
+      },
+    })
+
+    await expect(mppx.createCredential(response)).rejects.toThrow('illegal newline')
+  })
+
+  test('behavior: throws when method not found', async () => {
+    const events: string[] = []
+    const mppx = Mppx.create({
+      polyfill: false,
+      methods: [tempo({ account: accounts[1], getClient: () => client })],
+    })
+    mppx.onPaymentFailed((payload) => {
+      events.push(
+        `failed:${payload.challenge === undefined}:${payload.challenges?.length}:${payload.error instanceof Error}`,
+      )
     })
 
     const challenge = Challenge.from({
@@ -132,6 +264,7 @@ describe('createCredential', () => {
     await expect(mppx.createCredential(response)).rejects.toThrow(
       'No method found for challenges: unknown.charge. Available: tempo.charge, tempo.session',
     )
+    expect(events).toEqual(['failed:true:1:true'])
   })
 
   test('behavior: rejects expired challenges before creating credential', async () => {
@@ -450,6 +583,54 @@ describe('createCredential', () => {
     const parsed = Credential.deserialize(credential)
     expect((parsed.payload as { type: string }).type).toBe('transaction')
     expect(parsed.challenge.method).toBe('tempo')
+  })
+
+  test('behavior: mcp transport event responses are not cast to DOM Response', async () => {
+    const method = Method.toClient(Methods.charge, {
+      async createCredential({ challenge }) {
+        return Credential.serialize({
+          challenge,
+          payload: { signature: '0xsignature', type: 'transaction' },
+        })
+      },
+    })
+    const mppx = Mppx.create({
+      polyfill: false,
+      methods: [method],
+      transport: Transport.mcp(),
+    })
+
+    const challenge = Challenge.fromMethod(Methods.charge, {
+      realm,
+      secretKey,
+      expires: new Date(Date.now() + 60_000).toISOString(),
+      request: {
+        amount: '1000',
+        currency: '0x1234567890123456789012345678901234567890',
+        decimals: 6,
+        recipient: '0x1234567890123456789012345678901234567890',
+      },
+    })
+    const mcpResponse: Mcp.Response = {
+      jsonrpc: '2.0',
+      id: 1,
+      error: {
+        code: Mcp.paymentRequiredCode,
+        message: 'Payment Required',
+        data: {
+          httpStatus: 402,
+          challenges: [challenge],
+        },
+      },
+    }
+    const seen: unknown[] = []
+    mppx.onChallengeReceived((event) => {
+      seen.push(event.response)
+    })
+
+    await mppx.createCredential(mcpResponse)
+
+    expect(seen).toEqual([mcpResponse])
   })
 })
 

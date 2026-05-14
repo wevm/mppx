@@ -1,13 +1,17 @@
 import type { Account } from 'viem'
 import { describe, expectTypeOf, test } from 'vp/test'
 
+import * as Challenge from '../Challenge.js'
+import type * as Mcp from '../Mcp.js'
 import * as Method from '../Method.js'
 import { charge } from '../tempo/client/Charge.js'
 import { tempo } from '../tempo/client/Methods.js'
 import type * as AutoSwap from '../tempo/internal/auto-swap.js'
 import * as Methods from '../tempo/Methods.js'
 import * as z from '../zod.js'
+import * as Fetch from './internal/Fetch.js'
 import * as Mppx from './Mppx.js'
+import * as Transport from './Transport.js'
 
 describe('Mppx', () => {
   test('has methods array', () => {
@@ -62,6 +66,57 @@ describe('create.Config', () => {
     })
 
     expectTypeOf(mppx.fetch).toBeFunction()
+  })
+
+  test('client events expose typed payloads', () => {
+    const method = charge()
+    const mppx = Mppx.create({
+      methods: [method],
+    })
+
+    const unsubscribe = mppx.on('payment.response', (payload) => {
+      expectTypeOf(payload.response).toEqualTypeOf<Response>()
+    })
+    expectTypeOf(unsubscribe).toEqualTypeOf<Fetch.Unsubscribe>()
+
+    mppx.on('*', (event) => {
+      if (event.name === 'credential.created')
+        expectTypeOf(event.payload.credential).toEqualTypeOf<string>()
+      if (event.name === 'payment.response')
+        expectTypeOf(event.payload.response).toEqualTypeOf<Response>()
+    })
+    mppx.onChallengeReceived((payload) => {
+      expectTypeOf(payload.challenge.id).toEqualTypeOf<string>()
+      expectTypeOf(payload.challenges).toEqualTypeOf<readonly Challenge.Challenge[]>()
+      expectTypeOf(payload.method.intent).toEqualTypeOf<'charge'>()
+      expectTypeOf(payload.createCredential({ account: {} as Account })).toEqualTypeOf<
+        Promise<string>
+      >()
+      return payload.createCredential({ account: {} as Account })
+    })
+    mppx.onCredentialCreated((payload) => {
+      expectTypeOf(payload.credential).toEqualTypeOf<string>()
+      expectTypeOf(payload.method.intent).toEqualTypeOf<'charge'>()
+    })
+    mppx.onPaymentFailed((payload) => {
+      expectTypeOf(payload.error).toEqualTypeOf<unknown>()
+      expectTypeOf(payload.challenge).toEqualTypeOf<Challenge.Challenge | undefined>()
+    })
+    mppx.onPaymentResponse((payload) => {
+      expectTypeOf(payload.response).toEqualTypeOf<Response>()
+      expectTypeOf(payload.credential).toEqualTypeOf<string>()
+    })
+  })
+
+  test('client events use transport response types', () => {
+    const mppx = Mppx.create({
+      methods: [tempo({ account: {} as Account })],
+      transport: Transport.mcp(),
+    })
+
+    mppx.onChallengeReceived((payload) => {
+      expectTypeOf(payload.response).toMatchTypeOf<Response | Mcp.Response>()
+    })
   })
 })
 
