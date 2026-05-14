@@ -23,29 +23,6 @@ import * as Transport from './Transport.js'
 
 export type Methods = readonly (Method.AnyServer | readonly Method.AnyServer[])[]
 
-/**
- * Server-side payment events.
- *
- * Events are observe-only. Return values are ignored, and thrown/rejected event
- * handler errors do not change payment control flow.
- */
-export type ServerEvents<
-  methods extends readonly Method.Method[] = readonly Method.Method[],
-  transport extends Transport.AnyTransport = Transport.AnyTransport,
-> = Partial<{
-  '*': ServerEventHandler<methods, transport, '*'>
-  'challenge.created': ServerEventHandler<methods, transport, 'challenge.created'>
-  'payment.failed': ServerEventHandler<methods, transport, 'payment.failed'>
-  'payment.success': ServerEventHandler<methods, transport, 'payment.success'>
-}> & {
-  /** Called whenever the handler issues a payment challenge response. */
-  onChallengeCreated?: ServerEventHandler<methods, transport, 'challenge.created'> | undefined
-  /** Called when a submitted payment credential fails validation or verification. */
-  onPaymentFailed?: ServerEventHandler<methods, transport, 'payment.failed'> | undefined
-  /** Called after payment verification succeeds and a receipt has been created. */
-  onPaymentSuccess?: ServerEventHandler<methods, transport, 'payment.success'> | undefined
-}
-
 export type ServerEventMap<
   methods extends readonly Method.Method[] = readonly Method.Method[],
   transport extends Transport.AnyTransport = Transport.AnyTransport,
@@ -89,7 +66,7 @@ export type ServerEventHandler<
 /** Removes a registered server event handler. */
 export type Unsubscribe = () => void
 
-/** Context passed to `events.onChallengeCreated`. */
+/** Context passed to `onChallengeCreated`. */
 export type ChallengeContext<
   method extends Method.Method = Method.Method,
   transport extends Transport.AnyTransport = Transport.AnyTransport,
@@ -103,7 +80,7 @@ export type ChallengeContext<
   request: z.input<method['schema']['request']>
 }>
 
-/** Context passed to `events.onPaymentFailed`. */
+/** Context passed to `onPaymentFailed`. */
 export type PaymentFailedContext<
   method extends Method.Method = Method.Method,
   transport extends Transport.AnyTransport = Transport.AnyTransport,
@@ -117,7 +94,7 @@ export type PaymentFailedContext<
   request: z.input<method['schema']['request']>
 }>
 
-/** Context passed to `events.onPaymentSuccess`. */
+/** Context passed to `onPaymentSuccess`. */
 export type PaymentSuccessContext<
   method extends Method.Method = Method.Method,
   transport extends Transport.AnyTransport = Transport.AnyTransport,
@@ -364,7 +341,6 @@ export function create<
   const transport extends Transport.AnyTransport = Transport.Http,
 >(config: create.Config<methods, transport>): Mppx<methods, transport> {
   const {
-    events,
     realm = Env.get('realm'),
     secretKey = Env.get('secretKey'),
     transport = Transport.http() as transport,
@@ -377,7 +353,7 @@ export function create<
   }
 
   const methods = config.methods.flat() as unknown as FlattenMethods<methods>
-  const serverEvents = createServerEventDispatcher<FlattenMethods<methods>, transport>(events)
+  const serverEvents = createServerEventDispatcher<FlattenMethods<methods>, transport>()
 
   const handlers: Record<string, unknown> = {}
   const intentCount: Record<string, number> = {}
@@ -580,8 +556,6 @@ export declare namespace create {
   > = {
     /** Array of configured methods. @example [tempo()] */
     methods: methods
-    /** Server-side payment events for analytics, logging, and reconciliation. */
-    events?: ServerEvents<FlattenMethods<methods>, transport> | undefined
     /** Server realm (e.g., hostname). Resolution order: explicit value > env vars (`MPP_REALM`, `FLY_APP_NAME`, `VERCEL_URL`, etc.) > request URL hostname > `"MPP Payment"`. */
     realm?: string | undefined
     /** Secret key for HMAC-bound challenge IDs for stateless verification. Auto-detected from `MPP_SECRET_KEY` environment variable. Throws if neither provided nor set. */
@@ -1099,9 +1073,7 @@ type ServerWildcardEventMap<
 function createServerEventDispatcher<
   methods extends readonly Method.Method[],
   transport extends Transport.AnyTransport,
->(
-  initialEvents: ServerEvents<methods, transport> | undefined,
-): ServerEventDispatcher<methods, transport> {
+>(): ServerEventDispatcher<methods, transport> {
   const emitter = new Emitter<ServerRettimeEventMap<methods, transport>>()
   const wildcardEmitter = new Emitter<ServerWildcardEventMap<methods, transport>>()
 
@@ -1125,15 +1097,6 @@ function createServerEventDispatcher<
         )
     }
   }
-
-  if (initialEvents?.['*']) on('*', initialEvents['*'])
-  if (initialEvents?.['challenge.created'])
-    on('challenge.created', initialEvents['challenge.created'])
-  if (initialEvents?.['payment.failed']) on('payment.failed', initialEvents['payment.failed'])
-  if (initialEvents?.['payment.success']) on('payment.success', initialEvents['payment.success'])
-  if (initialEvents?.onChallengeCreated) on('challenge.created', initialEvents.onChallengeCreated)
-  if (initialEvents?.onPaymentFailed) on('payment.failed', initialEvents.onPaymentFailed)
-  if (initialEvents?.onPaymentSuccess) on('payment.success', initialEvents.onPaymentSuccess)
 
   return {
     async emit(name, context) {

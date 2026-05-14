@@ -176,37 +176,6 @@ describe('Mppx type tests', () => {
       methods: [alphaMethod],
       realm,
       secretKey,
-      events: {
-        '*'(event) {
-          expectTypeOf(event.name).toMatchTypeOf<
-            'challenge.created' | 'payment.failed' | 'payment.success'
-          >()
-          if (event.name === 'payment.success')
-            expectTypeOf(event.payload.receipt.status).toEqualTypeOf<'success'>()
-        },
-        'payment.success'(context) {
-          expectTypeOf(context.challenge.method).toEqualTypeOf<'alpha'>()
-        },
-        onChallengeCreated(context) {
-          expectTypeOf(context.input).toEqualTypeOf<Request>()
-          expectTypeOf(context.method.name).toEqualTypeOf<'alpha'>()
-          expectTypeOf(context.request.amount).toEqualTypeOf<string>()
-          expectTypeOf(context.error).toMatchTypeOf<Error | undefined>()
-        },
-        onPaymentFailed(context) {
-          expectTypeOf(context.credential).toMatchTypeOf<unknown>()
-          expectTypeOf(context.error).toMatchTypeOf<Error>()
-          expectTypeOf(context.method.intent).toEqualTypeOf<'charge'>()
-          expectTypeOf(context.request.currency).toEqualTypeOf<string>()
-        },
-        onPaymentSuccess(context) {
-          expectTypeOf(context.challenge.method).toEqualTypeOf<'alpha'>()
-          expectTypeOf(context.credential.payload.token).toEqualTypeOf<string>()
-          expectTypeOf(context.envelope.challenge.intent).toEqualTypeOf<'charge'>()
-          expectTypeOf(context.receipt.status).toEqualTypeOf<'success'>()
-          expectTypeOf(context.request.recipient).toEqualTypeOf<string>()
-        },
-      },
     })
 
     mppx.on('payment.success', (context) => {
@@ -222,16 +191,32 @@ describe('Mppx type tests', () => {
       expectTypeOf(context.credential).toMatchTypeOf<unknown>()
     })
     mppx.on('*', (event) => {
+      expectTypeOf(event.name).toMatchTypeOf<
+        'challenge.created' | 'payment.failed' | 'payment.success'
+      >()
       if (event.name === 'payment.failed') expectTypeOf(event.payload.error).toMatchTypeOf<Error>()
       if (event.name === 'challenge.created')
         expectTypeOf(event.payload.error).toMatchTypeOf<Error | undefined>()
+      if (event.name === 'payment.success')
+        expectTypeOf(event.payload.receipt.status).toEqualTypeOf<'success'>()
+    })
+    mppx.onChallengeCreated((context) => {
+      expectTypeOf(context.input).toEqualTypeOf<Request>()
+      expectTypeOf(context.method.name).toEqualTypeOf<'alpha'>()
+      expectTypeOf(context.request.amount).toEqualTypeOf<string>()
+      expectTypeOf(context.error).toMatchTypeOf<Error | undefined>()
     })
     mppx.onPaymentSuccess((context) => {
+      expectTypeOf(context.challenge.method).toEqualTypeOf<'alpha'>()
+      expectTypeOf(context.credential.payload.token).toEqualTypeOf<string>()
+      expectTypeOf(context.envelope.challenge.intent).toEqualTypeOf<'charge'>()
       expectTypeOf(context.receipt.status).toEqualTypeOf<'success'>()
       expectTypeOf(context.request.recipient).toEqualTypeOf<string>()
     })
     mppx.onPaymentFailed((context) => {
+      expectTypeOf(context.credential).toMatchTypeOf<unknown>()
       expectTypeOf(context.error).toMatchTypeOf<Error>()
+      expectTypeOf(context.method.intent).toEqualTypeOf<'charge'>()
       expectTypeOf(context.request.currency).toEqualTypeOf<string>()
     })
   })

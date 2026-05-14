@@ -962,26 +962,24 @@ describe('server events', () => {
       methods: [serverMethod],
       realm,
       secretKey,
-      events: {
-        onChallengeCreated(context) {
-          events.push(`challenge:${context.error?.name}`)
-          seen.challengeMethod = context.method.name
-          seen.challengePath = context.capturedRequest.url.pathname
-          seen.challengeAmount = context.request.amount
-          seen.challengeCredential = context.credential
-        },
-        onPaymentSuccess(context) {
-          events.push(`payment:${context.receipt.reference}`)
-          seen.paymentMethod = context.method.name
-          seen.paymentChallenge = context.challenge.id
-          seen.paymentEnvelope = context.envelope.challenge.id
-          seen.paymentToken = context.credential.payload.token
-          seen.paymentAmount = context.request.amount
-        },
-        onPaymentFailed() {
-          events.push('failed')
-        },
-      },
+    })
+    handler.onChallengeCreated((context) => {
+      events.push(`challenge:${context.error?.name}`)
+      seen.challengeMethod = context.method.name
+      seen.challengePath = context.capturedRequest.url.pathname
+      seen.challengeAmount = context.request.amount
+      seen.challengeCredential = context.credential
+    })
+    handler.onPaymentSuccess((context) => {
+      events.push(`payment:${context.receipt.reference}`)
+      seen.paymentMethod = context.method.name
+      seen.paymentChallenge = context.challenge.id
+      seen.paymentEnvelope = context.envelope.challenge.id
+      seen.paymentToken = context.credential.payload.token
+      seen.paymentAmount = context.request.amount
+    })
+    handler.onPaymentFailed(() => {
+      events.push('failed')
     })
     const handle = handler.charge(options())
 
@@ -1027,24 +1025,22 @@ describe('server events', () => {
       methods: [serverMethod],
       realm,
       secretKey,
-      events: {
-        async '*'() {
-          events.push('*')
-          throw new Error('catchall event failed')
-        },
-        onChallengeCreated() {
-          events.push('challenge.created')
-          throw new Error('challenge event failed')
-        },
-        async onPaymentFailed() {
-          events.push('failed')
-          throw new Error('failed event failed')
-        },
-        async onPaymentSuccess() {
-          events.push('success')
-          throw new Error('success event failed')
-        },
-      },
+    })
+    handler.on('*', async () => {
+      events.push('*')
+      throw new Error('catchall event failed')
+    })
+    handler.onChallengeCreated(() => {
+      events.push('challenge.created')
+      throw new Error('challenge event failed')
+    })
+    handler.onPaymentFailed(async () => {
+      events.push('failed')
+      throw new Error('failed event failed')
+    })
+    handler.onPaymentSuccess(async () => {
+      events.push('success')
+      throw new Error('success event failed')
     })
     const handle = handler.charge(options())
 
@@ -1116,14 +1112,6 @@ describe('server events', () => {
       methods: [serverMethod],
       realm,
       secretKey,
-      events: {
-        '*': (event) => {
-          events.push(`*:${event.name}`)
-        },
-        'challenge.created'(context) {
-          events.push(`config:${context.error?.name}`)
-        },
-      },
     })
     const offFailed = handler.on('payment.failed', (context) => {
       events.push(`failed:${context.error.name}`)
@@ -1184,15 +1172,9 @@ describe('server events', () => {
     offSuccess()
 
     expect(events).toEqual([
-      'config:PaymentRequiredError',
       'runtime:PaymentRequiredError',
-      '*:challenge.created',
       'runtime:*:challenge.created',
-      '*:payment.failed',
-      'config:InvalidChallengeError',
-      '*:challenge.created',
       'success:tx-registered-event',
-      '*:payment.success',
     ])
   })
 
@@ -1207,17 +1189,15 @@ describe('server events', () => {
       methods: [serverMethod],
       realm,
       secretKey,
-      events: {
-        onChallengeCreated(context) {
-          events.push(`challenge:${context.error?.name}`)
-        },
-        onPaymentSuccess(context) {
-          events.push(`payment:${context.receipt.reference}`)
-        },
-        onPaymentFailed(context) {
-          events.push(`failed:${context.error.name}:${context.credential?.challenge.id}`)
-        },
-      },
+    })
+    handler.onChallengeCreated((context) => {
+      events.push(`challenge:${context.error?.name}`)
+    })
+    handler.onPaymentSuccess((context) => {
+      events.push(`payment:${context.receipt.reference}`)
+    })
+    handler.onPaymentFailed((context) => {
+      events.push(`failed:${context.error.name}:${context.credential?.challenge.id}`)
     })
 
     const badChallenge = Challenge.from({
@@ -1261,14 +1241,12 @@ describe('server events', () => {
       methods: [serverMethod],
       realm,
       secretKey,
-      events: {
-        onChallengeCreated(context) {
-          events.push(`challenge:${context.error?.name}:${context.credential}`)
-        },
-        onPaymentFailed(context) {
-          events.push(`failed:${context.error.name}:${context.credential}`)
-        },
-      },
+    })
+    handler.onChallengeCreated((context) => {
+      events.push(`challenge:${context.error?.name}:${context.credential}`)
+    })
+    handler.onPaymentFailed((context) => {
+      events.push(`failed:${context.error.name}:${context.credential}`)
     })
 
     const result = await handler.charge(options())(
@@ -1295,17 +1273,15 @@ describe('server events', () => {
       methods: [serverMethod],
       realm,
       secretKey,
-      events: {
-        onChallengeCreated(context) {
-          events.push(`challenge:${context.error?.name}`)
-        },
-        onPaymentSuccess() {
-          events.push('payment')
-        },
-        onPaymentFailed(context) {
-          events.push(`failed:${context.error.name}`)
-        },
-      },
+    })
+    handler.onChallengeCreated((context) => {
+      events.push(`challenge:${context.error?.name}`)
+    })
+    handler.onPaymentSuccess(() => {
+      events.push('payment')
+    })
+    handler.onPaymentFailed((context) => {
+      events.push(`failed:${context.error.name}`)
     })
     const handle = handler.charge(options())
 

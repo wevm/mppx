@@ -138,17 +138,15 @@ describe('create', () => {
       ],
       realm: 'api.example.com',
       secretKey,
-      events: {
-        onChallengeCreated(context) {
-          events.push(`challenge:${context.error?.name}`)
-        },
-        onPaymentSuccess(context) {
-          events.push(`payment:${context.receipt.reference}`)
-        },
-        onPaymentFailed(context) {
-          events.push(`failed:${context.error.name}`)
-        },
-      },
+    })
+    handler.onChallengeCreated((context) => {
+      events.push(`challenge:${context.error?.name}`)
+    })
+    handler.onPaymentSuccess((context) => {
+      events.push(`payment:${context.receipt.reference}`)
+    })
+    handler.onPaymentFailed((context) => {
+      events.push(`failed:${context.error.name}`)
     })
     const proxy = ApiProxy.create({
       services: [
