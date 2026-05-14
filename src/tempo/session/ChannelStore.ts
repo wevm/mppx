@@ -30,7 +30,7 @@ export interface ContractBackendState {
   backend?: 'contract' | undefined
 }
 
-/** State for a TIP-1034 precompile-backed payment channel. */
+/** State for a TIP20EscrowChannel precompile-backed payment channel. */
 export interface PrecompileBackendState {
   /** Channel backend. */
   backend: 'precompile'
@@ -79,7 +79,7 @@ export interface BaseState {
   units: number
 }
 
-/** Returns whether a channel is backed by the TIP-1034 precompile. */
+/** Returns whether a channel is backed by the TIP20EscrowChannel precompile. */
 export function isPrecompileState(state: State): state is BaseState & PrecompileBackendState {
   return state.backend === 'precompile'
 }

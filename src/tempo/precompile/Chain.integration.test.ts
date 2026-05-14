@@ -1,5 +1,5 @@
 import { Hex } from 'ox'
-import { type Address, isAddressEqual, parseEventLogs, zeroAddress } from 'viem'
+import { type Address, encodeFunctionData, isAddressEqual, parseEventLogs, zeroAddress } from 'viem'
 import { sendTransaction, waitForTransactionReceipt } from 'viem/actions'
 import { describe, expect, test } from 'vp/test'
 import { nodeEnv } from '~test/config.js'
@@ -42,13 +42,10 @@ function getSingleEvent(receipt: { logs: readonly unknown[] }, name: string) {
 async function openChannel(parameters: { deposit?: bigint | undefined } = {}) {
   const deposit = uint96(parameters.deposit ?? 1_000n)
   const salt = Hex.random(32)
-  const data = Chain.encodeOpen({
-    payee: payee.address,
-    operator: zeroAddress,
-    token: asset,
-    deposit,
-    salt,
-    authorizedSigner: payer.address,
+  const data = encodeFunctionData({
+    abi: escrowAbi,
+    functionName: 'open',
+    args: [payee.address, zeroAddress, asset, deposit, salt, payer.address],
   })
   const receipt = await sendPrecompileCall(data)
   const opened = getSingleEvent(receipt, 'ChannelOpened')
@@ -73,7 +70,7 @@ async function openChannel(parameters: { deposit?: bigint | undefined } = {}) {
   return { channelId, descriptor, deposit }
 }
 
-describe.runIf(isPrecompileTestnet)('TIP-1034 precompile chain operations', () => {
+describe.runIf(isPrecompileTestnet)('TIP20EscrowChannel precompile chain operations', () => {
   test('opens a channel, parses ChannelOpened, and reads channel state', async () => {
     const { channelId, descriptor, deposit } = await openChannel()
 
@@ -94,7 +91,13 @@ describe.runIf(isPrecompileTestnet)('TIP-1034 precompile chain operations', () =
     })
     const additionalDeposit = uint96(750n)
 
-    const receipt = await sendPrecompileCall(Chain.encodeTopUp(descriptor, additionalDeposit))
+    const receipt = await sendPrecompileCall(
+      encodeFunctionData({
+        abi: escrowAbi,
+        functionName: 'topUp',
+        args: [descriptor, additionalDeposit],
+      }),
+    )
     const topUp = getSingleEvent(receipt, 'TopUp')
     expect(topUp.args.channelId).toBe(channelId)
     expect(topUp.args.additionalDeposit).toBe(additionalDeposit)
@@ -116,7 +119,11 @@ describe.runIf(isPrecompileTestnet)('TIP-1034 precompile chain operations', () =
     )
 
     const receipt = await sendPrecompileCall(
-      Chain.encodeSettle(descriptor, cumulativeAmount, signature),
+      encodeFunctionData({
+        abi: escrowAbi,
+        functionName: 'settle',
+        args: [descriptor, cumulativeAmount, signature],
+      }),
       payee,
     )
     const settled = getSingleEvent(receipt, 'Settled')

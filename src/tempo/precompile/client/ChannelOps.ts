@@ -1,10 +1,10 @@
 import { Hex } from 'ox'
-import { zeroAddress, type Account, type Address, type Client } from 'viem'
+import { encodeFunctionData, zeroAddress, type Account, type Address, type Client } from 'viem'
 import { prepareTransactionRequest, signTransaction } from 'viem/actions'
 
-import * as Chain from '../Chain.js'
 import * as Channel from '../Channel.js'
 import { tip20ChannelEscrow } from '../Constants.js'
+import { escrowAbi } from '../escrow.abi.js'
 import type {
   CloseCredentialPayload,
   OpenCredentialPayload,
@@ -59,13 +59,10 @@ export async function createOpen(
   const operator = parameters.operator ?? '0x0000000000000000000000000000000000000000'
   const salt = Hex.random(32)
 
-  const openData = Chain.encodeOpen({
-    authorizedSigner,
-    deposit: parameters.deposit,
-    operator,
-    payee: parameters.payee,
-    salt,
-    token: parameters.token,
+  const openData = encodeFunctionData({
+    abi: escrowAbi,
+    functionName: 'open',
+    args: [parameters.payee, operator, parameters.token, parameters.deposit, salt, authorizedSigner],
   })
   const prepared = await prepareTransactionRequest(client, {
     account,
@@ -180,7 +177,11 @@ export async function createTopUp(
     calls: [
       {
         to: escrow,
-        data: Chain.encodeTopUp(parameters.descriptor, parameters.additionalDeposit),
+        data: encodeFunctionData({
+          abi: escrowAbi,
+          functionName: 'topUp',
+          args: [parameters.descriptor, parameters.additionalDeposit],
+        }),
       },
     ],
     ...(parameters.feePayer ? { feePayer: true } : {}),

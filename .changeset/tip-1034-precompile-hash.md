@@ -31,4 +31,4 @@ const server = Mppx.create({
 })
 ```
 
-This added channel ID, expiring nonce hash, voucher, ABI calldata, open/top-up validation, descriptor persistence, credential payload parsing, client credential builder, session manager, server verification, and server-driven fee-payer settle/close helpers for TIP-1034 precompile channels. It also hardened precompile channel validation, atomic store updates, voucher-signing compatibility, finalized channel bookkeeping, and devnet precompile integration test setup.
+This added channel ID, expiring nonce hash, voucher, ABI calldata, open/top-up validation, descriptor persistence, credential payload parsing, client credential builder, session manager, server verification, and server-driven fee-payer settle/close helpers for TIP20EscrowChannel precompile channels. It also hardened precompile channel validation, atomic store updates, voucher-signing compatibility, finalized channel bookkeeping, and devnet precompile integration test setup.

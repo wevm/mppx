@@ -845,7 +845,7 @@ export declare namespace sessionManager {
       client?: import('viem').Client | undefined
       /** Token decimals used to convert `maxDeposit` to raw units. Defaults to `6`. */
       decimals?: number | undefined
-      /** TIP-1034 precompile address override. */
+      /** TIP20EscrowChannel precompile address override. */
       escrow?: Address | undefined
       fetch?: typeof globalThis.fetch | undefined
       /** Maximum deposit in human-readable units (e.g. `'10'` for 10 tokens). Converted to raw units via `decimals`. */

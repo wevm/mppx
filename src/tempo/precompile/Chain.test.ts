@@ -1,7 +1,6 @@
-import { decodeFunctionData, encodeFunctionData, erc20Abi } from 'viem'
+import { encodeFunctionData, erc20Abi } from 'viem'
 import { describe, expect, test } from 'vp/test'
 
-import * as Chain from './Chain.js'
 import { escrowAbi } from './escrow.abi.js'
 import * as ServerChannelOps from './server/ChannelOps.js'
 import * as Types from './Types.js'
@@ -17,23 +16,20 @@ const descriptor = {
 } as const
 
 const deposit = Types.uint96(1_000_000n)
-const cumulativeAmount = Types.uint96(500_000n)
-const captureAmount = Types.uint96(400_000n)
-const signature = '0x1234' as const
 
-function expectDescriptor(actual: unknown) {
-  expect(actual).toEqual(descriptor)
-}
-
-describe('precompile Chain encoders', () => {
-  test('encodeOpen round-trips through parseOpenCall', () => {
-    const data = Chain.encodeOpen({
-      authorizedSigner: descriptor.authorizedSigner,
-      deposit,
-      operator: descriptor.operator,
-      payee: descriptor.payee,
-      salt: descriptor.salt,
-      token: descriptor.token,
+describe('precompile open calldata parsing', () => {
+  test('parseOpenCall accepts TIP-1034 open calldata', () => {
+    const data = encodeFunctionData({
+      abi: escrowAbi,
+      functionName: 'open',
+      args: [
+        descriptor.payee,
+        descriptor.operator,
+        descriptor.token,
+        deposit,
+        descriptor.salt,
+        descriptor.authorizedSigner,
+      ],
     })
     const open = ServerChannelOps.parseOpenCall({
       data,
@@ -65,13 +61,17 @@ describe('precompile Chain encoders', () => {
       'Expected TIP-1034 open calldata',
     )
 
-    const data = Chain.encodeOpen({
-      authorizedSigner: descriptor.authorizedSigner,
-      deposit,
-      operator: descriptor.operator,
-      payee: descriptor.payee,
-      salt: descriptor.salt,
-      token: descriptor.token,
+    const data = encodeFunctionData({
+      abi: escrowAbi,
+      functionName: 'open',
+      args: [
+        descriptor.payee,
+        descriptor.operator,
+        descriptor.token,
+        deposit,
+        descriptor.salt,
+        descriptor.authorizedSigner,
+      ],
     })
     expect(() =>
       ServerChannelOps.parseOpenCall({
@@ -100,46 +100,6 @@ describe('precompile Chain encoders', () => {
     expect(() =>
       ServerChannelOps.parseOpenCall({ data, expected: { deposit: Types.uint96(1n) } }),
     ).toThrow('deposit does not match')
-  })
-
-  test('encodes descriptor-based lifecycle calls', () => {
-    const settle = decodeFunctionData({
-      abi: escrowAbi,
-      data: Chain.encodeSettle(descriptor, cumulativeAmount, signature),
-    })
-    expect(settle.functionName).toBe('settle')
-    expectDescriptor(settle.args[0])
-    expect(settle.args[1]).toBe(cumulativeAmount)
-    expect(settle.args[2]).toBe(signature)
-
-    const topUp = decodeFunctionData({
-      abi: escrowAbi,
-      data: Chain.encodeTopUp(descriptor, deposit),
-    })
-    expect(topUp.functionName).toBe('topUp')
-    expectDescriptor(topUp.args[0])
-    expect(topUp.args[1]).toBe(deposit)
-
-    const close = decodeFunctionData({
-      abi: escrowAbi,
-      data: Chain.encodeClose(descriptor, cumulativeAmount, captureAmount, signature),
-    })
-    expect(close.functionName).toBe('close')
-    expectDescriptor(close.args[0])
-    expect(close.args[1]).toBe(cumulativeAmount)
-    expect(close.args[2]).toBe(captureAmount)
-    expect(close.args[3]).toBe(signature)
-
-    const requestClose = decodeFunctionData({
-      abi: escrowAbi,
-      data: Chain.encodeRequestClose(descriptor),
-    })
-    expect(requestClose.functionName).toBe('requestClose')
-    expectDescriptor(requestClose.args[0])
-
-    const withdraw = decodeFunctionData({ abi: escrowAbi, data: Chain.encodeWithdraw(descriptor) })
-    expect(withdraw.functionName).toBe('withdraw')
-    expectDescriptor(withdraw.args[0])
   })
 })
 

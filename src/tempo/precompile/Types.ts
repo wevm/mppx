@@ -1,25 +1,24 @@
 import type { Address, Hex } from 'viem'
 
 const maxUint96 = (1n << 96n) - 1n
-declare const uint96Brand: unique symbol
 
-/** Bigint branded as already validated to fit the TIP-1034 `uint96` amount width. */
-export type Uint96 = bigint & { readonly [uint96Brand]: true }
+/** Amount encoded by TIP-1034 as a `uint96` on-chain value. */
+export type Uint96 = bigint
 
 /** Returns whether a bigint can be encoded as a TIP-1034 `uint96` amount. */
 export function isUint96(value: bigint): value is Uint96 {
   return value >= 0n && value <= maxUint96
 }
 
-/** Converts a bigint into a branded TIP-1034 `uint96` amount. */
+/** Converts a bigint into a TIP-1034 `uint96` amount after validating bounds. */
 export function uint96(value: bigint): Uint96 {
-  if (!isUint96(value)) throw new Error(`Value ${value} is outside uint96 bounds.`)
+  assertUint96(value)
   return value
 }
 
 /** Asserts that a bigint can be encoded as a TIP-1034 `uint96` amount. */
-export function assertUint96(value: bigint): asserts value is Uint96 {
-  uint96(value)
+export function assertUint96(value: bigint): void {
+  if (!isUint96(value)) throw new Error(`Value ${value} is outside uint96 bounds.`)
 }
 
 export type ChannelDescriptor = {
@@ -46,7 +45,7 @@ export type Voucher = {
  */
 export type SignedVoucher = Voucher & { signature: Hex }
 
-/** TIP-1034 precompile open credential payload before amount branding. */
+/** TIP20EscrowChannel precompile open credential payload before amount branding. */
 export type OpenCredentialPayload = {
   action: 'open'
   type: 'transaction'
@@ -58,7 +57,7 @@ export type OpenCredentialPayload = {
   authorizedSigner?: Address | undefined
 }
 
-/** TIP-1034 precompile top-up credential payload before amount branding. */
+/** TIP20EscrowChannel precompile top-up credential payload before amount branding. */
 export type TopUpCredentialPayload = {
   action: 'topUp'
   type: 'transaction'
@@ -68,7 +67,7 @@ export type TopUpCredentialPayload = {
   additionalDeposit: string
 }
 
-/** TIP-1034 precompile voucher credential payload before amount branding. */
+/** TIP20EscrowChannel precompile voucher credential payload before amount branding. */
 export type VoucherCredentialPayload = {
   action: 'voucher'
   channelId: Hex
@@ -77,7 +76,7 @@ export type VoucherCredentialPayload = {
   signature: Hex
 }
 
-/** TIP-1034 precompile close credential payload before amount branding. */
+/** TIP20EscrowChannel precompile close credential payload before amount branding. */
 export type CloseCredentialPayload = {
   action: 'close'
   channelId: Hex
@@ -86,7 +85,7 @@ export type CloseCredentialPayload = {
   signature: Hex
 }
 
-/** TIP-1034 precompile session credential payload before amount branding. */
+/** TIP20EscrowChannel precompile session credential payload before amount branding. */
 export type SessionCredentialPayload =
   | OpenCredentialPayload
   | TopUpCredentialPayload
@@ -109,7 +108,7 @@ export type ParsedCloseCredentialPayload = Omit<CloseCredentialPayload, 'cumulat
   cumulativeAmount: Uint96
 }
 
-/** TIP-1034 precompile session credential payload after boundary validation. */
+/** TIP20EscrowChannel precompile session credential payload after decimal amount parsing. */
 export type ParsedSessionCredentialPayload =
   | ParsedOpenCredentialPayload
   | ParsedTopUpCredentialPayload
@@ -129,7 +128,7 @@ export function parseCredentialPayload(
 export function parseCredentialPayload(
   payload: SessionCredentialPayload,
 ): ParsedSessionCredentialPayload
-/** Parses and brands decimal string amounts from a precompile session credential payload. */
+/** Parses decimal string amounts from a precompile session credential payload. */
 export function parseCredentialPayload(
   payload: SessionCredentialPayload,
 ): ParsedSessionCredentialPayload {

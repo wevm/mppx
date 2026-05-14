@@ -2,6 +2,7 @@ import {
   type Address,
   createClient,
   custom,
+  encodeFunctionData,
   encodeFunctionResult,
   type Hex,
   zeroAddress,
@@ -172,13 +173,10 @@ async function createOpenCredential(
   const salt = `0x${(++saltCounter).toString(16).padStart(64, '0')}` as Hex
   const operator = parameters.operator ?? zeroAddress
   const authorizedSigner = account.address
-  const data = Chain.encodeOpen({
-    payee,
-    operator,
-    token,
-    deposit,
-    salt,
-    authorizedSigner,
+  const data = encodeFunctionData({
+    abi: escrowAbi,
+    functionName: 'open',
+    args: [payee, operator, token, deposit, salt, authorizedSigner],
   })
   const signingClient = createSigningClient(account)
   const transaction = (await Transaction.serialize({

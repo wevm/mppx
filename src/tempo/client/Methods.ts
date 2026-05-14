@@ -27,7 +27,7 @@ export namespace tempo {
   export const charge = charge_
   /** Creates a client-side streaming session for managing payment channels. */
   export const session = session_
-  /** TIP-1034 precompile primitives for opt-in session implementations. */
+  /** TIP20EscrowChannel precompile primitives for opt-in session implementations. */
   export const precompile = Precompile_
   /** Creates a Tempo `subscription` client method for recurring TIP-20 payments. */
   export const subscription = subscription_

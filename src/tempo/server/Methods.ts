@@ -30,7 +30,7 @@ export namespace tempo {
   export const charge = charge_
   /** Creates a Tempo `session` method for session-based TIP-20 token payments. */
   export const session = session_
-  /** TIP-1034 precompile primitives for opt-in session implementations. */
+  /** TIP20EscrowChannel precompile primitives for opt-in session implementations. */
   export const precompile = Precompile_
   /** Creates a Tempo `subscription` method for recurring TIP-20 token payments. */
   export const subscription = subscription_

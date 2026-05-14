@@ -104,7 +104,7 @@ function isSameAddress(a: Address, b: Address): boolean {
   return a.toLowerCase() === b.toLowerCase()
 }
 
-/** Creates a client-side TIP-1034 precompile session payment method. */
+/** Creates a client-side TIP20EscrowChannel precompile session payment method. */
 export function session(parameters: session.Parameters = {}) {
   const { decimals = defaults.decimals } = parameters
   const maxDeposit =
@@ -374,7 +374,7 @@ export declare namespace session {
       deposit?: string | undefined
       /** Maximum deposit in human-readable units. Caps the server suggestedDeposit and enables auto-management. */
       maxDeposit?: string | undefined
-      /** TIP-1034 precompile address override. */
+      /** TIP20EscrowChannel precompile address override. */
       escrow?: Address | undefined
       /** Address authorized to operate the precompile channel on behalf of the payee. */
       operator?: Address | undefined

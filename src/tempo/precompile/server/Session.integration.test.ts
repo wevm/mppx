@@ -1,5 +1,5 @@
 import { Hex } from 'ox'
-import { parseEventLogs, zeroAddress } from 'viem'
+import { encodeFunctionData, parseEventLogs, zeroAddress } from 'viem'
 import { sendTransaction, waitForTransactionReceipt } from 'viem/actions'
 import { describe, expect, test } from 'vp/test'
 import { nodeEnv } from '~test/config.js'
@@ -7,7 +7,7 @@ import { accounts, asset, chain, client } from '~test/tempo/viem.js'
 
 import * as Store from '../../../Store.js'
 import * as ChannelStore from '../../session/ChannelStore.js'
-import * as Chain from '../Chain.js'
+import { getChannelState } from '../Chain.js'
 import * as Channel from '../Channel.js'
 import {
   createCloseCredential,
@@ -53,13 +53,10 @@ function getSingleEvent(receipt: { logs: readonly unknown[] }, name: string) {
 async function openRealChannel(deposit = 1_000n) {
   const salt = Hex.random(32)
   const receipt = await sendPrecompileCall(
-    Chain.encodeOpen({
-      payee: payee.address,
-      operator: zeroAddress,
-      token: asset,
-      deposit: uint96(deposit),
-      salt,
-      authorizedSigner: payer.address,
+    encodeFunctionData({
+      abi: escrowAbi,
+      functionName: 'open',
+      args: [payee.address, zeroAddress, asset, uint96(deposit), salt, payer.address],
     }),
   )
   const opened = getSingleEvent(receipt, 'ChannelOpened')
@@ -140,7 +137,7 @@ describe.runIf(isPrecompileTestnet)('precompile server session chain integration
     const opened = getSingleEvent(txReceipt, 'ChannelOpened')
     expect(opened.args.channelId).toBe(payload.channelId)
     expect(opened.args.expiringNonceHash).toBe(payload.descriptor.expiringNonceHash)
-    const state = await Chain.getChannelState(client, payload.channelId, tip20ChannelEscrow)
+    const state = await getChannelState(client, payload.channelId, tip20ChannelEscrow)
     expect(state.deposit).toBe(1_000n)
     const stored = await store.getChannel(payload.channelId)
     expect(stored?.backend).toBe('precompile')
@@ -213,7 +210,7 @@ describe.runIf(isPrecompileTestnet)('precompile server session chain integration
     const toppedUp = getSingleEvent(txReceipt, 'TopUp')
     expect(toppedUp.args.channelId).toBe(openPayload.channelId)
     expect(toppedUp.args.newDeposit).toBe(1_200n)
-    const state = await Chain.getChannelState(client, openPayload.channelId, tip20ChannelEscrow)
+    const state = await getChannelState(client, openPayload.channelId, tip20ChannelEscrow)
     expect(state.deposit).toBe(1_200n)
     const stored = await store.getChannel(openPayload.channelId)
     expect(stored?.deposit).toBe(1_200n)
@@ -298,7 +295,7 @@ describe.runIf(isPrecompileTestnet)('precompile server session chain integration
     expect(settled.args.channelId).toBe(channelId)
     expect(settled.args.newSettled).toBe(300n)
 
-    const state = await Chain.getChannelState(client, channelId, tip20ChannelEscrow)
+    const state = await getChannelState(client, channelId, tip20ChannelEscrow)
     expect(state.settled).toBe(300n)
     const settledStore = await store.getChannel(channelId)
     expect(settledStore?.settledOnChain).toBe(300n)

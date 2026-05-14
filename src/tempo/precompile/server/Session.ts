@@ -256,7 +256,7 @@ async function sendCredentialTransaction(parameters: {
   return receipt
 }
 
-/** Creates a server-side TIP-1034 precompile session payment method. */
+/** Creates a server-side TIP20EscrowChannel precompile session payment method. */
 export function session<const parameters extends session.Parameters>(
   p?: NoExtraKeys<parameters, session.Parameters>,
 ) {
@@ -929,7 +929,7 @@ async function handleClose(parameters: {
       payee: channel.payee,
       sender: account?.address,
     })
-    txHash = await Chain.close(
+    txHash = await Chain.closeOnChain(
       client,
       channel.descriptor,
       payload.cumulativeAmount,
@@ -1025,7 +1025,7 @@ export async function settle(
     sender: account?.address,
   })
   const amount = uint96(channel.highestVoucher.cumulativeAmount)
-  const txHash = await Chain.settle(
+  const txHash = await Chain.settleOnChain(
     client,
     channel.descriptor,
     amount,
