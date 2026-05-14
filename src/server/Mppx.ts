@@ -122,7 +122,7 @@ export type PaymentSuccessContext<
   input?: Transport.InputOf<transport> | undefined
   method: method
   receipt: Receipt.Receipt
-  request: z.input<method['schema']['request']>
+  request: z.output<method['schema']['request']>
 }>
 
 /** Options for standalone credential verification. */
@@ -380,7 +380,7 @@ export function create<
   for (const mi of methods) {
     intentCount[mi.intent] = (intentCount[mi.intent] ?? 0) + 1
   }
-  assertNoReservedMppxKeys(methods as readonly Method.AnyServer[], intentCount)
+  assertNoReservedMppxKeys(methods as readonly Method.AnyServer[])
 
   for (const mi of methods) {
     handlers[`${mi.name}/${mi.intent}`] = createMethodFn({
@@ -444,19 +444,23 @@ export function create<
         reason: `no registered method for ${credMethod}/${credIntent}`,
       })
 
-    const emitStandalonePaymentFailed = async (
-      error: Errors.PaymentError,
-      request = credential.challenge.request as z.input<typeof mi.schema.request>,
-    ) => {
+    const emitStandalonePaymentFailed = async (parameters: {
+      challenge: Challenge.Challenge
+      credential: Credential.Credential | null
+      error: Errors.PaymentError
+      request: Record<string, unknown>
+      submittedChallenge?: Challenge.Challenge | undefined
+    }) => {
       await serverEvents.emit(
         'payment.failed',
         createPaymentFailedContext({
-          challenge: credential.challenge,
-          credential,
-          error,
+          capturedRequest: options?.capturedRequest,
+          challenge: parameters.challenge,
+          credential: parameters.credential,
+          error: parameters.error,
           method: mi,
-          request,
-          submittedChallenge: credential.challenge,
+          request: parameters.request,
+          submittedChallenge: parameters.submittedChallenge,
         }) as never,
       )
     }
@@ -467,7 +471,6 @@ export function create<
         id: credential.challenge.id,
         reason: 'challenge was not issued by this server',
       })
-      await emitStandalonePaymentFailed(error)
       throw error
     }
 
@@ -475,15 +478,32 @@ export function create<
     try {
       Expires.assert(credential.challenge.expires, credential.challenge.id)
     } catch (e) {
-      if (e instanceof Errors.PaymentError) await emitStandalonePaymentFailed(e)
+      if (e instanceof Errors.PaymentError)
+        await emitStandalonePaymentFailed({
+          challenge: credential.challenge,
+          credential,
+          error: e,
+          request: credential.challenge.request as Record<string, unknown>,
+          submittedChallenge: credential.challenge,
+        })
       throw e
     }
 
     // Validate payload against method schema
+    let parsedCredential: Credential.Credential
     try {
-      mi.schema.credential.payload.parse(credential.payload)
+      parsedCredential = withParsedCredentialPayload(
+        credential,
+        mi.schema.credential.payload.parse(credential.payload),
+      )
     } catch (e) {
-      await emitStandalonePaymentFailed(new Errors.InvalidPayloadError())
+      await emitStandalonePaymentFailed({
+        challenge: credential.challenge,
+        credential,
+        error: new Errors.InvalidPayloadError(),
+        request: credential.challenge.request as Record<string, unknown>,
+        submittedChallenge: credential.challenge,
+      })
       throw e
     }
 
@@ -494,7 +514,13 @@ export function create<
         id: credential.challenge.id,
         reason: "credential scope does not match this route's requirements",
       })
-      await emitStandalonePaymentFailed(error)
+      await emitStandalonePaymentFailed({
+        challenge: credential.challenge,
+        credential: parsedCredential,
+        error,
+        request: credential.challenge.request as Record<string, unknown>,
+        submittedChallenge: credential.challenge,
+      })
       throw error
     }
 
@@ -513,7 +539,7 @@ export function create<
       request = shouldValidateRoute
         ? await resolveRouteChallenge({
             capturedRequest: options?.capturedRequest,
-            credential,
+            credential: parsedCredential,
             defaults: mi.defaults,
             expires: credential.challenge.expires,
             meta: expectedMeta,
@@ -538,7 +564,14 @@ export function create<
           })
         : (credential.challenge.request as z.input<typeof mi.schema.request>)
     } catch (e) {
-      if (e instanceof Errors.PaymentError) await emitStandalonePaymentFailed(e)
+      if (e instanceof Errors.PaymentError)
+        await emitStandalonePaymentFailed({
+          challenge: credential.challenge,
+          credential: parsedCredential,
+          error: e,
+          request: credential.challenge.request as Record<string, unknown>,
+          submittedChallenge: credential.challenge,
+        })
       throw e
     }
 
@@ -546,25 +579,32 @@ export function create<
       ? ({
           capturedRequest: options.capturedRequest,
           challenge: credential.challenge,
-          credential,
+          credential: parsedCredential,
           request,
         } as Method.VerifiedChallengeEnvelope)
       : undefined
 
     let receipt: Receipt.Receipt
     try {
-      receipt = await mi.verify({ credential, envelope, request } as never)
+      receipt = await mi.verify({ credential: parsedCredential, envelope, request } as never)
     } catch (e) {
       const error = e instanceof Errors.PaymentError ? e : new Errors.VerificationFailedError()
-      await emitStandalonePaymentFailed(error, request)
+      await emitStandalonePaymentFailed({
+        challenge: credential.challenge,
+        credential: parsedCredential,
+        error,
+        request,
+        submittedChallenge: credential.challenge,
+      })
       throw e
     }
 
     await serverEvents.emit(
       'payment.success',
       createPaymentSuccessContext({
+        capturedRequest: options?.capturedRequest,
         challenge: credential.challenge,
-        credential,
+        credential: parsedCredential,
         envelope,
         method: mi,
         receipt,
@@ -1028,8 +1068,12 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
           return { challenge: response, status: 402 }
         }
         // Validate payload structure against method schema
+        let parsedCredential: Credential.Credential
         try {
-          method.schema.credential.payload.parse(credential.payload)
+          parsedCredential = withParsedCredentialPayload(
+            credential,
+            method.schema.credential.payload.parse(credential.payload),
+          )
         } catch {
           const error = new Errors.InvalidPayloadError()
           await emitPaymentFailed({
@@ -1052,7 +1096,7 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
         const envelope: Method.VerifiedChallengeEnvelope = Object.freeze({
           capturedRequest,
           challenge: credential.challenge,
-          credential,
+          credential: parsedCredential,
           request,
         })
 
@@ -1060,14 +1104,14 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
         // If verification fails, re-issue the challenge so the client can retry.
         let receiptData: Receipt.Receipt
         try {
-          receiptData = await verify({ credential, envelope, request } as never)
+          receiptData = await verify({ credential: parsedCredential, envelope, request } as never)
         } catch (e) {
           if (!(e instanceof Errors.PaymentError))
             console.error('mppx: internal verification error', e)
           const error = e instanceof Errors.PaymentError ? e : new Errors.VerificationFailedError()
           await emitPaymentFailed({
             challenge,
-            credential,
+            credential: parsedCredential,
             error,
             request,
             retryChallenge: challenge,
@@ -1082,12 +1126,27 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
           return { challenge: response, status: 402 }
         }
 
+        // If the method's `respond` hook returns a Response, it means this
+        // request is a management action (e.g. channel open, voucher POST)
+        // and the user's route handler should NOT run. `withReceipt()` will
+        // return the management response directly. If undefined, `withReceipt()`
+        // expects the caller to pass the user handler's response instead.
+        const managementResponse = respond
+          ? await respond({
+              credential: parsedCredential,
+              envelope,
+              input,
+              receipt: receiptData,
+              request,
+            } as never)
+          : undefined
+
         await events.emit(
           'payment.success',
           createPaymentSuccessContext({
             capturedRequest,
             challenge: credential.challenge,
-            credential,
+            credential: parsedCredential,
             envelope,
             input,
             method,
@@ -1096,18 +1155,9 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
           }) as never,
         )
 
-        // If the method's `respond` hook returns a Response, it means this
-        // request is a management action (e.g. channel open, voucher POST)
-        // and the user's route handler should NOT run. `withReceipt()` will
-        // return the management response directly. If undefined, `withReceipt()`
-        // expects the caller to pass the user handler's response instead.
-        const managementResponse = respond
-          ? await respond({ credential, envelope, input, receipt: receiptData, request } as never)
-          : undefined
-
         return success(receiptData, {
           challengeId: credential.challenge.id,
-          credentialForReceipt: credential,
+          credentialForReceipt: parsedCredential,
           envelopeForReceipt: envelope,
           managementResponse,
         })
@@ -1282,14 +1332,11 @@ const reservedMppxKeys = new Set<ReservedKey>([
   'verifyCredential',
 ])
 
-function assertNoReservedMppxKeys(
-  methods: readonly Method.AnyServer[],
-  intentCount: Readonly<Record<string, number>>,
-) {
+function assertNoReservedMppxKeys(methods: readonly Method.AnyServer[]) {
   for (const method of methods) {
     if (reservedMppxKeys.has(method.name as ReservedKey))
       throw new Error(`Method name "${method.name}" conflicts with a reserved Mppx property.`)
-    if (intentCount[method.intent] === 1 && reservedMppxKeys.has(method.intent as ReservedKey))
+    if (reservedMppxKeys.has(method.intent as ReservedKey))
       throw new Error(`Method intent "${method.intent}" conflicts with a reserved Mppx property.`)
   }
 }
@@ -1312,9 +1359,9 @@ function createChallengeContext(parameters: {
       parameters.credential === undefined
         ? undefined
         : snapshotNullableValue(parameters.credential),
-    error: parameters.error,
-    ...(parameters.input !== undefined ? { input: snapshotTransportInput(parameters.input) } : {}),
-    method: parameters.method,
+    error: snapshotError(parameters.error),
+    ...snapshotInputProperty(parameters.input),
+    method: snapshotMethod(parameters.method),
     request: snapshotValue(parameters.request),
   }) as never
 }
@@ -1336,9 +1383,9 @@ function createPaymentFailedContext(parameters: {
       : {}),
     challenge: snapshotValue(parameters.challenge),
     credential: snapshotNullableValue(parameters.credential),
-    error: parameters.error,
-    ...(parameters.input !== undefined ? { input: snapshotTransportInput(parameters.input) } : {}),
-    method: parameters.method,
+    error: snapshotError(parameters.error),
+    ...snapshotInputProperty(parameters.input),
+    method: snapshotMethod(parameters.method),
     request: snapshotValue(parameters.request),
     ...(parameters.retryChallenge
       ? { retryChallenge: snapshotValue(parameters.retryChallenge) }
@@ -1366,11 +1413,31 @@ function createPaymentSuccessContext(parameters: {
     challenge: snapshotValue(parameters.challenge),
     ...(parameters.credential ? { credential: snapshotValue(parameters.credential) } : {}),
     ...(parameters.envelope ? { envelope: snapshotVerifiedEnvelope(parameters.envelope) } : {}),
-    ...(parameters.input !== undefined ? { input: snapshotTransportInput(parameters.input) } : {}),
-    method: parameters.method,
+    ...snapshotInputProperty(parameters.input),
+    method: snapshotMethod(parameters.method),
     receipt: snapshotValue(parameters.receipt),
     request: snapshotValue(parameters.request),
   }) as never
+}
+
+function snapshotMethod<method extends Method.Method>(method: method): method {
+  return Object.freeze({
+    ...method,
+    schema: Object.freeze({
+      ...method.schema,
+      credential: Object.freeze({ ...method.schema.credential }),
+    }),
+  }) as method
+}
+
+function snapshotError<error extends Errors.PaymentError | undefined>(error: error): error {
+  if (!error) return error
+  const snapshot = Object.assign(Object.create(Object.getPrototypeOf(error)), error)
+  Object.defineProperties(snapshot, {
+    message: { value: error.message, enumerable: false },
+    name: { value: error.name, enumerable: false },
+  })
+  return Object.freeze(snapshot) as error
 }
 
 function snapshotVerifiedEnvelope(
@@ -1406,15 +1473,28 @@ function snapshotValue<value>(value: value): value {
   }
 }
 
-function snapshotTransportInput<input>(input: input): input {
+function snapshotInputProperty(input: unknown): { input: unknown } | {} {
+  if (input === undefined) return {}
+  const snapshot = snapshotTransportInput(input)
+  return snapshot === undefined ? {} : { input: snapshot }
+}
+
+function snapshotTransportInput<input>(input: input): input | undefined {
   if (input instanceof globalThis.Request) {
     try {
-      return input.clone() as input
+      return new globalThis.Request(input.url, {
+        headers: new Headers(input.headers),
+        method: input.method,
+      }) as input
     } catch {
-      return input
+      return undefined
     }
   }
-  return input
+  try {
+    return freezeSnapshot(structuredClone(input))
+  } catch {
+    return undefined
+  }
 }
 
 // Event payloads are cloned before listeners see them; shallow freezing keeps
@@ -1542,16 +1622,18 @@ async function resolveRouteChallenge(parameters: {
       ? resolveRealmFromCapturedRequest(parameters.capturedRequest)
       : defaultRealm)
 
+  const challenge = Challenge.fromMethod(parameters.method, {
+    description: parameters.description,
+    expires: parameters.expires,
+    meta: parameters.meta,
+    realm: effectiveRealm,
+    request: request as never,
+    secretKey: parameters.secretKey,
+  })
+
   return {
-    challenge: Challenge.fromMethod(parameters.method, {
-      description: parameters.description,
-      expires: parameters.expires,
-      meta: parameters.meta,
-      realm: effectiveRealm,
-      request: request as never,
-      secretKey: parameters.secretKey,
-    }),
-    request,
+    challenge,
+    request: challenge.request as Record<string, unknown>,
   }
 }
 
@@ -1808,6 +1890,16 @@ function hydrateCredentialMeta<payload>(
       ...challenge,
       meta: PaymentRequest.deserialize(challenge.opaque) as Record<string, string>,
     },
+  }
+}
+
+function withParsedCredentialPayload<payload>(
+  credential: Credential.Credential,
+  payload: payload,
+): Credential.Credential<payload> {
+  return {
+    ...credential,
+    payload,
   }
 }
 export type MethodFn<

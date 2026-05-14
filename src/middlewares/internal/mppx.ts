@@ -7,6 +7,19 @@ export type AnyServer = Method.AnyServer
 
 type DiscoveryMeta = Pick<DiscoveryHandler, '_internal'>
 
+const reservedMppxKeys = new Set<string>([
+  'challenge',
+  'compose',
+  'methods',
+  'on',
+  'onChallengeCreated',
+  'onPaymentFailed',
+  'onPaymentSuccess',
+  'realm',
+  'transport',
+  'verifyCredential',
+])
+
 /** Recursively wraps nested handler objects one level deep. */
 type WrapNested<obj, handler> = {
   [key in keyof obj]: obj[key] extends (options: infer options) => any
@@ -51,7 +64,8 @@ export function wrap<mppx extends Mppx.Mppx<any, any>, handler>(
     }
     result[key] = wrapWithMeta
     // Also set shorthand intent key if Mppx registered it (no collision)
-    if ((mppx as any)[mi.intent]) result[mi.intent] = wrapWithMeta
+    if (!reservedMppxKeys.has(mi.intent) && (mppx as any)[mi.intent])
+      result[mi.intent] = wrapWithMeta
     // Build nested handlers: wrapped.tempo.charge(...)
     if (!result[mi.name] || typeof result[mi.name] !== 'object')
       result[mi.name] = {} as Record<string, unknown>

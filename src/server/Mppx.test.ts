@@ -1402,6 +1402,12 @@ describe('server events', () => {
 
   test('emits events from standalone verifyCredential', async () => {
     const events: string[] = []
+    const capturedRequest = {
+      headers: new Headers({ 'x-route': 'standalone' }),
+      hasBody: false,
+      method: 'POST',
+      url: new URL('https://example.com/standalone'),
+    }
     const serverMethod = Method.toServer(eventCharge, {
       async verify() {
         return receipt('tx-standalone')
@@ -1413,7 +1419,9 @@ describe('server events', () => {
       secretKey,
     })
     handler.onPaymentSuccess((context) => {
-      events.push(`success:${context.receipt.reference}:${context.input}`)
+      events.push(
+        `success:${context.receipt.reference}:${context.input}:${context.capturedRequest?.url.pathname}`,
+      )
     })
 
     const first = await handler.charge(options())(new Request('https://example.com/resource'))
@@ -1425,14 +1433,21 @@ describe('server events', () => {
         challenge: Challenge.fromResponse(first.challenge),
         payload: { token: 'valid' },
       }),
+      { capturedRequest, request: options() },
     )
 
     expect(result.reference).toBe('tx-standalone')
-    expect(events).toEqual(['success:tx-standalone:undefined'])
+    expect(events).toEqual(['success:tx-standalone:undefined:/standalone'])
   })
 
   test('emits payment failure from standalone verifyCredential failures', async () => {
     const events: string[] = []
+    const capturedRequest = {
+      headers: new Headers({ 'x-route': 'standalone' }),
+      hasBody: false,
+      method: 'POST',
+      url: new URL('https://example.com/standalone-failure'),
+    }
     const serverMethod = Method.toServer(eventCharge, {
       async verify() {
         throw new Errors.VerificationFailedError({ reason: 'declined' })
@@ -1444,7 +1459,9 @@ describe('server events', () => {
       secretKey,
     })
     handler.onPaymentFailed((context) => {
-      events.push(`failed:${context.error.name}:${context.submittedChallenge?.id}`)
+      events.push(
+        `failed:${context.error.name}:${context.submittedChallenge?.id}:${context.capturedRequest?.url.pathname}`,
+      )
     })
 
     const first = await handler.charge(options())(new Request('https://example.com/resource'))
@@ -1458,9 +1475,43 @@ describe('server events', () => {
           challenge,
           payload: { token: 'valid' },
         }),
+        { capturedRequest, request: options() },
       ),
     ).rejects.toThrow(Errors.VerificationFailedError)
-    expect(events).toEqual([`failed:VerificationFailedError:${challenge.id}`])
+    expect(events).toEqual([`failed:VerificationFailedError:${challenge.id}:/standalone-failure`])
+  })
+
+  test('does not emit standalone payment failure for forged challenge HMAC failures', async () => {
+    const events: string[] = []
+    const serverMethod = Method.toServer(eventCharge, {
+      async verify() {
+        return receipt()
+      },
+    })
+    const handler = Mppx.create({
+      methods: [serverMethod],
+      realm,
+      secretKey,
+    })
+    handler.onPaymentFailed((context) => {
+      events.push(`failed:${context.challenge.id}:${context.request.amount}`)
+    })
+
+    await expect(
+      handler.verifyCredential(
+        Credential.from({
+          challenge: Challenge.from({
+            id: 'forged-id',
+            intent: 'charge',
+            method: 'mock',
+            realm,
+            request: { amount: { $ne: '1000' }, currency: asset },
+          }),
+          payload: { token: 'valid' },
+        }),
+      ),
+    ).rejects.toThrow(Errors.InvalidChallengeError)
+    expect(events).toEqual([])
   })
 
   test('emits payment failure when credential-bearing request hook rejects', async () => {
@@ -1563,6 +1614,141 @@ describe('server events', () => {
         secretKey,
       }),
     ).toThrow('reserved Mppx property')
+  })
+
+  test('rejects duplicated reserved intent collisions', () => {
+    const createCollidingMethod = (name: string) =>
+      Method.toServer(
+        Method.from({
+          name,
+          intent: 'onPaymentSuccess',
+          schema: {
+            credential: { payload: z.object({ token: z.string() }) },
+            request: z.object({ amount: z.string() }),
+          },
+        }),
+        {
+          async verify() {
+            return receipt()
+          },
+        },
+      )
+
+    expect(() =>
+      Mppx.create({
+        methods: [createCollidingMethod('alpha'), createCollidingMethod('beta')],
+        realm,
+        secretKey,
+      }),
+    ).toThrow('reserved Mppx property')
+  })
+
+  test('server event request inputs are bodyless snapshots', async () => {
+    let eventInput: Request | undefined
+    const serverMethod = Method.toServer(eventCharge, {
+      async verify() {
+        return receipt()
+      },
+    })
+    const handler = Mppx.create({
+      methods: [serverMethod],
+      realm,
+      secretKey,
+    })
+    handler.onChallengeCreated((context) => {
+      eventInput = context.input
+    })
+
+    const original = new Request('https://example.com/resource', {
+      body: 'paid upload',
+      method: 'POST',
+    })
+    const result = await handler.charge(options())(original)
+
+    expect(result.status).toBe(402)
+    expect(eventInput).toBeInstanceOf(Request)
+    expect(eventInput?.body).toBeNull()
+    await expect(original.text()).resolves.toBe('paid upload')
+  })
+
+  test('payment success events expose transformed credential and request values', async () => {
+    const transformed = Method.from({
+      name: 'transformed',
+      intent: 'charge',
+      schema: {
+        credential: {
+          payload: z.pipe(
+            z.object({ admin: z.string() }),
+            z.transform(({ admin }) => ({ admin: admin === 'true' })),
+          ),
+        },
+        request: z.pipe(
+          z.object({
+            amount: z.string(),
+            currency: z.string(),
+            decimals: z.number(),
+            recipient: z.string(),
+          }),
+          z.transform(({ amount, currency, decimals, recipient }) => ({
+            amount: String(Number(amount) * 10 ** decimals),
+            currency,
+            recipient,
+          })),
+        ),
+      },
+    })
+    const seen: Record<string, unknown> = {}
+    const serverMethod = Method.toServer(transformed, {
+      async verify({ credential, envelope, request }) {
+        seen.verifyAdmin = credential.payload.admin
+        seen.verifyEnvelopeAmount = envelope?.request.amount
+        seen.verifyRequestAmount = request.amount
+        return receipt('tx-transformed')
+      },
+    })
+    const handler = Mppx.create({
+      methods: [serverMethod],
+      realm,
+      secretKey,
+    })
+    handler.onPaymentSuccess((context) => {
+      seen.eventAdmin = context.credential?.payload.admin
+      seen.eventEnvelopeAmount = context.envelope?.request.amount
+      seen.eventRequestAmount = context.request.amount
+    })
+    const handle = handler.charge({
+      amount: '25',
+      currency: '0x0000000000000000000000000000000000000001',
+      decimals: 2,
+      expires: new Date(Date.now() + 60_000).toISOString(),
+      recipient: '0x0000000000000000000000000000000000000002',
+    })
+    const first = await handle(new Request('https://example.com/resource'))
+    expect(first.status).toBe(402)
+    if (first.status !== 402) throw new Error()
+
+    const paid = await handle(
+      new Request('https://example.com/resource', {
+        headers: {
+          Authorization: Credential.serialize(
+            Credential.from({
+              challenge: Challenge.fromResponse(first.challenge),
+              payload: { admin: 'false' },
+            }),
+          ),
+        },
+      }),
+    )
+
+    expect(paid.status).toBe(200)
+    expect(seen).toMatchObject({
+      eventAdmin: false,
+      eventEnvelopeAmount: '2500',
+      eventRequestAmount: '2500',
+      verifyAdmin: false,
+      verifyEnvelopeAmount: '2500',
+      verifyRequestAmount: '2500',
+    })
   })
 
   test('snapshots payment success payloads before listeners run', async () => {
