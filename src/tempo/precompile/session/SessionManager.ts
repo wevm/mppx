@@ -10,9 +10,9 @@ import { deserializeSessionReceipt } from '../../session/Receipt.js'
 import { parseEvent } from '../../session/Sse.js'
 import type { SessionCredentialPayload, SessionReceipt } from '../../session/Types.js'
 import * as Ws from '../../session/Ws.js'
+import type { ChannelEntry } from '../client/ChannelOps.js'
+import { session as sessionPlugin } from '../client/Session.js'
 import { uint96 } from '../Types.js'
-import type { ChannelEntry } from './Client.js'
-import { session as sessionPlugin } from './Client.js'
 
 type WebSocketConstructor = {
   new (url: string | URL, protocols?: string | string[]): WebSocket

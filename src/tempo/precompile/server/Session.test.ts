@@ -14,7 +14,6 @@ import { describe, expect, test } from 'vp/test'
 import * as Store from '../../../Store.js'
 import * as ChannelStore from '../../session/ChannelStore.js'
 import type { SessionReceipt } from '../../session/Types.js'
-import * as Chain from '../Chain.js'
 import * as Channel from '../Channel.js'
 import * as ClientOps from '../client/ChannelOps.js'
 import { tip20ChannelEscrow } from '../Constants.js'
@@ -582,7 +581,13 @@ describe('precompile server session unit guardrails', () => {
       unitType: 'request',
       getClient: () => createStateClient(payer),
     })
-    const payload = await ClientOps.createClosePayload(createSigningClient(), payer, openPayload.descriptor, Types.uint96(100n), chainId)
+    const payload = await ClientOps.createClosePayload(
+      createSigningClient(),
+      payer,
+      openPayload.descriptor,
+      Types.uint96(100n),
+      chainId,
+    )
 
     await expect(
       method.verify({
@@ -618,7 +623,13 @@ describe('precompile server session unit guardrails', () => {
           closeRequestedAt: 0,
         }),
     })
-    const payload = await ClientOps.createClosePayload(createSigningClient(), payer, openPayload.descriptor, Types.uint96(99n), chainId)
+    const payload = await ClientOps.createClosePayload(
+      createSigningClient(),
+      payer,
+      openPayload.descriptor,
+      Types.uint96(99n),
+      chainId,
+    )
 
     await expect(
       method.verify({
@@ -655,7 +666,13 @@ describe('precompile server session unit guardrails', () => {
           closeRequestedAt: 0,
         }),
     })
-    const payload = await ClientOps.createClosePayload(createSigningClient(), payer, openPayload.descriptor, Types.uint96(100n), chainId)
+    const payload = await ClientOps.createClosePayload(
+      createSigningClient(),
+      payer,
+      openPayload.descriptor,
+      Types.uint96(100n),
+      chainId,
+    )
 
     await expect(
       method.verify({
@@ -672,7 +689,13 @@ describe('precompile server session unit guardrails', () => {
     const rawStore = Store.memory()
     const store = ChannelStore.fromStore(rawStore as never)
     const openPayload = await createOpenPayload()
-    const payload = await ClientOps.createClosePayload(createSigningClient(), payer, openPayload.descriptor, Types.uint96(100n), chainId)
+    const payload = await ClientOps.createClosePayload(
+      createSigningClient(),
+      payer,
+      openPayload.descriptor,
+      Types.uint96(100n),
+      chainId,
+    )
     const method = session({
       account: payer,
       amount: '1',
@@ -716,8 +739,20 @@ describe('precompile server session unit guardrails', () => {
 
   test('does not let a racing lower voucher regress highest accepted precompile voucher', async () => {
     const openPayload = await createOpenPayload({ initialAmount: 100n })
-    const lowerVoucher = await ClientOps.createVoucherPayload(createSigningClient(), payer, openPayload.descriptor, Types.uint96(200n), chainId)
-    const higherVoucher = await ClientOps.createVoucherPayload(createSigningClient(), payer, openPayload.descriptor, Types.uint96(500n), chainId)
+    const lowerVoucher = await ClientOps.createVoucherPayload(
+      createSigningClient(),
+      payer,
+      openPayload.descriptor,
+      Types.uint96(200n),
+      chainId,
+    )
+    const higherVoucher = await ClientOps.createVoucherPayload(
+      createSigningClient(),
+      payer,
+      openPayload.descriptor,
+      Types.uint96(500n),
+      chainId,
+    )
     if (higherVoucher.action !== 'voucher') throw new Error('expected voucher payload')
 
     const seedStore = ChannelStore.fromStore(Store.memory() as never)
@@ -825,7 +860,13 @@ describe('precompile server session unit guardrails', () => {
           }),
         }),
     })
-    const payload = await ClientOps.createClosePayload(createSigningClient(), payer, openPayload.descriptor, Types.uint96(100n), chainId)
+    const payload = await ClientOps.createClosePayload(
+      createSigningClient(),
+      payer,
+      openPayload.descriptor,
+      Types.uint96(100n),
+      chainId,
+    )
 
     await expect(
       method.verify({
@@ -855,7 +896,13 @@ describe('precompile server session unit guardrails', () => {
       unitType: 'request',
       getClient: () => createStateClient(null),
     })
-    const payload = await ClientOps.createClosePayload(createSigningClient(), payer, openPayload.descriptor, Types.uint96(100n), chainId)
+    const payload = await ClientOps.createClosePayload(
+      createSigningClient(),
+      payer,
+      openPayload.descriptor,
+      Types.uint96(100n),
+      chainId,
+    )
 
     await expect(
       method.verify({
@@ -886,7 +933,13 @@ describe('precompile server session unit guardrails', () => {
       unitType: 'request',
       getClient: () => createStateClient(payer),
     })
-    const payload = await ClientOps.createClosePayload(createSigningClient(), payer, openPayload.descriptor, Types.uint96(100n), chainId)
+    const payload = await ClientOps.createClosePayload(
+      createSigningClient(),
+      payer,
+      openPayload.descriptor,
+      Types.uint96(100n),
+      chainId,
+    )
 
     await expect(
       method.verify({
@@ -918,7 +971,13 @@ describe('precompile server session unit guardrails', () => {
       unitType: 'request',
       getClient: () => createStateClient(payer),
     })
-    const payload = await ClientOps.createClosePayload(createSigningClient(), payer, openPayload.descriptor, Types.uint96(100n), chainId)
+    const payload = await ClientOps.createClosePayload(
+      createSigningClient(),
+      payer,
+      openPayload.descriptor,
+      Types.uint96(100n),
+      chainId,
+    )
 
     await expect(
       method.verify({
@@ -956,7 +1015,13 @@ describe('precompile server session unit guardrails', () => {
       unitType: 'request',
       getClient: () => createStateClient(payer),
     })
-    const payload = await ClientOps.createClosePayload(createSigningClient(), payer, openPayload.descriptor, Types.uint96(100n), chainId)
+    const payload = await ClientOps.createClosePayload(
+      createSigningClient(),
+      payer,
+      openPayload.descriptor,
+      Types.uint96(100n),
+      chainId,
+    )
 
     await expect(
       method.verify({
@@ -984,7 +1049,13 @@ describe('precompile server session unit guardrails', () => {
       unitType: 'request',
       getClient: () => createStateClient(wrongPayer),
     })
-    const payload = await ClientOps.createClosePayload(createSigningClient(), payer, openPayload.descriptor, Types.uint96(100n), chainId)
+    const payload = await ClientOps.createClosePayload(
+      createSigningClient(),
+      payer,
+      openPayload.descriptor,
+      Types.uint96(100n),
+      chainId,
+    )
 
     await expect(
       method.verify({

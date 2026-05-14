@@ -1,5 +1,5 @@
 export * as Client from './client/index.js'
-export { session } from './session/Client.js'
+export { session } from './client/Session.js'
 export { sessionManager } from './session/SessionManager.js'
 export * as Session from './session/index.js'
 export * as Chain from './Chain.js'

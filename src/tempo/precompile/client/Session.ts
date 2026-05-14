@@ -1,8 +1,7 @@
-import { type Address, type Hex, parseUnits, type Account as viem_Account } from 'viem'
+import { type Address, parseUnits, type Account as viem_Account } from 'viem'
 import { tempo as tempo_chain } from 'viem/chains'
 
 import type * as Challenge from '../../../Challenge.js'
-import * as Credential from '../../../Credential.js'
 import * as Method from '../../../Method.js'
 import * as Account from '../../../viem/Account.js'
 import * as Client from '../../../viem/Client.js'
@@ -12,23 +11,17 @@ import * as defaults from '../../internal/defaults.js'
 import * as Methods from '../../Methods.js'
 import * as Chain from '../Chain.js'
 import * as Channel from '../Channel.js'
+import type { SessionCredentialPayload } from '../Types.js'
+import { uint96 } from '../Types.js'
 import {
   createOpenPayload,
   createTopUpPayload,
   createVoucherPayload,
-} from '../client/ChannelOps.js'
-import { tip20ChannelEscrow } from '../Constants.js'
-import type { SessionCredentialPayload, Uint96 } from '../Types.js'
-import { uint96 } from '../Types.js'
-
-export type ChannelEntry = {
-  channelId: Hex
-  cumulativeAmount: Uint96
-  descriptor: Channel.ChannelDescriptor
-  escrow: Address
-  chainId: number
-  opened: boolean
-}
+  isSameAddress,
+  resolveEscrow,
+  serializeCredential,
+  type ChannelEntry,
+} from './ChannelOps.js'
 
 export const sessionContextSchema = z.object({
   account: z.optional(z.custom<Account.getResolver.Parameters['account']>()),
@@ -36,77 +29,23 @@ export const sessionContextSchema = z.object({
   channelId: z.optional(z.string()),
   cumulativeAmount: z.optional(z.amount()),
   cumulativeAmountRaw: z.optional(z.string()),
+  transaction: z.optional(z.string()),
+  descriptor: z.optional(z.custom<Channel.ChannelDescriptor>()),
   additionalDeposit: z.optional(z.amount()),
   additionalDepositRaw: z.optional(z.string()),
   depositRaw: z.optional(z.string()),
-  transaction: z.optional(z.string()),
-  descriptor: z.optional(z.custom<Channel.ChannelDescriptor>()),
 })
 
 export type SessionContext = z.infer<typeof sessionContextSchema>
 
-function serializeCredential(
-  challenge: Challenge.Challenge,
-  payload: SessionCredentialPayload,
-  chainId: number,
-  account: viem_Account,
-): string {
-  return Credential.serialize({
-    challenge,
-    payload,
-    source: `did:pkh:eip155:${chainId}:${account.address}`,
-  })
-}
-
-function channelKey(payee: Address, token: Address, escrow: Address): string {
-  return `${payee.toLowerCase()}:${token.toLowerCase()}:${escrow.toLowerCase()}`
-}
-
-function resolveEscrow(
-  challenge: {
-    request: {
-      methodDetails?: { escrow?: string | undefined; escrowContract?: string | undefined }
-    }
-  },
-  escrowOverride?: Address | undefined,
-): Address {
-  const methodDetails = challenge.request.methodDetails
-  const challengeEscrow = (methodDetails?.escrowContract ?? methodDetails?.escrow) as
-    | Address
-    | undefined
-  return escrowOverride ?? challengeEscrow ?? tip20ChannelEscrow
-}
-
-function parseAmount(value: string | undefined, decimals: number): bigint | undefined {
-  return value === undefined ? undefined : parseUnits(value, decimals)
-}
-
-function parseContextAmount(context: SessionContext, decimals: number): Uint96 | undefined {
-  const amount = context.cumulativeAmountRaw
-    ? BigInt(context.cumulativeAmountRaw)
-    : parseAmount(context.cumulativeAmount, decimals)
-  return amount === undefined ? undefined : uint96(amount)
-}
-
-function parseContextAdditionalDeposit(
-  context: SessionContext,
-  decimals: number,
-): Uint96 | undefined {
-  const amount = context.additionalDepositRaw
-    ? BigInt(context.additionalDepositRaw)
-    : parseAmount(context.additionalDeposit, decimals)
-  return amount === undefined ? undefined : uint96(amount)
-}
-
-function isSameAddress(a: Address, b: Address): boolean {
-  return a.toLowerCase() === b.toLowerCase()
-}
-
-/** Creates a client-side TIP20EscrowChannel precompile session payment method. */
+/**
+ * Creates a precompile-backed session payment method for use with `Mppx.create()`.
+ *
+ * Supports both auto mode (set `deposit` to manage channels automatically)
+ * and manual mode (pass `context.action` with a channel descriptor to control each step).
+ */
 export function session(parameters: session.Parameters = {}) {
   const { decimals = defaults.decimals } = parameters
-  const maxDeposit =
-    parameters.maxDeposit !== undefined ? parseUnits(parameters.maxDeposit, decimals) : undefined
 
   const getClient = Client.getResolver({
     chain: tempo_chain,
@@ -115,11 +54,18 @@ export function session(parameters: session.Parameters = {}) {
   })
   const getAccount = Account.getResolver({ account: parameters.account })
 
+  const maxDeposit =
+    parameters.maxDeposit !== undefined ? parseUnits(parameters.maxDeposit, decimals) : undefined
+
   const channels = new Map<string, ChannelEntry>()
   const channelIdToKey = new Map<string, string>()
 
   function notifyUpdate(entry: ChannelEntry) {
     parameters.onChannelUpdate?.(entry)
+  }
+
+  function channelKey(payee: Address, token: Address, escrow: Address): string {
+    return `${payee.toLowerCase()}:${token.toLowerCase()}:${escrow.toLowerCase()}`
   }
 
   async function autoManageCredential(
@@ -130,17 +76,17 @@ export function session(parameters: session.Parameters = {}) {
     const methodDetails = challenge.request.methodDetails as { feePayer?: boolean } | undefined
     const chainId = resolveChainId(challenge)
     const client = await getClient({ chainId })
+    const escrow = resolveEscrow(challenge, parameters.escrow)
     const payee = challenge.request.recipient as Address
     const token = challenge.request.currency as Address
-    const escrow = resolveEscrow(challenge, parameters.escrow)
     const amount = uint96(BigInt(challenge.request.amount as string))
     const key = channelKey(payee, token, escrow)
-    const existing = channels.get(key)
+    let entry = channels.get(key)
 
     let payload: SessionCredentialPayload
-    if (!existing && context?.channelId && !context.descriptor)
+    if (!entry && context?.channelId && !context.descriptor)
       throw new Error('descriptor required to reuse precompile channel')
-    if (!existing && context?.descriptor) {
+    if (!entry && context?.descriptor) {
       const channelId = Channel.computeId({ ...context.descriptor, chainId, escrow })
       if (context.channelId && context.channelId.toLowerCase() !== channelId.toLowerCase())
         throw new Error('context channelId does not match descriptor')
@@ -153,10 +99,21 @@ export function session(parameters: session.Parameters = {}) {
         throw new Error(`Channel ${channelId} cannot be reused (closed or not found on-chain).`)
       if (state.closeRequestedAt !== 0)
         throw new Error(`Channel ${channelId} cannot be reused (pending close request).`)
+      const contextCumulative = context.cumulativeAmountRaw
+        ? BigInt(context.cumulativeAmountRaw)
+        : context.cumulativeAmount
+          ? parseUnits(context.cumulativeAmount, decimals)
+          : undefined
       const cumulativeAmount =
-        parseContextAmount(context, decimals) ?? uint96(state.settled + amount)
-      payload = await createVoucherPayload(client, account, context.descriptor, cumulativeAmount, chainId)
-      const entry: ChannelEntry = {
+        contextCumulative === undefined ? uint96(state.settled + amount) : uint96(contextCumulative)
+      payload = await createVoucherPayload(
+        client,
+        account,
+        context.descriptor,
+        cumulativeAmount,
+        chainId,
+      )
+      entry = {
         channelId,
         cumulativeAmount,
         descriptor: context.descriptor,
@@ -167,11 +124,17 @@ export function session(parameters: session.Parameters = {}) {
       channels.set(key, entry)
       channelIdToKey.set(channelId, key)
       notifyUpdate(entry)
-    } else if (existing?.opened) {
-      const cumulativeAmount = uint96(existing.cumulativeAmount + amount)
-      payload = await createVoucherPayload(client, account, existing.descriptor, cumulativeAmount, chainId)
-      existing.cumulativeAmount = cumulativeAmount
-      notifyUpdate(existing)
+    } else if (entry?.opened) {
+      const cumulativeAmount = uint96(entry.cumulativeAmount + amount)
+      payload = await createVoucherPayload(
+        client,
+        account,
+        entry.descriptor,
+        cumulativeAmount,
+        chainId,
+      )
+      entry.cumulativeAmount = cumulativeAmount
+      notifyUpdate(entry)
     } else {
       const suggestedDepositRaw = (challenge.request as { suggestedDeposit?: string })
         .suggestedDeposit
@@ -234,10 +197,21 @@ export function session(parameters: session.Parameters = {}) {
     switch (action) {
       case 'open': {
         if (!context.transaction) throw new Error('transaction required for open action')
-        const cumulativeAmount = parseContextAmount(context, decimals)
-        if (cumulativeAmount === undefined)
+        const cumulativeAmountRaw = context.cumulativeAmountRaw
+          ? BigInt(context.cumulativeAmountRaw)
+          : context.cumulativeAmount
+            ? parseUnits(context.cumulativeAmount, decimals)
+            : undefined
+        if (cumulativeAmountRaw === undefined)
           throw new Error('cumulativeAmount required for open action')
-        const voucher = await createVoucherPayload(client, account, descriptor, cumulativeAmount, chainId)
+        const cumulativeAmount = uint96(cumulativeAmountRaw)
+        const voucher = await createVoucherPayload(
+          client,
+          account,
+          descriptor,
+          cumulativeAmount,
+          chainId,
+        )
         if (voucher.action !== 'voucher') throw new Error('expected voucher payload')
         payload = {
           action: 'open',
@@ -252,9 +226,14 @@ export function session(parameters: session.Parameters = {}) {
         break
       }
       case 'topUp': {
-        const additionalDeposit = parseContextAdditionalDeposit(context, decimals)
-        if (additionalDeposit === undefined)
+        const additionalDepositRaw = context.additionalDepositRaw
+          ? BigInt(context.additionalDepositRaw)
+          : context.additionalDeposit
+            ? parseUnits(context.additionalDeposit, decimals)
+            : undefined
+        if (additionalDepositRaw === undefined)
           throw new Error('additionalDeposit required for topUp action')
+        const additionalDeposit = uint96(additionalDepositRaw)
         if (context.transaction) {
           payload = {
             action: 'topUp',
@@ -277,17 +256,33 @@ export function session(parameters: session.Parameters = {}) {
         break
       }
       case 'voucher': {
-        const cumulativeAmount = parseContextAmount(context, decimals)
-        if (cumulativeAmount === undefined)
+        const cumulativeAmountRaw = context.cumulativeAmountRaw
+          ? BigInt(context.cumulativeAmountRaw)
+          : context.cumulativeAmount
+            ? parseUnits(context.cumulativeAmount, decimals)
+            : undefined
+        if (cumulativeAmountRaw === undefined)
           throw new Error('cumulativeAmount required for voucher action')
+        const cumulativeAmount = uint96(cumulativeAmountRaw)
         payload = await createVoucherPayload(client, account, descriptor, cumulativeAmount, chainId)
         break
       }
       case 'close': {
-        const cumulativeAmount = parseContextAmount(context, decimals)
-        if (cumulativeAmount === undefined)
+        const cumulativeAmountRaw = context.cumulativeAmountRaw
+          ? BigInt(context.cumulativeAmountRaw)
+          : context.cumulativeAmount
+            ? parseUnits(context.cumulativeAmount, decimals)
+            : undefined
+        if (cumulativeAmountRaw === undefined)
           throw new Error('cumulativeAmount required for close action')
-        const voucher = await createVoucherPayload(client, account, descriptor, cumulativeAmount, chainId)
+        const cumulativeAmount = uint96(cumulativeAmountRaw)
+        const voucher = await createVoucherPayload(
+          client,
+          account,
+          descriptor,
+          cumulativeAmount,
+          chainId,
+        )
         if (voucher.action !== 'voucher') throw new Error('expected voucher payload')
         payload = { ...voucher, action: 'close' }
         break
@@ -340,10 +335,10 @@ export declare namespace session {
       decimals?: number | undefined
       /** Initial deposit amount in human-readable units. */
       deposit?: string | undefined
-      /** Maximum deposit in human-readable units. Caps the server suggestedDeposit and enables auto-management. */
-      maxDeposit?: string | undefined
       /** TIP20EscrowChannel precompile address override. */
       escrow?: Address | undefined
+      /** Maximum deposit in human-readable units. Caps the server suggestedDeposit and enables auto-management. */
+      maxDeposit?: string | undefined
       /** Address authorized to operate the precompile channel on behalf of the payee. */
       operator?: Address | undefined
       /** Called whenever channel state changes. */

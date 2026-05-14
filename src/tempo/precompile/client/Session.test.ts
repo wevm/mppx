@@ -10,7 +10,7 @@ import { tip20ChannelEscrow } from '../Constants.js'
 import { escrowAbi } from '../escrow.abi.js'
 import * as Types from '../Types.js'
 import * as Voucher from '../Voucher.js'
-import { session } from './Client.js'
+import { session } from './Session.js'
 
 const account = privateKeyToAccount(
   '0xac0974bec39a17e36ba6a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80',

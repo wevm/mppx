@@ -10,18 +10,57 @@ import { Hex } from 'ox'
 import { encodeFunctionData, zeroAddress, type Account, type Address, type Client } from 'viem'
 import { prepareTransactionRequest, signTransaction } from 'viem/actions'
 
+import type { Challenge } from '../../../Challenge.js'
+import * as Credential from '../../../Credential.js'
 import * as Channel from '../Channel.js'
 import { tip20ChannelEscrow } from '../Constants.js'
 import { escrowAbi } from '../escrow.abi.js'
 import type { SessionCredentialPayload } from '../Types.js'
 import * as Voucher from '../Voucher.js'
 
+export type ChannelEntry = {
+  channelId: Hex.Hex
+  cumulativeAmount: bigint
+  descriptor: Channel.ChannelDescriptor
+  escrow: Address
+  chainId: number
+  opened: boolean
+}
+
 function voucherAuthorizedSigner(address: Address): Address | undefined {
   return address.toLowerCase() === zeroAddress ? undefined : address
 }
 
-function defaultAuthorizedSigner(account: Account): Address {
-  return (account as unknown as { accessKeyAddress?: Address }).accessKeyAddress ?? account.address
+export function resolveEscrow(
+  challenge: {
+    request: {
+      methodDetails?: { escrow?: string | undefined; escrowContract?: string | undefined }
+    }
+  },
+  escrowOverride?: Address | undefined,
+): Address {
+  const methodDetails = challenge.request.methodDetails
+  const challengeEscrow = (methodDetails?.escrowContract ?? methodDetails?.escrow) as
+    | Address
+    | undefined
+  return escrowOverride ?? challengeEscrow ?? tip20ChannelEscrow
+}
+
+export function serializeCredential(
+  challenge: Challenge,
+  payload: SessionCredentialPayload,
+  chainId: number,
+  account: Account,
+): string {
+  return Credential.serialize({
+    challenge,
+    payload,
+    source: `did:pkh:eip155:${chainId}:${account.address}`,
+  })
+}
+
+export function isSameAddress(a: Address, b: Address): boolean {
+  return a.toLowerCase() === b.toLowerCase()
 }
 
 /** Signs and creates a TIP-1034 voucher credential payload for an existing channel. */
@@ -91,14 +130,24 @@ export async function createOpenPayload(
     token: Address
   },
 ): Promise<SessionCredentialPayload> {
-  const authorizedSigner = parameters.authorizedSigner ?? defaultAuthorizedSigner(account)
+  const authorizedSigner =
+    parameters.authorizedSigner ??
+    (account as unknown as { accessKeyAddress?: Address }).accessKeyAddress ??
+    account.address
   const operator = parameters.operator ?? '0x0000000000000000000000000000000000000000'
   const salt = Hex.random(32)
 
   const openData = encodeFunctionData({
     abi: escrowAbi,
     functionName: 'open',
-    args: [parameters.payee, operator, parameters.token, parameters.deposit, salt, authorizedSigner],
+    args: [
+      parameters.payee,
+      operator,
+      parameters.token,
+      parameters.deposit,
+      salt,
+      authorizedSigner,
+    ],
   })
   const prepared = await prepareTransactionRequest(client, {
     account,
