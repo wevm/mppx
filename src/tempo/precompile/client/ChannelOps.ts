@@ -16,6 +16,7 @@ import * as Channel from '../Channel.js'
 import { tip20ChannelEscrow } from '../Constants.js'
 import { escrowAbi } from '../escrow.abi.js'
 import type { SessionCredentialPayload } from '../Types.js'
+import { uint96 } from '../Types.js'
 import * as Voucher from '../Voucher.js'
 
 export type ChannelEntry = {
@@ -76,10 +77,11 @@ export async function createVoucherPayload(
     chainId,
     escrow: tip20ChannelEscrow,
   })
+  const amount = uint96(cumulativeAmount)
   const signature = await Voucher.signVoucher(
     client,
     account,
-    { channelId, cumulativeAmount },
+    { channelId, cumulativeAmount: amount },
     tip20ChannelEscrow,
     chainId,
     voucherAuthorizedSigner(descriptor.authorizedSigner),
@@ -89,7 +91,7 @@ export async function createVoucherPayload(
     action: 'voucher',
     channelId,
     descriptor,
-    cumulativeAmount: cumulativeAmount.toString(),
+    cumulativeAmount: amount.toString(),
     signature,
   }
 }
@@ -137,17 +139,12 @@ export async function createOpenPayload(
   const operator = parameters.operator ?? '0x0000000000000000000000000000000000000000'
   const salt = Hex.random(32)
 
+  const deposit = uint96(parameters.deposit)
+  const initialAmount = uint96(parameters.initialAmount)
   const openData = encodeFunctionData({
     abi: escrowAbi,
     functionName: 'open',
-    args: [
-      parameters.payee,
-      operator,
-      parameters.token,
-      parameters.deposit,
-      salt,
-      authorizedSigner,
-    ],
+    args: [parameters.payee, operator, parameters.token, deposit, salt, authorizedSigner],
   })
   const prepared = await prepareTransactionRequest(client, {
     account,
@@ -177,7 +174,7 @@ export async function createOpenPayload(
   const signature = await Voucher.signVoucher(
     client,
     account,
-    { channelId, cumulativeAmount: parameters.initialAmount },
+    { channelId, cumulativeAmount: initialAmount },
     tip20ChannelEscrow,
     parameters.chainId,
     voucherAuthorizedSigner(authorizedSigner),
@@ -191,7 +188,7 @@ export async function createOpenPayload(
     transaction,
     signature,
     descriptor,
-    cumulativeAmount: parameters.initialAmount.toString(),
+    cumulativeAmount: initialAmount.toString(),
     authorizedSigner: descriptor.authorizedSigner,
   }
 }
@@ -210,6 +207,7 @@ export async function createTopUpPayload(
     chainId,
     escrow: tip20ChannelEscrow,
   })
+  const deposit = uint96(additionalDeposit)
   const prepared = await prepareTransactionRequest(client, {
     account,
     calls: [
@@ -218,7 +216,7 @@ export async function createTopUpPayload(
         data: encodeFunctionData({
           abi: escrowAbi,
           functionName: 'topUp',
-          args: [descriptor, additionalDeposit],
+          args: [descriptor, deposit],
         }),
       },
     ],
@@ -233,6 +231,6 @@ export async function createTopUpPayload(
     channelId,
     transaction,
     descriptor,
-    additionalDeposit: additionalDeposit.toString(),
+    additionalDeposit: deposit.toString(),
   }
 }

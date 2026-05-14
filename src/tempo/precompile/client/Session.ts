@@ -12,7 +12,6 @@ import * as Methods from '../../Methods.js'
 import * as Chain from '../Chain.js'
 import * as Channel from '../Channel.js'
 import type { SessionCredentialPayload } from '../Types.js'
-import { uint96 } from '../Types.js'
 import {
   createOpenPayload,
   createTopUpPayload,
@@ -79,7 +78,7 @@ export function session(parameters: session.Parameters = {}) {
     const escrow = resolveEscrow(challenge, parameters.escrow)
     const payee = challenge.request.recipient as Address
     const token = challenge.request.currency as Address
-    const amount = uint96(BigInt(challenge.request.amount as string))
+    const amount = BigInt(challenge.request.amount as string)
     const key = channelKey(payee, token, escrow)
     let entry = channels.get(key)
 
@@ -105,7 +104,7 @@ export function session(parameters: session.Parameters = {}) {
           ? parseUnits(context.cumulativeAmount, decimals)
           : undefined
       const cumulativeAmount =
-        contextCumulative === undefined ? uint96(state.settled + amount) : uint96(contextCumulative)
+        contextCumulative === undefined ? state.settled + amount : contextCumulative
       payload = await createVoucherPayload(
         client,
         account,
@@ -125,7 +124,7 @@ export function session(parameters: session.Parameters = {}) {
       channelIdToKey.set(channelId, key)
       notifyUpdate(entry)
     } else if (entry?.opened) {
-      const cumulativeAmount = uint96(entry.cumulativeAmount + amount)
+      const cumulativeAmount = entry.cumulativeAmount + amount
       payload = await createVoucherPayload(
         client,
         account,
@@ -138,21 +137,19 @@ export function session(parameters: session.Parameters = {}) {
     } else {
       const suggestedDepositRaw = (challenge.request as { suggestedDeposit?: string })
         .suggestedDeposit
-      const deposit = uint96(
-        (() => {
-          if (context?.depositRaw) return BigInt(context.depositRaw)
-          if (parameters.deposit !== undefined) return parseUnits(parameters.deposit, decimals)
-          const suggestedDeposit =
-            suggestedDepositRaw !== undefined ? BigInt(suggestedDepositRaw) : undefined
-          if (suggestedDeposit !== undefined && maxDeposit !== undefined)
-            return suggestedDeposit < maxDeposit ? suggestedDeposit : maxDeposit
-          if (maxDeposit !== undefined) return maxDeposit
-          if (suggestedDeposit !== undefined) return suggestedDeposit
-          throw new Error(
-            'No deposit amount available. Set `deposit`, `maxDeposit`, or ensure the server challenge includes `suggestedDeposit`.',
-          )
-        })(),
-      )
+      const deposit = (() => {
+        if (context?.depositRaw) return BigInt(context.depositRaw)
+        if (parameters.deposit !== undefined) return parseUnits(parameters.deposit, decimals)
+        const suggestedDeposit =
+          suggestedDepositRaw !== undefined ? BigInt(suggestedDepositRaw) : undefined
+        if (suggestedDeposit !== undefined && maxDeposit !== undefined)
+          return suggestedDeposit < maxDeposit ? suggestedDeposit : maxDeposit
+        if (maxDeposit !== undefined) return maxDeposit
+        if (suggestedDeposit !== undefined) return suggestedDeposit
+        throw new Error(
+          'No deposit amount available. Set `deposit`, `maxDeposit`, or ensure the server challenge includes `suggestedDeposit`.',
+        )
+      })()
       payload = await createOpenPayload(client, account, {
         authorizedSigner: parameters.authorizedSigner,
         chainId,
@@ -204,7 +201,7 @@ export function session(parameters: session.Parameters = {}) {
             : undefined
         if (cumulativeAmountRaw === undefined)
           throw new Error('cumulativeAmount required for open action')
-        const cumulativeAmount = uint96(cumulativeAmountRaw)
+        const cumulativeAmount = cumulativeAmountRaw
         const voucher = await createVoucherPayload(
           client,
           account,
@@ -233,7 +230,7 @@ export function session(parameters: session.Parameters = {}) {
             : undefined
         if (additionalDepositRaw === undefined)
           throw new Error('additionalDeposit required for topUp action')
-        const additionalDeposit = uint96(additionalDepositRaw)
+        const additionalDeposit = additionalDepositRaw
         if (context.transaction) {
           payload = {
             action: 'topUp',
@@ -263,7 +260,7 @@ export function session(parameters: session.Parameters = {}) {
             : undefined
         if (cumulativeAmountRaw === undefined)
           throw new Error('cumulativeAmount required for voucher action')
-        const cumulativeAmount = uint96(cumulativeAmountRaw)
+        const cumulativeAmount = cumulativeAmountRaw
         payload = await createVoucherPayload(client, account, descriptor, cumulativeAmount, chainId)
         break
       }
@@ -275,7 +272,7 @@ export function session(parameters: session.Parameters = {}) {
             : undefined
         if (cumulativeAmountRaw === undefined)
           throw new Error('cumulativeAmount required for close action')
-        const cumulativeAmount = uint96(cumulativeAmountRaw)
+        const cumulativeAmount = cumulativeAmountRaw
         const voucher = await createVoucherPayload(
           client,
           account,
@@ -293,7 +290,7 @@ export function session(parameters: session.Parameters = {}) {
     if (key) {
       const entry = channels.get(key)
       if (entry && 'cumulativeAmount' in payload) {
-        const cumulativeAmount = uint96(BigInt(payload.cumulativeAmount))
+        const cumulativeAmount = BigInt(payload.cumulativeAmount)
         entry.cumulativeAmount =
           entry.cumulativeAmount > cumulativeAmount ? entry.cumulativeAmount : cumulativeAmount
         if (payload.action === 'close') entry.opened = false
