@@ -13,6 +13,7 @@ import { rpcUrl } from './tempo/prool.js'
 import { accounts, asset, chain, client, fundAccount } from './tempo/viem.js'
 
 const setupTimeoutMs = 120_000
+const setupLockStaleAfterMs = 2 * setupTimeoutMs
 const warmupAttempts = 5
 const warmupRetryDelayMs = 1_000
 const warmupRequestTimeoutMs = 10_000
@@ -41,6 +42,12 @@ const devnetSetupKey = node_crypto.createHash('sha256').update(rpcUrl).digest('h
 const devnetSetupDir = node_path.join(node_os.tmpdir(), `mppx-devnet-setup-${devnetSetupKey}`)
 const devnetSetupLock = node_path.join(devnetSetupDir, 'lock')
 
+type SetupLockMetadata = {
+  createdAt: number
+  pid: number
+  rpcUrl: string
+}
+
 async function exists(path: string) {
   try {
     await node_fs.access(path)
@@ -50,20 +57,61 @@ async function exists(path: string) {
   }
 }
 
+async function writeSetupLockMetadata(path: string) {
+  const metadata = {
+    createdAt: Date.now(),
+    pid: process.pid,
+    rpcUrl,
+  } satisfies SetupLockMetadata
+  await node_fs.writeFile(node_path.join(path, 'metadata.json'), JSON.stringify(metadata))
+}
+
+function isProcessAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch {
+    return false
+  }
+}
+
+async function isStaleSetupLock(path: string): Promise<boolean> {
+  try {
+    const raw = await node_fs.readFile(node_path.join(path, 'metadata.json'), 'utf8')
+    const metadata = JSON.parse(raw) as Partial<SetupLockMetadata>
+    if (typeof metadata.createdAt !== 'number') return true
+    if (Date.now() - metadata.createdAt > setupLockStaleAfterMs) return true
+    if (typeof metadata.pid !== 'number') return true
+    return !isProcessAlive(metadata.pid)
+  } catch {
+    return true
+  }
+}
+
+async function acquireSetupLock(path: string, done?: string | undefined) {
+  for (;;) {
+    try {
+      await node_fs.mkdir(path)
+      await writeSetupLockMetadata(path)
+      return
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
+      if (done && (await exists(done))) return
+      if (await isStaleSetupLock(path)) {
+        await node_fs.rm(path, { recursive: true, force: true })
+        continue
+      }
+      await sleep(250)
+    }
+  }
+}
+
 async function runLocalnetSetupLocked(fn: () => Promise<void>) {
   await node_fs.mkdir(localnetSetupDir, { recursive: true })
   if (await exists(localnetSetupDone)) return
 
-  for (;;) {
-    try {
-      await node_fs.mkdir(localnetSetupLock)
-      break
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
-      if (await exists(localnetSetupDone)) return
-      await sleep(250)
-    }
-  }
+  await acquireSetupLock(localnetSetupLock, localnetSetupDone)
+  if (await exists(localnetSetupDone)) return
 
   try {
     if (await exists(localnetSetupDone)) return
@@ -76,16 +124,7 @@ async function runLocalnetSetupLocked(fn: () => Promise<void>) {
 
 async function runDevnetSetupLocked(fn: () => Promise<void>) {
   await node_fs.mkdir(devnetSetupDir, { recursive: true })
-
-  for (;;) {
-    try {
-      await node_fs.mkdir(devnetSetupLock)
-      break
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
-      await sleep(250)
-    }
-  }
+  await acquireSetupLock(devnetSetupLock)
 
   try {
     await fn()
