@@ -529,7 +529,7 @@ async function handleOpen(parameters: {
     })
   if (payload.cumulativeAmount > open.deposit)
     throw new AmountExceedsDepositError({ reason: 'voucher amount exceeds open deposit' })
-  const valid = await Voucher.verify(
+  const valid = await Voucher.verifyVoucher(
     { channelId, cumulativeAmount: payload.cumulativeAmount, signature: payload.signature },
     authorizedSigner(descriptor),
     { chainId, verifyingContract: escrow },
@@ -791,7 +791,7 @@ async function handleVoucher(parameters: {
     throw new VerificationFailedError({
       reason: 'voucher cumulativeAmount must be strictly greater than highest accepted voucher',
     })
-  const valid = await Voucher.verify(
+  const valid = await Voucher.verifyVoucher(
     { channelId, cumulativeAmount: payload.cumulativeAmount, signature: payload.signature },
     channel.authorizedSigner,
     { chainId, verifyingContract: escrow },
@@ -879,7 +879,7 @@ async function handleClose(parameters: {
     throw new VerificationFailedError({
       reason: `close voucher amount must be >= ${state.settled} (on-chain settled)`,
     })
-  const valid = await Voucher.verify(
+  const valid = await Voucher.verifyVoucher(
     { channelId, cumulativeAmount: payload.cumulativeAmount, signature: payload.signature },
     channel.authorizedSigner,
     { chainId, verifyingContract: escrow },

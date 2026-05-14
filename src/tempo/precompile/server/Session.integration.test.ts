@@ -73,7 +73,7 @@ async function openRealChannel(deposit = 1_000n) {
     expiringNonceHash: opened.args.expiringNonceHash as Hex.Hex,
   } satisfies Channel.ChannelDescriptor
   const channelId = opened.args.channelId as Hex.Hex
-  expect(Channel.computeId(descriptor, { chainId: chain.id, escrow: tip20ChannelEscrow })).toBe(
+  expect(Channel.computeId({ ...descriptor, chainId: chain.id, escrow: tip20ChannelEscrow })).toBe(
     channelId,
   )
   return { channelId, descriptor, deposit: uint96(deposit) }

@@ -290,7 +290,7 @@ describe('precompile client session', () => {
     expect(payload.cumulativeAmount).toBe('250')
     expect(decoded.source).toBe(`did:pkh:eip155:${chainId}:${account.address}`)
     expect(
-      Voucher.verify(
+      Voucher.verifyVoucher(
         { channelId, cumulativeAmount, signature: payload.signature },
         descriptor.authorizedSigner,
         { chainId, verifyingContract: tip20ChannelEscrow },

@@ -202,8 +202,8 @@ async function createOpenCredential(
     authorizedSigner,
     expiringNonceHash,
   } satisfies Channel.ChannelDescriptor
-  const channelId = Channel.computeId(descriptor, { chainId, escrow })
-  const signature = await Voucher.sign(
+  const channelId = Channel.computeId({ ...descriptor, chainId, escrow })
+  const signature = await Voucher.signVoucher(
     signingClient,
     account,
     { channelId, cumulativeAmount: initialAmount },
@@ -359,7 +359,10 @@ describe('precompile server session unit guardrails', () => {
 
     await expect(
       method.verify({
-        credential: { challenge: makeChallenge(payload.channelId), payload: smuggled },
+        credential: {
+          challenge: makeChallenge(payload.channelId),
+          payload: smuggled,
+        },
         request: makeRequest(payload.channelId) as never,
       }),
     ).rejects.toThrow(/does not match/)
@@ -394,7 +397,10 @@ describe('precompile server session unit guardrails', () => {
 
     await expect(
       method.verify({
-        credential: { challenge: makeChallenge(payload.channelId), payload: badSignaturePayload },
+        credential: {
+          challenge: makeChallenge(payload.channelId),
+          payload: badSignaturePayload,
+        },
         request: makeRequest(payload.channelId) as never,
       }),
     ).rejects.toThrow(/invalid voucher signature/)
@@ -455,7 +461,9 @@ describe('precompile server session unit guardrails', () => {
 
   test('accepts settle sender matching a nonzero precompile operator', async () => {
     const { store } = createServer()
-    const openPayload = await createOpenCredential({ operator: wrongPayer.address })
+    const openPayload = await createOpenCredential({
+      operator: wrongPayer.address,
+    })
     await persistPrecompileChannel(store, openPayload)
 
     const { settle } = await import('./Session.js')
@@ -490,7 +498,9 @@ describe('precompile server session unit guardrails', () => {
   test('accepts precompile settle fee token options', async () => {
     const { store } = createServer()
     const openPayload = await createOpenCredential()
-    await persistPrecompileChannel(store, openPayload, { payee: payer.address })
+    await persistPrecompileChannel(store, openPayload, {
+      payee: payer.address,
+    })
     const client = createClient({
       account: payer,
       chain: { id: chainId } as never,
@@ -514,7 +524,9 @@ describe('precompile server session unit guardrails', () => {
   test('accepts settle account override matching the channel payee', async () => {
     const { store } = createServer()
     const openPayload = await createOpenCredential()
-    await persistPrecompileChannel(store, openPayload, { payee: wrongPayer.address })
+    await persistPrecompileChannel(store, openPayload, {
+      payee: wrongPayer.address,
+    })
     const client = createClient({
       account: payer,
       chain: { id: chainId } as never,
@@ -538,7 +550,9 @@ describe('precompile server session unit guardrails', () => {
   test('rejects precompile settle fee-payer policy violations', async () => {
     const { store } = createServer()
     const openPayload = await createOpenCredential()
-    await persistPrecompileChannel(store, openPayload, { payee: payer.address })
+    await persistPrecompileChannel(store, openPayload, {
+      payee: payer.address,
+    })
 
     const { settle } = await import('./Session.js')
     await expect(
@@ -554,7 +568,10 @@ describe('precompile server session unit guardrails', () => {
     const rawStore = Store.memory()
     const store = ChannelStore.fromStore(rawStore as never)
     const openPayload = await createOpenCredential()
-    await persistPrecompileChannel(store, openPayload, { payee: payer.address, spent: 150n })
+    await persistPrecompileChannel(store, openPayload, {
+      payee: payer.address,
+      spent: 150n,
+    })
     const method = session({
       account: payer,
       amount: '1',
@@ -574,7 +591,10 @@ describe('precompile server session unit guardrails', () => {
 
     await expect(
       method.verify({
-        credential: { challenge: makeChallenge(openPayload.channelId), payload },
+        credential: {
+          challenge: makeChallenge(openPayload.channelId),
+          payload,
+        },
         request: makeRequest(openPayload.channelId) as never,
       }),
     ).rejects.toThrow(/close voucher amount must be >= 150 \(spent\)/)
@@ -584,7 +604,9 @@ describe('precompile server session unit guardrails', () => {
     const rawStore = Store.memory()
     const store = ChannelStore.fromStore(rawStore as never)
     const openPayload = await createOpenCredential()
-    await persistPrecompileChannel(store, openPayload, { payee: payer.address })
+    await persistPrecompileChannel(store, openPayload, {
+      payee: payer.address,
+    })
     const method = session({
       account: payer,
       amount: '1',
@@ -595,7 +617,11 @@ describe('precompile server session unit guardrails', () => {
       store: rawStore,
       unitType: 'request',
       getClient: () =>
-        createStateClient(payer, { settled: 100n, deposit: 1_000n, closeRequestedAt: 0 }),
+        createStateClient(payer, {
+          settled: 100n,
+          deposit: 1_000n,
+          closeRequestedAt: 0,
+        }),
     })
     const payload = await ClientOps.createCloseCredential(createSigningClient(), payer, {
       chainId,
@@ -605,7 +631,10 @@ describe('precompile server session unit guardrails', () => {
 
     await expect(
       method.verify({
-        credential: { challenge: makeChallenge(openPayload.channelId), payload },
+        credential: {
+          challenge: makeChallenge(openPayload.channelId),
+          payload,
+        },
         request: makeRequest(openPayload.channelId) as never,
       }),
     ).rejects.toThrow(/close voucher amount must be >= 100 \(on-chain settled\)/)
@@ -615,7 +644,10 @@ describe('precompile server session unit guardrails', () => {
     const rawStore = Store.memory()
     const store = ChannelStore.fromStore(rawStore as never)
     const openPayload = await createOpenCredential()
-    await persistPrecompileChannel(store, openPayload, { payee: payer.address, spent: 100n })
+    await persistPrecompileChannel(store, openPayload, {
+      payee: payer.address,
+      spent: 100n,
+    })
     const method = session({
       account: payer,
       amount: '1',
@@ -625,7 +657,12 @@ describe('precompile server session unit guardrails', () => {
       recipient: payee,
       store: rawStore,
       unitType: 'request',
-      getClient: () => createStateClient(payer, { settled: 0n, deposit: 99n, closeRequestedAt: 0 }),
+      getClient: () =>
+        createStateClient(payer, {
+          settled: 0n,
+          deposit: 99n,
+          closeRequestedAt: 0,
+        }),
     })
     const payload = await ClientOps.createCloseCredential(createSigningClient(), payer, {
       chainId,
@@ -635,7 +672,10 @@ describe('precompile server session unit guardrails', () => {
 
     await expect(
       method.verify({
-        credential: { challenge: makeChallenge(openPayload.channelId), payload },
+        credential: {
+          challenge: makeChallenge(openPayload.channelId),
+          payload,
+        },
         request: makeRequest(openPayload.channelId) as never,
       }),
     ).rejects.toThrow(/close capture amount exceeds on-chain deposit/)
@@ -662,10 +702,16 @@ describe('precompile server session unit guardrails', () => {
       getClient: () => createStateClient(payer),
     })
 
-    await persistPrecompileChannel(store, openPayload, { finalized: true, payee: payer.address })
+    await persistPrecompileChannel(store, openPayload, {
+      finalized: true,
+      payee: payer.address,
+    })
     await expect(
       method.verify({
-        credential: { challenge: makeChallenge(openPayload.channelId), payload },
+        credential: {
+          challenge: makeChallenge(openPayload.channelId),
+          payload,
+        },
         request: makeRequest(openPayload.channelId) as never,
       }),
     ).rejects.toThrow(/channel is already finalized/)
@@ -676,7 +722,10 @@ describe('precompile server session unit guardrails', () => {
     })
     await expect(
       method.verify({
-        credential: { challenge: makeChallenge(openPayload.channelId), payload },
+        credential: {
+          challenge: makeChallenge(openPayload.channelId),
+          payload,
+        },
         request: makeRequest(openPayload.channelId) as never,
       }),
     ).rejects.toThrow(/channel has a pending close request/)
@@ -745,7 +794,10 @@ describe('precompile server session unit guardrails', () => {
     })
 
     const receipt = await method.verify({
-      credential: { challenge: makeChallenge(openPayload.channelId), payload: lowerVoucher },
+      credential: {
+        challenge: makeChallenge(openPayload.channelId),
+        payload: lowerVoucher,
+      },
       request: makeRequest(openPayload.channelId) as never,
     })
 
@@ -758,7 +810,9 @@ describe('precompile server session unit guardrails', () => {
     const rawStore = Store.memory()
     const store = ChannelStore.fromStore(rawStore as never)
     const openPayload = await createOpenCredential()
-    await persistPrecompileChannel(store, openPayload, { payee: payer.address })
+    await persistPrecompileChannel(store, openPayload, {
+      payee: payer.address,
+    })
     let observedPending = false
     const method = session({
       account: payer,
@@ -803,7 +857,10 @@ describe('precompile server session unit guardrails', () => {
 
     await expect(
       method.verify({
-        credential: { challenge: makeChallenge(openPayload.channelId), payload },
+        credential: {
+          challenge: makeChallenge(openPayload.channelId),
+          payload,
+        },
         request: makeRequest(openPayload.channelId) as never,
       }),
     ).rejects.toThrow(/broadcast failed/)
@@ -834,7 +891,10 @@ describe('precompile server session unit guardrails', () => {
 
     await expect(
       method.verify({
-        credential: { challenge: makeChallenge(openPayload.channelId), payload },
+        credential: {
+          challenge: makeChallenge(openPayload.channelId),
+          payload,
+        },
         request: makeRequest(openPayload.channelId) as never,
       }),
     ).rejects.toThrow(/no account available/)
@@ -844,7 +904,9 @@ describe('precompile server session unit guardrails', () => {
     const rawStore = Store.memory()
     const store = ChannelStore.fromStore(rawStore as never)
     const openPayload = await createOpenCredential()
-    await persistPrecompileChannel(store, openPayload, { payee: wrongPayer.address })
+    await persistPrecompileChannel(store, openPayload, {
+      payee: wrongPayer.address,
+    })
     const method = session({
       account: wrongPayer,
       amount: '1',
@@ -864,7 +926,10 @@ describe('precompile server session unit guardrails', () => {
 
     await expect(
       method.verify({
-        credential: { challenge: makeChallenge(openPayload.channelId), payload },
+        credential: {
+          challenge: makeChallenge(openPayload.channelId),
+          payload,
+        },
         request: makeRequest(openPayload.channelId) as never,
       }),
     ).rejects.toThrow(/eth_sendRawTransaction/)
@@ -874,7 +939,9 @@ describe('precompile server session unit guardrails', () => {
     const rawStore = Store.memory()
     const store = ChannelStore.fromStore(rawStore as never)
     const openPayload = await createOpenCredential()
-    await persistPrecompileChannel(store, openPayload, { payee: wrongPayer.address })
+    await persistPrecompileChannel(store, openPayload, {
+      payee: wrongPayer.address,
+    })
     const method = session({
       account: wrongPayer,
       amount: '1',
@@ -895,7 +962,10 @@ describe('precompile server session unit guardrails', () => {
 
     await expect(
       method.verify({
-        credential: { challenge: makeChallenge(openPayload.channelId), payload },
+        credential: {
+          challenge: makeChallenge(openPayload.channelId),
+          payload,
+        },
         request: {
           ...makeRequest(openPayload.channelId),
           feePayer: payer,
@@ -911,7 +981,9 @@ describe('precompile server session unit guardrails', () => {
   test('accepts server-driven close sender matching a nonzero precompile operator', async () => {
     const rawStore = Store.memory()
     const store = ChannelStore.fromStore(rawStore as never)
-    const openPayload = await createOpenCredential({ operator: wrongPayer.address })
+    const openPayload = await createOpenCredential({
+      operator: wrongPayer.address,
+    })
     await persistPrecompileChannel(store, openPayload)
     const method = session({
       account: wrongPayer,
@@ -932,7 +1004,10 @@ describe('precompile server session unit guardrails', () => {
 
     await expect(
       method.verify({
-        credential: { challenge: makeChallenge(openPayload.channelId), payload },
+        credential: {
+          challenge: makeChallenge(openPayload.channelId),
+          payload,
+        },
         request: makeRequest(openPayload.channelId) as never,
       }),
     ).rejects.toThrow(/eth_sendRawTransaction/)
@@ -961,7 +1036,10 @@ describe('precompile server session unit guardrails', () => {
 
     await expect(
       method.verify({
-        credential: { challenge: makeChallenge(openPayload.channelId), payload },
+        credential: {
+          challenge: makeChallenge(openPayload.channelId),
+          payload,
+        },
         request: makeRequest(openPayload.channelId) as never,
       }),
     ).rejects.toThrow(/tx sender .* is not the channel payee/)

@@ -7,7 +7,13 @@ import { Account as TempoAccount } from 'viem/tempo'
 import { describe, expect, test } from 'vp/test'
 
 import { uint96 } from './Types.js'
-import { domain, parseVoucherFromPayload, sign, types, verify } from './Voucher.js'
+import {
+  getVoucherDomain,
+  parseVoucherFromPayload,
+  signVoucher,
+  voucherTypes,
+  verifyVoucher,
+} from './Voucher.js'
 
 const account = privateKeyToAccount(
   '0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80',
@@ -25,7 +31,7 @@ const cumulativeAmount = uint96(1_000_000n)
 
 describe('Precompile Voucher', () => {
   test('sign and verify round-trip', async () => {
-    const signature = await sign(
+    const signature = await signVoucher(
       client,
       account,
       { channelId, cumulativeAmount },
@@ -37,7 +43,7 @@ describe('Precompile Voucher', () => {
     expect(signature).toMatch(/^0x/)
     expect(signature.length).toBe(132)
 
-    const isValid = verify({ channelId, cumulativeAmount, signature }, account.address, {
+    const isValid = verifyVoucher({ channelId, cumulativeAmount, signature }, account.address, {
       chainId,
       verifyingContract: escrowContract,
     })
@@ -45,7 +51,7 @@ describe('Precompile Voucher', () => {
   })
 
   test('verify rejects wrong signer', async () => {
-    const signature = await sign(
+    const signature = await signVoucher(
       client,
       account,
       { channelId, cumulativeAmount },
@@ -56,7 +62,7 @@ describe('Precompile Voucher', () => {
     )
 
     const wrongAddress = '0x0000000000000000000000000000000000000001' as const
-    const isValid = verify({ channelId, cumulativeAmount, signature }, wrongAddress, {
+    const isValid = verifyVoucher({ channelId, cumulativeAmount, signature }, wrongAddress, {
       chainId,
       verifyingContract: escrowContract,
     })
@@ -64,7 +70,7 @@ describe('Precompile Voucher', () => {
   })
 
   test('verify rejects tampered amount', async () => {
-    const signature = await sign(
+    const signature = await signVoucher(
       client,
       account,
       { channelId, cumulativeAmount },
@@ -74,7 +80,7 @@ describe('Precompile Voucher', () => {
       },
     )
 
-    const isValid = verify(
+    const isValid = verifyVoucher(
       { channelId, cumulativeAmount: uint96(9_999_999n), signature },
       account.address,
       { chainId, verifyingContract: escrowContract },
@@ -83,7 +89,7 @@ describe('Precompile Voucher', () => {
   })
 
   test('verify rejects tampered channelId', async () => {
-    const signature = await sign(
+    const signature = await signVoucher(
       client,
       account,
       { channelId, cumulativeAmount },
@@ -95,7 +101,7 @@ describe('Precompile Voucher', () => {
 
     const wrongChannelId =
       '0x0000000000000000000000000000000000000000000000000000000000000099' as const
-    const isValid = verify(
+    const isValid = verifyVoucher(
       { channelId: wrongChannelId, cumulativeAmount, signature },
       account.address,
       { chainId, verifyingContract: escrowContract },
@@ -104,7 +110,7 @@ describe('Precompile Voucher', () => {
   })
 
   test('verify rejects wrong chain ID', async () => {
-    const signature = await sign(
+    const signature = await signVoucher(
       client,
       account,
       { channelId, cumulativeAmount },
@@ -114,7 +120,7 @@ describe('Precompile Voucher', () => {
       },
     )
 
-    const isValid = verify({ channelId, cumulativeAmount, signature }, account.address, {
+    const isValid = verifyVoucher({ channelId, cumulativeAmount, signature }, account.address, {
       chainId: 99999,
       verifyingContract: escrowContract,
     })
@@ -122,7 +128,7 @@ describe('Precompile Voucher', () => {
   })
 
   test('verify returns false for invalid signature', () => {
-    const isValid = verify(
+    const isValid = verifyVoucher(
       { channelId, cumulativeAmount, signature: '0xdeadbeef' },
       account.address,
       { chainId, verifyingContract: escrowContract },
@@ -157,7 +163,7 @@ describe('Precompile Voucher', () => {
   })
 
   test('verify rejects wrong escrow contract', async () => {
-    const signature = await sign(
+    const signature = await signVoucher(
       client,
       account,
       { channelId, cumulativeAmount },
@@ -168,7 +174,7 @@ describe('Precompile Voucher', () => {
     )
 
     const wrongEscrow = '0xabcdefabcdefabcdefabcdefabcdefabcdefabcd' as const
-    const isValid = verify({ channelId, cumulativeAmount, signature }, account.address, {
+    const isValid = verifyVoucher({ channelId, cumulativeAmount, signature }, account.address, {
       chainId,
       verifyingContract: wrongEscrow,
     })
@@ -177,7 +183,7 @@ describe('Precompile Voucher', () => {
 
   test('sign and verify round-trip with zero amount', async () => {
     const zeroAmount = uint96(0n)
-    const signature = await sign(
+    const signature = await signVoucher(
       client,
       account,
       { channelId, cumulativeAmount: zeroAmount },
@@ -188,7 +194,7 @@ describe('Precompile Voucher', () => {
     )
     expect(signature).toMatch(/^0x/)
 
-    const isValid = verify(
+    const isValid = verifyVoucher(
       { channelId, cumulativeAmount: zeroAmount, signature },
       account.address,
       { chainId, verifyingContract: escrowContract },
@@ -199,19 +205,24 @@ describe('Precompile Voucher', () => {
   test('verify rejects direct keychain wrapper signatures', async () => {
     const signature = await signTypedData(client, {
       account,
-      domain: domain(chainId, escrowContract),
-      types,
+      domain: getVoucherDomain(chainId, escrowContract),
+      types: voucherTypes,
       primaryType: 'Voucher',
       message: { channelId, cumulativeAmount },
     })
     const envelope = SignatureEnvelope.from(signature as SignatureEnvelope.Serialized)
     const wrapped = SignatureEnvelope.serialize(
-      { inner: envelope, type: 'keychain', userAddress: account.address, version: 'v1' },
+      {
+        inner: envelope,
+        type: 'keychain',
+        userAddress: account.address,
+        version: 'v1',
+      },
       { magic: true },
     )
 
     expect(
-      verify({ channelId, cumulativeAmount, signature: wrapped }, account.address, {
+      verifyVoucher({ channelId, cumulativeAmount, signature: wrapped }, account.address, {
         chainId,
         verifyingContract: escrowContract,
       }),
@@ -220,14 +231,16 @@ describe('Precompile Voucher', () => {
 
   test('sign rejects p256 keychain access-key voucher delegation explicitly', async () => {
     const rootAccount = TempoAccount.fromSecp256k1(Secp256k1.randomPrivateKey())
-    const accessKey = TempoAccount.fromP256(P256.randomPrivateKey(), { access: rootAccount })
+    const accessKey = TempoAccount.fromP256(P256.randomPrivateKey(), {
+      access: rootAccount,
+    })
     const accessKeyClient = createClient({
       account: accessKey,
       transport: http('http://127.0.0.1'),
     })
 
     await expect(
-      sign(
+      signVoucher(
         accessKeyClient,
         accessKey,
         { channelId, cumulativeAmount },
@@ -241,20 +254,20 @@ describe('Precompile Voucher', () => {
   })
 
   test('domain and type match TIP-1034', () => {
-    expect(domain(chainId, escrowContract)).toEqual({
+    expect(getVoucherDomain(chainId, escrowContract)).toEqual({
       name: 'TIP20 Channel Escrow',
       version: '1',
       chainId,
       verifyingContract: escrowContract,
     })
-    expect(types.Voucher).toEqual([
+    expect(voucherTypes.Voucher).toEqual([
       { name: 'channelId', type: 'bytes32' },
       { name: 'cumulativeAmount', type: 'uint96' },
     ])
     expect(
       hashTypedData({
-        domain: domain(chainId, escrowContract),
-        types,
+        domain: getVoucherDomain(chainId, escrowContract),
+        types: voucherTypes,
         primaryType: 'Voucher',
         message: { channelId, cumulativeAmount },
       }),

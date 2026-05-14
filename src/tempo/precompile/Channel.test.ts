@@ -67,7 +67,11 @@ describe('precompile Channel.computeId', () => {
 
   test('changes when escrow or chainId changes', () => {
     expect(
-      Channel.computeId({ ...descriptor, chainId, escrow: '0xffffffffffffffffffffffffffffffffffffffff' }),
+      Channel.computeId({
+        ...descriptor,
+        chainId,
+        escrow: '0xffffffffffffffffffffffffffffffffffffffff',
+      }),
     ).not.toBe(Channel.computeId({ ...descriptor, chainId }))
     expect(Channel.computeId({ ...descriptor, chainId: 1 })).not.toBe(
       Channel.computeId({ ...descriptor, chainId }),

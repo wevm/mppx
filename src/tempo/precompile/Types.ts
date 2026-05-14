@@ -32,6 +32,20 @@ export type ChannelDescriptor = {
   expiringNonceHash: Hex
 }
 
+/**
+ * Voucher for cumulative payment.
+ * Cumulative monotonicity prevents replay attacks.
+ */
+export type Voucher = {
+  channelId: Hex
+  cumulativeAmount: Uint96
+}
+
+/**
+ * Signed voucher with EIP-712 signature.
+ */
+export type SignedVoucher = Voucher & { signature: Hex }
+
 /** TIP-1034 precompile open credential payload before amount branding. */
 export type OpenCredentialPayload = {
   action: 'open'

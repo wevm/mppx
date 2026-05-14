@@ -63,9 +63,13 @@ async function openChannel(parameters: { deposit?: bigint | undefined } = {}) {
     authorizedSigner: payer.address,
     expiringNonceHash,
   } satisfies Channel.ChannelDescriptor
-  expect(Channel.computeId({ ...descriptor, chainId: chain.id, escrow: tip20ChannelEscrow })).toBe(
-    channelId,
-  )
+  expect(
+    Channel.computeId({
+      ...descriptor,
+      chainId: chain.id,
+      escrow: tip20ChannelEscrow,
+    }),
+  ).toBe(channelId)
   return { channelId, descriptor, deposit }
 }
 
@@ -85,7 +89,9 @@ describe.runIf(isPrecompileTestnet)('TIP-1034 precompile chain operations', () =
   })
 
   test('topUp updates precompile channel state and emits TopUp', async () => {
-    const { channelId, descriptor, deposit } = await openChannel({ deposit: 1_000n })
+    const { channelId, descriptor, deposit } = await openChannel({
+      deposit: 1_000n,
+    })
     const additionalDeposit = uint96(750n)
 
     const receipt = await sendPrecompileCall(Chain.encodeTopUp(descriptor, additionalDeposit))
@@ -101,7 +107,7 @@ describe.runIf(isPrecompileTestnet)('TIP-1034 precompile chain operations', () =
   test('settles a signed voucher against the descriptor', async () => {
     const { channelId, descriptor } = await openChannel({ deposit: 1_000n })
     const cumulativeAmount = uint96(400n)
-    const signature = await Voucher.sign(
+    const signature = await Voucher.signVoucher(
       client,
       payer,
       { channelId, cumulativeAmount },

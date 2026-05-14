@@ -73,7 +73,7 @@ describe('precompile client ChannelOps credential builders', () => {
     expect(payload.descriptor).toEqual(descriptor)
     expect(payload.cumulativeAmount).toBe('250')
     expect(
-      Voucher.verify(
+      Voucher.verifyVoucher(
         { channelId, cumulativeAmount, signature: payload.signature },
         descriptor.authorizedSigner,
         {
@@ -110,7 +110,8 @@ describe('precompile client ChannelOps credential builders', () => {
       ...descriptor,
       authorizedSigner: zeroAddress,
     }
-    const zeroSignerChannelId = Channel.computeId(zeroSignerDescriptor, {
+    const zeroSignerChannelId = Channel.computeId({
+      ...zeroSignerDescriptor,
       chainId,
       escrow: tip20ChannelEscrow,
     })
@@ -124,7 +125,7 @@ describe('precompile client ChannelOps credential builders', () => {
 
     expect(payload.channelId).toBe(zeroSignerChannelId)
     expect(
-      Voucher.verify(
+      Voucher.verifyVoucher(
         { channelId: zeroSignerChannelId, cumulativeAmount, signature: payload.signature },
         descriptor.payer,
         {
@@ -148,7 +149,7 @@ describe('precompile client ChannelOps credential builders', () => {
     expect(payload.channelId).toBe(channelId)
     expect(payload.cumulativeAmount).toBe('300')
     expect(
-      Voucher.verify(
+      Voucher.verifyVoucher(
         { channelId, cumulativeAmount, signature: payload.signature },
         descriptor.authorizedSigner,
         {

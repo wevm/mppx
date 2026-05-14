@@ -1,36 +1,36 @@
-import { AbiParameters, Hash } from "ox";
-import type { Account, Address, Hex } from "viem";
+import { AbiParameters, Hash } from 'ox'
+import type { Account, Address, Hex } from 'viem'
 import {
   Transaction,
   type z_TransactionRequestTempo,
   type z_TransactionSerializableTempo,
-} from "viem/tempo";
+} from 'viem/tempo'
 
-import { tip20ChannelEscrow } from "./Constants.js";
-import type { ChannelDescriptor } from "./Types.js";
+import { tip20ChannelEscrow } from './Constants.js'
+import type { ChannelDescriptor } from './Types.js'
 
-export type { ChannelDescriptor } from "./Types.js";
+export type { ChannelDescriptor } from './Types.js'
 
 export type ExpiringNonceTransaction = (
   | z_TransactionSerializableTempo
   | z_TransactionRequestTempo
 ) & {
-  feePayer?: Account | true | undefined;
-};
+  feePayer?: Account | true | undefined
+}
 
 /** Computes the TIP-1034 channel ID for a precompile channel descriptor. */
 export function computeId(parameters: computeId.Parameters): Hex {
   const encoded = AbiParameters.encode(
     AbiParameters.from([
-      "address payer",
-      "address payee",
-      "address operator",
-      "address token",
-      "bytes32 salt",
-      "address authorizedSigner",
-      "bytes32 expiringNonceHash",
-      "address escrow",
-      "uint256 chainId",
+      'address payer',
+      'address payee',
+      'address operator',
+      'address token',
+      'bytes32 salt',
+      'address authorizedSigner',
+      'bytes32 expiringNonceHash',
+      'address escrow',
+      'uint256 chainId',
     ]),
     [
       parameters.payer,
@@ -43,15 +43,15 @@ export function computeId(parameters: computeId.Parameters): Hex {
       parameters.escrow ?? tip20ChannelEscrow,
       BigInt(parameters.chainId),
     ],
-  );
-  return Hash.keccak256(encoded);
+  )
+  return Hash.keccak256(encoded)
 }
 
 export declare namespace computeId {
   type Parameters = ChannelDescriptor & {
-    chainId: number;
-    escrow?: Address | undefined;
-  };
+    chainId: number
+    escrow?: Address | undefined
+  }
 }
 
 /**
@@ -68,6 +68,6 @@ export function computeExpiringNonceHash(
   const getChannelOpenContextHash = Transaction.getChannelOpenContextHash as (
     transaction: ExpiringNonceTransaction,
     options: { sender: Address },
-  ) => Hex;
-  return getChannelOpenContextHash(transaction, parameters);
+  ) => Hex
+  return getChannelOpenContextHash(transaction, parameters)
 }
