@@ -63,7 +63,7 @@ async function openChannel(parameters: { deposit?: bigint | undefined } = {}) {
     authorizedSigner: payer.address,
     expiringNonceHash,
   } satisfies Channel.ChannelDescriptor
-  expect(Channel.computeId(descriptor, { chainId: chain.id, escrow: tip20ChannelEscrow })).toBe(
+  expect(Channel.computeId({ ...descriptor, chainId: chain.id, escrow: tip20ChannelEscrow })).toBe(
     channelId,
   )
   return { channelId, descriptor, deposit }

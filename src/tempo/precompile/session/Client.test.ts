@@ -189,7 +189,7 @@ describe('precompile client session', () => {
       getClient: () => client,
       onChannelUpdate: (entry) => updates.push(entry.cumulativeAmount),
     })
-    const channelId = Channel.computeId(descriptor, { chainId, escrow: tip20ChannelEscrow })
+    const channelId = Channel.computeId({ ...descriptor, chainId, escrow: tip20ChannelEscrow })
     const recovered = deserialize(
       await method.createCredential({
         challenge: makeChallenge() as never,
@@ -228,7 +228,7 @@ describe('precompile client session', () => {
       }),
     })
     const method = session({ account, decimals: 0, deposit: '1000', getClient: () => closedClient })
-    const channelId = Channel.computeId(descriptor, { chainId, escrow: tip20ChannelEscrow })
+    const channelId = Channel.computeId({ ...descriptor, chainId, escrow: tip20ChannelEscrow })
 
     await expect(
       method.createCredential({
@@ -281,7 +281,7 @@ describe('precompile client session', () => {
     const decoded = Credential.deserialize(credential)
     const payload = decoded.payload as Types.SessionCredentialPayload
     const cumulativeAmount = Types.uint96(250n)
-    const channelId = Channel.computeId(descriptor, { chainId, escrow: tip20ChannelEscrow })
+    const channelId = Channel.computeId({ ...descriptor, chainId, escrow: tip20ChannelEscrow })
 
     expect(payload.action).toBe('voucher')
     if (payload.action !== 'voucher') throw new Error('expected voucher payload')

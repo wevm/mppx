@@ -145,7 +145,7 @@ export function session(parameters: session.Parameters = {}) {
     if (!existing && context?.channelId && !context.descriptor)
       throw new Error('descriptor required to reuse precompile channel')
     if (!existing && context?.descriptor) {
-      const channelId = Channel.computeId(context.descriptor, { chainId, escrow })
+      const channelId = Channel.computeId({ ...context.descriptor, chainId, escrow })
       if (context.channelId && context.channelId.toLowerCase() !== channelId.toLowerCase())
         throw new Error('context channelId does not match descriptor')
       if (!isSameAddress(context.descriptor.payee, payee))
@@ -244,7 +244,7 @@ export function session(parameters: session.Parameters = {}) {
     const action = context.action!
     const descriptor = context.descriptor
     if (!descriptor) throw new Error('descriptor required for precompile session action')
-    const channelId = Channel.computeId(descriptor, { chainId, escrow })
+    const channelId = Channel.computeId({ ...descriptor, chainId, escrow })
 
     let payload: SessionCredentialPayload
     switch (action) {

@@ -32,7 +32,7 @@ const descriptor = {
   expiringNonceHash: `0x${'22'.repeat(32)}` as Hex.Hex,
 } satisfies Channel.ChannelDescriptor
 
-const channelId = Channel.computeId(descriptor, { chainId, escrow: tip20ChannelEscrow })
+const channelId = Channel.computeId({ ...descriptor, chainId, escrow: tip20ChannelEscrow })
 
 describe('precompile client ChannelOps credential builders', () => {
   test('creates an open credential from a signed open result', () => {

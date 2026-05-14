@@ -94,7 +94,7 @@ function validateDescriptor(parameters: {
   currency: Address
 }) {
   const { descriptor, channelId, chainId, escrow, recipient, currency } = parameters
-  const computed = Channel.computeId(descriptor, { chainId, escrow })
+  const computed = Channel.computeId({ ...descriptor, chainId, escrow })
   if (computed.toLowerCase() !== channelId.toLowerCase())
     throw new VerificationFailedError({ reason: 'credential channelId does not match descriptor' })
   if (!isAddressEqual(descriptor.payee, recipient))
@@ -566,7 +566,7 @@ async function handleOpen(parameters: {
     })
   if (emittedDeposit !== open.deposit)
     throw new VerificationFailedError({ reason: 'ChannelOpened deposit does not match calldata' })
-  const confirmedChannelId = Channel.computeId(descriptor, { chainId, escrow })
+  const confirmedChannelId = Channel.computeId({ ...descriptor, chainId, escrow })
   if (confirmedChannelId.toLowerCase() !== emittedChannelId.toLowerCase())
     throw new VerificationFailedError({
       reason: 'descriptor does not match ChannelOpened channelId',

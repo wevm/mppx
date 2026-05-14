@@ -87,7 +87,7 @@ export async function createOpen(
     salt,
     token: parameters.token,
   } satisfies Channel.ChannelDescriptor
-  const channelId = Channel.computeId(descriptor, { chainId: parameters.chainId, escrow })
+  const channelId = Channel.computeId({ ...descriptor, chainId: parameters.chainId, escrow })
   const voucherSignature = await Voucher.sign(
     client,
     account,
@@ -132,10 +132,7 @@ export async function createVoucherCredential(
   },
 ): Promise<VoucherCredentialPayload> {
   const escrow = parameters.escrow ?? tip20ChannelEscrow
-  const channelId = Channel.computeId(parameters.descriptor, {
-    chainId: parameters.chainId,
-    escrow,
-  })
+  const channelId = Channel.computeId({ ...parameters.descriptor, chainId: parameters.chainId, escrow })
   const signature = await Voucher.sign(
     client,
     account,
@@ -169,10 +166,7 @@ export async function createTopUp(
   },
 ): Promise<TopUpResult> {
   const escrow = parameters.escrow ?? tip20ChannelEscrow
-  const channelId = Channel.computeId(parameters.descriptor, {
-    chainId: parameters.chainId,
-    escrow,
-  })
+  const channelId = Channel.computeId({ ...parameters.descriptor, chainId: parameters.chainId, escrow })
   const prepared = await prepareTransactionRequest(client, {
     account,
     calls: [

@@ -18,8 +18,8 @@ const chainId = 42431
 
 describe('precompile Channel.computeId', () => {
   test('returns deterministic 32-byte hash for fixed inputs', () => {
-    const id = Channel.computeId(descriptor, { chainId })
-    expect(Channel.computeId(descriptor, { chainId })).toBe(id)
+    const id = Channel.computeId({ ...descriptor, chainId })
+    expect(Channel.computeId({ ...descriptor, chainId })).toBe(id)
     expect(id).toMatch(/^0x[0-9a-f]{64}$/)
   })
 
@@ -48,7 +48,7 @@ describe('precompile Channel.computeId', () => {
         BigInt(chainId),
       ],
     )
-    expect(Channel.computeId(descriptor, { chainId })).toBe(Hash.keccak256(encoded))
+    expect(Channel.computeId({ ...descriptor, chainId })).toBe(Hash.keccak256(encoded))
   })
 
   test.each([
@@ -60,26 +60,23 @@ describe('precompile Channel.computeId', () => {
     ['authorizedSigner', '0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee'],
     ['expiringNonceHash', '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'],
   ] as const)('changes when %s changes', (key, value) => {
-    expect(Channel.computeId({ ...descriptor, [key]: value }, { chainId })).not.toBe(
-      Channel.computeId(descriptor, { chainId }),
+    expect(Channel.computeId({ ...descriptor, [key]: value, chainId })).not.toBe(
+      Channel.computeId({ ...descriptor, chainId }),
     )
   })
 
   test('changes when escrow or chainId changes', () => {
     expect(
-      Channel.computeId(descriptor, {
-        chainId,
-        escrow: '0xffffffffffffffffffffffffffffffffffffffff',
-      }),
-    ).not.toBe(Channel.computeId(descriptor, { chainId }))
-    expect(Channel.computeId(descriptor, { chainId: 1 })).not.toBe(
-      Channel.computeId(descriptor, { chainId }),
+      Channel.computeId({ ...descriptor, chainId, escrow: '0xffffffffffffffffffffffffffffffffffffffff' }),
+    ).not.toBe(Channel.computeId({ ...descriptor, chainId }))
+    expect(Channel.computeId({ ...descriptor, chainId: 1 })).not.toBe(
+      Channel.computeId({ ...descriptor, chainId }),
     )
   })
 
   test('encodes chainId as uint256', () => {
     const largeChainId = 2 ** 32
-    const id = Channel.computeId(descriptor, { chainId: largeChainId })
+    const id = Channel.computeId({ ...descriptor, chainId: largeChainId })
     const encoded = AbiParameters.encode(
       AbiParameters.from([
         'address payer',

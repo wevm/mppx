@@ -107,7 +107,8 @@ export function descriptorFromOpen(parameters: {
     token: parameters.open.token,
   } satisfies Channel.ChannelDescriptor
   if (parameters.channelId) {
-    const computed = Channel.computeId(descriptor, {
+    const computed = Channel.computeId({
+      ...descriptor,
       chainId: parameters.chainId,
       escrow: parameters.escrow ?? tip20ChannelEscrow,
     })
