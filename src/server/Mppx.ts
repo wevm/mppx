@@ -1,6 +1,8 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { isDeepStrictEqual } from 'node:util'
 
+import { Emitter, TypedEvent } from 'rettime'
+
 import * as Challenge from '../Challenge.js'
 import * as Credential from '../Credential.js'
 import * as Errors from '../Errors.js'
@@ -1069,14 +1071,29 @@ type ServerEventDispatcher<
   ): Unsubscribe
 }
 
-type ServerEventListenerSets<
+type ServerRettimeEventMap<
   methods extends readonly Method.Method[],
   transport extends Transport.AnyTransport,
 > = {
-  '*': Set<ServerEventHandler<methods, transport, '*'>>
-  'challenge.created': Set<ServerEventHandler<methods, transport, 'challenge.created'>>
-  'payment.failed': Set<ServerEventHandler<methods, transport, 'payment.failed'>>
-  'payment.success': Set<ServerEventHandler<methods, transport, 'payment.success'>>
+  'challenge.created': TypedEvent<
+    ServerEventMap<methods, transport>['challenge.created'],
+    MaybePromise<void>
+  >
+  'payment.failed': TypedEvent<
+    ServerEventMap<methods, transport>['payment.failed'],
+    MaybePromise<void>
+  >
+  'payment.success': TypedEvent<
+    ServerEventMap<methods, transport>['payment.success'],
+    MaybePromise<void>
+  >
+}
+
+type ServerWildcardEventMap<
+  methods extends readonly Method.Method[],
+  transport extends Transport.AnyTransport,
+> = {
+  event: TypedEvent<ServerEventEnvelope<methods, transport>, MaybePromise<void>>
 }
 
 function createServerEventDispatcher<
@@ -1085,34 +1102,26 @@ function createServerEventDispatcher<
 >(
   initialEvents: ServerEvents<methods, transport> | undefined,
 ): ServerEventDispatcher<methods, transport> {
-  const listeners: ServerEventListenerSets<methods, transport> = {
-    '*': new Set<ServerEventHandler<methods, transport, '*'>>(),
-    'challenge.created': new Set<ServerEventHandler<methods, transport, 'challenge.created'>>(),
-    'payment.failed': new Set<ServerEventHandler<methods, transport, 'payment.failed'>>(),
-    'payment.success': new Set<ServerEventHandler<methods, transport, 'payment.success'>>(),
-  }
+  const emitter = new Emitter<ServerRettimeEventMap<methods, transport>>()
+  const wildcardEmitter = new Emitter<ServerWildcardEventMap<methods, transport>>()
 
   const on: ServerEventDispatcher<methods, transport>['on'] = (name, handler) => {
     switch (name) {
       case '*':
-        return addServerEventListener(
-          listeners['*'],
-          handler as ServerEventHandler<methods, transport, '*'>,
+        return addServerEventListener(wildcardEmitter, 'event', (event) =>
+          handler(event.data as never),
         )
       case 'challenge.created':
-        return addServerEventListener(
-          listeners['challenge.created'],
-          handler as ServerEventHandler<methods, transport, 'challenge.created'>,
+        return addServerEventListener(emitter, 'challenge.created', (event) =>
+          handler(event.data as never),
         )
       case 'payment.failed':
-        return addServerEventListener(
-          listeners['payment.failed'],
-          handler as ServerEventHandler<methods, transport, 'payment.failed'>,
+        return addServerEventListener(emitter, 'payment.failed', (event) =>
+          handler(event.data as never),
         )
       case 'payment.success':
-        return addServerEventListener(
-          listeners['payment.success'],
-          handler as ServerEventHandler<methods, transport, 'payment.success'>,
+        return addServerEventListener(emitter, 'payment.success', (event) =>
+          handler(event.data as never),
         )
     }
   }
@@ -1128,45 +1137,21 @@ function createServerEventDispatcher<
 
   return {
     async emit(name, context) {
-      switch (name) {
-        case 'challenge.created':
-          for (const handler of listeners['challenge.created'])
-            await emitServerEvent(() =>
-              handler(context as ServerEventMap<methods, transport>['challenge.created']),
-            )
-          break
-        case 'payment.failed':
-          for (const handler of listeners['payment.failed'])
-            await emitServerEvent(() =>
-              handler(context as ServerEventMap<methods, transport>['payment.failed']),
-            )
-          break
-        case 'payment.success':
-          for (const handler of listeners['payment.success'])
-            await emitServerEvent(() =>
-              handler(context as ServerEventMap<methods, transport>['payment.success']),
-            )
-          break
-      }
-      const event = toServerEventEnvelope(name, context)
-      for (const handler of listeners['*']) await emitServerEvent(() => handler(event))
+      await emitServerEvent(() => emitter.emitAsPromise(createRettimeEvent(name, context)))
+      await emitServerCatchall(wildcardEmitter, name, context)
     },
     on,
   }
 }
 
-function addServerEventListener<
-  methods extends readonly Method.Method[],
-  transport extends Transport.AnyTransport,
-  name extends ServerEventName<methods, transport>,
->(
-  listeners: Set<ServerEventHandler<methods, transport, name>>,
-  handler: ServerEventHandler<methods, transport, name>,
+function addServerEventListener(
+  emitter: Emitter<any>,
+  name: string,
+  handler: (event: TypedEvent<any, any>) => unknown,
 ): Unsubscribe {
-  listeners.add(handler)
-  return () => {
-    listeners.delete(handler)
-  }
+  const controller = new AbortController()
+  emitter.on(name, handler as never, { signal: controller.signal })
+  return () => controller.abort()
 }
 
 function toServerEventEnvelope<
@@ -1180,7 +1165,25 @@ function toServerEventEnvelope<
   return Object.freeze({ name, payload }) as ServerEventPayload<methods, transport, '*'>
 }
 
-async function emitServerEvent(emit: () => MaybePromise<void | undefined>): Promise<void> {
+async function emitServerCatchall<
+  methods extends readonly Method.Method[],
+  transport extends Transport.AnyTransport,
+  name extends keyof ServerEventMap<methods, transport>,
+>(
+  emitter: Emitter<ServerWildcardEventMap<methods, transport>>,
+  name: name,
+  payload: ServerEventMap<methods, transport>[name],
+) {
+  await emitServerEvent(() =>
+    emitter.emitAsPromise(createRettimeEvent('event', toServerEventEnvelope(name, payload))),
+  )
+}
+
+function createRettimeEvent(name: string, payload: unknown): never {
+  return new TypedEvent<unknown, unknown, string>(name, { data: payload }) as never
+}
+
+async function emitServerEvent(emit: () => MaybePromise<unknown>): Promise<void> {
   try {
     await emit()
   } catch {
