@@ -1,8 +1,6 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { isDeepStrictEqual } from 'node:util'
 
-import { Emitter, TypedEvent } from 'rettime'
-
 import * as Challenge from '../Challenge.js'
 import * as Credential from '../Credential.js'
 import * as Errors from '../Errors.js'
@@ -71,11 +69,11 @@ export type ChallengeContext<
   method extends Method.Method = Method.Method,
   transport extends Transport.AnyTransport = Transport.AnyTransport,
 > = Readonly<{
-  capturedRequest: Method.CapturedRequest
+  capturedRequest?: Method.CapturedRequest | undefined
   challenge: Challenge.Challenge
   credential?: Credential.Credential | null | undefined
   error?: Errors.PaymentError | undefined
-  input: Transport.InputOf<transport>
+  input?: Transport.InputOf<transport> | undefined
   method: method
   request: z.input<method['schema']['request']>
 }>
@@ -85,13 +83,15 @@ export type PaymentFailedContext<
   method extends Method.Method = Method.Method,
   transport extends Transport.AnyTransport = Transport.AnyTransport,
 > = Readonly<{
-  capturedRequest: Method.CapturedRequest
+  capturedRequest?: Method.CapturedRequest | undefined
   challenge: Challenge.Challenge
   credential: Credential.Credential | null
   error: Errors.PaymentError
-  input: Transport.InputOf<transport>
+  input?: Transport.InputOf<transport> | undefined
   method: method
   request: z.input<method['schema']['request']>
+  retryChallenge?: Challenge.Challenge | undefined
+  submittedChallenge?: Challenge.Challenge | undefined
 }>
 
 /** Context passed to `onPaymentSuccess`. */
@@ -99,23 +99,27 @@ export type PaymentSuccessContext<
   method extends Method.Method = Method.Method,
   transport extends Transport.AnyTransport = Transport.AnyTransport,
 > = Readonly<{
-  capturedRequest: Method.CapturedRequest
+  capturedRequest?: Method.CapturedRequest | undefined
   challenge: Challenge.Challenge<
     z.output<method['schema']['request']>,
     method['intent'],
     method['name']
   >
-  credential: Credential.Credential<
-    z.output<method['schema']['credential']['payload']>,
-    Challenge.Challenge<z.output<method['schema']['request']>, method['intent'], method['name']>
-  >
-  envelope: Method.VerifiedChallengeEnvelope<
-    z.output<method['schema']['request']>,
-    z.output<method['schema']['credential']['payload']>,
-    method['intent'],
-    method['name']
-  >
-  input: Transport.InputOf<transport>
+  credential?:
+    | Credential.Credential<
+        z.output<method['schema']['credential']['payload']>,
+        Challenge.Challenge<z.output<method['schema']['request']>, method['intent'], method['name']>
+      >
+    | undefined
+  envelope?:
+    | Method.VerifiedChallengeEnvelope<
+        z.output<method['schema']['request']>,
+        z.output<method['schema']['credential']['payload']>,
+        method['intent'],
+        method['name']
+      >
+    | undefined
+  input?: Transport.InputOf<transport> | undefined
   method: method
   receipt: Receipt.Receipt
   request: z.input<method['schema']['request']>
@@ -255,6 +259,18 @@ type EffectiveTransportOf<mi, defaultTransport extends Transport.AnyTransport> =
   ? defaultTransport
   : TransportOverrideOf<mi>
 
+type ReservedMppxKey =
+  | 'challenge'
+  | 'compose'
+  | 'methods'
+  | 'on'
+  | 'onChallengeCreated'
+  | 'onPaymentFailed'
+  | 'onPaymentSuccess'
+  | 'realm'
+  | 'transport'
+  | 'verifyCredential'
+
 /** True when exactly one method has the given intent (no name collision). */
 type IsUniqueIntent<methods extends readonly Method.AnyServer[], intent extends string> =
   Extract<methods[number], { intent: intent }> extends infer M
@@ -271,7 +287,9 @@ type UniqueIntentHandlers<
   transport extends Transport.AnyTransport,
 > = {
   [method_name in methods[number]['intent'] as IsUniqueIntent<methods, method_name> extends true
-    ? method_name
+    ? method_name extends ReservedMppxKey
+      ? never
+      : method_name
     : never]: MethodFn<
     Extract<methods[number], { intent: method_name }>,
     EffectiveTransportOf<Extract<methods[number], { intent: method_name }>, transport>,
@@ -284,7 +302,7 @@ type NestedHandlers<
   methods extends readonly Method.AnyServer[],
   transport extends Transport.AnyTransport,
 > = {
-  [name in methods[number]['name']]: {
+  [name in methods[number]['name'] as name extends ReservedMppxKey ? never : name]: {
     [mi in Extract<methods[number], { name: name }> as mi['intent']]: MethodFn<
       mi,
       EffectiveTransportOf<mi, transport>,
@@ -360,6 +378,10 @@ export function create<
 
   for (const mi of methods) {
     intentCount[mi.intent] = (intentCount[mi.intent] ?? 0) + 1
+  }
+  assertNoReservedMppxKeys(methods as readonly Method.AnyServer[], intentCount)
+
+  for (const mi of methods) {
     handlers[`${mi.name}/${mi.intent}`] = createMethodFn({
       authorize: mi.authorize as never,
       defaults: mi.defaults,
@@ -410,16 +432,6 @@ export function create<
       typeof input === 'string' ? Credential.deserialize(input) : input,
     )
 
-    // HMAC provenance check (secretKey is guaranteed non-null by the guard at the top of create())
-    if (!Challenge.verify(credential.challenge, { secretKey: secretKey! }))
-      throw new Errors.InvalidChallengeError({
-        id: credential.challenge.id,
-        reason: 'challenge was not issued by this server',
-      })
-
-    // Expiry check
-    Expires.assert(credential.challenge.expires, credential.challenge.id)
-
     // Find matching method by name + intent
     const { method: credMethod, intent: credIntent } = credential.challenge
     const mi = (methods as readonly Method.AnyServer[]).find(
@@ -431,16 +443,58 @@ export function create<
         reason: `no registered method for ${credMethod}/${credIntent}`,
       })
 
+    const emitStandalonePaymentFailed = async (
+      error: Errors.PaymentError,
+      request = credential.challenge.request as z.input<typeof mi.schema.request>,
+    ) => {
+      await serverEvents.emit(
+        'payment.failed',
+        createPaymentFailedContext({
+          challenge: credential.challenge,
+          credential,
+          error,
+          method: mi,
+          request,
+          submittedChallenge: credential.challenge,
+        }) as never,
+      )
+    }
+
+    // HMAC provenance check (secretKey is guaranteed non-null by the guard at the top of create())
+    if (!Challenge.verify(credential.challenge, { secretKey: secretKey! })) {
+      const error = new Errors.InvalidChallengeError({
+        id: credential.challenge.id,
+        reason: 'challenge was not issued by this server',
+      })
+      await emitStandalonePaymentFailed(error)
+      throw error
+    }
+
+    // Expiry check
+    try {
+      Expires.assert(credential.challenge.expires, credential.challenge.id)
+    } catch (e) {
+      if (e instanceof Errors.PaymentError) await emitStandalonePaymentFailed(e)
+      throw e
+    }
+
     // Validate payload against method schema
-    mi.schema.credential.payload.parse(credential.payload)
+    try {
+      mi.schema.credential.payload.parse(credential.payload)
+    } catch (e) {
+      await emitStandalonePaymentFailed(new Errors.InvalidPayloadError())
+      throw e
+    }
 
     const expectedMeta = Scope.merge({ meta: options?.meta, scope: options?.scope })
 
     if (options?.scope !== undefined && Scope.read(credential.challenge.meta) !== options.scope) {
-      throw new Errors.InvalidChallengeError({
+      const error = new Errors.InvalidChallengeError({
         id: credential.challenge.id,
         reason: "credential scope does not match this route's requirements",
       })
+      await emitStandalonePaymentFailed(error)
+      throw error
     }
 
     const shouldValidateRoute =
@@ -453,33 +507,39 @@ export function create<
       realm ??
       (options?.capturedRequest === undefined ? credential.challenge.realm : undefined)
 
-    const request = shouldValidateRoute
-      ? await resolveRouteChallenge({
-          capturedRequest: options?.capturedRequest,
-          credential,
-          defaults: mi.defaults,
-          expires: credential.challenge.expires,
-          meta: expectedMeta,
-          method: mi,
-          realm: expectedRealm,
-          request: mi.request as never,
-          routeRequest: options?.request ?? {},
-          secretKey: secretKey!,
-        }).then((resolved) => {
-          const mismatch = getChallengeBindingMismatch(
-            resolved.challenge,
-            credential.challenge,
-            mi.stableBinding as never,
-          )
-          if (mismatch)
-            throw new Errors.InvalidChallengeError({
-              id: credential.challenge.id,
-              reason: `credential ${mismatch} does not match this route's requirements`,
-            })
+    let request: z.input<typeof mi.schema.request>
+    try {
+      request = shouldValidateRoute
+        ? await resolveRouteChallenge({
+            capturedRequest: options?.capturedRequest,
+            credential,
+            defaults: mi.defaults,
+            expires: credential.challenge.expires,
+            meta: expectedMeta,
+            method: mi,
+            realm: expectedRealm,
+            request: mi.request as never,
+            routeRequest: options?.request ?? {},
+            secretKey: secretKey!,
+          }).then((resolved) => {
+            const mismatch = getChallengeBindingMismatch(
+              resolved.challenge,
+              credential.challenge,
+              mi.stableBinding as never,
+            )
+            if (mismatch)
+              throw new Errors.InvalidChallengeError({
+                id: credential.challenge.id,
+                reason: `credential ${mismatch} does not match this route's requirements`,
+              })
 
-          return resolved.request as z.input<typeof mi.schema.request>
-        })
-      : (credential.challenge.request as z.input<typeof mi.schema.request>)
+            return resolved.request as z.input<typeof mi.schema.request>
+          })
+        : (credential.challenge.request as z.input<typeof mi.schema.request>)
+    } catch (e) {
+      if (e instanceof Errors.PaymentError) await emitStandalonePaymentFailed(e)
+      throw e
+    }
 
     const envelope = options?.capturedRequest
       ? ({
@@ -490,7 +550,28 @@ export function create<
         } as Method.VerifiedChallengeEnvelope)
       : undefined
 
-    return mi.verify({ credential, envelope, request } as never)
+    let receipt: Receipt.Receipt
+    try {
+      receipt = await mi.verify({ credential, envelope, request } as never)
+    } catch (e) {
+      const error = e instanceof Errors.PaymentError ? e : new Errors.VerificationFailedError()
+      await emitStandalonePaymentFailed(error, request)
+      throw e
+    }
+
+    await serverEvents.emit(
+      'payment.success',
+      createPaymentSuccessContext({
+        challenge: credential.challenge,
+        credential,
+        envelope,
+        method: mi,
+        receipt,
+        request,
+      }) as never,
+    )
+
+    return receipt
   }
 
   function composeFn(
@@ -593,6 +674,12 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
 
     return Object.assign(
       async (input: Transport.InputOf): Promise<MethodFn.Response> => {
+        if (method.html && isServiceWorkerRequest(input))
+          return {
+            status: 402,
+            challenge: createServiceWorkerResponse(),
+          } as MethodFn.Response<Transport.Http>
+
         const expires =
           'expires' in options
             ? normalizeExpires(options.expires as z.DatetimeInput | undefined)
@@ -620,9 +707,39 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
           html?: Method.Method['html'] | undefined
           request: Record<string, unknown>
         }) => {
+          const response = await transport.respondChallenge({
+            challenge: parameters.challenge,
+            input,
+            ...(parameters.error && { error: parameters.error }),
+            ...(parameters.html && { html: parameters.html }),
+          })
+          if (isIssuedChallengeResponse(response))
+            await events.emit(
+              'challenge.created',
+              createChallengeContext({
+                capturedRequest,
+                challenge: parameters.challenge,
+                credential: parameters.credential,
+                error: parameters.error,
+                input,
+                method,
+                request: parameters.request,
+              }) as never,
+            )
+          return response
+        }
+
+        const emitPaymentFailed = async (parameters: {
+          challenge: Challenge.Challenge
+          credential: Credential.Credential | null
+          error: Errors.PaymentError
+          request: Record<string, unknown>
+          retryChallenge?: Challenge.Challenge | undefined
+          submittedChallenge?: Challenge.Challenge | undefined
+        }) => {
           await events.emit(
-            'challenge.created',
-            Object.freeze({
+            'payment.failed',
+            createPaymentFailedContext({
               capturedRequest,
               challenge: parameters.challenge,
               credential: parameters.credential,
@@ -630,14 +747,10 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
               input,
               method,
               request: parameters.request,
+              retryChallenge: parameters.retryChallenge,
+              submittedChallenge: parameters.submittedChallenge,
             }) as never,
           )
-          return transport.respondChallenge({
-            challenge: parameters.challenge,
-            input,
-            ...(parameters.error && { error: parameters.error }),
-            ...(parameters.html && { html: parameters.html }),
-          })
         }
 
         const routeChallenge = await resolveRouteChallenge({
@@ -665,8 +778,18 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
             routeRequest: rest,
             secretKey,
           })
+          if (credential)
+            await emitPaymentFailed({
+              challenge,
+              credential,
+              error: e,
+              request: challenge.request,
+              retryChallenge: challenge,
+              submittedChallenge: credential.challenge,
+            })
           const response = await emitChallenge({
             challenge,
+            credential,
             request: challenge.request,
             error: e,
             html: method.html,
@@ -676,29 +799,17 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
         if ('response' in routeChallenge) return { challenge: routeChallenge.response, status: 402 }
         const { challenge, request } = routeChallenge
 
-        const emitPaymentFailed = async (
-          error: Errors.PaymentError,
-          failedCredential: Credential.Credential | null,
-        ) => {
-          await events.emit(
-            'payment.failed',
-            Object.freeze({
-              capturedRequest,
-              challenge,
-              credential: failedCredential,
-              error,
-              input,
-              method,
-              request,
-            }) as never,
-          )
-        }
-
         // Credential was provided but malformed
         if (credentialError) {
           const reason = getSafeCredentialReason(credentialError)
           const error = new Errors.MalformedCredentialError(reason ? { reason } : {})
-          await emitPaymentFailed(error, null)
+          await emitPaymentFailed({
+            challenge,
+            credential: null,
+            error,
+            request,
+            retryChallenge: challenge,
+          })
           const response = await emitChallenge({
             challenge,
             credential: null,
@@ -761,6 +872,17 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
                 request: challenge.request,
               } as never)
               if (authorized) {
+                await events.emit(
+                  'payment.success',
+                  createPaymentSuccessContext({
+                    capturedRequest,
+                    challenge,
+                    input,
+                    method,
+                    receipt: authorized.receipt,
+                    request,
+                  }) as never,
+                )
                 return success(authorized.receipt, {
                   managementResponse: authorized.response,
                 })
@@ -770,6 +892,13 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
                 console.error('mppx: internal authorization error', e)
               const error =
                 e instanceof Errors.PaymentError ? e : new Errors.VerificationFailedError()
+              await emitPaymentFailed({
+                challenge,
+                credential: null,
+                error,
+                request,
+                retryChallenge: challenge,
+              })
               const response = await emitChallenge({
                 challenge,
                 request,
@@ -807,7 +936,14 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
             id: credential.challenge.id,
             reason: 'challenge was not issued by this server',
           })
-          await emitPaymentFailed(error, credential)
+          await emitPaymentFailed({
+            challenge,
+            credential,
+            error,
+            request,
+            retryChallenge: challenge,
+            submittedChallenge: credential.challenge,
+          })
           const response = await emitChallenge({
             challenge,
             credential,
@@ -851,7 +987,14 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
               id: credential.challenge.id,
               reason: `credential ${mismatch} does not match this route's requirements`,
             })
-            await emitPaymentFailed(error, credential)
+            await emitPaymentFailed({
+              challenge,
+              credential,
+              error,
+              request,
+              retryChallenge: challenge,
+              submittedChallenge: credential.challenge,
+            })
             const response = await emitChallenge({
               challenge,
               credential,
@@ -867,7 +1010,14 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
         try {
           Expires.assert(credential.challenge.expires, credential.challenge.id)
         } catch (error) {
-          await emitPaymentFailed(error as Errors.PaymentError, credential)
+          await emitPaymentFailed({
+            challenge,
+            credential,
+            error: error as Errors.PaymentError,
+            request,
+            retryChallenge: challenge,
+            submittedChallenge: credential.challenge,
+          })
           const response = await emitChallenge({
             challenge,
             credential,
@@ -881,7 +1031,14 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
           method.schema.credential.payload.parse(credential.payload)
         } catch {
           const error = new Errors.InvalidPayloadError()
-          await emitPaymentFailed(error, credential)
+          await emitPaymentFailed({
+            challenge,
+            credential,
+            error,
+            request,
+            retryChallenge: challenge,
+            submittedChallenge: credential.challenge,
+          })
           const response = await emitChallenge({
             challenge,
             credential,
@@ -907,7 +1064,14 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
           if (!(e instanceof Errors.PaymentError))
             console.error('mppx: internal verification error', e)
           const error = e instanceof Errors.PaymentError ? e : new Errors.VerificationFailedError()
-          await emitPaymentFailed(error, credential)
+          await emitPaymentFailed({
+            challenge,
+            credential,
+            error,
+            request,
+            retryChallenge: challenge,
+            submittedChallenge: credential.challenge,
+          })
           const response = await emitChallenge({
             challenge,
             credential,
@@ -919,7 +1083,7 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
 
         await events.emit(
           'payment.success',
-          Object.freeze({
+          createPaymentSuccessContext({
             capturedRequest,
             challenge: credential.challenge,
             credential,
@@ -1045,76 +1209,37 @@ type ServerEventDispatcher<
   ): Unsubscribe
 }
 
-type ServerRettimeEventMap<
-  methods extends readonly Method.Method[],
-  transport extends Transport.AnyTransport,
-> = {
-  'challenge.created': TypedEvent<
-    ServerEventMap<methods, transport>['challenge.created'],
-    MaybePromise<void>
-  >
-  'payment.failed': TypedEvent<
-    ServerEventMap<methods, transport>['payment.failed'],
-    MaybePromise<void>
-  >
-  'payment.success': TypedEvent<
-    ServerEventMap<methods, transport>['payment.success'],
-    MaybePromise<void>
-  >
-}
-
-type ServerWildcardEventMap<
-  methods extends readonly Method.Method[],
-  transport extends Transport.AnyTransport,
-> = {
-  event: TypedEvent<ServerEventEnvelope<methods, transport>, MaybePromise<void>>
-}
-
 function createServerEventDispatcher<
   methods extends readonly Method.Method[],
   transport extends Transport.AnyTransport,
 >(): ServerEventDispatcher<methods, transport> {
-  const emitter = new Emitter<ServerRettimeEventMap<methods, transport>>()
-  const wildcardEmitter = new Emitter<ServerWildcardEventMap<methods, transport>>()
+  const handlers = {
+    '*': new Set<ServerEventHandler<methods, transport, '*'>>(),
+    'challenge.created': new Set<ServerEventHandler<methods, transport, 'challenge.created'>>(),
+    'payment.failed': new Set<ServerEventHandler<methods, transport, 'payment.failed'>>(),
+    'payment.success': new Set<ServerEventHandler<methods, transport, 'payment.success'>>(),
+  }
 
   const on: ServerEventDispatcher<methods, transport>['on'] = (name, handler) => {
     switch (name) {
       case '*':
-        return addServerEventListener(wildcardEmitter, 'event', (event) =>
-          handler(event.data as never),
-        )
       case 'challenge.created':
-        return addServerEventListener(emitter, 'challenge.created', (event) =>
-          handler(event.data as never),
-        )
       case 'payment.failed':
-        return addServerEventListener(emitter, 'payment.failed', (event) =>
-          handler(event.data as never),
-        )
       case 'payment.success':
-        return addServerEventListener(emitter, 'payment.success', (event) =>
-          handler(event.data as never),
-        )
+        handlers[name].add(handler as never)
+        return () => handlers[name].delete(handler as never)
+      default:
+        throw new Error(`Unknown server event "${String(name)}".`)
     }
   }
 
   return {
     async emit(name, context) {
-      await emitServerEvent(() => emitter.emitAsPromise(createRettimeEvent(name, context)))
-      await emitServerCatchall(wildcardEmitter, name, context)
+      await emitServerEventHandlers(handlers[name], context)
+      await emitServerEventHandlers(handlers['*'], toServerEventEnvelope(name, context))
     },
     on,
   }
-}
-
-function addServerEventListener(
-  emitter: Emitter<any>,
-  name: string,
-  handler: (event: TypedEvent<any, any>) => unknown,
-): Unsubscribe {
-  const controller = new AbortController()
-  emitter.on(name, handler as never, { signal: controller.signal })
-  return () => controller.abort()
 }
 
 function toServerEventEnvelope<
@@ -1128,30 +1253,193 @@ function toServerEventEnvelope<
   return Object.freeze({ name, payload }) as ServerEventPayload<methods, transport, '*'>
 }
 
-async function emitServerCatchall<
-  methods extends readonly Method.Method[],
-  transport extends Transport.AnyTransport,
-  name extends keyof ServerEventMap<methods, transport>,
->(
-  emitter: Emitter<ServerWildcardEventMap<methods, transport>>,
-  name: name,
-  payload: ServerEventMap<methods, transport>[name],
+async function emitServerEventHandlers(
+  handlers: ReadonlySet<(context: never) => MaybePromise<void>>,
+  context: unknown,
+): Promise<void> {
+  for (const handler of handlers) {
+    try {
+      await handler(context as never)
+    } catch {
+      // Server events are observational and must not alter payment control flow.
+    }
+  }
+}
+
+const reservedMppxKeys = new Set<ReservedMppxKey>([
+  'challenge',
+  'compose',
+  'methods',
+  'on',
+  'onChallengeCreated',
+  'onPaymentFailed',
+  'onPaymentSuccess',
+  'realm',
+  'transport',
+  'verifyCredential',
+])
+
+function assertNoReservedMppxKeys(
+  methods: readonly Method.AnyServer[],
+  intentCount: Readonly<Record<string, number>>,
 ) {
-  await emitServerEvent(() =>
-    emitter.emitAsPromise(createRettimeEvent('event', toServerEventEnvelope(name, payload))),
+  for (const method of methods) {
+    if (reservedMppxKeys.has(method.name as ReservedMppxKey))
+      throw new Error(`Method name "${method.name}" conflicts with a reserved Mppx property.`)
+    if (intentCount[method.intent] === 1 && reservedMppxKeys.has(method.intent as ReservedMppxKey))
+      throw new Error(`Method intent "${method.intent}" conflicts with a reserved Mppx property.`)
+  }
+}
+
+function createChallengeContext(parameters: {
+  capturedRequest?: Method.CapturedRequest | undefined
+  challenge: Challenge.Challenge
+  credential?: Credential.Credential | null | undefined
+  error?: Errors.PaymentError | undefined
+  input?: unknown
+  method: Method.Method
+  request: Record<string, unknown>
+}): ChallengeContext {
+  return Object.freeze({
+    ...(parameters.capturedRequest
+      ? { capturedRequest: snapshotCapturedRequest(parameters.capturedRequest) }
+      : {}),
+    challenge: snapshotValue(parameters.challenge),
+    credential:
+      parameters.credential === undefined
+        ? undefined
+        : snapshotNullableValue(parameters.credential),
+    error: parameters.error,
+    ...(parameters.input !== undefined ? { input: snapshotTransportInput(parameters.input) } : {}),
+    method: parameters.method,
+    request: snapshotValue(parameters.request),
+  }) as never
+}
+
+function createPaymentFailedContext(parameters: {
+  capturedRequest?: Method.CapturedRequest | undefined
+  challenge: Challenge.Challenge
+  credential: Credential.Credential | null
+  error: Errors.PaymentError
+  input?: unknown
+  method: Method.Method
+  request: Record<string, unknown>
+  retryChallenge?: Challenge.Challenge | undefined
+  submittedChallenge?: Challenge.Challenge | undefined
+}): PaymentFailedContext {
+  return Object.freeze({
+    ...(parameters.capturedRequest
+      ? { capturedRequest: snapshotCapturedRequest(parameters.capturedRequest) }
+      : {}),
+    challenge: snapshotValue(parameters.challenge),
+    credential: snapshotNullableValue(parameters.credential),
+    error: parameters.error,
+    ...(parameters.input !== undefined ? { input: snapshotTransportInput(parameters.input) } : {}),
+    method: parameters.method,
+    request: snapshotValue(parameters.request),
+    ...(parameters.retryChallenge
+      ? { retryChallenge: snapshotValue(parameters.retryChallenge) }
+      : {}),
+    ...(parameters.submittedChallenge
+      ? { submittedChallenge: snapshotValue(parameters.submittedChallenge) }
+      : {}),
+  }) as never
+}
+
+function createPaymentSuccessContext(parameters: {
+  capturedRequest?: Method.CapturedRequest | undefined
+  challenge: Challenge.Challenge
+  credential?: Credential.Credential | undefined
+  envelope?: Method.VerifiedChallengeEnvelope | undefined
+  input?: unknown
+  method: Method.Method
+  receipt: Receipt.Receipt
+  request: Record<string, unknown>
+}): PaymentSuccessContext {
+  return Object.freeze({
+    ...(parameters.capturedRequest
+      ? { capturedRequest: snapshotCapturedRequest(parameters.capturedRequest) }
+      : {}),
+    challenge: snapshotValue(parameters.challenge),
+    ...(parameters.credential ? { credential: snapshotValue(parameters.credential) } : {}),
+    ...(parameters.envelope ? { envelope: snapshotVerifiedEnvelope(parameters.envelope) } : {}),
+    ...(parameters.input !== undefined ? { input: snapshotTransportInput(parameters.input) } : {}),
+    method: parameters.method,
+    receipt: snapshotValue(parameters.receipt),
+    request: snapshotValue(parameters.request),
+  }) as never
+}
+
+function snapshotVerifiedEnvelope(
+  envelope: Method.VerifiedChallengeEnvelope,
+): Method.VerifiedChallengeEnvelope {
+  return Object.freeze({
+    capturedRequest: snapshotCapturedRequest(envelope.capturedRequest),
+    challenge: snapshotValue(envelope.challenge),
+    credential: snapshotValue(envelope.credential),
+    request: snapshotValue(envelope.request),
+  }) as Method.VerifiedChallengeEnvelope
+}
+
+function snapshotCapturedRequest(capturedRequest: Method.CapturedRequest): Method.CapturedRequest {
+  return Object.freeze({
+    headers: new Headers(capturedRequest.headers),
+    hasBody: capturedRequest.hasBody,
+    method: capturedRequest.method,
+    url: new URL(capturedRequest.url),
+  })
+}
+
+function snapshotNullableValue<value>(value: value | null): value | null {
+  if (value === null) return null
+  return snapshotValue(value)
+}
+
+function snapshotValue<value>(value: value): value {
+  try {
+    return deepFreeze(structuredClone(value))
+  } catch {
+    return value
+  }
+}
+
+function snapshotTransportInput<input>(input: input): input {
+  if (input instanceof globalThis.Request) {
+    try {
+      return input.clone() as input
+    } catch {
+      return input
+    }
+  }
+  return input
+}
+
+function deepFreeze<value>(value: value): value {
+  if (!value || typeof value !== 'object' || Object.isFrozen(value)) return value
+  Object.freeze(value)
+  for (const child of Object.values(value as Record<string, unknown>)) deepFreeze(child)
+  return value
+}
+
+function isServiceWorkerRequest(input: unknown): input is Request {
+  return (
+    input instanceof globalThis.Request &&
+    new URL(input.url).searchParams.has(Html.params.serviceWorker)
   )
 }
 
-function createRettimeEvent(name: string, payload: unknown): never {
-  return new TypedEvent<unknown, unknown, string>(name, { data: payload }) as never
+function createServiceWorkerResponse() {
+  return new Response(serviceWorker, {
+    status: 200,
+    headers: {
+      'Content-Type': 'application/javascript',
+      'Cache-Control': 'no-store',
+    },
+  })
 }
 
-async function emitServerEvent(emit: () => MaybePromise<unknown>): Promise<void> {
-  try {
-    await emit()
-  } catch {
-    // Server events are observational and must not alter payment control flow.
-  }
+function isIssuedChallengeResponse(response: unknown): boolean {
+  return !(response instanceof globalThis.Response) || response.status === 402
 }
 
 function getSafeCredentialReason(error: unknown): string | undefined {

@@ -180,7 +180,7 @@ describe('Mppx type tests', () => {
 
     mppx.on('payment.success', (context) => {
       expectTypeOf(context.challenge.method).toEqualTypeOf<'alpha'>()
-      expectTypeOf(context.credential.payload.token).toEqualTypeOf<string>()
+      expectTypeOf(context.credential?.payload.token).toEqualTypeOf<string | undefined>()
     })
     mppx.on('challenge.created', (context) => {
       expectTypeOf(context.method.name).toEqualTypeOf<'alpha'>()
@@ -201,15 +201,15 @@ describe('Mppx type tests', () => {
         expectTypeOf(event.payload.receipt.status).toEqualTypeOf<'success'>()
     })
     mppx.onChallengeCreated((context) => {
-      expectTypeOf(context.input).toEqualTypeOf<Request>()
+      expectTypeOf(context.input).toEqualTypeOf<Request | undefined>()
       expectTypeOf(context.method.name).toEqualTypeOf<'alpha'>()
       expectTypeOf(context.request.amount).toEqualTypeOf<string>()
       expectTypeOf(context.error).toMatchTypeOf<Error | undefined>()
     })
     mppx.onPaymentSuccess((context) => {
       expectTypeOf(context.challenge.method).toEqualTypeOf<'alpha'>()
-      expectTypeOf(context.credential.payload.token).toEqualTypeOf<string>()
-      expectTypeOf(context.envelope.challenge.intent).toEqualTypeOf<'charge'>()
+      expectTypeOf(context.credential?.payload.token).toEqualTypeOf<string | undefined>()
+      expectTypeOf(context.envelope?.challenge.intent).toEqualTypeOf<'charge' | undefined>()
       expectTypeOf(context.receipt.status).toEqualTypeOf<'success'>()
       expectTypeOf(context.request.recipient).toEqualTypeOf<string>()
     })
