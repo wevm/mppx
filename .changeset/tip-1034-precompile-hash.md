@@ -2,4 +2,33 @@
 'mppx': patch
 ---
 
-Added Tempo TIP-1034 precompile channel helpers, client credential builders, opt-in client sessions, opt-in server session verification, session manager exports, server-driven fee-payer settle/close support, devnet precompile test setup, and hardened precompile channel validation, store atomicity, voucher-signing compatibility, and finalized channel bookkeeping.
+Added opt-in Tempo [TIP-1034](https://github.com/tempoxyz/tempo/blob/main/tips/tip-1034.md) precompile support for payment-channel sessions.
+
+The default `tempo.session(...)` method continued to use the existing session backend. Applications opted into the new precompile-backed flow explicitly by using `tempo.precompile.session(...)` on the client and `tempo.precompile.Server.session(...)` on the server.
+
+```ts
+import { Mppx, tempo } from 'mppx/client'
+
+const client = Mppx.create({
+  methods: [tempo.precompile.session({ account, maxDeposit: '10' })],
+})
+```
+
+```ts
+import { Mppx, tempo } from 'mppx/server'
+
+const server = Mppx.create({
+  methods: [
+    tempo.precompile.Server.session({
+      amount: '1',
+      chainId,
+      currency,
+      recipient,
+      store,
+      unitType: 'request',
+    }),
+  ],
+})
+```
+
+This added channel ID, expiring nonce hash, voucher, ABI calldata, open/top-up validation, descriptor persistence, credential payload parsing, client credential builder, session manager, server verification, and server-driven fee-payer settle/close helpers for TIP-1034 precompile channels. It also hardened precompile channel validation, atomic store updates, voucher-signing compatibility, finalized channel bookkeeping, and devnet precompile integration test setup.
