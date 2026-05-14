@@ -5,13 +5,7 @@ import { prepareTransactionRequest, signTransaction } from 'viem/actions'
 import * as Channel from '../Channel.js'
 import { tip20ChannelEscrow } from '../Constants.js'
 import { escrowAbi } from '../escrow.abi.js'
-import type {
-  CloseCredentialPayload,
-  OpenCredentialPayload,
-  TopUpCredentialPayload,
-  Uint96,
-  VoucherCredentialPayload,
-} from '../Types.js'
+import type { SessionCredentialPayload, Uint96 } from '../Types.js'
 import * as Voucher from '../Voucher.js'
 
 export type OpenResult = {
@@ -106,7 +100,7 @@ export async function createOpen(
 export function createOpenCredential(
   result: OpenResult,
   initialAmount: Uint96,
-): OpenCredentialPayload {
+): Extract<SessionCredentialPayload, { action: 'open' }> {
   return {
     action: 'open',
     type: 'transaction',
@@ -129,7 +123,7 @@ export async function createVoucherCredential(
     descriptor: Channel.ChannelDescriptor
     escrow?: Address | undefined
   },
-): Promise<VoucherCredentialPayload> {
+): Promise<Extract<SessionCredentialPayload, { action: 'voucher' }>> {
   const escrow = parameters.escrow ?? tip20ChannelEscrow
   const channelId = Channel.computeId({
     ...parameters.descriptor,
@@ -196,7 +190,7 @@ export async function createTopUp(
 export function createTopUpCredential(
   result: TopUpResult,
   additionalDeposit: Uint96,
-): TopUpCredentialPayload {
+): Extract<SessionCredentialPayload, { action: 'topUp' }> {
   return {
     action: 'topUp',
     type: 'transaction',
@@ -217,7 +211,7 @@ export async function createCloseCredential(
     descriptor: Channel.ChannelDescriptor
     escrow?: Address | undefined
   },
-): Promise<CloseCredentialPayload> {
+): Promise<Extract<SessionCredentialPayload, { action: 'close' }>> {
   const voucher = await createVoucherCredential(client, account, parameters)
   return {
     action: 'close',

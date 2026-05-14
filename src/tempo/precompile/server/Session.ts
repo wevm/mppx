@@ -47,12 +47,7 @@ import * as Chain from '../Chain.js'
 import * as Channel from '../Channel.js'
 import { tip20ChannelEscrow } from '../Constants.js'
 import { escrowAbi } from '../escrow.abi.js'
-import {
-  parseCredentialPayload,
-  type ParsedSessionCredentialPayload,
-  type SessionCredentialPayload,
-  uint96,
-} from '../Types.js'
+import { type SessionCredentialPayload, uint96 } from '../Types.js'
 import * as Voucher from '../Voucher.js'
 import * as ChannelOps from './ChannelOps.js'
 
@@ -315,7 +310,7 @@ export function session<const parameters extends session.Parameters>(
 
     async verify({ credential, envelope, request }) {
       const { challenge, payload: rawPayload } = credential
-      const payload = parseCredentialPayload(rawPayload as SessionCredentialPayload)
+      const payload = rawPayload as SessionCredentialPayload
       const methodDetails = (request as typeof request & { methodDetails?: SessionMethodDetails })
         .methodDetails
       if (!methodDetails) throw new VerificationFailedError({ reason: 'missing methodDetails' })
@@ -462,13 +457,14 @@ async function handleOpen(parameters: {
   store: ChannelStore.ChannelStore
   client: Parameters<typeof sendRawTransaction>[0]
   challenge: Challenge.Challenge
-  payload: ParsedSessionCredentialPayload & { action: 'open' }
+  payload: Extract<SessionCredentialPayload, { action: 'open' }>
   chainId: number
   escrow: Address
   feePayer?: viem_Account | undefined
   feePayerPolicy?: Partial<FeePayer.Policy> | undefined
 }): Promise<SessionReceipt> {
   const { store, client, challenge, payload, chainId, escrow } = parameters
+  const cumulativeAmount = uint96(BigInt(payload.cumulativeAmount))
   assertDescriptor(payload)
   if (
     payload.authorizedSigner !== undefined &&
@@ -527,12 +523,12 @@ async function handleOpen(parameters: {
     throw new VerificationFailedError({
       reason: 'credential expiringNonceHash does not match transaction',
     })
-  if (payload.cumulativeAmount > open.deposit)
+  if (cumulativeAmount > open.deposit)
     throw new AmountExceedsDepositError({ reason: 'voucher amount exceeds open deposit' })
   const valid = await Voucher.verifyVoucher(
     escrow,
     chainId,
-    { channelId, cumulativeAmount: payload.cumulativeAmount, signature: payload.signature },
+    { channelId, cumulativeAmount: cumulativeAmount, signature: payload.signature },
     authorizedSigner(descriptor),
   )
   if (!valid) throw new InvalidSignatureError({ reason: 'invalid voucher signature' })
@@ -598,15 +594,15 @@ async function handleOpen(parameters: {
     settledOnChain:
       current && current.settledOnChain > state.settled ? current.settledOnChain : state.settled,
     highestVoucherAmount:
-      current?.highestVoucherAmount && current.highestVoucherAmount > payload.cumulativeAmount
+      current?.highestVoucherAmount && current.highestVoucherAmount > cumulativeAmount
         ? current.highestVoucherAmount
-        : payload.cumulativeAmount,
+        : cumulativeAmount,
     highestVoucher:
-      current?.highestVoucherAmount && current.highestVoucherAmount > payload.cumulativeAmount
+      current?.highestVoucherAmount && current.highestVoucherAmount > cumulativeAmount
         ? current.highestVoucher
         : {
             channelId: emittedChannelId,
-            cumulativeAmount: payload.cumulativeAmount,
+            cumulativeAmount: cumulativeAmount,
             signature: payload.signature,
           },
     spent: current && current.spent > state.settled ? current.spent : state.settled,
@@ -633,13 +629,14 @@ async function handleTopUp(parameters: {
   store: ChannelStore.ChannelStore
   client: Parameters<typeof sendRawTransaction>[0]
   challenge: Challenge.Challenge
-  payload: ParsedSessionCredentialPayload & { action: 'topUp' }
+  payload: Extract<SessionCredentialPayload, { action: 'topUp' }>
   chainId: number
   escrow: Address
   feePayer?: viem_Account | undefined
   feePayerPolicy?: Partial<FeePayer.Policy> | undefined
 }): Promise<SessionReceipt> {
   const { store, client, challenge, payload, chainId, escrow } = parameters
+  const additionalDeposit = uint96(BigInt(payload.additionalDeposit))
   assertDescriptor(payload)
   const channelId = ChannelStore.normalizeChannelId(payload.channelId)
   const channel = await store.getChannel(channelId)
@@ -670,14 +667,14 @@ async function handleTopUp(parameters: {
     })
   ChannelOps.parseTopUpCall({
     data: call.data!,
-    expected: { descriptor: channel.descriptor, additionalDeposit: payload.additionalDeposit },
+    expected: { descriptor: channel.descriptor, additionalDeposit: additionalDeposit },
   })
   const receipt = await sendCredentialTransaction({
     challengeExpires: challenge.expires,
     chainId,
     client,
     details: {
-      additionalDeposit: payload.additionalDeposit.toString(),
+      additionalDeposit: additionalDeposit.toString(),
       channelId,
       currency: channel.token,
     },
@@ -727,7 +724,7 @@ async function handleVoucher(parameters: {
   store: ChannelStore.ChannelStore
   client: Parameters<typeof sendRawTransaction>[0]
   challenge: Challenge.Challenge
-  payload: ParsedSessionCredentialPayload & { action: 'voucher' }
+  payload: Extract<SessionCredentialPayload, { action: 'voucher' }>
   chainId: number
   escrow: Address
   minVoucherDelta: bigint
@@ -745,6 +742,7 @@ async function handleVoucher(parameters: {
     channelStateTtl,
     lastOnChainVerified,
   } = parameters
+  const cumulativeAmount = uint96(BigInt(payload.cumulativeAmount))
   const channelId = ChannelStore.normalizeChannelId(payload.channelId)
   assertDescriptor(payload)
   const channel = await store.getChannel(channelId)
@@ -782,24 +780,24 @@ async function handleVoucher(parameters: {
     throw new ChannelClosedError({ reason: 'channel has a pending close request' })
   }
   if (deposit === 0n) throw new ChannelClosedError({ reason: 'channel deposit is zero (settled)' })
-  if (payload.cumulativeAmount <= settled)
+  if (cumulativeAmount <= settled)
     throw new VerificationFailedError({
       reason: 'voucher cumulativeAmount is below on-chain settled amount',
     })
-  if (payload.cumulativeAmount > deposit)
+  if (cumulativeAmount > deposit)
     throw new AmountExceedsDepositError({ reason: 'voucher amount exceeds on-chain deposit' })
-  if (payload.cumulativeAmount < channel.highestVoucherAmount)
+  if (cumulativeAmount < channel.highestVoucherAmount)
     throw new VerificationFailedError({
       reason: 'voucher cumulativeAmount must be strictly greater than highest accepted voucher',
     })
   const valid = await Voucher.verifyVoucher(
     escrow,
     chainId,
-    { channelId, cumulativeAmount: payload.cumulativeAmount, signature: payload.signature },
+    { channelId, cumulativeAmount: cumulativeAmount, signature: payload.signature },
     channel.authorizedSigner,
   )
   if (!valid) throw new InvalidSignatureError({ reason: 'invalid voucher signature' })
-  if (payload.cumulativeAmount === channel.highestVoucherAmount)
+  if (cumulativeAmount === channel.highestVoucherAmount)
     return createSessionReceipt({
       challengeId: challenge.id,
       channelId,
@@ -807,7 +805,7 @@ async function handleVoucher(parameters: {
       spent: channel.spent,
       units: channel.units,
     })
-  const delta = payload.cumulativeAmount - channel.highestVoucherAmount
+  const delta = cumulativeAmount - channel.highestVoucherAmount
   if (delta < minVoucherDelta)
     throw new DeltaTooSmallError({
       reason: `voucher delta ${delta} below minimum ${minVoucherDelta}`,
@@ -821,15 +819,15 @@ async function handleVoucher(parameters: {
 
       const nextDeposit = deposit > current.deposit ? deposit : current.deposit
       const nextSettled = settled > current.settledOnChain ? settled : current.settledOnChain
-      if (payload.cumulativeAmount > current.highestVoucherAmount) {
+      if (cumulativeAmount > current.highestVoucherAmount) {
         return {
           ...current,
           deposit: nextDeposit,
           settledOnChain: nextSettled,
-          highestVoucherAmount: payload.cumulativeAmount,
+          highestVoucherAmount: cumulativeAmount,
           highestVoucher: {
             channelId,
-            cumulativeAmount: payload.cumulativeAmount,
+            cumulativeAmount: cumulativeAmount,
             signature: payload.signature,
           },
         }
@@ -851,7 +849,7 @@ async function handleClose(parameters: {
   store: ChannelStore.ChannelStore
   client: Parameters<typeof sendRawTransaction>[0]
   challenge: Challenge.Challenge
-  payload: ParsedSessionCredentialPayload & { action: 'close' }
+  payload: Extract<SessionCredentialPayload, { action: 'close' }>
   chainId: number
   escrow: Address
   account?: viem_Account | undefined
@@ -860,6 +858,7 @@ async function handleClose(parameters: {
   feeToken?: Address | undefined
 }): Promise<SessionReceipt> {
   const { store, client, challenge, payload, chainId, escrow } = parameters
+  const cumulativeAmount = uint96(BigInt(payload.cumulativeAmount))
   const channelId = ChannelStore.normalizeChannelId(payload.channelId)
   assertDescriptor(payload)
   const channel = await store.getChannel(channelId)
@@ -871,20 +870,20 @@ async function handleClose(parameters: {
   const state = await Chain.getChannelState(client, channelId, escrow)
   if (state.closeRequestedAt !== 0)
     throw new ChannelClosedError({ reason: 'channel has a pending close request' })
-  if (state.deposit === 0n && (payload.cumulativeAmount !== 0n || channel.spent !== 0n))
+  if (state.deposit === 0n && (cumulativeAmount !== 0n || channel.spent !== 0n))
     throw new ChannelClosedError({ reason: 'channel deposit is zero (settled)' })
-  if (payload.cumulativeAmount < channel.spent)
+  if (cumulativeAmount < channel.spent)
     throw new VerificationFailedError({
       reason: `close voucher amount must be >= ${channel.spent} (spent)`,
     })
-  if (payload.cumulativeAmount < state.settled)
+  if (cumulativeAmount < state.settled)
     throw new VerificationFailedError({
       reason: `close voucher amount must be >= ${state.settled} (on-chain settled)`,
     })
   const valid = await Voucher.verifyVoucher(
     escrow,
     chainId,
-    { channelId, cumulativeAmount: payload.cumulativeAmount, signature: payload.signature },
+    { channelId, cumulativeAmount: cumulativeAmount, signature: payload.signature },
     channel.authorizedSigner,
   )
   if (!valid) throw new InvalidSignatureError({ reason: 'invalid voucher signature' })
@@ -899,14 +898,14 @@ async function handleClose(parameters: {
     if (current.finalized) throw new ChannelClosedError({ reason: 'channel is already finalized' })
     if (current.closeRequestedAt !== 0n)
       throw new ChannelClosedError({ reason: 'channel has a pending close request' })
-    if (payload.cumulativeAmount < current.spent)
+    if (cumulativeAmount < current.spent)
       throw new VerificationFailedError({
         reason: `close voucher amount must be >= ${current.spent} (spent)`,
       })
     const currentCaptureAmount = uint96(
       current.spent > state.settled ? current.spent : state.settled,
     )
-    if (currentCaptureAmount > payload.cumulativeAmount)
+    if (currentCaptureAmount > cumulativeAmount)
       throw new VerificationFailedError({
         reason: `close voucher amount must be >= ${currentCaptureAmount} (capture amount)`,
       })
@@ -932,7 +931,7 @@ async function handleClose(parameters: {
     txHash = await Chain.closeOnChain(
       client,
       channel.descriptor,
-      payload.cumulativeAmount,
+      cumulativeAmount,
       captureAmount,
       payload.signature,
       escrow,
@@ -971,12 +970,12 @@ async function handleClose(parameters: {
           deposit: 0n,
           settledOnChain:
             captureAmount > current.settledOnChain ? captureAmount : current.settledOnChain,
-          ...(payload.cumulativeAmount > current.highestVoucherAmount
+          ...(cumulativeAmount > current.highestVoucherAmount
             ? {
-                highestVoucherAmount: payload.cumulativeAmount,
+                highestVoucherAmount: cumulativeAmount,
                 highestVoucher: {
                   channelId,
-                  cumulativeAmount: payload.cumulativeAmount,
+                  cumulativeAmount: cumulativeAmount,
                   signature: payload.signature,
                 },
               }
@@ -987,7 +986,7 @@ async function handleClose(parameters: {
   return createSessionReceipt({
     challengeId: challenge.id,
     channelId,
-    acceptedCumulative: payload.cumulativeAmount,
+    acceptedCumulative: cumulativeAmount,
     spent: updated?.spent ?? channel.spent,
     units: updated?.units ?? channel.units,
     txHash,

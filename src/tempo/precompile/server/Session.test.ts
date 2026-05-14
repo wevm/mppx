@@ -19,7 +19,7 @@ import * as Channel from '../Channel.js'
 import * as ClientOps from '../client/ChannelOps.js'
 import { tip20ChannelEscrow } from '../Constants.js'
 import { escrowAbi } from '../escrow.abi.js'
-import type { OpenCredentialPayload } from '../Types.js'
+import type { SessionCredentialPayload } from '../Types.js'
 import * as Types from '../Types.js'
 import * as Voucher from '../Voucher.js'
 import { session } from './Session.js'
@@ -165,7 +165,7 @@ async function createOpenCredential(
     account?: typeof payer | undefined
     operator?: Address | undefined
   } = {},
-): Promise<OpenCredentialPayload> {
+): Promise<Extract<SessionCredentialPayload, { action: 'open' }>> {
   const account = parameters.account ?? payer
   const escrow = parameters.escrow ?? tip20ChannelEscrow
   const initialAmount = Types.uint96(parameters.initialAmount ?? 100n)
@@ -222,7 +222,7 @@ async function createOpenCredential(
 
 async function persistPrecompileChannel(
   store: ChannelStore.ChannelStore,
-  payload: OpenCredentialPayload,
+  payload: Extract<SessionCredentialPayload, { action: 'open' }>,
   overrides: Partial<ChannelStore.State> = {},
 ) {
   await store.updateChannel(payload.channelId, () => ({
