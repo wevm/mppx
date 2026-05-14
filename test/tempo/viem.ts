@@ -1,5 +1,11 @@
 import type * as Hex from 'ox/Hex'
-import { createClient, defineChain, type HttpTransportConfig, http as viem_http } from 'viem'
+import {
+  createClient,
+  defineChain,
+  type Chain as viem_Chain,
+  type HttpTransportConfig,
+  http as viem_http,
+} from 'viem'
 import { english, generateMnemonic, type LocalAccount, mnemonicToAccount } from 'viem/accounts'
 import { tempo, tempoDevnet, tempoLocalnet, tempoModerato } from 'viem/chains'
 import { Actions } from 'viem/tempo'
@@ -29,14 +35,28 @@ export const accounts = Array.from({ length: 20 }, (_, i) =>
   }),
 ) as unknown as FixedArray<LocalAccount, 20>
 
+function withRpcUrl<const chain extends viem_Chain>(chain: chain): chain {
+  if (!import.meta.env.VITE_RPC_URL) return chain
+  return defineChain({
+    ...chain,
+    rpcUrls: {
+      ...chain.rpcUrls,
+      default: {
+        ...chain.rpcUrls.default,
+        http: [rpcUrl],
+      },
+    },
+  }) as unknown as chain
+}
+
 export const chain = (() => {
   switch (nodeEnv) {
     case 'mainnet':
-      return tempo
+      return withRpcUrl(tempo)
     case 'testnet':
-      return tempoModerato
+      return withRpcUrl(tempoModerato)
     case 'devnet':
-      return tempoDevnet
+      return withRpcUrl(tempoDevnet)
     default:
       return defineChain({
         ...tempoLocalnet,

@@ -16,6 +16,9 @@ const setupTimeoutMs = 120_000
 const warmupAttempts = 5
 const warmupRetryDelayMs = 1_000
 const warmupRequestTimeoutMs = 10_000
+const devnetFaucetAttempts = 3
+const devnetFaucetRetryDelayMs = 3_000
+const devnetFaucetRequestTimeoutMs = 30_000
 
 const warmupClient = createClient({
   account: accounts[0],
@@ -34,6 +37,9 @@ const localnetSetupKey = node_crypto.createHash('sha256').update(rpcUrl).digest(
 const localnetSetupDir = node_path.join(node_os.tmpdir(), `mppx-localnet-setup-${localnetSetupKey}`)
 const localnetSetupDone = node_path.join(localnetSetupDir, 'done')
 const localnetSetupLock = node_path.join(localnetSetupDir, 'lock')
+const devnetSetupKey = node_crypto.createHash('sha256').update(rpcUrl).digest('hex').slice(0, 16)
+const devnetSetupDir = node_path.join(node_os.tmpdir(), `mppx-devnet-setup-${devnetSetupKey}`)
+const devnetSetupLock = node_path.join(devnetSetupDir, 'lock')
 
 async function exists(path: string) {
   try {
@@ -68,7 +74,32 @@ async function runLocalnetSetupLocked(fn: () => Promise<void>) {
   }
 }
 
+async function runDevnetSetupLocked(fn: () => Promise<void>) {
+  await node_fs.mkdir(devnetSetupDir, { recursive: true })
+
+  for (;;) {
+    try {
+      await node_fs.mkdir(devnetSetupLock)
+      break
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
+      await sleep(250)
+    }
+  }
+
+  try {
+    await fn()
+  } finally {
+    await node_fs.rm(devnetSetupLock, { recursive: true, force: true })
+  }
+}
+
 type LocalnetSetupState = {
+  done: boolean
+  promise: Promise<void> | undefined
+}
+
+type DevnetSetupState = {
   done: boolean
   promise: Promise<void> | undefined
 }
@@ -78,6 +109,16 @@ const localnetSetupState = (() => {
     __mppxLocalnetSetup__?: LocalnetSetupState
   }
   return (globalState.__mppxLocalnetSetup__ ??= {
+    done: false,
+    promise: undefined,
+  })
+})()
+
+const devnetSetupState = (() => {
+  const globalState = globalThis as typeof globalThis & {
+    __mppxDevnetSetup__?: DevnetSetupState
+  }
+  return (globalState.__mppxDevnetSetup__ ??= {
     done: false,
     promise: undefined,
   })
@@ -100,8 +141,52 @@ async function warmupLocalnet() {
   throw lastError
 }
 
+async function fundDevnetAccount(account: (typeof accounts)[number]) {
+  let lastError: unknown
+
+  for (let attempt = 1; attempt <= devnetFaucetAttempts; attempt++) {
+    try {
+      await Actions.faucet.fundSync(client, {
+        account,
+        timeout: devnetFaucetRequestTimeoutMs,
+      })
+      return
+    } catch (error) {
+      lastError = error
+      if (attempt === devnetFaucetAttempts) break
+      await sleep(devnetFaucetRetryDelayMs)
+    }
+  }
+
+  throw lastError
+}
+
 beforeAll(async () => {
-  if (nodeEnv !== 'localnet') return
+  if (nodeEnv !== 'localnet' && nodeEnv !== 'devnet') return
+
+  if (nodeEnv === 'devnet') {
+    if (devnetSetupState.done) return
+    if (devnetSetupState.promise) {
+      await devnetSetupState.promise
+      return
+    }
+
+    devnetSetupState.promise = runDevnetSetupLocked(async () => {
+      // Fund deterministic test accounts used by the precompile/session suites.
+      // The devnet faucet funds the chain's configured test TIP-20 tokens.
+      for (const account of [accounts[0], accounts[1], accounts[2]])
+        await fundDevnetAccount(account)
+      devnetSetupState.done = true
+    })
+
+    try {
+      await devnetSetupState.promise
+    } catch (error) {
+      devnetSetupState.promise = undefined
+      throw error
+    }
+    return
+  }
 
   if (localnetSetupState.done) return
   if (localnetSetupState.promise) {
