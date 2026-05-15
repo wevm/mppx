@@ -1,5 +1,11 @@
 # mppx
 
+## 0.6.23
+
+### Patch Changes
+
+- c370c93: Added fee payer support and an optional `feePayerPolicy` parameter to `tempo.subscription` so activation and renewal payments can be sponsored without consuming the access key's spending limit.
+
 ## 0.6.22
 
 ### Patch Changes
