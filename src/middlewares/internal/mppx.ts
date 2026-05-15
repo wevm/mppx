@@ -1,24 +1,12 @@
 import type { DiscoveryHandler } from '../../discovery/OpenApi.js'
 import type * as Method from '../../Method.js'
+import { reservedMppxKeys } from '../../server/Mppx.js'
 import type * as Mppx from '../../server/Mppx.js'
 
 export type AnyMethodFn = Mppx.AnyMethodFn
 export type AnyServer = Method.AnyServer
 
 type DiscoveryMeta = Pick<DiscoveryHandler, '_internal'>
-
-const reservedMppxKeys = new Set<string>([
-  'challenge',
-  'compose',
-  'methods',
-  'on',
-  'onChallengeCreated',
-  'onPaymentFailed',
-  'onPaymentSuccess',
-  'realm',
-  'transport',
-  'verifyCredential',
-])
 
 /** Recursively wraps nested handler objects one level deep. */
 type WrapNested<obj, handler> = {

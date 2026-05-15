@@ -966,6 +966,7 @@ describe('server events', () => {
     handler.onChallengeCreated((context) => {
       events.push(`challenge:${context.error?.name}`)
       seen.challengeMethod = context.method.name
+      seen.challengeMethodKeys = Object.keys(context.method)
       seen.challengePath = context.capturedRequest?.url.pathname
       seen.challengeAmount = context.request.amount
       seen.challengeCredential = context.credential
@@ -1005,6 +1006,7 @@ describe('server events', () => {
       challengeAmount: '1000',
       challengeCredential: null,
       challengeMethod: 'mock',
+      challengeMethodKeys: ['intent', 'name'],
       challengePath: '/resource',
       paymentAmount: '1000',
       paymentChallenge: challenge.id,
@@ -1481,8 +1483,9 @@ describe('server events', () => {
     expect(events).toEqual([`failed:VerificationFailedError:${challenge.id}:/standalone-failure`])
   })
 
-  test('does not emit standalone payment failure for forged challenge HMAC failures', async () => {
+  test('emits standalone payment failure for forged challenge HMAC failures', async () => {
     const events: string[] = []
+    let failedRequestAmount: unknown
     const serverMethod = Method.toServer(eventCharge, {
       async verify() {
         return receipt()
@@ -1494,7 +1497,8 @@ describe('server events', () => {
       secretKey,
     })
     handler.onPaymentFailed((context) => {
-      events.push(`failed:${context.challenge.id}:${context.request.amount}`)
+      events.push(`failed:${context.challenge.id}`)
+      failedRequestAmount = context.request.amount
     })
 
     await expect(
@@ -1511,7 +1515,8 @@ describe('server events', () => {
         }),
       ),
     ).rejects.toThrow(Errors.InvalidChallengeError)
-    expect(events).toEqual([])
+    expect(events).toEqual(['failed:forged-id'])
+    expect(failedRequestAmount).toEqual({ $ne: '1000' })
   })
 
   test('emits payment failure when credential-bearing request hook rejects', async () => {
@@ -1747,7 +1752,7 @@ describe('server events', () => {
       eventRequestAmount: '2500',
       verifyAdmin: false,
       verifyEnvelopeAmount: '2500',
-      verifyRequestAmount: '2500',
+      verifyRequestAmount: '25',
     })
   })
 
@@ -4561,10 +4566,14 @@ describe('verifyCredential', () => {
   })
 
   test('rejects credential for unregistered method/intent', async () => {
+    const events: string[] = []
     const mppx = Mppx.create({
       methods: [alphaChargeServer],
       realm,
       secretKey,
+    })
+    mppx.onPaymentFailed((context) => {
+      events.push(`${context.method.name}/${context.method.intent}:${context.error.name}`)
     })
 
     // Forge a challenge for an unregistered method using the same secret
@@ -4584,6 +4593,7 @@ describe('verifyCredential', () => {
     await expect(mppx.verifyCredential(credential)).rejects.toThrow(
       'no registered method for unknown/charge',
     )
+    expect(events).toEqual(['unknown/charge:InvalidChallengeError'])
   })
 
   test('rejects malformed credential string', async () => {

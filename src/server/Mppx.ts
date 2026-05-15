@@ -55,6 +55,13 @@ export type ServerEventPayload<
     ? ServerEventMap<methods, transport>[name]
     : never
 
+/**
+ * Server event handler.
+ *
+ * Handlers are awaited inline and sequentially on the payment request path.
+ * Errors are swallowed so observers cannot change payment control flow, but
+ * slow handlers still delay the response.
+ */
 export type ServerEventHandler<
   methods extends readonly Method.Method[] = readonly Method.Method[],
   transport extends Transport.AnyTransport = Transport.AnyTransport,
@@ -63,6 +70,14 @@ export type ServerEventHandler<
 
 /** Removes a registered server event handler. */
 export type Unsubscribe = () => void
+
+/** Inert method descriptor exposed to server event handlers. */
+export type ServerMethodDescriptor<
+  method extends Pick<Method.Method, 'intent' | 'name'> = Method.Method,
+> = Readonly<{
+  intent: method['intent']
+  name: method['name']
+}>
 
 /** Context passed to `onChallengeCreated`. */
 export type ChallengeContext<
@@ -74,8 +89,8 @@ export type ChallengeContext<
   credential?: Credential.Credential | null | undefined
   error?: Errors.PaymentError | undefined
   input?: Transport.InputOf<transport> | undefined
-  method: method
-  request: z.input<method['schema']['request']>
+  method: ServerMethodDescriptor<method>
+  request: z.output<method['schema']['request']>
 }>
 
 /** Context passed to `onPaymentFailed`. */
@@ -88,8 +103,8 @@ export type PaymentFailedContext<
   credential: Credential.Credential | null
   error: Errors.PaymentError
   input?: Transport.InputOf<transport> | undefined
-  method: method
-  request: z.input<method['schema']['request']>
+  method: ServerMethodDescriptor<method>
+  request: z.output<method['schema']['request']>
   retryChallenge?: Challenge.Challenge | undefined
   submittedChallenge?: Challenge.Challenge | undefined
 }>
@@ -120,7 +135,7 @@ export type PaymentSuccessContext<
       >
     | undefined
   input?: Transport.InputOf<transport> | undefined
-  method: method
+  method: ServerMethodDescriptor<method>
   receipt: Receipt.Receipt
   request: z.output<method['schema']['request']>
 }>
@@ -230,7 +245,10 @@ export type Mppx<
      * check expiry, and call the method's verify function.
      *
      * Method verification can settle payments and persist state. For example,
-     * subscription credentials may activate or renew a subscription.
+     * subscription credentials may activate or renew a subscription. Failed
+     * standalone verification emits `payment.failed` once a credential challenge
+     * can be parsed; strings that cannot be deserialized have no challenge
+     * context to report.
      *
      * @example
      * ```ts
@@ -259,18 +277,24 @@ type EffectiveTransportOf<mi, defaultTransport extends Transport.AnyTransport> =
   ? defaultTransport
   : TransportOverrideOf<mi>
 
+const reservedMppxKeyValues = [
+  'challenge',
+  'compose',
+  'methods',
+  'on',
+  'onChallengeCreated',
+  'onPaymentFailed',
+  'onPaymentSuccess',
+  'realm',
+  'transport',
+  'verifyCredential',
+] as const
+
 /** Public instance keys that payment method names and shorthand intents cannot shadow. */
-export type ReservedKey =
-  | 'challenge'
-  | 'compose'
-  | 'methods'
-  | 'on'
-  | 'onChallengeCreated'
-  | 'onPaymentFailed'
-  | 'onPaymentSuccess'
-  | 'realm'
-  | 'transport'
-  | 'verifyCredential'
+export type ReservedKey = (typeof reservedMppxKeyValues)[number]
+
+/** Public instance keys that payment method names and shorthand intents cannot shadow. */
+export const reservedMppxKeys: ReadonlySet<ReservedKey> = new Set(reservedMppxKeyValues)
 
 /** True when exactly one method has the given intent (no name collision). */
 type IsUniqueIntent<methods extends readonly Method.AnyServer[], intent extends string> =
@@ -438,11 +462,8 @@ export function create<
     const mi = (methods as readonly Method.AnyServer[]).find(
       (m) => m.name === credMethod && m.intent === credIntent,
     )
-    if (!mi)
-      throw new Errors.InvalidChallengeError({
-        id: credential.challenge.id,
-        reason: `no registered method for ${credMethod}/${credIntent}`,
-      })
+    const eventMethod =
+      mi ?? ({ intent: credIntent, name: credMethod } satisfies ServerMethodDescriptor)
 
     const emitStandalonePaymentFailed = async (parameters: {
       challenge: Challenge.Challenge
@@ -458,11 +479,26 @@ export function create<
           challenge: parameters.challenge,
           credential: parameters.credential,
           error: parameters.error,
-          method: mi,
+          method: eventMethod,
           request: parameters.request,
           submittedChallenge: parameters.submittedChallenge,
         }) as never,
       )
+    }
+
+    if (!mi) {
+      const error = new Errors.InvalidChallengeError({
+        id: credential.challenge.id,
+        reason: `no registered method for ${credMethod}/${credIntent}`,
+      })
+      await emitStandalonePaymentFailed({
+        challenge: credential.challenge,
+        credential,
+        error,
+        request: credential.challenge.request as Record<string, unknown>,
+        submittedChallenge: credential.challenge,
+      })
+      throw error
     }
 
     // HMAC provenance check (secretKey is guaranteed non-null by the guard at the top of create())
@@ -470,6 +506,13 @@ export function create<
       const error = new Errors.InvalidChallengeError({
         id: credential.challenge.id,
         reason: 'challenge was not issued by this server',
+      })
+      await emitStandalonePaymentFailed({
+        challenge: credential.challenge,
+        credential,
+        error,
+        request: credential.challenge.request as Record<string, unknown>,
+        submittedChallenge: credential.challenge,
       })
       throw error
     }
@@ -534,6 +577,7 @@ export function create<
       realm ??
       (options?.capturedRequest === undefined ? credential.challenge.realm : undefined)
 
+    let parsedRequest = credential.challenge.request as Record<string, unknown>
     let request: z.input<typeof mi.schema.request>
     try {
       request = shouldValidateRoute
@@ -560,6 +604,7 @@ export function create<
                 reason: `credential ${mismatch} does not match this route's requirements`,
               })
 
+            parsedRequest = resolved.parsedRequest
             return resolved.request as z.input<typeof mi.schema.request>
           })
         : (credential.challenge.request as z.input<typeof mi.schema.request>)
@@ -580,7 +625,7 @@ export function create<
           capturedRequest: options.capturedRequest,
           challenge: credential.challenge,
           credential: parsedCredential,
-          request,
+          request: parsedRequest,
         } as Method.VerifiedChallengeEnvelope)
       : undefined
 
@@ -593,7 +638,7 @@ export function create<
         challenge: credential.challenge,
         credential: parsedCredential,
         error,
-        request,
+        request: parsedRequest,
         submittedChallenge: credential.challenge,
       })
       throw e
@@ -608,7 +653,7 @@ export function create<
         envelope,
         method: mi,
         receipt,
-        request,
+        request: parsedRequest,
       }) as never,
     )
 
@@ -838,7 +883,7 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
           return { response }
         })
         if ('response' in routeChallenge) return { challenge: routeChallenge.response, status: 402 }
-        const { challenge, request } = routeChallenge
+        const { challenge, parsedRequest, request } = routeChallenge
 
         // Credential was provided but malformed
         if (credentialError) {
@@ -848,13 +893,13 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
             challenge,
             credential: null,
             error,
-            request,
+            request: parsedRequest,
             retryChallenge: challenge,
           })
           const response = await emitChallenge({
             challenge,
             credential: null,
-            request,
+            request: parsedRequest,
             error,
             html: method.html,
           })
@@ -921,7 +966,7 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
                     input,
                     method,
                     receipt: authorized.receipt,
-                    request,
+                    request: parsedRequest,
                   }) as never,
                 )
                 return success(authorized.receipt, {
@@ -937,12 +982,12 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
                 challenge,
                 credential: null,
                 error,
-                request,
+                request: parsedRequest,
                 retryChallenge: challenge,
               })
               const response = await emitChallenge({
                 challenge,
-                request,
+                request: parsedRequest,
                 error,
                 html: method.html,
               })
@@ -954,7 +999,7 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
           const response = await emitChallenge({
             challenge,
             credential: null,
-            request,
+            request: parsedRequest,
             error,
             html: method.html,
           })
@@ -981,14 +1026,14 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
             challenge,
             credential,
             error,
-            request,
+            request: parsedRequest,
             retryChallenge: challenge,
             submittedChallenge: credential.challenge,
           })
           const response = await emitChallenge({
             challenge,
             credential,
-            request,
+            request: parsedRequest,
             error,
             html: method.html,
           })
@@ -1032,14 +1077,14 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
               challenge,
               credential,
               error,
-              request,
+              request: parsedRequest,
               retryChallenge: challenge,
               submittedChallenge: credential.challenge,
             })
             const response = await emitChallenge({
               challenge,
               credential,
-              request,
+              request: parsedRequest,
               error,
               html: method.html,
             })
@@ -1055,14 +1100,14 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
             challenge,
             credential,
             error: error as Errors.PaymentError,
-            request,
+            request: parsedRequest,
             retryChallenge: challenge,
             submittedChallenge: credential.challenge,
           })
           const response = await emitChallenge({
             challenge,
             credential,
-            request,
+            request: parsedRequest,
             error: error as Errors.PaymentError,
           })
           return { challenge: response, status: 402 }
@@ -1080,14 +1125,14 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
             challenge,
             credential,
             error,
-            request,
+            request: parsedRequest,
             retryChallenge: challenge,
             submittedChallenge: credential.challenge,
           })
           const response = await emitChallenge({
             challenge,
             credential,
-            request,
+            request: parsedRequest,
             error,
           })
           return { challenge: response, status: 402 }
@@ -1097,7 +1142,7 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
           capturedRequest,
           challenge: credential.challenge,
           credential: parsedCredential,
-          request,
+          request: parsedRequest,
         })
 
         // User-provided verification (e.g., check signature, submit tx, verify payment).
@@ -1113,14 +1158,14 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
             challenge,
             credential: parsedCredential,
             error,
-            request,
+            request: parsedRequest,
             retryChallenge: challenge,
             submittedChallenge: credential.challenge,
           })
           const response = await emitChallenge({
             challenge,
-            credential,
-            request,
+            credential: parsedCredential,
+            request: parsedRequest,
             error,
           })
           return { challenge: response, status: 402 }
@@ -1151,7 +1196,7 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
             input,
             method,
             receipt: receiptData,
-            request,
+            request: parsedRequest,
           }) as never,
         )
 
@@ -1312,25 +1357,10 @@ async function emitServerEventHandlers(
     try {
       await handler(context as never)
     } catch {
-      // Server events are observational and must not alter payment control flow.
+      // Errors are isolated, but handlers are still awaited inline.
     }
   }
 }
-
-// Keep this runtime list aligned with `ReservedKey`; it protects the same
-// public Mppx instance surface that framework wrappers pass through unchanged.
-const reservedMppxKeys = new Set<ReservedKey>([
-  'challenge',
-  'compose',
-  'methods',
-  'on',
-  'onChallengeCreated',
-  'onPaymentFailed',
-  'onPaymentSuccess',
-  'realm',
-  'transport',
-  'verifyCredential',
-])
 
 function assertNoReservedMppxKeys(methods: readonly Method.AnyServer[]) {
   for (const method of methods) {
@@ -1347,7 +1377,7 @@ function createChallengeContext(parameters: {
   credential?: Credential.Credential | null | undefined
   error?: Errors.PaymentError | undefined
   input?: unknown
-  method: Method.Method
+  method: Method.Method | ServerMethodDescriptor
   request: Record<string, unknown>
 }): ChallengeContext {
   return Object.freeze({
@@ -1372,7 +1402,7 @@ function createPaymentFailedContext(parameters: {
   credential: Credential.Credential | null
   error: Errors.PaymentError
   input?: unknown
-  method: Method.Method
+  method: Method.Method | ServerMethodDescriptor
   request: Record<string, unknown>
   retryChallenge?: Challenge.Challenge | undefined
   submittedChallenge?: Challenge.Challenge | undefined
@@ -1402,7 +1432,7 @@ function createPaymentSuccessContext(parameters: {
   credential?: Credential.Credential | undefined
   envelope?: Method.VerifiedChallengeEnvelope | undefined
   input?: unknown
-  method: Method.Method
+  method: Method.Method | ServerMethodDescriptor
   receipt: Receipt.Receipt
   request: Record<string, unknown>
 }): PaymentSuccessContext {
@@ -1420,14 +1450,13 @@ function createPaymentSuccessContext(parameters: {
   }) as never
 }
 
-function snapshotMethod<method extends Method.Method>(method: method): method {
+function snapshotMethod<method extends Pick<Method.Method, 'intent' | 'name'>>(
+  method: method,
+): ServerMethodDescriptor<method> {
   return Object.freeze({
-    ...method,
-    schema: Object.freeze({
-      ...method.schema,
-      credential: Object.freeze({ ...method.schema.credential }),
-    }),
-  }) as method
+    intent: method.intent,
+    name: method.name,
+  }) as ServerMethodDescriptor<method>
 }
 
 function snapshotError<error extends Errors.PaymentError | undefined>(error: error): error {
@@ -1469,7 +1498,7 @@ function snapshotValue<value>(value: value): value {
   try {
     return freezeSnapshot(structuredClone(value))
   } catch {
-    return value
+    return freezeSnapshot(value)
   }
 }
 
@@ -1493,6 +1522,10 @@ function snapshotTransportInput<input>(input: input): input | undefined {
   try {
     return freezeSnapshot(structuredClone(input))
   } catch {
+    warnOnce(
+      Warnings.transportInputSnapshot,
+      'Could not clone server event input; omitting `context.input`. Use `capturedRequest` for request correlation.',
+    )
     return undefined
   }
 }
@@ -1536,6 +1569,7 @@ function getSafeCredentialReason(error: unknown): string | undefined {
 const defaultRealm = 'MPP Payment'
 const Warnings = {
   realmFallback: 'realm-fallback',
+  transportInputSnapshot: 'transport-input-snapshot',
 } as const
 const missingReceiptResponseErrorName = 'MissingReceiptResponseError'
 const missingReceiptResponseErrorMessage = 'withReceipt() requires a response argument'
@@ -1600,6 +1634,7 @@ async function resolveRouteChallenge(parameters: {
   secretKey: string
 }): Promise<{
   challenge: Challenge.Challenge
+  parsedRequest: Record<string, unknown>
   request: Record<string, unknown>
 }> {
   // Resolve the route's canonical request exactly as the handler path does:
@@ -1633,7 +1668,8 @@ async function resolveRouteChallenge(parameters: {
 
   return {
     challenge,
-    request: challenge.request as Record<string, unknown>,
+    parsedRequest: challenge.request as Record<string, unknown>,
+    request,
   }
 }
 

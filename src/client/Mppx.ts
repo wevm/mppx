@@ -391,7 +391,7 @@ function snapshotValue<value>(value: value): value {
   try {
     return deepFreeze(structuredClone(value))
   } catch {
-    return value
+    return freezeSnapshot(value)
   }
 }
 
