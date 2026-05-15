@@ -1,3 +1,4 @@
+import { Hex } from 'ox'
 import { KeyAuthorization } from 'ox/tempo'
 import { isAddressEqual, type Address } from 'viem'
 import { tempo as tempo_chain } from 'viem/chains'
@@ -11,7 +12,7 @@ import * as z from '../../zod.js'
 import * as defaults from '../internal/defaults.js'
 import * as Methods from '../Methods.js'
 import {
-  getSubscriptionRpcAllowedCalls,
+  getSubscriptionScopes,
   signSubscriptionKeyAuthorization,
   toSubscriptionExpiryDate,
   toSubscriptionExpirySeconds,
@@ -117,16 +118,16 @@ async function authorizeAccessKey(
     params: [
       {
         address: accessKey.accessKeyAddress,
-        allowedCalls: getSubscriptionRpcAllowedCalls(request),
         expiry: toSubscriptionExpirySeconds(toSubscriptionExpiryDate(request.subscriptionExpires)),
         keyType: accessKey.keyType,
         limits: [
           {
             token: request.currency as Address,
-            limit: BigInt(request.amount),
+            limit: Hex.fromNumber(BigInt(request.amount)),
             period: toSubscriptionPeriodSeconds(request),
           },
         ],
+        scopes: getSubscriptionScopes(request),
       },
     ],
   } as never)) as {
