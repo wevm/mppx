@@ -1919,13 +1919,14 @@ function hydrateCredentialMeta<payload>(
   credential: Credential.Credential<payload>,
 ): Credential.Credential<payload> {
   const { challenge } = credential
-  if (challenge.meta !== undefined || challenge.opaque === undefined) return credential
+  if (challenge.opaque === undefined) return credential
+  const hydratedChallenge = Challenge.Schema.parse({
+    ...challenge,
+    meta: PaymentRequest.deserialize(challenge.opaque),
+  })
   return {
     ...credential,
-    challenge: {
-      ...challenge,
-      meta: PaymentRequest.deserialize(challenge.opaque) as Record<string, string>,
-    },
+    challenge: hydratedChallenge,
   }
 }
 
