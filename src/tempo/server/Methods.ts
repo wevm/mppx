@@ -1,3 +1,4 @@
+import * as Precompile_ from '../precompile/index.js'
 import * as Ws_ from '../session/Ws.js'
 import { charge as charge_ } from './Charge.js'
 import { session as session_, settle as settle_ } from './Session.js'
@@ -29,6 +30,8 @@ export namespace tempo {
   export const charge = charge_
   /** Creates a Tempo `session` method for session-based TIP-20 token payments. */
   export const session = session_
+  /** TIP20EscrowChannel precompile primitives for opt-in session implementations. */
+  export const precompile = Precompile_
   /** Creates a Tempo `subscription` method for recurring TIP-20 token payments. */
   export const subscription = subscription_
   /** Renews an overdue Tempo subscription outside of the HTTP request path. */

@@ -1,3 +1,4 @@
+import * as Precompile_ from '../precompile/index.js'
 import { charge as charge_ } from './Charge.js'
 import { session as sessionIntent_ } from './Session.js'
 import { sessionManager as session_ } from './SessionManager.js'
@@ -26,6 +27,8 @@ export namespace tempo {
   export const charge = charge_
   /** Creates a client-side streaming session for managing payment channels. */
   export const session = session_
+  /** TIP20EscrowChannel precompile primitives for opt-in session implementations. */
+  export const precompile = Precompile_
   /** Creates a Tempo `subscription` client method for recurring TIP-20 payments. */
   export const subscription = subscription_
 }

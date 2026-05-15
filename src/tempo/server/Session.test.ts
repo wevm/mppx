@@ -5562,31 +5562,35 @@ describe('monotonicity and TOCTOU (unit tests)', () => {
 
   function seedChannel(
     store: ChannelStore.ChannelStore,
-    overrides: Partial<ChannelStore.State> = {},
+    overrides: Partial<ChannelStore.BaseState> = {},
   ) {
-    return store.updateChannel(testChannelId, () => ({
-      channelId: testChannelId,
-      payer: '0x0000000000000000000000000000000000000001' as Address,
-      payee: '0x0000000000000000000000000000000000000002' as Address,
-      token: '0x0000000000000000000000000000000000000003' as Address,
-      authorizedSigner: '0x0000000000000000000000000000000000000004' as Address,
-      chainId: 42431,
-      escrowContract: escrowContractDefaults[chainIdDefaults.testnet] as Address,
-      deposit: 10000000n,
-      settledOnChain: 0n,
-      highestVoucherAmount: 5000000n,
-      highestVoucher: {
-        channelId: testChannelId,
-        cumulativeAmount: 5000000n,
-        signature: '0xdeadbeef' as Hex,
-      },
-      spent: 0n,
-      units: 0,
-      closeRequestedAt: 0n,
-      finalized: false,
-      createdAt: new Date().toISOString(),
-      ...overrides,
-    }))
+    return store.updateChannel(
+      testChannelId,
+      () =>
+        ({
+          channelId: testChannelId,
+          payer: '0x0000000000000000000000000000000000000001' as Address,
+          payee: '0x0000000000000000000000000000000000000002' as Address,
+          token: '0x0000000000000000000000000000000000000003' as Address,
+          authorizedSigner: '0x0000000000000000000000000000000000000004' as Address,
+          chainId: 42431,
+          escrowContract: escrowContractDefaults[chainIdDefaults.testnet] as Address,
+          deposit: 10000000n,
+          settledOnChain: 0n,
+          highestVoucherAmount: 5000000n,
+          highestVoucher: {
+            channelId: testChannelId,
+            cumulativeAmount: 5000000n,
+            signature: '0xdeadbeef' as Hex,
+          },
+          spent: 0n,
+          units: 0,
+          closeRequestedAt: 0n,
+          finalized: false,
+          createdAt: new Date().toISOString(),
+          ...overrides,
+        }) as ChannelStore.State,
+    )
   }
 
   test('charge does not allow highestVoucherAmount to decrease', async () => {

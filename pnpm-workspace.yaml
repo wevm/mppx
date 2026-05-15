@@ -9,12 +9,15 @@ blockExoticSubdeps: true
 minimumReleaseAge: 1440
 trustPolicy: no-downgrade
 
+patchedDependencies:
+  ox@0.14.20: patches/ox@0.14.20.patch
+
 overrides:
   mppx: 'workspace:*'
   vitest: 'npm:@voidzero-dev/vite-plus-test@~0.1.17'
   typescript: '~5.9.3'
-  ox: '0.14.18'
-  viem: '^2.47.5'
+  ox: '0.14.20'
+  viem: 'file:/Users/rusowsky/dev/viem/src'
   path-to-regexp@<8.4.0: '8.4.0'
   tar@<=7.5.10: '7.5.11'
   '@modelcontextprotocol/sdk@>=1.10.0 <=1.25.3': '1.26.0'
