@@ -641,18 +641,21 @@ async function handleOpen(parameters: {
     feePayer: parameters.feePayer,
     feePayerPolicy: parameters.feePayerPolicy,
     serializedTransaction: payload.transaction,
+    async beforeBroadcast(prepared) {
+      assertSameDescriptor(prepared.descriptor, payload.descriptor)
+      if (cumulativeAmount > prepared.openDeposit)
+        throw new AmountExceedsDepositError({ reason: 'voucher amount exceeds open deposit' })
+      const valid = await Voucher.verifyVoucher(
+        escrow,
+        chainId,
+        { channelId, cumulativeAmount: cumulativeAmount, signature: payload.signature },
+        authorizedSigner(prepared.descriptor),
+      )
+      if (!valid) throw new InvalidSignatureError({ reason: 'invalid voucher signature' })
+    },
   })
   const { descriptor, state } = result
   assertSameDescriptor(descriptor, payload.descriptor)
-  if (cumulativeAmount > result.openDeposit)
-    throw new AmountExceedsDepositError({ reason: 'voucher amount exceeds open deposit' })
-  const valid = await Voucher.verifyVoucher(
-    escrow,
-    chainId,
-    { channelId, cumulativeAmount: cumulativeAmount, signature: payload.signature },
-    authorizedSigner(descriptor),
-  )
-  if (!valid) throw new InvalidSignatureError({ reason: 'invalid voucher signature' })
   const amount = challenge.request.amount ? BigInt(challenge.request.amount as string) : undefined
   validateChannelState(state, amount)
 

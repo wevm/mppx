@@ -266,6 +266,72 @@ describe('precompile client session', () => {
     expect(payload.descriptor.authorizedSigner).toBe(accessKeyAddress)
   })
 
+  test('manual open requires transaction', async () => {
+    const method = session({ account, getClient: () => client })
+
+    await expect(
+      method.createCredential({
+        challenge: makeChallenge() as never,
+        context: { action: 'open', descriptor, cumulativeAmountRaw: '100' },
+      }),
+    ).rejects.toThrow('transaction required for open action')
+  })
+
+  test('manual open requires cumulativeAmount', async () => {
+    const method = session({ account, getClient: () => client })
+
+    await expect(
+      method.createCredential({
+        challenge: makeChallenge() as never,
+        context: { action: 'open', descriptor, transaction: '0x1234' },
+      }),
+    ).rejects.toThrow('cumulativeAmount required for open action')
+  })
+
+  test('manual topUp requires additionalDeposit', async () => {
+    const method = session({ account, getClient: () => client })
+
+    await expect(
+      method.createCredential({
+        challenge: makeChallenge() as never,
+        context: { action: 'topUp', descriptor, transaction: '0x1234' },
+      }),
+    ).rejects.toThrow('additionalDeposit required for topUp action')
+  })
+
+  test('manual voucher requires cumulativeAmount', async () => {
+    const method = session({ account, getClient: () => client })
+
+    await expect(
+      method.createCredential({
+        challenge: makeChallenge() as never,
+        context: { action: 'voucher', descriptor },
+      }),
+    ).rejects.toThrow('cumulativeAmount required for voucher action')
+  })
+
+  test('manual close requires cumulativeAmount', async () => {
+    const method = session({ account, getClient: () => client })
+
+    await expect(
+      method.createCredential({
+        challenge: makeChallenge() as never,
+        context: { action: 'close', descriptor },
+      }),
+    ).rejects.toThrow('cumulativeAmount required for close action')
+  })
+
+  test('manual actions require descriptors', async () => {
+    const method = session({ account, getClient: () => client })
+
+    await expect(
+      method.createCredential({
+        challenge: makeChallenge() as never,
+        context: { action: 'voucher', cumulativeAmountRaw: '100' },
+      }),
+    ).rejects.toThrow('descriptor required for precompile session action')
+  })
+
   test('creates manual voucher credentials with descriptor payloads', async () => {
     const method = session({ account, getClient: () => client })
     const credential = await method.createCredential({

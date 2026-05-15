@@ -367,7 +367,13 @@ export async function broadcastOpenTransaction(parameters: {
   feePayer?: Account | undefined
   feePayerPolicy?: Partial<FeePayer.Policy> | undefined
   serializedTransaction: Hex
+  beforeBroadcast?:
+    | ((result: Omit<BroadcastOpenTransactionResult, 'txHash' | 'state'>) => Promise<void> | void)
+    | undefined
 }): Promise<BroadcastOpenTransactionResult> {
+  if (parameters.feePayer && !FeePayer.isTempoTransaction(parameters.serializedTransaction))
+    throw new BadRequestError({ reason: 'Only Tempo (0x76/0x78) transactions are supported' })
+
   const transaction = Transaction.deserialize(
     parameters.serializedTransaction as Transaction.TransactionSerializedTempo,
   )
@@ -407,6 +413,11 @@ export async function broadcastOpenTransaction(parameters: {
     throw new VerificationFailedError({
       reason: 'credential expiringNonceHash does not match transaction',
     })
+  await parameters.beforeBroadcast?.({
+    descriptor,
+    expiringNonceHash,
+    openDeposit: open.deposit,
+  })
   const receipt = await sendCredentialTransaction({
     challengeExpires: parameters.challengeExpires,
     chainId: parameters.chainId,
@@ -481,6 +492,9 @@ export async function broadcastTopUpTransaction(parameters: {
   feePayerPolicy?: Partial<FeePayer.Policy> | undefined
   serializedTransaction: Hex
 }): Promise<BroadcastTopUpTransactionResult> {
+  if (parameters.feePayer && !FeePayer.isTempoTransaction(parameters.serializedTransaction))
+    throw new BadRequestError({ reason: 'Only Tempo (0x76/0x78) transactions are supported' })
+
   const transaction = Transaction.deserialize(
     parameters.serializedTransaction as Transaction.TransactionSerializedTempo,
   )
