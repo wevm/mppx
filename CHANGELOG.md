@@ -1,5 +1,12 @@
 # mppx
 
+## 0.6.24
+
+### Patch Changes
+
+- bec7b56: Added challenge ordering hooks for client-side challenge filtering and sorting.
+- 8f766f8: Fixed bug where forged scope metadata could result in cross route bypass of requests.
+
 ## 0.6.23
 
 ### Patch Changes
