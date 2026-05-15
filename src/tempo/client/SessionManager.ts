@@ -4,6 +4,7 @@ import { parseUnits, type Address } from 'viem'
 import * as Challenge from '../../Challenge.js'
 import * as Fetch from '../../client/internal/Fetch.js'
 import * as PaymentCredential from '../../Credential.js'
+import * as AcceptPayment from '../../internal/AcceptPayment.js'
 import type * as Account from '../../viem/Account.js'
 import type * as Client from '../../viem/Client.js'
 import { deserializeSessionReceipt } from '../session/Receipt.js'
@@ -28,6 +29,12 @@ type CloseReadyWaiter = {
   resolve(receipt: SessionReceipt): void
 }
 
+type SessionMethod = ReturnType<typeof sessionPlugin>
+type SessionOrderChallenges = AcceptPayment.OrderChallenges<readonly [SessionMethod]>
+type SessionRequestInit = RequestInit & {
+  orderChallenges?: SessionOrderChallenges | undefined
+}
+
 const WebSocketReadyState = {
   CONNECTING: 0,
   OPEN: 1,
@@ -45,10 +52,10 @@ export type SessionManager = {
   readonly opened: boolean
 
   open(options?: { deposit?: bigint }): Promise<void>
-  fetch(input: RequestInfo | URL, init?: RequestInit): Promise<PaymentResponse>
+  fetch(input: RequestInfo | URL, init?: SessionRequestInit): Promise<PaymentResponse>
   sse(
     input: RequestInfo | URL,
-    init?: RequestInit & {
+    init?: SessionRequestInit & {
       onReceipt?: ((receipt: SessionReceipt) => void) | undefined
       signal?: AbortSignal | undefined
     },
@@ -57,6 +64,7 @@ export type SessionManager = {
     input: string | URL,
     init?: {
       onReceipt?: ((receipt: SessionReceipt) => void) | undefined
+      orderChallenges?: SessionOrderChallenges | undefined
       protocols?: string | string[] | undefined
       signal?: AbortSignal | undefined
     },
@@ -134,6 +142,7 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
       lastChallenge = challenge
       return undefined
     },
+    orderChallenges: parameters.orderChallenges,
   })
 
   function updateSpentFromReceipt(receipt: SessionReceipt | null | undefined) {
@@ -252,7 +261,10 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
     })
   }
 
-  async function doFetch(input: RequestInfo | URL, init?: RequestInit): Promise<PaymentResponse> {
+  async function doFetch(
+    input: RequestInfo | URL,
+    init?: SessionRequestInit,
+  ): Promise<PaymentResponse> {
     lastUrl = input
     const response = await wrappedFetch(input, init)
     return toPaymentResponse(response)
@@ -536,9 +548,17 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
         )
       }
 
-      const challenge = Challenge.fromResponseList(probe).find(
-        (item) => item.method === method.name && item.intent === method.intent,
+      const candidates = AcceptPayment.selectChallengeCandidates(
+        Challenge.fromResponseList(probe),
+        [method] as const,
+        AcceptPayment.resolve([method] as const).entries,
       )
+      const challenge = (
+        await resolveSessionChallengeOrder(
+          candidates,
+          init?.orderChallenges ?? parameters.orderChallenges,
+        )
+      )[0]?.challenge
       if (!challenge) {
         throw new Error(
           'No payment challenge received from HTTP endpoint for this WebSocket URL. The server may not require payment or did not advertise a challenge.',
@@ -844,7 +864,17 @@ export declare namespace sessionManager {
       fetch?: typeof globalThis.fetch | undefined
       /** Maximum deposit in human-readable units (e.g. `'10'` for 10 tokens). Converted to raw units via `decimals`. */
       maxDeposit?: string | undefined
+      /** Filters and sorts supported session challenges before credential creation. */
+      orderChallenges?: SessionOrderChallenges | undefined
       /** Optional websocket constructor for runtimes without a global WebSocket. */
       webSocket?: WebSocketConstructor | undefined
     }
+}
+
+async function resolveSessionChallengeOrder(
+  candidates: readonly AcceptPayment.ChallengeCandidate<SessionMethod>[],
+  override: SessionOrderChallenges | undefined,
+): Promise<readonly AcceptPayment.ChallengeCandidate<SessionMethod>[]> {
+  const orderChallenges = override
+  return orderChallenges ? orderChallenges(candidates) : candidates
 }

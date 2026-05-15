@@ -30,7 +30,7 @@ export type Mppx<
   createCredential: (
     response: Transport.ResponseOf<transport>,
     context?: AnyContextFor<FlattenMethods<methods>> | undefined,
-    options?: createCredential.Options | undefined,
+    options?: createCredential.Options<FlattenMethods<methods>> | undefined,
   ) => Promise<string>
   /** Register a client event handler by canonical event name. */
   on<name extends Fetch.ClientEventName<FlattenMethods<methods>, EventResponseOf<transport>>>(
@@ -101,6 +101,7 @@ export function create<
 >(config: create.Config<methods, transport>): Mppx<methods, transport> {
   const {
     onChallenge,
+    orderChallenges,
     polyfill = true,
     acceptPaymentPolicy = polyfill && typeof globalThis.location !== 'undefined'
       ? 'same-origin'
@@ -122,6 +123,7 @@ export function create<
     ...(config.fetch && { fetch: config.fetch }),
     eventDispatcher: events,
     ...(resolvedOnChallenge && { onChallenge: resolvedOnChallenge }),
+    ...(orderChallenges && { orderChallenges }),
     methods,
   } satisfies Fetch.from.Config<FlattenMethods<methods>>
   const fetch = Fetch.from<FlattenMethods<methods>>(config_fetch)
@@ -181,7 +183,7 @@ export function create<
     async createCredential(
       response: Transport.ResponseOf<transport>,
       context?: unknown,
-      options?: createCredential.Options,
+      options?: createCredential.Options<FlattenMethods<methods>>,
     ) {
       const challenges = transport.getChallenges
         ? transport.getChallenges(response as never)
@@ -191,7 +193,12 @@ export function create<
       let challenge: Challenge.Challenge | undefined
       let mi: FlattenMethods<methods>[number] | undefined
       try {
-        const selected = AcceptPayment.selectChallenge(challenges, methods, preferences)
+        const candidates = AcceptPayment.selectChallengeCandidates(challenges, methods, preferences)
+        const orderedCandidates = await resolveChallengeOrder(
+          candidates,
+          options?.orderChallenges ?? orderChallenges,
+        )
+        const selected = orderedCandidates[0]
         if (!selected)
           throw new Error(
             `No method found for challenges: ${challenges.map((challenge) => `${challenge.method}.${challenge.intent}`).join(', ')}. Available: ${methods.map((m) => `${m.name}.${m.intent}`).join(', ')}`,
@@ -246,9 +253,11 @@ export function create<
 }
 
 export declare namespace createCredential {
-  type Options = {
+  type Options<methods extends readonly Method.AnyClient[] = readonly Method.AnyClient[]> = {
     /** Request-local Accept-Payment override for manual rawFetch + createCredential flows. */
     acceptPayment?: string | readonly AcceptPayment.Entry[] | undefined
+    /** Request-local challenge filtering and sorting. */
+    orderChallenges?: AcceptPayment.OrderChallenges<methods> | undefined
   }
 }
 
@@ -288,6 +297,8 @@ export declare namespace create {
           },
         ) => Promise<string | undefined>)
       | undefined
+    /** Filters and sorts supported challenges before credential creation. */
+    orderChallenges?: AcceptPayment.OrderChallenges<FlattenMethods<methods>> | undefined
     /** Client-declared supported payment methods, keyed by typed `method/intent` strings. */
     paymentPreferences?: AcceptPayment.Config<FlattenMethods<methods>> | undefined
     /** Array of methods to use. Accepts individual clients or tuples (e.g. from `tempo()`). */
@@ -429,6 +440,13 @@ function resolveChallengePreferences(
 ): readonly AcceptPayment.Entry[] {
   if (!override) return fallback
   return typeof override === 'string' ? AcceptPayment.parse(override) : override
+}
+
+async function resolveChallengeOrder<methods extends readonly Method.AnyClient[]>(
+  candidates: readonly AcceptPayment.ChallengeCandidate<methods[number]>[],
+  orderChallenges: AcceptPayment.OrderChallenges<methods> | undefined,
+): Promise<readonly AcceptPayment.ChallengeCandidate<methods[number]>[]> {
+  return orderChallenges ? orderChallenges(candidates) : candidates
 }
 
 async function createCredentialForMethod(

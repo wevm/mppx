@@ -30,11 +30,11 @@ function makeChallenge(overrides: Record<string, unknown> = {}): Challenge.Chall
   })
 }
 
-function make402Response(challenge?: Challenge.Challenge): Response {
-  const c = challenge ?? makeChallenge()
+function make402Response(...challenges: Challenge.Challenge[]): Response {
+  const entries = challenges.length ? challenges : [makeChallenge()]
   return new Response(null, {
     status: 402,
-    headers: { 'WWW-Authenticate': Challenge.serialize(c) },
+    headers: { 'WWW-Authenticate': entries.map(Challenge.serialize).join(', ') },
   })
 }
 
@@ -110,6 +110,87 @@ describe('Session', () => {
       await expect(s.fetch('https://api.example.com/data')).rejects.toThrow(
         'no `deposit` or `maxDeposit` configured',
       )
+    })
+
+    test('passes supported challenges through the ordering hook', async () => {
+      const first = makeChallenge({ currency: 'pathusd' })
+      const second = makeChallenge({ currency: 'usdc' })
+      const mockFetch = vi.fn().mockResolvedValue(make402Response(first, second))
+      const orderChallenges = vi.fn(
+        (candidates: Parameters<NonNullable<sessionManager.Parameters['orderChallenges']>>[0]) =>
+          candidates.slice(1, 1),
+      )
+
+      const s = sessionManager({
+        account: '0x0000000000000000000000000000000000000001',
+        fetch: mockFetch as typeof globalThis.fetch,
+        orderChallenges,
+      })
+
+      await expect(s.fetch('https://api.example.com/data')).rejects.toThrow(
+        'No method found for challenges: tempo.session, tempo.session',
+      )
+      expect(orderChallenges).toHaveBeenCalledOnce()
+      expect(
+        orderChallenges.mock.calls[0]?.[0].map(({ challenge, index }) => ({
+          currency: challenge.request.currency,
+          index,
+        })),
+      ).toEqual([
+        { currency: 'pathusd', index: 0 },
+        { currency: 'usdc', index: 1 },
+      ])
+    })
+
+    test('request-local ordering overrides the session manager ordering hook', async () => {
+      const mockFetch = vi.fn().mockResolvedValue(make402Response())
+      const configuredOrderChallenges = vi.fn(
+        (candidates: Parameters<NonNullable<sessionManager.Parameters['orderChallenges']>>[0]) =>
+          candidates,
+      )
+      const requestOrderChallenges = vi.fn(
+        (
+          _candidates: Parameters<NonNullable<sessionManager.Parameters['orderChallenges']>>[0],
+        ) => [],
+      )
+
+      const s = sessionManager({
+        account: '0x0000000000000000000000000000000000000001',
+        fetch: mockFetch as typeof globalThis.fetch,
+        orderChallenges: configuredOrderChallenges,
+      })
+
+      await expect(
+        s.fetch('https://api.example.com/data', {
+          orderChallenges: requestOrderChallenges,
+        }),
+      ).rejects.toThrow('No method found for challenges: tempo.session')
+      expect(configuredOrderChallenges).not.toHaveBeenCalled()
+      expect(requestOrderChallenges).toHaveBeenCalledOnce()
+    })
+  })
+
+  describe('.ws()', () => {
+    test('applies challenge ordering to the HTTP probe', async () => {
+      const mockFetch = vi.fn().mockResolvedValue(make402Response())
+      const orderChallenges = vi.fn(
+        (
+          _candidates: Parameters<NonNullable<sessionManager.Parameters['orderChallenges']>>[0],
+        ) => [],
+      )
+
+      const s = sessionManager({
+        account: '0x0000000000000000000000000000000000000001',
+        fetch: mockFetch as typeof globalThis.fetch,
+        maxDeposit: '10',
+        orderChallenges,
+        webSocket: vi.fn() as never,
+      })
+
+      await expect(s.ws('wss://api.example.com/session')).rejects.toThrow(
+        'No payment challenge received from HTTP endpoint for this WebSocket URL.',
+      )
+      expect(orderChallenges).toHaveBeenCalledOnce()
     })
   })
 

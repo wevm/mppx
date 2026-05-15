@@ -152,6 +152,32 @@ describe('AcceptPayment', () => {
     expect(selected?.method).toEqual({ name: 'tempo', intent: 'session' })
   })
 
+  test('selectChallengeCandidates returns supported offers with methods and response indexes', () => {
+    const candidates = AcceptPayment.selectChallengeCandidates(
+      [
+        { id: '1', intent: 'charge', method: 'unknown', realm: 'test', request: {} },
+        { id: '2', intent: 'session', method: 'tempo', realm: 'test', request: {} },
+        { id: '3', intent: 'charge', method: 'stripe', realm: 'test', request: {} },
+      ],
+      [
+        { name: 'tempo', intent: 'session' },
+        { name: 'stripe', intent: 'charge' },
+      ] as const,
+      AcceptPayment.parse('stripe/charge;q=0.5, tempo/session;q=0.9'),
+    )
+
+    expect(
+      candidates.map(({ challenge, index, method }) => ({
+        id: challenge.id,
+        index,
+        key: AcceptPayment.keyOf(method),
+      })),
+    ).toEqual([
+      { id: '2', index: 1, key: 'tempo/session' },
+      { id: '3', index: 2, key: 'stripe/charge' },
+    ])
+  })
+
   test('selectChallenge honors a specific opt-out over a broader wildcard', () => {
     const selected = AcceptPayment.selectChallenge(
       [

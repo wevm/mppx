@@ -1,9 +1,29 @@
 import type * as Challenge from '../Challenge.js'
+import type { MaybePromise } from './types.js'
 
 type MethodLike = {
   intent: string
   name: string
 }
+
+/** Supported challenge paired with the configured client method that can sign it. */
+export type ChallengeCandidate<method extends MethodLike = MethodLike> = method extends MethodLike
+  ? {
+      challenge: Challenge.Challenge<Record<string, unknown>, method['intent'], method['name']>
+      index: number
+      method: method
+    }
+  : never
+
+/**
+ * Hook for filtering and sorting supported challenges before credential creation.
+ *
+ * Return candidates in preference order. The SDK signs the first returned
+ * candidate. Return an empty array to reject all offered challenges.
+ */
+export type OrderChallenges<methods extends readonly MethodLike[]> = (
+  candidates: readonly ChallengeCandidate<methods[number]>[],
+) => MaybePromise<readonly ChallengeCandidate<methods[number]>[]>
 
 /** Typed `method/intent` key for a configured payment capability. */
 export type Key<methods extends readonly MethodLike[]> = methods[number] extends infer mi
@@ -144,23 +164,48 @@ export function selectChallenge<const methods extends readonly MethodLike[]>(
       method: methods[number]
     }
   | undefined {
+  const candidate = selectChallengeCandidates(challenges, methods, preferences)[0]
+  if (!candidate) return undefined
+
+  return {
+    challenge: candidate.challenge,
+    method: candidate.method,
+  }
+}
+
+/** Returns supported challenge candidates ordered by client payment preferences. */
+export function selectChallengeCandidates<const methods extends readonly MethodLike[]>(
+  challenges: readonly Challenge.Challenge[],
+  methods: methods,
+  preferences: readonly Entry[],
+): ChallengeCandidate<methods[number]>[] {
   const methodByKey = new Map<string, methods[number]>()
   for (const method of methods) {
     const key = keyOf(method)
     if (!methodByKey.has(key)) methodByKey.set(key, method)
   }
 
-  const ranked = rank(
-    challenges.filter((challenge) => methodByKey.has(keyOf(challenge))),
-    preferences,
-  )
-  const challenge = ranked[0]
-  if (!challenge) return undefined
+  return challenges
+    .map((challenge, index) => {
+      const method = methodByKey.get(keyOf(challenge))
+      if (!method) return undefined
 
-  return {
-    challenge,
-    method: methodByKey.get(keyOf(challenge))!,
-  }
+      const match = bestMatch(challenge, preferences)
+      if (!match || match.q <= 0) return undefined
+
+      return {
+        challenge,
+        index,
+        match,
+        method,
+      } as ChallengeCandidate<methods[number]> & { match: Match }
+    })
+    .filter((candidate): candidate is NonNullable<typeof candidate> => Boolean(candidate))
+    .sort((left, right) => right.match.q - left.match.q || left.index - right.index)
+    .map((candidate) => {
+      const { match: _match, ...rest } = candidate
+      return rest as unknown as ChallengeCandidate<methods[number]>
+    })
 }
 
 /** Returns the canonical `method/intent` key for a method or challenge-like value. */
