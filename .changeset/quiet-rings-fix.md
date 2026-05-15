@@ -2,4 +2,5 @@
 'mppx': patch
 ---
 
-Fixed credential metadata hydration to reject forged route scope metadata.
+Fixed bug where forged scope metadata could result in cross route bypass of requests.
+
