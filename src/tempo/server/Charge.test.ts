@@ -3881,6 +3881,129 @@ describe('tempo', () => {
       httpServer.close()
     })
 
+    test('server accepts hash transfers from a different source when validateSender allows it', async () => {
+      let validateSenderCalled = false
+      const validatingServer = Mppx_server.create({
+        methods: [
+          tempo_server.charge({
+            getClient() {
+              return client
+            },
+            currency: asset,
+            account: accounts[0],
+            validateSender({ expectedSender, sender, source }) {
+              validateSenderCalled = true
+              expect(sender.toLowerCase()).toBe(accounts[1].address.toLowerCase())
+              expect(expectedSender.toLowerCase()).toBe(accounts[2].address.toLowerCase())
+              expect(source).toEqual({
+                address: accounts[2].address,
+                chainId: chain.id,
+              })
+              return true
+            },
+          }),
+        ],
+        realm,
+        secretKey,
+      })
+      const httpServer = await Http.createServer(async (req, res) => {
+        const result = await Mppx_server.toNodeListener(
+          validatingServer.charge({ amount: '1', decimals: 6 }),
+        )(req, res)
+        if (result.status === 402) return
+        res.end('OK')
+      })
+
+      const response = await fetch(httpServer.url)
+      expect(response.status).toBe(402)
+
+      const challenge = Challenge.fromResponse(response, {
+        methods: [tempo_client.charge()],
+      })
+      const memo = Attribution.encode({ challengeId: challenge.id, serverId: challenge.realm })
+
+      const { receipt } = await Actions.token.transferSync(client, {
+        account: accounts[1],
+        amount: BigInt(challenge.request.amount),
+        memo: memo as Hex.Hex,
+        to: challenge.request.recipient as Hex.Hex,
+        token: challenge.request.currency as Hex.Hex,
+      })
+
+      const credential = Credential.from({
+        challenge,
+        payload: { hash: receipt.transactionHash, type: 'hash' as const },
+        source: `did:pkh:eip155:${chain.id}:${accounts[2].address}`,
+      })
+
+      {
+        const response = await fetch(httpServer.url, {
+          headers: { Authorization: Credential.serialize(credential) },
+        })
+        expect(response.status).toBe(200)
+        expect(validateSenderCalled).toBe(true)
+      }
+
+      httpServer.close()
+    })
+
+    test('server skips validateSender when hash transfer source already matches', async () => {
+      const validatingServer = Mppx_server.create({
+        methods: [
+          tempo_server.charge({
+            getClient() {
+              return client
+            },
+            currency: asset,
+            account: accounts[0],
+            validateSender() {
+              throw new Error('validateSender should not run for matching senders')
+            },
+          }),
+        ],
+        realm,
+        secretKey,
+      })
+      const httpServer = await Http.createServer(async (req, res) => {
+        const result = await Mppx_server.toNodeListener(
+          validatingServer.charge({ amount: '1', decimals: 6 }),
+        )(req, res)
+        if (result.status === 402) return
+        res.end('OK')
+      })
+
+      const response = await fetch(httpServer.url)
+      expect(response.status).toBe(402)
+
+      const challenge = Challenge.fromResponse(response, {
+        methods: [tempo_client.charge()],
+      })
+      const memo = Attribution.encode({ challengeId: challenge.id, serverId: challenge.realm })
+
+      const { receipt } = await Actions.token.transferSync(client, {
+        account: accounts[1],
+        amount: BigInt(challenge.request.amount),
+        memo: memo as Hex.Hex,
+        to: challenge.request.recipient as Hex.Hex,
+        token: challenge.request.currency as Hex.Hex,
+      })
+
+      const credential = Credential.from({
+        challenge,
+        payload: { hash: receipt.transactionHash, type: 'hash' as const },
+        source: `did:pkh:eip155:${chain.id}:${accounts[1].address}`,
+      })
+
+      {
+        const response = await fetch(httpServer.url, {
+          headers: { Authorization: Credential.serialize(credential) },
+        })
+        expect(response.status).toBe(200)
+      }
+
+      httpServer.close()
+    })
+
     test('server rejects hash credentials with malformed source', async () => {
       const httpServer = await Http.createServer(async (req, res) => {
         const result = await Mppx_server.toNodeListener(
