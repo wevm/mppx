@@ -1,3 +1,5 @@
+import { Challenge, Credential } from 'mppx'
+import { Mppx as Mppx_server, tempo as tempo_server } from 'mppx/server'
 import {
   type Address,
   createClient,
@@ -15,11 +17,13 @@ import { describe, expect, test } from 'vp/test'
 
 import * as Store from '../../../Store.js'
 import * as ChannelStore from '../../session/ChannelStore.js'
+import { deserializeSessionReceipt } from '../../session/Receipt.js'
 import type { SessionReceipt } from '../../session/Types.js'
 import * as Channel from '../Channel.js'
 import * as ClientOps from '../client/ChannelOps.js'
 import { tip20ChannelEscrow } from '../Constants.js'
 import { escrowAbi } from '../escrow.abi.js'
+import { sessionManager as precompileSessionManager } from '../session/SessionManager.js'
 import type { SessionCredentialPayload } from '../Types.js'
 import * as Types from '../Types.js'
 import * as Voucher from '../Voucher.js'
@@ -264,7 +268,10 @@ function transactionReceipt(logs: readonly Record<string, unknown>[]) {
   }
 }
 
-function openedLog(payload: Extract<SessionCredentialPayload, { action: 'open' }>) {
+function openedLog(
+  payload: Extract<SessionCredentialPayload, { action: 'open' }>,
+  deposit = 1_000n,
+) {
   return {
     address: tip20ChannelEscrow,
     data: encodeAbiParameters(
@@ -282,7 +289,7 @@ function openedLog(payload: Extract<SessionCredentialPayload, { action: 'open' }
         payload.descriptor.authorizedSigner,
         payload.descriptor.salt,
         payload.descriptor.expiringNonceHash,
-        1_000n,
+        deposit,
       ],
     ),
     topics: encodeEventTopics({
@@ -1536,6 +1543,337 @@ describe('precompile server session unit guardrails', () => {
       )
       expect(result).toBeInstanceOf(Response)
       expect((result as Response).status).toBe(204)
+    })
+  })
+
+  describe('default HTTP auto-billing', () => {
+    function createRoute(rawStore: Store.AtomicStore) {
+      return Mppx_server.create({
+        methods: [
+          tempo_server.precompile.Server.session({
+            amount: '1',
+            chainId,
+            currency: token,
+            decimals: 0,
+            recipient: payee,
+            store: rawStore,
+            unitType: 'request',
+            getClient: () => createStateClient(payer),
+          }),
+        ],
+        realm: 'api.example.com',
+        secretKey: 'secret',
+      }).session({ amount: '1', decimals: 0, unitType: 'request' })
+    }
+
+    test('GET content flow charges once and rejects same-voucher replay', async () => {
+      const rawStore = Store.memory()
+      const store = ChannelStore.fromStore(rawStore as never)
+      const openPayload = await createOpenPayload({ initialAmount: 1n })
+      await persistPrecompileChannel(store, openPayload, {
+        highestVoucherAmount: 1n,
+        spent: 0n,
+        units: 0,
+      })
+      const route = createRoute(rawStore)
+      const voucher = await ClientOps.createVoucherPayload(
+        createSigningClient(),
+        payer,
+        openPayload.descriptor,
+        Types.uint96(1n),
+        chainId,
+      )
+
+      const serve = async (request: Request) => {
+        const result = await route(request)
+        if (result.status === 402) return result.challenge
+        return result.withReceipt(new Response('paid-content'))
+      }
+
+      const first = await route(new Request('https://api.example.com/resource'))
+      expect(first.status).toBe(402)
+      if (first.status !== 402) throw new Error('expected challenge')
+
+      const paid = await serve(
+        new Request('https://api.example.com/resource', {
+          headers: {
+            Authorization: Credential.serialize({
+              challenge: Challenge.fromResponse(first.challenge),
+              payload: voucher,
+            }),
+          },
+        }),
+      )
+      expect(paid.status).toBe(200)
+      expect(await paid.text()).toBe('paid-content')
+      const receipt = deserializeSessionReceipt(paid.headers.get('Payment-Receipt') as string)
+      expect(receipt.acceptedCumulative).toBe('1')
+      expect(receipt.spent).toBe('1')
+      expect(receipt.units).toBe(1)
+
+      const replayChallenge = await route(new Request('https://api.example.com/resource'))
+      expect(replayChallenge.status).toBe(402)
+      if (replayChallenge.status !== 402) throw new Error('expected challenge')
+
+      const replay = await serve(
+        new Request('https://api.example.com/resource', {
+          headers: {
+            Authorization: Credential.serialize({
+              challenge: Challenge.fromResponse(replayChallenge.challenge),
+              payload: voucher,
+            }),
+          },
+        }),
+      )
+      expect(replay.status).toBe(402)
+      expect(replay.headers.get('Payment-Receipt')).toBeNull()
+    })
+
+    test('POST content flow charges once and rejects same-voucher replay', async () => {
+      const rawStore = Store.memory()
+      const store = ChannelStore.fromStore(rawStore as never)
+      const openPayload = await createOpenPayload({ initialAmount: 1n })
+      await persistPrecompileChannel(store, openPayload)
+      const route = createRoute(rawStore)
+      const voucher = await ClientOps.createVoucherPayload(
+        createSigningClient(),
+        payer,
+        openPayload.descriptor,
+        Types.uint96(1n),
+        chainId,
+      )
+      const makeRequest = (authorization?: string) =>
+        new Request('https://api.example.com/resource', {
+          method: 'POST',
+          body: '{}',
+          headers: {
+            'content-length': '2',
+            'content-type': 'application/json',
+            ...(authorization ? { Authorization: authorization } : {}),
+          },
+        })
+
+      const first = await route(makeRequest())
+      expect(first.status).toBe(402)
+      if (first.status !== 402) throw new Error('expected challenge')
+
+      const result = await route(
+        makeRequest(
+          Credential.serialize({
+            challenge: Challenge.fromResponse(first.challenge),
+            payload: voucher,
+          }),
+        ),
+      )
+      expect(result.status).toBe(200)
+      if (result.status !== 200) throw new Error('expected paid response')
+      const paid = result.withReceipt(new Response('paid-content'))
+      const receipt = deserializeSessionReceipt(paid.headers.get('Payment-Receipt') as string)
+      expect(receipt.spent).toBe('1')
+      expect(receipt.units).toBe(1)
+
+      const replayChallenge = await route(makeRequest())
+      expect(replayChallenge.status).toBe(402)
+      if (replayChallenge.status !== 402) throw new Error('expected challenge')
+      const replay = await route(
+        makeRequest(
+          Credential.serialize({
+            challenge: Challenge.fromResponse(replayChallenge.challenge),
+            payload: voucher,
+          }),
+        ),
+      )
+      expect(replay.status).toBe(402)
+      if (replay.status !== 402) throw new Error('expected challenge')
+      expect(replay.challenge.headers.get('Payment-Receipt')).toBeNull()
+    })
+
+    test('verification errors do not include Payment-Receipt', async () => {
+      const rawStore = Store.memory()
+      const store = ChannelStore.fromStore(rawStore as never)
+      const openPayload = await createOpenPayload({ initialAmount: 100n })
+      await persistPrecompileChannel(store, openPayload)
+      const route = createRoute(rawStore)
+      const first = await route(new Request('https://api.example.com/resource'))
+      expect(first.status).toBe(402)
+      if (first.status !== 402) throw new Error('expected challenge')
+
+      const failed = await route(
+        new Request('https://api.example.com/resource', {
+          headers: {
+            Authorization: Credential.serialize({
+              challenge: Challenge.fromResponse(first.challenge),
+              payload: {
+                action: 'voucher',
+                channelId: openPayload.channelId,
+                cumulativeAmount: '100',
+                descriptor: openPayload.descriptor,
+                signature: (await createOpenPayload({ account: wrongPayer })).signature,
+              },
+            }),
+          },
+        }),
+      )
+
+      expect(failed.status).toBe(402)
+      if (failed.status !== 402) throw new Error('expected challenge')
+      expect(failed.challenge.headers.get('Payment-Receipt')).toBeNull()
+    })
+  })
+
+  describe('SSE parity', () => {
+    function createManagedSseFetch(
+      options: { amount?: string; maxDeposit?: bigint; unitType?: 'request' | 'token' } = {},
+    ) {
+      const rawStore = Store.memory()
+      let currentPayload: SessionCredentialPayload | undefined
+      let voucherPosts = 0
+      const amount = options.amount ?? '1'
+      const maxDeposit = options.maxDeposit ?? 3n
+      const unitType = options.unitType ?? 'token'
+      const route = Mppx_server.create({
+        methods: [
+          tempo_server.precompile.Server.session({
+            amount,
+            chainId,
+            currency: token,
+            decimals: 0,
+            recipient: payer.address,
+            sse: true,
+            store: rawStore,
+            unitType,
+            getClient: () => {
+              const payload = currentPayload
+              if (payload?.action === 'open') {
+                return createServerClient([], payer, payload.channelId, {
+                  descriptor: payload.descriptor,
+                  receipt: transactionReceipt([openedLog(payload, maxDeposit)]),
+                  state: { settled: 0n, deposit: maxDeposit, closeRequestedAt: 0 },
+                })
+              }
+              if (payload?.action === 'close') {
+                return createServerClient([], payer, payload.channelId, {
+                  receipt: transactionReceipt([
+                    closedLog(payload.channelId, BigInt(payload.cumulativeAmount), 0n),
+                  ]),
+                  state: { settled: 0n, deposit: maxDeposit, closeRequestedAt: 0 },
+                })
+              }
+              return createStateClient(payer, {
+                settled: 0n,
+                deposit: maxDeposit,
+                closeRequestedAt: 0,
+              })
+            },
+          }),
+        ],
+        realm: 'api.example.com',
+        secretKey: 'secret',
+      }).session({ amount, decimals: 0, unitType })
+
+      const fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+        const request = new Request(input, init)
+        currentPayload = undefined
+        if (request.headers.has('Authorization')) {
+          try {
+            currentPayload = Credential.fromRequest<SessionCredentialPayload>(request).payload
+            if (currentPayload.action === 'voucher') voucherPosts++
+          } catch {}
+        }
+
+        const result = await route(request)
+        if (result.status === 402) return result.challenge
+        if (currentPayload?.action === 'voucher') return new Response(null, { status: 200 })
+
+        if (request.headers.get('Accept')?.includes('text/event-stream')) {
+          if (unitType === 'request') {
+            const encoder = new TextEncoder()
+            return result.withReceipt(
+              new Response(
+                new ReadableStream({
+                  start(controller) {
+                    controller.enqueue(encoder.encode('event: message\ndata: chunk-1\n\n'))
+                    controller.enqueue(encoder.encode('event: message\ndata: chunk-2\n\n'))
+                    controller.enqueue(encoder.encode('event: message\ndata: chunk-3\n\n'))
+                    controller.close()
+                  },
+                }),
+                { headers: { 'Content-Type': 'text/event-stream; charset=utf-8' } },
+              ),
+            )
+          }
+
+          return result.withReceipt(async function* (stream) {
+            await stream.charge()
+            yield 'chunk-1'
+            await stream.charge()
+            yield 'chunk-2'
+            await stream.charge()
+            yield 'chunk-3'
+          })
+        }
+
+        return result.withReceipt(new Response('ok'))
+      }
+
+      return {
+        fetch,
+        rawStore,
+        get voucherPosts() {
+          return voucherPosts
+        },
+      }
+    }
+
+    test('open -> stream -> need-voucher -> resume -> close', async () => {
+      const harness = createManagedSseFetch({ maxDeposit: 3n })
+      const manager = precompileSessionManager({
+        account: payer,
+        client: createSigningClient(),
+        decimals: 0,
+        fetch: harness.fetch,
+        maxDeposit: '3',
+      })
+
+      const chunks: string[] = []
+      const stream = await manager.sse('https://api.example.com/stream')
+      for await (const chunk of stream) chunks.push(chunk)
+
+      expect(chunks).toEqual(['chunk-1', 'chunk-2', 'chunk-3'])
+      expect(harness.voucherPosts).toBeGreaterThan(0)
+
+      const closeReceipt = await manager.close()
+      expect(closeReceipt?.status).toBe('success')
+      expect(closeReceipt?.spent).toBe('3')
+
+      const channelId = manager.channelId
+      expect(channelId).toBeTruthy()
+      const persisted = await ChannelStore.fromStore(harness.rawStore as never).getChannel(
+        channelId!,
+      )
+      expect(persisted?.finalized).toBe(true)
+    })
+
+    test('unitType=request auto-metered SSE responses charge once across the stream', async () => {
+      const harness = createManagedSseFetch({ maxDeposit: 1n, unitType: 'request' })
+      const manager = precompileSessionManager({
+        account: payer,
+        client: createSigningClient(),
+        decimals: 0,
+        fetch: harness.fetch,
+        maxDeposit: '1',
+      })
+
+      const chunks: string[] = []
+      const stream = await manager.sse('https://api.example.com/stream')
+      for await (const chunk of stream) chunks.push(chunk)
+
+      expect(chunks).toEqual(['chunk-1', 'chunk-2', 'chunk-3'])
+      expect(harness.voucherPosts).toBe(0)
+
+      const closeReceipt = await manager.close()
+      expect(closeReceipt?.status).toBe('success')
+      expect(closeReceipt?.spent).toBe('1')
     })
   })
 
