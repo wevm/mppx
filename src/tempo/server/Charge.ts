@@ -63,6 +63,7 @@ export function charge<const parameters extends charge.Parameters>(
     feePayerPolicy,
     html,
     memo,
+    validateSender,
     waitForConfirmation = true,
   } = parameters
   const store = (parameters.store ?? Store.memory()) as Store.AtomicStore<charge.StoreItemMap>
@@ -230,10 +231,12 @@ export function charge<const parameters extends charge.Parameters>(
             })
             const receipt = await getTransactionReceipt(client, { hash })
             const sender = source?.address ?? receipt.from
-            const matchedLogs = assertTransferLogs(receipt, {
+            const matchedLogs = await assertTransferLogs(receipt, {
               currency,
               sender,
+              source,
               transfers: expectedTransfers,
+              validateSender,
             })
             // Only verify challenge binding when using auto-generated attribution memos.
             // Explicit memos (set by the server) are strictly matched by assertTransferLogs
@@ -415,7 +418,7 @@ export function charge<const parameters extends charge.Parameters>(
               const receipt = await sendRawTransactionSync(client, {
                 serializedTransaction: serializedTransaction_final,
               })
-              const matchedLogs = assertTransferLogs(receipt, {
+              const matchedLogs = await assertTransferLogs(receipt, {
                 currency,
                 sender: transaction.from! as `0x${string}`,
                 transfers,
@@ -490,6 +493,17 @@ export declare namespace charge {
 
   type Defaults = LooseOmit<Method.RequestDefaults<typeof Methods.charge>, 'feePayer' | 'recipient'>
 
+  type ValidateSender = (parameters: ValidateSenderParameters) => boolean | Promise<boolean>
+
+  type ValidateSenderParameters = {
+    /** Actual TIP-20 `Transfer.from` address. */
+    sender: `0x${string}`
+    /** Address that mppx would normally require as the sender. */
+    expectedSender: `0x${string}`
+    /** Parsed hash credential source when the credential includes one. */
+    source?: { address: `0x${string}`; chainId: number } | undefined
+  }
+
   type Parameters = {
     /** Render payment page when Accept header is text/html (e.g. in browsers) */
     html?: boolean | Html.Config | undefined
@@ -519,6 +533,12 @@ export declare namespace charge {
      * proofs are visible across all server instances.
      */
     store?: Store.AtomicStore | undefined
+    /**
+     * Validates a TIP-20 transfer sender when it differs from the credential
+     * source. Core verification still validates amount, currency, recipient,
+     * memo binding, transaction success, and replay protection.
+     */
+    validateSender?: ValidateSender | undefined
     /**
      * Whether to wait for the charge transaction to confirm on-chain before
      * responding. @default true
@@ -687,14 +707,16 @@ type TransferLog =
       address: `0x${string}`
     }
 
-function assertTransferLogs(
+async function assertTransferLogs(
   receipt: TransactionReceipt,
   parameters: {
     currency: `0x${string}`
     sender: `0x${string}`
+    source?: { address: `0x${string}`; chainId: number } | undefined
     transfers: readonly ExpectedTransfer[]
+    validateSender?: charge.ValidateSender | undefined
   },
-): TransferLog[] {
+): Promise<TransferLog[]> {
   const transferLogs = parseEventLogs({
     abi: Abis.tip20,
     eventName: 'Transfer',
@@ -722,18 +744,31 @@ function assertTransferLogs(
   })
 
   for (const transfer of sorted) {
-    const matchIndex = logs.findIndex((log, index) => {
-      if (used.has(index)) return false
-      if (!TempoAddress.isEqual(log.address, parameters.currency)) return false
-      if (!TempoAddress.isEqual(log.args.from, parameters.sender)) return false
-      if (!TempoAddress.isEqual(log.args.to, transfer.recipient)) return false
-      if (log.args.amount.toString() !== transfer.amount) return false
-      if (transfer.memo) {
-        return log.kind === 'memo' && log.args.memo.toLowerCase() === transfer.memo.toLowerCase()
-      }
-      if (transfer.allowAnyMemo) return log.kind === 'transfer' || log.kind === 'memo'
-      return log.kind === 'transfer'
-    })
+    let matchIndex = -1
+    for (const [index, log] of logs.entries()) {
+      if (used.has(index)) continue
+      if (!TempoAddress.isEqual(log.address, parameters.currency)) continue
+      if (!TempoAddress.isEqual(log.args.to, transfer.recipient)) continue
+      if (log.args.amount.toString() !== transfer.amount) continue
+      const memoMatches = (() => {
+        if (transfer.memo)
+          return log.kind === 'memo' && log.args.memo.toLowerCase() === transfer.memo.toLowerCase()
+        if (transfer.allowAnyMemo) return log.kind === 'transfer' || log.kind === 'memo'
+        return log.kind === 'transfer'
+      })()
+      if (!memoMatches) continue
+      if (
+        !(await isValidTransferSender({
+          expectedSender: parameters.sender,
+          sender: log.args.from,
+          source: parameters.source,
+          validateSender: parameters.validateSender,
+        }))
+      )
+        continue
+      matchIndex = index
+      break
+    }
 
     if (matchIndex === -1) {
       throw new MismatchError('Payment verification failed: no matching transfer found.', {
@@ -748,6 +783,21 @@ function assertTransferLogs(
   }
 
   return matched
+}
+
+async function isValidTransferSender(parameters: {
+  expectedSender: `0x${string}`
+  sender: `0x${string}`
+  source?: { address: `0x${string}`; chainId: number } | undefined
+  validateSender?: charge.ValidateSender | undefined
+}): Promise<boolean> {
+  if (TempoAddress.isEqual(parameters.sender, parameters.expectedSender)) return true
+  if (!parameters.validateSender) return false
+  return parameters.validateSender({
+    expectedSender: parameters.expectedSender,
+    sender: parameters.sender,
+    source: parameters.source,
+  })
 }
 
 /** @internal */
