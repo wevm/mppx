@@ -3,6 +3,7 @@ import { KeyAuthorization } from 'ox/tempo'
 import { encodeFunctionData, isAddressEqual, type Address, type Client as ViemClient } from 'viem'
 import {
   call as viem_call,
+  prepareTransactionRequest,
   sendRawTransaction,
   sendRawTransactionSync,
   signTransaction,
@@ -19,6 +20,7 @@ import * as ClientResolver from '../../viem/Client.js'
 import * as Attribution from '../Attribution.js'
 import * as Account from '../internal/account.js'
 import * as defaults from '../internal/defaults.js'
+import * as FeePayer from '../internal/fee-payer.js'
 import * as Proof from '../internal/proof.js'
 import type * as types from '../internal/types.js'
 import * as Methods from '../Methods.js'
@@ -72,7 +74,7 @@ export function subscription<const parameters extends subscription.Parameters>(
     activationTimeoutMs: parameters.activationTimeoutMs,
     renewalTimeoutMs: parameters.renewalTimeoutMs,
   })
-  const { recipient } = Account.resolve(parameters)
+  const { feePayer, recipient } = Account.resolve(parameters)
   const getClient = ClientResolver.getResolver({
     chain: tempo_chain,
     getClient: parameters.getClient,
@@ -104,6 +106,8 @@ export function subscription<const parameters extends subscription.Parameters>(
       const periodIndex = getPeriodIndex(subscription)
       if (periodIndex > subscription.lastChargedPeriod) {
         const renew = resolveRenewalHandler({
+          feePayer,
+          feePayerPolicy: parameters.feePayerPolicy,
           getClient,
           parameters,
           store,
@@ -235,6 +239,8 @@ export function subscription<const parameters extends subscription.Parameters>(
               accessKey,
               auto: {
                 challengeId: credential.challenge.id,
+                feePayer,
+                feePayerPolicy: parameters.feePayerPolicy,
                 getClient,
                 keyAuthorization: (credential.payload as SubscriptionCredentialPayload).signature,
                 realm: credential.challenge.realm,
@@ -346,6 +352,8 @@ async function activateSubscription(parameters: {
   accessKey: SubscriptionAccessKey
   auto: {
     challengeId: string
+    feePayer?: ReturnType<typeof Account.resolve>['feePayer'] | undefined
+    feePayerPolicy?: Partial<FeePayer.Policy> | undefined
     getClient: (parameters: { chainId?: number | undefined }) => MaybePromise<ViemClient>
     keyAuthorization: `0x${string}`
     realm: string
@@ -391,6 +399,8 @@ async function activateSubscription(parameters: {
   // billing authority needed for request-path and background renewals.
   const reference = await submitSubscriptionPayment({
     accessKey,
+    feePayer: auto.feePayer,
+    feePayerPolicy: auto.feePayerPolicy,
     getClient: auto.getClient,
     keyAuthorization: auto.keyAuthorization,
     lookupKey: resolved.key,
@@ -689,6 +699,8 @@ function subscriptionBinding(request: SubscriptionRequest) {
 }
 
 function resolveRenewalHandler(parameters: {
+  feePayer?: ReturnType<typeof Account.resolve>['feePayer'] | undefined
+  feePayerPolicy?: Partial<FeePayer.Policy> | undefined
   getClient: (parameters: { chainId?: number | undefined }) => MaybePromise<ViemClient>
   parameters: {
     renew?:
@@ -710,6 +722,8 @@ function resolveRenewalHandler(parameters: {
     }) => Promise<subscription.RenewalResult>)
   | undefined {
   const {
+    feePayer,
+    feePayerPolicy,
     getClient,
     parameters: subscriptionParameters,
     store,
@@ -721,6 +735,8 @@ function resolveRenewalHandler(parameters: {
   return async ({ inFlightReference, periodIndex, subscription }) => {
     const reference = await submitSubscriptionPayment({
       accessKey: subscription.accessKey!,
+      feePayer,
+      feePayerPolicy,
       getClient,
       lookupKey: subscription.lookupKey,
       request: subscription,
@@ -744,6 +760,8 @@ function resolveRenewalHandler(parameters: {
 
 async function submitSubscriptionPayment(parameters: {
   accessKey: SubscriptionAccessKey
+  feePayer?: ReturnType<typeof Account.resolve>['feePayer'] | undefined
+  feePayerPolicy?: Partial<FeePayer.Policy> | undefined
   getClient: (parameters: { chainId?: number | undefined }) => MaybePromise<ViemClient>
   keyAuthorization?: `0x${string}` | undefined
   lookupKey: string
@@ -757,6 +775,8 @@ async function submitSubscriptionPayment(parameters: {
 }) {
   const {
     accessKey,
+    feePayer,
+    feePayerPolicy,
     getClient,
     keyAuthorization,
     lookupKey,
@@ -786,7 +806,7 @@ async function submitSubscriptionPayment(parameters: {
     challengeId: settlementReference,
     serverId: lookupKey,
   })
-  const serializedTransaction = await signTransaction(client, {
+  const baseTransaction = {
     account,
     calls: [
       {
@@ -802,7 +822,39 @@ async function submitSubscriptionPayment(parameters: {
     ...(keyAuthorization
       ? { keyAuthorization: KeyAuthorization.deserialize(keyAuthorization) }
       : {}),
-  } as never)
+  }
+  const serializedTransaction = await (async () => {
+    if (!feePayer) return await signTransaction(client, baseTransaction as never)
+    // For sponsored payments, prepare the tx via `prepareTransactionRequest`
+    // (without `feePayer: true`) so viem returns the chain's full
+    // proof-inclusive gas estimate. With `feePayer: true` viem sets a
+    // dummy sig + null feePayerSignature, dropping signature and key
+    // authorization verification costs — see chainConfig.js FIXME. We add
+    // a small buffer for fee-payer overhead, then flip `feePayer = true`
+    // and re-sign with the fee-payer-sponsored envelope.
+    const prepared = await prepareTransactionRequest(client, {
+      ...baseTransaction,
+      nonceKey: 'expiring',
+    } as never)
+    prepared.gas = (prepared.gas ?? 0n) + 5_000n
+    ;(prepared as Record<string, unknown>).feePayer = true
+    const userSerialized = await signTransaction(client, prepared as never)
+    const userTransaction = Transaction.deserialize(
+      userSerialized as Transaction.TransactionSerializedTempo,
+    )
+    const sponsored = FeePayer.prepareSponsoredTransaction({
+      account: feePayer,
+      chainId: chainId ?? client.chain!.id,
+      details: {
+        amount: String(request.amount),
+        currency: String(request.currency),
+        recipient: String(request.recipient),
+      },
+      ...(feePayerPolicy ? { policy: feePayerPolicy } : {}),
+      transaction: userTransaction as never,
+    })
+    return await signTransaction(client, sponsored as never)
+  })()
   const transaction = Transaction.deserialize(
     serializedTransaction as Transaction.TransactionSerializedTempo,
   )
@@ -810,6 +862,7 @@ async function submitSubscriptionPayment(parameters: {
     ...transaction,
     account: transaction.from,
     calls: transaction.calls,
+    feePayerSignature: undefined,
   } as never)
 
   if (!waitForConfirmation) {
@@ -950,6 +1003,12 @@ export declare namespace subscription {
        * Keeps concurrent renewal safe while allowing recovery from abandoned attempts.
        */
       renewalTimeoutMs?: number | undefined
+      /**
+       * Override the fee-payer policy for sponsored subscription payments.
+       * Useful when the access key + key authorization tx requires more gas
+       * than the default policy allows.
+       */
+      feePayerPolicy?: Partial<FeePayer.Policy> | undefined
       activate?:
         | ((parameters: {
             /** Custom activation must verify this access key matches the resolved subscription. */
