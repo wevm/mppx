@@ -64,13 +64,14 @@ export function deserialize<payload = unknown>(value: string): Credential<payloa
     const json = Base64.toString(prefixMatch[1])
     const parsed = JSON.parse(json) as {
       challenge: Omit<Challenge.Challenge, 'meta' | 'opaque' | 'request'> & {
+        meta?: unknown
         opaque?: unknown
         request: string
       }
       payload: payload
       source?: string
     }
-    const { opaque: challengeOpaque, request, ...challengeFields } = parsed.challenge
+    const { opaque: challengeOpaque, request, meta: _meta, ...challengeFields } = parsed.challenge
     const { meta, opaque } = normalizeCredentialOpaque(challengeOpaque)
     const challenge = Challenge.Schema.parse({
       ...challengeFields,

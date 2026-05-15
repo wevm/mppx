@@ -4415,6 +4415,30 @@ describe('verifyCredential', () => {
     )
   })
 
+  test('rejects direct credential objects with forged meta and valid opaque', async () => {
+    const mppx = Mppx.create({
+      methods: [alphaChargeServer],
+      realm,
+      secretKey,
+    })
+
+    const challenge = await mppx.challenge.alpha.charge({
+      ...challengeOpts,
+      scope: 'GET /public',
+    })
+    const credential = Credential.from({
+      challenge: {
+        ...challenge,
+        meta: { _mppx_scope: 'GET /admin' },
+      },
+      payload: { token: 'valid' },
+    })
+
+    await expect(mppx.verifyCredential(credential, { scope: 'GET /admin' })).rejects.toThrow(
+      "credential scope does not match this route's requirements",
+    )
+  })
+
   test('verifies route requirements using the echoed challenge realm when host was auto-detected', async () => {
     const mppx = Mppx.create({
       methods: [alphaChargeServer],

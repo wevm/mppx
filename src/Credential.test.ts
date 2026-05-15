@@ -198,6 +198,29 @@ describe('deserialize', () => {
     expect(credential.challenge.request).toEqual({ amount: '1000' })
   })
 
+  test('security: drops injected meta when opaque is a string', () => {
+    const encoded = Base64.fromString(
+      JSON.stringify({
+        challenge: {
+          id: 'opaque123',
+          intent: 'charge',
+          meta: { _mppx_scope: 'GET /admin' },
+          method: 'tempo',
+          opaque: 'eyJfbXBweF9zY29wZSI6IkdFVCAvcHVibGljIn0',
+          realm: 'api.example.com',
+          request: 'eyJhbW91bnQiOiIxMDAwIn0',
+        },
+        payload: { signature: '0x1234' },
+      }),
+      { pad: false, url: true },
+    )
+
+    const credential = Credential.deserialize(`Payment ${encoded}`)
+
+    expect(credential.challenge.opaque).toBe('eyJfbXBweF9zY29wZSI6IkdFVCAvcHVibGljIn0')
+    expect(credential.challenge.meta).toBeUndefined()
+  })
+
   test('behavior: preserves non-json opaque string credentials', () => {
     const encoded = Base64.fromString(
       JSON.stringify({
