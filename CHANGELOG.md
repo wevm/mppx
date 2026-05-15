@@ -1,5 +1,12 @@
 # mppx
 
+## 0.6.21
+
+### Patch Changes
+
+- d752fb5: Added typed client payment events for challenge handling, credential creation, payment responses, and failures.
+- 55a5b8f: Added typed server events for payment challenges, failed payments, and verified payments.
+
 ## 0.6.20
 
 ### Patch Changes
