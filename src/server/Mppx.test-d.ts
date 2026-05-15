@@ -171,6 +171,56 @@ describe('Mppx type tests', () => {
     expectTypeOf(mppx.verifyCredential).toBeFunction()
   })
 
+  test('server events receive typed method context', () => {
+    const mppx = Mppx.create({
+      methods: [alphaMethod],
+      realm,
+      secretKey,
+    })
+
+    mppx.on('payment.success', (context) => {
+      expectTypeOf(context.challenge.method).toEqualTypeOf<'alpha'>()
+      expectTypeOf(context.credential?.payload.token).toEqualTypeOf<string | undefined>()
+    })
+    mppx.on('challenge.created', (context) => {
+      expectTypeOf(context.method.name).toEqualTypeOf<'alpha'>()
+      expectTypeOf(context.error).toMatchTypeOf<Error | undefined>()
+    })
+    mppx.on('payment.failed', (context) => {
+      expectTypeOf(context.error).toMatchTypeOf<Error>()
+      expectTypeOf(context.credential).toMatchTypeOf<unknown>()
+    })
+    mppx.on('*', (event) => {
+      expectTypeOf(event.name).toMatchTypeOf<
+        'challenge.created' | 'payment.failed' | 'payment.success'
+      >()
+      if (event.name === 'payment.failed') expectTypeOf(event.payload.error).toMatchTypeOf<Error>()
+      if (event.name === 'challenge.created')
+        expectTypeOf(event.payload.error).toMatchTypeOf<Error | undefined>()
+      if (event.name === 'payment.success')
+        expectTypeOf(event.payload.receipt.status).toEqualTypeOf<'success'>()
+    })
+    mppx.onChallengeCreated((context) => {
+      expectTypeOf(context.input).toEqualTypeOf<Request | undefined>()
+      expectTypeOf(context.method.name).toEqualTypeOf<'alpha'>()
+      expectTypeOf(context.request.amount).toEqualTypeOf<string>()
+      expectTypeOf(context.error).toMatchTypeOf<Error | undefined>()
+    })
+    mppx.onPaymentSuccess((context) => {
+      expectTypeOf(context.challenge.method).toEqualTypeOf<'alpha'>()
+      expectTypeOf(context.credential?.payload.token).toEqualTypeOf<string | undefined>()
+      expectTypeOf(context.envelope?.challenge.intent).toEqualTypeOf<'charge' | undefined>()
+      expectTypeOf(context.receipt.status).toEqualTypeOf<'success'>()
+      expectTypeOf(context.request.recipient).toEqualTypeOf<string>()
+    })
+    mppx.onPaymentFailed((context) => {
+      expectTypeOf(context.credential).toMatchTypeOf<unknown>()
+      expectTypeOf(context.error).toMatchTypeOf<Error>()
+      expectTypeOf(context.method.intent).toEqualTypeOf<'charge'>()
+      expectTypeOf(context.request.currency).toEqualTypeOf<string>()
+    })
+  })
+
   test('handler options and verifyCredential accept scope', () => {
     const mppx = Mppx.create({ methods: [alphaMethod], realm, secretKey })
 

@@ -111,6 +111,75 @@ function createUpstream(handler: (req: Request) => Response | Promise<Response>)
 }
 
 describe('create', () => {
+  test('behavior: paid routes emit mppx server events', async () => {
+    const events: string[] = []
+    upstream = await createUpstream(() => Response.json({ data: 'ok' }))
+
+    const method = Method.from({
+      name: 'mock',
+      intent: 'charge',
+      schema: {
+        credential: { payload: z.object({ token: z.string() }) },
+        request: z.object({ amount: z.string() }),
+      },
+    })
+    const handler = Mppx_server.create({
+      methods: [
+        Method.toServer(method, {
+          async verify() {
+            return Receipt.from({
+              method: 'mock',
+              status: 'success',
+              timestamp: new Date().toISOString(),
+              reference: 'proxy-reference',
+            })
+          },
+        }),
+      ],
+      realm: 'api.example.com',
+      secretKey,
+    })
+    handler.onChallengeCreated((context) => {
+      events.push(`challenge:${context.error?.name}`)
+    })
+    handler.onPaymentSuccess((context) => {
+      events.push(`payment:${context.receipt.reference}`)
+    })
+    handler.onPaymentFailed((context) => {
+      events.push(`failed:${context.error.name}`)
+    })
+    const proxy = ApiProxy.create({
+      services: [
+        Service.from('api', {
+          baseUrl: upstream.url,
+          routes: {
+            'GET /v1/data': handler['mock/charge']({ amount: '1' }),
+          },
+        }),
+      ],
+    })
+    proxyServer = await Http.createServer(proxy.listener)
+
+    const challengeResponse = await fetch(`${proxyServer.url}/api/v1/data`)
+    expect(challengeResponse.status).toBe(402)
+
+    const challenge = Challenge.fromResponse(challengeResponse)
+    const authorization = Credential.serialize(
+      Credential.from({
+        challenge,
+        payload: { token: 'ok' },
+      }),
+    )
+    const paid = await fetch(`${proxyServer.url}/api/v1/data`, {
+      headers: { Authorization: authorization },
+    })
+
+    expect(paid.status).toBe(200)
+    expect(paid.headers.get('Payment-Receipt')).toBeTruthy()
+    expect(await paid.json()).toEqual({ data: 'ok' })
+    expect(events).toEqual(['challenge:PaymentRequiredError', 'payment:proxy-reference'])
+  })
+
   test('behavior: GET /openapi.json returns discovery JSON', async () => {
     const proxy = ApiProxy.create({
       categories: ['gateway'],

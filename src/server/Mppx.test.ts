@@ -1,6 +1,6 @@
 import * as http from 'node:http'
 
-import { Challenge, Credential, Errors, Method, z } from 'mppx'
+import { Challenge, Credential, Errors, Method, Receipt, z } from 'mppx'
 import {
   Mppx as Mppx_client,
   session as tempo_session_client,
@@ -911,6 +911,893 @@ describe('receipt handling', () => {
     )
 
     expect(result.status).toBe(200)
+  })
+})
+
+describe('server events', () => {
+  const eventCharge = Method.from({
+    name: 'mock',
+    intent: 'charge',
+    schema: {
+      credential: {
+        payload: z.object({ token: z.string() }),
+      },
+      request: z.object({
+        amount: z.string(),
+        currency: z.string(),
+        decimals: z.number(),
+        recipient: z.string(),
+      }),
+    },
+  })
+
+  function options() {
+    return {
+      amount: '1000',
+      currency: '0x0000000000000000000000000000000000000001',
+      decimals: 6,
+      expires: new Date(Date.now() + 60_000).toISOString(),
+      recipient: '0x0000000000000000000000000000000000000002',
+    }
+  }
+
+  function receipt(reference = 'tx-events') {
+    return {
+      method: 'mock',
+      reference,
+      status: 'success' as const,
+      timestamp: new Date().toISOString(),
+    }
+  }
+
+  test('emits challenge then success events for a successful request', async () => {
+    const events: string[] = []
+    const seen: Record<string, unknown> = {}
+    const serverMethod = Method.toServer(eventCharge, {
+      async verify() {
+        return receipt()
+      },
+    })
+    const handler = Mppx.create({
+      methods: [serverMethod],
+      realm,
+      secretKey,
+    })
+    handler.onChallengeCreated((context) => {
+      events.push(`challenge:${context.error?.name}`)
+      seen.challengeMethod = context.method.name
+      seen.challengeMethodKeys = Object.keys(context.method)
+      seen.challengePath = context.capturedRequest?.url.pathname
+      seen.challengeAmount = context.request.amount
+      seen.challengeCredential = context.credential
+    })
+    handler.onPaymentSuccess((context) => {
+      events.push(`payment:${context.receipt.reference}`)
+      seen.paymentMethod = context.method.name
+      seen.paymentChallenge = context.challenge.id
+      seen.paymentEnvelope = context.envelope?.challenge.id
+      seen.paymentToken = context.credential?.payload.token
+      seen.paymentAmount = context.request.amount
+    })
+    handler.onPaymentFailed(() => {
+      events.push('failed')
+    })
+    const handle = handler.charge(options())
+
+    const first = await handle(new Request('https://example.com/resource'))
+    expect(first.status).toBe(402)
+    if (first.status !== 402) throw new Error()
+
+    const challenge = Challenge.fromResponse(first.challenge)
+    const credential = Credential.from({ challenge, payload: { token: 'valid' } })
+    const paid = await handle(
+      new Request('https://example.com/resource', {
+        headers: { Authorization: Credential.serialize(credential) },
+      }),
+    )
+    expect(paid.status).toBe(200)
+    if (paid.status !== 200) throw new Error()
+
+    const response = paid.withReceipt(Response.json({ ok: true }))
+
+    expect(response.headers.get('Payment-Receipt')).toBeTruthy()
+    expect(events).toEqual(['challenge:PaymentRequiredError', 'payment:tx-events'])
+    expect(seen).toMatchObject({
+      challengeAmount: '1000',
+      challengeCredential: null,
+      challengeMethod: 'mock',
+      challengeMethodKeys: ['intent', 'name'],
+      challengePath: '/resource',
+      paymentAmount: '1000',
+      paymentChallenge: challenge.id,
+      paymentEnvelope: challenge.id,
+      paymentMethod: 'mock',
+      paymentToken: 'valid',
+    })
+  })
+
+  test('does not let server event errors alter payment control flow', async () => {
+    const events: string[] = []
+    const serverMethod = Method.toServer(eventCharge, {
+      async verify() {
+        return receipt('tx-event-error')
+      },
+    })
+
+    const handler = Mppx.create({
+      methods: [serverMethod],
+      realm,
+      secretKey,
+    })
+    handler.on('*', async () => {
+      events.push('*')
+      throw new Error('catchall event failed')
+    })
+    handler.onChallengeCreated(() => {
+      events.push('challenge.created')
+      throw new Error('challenge event failed')
+    })
+    handler.onPaymentFailed(async () => {
+      events.push('failed')
+      throw new Error('failed event failed')
+    })
+    handler.onPaymentSuccess(async () => {
+      events.push('success')
+      throw new Error('success event failed')
+    })
+    const handle = handler.charge(options())
+
+    const first = await handle(new Request('https://example.com/resource'))
+    expect(first.status).toBe(402)
+    if (first.status !== 402) throw new Error()
+
+    const invalid = await handle(
+      new Request('https://example.com/resource', {
+        headers: {
+          Authorization: Credential.serialize(
+            Credential.from({
+              challenge: Challenge.from({
+                id: 'wrong-id',
+                intent: 'charge',
+                method: 'mock',
+                realm,
+                request: {
+                  amount: '1000',
+                  currency: '0x0000000000000000000000000000000000000001',
+                  decimals: 6,
+                  recipient: '0x0000000000000000000000000000000000000002',
+                },
+              }),
+              payload: { token: 'valid' },
+            }),
+          ),
+        },
+      }),
+    )
+    expect(invalid.status).toBe(402)
+
+    const paid = await handle(
+      new Request('https://example.com/resource', {
+        headers: {
+          Authorization: Credential.serialize(
+            Credential.from({
+              challenge: Challenge.fromResponse(first.challenge),
+              payload: { token: 'valid' },
+            }),
+          ),
+        },
+      }),
+    )
+    expect(paid.status).toBe(200)
+    if (paid.status !== 200) throw new Error()
+    expect(paid.withReceipt(Response.json({ ok: true })).status).toBe(200)
+
+    expect(events).toEqual([
+      'challenge.created',
+      '*',
+      'failed',
+      '*',
+      'challenge.created',
+      '*',
+      'success',
+      '*',
+    ])
+  })
+
+  test('continues dispatching later listeners after an earlier listener throws', async () => {
+    const events: string[] = []
+    const serverMethod = Method.toServer(eventCharge, {
+      async verify() {
+        return receipt('tx-listener-isolation')
+      },
+    })
+    const handler = Mppx.create({
+      methods: [serverMethod],
+      realm,
+      secretKey,
+    })
+    handler.onPaymentSuccess(() => {
+      events.push('first')
+      throw new Error('listener failed')
+    })
+    handler.onPaymentSuccess(() => {
+      events.push('second')
+    })
+
+    const handle = handler.charge(options())
+    const first = await handle(new Request('https://example.com/resource'))
+    expect(first.status).toBe(402)
+    if (first.status !== 402) throw new Error()
+
+    const paid = await handle(
+      new Request('https://example.com/resource', {
+        headers: {
+          Authorization: Credential.serialize(
+            Credential.from({
+              challenge: Challenge.fromResponse(first.challenge),
+              payload: { token: 'valid' },
+            }),
+          ),
+        },
+      }),
+    )
+
+    expect(paid.status).toBe(200)
+    expect(events).toEqual(['first', 'second'])
+  })
+
+  test('supports canonical event names and generated registration methods', async () => {
+    const events: string[] = []
+    const serverMethod = Method.toServer(eventCharge, {
+      async verify() {
+        return receipt('tx-registered-event')
+      },
+    })
+    const handler = Mppx.create({
+      methods: [serverMethod],
+      realm,
+      secretKey,
+    })
+    const offFailed = handler.on('payment.failed', (context) => {
+      events.push(`failed:${context.error.name}`)
+    })
+    const offChallengeCreated = handler.on('challenge.created', (context) => {
+      events.push(`runtime:${context.error?.name}`)
+    })
+    const offAll = handler.on('*', (event) => {
+      events.push(`runtime:*:${event.name}`)
+    })
+    const offSuccess = handler.onPaymentSuccess((context) => {
+      events.push(`success:${context.receipt.reference}`)
+    })
+    offFailed()
+
+    const handle = handler.charge(options())
+    const first = await handle(new Request('https://example.com/resource'))
+    expect(first.status).toBe(402)
+    if (first.status !== 402) throw new Error()
+    offChallengeCreated()
+    offAll()
+
+    const badCredential = Credential.from({
+      challenge: Challenge.from({
+        id: 'wrong-id',
+        intent: 'charge',
+        method: 'mock',
+        realm,
+        request: {
+          amount: '1000',
+          currency: '0x0000000000000000000000000000000000000001',
+          decimals: 6,
+          recipient: '0x0000000000000000000000000000000000000002',
+        },
+      }),
+      payload: { token: 'valid' },
+    })
+    const invalid = await handle(
+      new Request('https://example.com/resource', {
+        headers: { Authorization: Credential.serialize(badCredential) },
+      }),
+    )
+    expect(invalid.status).toBe(402)
+
+    const paid = await handle(
+      new Request('https://example.com/resource', {
+        headers: {
+          Authorization: Credential.serialize(
+            Credential.from({
+              challenge: Challenge.fromResponse(first.challenge),
+              payload: { token: 'valid' },
+            }),
+          ),
+        },
+      }),
+    )
+    expect(paid.status).toBe(200)
+    offSuccess()
+
+    expect(events).toEqual([
+      'runtime:PaymentRequiredError',
+      'runtime:*:challenge.created',
+      'success:tx-registered-event',
+    ])
+  })
+
+  test('emits payment failure before reissuing challenge for invalid credentials', async () => {
+    const events: string[] = []
+    const serverMethod = Method.toServer(eventCharge, {
+      async verify() {
+        return receipt()
+      },
+    })
+    const handler = Mppx.create({
+      methods: [serverMethod],
+      realm,
+      secretKey,
+    })
+    handler.onChallengeCreated((context) => {
+      events.push(`challenge:${context.error?.name}`)
+    })
+    handler.onPaymentSuccess((context) => {
+      events.push(`payment:${context.receipt.reference}`)
+    })
+    handler.onPaymentFailed((context) => {
+      events.push(`failed:${context.error.name}:${context.credential?.challenge.id}`)
+    })
+
+    const badChallenge = Challenge.from({
+      id: 'wrong-id',
+      intent: 'charge',
+      method: 'mock',
+      realm,
+      request: {
+        amount: '1000',
+        currency: '0x0000000000000000000000000000000000000001',
+        decimals: 6,
+        recipient: '0x0000000000000000000000000000000000000002',
+      },
+    })
+    const credential = Credential.from({
+      challenge: badChallenge,
+      payload: { token: 'valid' },
+    })
+
+    const result = await handler.charge(options())(
+      new Request('https://example.com/resource', {
+        headers: { Authorization: Credential.serialize(credential) },
+      }),
+    )
+
+    expect(result.status).toBe(402)
+    expect(events).toEqual([
+      'failed:InvalidChallengeError:wrong-id',
+      'challenge:InvalidChallengeError',
+    ])
+  })
+
+  test('emits payment failure for malformed credentials with no parsed credential', async () => {
+    const events: string[] = []
+    const serverMethod = Method.toServer(eventCharge, {
+      async verify() {
+        return receipt()
+      },
+    })
+    const handler = Mppx.create({
+      methods: [serverMethod],
+      realm,
+      secretKey,
+    })
+    handler.onChallengeCreated((context) => {
+      events.push(`challenge:${context.error?.name}:${context.credential}`)
+    })
+    handler.onPaymentFailed((context) => {
+      events.push(`failed:${context.error.name}:${context.credential}`)
+    })
+
+    const result = await handler.charge(options())(
+      new Request('https://example.com/resource', {
+        headers: { Authorization: 'Payment invalid' },
+      }),
+    )
+
+    expect(result.status).toBe(402)
+    expect(events).toEqual([
+      'failed:MalformedCredentialError:null',
+      'challenge:MalformedCredentialError:null',
+    ])
+  })
+
+  test('emits payment failure when method verification rejects', async () => {
+    const events: string[] = []
+    const serverMethod = Method.toServer(eventCharge, {
+      async verify() {
+        throw new Errors.VerificationFailedError({ reason: 'declined' })
+      },
+    })
+    const handler = Mppx.create({
+      methods: [serverMethod],
+      realm,
+      secretKey,
+    })
+    handler.onChallengeCreated((context) => {
+      events.push(`challenge:${context.error?.name}`)
+    })
+    handler.onPaymentSuccess(() => {
+      events.push('payment')
+    })
+    handler.onPaymentFailed((context) => {
+      events.push(`failed:${context.error.name}`)
+    })
+    const handle = handler.charge(options())
+
+    const first = await handle(new Request('https://example.com/resource'))
+    expect(first.status).toBe(402)
+    if (first.status !== 402) throw new Error()
+
+    const credential = Credential.from({
+      challenge: Challenge.fromResponse(first.challenge),
+      payload: { token: 'valid' },
+    })
+    const result = await handle(
+      new Request('https://example.com/resource', {
+        headers: { Authorization: Credential.serialize(credential) },
+      }),
+    )
+
+    expect(result.status).toBe(402)
+    expect(events).toEqual([
+      'challenge:PaymentRequiredError',
+      'failed:VerificationFailedError',
+      'challenge:VerificationFailedError',
+    ])
+  })
+
+  test('emits payment success when authorize grants access without a credential', async () => {
+    const events: string[] = []
+    const serverMethod = Method.toServer(eventCharge, {
+      async authorize() {
+        return { receipt: receipt('tx-authorized') }
+      },
+      async verify() {
+        return receipt()
+      },
+    })
+    const handler = Mppx.create({
+      methods: [serverMethod],
+      realm,
+      secretKey,
+    })
+    handler.onPaymentSuccess((context) => {
+      events.push(`success:${context.receipt.reference}:${context.credential}:${context.envelope}`)
+    })
+
+    const result = await handler.charge(options())(new Request('https://example.com/resource'))
+
+    expect(result.status).toBe(200)
+    expect(events).toEqual(['success:tx-authorized:undefined:undefined'])
+  })
+
+  test('emits payment failure when authorize rejects', async () => {
+    const events: string[] = []
+    const serverMethod = Method.toServer(eventCharge, {
+      async authorize() {
+        throw new Errors.VerificationFailedError({ reason: 'not active' })
+      },
+      async verify() {
+        return receipt()
+      },
+    })
+    const handler = Mppx.create({
+      methods: [serverMethod],
+      realm,
+      secretKey,
+    })
+    handler.onPaymentFailed((context) => {
+      events.push(`failed:${context.error.name}:${context.credential}`)
+    })
+
+    const result = await handler.charge(options())(new Request('https://example.com/resource'))
+
+    expect(result.status).toBe(402)
+    expect(events).toEqual(['failed:VerificationFailedError:null'])
+  })
+
+  test('emits events from standalone verifyCredential', async () => {
+    const events: string[] = []
+    const capturedRequest = {
+      headers: new Headers({ 'x-route': 'standalone' }),
+      hasBody: false,
+      method: 'POST',
+      url: new URL('https://example.com/standalone'),
+    }
+    const serverMethod = Method.toServer(eventCharge, {
+      async verify() {
+        return receipt('tx-standalone')
+      },
+    })
+    const handler = Mppx.create({
+      methods: [serverMethod],
+      realm,
+      secretKey,
+    })
+    handler.onPaymentSuccess((context) => {
+      events.push(
+        `success:${context.receipt.reference}:${context.input}:${context.capturedRequest?.url.pathname}`,
+      )
+    })
+
+    const first = await handler.charge(options())(new Request('https://example.com/resource'))
+    expect(first.status).toBe(402)
+    if (first.status !== 402) throw new Error()
+
+    const result = await handler.verifyCredential(
+      Credential.from({
+        challenge: Challenge.fromResponse(first.challenge),
+        payload: { token: 'valid' },
+      }),
+      { capturedRequest, request: options() },
+    )
+
+    expect(result.reference).toBe('tx-standalone')
+    expect(events).toEqual(['success:tx-standalone:undefined:/standalone'])
+  })
+
+  test('emits payment failure from standalone verifyCredential failures', async () => {
+    const events: string[] = []
+    const capturedRequest = {
+      headers: new Headers({ 'x-route': 'standalone' }),
+      hasBody: false,
+      method: 'POST',
+      url: new URL('https://example.com/standalone-failure'),
+    }
+    const serverMethod = Method.toServer(eventCharge, {
+      async verify() {
+        throw new Errors.VerificationFailedError({ reason: 'declined' })
+      },
+    })
+    const handler = Mppx.create({
+      methods: [serverMethod],
+      realm,
+      secretKey,
+    })
+    handler.onPaymentFailed((context) => {
+      events.push(
+        `failed:${context.error.name}:${context.submittedChallenge?.id}:${context.capturedRequest?.url.pathname}`,
+      )
+    })
+
+    const first = await handler.charge(options())(new Request('https://example.com/resource'))
+    expect(first.status).toBe(402)
+    if (first.status !== 402) throw new Error()
+    const challenge = Challenge.fromResponse(first.challenge)
+
+    await expect(
+      handler.verifyCredential(
+        Credential.from({
+          challenge,
+          payload: { token: 'valid' },
+        }),
+        { capturedRequest, request: options() },
+      ),
+    ).rejects.toThrow(Errors.VerificationFailedError)
+    expect(events).toEqual([`failed:VerificationFailedError:${challenge.id}:/standalone-failure`])
+  })
+
+  test('emits standalone payment failure for forged challenge HMAC failures', async () => {
+    const events: string[] = []
+    let failedRequestAmount: unknown
+    const serverMethod = Method.toServer(eventCharge, {
+      async verify() {
+        return receipt()
+      },
+    })
+    const handler = Mppx.create({
+      methods: [serverMethod],
+      realm,
+      secretKey,
+    })
+    handler.onPaymentFailed((context) => {
+      events.push(`failed:${context.challenge.id}`)
+      failedRequestAmount = context.request.amount
+    })
+
+    await expect(
+      handler.verifyCredential(
+        Credential.from({
+          challenge: Challenge.from({
+            id: 'forged-id',
+            intent: 'charge',
+            method: 'mock',
+            realm,
+            request: { amount: { $ne: '1000' }, currency: asset },
+          }),
+          payload: { token: 'valid' },
+        }),
+      ),
+    ).rejects.toThrow(Errors.InvalidChallengeError)
+    expect(events).toEqual(['failed:forged-id'])
+    expect(failedRequestAmount).toEqual({ $ne: '1000' })
+  })
+
+  test('emits payment failure when credential-bearing request hook rejects', async () => {
+    const events: string[] = []
+    const serverMethod = Method.toServer(eventCharge, {
+      request({ credential, request }) {
+        if (credential) throw new Errors.VerificationFailedError({ reason: 'request rejected' })
+        return request
+      },
+      async verify() {
+        return receipt()
+      },
+    })
+    const handler = Mppx.create({
+      methods: [serverMethod],
+      realm,
+      secretKey,
+    })
+    handler.onPaymentFailed((context) => {
+      events.push(`failed:${context.error.name}:${context.submittedChallenge?.id}`)
+    })
+
+    const handle = handler.charge(options())
+    const first = await handle(new Request('https://example.com/resource'))
+    expect(first.status).toBe(402)
+    if (first.status !== 402) throw new Error()
+    const challenge = Challenge.fromResponse(first.challenge)
+
+    const result = await handle(
+      new Request('https://example.com/resource', {
+        headers: {
+          Authorization: Credential.serialize(
+            Credential.from({
+              challenge,
+              payload: { token: 'valid' },
+            }),
+          ),
+        },
+      }),
+    )
+
+    expect(result.status).toBe(402)
+    expect(events).toEqual([`failed:VerificationFailedError:${challenge.id}`])
+  })
+
+  test('does not emit challenge events for service worker requests', async () => {
+    const events: string[] = []
+    const serverMethod = Method.toServer(eventCharge, {
+      html: {
+        config: {},
+        content: '<script src="/bundle.js"></script>',
+        formatAmount: (request: Record<string, unknown>) => `$${request.amount}`,
+        text: undefined,
+        theme: undefined,
+      },
+      async verify() {
+        return receipt()
+      },
+    })
+    const handler = Mppx.create({
+      methods: [serverMethod],
+      realm,
+      secretKey,
+    })
+    handler.onChallengeCreated(() => {
+      events.push('challenge')
+    })
+
+    const result = await handler.charge(options())(
+      new Request('https://example.com/resource?__mppx_worker'),
+    )
+
+    expect(result.status).toBe(402)
+    if (result.status !== 402) throw new Error()
+    expect(result.challenge.status).toBe(200)
+    expect(events).toEqual([])
+  })
+
+  test('rejects reserved lifecycle helper collisions', () => {
+    const collidingMethod = Method.toServer(
+      Method.from({
+        name: 'mock',
+        intent: 'onPaymentSuccess',
+        schema: {
+          credential: { payload: z.object({ token: z.string() }) },
+          request: z.object({ amount: z.string() }),
+        },
+      }),
+      {
+        async verify() {
+          return receipt()
+        },
+      },
+    )
+
+    expect(() =>
+      Mppx.create({
+        methods: [collidingMethod],
+        realm,
+        secretKey,
+      }),
+    ).toThrow('reserved Mppx property')
+  })
+
+  test('rejects duplicated reserved intent collisions', () => {
+    const createCollidingMethod = (name: string) =>
+      Method.toServer(
+        Method.from({
+          name,
+          intent: 'onPaymentSuccess',
+          schema: {
+            credential: { payload: z.object({ token: z.string() }) },
+            request: z.object({ amount: z.string() }),
+          },
+        }),
+        {
+          async verify() {
+            return receipt()
+          },
+        },
+      )
+
+    expect(() =>
+      Mppx.create({
+        methods: [createCollidingMethod('alpha'), createCollidingMethod('beta')],
+        realm,
+        secretKey,
+      }),
+    ).toThrow('reserved Mppx property')
+  })
+
+  test('server event request inputs are bodyless snapshots', async () => {
+    let eventInput: Request | undefined
+    const serverMethod = Method.toServer(eventCharge, {
+      async verify() {
+        return receipt()
+      },
+    })
+    const handler = Mppx.create({
+      methods: [serverMethod],
+      realm,
+      secretKey,
+    })
+    handler.onChallengeCreated((context) => {
+      eventInput = context.input
+    })
+
+    const original = new Request('https://example.com/resource', {
+      body: 'paid upload',
+      method: 'POST',
+    })
+    const result = await handler.charge(options())(original)
+
+    expect(result.status).toBe(402)
+    expect(eventInput).toBeInstanceOf(Request)
+    expect(eventInput?.body).toBeNull()
+    await expect(original.text()).resolves.toBe('paid upload')
+  })
+
+  test('payment success events expose transformed credential and request values', async () => {
+    const transformed = Method.from({
+      name: 'transformed',
+      intent: 'charge',
+      schema: {
+        credential: {
+          payload: z.pipe(
+            z.object({ admin: z.string() }),
+            z.transform(({ admin }) => ({ admin: admin === 'true' })),
+          ),
+        },
+        request: z.pipe(
+          z.object({
+            amount: z.string(),
+            currency: z.string(),
+            decimals: z.number(),
+            recipient: z.string(),
+          }),
+          z.transform(({ amount, currency, decimals, recipient }) => ({
+            amount: String(Number(amount) * 10 ** decimals),
+            currency,
+            recipient,
+          })),
+        ),
+      },
+    })
+    const seen: Record<string, unknown> = {}
+    const serverMethod = Method.toServer(transformed, {
+      async verify({ credential, envelope, request }) {
+        seen.verifyAdmin = credential.payload.admin
+        seen.verifyEnvelopeAmount = envelope?.request.amount
+        seen.verifyRequestAmount = request.amount
+        return receipt('tx-transformed')
+      },
+    })
+    const handler = Mppx.create({
+      methods: [serverMethod],
+      realm,
+      secretKey,
+    })
+    handler.onPaymentSuccess((context) => {
+      seen.eventAdmin = context.credential?.payload.admin
+      seen.eventEnvelopeAmount = context.envelope?.request.amount
+      seen.eventRequestAmount = context.request.amount
+    })
+    const handle = handler.charge({
+      amount: '25',
+      currency: '0x0000000000000000000000000000000000000001',
+      decimals: 2,
+      expires: new Date(Date.now() + 60_000).toISOString(),
+      recipient: '0x0000000000000000000000000000000000000002',
+    })
+    const first = await handle(new Request('https://example.com/resource'))
+    expect(first.status).toBe(402)
+    if (first.status !== 402) throw new Error()
+
+    const paid = await handle(
+      new Request('https://example.com/resource', {
+        headers: {
+          Authorization: Credential.serialize(
+            Credential.from({
+              challenge: Challenge.fromResponse(first.challenge),
+              payload: { admin: 'false' },
+            }),
+          ),
+        },
+      }),
+    )
+
+    expect(paid.status).toBe(200)
+    expect(seen).toMatchObject({
+      eventAdmin: false,
+      eventEnvelopeAmount: '2500',
+      eventRequestAmount: '2500',
+      verifyAdmin: false,
+      verifyEnvelopeAmount: '2500',
+      verifyRequestAmount: '25',
+    })
+  })
+
+  test('snapshots payment success payloads before listeners run', async () => {
+    let mutationBlocked = false
+    const serverMethod = Method.toServer(eventCharge, {
+      async verify() {
+        return receipt('tx-original')
+      },
+    })
+    const handler = Mppx.create({
+      methods: [serverMethod],
+      realm,
+      secretKey,
+    })
+    handler.onPaymentSuccess((context) => {
+      try {
+        ;(context.receipt as { reference: string }).reference = 'tx-mutated'
+      } catch {
+        mutationBlocked = true
+      }
+    })
+    const handle = handler.charge(options())
+    const first = await handle(new Request('https://example.com/resource'))
+    expect(first.status).toBe(402)
+    if (first.status !== 402) throw new Error()
+
+    const paid = await handle(
+      new Request('https://example.com/resource', {
+        headers: {
+          Authorization: Credential.serialize(
+            Credential.from({
+              challenge: Challenge.fromResponse(first.challenge),
+              payload: { token: 'valid' },
+            }),
+          ),
+        },
+      }),
+    )
+    expect(paid.status).toBe(200)
+    if (paid.status !== 200) throw new Error()
+
+    const response = paid.withReceipt(Response.json({ ok: true }))
+    expect(mutationBlocked).toBe(true)
+    expect(Receipt.fromResponse(response).reference).toBe('tx-original')
   })
 })
 
@@ -3679,10 +4566,14 @@ describe('verifyCredential', () => {
   })
 
   test('rejects credential for unregistered method/intent', async () => {
+    const events: string[] = []
     const mppx = Mppx.create({
       methods: [alphaChargeServer],
       realm,
       secretKey,
+    })
+    mppx.onPaymentFailed((context) => {
+      events.push(`${context.method.name}/${context.method.intent}:${context.error.name}`)
     })
 
     // Forge a challenge for an unregistered method using the same secret
@@ -3702,6 +4593,7 @@ describe('verifyCredential', () => {
     await expect(mppx.verifyCredential(credential)).rejects.toThrow(
       'no registered method for unknown/charge',
     )
+    expect(events).toEqual(['unknown/charge:InvalidChallengeError'])
   })
 
   test('rejects malformed credential string', async () => {

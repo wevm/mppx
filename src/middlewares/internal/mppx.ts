@@ -1,5 +1,6 @@
 import type { DiscoveryHandler } from '../../discovery/OpenApi.js'
 import type * as Method from '../../Method.js'
+import { reservedMppxKeys } from '../../server/Mppx.js'
 import type * as Mppx from '../../server/Mppx.js'
 
 export type AnyMethodFn = Mppx.AnyMethodFn
@@ -17,11 +18,8 @@ type WrapNested<obj, handler> = {
 export type Wrap<mppx, handler> = {
   // `compose` is omitted — it returns a raw HTTP handler, not a
   // middleware-shaped result. Use `Mppx.compose()` static instead.
-  // `methods`, `realm`, `transport` are data properties — not handlers.
-  [key in keyof mppx as key extends 'compose' ? never : key]: key extends
-    | 'methods'
-    | 'realm'
-    | 'transport'
+  // Reserved Mppx keys are copied through unchanged, not wrapped as handlers.
+  [key in keyof mppx as key extends 'compose' ? never : key]: key extends Mppx.ReservedKey
     ? mppx[key]
     : mppx[key] extends (options: infer options) => any
       ? (o: options) => handler & DiscoveryMeta
@@ -54,7 +52,8 @@ export function wrap<mppx extends Mppx.Mppx<any, any>, handler>(
     }
     result[key] = wrapWithMeta
     // Also set shorthand intent key if Mppx registered it (no collision)
-    if ((mppx as any)[mi.intent]) result[mi.intent] = wrapWithMeta
+    if (!reservedMppxKeys.has(mi.intent) && (mppx as any)[mi.intent])
+      result[mi.intent] = wrapWithMeta
     // Build nested handlers: wrapped.tempo.charge(...)
     if (!result[mi.name] || typeof result[mi.name] !== 'object')
       result[mi.name] = {} as Record<string, unknown>
