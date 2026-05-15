@@ -104,6 +104,57 @@ describe('tempo.subscription client', () => {
     )
   })
 
+  test('passes hex-encoded `scopes` and `limits` to wallet_authorizeAccessKey', async () => {
+    const challenge = createChallenge()
+    const keyAuthorization = await signSubscriptionKeyAuthorization({
+      accessKey,
+      account: selectedAccount,
+      chainId,
+      request: challenge.request,
+    })
+    if (!keyAuthorization) throw new Error('expected key authorization')
+
+    let capturedParams: Record<string, unknown> | undefined
+    const method = subscription({
+      account: selectedAccount.address,
+      getClient: async () =>
+        ({
+          request: async ({ params }: { params: readonly Record<string, unknown>[] }) => {
+            capturedParams = params[0]
+            return { keyAuthorization: KeyAuthorization.toRpc(keyAuthorization) }
+          },
+        }) as never,
+    })
+
+    await method.createCredential({ challenge, context: {} })
+
+    expect(capturedParams).toMatchObject({
+      address: accessKey.accessKeyAddress.toLowerCase(),
+      keyType: accessKey.keyType,
+      expiry: expect.any(Number),
+      limits: [
+        {
+          token: expect.stringMatching(/^0x[0-9a-fA-F]{40}$/),
+          limit: '0xf4240',
+          period: expect.any(Number),
+        },
+      ],
+      scopes: [
+        {
+          address: expect.stringMatching(/^0x[0-9a-fA-F]{40}$/),
+          selector: expect.stringMatching(/^0x/),
+          recipients: expect.any(Array),
+        },
+        {
+          address: expect.stringMatching(/^0x[0-9a-fA-F]{40}$/),
+          selector: expect.stringMatching(/^0x/),
+          recipients: expect.any(Array),
+        },
+      ],
+    })
+    expect(capturedParams).not.toHaveProperty('allowedCalls')
+  })
+
   test('rejects key authorizations signed by a different account', async () => {
     const challenge = createChallenge()
     const keyAuthorization = await signSubscriptionKeyAuthorization({
