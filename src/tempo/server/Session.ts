@@ -57,7 +57,7 @@ import { captureRequestBodyProbe, isSessionContentRequest } from './internal/req
 import * as Transport from './internal/transport.js'
 
 /** Challenge methodDetails shape for session methods. */
-type SessionMethodDetails = {
+export type SessionMethodDetails = {
   escrowContract: Address
   chainId: number
   channelId?: Hex | undefined
