@@ -1,6 +1,7 @@
+import { SignatureEnvelope } from 'ox/tempo'
 import { type Address, createClient, decodeFunctionData, erc20Abi, type Hex, http } from 'viem'
 import { privateKeyToAccount } from 'viem/accounts'
-import { Addresses, Transaction } from 'viem/tempo'
+import { Account as TempoAccount, Addresses, Transaction, WebCryptoP256 } from 'viem/tempo'
 import { beforeAll, describe, expect, test } from 'vp/test'
 import { nodeEnv } from '~test/config.js'
 import { deployEscrow, openChannel } from '~test/tempo/session.js'
@@ -13,6 +14,7 @@ import * as Credential from '../../Credential.js'
 import { chainId, escrowContract as escrowContractDefaults } from '../internal/defaults.js'
 import { escrowAbi } from '../session/Chain.js'
 import type { SessionCredentialPayload } from '../session/Types.js'
+import { verifyVoucher } from '../session/Voucher.js'
 import { session } from './Session.js'
 
 function deserializePayload(result: string) {
@@ -181,6 +183,50 @@ describe('session (pure)', () => {
         expect(cred.payload.signature).toMatch(/^0x[0-9a-f]+$/)
         expect(cred.payload.authorizedSigner).toBe(pureAccount.address)
       }
+      expect(cred.source).toBe(`did:pkh:eip155:42431:${pureAccount.address}`)
+    })
+
+    test('manual open signs voucher with P256 voucher signer', async () => {
+      const keyPair = await WebCryptoP256.createKeyPair()
+      const voucherSigner = TempoAccount.fromWebCryptoP256(keyPair)
+      const method = session({
+        getClient: () => pureClient,
+        account: pureAccount,
+        voucherSigner,
+      })
+
+      const result = await method.createCredential({
+        challenge: makeChallenge(),
+        context: {
+          action: 'open',
+          channelId,
+          cumulativeAmount: '5',
+          transaction: '0xdeadbeef',
+        },
+      })
+
+      const cred = deserializePayload(result)
+      expect(cred.payload.action).toBe('open')
+      if (cred.payload.action !== 'open') throw new Error('unexpected action')
+      expect(cred.payload.authorizedSigner).toBe(voucherSigner.address)
+
+      const envelope = SignatureEnvelope.from(
+        cred.payload.signature as SignatureEnvelope.Serialized,
+      )
+      expect(envelope.type).toBe('p256')
+      expect(cred.payload.signature.length).toBe(262)
+
+      const isValid = await verifyVoucher(
+        escrowAddress,
+        42431,
+        {
+          channelId,
+          cumulativeAmount: 5_000_000n,
+          signature: cred.payload.signature,
+        },
+        voucherSigner.address,
+      )
+      expect(isValid).toBe(true)
       expect(cred.source).toBe(`did:pkh:eip155:42431:${pureAccount.address}`)
     })
 

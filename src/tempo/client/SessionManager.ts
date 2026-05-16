@@ -1,5 +1,5 @@
 import type { Hex } from 'ox'
-import { parseUnits, type Address } from 'viem'
+import { parseUnits, type Account as viem_Account, type Address } from 'viem'
 
 import * as Challenge from '../../Challenge.js'
 import * as Fetch from '../../client/internal/Fetch.js'
@@ -125,6 +125,7 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
   const method = sessionPlugin({
     account: parameters.account,
     authorizedSigner: parameters.authorizedSigner,
+    voucherSigner: parameters.voucherSigner,
     getClient: parameters.client ? () => parameters.client! : parameters.getClient,
     escrowContract: parameters.escrowContract,
     decimals: parameters.decimals,
@@ -855,6 +856,8 @@ export declare namespace sessionManager {
     Client.getResolver.Parameters & {
       /** Address authorized to sign vouchers. Defaults to the account address. */
       authorizedSigner?: Address | undefined
+      /** Account that signs voucher digests directly. Use for delegated P256/WebCrypto voucher signing. */
+      voucherSigner?: viem_Account | undefined
       /** Viem client instance. Shorthand for `getClient: () => client`. */
       client?: import('viem').Client | undefined
       /** Token decimals used to convert `maxDeposit` to raw units. Defaults to `6`. */
