@@ -717,21 +717,7 @@ async function assertTransferLogs(
     validateSender?: charge.ValidateSender | undefined
   },
 ): Promise<TransferLog[]> {
-  const transferLogs = parseEventLogs({
-    abi: Abis.tip20,
-    eventName: 'Transfer',
-    logs: receipt.logs,
-  }).map((log) => ({ ...log, kind: 'transfer' as const }))
-
-  const memoLogs = parseEventLogs({
-    abi: Abis.tip20,
-    eventName: 'TransferWithMemo',
-    logs: receipt.logs,
-  }).map((log) => ({ ...log, kind: 'memo' as const }))
-
-  // Prefer memo logs so allowAnyMemo matches TransferWithMemo before Transfer,
-  // preserving the memo for challenge binding verification.
-  const logs = [...memoLogs, ...transferLogs]
+  const logs = getTransferLogEffects(receipt)
   const used = new Set<number>()
   const matched: TransferLog[] = []
 
@@ -783,6 +769,87 @@ async function assertTransferLogs(
   }
 
   return matched
+}
+
+type ParsedTransferLog =
+  | {
+      kind: 'transfer'
+      args: { from: `0x${string}`; to: `0x${string}`; amount: bigint }
+      address: `0x${string}`
+      logIndex: number
+    }
+  | {
+      kind: 'memo'
+      args: { from: `0x${string}`; to: `0x${string}`; amount: bigint; memo: `0x${string}` }
+      address: `0x${string}`
+      logIndex: number
+    }
+
+function getTransferLogEffects(receipt: TransactionReceipt): TransferLog[] {
+  const transferLogs = parseEventLogs({
+    abi: Abis.tip20,
+    eventName: 'Transfer',
+    logs: receipt.logs,
+  }).map(
+    (log) =>
+      ({
+        address: log.address,
+        args: log.args,
+        kind: 'transfer',
+        logIndex: log.logIndex,
+      }) as ParsedTransferLog,
+  )
+
+  const memoLogs = parseEventLogs({
+    abi: Abis.tip20,
+    eventName: 'TransferWithMemo',
+    logs: receipt.logs,
+  }).map(
+    (log) =>
+      ({
+        address: log.address,
+        args: log.args,
+        kind: 'memo',
+        logIndex: log.logIndex,
+      }) as ParsedTransferLog,
+  )
+
+  const logs = [...transferLogs, ...memoLogs].sort((a, b) => a.logIndex - b.logIndex)
+  const effects: TransferLog[] = []
+
+  for (let index = 0; index < logs.length; index++) {
+    const log = logs[index]!
+    const next = logs[index + 1]
+    if (next && log.kind !== next.kind && isSameTransferLog(log, next)) {
+      const memoLog = log.kind === 'memo' ? log : next.kind === 'memo' ? next : undefined
+      if (!memoLog) continue
+      effects.push({
+        address: memoLog.address,
+        args: memoLog.args,
+        kind: 'memo',
+      })
+      index++
+      continue
+    }
+
+    effects.push({
+      address: log.address,
+      args: log.args,
+      kind: log.kind,
+    } as TransferLog)
+  }
+
+  return effects
+}
+
+function isSameTransferLog(a: ParsedTransferLog, b: ParsedTransferLog): boolean {
+  return (
+    TempoAddress.isEqual(a.address, b.address) &&
+    TempoAddress.isEqual(a.args.from, b.args.from) &&
+    TempoAddress.isEqual(a.args.to, b.args.to) &&
+    a.args.amount === b.args.amount &&
+    Math.abs(a.logIndex - b.logIndex) === 1
+  )
 }
 
 async function isValidTransferSender(parameters: {

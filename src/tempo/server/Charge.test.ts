@@ -3947,6 +3947,72 @@ describe('tempo', () => {
       httpServer.close()
     })
 
+    test('server rejects hash transfers that reuse one transferWithMemo for duplicate expected transfers', async () => {
+      const validatingServer = Mppx_server.create({
+        methods: [
+          tempo_server.charge({
+            getClient() {
+              return client
+            },
+            currency: asset,
+            account: accounts[0],
+            validateSender() {
+              return true
+            },
+          }),
+        ],
+        realm,
+        secretKey,
+      })
+      const httpServer = await Http.createServer(async (req, res) => {
+        const result = await Mppx_server.toNodeListener(
+          validatingServer.charge({
+            amount: '2',
+            currency: asset,
+            recipient: accounts[0].address,
+            splits: [{ amount: '1', recipient: accounts[0].address }],
+          }),
+        )(req, res)
+        if (result.status === 402) return
+        res.end('OK')
+      })
+
+      const response = await fetch(httpServer.url)
+      expect(response.status).toBe(402)
+
+      const challenge = Challenge.fromResponse(response, {
+        methods: [tempo_client.charge()],
+      })
+      const memo = Attribution.encode({ challengeId: challenge.id, serverId: challenge.realm })
+      const splits = challenge.request.methodDetails?.splits ?? []
+      const primaryAmount = BigInt(challenge.request.amount) - BigInt(splits[0]!.amount)
+
+      const { receipt } = await Actions.token.transferSync(client, {
+        account: accounts[1],
+        amount: primaryAmount,
+        memo: memo as Hex.Hex,
+        to: challenge.request.recipient as Hex.Hex,
+        token: challenge.request.currency as Hex.Hex,
+      })
+
+      const credential = Credential.from({
+        challenge,
+        payload: { hash: receipt.transactionHash, type: 'hash' as const },
+        source: `did:pkh:eip155:${chain.id}:${accounts[2].address}`,
+      })
+
+      {
+        const response = await fetch(httpServer.url, {
+          headers: { Authorization: Credential.serialize(credential) },
+        })
+        expect(response.status).toBe(402)
+        const body = (await response.json()) as { detail: string }
+        expect(body.detail).toContain('no matching transfer found')
+      }
+
+      httpServer.close()
+    })
+
     test('server skips validateSender when hash transfer source already matches', async () => {
       const validatingServer = Mppx_server.create({
         methods: [
