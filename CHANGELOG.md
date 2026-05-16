@@ -1,5 +1,12 @@
 # mppx
 
+## 0.6.25
+
+### Patch Changes
+
+- 6c4af82: Fixed Tempo charge hash receipt verification to collapse paired transfer logs before matching expected transfers.
+- d378d68: Added a Tempo charge sender validation hook for accepting authorized third-party transfer senders.
+
 ## 0.6.24
 
 ### Patch Changes
