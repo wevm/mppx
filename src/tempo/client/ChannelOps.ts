@@ -77,6 +77,7 @@ export async function createVoucherPayload(
   escrowContract: Address,
   chainId: number,
   authorizedSigner?: Address | undefined,
+  voucherSigner?: viem_Account | undefined,
 ): Promise<SessionCredentialPayload> {
   const signature = await signVoucher(
     client,
@@ -85,6 +86,7 @@ export async function createVoucherPayload(
     escrowContract,
     chainId,
     authorizedSigner,
+    voucherSigner,
   )
   return {
     action: 'voucher',
@@ -102,6 +104,7 @@ export async function createClosePayload(
   escrowContract: Address,
   chainId: number,
   authorizedSigner?: Address | undefined,
+  voucherSigner?: viem_Account | undefined,
 ): Promise<SessionCredentialPayload> {
   const signature = await signVoucher(
     client,
@@ -110,6 +113,7 @@ export async function createClosePayload(
     escrowContract,
     chainId,
     authorizedSigner,
+    voucherSigner,
   )
   return {
     action: 'close',
@@ -124,6 +128,7 @@ export async function createOpenPayload(
   account: viem_Account,
   options: {
     authorizedSigner?: Address | undefined
+    voucherSigner?: viem_Account | undefined
     escrowContract: Address
     payee: Address
     currency: Address
@@ -177,6 +182,7 @@ export async function createOpenPayload(
     escrowContract,
     chainId,
     options.authorizedSigner,
+    options.voucherSigner,
   )
 
   return {

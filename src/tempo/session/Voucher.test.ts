@@ -1,5 +1,7 @@
+import { SignatureEnvelope } from 'ox/tempo'
 import { createClient, http } from 'viem'
 import { privateKeyToAccount } from 'viem/accounts'
+import { Account as TempoAccount, WebCryptoP256 } from 'viem/tempo'
 import { describe, expect, test } from 'vp/test'
 
 import { parseVoucherFromPayload, signVoucher, verifyVoucher } from './Voucher.js'
@@ -37,6 +39,91 @@ describe('Voucher', () => {
       account.address,
     )
     expect(isValid).toBe(true)
+  })
+
+  test('signVoucher and verifyVoucher round-trip with WebCrypto P256', async () => {
+    const keyPair = await WebCryptoP256.createKeyPair()
+    const p256Account = TempoAccount.fromWebCryptoP256(keyPair)
+    const p256Client = createClient({
+      account: p256Account,
+      transport: http('http://127.0.0.1'),
+    })
+
+    const signature = await signVoucher(
+      p256Client,
+      p256Account,
+      { channelId, cumulativeAmount },
+      escrowContract,
+      chainId,
+    )
+    const envelope = SignatureEnvelope.from(signature as SignatureEnvelope.Serialized)
+
+    expect(envelope.type).toBe('p256')
+    if (envelope.type !== 'p256') throw new Error('unexpected signature type')
+    expect(envelope.prehash).toBe(true)
+    expect(signature.length).toBe(262)
+
+    const isValid = await verifyVoucher(
+      escrowContract,
+      chainId,
+      { channelId, cumulativeAmount, signature },
+      p256Account.address,
+    )
+    expect(isValid).toBe(true)
+  })
+
+  test('verifyVoucher rejects keychain envelopes', async () => {
+    const keyPair = await WebCryptoP256.createKeyPair()
+    const p256Account = TempoAccount.fromWebCryptoP256(keyPair)
+    const p256Client = createClient({
+      account: p256Account,
+      transport: http('http://127.0.0.1'),
+    })
+    const signature = await signVoucher(
+      p256Client,
+      p256Account,
+      { channelId, cumulativeAmount },
+      escrowContract,
+      chainId,
+    )
+    const keychainSignature = SignatureEnvelope.serialize({
+      type: 'keychain',
+      version: 'v2',
+      userAddress: account.address,
+      inner: SignatureEnvelope.from(signature as SignatureEnvelope.Serialized),
+    })
+
+    const isValid = await verifyVoucher(
+      escrowContract,
+      chainId,
+      { channelId, cumulativeAmount, signature: keychainSignature },
+      p256Account.address,
+    )
+    expect(isValid).toBe(false)
+  })
+
+  test('signVoucher rejects keychain signer accounts', async () => {
+    const accessKey = TempoAccount.fromSecp256k1(
+      '0x59c6995e998f97a5a0044966f09453863d462d2b3f1446a99f0a3d7b5d0f5a0d',
+      { access: account },
+    )
+    const accessKeyClient = createClient({
+      account: accessKey,
+      transport: http('http://127.0.0.1'),
+    })
+
+    await expect(
+      signVoucher(
+        accessKeyClient,
+        accessKey,
+        { channelId, cumulativeAmount },
+        escrowContract,
+        chainId,
+        accessKey.accessKeyAddress,
+      ),
+    ).rejects.toThrowErrorMatchingInlineSnapshot(
+      `[Error: Session vouchers must be signed directly by authorizedSigner; pass a direct voucherSigner instead of a keychain account.]`,
+    )
   })
 
   test('verifyVoucher rejects wrong signer', async () => {
