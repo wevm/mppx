@@ -11,6 +11,8 @@ import {
   toSubscriptionExpiryDate,
   toSubscriptionExpirySeconds,
   toSubscriptionPeriodSeconds,
+  transferSelector,
+  transferWithMemoSelector,
   verifySubscriptionKeyAuthorization,
 } from './KeyAuthorization.js'
 import type { SubscriptionAccessKey } from './Types.js'
@@ -89,13 +91,12 @@ describe('tempo subscription key authorization', () => {
     const request = parseRequest()
 
     expect(getSubscriptionScopes(request)).toMatchObject([
-      { address: currency, recipients: [recipient] },
-      { address: currency, recipients: [recipient] },
+      { address: currency, recipients: [recipient], selector: transferWithMemoSelector },
     ])
     expect(getSubscriptionRpcAllowedCalls(request)).toMatchObject([
       {
         target: currency,
-        selectorRules: [{ recipients: [recipient] }, { recipients: [recipient] }],
+        selectorRules: [{ recipients: [recipient], selector: transferWithMemoSelector }],
       },
     ])
   })
@@ -158,7 +159,10 @@ describe('tempo subscription key authorization', () => {
     const authorization = KeyAuthorization.deserialize(payload.signature)
     const transferOnly = KeyAuthorization.serialize({
       ...authorization,
-      scopes: authorization.scopes?.slice(0, 1),
+      scopes: authorization.scopes?.map((scope) => ({
+        ...scope,
+        selector: transferSelector,
+      })),
     })
 
     expect(() =>
@@ -181,6 +185,11 @@ describe('tempo subscription key authorization', () => {
         periodUnit: 'day',
       }),
     ).toThrow('subscription period cannot be represented exactly by this Tempo client')
+  })
+
+  test('accepts dev-prefixed subscription periods for development and tests', () => {
+    expect(toSubscriptionPeriodSeconds({ periodCount: '15', periodUnit: 'dev_second' })).toBe(15)
+    expect(toSubscriptionPeriodSeconds({ periodCount: '120', periodUnit: 'dev_second' })).toBe(120)
   })
 
   test('rejects subscription expiries that cannot be represented by Tempo key authorizations', () => {

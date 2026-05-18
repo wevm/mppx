@@ -1395,11 +1395,8 @@ describe('tempo.subscription', () => {
       reference: hashStale,
     })
 
-    const result = await renew({
-      getClient: async () => client,
-      store,
+    const result = await mppx.tempo.subscription.renew({
       subscriptionId: record.subscriptionId,
-      waitForConfirmation: false,
     })
 
     expect(result?.receipt.reference).toBe(hashBackground)

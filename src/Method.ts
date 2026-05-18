@@ -129,9 +129,11 @@ export type Server<
   method extends Method = Method,
   defaults extends ExactPartial<z.input<method['schema']['request']>> = {},
   transportOverride = undefined,
+  extensions extends object = {},
 > = method & {
   authorize?: AuthorizeFn<method> | undefined
   defaults?: defaults | undefined
+  extensions?: extensions | undefined
   html?: Html.Options | undefined
   request?: RequestFn<method> | undefined
   respond?: RespondFn<method> | undefined
@@ -139,7 +141,7 @@ export type Server<
   transport?: transportOverride | undefined
   verify: VerifyFn<method>
 }
-export type AnyServer = Server<any, any, any>
+export type AnyServer = Server<any, any, any, any>
 
 /** Credential creation function for a single method. */
 export type CreateCredentialFn<method extends Method, context = unknown> = (
@@ -288,22 +290,34 @@ export function toServer<
   const method extends Method,
   const defaults extends RequestDefaults<method> = {},
   const transportOverride extends Transport.AnyTransport | undefined = undefined,
+  const extensions extends object = {},
 >(
   method: method,
-  options: toServer.Options<method, defaults, transportOverride>,
-): Server<method, defaults, transportOverride> {
-  const { authorize, defaults, html, request, respond, stableBinding, transport, verify } = options
-  return {
-    ...method,
+  options: toServer.Options<method, defaults, transportOverride, extensions>,
+): Server<method, defaults, transportOverride, extensions> {
+  const {
     authorize,
     defaults,
+    extensions,
     html,
     request,
     respond,
     stableBinding,
     transport,
     verify,
-  } as Server<method, defaults, transportOverride>
+  } = options
+  return {
+    ...method,
+    authorize,
+    defaults,
+    extensions,
+    html,
+    request,
+    respond,
+    stableBinding,
+    transport,
+    verify,
+  } as Server<method, defaults, transportOverride, extensions>
 }
 
 export declare namespace toServer {
@@ -311,9 +325,11 @@ export declare namespace toServer {
     method extends Method,
     defaults extends RequestDefaults<method> = {},
     transportOverride extends Transport.AnyTransport | undefined = undefined,
+    extensions extends object = {},
   > = {
     authorize?: AuthorizeFn<method> | undefined
     defaults?: defaults | undefined
+    extensions?: extensions | undefined
     html?: Html.Options | undefined
     request?: RequestFn<method> | undefined
     respond?: RespondFn<method> | undefined

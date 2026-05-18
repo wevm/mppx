@@ -313,6 +313,23 @@ describe('subscription', () => {
     expect(request.periodCount).toBe(expected)
   })
 
+  test.each(['dev_second'] as const)(
+    'schema: accepts %s subscription periods for development and tests',
+    (periodUnit) => {
+      const request = Methods.subscription.schema.request.parse({
+        amount: '10',
+        currency: '0x20c0000000000000000000000000000000000001',
+        decimals: 6,
+        periodCount: '5',
+        periodUnit,
+        recipient: '0x1234567890abcdef1234567890abcdef12345678',
+        subscriptionExpires: '2026-01-01T00:00:00Z',
+      })
+
+      expect(request.periodUnit).toBe(periodUnit)
+    },
+  )
+
   test('schema: rejects non-numeric periodCount', () => {
     const result = Methods.subscription.schema.request.safeParse({
       amount: '10',

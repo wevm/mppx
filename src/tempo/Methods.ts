@@ -19,8 +19,11 @@ const split = z.object({
 })
 
 const uint64Max = (1n << 64n) - 1n
-const secondsPerDay = 86_400n
-const secondsPerWeek = 604_800n
+const subscriptionPeriodUnitSeconds = {
+  dev_second: 1n,
+  day: 86_400n,
+  week: 604_800n,
+} satisfies Record<SubscriptionPeriodUnit, bigint>
 
 const normalizedAddress = z.pipe(
   z.address(),
@@ -46,7 +49,11 @@ const subscriptionExpires = z
     ),
   )
 
-const subscriptionPeriodUnits = ['day', 'week'] as const satisfies readonly SubscriptionPeriodUnit[]
+const subscriptionPeriodUnits = [
+  'dev_second',
+  'day',
+  'week',
+] as const satisfies readonly SubscriptionPeriodUnit[]
 const subscriptionPeriodUnit = z.enum(subscriptionPeriodUnits)
 
 const uint64String = z
@@ -82,7 +89,8 @@ function subscriptionPeriodFitsUint64(value: unknown) {
     periodUnit: SubscriptionPeriodUnit
   }
   try {
-    const unitSeconds = periodUnit === 'day' ? secondsPerDay : secondsPerWeek
+    const unitSeconds = subscriptionPeriodUnitSeconds[periodUnit]
+    if (unitSeconds === undefined) return false
     return BigInt(periodCount) * unitSeconds <= uint64Max
   } catch {
     return false
