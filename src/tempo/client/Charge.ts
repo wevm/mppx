@@ -1,5 +1,5 @@
 import type * as Hex from 'ox/Hex'
-import type { Address } from 'viem'
+import type { Address, Call, Client as viem_Client } from 'viem'
 import {
   prepareTransactionRequest,
   sendCallsSync,
@@ -9,7 +9,9 @@ import {
 import { tempo as tempo_chain } from 'viem/chains'
 import { Actions } from 'viem/tempo'
 
+import type * as Challenge from '../../Challenge.js'
 import * as Credential from '../../Credential.js'
+import type { MaybePromise } from '../../internal/types.js'
 import * as Method from '../../Method.js'
 import * as Account from '../../viem/Account.js'
 import * as Client from '../../viem/Client.js'
@@ -34,7 +36,9 @@ import * as Methods from '../Methods.js'
  * })
  * ```
  */
-export function charge(parameters: charge.Parameters = {}) {
+export function charge<
+  const mode extends Methods.ChargeMode | undefined = Methods.ChargeMode | undefined,
+>(parameters: charge.Parameters<mode> = {} as charge.Parameters<mode>) {
   const { clientId } = parameters
   const getClient = Client.getResolver({
     chain: tempo_chain,
@@ -51,8 +55,12 @@ export function charge(parameters: charge.Parameters = {}) {
     }),
 
     async createCredential({ challenge, context }) {
-      const chainId = challenge.request.methodDetails?.chainId
-      const client = await getClient({ chainId })
+      const challengeChainId = challenge.request.methodDetails?.chainId
+      const client = await getClient({ chainId: challengeChainId })
+      const chainId = challengeChainId ?? client.chain?.id
+      if (chainId === undefined)
+        throw new Error('No `chainId` provided. Pass a chain ID in the challenge or client.')
+
       const account = getAccount(client, context)
 
       const { request } = challenge
@@ -62,7 +70,7 @@ export function charge(parameters: charge.Parameters = {}) {
       if (BigInt(amount) === 0n) {
         const signature = await signTypedData(client, {
           account,
-          domain: Proof.domain(chainId!),
+          domain: Proof.domain(chainId),
           types: Proof.types,
           primaryType: 'Proof',
           message: Proof.message(challenge.id, challenge.realm),
@@ -70,7 +78,7 @@ export function charge(parameters: charge.Parameters = {}) {
         return Credential.serialize({
           challenge,
           payload: { signature, type: 'proof' },
-          source: Proof.proofSource({ address: account.address, chainId: chainId! }),
+          source: Proof.proofSource({ address: account.address, chainId }),
         })
       }
 
@@ -145,45 +153,132 @@ export function charge(parameters: charge.Parameters = {}) {
         return Math.min(defaultExpiry, challengeExpiry)
       })()
 
+      const executionRequest = {
+        calls: calls as readonly Call[],
+        ...(methodDetails?.feePayer && { feePayer: true as const }),
+        nonceKey: 'expiring',
+        validBefore,
+      } satisfies charge.FillPayloadRequest
+
+      const result = parameters.fillPayload
+        ? await (parameters.fillPayload as unknown as charge.FillPayload)({
+            account,
+            challenge,
+            chainId,
+            client,
+            mode,
+            request: executionRequest,
+          })
+        : await fillPayload_default({
+            account,
+            challenge,
+            chainId,
+            client,
+            mode,
+            request: executionRequest,
+          })
+
       if (mode === 'push') {
-        const { receipts } = await sendCallsSync(client, {
-          account,
-          calls: calls as never,
-          experimental_fallback: true,
-        })
-        const hash = receipts?.[0]?.transactionHash
-        if (!hash) throw new Error('No transaction receipt returned.')
+        if (result.type !== 'hash')
+          throw new Error('fillPayload must return a hash result for push mode.')
         return Credential.serialize({
           challenge,
-          payload: { hash, type: 'hash' },
-          source: `did:pkh:eip155:${chainId}:${account.address}`,
+          payload: { hash: result.hash, type: 'hash' },
+          source: Proof.proofSource({ address: account.address, chainId }),
         })
       }
 
-      const prepared = await prepareTransactionRequest(client, {
-        account,
-        calls,
-        ...(methodDetails?.feePayer && { feePayer: true }),
-        nonceKey: 'expiring',
-        validBefore,
-      } as never)
-      // FIXME: figure out gas estimation issue for fee payer tx
-      prepared.gas = prepared.gas! + 5_000n
-      const signature = await signTransaction(client, prepared as never)
+      if (result.type !== 'transaction')
+        throw new Error('fillPayload must return a transaction result for pull mode.')
 
       return Credential.serialize({
         challenge,
-        payload: { signature, type: 'transaction' },
-        source: `did:pkh:eip155:${chainId}:${account.address}`,
+        payload: { signature: result.signature, type: 'transaction' },
+        source: Proof.proofSource({ address: account.address, chainId }),
       })
     },
   })
 }
 
+async function fillPayload_default(
+  parameters: charge.FillPayloadParameters,
+): Promise<charge.FillPayloadResult> {
+  const { account, client, mode, request } = parameters
+
+  if (mode === 'push') {
+    const { receipts } = await sendCallsSync(client, {
+      account,
+      calls: request.calls as never,
+      experimental_fallback: true,
+    })
+    const hash = receipts?.[0]?.transactionHash
+    if (!hash) throw new Error('No transaction receipt returned.')
+    return { hash, type: 'hash' }
+  }
+
+  const prepared = await prepareTransactionRequest(client, {
+    account,
+    calls: request.calls,
+    ...(request.feePayer && { feePayer: request.feePayer }),
+    nonceKey: request.nonceKey,
+    validBefore: request.validBefore,
+  } as never)
+  // FIXME: figure out gas estimation issue for fee payer tx
+  prepared.gas = prepared.gas! + 5_000n
+  const signature = await signTransaction(client, prepared as never)
+
+  return { signature, type: 'transaction' }
+}
+
 export declare namespace charge {
   type AutoSwap = AutoSwap.resolve.Value
 
-  type Parameters = {
+  type FillPayloadResultMap = {
+    pull: { signature: Hex.Hex; type: 'transaction' }
+    push: { hash: Hex.Hex; type: 'hash' }
+  }
+
+  type FillPayloadResult<mode extends Methods.ChargeMode = Methods.ChargeMode> =
+    FillPayloadResultMap[mode]
+
+  type FillPayloadRequest = {
+    /** Finalized payment calls MPPX would otherwise pass to viem. */
+    calls: readonly Call[]
+    /** Whether the transaction should request Tempo fee-payer sponsorship. */
+    feePayer?: true | undefined
+    /** Expiring nonce key passed to Tempo transaction preparation. */
+    nonceKey?: 'expiring' | undefined
+    /** Expiration timestamp, in whole Unix seconds, for the expiring nonce. */
+    validBefore?: number | undefined
+  }
+
+  type FillPayloadParameters<mode extends Methods.ChargeMode = Methods.ChargeMode> = {
+    /** Payer identity selected by MPPX. Custom hooks must produce a payload for this address. */
+    account: Account.Account
+    /** Original payment challenge. */
+    challenge: Challenge.Challenge<
+      z.output<typeof Methods.charge.schema.request>,
+      typeof Methods.charge.intent,
+      typeof Methods.charge.name
+    >
+    /** Chain ID used for the payment transaction. */
+    chainId: number
+    /** Viem client resolved by `getClient`. */
+    client: viem_Client
+    /** Final selected charge mode. */
+    mode: mode
+    /** Finalized transaction request fields MPPX would otherwise execute. */
+    request: FillPayloadRequest
+  }
+
+  type ResolveFillPayloadMode<mode extends Methods.ChargeMode | undefined> =
+    mode extends Methods.ChargeMode ? mode : Methods.ChargeMode
+
+  type FillPayload<mode extends Methods.ChargeMode = Methods.ChargeMode> = (
+    parameters: FillPayloadParameters<mode>,
+  ) => MaybePromise<FillPayloadResult<mode>>
+
+  type Parameters<mode extends Methods.ChargeMode | undefined = Methods.ChargeMode | undefined> = {
     /**
      * Automatically swap from a fallback currency (pathUsd, USDC.e) via the
      * Tempo DEX when the user lacks sufficient balance of the target currency.
@@ -193,6 +288,15 @@ export declare namespace charge {
     autoSwap?: AutoSwap | undefined
     /** Client identifier used to derive the client fingerprint in attribution memos. */
     clientId?: string | undefined
+    /**
+     * Fills the Tempo charge credential payload from the finalized payment calls.
+     *
+     * MPPX still validates the challenge, selects the charge mode, builds the
+     * transfer and auto-swap calls, and serializes the credential. The hook only
+     * replaces the final signing or submission step and must produce a payload
+     * for `account.address`.
+     */
+    fillPayload?: FillPayload<ResolveFillPayloadMode<mode>> | undefined
     /**
      * Allowlist of expected split recipient addresses. When set, the client
      * rejects any challenge whose split recipients are not in this list.
@@ -209,7 +313,7 @@ export declare namespace charge {
      *
      * @default `'push'` for JSON-RPC accounts, `'pull'` for local accounts.
      */
-    mode?: Methods.ChargeMode | undefined
+    mode?: mode | undefined
   } & Account.getResolver.Parameters &
     Client.getResolver.Parameters
 }
