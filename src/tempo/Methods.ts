@@ -3,6 +3,7 @@ import { parseUnits } from 'viem'
 
 import * as Method from '../Method.js'
 import * as z from '../zod.js'
+import type * as PrecompileChannel from './precompile/Channel.js'
 import type { SubscriptionPeriodUnit } from './subscription/Types.js'
 
 export const chargeModes = ['push', 'pull'] as const
@@ -188,6 +189,7 @@ export const session = Method.from({
           authorizedSigner: z.optional(z.string()),
           channelId: z.hash(),
           cumulativeAmount: z.amount(),
+          descriptor: z.optional(z.custom<PrecompileChannel.ChannelDescriptor>()),
           signature: z.signature(),
           transaction: z.signature(),
           type: z.literal('transaction'),
@@ -196,6 +198,7 @@ export const session = Method.from({
           action: z.literal('topUp'),
           additionalDeposit: z.amount(),
           channelId: z.hash(),
+          descriptor: z.optional(z.custom<PrecompileChannel.ChannelDescriptor>()),
           transaction: z.signature(),
           type: z.literal('transaction'),
         }),
@@ -203,12 +206,14 @@ export const session = Method.from({
           action: z.literal('voucher'),
           channelId: z.hash(),
           cumulativeAmount: z.amount(),
+          descriptor: z.optional(z.custom<PrecompileChannel.ChannelDescriptor>()),
           signature: z.signature(),
         }),
         z.object({
           action: z.literal('close'),
           channelId: z.hash(),
           cumulativeAmount: z.amount(),
+          descriptor: z.optional(z.custom<PrecompileChannel.ChannelDescriptor>()),
           signature: z.signature(),
         }),
       ]),

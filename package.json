@@ -51,7 +51,7 @@
     "testcontainers": "^11.14.0",
     "tsx": "^4.21.0",
     "typescript": "~6.0.3",
-    "viem": "^2.47.6",
+    "viem": "file:/Users/rusowsky/dev/viem/src",
     "vite": "^8.0.10",
     "vp": "npm:vite-plus@~0.1.17",
     "ws": "^8.20.0",
@@ -197,5 +197,10 @@
   "bin": {
     "mppx": "./dist/bin.js",
     "mppx.src": "./src/bin.ts"
+  },
+  "pnpm": {
+    "overrides": {
+      "ox": "0.14.20"
+    }
   }
 }
