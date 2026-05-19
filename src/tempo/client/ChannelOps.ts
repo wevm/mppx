@@ -157,6 +157,7 @@ export async function createOpenPayload(
     functionName: 'open',
     args: [payee, currency, deposit, salt, authorizedSigner],
   })
+  const validBefore = Math.floor(Date.now() / 1_000) + 25
 
   const prepared = await prepareTransactionRequest(client, {
     account,
@@ -164,10 +165,13 @@ export async function createOpenPayload(
       { to: currency, data: approveData },
       { to: escrowContract, data: openData },
     ],
-    ...(feePayer && { feePayer: true }),
     feeToken: currency,
+    ...(feePayer ? { nonceKey: 'expiring', validBefore } : {}),
   } as never)
-  prepared.gas = prepared.gas! + 5_000n
+  // Estimate before enabling fee-payer mode so Tempo includes sender
+  // signature and access-key verification costs in the gas budget.
+  prepared.gas = (prepared.gas ?? 0n) + 5_000n
+  if (feePayer) (prepared as Record<string, unknown>).feePayer = true
   const transaction = (await signTransaction(client, prepared as never)) as Hex.Hex
 
   const signature = await signVoucher(

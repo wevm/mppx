@@ -1,5 +1,13 @@
 # mppx
 
+## 0.6.26
+
+### Patch Changes
+
+- 3d9a9cf: Added `dev_second` subscription periods.
+  Added `mppx.tempo.subscription.renew`.
+  Raised default sponsor limits for subscription payments.
+
 ## 0.6.25
 
 ### Patch Changes

@@ -4,7 +4,10 @@ import { privateKeyToAccount } from 'viem/accounts'
 import { describe, expect, test } from 'vp/test'
 
 import * as Methods from '../Methods.js'
-import { signSubscriptionKeyAuthorization } from '../subscription/KeyAuthorization.js'
+import {
+  signSubscriptionKeyAuthorization,
+  transferWithMemoSelector,
+} from '../subscription/KeyAuthorization.js'
 import type { SubscriptionAccessKey } from '../subscription/Types.js'
 import { subscription } from './Subscription.js'
 
@@ -142,12 +145,7 @@ describe('tempo.subscription client', () => {
       scopes: [
         {
           address: expect.stringMatching(/^0x[0-9a-fA-F]{40}$/),
-          selector: expect.stringMatching(/^0x/),
-          recipients: expect.any(Array),
-        },
-        {
-          address: expect.stringMatching(/^0x[0-9a-fA-F]{40}$/),
-          selector: expect.stringMatching(/^0x/),
+          selector: transferWithMemoSelector,
           recipients: expect.any(Array),
         },
       ],

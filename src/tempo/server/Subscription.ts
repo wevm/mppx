@@ -41,6 +41,7 @@ import type {
 } from '../subscription/Types.js'
 
 type SubscriptionRequest = ReturnType<typeof Methods.subscription.schema.request.parse>
+type RenewalHandler = NonNullable<subscription.Parameters['renew']>
 
 /**
  * Creates a Tempo subscription method for recurring TIP-20 token payments.
@@ -67,22 +68,25 @@ export function subscription<const parameters extends subscription.Parameters>(
     periodCount,
     periodUnit,
     subscriptionExpires,
-    waitForConfirmation = true,
   } = parameters
 
-  const store = SubscriptionStore.fromStore(rawStore, {
-    activationTimeoutMs: parameters.activationTimeoutMs,
-    renewalTimeoutMs: parameters.renewalTimeoutMs,
+  const { recipient } = Account.resolve(parameters)
+  const context = createContext(parameters, {
+    store: rawStore,
+    options: {
+      activationTimeoutMs: parameters.activationTimeoutMs,
+      renewalTimeoutMs: parameters.renewalTimeoutMs,
+    },
   })
-  const { feePayer, recipient } = Account.resolve(parameters)
-  const getClient = ClientResolver.getResolver({
-    chain: tempo_chain,
-    getClient: parameters.getClient,
-    rpcUrl: defaults.rpcUrl,
-  })
+  const { feePayer, feePayerPolicy, getClient, store, waitForConfirmation } = context
 
   type Defaults = subscription.DeriveDefaults<parameters>
-  return Method.toServer<typeof Methods.subscription, Defaults>(Methods.subscription, {
+  const method = Method.toServer<
+    typeof Methods.subscription,
+    Defaults,
+    undefined,
+    subscription.Extensions
+  >(Methods.subscription, {
     defaults: {
       amount,
       currency,
@@ -94,6 +98,19 @@ export function subscription<const parameters extends subscription.Parameters>(
       recipient,
       subscriptionExpires,
     } as unknown as Defaults,
+    extensions: {
+      renew: (parameters) =>
+        renewWithContext({
+          context: {
+            ...context,
+            feePayerPolicy: parameters.feePayerPolicy
+              ? resolveFeePayerPolicy(context.feePayerPolicy, parameters.feePayerPolicy)
+              : context.feePayerPolicy,
+            waitForConfirmation: parameters.waitForConfirmation ?? context.waitForConfirmation,
+          },
+          subscriptionId: parameters.subscriptionId,
+        }),
+    },
 
     async authorize({ input, request }) {
       const resolved = await parameters.resolve({ input, request })
@@ -107,7 +124,7 @@ export function subscription<const parameters extends subscription.Parameters>(
       if (periodIndex > subscription.lastChargedPeriod) {
         const renew = resolveRenewalHandler({
           feePayer,
-          feePayerPolicy: parameters.feePayerPolicy,
+          feePayerPolicy,
           getClient,
           parameters,
           store,
@@ -226,7 +243,9 @@ export function subscription<const parameters extends subscription.Parameters>(
         (declaredSource.chainId !== verified.source.chainId ||
           !isAddressEqual(declaredSource.address, verified.source.address))
       ) {
-        throw new VerificationFailedError({ reason: 'credential source does not match signature' })
+        throw new VerificationFailedError({
+          reason: 'credential source does not match signature',
+        })
       }
 
       const activation = await store.activate({
@@ -240,7 +259,7 @@ export function subscription<const parameters extends subscription.Parameters>(
               auto: {
                 challengeId: credential.challenge.id,
                 feePayer,
-                feePayerPolicy: parameters.feePayerPolicy,
+                feePayerPolicy,
                 getClient,
                 keyAuthorization: (credential.payload as SubscriptionCredentialPayload).signature,
                 realm: credential.challenge.realm,
@@ -290,6 +309,19 @@ export function subscription<const parameters extends subscription.Parameters>(
       return activation.result.receipt
     },
   })
+  return method
+}
+
+// Access-key provisioning can cost around 4M gas.
+const defaultFeePayerPolicy = {
+  maxGas: 5_000_000n,
+  maxTotalFee: 200_000_000_000_000_000n,
+} satisfies Partial<FeePayer.Policy>
+
+function resolveFeePayerPolicy(
+  ...policies: (Partial<FeePayer.Policy> | undefined)[]
+): Partial<FeePayer.Policy> {
+  return Object.assign({}, defaultFeePayerPolicy, ...policies)
 }
 
 function requestFromCaptured(capturedRequest: Method.CapturedRequest | undefined): Request {
@@ -702,25 +734,11 @@ function resolveRenewalHandler(parameters: {
   feePayer?: ReturnType<typeof Account.resolve>['feePayer'] | undefined
   feePayerPolicy?: Partial<FeePayer.Policy> | undefined
   getClient: (parameters: { chainId?: number | undefined }) => MaybePromise<ViemClient>
-  parameters: {
-    renew?:
-      | ((parameters: {
-          inFlightReference: string
-          periodIndex: number
-          subscription: SubscriptionRecord
-        }) => Promise<subscription.RenewalResult>)
-      | undefined
-  }
+  parameters: Pick<createContext.Parameters, 'renew'>
   store: SubscriptionStore.SubscriptionStore
   subscription: SubscriptionRecord
   waitForConfirmation: boolean
-}):
-  | ((parameters: {
-      inFlightReference: string
-      periodIndex: number
-      subscription: SubscriptionRecord
-    }) => Promise<subscription.RenewalResult>)
-  | undefined {
+}): RenewalHandler | undefined {
   const {
     feePayer,
     feePayerPolicy,
@@ -829,7 +847,7 @@ async function submitSubscriptionPayment(parameters: {
     // (without `feePayer: true`) so viem returns the chain's full
     // proof-inclusive gas estimate. With `feePayer: true` viem sets a
     // dummy sig + null feePayerSignature, dropping signature and key
-    // authorization verification costs — see chainConfig.js FIXME. We add
+    // authorization verification costs -- see chainConfig.js FIXME. We add
     // a small buffer for fee-payer overhead, then flip `feePayer = true`
     // and re-sign with the fee-payer-sponsored envelope.
     const prepared = await prepareTransactionRequest(client, {
@@ -895,31 +913,41 @@ function createSubscriptionId() {
  * Returns the renewal result if the subscription was overdue, or `null` if already current.
  */
 export async function renew(parameters: renew.Parameters): Promise<renew.Result | null> {
-  const { store: rawStore, waitForConfirmation = true } = parameters
-  const store = SubscriptionStore.fromStore(rawStore, {
-    renewalTimeoutMs: parameters.renewalTimeoutMs,
-  })
-  const getClient = ClientResolver.getResolver({
-    chain: tempo_chain,
-    getClient: parameters.getClient,
-    rpcUrl: defaults.rpcUrl,
+  const context = createContext(parameters, {
+    store: parameters.store,
+    options: {
+      renewalTimeoutMs: parameters.renewalTimeoutMs,
+    },
   })
 
-  const record = await store.get(parameters.subscriptionId)
+  return renewWithContext({
+    context,
+    subscriptionId: parameters.subscriptionId,
+  })
+}
+
+async function renewWithContext(parameters: {
+  context: createContext.Return
+  subscriptionId: string
+}): Promise<renew.Result | null> {
+  const { context, subscriptionId } = parameters
+  const record = await context.store.get(subscriptionId)
   if (!record) return null
   if (!isActive(record)) return null
-  const active = await store.getByKey(record.lookupKey)
+  const active = await context.store.getByKey(record.lookupKey)
   if (active?.subscriptionId !== record.subscriptionId) return null
 
   const periodIndex = getPeriodIndex(record)
   if (periodIndex <= record.lastChargedPeriod) return null
 
   const renew = resolveRenewalHandler({
-    getClient,
-    parameters,
-    store,
+    feePayer: context.feePayer,
+    feePayerPolicy: context.feePayerPolicy,
+    getClient: context.getClient,
+    parameters: context.parameters,
+    store: context.store,
     subscription: record,
-    waitForConfirmation,
+    waitForConfirmation: context.waitForConfirmation,
   })
   if (!renew) return null
 
@@ -927,35 +955,41 @@ export async function renew(parameters: renew.Parameters): Promise<renew.Result 
     expectedLookupKey: record.lookupKey,
     periodIndex,
     renew,
-    store,
+    store: context.store,
     subscription: record,
   })
-  return renewal?.status === 'renewed' ? renewal.result : null
+  if (renewal?.status !== 'renewed') return null
+
+  await context.parameters.hooks?.renewed?.({
+    periodIndex,
+    receipt: renewal.result.receipt,
+    subscription: renewal.result.subscription,
+  })
+  return renewal.result
 }
 
 export declare namespace renew {
   /** Parameters for renewing an overdue subscription outside the request path. */
-  type Parameters = {
-    /** The subscription to renew. */
-    subscriptionId: string
-    /** Billing callback — same signature as the `renew` hook on {@link subscription}. */
-    renew?:
-      | ((parameters: {
-          /** Stable idempotency/reconciliation reference persisted before the renewal hook runs. */
-          inFlightReference: string
-          periodIndex: number
-          subscription: SubscriptionRecord
-        }) => Promise<subscription.RenewalResult>)
-      | undefined
-    /** Store containing subscription records. */
-    store: Store.AtomicStore<Record<string, unknown>>
-    /**
-     * Milliseconds before an in-flight renewal lock can be replaced.
-     * Keeps concurrent renewal safe while allowing recovery from abandoned attempts.
-     */
-    renewalTimeoutMs?: number | undefined
-    waitForConfirmation?: boolean | undefined
-  } & Client.getResolver.Parameters
+  type Parameters = Account.resolve.Parameters &
+    Client.getResolver.Parameters & {
+      /** The subscription to renew. */
+      subscriptionId: string
+      /** Billing callback -- same signature as the `renew` hook on {@link subscription}. */
+      renew?: subscription.Parameters['renew']
+      /** Store containing subscription records. */
+      store: Store.AtomicStore<Record<string, unknown>>
+      /**
+       * Milliseconds before an in-flight renewal lock can be replaced.
+       * Keeps concurrent renewal safe while allowing recovery from abandoned attempts.
+       */
+      renewalTimeoutMs?: number | undefined
+      /**
+       * Override the fee-payer policy for sponsored subscription payments.
+       * Useful when the access key renewal tx requires more gas than the default policy allows.
+       */
+      feePayerPolicy?: Partial<FeePayer.Policy> | undefined
+      waitForConfirmation?: boolean | undefined
+    }
 
   /** Renewal result returned by {@link renew}. */
   type Result = subscription.RenewalResult
@@ -975,6 +1009,23 @@ export declare namespace subscription {
   type RenewalResult = {
     receipt: SubscriptionReceiptValue
     subscription: SubscriptionRecord
+  }
+
+  /** Parameters for renewing through a configured `mppx.tempo.subscription` handler. */
+  type RenewParameters = {
+    /** The subscription to renew. */
+    subscriptionId: string
+    /**
+     * Override the fee-payer policy for sponsored subscription payments.
+     * Useful when the access key renewal tx requires more gas than the default policy allows.
+     */
+    feePayerPolicy?: Partial<FeePayer.Policy> | undefined
+    waitForConfirmation?: boolean | undefined
+  }
+
+  /** Handler extensions attached to `mppx.tempo.subscription`. */
+  type Extensions = {
+    renew: (parameters: RenewParameters) => Promise<renew.Result | null>
   }
 
   /** Request defaults supported by the subscription method. */
@@ -1070,4 +1121,42 @@ export declare namespace subscription {
   > & {
     decimals: number
   }
+}
+
+function createContext<const parameters extends createContext.Parameters>(
+  parameters: parameters,
+  options: createContext.Options,
+) {
+  const { feePayer } = Account.resolve(parameters)
+  const store = SubscriptionStore.fromStore(options.store, options.options)
+  const getClient = ClientResolver.getResolver({
+    chain: tempo_chain,
+    getClient: parameters.getClient,
+    rpcUrl: defaults.rpcUrl,
+  })
+  return {
+    feePayer,
+    feePayerPolicy: resolveFeePayerPolicy(parameters.feePayerPolicy),
+    getClient,
+    parameters,
+    store,
+    waitForConfirmation: parameters.waitForConfirmation ?? true,
+  }
+}
+
+declare namespace createContext {
+  type Parameters = Account.resolve.Parameters &
+    Client.getResolver.Parameters & {
+      feePayerPolicy?: Partial<FeePayer.Policy> | undefined
+      hooks?: subscription.Parameters['hooks']
+      renew?: subscription.Parameters['renew']
+      waitForConfirmation?: boolean | undefined
+    }
+
+  type Options = {
+    store: Store.AtomicStore<Record<string, unknown>>
+    options?: SubscriptionStore.fromStore.Options | undefined
+  }
+
+  type Return = ReturnType<typeof createContext>
 }

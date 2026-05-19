@@ -319,7 +319,8 @@ type UniqueIntentHandlers<
     Extract<methods[number], { intent: method_name }>,
     EffectiveTransportOf<Extract<methods[number], { intent: method_name }>, transport>,
     NonNullable<Extract<methods[number], { intent: method_name }>['defaults']>
-  >
+  > &
+    MethodExtensions<Extract<methods[number], { intent: method_name }>>
 }
 
 /** Nested handlers: `mppx.tempo.charge(...)`, grouped by method name then intent. */
@@ -332,7 +333,8 @@ type NestedHandlers<
       mi,
       EffectiveTransportOf<mi, transport>,
       NonNullable<mi['defaults']>
-    > & { _method: mi }
+    > &
+      MethodExtensions<mi> & { _method: mi }
   }
 }
 
@@ -344,9 +346,18 @@ type Handlers<
     mi,
     EffectiveTransportOf<mi, transport>,
     NonNullable<mi['defaults']>
-  >
+  > &
+    MethodExtensions<mi>
 } & UniqueIntentHandlers<methods, transport> &
   NestedHandlers<methods, transport>
+
+type MethodExtensions<method extends Method.AnyServer> = method extends {
+  extensions?: (infer extensions) | undefined
+}
+  ? NonNullable<extensions> extends object
+    ? NonNullable<extensions>
+    : {}
+  : {}
 
 /** Nested challenge generators: `mppx.challenge.tempo.charge(...)`. */
 type ChallengeHandlers<methods extends readonly Method.AnyServer[]> = {
@@ -407,7 +418,7 @@ export function create<
   assertNoReservedMppxKeys(methods as readonly Method.AnyServer[])
 
   for (const mi of methods) {
-    handlers[`${mi.name}/${mi.intent}`] = createMethodFn({
+    const fn = createMethodFn({
       authorize: mi.authorize as never,
       defaults: mi.defaults,
       method: mi,
@@ -420,6 +431,8 @@ export function create<
       transport: (mi.transport ?? transport) as never,
       verify: mi.verify as never,
     })
+    if (mi.extensions) Object.assign(fn, mi.extensions)
+    handlers[`${mi.name}/${mi.intent}`] = fn
   }
 
   // Also set shorthand intent key when there's no collision

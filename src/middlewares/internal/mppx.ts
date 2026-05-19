@@ -11,9 +11,12 @@ type DiscoveryMeta = Pick<DiscoveryHandler, '_internal'>
 /** Recursively wraps nested handler objects one level deep. */
 type WrapNested<obj, handler> = {
   [key in keyof obj]: obj[key] extends (options: infer options) => any
-    ? (o: options) => handler & DiscoveryMeta
+    ? WrappedMethod<obj[key], options, handler>
     : obj[key]
 }
+
+type WrappedMethod<method, options, handler> = ((o: options) => handler & DiscoveryMeta) &
+  Omit<method, keyof Function>
 
 export type Wrap<mppx, handler> = {
   // `compose` is omitted — it returns a raw HTTP handler, not a
@@ -22,7 +25,7 @@ export type Wrap<mppx, handler> = {
   [key in keyof mppx as key extends 'compose' ? never : key]: key extends Mppx.ReservedKey
     ? mppx[key]
     : mppx[key] extends (options: infer options) => any
-      ? (o: options) => handler & DiscoveryMeta
+      ? WrappedMethod<mppx[key], options, handler>
       : mppx[key] extends Record<string, (options: any) => any>
         ? WrapNested<mppx[key], handler>
         : mppx[key]
@@ -50,6 +53,7 @@ export function wrap<mppx extends Mppx.Mppx<any, any>, handler>(
       if (configured._internal) handler._internal = configured._internal
       return handler
     }
+    Object.assign(wrapWithMeta, methodFn)
     result[key] = wrapWithMeta
     // Also set shorthand intent key if Mppx registered it (no collision)
     if (!reservedMppxKeys.has(mi.intent) && (mppx as any)[mi.intent])

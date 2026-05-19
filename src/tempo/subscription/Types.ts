@@ -1,7 +1,7 @@
 import type { Address } from 'viem'
 
-/** Tempo-supported subscription period units. The shared intent also defines `month`, but Tempo cannot represent calendar-month periods exactly. */
-export type SubscriptionPeriodUnit = 'day' | 'week'
+/** Tempo-supported subscription period units. Use `day` or `week` in production; `dev_*` units are for development and tests. */
+export type SubscriptionPeriodUnit = 'dev_second' | 'day' | 'week'
 
 /** Access key information used to authorize recurring Tempo payments. */
 export type SubscriptionAccessKey = {

@@ -498,10 +498,12 @@ describe.runIf(isLocalnet)('on-chain', () => {
           { to: currency, data: approveData },
           { to: escrowContract, data: openData },
         ],
-        feePayer: true,
         feeToken: currency,
+        nonceKey: 'expiring',
+        validBefore: Math.floor(Date.now() / 1_000) + 25,
       } as never)
-      prepared.gas = prepared.gas! + 5_000n
+      prepared.gas = (prepared.gas ?? 0n) + 5_000n
+      ;(prepared as Record<string, unknown>).feePayer = true
       const serializedTransaction = await signTransaction(client, prepared as never)
 
       await broadcastOpenTransaction({
@@ -561,10 +563,12 @@ describe.runIf(isLocalnet)('on-chain', () => {
           { to: escrowContract, data: openData },
           { to: escrowContract, data: smuggledOpenData },
         ],
-        feePayer: true,
         feeToken: currency,
+        nonceKey: 'expiring',
+        validBefore: Math.floor(Date.now() / 1_000) + 25,
       } as never)
-      prepared.gas = prepared.gas! + 5_000n
+      prepared.gas = (prepared.gas ?? 0n) + 5_000n
+      ;(prepared as Record<string, unknown>).feePayer = true
 
       const serializedTransaction = await signTransaction(client, prepared as never)
 
@@ -1006,10 +1010,12 @@ describe.runIf(isLocalnet)('on-chain', () => {
           { to: currency, data: approveData },
           { to: escrowContract, data: topUpData },
         ],
-        feePayer: true,
         feeToken: currency,
+        nonceKey: 'expiring',
+        validBefore: Math.floor(Date.now() / 1_000) + 25,
       } as never)
-      prepared.gas = prepared.gas! + 5_000n
+      prepared.gas = (prepared.gas ?? 0n) + 5_000n
+      ;(prepared as Record<string, unknown>).feePayer = true
       const serializedTransaction = await signTransaction(client, prepared as never)
 
       await broadcastTopUpTransaction({
@@ -1069,10 +1075,12 @@ describe.runIf(isLocalnet)('on-chain', () => {
           { to: escrowContract, data: topUpData },
           { to: escrowContract, data: smuggledTopUpData },
         ],
-        feePayer: true,
         feeToken: currency,
+        nonceKey: 'expiring',
+        validBefore: Math.floor(Date.now() / 1_000) + 25,
       } as never)
-      prepared.gas = prepared.gas! + 5_000n
+      prepared.gas = (prepared.gas ?? 0n) + 5_000n
+      ;(prepared as Record<string, unknown>).feePayer = true
 
       const serializedTransaction = await signTransaction(client, prepared as never)
 

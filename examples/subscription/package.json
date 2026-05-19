@@ -13,7 +13,7 @@
     "@typescript/native-preview": "7.0.0-dev.20260323.1",
     "mppx": "workspace:*",
     "tsx": "^4.21.0",
-    "typescript": "~5.9.3",
+    "typescript": "~6.0.3",
     "viem": "^2.50.4",
     "vite": "latest"
   }

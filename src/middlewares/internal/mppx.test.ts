@@ -60,6 +60,20 @@ const betaMethod = Method.toServer(mockChargeB, {
   },
 })
 
+const alphaMethodWithExtension = Method.toServer<
+  typeof mockChargeA,
+  {},
+  undefined,
+  { renew: () => string }
+>(mockChargeA, {
+  extensions: {
+    renew: () => 'renewed',
+  },
+  async verify() {
+    return mockReceipt('alpha')
+  },
+})
+
 const challengeOpts = {
   amount: '1000',
   currency: '0x0000000000000000000000000000000000000001',
@@ -149,5 +163,15 @@ describe('wrap: nested handlers', () => {
 
     expect(wrapped.realm).toBe(realm)
     expect(wrapped.transport).toBe(mppx.transport)
+  })
+
+  test('method extensions are copied to wrapped handlers', () => {
+    const mppx = Mppx.create({ methods: [alphaMethodWithExtension], realm, secretKey }) as any
+
+    const wrapped = wrap(mppx, (_methodFn, _options) => 'wrapped') as any
+
+    expect(wrapped.charge.renew()).toBe('renewed')
+    expect(wrapped.alpha.charge.renew()).toBe('renewed')
+    expect(wrapped['alpha/charge'].renew()).toBe('renewed')
   })
 })

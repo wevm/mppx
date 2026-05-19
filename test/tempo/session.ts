@@ -171,6 +171,7 @@ export async function signOpenChannel(params: {
     functionName: 'open',
     args: [payee, token, deposit, salt, authorizedSigner],
   })
+  const validBefore = Math.floor(Date.now() / 1_000) + 25
 
   const prepared = await prepareTransactionRequest(client, {
     account: payer,
@@ -178,9 +179,10 @@ export async function signOpenChannel(params: {
       { to: token, data: approveData },
       { to: escrow, data: openData },
     ],
-    ...(params.feePayer ? { feePayer: true, feeToken: token } : {}),
+    ...(params.feePayer ? { feeToken: token, nonceKey: 'expiring', validBefore } : {}),
   } as never)
-  prepared.gas = prepared.gas! + 5_000n
+  prepared.gas = (prepared.gas ?? 0n) + 5_000n
+  if (params.feePayer) (prepared as Record<string, unknown>).feePayer = true
 
   const serializedTransaction = await signTransaction(client, prepared as never)
 
@@ -207,6 +209,7 @@ export async function signTopUpChannel(params: {
     functionName: 'topUp',
     args: [channelId, amount],
   })
+  const validBefore = Math.floor(Date.now() / 1_000) + 25
 
   const prepared = await prepareTransactionRequest(client, {
     account: payer,
@@ -214,9 +217,10 @@ export async function signTopUpChannel(params: {
       { to: token, data: approveData },
       { to: escrow, data: topUpData },
     ],
-    ...(params.feePayer ? { feePayer: true, feeToken: token } : {}),
+    ...(params.feePayer ? { feeToken: token, nonceKey: 'expiring', validBefore } : {}),
   } as never)
-  prepared.gas = prepared.gas! + 5_000n
+  prepared.gas = (prepared.gas ?? 0n) + 5_000n
+  if (params.feePayer) (prepared as Record<string, unknown>).feePayer = true
 
   const serializedTransaction = await signTransaction(client, prepared as never)
 

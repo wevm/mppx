@@ -12,12 +12,15 @@ import type {
 /** 4-byte selector for TIP-20 `transfer(address,uint256)`. */
 export const transferSelector = '0xa9059cbb'
 
-/** 4-byte selector for TIP-20 `transferWithMemo(address,uint256,bytes)`. */
+/** 4-byte selector for TIP-20 `transferWithMemo(address,uint256,bytes32)`. */
 export const transferWithMemoSelector = '0x95777d59'
 
 const uint64Max = (1n << 64n) - 1n
-const secondsPerDay = 86_400n
-const secondsPerWeek = 604_800n
+const subscriptionPeriodUnitSeconds = {
+  dev_second: 1n,
+  day: 86_400n,
+  week: 604_800n,
+} satisfies Record<SubscriptionPeriodUnit, bigint>
 
 type SubscriptionRequest = ReturnType<typeof Methods.subscription.schema.request.parse>
 type Authorization = KeyAuthorization.KeyAuthorization
@@ -63,11 +66,11 @@ export function toSubscriptionPeriodSeconds(request: {
   if (!/^[1-9]\d*$/.test(request.periodCount)) {
     throw new VerificationFailedError({ reason: 'periodCount is invalid' })
   }
-  if (request.periodUnit !== 'day' && request.periodUnit !== 'week') {
+  const unitSeconds = subscriptionPeriodUnitSeconds[request.periodUnit]
+  if (unitSeconds === undefined) {
     throw new VerificationFailedError({ reason: 'periodUnit is invalid' })
   }
 
-  const unitSeconds = request.periodUnit === 'day' ? secondsPerDay : secondsPerWeek
   const value = BigInt(request.periodCount) * unitSeconds
   if (value > uint64Max) {
     throw new VerificationFailedError({
@@ -115,11 +118,6 @@ export function getSubscriptionScopes(
   return [
     {
       address: currency,
-      selector: transferSelector,
-      recipients: [recipient],
-    },
-    {
-      address: currency,
       selector: transferWithMemoSelector,
       recipients: [recipient],
     },
@@ -130,15 +128,11 @@ export function getSubscriptionScopes(
 export function getSubscriptionRpcAllowedCalls(
   request: Pick<SubscriptionRequest, 'currency' | 'recipient'>,
 ) {
-  const [transfer, transferWithMemo] = getSubscriptionScopes(request)
+  const [transferWithMemo] = getSubscriptionScopes(request)
   return [
     {
       target: normalizeAddress(request.currency, 'currency'),
       selectorRules: [
-        {
-          selector: transfer.selector,
-          recipients: transfer.recipients,
-        },
         {
           selector: transferWithMemo.selector,
           recipients: transferWithMemo.recipients,
@@ -325,9 +319,9 @@ function assertAuthorizationScopes(
   scopes: readonly KeyAuthorization.Scope[] | undefined,
   request: Pick<SubscriptionRequest, 'currency' | 'recipient'>,
 ) {
-  if (!scopes || scopes.length < 1 || scopes.length > 2) {
+  if (!scopes || scopes.length !== 1) {
     throw new VerificationFailedError({
-      reason: 'keyAuthorization must contain recipient-scoped transfer calls',
+      reason: 'keyAuthorization must contain a recipient-scoped transferWithMemo call',
     })
   }
 
@@ -353,9 +347,6 @@ function assertAuthorizationScopes(
     }
   }
 
-  if (!seen.has(transferSelector)) {
-    throw new VerificationFailedError({ reason: 'keyAuthorization must allow transfer' })
-  }
   if (!seen.has(transferWithMemoSelector)) {
     throw new VerificationFailedError({ reason: 'keyAuthorization must allow transferWithMemo' })
   }
