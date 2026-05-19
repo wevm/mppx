@@ -5,6 +5,6 @@
   "dependencies": {
     "accounts": "0.8.10",
     "mppx": "workspace:*",
-    "viem": "2.47.5"
+    "viem": "^2.50.4"
   }
 }

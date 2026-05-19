@@ -34,8 +34,7 @@
 import { tempo } from 'mppx/client'
 import { createClient, type Hex, http } from 'viem'
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts'
-import { tempoModerato } from 'viem/chains'
-import { Actions } from 'viem/tempo'
+import { Actions, Chain } from 'viem/tempo'
 
 const BASE_URL = process.env.BASE_URL ?? 'http://localhost:5173'
 
@@ -54,7 +53,7 @@ const account = privateKeyToAccount((process.env.PRIVATE_KEY as Hex) ?? generate
 // `pollingInterval` of 1s makes block confirmations snappier for the demo.
 const client = createClient({
   account,
-  chain: tempoModerato,
+  chain: Chain.testnet,
   pollingInterval: 1_000,
   transport: http(),
 })

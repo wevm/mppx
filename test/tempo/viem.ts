@@ -1,8 +1,8 @@
 import type * as Hex from 'ox/Hex'
 import { createClient, defineChain, type HttpTransportConfig, http as viem_http } from 'viem'
 import { english, generateMnemonic, type LocalAccount, mnemonicToAccount } from 'viem/accounts'
-import { tempo, tempoDevnet, tempoLocalnet, tempoModerato } from 'viem/chains'
 import { Actions } from 'viem/tempo'
+import { tempo, tempoDevnet, tempoLocalnet, tempoModerato } from 'viem/tempo/chains'
 
 import { nodeEnv } from '../config.js'
 import { rpcUrl } from './prool.js'

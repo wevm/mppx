@@ -1,8 +1,7 @@
 import { Mppx, tempo } from 'mppx/server'
 import { createClient, http } from 'viem'
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts'
-import { tempoModerato } from 'viem/chains'
-import { Actions } from 'viem/tempo'
+import { Actions, Chain } from 'viem/tempo'
 
 const account = privateKeyToAccount(generatePrivateKey())
 
@@ -42,7 +41,7 @@ export async function handler(request: Request): Promise<Response | null> {
 }
 
 const client = createClient({
-  chain: tempoModerato,
+  chain: Chain.testnet,
   pollingInterval: 1_000,
   transport: http(process.env.MPPX_RPC_URL),
 })

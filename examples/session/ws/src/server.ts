@@ -30,8 +30,7 @@ import type * as node_net from 'node:net'
 import { Mppx, Store, tempo } from 'mppx/server'
 import { createClient, http } from 'viem'
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts'
-import { tempoModerato } from 'viem/chains'
-import { Actions } from 'viem/tempo'
+import { Actions, Chain } from 'viem/tempo'
 import { WebSocketServer } from 'ws'
 
 // Server Account Setup
@@ -61,7 +60,7 @@ const secretKey = process.env.MPP_SECRET_KEY ?? 'mppx-demo-websocket-secret'
 // session method needs signing capabilities for settlement and close flows.
 const client = createClient({
   account,
-  chain: tempoModerato,
+  chain: Chain.testnet,
   pollingInterval: 1_000,
   transport: http(),
 })

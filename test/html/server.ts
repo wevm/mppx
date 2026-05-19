@@ -3,8 +3,8 @@ import * as http from 'node:http'
 import { Mppx, Request as ServerRequest, stripe, tempo } from 'mppx/server'
 import { createClient, http as createHttpTransport } from 'viem'
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts'
-import { tempoModerato } from 'viem/chains'
 import { Actions } from 'viem/tempo'
+import { tempoModerato } from 'viem/tempo/chains'
 
 import { stripePreviewVersion } from '../../src/stripe/internal/constants.js'
 

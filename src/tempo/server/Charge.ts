@@ -15,8 +15,8 @@ import {
   verifyTypedData,
   call as viem_call,
 } from 'viem/actions'
-import { tempo as tempo_chain } from 'viem/chains'
 import { Abis, Actions, Transaction } from 'viem/tempo'
+import { tempo as tempo_chain } from 'viem/tempo/chains'
 
 import { PaymentError, VerificationFailedError } from '../../Errors.js'
 import * as Expires from '../../Expires.js'

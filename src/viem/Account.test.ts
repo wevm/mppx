@@ -1,6 +1,6 @@
 import { createClient, http } from 'viem'
 import { privateKeyToAccount } from 'viem/accounts'
-import { mainnet } from 'viem/chains'
+import { tempo as mainnet } from 'viem/tempo/chains'
 import { describe, expect, test } from 'vp/test'
 
 import * as Account from './Account.js'

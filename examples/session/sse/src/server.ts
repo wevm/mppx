@@ -23,9 +23,8 @@
 import { Mppx, Store, tempo } from 'mppx/server'
 import { createClient, http } from 'viem'
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts'
-import { tempoModerato } from 'viem/chains'
 // `Actions` provides Tempo-specific viem actions (faucet, token ops, etc.)
-import { Actions } from 'viem/tempo'
+import { Actions, Chain } from 'viem/tempo'
 
 // Server Account Setup
 
@@ -53,7 +52,7 @@ const pricePerToken = '0.000075'
 // payment channels and co-signing fee-payer transactions.
 const client = createClient({
   account,
-  chain: tempoModerato,
+  chain: Chain.testnet,
   pollingInterval: 1_000,
   transport: http(),
 })

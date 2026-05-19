@@ -8,8 +8,8 @@ import {
   sendRawTransactionSync,
   signTransaction,
 } from 'viem/actions'
-import { tempo as tempo_chain } from 'viem/chains'
 import { Abis, Account as TempoAccount, Transaction } from 'viem/tempo'
+import { tempo as tempo_chain } from 'viem/tempo/chains'
 
 import { VerificationFailedError } from '../../Errors.js'
 import type { LooseOmit, MaybePromise, NoExtraKeys } from '../../internal/types.js'

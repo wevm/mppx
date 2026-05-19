@@ -29,8 +29,7 @@
 import { Mppx, tempo } from 'mppx/server'
 import { createClient, http } from 'viem'
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts'
-import { tempoModerato } from 'viem/chains'
-import { Actions } from 'viem/tempo'
+import { Actions, Chain } from 'viem/tempo'
 
 // Generate a fresh keypair for the server on each start.
 // In production, you'd use a persistent key stored securely.
@@ -51,7 +50,7 @@ const currency = '0x20c0000000000000000000000000000000000000' as const
 // `pollingInterval: 1_000` makes block polling faster for demo responsiveness.
 const client = createClient({
   account,
-  chain: tempoModerato,
+  chain: Chain.testnet,
   pollingInterval: 1_000,
   transport: http(process.env.MPPX_RPC_URL),
 })

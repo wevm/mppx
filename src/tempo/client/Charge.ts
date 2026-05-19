@@ -6,8 +6,8 @@ import {
   signTypedData,
   signTransaction,
 } from 'viem/actions'
-import { tempo as tempo_chain } from 'viem/chains'
 import { Actions } from 'viem/tempo'
+import { tempo as tempo_chain } from 'viem/tempo/chains'
 
 import * as Credential from '../../Credential.js'
 import * as Method from '../../Method.js'

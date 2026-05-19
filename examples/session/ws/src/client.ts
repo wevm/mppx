@@ -17,8 +17,7 @@ import { WebSocket } from 'isows'
 import { tempo } from 'mppx/client'
 import { createClient, type Hex, http } from 'viem'
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts'
-import { tempoModerato } from 'viem/chains'
-import { Actions } from 'viem/tempo'
+import { Actions, Chain } from 'viem/tempo'
 
 // The server URL. The websocket URL is derived from this base.
 const BASE_URL = process.env.BASE_URL ?? 'http://localhost:5173'
@@ -42,7 +41,7 @@ const account = privateKeyToAccount((process.env.PRIVATE_KEY as Hex) ?? generate
 // transaction for the payment channel.
 const client = createClient({
   account,
-  chain: tempoModerato,
+  chain: Chain.testnet,
   pollingInterval: 1_000,
   transport: http(),
 })

@@ -31,11 +31,10 @@ document.getElementById('button')!.addEventListener('click', async () => {
 // Internal
 
 import { createClient, http } from 'viem'
-import { tempoModerato } from 'viem/chains'
-import { Actions } from 'viem/tempo'
+import { Actions, Chain } from 'viem/tempo'
 
 const client = createClient({
-  chain: tempoModerato,
+  chain: Chain.testnet,
   pollingInterval: 200,
   transport: http(),
 })

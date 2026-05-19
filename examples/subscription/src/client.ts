@@ -3,7 +3,7 @@ import { Mppx, tempo } from 'mppx/client'
 import type { Subscription } from 'mppx/tempo'
 import { createClient, type Hex, http } from 'viem'
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts'
-import { tempoModerato } from 'viem/chains'
+import { Chain } from 'viem/tempo'
 
 const baseUrl = process.env.BASE_URL ?? 'http://localhost:5173'
 const userId = process.env.USER_ID ?? 'user-1'
@@ -11,7 +11,7 @@ const account = privateKeyToAccount((process.env.PRIVATE_KEY as Hex) ?? generate
 
 const client = createClient({
   account,
-  chain: tempoModerato,
+  chain: Chain.testnet,
   transport: http(process.env.MPPX_RPC_URL),
 })
 

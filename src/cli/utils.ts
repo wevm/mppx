@@ -2,7 +2,7 @@ import * as readline from 'node:readline'
 
 import type { Chain } from 'viem'
 import { type Address, createClient, http } from 'viem'
-import { tempo as tempoMainnet, tempoModerato } from 'viem/chains'
+import { tempo as tempoMainnet, tempoModerato } from 'viem/tempo/chains'
 
 import * as defaults from '../tempo/internal/defaults.js'
 
@@ -249,7 +249,7 @@ export async function resolveChain(
   if (!rpcUrl) return tempoMainnet
   const { getChainId } = await import('viem/actions')
   const chainId = await getChainId(createClient({ transport: http(rpcUrl) }))
-  const allExports = Object.values(await import('viem/chains')) as unknown[]
+  const allExports = Object.values(await import('viem/tempo/chains')) as unknown[]
   const candidates = allExports.filter(
     (c): c is Chain =>
       typeof c === 'object' && c !== null && 'id' in c && (c as Chain).id === chainId,

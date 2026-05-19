@@ -1,8 +1,8 @@
 import { createClient, custom, defineChain, type Hex } from 'viem'
 import { privateKeyToAccount } from 'viem/accounts'
 import { signTransaction } from 'viem/actions'
-import { tempoLocalnet } from 'viem/chains'
 import { Account as TempoAccount, Transaction } from 'viem/tempo'
+import { tempoLocalnet } from 'viem/tempo/chains'
 import { describe, expect, test } from 'vp/test'
 
 import * as Client from './Client.js'

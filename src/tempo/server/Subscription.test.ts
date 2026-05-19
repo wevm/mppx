@@ -3,7 +3,7 @@ import { Mppx } from 'mppx/server'
 import { KeyAuthorization } from 'ox/tempo'
 import { createClient, custom } from 'viem'
 import { privateKeyToAccount } from 'viem/accounts'
-import { tempo as tempo_chain } from 'viem/chains'
+import { tempo as tempo_chain } from 'viem/tempo/chains'
 import { describe, expect, test } from 'vp/test'
 
 import * as Store from '../../Store.js'

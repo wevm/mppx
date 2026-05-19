@@ -14,7 +14,7 @@
     "mppx": "latest",
     "tsx": "latest",
     "typescript": "latest",
-    "viem": "latest",
+    "viem": "^2.50.4",
     "vite": "latest"
   }
 }

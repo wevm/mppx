@@ -1,6 +1,6 @@
 import { local, Provider } from 'accounts'
 import { createClient, custom, http } from 'viem'
-import { tempoModerato, tempoLocalnet } from 'viem/chains'
+import { tempoModerato, tempoLocalnet } from 'viem/tempo/chains'
 
 import { tempo } from '../../../../client/index.js'
 import * as Html from '../../../../Html.js'

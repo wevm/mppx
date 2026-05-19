@@ -18,7 +18,7 @@ import {
   type Account as viem_Account,
   type Client as viem_Client,
 } from 'viem'
-import { tempo as tempo_chain } from 'viem/chains'
+import { tempo as tempo_chain } from 'viem/tempo/chains'
 
 import {
   AmountExceedsDepositError,

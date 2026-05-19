@@ -1,7 +1,7 @@
 import { Hex } from 'ox'
 import { KeyAuthorization } from 'ox/tempo'
 import { isAddressEqual, type Address } from 'viem'
-import { tempo as tempo_chain } from 'viem/chains'
+import { tempo as tempo_chain } from 'viem/tempo/chains'
 
 import * as Credential from '../../Credential.js'
 import type { MaybePromise } from '../../internal/types.js'

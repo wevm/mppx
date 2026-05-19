@@ -1,15 +1,15 @@
 import { Mppx, tempo } from 'mppx/client'
+import { Chain } from 'viem/tempo'
 import { createConfig, http } from 'wagmi'
 import { getConnectorClient } from 'wagmi/actions'
-import { tempoModerato } from 'wagmi/chains'
 import { metaMask } from 'wagmi/connectors'
 import { webAuthn } from 'wagmi/tempo'
 
 export const config = createConfig({
-  chains: [tempoModerato],
+  chains: [Chain.testnet],
   connectors: [webAuthn(), metaMask()],
   transports: {
-    [tempoModerato.id]: http(),
+    [Chain.testnet.id]: http(),
   },
 })
 

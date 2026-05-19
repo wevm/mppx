@@ -16,7 +16,7 @@
     "mppx": "latest",
     "react": "^19.2.5",
     "react-dom": "^19.2.5",
-    "viem": "^2.47.6",
+    "viem": "^2.50.4",
     "wagmi": "^3.6.9"
   },
   "devDependencies": {

@@ -1,4 +1,4 @@
-import { tempo as tempoMainnet, tempoModerato } from 'viem/chains'
+import { tempo as tempoMainnet, tempoModerato } from 'viem/tempo/chains'
 import { afterEach, describe, expect, test } from 'vp/test'
 
 import { networkRpcUrls, resolveChain, resolveRpcUrl } from './utils.js'

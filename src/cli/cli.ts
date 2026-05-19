@@ -6,7 +6,7 @@ import { Cli, Errors, z } from 'incur'
 import { Base64 } from 'ox'
 import { type Address, createClient, http } from 'viem'
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts'
-import { tempo as tempoMainnet } from 'viem/chains'
+import { tempo as tempoMainnet } from 'viem/tempo/chains'
 
 import * as Challenge from '../Challenge.js'
 import { normalizeHeaders } from '../client/internal/Fetch.js'

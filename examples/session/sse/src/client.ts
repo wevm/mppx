@@ -31,10 +31,9 @@
 import { tempo } from 'mppx/client'
 import { createClient, type Hex, http } from 'viem'
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts'
-// `tempoModerato` is Tempo's testnet chain (like Ethereum's Sepolia/Goerli).
-import { tempoModerato } from 'viem/chains'
 // `Actions` provides Tempo-specific viem actions: faucet funding, token balances, etc.
-import { Actions } from 'viem/tempo'
+import { Actions, Chain } from 'viem/tempo'
+// `Chain.testnet` is Tempo's testnet chain (like Ethereum's Sepolia/Goerli).
 
 // The server URL. Defaults to localhost for local development.
 const BASE_URL = process.env.BASE_URL ?? 'http://localhost:5173'
@@ -57,7 +56,7 @@ const account = privateKeyToAccount((process.env.PRIVATE_KEY as Hex) ?? generate
 
 const client = createClient({
   account,
-  chain: tempoModerato,
+  chain: Chain.testnet,
   pollingInterval: 1_000,
   transport: http(),
 })
