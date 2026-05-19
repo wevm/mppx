@@ -12,7 +12,7 @@ import { parseEvent } from '../session/Sse.js'
 import type { SessionCredentialPayload, SessionReceipt } from '../session/Types.js'
 import * as Ws from '../session/Ws.js'
 import type { ChannelEntry } from './ChannelOps.js'
-import { session as sessionPlugin } from './Session.js'
+import { createSessionController, session as sessionPlugin } from './Session.js'
 
 type WebSocketConstructor = {
   new (url: string | URL, protocols?: string | string[]): WebSocket
@@ -122,7 +122,7 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
   let wsDeliveredChunks = 0n
   let wsTickCost = 0n
 
-  const method = sessionPlugin({
+  const session = createSessionController({
     account: parameters.account,
     authorizedSigner: parameters.authorizedSigner,
     getClient: parameters.client ? () => parameters.client! : parameters.getClient,
@@ -134,6 +134,7 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
       channel = entry
     },
   })
+  const { method } = session
 
   const wrappedFetch = Fetch.from({
     fetch: fetchFn,
@@ -150,6 +151,14 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
     assertReceiptWithinLocalState(receipt)
     const next = BigInt(receipt.spent)
     spent = spent > next ? spent : next
+  }
+
+  async function handleSessionResponse(response: Response): Promise<void> {
+    const channelId = channel?.channelId
+    const result = await session.syncFromResponse(response, { channelId })
+    if (!result?.channelEvicted) return
+    channel = null
+    spent = 0n
   }
 
   function assertReceiptWithinLocalState(receipt: SessionReceipt) {
@@ -267,6 +276,7 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
   ): Promise<PaymentResponse> {
     lastUrl = input
     const response = await wrappedFetch(input, init)
+    await handleSessionResponse(response)
     return toPaymentResponse(response)
   }
 
@@ -428,6 +438,7 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
         headers: { Authorization: credential },
       })
       if (!response.ok) {
+        await handleSessionResponse(response)
         const body = await response.text().catch(() => '')
         const wwwAuth = response.headers.get('WWW-Authenticate') ?? ''
         throw new Error(
@@ -507,6 +518,7 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
                     headers: { Authorization: credential },
                   })
                   if (!voucherResponse.ok) {
+                    await handleSessionResponse(voucherResponse)
                     throw new Error(`Voucher POST failed with status ${voucherResponse.status}`)
                   }
                   break
@@ -822,6 +834,7 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
         headers: { Authorization: credential },
       })
       if (!response.ok) {
+        await handleSessionResponse(response)
         const body = await response.text().catch(() => '')
         const detail = (() => {
           if (!body) return ''
