@@ -258,9 +258,14 @@ async function sendFeePayerTx(
   const prepared = await prepareTransactionRequest(client, {
     account,
     calls: [{ to, data }],
-    feePayer: true,
     ...(feeToken ? { feeToken } : {}),
+    nonceKey: 'expiring',
+    validBefore: Math.floor(Date.now() / 1_000) + 25,
   } as never)
+  // Estimate before enabling fee-payer mode so Tempo includes sender
+  // signature verification costs in the gas budget.
+  prepared.gas = (prepared.gas ?? 0n) + 5_000n
+  ;(prepared as Record<string, unknown>).feePayer = true
 
   const serialized = (await signTransaction(client, {
     ...prepared,

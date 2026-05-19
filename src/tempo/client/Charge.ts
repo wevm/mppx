@@ -163,12 +163,13 @@ export function charge(parameters: charge.Parameters = {}) {
       const prepared = await prepareTransactionRequest(client, {
         account,
         calls,
-        ...(methodDetails?.feePayer && { feePayer: true }),
         nonceKey: 'expiring',
         validBefore,
       } as never)
-      // FIXME: figure out gas estimation issue for fee payer tx
-      prepared.gas = prepared.gas! + 5_000n
+      // Estimate before enabling fee-payer mode so Tempo includes sender
+      // signature and access-key verification costs in the gas budget.
+      prepared.gas = (prepared.gas ?? 0n) + 5_000n
+      if (methodDetails?.feePayer) (prepared as Record<string, unknown>).feePayer = true
       const signature = await signTransaction(client, prepared as never)
 
       return Credential.serialize({

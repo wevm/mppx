@@ -14,7 +14,7 @@
     "mppx": "workspace:*",
     "tsx": "^4.21.0",
     "typescript": "~6.0.3",
-    "viem": "^2.47.6",
+    "viem": "^2.50.4",
     "vite": "latest"
   }
 }
