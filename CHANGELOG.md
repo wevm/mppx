@@ -1,5 +1,12 @@
 # mppx
 
+## 0.6.27
+
+### Patch Changes
+
+- 27d9218: Updated Tempo chain imports to use the `viem/tempo/chains` entrypoint.
+- 22d8eed: Updated viem and ox dependencies to their latest published versions and fixed sponsored Tempo transaction gas estimation with the new versions.
+
 ## 0.6.26
 
 ### Patch Changes
