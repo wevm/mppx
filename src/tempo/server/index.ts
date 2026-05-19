@@ -1,6 +1,7 @@
 export * as ChannelStore from '../session/ChannelStore.js'
 export * as Sse from '../session/Sse.js'
 export * as Ws from '../session/Ws.js'
+export { authorize, capture, voidAuthorization } from './Authorize.js'
 export { charge } from './Charge.js'
 export { tempo } from './Methods.js'
 export { session, settle } from './Session.js'

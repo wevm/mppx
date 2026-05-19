@@ -133,6 +133,30 @@ importers:
         specifier: ^0.0.25
         version: 0.0.25(@typescript/native-preview@7.0.0-dev.20260323.1)(typescript@5.9.3)
 
+  examples/authorize:
+    dependencies:
+      '@remix-run/node-fetch-server':
+        specifier: ^0.13.0
+        version: 0.13.1
+      '@types/node':
+        specifier: ^25.6.0
+        version: 25.9.0
+      '@typescript/native-preview':
+        specifier: 7.0.0-dev.20260323.1
+        version: 7.0.0-dev.20260323.1
+      mppx:
+        specifier: workspace:*
+        version: link:../..
+      typescript:
+        specifier: ~5.9.3
+        version: 5.9.3
+      viem:
+        specifier: ^2.50.4
+        version: 2.50.4(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.4.3)
+      vite:
+        specifier: ^8.0.10
+        version: 8.0.13(@types/node@25.9.0)(esbuild@0.28.0)(tsx@4.22.2)(yaml@2.8.4)
+
   examples/charge:
     dependencies:
       '@remix-run/node-fetch-server':
@@ -1845,9 +1869,6 @@ packages:
 
   '@types/node@25.6.2':
     resolution: {integrity: sha512-sokuT28dxf9JT5Kady1fsXOvI4HVpjZa95NKT5y9PNTIrs2AsobR4GFAA90ZG8M+nxVRLysCXsVj6eGC7Vbrlw==}
-
-  '@types/node@25.8.0':
-    resolution: {integrity: sha512-TCFSk8IZh+iLX1xtksoBVtdmgL+1IX0fC9BeU4QqFSuNdN/K+HUlhqOzEmSYYpZUVsLYcPqc9KX+60iDuninSQ==}
 
   '@types/node@25.9.0':
     resolution: {integrity: sha512-AOQwYUNolgy3VosiRqXrACUXTN8nJUtPl7FJXMqZVyxiiCLhQuG3jXKvCS1ALr+Y2OmZhzzLVlYPEqJaiqkaJQ==}
@@ -5507,7 +5528,7 @@ snapshots:
   '@types/body-parser@1.19.6':
     dependencies:
       '@types/connect': 3.4.38
-      '@types/node': 25.8.0
+      '@types/node': 25.9.0
 
   '@types/chai@5.2.3':
     dependencies:
@@ -5516,7 +5537,7 @@ snapshots:
 
   '@types/connect@3.4.38':
     dependencies:
-      '@types/node': 25.8.0
+      '@types/node': 25.9.0
 
   '@types/debug@4.1.13':
     dependencies:
@@ -5526,13 +5547,13 @@ snapshots:
 
   '@types/docker-modem@3.0.6':
     dependencies:
-      '@types/node': 25.8.0
+      '@types/node': 25.9.0
       '@types/ssh2': 1.15.5
 
   '@types/dockerode@4.0.1':
     dependencies:
       '@types/docker-modem': 3.0.6
-      '@types/node': 25.8.0
+      '@types/node': 25.9.0
       '@types/ssh2': 1.15.5
 
   '@types/esrecurse@4.3.1': {}
@@ -5541,7 +5562,7 @@ snapshots:
 
   '@types/express-serve-static-core@5.1.1':
     dependencies:
-      '@types/node': 25.8.0
+      '@types/node': 25.9.0
       '@types/qs': 6.14.0
       '@types/range-parser': 1.2.7
       '@types/send': 1.2.1
@@ -5572,10 +5593,6 @@ snapshots:
     dependencies:
       undici-types: 7.19.2
 
-  '@types/node@25.8.0':
-    dependencies:
-      undici-types: 7.24.6
-
   '@types/node@25.9.0':
     dependencies:
       undici-types: 7.24.6
@@ -5594,20 +5611,20 @@ snapshots:
 
   '@types/send@1.2.1':
     dependencies:
-      '@types/node': 25.8.0
+      '@types/node': 25.9.0
 
   '@types/serve-static@2.2.0':
     dependencies:
       '@types/http-errors': 2.0.5
-      '@types/node': 25.8.0
+      '@types/node': 25.9.0
 
   '@types/ssh2-streams@0.1.13':
     dependencies:
-      '@types/node': 25.8.0
+      '@types/node': 25.9.0
 
   '@types/ssh2@0.5.52':
     dependencies:
-      '@types/node': 25.8.0
+      '@types/node': 25.9.0
       '@types/ssh2-streams': 0.1.13
 
   '@types/ssh2@1.15.5':
@@ -7654,7 +7671,7 @@ snapshots:
 
   stripe@17.7.0:
     dependencies:
-      '@types/node': 25.8.0
+      '@types/node': 25.9.0
       qs: 6.14.2
 
   strtok3@10.3.5:

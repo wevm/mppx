@@ -3,6 +3,7 @@ import { describe, expect, test } from 'vp/test'
 
 import * as Store from '../../Store.js'
 import { chainId, escrowContract as escrowContractDefaults } from '../internal/defaults.js'
+import * as PrecompileChannel from '../precompile/Channel.js'
 import * as ChannelStore from './ChannelStore.js'
 
 const channelId = '0x0000000000000000000000000000000000000000000000000000000000000001' as Hex
@@ -12,7 +13,26 @@ const mixedCaseAliasChannelId = lowerCaseAliasChannelId.replace(/[a-f]/g, (chara
   index % 2 === 0 ? character.toUpperCase() : character,
 ) as Hex
 
-function makeChannel(overrides?: Partial<ChannelStore.State>): ChannelStore.State {
+const precompileDescriptor = {
+  payer: '0x0000000000000000000000000000000000000001' as Address,
+  payee: '0x0000000000000000000000000000000000000002' as Address,
+  operator: '0x0000000000000000000000000000000000000005' as Address,
+  token: '0x0000000000000000000000000000000000000003' as Address,
+  salt: `0x${'11'.repeat(32)}` as Hex,
+  authorizedSigner: '0x0000000000000000000000000000000000000004' as Address,
+  expiringNonceHash: `0x${'22'.repeat(32)}` as Hex,
+} satisfies PrecompileChannel.ChannelDescriptor
+
+type ContractChannelOverrides = Partial<ChannelStore.BaseState> &
+  Partial<ChannelStore.ContractBackendState>
+type PrecompileChannelOverrides = Partial<ChannelStore.BaseState> &
+  ChannelStore.PrecompileBackendState
+
+type ChannelOverrides = ContractChannelOverrides | PrecompileChannelOverrides
+
+function makeChannel(overrides?: ContractChannelOverrides): ChannelStore.State
+function makeChannel(overrides: PrecompileChannelOverrides): ChannelStore.State
+function makeChannel(overrides?: ChannelOverrides): ChannelStore.State {
   return {
     channelId,
     payer: '0x0000000000000000000000000000000000000001' as Address,
@@ -31,14 +51,18 @@ function makeChannel(overrides?: Partial<ChannelStore.State>): ChannelStore.Stat
     finalized: false,
     createdAt: '2025-01-01T00:00:00.000Z',
     ...overrides,
-  }
+  } as ChannelStore.State
 }
 
 function seedChannel(
   store: ChannelStore.ChannelStore,
-  overrides?: Partial<ChannelStore.State>,
+  overrides?: ChannelOverrides,
 ): Promise<ChannelStore.State | null> {
-  return store.updateChannel(channelId, () => makeChannel(overrides))
+  return store.updateChannel(channelId, () => {
+    if (!overrides) return makeChannel()
+    if (overrides.backend === 'precompile') return makeChannel(overrides)
+    return makeChannel(overrides)
+  })
 }
 
 function stripUpdateMethod(store: Store.Store | Store.AtomicStore): Store.Store {
@@ -183,6 +207,55 @@ describe('channelStore', () => {
       expect(loaded!.settledOnChain).toBe(123_456_789n)
       expect(loaded!.highestVoucherAmount).toBe(888_888_888n)
       expect(loaded!.spent).toBe(42n)
+    })
+
+    test('keeps existing contract-backed channels compatible when backend fields are absent', async () => {
+      const cs = ChannelStore.fromStore(Store.memory())
+      await seedChannel(cs)
+
+      const loaded = await cs.getChannel(channelId)
+      expect(loaded).not.toBeNull()
+      expect(ChannelStore.isContractState(loaded!)).toBe(true)
+      expect(loaded!.backend).toBeUndefined()
+      expect('operator' in loaded!).toBe(false)
+      expect('salt' in loaded!).toBe(false)
+      expect('expiringNonceHash' in loaded!).toBe(false)
+      expect('descriptor' in loaded!).toBe(false)
+    })
+
+    test('supports explicit contract-backed channel state', async () => {
+      const cs = ChannelStore.fromStore(Store.memory())
+      await seedChannel(cs, { backend: 'contract' })
+
+      const loaded = await cs.getChannel(channelId)
+      expect(loaded).not.toBeNull()
+      expect(ChannelStore.isContractState(loaded!)).toBe(true)
+      expect(loaded!.backend).toBe('contract')
+    })
+
+    test('persists precompile descriptor fields without affecting accounting', async () => {
+      const cs = ChannelStore.fromStore(Store.memory())
+      await seedChannel(cs, {
+        backend: 'precompile',
+        operator: precompileDescriptor.operator,
+        salt: precompileDescriptor.salt,
+        expiringNonceHash: precompileDescriptor.expiringNonceHash,
+        descriptor: precompileDescriptor,
+      })
+
+      const deducted = await ChannelStore.deductFromChannel(cs, channelId, 1_000_000n)
+      expect(deducted.ok).toBe(true)
+
+      const loaded = await cs.getChannel(channelId)
+      expect(ChannelStore.isPrecompileState(loaded!)).toBe(true)
+      if (!ChannelStore.isPrecompileState(loaded!)) throw new Error('expected precompile channel')
+      expect(loaded!.backend).toBe('precompile')
+      expect(loaded!.operator).toBe(precompileDescriptor.operator)
+      expect(loaded!.salt).toBe(precompileDescriptor.salt)
+      expect(loaded!.expiringNonceHash).toBe(precompileDescriptor.expiringNonceHash)
+      expect(loaded!.descriptor).toEqual(precompileDescriptor)
+      expect(loaded!.spent).toBe(1_000_000n)
+      expect(loaded!.units).toBe(1)
     })
   })
 

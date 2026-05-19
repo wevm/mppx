@@ -93,6 +93,91 @@ describe('authorize hook', () => {
     server.close()
   })
 
+  test('verified management responses can omit Payment-Receipt', async () => {
+    const method = Method.toServer(
+      Method.from({
+        name: 'mock',
+        intent: 'authorize',
+        schema: {
+          credential: { payload: z.object({ token: z.string() }) },
+          request: z.object({ amount: z.string() }),
+        },
+      }),
+      {
+        async verify() {
+          return {
+            response: Response.json({ authorization: { id: 'auth-1' } }),
+          } as never
+        },
+      },
+    )
+
+    const handler = Mppx.create({ methods: [method], realm, secretKey })
+    const first = await handler.authorize({ amount: '1' })(
+      new Request('https://example.com/resource'),
+    )
+
+    expect(first.status).toBe(402)
+    if (first.status !== 402) throw new Error('expected challenge')
+
+    const credential = Credential.from({
+      challenge: Challenge.fromResponse(first.challenge),
+      payload: { token: 'ok' },
+    })
+    const second = await handler.authorize({ amount: '1' })(
+      new Request('https://example.com/resource', {
+        headers: { Authorization: Credential.serialize(credential) },
+      }),
+    )
+
+    expect(second.status).toBe(200)
+    if (second.status !== 200) throw new Error('expected authorize success')
+
+    const response = second.withReceipt()
+    expect(response.headers.get('Payment-Receipt')).toBeNull()
+    expect(await response.json()).toEqual({ authorization: { id: 'auth-1' } })
+  })
+
+  test('verified management responses ignore protected handler responses', async () => {
+    const method = Method.toServer(
+      Method.from({
+        name: 'mock',
+        intent: 'authorize',
+        schema: {
+          credential: { payload: z.object({ token: z.string() }) },
+          request: z.object({ amount: z.string() }),
+        },
+      }),
+      {
+        async verify() {
+          return {
+            response: Response.json({ authorization: { id: 'auth-1' } }),
+          } as never
+        },
+      },
+    )
+
+    const handler = Mppx.create({ methods: [method], realm, secretKey })
+    const first = await handler.authorize({ amount: '1' })(
+      new Request('https://example.com/resource'),
+    )
+    if (first.status !== 402) throw new Error('expected challenge')
+
+    const credential = Credential.from({
+      challenge: Challenge.fromResponse(first.challenge),
+      payload: { token: 'ok' },
+    })
+    const second = await handler.authorize({ amount: '1' })(
+      new Request('https://example.com/resource', {
+        headers: { Authorization: Credential.serialize(credential) },
+      }),
+    )
+    if (second.status !== 200) throw new Error('expected authorize success')
+
+    const response = second.withReceipt(new Response('protected content'))
+    expect(await response.json()).toEqual({ authorization: { id: 'auth-1' } })
+  })
+
   test('compose evaluates authorize hooks sequentially on no-credential requests', async () => {
     const calls: string[] = []
     const createMethod = (

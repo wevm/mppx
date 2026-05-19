@@ -1,4 +1,6 @@
 export * as Proof from './Proof.js'
 export * as Methods from './Methods.js'
+export * as Authorize from './authorize/index.js'
+export * as Precompile from './precompile/index.js'
 export * as Session from './session/index.js'
 export * as Subscription from './subscription/index.js'

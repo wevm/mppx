@@ -199,6 +199,21 @@ export type StableBindingFn<method extends Method> = (
 ) => Record<string, unknown>
 
 /** Verification function for a single method. */
+export type VerifyResult =
+  | Receipt.Receipt
+  | {
+      /** Response for verified management actions that do not consume value. */
+      response: globalThis.Response
+    }
+
+/** Returns true when a verification result is a response without a receipt. */
+export function isVerifyResponse(
+  result: unknown,
+): result is Extract<VerifyResult, { response: globalThis.Response }> {
+  return typeof result === 'object' && result !== null && 'response' in result
+}
+
+/** Verification function for a single method. */
 export type VerifyFn<method extends Method> = (
   parameters: VerifyContext<method>,
 ) => Promise<Receipt.Receipt>
