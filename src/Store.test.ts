@@ -112,6 +112,83 @@ describe.each([
   })
 })
 
+describe('keyPrefix', () => {
+  test('scopes get, put, and delete to prefixed backing keys', async () => {
+    const backing = Store.memory()
+    const store = Store.from(backing, { keyPrefix: 'tenant:' })
+
+    await store.put('k', nested)
+    expect(await backing.get('tenant:k')).toEqual(nested)
+    expect(await backing.get('k')).toBeNull()
+    expect(await store.get('k')).toEqual(nested)
+
+    await store.delete('k')
+    expect(await backing.get('tenant:k')).toBeNull()
+  })
+
+  test('scopes atomic update to prefixed backing keys', async () => {
+    const backing = Store.memory()
+    const store = Store.from(backing, { keyPrefix: 'tenant:' })
+
+    const result = await store.update('k', (current) => {
+      expect(current).toBeNull()
+      return { op: 'set', value: { count: 1 }, result: 'created' as const }
+    })
+
+    expect(result).toBe('created')
+    expect(await backing.get('tenant:k')).toEqual({ count: 1 })
+    expect(await backing.get('k')).toBeNull()
+  })
+
+  test('returns the original store when keyPrefix is empty', () => {
+    const backing = Store.memory()
+    expect(Store.from(backing, { keyPrefix: '' })).toBe(backing)
+  })
+
+  test('reuses wrappers for the same backing store and prefix', () => {
+    const backing = Store.memory()
+    expect(Store.from(backing, { keyPrefix: 'tenant:' })).toBe(
+      Store.from(backing, { keyPrefix: 'tenant:' }),
+    )
+    expect(Store.from(backing, { keyPrefix: 'other:' })).not.toBe(
+      Store.from(backing, { keyPrefix: 'tenant:' }),
+    )
+  })
+
+  test('constructs memory stores with a keyPrefix', async () => {
+    const store = Store.memory({ keyPrefix: 'tenant:' })
+    await store.put('k', 'value')
+    expect(await store.get('k')).toBe('value')
+  })
+
+  test('constructs adapter stores with a keyPrefix', async () => {
+    const cloudflareKv = fakeStringKv()
+    const cloudflare = Store.cloudflare(cloudflareKv, { keyPrefix: 'tenant:' })
+    await cloudflare.put('k', 'value')
+    expect(await cloudflareKv.get('tenant:k')).not.toBeNull()
+    expect(await cloudflareKv.get('k')).toBeNull()
+
+    const redisKv = fakeStringKv()
+    const redis = Store.redis(
+      {
+        get: redisKv.get,
+        set: redisKv.put,
+        del: redisKv.delete,
+      },
+      { keyPrefix: 'tenant:' },
+    )
+    await redis.put('k', 'value')
+    expect(await redisKv.get('tenant:k')).not.toBeNull()
+    expect(await redisKv.get('k')).toBeNull()
+
+    const upstashKv = fakeUnknownKv()
+    const upstash = Store.upstash(upstashKv, { keyPrefix: 'tenant:' })
+    await upstash.put('k', 'value')
+    expect(await upstashKv.get('tenant:k')).toBe('value')
+    expect(await upstashKv.get('k')).toBeNull()
+  })
+})
+
 describe('json roundtrip behavior', () => {
   test('cloudflare json-roundtrips nested objects', async () => {
     const store = Store.cloudflare(fakeStringKv())

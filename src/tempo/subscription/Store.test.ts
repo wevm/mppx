@@ -26,6 +26,61 @@ function createRecord(overrides: Partial<SubscriptionRecord> = {}): Subscription
 }
 
 describe('tempo subscription store', () => {
+  test('prefixes all backing store keys when configured', async () => {
+    const rawStore = Store.memory()
+    const store = fromStore(Store.from(rawStore, { keyPrefix: 'tenant:' }))
+    let finishActivation!: () => void
+    const pendingActivation = new Promise<void>((resolve) => {
+      finishActivation = resolve
+    })
+    let activationStarted!: () => void
+    const activationStartedPromise = new Promise<void>((resolve) => {
+      activationStarted = resolve
+    })
+
+    const activation = store.activate({
+      challengeId: 'challenge-1',
+      create: async () => {
+        activationStarted()
+        await pendingActivation
+        return { subscription: createRecord() }
+      },
+      lookupKey: 'user-1:plan:pro',
+    })
+    await activationStartedPromise
+
+    expect(await rawStore.get('tenant:tempo:subscription:credential:challenge-1')).not.toBeNull()
+    expect(
+      await rawStore.get('tenant:tempo:subscription:activation:user-1:plan:pro'),
+    ).not.toBeNull()
+    expect(await rawStore.get('tempo:subscription:credential:challenge-1')).toBeNull()
+
+    finishActivation()
+    expect((await activation).status).toBe('activated')
+    await store.getOrCreateAccessKey('user-1:plan:pro')
+
+    expect(await rawStore.get(`tenant:tempo:subscription:record:${subscriptionId}`)).not.toBeNull()
+    expect(await rawStore.get('tenant:tempo:subscription:key:user-1:plan:pro')).toBe(subscriptionId)
+    expect(
+      await rawStore.get('tenant:tempo:subscription:access-key:user-1:plan:pro'),
+    ).not.toBeNull()
+    expect(await rawStore.get(`tempo:subscription:record:${subscriptionId}`)).toBeNull()
+  })
+
+  test('combines store prefix with custom key family prefixes', async () => {
+    const rawStore = Store.memory()
+    const store = fromStore(Store.from(rawStore, { keyPrefix: 'tenant:' }), {
+      keyPrefix: 'lookup:',
+      recordPrefix: 'record:',
+    })
+
+    await store.put(createRecord())
+
+    expect(await rawStore.get(`tenant:record:${subscriptionId}`)).not.toBeNull()
+    expect(await rawStore.get('tenant:lookup:user-1:plan:pro')).toBe(subscriptionId)
+    expect(await rawStore.get(`record:${subscriptionId}`)).toBeNull()
+  })
+
   test('rejects a replayed activation challenge', async () => {
     const store = fromStore(Store.memory())
 

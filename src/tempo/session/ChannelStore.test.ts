@@ -117,6 +117,27 @@ describe('channelStore', () => {
       expect(typeof loaded!.createdAt).toBe('string')
     })
 
+    test('prefixes backing store keys when configured', async () => {
+      const rawStore = Store.memory()
+      const cs = ChannelStore.fromStore(Store.from(rawStore, { keyPrefix: 'tenant:' }))
+      await cs.updateChannel(channelId, () => makeChannel())
+
+      expect(await rawStore.get(`tenant:${channelId}`)).not.toBeNull()
+      expect(await rawStore.get(channelId)).toBeNull()
+      expect((await cs.getChannel(channelId))?.channelId).toBe(channelId)
+    })
+
+    test('isolates prefixed store wrappers', async () => {
+      const rawStore = Store.memory()
+      const first = ChannelStore.fromStore(Store.from(rawStore, { keyPrefix: 'tenant-a:' }))
+      const second = ChannelStore.fromStore(Store.from(rawStore, { keyPrefix: 'tenant-b:' }))
+      await first.updateChannel(channelId, () => makeChannel())
+
+      expect(await second.getChannel(channelId)).toBeNull()
+      expect(await rawStore.get(`tenant-a:${channelId}`)).not.toBeNull()
+      expect(await rawStore.get(`tenant-b:${channelId}`)).toBeNull()
+    })
+
     test('treats case-variant channelIds as the same record', async () => {
       const cs = ChannelStore.fromStore(Store.memory())
       await cs.updateChannel(mixedCaseAliasChannelId, () =>

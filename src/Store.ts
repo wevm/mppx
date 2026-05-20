@@ -84,11 +84,55 @@ export type AtomicStore<itemMap extends StoreItemMap = StoreItemMap> = Store<
   AtomicActions<itemMap>
 >
 
+/** Options shared by store constructors. */
+export type Options = {
+  /** Prefix prepended to every backing store key. */
+  keyPrefix?: string | undefined
+}
+
+const keyPrefixCache = new WeakMap<Store, Map<string, Store | AtomicStore>>()
+
 /** Creates a {@link Store} from an existing implementation. */
-export function from<store extends Store>(store: store): store
-export function from<store extends AtomicStore>(store: store): store
-export function from(store: Store | AtomicStore) {
-  return store
+export function from<store extends AtomicStore<any>>(store: store, options?: Options): store
+export function from<store extends Store<any>>(store: store, options?: Options): store
+export function from(store: Store | AtomicStore, options?: Options) {
+  return withKeyPrefix(store, options?.keyPrefix)
+}
+
+function withKeyPrefix(store: Store | AtomicStore, keyPrefix = ''): Store | AtomicStore {
+  if (!keyPrefix) return store
+
+  const cached = keyPrefixCache.get(store)?.get(keyPrefix)
+  if (cached) return cached
+
+  const backing = store as Store
+  const prefixedKey = (key: string) => `${keyPrefix}${key}`
+  const prefixed = from({
+    async get(key: string) {
+      return backing.get(prefixedKey(key)) as Promise<unknown>
+    },
+    async put(key: string, value: unknown) {
+      await backing.put(prefixedKey(key), value)
+    },
+    async delete(key: string) {
+      await backing.delete(prefixedKey(key))
+    },
+    ...('update' in store
+      ? {
+          async update<result>(
+            key: string,
+            fn: (current: unknown | null) => Change<unknown, result>,
+          ) {
+            return (store as AtomicStore).update(prefixedKey(key), fn as never)
+          },
+        }
+      : {}),
+  } satisfies Store | AtomicStore)
+
+  const cachedByPrefix = keyPrefixCache.get(store) ?? new Map<string, Store | AtomicStore>()
+  cachedByPrefix.set(keyPrefix, prefixed)
+  keyPrefixCache.set(store, cachedByPrefix)
+  return prefixed
 }
 
 function wrapJsonUpdate(
@@ -113,26 +157,37 @@ function wrapJsonUpdate(
 }
 
 /** Wraps a Cloudflare KV namespace. */
-export function cloudflare(kv: cloudflare.AtomicParameters): AtomicStore
-export function cloudflare(kv: cloudflare.Parameters): Store
-export function cloudflare(kv: cloudflare.Parameters): Store {
-  return from({
-    async get(key) {
-      const raw = await kv.get(key)
-      if (raw == null) return null as any
-      return Json.parse(raw as string)
+export function cloudflare(
+  kv: cloudflare.AtomicParameters,
+  options?: cloudflare.Options,
+): AtomicStore
+export function cloudflare(kv: cloudflare.Parameters, options?: cloudflare.Options): Store
+export function cloudflare(kv: cloudflare.Parameters, options?: cloudflare.Options): Store {
+  return from(
+    {
+      async get(key: string) {
+        const raw = await kv.get(key)
+        if (raw == null) return null as any
+        return Json.parse(raw as string)
+      },
+      async put(key: string, value: unknown) {
+        await kv.put(key, Json.stringify(value))
+      },
+      async delete(key: string) {
+        await kv.delete(key)
+      },
+      ...wrapJsonUpdate(kv.update),
     },
-    async put(key, value) {
-      await kv.put(key, Json.stringify(value))
-    },
-    async delete(key) {
-      await kv.delete(key)
-    },
-    ...wrapJsonUpdate(kv.update),
-  })
+    options,
+  )
 }
 
 export declare namespace cloudflare {
+  export type Options = {
+    /** Prefix prepended to every backing store key. */
+    keyPrefix?: string | undefined
+  }
+
   export type Parameters = {
     get: (key: string) => Promise<unknown>
     put: (key: string, value: string) => Promise<void>
@@ -149,51 +204,69 @@ export declare namespace cloudflare {
 }
 
 /** In-memory store backed by a `Map`. JSON-roundtrips values to match production behavior. */
-export function memory(): AtomicStore {
+export function memory(options?: memory.Options): AtomicStore {
   const store = new Map<string, string>()
-  return from({
-    async get(key) {
-      const raw = store.get(key)
-      if (raw === undefined) return null as any
-      return Json.parse(raw)
+  return from(
+    {
+      async get(key: string) {
+        const raw = store.get(key)
+        if (raw === undefined) return null as any
+        return Json.parse(raw)
+      },
+      async put(key: string, value: unknown) {
+        store.set(key, Json.stringify(value))
+      },
+      async delete(key: string) {
+        store.delete(key)
+      },
+      async update<result>(key: string, fn: (current: unknown | null) => Change<unknown, result>) {
+        const current = store.has(key) ? (Json.parse(store.get(key)!) as never) : null
+        const change = fn(current)
+        if (change.op === 'set') store.set(key, Json.stringify(change.value))
+        if (change.op === 'delete') store.delete(key)
+        return change.result
+      },
     },
-    async put(key, value) {
-      store.set(key, Json.stringify(value))
-    },
-    async delete(key) {
-      store.delete(key)
-    },
-    async update(key, fn) {
-      const current = store.has(key) ? (Json.parse(store.get(key)!) as never) : null
-      const change = fn(current)
-      if (change.op === 'set') store.set(key, Json.stringify(change.value))
-      if (change.op === 'delete') store.delete(key)
-      return change.result
-    },
-  })
+    options,
+  )
+}
+
+export declare namespace memory {
+  export type Options = {
+    /** Prefix prepended to every backing store key. */
+    keyPrefix?: string | undefined
+  }
 }
 
 /** Wraps a standard Redis client (ioredis, node-redis, Valkey). */
-export function redis(client: redis.AtomicParameters): AtomicStore
-export function redis(client: redis.Parameters): Store
-export function redis(client: redis.Parameters): Store {
-  return from({
-    async get(key) {
-      const raw = await client.get(key)
-      if (raw == null) return null as any
-      return Json.parse(raw)
+export function redis(client: redis.AtomicParameters, options?: redis.Options): AtomicStore
+export function redis(client: redis.Parameters, options?: redis.Options): Store
+export function redis(client: redis.Parameters, options?: redis.Options): Store {
+  return from(
+    {
+      async get(key: string) {
+        const raw = await client.get(key)
+        if (raw == null) return null as any
+        return Json.parse(raw)
+      },
+      async put(key: string, value: unknown) {
+        await client.set(key, Json.stringify(value))
+      },
+      async delete(key: string) {
+        await client.del(key)
+      },
+      ...wrapJsonUpdate(client.update),
     },
-    async put(key, value) {
-      await client.set(key, Json.stringify(value))
-    },
-    async delete(key) {
-      await client.del(key)
-    },
-    ...wrapJsonUpdate(client.update),
-  })
+    options,
+  )
 }
 
 export declare namespace redis {
+  export type Options = {
+    /** Prefix prepended to every backing store key. */
+    keyPrefix?: string | undefined
+  }
+
   export type Parameters = {
     get: (key: string) => Promise<string | null>
     set: (key: string, value: string) => Promise<unknown>
@@ -210,28 +283,36 @@ export declare namespace redis {
 }
 
 /** Wraps an Upstash Redis instance (e.g. Vercel KV). */
-export function upstash(redis: upstash.AtomicParameters): AtomicStore
-export function upstash(redis: upstash.Parameters): Store
-export function upstash(redis: upstash.Parameters): Store {
-  return from({
-    async get(key) {
-      return (await redis.get(key)) as any
+export function upstash(redis: upstash.AtomicParameters, options?: upstash.Options): AtomicStore
+export function upstash(redis: upstash.Parameters, options?: upstash.Options): Store
+export function upstash(redis: upstash.Parameters, options?: upstash.Options): Store {
+  return from(
+    {
+      async get(key: string) {
+        return (await redis.get(key)) as any
+      },
+      async put(key: string, value: unknown) {
+        await redis.set(key, value)
+      },
+      async delete(key: string) {
+        await redis.del(key)
+      },
+      ...(redis.update
+        ? {
+            update: redis.update as Update,
+          }
+        : {}),
     },
-    async put(key, value) {
-      await redis.set(key, value)
-    },
-    async delete(key) {
-      await redis.del(key)
-    },
-    ...(redis.update
-      ? {
-          update: redis.update as Update,
-        }
-      : {}),
-  })
+    options,
+  )
 }
 
 export declare namespace upstash {
+  export type Options = {
+    /** Prefix prepended to every backing store key. */
+    keyPrefix?: string | undefined
+  }
+
   export type Parameters = {
     get: (key: string) => Promise<unknown>
     set: (key: string, value: unknown) => Promise<unknown>

@@ -104,7 +104,9 @@ export function session<const parameters extends session.Parameters>(
 
   const lastOnChainVerified = new Map<Hex, number>()
 
-  const store = ChannelStore.fromStore(rawStore)
+  const store = ChannelStore.fromStore(
+    Store.from(rawStore, { keyPrefix: parameters.storeKeyPrefix }),
+  )
 
   const { account, recipient, feePayer, feePayerUrl } = Account.resolve(parameters)
 
@@ -357,6 +359,12 @@ export declare namespace session {
      * local single-process usage.
      */
     store?: Store.AtomicStore | undefined
+    /**
+     * Prefix prepended to channel state store keys.
+     *
+     * By default, no prefix is applied.
+     */
+    storeKeyPrefix?: string | undefined
     /**
      * Enable SSE streaming.
      *

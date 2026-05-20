@@ -72,7 +72,7 @@ export function subscription<const parameters extends subscription.Parameters>(
 
   const { recipient } = Account.resolve(parameters)
   const context = createContext(parameters, {
-    store: rawStore,
+    store: Store.from(rawStore, { keyPrefix: parameters.storeKeyPrefix }),
     options: {
       activationTimeoutMs: parameters.activationTimeoutMs,
       renewalTimeoutMs: parameters.renewalTimeoutMs,
@@ -1110,6 +1110,12 @@ export declare namespace subscription {
         subscription: SubscriptionRecord
       }) => Promise<RenewalResult>
       store?: Store.AtomicStore<Record<string, unknown>> | undefined
+      /**
+       * Prefix prepended to all subscription store keys.
+       *
+       * By default, no prefix is applied.
+       */
+      storeKeyPrefix?: string | undefined
       testnet?: boolean | undefined
       waitForConfirmation?: boolean | undefined
     } & Defaults

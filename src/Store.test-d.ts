@@ -25,6 +25,64 @@ test('memory returns AtomicStore', () => {
   expectTypeOf(store).toEqualTypeOf<Store.AtomicStore>()
 })
 
+test('from with keyPrefix preserves AtomicStore', () => {
+  const store = Store.from(Store.memory(), { keyPrefix: 'tenant:' })
+  expectTypeOf(store).toEqualTypeOf<Store.AtomicStore>()
+})
+
+test('from with keyPrefix preserves typed Store', () => {
+  type ItemMap = { [key: `mppx:charge:${string}`]: number }
+  const store = {} as Store.Store<ItemMap>
+  const prefixed = Store.from(store, { keyPrefix: 'tenant:' })
+
+  expectTypeOf(prefixed.get).parameter(0).toEqualTypeOf<`mppx:charge:${string}`>()
+  expectTypeOf(prefixed.put).parameter(1).toEqualTypeOf<number>()
+})
+
+test('from with keyPrefix preserves typed AtomicStore', () => {
+  type ItemMap = { [key: `mppx:charge:${string}`]: number }
+  const store = {} as Store.AtomicStore<ItemMap>
+  const prefixed = Store.from(store, { keyPrefix: 'tenant:' })
+
+  expectTypeOf(prefixed.update).parameter(0).toEqualTypeOf<`mppx:charge:${string}`>()
+})
+
+test('memory accepts keyPrefix option', () => {
+  const store = Store.memory({ keyPrefix: 'tenant:' })
+  expectTypeOf(store).toEqualTypeOf<Store.AtomicStore>()
+})
+
+test('adapter constructors accept keyPrefix option', () => {
+  const cloudflare = Store.cloudflare(
+    {
+      get: async () => null,
+      put: async () => {},
+      delete: async () => {},
+    },
+    { keyPrefix: 'tenant:' },
+  )
+  const redis = Store.redis(
+    {
+      get: async () => null,
+      set: async () => null,
+      del: async () => null,
+    },
+    { keyPrefix: 'tenant:' },
+  )
+  const upstash = Store.upstash(
+    {
+      get: async () => null,
+      set: async () => null,
+      del: async () => null,
+    },
+    { keyPrefix: 'tenant:' },
+  )
+
+  expectTypeOf(cloudflare).toEqualTypeOf<Store.Store>()
+  expectTypeOf(redis).toEqualTypeOf<Store.Store>()
+  expectTypeOf(upstash).toEqualTypeOf<Store.Store>()
+})
+
 test('AtomicStore is assignable to Store', () => {
   const atomic = {} as Store.AtomicStore
   expectTypeOf(atomic).toMatchTypeOf<Store.Store>()

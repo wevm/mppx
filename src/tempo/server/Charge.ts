@@ -66,8 +66,16 @@ export function charge<const parameters extends charge.Parameters>(
     validateSender,
     waitForConfirmation = true,
   } = parameters
-  const store = (parameters.store ?? Store.memory()) as Store.AtomicStore<charge.StoreItemMap>
-  const proofStore = parameters.store as Store.AtomicStore<charge.StoreItemMap> | undefined
+  const storeKeyPrefix = parameters.storeKeyPrefix ?? ''
+  const store = Store.from(
+    (parameters.store ?? Store.memory()) as Store.AtomicStore<charge.StoreItemMap>,
+    { keyPrefix: storeKeyPrefix },
+  )
+  const proofStore = parameters.store
+    ? Store.from(parameters.store as Store.AtomicStore<charge.StoreItemMap>, {
+        keyPrefix: storeKeyPrefix,
+      })
+    : undefined
 
   const { recipient, feePayer, feePayerUrl } = Account.resolve(parameters)
 
@@ -539,6 +547,12 @@ export declare namespace charge {
      * memo binding, transaction success, and replay protection.
      */
     validateSender?: ValidateSender | undefined
+    /**
+     * Prefix prepended to charge replay-protection store keys.
+     *
+     * By default, no prefix is applied.
+     */
+    storeKeyPrefix?: string | undefined
     /**
      * Whether to wait for the charge transaction to confirm on-chain before
      * responding. @default true

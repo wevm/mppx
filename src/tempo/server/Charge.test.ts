@@ -286,6 +286,7 @@ describe('tempo', () => {
     })
 
     test('behavior: rejects replayed transaction hash', async () => {
+      const dedupStore = Store.memory()
       const dedupServer = Mppx_server.create({
         methods: [
           tempo_server.charge({
@@ -294,7 +295,8 @@ describe('tempo', () => {
             },
             currency: asset,
             account: accounts[0],
-            store: Store.memory(),
+            store: dedupStore,
+            storeKeyPrefix: 'tenant:',
           }),
         ],
         realm,
@@ -336,6 +338,8 @@ describe('tempo', () => {
         })
         expect(response.status).toBe(200)
       }
+      expect(await dedupStore.get(`tenant:mppx:charge:${receipt.transactionHash}`)).not.toBeNull()
+      expect(await dedupStore.get(`mppx:charge:${receipt.transactionHash}`)).toBeNull()
 
       const response2 = await fetch(httpServer.url)
       expect(response2.status).toBe(402)
@@ -1616,6 +1620,7 @@ describe('tempo', () => {
             currency: asset,
             account: accounts[0],
             store: sponsoredStore,
+            storeKeyPrefix: 'tenant:',
           }),
         ],
         realm,
@@ -1661,6 +1666,16 @@ describe('tempo', () => {
 
       const first = fetch(httpServer.url, { headers: { Authorization: credential1 } })
       await simulationStarted
+      expect(
+        await sponsoredStore.get(
+          `tenant:mppx:charge:sponsor:${chain.id}:${accounts[1].address.toLowerCase()}`,
+        ),
+      ).not.toBeNull()
+      expect(
+        await sponsoredStore.get(
+          `mppx:charge:sponsor:${chain.id}:${accounts[1].address.toLowerCase()}`,
+        ),
+      ).toBeNull()
       const second = fetch(httpServer.url, { headers: { Authorization: credential2 } })
 
       try {
@@ -2870,6 +2885,7 @@ describe('tempo', () => {
 
     test('behavior: store keys proof replay protection by challenge ID', async () => {
       const replayStore = Store.memory()
+      const storeKeyPrefix = 'tenant:'
       const server_ = Mppx_server.create({
         methods: [
           tempo_server.charge({
@@ -2879,6 +2895,7 @@ describe('tempo', () => {
             currency: asset,
             account: accounts[0],
             store: replayStore,
+            storeKeyPrefix,
           }),
         ],
         realm,
@@ -2918,6 +2935,10 @@ describe('tempo', () => {
         headers: { Authorization: Credential.serialize(credential1) },
       })
       expect(response2.status).toBe(200)
+      expect(
+        await replayStore.get(`${storeKeyPrefix}mppx:charge:proof:${challenge1.id}`),
+      ).not.toBeNull()
+      expect(await replayStore.get(`mppx:charge:proof:${challenge1.id}`)).toBeNull()
 
       const response3 = await fetch(httpServer.url)
       expect(response3.status).toBe(402)
