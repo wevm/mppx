@@ -14,6 +14,11 @@ type WrappedFetch = typeof globalThis.fetch & {
   [MPPX_FETCH_WRAPPER]?: typeof globalThis.fetch
 }
 
+/** Client method extension used to reconcile successful HTTP responses. */
+type ResponseAwareClient = Method.AnyClient & {
+  onResponse?: ((response: Response) => Promise<void> | void) | undefined
+}
+
 let originalFetch: typeof globalThis.fetch | undefined
 
 export type ClientEventMap<
@@ -183,7 +188,10 @@ export function from<const methods extends readonly Method.AnyClient[]>(
     )
     const response = await baseFetch(initialRequest.input, initialRequest.init)
 
-    if (response.status !== 402) return response
+    if (response.status !== 402) {
+      await handleResponse(methods, response)
+      return response
+    }
 
     // Only extract context for payment handling after confirming 402.
     const context = (init as Record<string, unknown> | undefined)?.context
@@ -262,6 +270,7 @@ export function from<const methods extends readonly Method.AnyClient[]>(
         ...fetchInit,
         headers: withAuthorizationHeader(initialRequest.headers, credential),
       })
+      await handleResponse(methods, paymentResponse)
       if (paymentResponse.ok)
         await events.emit(
           'payment.response',
@@ -762,6 +771,16 @@ export function validateCredentialHeaderValue(credential: string): void {
   if (!credential.trim()) throw new Error('Credential header value must be non-empty')
   if (credential.includes('\r') || credential.includes('\n')) {
     throw new Error('Credential header value contains illegal newline characters')
+  }
+}
+
+async function handleResponse(
+  methods: readonly Method.AnyClient[],
+  response: Response,
+): Promise<void> {
+  for (const method of methods) {
+    const onResponse = (method as ResponseAwareClient).onResponse
+    if (onResponse) await onResponse(response)
   }
 }
 

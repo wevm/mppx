@@ -95,7 +95,9 @@ export type VerifiedChallengeEnvelope<
 /** Request hook parameters for a single method. */
 export type RequestContext<method extends Method> = {
   capturedRequest?: CapturedRequest
-  credential?: Credential.Credential | null
+  credential?: Credential.Credential | null | undefined
+  /** Incoming HTTP request when the server transport can provide one. */
+  input?: globalThis.Request | undefined
   request: z.input<method['schema']['request']>
 }
 

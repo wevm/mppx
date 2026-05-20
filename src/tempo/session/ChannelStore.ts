@@ -105,6 +105,23 @@ export type ChannelStore = {
     channelId: Hex,
     fn: (current: State | null) => Store.Change<State, result>,
   ): Promise<result>
+
+  /**
+   * Finds the best reusable channel for a payer and session dimensions.
+   *
+   * Implementations may return `null` when no reusable channel exists or when
+   * reverse lookup is not supported by the backing store.
+   */
+  findReusableChannel?(options: ReusableChannelQuery): Promise<State | null>
+}
+
+export type ReusableChannelQuery = {
+  amount?: bigint | undefined
+  chainId?: number | undefined
+  escrowContract: Address
+  payee: Address
+  payer: Address
+  token: Address
 }
 
 export type DeductResult = { ok: true; channel: State } | { ok: false; channel: State }
@@ -176,6 +193,79 @@ export async function deductFromChannel(
   return result ?? { ok: false, channel }
 }
 
+export async function findReusableChannel(
+  store: ChannelStore,
+  options: ReusableChannelQuery,
+): Promise<State | null> {
+  if (!store.findReusableChannel) return null
+  return store.findReusableChannel(options)
+}
+
+const defaultPayerIndexPrefix = 'mppx:session:payer:'
+
+function payerIndexKey(payer: Address, prefix = defaultPayerIndexPrefix): string {
+  return `${prefix}${payer.toLowerCase()}`
+}
+
+function normalizeChannelIds(channelIds: readonly Hex[]): Hex[] {
+  return [...new Set(channelIds.map((channelId) => channelId.toLowerCase() as Hex))]
+}
+
+function sameChannelIds(left: readonly Hex[], right: readonly Hex[]): boolean {
+  if (left.length !== right.length) return false
+  for (let index = 0; index < left.length; index++) {
+    if (left[index]!.toLowerCase() !== right[index]!.toLowerCase()) return false
+  }
+  return true
+}
+
+function compareHexDesc(left: Hex, right: Hex): number {
+  return right.localeCompare(left)
+}
+
+function compareBigIntDesc(left: bigint, right: bigint): number {
+  if (left === right) return 0
+  return left > right ? -1 : 1
+}
+
+function compareNumberDesc(left: number, right: number): number {
+  if (left === right) return 0
+  return left > right ? -1 : 1
+}
+
+function createdAtScore(channel: State): number {
+  const timestamp = Date.parse(channel.createdAt)
+  return Number.isNaN(timestamp) ? 0 : timestamp
+}
+
+function isReusableChannel(channel: State, options: ReusableChannelQuery): boolean {
+  if (channel.finalized || channel.deposit === 0n || channel.closeRequestedAt !== 0n) return false
+  if (channel.payer.toLowerCase() !== options.payer.toLowerCase()) return false
+  if (channel.payee.toLowerCase() !== options.payee.toLowerCase()) return false
+  if (channel.token.toLowerCase() !== options.token.toLowerCase()) return false
+  if (channel.escrowContract.toLowerCase() !== options.escrowContract.toLowerCase()) return false
+  if (options.chainId !== undefined && channel.chainId !== options.chainId) return false
+
+  if (options.amount !== undefined) {
+    const requiredCumulative =
+      channel.spent + options.amount > channel.highestVoucherAmount
+        ? channel.spent + options.amount
+        : channel.highestVoucherAmount
+    if (requiredCumulative > channel.deposit) return false
+  }
+
+  return true
+}
+
+function compareReusableChannels(left: State, right: State): number {
+  return (
+    compareNumberDesc(createdAtScore(left), createdAtScore(right)) ||
+    compareBigIntDesc(left.highestVoucherAmount, right.highestVoucherAmount) ||
+    compareBigIntDesc(left.spent, right.spent) ||
+    compareHexDesc(left.channelId, right.channelId)
+  )
+}
+
 /**
  * Wraps a generic {@link Store} into the internal {@link Store}
  * interface used by server handlers and the SSE metering loop.
@@ -193,10 +283,15 @@ export async function deductFromChannel(
  * Backends that need true atomicity (e.g., Durable Objects, D1)
  * should implement {@link Store} directly.
  */
-const storeCache = new WeakMap<Store.Store, ChannelStore>()
+const storeCache = new WeakMap<Store.Store, Map<string, ChannelStore>>()
 
-export function fromStore(store: Store.Store | Store.AtomicStore): ChannelStore {
-  const cached = storeCache.get(store)
+export function fromStore(
+  store: Store.Store | Store.AtomicStore,
+  options?: fromStore.Options,
+): ChannelStore {
+  const { payerIndexPrefix = defaultPayerIndexPrefix } = options ?? {}
+  let cachedByPrefix = storeCache.get(store)
+  const cached = cachedByPrefix?.get(payerIndexPrefix)
   if (cached) return cached
 
   const atomicUpdate = 'update' in store ? (store as Store.AtomicStore).update : undefined
@@ -204,11 +299,71 @@ export function fromStore(store: Store.Store | Store.AtomicStore): ChannelStore 
   const waiters = new Map<string, Set<() => void>>()
   const locks = new Map<string, Promise<void>>()
 
+  async function withLock<value>(key: string, fn: () => Promise<value>): Promise<value> {
+    while (locks.has(key)) await locks.get(key)
+
+    let release!: () => void
+    locks.set(
+      key,
+      new Promise<void>((r) => {
+        release = r
+      }),
+    )
+
+    try {
+      return await fn()
+    } finally {
+      locks.delete(key)
+      release()
+    }
+  }
+
   function notify(channelId: string) {
     const set = waiters.get(channelId)
     if (!set) return
     for (const resolve of set) resolve()
     waiters.delete(channelId)
+  }
+
+  async function updatePayerIndex(
+    payer: Address,
+    update: (current: readonly Hex[]) => readonly Hex[],
+  ): Promise<void> {
+    const key = payerIndexKey(payer, payerIndexPrefix)
+    await withLock(key, async () => {
+      const current = ((await store.get(key as never)) as Hex[] | null) ?? []
+      const next = normalizeChannelIds(update(current))
+      if (sameChannelIds(current, next)) return
+      if (next.length === 0) {
+        await store.delete(key as never)
+        return
+      }
+      await store.put(key as never, next as never)
+    })
+  }
+
+  async function syncPayerIndex(
+    channelId: Hex,
+    current: State | null,
+    next: State | null,
+  ): Promise<void> {
+    const normalizedChannelId = channelId.toLowerCase() as Hex
+    const currentPayer = current?.payer.toLowerCase() as Address | undefined
+    const nextPayer = next?.payer.toLowerCase() as Address | undefined
+
+    if (currentPayer && currentPayer !== nextPayer) {
+      await updatePayerIndex(currentPayer, (entries) =>
+        entries.filter((entry) => entry.toLowerCase() !== normalizedChannelId),
+      )
+    }
+
+    if (!nextPayer) return
+
+    await updatePayerIndex(nextPayer, (entries) =>
+      entries.some((entry) => entry.toLowerCase() === normalizedChannelId)
+        ? entries
+        : [...entries, normalizedChannelId],
+    )
   }
 
   async function update(
@@ -228,10 +383,12 @@ export function fromStore(store: Store.Store | Store.AtomicStore): ChannelStore 
   ): Promise<result> {
     const normalizedChannelId = normalizeChannelId(channelId)
     let change: Store.Change<State, result> | undefined
+    let currentState: State | null = null
 
     if (atomicUpdate) {
       const result = await atomicUpdate(normalizedChannelId, (current) => {
-        change = fn(normalizeMaybeState(normalizedChannelId, (current as State | null) ?? null))
+        currentState = normalizeMaybeState(normalizedChannelId, (current as State | null) ?? null)
+        change = fn(currentState)
         if (change.op === 'set') {
           change = {
             ...change,
@@ -241,7 +398,14 @@ export function fromStore(store: Store.Store | Store.AtomicStore): ChannelStore 
         if (change.op !== 'set') return change
         return { ...change, value: change.value as never }
       })
-      if (change?.op !== 'noop') notify(normalizedChannelId)
+      if (change && change.op !== 'noop') {
+        await syncPayerIndex(
+          normalizedChannelId,
+          currentState,
+          change.op === 'set' ? change.value : null,
+        )
+        notify(normalizedChannelId)
+      }
       return result
     }
 
@@ -269,7 +433,14 @@ export function fromStore(store: Store.Store | Store.AtomicStore): ChannelStore 
         await store.put(normalizedChannelId, change.value as never)
       }
       if (change.op === 'delete') await store.delete(normalizedChannelId)
-      if (change.op !== 'noop') notify(normalizedChannelId)
+      if (change.op !== 'noop') {
+        await syncPayerIndex(
+          normalizedChannelId,
+          current,
+          change.op === 'set' ? change.value : null,
+        )
+        notify(normalizedChannelId)
+      }
       return change.result
     } finally {
       locks.delete(normalizedChannelId)
@@ -299,10 +470,42 @@ export function fromStore(store: Store.Store | Store.AtomicStore): ChannelStore 
         set.add(resolve)
       })
     },
+    async findReusableChannel(options) {
+      const key = payerIndexKey(options.payer, payerIndexPrefix)
+      const channelIds = ((await store.get(key as never)) as Hex[] | null) ?? []
+      if (channelIds.length === 0) return null
+
+      const channels = await Promise.all(channelIds.map((channelId) => cs.getChannel(channelId)))
+      const missing = channelIds.filter((_channelId, index) => !channels[index])
+      if (missing.length > 0) {
+        const missingSet = new Set(missing.map((channelId) => channelId.toLowerCase()))
+        await updatePayerIndex(options.payer, (entries) =>
+          entries.filter((entry) => !missingSet.has(entry.toLowerCase())),
+        )
+      }
+
+      const reusable = channels
+        .filter((channel): channel is State => channel !== null)
+        .filter((channel) => isReusableChannel(channel, options))
+        .sort(compareReusableChannels)
+
+      return reusable[0] ?? null
+    },
   }
 
   cs.updateChannelResult = updateResult
 
-  storeCache.set(store, cs)
+  if (!cachedByPrefix) {
+    cachedByPrefix = new Map()
+    storeCache.set(store, cachedByPrefix)
+  }
+  cachedByPrefix.set(payerIndexPrefix, cs)
   return cs
+}
+
+export declare namespace fromStore {
+  type Options = {
+    /** Key prefix for payer-to-channel reverse indexes. @default `'mppx:session:payer:'` */
+    payerIndexPrefix?: string | undefined
+  }
 }

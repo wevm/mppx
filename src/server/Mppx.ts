@@ -858,6 +858,7 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
           defaults,
           description,
           expires,
+          input: input instanceof globalThis.Request ? input : undefined,
           meta: effectiveMeta,
           method,
           realm,
@@ -1639,6 +1640,7 @@ async function resolveRouteChallenge(parameters: {
   defaults?: Record<string, unknown> | undefined
   description?: string | undefined
   expires?: string | undefined
+  input?: globalThis.Request | undefined
   meta?: Record<string, string> | undefined
   method: Method.Method
   realm?: string | undefined
@@ -1659,6 +1661,7 @@ async function resolveRouteChallenge(parameters: {
       ? ((await parameters.request({
           capturedRequest: parameters.capturedRequest,
           credential: parameters.credential,
+          input: parameters.input,
           request: merged,
         } as never)) as Record<string, unknown>)
       : merged

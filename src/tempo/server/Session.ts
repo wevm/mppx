@@ -31,7 +31,7 @@ import {
   VerificationFailedError,
 } from '../../Errors.js'
 import type { Challenge, Credential } from '../../index.js'
-import type { LooseOmit, NoExtraKeys } from '../../internal/types.js'
+import type { LooseOmit, MaybePromise, NoExtraKeys } from '../../internal/types.js'
 import * as Method from '../../Method.js'
 import * as Store from '../../Store.js'
 import * as Client from '../../viem/Client.js'
@@ -39,6 +39,7 @@ import type * as z from '../../zod.js'
 import * as Account from '../internal/account.js'
 import * as defaults from '../internal/defaults.js'
 import * as FeePayer from '../internal/fee-payer.js'
+import * as Proof from '../internal/proof.js'
 import type * as types from '../internal/types.js'
 import * as Methods from '../Methods.js'
 import {
@@ -51,18 +52,121 @@ import {
 } from '../session/Chain.js'
 import * as ChannelStore from '../session/ChannelStore.js'
 import { createSessionReceipt } from '../session/Receipt.js'
-import type { SessionCredentialPayload, SessionReceipt, SignedVoucher } from '../session/Types.js'
+import type {
+  SessionChallengeMethodDetails,
+  SessionCredentialPayload,
+  SessionReceipt,
+  SignedVoucher,
+} from '../session/Types.js'
 import { parseVoucherFromPayload, verifyVoucher } from '../session/Voucher.js'
 import { captureRequestBodyProbe, isSessionContentRequest } from './internal/request-body.js'
 import * as Transport from './internal/transport.js'
 
-/** Challenge methodDetails shape for session methods. */
-type SessionMethodDetails = {
+/** Session challenge methodDetails including required network and escrow routing fields. */
+type SessionMethodDetails = SessionChallengeMethodDetails & {
+  /** Escrow contract clients should use for this challenge. */
   escrowContract: Address
+  /** Chain ID clients should use for this challenge. */
   chainId: number
-  channelId?: Hex | undefined
-  minVoucherDelta?: string | undefined
-  feePayer?: boolean | undefined
+}
+
+/** Builds advisory reuse hints for a live channel; unusable channels are omitted. */
+function createChallengeHints(
+  channel: ChannelStore.State | null,
+  amount: bigint | undefined,
+):
+  | Pick<SessionMethodDetails, 'acceptedCumulative' | 'deposit' | 'requiredCumulative' | 'spent'>
+  | undefined {
+  if (!channel || channel.finalized || channel.deposit === 0n || channel.closeRequestedAt !== 0n)
+    return undefined
+
+  const requiredCumulative = (() => {
+    if (amount === undefined) return undefined
+    const nextSpent = channel.spent + amount
+    const target =
+      nextSpent > channel.highestVoucherAmount ? nextSpent : channel.highestVoucherAmount
+    return target.toString()
+  })()
+
+  return {
+    acceptedCumulative: channel.highestVoucherAmount.toString(),
+    deposit: channel.deposit.toString(),
+    ...(requiredCumulative !== undefined && { requiredCumulative }),
+    spent: channel.spent.toString(),
+  }
+}
+
+/** Parses an authenticated payer source and rejects sources bound to another chain. */
+function resolveRequestedPayer(
+  source: string | undefined,
+  chainId: number,
+): Address | null | undefined {
+  if (!source) return undefined
+
+  const payer = Proof.parsePkhSource(source)
+  if (!payer || payer.chainId !== chainId) return null
+  return payer.address
+}
+
+/** Checks that a reusable channel matches the requested payment dimensions and optional payer. */
+function matchesRequestedChannel(parameters: {
+  channel: ChannelStore.State
+  request: { currency: Address; recipient: Address }
+  resolvedEscrow: Address
+  chainId: number
+  payer?: Address | undefined
+}): boolean {
+  const { channel, chainId, payer, request, resolvedEscrow } = parameters
+
+  if (channel.chainId !== chainId) return false
+  if (channel.escrowContract.toLowerCase() !== resolvedEscrow.toLowerCase()) return false
+  if (channel.payee.toLowerCase() !== request.recipient.toLowerCase()) return false
+  if (channel.token.toLowerCase() !== request.currency.toLowerCase()) return false
+  if (payer && channel.payer.toLowerCase() !== payer.toLowerCase()) return false
+
+  return true
+}
+
+/** Finds an explicit requested channel first, then falls back to payer-index reuse. */
+async function findRequestedChannel(parameters: {
+  amount: bigint
+  request: { channelId?: Hex | undefined; currency: Address; recipient: Address }
+  resolvedEscrow: Address
+  chainId: number
+  source: string | undefined
+  store: ChannelStore.ChannelStore
+}): Promise<ChannelStore.State | null> {
+  const { amount, chainId, request, resolvedEscrow, source, store } = parameters
+  const payer = resolveRequestedPayer(source, chainId)
+  if (source && !payer) return null
+
+  if (request.channelId) {
+    const channel = await store.getChannel(request.channelId)
+    if (!channel) return null
+    if (
+      !matchesRequestedChannel({
+        channel,
+        chainId,
+        ...(payer ? { payer } : {}),
+        request,
+        resolvedEscrow,
+      })
+    ) {
+      return null
+    }
+    return channel
+  }
+
+  if (!payer) return null
+
+  return ChannelStore.findReusableChannel(store, {
+    amount,
+    chainId,
+    escrowContract: resolvedEscrow,
+    payee: request.recipient,
+    payer,
+    token: request.currency,
+  })
 }
 
 /**
@@ -104,7 +208,7 @@ export function session<const parameters extends session.Parameters>(
 
   const lastOnChainVerified = new Map<Hex, number>()
 
-  const store = ChannelStore.fromStore(rawStore)
+  const store = ChannelStore.fromStore(rawStore, parameters.storeOptions)
 
   const { account, recipient, feePayer, feePayerUrl } = Account.resolve(parameters)
 
@@ -142,7 +246,8 @@ export function session<const parameters extends session.Parameters>(
     transport: transport as never,
 
     // TODO: dedupe `{charge,session}.request`
-    async request({ credential, request }) {
+    // `input` is optional request context; resolvePayerSource uses it for app-level auth.
+    async request({ credential, input, request }) {
       // Extract chainId from request or default.
       const chainId = await (async () => {
         if (request.chainId) return request.chainId
@@ -166,6 +271,23 @@ export function session<const parameters extends session.Parameters>(
         parameters.escrowContract ??
         defaults.escrowContract[chainId as keyof typeof defaults.escrowContract]
 
+      const amount = parseUnits(request.amount, request.decimals ?? decimals)
+      const resolvePayerSource = parameters.resolvePayerSource ?? parameters.resolveSource
+      const source = await resolvePayerSource?.({ input, request })
+      const requestedChannel = await findRequestedChannel({
+        amount,
+        chainId: chainId as number,
+        request: {
+          channelId: request.channelId as Hex | undefined,
+          currency: request.currency as Address,
+          recipient: request.recipient as Address,
+        },
+        resolvedEscrow: resolvedEscrow as Address,
+        source,
+        store,
+      })
+      const challengeHints = createChallengeHints(requestedChannel, amount)
+
       // Extract feePayer.
       const resolvedFeePayer = (() => {
         if (request.feePayer === false) return credential ? false : undefined
@@ -178,8 +300,12 @@ export function session<const parameters extends session.Parameters>(
 
       return {
         ...request,
-        chainId,
-        escrowContract: resolvedEscrow,
+        ...challengeHints,
+        ...(!request.channelId && requestedChannel
+          ? { channelId: requestedChannel.channelId }
+          : {}),
+        chainId: chainId as number,
+        escrowContract: resolvedEscrow as Address,
         feePayer: resolvedFeePayer,
       }
     },
@@ -329,6 +455,10 @@ export declare namespace session {
   >
 
   type FeePayerPolicy = Partial<FeePayer.Policy>
+  type ResolvePayerSource = (options: {
+    input?: globalThis.Request | undefined
+    request: Method.RequestDefaults<typeof Methods.session>
+  }) => MaybePromise<string | undefined>
 
   type Parameters = {
     /** TTL in milliseconds for cached on-chain channel state. After this duration, the server re-queries on-chain state during voucher handling to detect forced close requests. @default 5_000 */
@@ -337,6 +467,21 @@ export declare namespace session {
     feePayerPolicy?: FeePayerPolicy | undefined
     /** Minimum voucher delta to accept (numeric string, default: "0"). */
     minVoucherDelta?: string | undefined
+    /**
+     * Resolves the authenticated payer source used for stateless channel
+     * discovery when the client does not provide a channelId.
+     *
+     * Return the zero-dollar proof source DID (for example
+     * `did:pkh:eip155:4217:0x...`) from your server-managed auth/session
+     * context, such as a cookie-backed login established by `tempo.charge`
+     * proof auth.
+     */
+    resolvePayerSource?: ResolvePayerSource | undefined
+    /**
+     * @deprecated Use {@link resolvePayerSource}. Kept for compatibility with
+     * prerelease stateless-resume integrations.
+     */
+    resolveSource?: ResolvePayerSource | undefined
     /**
      * Whether to wait for the open transaction to confirm on-chain before
      * responding. @default true
@@ -357,6 +502,8 @@ export declare namespace session {
      * local single-process usage.
      */
     store?: Store.AtomicStore | undefined
+    /** Options for adapting `store` into a channel store. */
+    storeOptions?: ChannelStore.fromStore.Options | undefined
     /**
      * Enable SSE streaming.
      *

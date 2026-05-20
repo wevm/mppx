@@ -11,7 +11,8 @@ import { deserializeSessionReceipt } from '../session/Receipt.js'
 import { parseEvent } from '../session/Sse.js'
 import type { SessionCredentialPayload, SessionReceipt } from '../session/Types.js'
 import * as Ws from '../session/Ws.js'
-import type { ChannelEntry } from './ChannelOps.js'
+import { reconcileChannelReceipt, type ChannelEntry } from './ChannelOps.js'
+import { charge as chargePlugin } from './Charge.js'
 import { session as sessionPlugin } from './Session.js'
 
 type WebSocketConstructor = {
@@ -83,9 +84,9 @@ export type PaymentResponse = Response & {
  * Creates a session manager that handles the full client payment lifecycle:
  * channel open, incremental vouchers, SSE streaming, and channel close.
  *
- * Internally delegates to the `session()` method for all
- * channel state management and credential creation, and to `Fetch.from`
- * for the 402 challenge/retry flow.
+ * Internally delegates to the `session()` method for channel state
+ * management and credential creation, while owning a bounded 402 retry
+ * loop for zero-auth bootstrap and stateless resume.
  *
  * ## Session resumption
  *
@@ -94,9 +95,9 @@ export type PaymentResponse = Response & {
  * request — the previous channel's deposit is orphaned until manually closed.
  *
  * When the server includes a `channelId` in the 402 challenge `methodDetails`,
- * the client will attempt to recover the channel by reading its on-chain state
- * via `getOnChainChannel()`. If the channel has a positive deposit and is not
- * finalized, it resumes from the on-chain settled amount.
+ * the client first tries to recover trusted channel state on-chain. If recovery
+ * is unavailable, advisory server hints can hydrate accounting state without
+ * increasing the next client-signed voucher amount.
  */
 export function sessionManager(parameters: sessionManager.Parameters): SessionManager {
   const fetchFn = parameters.fetch ?? globalThis.fetch
@@ -111,7 +112,6 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
   let channel: ChannelEntry | null = null
   let lastChallenge: Challenge.Challenge | null = null
   let lastUrl: RequestInfo | URL | null = null
-  let spent = 0n
   let activeSocketChallenge: Challenge.Challenge | null = null
   let activeSocketChannelId: Hex.Hex | null = null
   let activeSocket: WebSocket | null = null
@@ -130,26 +130,51 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
     decimals: parameters.decimals,
     maxDeposit: parameters.maxDeposit,
     onChannelUpdate(entry) {
-      if (entry.channelId !== channel?.channelId) spent = 0n
       channel = entry
     },
   })
-
-  const wrappedFetch = Fetch.from({
-    fetch: fetchFn,
-    methods: [method],
-    onChallenge: async (challenge, _helpers) => {
-      lastChallenge = challenge
-      return undefined
-    },
-    orderChallenges: parameters.orderChallenges,
+  const authMethod = chargePlugin({
+    account: parameters.account,
+    getClient: parameters.client ? () => parameters.client! : parameters.getClient,
   })
+  const sessionMethods = [method] as const
+  const sessionPreferences = AcceptPayment.resolve(sessionMethods).entries
 
   function updateSpentFromReceipt(receipt: SessionReceipt | null | undefined) {
     if (!receipt || receipt.channelId !== channel?.channelId) return
     assertReceiptWithinLocalState(receipt)
-    const next = BigInt(receipt.spent)
-    spent = spent > next ? spent : next
+    reconcileChannelReceipt(channel, receipt)
+  }
+
+  function isZeroAuthChallenge(challenge: Challenge.Challenge): boolean {
+    return (
+      challenge.method === 'tempo' &&
+      challenge.intent === 'charge' &&
+      challenge.request.amount === '0'
+    )
+  }
+
+  function withAuthorizationHeader(
+    headers: RequestInit['headers'],
+    credential: string,
+  ): Record<string, string> {
+    const normalized = Fetch.normalizeHeaders(headers)
+    for (const key of Object.keys(normalized)) {
+      if (key.toLowerCase() === 'authorization') delete normalized[key]
+    }
+    normalized.Authorization = credential
+    return normalized
+  }
+
+  function readReceipt(response: Response): SessionReceipt | undefined {
+    const receiptHeader = response.headers.get('Payment-Receipt')
+    if (!receiptHeader) return undefined
+
+    try {
+      return deserializeSessionReceipt(receiptHeader)
+    } catch {
+      return undefined
+    }
   }
 
   function assertReceiptWithinLocalState(receipt: SessionReceipt) {
@@ -158,12 +183,6 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
     const receiptSpent = BigInt(receipt.spent)
     if (receiptSpent > acceptedCumulative) {
       throw new Error('receipt spent exceeds accepted cumulative voucher amount')
-    }
-    if (acceptedCumulative > channel.cumulativeAmount) {
-      throw new Error('receipt accepted cumulative exceeds local voucher state')
-    }
-    if (receiptSpent > channel.cumulativeAmount) {
-      throw new Error('receipt spent exceeds local voucher state')
     }
     assertVoucherWithinLocalLimit(acceptedCumulative)
     assertVoucherWithinLocalLimit(receiptSpent)
@@ -225,20 +244,21 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
 
     const cumulative = channel?.channelId === channelId ? channel.cumulativeAmount : 0n
 
-    // For WS sessions, use delivered chunk count × tick cost as a tight spend
-    // estimate.  Without this, a socket death before close-ready would cause
-    // the client to sign for the full cumulative voucher authorization —
-    // potentially orders of magnitude more than what was actually consumed.
-    // The estimate may undercount by at most 1 chunk (if the server committed
-    // a charge but the socket died before delivering the message).
     if (wsTickCost > 0n) {
       const deliveryEstimate = wsDeliveredChunks * wsTickCost
-      const bestSpent = spent > deliveryEstimate ? spent : deliveryEstimate
+      const currentSpent = channel?.spent ?? 0n
+      const bestSpent = currentSpent > deliveryEstimate ? currentSpent : deliveryEstimate
       return (bestSpent > cumulative ? cumulative : bestSpent).toString()
     }
 
-    // SSE/HTTP: spent is kept in sync by inline receipts, use it directly.
-    return spent.toString()
+    return (channel?.spent ?? 0n).toString()
+  }
+
+  function getLocalAuthorizedAmount(): bigint {
+    if (!channel) return 0n
+    const spent =
+      channel.spent > channel.acceptedCumulative ? channel.spent : channel.acceptedCumulative
+    return channel.cumulativeAmount > spent ? channel.cumulativeAmount : spent
   }
 
   function assertVoucherWithinLocalLimit(cumulativeAmount: bigint) {
@@ -249,10 +269,19 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
     )
   }
 
-  function toPaymentResponse(response: Response): PaymentResponse {
-    const receiptHeader = response.headers.get('Payment-Receipt')
-    const receipt = receiptHeader ? deserializeSessionReceipt(receiptHeader) : null
+  async function syncResponse(response: Response): Promise<SessionReceipt | null> {
+    await method.onResponse?.(response)
+    const receipt = readReceipt(response) ?? null
     updateSpentFromReceipt(receipt)
+    return receipt
+  }
+
+  function reconcileReceiptEvent(receipt: SessionReceipt | null | undefined) {
+    if (!receipt || !channel || receipt.channelId !== channel.channelId) return
+    reconcileChannelReceipt(channel, receipt)
+  }
+
+  function toPaymentResponse(response: Response, receipt: SessionReceipt | null): PaymentResponse {
     return Object.assign(response, {
       receipt,
       challenge: lastChallenge,
@@ -266,8 +295,64 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
     init?: SessionRequestInit,
   ): Promise<PaymentResponse> {
     lastUrl = input
-    const response = await wrappedFetch(input, init)
-    return toPaymentResponse(response)
+    const { orderChallenges: requestOrderChallenges, ...fetchInit } = init ?? {}
+    let response = await fetchFn(input, fetchInit)
+    let attemptedZeroAuth = false
+    let attemptedSession = false
+
+    for (let attempts = 0; response.status === 402 && attempts < 3; attempts++) {
+      const challenges = Challenge.fromResponseList(response)
+      const sessionCandidates = AcceptPayment.selectChallengeCandidates(
+        challenges,
+        sessionMethods,
+        sessionPreferences,
+      )
+      const sessionChallenge = (
+        await resolveSessionChallengeOrder(
+          sessionCandidates,
+          requestOrderChallenges ?? parameters.orderChallenges,
+        )
+      )[0]?.challenge
+      if (sessionChallenge) lastChallenge = sessionChallenge
+      else if (challenges[0]) lastChallenge = challenges[0]
+
+      const zeroAuthChallenge =
+        !channel && !attemptedZeroAuth ? challenges.find(isZeroAuthChallenge) : undefined
+
+      if (zeroAuthChallenge) {
+        attemptedZeroAuth = true
+        const credential = await authMethod.createCredential({
+          challenge: zeroAuthChallenge as never,
+          context: {},
+        })
+        response = await fetchFn(input, {
+          ...fetchInit,
+          headers: withAuthorizationHeader(fetchInit.headers, credential),
+        })
+        continue
+      }
+
+      if (sessionCandidates.length > 0 && !sessionChallenge) {
+        throw new Error(
+          `No method found for challenges: ${challenges.map((c) => `${c.method}.${c.intent}`).join(', ')}`,
+        )
+      }
+      if (!sessionChallenge) break
+      if (attemptedSession) break
+
+      attemptedSession = true
+      const credential = await method.createCredential({
+        challenge: sessionChallenge as never,
+        context: {},
+      })
+      response = await fetchFn(input, {
+        ...fetchInit,
+        headers: withAuthorizationHeader(fetchInit.headers, credential),
+      })
+    }
+
+    const receipt = await syncResponse(response)
+    return toPaymentResponse(response, receipt)
   }
 
   function createManagedSocket(socket: WebSocket) {
@@ -434,6 +519,7 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
           `Open request failed with status ${response.status}${body ? `: ${body}` : ''}${wwwAuth ? ` [WWW-Authenticate: ${wwwAuth}]` : ''}`,
         )
       }
+      await syncResponse(response)
     },
 
     fetch: doFetch,
@@ -509,11 +595,12 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
                   if (!voucherResponse.ok) {
                     throw new Error(`Voucher POST failed with status ${voucherResponse.status}`)
                   }
+                  await syncResponse(voucherResponse)
                   break
                 }
 
                 case 'payment-receipt':
-                  updateSpentFromReceipt(event.data)
+                  reconcileReceiptEvent(event.data)
                   onReceipt?.(event.data)
                   break
               }
@@ -550,8 +637,8 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
 
       const candidates = AcceptPayment.selectChallengeCandidates(
         Challenge.fromResponseList(probe),
-        [method] as const,
-        AcceptPayment.resolve([method] as const).entries,
+        sessionMethods,
+        sessionPreferences,
       )
       const challenge = (
         await resolveSessionChallengeOrder(
@@ -761,7 +848,8 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
             return waitForCloseReady()
           })())
         const readySpent = BigInt(ready.spent)
-        if (readySpent > (channel.cumulativeAmount > spent ? channel.cumulativeAmount : spent)) {
+        const localAuthorized = getLocalAuthorizedAmount()
+        if (readySpent > localAuthorized) {
           throw new Error('close-ready spent exceeds local voucher state')
         }
 
@@ -802,7 +890,8 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
           channelId: closeChannelId,
           cumulativeAmountRaw: (() => {
             const closeAmount = BigInt(getFallbackCloseAmount(closeChallenge, closeChannelId))
-            if (closeAmount > channel.cumulativeAmount) {
+            const localAuthorized = getLocalAuthorizedAmount()
+            if (closeAmount > localAuthorized) {
               throw new Error('fallback close amount exceeds local voucher state')
             }
             assertVoucherWithinLocalLimit(closeAmount)
@@ -840,8 +929,7 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
           `Close request failed with status ${response.status}${detail ? `: ${detail}` : ''}${wwwAuth ? ` [WWW-Authenticate: ${wwwAuth}]` : ''}`,
         )
       }
-      const receiptHeader = response.headers.get('Payment-Receipt')
-      const receipt = receiptHeader ? deserializeSessionReceipt(receiptHeader) : undefined
+      const receipt = (await syncResponse(response)) ?? undefined
 
       return receipt
     },
@@ -875,6 +963,5 @@ async function resolveSessionChallengeOrder(
   candidates: readonly AcceptPayment.ChallengeCandidate<SessionMethod>[],
   override: SessionOrderChallenges | undefined,
 ): Promise<readonly AcceptPayment.ChallengeCandidate<SessionMethod>[]> {
-  const orderChallenges = override
-  return orderChallenges ? orderChallenges(candidates) : candidates
+  return override ? override(candidates) : candidates
 }

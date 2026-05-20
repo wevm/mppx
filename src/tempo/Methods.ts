@@ -224,11 +224,13 @@ export const session = Method.from({
     request: z.pipe(
       z
         .object({
+          acceptedCumulative: z.optional(z.string()),
           amount: z.amount(),
           chainId: z.optional(z.number()),
           channelId: z.optional(z.hash()),
           currency: z.string(),
           decimals: z.number(),
+          deposit: z.optional(z.string()),
           escrowContract: z.optional(z.string()),
           feePayer: z.optional(
             z.pipe(
@@ -238,6 +240,8 @@ export const session = Method.from({
           ),
           minVoucherDelta: z.optional(z.amount()),
           recipient: z.optional(z.string()),
+          requiredCumulative: z.optional(z.string()),
+          spent: z.optional(z.string()),
           suggestedDeposit: z.optional(z.amount()),
           unitType: z.string(),
         })
@@ -249,13 +253,17 @@ export const session = Method.from({
         ),
       z.transform(
         ({
+          acceptedCumulative,
           amount,
           chainId,
           channelId,
           decimals,
+          deposit,
           escrowContract,
           feePayer,
           minVoucherDelta,
+          requiredCumulative,
+          spent,
           suggestedDeposit,
           ...rest
         }) => ({
@@ -267,13 +275,17 @@ export const session = Method.from({
               }
             : {}),
           methodDetails: {
+            ...(acceptedCumulative !== undefined && { acceptedCumulative }),
+            ...(deposit !== undefined && { deposit }),
             escrowContract,
             ...(channelId !== undefined && { channelId }),
             ...(minVoucherDelta !== undefined && {
               minVoucherDelta: parseUnits(minVoucherDelta, decimals).toString(),
             }),
+            ...(requiredCumulative !== undefined && { requiredCumulative }),
             ...(chainId !== undefined && { chainId }),
             ...(feePayer !== undefined && { feePayer }),
+            ...(spent !== undefined && { spent }),
           },
         }),
       ),

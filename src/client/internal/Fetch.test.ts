@@ -601,6 +601,20 @@ describe('Fetch.from: init passthrough (non-402)', () => {
       expect(new Headers(receivedInits[0]?.headers).get('Accept-Payment')).toBe('test/test')
     }
   })
+
+  test('calls method response hooks for successful non-402 responses', async () => {
+    const onResponse = vi.fn()
+    const method = { ...noopMethod, onResponse }
+    const fetch = Fetch.from({
+      fetch: async () => new Response('OK', { status: 200 }),
+      methods: [method],
+    })
+
+    await fetch('https://example.com/api')
+
+    expect(onResponse).toHaveBeenCalledOnce()
+    expect(onResponse.mock.calls[0]![0]).toBeInstanceOf(Response)
+  })
 })
 
 describe('Fetch.from: 402 retry path', () => {
@@ -928,6 +942,25 @@ describe('Fetch.from: 402 retry path', () => {
     await expect(fetch('https://example.com/api')).rejects.toThrow(Errors.PaymentExpiredError)
     expect(createCredential).not.toHaveBeenCalled()
     expect(events).toEqual(['failed:true:abc', '*:payment.failed'])
+  })
+
+  test('calls method response hooks for successful retry responses', async () => {
+    let callCount = 0
+    const onResponse = vi.fn()
+    const method = { ...noopMethod, onResponse }
+    const fetch = Fetch.from({
+      fetch: async () => {
+        callCount++
+        if (callCount === 1) return make402()
+        return new Response('OK', { status: 200 })
+      },
+      methods: [method],
+    })
+
+    await fetch('https://example.com/api')
+
+    expect(onResponse).toHaveBeenCalledOnce()
+    expect(callCount).toBe(2)
   })
 
   test('preserves existing headers on retry', async () => {
