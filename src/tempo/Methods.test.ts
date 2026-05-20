@@ -250,6 +250,57 @@ describe('session', () => {
   })
 })
 
+describe('authorize', () => {
+  test('has correct name and intent', () => {
+    expect(Methods.authorize.intent).toBe('authorize')
+    expect(Methods.authorize.name).toBe('tempo')
+  })
+
+  test('schema: validates request and encodes amount in base units', () => {
+    const request = Methods.authorize.schema.request.parse({
+      amount: '10',
+      authorizedSigner: '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+      chainId: 4217,
+      currency: '0x20c0000000000000000000000000000000000001',
+      decimals: 6,
+      feePayer: true,
+      operator: '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+      recipient: '0x1234567890abcdef1234567890abcdef12345678',
+    })
+
+    expect(request.amount).toBe('10000000')
+    expect(request.methodDetails).toEqual({
+      authorizedSigner: '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+      chainId: 4217,
+      feePayer: true,
+      operator: '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+    })
+    expect('authorizationExpires' in request).toBe(false)
+  })
+
+  test('schema: rejects amounts greater than uint96', () => {
+    const result = Methods.authorize.schema.request.safeParse({
+      amount: (1n << 96n).toString(),
+      authorizedSigner: '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+      currency: '0x20c0000000000000000000000000000000000001',
+      decimals: 0,
+      operator: '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+      recipient: '0x1234567890abcdef1234567890abcdef12345678',
+    })
+
+    expect(result.success).toBe(false)
+  })
+
+  test('schema: validates transaction payload', () => {
+    const result = Methods.authorize.schema.credential.payload.safeParse({
+      channelId: '0x1a2b3c4d5e6f7890abcdef1234567890abcdef1234567890abcdef1234567890',
+      transaction: '0x76f90100000000000000000000000000000000000000000000000000000000000000000000',
+    })
+
+    expect(result.success).toBe(true)
+  })
+})
+
 describe('subscription', () => {
   test('has correct name and intent', () => {
     expect(Methods.subscription.intent).toBe('subscription')

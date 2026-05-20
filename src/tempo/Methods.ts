@@ -3,6 +3,7 @@ import { parseUnits } from 'viem'
 
 import * as Method from '../Method.js'
 import * as z from '../zod.js'
+import type * as PrecompileChannel from './precompile/Channel.js'
 import type { SubscriptionPeriodUnit } from './subscription/Types.js'
 
 export const chargeModes = ['push', 'pull'] as const
@@ -55,6 +56,7 @@ const subscriptionPeriodUnits = [
   'week',
 ] as const satisfies readonly SubscriptionPeriodUnit[]
 const subscriptionPeriodUnit = z.enum(subscriptionPeriodUnits)
+const uint96Max = (1n << 96n) - 1n
 
 const uint64String = z
   .pipe(
@@ -80,6 +82,13 @@ function positiveParsedAmount(message: string) {
   return z.refine((value) => {
     const { amount, decimals } = value as { amount: string; decimals: number }
     return parseUnits(amount, decimals) > 0n
+  }, message)
+}
+
+function parsedAmountFitsUint96(message: string) {
+  return z.refine((value) => {
+    const { amount, decimals } = value as { amount: string; decimals: number }
+    return parseUnits(amount, decimals) <= uint96Max
   }, message)
 }
 
@@ -196,6 +205,7 @@ export const session = Method.from({
           authorizedSigner: z.optional(z.string()),
           channelId: z.hash(),
           cumulativeAmount: z.amount(),
+          descriptor: z.optional(z.custom<PrecompileChannel.ChannelDescriptor>()),
           signature: z.signature(),
           transaction: z.signature(),
           type: z.literal('transaction'),
@@ -204,6 +214,7 @@ export const session = Method.from({
           action: z.literal('topUp'),
           additionalDeposit: z.amount(),
           channelId: z.hash(),
+          descriptor: z.optional(z.custom<PrecompileChannel.ChannelDescriptor>()),
           transaction: z.signature(),
           type: z.literal('transaction'),
         }),
@@ -211,12 +222,14 @@ export const session = Method.from({
           action: z.literal('voucher'),
           channelId: z.hash(),
           cumulativeAmount: z.amount(),
+          descriptor: z.optional(z.custom<PrecompileChannel.ChannelDescriptor>()),
           signature: z.signature(),
         }),
         z.object({
           action: z.literal('close'),
           channelId: z.hash(),
           cumulativeAmount: z.amount(),
+          descriptor: z.optional(z.custom<PrecompileChannel.ChannelDescriptor>()),
           signature: z.signature(),
         }),
       ]),
@@ -274,6 +287,69 @@ export const session = Method.from({
             }),
             ...(chainId !== undefined && { chainId }),
             ...(feePayer !== undefined && { feePayer }),
+          },
+        }),
+      ),
+    ),
+  },
+})
+
+/**
+ * Tempo authorize intent for deferred capture over TIP-1034 channels.
+ *
+ * Opens a dedicated TIP-1034 channel funded up to `amount`; later captures
+ * settle cumulative vouchers against that channel.
+ */
+export const authorize = Method.from({
+  name: 'tempo',
+  intent: 'authorize',
+  schema: {
+    credential: {
+      payload: z.object({
+        channelId: z.hash(),
+        transaction: z.signature(),
+      }),
+    },
+    request: z.pipe(
+      z
+        .object({
+          amount: z.amount(),
+          authorizedSigner: normalizedAddress,
+          chainId: z.optional(z.number()),
+          currency: normalizedAddress,
+          decimals: z.number(),
+          description: z.optional(z.string()),
+          escrowContract: z.optional(normalizedAddress),
+          externalId: z.optional(z.string()),
+          feePayer: z.optional(
+            z.pipe(
+              z.union([z.boolean(), z.custom<Account>()]),
+              z.transform((v): boolean => (typeof v === 'object' ? true : v)),
+            ),
+          ),
+          operator: normalizedAddress,
+          recipient: normalizedAddress,
+        })
+        .check(parsedAmountFitsUint96('Authorize amount exceeds uint96')),
+      z.transform(
+        ({
+          amount,
+          authorizedSigner,
+          chainId,
+          decimals,
+          escrowContract,
+          feePayer,
+          operator,
+          ...rest
+        }) => ({
+          ...rest,
+          amount: parseUnits(amount, decimals).toString(),
+          methodDetails: {
+            authorizedSigner,
+            ...(chainId !== undefined && { chainId }),
+            ...(escrowContract !== undefined && { escrowContract }),
+            ...(feePayer !== undefined && { feePayer }),
+            operator,
           },
         }),
       ),

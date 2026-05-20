@@ -1,4 +1,10 @@
+import * as Precompile_ from '../precompile/index.js'
 import * as Ws_ from '../session/Ws.js'
+import {
+  authorize as authorize_,
+  capture as capture_,
+  voidAuthorization as voidAuthorization_,
+} from './Authorize.js'
 import { charge as charge_ } from './Charge.js'
 import { session as session_, settle as settle_ } from './Session.js'
 import { renew as renewSubscription_, subscription as subscription_ } from './Subscription.js'
@@ -25,10 +31,18 @@ export function tempo<const parameters extends tempo.Parameters>(parameters?: pa
 export namespace tempo {
   export type Parameters = charge_.Parameters & session_.Parameters
 
+  /** Creates a Tempo `authorize` method for deferred TIP-20 captures. */
+  export const authorize = authorize_
+  /** Captures value against a Tempo authorization. */
+  export const capture = capture_
+  /** Captures value against a Tempo authorization. */
+  export const captureAuthorization = capture_
   /** Creates a Tempo `charge` method for one-time TIP-20 token transfers. */
   export const charge = charge_
   /** Creates a Tempo `session` method for session-based TIP-20 token payments. */
   export const session = session_
+  /** TIP20EscrowChannel precompile primitives for opt-in session implementations. */
+  export const precompile = Precompile_
   /** Creates a Tempo `subscription` method for recurring TIP-20 token payments. */
   export const subscription = subscription_
   /** Renews an overdue Tempo subscription outside of the HTTP request path. */
@@ -37,4 +51,6 @@ export namespace tempo {
   export const settle = settle_
   /** Experimental websocket helpers for Tempo sessions. */
   export const Ws = Ws_
+  /** Voids a Tempo authorization without increasing captured value. */
+  export const voidAuthorization = voidAuthorization_
 }
