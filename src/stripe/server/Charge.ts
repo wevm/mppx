@@ -1,7 +1,8 @@
+import type * as Challenge from '../../Challenge.js'
 import type * as Credential from '../../Credential.js'
 import { PaymentActionRequiredError, VerificationFailedError } from '../../Errors.js'
 import * as Expires from '../../Expires.js'
-import type { LooseOmit, OneOf } from '../../internal/types.js'
+import type { LooseOmit, MaybePromise, OneOf } from '../../internal/types.js'
 import * as Method from '../../Method.js'
 import type * as Html from '../../server/internal/html/config.ts'
 import type * as z from '../../zod.js'
@@ -54,6 +55,7 @@ export function charge<const parameters extends charge.Parameters>(parameters: p
   } = parameters
 
   const client = 'client' in parameters ? parameters.client : undefined
+  const connect = parameters.connect
   const secretKey = 'secretKey' in parameters ? parameters.secretKey : undefined
 
   type Defaults = charge.DeriveDefaults<parameters>
@@ -92,7 +94,7 @@ export function charge<const parameters extends charge.Parameters>(parameters: p
           }
         : undefined,
 
-    async verify({ credential, request }) {
+    async verify({ credential, envelope, request }) {
       const { challenge } = credential
       const resolvedRequest = (() => {
         const parsed = Methods.charge.schema.request.safeParse(request)
@@ -115,6 +117,13 @@ export function charge<const parameters extends charge.Parameters>(parameters: p
         | Record<string, string>
         | undefined
       const resolvedMetadata = { ...buildAnalytics({ credential }), ...userMetadata }
+      const settlement = validateConnectSettlement({
+        amount: resolvedRequest.amount,
+        settlement:
+          typeof connect === 'function'
+            ? await connect({ challenge, credential, envelope, request: resolvedRequest })
+            : connect,
+      })
 
       const pi = client
         ? await createWithClient({
@@ -123,6 +132,7 @@ export function charge<const parameters extends charge.Parameters>(parameters: p
             request: resolvedRequest,
             spt,
             metadata: resolvedMetadata,
+            settlement,
           })
         : await createWithSecretKey({
             secretKey: secretKey!,
@@ -130,6 +140,7 @@ export function charge<const parameters extends charge.Parameters>(parameters: p
             request: resolvedRequest,
             spt,
             metadata: resolvedMetadata,
+            settlement,
           })
 
       if (pi.replayed)
@@ -171,6 +182,8 @@ export declare namespace charge {
       | undefined
     /** Optional metadata to include in SPT creation requests. */
     metadata?: Record<string, string> | undefined
+    /** Optional server-side Stripe Connect settlement policy. Not included in MPP challenges. */
+    connect?: ConnectSettlement | ResolveConnectSettlement | undefined
   } & Defaults &
     OneOf<
       | {
@@ -187,6 +200,40 @@ export declare namespace charge {
     parameters,
     Extract<keyof parameters, keyof Defaults>
   > & { decimals: number }
+
+  type ConnectSettlement = {
+    /** Connected account used as the Stripe account context for the request. */
+    stripeAccount?: string | undefined
+    /** Platform application fee amount in the smallest currency unit. */
+    applicationFeeAmount?: number | undefined
+    /** Connected account used as the business of record. */
+    onBehalfOf?: string | undefined
+    /** Destination transfer created from the PaymentIntent. */
+    transferData?: { amount?: number | undefined; destination: string } | undefined
+    /** Reconciliation token linking related charges and transfers. */
+    transferGroup?: string | undefined
+  }
+
+  type ResolveConnectSettlement = (parameters: {
+    challenge: Challenge.Challenge<
+      z.output<typeof Methods.charge.schema.request>,
+      'charge',
+      'stripe'
+    >
+    credential: Credential.Credential<
+      z.output<typeof Methods.charge.schema.credential.payload>,
+      Challenge.Challenge<z.output<typeof Methods.charge.schema.request>, 'charge', 'stripe'>
+    >
+    envelope?:
+      | Method.VerifiedChallengeEnvelope<
+          z.output<typeof Methods.charge.schema.request>,
+          z.output<typeof Methods.charge.schema.credential.payload>,
+          'charge',
+          'stripe'
+        >
+      | undefined
+    request: z.output<typeof Methods.charge.schema.request>
+  }) => MaybePromise<ConnectSettlement | undefined>
 }
 
 /** Creates a PaymentIntent using the Stripe SDK client. */
@@ -195,21 +242,41 @@ async function createWithClient(parameters: {
   challenge: { id: string }
   metadata: Record<string, string>
   request: { amount: unknown; currency: unknown }
+  settlement: charge.ConnectSettlement | undefined
   spt: string
 }): Promise<{ id: string; status: string; replayed: boolean }> {
-  const { client, challenge, metadata, request, spt } = parameters
+  const { client, challenge, metadata, request, settlement, spt } = parameters
   try {
+    const paymentIntentParams = {
+      amount: Number(request.amount),
+      automatic_payment_methods: { allow_redirects: 'never', enabled: true },
+      confirm: true,
+      currency: request.currency as string,
+      metadata,
+      ...(settlement?.applicationFeeAmount !== undefined && {
+        application_fee_amount: settlement.applicationFeeAmount,
+      }),
+      ...(settlement?.onBehalfOf !== undefined && { on_behalf_of: settlement.onBehalfOf }),
+      ...(settlement?.transferData !== undefined && {
+        transfer_data: {
+          destination: settlement.transferData.destination,
+          ...(settlement.transferData.amount !== undefined && {
+            amount: settlement.transferData.amount,
+          }),
+        },
+      }),
+      ...(settlement?.transferGroup !== undefined && { transfer_group: settlement.transferGroup }),
+      // `shared_payment_granted_token` is not yet in the Stripe SDK types (SPTs are in private preview).
+      shared_payment_granted_token: spt,
+    }
+    const paymentIntentOptions = {
+      apiVersion: stripePreviewVersion,
+      idempotencyKey: `mppx_${challenge.id}_${spt}`,
+      ...(settlement?.stripeAccount !== undefined && { stripeAccount: settlement.stripeAccount }),
+    }
     const result = await client.paymentIntents.create(
-      {
-        amount: Number(request.amount),
-        automatic_payment_methods: { allow_redirects: 'never', enabled: true },
-        confirm: true,
-        currency: request.currency as string,
-        metadata,
-        // `shared_payment_granted_token` is not yet in the Stripe SDK types (SPTs are in private preview).
-        shared_payment_granted_token: spt,
-      } as any,
-      { idempotencyKey: `mppx_${challenge.id}_${spt}`, apiVersion: stripePreviewVersion },
+      paymentIntentParams as any,
+      paymentIntentOptions,
     )
     // https://docs.stripe.com/error-low-level#idempotency
     const replayed = result.lastResponse?.headers?.['idempotent-replayed'] === 'true'
@@ -228,9 +295,10 @@ async function createWithSecretKey(parameters: {
   challenge: { id: string }
   metadata: Record<string, string>
   request: { amount: unknown; currency: unknown }
+  settlement: charge.ConnectSettlement | undefined
   spt: string
 }): Promise<{ id: string; status: string; replayed: boolean }> {
-  const { secretKey, challenge, metadata, request, spt } = parameters
+  const { secretKey, challenge, metadata, request, settlement, spt } = parameters
 
   const body = new URLSearchParams({
     amount: request.amount as string,
@@ -243,15 +311,27 @@ async function createWithSecretKey(parameters: {
   for (const [key, value] of Object.entries(metadata)) {
     body.set(`metadata[${key}]`, value)
   }
+  if (settlement?.applicationFeeAmount !== undefined)
+    body.set('application_fee_amount', String(settlement.applicationFeeAmount))
+  if (settlement?.onBehalfOf !== undefined) body.set('on_behalf_of', settlement.onBehalfOf)
+  if (settlement?.transferData !== undefined) {
+    body.set('transfer_data[destination]', settlement.transferData.destination)
+    if (settlement.transferData.amount !== undefined)
+      body.set('transfer_data[amount]', String(settlement.transferData.amount))
+  }
+  if (settlement?.transferGroup !== undefined) body.set('transfer_group', settlement.transferGroup)
+
+  const headers = {
+    Authorization: `Basic ${btoa(`${secretKey}:`)}`,
+    'Content-Type': 'application/x-www-form-urlencoded',
+    'Idempotency-Key': `mppx_${challenge.id}_${spt}`,
+    'Stripe-Version': stripePreviewVersion,
+    ...(settlement?.stripeAccount !== undefined && { 'Stripe-Account': settlement.stripeAccount }),
+  }
 
   const response = await fetch('https://api.stripe.com/v1/payment_intents', {
     method: 'POST',
-    headers: {
-      Authorization: `Basic ${btoa(`${secretKey}:`)}`,
-      'Content-Type': 'application/x-www-form-urlencoded',
-      'Idempotency-Key': `mppx_${challenge.id}_${spt}`,
-      'Stripe-Version': stripePreviewVersion,
-    },
+    headers,
     body,
   })
 
@@ -287,4 +367,49 @@ function buildAnalytics(parameters: { credential: Credential.Credential }): Reco
     mpp_server_id: challenge.realm,
     ...(credential.source ? { mpp_client_id: credential.source } : {}),
   }
+}
+
+function validateConnectSettlement(parameters: {
+  amount: unknown
+  settlement: charge.ConnectSettlement | undefined
+}): charge.ConnectSettlement | undefined {
+  const { amount, settlement } = parameters
+  if (settlement === undefined) return undefined
+
+  const paymentAmount = Number(amount)
+  if (!Number.isSafeInteger(paymentAmount) || paymentAmount < 0)
+    throw new VerificationFailedError({ reason: 'Stripe amount must be a non-negative integer.' })
+
+  validateAccountId(settlement.stripeAccount, 'stripeAccount')
+  validateAccountId(settlement.onBehalfOf, 'onBehalfOf')
+  validateAmount(settlement.applicationFeeAmount, paymentAmount, 'applicationFeeAmount')
+
+  if (settlement.transferData !== undefined) {
+    validateRequiredAccountId(settlement.transferData.destination, 'transferData.destination')
+    validateAmount(settlement.transferData.amount, paymentAmount, 'transferData.amount')
+  }
+
+  return settlement
+}
+
+function validateAccountId(value: string | undefined, name: string) {
+  if (value !== undefined && value.length === 0)
+    throw new VerificationFailedError({ reason: `Stripe Connect ${name} must be non-empty.` })
+}
+
+function validateRequiredAccountId(value: string | undefined, name: string) {
+  if (value === undefined || value.length === 0)
+    throw new VerificationFailedError({ reason: `Stripe Connect ${name} must be non-empty.` })
+}
+
+function validateAmount(value: number | undefined, paymentAmount: number, name: string) {
+  if (value === undefined) return
+  if (!Number.isSafeInteger(value) || value < 0)
+    throw new VerificationFailedError({
+      reason: `Stripe Connect ${name} must be a non-negative integer.`,
+    })
+  if (value > paymentAmount)
+    throw new VerificationFailedError({
+      reason: `Stripe Connect ${name} must be less than or equal to the PaymentIntent amount.`,
+    })
 }
