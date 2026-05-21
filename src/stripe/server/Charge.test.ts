@@ -143,7 +143,7 @@ describe('stripe.charge with client', () => {
             return {
               applicationFeeAmount: 12,
               onBehalfOf: 'acct_merchant',
-              stripeAccount: 'acct_platform',
+              stripeAccount: 'acct_connected',
               transferData: { amount: 88, destination: 'acct_destination' },
               transferGroup: 'order_123',
             }
@@ -185,7 +185,7 @@ describe('stripe.charge with client', () => {
       transfer_data: { amount: 88, destination: 'acct_destination' },
       transfer_group: 'order_123',
     })
-    expect(options).toMatchObject({ stripeAccount: 'acct_platform' })
+    expect(options).toMatchObject({ stripeAccount: 'acct_connected' })
   })
 
   test('behavior: applies Connect settlement parameters in secretKey call', async () => {
@@ -201,7 +201,7 @@ describe('stripe.charge with client', () => {
           connect: {
             applicationFeeAmount: 12,
             onBehalfOf: 'acct_merchant',
-            stripeAccount: 'acct_platform',
+            stripeAccount: 'acct_connected',
             transferData: { amount: 88, destination: 'acct_destination' },
             transferGroup: 'order_123',
           },
@@ -234,13 +234,52 @@ describe('stripe.charge with client', () => {
     const [input, init] = fetchMock.mock.calls[0]!
     expect(input).toBe('https://api.stripe.com/v1/payment_intents')
     const headers = new Headers(init?.headers)
-    expect(headers.get('Stripe-Account')).toBe('acct_platform')
+    expect(headers.get('Stripe-Account')).toBe('acct_connected')
     const body = init?.body as URLSearchParams
     expect(body.get('application_fee_amount')).toBe('12')
     expect(body.get('on_behalf_of')).toBe('acct_merchant')
     expect(body.get('transfer_data[amount]')).toBe('88')
     expect(body.get('transfer_data[destination]')).toBe('acct_destination')
     expect(body.get('transfer_group')).toBe('order_123')
+  })
+
+  test('error: surfaces Connect PaymentIntent creation failures', async () => {
+    const { client } = createMockStripeClient({ throws: true })
+
+    const server = Mppx.create({
+      methods: [
+        stripe.charge({
+          client,
+          connect: { stripeAccount: 'acct_connected' },
+          networkId: 'internal',
+          paymentMethodTypes: ['card'],
+        }),
+      ],
+      realm,
+      secretKey,
+    })
+
+    httpServer = await Http.createServer(async (req, res) => {
+      const result = await Mppx.toNodeListener(
+        server.charge({ amount: '1', currency: 'usd', decimals: 2 }),
+      )(req, res)
+      if (result.status === 402) return
+      res.end('OK')
+    })
+
+    const response = await fetch(httpServer.url)
+    const challenge = Challenge.fromResponse(response)
+    const credential = Credential.from({
+      challenge,
+      payload: { spt: 'spt_test_token' },
+    })
+
+    const paidResponse = await fetch(httpServer.url, {
+      headers: { Authorization: Credential.serialize(credential) },
+    })
+    expect(paidResponse.status).toBe(402)
+    const body = (await paidResponse.json()) as { detail: string }
+    expect(body.detail).toContain('Stripe PaymentIntent failed')
   })
 
   const invalidConnectCases: readonly {

@@ -201,6 +201,11 @@ export declare namespace charge {
     Extract<keyof parameters, keyof Defaults>
   > & { decimals: number }
 
+  /**
+   * Server-side Stripe Connect settlement parameters.
+   *
+   * @see https://docs.stripe.com/connect/destination-charges
+   */
   type ConnectSettlement = {
     /** Connected account used as the Stripe account context for the request. */
     stripeAccount?: string | undefined
