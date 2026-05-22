@@ -125,6 +125,7 @@ export function create<
     ...(resolvedOnChallenge && { onChallenge: resolvedOnChallenge }),
     ...(orderChallenges && { orderChallenges }),
     methods,
+    transport: transport as never,
   } satisfies Fetch.from.Config<FlattenMethods<methods>>
   const fetch = Fetch.from<FlattenMethods<methods>>(config_fetch)
 

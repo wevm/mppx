@@ -78,6 +78,75 @@ Mppx.create({
 const res = await fetch('https://mpp.dev/api/ping/paid')
 ```
 
+### x402 Exact
+
+```ts
+import { Mppx, x402 } from 'mppx/server'
+
+const mppx = Mppx.create({
+  methods: [
+    x402.exact({
+      config: {
+        asset: x402.assets.baseSepolia.USDC,
+        facilitator: 'https://x402.org/facilitator',
+        payTo: '0x742d35Cc6634c0532925a3b844bC9e7595F8fE00',
+      },
+    }),
+  ],
+})
+
+export async function GET(request: Request) {
+  const result = await mppx.x402.exact({
+    amount: '10000',
+    resource: { url: request.url },
+  })(request)
+
+  if (result.status === 402) return result.challenge
+  return result.withReceipt(Response.json({ data: 'paid content' }))
+}
+```
+
+Existing server adapters expose the same method. For Hono:
+
+```ts
+import { Hono } from 'hono'
+import { Mppx, x402 } from 'mppx/hono'
+
+const app = new Hono()
+const mppx = Mppx.create({
+  methods: [
+    x402.exact({
+      config: {
+        asset: x402.assets.baseSepolia.USDC,
+        facilitator: 'https://x402.org/facilitator',
+        payTo: '0x742d35Cc6634c0532925a3b844bC9e7595F8fE00',
+      },
+    }),
+  ],
+})
+
+app.get('/paid', mppx.x402.exact({ amount: '10000' }), (c) => c.json({ ok: true }))
+```
+
+```ts
+import { privateKeyToAccount } from 'viem/accounts'
+import { Mppx, x402 } from 'mppx/client'
+
+const mppx = Mppx.create({
+  methods: [
+    x402.exact({
+      account: privateKeyToAccount('0x...'),
+      assets: [x402.assets.baseSepolia.USDC.address],
+      maxAmount: '10000',
+      networks: ['eip155:84532'],
+    }),
+  ],
+  transport: x402.Transport.http(),
+})
+
+const res = await mppx.fetch('https://api.example.com/paid')
+```
+
 ## Examples
 
 | Example                                                | Description                                          |

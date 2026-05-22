@@ -4,6 +4,7 @@ import * as AcceptPayment from '../../internal/AcceptPayment.js'
 import type { MaybePromise } from '../../internal/types.js'
 import type * as Method from '../../Method.js'
 import type * as z from '../../zod.js'
+import * as Transport from '../Transport.js'
 
 // We tag wrappers with a global symbol so we can recognize wrappers created by mppx,
 // even across multiple module instances/bundles. This lets restore() avoid clobbering
@@ -162,6 +163,7 @@ export function from<const methods extends readonly Method.AnyClient[]>(
     methods,
     onChallenge,
     orderChallenges,
+    transport = Transport.http(),
   } = config
   const events = config.eventDispatcher ?? createEventDispatcher()
   const resolvedAcceptPayment = acceptPayment ?? AcceptPayment.resolve(methods)
@@ -183,7 +185,7 @@ export function from<const methods extends readonly Method.AnyClient[]>(
     )
     const response = await baseFetch(initialRequest.input, initialRequest.init)
 
-    if (response.status !== 402) return response
+    if (!transport.isPaymentRequired(response)) return response
 
     // Only extract context for payment handling after confirming 402.
     const context = (init as Record<string, unknown> | undefined)?.context
@@ -198,8 +200,9 @@ export function from<const methods extends readonly Method.AnyClient[]>(
     let mi: methods[number] | undefined
 
     try {
-      // Parse all challenges from the response (supports merged WWW-Authenticate headers).
-      challenges = Challenge.fromResponseList(response)
+      challenges = transport.getChallenges
+        ? transport.getChallenges(response)
+        : [transport.getChallenge(response)]
 
       const candidates = AcceptPayment.selectChallengeCandidates(
         challenges,
@@ -258,10 +261,16 @@ export function from<const methods extends readonly Method.AnyClient[]>(
         }),
       )
 
-      const paymentResponse = await baseFetch(initialRequest.input, {
-        ...fetchInit,
-        headers: withAuthorizationHeader(initialRequest.headers, credential),
-      })
+      const paymentResponse = await baseFetch(
+        initialRequest.input,
+        transport.setCredential(
+          {
+            ...fetchInit,
+            headers: initialRequest.headers,
+          },
+          credential,
+        ),
+      )
       if (paymentResponse.ok)
         await events.emit(
           'payment.response',
@@ -335,6 +344,8 @@ export declare namespace from {
       | undefined
     /** Filters and sorts supported challenges before credential creation. */
     orderChallenges?: AcceptPayment.OrderChallenges<methods> | undefined
+    /** Transport to use for challenge extraction and credential attachment. */
+    transport?: Transport.Transport<RequestInit, Response> | undefined
   }
 
   type Fetch<methods extends readonly Method.AnyClient[] = readonly Method.AnyClient[]> = (
@@ -686,18 +697,6 @@ function freezeSnapshot<value>(value: value): value {
   if (!value || typeof value !== 'object' || Object.isFrozen(value)) return value
   Object.freeze(value)
   return value
-}
-
-/** @internal */
-function withAuthorizationHeader(headers: unknown, credential: string): Record<string, string> {
-  const normalized = normalizeHeaders(headers)
-  // Remove any existing Authorization header regardless of casing to avoid
-  // duplicate/conflicting credentials on retry.
-  for (const key of Object.keys(normalized)) {
-    if (key.toLowerCase() === 'authorization') delete normalized[key]
-  }
-  normalized.Authorization = credential
-  return normalized
 }
 
 /** @internal */

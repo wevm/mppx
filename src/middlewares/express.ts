@@ -99,7 +99,7 @@ export function payment<const intent extends Mppx_internal.AnyMethodFn>(
     const originalJson = res.json.bind(res)
     res.json = (body: any) => {
       const wrapped = result.withReceipt(Response.json(body))
-      res.setHeader('Payment-Receipt', wrapped.headers.get('Payment-Receipt')!)
+      for (const [key, value] of wrapped.headers) res.setHeader(key, value)
       return originalJson(body)
     }
 
