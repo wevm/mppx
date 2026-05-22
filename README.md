@@ -147,6 +147,11 @@ const mppx = Mppx.create({
 const res = await mppx.fetch('https://api.example.com/paid')
 ```
 
+x402 uses its own HTTP headers (`PAYMENT-REQUIRED`, `PAYMENT-SIGNATURE`, and
+`PAYMENT-RESPONSE`), so clients must use `x402.Transport.http()` when calling
+x402-protected routes. Server methods install the matching transport
+automatically, including Hono, Express, Elysia, and Next.js adapters.
+
 ## Examples
 
 | Example                                                | Description                                          |
