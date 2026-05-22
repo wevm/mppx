@@ -1976,7 +1976,7 @@ describe('compose', () => {
     const paymentRequired = x402_Header.decodePaymentRequired(
       firstResult.challenge.headers.get(x402_Types.paymentRequiredHeader)!,
     )
-    const credential = x402PaymentSignature(paymentRequired.accepts[0]!)
+    const credential = x402PaymentSignature(paymentRequired.accepts[0]!, paymentRequired.resource)
 
     const result = await handle(
       new Request('https://example.com/resource', {
@@ -2634,7 +2634,10 @@ describe('compose', () => {
   })
 })
 
-function x402PaymentSignature(accepted: x402_Types.PaymentRequirements): string {
+function x402PaymentSignature(
+  accepted: x402_Types.PaymentRequirements,
+  resource: x402_Types.ResourceInfo,
+): string {
   return x402_Header.encodePaymentSignature({
     accepted,
     payload: {
@@ -2649,6 +2652,7 @@ function x402PaymentSignature(accepted: x402_Types.PaymentRequirements): string 
       signature:
         '0x2d6a7588d6acca505cbf0d9a4a227e0c52c6c34008c8e8986a1283259764173608a2ce6496642e377d6da8dbbf5836e9bd15092f9ecab05ded3d6293af148b571c',
     },
+    resource,
     x402Version: 2,
   })
 }
