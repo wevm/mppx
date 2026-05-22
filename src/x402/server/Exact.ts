@@ -67,20 +67,46 @@ export declare namespace exact {
     config: Config
   }
 
-  type Config = {
-    /** Token contract address or known x402 asset metadata. */
-    asset: `0x${string}` | Assets.KnownAsset
+  type Config = BaseConfig & CurrencyConfig & RecipientConfig
+
+  type BaseConfig = {
     /** Facilitator client or base URL. */
     facilitator: string | Types.Facilitator
     /** Maximum time in seconds allowed for payment completion. @default 60 */
     maxTimeoutSeconds?: number | undefined
     /** CAIP-2 network. Required for custom asset addresses; inferred for known assets. */
     network?: Types.EvmNetwork | undefined
-    /** Recipient wallet address. */
-    payTo: `0x${string}`
     /** Required for custom asset addresses; inferred for known assets. */
     transfer?: Types.ExactTransfer | undefined
   }
+
+  type CurrencyConfig =
+    | {
+        /** Token contract address or known x402 asset metadata. */
+        currency: `0x${string}` | Assets.KnownAsset
+        /** Legacy alias for `currency`. */
+        asset?: `0x${string}` | Assets.KnownAsset | undefined
+      }
+    | {
+        /** Legacy alias for `currency`. */
+        asset: `0x${string}` | Assets.KnownAsset
+        /** Token contract address or known x402 asset metadata. */
+        currency?: `0x${string}` | Assets.KnownAsset | undefined
+      }
+
+  type RecipientConfig =
+    | {
+        /** Recipient wallet address. */
+        recipient: `0x${string}`
+        /** Legacy alias for `recipient`. */
+        payTo?: `0x${string}` | undefined
+      }
+    | {
+        /** Legacy alias for `recipient`. */
+        payTo: `0x${string}`
+        /** Recipient wallet address. */
+        recipient?: `0x${string}` | undefined
+      }
 
   type Defaults = {
     asset: `0x${string}`
@@ -103,16 +129,21 @@ type ResolvedConfig = exact.Defaults & {
 }
 
 function resolveConfig(config: exact.Config): ResolvedConfig {
+  const currency = config.currency ?? config.asset
+  const recipient = config.recipient ?? config.payTo
+  if (!currency) throw new Error('x402 exact requires `currency`.')
+  if (!recipient) throw new Error('x402 exact requires `recipient`.')
+
   let address: `0x${string}`
   let network = config.network
   let transfer = config.transfer
 
-  if (Assets.isAsset(config.asset)) {
-    address = config.asset.address
-    network ??= config.asset.network
-    transfer ??= config.asset.transfer
+  if (Assets.isAsset(currency)) {
+    address = currency.address
+    network ??= currency.network
+    transfer ??= currency.transfer
   } else {
-    address = config.asset
+    address = currency
   }
 
   if (!network) throw new Error('x402 exact custom assets require `network`.')
@@ -123,7 +154,7 @@ function resolveConfig(config: exact.Config): ResolvedConfig {
     facilitator: config.facilitator,
     maxTimeoutSeconds: config.maxTimeoutSeconds ?? 60,
     network,
-    payTo: config.payTo,
+    payTo: recipient,
     transfer,
   }
 }

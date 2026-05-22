@@ -230,7 +230,7 @@ describe('charge', () => {
         }),
         x402_server.exact({
           config: {
-            asset: x402_server.assets.baseSepolia.USDC,
+            currency: x402_server.assets.baseSepolia.USDC,
             facilitator: {
               async verify(paymentPayload: PaymentPayload) {
                 return {
@@ -247,7 +247,7 @@ describe('charge', () => {
                 }
               },
             },
-            payTo: accounts[0].address,
+            recipient: accounts[0].address,
           },
         }),
       ],
@@ -255,8 +255,8 @@ describe('charge', () => {
     })
 
     const route = payments.compose(
-      ['tempo/charge', { amount: '0', chainId: client.chain!.id }],
-      ['x402/exact', { amount: '10000' }],
+      [payments.tempo.charge, { amount: '0', chainId: client.chain!.id }],
+      [payments.x402.exact, { amount: '10000' }],
     )
 
     const app = new Hono()

@@ -2212,19 +2212,36 @@ export function compose(
       }
     })()
 
+    const challengeResponses = results.flatMap((result) =>
+      result.status === 402 ? [result.challenge as Response] : [],
+    )
+
     // Merge challenge headers from all 402 responses.
     const mergedHeaders = new Headers()
     mergedHeaders.set('Cache-Control', 'no-store')
 
-    for (const entry of challengeEntries) {
-      const response = entry.result.challenge as Response
-      const wwwAuth = response.headers.get('WWW-Authenticate')
-      if (wwwAuth) mergedHeaders.append('WWW-Authenticate', wwwAuth)
+    const challengeHeaderMerges = [
+      {
+        name: 'WWW-Authenticate',
+        values: challengeEntries
+          .map((entry) => (entry.result.challenge as Response).headers.get('WWW-Authenticate'))
+          .filter((value): value is string => value !== null),
+        merge: (values: readonly string[]) => values,
+      },
+      {
+        name: x402_Types.paymentRequiredHeader,
+        values: challengeResponses
+          .map((response) => response.headers.get(x402_Types.paymentRequiredHeader))
+          .filter((value): value is string => value !== null),
+        merge: mergeX402PaymentRequiredHeaders,
+      },
+    ] satisfies readonly ChallengeHeaderMerge[]
+
+    for (const header of challengeHeaderMerges) {
+      for (const value of header.merge(header.values)) {
+        mergedHeaders.append(header.name, value)
+      }
     }
-    mergeTransportChallengeHeaders(
-      mergedHeaders,
-      results.flatMap((result) => (result.status === 402 ? [result.challenge as Response] : [])),
-    )
 
     // Collect html-enabled handlers and their challenges
     const htmlEntries = challengeEntries.filter((entry) => entry.handler._internal?.html)
@@ -2280,7 +2297,7 @@ export function compose(
     const bodyResponses =
       challengeEntries.length > 0
         ? challengeEntries.map((entry) => entry.result.challenge as Response)
-        : results.flatMap((result) => (result.status === 402 ? [result.challenge as Response] : []))
+        : challengeResponses
     for (const response of bodyResponses) {
       if (!body) {
         const contentType = response.headers.get('Content-Type')
@@ -2297,27 +2314,26 @@ export function compose(
   }
 }
 
-function mergeTransportChallengeHeaders(headers: Headers, responses: readonly Response[]) {
-  const x402Headers = responses
-    .map((response) => response.headers.get(x402_Types.paymentRequiredHeader))
-    .filter((value): value is string => value !== null)
-
-  if (x402Headers.length > 0) {
-    headers.set(x402_Types.paymentRequiredHeader, mergeX402PaymentRequired(x402Headers))
-  }
+type ChallengeHeaderMerge = {
+  name: string
+  values: readonly string[]
+  merge(values: readonly string[]): readonly string[]
 }
 
-function mergeX402PaymentRequired(values: readonly string[]): string {
+function mergeX402PaymentRequiredHeaders(values: readonly string[]): readonly string[] {
+  if (values.length === 0) return []
   const [first, ...rest] = values.map((value) => x402_Header.decodePaymentRequired(value))
   if (!first) throw new Error('Expected at least one x402 payment-required header.')
   const error = [first.error, ...rest.map((value) => value.error)]
     .filter((value): value is string => value !== undefined && value.length > 0)
     .join('; ')
-  return x402_Header.encodePaymentRequired({
-    ...first,
-    accepts: [first.accepts, ...rest.map((value) => value.accepts)].flat(),
-    ...(error ? { error } : {}),
-  })
+  return [
+    x402_Header.encodePaymentRequired({
+      ...first,
+      accepts: [first.accepts, ...rest.map((value) => value.accepts)].flat(),
+      ...(error ? { error } : {}),
+    }),
+  ]
 }
 
 /**

@@ -91,9 +91,9 @@ const mppx = Mppx.create({
     }),
     x402.exact({
       config: {
-        asset: x402.assets.baseSepolia.USDC,
+        currency: x402.assets.baseSepolia.USDC,
         facilitator: 'https://x402.org/facilitator',
-        payTo: '0x742d35Cc6634c0532925a3b844bC9e7595F8fE00',
+        recipient: '0x742d35Cc6634c0532925a3b844bC9e7595F8fE00',
       },
     }),
   ],
@@ -129,9 +129,9 @@ const mppx = Mppx.create({
     }),
     x402.exact({
       config: {
-        asset: x402.assets.baseSepolia.USDC,
+        currency: x402.assets.baseSepolia.USDC,
         facilitator: 'https://x402.org/facilitator',
-        payTo: '0x742d35Cc6634c0532925a3b844bC9e7595F8fE00',
+        recipient: '0x742d35Cc6634c0532925a3b844bC9e7595F8fE00',
       },
     }),
   ],
@@ -149,26 +149,22 @@ import { Hono } from 'hono'
 import { Mppx, tempo, x402 } from 'mppx/server'
 
 const app = new Hono()
+const tempoCharge = tempo.charge({
+  currency: '0x20c0000000000000000000000000000000000000',
+  recipient: '0x742d35Cc6634c0532925a3b844bC9e7595F8fE00',
+})
+const x402Exact = x402.exact({
+  config: {
+    currency: x402.assets.baseSepolia.USDC,
+    facilitator: 'https://x402.org/facilitator',
+    recipient: '0x742d35Cc6634c0532925a3b844bC9e7595F8fE00',
+  },
+})
 const payments = Mppx.create({
-  methods: [
-    tempo({
-      currency: '0x20c0000000000000000000000000000000000000',
-      recipient: '0x742d35Cc6634c0532925a3b844bC9e7595F8fE00',
-    }),
-    x402.exact({
-      config: {
-        asset: x402.assets.baseSepolia.USDC,
-        facilitator: 'https://x402.org/facilitator',
-        payTo: '0x742d35Cc6634c0532925a3b844bC9e7595F8fE00',
-      },
-    }),
-  ],
+  methods: [tempoCharge, x402Exact],
 })
 
-const paid = payments.compose(
-  ['tempo/charge', { amount: '1' }],
-  ['x402/exact', { amount: '10000' }],
-)
+const paid = payments.compose([tempoCharge, { amount: '1' }], [x402Exact, { amount: '10000' }])
 
 app.get('/paid', async (c) => {
   const result = await paid(c.req.raw)

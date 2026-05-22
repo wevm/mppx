@@ -12,7 +12,7 @@ describe('x402 public interface', () => {
       methods: [
         x402.exact({
           config: {
-            asset: x402.assets.base.USDC,
+            currency: x402.assets.base.USDC,
             facilitator: {
               settle: async () => ({
                 network: 'eip155:8453',
@@ -21,7 +21,7 @@ describe('x402 public interface', () => {
               }),
               verify: async () => ({ isValid: true }),
             },
-            payTo: '0x209693Bc6afc0C5328bA36FaF03C514EF312287C',
+            recipient: '0x209693Bc6afc0C5328bA36FaF03C514EF312287C',
           },
         }),
       ],
