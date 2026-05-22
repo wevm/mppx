@@ -1,6 +1,4 @@
-import { Base64 } from 'ox'
-
-import type * as z from '../zod.js'
+import * as HeaderCodec from '../internal/HeaderCodec.js'
 import {
   PaymentPayloadSchema,
   PaymentRequiredSchema,
@@ -10,9 +8,9 @@ import {
   type SettleResponse,
 } from './Types.js'
 
-const paymentRequired = createHeaderCodec(PaymentRequiredSchema)
-const paymentSignature = createHeaderCodec(PaymentPayloadSchema)
-const paymentResponse = createHeaderCodec(SettleResponseSchema)
+const paymentRequired = HeaderCodec.createJson(PaymentRequiredSchema)
+const paymentSignature = HeaderCodec.createJson(PaymentPayloadSchema)
+const paymentResponse = HeaderCodec.createJson(SettleResponseSchema)
 
 /** Encodes an x402 payment-required object for the `PAYMENT-REQUIRED` header. */
 export const encodePaymentRequired: (paymentRequired: PaymentRequired) => string =
@@ -34,28 +32,3 @@ export const encodePaymentResponse: (paymentResponse: SettleResponse) => string 
 
 /** Decodes an x402 `PAYMENT-RESPONSE` header value. */
 export const decodePaymentResponse: (value: string) => SettleResponse = paymentResponse.decode
-
-function createHeaderCodec<const schema extends z.ZodMiniType>(schema: schema) {
-  type value = z.output<schema>
-
-  return {
-    encode(value: value): string {
-      return encodeJson(schema.parse(value))
-    },
-    decode(value: string): value {
-      return schema.parse(decodeJson(value)) as value
-    },
-  }
-}
-
-function encodeJson(value: unknown): string {
-  return Base64.fromString(JSON.stringify(value))
-}
-
-function decodeJson(value: string): unknown {
-  try {
-    return JSON.parse(Base64.toString(value))
-  } catch {
-    throw new Error('Invalid x402 base64 JSON header.')
-  }
-}

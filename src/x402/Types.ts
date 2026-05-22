@@ -3,6 +3,7 @@ import * as z from '../zod.js'
 export const versions = [2] as const
 export const schemes = ['exact'] as const
 export const assetTransferMethods = ['eip3009', 'permit2'] as const
+export const evmNetworkPrefix = 'eip155:' as const
 
 /** x402 protocol version supported by this package. */
 export type Version = 2
@@ -14,7 +15,7 @@ export type Scheme = (typeof schemes)[number]
 export type AssetTransferMethod = (typeof assetTransferMethods)[number]
 
 /** CAIP-2 EVM network identifier. */
-export type EvmNetwork = `eip155:${number}`
+export type EvmNetwork = `${typeof evmNetworkPrefix}${number}`
 
 /** HTTP header carrying a base64-encoded x402 payment-required response. */
 export const paymentRequiredHeader = 'PAYMENT-REQUIRED'
@@ -31,7 +32,9 @@ const atomicAmount = z.string().check(z.regex(/^\d+$/, 'Invalid atomic amount'))
 const address = z.address()
 const evmNetwork = z
   .string()
-  .check(z.regex(/^eip155:\d+$/, 'Invalid EVM CAIP-2 network')) as z.ZodMiniType<EvmNetwork>
+  .check(
+    z.regex(new RegExp(`^${evmNetworkPrefix}\\d+$`), 'Invalid EVM CAIP-2 network'),
+  ) as z.ZodMiniType<EvmNetwork>
 
 /** Describes the protected resource in x402 v2 payment-required responses. */
 export const ResourceInfoSchema = z.object({

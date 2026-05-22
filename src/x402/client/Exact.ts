@@ -104,7 +104,7 @@ const authorizationTypes = {
 } as const
 
 function chainIdOf(network: Types.EvmNetwork): number {
-  return Number(network.slice('eip155:'.length))
+  return Number(network.slice(Types.evmNetworkPrefix.length))
 }
 
 function assertPolicy(parameters: exact.Parameters, accepted: Types.PaymentRequirements) {
