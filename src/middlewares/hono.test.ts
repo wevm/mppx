@@ -256,7 +256,7 @@ describe('charge', () => {
 
     const route = payments.compose(
       [payments.tempo.charge, { amount: '0', chainId: client.chain!.id }],
-      [payments.x402.exact, { amount: '10000' }],
+      [payments.x402.exact, { amount: '0.01' }],
     )
 
     const app = new Hono()

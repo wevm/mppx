@@ -1,9 +1,10 @@
 import { Hex } from 'ox'
 import type { Account } from 'viem'
-import { getAddress } from 'viem'
+import { getAddress, parseUnits } from 'viem'
 
 import * as Method from '../../Method.js'
 import * as z from '../../zod.js'
+import * as Assets from '../Assets.js'
 import * as Header from '../Header.js'
 import * as Methods from '../Methods.js'
 import * as Types from '../Types.js'
@@ -83,12 +84,18 @@ export declare namespace exact {
   type Parameters = {
     /** Account used to sign exact EVM payment payloads. */
     account: Account
-    /** Optional maximum atomic amount the client is willing to pay. */
+    /** Optional token decimals used to parse `maxAmount` when currency metadata is not provided. */
+    decimals?: number | undefined
+    /** Optional maximum display-unit amount the client is willing to pay. */
     maxAmount?: string | undefined
+    /** Optional maximum atomic amount the client is willing to pay. */
+    maxAtomicAmount?: string | undefined
     /** Optional allowlist of supported x402 EVM networks. */
     networks?: readonly Types.EvmNetwork[] | undefined
-    /** Optional allowlist of supported asset contract addresses. */
-    assets?: readonly `0x${string}`[] | undefined
+    /** Optional allowlist of supported currencies. */
+    currencies?: readonly (`0x${string}` | Assets.KnownAsset)[] | undefined
+    /** Legacy alias for `currencies`. */
+    assets?: readonly (`0x${string}` | Assets.KnownAsset)[] | undefined
   }
 }
 
@@ -108,15 +115,45 @@ function chainIdOf(network: Types.EvmNetwork): number {
 }
 
 function assertPolicy(parameters: exact.Parameters, accepted: Types.PaymentRequirements) {
-  if (parameters.maxAmount !== undefined && BigInt(accepted.amount) > BigInt(parameters.maxAmount))
-    throw new Error('x402 exact amount exceeds maxAmount.')
-
   if (parameters.networks && !parameters.networks.includes(accepted.network))
     throw new Error(`x402 exact network is not allowed: ${accepted.network}.`)
 
-  if (parameters.assets) {
-    const acceptedAsset = getAddress(accepted.asset as `0x${string}`)
-    const allowed = parameters.assets.some((asset) => getAddress(asset) === acceptedAsset)
-    if (!allowed) throw new Error(`x402 exact asset is not allowed: ${acceptedAsset}.`)
+  const currencies = parameters.currencies ?? parameters.assets
+  if (currencies) {
+    const acceptedCurrency = getAddress(accepted.asset as `0x${string}`)
+    const allowed = currencies.some(
+      (currency) => getAddress(addressOf(currency)) === acceptedCurrency,
+    )
+    if (!allowed) throw new Error(`x402 exact currency is not allowed: ${acceptedCurrency}.`)
   }
+
+  if (
+    parameters.maxAtomicAmount !== undefined &&
+    BigInt(accepted.amount) > BigInt(parameters.maxAtomicAmount)
+  )
+    throw new Error('x402 exact amount exceeds maxAtomicAmount.')
+
+  if (parameters.maxAmount !== undefined) {
+    const decimals = decimalsOfAcceptedCurrency(parameters, accepted)
+    if (decimals === undefined) throw new Error('x402 exact maxAmount requires currency decimals.')
+    if (BigInt(accepted.amount) > parseUnits(parameters.maxAmount, decimals))
+      throw new Error('x402 exact amount exceeds maxAmount.')
+  }
+}
+
+function addressOf(currency: `0x${string}` | Assets.KnownAsset): `0x${string}` {
+  return Assets.isAsset(currency) ? currency.address : currency
+}
+
+function decimalsOfAcceptedCurrency(
+  parameters: exact.Parameters,
+  accepted: Types.PaymentRequirements,
+): number | undefined {
+  const currencies = parameters.currencies ?? parameters.assets
+  const acceptedCurrency = getAddress(accepted.asset as `0x${string}`)
+  const currency = currencies?.find(
+    (currency) => getAddress(addressOf(currency)) === acceptedCurrency,
+  )
+  if (currency && Assets.isAsset(currency)) return currency.decimals
+  return parameters.decimals
 }

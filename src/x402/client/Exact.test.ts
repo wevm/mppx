@@ -2,6 +2,7 @@ import { Challenge } from 'mppx'
 import type { Account } from 'viem'
 import { describe, expect, test, vi } from 'vp/test'
 
+import * as Assets from '../Assets.js'
 import * as Header from '../Header.js'
 import * as Types from '../Types.js'
 import { exact } from './Exact.js'
@@ -12,13 +13,23 @@ const account = {
   address: '0x1111111111111111111111111111111111111111',
   signTypedData: vi.fn(async () => '0x1234'),
 } as unknown as Account
+const usdc = Assets.define({
+  address: '0x036CbD53842c5426634e7929541eC2318f3dCF7e',
+  decimals: 6,
+  network: 'eip155:84532',
+  transfer: {
+    name: 'USDC',
+    type: 'eip3009',
+    version: '2',
+  },
+})
 
 describe('x402.exact client', () => {
-  test('enforces max amount, network, and asset policy before signing', async () => {
+  test('enforces max amount, network, and currency policy before signing', async () => {
     const method = exact({
       account,
-      assets: ['0x036CbD53842c5426634e7929541eC2318f3dCF7e'],
-      maxAmount: '10000',
+      currencies: [usdc],
+      maxAmount: '0.01',
       networks: ['eip155:84532'],
     })
 
@@ -42,7 +53,7 @@ describe('x402.exact client', () => {
         context: {},
       }),
     ).rejects.toThrow(
-      'x402 exact asset is not allowed: 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913.',
+      'x402 exact currency is not allowed: 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913.',
     )
 
     expect(account.signTypedData).not.toHaveBeenCalled()
@@ -55,7 +66,8 @@ describe('x402.exact client', () => {
         ...account,
         signTypedData,
       } as unknown as Account,
-      maxAmount: '10000',
+      currencies: [usdc],
+      maxAmount: '0.01',
       networks: ['eip155:84532'],
     })
 

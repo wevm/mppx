@@ -1,3 +1,5 @@
+import { parseUnits } from 'viem'
+
 import * as Method from '../Method.js'
 import * as z from '../zod.js'
 import * as Types from './Types.js'
@@ -17,8 +19,9 @@ export const exact = Method.from({
     },
     request: z.pipe(
       Types.ExactRequestInputSchema,
-      z.transform(({ transfer, ...request }) => ({
+      z.transform(({ amount, decimals, transfer, ...request }) => ({
         ...request,
+        amount: parseUnits(amount, decimals).toString(),
         extra: Types.transferToExtra(transfer),
         scheme: Types.schemes[0],
       })),

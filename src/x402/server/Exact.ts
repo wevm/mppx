@@ -23,6 +23,7 @@ export function exact<const parameters extends exact.Parameters>(parameters: par
   return Method.toServer<typeof Methods.exact, exact.Defaults, typeof transport>(Methods.exact, {
     defaults: {
       asset: config.asset,
+      decimals: config.decimals,
       maxTimeoutSeconds: config.maxTimeoutSeconds,
       network: config.network,
       payTo: config.payTo,
@@ -70,6 +71,8 @@ export declare namespace exact {
   type Config = BaseConfig & CurrencyConfig & RecipientConfig
 
   type BaseConfig = {
+    /** Token decimal places. Required for custom currency addresses; inferred for known assets. */
+    decimals?: number | undefined
     /** Facilitator client or base URL. */
     facilitator: string | Types.Facilitator
     /** Maximum time in seconds allowed for payment completion. @default 60 */
@@ -110,6 +113,7 @@ export declare namespace exact {
 
   type Defaults = {
     asset: `0x${string}`
+    decimals: number
     maxTimeoutSeconds: number
     network: Types.EvmNetwork
     payTo: `0x${string}`
@@ -135,22 +139,26 @@ function resolveConfig(config: exact.Config): ResolvedConfig {
   if (!recipient) throw new Error('x402 exact requires `recipient`.')
 
   let address: `0x${string}`
+  let decimals = config.decimals
   let network = config.network
   let transfer = config.transfer
 
   if (Assets.isAsset(currency)) {
     address = currency.address
+    decimals ??= currency.decimals
     network ??= currency.network
     transfer ??= currency.transfer
   } else {
     address = currency
   }
 
-  if (!network) throw new Error('x402 exact custom assets require `network`.')
-  if (!transfer) throw new Error('x402 exact custom assets require `transfer`.')
+  if (decimals === undefined) throw new Error('x402 exact custom currencies require `decimals`.')
+  if (!network) throw new Error('x402 exact custom currencies require `network`.')
+  if (!transfer) throw new Error('x402 exact custom currencies require `transfer`.')
 
   return {
     asset: address,
+    decimals,
     facilitator: config.facilitator,
     maxTimeoutSeconds: config.maxTimeoutSeconds ?? 60,
     network,

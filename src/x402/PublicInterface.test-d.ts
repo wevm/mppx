@@ -29,14 +29,14 @@ describe('x402 public interface', () => {
     })
 
     expectTypeOf(mppx.x402.exact).toBeFunction()
-    expectTypeOf(mppx.x402.exact({ amount: '10000' })).toBeFunction()
+    expectTypeOf(mppx.x402.exact({ amount: '0.01' })).toBeFunction()
   })
 
   test('client exact exposes account config and policies', () => {
     const method = clientX402.exact({
       account: {} as Account,
-      assets: ['0x036CbD53842c5426634e7929541eC2318f3dCF7e'],
-      maxAmount: '10000',
+      currencies: [x402.assets.baseSepolia.USDC],
+      maxAmount: '0.01',
       networks: ['eip155:84532'],
     })
 

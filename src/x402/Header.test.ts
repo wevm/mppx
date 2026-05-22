@@ -66,8 +66,9 @@ describe('x402 headers', () => {
 describe('x402 exact method', () => {
   test('maps public transfer config to wire extra', () => {
     const request = Methods.exact.schema.request.parse({
-      amount: '10000',
+      amount: '0.01',
       asset: '0x036CbD53842c5426634e7929541eC2318f3dCF7e',
+      decimals: 6,
       maxTimeoutSeconds: 60,
       network: 'eip155:84532',
       payTo: '0x209693Bc6afc0C5328bA36FaF03C514EF312287C',
@@ -79,6 +80,7 @@ describe('x402 exact method', () => {
     })
 
     expect(request).toMatchObject({
+      amount: '10000',
       extra: {
         assetTransferMethod: 'eip3009',
         name: 'USDC',

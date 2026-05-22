@@ -73,7 +73,7 @@ describe('x402 exact e2e', () => {
 
       if (req.url === '/x402') {
         const result = await x402Payment.x402.exact({
-          amount: '10000',
+          amount: '0.01',
           resource: {
             mimeType: 'text/plain',
             url: new URL('/x402', request.url).toString(),
@@ -165,7 +165,7 @@ describe('x402 exact e2e', () => {
     })
     const paid = payment.compose(
       [payment.tempo.charge, { amount: '0', chainId: client.chain!.id }],
-      [payment.x402.exact, { amount: '10000' }],
+      [payment.x402.exact, { amount: '0.01' }],
     )
 
     const server = await Http.createServer(async (req, res) => {

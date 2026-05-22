@@ -104,8 +104,9 @@ export type ExactRequest = PaymentRequirements & {
 
 /** Public exact EVM route input before it is converted to x402 wire requirements. */
 export const ExactRequestInputSchema = z.object({
-  amount: atomicAmount,
+  amount: z.amount(),
   asset: address,
+  decimals: z.number(),
   maxTimeoutSeconds: positiveNumber,
   network: evmNetwork,
   payTo: address,

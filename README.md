@@ -105,7 +105,7 @@ export async function GET(request: Request) {
     url.pathname === '/mpp'
       ? await mppx.tempo.charge({ amount: '1' })(request)
       : await mppx.x402.exact({
-          amount: '10000',
+          amount: '0.01',
           resource: { url: request.url },
         })(request)
 
@@ -138,8 +138,11 @@ const mppx = Mppx.create({
 })
 
 app.get('/mpp', mppx.tempo.charge({ amount: '1' }), (c) => c.json({ ok: true }))
-app.get('/x402', mppx.x402.exact({ amount: '10000' }), (c) => c.json({ ok: true }))
+app.get('/x402', mppx.x402.exact({ amount: '0.01' }), (c) => c.json({ ok: true }))
 ```
+
+Like Tempo, x402 route `amount` values are display-unit strings; mppx converts
+them to atomic token amounts from the configured currency decimals.
 
 To offer both protocols from one Hono route, use the core HTTP composer inside
 the Hono handler:
@@ -164,7 +167,7 @@ const payments = Mppx.create({
   methods: [tempoCharge, x402Exact],
 })
 
-const paid = payments.compose([tempoCharge, { amount: '1' }], [x402Exact, { amount: '10000' }])
+const paid = payments.compose([tempoCharge, { amount: '1' }], [x402Exact, { amount: '0.01' }])
 
 app.get('/paid', async (c) => {
   const result = await paid(c.req.raw)
@@ -185,8 +188,8 @@ const mppx = Mppx.create({
   methods: [
     x402.exact({
       account: privateKeyToAccount('0x...'),
-      assets: [x402.assets.baseSepolia.USDC.address],
-      maxAmount: '10000',
+      currencies: [x402.assets.baseSepolia.USDC],
+      maxAmount: '0.01',
       networks: ['eip155:84532'],
     }),
   ],
