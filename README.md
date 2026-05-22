@@ -177,6 +177,10 @@ app.get('/paid', async (c) => {
 })
 ```
 
+The same `compose()` handler can be used in other HTTP frameworks. Pass it the
+framework's standard `Request`, return `result.challenge` on `402`, and wrap the
+framework response with `result.withReceipt(...)` after payment succeeds.
+
 ```ts
 import { privateKeyToAccount } from 'viem/accounts'
 import { Mppx, x402 } from 'mppx/client'

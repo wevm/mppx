@@ -110,6 +110,26 @@ describe('http', () => {
         name: 'x402 challenges',
       },
       {
+        expectedIds: [
+          `${x402_Types.syntheticChallengeIdPrefix}0`,
+          `${x402_Types.syntheticChallengeIdPrefix}1`,
+        ],
+        expectedMethods: [x402_Types.paymentMethod, x402_Types.paymentMethod],
+        headers: () => ({
+          'PAYMENT-REQUIRED': x402_Header.encodePaymentRequired({
+            ...x402PaymentRequired,
+            accepts: [
+              x402PaymentRequired.accepts[0]!,
+              {
+                ...x402PaymentRequired.accepts[0]!,
+                amount: '20000',
+              },
+            ],
+          }),
+        }),
+        name: 'multiple x402 accepts',
+      },
+      {
         expectedIds: [challenge.id, `${x402_Types.syntheticChallengeIdPrefix}0`],
         expectedMethods: ['tempo', x402_Types.paymentMethod],
         headers: () => ({

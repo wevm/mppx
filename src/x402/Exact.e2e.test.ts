@@ -128,6 +128,89 @@ describe('x402 exact e2e', () => {
       server.close()
     }
   })
+
+  test('serves tempo and x402 from one composed live endpoint', async () => {
+    const payment = ServerMppx.create({
+      methods: [
+        tempo.charge({
+          account: accounts[0],
+          currency: asset,
+          getClient: () => client,
+          recipient: accounts[0].address,
+        }),
+        x402Server.exact({
+          config: {
+            asset: x402Server.assets.baseSepolia.USDC,
+            facilitator: {
+              async verify(paymentPayload) {
+                return {
+                  isValid: true,
+                  payer: payerOf(paymentPayload),
+                }
+              },
+              async settle(paymentPayload) {
+                return {
+                  network: paymentPayload.accepted.network,
+                  payer: payerOf(paymentPayload),
+                  success: true,
+                  transaction,
+                }
+              },
+            },
+            payTo: accounts[0].address,
+          },
+        }),
+      ],
+      secretKey,
+    })
+    const paid = payment.compose(
+      ['tempo/charge', { amount: '0', chainId: client.chain!.id }],
+      ['x402/exact', { amount: '10000' }],
+    )
+
+    const server = await Http.createServer(async (req, res) => {
+      const request = ServerRequest.fromNodeListener(req, res)
+      const result = await paid(request)
+      if (result.status === 402) return NodeListener.sendResponse(res, result.challenge)
+      return NodeListener.sendResponse(res, result.withReceipt(new Response('paid ok')))
+    })
+
+    try {
+      const challenge = await fetch(server.url)
+      expect(challenge.status).toBe(402)
+      expect(challenge.headers.has('WWW-Authenticate')).toBe(true)
+      expect(challenge.headers.has(Types.paymentRequiredHeader)).toBe(true)
+
+      const tempoClientPayment = ClientMppx.create({
+        methods: [
+          tempoClient.charge({
+            account: accounts[0],
+            getClient: () => client,
+          }),
+        ],
+        polyfill: false,
+      })
+      const tempoResponse = await tempoClientPayment.fetch(server.url)
+      expect(tempoResponse.status).toBe(200)
+      expect(await tempoResponse.text()).toBe('paid ok')
+      expect(tempoResponse.headers.has('Payment-Receipt')).toBe(true)
+
+      const x402ClientPayment = ClientMppx.create({
+        methods: [
+          x402Client.exact({
+            account: accounts[0],
+          }),
+        ],
+        polyfill: false,
+      })
+      const x402Response = await x402ClientPayment.fetch(server.url)
+      expect(x402Response.status).toBe(200)
+      expect(await x402Response.text()).toBe('paid ok')
+      expect(x402Response.headers.has(Types.paymentResponseHeader)).toBe(true)
+    } finally {
+      server.close()
+    }
+  })
 })
 
 function payerOf(paymentPayload: Types.PaymentPayload): string {
