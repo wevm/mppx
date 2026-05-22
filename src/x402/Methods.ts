@@ -9,8 +9,8 @@ import * as Types from './Types.js'
  * converts it into the x402 wire `extra` object.
  */
 export const exact = Method.from({
-  name: 'x402',
-  intent: 'exact',
+  name: Types.paymentMethod,
+  intent: Types.exactIntent,
   schema: {
     credential: {
       payload: Types.PaymentPayloadSchema,
@@ -20,7 +20,7 @@ export const exact = Method.from({
       z.transform(({ transfer, ...request }) => ({
         ...request,
         extra: Types.transferToExtra(transfer),
-        scheme: 'exact' as const,
+        scheme: Types.schemes[0],
       })),
     ),
   },

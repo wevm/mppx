@@ -4,6 +4,10 @@ import * as Mcp from '../Mcp.js'
 import * as x402_Header from '../x402/Header.js'
 import * as x402_Types from '../x402/Types.js'
 
+const paymentRequiredStatus = 402
+const paymentAuthChallengeHeader = 'WWW-Authenticate'
+const paymentAuthCredentialHeader = 'Authorization'
+
 /**
  * Client-side transport adapter.
  *
@@ -78,15 +82,15 @@ export function http() {
     name: 'http',
 
     isPaymentRequired(response) {
-      return response.status === 402
+      return response.status === paymentRequiredStatus
     },
 
     getChallenges(response) {
-      return [...paymentAuthChallenges(response), ...x402Challenges(response)]
+      return paymentRequiredChallenges(response)
     },
 
     getChallenge(response) {
-      const challenge = [...paymentAuthChallenges(response), ...x402Challenges(response)][0]
+      const challenge = paymentRequiredChallenges(response)[0]
       if (!challenge) throw new Error('No challenge in response.')
       return challenge
     },
@@ -96,15 +100,19 @@ export function http() {
       if (isX402Challenge(options?.challenge)) {
         headers.set(x402_Types.paymentSignatureHeader, credential)
       } else {
-        headers.set('Authorization', credential)
+        headers.set(paymentAuthCredentialHeader, credential)
       }
       return { ...request, headers }
     },
   })
 }
 
+function paymentRequiredChallenges(response: Response): Challenge.Challenge[] {
+  return [...paymentAuthChallenges(response), ...x402Challenges(response)]
+}
+
 function paymentAuthChallenges(response: Response): Challenge.Challenge[] {
-  if (!response.headers.has('WWW-Authenticate')) return []
+  if (!response.headers.has(paymentAuthChallengeHeader)) return []
   return Challenge.fromResponseList(response)
 }
 
@@ -114,9 +122,9 @@ function x402Challenges(response: Response): Challenge.Challenge[] {
   const paymentRequired = x402_Header.decodePaymentRequired(header)
   return paymentRequired.accepts.map((accepted, index) =>
     Challenge.from({
-      id: `x402-${index}`,
-      intent: 'exact',
-      method: 'x402',
+      id: `${x402_Types.syntheticChallengeIdPrefix}${index}`,
+      intent: x402_Types.exactIntent,
+      method: x402_Types.paymentMethod,
       realm: new URL(paymentRequired.resource.url).host,
       request: {
         ...accepted,
@@ -127,7 +135,14 @@ function x402Challenges(response: Response): Challenge.Challenge[] {
 }
 
 function isX402Challenge(challenge: Challenge.Challenge | undefined): boolean {
-  return challenge?.method === 'x402' && challenge.intent === 'exact'
+  return (
+    challenge?.method === x402_Types.paymentMethod &&
+    challenge.intent === x402_Types.exactIntent &&
+    typeof challenge.request === 'object' &&
+    challenge.request !== null &&
+    'scheme' in challenge.request &&
+    challenge.request.scheme === x402_Types.schemes[0]
+  )
 }
 
 /**

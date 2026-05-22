@@ -1,12 +1,30 @@
 import * as z from '../zod.js'
 
 export const versions = [2] as const
+
+/** mppx method name used for x402 challenges. */
+export const paymentMethod = 'x402' as const
+
+/** mppx intent name used for x402 exact challenges. */
+export const exactIntent = 'exact' as const
+
 export const schemes = ['exact'] as const
 export const assetTransferMethods = ['eip3009', 'permit2'] as const
+
+/** CAIP-2 namespace prefix for EVM networks. */
 export const evmNetworkPrefix = 'eip155:' as const
+
+/** Prefix for synthetic mppx challenge IDs derived from x402 `accepts` entries. */
+export const syntheticChallengeIdPrefix = 'x402:' as const
 
 /** x402 protocol version supported by this package. */
 export type Version = 2
+
+/** mppx payment method name used for x402 challenges. */
+export type PaymentMethod = typeof paymentMethod
+
+/** mppx intent name used for x402 exact challenges. */
+export type ExactIntent = typeof exactIntent
 
 /** x402 scheme supported by this package. */
 export type Scheme = (typeof schemes)[number]

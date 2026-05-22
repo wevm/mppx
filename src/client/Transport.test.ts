@@ -1,7 +1,7 @@
 import { Challenge, Credential, Mcp } from 'mppx'
 import { Transport } from 'mppx/client'
 import { Methods } from 'mppx/tempo'
-import { Header as x402_Header, type PaymentRequired } from 'mppx/x402'
+import { Header as x402_Header, Types as x402_Types, type PaymentRequired } from 'mppx/x402'
 import { describe, expect, test } from 'vp/test'
 
 const realm = 'api.example.com'
@@ -32,7 +32,7 @@ const x402PaymentRequired = {
       maxTimeoutSeconds: 60,
       network: 'eip155:84532',
       payTo: '0x209693Bc6afc0C5328bA36FaF03C514EF312287C',
-      scheme: 'exact',
+      scheme: x402_Types.schemes[0],
     },
   ],
   resource: {
@@ -102,16 +102,16 @@ describe('http', () => {
         name: 'Payment auth challenges',
       },
       {
-        expectedIds: ['x402-0'],
-        expectedMethods: ['x402'],
+        expectedIds: [`${x402_Types.syntheticChallengeIdPrefix}0`],
+        expectedMethods: [x402_Types.paymentMethod],
         headers: () => ({
           'PAYMENT-REQUIRED': x402_Header.encodePaymentRequired(x402PaymentRequired),
         }),
         name: 'x402 challenges',
       },
       {
-        expectedIds: [challenge.id, 'x402-0'],
-        expectedMethods: ['tempo', 'x402'],
+        expectedIds: [challenge.id, `${x402_Types.syntheticChallengeIdPrefix}0`],
+        expectedMethods: ['tempo', x402_Types.paymentMethod],
         headers: () => ({
           'PAYMENT-REQUIRED': x402_Header.encodePaymentRequired(x402PaymentRequired),
           'WWW-Authenticate': Challenge.serialize(challenge),
@@ -142,9 +142,9 @@ describe('http', () => {
       },
       {
         challenge: Challenge.from({
-          id: 'x402-0',
-          intent: 'exact',
-          method: 'x402',
+          id: `${x402_Types.syntheticChallengeIdPrefix}0`,
+          intent: x402_Types.exactIntent,
+          method: x402_Types.paymentMethod,
           realm: 'api.example.com',
           request: x402PaymentRequired.accepts[0]!,
         }),

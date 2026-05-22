@@ -35,6 +35,7 @@ export const base = {
     decimals: 6,
     network: 'eip155:8453',
     transfer: {
+      // USDC's EIP-712 domain name differs between Base and Base Sepolia.
       name: 'USD Coin',
       type: 'eip3009',
       version: '2',
@@ -49,6 +50,7 @@ export const baseSepolia = {
     decimals: 6,
     network: 'eip155:84532',
     transfer: {
+      // Base Sepolia test USDC signs with the shorter EIP-712 domain name.
       name: 'USDC',
       type: 'eip3009',
       version: '2',
