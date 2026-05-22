@@ -118,11 +118,15 @@ Existing server adapters expose the same method. For Hono:
 
 ```ts
 import { Hono } from 'hono'
-import { Mppx, x402 } from 'mppx/hono'
+import { Mppx, tempo, x402 } from 'mppx/hono'
 
 const app = new Hono()
 const mppx = Mppx.create({
   methods: [
+    tempo({
+      currency: '0x20c0000000000000000000000000000000000000',
+      recipient: '0x742d35Cc6634c0532925a3b844bC9e7595F8fE00',
+    }),
     x402.exact({
       config: {
         asset: x402.assets.baseSepolia.USDC,
@@ -133,7 +137,8 @@ const mppx = Mppx.create({
   ],
 })
 
-app.get('/paid', mppx.x402.exact({ amount: '10000' }), (c) => c.json({ ok: true }))
+app.get('/mpp', mppx.tempo.charge({ amount: '1' }), (c) => c.json({ ok: true }))
+app.get('/x402', mppx.x402.exact({ amount: '10000' }), (c) => c.json({ ok: true }))
 ```
 
 ```ts
