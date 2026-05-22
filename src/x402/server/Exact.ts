@@ -53,7 +53,7 @@ export function exact<const parameters extends exact.Parameters>(parameters: par
         })
 
       return Receipt.from({
-        method: 'x402',
+        method: Types.paymentMethod,
         reference: settled.transaction,
         status: 'success',
         timestamp: new Date().toISOString(),

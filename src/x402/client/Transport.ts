@@ -39,9 +39,9 @@ function paymentRequiredToChallenges(
 ): Challenge.Challenge[] {
   return paymentRequired.accepts.map((accepted, index) =>
     Challenge.from({
-      id: `x402-${index}`,
-      intent: 'exact',
-      method: 'x402',
+      id: `${Types.syntheticChallengeIdPrefix}${index}`,
+      intent: Types.exactIntent,
+      method: Types.paymentMethod,
       realm: new URL(paymentRequired.resource.url).host,
       request: {
         ...accepted,

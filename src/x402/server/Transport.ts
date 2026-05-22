@@ -26,8 +26,8 @@ export function http() {
       return Credential.from({
         challenge: Challenge.from({
           id: 'x402-pending',
-          intent: 'exact',
-          method: 'x402',
+          intent: Types.exactIntent,
+          method: Types.paymentMethod,
           realm: 'x402',
           request: paymentPayload.accepted,
         }),
