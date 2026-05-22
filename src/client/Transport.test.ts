@@ -1,6 +1,7 @@
 import { Challenge, Credential, Mcp } from 'mppx'
 import { Transport } from 'mppx/client'
 import { Methods } from 'mppx/tempo'
+import { Header as x402_Header, type PaymentRequired } from 'mppx/x402'
 import { describe, expect, test } from 'vp/test'
 
 const realm = 'api.example.com'
@@ -22,6 +23,23 @@ const credential = Credential.from({
   challenge,
   payload: { signature: '0xabc123', type: 'transaction' },
 })
+
+const x402PaymentRequired = {
+  accepts: [
+    {
+      amount: '10000',
+      asset: '0x036CbD53842c5426634e7929541eC2318f3dCF7e',
+      maxTimeoutSeconds: 60,
+      network: 'eip155:84532',
+      payTo: '0x209693Bc6afc0C5328bA36FaF03C514EF312287C',
+      scheme: 'exact',
+    },
+  ],
+  resource: {
+    url: 'https://api.example.com/x402',
+  },
+  x402Version: 2,
+} satisfies PaymentRequired
 
 describe('http', () => {
   describe('isPaymentRequired', () => {
@@ -95,6 +113,45 @@ describe('http', () => {
         'alternate',
       ])
     })
+
+    test('returns x402 challenges from PAYMENT-REQUIRED', () => {
+      const transport = Transport.http()
+      const response = new Response(null, {
+        status: 402,
+        headers: {
+          'PAYMENT-REQUIRED': x402_Header.encodePaymentRequired(x402PaymentRequired),
+        },
+      })
+
+      expect(transport.getChallenges?.(response)).toMatchObject([
+        {
+          id: 'x402-0',
+          intent: 'exact',
+          method: 'x402',
+          realm: 'api.example.com',
+          request: {
+            amount: '10000',
+            scheme: 'exact',
+          },
+        },
+      ])
+    })
+
+    test('returns Payment auth and x402 challenges from the same response', () => {
+      const transport = Transport.http()
+      const response = new Response(null, {
+        status: 402,
+        headers: {
+          'PAYMENT-REQUIRED': x402_Header.encodePaymentRequired(x402PaymentRequired),
+          'WWW-Authenticate': Challenge.serialize(challenge),
+        },
+      })
+
+      expect(transport.getChallenges?.(response).map((entry) => entry.method)).toEqual([
+        'tempo',
+        'x402',
+      ])
+    })
   })
 
   describe('setCredential', () => {
@@ -119,6 +176,15 @@ describe('http', () => {
       const headers = result.headers as Headers
 
       expect(headers.get('Content-Type')).toBe('application/json')
+    })
+
+    test('writes raw x402 credentials to PAYMENT-SIGNATURE', () => {
+      const transport = Transport.http()
+      const result = transport.setCredential({}, 'x402-signature')
+      const headers = result.headers as Headers
+
+      expect(headers.get('PAYMENT-SIGNATURE')).toBe('x402-signature')
+      expect(headers.has('Authorization')).toBe(false)
     })
   })
 })

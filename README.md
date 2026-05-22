@@ -141,16 +141,14 @@ const mppx = Mppx.create({
       networks: ['eip155:84532'],
     }),
   ],
-  transport: x402.Transport.http(),
 })
 
 const res = await mppx.fetch('https://api.example.com/paid')
 ```
 
-x402 uses its own HTTP headers (`PAYMENT-REQUIRED`, `PAYMENT-SIGNATURE`, and
-`PAYMENT-RESPONSE`), so clients must use `x402.Transport.http()` when calling
-x402-protected routes. Server methods install the matching transport
-automatically, including Hono, Express, Elysia, and Next.js adapters.
+The default HTTP transport multiplexes Payment auth and x402 headers. It reads
+`WWW-Authenticate` and `PAYMENT-REQUIRED`, then sends credentials through either
+`Authorization` or `PAYMENT-SIGNATURE` based on the selected challenge.
 
 ## Examples
 

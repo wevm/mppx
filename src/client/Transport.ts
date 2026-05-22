@@ -1,6 +1,8 @@
 import * as Challenge from '../Challenge.js'
 import * as Credential from '../Credential.js'
 import * as Mcp from '../Mcp.js'
+import * as x402_Header from '../x402/Header.js'
+import * as x402_Types from '../x402/Types.js'
 
 /**
  * Client-side transport adapter.
@@ -55,8 +57,10 @@ export function from<request, response>(
  * HTTP transport for client-side payment handling.
  *
  * - Detects payment required via 402 status
- * - Extracts challenges from `WWW-Authenticate` header
- * - Sends credentials via `Authorization` header
+ * - Extracts Payment auth challenges from `WWW-Authenticate`
+ * - Extracts x402 exact challenges from `PAYMENT-REQUIRED`
+ * - Sends Payment auth credentials via `Authorization`
+ * - Sends x402 credentials via `PAYMENT-SIGNATURE`
  */
 export function http() {
   return from<RequestInit, Response>({
@@ -67,19 +71,49 @@ export function http() {
     },
 
     getChallenges(response) {
-      return Challenge.fromResponseList(response)
+      return [...paymentAuthChallenges(response), ...x402Challenges(response)]
     },
 
     getChallenge(response) {
-      return Challenge.fromResponse(response)
+      const challenge = [...paymentAuthChallenges(response), ...x402Challenges(response)][0]
+      if (!challenge) throw new Error('No challenge in response.')
+      return challenge
     },
 
     setCredential(request, credential) {
       const headers = new Headers(request.headers)
-      headers.set('Authorization', credential)
+      if (isPaymentAuthCredential(credential)) headers.set('Authorization', credential)
+      else headers.set(x402_Types.paymentSignatureHeader, credential)
       return { ...request, headers }
     },
   })
+}
+
+function paymentAuthChallenges(response: Response): Challenge.Challenge[] {
+  if (!response.headers.has('WWW-Authenticate')) return []
+  return Challenge.fromResponseList(response)
+}
+
+function x402Challenges(response: Response): Challenge.Challenge[] {
+  const header = response.headers.get(x402_Types.paymentRequiredHeader)
+  if (!header) return []
+  const paymentRequired = x402_Header.decodePaymentRequired(header)
+  return paymentRequired.accepts.map((accepted, index) =>
+    Challenge.from({
+      id: `x402-${index}`,
+      intent: 'exact',
+      method: 'x402',
+      realm: new URL(paymentRequired.resource.url).host,
+      request: {
+        ...accepted,
+        resource: paymentRequired.resource,
+      },
+    }),
+  )
+}
+
+function isPaymentAuthCredential(credential: string): boolean {
+  return /^Payment\s+/i.test(credential)
 }
 
 /**

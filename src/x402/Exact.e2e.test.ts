@@ -108,7 +108,6 @@ describe('x402 exact e2e', () => {
           }),
         ],
         polyfill: false,
-        transport: x402Client.Transport.http(),
       })
       const x402Required = await x402ClientPayment.rawFetch(`${server.url}/x402`)
       expect(x402Required.status).toBe(402)
