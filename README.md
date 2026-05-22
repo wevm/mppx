@@ -141,6 +141,42 @@ app.get('/mpp', mppx.tempo.charge({ amount: '1' }), (c) => c.json({ ok: true }))
 app.get('/x402', mppx.x402.exact({ amount: '10000' }), (c) => c.json({ ok: true }))
 ```
 
+To offer both protocols from one Hono route, use the core HTTP composer inside
+the Hono handler:
+
+```ts
+import { Hono } from 'hono'
+import { Mppx, tempo, x402 } from 'mppx/server'
+
+const app = new Hono()
+const payments = Mppx.create({
+  methods: [
+    tempo({
+      currency: '0x20c0000000000000000000000000000000000000',
+      recipient: '0x742d35Cc6634c0532925a3b844bC9e7595F8fE00',
+    }),
+    x402.exact({
+      config: {
+        asset: x402.assets.baseSepolia.USDC,
+        facilitator: 'https://x402.org/facilitator',
+        payTo: '0x742d35Cc6634c0532925a3b844bC9e7595F8fE00',
+      },
+    }),
+  ],
+})
+
+const paid = payments.compose(
+  ['tempo/charge', { amount: '1' }],
+  ['x402/exact', { amount: '10000' }],
+)
+
+app.get('/paid', async (c) => {
+  const result = await paid(c.req.raw)
+  if (result.status === 402) return result.challenge
+  return result.withReceipt(c.json({ ok: true }))
+})
+```
+
 ```ts
 import { privateKeyToAccount } from 'viem/accounts'
 import { Mppx, x402 } from 'mppx/client'
