@@ -81,10 +81,14 @@ const res = await fetch('https://mpp.dev/api/ping/paid')
 ### x402 Exact
 
 ```ts
-import { Mppx, x402 } from 'mppx/server'
+import { Mppx, tempo, x402 } from 'mppx/server'
 
 const mppx = Mppx.create({
   methods: [
+    tempo({
+      currency: '0x20c0000000000000000000000000000000000000',
+      recipient: '0x742d35Cc6634c0532925a3b844bC9e7595F8fE00',
+    }),
     x402.exact({
       config: {
         asset: x402.assets.baseSepolia.USDC,
@@ -96,10 +100,14 @@ const mppx = Mppx.create({
 })
 
 export async function GET(request: Request) {
-  const result = await mppx.x402.exact({
-    amount: '10000',
-    resource: { url: request.url },
-  })(request)
+  const url = new URL(request.url)
+  const result =
+    url.pathname === '/mpp'
+      ? await mppx.tempo.charge({ amount: '1' })(request)
+      : await mppx.x402.exact({
+          amount: '10000',
+          resource: { url: request.url },
+        })(request)
 
   if (result.status === 402) return result.challenge
   return result.withReceipt(Response.json({ data: 'paid content' }))
