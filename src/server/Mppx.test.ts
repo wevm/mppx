@@ -1858,7 +1858,7 @@ describe('compose', () => {
 
   const x402Method = x402.exact({
     config: {
-      asset: x402.assets.baseSepolia.USDC,
+      currency: x402.assets.baseSepolia.USDC,
       facilitator: {
         async verify(paymentPayload: PaymentPayload) {
           return {
@@ -1875,7 +1875,7 @@ describe('compose', () => {
           }
         },
       },
-      payTo: accounts[0].address,
+      recipient: accounts[0].address,
     },
   })
 

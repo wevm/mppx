@@ -50,9 +50,9 @@ describe('x402 exact e2e', () => {
       methods: [
         x402Server.exact({
           config: {
-            asset: x402Server.assets.baseSepolia.USDC,
+            currency: x402Server.assets.baseSepolia.USDC,
             facilitator,
-            payTo: accounts[0].address,
+            recipient: accounts[0].address,
           },
         }),
       ],
@@ -140,7 +140,7 @@ describe('x402 exact e2e', () => {
         }),
         x402Server.exact({
           config: {
-            asset: x402Server.assets.baseSepolia.USDC,
+            currency: x402Server.assets.baseSepolia.USDC,
             facilitator: {
               async verify(paymentPayload) {
                 return {
@@ -157,15 +157,15 @@ describe('x402 exact e2e', () => {
                 }
               },
             },
-            payTo: accounts[0].address,
+            recipient: accounts[0].address,
           },
         }),
       ],
       secretKey,
     })
     const paid = payment.compose(
-      ['tempo/charge', { amount: '0', chainId: client.chain!.id }],
-      ['x402/exact', { amount: '10000' }],
+      [payment.tempo.charge, { amount: '0', chainId: client.chain!.id }],
+      [payment.x402.exact, { amount: '10000' }],
     )
 
     const server = await Http.createServer(async (req, res) => {
