@@ -30,15 +30,22 @@ export function exact<const parameters extends exact.Parameters>(parameters: par
       transfer: config.transfer,
     },
     transport,
-    async verify({ credential }) {
+    async verify({ credential, envelope }) {
       const paymentPayload = credential.payload as Types.PaymentPayload
-      const paymentRequirements = Types.toPaymentRequirements(
-        credential.challenge.request as Types.ExactRequest,
-      )
+      const request = credential.challenge.request as Types.ExactRequest
+      const paymentRequirements = Types.toPaymentRequirements(request)
+      const expectedResource =
+        request.resource ??
+        (envelope ? { url: envelope.capturedRequest.url.toString() } : undefined)
 
       if (!isDeepStrictEqual(paymentPayload.accepted, paymentRequirements))
         throw new VerificationFailedError({
           reason: 'x402 payment payload does not match route requirements',
+        })
+
+      if (expectedResource && !isDeepStrictEqual(paymentPayload.resource, expectedResource))
+        throw new VerificationFailedError({
+          reason: 'x402 payment payload resource does not match route resource',
         })
 
       const verified = await facilitator.verify(paymentPayload, paymentRequirements)

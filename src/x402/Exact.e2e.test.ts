@@ -129,6 +129,69 @@ describe('x402 exact e2e', () => {
     }
   })
 
+  test('rejects x402 payment payload replayed across resources with same requirements', async () => {
+    let verifyCalls = 0
+    const payment = ServerMppx.create({
+      methods: [
+        x402Server.exact({
+          config: {
+            currency: x402Server.assets.baseSepolia.USDC,
+            facilitator: {
+              async verify() {
+                verifyCalls++
+                return { isValid: true }
+              },
+              async settle(paymentPayload) {
+                return {
+                  network: paymentPayload.accepted.network,
+                  success: true,
+                  transaction,
+                }
+              },
+            },
+            recipient: accounts[0].address,
+          },
+        }),
+      ],
+      secretKey,
+    })
+    const route = payment.x402.exact({ amount: '0.01' })
+
+    const routeAChallenge = await route(new Request('https://example.com/a'))
+    expect(routeAChallenge.status).toBe(402)
+    if (routeAChallenge.status !== 402) throw new Error()
+
+    const paymentRequired = Header.decodePaymentRequired(
+      routeAChallenge.challenge.headers.get(Types.paymentRequiredHeader)!,
+    )
+    const accepted = paymentRequired.accepts[0]!
+    const paymentSignature = Header.encodePaymentSignature({
+      accepted,
+      payload: {
+        authorization: {
+          from: accounts[0].address,
+          nonce: `0x${'1'.repeat(64)}`,
+          to: accepted.payTo as `0x${string}`,
+          validAfter: '0',
+          validBefore: '9999999999',
+          value: accepted.amount,
+        },
+        signature: `0x${'2'.repeat(130)}`,
+      },
+      resource: paymentRequired.resource,
+      x402Version: 2,
+    })
+
+    const result = await route(
+      new Request('https://example.com/b', {
+        headers: { [Types.paymentSignatureHeader]: paymentSignature },
+      }),
+    )
+
+    expect(result.status).toBe(402)
+    expect(verifyCalls).toBe(0)
+  })
+
   test('serves tempo and x402 from one composed live endpoint', async () => {
     const payment = ServerMppx.create({
       methods: [
