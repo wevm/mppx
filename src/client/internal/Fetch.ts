@@ -269,6 +269,7 @@ export function from<const methods extends readonly Method.AnyClient[]>(
             headers: initialRequest.headers,
           },
           credential,
+          { challenge: selectedChallenge },
         ),
       )
       if (paymentResponse.ok)

@@ -43,25 +43,15 @@ const x402PaymentRequired = {
 
 describe('http', () => {
   describe('isPaymentRequired', () => {
-    test('returns true for 402 response', () => {
+    test.each([
+      { expected: true, status: 402 },
+      { expected: false, status: 200 },
+      { expected: false, status: 401 },
+    ])('returns $expected for $status response', ({ expected, status }) => {
+      const response = new Response(null, { status })
+
       const transport = Transport.http()
-      const response = new Response(null, { status: 402 })
-
-      expect(transport.isPaymentRequired(response)).toBe(true)
-    })
-
-    test('returns false for 200 response', () => {
-      const transport = Transport.http()
-      const response = new Response(null, { status: 200 })
-
-      expect(transport.isPaymentRequired(response)).toBe(false)
-    })
-
-    test('returns false for other error responses', () => {
-      const transport = Transport.http()
-      const response = new Response(null, { status: 401 })
-
-      expect(transport.isPaymentRequired(response)).toBe(false)
+      expect(transport.isPaymentRequired(response)).toBe(expected)
     })
   })
 
@@ -98,71 +88,92 @@ describe('http', () => {
   })
 
   describe('getChallenges', () => {
-    test('returns all HTTP challenges', () => {
-      const transport = Transport.http()
-      const alternate = { ...challenge, id: 'alternate', method: 'stripe' as const }
-      const response = new Response(null, {
-        status: 402,
-        headers: {
-          'WWW-Authenticate': `${Challenge.serialize(challenge)}, ${Challenge.serialize(alternate)}`,
-        },
-      })
-
-      expect(transport.getChallenges?.(response).map((entry) => entry.id)).toEqual([
-        challenge.id,
-        'alternate',
-      ])
-    })
-
-    test('returns x402 challenges from PAYMENT-REQUIRED', () => {
-      const transport = Transport.http()
-      const response = new Response(null, {
-        status: 402,
-        headers: {
+    test.each([
+      {
+        expectedIds: [challenge.id, 'alternate'],
+        expectedMethods: ['tempo', 'stripe'],
+        headers: () => ({
+          'WWW-Authenticate': `${Challenge.serialize(challenge)}, ${Challenge.serialize({
+            ...challenge,
+            id: 'alternate',
+            method: 'stripe' as const,
+          })}`,
+        }),
+        name: 'Payment auth challenges',
+      },
+      {
+        expectedIds: ['x402-0'],
+        expectedMethods: ['x402'],
+        headers: () => ({
           'PAYMENT-REQUIRED': x402_Header.encodePaymentRequired(x402PaymentRequired),
-        },
-      })
-
-      expect(transport.getChallenges?.(response)).toMatchObject([
-        {
-          id: 'x402-0',
-          intent: 'exact',
-          method: 'x402',
-          realm: 'api.example.com',
-          request: {
-            amount: '10000',
-            scheme: 'exact',
-          },
-        },
-      ])
-    })
-
-    test('returns Payment auth and x402 challenges from the same response', () => {
-      const transport = Transport.http()
-      const response = new Response(null, {
-        status: 402,
-        headers: {
+        }),
+        name: 'x402 challenges',
+      },
+      {
+        expectedIds: [challenge.id, 'x402-0'],
+        expectedMethods: ['tempo', 'x402'],
+        headers: () => ({
           'PAYMENT-REQUIRED': x402_Header.encodePaymentRequired(x402PaymentRequired),
           'WWW-Authenticate': Challenge.serialize(challenge),
-        },
+        }),
+        name: 'Payment auth and x402 challenges',
+      },
+    ])('returns $name', ({ expectedIds, expectedMethods, headers }) => {
+      const transport = Transport.http()
+      const response = new Response(null, {
+        status: 402,
+        headers: headers(),
       })
+      const challenges = transport.getChallenges?.(response) ?? []
 
-      expect(transport.getChallenges?.(response).map((entry) => entry.method)).toEqual([
-        'tempo',
-        'x402',
-      ])
+      expect(challenges.map((entry) => entry.id)).toEqual(expectedIds)
+      expect(challenges.map((entry) => entry.method)).toEqual(expectedMethods)
     })
   })
 
   describe('setCredential', () => {
-    test('default', () => {
+    test.each([
+      {
+        challenge,
+        credential: Credential.serialize(credential),
+        expectedHeader: 'Authorization',
+        expectedValue: Credential.serialize(credential),
+        name: 'Payment auth credential for Payment auth challenge',
+      },
+      {
+        challenge: Challenge.from({
+          id: 'x402-0',
+          intent: 'exact',
+          method: 'x402',
+          realm: 'api.example.com',
+          request: x402PaymentRequired.accepts[0]!,
+        }),
+        credential: 'x402-signature',
+        expectedHeader: 'PAYMENT-SIGNATURE',
+        expectedValue: 'x402-signature',
+        name: 'raw x402 credential for x402 challenge',
+      },
+      {
+        challenge,
+        credential: 'custom-credential',
+        expectedHeader: 'Authorization',
+        expectedValue: 'custom-credential',
+        name: 'non-Payment credential for non-x402 challenge',
+      },
+      {
+        challenge: undefined,
+        credential: 'custom-credential',
+        expectedHeader: 'Authorization',
+        expectedValue: 'custom-credential',
+        name: 'credential without selected challenge',
+      },
+    ])('writes $name', ({ challenge, credential, expectedHeader, expectedValue }) => {
       const transport = Transport.http()
-      const serialized = Credential.serialize(credential)
 
-      const result = transport.setCredential({}, serialized)
+      const result = transport.setCredential({}, credential, { challenge })
       const headers = result.headers as Headers
 
-      expect(headers.get('Authorization')).toBe(serialized)
+      expect(headers.get(expectedHeader)).toBe(expectedValue)
     })
 
     test('preserves existing headers', () => {
@@ -176,15 +187,6 @@ describe('http', () => {
       const headers = result.headers as Headers
 
       expect(headers.get('Content-Type')).toBe('application/json')
-    })
-
-    test('writes raw x402 credentials to PAYMENT-SIGNATURE', () => {
-      const transport = Transport.http()
-      const result = transport.setCredential({}, 'x402-signature')
-      const headers = result.headers as Headers
-
-      expect(headers.get('PAYMENT-SIGNATURE')).toBe('x402-signature')
-      expect(headers.has('Authorization')).toBe(false)
     })
   })
 })

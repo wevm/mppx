@@ -20,9 +20,20 @@ export type Transport<in out request = unknown, in out response = unknown> = {
   /** Extracts the challenge from a payment-required response. */
   getChallenge: (response: response) => Challenge.Challenge
   /** Attaches a credential to a request. */
-  setCredential: (request: request, credential: string) => request
+  setCredential: (
+    request: request,
+    credential: string,
+    options?: setCredential.Options | undefined,
+  ) => request
 }
 export type AnyTransport = Transport<any, any>
+
+export declare namespace setCredential {
+  type Options = {
+    /** Challenge selected for credential creation. */
+    challenge?: Challenge.Challenge | undefined
+  }
+}
 
 /** Extracts the response type from a transport. */
 export type ResponseOf<transport extends Transport> =
@@ -80,10 +91,13 @@ export function http() {
       return challenge
     },
 
-    setCredential(request, credential) {
+    setCredential(request, credential, options) {
       const headers = new Headers(request.headers)
-      if (isPaymentAuthCredential(credential)) headers.set('Authorization', credential)
-      else headers.set(x402_Types.paymentSignatureHeader, credential)
+      if (isX402Challenge(options?.challenge)) {
+        headers.set(x402_Types.paymentSignatureHeader, credential)
+      } else {
+        headers.set('Authorization', credential)
+      }
       return { ...request, headers }
     },
   })
@@ -112,8 +126,8 @@ function x402Challenges(response: Response): Challenge.Challenge[] {
   )
 }
 
-function isPaymentAuthCredential(credential: string): boolean {
-  return /^Payment\s+/i.test(credential)
+function isX402Challenge(challenge: Challenge.Challenge | undefined): boolean {
+  return challenge?.method === 'x402' && challenge.intent === 'exact'
 }
 
 /**
