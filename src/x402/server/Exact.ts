@@ -1,0 +1,157 @@
+import { isDeepStrictEqual } from 'node:util'
+
+import { VerificationFailedError } from '../../Errors.js'
+import * as Method from '../../Method.js'
+import * as Receipt from '../../Receipt.js'
+import * as Assets from '../Assets.js'
+import * as Methods from '../Methods.js'
+import * as Types from '../Types.js'
+import * as Transport from './Transport.js'
+
+/**
+ * Creates an x402 exact server method.
+ *
+ * The public config hides x402 wire `extra` fields. Known assets provide the
+ * required EIP-712 domain metadata automatically; custom assets must provide a
+ * typed `transfer` config.
+ */
+export function exact<const parameters extends exact.Parameters>(parameters: parameters) {
+  const config = resolveConfig(parameters.config)
+  const facilitator = resolveFacilitator(config.facilitator)
+  const transport = Transport.http()
+
+  return Method.toServer<typeof Methods.exact, exact.Defaults, typeof transport>(Methods.exact, {
+    defaults: {
+      asset: config.asset,
+      maxTimeoutSeconds: config.maxTimeoutSeconds,
+      network: config.network,
+      payTo: config.payTo,
+      transfer: config.transfer,
+    },
+    transport,
+    async verify({ credential }) {
+      const paymentPayload = credential.payload as Types.PaymentPayload
+      const paymentRequirements = Types.toPaymentRequirements(
+        credential.challenge.request as Types.ExactRequest,
+      )
+
+      if (!isDeepStrictEqual(paymentPayload.accepted, paymentRequirements))
+        throw new VerificationFailedError({
+          reason: 'x402 payment payload does not match route requirements',
+        })
+
+      const verified = await facilitator.verify(paymentPayload, paymentRequirements)
+      if (!verified.isValid)
+        throw new VerificationFailedError({
+          reason: verified.invalidMessage ?? verified.invalidReason ?? 'x402 verify failed',
+        })
+
+      const settled = await facilitator.settle(paymentPayload, paymentRequirements)
+      if (!settled.success)
+        throw new VerificationFailedError({
+          reason: settled.errorMessage ?? settled.errorReason ?? 'x402 settlement failed',
+        })
+
+      return Receipt.from({
+        method: 'x402',
+        reference: settled.transaction,
+        status: 'success',
+        timestamp: new Date().toISOString(),
+      })
+    },
+  })
+}
+
+export declare namespace exact {
+  type Parameters = {
+    config: Config
+  }
+
+  type Config = {
+    /** Token contract address or known x402 asset metadata. */
+    asset: `0x${string}` | Assets.KnownAsset
+    /** Facilitator client or base URL. */
+    facilitator: string | Types.Facilitator
+    /** Maximum time in seconds allowed for payment completion. @default 60 */
+    maxTimeoutSeconds?: number | undefined
+    /** CAIP-2 network. Required for custom asset addresses; inferred for known assets. */
+    network?: Types.EvmNetwork | undefined
+    /** Recipient wallet address. */
+    payTo: `0x${string}`
+    /** Required for custom asset addresses; inferred for known assets. */
+    transfer?: Types.ExactTransfer | undefined
+  }
+
+  type Defaults = {
+    asset: `0x${string}`
+    maxTimeoutSeconds: number
+    network: Types.EvmNetwork
+    payTo: `0x${string}`
+    transfer: Types.ExactTransfer
+  }
+
+  type RouteOptions = {
+    /** Required atomic token amount. */
+    amount: string
+    /** Optional x402 resource metadata for the protected route. */
+    resource?: Types.ResourceInfo | undefined
+  }
+}
+
+type ResolvedConfig = exact.Defaults & {
+  facilitator: string | Types.Facilitator
+}
+
+function resolveConfig(config: exact.Config): ResolvedConfig {
+  let address: `0x${string}`
+  let network = config.network
+  let transfer = config.transfer
+
+  if (Assets.isAsset(config.asset)) {
+    address = config.asset.address
+    network ??= config.asset.network
+    transfer ??= config.asset.transfer
+  } else {
+    address = config.asset
+  }
+
+  if (!network) throw new Error('x402 exact custom assets require `network`.')
+  if (!transfer) throw new Error('x402 exact custom assets require `transfer`.')
+
+  return {
+    asset: address,
+    facilitator: config.facilitator,
+    maxTimeoutSeconds: config.maxTimeoutSeconds ?? 60,
+    network,
+    payTo: config.payTo,
+    transfer,
+  }
+}
+
+function resolveFacilitator(facilitator: string | Types.Facilitator): Types.Facilitator {
+  if (typeof facilitator === 'object' && facilitator !== null) return facilitator
+  if (typeof facilitator === 'string') return httpFacilitator(facilitator)
+  throw new Error('x402 exact requires `facilitator`.')
+}
+
+function httpFacilitator(url: string): Types.Facilitator {
+  const base = url.replace(/\/$/, '')
+  return {
+    async verify(paymentPayload, paymentRequirements) {
+      const response = await fetch(`${base}/verify`, {
+        body: JSON.stringify({ paymentPayload, paymentRequirements }),
+        headers: { 'Content-Type': 'application/json' },
+        method: 'POST',
+      })
+      return Types.VerifyResponseSchema.parse(await response.json())
+    },
+    async settle(paymentPayload, paymentRequirements) {
+      const response = await fetch(`${base}/settle`, {
+        body: JSON.stringify({ paymentPayload, paymentRequirements }),
+        headers: { 'Content-Type': 'application/json' },
+        method: 'POST',
+      })
+      return Types.SettleResponseSchema.parse(await response.json())
+    },
+  }
+}

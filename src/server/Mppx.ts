@@ -790,7 +790,7 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
             : staticMeta
 
         // Extract credential once — getCredential may have side effects (e.g. SSE transports).
-        const [credential, credentialError] = (() => {
+        let [credential, credentialError] = (() => {
           try {
             const credential = transport.getCredential(input) as Credential.Credential | null
             return [credential ? hydrateCredentialMeta(credential) : null, undefined] as const
@@ -897,6 +897,17 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
         })
         if ('response' in routeChallenge) return { challenge: routeChallenge.response, status: 402 }
         const { challenge, parsedRequest, request } = routeChallenge
+
+        if (credential && transport.bindCredential) {
+          try {
+            credential = hydrateCredentialMeta(
+              transport.bindCredential({ challenge, credential, input }) as Credential.Credential,
+            )
+          } catch (e) {
+            credential = null
+            credentialError = e as Error
+          }
+        }
 
         // Credential was provided but malformed
         if (credentialError) {

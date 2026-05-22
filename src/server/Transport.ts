@@ -27,6 +27,18 @@ export type Transport<
   /** Captures the transport request into an immutable verification snapshot. */
   captureRequest?: ((input: input) => MaybePromise<Method.CapturedRequest>) | undefined
   /**
+   * Rebinds a transport-native credential to the route challenge after request
+   * normalization. Transports with non-Payment-auth wire formats can parse their
+   * payload early, then attach the canonical mppx challenge here.
+   */
+  bindCredential?:
+    | ((options: {
+        challenge: Challenge.Challenge
+        credential: Credential.Credential
+        input: input
+      }) => Credential.Credential)
+    | undefined
+  /**
    * Extracts credential from the transport input.
    * Returns `null` if no credential was provided, or throws if malformed.
    */

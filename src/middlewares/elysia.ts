@@ -67,8 +67,7 @@ export function payment<const intent extends Mppx_internal.AnyMethodFn>(
     const managementResponse = getManagementResponse(result)
     if (managementResponse) return managementResponse
     const receipt = result.withReceipt(new Response())
-    const header = receipt.headers.get('Payment-Receipt')
-    if (header) set.headers['Payment-Receipt'] = header
+    for (const [key, value] of receipt.headers) set.headers[key] = value
   }
 }
 

@@ -59,6 +59,28 @@ describe('payment', () => {
 
     server.close()
   })
+
+  test('copies transport-specific success headers', async () => {
+    const intent = () => async () => ({
+      status: 200 as const,
+      withReceipt: (response?: Response) =>
+        new Response(response?.body ?? null, {
+          headers: {
+            ...(response ? Object.fromEntries(response.headers) : {}),
+            'PAYMENT-RESPONSE': 'x402-response',
+          },
+          status: response?.status ?? 200,
+        }),
+    })
+    const handler = payment(intent as any, {} as any, () => Response.json({ data: 'content' }))
+
+    const server = await createServer(handler)
+    const response = await globalThis.fetch(server.url)
+    expect(response.status).toBe(200)
+    expect(response.headers.get('PAYMENT-RESPONSE')).toBe('x402-response')
+
+    server.close()
+  })
 })
 
 function createChargeHarness(feePayer: boolean) {
