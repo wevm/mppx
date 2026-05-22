@@ -11,6 +11,8 @@ import type { MaybePromise } from '../internal/types.js'
 import type * as Method from '../Method.js'
 import * as PaymentRequest from '../PaymentRequest.js'
 import type * as Receipt from '../Receipt.js'
+import * as x402_Header from '../x402/Header.js'
+import * as x402_Types from '../x402/Types.js'
 import * as z from '../zod.js'
 import * as Html from './internal/html/config.js'
 import { serviceWorker } from './internal/html/serviceWorker.gen.js'
@@ -2210,7 +2212,7 @@ export function compose(
       }
     })()
 
-    // Merge WWW-Authenticate headers from all 402 responses.
+    // Merge challenge headers from all 402 responses.
     const mergedHeaders = new Headers()
     mergedHeaders.set('Cache-Control', 'no-store')
 
@@ -2219,6 +2221,10 @@ export function compose(
       const wwwAuth = response.headers.get('WWW-Authenticate')
       if (wwwAuth) mergedHeaders.append('WWW-Authenticate', wwwAuth)
     }
+    mergeTransportChallengeHeaders(
+      mergedHeaders,
+      results.flatMap((result) => (result.status === 402 ? [result.challenge as Response] : [])),
+    )
 
     // Collect html-enabled handlers and their challenges
     const htmlEntries = challengeEntries.filter((entry) => entry.handler._internal?.html)
@@ -2268,11 +2274,15 @@ export function compose(
       }
     }
 
-    // Non-HTML fallback: use first handler's body
+    // Non-HTML fallback: prefer the first Payment-auth body, otherwise use
+    // the first transport-specific 402 body.
     let body: string | null = null
-    for (const entry of challengeEntries) {
+    const bodyResponses =
+      challengeEntries.length > 0
+        ? challengeEntries.map((entry) => entry.result.challenge as Response)
+        : results.flatMap((result) => (result.status === 402 ? [result.challenge as Response] : []))
+    for (const response of bodyResponses) {
       if (!body) {
-        const response = entry.result.challenge as Response
         const contentType = response.headers.get('Content-Type')
         if (contentType) mergedHeaders.set('Content-Type', contentType)
         body = await response.text()
@@ -2285,6 +2295,29 @@ export function compose(
       challenge: new Response(body, { status: 402, headers: mergedHeaders }),
     }
   }
+}
+
+function mergeTransportChallengeHeaders(headers: Headers, responses: readonly Response[]) {
+  const x402Headers = responses
+    .map((response) => response.headers.get(x402_Types.paymentRequiredHeader))
+    .filter((value): value is string => value !== null)
+
+  if (x402Headers.length > 0) {
+    headers.set(x402_Types.paymentRequiredHeader, mergeX402PaymentRequired(x402Headers))
+  }
+}
+
+function mergeX402PaymentRequired(values: readonly string[]): string {
+  const [first, ...rest] = values.map((value) => x402_Header.decodePaymentRequired(value))
+  if (!first) throw new Error('Expected at least one x402 payment-required header.')
+  const error = [first.error, ...rest.map((value) => value.error)]
+    .filter((value): value is string => value !== undefined && value.length > 0)
+    .join('; ')
+  return x402_Header.encodePaymentRequired({
+    ...first,
+    accepts: [first.accepts, ...rest.map((value) => value.accepts)].flat(),
+    ...(error ? { error } : {}),
+  })
 }
 
 /**
