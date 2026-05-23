@@ -1,5 +1,13 @@
 # mppx
 
+## 0.6.28
+
+### Patch Changes
+
+- 6c789fa: Added store key prefix options for Store constructors and Tempo charge, session, and subscription stores.
+- b051e6c: Stripped `Set-Cookie` from upstream responses in `Proxy.scrubResponse` so an upstream service cannot set cookies under the proxy's origin.
+- 1ee47a2: Added server-side Stripe Connect settlement options for Stripe charges.
+
 ## 0.6.27
 
 ### Patch Changes
