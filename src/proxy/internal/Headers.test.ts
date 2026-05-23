@@ -98,4 +98,22 @@ describe('scrubResponse', () => {
     expect(result.statusText).toBe('Created')
     expect(await result.text()).toBe('hello')
   })
+
+  // Regression: an upstream service must never be able to issue a cookie
+  // under the proxy's origin. Otherwise a compromised or attacker-influenced
+  // upstream can session-fixate (`Set-Cookie: session=evil; Domain=…`) every
+  // sibling subdomain of the proxy. See the docblock on `scrubResponse`.
+  test('behavior: strips set-cookie so upstream cannot set cookies on proxy origin', () => {
+    const response = new Response('body', {
+      headers: [
+        ['Set-Cookie', '__Secure-session=evil; Domain=.example.com; Secure; HttpOnly'],
+        ['Set-Cookie', 'tracking=1; Path=/'],
+        ['Content-Type', 'application/json'],
+      ],
+    })
+    const result = Headers.scrubResponse(response)
+    expect(result.headers.has('set-cookie')).toBe(false)
+    expect(result.headers.getSetCookie?.() ?? []).toEqual([])
+    expect(result.headers.get('content-type')).toBe('application/json')
+  })
 })

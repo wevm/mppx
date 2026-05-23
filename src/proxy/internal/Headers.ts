@@ -29,11 +29,24 @@ export function scrub(headers: Headers): Headers {
   return scrubbed
 }
 
-/** Strips `content-encoding` and `content-length` from an upstream response so the proxy can re-stream it. */
+/**
+ * Strips re-streaming headers (`content-encoding`, `content-length`) and
+ * security-sensitive headers (`set-cookie`) from an upstream response.
+ *
+ * `set-cookie` is dropped because a paid API proxy must never let an upstream
+ * service set cookies in the user's browser under the proxy's origin. If a
+ * compromised, misbehaving, or attacker-influenced upstream returned
+ * `Set-Cookie: session=evil; Domain=.example.com`, the browser would honor it
+ * for every sibling subdomain of the proxy — turning any future path-confusion
+ * or open-redirect bug in the surrounding deployment into a session-fixation
+ * primitive. Proxied services authenticate via bearer tokens / signed
+ * payloads, never cookies, so dropping `set-cookie` is purely defensive.
+ */
 export function scrubResponse(response: Response): Response {
   const headers = new Headers(response.headers)
   headers.delete('content-encoding')
   headers.delete('content-length')
+  headers.delete('set-cookie')
   return new Response(response.body, {
     status: response.status,
     statusText: response.statusText,
