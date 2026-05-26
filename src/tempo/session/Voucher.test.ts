@@ -42,7 +42,7 @@ describe('Voucher', () => {
     expect(isValid).toBe(true)
   })
 
-  test('signVoucher creates direct WebCrypto P256 voucher signatures', async () => {
+  test('signVoucher rejects direct WebCrypto P256 voucher signatures', async () => {
     const keyPair = await WebCryptoP256.createKeyPair()
     const p256Account = TempoAccount.fromWebCryptoP256(keyPair)
     const p256Client = createClient({
@@ -50,29 +50,18 @@ describe('Voucher', () => {
       transport: http('http://127.0.0.1'),
     })
 
-    const signature = await signVoucher(
-      p256Client,
-      p256Account,
-      { channelId, cumulativeAmount },
-      escrowContract,
-      chainId,
-    )
-    const envelope = SignatureEnvelope.from(signature as SignatureEnvelope.Serialized)
-
-    expect(envelope.type).toBe('p256')
-    if (envelope.type !== 'p256') throw new Error('unexpected signature type')
-    expect(envelope.prehash).toBe(true)
-
-    const isValid = await verifyVoucher(
-      escrowContract,
-      chainId,
-      { channelId, cumulativeAmount, signature },
-      p256Account.address,
-    )
-    expect(isValid).toBe(false)
+    await expect(
+      signVoucher(
+        p256Client,
+        p256Account,
+        { channelId, cumulativeAmount },
+        escrowContract,
+        chainId,
+      ),
+    ).rejects.toThrow('Session vouchers only support secp256k1 signatures')
   })
 
-  test('signVoucher creates direct WebAuthn voucher signatures', async () => {
+  test('signVoucher rejects direct WebAuthn voucher signatures', async () => {
     const webAuthnAccount = TempoAccount.fromHeadlessWebAuthn(P256.randomPrivateKey(), {
       origin: 'https://example.com',
       rpId: 'example.com',
@@ -82,24 +71,15 @@ describe('Voucher', () => {
       transport: http('http://127.0.0.1'),
     })
 
-    const signature = await signVoucher(
-      webAuthnClient,
-      webAuthnAccount,
-      { channelId, cumulativeAmount },
-      escrowContract,
-      chainId,
-    )
-    const envelope = SignatureEnvelope.from(signature as SignatureEnvelope.Serialized)
-
-    expect(envelope.type).toBe('webAuthn')
-
-    const isValid = await verifyVoucher(
-      escrowContract,
-      chainId,
-      { channelId, cumulativeAmount, signature },
-      webAuthnAccount.address,
-    )
-    expect(isValid).toBe(false)
+    await expect(
+      signVoucher(
+        webAuthnClient,
+        webAuthnAccount,
+        { channelId, cumulativeAmount },
+        escrowContract,
+        chainId,
+      ),
+    ).rejects.toThrow('Session vouchers only support secp256k1 signatures')
   })
 
   test('signVoucher signs v1 secp256k1 access keys with raw signatures', async () => {
@@ -205,31 +185,22 @@ describe('Voucher', () => {
   })
 
   test('verifyVoucher rejects keychain envelopes', async () => {
-    const keyPair = await WebCryptoP256.createKeyPair()
-    const p256Account = TempoAccount.fromWebCryptoP256(keyPair)
-    const p256Client = createClient({
-      account: p256Account,
-      transport: http('http://127.0.0.1'),
-    })
-    const signature = await signVoucher(
-      p256Client,
-      p256Account,
-      { channelId, cumulativeAmount },
-      escrowContract,
-      chainId,
+    const privateKey = '0x59c6995e998f97a5a0044966f09453863d462d2b3f1446a99f0a3d7b5d0f5a0d'
+    const inner = SignatureEnvelope.from(
+      Signature.toHex(Secp256k1.sign({ payload: channelId, privateKey })),
     )
     const keychainSignature = SignatureEnvelope.serialize({
       type: 'keychain',
       version: 'v2',
       userAddress: account.address,
-      inner: SignatureEnvelope.from(signature as SignatureEnvelope.Serialized),
+      inner,
     })
 
     const isValid = await verifyVoucher(
       escrowContract,
       chainId,
       { channelId, cumulativeAmount, signature: keychainSignature },
-      p256Account.address,
+      account.address,
     )
     expect(isValid).toBe(false)
   })
@@ -244,24 +215,15 @@ describe('Voucher', () => {
       transport: http('http://127.0.0.1'),
     })
 
-    const signature = await signVoucher(
-      accessKeyClient,
-      accessKey,
-      { channelId, cumulativeAmount },
-      escrowContract,
-      chainId,
-    )
-    const envelope = SignatureEnvelope.from(signature as SignatureEnvelope.Serialized)
-
-    expect(envelope.type).toBe('p256')
-
-    const isValid = await verifyVoucher(
-      escrowContract,
-      chainId,
-      { channelId, cumulativeAmount, signature },
-      accessKey.accessKeyAddress,
-    )
-    expect(isValid).toBe(false)
+    await expect(
+      signVoucher(
+        accessKeyClient,
+        accessKey,
+        { channelId, cumulativeAmount },
+        escrowContract,
+        chainId,
+      ),
+    ).rejects.toThrow('Session vouchers only support secp256k1 signatures')
   })
 
   test('verifyVoucher rejects magic-suffixed secp256k1 signatures', async () => {

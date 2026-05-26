@@ -92,6 +92,14 @@ function acceptsVoucherEnvelope(envelope: SignatureEnvelope.SignatureEnvelope): 
   return acceptTip1020VoucherSignatures
 }
 
+function assertSupportedVoucherEnvelope(envelope: SignatureEnvelope.SignatureEnvelope) {
+  if (acceptsVoucherEnvelope(envelope)) return
+
+  throw new Error(
+    'Session vouchers only support secp256k1 signatures until TIP-1020 voucher verification is enabled.',
+  )
+}
+
 /**
  * Sign a voucher with an account.
  */
@@ -112,6 +120,7 @@ export async function signVoucher(
     : await signVoucherTypedData(client, signer, message, escrowContract, chainId)
   const normalized = normalizeVoucherSignature(signature)
   const envelope = SignatureEnvelope.from(normalized as SignatureEnvelope.Serialized)
+  assertSupportedVoucherEnvelope(envelope)
 
   if (
     !SignatureEnvelope.verify(envelope, {

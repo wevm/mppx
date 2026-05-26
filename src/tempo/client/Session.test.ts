@@ -186,7 +186,7 @@ describe('session (pure)', () => {
       expect(cred.source).toBe(`did:pkh:eip155:42431:${pureAccount.address}`)
     })
 
-    test('manual open signs voucher with P256 voucher signer', async () => {
+    test('manual open rejects P256 voucher signer while TIP-1020 verification is disabled', async () => {
       const keyPair = await WebCryptoP256.createKeyPair()
       const voucherSigner = TempoAccount.fromWebCryptoP256(keyPair)
       const method = session({
@@ -195,38 +195,17 @@ describe('session (pure)', () => {
         voucherSigner,
       })
 
-      const result = await method.createCredential({
-        challenge: makeChallenge(),
-        context: {
-          action: 'open',
-          channelId,
-          cumulativeAmount: '5',
-          transaction: '0xdeadbeef',
-        },
-      })
-
-      const cred = deserializePayload(result)
-      expect(cred.payload.action).toBe('open')
-      if (cred.payload.action !== 'open') throw new Error('unexpected action')
-      expect(cred.payload.authorizedSigner).toBe(voucherSigner.address)
-
-      const envelope = SignatureEnvelope.from(
-        cred.payload.signature as SignatureEnvelope.Serialized,
-      )
-      expect(envelope.type).toBe('p256')
-
-      const isValid = await verifyVoucher(
-        escrowAddress,
-        42431,
-        {
-          channelId,
-          cumulativeAmount: 5_000_000n,
-          signature: cred.payload.signature,
-        },
-        voucherSigner.address,
-      )
-      expect(isValid).toBe(false)
-      expect(cred.source).toBe(`did:pkh:eip155:42431:${pureAccount.address}`)
+      await expect(
+        method.createCredential({
+          challenge: makeChallenge(),
+          context: {
+            action: 'open',
+            channelId,
+            cumulativeAmount: '5',
+            transaction: '0xdeadbeef',
+          },
+        }),
+      ).rejects.toThrow('Session vouchers only support secp256k1 signatures')
     })
 
     test('manual open signs access-key vouchers with raw signatures', async () => {
