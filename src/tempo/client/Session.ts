@@ -28,7 +28,6 @@ export const sessionContextSchema = z.object({
   cumulativeAmount: z.optional(z.amount()),
   cumulativeAmountRaw: z.optional(z.string()),
   transaction: z.optional(z.string()),
-  voucherSigner: z.optional(z.custom<viem_Account>()),
   additionalDeposit: z.optional(z.amount()),
   additionalDepositRaw: z.optional(z.string()),
   depositRaw: z.optional(z.string()),
@@ -87,12 +86,8 @@ export function session(parameters: session.Parameters = {}) {
     rpcUrl: defaults.rpcUrl,
   })
   const getAccount = Account.getResolver({ account: parameters.account })
-  function getVoucherSigning(account: viem_Account, context?: SessionContext | undefined) {
-    const contextVoucherSigner = context?.voucherSigner
-    const voucherSigner = resolveVoucherSigner(
-      account,
-      contextVoucherSigner ?? parameters.voucherSigner,
-    )
+  function getVoucherSigning(account: viem_Account) {
+    const voucherSigner = resolveVoucherSigner(account, parameters.voucherSigner)
     const authorizedSigner = getAccountSignerAddress(voucherSigner)
 
     return { authorizedSigner, voucherSigner }
@@ -156,7 +151,7 @@ export function session(parameters: session.Parameters = {}) {
       )
     })()
 
-    const voucherSigning = getVoucherSigning(account, context)
+    const voucherSigning = getVoucherSigning(account)
 
     const key = channelKey(payee, currency, escrowContract)
     let entry = channels.get(key)
@@ -238,7 +233,7 @@ export function session(parameters: session.Parameters = {}) {
 
     const action = context.action!
     const { channelId: channelIdRaw, transaction } = context
-    const voucherSigning = getVoucherSigning(account, context)
+    const voucherSigning = getVoucherSigning(account)
     const channelId = channelIdRaw as Hex.Hex
     const cumulativeAmount = context.cumulativeAmountRaw
       ? BigInt(context.cumulativeAmountRaw)
