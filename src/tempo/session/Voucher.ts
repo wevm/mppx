@@ -55,17 +55,19 @@ function getVoucherDigest(escrowContract: Address.Address, chainId: number, mess
   })
 }
 
-async function signVoucherDigest(
+async function signRawVoucherDigest(account: Account, digest: Hex): Promise<Hex | undefined> {
+  const sign = (account as { sign?: RawSign | undefined }).sign
+  if (sign) return sign({ hash: digest, raw: true })
+  return undefined
+}
+
+async function signVoucherTypedData(
   client: Client,
   account: Account,
   message: Voucher,
   escrowContract: Address.Address,
   chainId: number,
-  digest: Hex,
 ): Promise<Hex> {
-  const sign = (account as { sign?: RawSign | undefined }).sign
-  if (sign) return sign({ hash: digest, raw: true })
-
   return signTypedData(client, {
     account,
     domain: getVoucherDomain(escrowContract, chainId),
@@ -113,14 +115,9 @@ export async function signVoucher(
   const expectedSigner = getAccountSignerAddress(signer)
 
   const digest = getVoucherDigest(escrowContract, chainId, message)
-  const signature = await signVoucherDigest(
-    client,
-    signer,
-    message,
-    escrowContract,
-    chainId,
-    digest,
-  )
+  const signature =
+    (await signRawVoucherDigest(signer, digest)) ??
+    (await signVoucherTypedData(client, signer, message, escrowContract, chainId))
   const normalized = normalizeVoucherSignature(signature)
   const envelope = SignatureEnvelope.from(normalized as SignatureEnvelope.Serialized)
 
