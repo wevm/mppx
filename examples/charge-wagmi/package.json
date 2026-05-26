@@ -11,13 +11,13 @@
   "dependencies": {
     "@metamask/sdk": "~0.34.0",
     "@remix-run/node-fetch-server": "^0.13.0",
-    "@tanstack/react-query": "^5.100.10",
-    "@types/node": "^25.6.0",
+    "@tanstack/react-query": "^5.100.11",
+    "@types/node": "^25.9.1",
     "mppx": "latest",
     "react": "^19.2.6",
     "react-dom": "^19.2.6",
     "viem": "^2.50.4",
-    "wagmi": "^3.6.13"
+    "wagmi": "^3.6.15"
   },
   "devDependencies": {
     "@types/react": "^19.2.14",
