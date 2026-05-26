@@ -4,10 +4,8 @@ import type { Account, Client, Hex } from 'viem'
 import { hashTypedData } from 'viem'
 import { signTypedData } from 'viem/actions'
 
-import { getAccountSignerAddress } from '../internal/account.js'
+import { getAccountSignerAddress, isAccessKeyAccount } from '../internal/account.js'
 import type { SignedVoucher, Voucher } from './Types.js'
-
-type RawSign = (parameters: { hash: Hex; raw?: boolean | undefined }) => Promise<Hex>
 
 /** Must match the on-chain TempoStreamChannel DOMAIN_SEPARATOR name. */
 const DOMAIN_NAME = 'Tempo Stream Channel'
@@ -53,12 +51,6 @@ function getVoucherDigest(escrowContract: Address.Address, chainId: number, mess
     primaryType: 'Voucher',
     message: getVoucherMessage(message),
   })
-}
-
-async function signRawVoucherDigest(account: Account, digest: Hex): Promise<Hex | undefined> {
-  const sign = (account as { sign?: RawSign | undefined }).sign
-  if (sign) return sign({ hash: digest, raw: true })
-  return undefined
 }
 
 async function signVoucherTypedData(
@@ -115,9 +107,9 @@ export async function signVoucher(
   const expectedSigner = getAccountSignerAddress(signer)
 
   const digest = getVoucherDigest(escrowContract, chainId, message)
-  const signature =
-    (await signRawVoucherDigest(signer, digest)) ??
-    (await signVoucherTypedData(client, signer, message, escrowContract, chainId))
+  const signature = isAccessKeyAccount(signer)
+    ? await signer.sign({ hash: digest, raw: true })
+    : await signVoucherTypedData(client, signer, message, escrowContract, chainId)
   const normalized = normalizeVoucherSignature(signature)
   const envelope = SignatureEnvelope.from(normalized as SignatureEnvelope.Serialized)
 

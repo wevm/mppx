@@ -1,5 +1,6 @@
 import { createClient, type Hex, http } from 'viem'
 import { privateKeyToAccount } from 'viem/accounts'
+import { Account as TempoAccount } from 'viem/tempo'
 import { describe, expect, test, vi } from 'vp/test'
 
 import * as Challenge from '../../Challenge.js'
@@ -103,8 +104,9 @@ describe('Session', () => {
         const account = privateKeyToAccount(
           '0x0000000000000000000000000000000000000000000000000000000000000001',
         )
-        const voucherSigner = privateKeyToAccount(
+        const voucherSigner = TempoAccount.fromSecp256k1(
           '0x0000000000000000000000000000000000000000000000000000000000000002',
+          { access: account },
         )
         const client = createClient({
           account,
@@ -141,7 +143,7 @@ describe('Session', () => {
         const credential = PaymentCredential.deserialize<SessionCredentialPayload>(authorization)
         expect(credential.payload.action).toBe('open')
         if (credential.payload.action !== 'open') throw new Error('unexpected action')
-        expect(credential.payload.authorizedSigner).toBe(voucherSigner.address)
+        expect(credential.payload.authorizedSigner).toBe(voucherSigner.accessKeyAddress)
       } finally {
         vi.doUnmock('viem/actions')
         vi.resetModules()
