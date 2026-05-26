@@ -35,13 +35,6 @@ export const sessionContextSchema = z.object({
 
 export type SessionContext = z.infer<typeof sessionContextSchema>
 
-function resolveVoucherSigner(
-  account: viem_Account,
-  voucherSigner?: viem_Account | undefined,
-): viem_Account {
-  return voucherSigner ?? account
-}
-
 /**
  * Creates a session payment method for use with `Mppx.create()`.
  *
@@ -86,12 +79,6 @@ export function session(parameters: session.Parameters = {}) {
     rpcUrl: defaults.rpcUrl,
   })
   const getAccount = Account.getResolver({ account: parameters.account })
-  function getVoucherSigning(account: viem_Account) {
-    const voucherSigner = resolveVoucherSigner(account, parameters.voucherSigner)
-    const authorizedSigner = getAccountSignerAddress(voucherSigner)
-
-    return { authorizedSigner, voucherSigner }
-  }
 
   const maxDeposit =
     parameters.maxDeposit !== undefined ? parseUnits(parameters.maxDeposit, decimals) : undefined
@@ -151,7 +138,7 @@ export function session(parameters: session.Parameters = {}) {
       )
     })()
 
-    const voucherSigning = getVoucherSigning(account)
+    const voucherSigner = parameters.voucherSigner ?? account
 
     const key = channelKey(payee, currency, escrowContract)
     let entry = channels.get(key)
@@ -196,12 +183,12 @@ export function session(parameters: session.Parameters = {}) {
         entry.cumulativeAmount,
         escrowContract,
         chainId,
-        voucherSigning.voucherSigner,
+        voucherSigner,
       )
       notifyUpdate(entry)
     } else {
       const result = await createOpenPayload(client, account, {
-        voucherSigner: voucherSigning.voucherSigner,
+        voucherSigner,
         escrowContract,
         payee,
         currency,
@@ -233,7 +220,7 @@ export function session(parameters: session.Parameters = {}) {
 
     const action = context.action!
     const { channelId: channelIdRaw, transaction } = context
-    const voucherSigning = getVoucherSigning(account)
+    const voucherSigner = parameters.voucherSigner ?? account
     const channelId = channelIdRaw as Hex.Hex
     const cumulativeAmount = context.cumulativeAmountRaw
       ? BigInt(context.cumulativeAmountRaw)
@@ -262,14 +249,14 @@ export function session(parameters: session.Parameters = {}) {
           { channelId, cumulativeAmount },
           escrowContract,
           chainId,
-          voucherSigning.voucherSigner,
+          voucherSigner,
         )
         payload = {
           action: 'open',
           type: 'transaction',
           channelId,
           transaction: transaction as Hex.Hex,
-          authorizedSigner: voucherSigning.authorizedSigner,
+          authorizedSigner: getAccountSignerAddress(voucherSigner),
           cumulativeAmount: cumulativeAmount.toString(),
           signature,
         }
@@ -299,7 +286,7 @@ export function session(parameters: session.Parameters = {}) {
           cumulativeAmount,
           escrowContract,
           chainId,
-          voucherSigning.voucherSigner,
+          voucherSigner,
         )
         const key = channelIdToKey.get(channelId)
         if (key) {
@@ -322,7 +309,7 @@ export function session(parameters: session.Parameters = {}) {
           { channelId, cumulativeAmount },
           escrowContract,
           chainId,
-          voucherSigning.voucherSigner,
+          voucherSigner,
         )
         payload = {
           action: 'close',
