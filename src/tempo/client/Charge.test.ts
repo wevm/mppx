@@ -2,7 +2,7 @@ import { Challenge, Credential } from 'mppx'
 import { createClient, http } from 'viem'
 import { privateKeyToAccount } from 'viem/accounts'
 import { tempoLocalnet } from 'viem/chains'
-import { describe, expect, test } from 'vp/test'
+import { describe, expect, test, vi } from 'vp/test'
 
 import * as Methods from '../Methods.js'
 import { charge } from './Charge.js'
@@ -81,5 +81,46 @@ describe('tempo.charge client', () => {
 
     expect(requestedChainId).toBe(chainId)
     expect(credential.source).toBe(`did:pkh:eip155:${chainId}:${account.address}`)
+  })
+
+  test('uses challenge chainId for non-zero transaction source', async () => {
+    vi.resetModules()
+    const prepareTransactionRequest = vi.fn(async () => ({}))
+    const signTransaction = vi.fn(async () => '0xdeadbeef')
+    vi.doMock('viem/actions', () => ({
+      prepareTransactionRequest,
+      sendCallsSync: vi.fn(),
+      signTransaction,
+      signTypedData: vi.fn(),
+    }))
+
+    try {
+      const { charge: chargeWithMockedActions } = await import('./Charge.js')
+      const chainId = 42431
+      const client = createClient({
+        account,
+        chain: tempoLocalnet,
+        transport: http('http://127.0.0.1'),
+      })
+      const method = chargeWithMockedActions({
+        account,
+        getClient: () => client,
+      })
+
+      const credential = Credential.deserialize(
+        await method.createCredential({
+          challenge: createChallenge({ amount: '1', chainId, supportedModes: ['pull'] }),
+          context: {},
+        }),
+      )
+
+      expect(prepareTransactionRequest).toHaveBeenCalledOnce()
+      expect(signTransaction).toHaveBeenCalledOnce()
+      expect(credential.payload).toEqual({ signature: '0xdeadbeef', type: 'transaction' })
+      expect(credential.source).toBe(`did:pkh:eip155:${chainId}:${account.address}`)
+    } finally {
+      vi.doUnmock('viem/actions')
+      vi.resetModules()
+    }
   })
 })

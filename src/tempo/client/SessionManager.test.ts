@@ -1,9 +1,15 @@
-import type { Hex } from 'viem'
+import { createClient, type Hex, http } from 'viem'
+import { privateKeyToAccount } from 'viem/accounts'
 import { describe, expect, test, vi } from 'vp/test'
 
 import * as Challenge from '../../Challenge.js'
+import * as PaymentCredential from '../../Credential.js'
 import { formatNeedVoucherEvent, parseEvent } from '../session/Sse.js'
-import type { NeedVoucherEvent, SessionReceipt } from '../session/Types.js'
+import type {
+  NeedVoucherEvent,
+  SessionCredentialPayload,
+  SessionReceipt,
+} from '../session/Types.js'
 import { sessionManager } from './SessionManager.js'
 
 const channelId = '0x0000000000000000000000000000000000000000000000000000000000000001' as Hex
@@ -81,6 +87,65 @@ describe('Session', () => {
       expect(s.channelId).toBeUndefined()
       expect(s.cumulative).toBe(0n)
       expect(s.opened).toBe(false)
+    })
+
+    test('uses voucherSigner for managed open credentials', async () => {
+      vi.resetModules()
+      vi.doMock('viem/actions', () => ({
+        prepareTransactionRequest: vi.fn(async () => ({})),
+        sendCallsSync: vi.fn(),
+        signTransaction: vi.fn(async () => '0xdeadbeef'),
+        signTypedData: vi.fn(),
+      }))
+
+      try {
+        const { sessionManager: sessionManagerWithMocks } = await import('./SessionManager.js')
+        const account = privateKeyToAccount(
+          '0x0000000000000000000000000000000000000000000000000000000000000001',
+        )
+        const voucherSigner = privateKeyToAccount(
+          '0x0000000000000000000000000000000000000000000000000000000000000002',
+        )
+        const client = createClient({
+          account,
+          transport: http('http://127.0.0.1'),
+        })
+        const challenge = makeChallenge({
+          recipient: '0x742d35cc6634c0532925a3b844bc9e7595f8fe00',
+          methodDetails: {
+            escrowContract: '0x9d136eea063ede5418a6bc7beaff009bbb6cfa70',
+            chainId: 4217,
+          },
+        })
+        const mockFetch = vi
+          .fn()
+          .mockResolvedValueOnce(make402Response(challenge))
+          .mockResolvedValueOnce(makeOkResponse())
+
+        const manager = sessionManagerWithMocks({
+          account,
+          client,
+          fetch: mockFetch as typeof globalThis.fetch,
+          maxDeposit: '10',
+          voucherSigner,
+        })
+
+        const response = await manager.fetch('https://api.example.com/data')
+        const authorization = new Headers((mockFetch.mock.calls[1]![1] as RequestInit).headers).get(
+          'Authorization',
+        )
+
+        expect(response.status).toBe(200)
+        expect(authorization).toBeDefined()
+        if (!authorization) throw new Error('missing authorization header')
+        const credential = PaymentCredential.deserialize<SessionCredentialPayload>(authorization)
+        expect(credential.payload.action).toBe('open')
+        if (credential.payload.action !== 'open') throw new Error('unexpected action')
+        expect(credential.payload.authorizedSigner).toBe(voucherSigner.address)
+      } finally {
+        vi.doUnmock('viem/actions')
+        vi.resetModules()
+      }
     })
   })
 
