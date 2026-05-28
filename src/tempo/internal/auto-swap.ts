@@ -1,4 +1,4 @@
-import type { Address, Client } from 'viem'
+import type { Address, Call, Client } from 'viem'
 import { readContract } from 'viem/actions'
 import { Actions, Addresses } from 'viem/tempo'
 
@@ -96,7 +96,7 @@ export declare namespace findCalls {
   }
 
   /** `undefined` when no swap is needed (account has sufficient balance). */
-  type ReturnType = readonly object[] | undefined
+  type ReturnType = readonly Call[] | undefined
 }
 
 /** Resolves an auto-swap configuration value into concrete currencies and slippage. */

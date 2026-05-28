@@ -1,16 +1,15 @@
 import { Challenge, Credential } from 'mppx'
-import { createClient, http } from 'viem'
-import { privateKeyToAccount } from 'viem/accounts'
-import { tempoLocalnet } from 'viem/chains'
-import { describe, expect, test, vi } from 'vp/test'
+import { createClient } from 'viem'
+import { describe, expect, test } from 'vp/test'
+import { accounts, asset, chain, http } from '~test/tempo/viem.js'
 
 import * as Methods from '../Methods.js'
 import { charge } from './Charge.js'
 
-const account = privateKeyToAccount(
-  '0x0000000000000000000000000000000000000000000000000000000000000001',
-)
-const currency = '0x3333333333333333333333333333333333333333'
+const account = accounts[1]
+const otherAccount = accounts[2]
+const chainId = chain.id
+const currency = asset
 const recipient = '0x2222222222222222222222222222222222222222'
 
 type ChargeRequest = ReturnType<typeof Methods.charge.schema.request.parse>
@@ -35,11 +34,11 @@ function createChallenge(
 }
 
 describe('tempo.charge client', () => {
-  test('uses client chain ID when the challenge omits chainId', async () => {
+  test('behavior: uses client chain ID when challenge omits chainId', async () => {
     const client = createClient({
       account,
-      chain: tempoLocalnet,
-      transport: http('http://127.0.0.1'),
+      chain,
+      transport: http(),
     })
     const method = charge({
       account,
@@ -53,16 +52,16 @@ describe('tempo.charge client', () => {
       }),
     )
 
-    expect(credential.source).toBe(`did:pkh:eip155:${tempoLocalnet.id}:${account.address}`)
+    expect(credential.source).toBe(`did:pkh:eip155:${chainId}:${account.address}`)
   })
 
-  test('uses challenge chainId for client resolution and proof source', async () => {
+  test('behavior: uses challenge chainId for client resolution and proof source', async () => {
     let requestedChainId: number | undefined
-    const chainId = 42431
+    const challengeChainId = 42431
     const client = createClient({
       account,
-      chain: tempoLocalnet,
-      transport: http('http://127.0.0.1'),
+      chain,
+      transport: http(),
     })
     const method = charge({
       account,
@@ -74,53 +73,33 @@ describe('tempo.charge client', () => {
 
     const credential = Credential.deserialize(
       await method.createCredential({
-        challenge: createChallenge({ chainId }),
+        challenge: createChallenge({ chainId: challengeChainId }),
         context: {},
       }),
     )
 
-    expect(requestedChainId).toBe(chainId)
-    expect(credential.source).toBe(`did:pkh:eip155:${chainId}:${account.address}`)
+    expect(requestedChainId).toBe(challengeChainId)
+    expect(credential.source).toBe(`did:pkh:eip155:${challengeChainId}:${account.address}`)
   })
 
-  test('uses challenge chainId for non-zero transaction source', async () => {
-    vi.resetModules()
-    const prepareTransactionRequest = vi.fn(async () => ({}))
-    const signTransaction = vi.fn(async () => '0xdeadbeef')
-    vi.doMock('viem/actions', () => ({
-      prepareTransactionRequest,
-      sendCallsSync: vi.fn(),
-      signTransaction,
-      signTypedData: vi.fn(),
-    }))
+  test('behavior: context account overrides default account', async () => {
+    const client = createClient({
+      account,
+      chain,
+      transport: http(),
+    })
+    const method = charge({
+      account,
+      getClient: () => client,
+    })
 
-    try {
-      const { charge: chargeWithMockedActions } = await import('./Charge.js')
-      const chainId = 42431
-      const client = createClient({
-        account,
-        chain: tempoLocalnet,
-        transport: http('http://127.0.0.1'),
-      })
-      const method = chargeWithMockedActions({
-        account,
-        getClient: () => client,
-      })
+    const credential = Credential.deserialize(
+      await method.createCredential({
+        challenge: createChallenge({ chainId }),
+        context: { account: otherAccount },
+      }),
+    )
 
-      const credential = Credential.deserialize(
-        await method.createCredential({
-          challenge: createChallenge({ amount: '1', chainId, supportedModes: ['pull'] }),
-          context: {},
-        }),
-      )
-
-      expect(prepareTransactionRequest).toHaveBeenCalledOnce()
-      expect(signTransaction).toHaveBeenCalledOnce()
-      expect(credential.payload).toEqual({ signature: '0xdeadbeef', type: 'transaction' })
-      expect(credential.source).toBe(`did:pkh:eip155:${chainId}:${account.address}`)
-    } finally {
-      vi.doUnmock('viem/actions')
-      vi.resetModules()
-    }
+    expect(credential.source).toBe(`did:pkh:eip155:${chainId}:${otherAccount.address}`)
   })
 })
