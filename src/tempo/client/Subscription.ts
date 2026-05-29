@@ -20,6 +20,7 @@ import {
   verifySubscriptionKeyAuthorization,
 } from '../subscription/KeyAuthorization.js'
 import type { SubscriptionAccessKey } from '../subscription/Types.js'
+import * as MppAuthorize from './internal/MppAuthorize.js'
 
 type SubscriptionRequest = ReturnType<typeof Methods.subscription.schema.request.parse>
 
@@ -48,16 +49,25 @@ export function subscription(parameters: subscription.Parameters = {}) {
       const chainId = challenge.request.methodDetails?.chainId ?? defaults.chainId.testnet
       const client = await getClient({ chainId })
       const account = getAccount(client, context)
-      const accessKey =
+      let accessKey =
         context?.accessKey ?? parameters.accessKey ?? challenge.request.methodDetails?.accessKey
+
+      assertSubscriptionRequestRepresentable(challenge.request)
+      await parameters.validateRequest?.(challenge.request)
+
+      if (!accessKey && account.type === 'json-rpc') {
+        accessKey = await MppAuthorize.authorizeSubscriptionAccessKey(client, {
+          account: account.address,
+          challenge,
+          chainId,
+        })
+      }
+
       if (!accessKey) {
         throw new Error(
           'No `accessKey` provided. The subscription challenge must include `accessKey`, or the client must pass one to parameters/context.',
         )
       }
-
-      assertSubscriptionRequestRepresentable(challenge.request)
-      await parameters.validateRequest?.(challenge.request)
 
       const keyAuthorization = await authorizeAccessKey(client, {
         accessKey,

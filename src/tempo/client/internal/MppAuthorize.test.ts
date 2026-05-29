@@ -6,6 +6,7 @@ import * as Credential from '../../../Credential.js'
 import * as MppAuthorize from './MppAuthorize.js'
 
 const account = '0x1111111111111111111111111111111111111111' as Address
+const accessKeyAddress = '0x4444444444444444444444444444444444444444' as Address
 const chainId = 42431
 const capabilities = { '0xa5bf': { mpp: { status: 'supported' } } }
 
@@ -98,5 +99,51 @@ describe('mpp_authorize helper', () => {
     await expect(
       MppAuthorize.authorize(client, { account, challenge: makeChallenge(), chainId }),
     ).resolves.toBe(undefined)
+  })
+
+  test('returns subscription access key from demo shim response', async () => {
+    const challenge = Challenge.from({
+      ...makeChallenge(),
+      intent: 'subscription',
+    })
+    const requests: unknown[] = []
+    const client = {
+      async request(parameters: { method: string }) {
+        requests.push(parameters)
+        if (parameters.method === 'wallet_getCapabilities') return capabilities
+        return {
+          subscriptionAccessKey: {
+            accessKeyAddress,
+            keyType: 'secp256k1',
+          },
+        }
+      },
+    } as never
+
+    const result = await MppAuthorize.authorizeSubscriptionAccessKey(client, {
+      account,
+      challenge,
+      chainId,
+    })
+
+    expect(result).toEqual({
+      accessKeyAddress,
+      keyType: 'secp256k1',
+    })
+    expect(requests).toEqual([
+      {
+        method: 'wallet_getCapabilities',
+        params: [account, ['0xa5bf']],
+      },
+      {
+        method: 'mpp_authorize',
+        params: [
+          {
+            challenges: [Challenge.serialize(challenge)],
+            intent: 'subscriptionAccessKey',
+          },
+        ],
+      },
+    ])
   })
 })
