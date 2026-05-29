@@ -3,6 +3,7 @@ import { type Address, parseUnits, type Account as viem_Account } from 'viem'
 import { tempo as tempo_chain } from 'viem/tempo/chains'
 
 import type * as Challenge from '../../Challenge.js'
+import * as Credential from '../../Credential.js'
 import * as Method from '../../Method.js'
 import * as Account from '../../viem/Account.js'
 import * as Client from '../../viem/Client.js'
@@ -10,16 +11,10 @@ import * as z from '../../zod.js'
 import { getAccountSignerAddress } from '../internal/account.js'
 import * as defaults from '../internal/defaults.js'
 import * as Methods from '../Methods.js'
+import * as SessionActions from '../Session.js'
 import type { SessionCredentialPayload } from '../session/Types.js'
 import { signVoucher } from '../session/Voucher.js'
-import {
-  type ChannelEntry,
-  createOpenPayload,
-  createVoucherPayload,
-  resolveEscrow,
-  serializeCredential,
-  tryRecoverChannel,
-} from './ChannelOps.js'
+import { resolveEscrow, tryRecoverChannel } from './ChannelOps.js'
 
 export const sessionContextSchema = z.object({
   account: z.optional(z.custom<Account.getResolver.Parameters['account']>()),
@@ -84,10 +79,10 @@ export function session(parameters: session.Parameters = {}) {
     parameters.maxDeposit !== undefined ? parseUnits(parameters.maxDeposit, decimals) : undefined
 
   const escrowContractMap = new Map<string, Address>()
-  const channels = new Map<string, ChannelEntry>()
+  const channels = new Map<string, SessionActions.ChannelEntry>()
   const channelIdToKey = new Map<string, string>()
 
-  function notifyUpdate(entry: ChannelEntry) {
+  function notifyUpdate(entry: SessionActions.ChannelEntry) {
     parameters.onChannelUpdate?.(entry)
   }
 
@@ -105,6 +100,23 @@ export function session(parameters: session.Parameters = {}) {
       if (cached) return cached
     }
     return resolveEscrow(challenge, chainId, parameters.escrowContract)
+  }
+
+  function asSessionChallenge(challenge: Challenge.Challenge): SessionActions.SessionChallenge {
+    return challenge as SessionActions.SessionChallenge
+  }
+
+  function serializeManualCredential(
+    challenge: Challenge.Challenge,
+    payload: SessionCredentialPayload,
+    chainId: number,
+    account: viem_Account,
+  ): string {
+    return Credential.serialize({
+      challenge,
+      payload,
+      source: `did:pkh:eip155:${chainId}:${account.address}`,
+    })
   }
 
   async function autoManageCredential(
@@ -172,39 +184,45 @@ export function session(parameters: session.Parameters = {}) {
       }
     }
 
-    let payload: SessionCredentialPayload
-
     if (entry?.opened) {
       entry.cumulativeAmount += amount
-      payload = await createVoucherPayload(
-        client,
-        account,
-        entry.channelId,
-        entry.cumulativeAmount,
+      const credential = await SessionActions.voucher.createCredential(client, {
+        challenge: asSessionChallenge(challenge),
+        channelId: entry.channelId,
+        cumulativeAmount: entry.cumulativeAmount,
         escrowContract,
-        chainId,
+        signer: account,
         voucherSigner,
-      )
-      notifyUpdate(entry)
-    } else {
-      const result = await createOpenPayload(client, account, {
-        voucherSigner,
-        escrowContract,
-        payee,
-        currency,
-        deposit,
-        initialAmount: amount,
-        chainId,
-        feePayer: md?.feePayer,
       })
-      channels.set(key, result.entry)
-      channelIdToKey.set(result.entry.channelId, key)
-      escrowContractMap.set(result.entry.channelId, escrowContract)
-      payload = result.payload
-      notifyUpdate(result.entry)
+      notifyUpdate(entry)
+      return credential
+    } else {
+      const filled = await SessionActions.open.fill(client, {
+        authorizedSigner: getAccountSignerAddress(voucherSigner),
+        challenge: asSessionChallenge(challenge),
+        deposit,
+        escrowContract,
+        payer: account.address,
+      })
+      const credential = await SessionActions.open.createCredential(client, {
+        filled,
+        signer: account,
+        voucherSigner,
+      })
+      const entry = {
+        channelId: filled.channelId,
+        salt: filled.salt,
+        cumulativeAmount: amount,
+        escrowContract,
+        chainId,
+        opened: true,
+      } satisfies SessionActions.ChannelEntry
+      channels.set(key, entry)
+      channelIdToKey.set(entry.channelId, key)
+      escrowContractMap.set(entry.channelId, escrowContract)
+      notifyUpdate(entry)
+      return credential
     }
-
-    return serializeCredential(challenge, payload, chainId, account)
   }
 
   async function manualCredential(
@@ -236,8 +254,6 @@ export function session(parameters: session.Parameters = {}) {
     const escrowContract = resolveEscrowCached(challenge, chainId, channelId)
     escrowContractMap.set(channelId, escrowContract)
 
-    let payload: SessionCredentialPayload
-
     switch (action) {
       case 'open': {
         if (!transaction) throw new Error('transaction required for open action')
@@ -251,43 +267,51 @@ export function session(parameters: session.Parameters = {}) {
           chainId,
           voucherSigner,
         )
-        payload = {
-          action: 'open',
-          type: 'transaction',
-          channelId,
-          transaction: transaction as Hex.Hex,
-          authorizedSigner: getAccountSignerAddress(voucherSigner),
-          cumulativeAmount: cumulativeAmount.toString(),
-          signature,
-        }
-        break
+        return serializeManualCredential(
+          challenge,
+          {
+            action: 'open',
+            type: 'transaction',
+            channelId,
+            transaction: transaction as Hex.Hex,
+            authorizedSigner: getAccountSignerAddress(voucherSigner),
+            cumulativeAmount: cumulativeAmount.toString(),
+            signature,
+          },
+          chainId,
+          account,
+        )
       }
 
-      case 'topUp':
+      case 'topUp': {
         if (!transaction) throw new Error('transaction required for topUp action')
         if (resolvedAdditionalDeposit === undefined)
           throw new Error('additionalDeposit required for topUp action')
-        payload = {
-          action: 'topUp',
-          type: 'transaction',
-          channelId,
-          transaction: transaction as Hex.Hex,
-          additionalDeposit: resolvedAdditionalDeposit.toString(),
-        }
-        break
+        return serializeManualCredential(
+          challenge,
+          {
+            action: 'topUp',
+            type: 'transaction',
+            channelId,
+            transaction: transaction as Hex.Hex,
+            additionalDeposit: resolvedAdditionalDeposit.toString(),
+          },
+          chainId,
+          account,
+        )
+      }
 
       case 'voucher': {
         if (cumulativeAmount === undefined)
           throw new Error('cumulativeAmount required for voucher action')
-        payload = await createVoucherPayload(
-          client,
-          account,
+        const credential = await SessionActions.voucher.createCredential(client, {
+          challenge: asSessionChallenge(challenge),
           channelId,
           cumulativeAmount,
           escrowContract,
-          chainId,
+          signer: account,
           voucherSigner,
-        )
+        })
         const key = channelIdToKey.get(channelId)
         if (key) {
           const entry = channels.get(key)
@@ -297,26 +321,20 @@ export function session(parameters: session.Parameters = {}) {
             notifyUpdate(entry)
           }
         }
-        break
+        return credential
       }
 
       case 'close': {
         if (cumulativeAmount === undefined)
           throw new Error('cumulativeAmount required for close action')
-        const signature = await signVoucher(
-          client,
-          account,
-          { channelId, cumulativeAmount },
-          escrowContract,
-          chainId,
-          voucherSigner,
-        )
-        payload = {
-          action: 'close',
+        const credential = await SessionActions.close.createCredential(client, {
+          challenge: asSessionChallenge(challenge),
           channelId,
-          cumulativeAmount: cumulativeAmount.toString(),
-          signature,
-        }
+          cumulativeAmount,
+          escrowContract,
+          signer: account,
+          voucherSigner,
+        })
         const closeKey = channelIdToKey.get(channelId)
         if (closeKey) {
           const entry = channels.get(closeKey)
@@ -327,11 +345,9 @@ export function session(parameters: session.Parameters = {}) {
             notifyUpdate(entry)
           }
         }
-        break
+        return credential
       }
     }
-
-    return serializeCredential(challenge, payload, chainId, account)
   }
 
   return Method.toClient(Methods.session, {
@@ -368,6 +384,6 @@ export declare namespace session {
       /** Maximum deposit in human-readable units (e.g. "10"). Caps the server's `suggestedDeposit`. Enables auto-management like `deposit`. */
       maxDeposit?: string | undefined
       /** Called whenever channel state changes (open, voucher, close, recovery). */
-      onChannelUpdate?: ((entry: ChannelEntry) => void) | undefined
+      onChannelUpdate?: ((entry: SessionActions.ChannelEntry) => void) | undefined
     }
 }
