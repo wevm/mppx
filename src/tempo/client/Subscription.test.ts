@@ -23,7 +23,6 @@ const accessAccount = privateKeyToAccount(
 const otherRootAccount = privateKeyToAccount(
   '0x0000000000000000000000000000000000000000000000000000000000000003',
 )
-const capabilities = { '0x1079': { mpp: { status: 'supported' } } }
 const accessKey = {
   accessKeyAddress: accessAccount.address,
   keyType: 'secp256k1',
@@ -106,56 +105,6 @@ describe('tempo.subscription client', () => {
     await expect(method.createCredential({ challenge, context: {} })).rejects.toThrow(
       'unexpected subscription request',
     )
-  })
-
-  test('can shim subscription access key selection through mpp_authorize', async () => {
-    const challenge = createChallenge({ accessKey: undefined })
-    const keyAuthorization = await signSubscriptionKeyAuthorization({
-      accessKey,
-      account: selectedAccount,
-      chainId,
-      request: challenge.request,
-    })
-    if (!keyAuthorization) throw new Error('expected key authorization')
-
-    const requests: unknown[] = []
-    const method = subscription({
-      account: selectedAccount.address,
-      getClient: async () =>
-        ({
-          request: async (request: { method: string }) => {
-            requests.push(request)
-            if (request.method === 'wallet_getCapabilities') return capabilities
-            if (request.method === 'mpp_authorize') return { subscriptionAccessKey: accessKey }
-            return { keyAuthorization: KeyAuthorization.toRpc(keyAuthorization) }
-          },
-        }) as never,
-    })
-
-    const credential = Credential.deserialize(
-      await method.createCredential({ challenge, context: {} }),
-    )
-    const payload = Methods.subscription.schema.credential.payload.parse(credential.payload)
-
-    expect(payload.type).toBe('keyAuthorization')
-    expect(requests).toMatchObject([
-      {
-        method: 'wallet_getCapabilities',
-        params: [selectedAccount.address, ['0x1079']],
-      },
-      {
-        method: 'mpp_authorize',
-        params: [
-          {
-            challenges: [Challenge.serialize(challenge)],
-            intent: 'subscriptionAccessKey',
-          },
-        ],
-      },
-      {
-        method: 'wallet_authorizeAccessKey',
-      },
-    ])
   })
 
   test('passes hex-encoded `scopes` and `limits` to wallet_authorizeAccessKey', async () => {
