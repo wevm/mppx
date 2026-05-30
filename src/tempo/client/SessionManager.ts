@@ -740,7 +740,8 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
       const closeChallenge = activeSocketChallenge ?? lastChallenge
       const closeChannelId = activeSocketChannelId ?? channel?.channelId
 
-      if (!channel?.opened) return undefined
+      const openedChannel = channel?.opened ? channel : null
+      if (!openedChannel) return undefined
 
       if (!closeChallenge) {
         throw new Error(
@@ -753,6 +754,23 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
         )
       }
 
+      const createCloseCredential = async (challenge: Challenge.Challenge) =>
+        method.createCredential({
+          challenge: challenge as never,
+          context: {
+            action: 'close',
+            channelId: closeChannelId,
+            cumulativeAmountRaw: (() => {
+              const closeAmount = BigInt(getFallbackCloseAmount(challenge, closeChannelId))
+              if (closeAmount > openedChannel.cumulativeAmount) {
+                throw new Error('fallback close amount exceeds local voucher state')
+              }
+              assertVoucherWithinLocalLimit(closeAmount)
+              return closeAmount.toString()
+            })(),
+          },
+        })
+
       if (activeSocket?.readyState === WebSocketReadyState.OPEN) {
         const ready =
           closeReadyReceipt ??
@@ -761,7 +779,10 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
             return waitForCloseReady()
           })())
         const readySpent = BigInt(ready.spent)
-        if (readySpent > (channel.cumulativeAmount > spent ? channel.cumulativeAmount : spent)) {
+        if (
+          readySpent >
+          (openedChannel.cumulativeAmount > spent ? openedChannel.cumulativeAmount : spent)
+        ) {
           throw new Error('close-ready spent exceeds local voucher state')
         }
 
@@ -795,32 +816,30 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
         }
       }
 
-      const credential = await method.createCredential({
-        challenge: closeChallenge as never,
-        context: {
-          action: 'close',
-          channelId: closeChannelId,
-          cumulativeAmountRaw: (() => {
-            const closeAmount = BigInt(getFallbackCloseAmount(closeChallenge, closeChannelId))
-            if (closeAmount > channel.cumulativeAmount) {
-              throw new Error('fallback close amount exceeds local voucher state')
-            }
-            assertVoucherWithinLocalLimit(closeAmount)
-            return closeAmount.toString()
-          })(),
-        },
-      })
-
       if (!lastUrl) {
         throw new Error(
           'Cannot close session: no URL available. This usually means close() was called on a SessionManager instance that was recreated after the session was opened. Use the same SessionManager instance that opened the session, or call fetch()/sse() before close().',
         )
       }
 
-      const response = await fetchFn(lastUrl, {
+      let response = await fetchFn(lastUrl, {
         method: 'POST',
-        headers: { Authorization: credential },
+        headers: { Authorization: await createCloseCredential(closeChallenge) },
       })
+      if (response.status === 402) {
+        const retryChallenge = await selectRetryCloseChallenge(
+          response,
+          method,
+          parameters.orderChallenges,
+        )
+        if (retryChallenge) {
+          lastChallenge = retryChallenge
+          response = await fetchFn(lastUrl, {
+            method: 'POST',
+            headers: { Authorization: await createCloseCredential(retryChallenge) },
+          })
+        }
+      }
       if (!response.ok) {
         const body = await response.text().catch(() => '')
         const detail = (() => {
@@ -877,4 +896,23 @@ async function resolveSessionChallengeOrder(
 ): Promise<readonly AcceptPayment.ChallengeCandidate<SessionMethod>[]> {
   const orderChallenges = override
   return orderChallenges ? orderChallenges(candidates) : candidates
+}
+
+async function selectRetryCloseChallenge(
+  response: Response,
+  method: SessionMethod,
+  orderChallenges: SessionOrderChallenges | undefined,
+): Promise<Challenge.Challenge | undefined> {
+  let challenges: Challenge.Challenge[]
+  try {
+    challenges = Challenge.fromResponseList(response)
+  } catch {
+    return undefined
+  }
+  const candidates = AcceptPayment.selectChallengeCandidates(
+    challenges,
+    [method],
+    AcceptPayment.resolve([method]).entries,
+  )
+  return (await resolveSessionChallengeOrder(candidates, orderChallenges))[0]?.challenge
 }
