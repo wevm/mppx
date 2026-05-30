@@ -392,5 +392,86 @@ describe('Session', () => {
       await s.close()
       expect(mockFetch).not.toHaveBeenCalled()
     })
+
+    test('retries HTTP close with the fresh challenge from a 402 response', async () => {
+      vi.resetModules()
+      vi.doMock('viem/actions', () => ({
+        prepareTransactionRequest: vi.fn(async () => ({})),
+        sendCallsSync: vi.fn(),
+        signTransaction: vi.fn(async () => '0xdeadbeef'),
+        signTypedData: vi.fn(),
+      }))
+
+      try {
+        const { sessionManager: sessionManagerWithMocks } = await import('./SessionManager.js')
+        const account = privateKeyToAccount(
+          '0x0000000000000000000000000000000000000000000000000000000000000001',
+        )
+        const voucherSigner = TempoAccount.fromSecp256k1(
+          '0x0000000000000000000000000000000000000000000000000000000000000002',
+          { access: account },
+        )
+        const client = createClient({
+          account,
+          transport: http('http://127.0.0.1'),
+        })
+        const initialChallenge = makeChallenge({
+          amount: '1000000',
+          recipient: '0x742d35cc6634c0532925a3b844bc9e7595f8fe00',
+          methodDetails: {
+            escrowContract: '0x9d136eea063ede5418a6bc7beaff009bbb6cfa70',
+            chainId: 4217,
+          },
+        })
+        const closeChallenge = makeChallenge({
+          amount: '2000000',
+          recipient: '0x742d35cc6634c0532925a3b844bc9e7595f8fe00',
+          methodDetails: {
+            escrowContract: '0x9d136eea063ede5418a6bc7beaff009bbb6cfa70',
+            chainId: 4217,
+          },
+        })
+        const mockFetch = vi
+          .fn()
+          .mockResolvedValueOnce(make402Response(initialChallenge))
+          .mockResolvedValueOnce(makeOkResponse())
+          .mockImplementationOnce(async (_input, init) => {
+            const authorization = new Headers((init as RequestInit).headers).get('Authorization')
+            if (!authorization) throw new Error('missing close authorization')
+            const credential = PaymentCredential.deserialize<SessionCredentialPayload>(authorization)
+            expect(credential.challenge.id).toBe(initialChallenge.id)
+            expect(credential.challenge.request.amount).toBe('1000000')
+            expect(credential.payload.action).toBe('close')
+            return make402Response(closeChallenge)
+          })
+          .mockImplementationOnce(async (_input, init) => {
+            const authorization = new Headers((init as RequestInit).headers).get('Authorization')
+            if (!authorization) throw new Error('missing retry close authorization')
+            const credential = PaymentCredential.deserialize<SessionCredentialPayload>(authorization)
+            expect(credential.challenge.id).toBe(closeChallenge.id)
+            expect(credential.challenge.request.amount).toBe('2000000')
+            expect(credential.payload.action).toBe('close')
+            return makeOkResponse()
+          })
+
+        const manager = sessionManagerWithMocks({
+          account,
+          client,
+          fetch: mockFetch as typeof globalThis.fetch,
+          maxDeposit: '10',
+          voucherSigner,
+        })
+
+        await manager.fetch('https://api.example.com/data')
+        await manager.close()
+
+        expect(mockFetch).toHaveBeenCalledTimes(4)
+        expect((mockFetch.mock.calls[2]![1] as RequestInit).method).toBe('POST')
+        expect((mockFetch.mock.calls[3]![1] as RequestInit).method).toBe('POST')
+      } finally {
+        vi.doUnmock('viem/actions')
+        vi.resetModules()
+      }
+    })
   })
 })
