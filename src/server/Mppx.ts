@@ -255,6 +255,7 @@ export type Mppx<
      * const receipt = await mppx.verifyCredential('eyJjaGFsbGVuZ2...')
      * const receipt = await mppx.verifyCredential(credential)
      * const receipt = await mppx.verifyCredential(credential, { request: { amount: '1000' } })
+     * const receipt = await mppx.verifyCredential(credential, { capturedRequest: request })
      * ```
      */
     verifyCredential(
@@ -561,6 +562,24 @@ export function create<
         submittedChallenge: credential.challenge,
       })
       throw e
+    }
+
+    if (
+      options?.capturedRequest === undefined &&
+      requiresCapturedRequestForStandaloneVerify(parsedCredential)
+    ) {
+      const error = new Errors.BadRequestError({
+        reason:
+          'standalone tempo.session verification requires capturedRequest for open and voucher credentials',
+      })
+      await emitStandalonePaymentFailed({
+        challenge: credential.challenge,
+        credential: parsedCredential,
+        error,
+        request: credential.challenge.request as Record<string, unknown>,
+        submittedChallenge: credential.challenge,
+      })
+      throw error
     }
 
     const expectedMeta = Scope.merge({ meta: options?.meta, scope: options?.scope })
@@ -1941,6 +1960,13 @@ function hydrateCredentialMeta<payload>(
     ...credential,
     challenge: hydratedChallenge,
   }
+}
+
+function requiresCapturedRequestForStandaloneVerify(credential: Credential.Credential): boolean {
+  if (credential.challenge.method !== 'tempo') return false
+  if (credential.challenge.intent !== 'session') return false
+  const action = (credential.payload as { action?: unknown }).action
+  return action === 'open' || action === 'voucher'
 }
 
 function withParsedCredentialPayload<payload>(

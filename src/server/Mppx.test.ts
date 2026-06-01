@@ -4899,7 +4899,17 @@ describe('verifyCredential', () => {
     const openCredential = Credential.deserialize(serializedOpenCredential)
     expect(openCredential.payload).toMatchObject({ action: 'open' })
 
-    const openReceipt = await server.verifyCredential(serializedOpenCredential)
+    const managementRequest = {
+      headers: new Headers(),
+      hasBody: false,
+      method: 'POST',
+      url: new URL(httpServer.url),
+    } as const
+
+    const openReceipt = await server.verifyCredential(serializedOpenCredential, {
+      capturedRequest: managementRequest,
+      request: { amount: '1', unitType: 'request' },
+    })
 
     expect(openReceipt.status).toBe('success')
     expect(openReceipt.method).toBe('tempo')
@@ -4911,7 +4921,10 @@ describe('verifyCredential', () => {
     const voucherCredential = Credential.deserialize(serializedVoucherCredential)
     expect(voucherCredential.payload).toMatchObject({ action: 'voucher' })
 
-    const voucherReceipt = await server.verifyCredential(serializedVoucherCredential)
+    const voucherReceipt = await server.verifyCredential(serializedVoucherCredential, {
+      capturedRequest: managementRequest,
+      request: { amount: '1', unitType: 'request' },
+    })
 
     expect(voucherReceipt.status).toBe('success')
     expect(voucherReceipt.method).toBe('tempo')
@@ -4955,7 +4968,15 @@ describe('verifyCredential', () => {
     const serializedOpenCredential = await clientMppx.createCredential(
       openChallengeResponse.challenge,
     )
-    await server.verifyCredential(serializedOpenCredential)
+    await server.verifyCredential(serializedOpenCredential, {
+      capturedRequest: {
+        headers: new Headers(),
+        hasBody: false,
+        method: 'POST',
+        url: new URL('https://example.com/session'),
+      },
+      request: { amount: '1', unitType: 'request' },
+    })
 
     const voucherChallengeResponse = await route(new Request('https://example.com/session'))
     expect(voucherChallengeResponse.status).toBe(402)
@@ -5073,5 +5094,53 @@ describe('verifyCredential', () => {
     const receipt = await mppx.verifyCredential(serialized)
 
     expect(receipt.status).toBe('success')
+  })
+
+  test('standalone tempo session verification requires capturedRequest for billable credentials', async () => {
+    const tempoSession = Method.from({
+      name: 'tempo',
+      intent: 'session',
+      schema: {
+        credential: {
+          payload: z.discriminatedUnion('action', [
+            z.object({ action: z.literal('open'), token: z.string() }),
+            z.object({ action: z.literal('voucher'), token: z.string() }),
+            z.object({ action: z.literal('topUp'), token: z.string() }),
+            z.object({ action: z.literal('close'), token: z.string() }),
+          ]),
+        },
+        request: z.object({
+          amount: z.string(),
+          currency: z.string(),
+          recipient: z.string(),
+          unitType: z.string(),
+        }),
+      },
+    })
+    let verifyCalled = false
+    const server = Mppx.create({
+      methods: [
+        Method.toServer(tempoSession, {
+          async verify() {
+            verifyCalled = true
+            return mockReceipt('tempo-session')
+          },
+        }),
+      ],
+      realm,
+      secretKey,
+    })
+    const challenge = await server.challenge.tempo.session({
+      amount: '1',
+      currency: 'USD',
+      recipient: 'merchant',
+      unitType: 'request',
+    })
+    const credential = Credential.serialize(
+      Credential.from({ challenge, payload: { action: 'voucher', token: 'valid' } }),
+    )
+
+    await expect(server.verifyCredential(credential)).rejects.toThrow('requires capturedRequest')
+    expect(verifyCalled).toBe(false)
   })
 })
