@@ -3679,6 +3679,24 @@ describe('tempo', () => {
       expect(challenge.request.methodDetails?.supportedModes).toEqual(['pull'])
     })
 
+    test('stable binding contains supportedModes', () => {
+      const method = tempo_server.charge({
+        getClient: () => client,
+        account: accounts[0].address,
+        currency: asset,
+      })
+      const request = method.schema.request.parse({
+        amount: '1',
+        currency: asset,
+        decimals: 6,
+        supportedModes: ['pull'],
+      })
+
+      expect(method.stableBinding?.(request)).toMatchObject({
+        supportedModes: ['pull'],
+      })
+    })
+
     test('challenge contains splits from method defaults', async () => {
       const split = { amount: '0.2', recipient: accounts[2].address }
       const handler = Mppx_server.create({
