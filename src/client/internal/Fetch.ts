@@ -262,7 +262,7 @@ export function from<const methods extends readonly Method.AnyClient[]>(
       )
 
       const paymentResponse = await baseFetch(
-        initialRequest.input,
+        resolvePaymentRetryInput(response, initialRequest.input),
         transport.setCredential(
           {
             ...fetchInit,
@@ -842,4 +842,11 @@ function resolveRequestUrl(input: RequestInfo | URL): URL {
   if (input instanceof URL) return input
   if (input instanceof Request) return new URL(input.url)
   return new URL(input, isBrowser() ? globalThis.location.href : undefined)
+}
+
+function resolvePaymentRetryInput(
+  response: Response,
+  fallback: RequestInfo | URL,
+): RequestInfo | URL {
+  return response.url ? response.url : fallback
 }

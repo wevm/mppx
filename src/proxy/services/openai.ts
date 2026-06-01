@@ -29,6 +29,8 @@ export function openai(config: openai.Config) {
     },
     rewriteRequest(request, ctx) {
       const apiKey = ctx.apiKey ?? config.apiKey
+      request.headers.delete('OpenAI-Organization')
+      request.headers.delete('OpenAI-Project')
       request.headers.set('Authorization', `Bearer ${apiKey}`)
       return request
     },

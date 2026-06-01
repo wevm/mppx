@@ -466,6 +466,7 @@ export async function broadcastOpenTransaction(parameters: {
   challengeExpires?: string | undefined
   feePayerPolicy?: Partial<FeePayer.Policy> | undefined
   feePayer?: Account | undefined
+  isSponsored?: boolean | undefined
   beforeBroadcast?: ((onChain: OnChainChannel) => Promise<void> | void) | undefined
   /** When false, simulates instead of waiting for confirmation and returns derived on-chain state. @default true */
   waitForConfirmation?: boolean | undefined
@@ -480,11 +481,12 @@ export async function broadcastOpenTransaction(parameters: {
     challengeExpires,
     feePayerPolicy,
     feePayer,
+    isSponsored = Boolean(feePayer),
     beforeBroadcast,
     waitForConfirmation = true,
   } = parameters
 
-  if (feePayer && !FeePayer.isTempoTransaction(serializedTransaction))
+  if (isSponsored && !FeePayer.isTempoTransaction(serializedTransaction))
     throw new BadRequestError({
       reason: 'Only Tempo (0x76/0x78) transactions are supported',
     })
@@ -493,11 +495,11 @@ export async function broadcastOpenTransaction(parameters: {
     serializedTransaction as Transaction.TransactionSerializedTempo,
   )
 
-  if (feePayer) assertSenderSigned(transaction)
+  if (isSponsored) assertSenderSigned(transaction)
 
   const calls = transaction.calls ?? []
 
-  const sponsoredOpenCall = feePayer
+  const sponsoredOpenCall = isSponsored
     ? validateSponsoredOpenCalls({
         calls,
         currency,
@@ -669,6 +671,7 @@ export async function broadcastTopUpTransaction(parameters: {
   challengeExpires?: string | undefined
   feePayerPolicy?: Partial<FeePayer.Policy> | undefined
   feePayer?: Account | undefined
+  isSponsored?: boolean | undefined
 }): Promise<{ txHash: Hex; newDeposit: bigint }> {
   const {
     client,
@@ -681,9 +684,10 @@ export async function broadcastTopUpTransaction(parameters: {
     challengeExpires,
     feePayerPolicy,
     feePayer,
+    isSponsored = Boolean(feePayer),
   } = parameters
 
-  if (feePayer && !FeePayer.isTempoTransaction(serializedTransaction))
+  if (isSponsored && !FeePayer.isTempoTransaction(serializedTransaction))
     throw new BadRequestError({
       reason: 'Only Tempo (0x76/0x78) transactions are supported',
     })
@@ -692,11 +696,11 @@ export async function broadcastTopUpTransaction(parameters: {
     serializedTransaction as Transaction.TransactionSerializedTempo,
   )
 
-  if (feePayer) assertSenderSigned(transaction)
+  if (isSponsored) assertSenderSigned(transaction)
 
   const calls = transaction.calls ?? []
 
-  const sponsoredTopUpCall = feePayer
+  const sponsoredTopUpCall = isSponsored
     ? validateSponsoredTopUpCalls({
         calls,
         currency,
