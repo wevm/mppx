@@ -668,6 +668,36 @@ describe.runIf(isLocalnet)('session', () => {
       expect(ch!.highestVoucherAmount).toBe(2000000n)
     })
 
+    test('rejects voucher signed for route escrow instead of stored channel escrow', async () => {
+      const { channelId, serializedTransaction } = await createSignedOpenTransaction(10000000n)
+      const server = createServer()
+      await openServerChannel(server, channelId, serializedTransaction)
+
+      const routeEscrow = '0x0000000000000000000000000000000000000999' as Address
+      const signature = await signVoucher(
+        client,
+        payer,
+        { channelId, cumulativeAmount: 2000000n },
+        routeEscrow,
+        chain.id,
+      )
+
+      await expect(
+        server.verify({
+          credential: {
+            challenge: makeChallenge({ id: 'route-escrow-replay', channelId }),
+            payload: {
+              action: 'voucher' as const,
+              channelId,
+              cumulativeAmount: '2000000',
+              signature,
+            },
+          },
+          request: makeRequest({ escrowContract: routeEscrow }),
+        }),
+      ).rejects.toThrow(InvalidSignatureError)
+    })
+
     test('rejects non-increasing voucher replay', async () => {
       const { channelId, serializedTransaction } = await createSignedOpenTransaction(10000000n)
       const server = createServer()
