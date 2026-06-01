@@ -407,4 +407,75 @@ describe('isows', () => {
     expect(channel?.spent).toBe(0n)
     expect(channel?.units).toBe(0)
   })
+
+  test('does not meter or emit application messages after close is requested on-chain', async () => {
+    const socket = new MockSocket()
+    const store = memoryChannelStore()
+    await store.updateChannel(channelId, () => ({
+      channelId,
+      payer: '0x0000000000000000000000000000000000000001' as Address,
+      payee: '0x0000000000000000000000000000000000000002' as Address,
+      token: '0x0000000000000000000000000000000000000003' as Address,
+      authorizedSigner: '0x0000000000000000000000000000000000000004' as Address,
+      chainId: 42431,
+      escrowContract: '0x0000000000000000000000000000000000000005' as Address,
+      deposit: 1n,
+      settledOnChain: 0n,
+      highestVoucherAmount: 1n,
+      highestVoucher: null,
+      spent: 0n,
+      units: 0,
+      closeRequestedAt: 1n,
+      finalized: false,
+      createdAt: new Date().toISOString(),
+    }))
+
+    await Ws.serve({
+      socket,
+      store,
+      url: 'ws://example.test/stream',
+      route: async () => ({
+        status: 200,
+        withReceipt(response = new Response(null, { status: 204 })) {
+          response.headers.set(
+            'Payment-Receipt',
+            serializeSessionReceipt(
+              createSessionReceipt({
+                challengeId: challenge.id,
+                channelId,
+                acceptedCumulative: 1n,
+                spent: 0n,
+                units: 0,
+              }),
+            ),
+          )
+          return response
+        },
+      }),
+      generate: (async function* () {
+        yield 'should-not-reach'
+      })(),
+    })
+
+    socket.receive(
+      Ws.formatAuthorizationMessage(
+        makeCredential({
+          action: 'open',
+          channelId,
+          cumulativeAmount: '1',
+          signature: `0x${'77'.repeat(65)}`,
+          transaction: '0x01',
+          type: 'transaction',
+        }),
+      ),
+    )
+
+    await sleep(100)
+
+    expect(socket.closed).toBe(true)
+    expect(socket.sent.some((message) => message.includes('should-not-reach'))).toBe(false)
+    const channel = await store.getChannel(channelId)
+    expect(channel?.spent).toBe(0n)
+    expect(channel?.units).toBe(0)
+  })
 })

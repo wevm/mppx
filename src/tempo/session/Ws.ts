@@ -1,4 +1,5 @@
 import * as Credential from '../../Credential.js'
+import { ChannelClosedError } from '../../Errors.js'
 import * as ChannelStore from './ChannelStore.js'
 import { deserializeSessionReceipt } from './Receipt.js'
 import { createSessionReceipt } from './Receipt.js'
@@ -405,6 +406,7 @@ async function reserveChargeOrWait(options: {
 
   let channel = await store.getChannel(channelId)
   if (!channel) throw new Error('channel not found')
+  throwIfChannelClosed(channel)
 
   const hasHeadroom = (state: ChannelStore.State) =>
     state.highestVoucherAmount - state.spent - reservedAmount >= amount
@@ -424,6 +426,7 @@ async function reserveChargeOrWait(options: {
     await waitForUpdate(store, channelId, pollIntervalMs, signal)
     channel = await store.getChannel(channelId)
     if (!channel) throw new Error('channel not found')
+    throwIfChannelClosed(channel)
   }
 }
 
@@ -440,6 +443,7 @@ async function commitReservedCharges(options: {
   const channel = await store.updateChannel(channelId, (current) => {
     if (!current) return null
     if (current.finalized) return current
+    if (current.closeRequestedAt !== 0n) return current
     if (current.highestVoucherAmount - current.spent < amount) return current
     committed = true
     return {
@@ -450,7 +454,16 @@ async function commitReservedCharges(options: {
   })
 
   if (!channel) throw new Error('channel not found')
+  if (channel.finalized) throw new ChannelClosedError({ reason: 'channel is finalized' })
+  if (channel.closeRequestedAt !== 0n)
+    throw new ChannelClosedError({ reason: 'channel has a pending close request' })
   if (!committed) throw new Error('reserved voucher coverage is no longer available')
+}
+
+function throwIfChannelClosed(channel: ChannelStore.State): void {
+  if (channel.finalized) throw new ChannelClosedError({ reason: 'channel is finalized' })
+  if (channel.closeRequestedAt !== 0n)
+    throw new ChannelClosedError({ reason: 'channel has a pending close request' })
 }
 
 async function waitForUpdate(
