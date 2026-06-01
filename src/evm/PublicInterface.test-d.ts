@@ -10,6 +10,9 @@ import { Mppx as ServerMppx } from '../server/index.js'
 const account = {} as Account
 const recipient = '0x209693Bc6afc0C5328bA36FaF03C514EF312287C'
 const secretKey = 'test-secret'
+const settle = async () => ({
+  reference: `0x${'1'.repeat(64)}` as `0x${string}`,
+})
 const facilitator = {
   settle: async () => ({
     network: 'eip155:8453',
@@ -30,8 +33,8 @@ describe('evm public interface', () => {
   test('server charge works through subpath exports and tuple helper', () => {
     const direct = serverCharge({
       currency: serverAssets.base.USDC,
+      facilitator,
       recipient,
-      x402: { facilitator },
     })
     expectTypeOf(direct.name).toEqualTypeOf<'evm'>()
     expectTypeOf(direct.intent).toEqualTypeOf<'charge'>()
@@ -40,8 +43,8 @@ describe('evm public interface', () => {
       methods: [
         serverEvm({
           currency: serverAssets.base.USDC,
+          facilitator,
           recipient,
-          x402: { facilitator },
         }),
       ],
       secretKey,
@@ -49,6 +52,16 @@ describe('evm public interface', () => {
 
     expectTypeOf(mppx.evm.charge).toBeFunction()
     expectTypeOf(mppx.evm.charge({ amount: '0.01' })).toBeFunction()
+  })
+
+  test('server charge accepts a custom settlement override', () => {
+    const direct = serverCharge({
+      currency: serverAssets.base.USDC,
+      recipient,
+      settle,
+    })
+    expectTypeOf(direct.name).toEqualTypeOf<'evm'>()
+    expectTypeOf(direct.intent).toEqualTypeOf<'charge'>()
   })
 
   test('client charge works through subpath exports and tuple helper', () => {
@@ -84,16 +97,6 @@ describe('evm public interface', () => {
         facilitator,
         recipient,
       },
-    })
-  })
-
-  test('server charge rejects top-level x402 adapter fields', () => {
-    serverCharge({
-      currency: serverAssets.base.USDC,
-      // @ts-expect-error facilitator belongs under `x402`.
-      facilitator,
-      recipient,
-      x402: { facilitator },
     })
   })
 })

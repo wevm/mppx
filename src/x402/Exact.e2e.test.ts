@@ -44,8 +44,8 @@ describe('x402 exact e2e', () => {
       methods: [
         evm.charge({
           currency: evm.assets.baseSepolia.USDC,
+          facilitator,
           recipient: accounts[0].address,
-          x402: { facilitator },
         }),
       ],
       secretKey,
@@ -66,10 +66,6 @@ describe('x402 exact e2e', () => {
       if (req.url === '/x402') {
         const result = await x402Payment.evm.charge({
           amount: '0.01',
-          resource: {
-            mimeType: 'text/plain',
-            url: new URL('/x402', request.url).toString(),
-          },
         })(request)
         if (result.status === 402) return NodeListener.sendResponse(res, result.challenge)
         return NodeListener.sendResponse(res, result.withReceipt(new Response('x402 ok')))
@@ -99,6 +95,8 @@ describe('x402 exact e2e', () => {
             account: accounts[0],
           }),
         ],
+        orderChallenges: (candidates) =>
+          candidates.filter(({ challenge }) => challenge.request.scheme === 'exact'),
         polyfill: false,
       })
       const x402Required = await x402ClientPayment.rawFetch(`${server.url}/x402`)
@@ -127,22 +125,20 @@ describe('x402 exact e2e', () => {
       methods: [
         evm.charge({
           currency: evm.assets.baseSepolia.USDC,
-          recipient: accounts[0].address,
-          x402: {
-            facilitator: {
-              async verify() {
-                verifyCalls++
-                return { isValid: true }
-              },
-              async settle(paymentPayload) {
-                return {
-                  network: paymentPayload.accepted.network,
-                  success: true,
-                  transaction,
-                }
-              },
+          facilitator: {
+            async verify() {
+              verifyCalls++
+              return { isValid: true }
+            },
+            async settle(paymentPayload: Types.PaymentPayload) {
+              return {
+                network: paymentPayload.accepted.network,
+                success: true,
+                transaction,
+              }
             },
           },
+          recipient: accounts[0].address,
         }),
       ],
       secretKey,
@@ -195,25 +191,23 @@ describe('x402 exact e2e', () => {
         }),
         evm.charge({
           currency: evm.assets.baseSepolia.USDC,
-          recipient: accounts[0].address,
-          x402: {
-            facilitator: {
-              async verify(paymentPayload) {
-                return {
-                  isValid: true,
-                  payer: payerOf(paymentPayload),
-                }
-              },
-              async settle(paymentPayload) {
-                return {
-                  network: paymentPayload.accepted.network,
-                  payer: payerOf(paymentPayload),
-                  success: true,
-                  transaction,
-                }
-              },
+          facilitator: {
+            async verify(paymentPayload: Types.PaymentPayload) {
+              return {
+                isValid: true,
+                payer: payerOf(paymentPayload),
+              }
+            },
+            async settle(paymentPayload: Types.PaymentPayload) {
+              return {
+                network: paymentPayload.accepted.network,
+                payer: payerOf(paymentPayload),
+                success: true,
+                transaction,
+              }
             },
           },
+          recipient: accounts[0].address,
         }),
       ],
       secretKey,
@@ -256,6 +250,8 @@ describe('x402 exact e2e', () => {
             account: accounts[0],
           }),
         ],
+        orderChallenges: (candidates) =>
+          candidates.filter(({ challenge }) => challenge.request.scheme === 'exact'),
         polyfill: false,
       })
       const x402Response = await x402ClientPayment.fetch(server.url)
