@@ -63,6 +63,8 @@ export function charge<const parameters extends charge.Parameters>(
     feePayerPolicy,
     html,
     memo,
+    splits,
+    supportedModes,
     validateSender,
     waitForConfirmation = true,
   } = parameters
@@ -96,7 +98,11 @@ export function charge<const parameters extends charge.Parameters>(
       externalId,
       memo,
       recipient,
+      splits,
+      supportedModes,
     } as unknown as Defaults,
+
+    stableBinding: chargeBinding,
 
     html: html
       ? {
@@ -577,6 +583,32 @@ export declare namespace charge {
   }
 
   type FeePayerPolicy = Partial<FeePayer.Policy>
+}
+
+type ChargeRequest = z.output<typeof Methods.charge.schema.request>
+
+function chargeBinding(request: ChargeRequest) {
+  // Exhaustively destructure so new charge request fields require an explicit binding decision.
+  const { amount, currency, description, externalId, methodDetails, recipient, ...requestRest } =
+    request
+  requestRest satisfies Record<string, never>
+
+  const { chainId, feePayer, memo, splits, supportedModes, ...methodDetailsRest } =
+    methodDetails ?? {}
+  methodDetailsRest satisfies Record<string, never>
+  void feePayer
+
+  return {
+    amount,
+    chainId,
+    currency,
+    description,
+    externalId,
+    memo,
+    recipient,
+    splits,
+    supportedModes,
+  }
 }
 
 type ExpectedTransfer = {
