@@ -532,10 +532,8 @@ async function verifyAndAcceptVoucher(parameters: {
   channelId: Hex
   voucher: SignedVoucher
   onChain: OnChainChannel
-  methodDetails: SessionMethodDetails
 }): Promise<SessionReceipt> {
-  const { store, minVoucherDelta, challenge, channel, channelId, voucher, onChain, methodDetails } =
-    parameters
+  const { store, minVoucherDelta, challenge, channel, channelId, voucher, onChain } = parameters
 
   if (onChain.finalized) {
     throw new ChannelClosedError({ reason: 'channel is finalized on-chain' })
@@ -570,8 +568,8 @@ async function verifyAndAcceptVoucher(parameters: {
   }
 
   const isValid = await verifyVoucher(
-    methodDetails.escrowContract,
-    methodDetails.chainId,
+    channel.escrowContract,
+    channel.chainId,
     voucher,
     channel.authorizedSigner,
   )
@@ -854,11 +852,7 @@ async function handleVoucher(
 
   const onChain = await (async () => {
     if (isStale) {
-      const onChainChannel = await getOnChainChannel(
-        client,
-        methodDetails.escrowContract,
-        channelId,
-      )
+      const onChainChannel = await getOnChainChannel(client, channel.escrowContract, channelId)
       lastOnChainVerified.set(channelId, Date.now())
       // Persist closeRequestedAt so the cached path detects force-close
       // between re-queries.
@@ -889,7 +883,6 @@ async function handleVoucher(
     channelId,
     voucher,
     onChain,
-    methodDetails,
   })
 }
 
@@ -916,7 +909,7 @@ async function handleClose(
 
   const voucher = parseVoucherFromPayload(channelId, payload.cumulativeAmount, payload.signature)
 
-  const onChain = await getOnChainChannel(client, methodDetails.escrowContract, channelId)
+  const onChain = await getOnChainChannel(client, channel.escrowContract, channelId)
 
   if (onChain.finalized) {
     throw new ChannelClosedError({ reason: 'channel is finalized on-chain' })
@@ -942,8 +935,8 @@ async function handleClose(
   }
 
   const isValid = await verifyVoucher(
-    methodDetails.escrowContract,
-    methodDetails.chainId,
+    channel.escrowContract,
+    channel.chainId,
     voucher,
     channel.authorizedSigner,
   )
@@ -978,7 +971,7 @@ async function handleClose(
       sender: account?.address ?? client.account?.address,
     })
 
-    txHash = await closeOnChain(client, methodDetails.escrowContract, voucher, {
+    txHash = await closeOnChain(client, channel.escrowContract, voucher, {
       ...(feePayer && account ? { feePayer, account } : { account }),
       candidateFeeTokens: [channel.token],
     })
