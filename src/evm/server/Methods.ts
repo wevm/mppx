@@ -1,8 +1,11 @@
+import type { NoExtraKeys } from '../../internal/types.js'
 import * as Assets from '../Assets.js'
 import { charge as charge_ } from './Charge.js'
 
 /** Creates EVM server methods from shared charge parameters. */
-export function evm<const parameters extends evm.Parameters>(parameters: parameters) {
+export function evm<const parameters extends evm.Parameters>(
+  parameters: NoExtraKeys<parameters, evm.Parameters>,
+) {
   return [evm.charge(parameters)] as const
 }
 

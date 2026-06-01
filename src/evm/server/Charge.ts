@@ -1,3 +1,4 @@
+import type { NoExtraKeys } from '../../internal/types.js'
 import { exact as x402_exact } from '../../x402/server/Exact.js'
 import type * as x402_Types from '../../x402/Types.js'
 
@@ -7,7 +8,9 @@ import type * as x402_Types from '../../x402/Types.js'
  * When `x402` is configured, the method speaks x402 exact on the wire while
  * exposing the user-facing MPP method as `evm/charge`.
  */
-export function charge<const parameters extends charge.Parameters>(parameters: parameters) {
+export function charge<const parameters extends charge.Parameters>(
+  parameters: NoExtraKeys<parameters, charge.Parameters>,
+) {
   const { x402, ...config } = parameters
   return x402_exact({
     config: {
