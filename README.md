@@ -78,10 +78,10 @@ Mppx.create({
 const res = await fetch('https://mpp.dev/api/ping/paid')
 ```
 
-### x402 Exact
+### EVM Charge with x402
 
 ```ts
-import { Mppx, tempo, x402 } from 'mppx/server'
+import { evm, Mppx, tempo } from 'mppx/server'
 
 const mppx = Mppx.create({
   methods: [
@@ -89,11 +89,11 @@ const mppx = Mppx.create({
       currency: '0x20c0000000000000000000000000000000000000',
       recipient: '0x742d35Cc6634c0532925a3b844bC9e7595F8fE00',
     }),
-    x402.exact({
-      config: {
-        currency: x402.assets.baseSepolia.USDC,
+    evm.charge({
+      currency: evm.assets.baseSepolia.USDC,
+      recipient: '0x742d35Cc6634c0532925a3b844bC9e7595F8fE00',
+      x402: {
         facilitator: 'https://x402.org/facilitator',
-        recipient: '0x742d35Cc6634c0532925a3b844bC9e7595F8fE00',
       },
     }),
   ],
@@ -104,7 +104,7 @@ export async function GET(request: Request) {
   const result =
     url.pathname === '/mpp'
       ? await mppx.tempo.charge({ amount: '1' })(request)
-      : await mppx.x402.exact({
+      : await mppx.evm.charge({
           amount: '0.01',
           resource: { url: request.url },
         })(request)
@@ -118,7 +118,7 @@ Existing server adapters expose the same method. For Hono:
 
 ```ts
 import { Hono } from 'hono'
-import { Mppx, tempo, x402 } from 'mppx/hono'
+import { evm, Mppx, tempo } from 'mppx/hono'
 
 const app = new Hono()
 const mppx = Mppx.create({
@@ -127,21 +127,21 @@ const mppx = Mppx.create({
       currency: '0x20c0000000000000000000000000000000000000',
       recipient: '0x742d35Cc6634c0532925a3b844bC9e7595F8fE00',
     }),
-    x402.exact({
-      config: {
-        currency: x402.assets.baseSepolia.USDC,
+    evm.charge({
+      currency: evm.assets.baseSepolia.USDC,
+      recipient: '0x742d35Cc6634c0532925a3b844bC9e7595F8fE00',
+      x402: {
         facilitator: 'https://x402.org/facilitator',
-        recipient: '0x742d35Cc6634c0532925a3b844bC9e7595F8fE00',
       },
     }),
   ],
 })
 
 app.get('/mpp', mppx.tempo.charge({ amount: '1' }), (c) => c.json({ ok: true }))
-app.get('/x402', mppx.x402.exact({ amount: '0.01' }), (c) => c.json({ ok: true }))
+app.get('/x402', mppx.evm.charge({ amount: '0.01' }), (c) => c.json({ ok: true }))
 ```
 
-Like Tempo, x402 route `amount` values are display-unit strings; mppx converts
+Like Tempo, EVM charge route `amount` values are display-unit strings; mppx converts
 them to atomic token amounts from the configured currency decimals.
 
 To offer both protocols from one Hono route, use the core HTTP composer inside
@@ -149,25 +149,25 @@ the Hono handler:
 
 ```ts
 import { Hono } from 'hono'
-import { Mppx, tempo, x402 } from 'mppx/server'
+import { evm, Mppx, tempo } from 'mppx/server'
 
 const app = new Hono()
 const tempoCharge = tempo.charge({
   currency: '0x20c0000000000000000000000000000000000000',
   recipient: '0x742d35Cc6634c0532925a3b844bC9e7595F8fE00',
 })
-const x402Exact = x402.exact({
-  config: {
-    currency: x402.assets.baseSepolia.USDC,
+const evmCharge = evm.charge({
+  currency: evm.assets.baseSepolia.USDC,
+  recipient: '0x742d35Cc6634c0532925a3b844bC9e7595F8fE00',
+  x402: {
     facilitator: 'https://x402.org/facilitator',
-    recipient: '0x742d35Cc6634c0532925a3b844bC9e7595F8fE00',
   },
 })
 const payments = Mppx.create({
-  methods: [tempoCharge, x402Exact],
+  methods: [tempoCharge, evmCharge],
 })
 
-const paid = payments.compose([tempoCharge, { amount: '1' }], [x402Exact, { amount: '0.01' }])
+const paid = payments.compose([tempoCharge, { amount: '1' }], [evmCharge, { amount: '0.01' }])
 
 app.get('/paid', async (c) => {
   const result = await paid(c.req.raw)
@@ -182,13 +182,13 @@ framework response with `result.withReceipt(...)` after payment succeeds.
 
 ```ts
 import { privateKeyToAccount } from 'viem/accounts'
-import { Mppx, x402 } from 'mppx/client'
+import { evm, Mppx } from 'mppx/client'
 
 const mppx = Mppx.create({
   methods: [
-    x402.exact({
+    evm.charge({
       account: privateKeyToAccount('0x...'),
-      currencies: [x402.assets.baseSepolia.USDC],
+      currencies: [evm.assets.baseSepolia.USDC],
       maxAmount: '0.01',
       networks: ['eip155:84532'],
     }),

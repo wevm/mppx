@@ -1,11 +1,5 @@
-import { Mppx as ClientMppx, tempo as tempoClient, x402 as x402Client } from 'mppx/client'
-import {
-  Mppx as ServerMppx,
-  NodeListener,
-  Request as ServerRequest,
-  tempo,
-  x402 as x402Server,
-} from 'mppx/server'
+import { evm as evmClient, Mppx as ClientMppx, tempo as tempoClient } from 'mppx/client'
+import { evm, Mppx as ServerMppx, NodeListener, Request as ServerRequest, tempo } from 'mppx/server'
 import { describe, expect, test } from 'vp/test'
 import * as Http from '~test/Http.js'
 import { accounts, asset, client } from '~test/tempo/viem.js'
@@ -48,12 +42,10 @@ describe('x402 exact e2e', () => {
     }
     const x402Payment = ServerMppx.create({
       methods: [
-        x402Server.exact({
-          config: {
-            currency: x402Server.assets.baseSepolia.USDC,
-            facilitator,
-            recipient: accounts[0].address,
-          },
+        evm.charge({
+          currency: evm.assets.baseSepolia.USDC,
+          recipient: accounts[0].address,
+          x402: { facilitator },
         }),
       ],
       secretKey,
@@ -72,7 +64,7 @@ describe('x402 exact e2e', () => {
       }
 
       if (req.url === '/x402') {
-        const result = await x402Payment.x402.exact({
+        const result = await x402Payment.evm.charge({
           amount: '0.01',
           resource: {
             mimeType: 'text/plain',
@@ -103,7 +95,7 @@ describe('x402 exact e2e', () => {
 
       const x402ClientPayment = ClientMppx.create({
         methods: [
-          x402Client.exact({
+          evmClient.charge({
             account: accounts[0],
           }),
         ],
@@ -133,9 +125,10 @@ describe('x402 exact e2e', () => {
     let verifyCalls = 0
     const payment = ServerMppx.create({
       methods: [
-        x402Server.exact({
-          config: {
-            currency: x402Server.assets.baseSepolia.USDC,
+        evm.charge({
+          currency: evm.assets.baseSepolia.USDC,
+          recipient: accounts[0].address,
+          x402: {
             facilitator: {
               async verify() {
                 verifyCalls++
@@ -149,13 +142,12 @@ describe('x402 exact e2e', () => {
                 }
               },
             },
-            recipient: accounts[0].address,
           },
         }),
       ],
       secretKey,
     })
-    const route = payment.x402.exact({ amount: '0.01' })
+    const route = payment.evm.charge({ amount: '0.01' })
 
     const routeAChallenge = await route(new Request('https://example.com/a'))
     expect(routeAChallenge.status).toBe(402)
@@ -201,9 +193,10 @@ describe('x402 exact e2e', () => {
           getClient: () => client,
           recipient: accounts[0].address,
         }),
-        x402Server.exact({
-          config: {
-            currency: x402Server.assets.baseSepolia.USDC,
+        evm.charge({
+          currency: evm.assets.baseSepolia.USDC,
+          recipient: accounts[0].address,
+          x402: {
             facilitator: {
               async verify(paymentPayload) {
                 return {
@@ -220,7 +213,6 @@ describe('x402 exact e2e', () => {
                 }
               },
             },
-            recipient: accounts[0].address,
           },
         }),
       ],
@@ -228,7 +220,7 @@ describe('x402 exact e2e', () => {
     })
     const paid = payment.compose(
       [payment.tempo.charge, { amount: '0', chainId: client.chain!.id }],
-      [payment.x402.exact, { amount: '0.01' }],
+      [payment.evm.charge, { amount: '0.01' }],
     )
 
     const server = await Http.createServer(async (req, res) => {
@@ -260,7 +252,7 @@ describe('x402 exact e2e', () => {
 
       const x402ClientPayment = ClientMppx.create({
         methods: [
-          x402Client.exact({
+          evmClient.charge({
             account: accounts[0],
           }),
         ],

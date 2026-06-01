@@ -6,7 +6,7 @@ import {
   session as tempo_session_client,
   tempo as tempo_client,
 } from 'mppx/client'
-import { Mppx, stripe, Store, Transport, tempo, x402 } from 'mppx/server'
+import { evm, Mppx, stripe, Store, Transport, tempo } from 'mppx/server'
 import { Header as x402_Header, Types as x402_Types, type PaymentPayload } from 'mppx/x402'
 import { getTransactionReceipt } from 'viem/actions'
 import { describe, expect, test } from 'vp/test'
@@ -1856,9 +1856,10 @@ describe('compose', () => {
     },
   })
 
-  const x402Method = x402.exact({
-    config: {
-      currency: x402.assets.baseSepolia.USDC,
+  const x402Method = evm.charge({
+    currency: evm.assets.baseSepolia.USDC,
+    recipient: accounts[0].address,
+    x402: {
       facilitator: {
         async verify(paymentPayload: PaymentPayload) {
           return {
@@ -1875,7 +1876,6 @@ describe('compose', () => {
           }
         },
       },
-      recipient: accounts[0].address,
     },
   })
 
@@ -1906,7 +1906,7 @@ describe('compose', () => {
   test('returns composed x402 challenge headers when no credential', async () => {
     const mppx = Mppx.create({ methods: [x402Method], realm, secretKey })
 
-    const result = await mppx.compose(['x402/exact', { amount: '0.01' }])(
+    const result = await mppx.compose(['evm/charge', { amount: '0.01' }])(
       new Request('https://example.com/resource'),
     )
 
@@ -1933,7 +1933,7 @@ describe('compose', () => {
 
     const result = await mppx.compose(
       [alphaMethod, challengeOpts],
-      ['x402/exact', { amount: '0.01' }],
+      ['evm/charge', { amount: '0.01' }],
     )(new Request('https://example.com/resource'))
 
     expect(result.status).toBe(402)
@@ -1952,8 +1952,8 @@ describe('compose', () => {
     const mppx = Mppx.create({ methods: [x402Method], realm, secretKey })
 
     const result = await mppx.compose(
-      ['x402/exact', { amount: '0.01' }],
-      ['x402/exact', { amount: '0.02' }],
+      ['evm/charge', { amount: '0.01' }],
+      ['evm/charge', { amount: '0.02' }],
     )(new Request('https://example.com/resource'))
 
     expect(result.status).toBe(402)
@@ -1967,7 +1967,7 @@ describe('compose', () => {
 
   test('dispatches x402 credentials through compose()', async () => {
     const mppx = Mppx.create({ methods: [alphaMethod, x402Method], realm, secretKey })
-    const handle = mppx.compose([alphaMethod, challengeOpts], ['x402/exact', { amount: '0.01' }])
+    const handle = mppx.compose([alphaMethod, challengeOpts], ['evm/charge', { amount: '0.01' }])
 
     const firstResult = await handle(new Request('https://example.com/resource'))
     expect(firstResult.status).toBe(402)

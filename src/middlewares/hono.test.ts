@@ -2,13 +2,13 @@ import { serve } from '@hono/node-server'
 import { Hono } from 'hono'
 import { Challenge, Credential, Method, Receipt, z } from 'mppx'
 import {
+  evm as evm_client,
   Mppx as Mppx_client,
   session as sessionIntent,
   tempo as tempo_client,
-  x402 as x402_client,
 } from 'mppx/client'
 import { Mppx, discovery, payment } from 'mppx/hono'
-import { Mppx as ServerMppx, tempo as tempo_server, x402 as x402_server } from 'mppx/server'
+import { evm as evm_server, Mppx as ServerMppx, tempo as tempo_server } from 'mppx/server'
 import { paymentRequiredHeader, paymentResponseHeader, type PaymentPayload } from 'mppx/x402'
 import type { Address } from 'viem'
 import { Addresses } from 'viem/tempo'
@@ -228,9 +228,10 @@ describe('charge', () => {
           getClient: () => client,
           recipient: accounts[0].address,
         }),
-        x402_server.exact({
-          config: {
-            currency: x402_server.assets.baseSepolia.USDC,
+        evm_server.charge({
+          currency: evm_server.assets.baseSepolia.USDC,
+          recipient: accounts[0].address,
+          x402: {
             facilitator: {
               async verify(paymentPayload: PaymentPayload) {
                 return {
@@ -247,7 +248,6 @@ describe('charge', () => {
                 }
               },
             },
-            recipient: accounts[0].address,
           },
         }),
       ],
@@ -256,7 +256,7 @@ describe('charge', () => {
 
     const route = payments.compose(
       [payments.tempo.charge, { amount: '0', chainId: client.chain!.id }],
-      [payments.x402.exact, { amount: '0.01' }],
+      [payments.evm.charge, { amount: '0.01' }],
     )
 
     const app = new Hono()
@@ -288,7 +288,7 @@ describe('charge', () => {
 
     const x402Payment = Mppx_client.create({
       methods: [
-        x402_client.exact({
+        evm_client.charge({
           account: accounts[0],
         }),
       ],

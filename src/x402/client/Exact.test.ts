@@ -87,8 +87,8 @@ describe('x402.exact client', () => {
 function challenge(overrides: Partial<Types.PaymentRequirements> = {}): X402Challenge {
   return Challenge.from({
     id: 'x402-test',
-    intent: 'exact',
-    method: 'x402',
+    intent: 'charge',
+    method: 'evm',
     realm: 'example.com',
     request: {
       amount: '10000',
