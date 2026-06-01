@@ -90,6 +90,11 @@ const store = Store.memory()
 
 // Mppx Server Instance
 
+// `Mppx.create()` requires a secret key so challenge IDs can be verified
+// statelessly. The example ships with a default demo key so `pnpm dev` works
+// out of the box, but still allows override via `MPP_SECRET_KEY`.
+const secretKey = process.env.MPP_SECRET_KEY ?? 'mppx-demo-sse-secret'
+
 //
 // `Mppx.create()` assembles the payment handler from method intents.
 //
@@ -112,6 +117,7 @@ const store = Store.memory()
 //       Authorization header to configure the SSE metering loop
 //
 const mppx = Mppx.create({
+  secretKey,
   methods: [
     tempo.session({
       // The server's account — where settled funds are transferred to.
