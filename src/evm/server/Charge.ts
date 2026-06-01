@@ -172,9 +172,23 @@ type ResolvedConfig = {
   x402: X402.ResolvedOptions
 }
 
+type HttpPath = {
+  bindCredential: NonNullable<ServerTransport.Http['bindCredential']>
+  captureRequest?: ServerTransport.Http['captureRequest'] | undefined
+  getCredential: ServerTransport.Http['getCredential']
+  respondChallenge: (
+    options: Parameters<ServerTransport.Http['respondChallenge']>[0],
+    response?: Response | undefined,
+  ) => Response | Promise<Response>
+  respondReceipt: (
+    options: Parameters<ServerTransport.Http['respondReceipt']>[0],
+    response: Response,
+  ) => Response
+}
+
 type HttpPaths = {
-  mpp: ServerTransport.Http
-  x402: X402.Path
+  mpp: HttpPath
+  x402: HttpPath
 }
 
 function resolveConfig(config: charge.NativeConfig): ResolvedConfig {
@@ -222,8 +236,19 @@ function resolveConfig(config: charge.NativeConfig): ResolvedConfig {
 
 function createPaths(config: ResolvedConfig): HttpPaths {
   return {
-    mpp: ServerTransport.http(),
+    mpp: createMppPath(),
     x402: X402.createPath(config.x402),
+  }
+}
+
+function createMppPath(): HttpPath {
+  const transport = ServerTransport.http()
+  return {
+    bindCredential: (options) => transport.bindCredential?.(options) ?? options.credential,
+    captureRequest: transport.captureRequest,
+    getCredential: transport.getCredential,
+    respondChallenge: (options) => transport.respondChallenge(options),
+    respondReceipt: (options, response) => transport.respondReceipt({ ...options, response }),
   }
 }
 
@@ -249,7 +274,7 @@ function httpTransport(paths: HttpPaths): ServerTransport.Http {
     },
 
     respondReceipt(options) {
-      const response = paths.mpp.respondReceipt(options)
+      const response = paths.mpp.respondReceipt(options, options.response)
       return paths.x402.respondReceipt(options, response)
     },
   })

@@ -33,7 +33,7 @@ export type Path = {
   getCredential: ServerTransport.Http['getCredential']
   respondChallenge: (
     options: Parameters<ServerTransport.Http['respondChallenge']>[0],
-    response: Response,
+    response?: Response | undefined,
   ) => Response | Promise<Response>
   respondReceipt: (
     options: Parameters<ServerTransport.Http['respondReceipt']>[0],
@@ -106,6 +106,7 @@ export function createPath(config: ResolvedOptions): Path {
     },
 
     respondChallenge(options, response) {
+      if (!response) throw new Error('x402 path requires a base challenge response.')
       const headers = new Headers(response.headers)
       const request = options.challenge.request as Types.ChargeRequest
       headers.set(
