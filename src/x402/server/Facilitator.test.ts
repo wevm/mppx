@@ -88,4 +88,24 @@ describe('x402 facilitator http client', () => {
       x402Version: 2,
     })
   })
+
+  test('unwraps mppx fetch wrappers', async () => {
+    const rawFetch = vi.fn(async () => {
+      return new Response(JSON.stringify({ isValid: true }), {
+        headers: { 'Content-Type': 'application/json' },
+      })
+    })
+    const wrappedFetch = vi.fn(async () => {
+      throw new Error('wrapped fetch should not be called')
+    }) as unknown as typeof globalThis.fetch & {
+      [key: symbol]: typeof globalThis.fetch
+    }
+    wrappedFetch[Symbol.for('mppx.fetch.wrapper')] = rawFetch as typeof globalThis.fetch
+
+    const facilitator = Facilitator.http('https://facilitator.example', { fetch: wrappedFetch })
+    await facilitator.verify(paymentPayload, paymentRequirements)
+
+    expect(wrappedFetch).not.toHaveBeenCalled()
+    expect(rawFetch).toHaveBeenCalledOnce()
+  })
 })

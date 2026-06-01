@@ -16,6 +16,7 @@ import { deployEscrow } from '~test/tempo/session.js'
 import { accounts, asset, client } from '~test/tempo/viem.js'
 
 import type { SessionReceipt } from '../tempo/session/Types.js'
+import * as x402_RouteBinding from '../x402/internal/RouteBinding.js'
 
 const realm = 'api.example.com'
 const secretKey = 'test-secret-key'
@@ -2711,7 +2712,11 @@ async function x402PaymentSignature(
 ): Promise<string> {
   const authorization = {
     from: accounts[0].address,
-    nonce: `0x${'1'.repeat(64)}` as `0x${string}`,
+    nonce: x402_RouteBinding.nonce({
+      accepted,
+      extensions: extensions!,
+      resource,
+    }),
     to: accepted.payTo as `0x${string}`,
     validAfter: '0',
     validBefore: '9999999999',

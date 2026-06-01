@@ -1,10 +1,10 @@
-import { Hex } from 'ox'
 import type { Account } from 'viem'
 import { getAddress, parseUnits } from 'viem'
 
 import type * as Challenge from '../../Challenge.js'
 import * as Assets from '../Assets.js'
 import * as Header from '../Header.js'
+import * as RouteBinding from '../internal/RouteBinding.js'
 import * as Types from '../Types.js'
 
 /**
@@ -17,6 +17,8 @@ export async function createCredential(parameters: createCredential.Parameters):
   const request = parameters.challenge.request as Types.ExactRequest
   const accepted = Types.toPaymentRequirements(request)
   assertPolicy(parameters.config, accepted)
+  if (!request.resource || !request.extensions?.mppx)
+    throw new Error('x402 exact EIP-3009 requires route binding.')
   const transferMethod = accepted.extra?.assetTransferMethod ?? 'eip3009'
   if (transferMethod !== 'eip3009')
     throw new Error(`x402 exact ${String(transferMethod)} signing is not implemented yet.`)
@@ -29,7 +31,11 @@ export async function createCredential(parameters: createCredential.Parameters):
   const now = Math.floor(Date.now() / 1000)
   const authorization: Types.ExactEip3009Payload['authorization'] = {
     from: getAddress(account.address),
-    nonce: Hex.random(32),
+    nonce: RouteBinding.nonce({
+      accepted,
+      extensions: request.extensions,
+      resource: request.resource,
+    }),
     to: getAddress(accepted.payTo),
     validAfter: (now - 600).toString(),
     validBefore: (now + accepted.maxTimeoutSeconds).toString(),
@@ -117,6 +123,8 @@ function assertPolicy(parameters: Config, accepted: Types.PaymentRequirements) {
     throw new Error(`x402 exact network is not allowed: ${accepted.network}.`)
 
   const currencies = parameters.currencies ?? parameters.assets
+  if (currencies?.some((currency) => !Assets.isAsset(currency)) && !parameters.networks?.length)
+    throw new Error('x402 exact raw currency allowlists require networks.')
   if (currencies) {
     const acceptedCurrency = getAddress(accepted.asset as `0x${string}`)
     const allowed = currencies.some((currency) =>

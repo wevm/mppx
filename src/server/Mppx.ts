@@ -903,7 +903,11 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
         if (credential && transport.bindCredential) {
           try {
             credential = hydrateCredentialMeta(
-              transport.bindCredential({ challenge, credential, input }) as Credential.Credential,
+              (await transport.bindCredential({
+                challenge,
+                credential,
+                input,
+              })) as Credential.Credential,
             )
           } catch (e) {
             credential = null

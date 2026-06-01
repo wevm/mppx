@@ -126,6 +126,8 @@ function assertPolicy(parameters: charge.Parameters, request: Types.ChargeReques
     throw new Error(`EVM network is not allowed: ${network}.`)
 
   const currencies = parameters.currencies ?? parameters.assets
+  if (currencies?.some((currency) => !Assets.isAsset(currency)) && !parameters.networks?.length)
+    throw new Error('EVM raw currency allowlists require networks.')
   if (currencies) {
     const acceptedCurrency = getAddress(request.currency as `0x${string}`)
     const allowed = currencies.some((currency) =>

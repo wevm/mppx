@@ -4,6 +4,7 @@ import { describe, expect, test, vi } from 'vp/test'
 
 import * as Assets from '../Assets.js'
 import * as Header from '../Header.js'
+import * as RouteBinding from '../internal/RouteBinding.js'
 import * as Types from '../Types.js'
 import { createCredential } from './Exact.js'
 
@@ -62,6 +63,20 @@ describe('x402 exact credential helper', () => {
     expect(account.signTypedData).not.toHaveBeenCalled()
   })
 
+  test('requires network policy for raw hex currencies', async () => {
+    await expect(
+      createCredential({
+        challenge: challenge(),
+        config: {
+          account,
+          currencies: [usdc.address],
+          maxAmount: '0.01',
+        },
+        context: {},
+      }),
+    ).rejects.toThrow('x402 exact raw currency allowlists require networks.')
+  })
+
   test('signs EIP-3009 exact payment payloads', async () => {
     const signTypedData = vi.fn(async () => '0x1234')
     const config = {
@@ -84,6 +99,15 @@ describe('x402 exact credential helper', () => {
     expect(signTypedData).toHaveBeenCalledOnce()
     expect(paymentPayload.x402Version).toBe(2)
     expect(paymentPayload.accepted.scheme).toBe('exact')
+    expect('authorization' in paymentPayload.payload).toBe(true)
+    if (!('authorization' in paymentPayload.payload)) throw new Error()
+    expect(paymentPayload.payload.authorization.nonce).toBe(
+      RouteBinding.nonce({
+        accepted: paymentPayload.accepted,
+        extensions: paymentPayload.extensions!,
+        resource: paymentPayload.resource!,
+      }),
+    )
     expect(paymentPayload.payload.signature).toBe('0x1234')
   })
 })
@@ -106,6 +130,18 @@ function challenge(overrides: Partial<Types.PaymentRequirements> = {}): X402Chal
       network: 'eip155:84532',
       payTo: '0x2222222222222222222222222222222222222222',
       scheme: 'exact',
+      extensions: {
+        mppx: {
+          info: { method: 'GET' },
+          schema: {
+            additionalProperties: false,
+            properties: { method: { type: 'string' } },
+            required: ['method'],
+            type: 'object',
+          },
+        },
+      },
+      resource: { url: 'https://example.com/paid' },
       ...overrides,
     },
   }) as X402Challenge

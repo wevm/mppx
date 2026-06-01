@@ -3,14 +3,17 @@ import { isDeepStrictEqual } from 'node:util'
 import { Bytes, Hash } from 'ox'
 import { getAddress } from 'viem'
 
+import * as BodyDigest from '../../BodyDigest.js'
 import * as Challenge from '../../Challenge.js'
 import type * as Credential from '../../Credential.js'
 import * as Credential_ from '../../Credential.js'
 import { VerificationFailedError } from '../../Errors.js'
 import * as Types from '../../evm/Types.js'
+import * as PaymentRequest from '../../PaymentRequest.js'
 import * as Scope from '../../server/internal/scope.js'
 import * as ServerTransport from '../../server/Transport.js'
 import * as x402_Header from '../Header.js'
+import * as x402_RouteBinding from '../internal/RouteBinding.js'
 import * as x402_Types from '../Types.js'
 import * as x402_Facilitator from './Facilitator.js'
 
@@ -23,6 +26,7 @@ const mppxRouteBindingSchema = {
     [Scope.reservedMetaKey]: { type: 'string' },
     digest: { type: 'string' },
     method: { type: 'string' },
+    opaque: { type: 'string' },
   },
   required: ['method'],
   type: 'object',
@@ -31,6 +35,8 @@ const mppxRouteBindingSchema = {
 export type Options = {
   /** Facilitator client or base URL used for x402-compatible settlement. */
   facilitator?: string | x402_Types.Facilitator | undefined
+  /** Fetch implementation used for facilitator RPCs. */
+  fetch?: typeof globalThis.fetch | undefined
   /** Maximum time in seconds allowed for x402-compatible payment completion. @default 300 */
   maxTimeoutSeconds?: number | undefined
 }
@@ -66,6 +72,7 @@ export function resolveOptions(parameters: {
           facilitator: x402_Facilitator.resolve(
             parameters.options.facilitator,
             'EVM authorization x402 requires `facilitator`.',
+            { fetch: parameters.options.fetch },
           ),
         }
       : {}),
@@ -89,10 +96,11 @@ export function createPath(config: ResolvedOptions): Path {
       )
     },
 
-    bindCredential({ challenge, credential, input }) {
+    async bindCredential({ challenge, credential, input }) {
       const paymentPayload = parsePaymentPayload(credential.payload)
       if (!paymentPayload) return credential
       if (!isPendingCredential(credential)) return credential
+      await assertBodyDigest(challenge, input)
 
       const request = challenge.request as Types.ChargeRequest
       const paymentRequirements = toPaymentRequirements(request, config)
@@ -107,12 +115,22 @@ export function createPath(config: ResolvedOptions): Path {
           reason: 'x402 payment payload resource does not match route resource',
         })
 
-      if (!containsExtensions(paymentPayload.extensions, routeExtensions(challenge, input)))
+      const expectedExtensions = routeExtensions(challenge, input)
+      if (!containsExtensions(paymentPayload.extensions, expectedExtensions))
         throw new VerificationFailedError({
           reason: 'x402 payment payload extensions do not match route binding',
         })
 
       const payload = payloadToAuthorization(paymentPayload)
+      const expectedNonce = x402_RouteBinding.nonce({
+        accepted: paymentRequirements,
+        extensions: expectedExtensions,
+        resource: expectedResource,
+      })
+      if (payload.nonce !== expectedNonce)
+        throw new VerificationFailedError({
+          reason: 'x402 authorization nonce does not match route binding',
+        })
 
       return markCredential(
         Credential_.from({
@@ -128,6 +146,7 @@ export function createPath(config: ResolvedOptions): Path {
 
     respondChallenge(options, response) {
       if (!response) throw new Error('x402 path requires a base challenge response.')
+      if (options.input.body !== null && options.challenge.digest === undefined) return response
       const headers = new Headers(response.headers)
       const request = options.challenge.request as Types.ChargeRequest
       headers.set(
@@ -301,6 +320,9 @@ function routeExtensions(challenge: Challenge.Challenge, input: Request): x402_T
   const scope = Scope.read(challenge.meta)
   if (scope !== undefined) binding[Scope.reservedMetaKey] = scope
   if (challenge.digest !== undefined) binding.digest = challenge.digest
+  const opaque =
+    challenge.opaque ?? (challenge.meta ? PaymentRequest.serialize(challenge.meta) : undefined)
+  if (opaque !== undefined) binding.opaque = opaque
   return {
     [mppxExtensionKey]: {
       info: binding,
@@ -319,11 +341,29 @@ function containsExtensions(
     return (
       actualExtension !== undefined &&
       isDeepStrictEqual(actualExtension.schema, expectedExtension.schema) &&
-      Object.entries(expectedExtension.info).every(([infoKey, value]) =>
-        isDeepStrictEqual(actualExtension.info[infoKey], value),
-      )
+      isDeepStrictEqual(actualExtension.info, expectedExtension.info)
     )
   })
+}
+
+async function assertBodyDigest(challenge: Challenge.Challenge, input: Request): Promise<void> {
+  if (input.body === null) return
+  if (challenge.digest === undefined)
+    throw new VerificationFailedError({
+      reason: 'x402 payment requires a body digest for body-bearing requests',
+    })
+  let body: string
+  try {
+    body = await input.clone().text()
+  } catch {
+    throw new VerificationFailedError({
+      reason: 'x402 payment cannot bind streaming request body',
+    })
+  }
+  if (!BodyDigest.verify(challenge.digest as BodyDigest.BodyDigest, body))
+    throw new VerificationFailedError({
+      reason: 'x402 payment body digest mismatch',
+    })
 }
 
 function markPendingCredential<const credential extends Credential.Credential>(

@@ -36,7 +36,7 @@ export type Transport<
         challenge: Challenge.Challenge
         credential: Credential.Credential
         input: input
-      }) => Credential.Credential)
+      }) => MaybePromise<Credential.Credential>)
     | undefined
   /**
    * Extracts credential from the transport input.

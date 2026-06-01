@@ -67,4 +67,32 @@ describe('evm charge client', () => {
       'EVM charge maxAmount requires currency decimals.',
     )
   })
+
+  test('requires network policy for raw hex currencies', async () => {
+    const client = charge({
+      account,
+      currencies: [Assets.baseSepolia.USDC.address],
+      maxAmount: '1',
+    })
+    const challenge = Challenge.from({
+      id: 'native',
+      intent: 'charge',
+      method: 'evm',
+      realm: 'api.example.com',
+      request: {
+        amount: '1000000',
+        currency: Assets.baseSepolia.USDC.address,
+        methodDetails: {
+          chainId: 84532,
+          credentialTypes: ['authorization'],
+          decimals: 6,
+        },
+        recipient: '0x2222222222222222222222222222222222222222',
+      },
+    })
+
+    await expect(client.createCredential({ challenge } as never)).rejects.toThrow(
+      'EVM raw currency allowlists require networks.',
+    )
+  })
 })

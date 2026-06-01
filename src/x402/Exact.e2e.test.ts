@@ -5,6 +5,7 @@ import * as Http from '~test/Http.js'
 import { accounts, asset, client } from '~test/tempo/viem.js'
 
 import * as Header from './Header.js'
+import * as RouteBinding from './internal/RouteBinding.js'
 import * as Types from './Types.js'
 
 const secretKey = 'test-secret'
@@ -179,6 +180,165 @@ describe('x402 exact e2e', () => {
     )
 
     expect(result.status).toBe(402)
+    expect(verifyCalls).toBe(0)
+  })
+
+  test('rejects x402 route extensions with extra binding fields', async () => {
+    let verifyCalls = 0
+    const payment = ServerMppx.create({
+      methods: [
+        evm.charge({
+          currency: evm.assets.baseSepolia.USDC,
+          recipient: accounts[0].address,
+          x402: {
+            facilitator: {
+              async verify() {
+                verifyCalls++
+                return { isValid: true }
+              },
+              async settle(paymentPayload: Types.PaymentPayload) {
+                return {
+                  network: paymentPayload.accepted.network,
+                  success: true,
+                  transaction,
+                }
+              },
+            },
+          },
+        }),
+      ],
+      secretKey,
+    })
+    const route = payment.evm.charge({ amount: '0.01' })
+
+    const first = await route(new Request('https://example.com/a'))
+    expect(first.status).toBe(402)
+    if (first.status !== 402) throw new Error()
+
+    const paymentRequired = Header.decodePaymentRequired(
+      first.challenge.headers.get(Types.paymentRequiredHeader)!,
+    )
+    const accepted = paymentRequired.accepts[0]!
+    const mppxExtension = paymentRequired.extensions!.mppx
+    if (!mppxExtension) throw new Error()
+    const extensions: Types.Extensions = {
+      ...paymentRequired.extensions!,
+      mppx: {
+        schema: mppxExtension.schema,
+        info: {
+          ...mppxExtension.info,
+          extra: 'not allowed',
+        },
+      },
+    }
+    const paymentSignature = Header.encodePaymentSignature({
+      accepted,
+      extensions,
+      payload: {
+        authorization: {
+          from: accounts[0].address,
+          nonce: RouteBinding.nonce({
+            accepted,
+            extensions,
+            resource: paymentRequired.resource,
+          }),
+          to: accepted.payTo as `0x${string}`,
+          validAfter: '0',
+          validBefore: '9999999999',
+          value: accepted.amount,
+        },
+        signature: `0x${'2'.repeat(130)}`,
+      },
+      resource: paymentRequired.resource,
+      x402Version: 2,
+    })
+
+    const result = await route(
+      new Request('https://example.com/a', {
+        headers: { [Types.paymentSignatureHeader]: paymentSignature },
+      }),
+    )
+
+    expect(result.status).toBe(402)
+    expect(verifyCalls).toBe(0)
+  })
+
+  test('does not advertise x402 for body-bearing requests without a digest', async () => {
+    let verifyCalls = 0
+    const payment = ServerMppx.create({
+      methods: [
+        evm.charge({
+          currency: evm.assets.baseSepolia.USDC,
+          recipient: accounts[0].address,
+          x402: {
+            facilitator: {
+              async verify() {
+                verifyCalls++
+                return { isValid: true }
+              },
+              async settle(paymentPayload: Types.PaymentPayload) {
+                return {
+                  network: paymentPayload.accepted.network,
+                  success: true,
+                  transaction,
+                }
+              },
+            },
+          },
+        }),
+      ],
+      secretKey,
+    })
+    const route = payment.evm.charge({ amount: '0.01' })
+
+    const result = await route(
+      new Request('https://example.com/body', {
+        body: JSON.stringify({ a: 1 }),
+        method: 'POST',
+      }),
+    )
+
+    expect(result.status).toBe(402)
+    if (result.status !== 402) throw new Error()
+    expect(result.challenge.headers.has('WWW-Authenticate')).toBe(true)
+    expect(result.challenge.headers.has(Types.paymentRequiredHeader)).toBe(false)
+
+    const getChallenge = await route(new Request('https://example.com/body'))
+    expect(getChallenge.status).toBe(402)
+    if (getChallenge.status !== 402) throw new Error()
+    const paymentRequired = Header.decodePaymentRequired(
+      getChallenge.challenge.headers.get(Types.paymentRequiredHeader)!,
+    )
+    const accepted = paymentRequired.accepts[0]!
+    const paymentSignature = Header.encodePaymentSignature({
+      accepted,
+      extensions: paymentRequired.extensions,
+      payload: {
+        authorization: {
+          from: accounts[0].address,
+          nonce: RouteBinding.nonce({
+            accepted,
+            extensions: paymentRequired.extensions!,
+            resource: paymentRequired.resource,
+          }),
+          to: accepted.payTo as `0x${string}`,
+          validAfter: '0',
+          validBefore: '9999999999',
+          value: accepted.amount,
+        },
+        signature: `0x${'2'.repeat(130)}`,
+      },
+      resource: paymentRequired.resource,
+      x402Version: 2,
+    })
+    const replay = await route(
+      new Request('https://example.com/body', {
+        body: JSON.stringify({ a: 2 }),
+        headers: { [Types.paymentSignatureHeader]: paymentSignature },
+        method: 'POST',
+      }),
+    )
+    expect(replay.status).toBe(402)
     expect(verifyCalls).toBe(0)
   })
 
