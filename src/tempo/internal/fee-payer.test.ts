@@ -1,4 +1,4 @@
-import { encodeFunctionData } from 'viem'
+import { encodeFunctionData, maxUint256 } from 'viem'
 import { Abis, Addresses } from 'viem/tempo'
 import { describe, expect, test } from 'vp/test'
 
@@ -456,6 +456,21 @@ describe('prepareSponsoredTransaction', () => {
         details,
         expectedFeeToken: bogus,
         transaction: baseTransaction as any,
+      }),
+    ).not.toThrow()
+  })
+
+  test('accepts serialized expiring nonce key', () => {
+    expect(() =>
+      prepareSponsoredTransaction({
+        account: sponsor,
+        chainId: 42431,
+        details,
+        expectedFeeToken: bogus,
+        transaction: {
+          ...baseTransaction,
+          nonceKey: maxUint256,
+        } as any,
       }),
     ).not.toThrow()
   })

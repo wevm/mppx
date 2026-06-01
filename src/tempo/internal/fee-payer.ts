@@ -2,7 +2,7 @@ import type { TempoAddress } from 'ox/tempo'
 import { TxEnvelopeTempo } from 'ox/tempo'
 import type { Hex } from 'viem'
 import type { Account } from 'viem'
-import { decodeFunctionData } from 'viem'
+import { decodeFunctionData, maxUint256 } from 'viem'
 import { Abis, Addresses, Transaction } from 'viem/tempo'
 
 import * as TempoAddress_internal from './address.js'
@@ -124,6 +124,10 @@ function getPolicy(chainId: number, overrides: Partial<Policy> | undefined): Pol
     maxTotalFee: overrides.maxTotalFee ?? base.maxTotalFee,
     maxValidityWindowSeconds: overrides.maxValidityWindowSeconds ?? base.maxValidityWindowSeconds,
   }
+}
+
+function isExpiringNonceKey(nonceKey: SponsoredTransaction['nonceKey']): boolean {
+  return nonceKey === 'expiring' || nonceKey === maxUint256
 }
 
 /** Validates that a set of transaction calls matches an allowed fee-payer pattern. */
@@ -358,7 +362,7 @@ export function prepareSponsoredTransaction(parameters: {
       maxPriorityFeePerGas: maxPriorityFeePerGas.toString(),
     })
 
-  if (nonceKey !== 'expiring') fail('fee-sponsored transaction must use an expiring nonce')
+  if (!isExpiringNonceKey(nonceKey)) fail('fee-sponsored transaction must use an expiring nonce')
   if (validBefore === undefined)
     fail('fee-sponsored transaction must declare validBefore for the expiring nonce')
   const validBeforeValue = validBefore
