@@ -35,8 +35,64 @@ const mppx_client = Mppx_client.create({
 })
 
 let proxyServer: Awaited<ReturnType<typeof Http.createServer>> | undefined
+let upstreamServer: Awaited<ReturnType<typeof Http.createServer>> | undefined
 
-afterEach(() => proxyServer?.close())
+afterEach(() => {
+  proxyServer?.close()
+  upstreamServer?.close()
+})
+
+describe('openai', () => {
+  test('security: strips caller-supplied OpenAI tenant headers before proxying', async () => {
+    upstreamServer = await Http.createServer((req, res) => {
+      res.writeHead(200, { 'Content-Type': 'application/json' })
+      res.end(
+        JSON.stringify({
+          headers: {
+            authorization: req.headers.authorization,
+            organization: req.headers['openai-organization'],
+            project: req.headers['openai-project'],
+          },
+        }),
+      )
+    })
+
+    const proxy = ApiProxy.create({
+      services: [
+        openai({
+          apiKey: 'sk-test',
+          baseUrl: upstreamServer.url,
+          routes: {
+            'POST /v1/chat/completions': true,
+          },
+        }),
+      ],
+    })
+    proxyServer = await Http.createServer(proxy.listener)
+
+    const res = await fetch(`${proxyServer.url}/openai/v1/chat/completions`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'OpenAI-Organization': 'org_attacker',
+        'OpenAI-Project': 'proj_attacker',
+      },
+      body: '{}',
+    })
+    expect(res.status).toBe(200)
+
+    const body = (await res.json()) as {
+      headers: {
+        authorization: string
+        organization?: string | string[] | undefined
+        project?: string | string[] | undefined
+      }
+    }
+    expect(body.headers.authorization).toBe('Bearer sk-test')
+    expect(body.headers.organization).toBeUndefined()
+    expect(body.headers.project).toBeUndefined()
+  })
+})
 
 describe.skipIf(!apiKey)('openai', () => {
   test('behavior: proxies GET /v1/models with charge', async () => {
