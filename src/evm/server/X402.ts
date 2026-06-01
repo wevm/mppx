@@ -28,7 +28,7 @@ export type ResolvedOptions = {
   maxTimeoutSeconds: number
 }
 
-export type HttpPath = {
+export type Path = {
   bindCredential: NonNullable<ServerTransport.Http['bindCredential']>
   getCredential: ServerTransport.Http['getCredential']
   respondChallenge: (
@@ -61,7 +61,7 @@ export function resolveOptions(parameters: {
 }
 
 /** Creates the x402 wire path for an EVM charge method. */
-export function httpPath(config: ResolvedOptions): HttpPath {
+export function createPath(config: ResolvedOptions): Path {
   return {
     getCredential(request) {
       const paymentSignature = request.headers.get(x402_Types.paymentSignatureHeader)

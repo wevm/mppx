@@ -174,7 +174,7 @@ type ResolvedConfig = {
 
 type HttpPaths = {
   mpp: ServerTransport.Http
-  x402: X402.HttpPath
+  x402: X402.Path
 }
 
 function resolveConfig(config: charge.NativeConfig): ResolvedConfig {
@@ -223,7 +223,7 @@ function resolveConfig(config: charge.NativeConfig): ResolvedConfig {
 function createPaths(config: ResolvedConfig): HttpPaths {
   return {
     mpp: ServerTransport.http(),
-    x402: X402.httpPath(config.x402),
+    x402: X402.createPath(config.x402),
   }
 }
 
