@@ -669,6 +669,35 @@ describe('Fetch.from: 402 retry path', () => {
     expect(headers.Authorization).toBe('credential')
   })
 
+  test('sends credential retry to the final 402 response URL', async () => {
+    let callCount = 0
+    const calls: { input: RequestInfo | URL; init: RequestInit | undefined }[] = []
+    const mockFetch: typeof globalThis.fetch = async (input, init) => {
+      calls.push({ input, init })
+      callCount++
+      if (callCount === 1) {
+        const response = make402()
+        Object.defineProperty(response, 'url', {
+          value: 'https://payments.example.com/protected',
+        })
+        return response
+      }
+      return new Response('OK', { status: 200 })
+    }
+
+    const fetch = Fetch.from({
+      fetch: mockFetch,
+      methods: [noopMethod],
+    })
+
+    const response = await fetch('https://api.example.com/protected')
+
+    expect(response.status).toBe(200)
+    expect(calls[0]!.input).toBe('https://api.example.com/protected')
+    expect(calls[1]!.input).toBe('https://payments.example.com/protected')
+    expect(new Headers(calls[1]!.init?.headers).get('Authorization')).toBe('credential')
+  })
+
   test('emits client events and allows challenge handler to provide credential', async () => {
     const events: string[] = []
     const createCredential = vi.fn(async () => 'method-credential')
