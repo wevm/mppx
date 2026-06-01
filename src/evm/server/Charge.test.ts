@@ -27,7 +27,7 @@ describe('evm charge server', () => {
         evm({
           currency: evm.assets.baseSepolia.USDC,
           recipient,
-          x402Options: {
+          x402: {
             facilitator: {
               async verify(paymentPayload, paymentRequirements) {
                 facilitated = { paymentPayload, paymentRequirements }
@@ -125,5 +125,44 @@ describe('evm charge server', () => {
       },
       signature: credential.payload.signature,
     })
+
+    const forgedPayload: evm_Types.AuthorizationPayload = {
+      ...credential.payload,
+      nonce: `0x${'2'.repeat(64)}`,
+      signature: await account.signTypedData({
+        domain: evm_Types.authorizationDomain({
+          authorization: { name: 'USDC', version: '2' },
+          chainId: 84532,
+          currency,
+        }),
+        message: {
+          from: credential.payload.from as `0x${string}`,
+          nonce: `0x${'2'.repeat(64)}` as `0x${string}`,
+          to: credential.payload.to as `0x${string}`,
+          validAfter: BigInt(credential.payload.validAfter),
+          validBefore: BigInt(credential.payload.validBefore),
+          value: BigInt(credential.payload.value),
+        },
+        primaryType: 'TransferWithAuthorization',
+        types: evm_Types.authorizationTypes,
+      }),
+    }
+    const forgedAuthorization = Credential.serialize(
+      Credential.from({
+        challenge,
+        payload: forgedPayload,
+        ...(credential.source ? { source: credential.source } : {}),
+      }),
+    )
+
+    const forgedResult = await route(
+      new Request('https://example.com/paid', {
+        headers: {
+          Authorization: forgedAuthorization,
+          [x402_Types.paymentSignatureHeader]: 'ignored-for-native-authorization',
+        },
+      }),
+    )
+    expect(forgedResult.status).toBe(402)
   })
 })

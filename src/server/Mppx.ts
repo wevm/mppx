@@ -2033,7 +2033,7 @@ const challengeHeaderMerges = [
   {
     name: x402_Types.paymentRequiredHeader,
     values: (context) =>
-      context.challengeResponses
+      context.negotiatedChallengeResponses
         .map((response) => response.headers.get(x402_Types.paymentRequiredHeader))
         .filter((value): value is string => value !== null),
     merge: mergeX402PaymentRequiredHeaders,
@@ -2238,13 +2238,23 @@ export function compose(
     const challengeResponses = results.flatMap((result) =>
       result.status === 402 ? [result.challenge as Response] : [],
     )
+    const negotiatedChallengeResponses =
+      challengeEntries.length > 0
+        ? challengeEntries.map((entry) => entry.result.challenge as Response)
+        : challengeResponses
 
-    // Merge challenge headers from all 402 responses.
+    // Merge challenge headers from the negotiated 402 responses.
     const mergedHeaders = new Headers()
     mergedHeaders.set('Cache-Control', 'no-store')
 
     for (const header of challengeHeaderMerges) {
-      for (const value of header.merge(header.values({ challengeEntries, challengeResponses }))) {
+      for (const value of header.merge(
+        header.values({
+          challengeEntries,
+          challengeResponses,
+          negotiatedChallengeResponses,
+        }),
+      )) {
         mergedHeaders.append(header.name, value)
       }
     }
@@ -2329,6 +2339,7 @@ type ChallengeHeaderMerge = {
       result: Extract<MethodFn.Response<Transport.Http>, { status: 402 }>
     }[]
     challengeResponses: readonly Response[]
+    negotiatedChallengeResponses: readonly Response[]
   }): readonly string[]
   merge(values: readonly string[]): readonly string[]
 }

@@ -13,7 +13,7 @@ describe('x402 public interface', () => {
         evm.charge({
           currency: evm.assets.base.USDC,
           recipient: '0x209693Bc6afc0C5328bA36FaF03C514EF312287C',
-          x402Options: {
+          x402: {
             facilitator: 'https://x402.org/facilitator',
           },
         }),

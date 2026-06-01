@@ -4,7 +4,6 @@ import type * as Credential from '../../Credential.js'
 import { VerificationFailedError } from '../../Errors.js'
 import * as Method from '../../Method.js'
 import * as Receipt from '../../Receipt.js'
-import * as x402_Types from '../../x402/Types.js'
 import * as Assets from '../Assets.js'
 import * as Methods from '../Methods.js'
 import * as Types from '../Types.js'
@@ -20,7 +19,7 @@ export function charge(
 ): Method.Server<typeof Methods.charge, charge.Defaults>
 export function charge(parameters: charge.NativeConfig): Method.AnyServer {
   const config = resolveConfig(parameters)
-  const transport = X402.httpTransport(config.x402Options)
+  const transport = X402.httpTransport(config.x402)
 
   return Method.toServer<typeof Methods.charge, charge.Defaults, typeof transport>(Methods.charge, {
     defaults: {
@@ -31,13 +30,11 @@ export function charge(parameters: charge.NativeConfig): Method.AnyServer {
       recipient: config.recipient,
     },
     transport,
-    async verify({ credential, envelope }) {
+    async verify({ credential }) {
       const payload = credential.payload as Types.AuthorizationPayload
       const request = credential.challenge.request as Types.ChargeRequest
       const chainId = request.methodDetails.chainId
-      const isX402Credential = envelope?.capturedRequest.headers.has(
-        x402_Types.paymentSignatureHeader,
-      )
+      const isX402Credential = X402.isCredential(credential)
 
       if (!request.methodDetails.credentialTypes?.includes('authorization')) {
         throw new VerificationFailedError({
@@ -119,10 +116,10 @@ export declare namespace charge {
     chainId?: number | undefined
     /** Token decimal places. Required for custom currency addresses; inferred for known assets. */
     decimals?: number | undefined
-    /** Custom settlement override. If omitted, `x402Options.facilitator` is used. */
+    /** Custom settlement override. If omitted, `x402.facilitator` is used. */
     settle?: SettleAuthorization | undefined
     /** x402 compatibility options. */
-    x402Options?: X402.Options | undefined
+    x402?: X402.Options | undefined
   }
 
   type CurrencyConfig = {
@@ -170,7 +167,7 @@ type ResolvedConfig = {
   decimals: number
   recipient: `0x${string}`
   settle: charge.SettleAuthorization
-  x402Options?: X402.ResolvedOptions | undefined
+  x402: X402.ResolvedOptions
 }
 
 function resolveConfig(config: charge.NativeConfig): ResolvedConfig {
@@ -198,14 +195,12 @@ function resolveConfig(config: charge.NativeConfig): ResolvedConfig {
   if (chainId === undefined) throw new Error('EVM authorization requires `chainId`.')
   if (decimals === undefined) throw new Error('EVM authorization requires `decimals`.')
 
-  const x402Options = X402.resolveOptions({
+  const x402 = X402.resolveOptions({
     authorization,
-    options: config.x402Options,
+    options: config.x402,
   })
-  const settle =
-    config.settle ??
-    (x402Options?.facilitator ? X402.settleWithFacilitator(x402Options) : undefined)
-  if (!settle) throw new Error('EVM authorization requires `settle` or `x402Options.facilitator`.')
+  const settle = config.settle ?? (x402?.facilitator ? X402.settleWithFacilitator(x402) : undefined)
+  if (!settle) throw new Error('EVM authorization requires `settle` or `x402.facilitator`.')
 
   return {
     authorization,
@@ -214,7 +209,7 @@ function resolveConfig(config: charge.NativeConfig): ResolvedConfig {
     decimals,
     recipient: getAddress(recipient),
     settle,
-    ...(x402Options ? { x402Options } : {}),
+    x402,
   }
 }
 

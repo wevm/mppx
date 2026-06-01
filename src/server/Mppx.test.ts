@@ -1859,7 +1859,7 @@ describe('compose', () => {
   const x402Method = evm.charge({
     currency: evm.assets.baseSepolia.USDC,
     recipient: accounts[0].address,
-    x402Options: {
+    x402: {
       facilitator: {
         async verify(paymentPayload: PaymentPayload) {
           return {
@@ -2012,6 +2012,27 @@ describe('compose', () => {
     const challenges = Challenge.fromResponseList(result.challenge)
     expect(challenges).toHaveLength(1)
     expect(challenges[0]?.method).toBe('beta')
+  })
+
+  test('filters compose x402 challenge headers using Accept-Payment', async () => {
+    const mppx = Mppx.create({ methods: [alphaMethod, x402Method], realm, secretKey })
+
+    const result = await mppx.compose(
+      [alphaMethod, challengeOpts],
+      ['evm/charge', { amount: '0.01' }],
+    )(
+      new Request('https://example.com/resource', {
+        headers: { 'Accept-Payment': 'alpha/charge' },
+      }),
+    )
+
+    expect(result.status).toBe(402)
+    if (result.status !== 402) throw new Error()
+
+    const challenges = Challenge.fromResponseList(result.challenge)
+    expect(challenges).toHaveLength(1)
+    expect(challenges[0]?.method).toBe('alpha')
+    expect(result.challenge.headers.get(x402_Types.paymentRequiredHeader)).toBeNull()
   })
 
   test('orders compose challenges by Accept-Payment q-value', async () => {

@@ -231,7 +231,7 @@ describe('charge', () => {
         evm_server.charge({
           currency: evm_server.assets.baseSepolia.USDC,
           recipient: accounts[0].address,
-          x402Options: {
+          x402: {
             facilitator: {
               async verify(paymentPayload: PaymentPayload) {
                 return {

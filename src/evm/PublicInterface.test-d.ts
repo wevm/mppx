@@ -34,7 +34,7 @@ describe('evm public interface', () => {
     const direct = serverCharge({
       currency: serverAssets.base.USDC,
       recipient,
-      x402Options: { facilitator },
+      x402: { facilitator },
     })
     expectTypeOf(direct.name).toEqualTypeOf<'evm'>()
     expectTypeOf(direct.intent).toEqualTypeOf<'charge'>()
@@ -44,7 +44,7 @@ describe('evm public interface', () => {
         serverEvm({
           currency: serverAssets.base.USDC,
           recipient,
-          x402Options: { facilitator },
+          x402: { facilitator },
         }),
       ],
       secretKey,
@@ -95,7 +95,7 @@ describe('evm public interface', () => {
       config: {
         currency: serverAssets.base.USDC,
         recipient,
-        x402Options: { facilitator },
+        x402: { facilitator },
       },
     })
   })

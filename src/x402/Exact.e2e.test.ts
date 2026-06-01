@@ -45,7 +45,7 @@ describe('x402 exact e2e', () => {
         evm.charge({
           currency: evm.assets.baseSepolia.USDC,
           recipient: accounts[0].address,
-          x402Options: { facilitator },
+          x402: { facilitator },
         }),
       ],
       secretKey,
@@ -126,7 +126,7 @@ describe('x402 exact e2e', () => {
         evm.charge({
           currency: evm.assets.baseSepolia.USDC,
           recipient: accounts[0].address,
-          x402Options: {
+          x402: {
             facilitator: {
               async verify() {
                 verifyCalls++
@@ -194,7 +194,7 @@ describe('x402 exact e2e', () => {
         evm.charge({
           currency: evm.assets.baseSepolia.USDC,
           recipient: accounts[0].address,
-          x402Options: {
+          x402: {
             facilitator: {
               async verify(paymentPayload: Types.PaymentPayload) {
                 return {

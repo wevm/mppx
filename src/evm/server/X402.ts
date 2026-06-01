@@ -13,6 +13,8 @@ import * as x402_Facilitator from '../../x402/server/Facilitator.js'
 import * as x402_Types from '../../x402/Types.js'
 import * as Types from '../Types.js'
 
+const x402Credential = Symbol('mppx.evm.x402Credential')
+
 export type Options = {
   /** Facilitator client or base URL used for x402-compatible settlement. */
   facilitator?: string | x402_Types.Facilitator | undefined
@@ -30,26 +32,24 @@ export type ResolvedOptions = {
 export function resolveOptions(parameters: {
   authorization: Types.AuthorizationConfig
   options?: Options | undefined
-}): ResolvedOptions | undefined {
-  if (!parameters.options) return undefined
+}): ResolvedOptions {
   return {
     authorization: parameters.authorization,
-    ...(parameters.options.facilitator
+    ...(parameters.options?.facilitator
       ? {
           facilitator: x402_Facilitator.resolve(
             parameters.options.facilitator,
-            'EVM authorization x402Options requires `facilitator`.',
+            'EVM authorization x402 requires `facilitator`.',
           ),
         }
       : {}),
-    maxTimeoutSeconds: parameters.options.maxTimeoutSeconds ?? 300,
+    maxTimeoutSeconds: parameters.options?.maxTimeoutSeconds ?? 300,
   }
 }
 
 /** Adds x402 header compatibility to the standard Payment-auth HTTP transport. */
-export function httpTransport(config: ResolvedOptions | undefined): ServerTransport.Http {
+export function httpTransport(config: ResolvedOptions): ServerTransport.Http {
   const base = ServerTransport.http()
-  if (!config) return base
 
   return ServerTransport.from<Request, Response>({
     name: 'evm-http',
@@ -89,14 +89,16 @@ export function httpTransport(config: ResolvedOptions | undefined): ServerTransp
 
       const payload = payloadToAuthorization(paymentPayload)
 
-      return Credential_.from({
-        challenge,
-        payload,
-        source: Types.toSource({
-          address: getAddress(payload.from),
-          chainId: request.methodDetails.chainId,
+      return markCredential(
+        Credential_.from({
+          challenge,
+          payload,
+          source: Types.toSource({
+            address: getAddress(payload.from),
+            chainId: request.methodDetails.chainId,
+          }),
         }),
-      })
+      )
     },
 
     async respondChallenge(options) {
@@ -148,7 +150,7 @@ export function httpTransport(config: ResolvedOptions | undefined): ServerTransp
 /** Settles a verified EVM authorization through an x402 facilitator. */
 export function settleWithFacilitator(parameters: ResolvedOptions): SettleWithFacilitator {
   const { facilitator, maxTimeoutSeconds } = parameters
-  if (!facilitator) throw new Error('EVM authorization x402Options requires `facilitator`.')
+  if (!facilitator) throw new Error('EVM authorization x402 requires `facilitator`.')
 
   return async ({ payload, request }) => {
     const paymentRequirements = toPaymentRequirements(request, {
@@ -199,6 +201,11 @@ export type SettleWithFacilitator = (parameters: {
   reference: string
   timestamp?: string | undefined
 }>
+
+/** Returns whether a credential was converted from an x402 payment payload. */
+export function isCredential(credential: Credential.Credential): boolean {
+  return (credential as { [x402Credential]?: true })[x402Credential] === true
+}
 
 /** Converts a native EVM charge request to x402 exact payment requirements. */
 export function toPaymentRequirements(
@@ -258,4 +265,14 @@ function pendingChallenge(paymentPayload: x402_Types.PaymentPayload) {
 function pendingChallengeId(paymentPayload: x402_Types.PaymentPayload): string {
   const hash = Hash.sha256(Bytes.fromString(JSON.stringify(paymentPayload)), { as: 'Hex' })
   return `${x402_Types.syntheticChallengeIdPrefix}${hash}`
+}
+
+function markCredential<const credential extends Credential.Credential>(
+  credential: credential,
+): credential {
+  Object.defineProperty(credential, x402Credential, {
+    enumerable: true,
+    value: true,
+  })
+  return credential
 }
