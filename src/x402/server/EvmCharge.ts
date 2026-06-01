@@ -8,11 +8,13 @@ import type * as Credential from '../../Credential.js'
 import * as Credential_ from '../../Credential.js'
 import { VerificationFailedError } from '../../Errors.js'
 import * as Types from '../../evm/Types.js'
+import * as Scope from '../../server/internal/scope.js'
 import * as ServerTransport from '../../server/Transport.js'
 import * as x402_Header from '../Header.js'
 import * as x402_Types from '../Types.js'
 import * as x402_Facilitator from './Facilitator.js'
 
+const pendingX402Credential = Symbol('mppx.evm.pendingX402Credential')
 const x402Credential = Symbol('mppx.evm.x402Credential')
 
 export type Options = {
@@ -68,15 +70,18 @@ export function createPath(config: ResolvedOptions): Path {
       if (!paymentSignature) return null
       const paymentPayload = x402_Header.decodePaymentSignature(paymentSignature)
 
-      return Credential_.from({
-        challenge: pendingChallenge(paymentPayload),
-        payload: paymentPayload,
-      })
+      return markPendingCredential(
+        Credential_.from({
+          challenge: pendingChallenge(paymentPayload),
+          payload: paymentPayload,
+        }),
+      )
     },
 
     bindCredential({ challenge, credential, input }) {
       const paymentPayload = parsePaymentPayload(credential.payload)
       if (!paymentPayload) return credential
+      if (!isPendingCredential(credential)) return credential
 
       const request = challenge.request as Types.ChargeRequest
       const paymentRequirements = toPaymentRequirements(request, config)
@@ -89,6 +94,12 @@ export function createPath(config: ResolvedOptions): Path {
       if (!isDeepStrictEqual(paymentPayload.resource, expectedResource))
         throw new VerificationFailedError({
           reason: 'x402 payment payload resource does not match route resource',
+        })
+
+      const expectedExtensions = routeExtensions(challenge, input)
+      if (!isDeepStrictEqual(paymentPayload.extensions, expectedExtensions))
+        throw new VerificationFailedError({
+          reason: 'x402 payment payload extensions do not match route binding',
         })
 
       const payload = payloadToAuthorization(paymentPayload)
@@ -115,6 +126,7 @@ export function createPath(config: ResolvedOptions): Path {
           accepts: [toPaymentRequirements(request, config)],
           error:
             options.error?.message ?? `${x402_Types.paymentSignatureHeader} header is required`,
+          extensions: routeExtensions(options.challenge, options.input),
           resource: { url: options.input.url },
           x402Version: 2,
         }),
@@ -210,6 +222,11 @@ export function isCredential(credential: Credential.Credential): boolean {
   return (credential as { [x402Credential]?: true })[x402Credential] === true
 }
 
+/** Returns whether a credential was parsed from the x402 payment header. */
+export function isPendingCredential(credential: Credential.Credential): boolean {
+  return (credential as { [pendingX402Credential]?: true })[pendingX402Credential] === true
+}
+
 /** Converts a native EVM charge request to x402 exact payment requirements. */
 export function toPaymentRequirements(
   request: Types.ChargeRequest,
@@ -268,6 +285,27 @@ function pendingChallenge(paymentPayload: x402_Types.PaymentPayload) {
 function pendingChallengeId(paymentPayload: x402_Types.PaymentPayload): string {
   const hash = Hash.sha256(Bytes.fromString(JSON.stringify(paymentPayload)), { as: 'Hex' })
   return `${x402_Types.syntheticChallengeIdPrefix}${hash}`
+}
+
+function routeExtensions(
+  challenge: Challenge.Challenge,
+  input: Request,
+): Record<string, unknown> | undefined {
+  const binding: Record<string, unknown> = { method: input.method }
+  const scope = Scope.read(challenge.meta)
+  if (scope !== undefined) binding[Scope.reservedMetaKey] = scope
+  if (challenge.digest !== undefined) binding.digest = challenge.digest
+  return { [x402_Types.mppxExtensionKey]: binding }
+}
+
+function markPendingCredential<const credential extends Credential.Credential>(
+  credential: credential,
+): credential {
+  Object.defineProperty(credential, pendingX402Credential, {
+    enumerable: true,
+    value: true,
+  })
+  return credential
 }
 
 function markCredential<const credential extends Credential.Credential>(

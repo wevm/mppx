@@ -2,7 +2,7 @@ import { Challenge, Credential, Receipt } from 'mppx'
 import { evm as evm_client, Mppx as ClientMppx } from 'mppx/client'
 import { Types as evm_Types } from 'mppx/evm'
 import { evm, Mppx } from 'mppx/server'
-import { Types as x402_Types, type PaymentPayload } from 'mppx/x402'
+import { Header as x402_Header, Types as x402_Types, type PaymentPayload } from 'mppx/x402'
 import { privateKeyToAccount } from 'viem/accounts'
 import { describe, expect, test } from 'vp/test'
 
@@ -164,5 +164,38 @@ describe('evm charge server', () => {
       }),
     )
     expect(forgedResult.status).toBe(402)
+
+    const paymentRequired = x402_Header.decodePaymentRequired(
+      first.challenge.headers.get(x402_Types.paymentRequiredHeader)!,
+    )
+    const x402Authorization = Credential.serialize(
+      Credential.from({
+        challenge,
+        payload: {
+          accepted: paymentRequired.accepts[0]!,
+          extensions: paymentRequired.extensions,
+          payload: {
+            authorization: {
+              from: account.address,
+              nonce: `0x${'3'.repeat(64)}`,
+              to: recipient,
+              validAfter: '0',
+              validBefore: '9999999999',
+              value: paymentRequired.accepts[0]!.amount,
+            },
+            signature: `0x${'4'.repeat(130)}`,
+          },
+          resource: paymentRequired.resource,
+          x402Version: 2,
+        } satisfies PaymentPayload,
+      }),
+    )
+
+    const x402InAuthorizationResult = await route(
+      new Request('https://example.com/paid', {
+        headers: { Authorization: x402Authorization },
+      }),
+    )
+    expect(x402InAuthorizationResult.status).toBe(402)
   })
 })

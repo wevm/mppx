@@ -2238,9 +2238,20 @@ export function compose(
     const challengeResponses = results.flatMap((result) =>
       result.status === 402 ? [result.challenge as Response] : [],
     )
+    const unnegotiatedX402Responses =
+      input.headers.has('Accept-Payment') || challengeEntries.length === 0
+        ? []
+        : challengeResponses.filter(
+            (response) =>
+              response.headers.has(x402_Types.paymentRequiredHeader) &&
+              !response.headers.has(paymentAuthChallengeHeader),
+          )
     const negotiatedChallengeResponses =
       challengeEntries.length > 0
-        ? challengeEntries.map((entry) => entry.result.challenge as Response)
+        ? [
+            ...challengeEntries.map((entry) => entry.result.challenge as Response),
+            ...unnegotiatedX402Responses,
+          ]
         : challengeResponses
 
     // Merge challenge headers from the negotiated 402 responses.
@@ -2348,6 +2359,20 @@ function mergeX402PaymentRequiredHeaders(values: readonly string[]): readonly st
   if (values.length === 0) return []
   const [first, ...rest] = values.map((value) => x402_Header.decodePaymentRequired(value))
   if (!first) throw new Error('Expected at least one x402 payment-required header.')
+  const incompatible = rest.some(
+    (value) =>
+      !isDeepStrictEqual(value.resource, first.resource) ||
+      !isDeepStrictEqual(value.extensions, first.extensions),
+  )
+  if (incompatible)
+    return [
+      x402_Header.encodePaymentRequired({
+        ...first,
+        error: [first.error, 'Cannot merge x402 payment requirements with different resources.']
+          .filter((value): value is string => value !== undefined && value.length > 0)
+          .join('; '),
+      }),
+    ]
   const error = [first.error, ...rest.map((value) => value.error)]
     .filter((value): value is string => value !== undefined && value.length > 0)
     .join('; ')
@@ -2400,7 +2425,7 @@ export function toNodeListener(
       }
 
       const wrapped = result.withReceipt(new globalThis.Response()) as globalThis.Response
-      res.setHeader('Payment-Receipt', wrapped.headers.get('Payment-Receipt')!)
+      for (const [name, value] of wrapped.headers) res.setHeader(name, value)
     }
 
     return result

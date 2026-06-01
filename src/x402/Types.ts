@@ -17,6 +17,9 @@ export const evmNetworkPrefix = 'eip155:' as const
 /** Prefix for synthetic mppx challenge IDs derived from x402 `accepts` entries. */
 export const syntheticChallengeIdPrefix = 'x402:' as const
 
+/** x402 extension key used for mppx route-binding metadata. */
+export const mppxExtensionKey = 'mppx' as const
+
 /** x402 protocol version supported by this package. */
 export type Version = 2
 
@@ -99,6 +102,7 @@ export type Asset = {
 
 /** Public exact EVM route request accepted by `mppx` handlers. */
 export type ExactRequest = PaymentRequirements & {
+  extensions?: Record<string, unknown> | undefined
   resource?: ResourceInfo | undefined
 }
 
@@ -253,6 +257,6 @@ export function transferToExtra(transfer: ExactTransfer): Record<string, unknown
 
 /** Extracts x402 `PaymentRequirements` from a canonical exact request. */
 export function toPaymentRequirements(request: ExactRequest): PaymentRequirements {
-  const { resource: _resource, ...paymentRequirements } = request
+  const { extensions: _extensions, resource: _resource, ...paymentRequirements } = request
   return PaymentRequirementsSchema.parse(paymentRequirements)
 }

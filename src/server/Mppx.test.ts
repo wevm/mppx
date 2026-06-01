@@ -6,6 +6,7 @@ import {
   session as tempo_session_client,
   tempo as tempo_client,
 } from 'mppx/client'
+import { Types as evm_Types } from 'mppx/evm'
 import { evm, Mppx, stripe, Store, Transport, tempo } from 'mppx/server'
 import { Header as x402_Header, Types as x402_Types, type PaymentPayload } from 'mppx/x402'
 import { getTransactionReceipt } from 'viem/actions'
@@ -1948,6 +1949,50 @@ describe('compose', () => {
     expect(paymentRequired.accepts.map((accepted) => accepted.amount)).toEqual(['10000'])
   })
 
+  test('keeps pure x402 challenge headers when Payment auth challenges are present', async () => {
+    const mppx = Mppx.create({ methods: [alphaMethod], realm, secretKey })
+    const pureX402 = async () =>
+      ({
+        status: 402,
+        challenge: new Response('{}', {
+          status: 402,
+          headers: {
+            [x402_Types.paymentRequiredHeader]: x402_Header.encodePaymentRequired({
+              accepts: [
+                {
+                  amount: '10000',
+                  asset: evm.assets.baseSepolia.USDC.address,
+                  extra: {
+                    assetTransferMethod: evm_Types.eip3009,
+                    name: 'USDC',
+                    version: '2',
+                  },
+                  maxTimeoutSeconds: 300,
+                  network: 'eip155:84532',
+                  payTo: accounts[0].address,
+                  scheme: 'exact',
+                },
+              ],
+              resource: { url: 'https://example.com/resource' },
+              x402Version: 2,
+            }),
+          },
+        }),
+      }) as const
+
+    const alpha = (mppx as unknown as Record<string, (options: unknown) => any>)['alpha/charge']!(
+      challengeOpts,
+    )
+
+    const result = await Mppx.compose(alpha, pureX402)(new Request('https://example.com/resource'))
+
+    expect(result.status).toBe(402)
+    if (result.status !== 402) throw new Error()
+
+    expect(result.challenge.headers.get('WWW-Authenticate')).toContain('method="alpha"')
+    expect(result.challenge.headers.get(x402_Types.paymentRequiredHeader)).toBeTruthy()
+  })
+
   test('merges multiple x402 exact offers in compose()', async () => {
     const mppx = Mppx.create({ methods: [x402Method], realm, secretKey })
 
@@ -1979,6 +2024,7 @@ describe('compose', () => {
     const credential = await x402PaymentSignature(
       paymentRequired.accepts[0]!,
       paymentRequired.resource,
+      paymentRequired.extensions,
     )
 
     const result = await handle(
@@ -2661,6 +2707,7 @@ describe('compose', () => {
 async function x402PaymentSignature(
   accepted: x402_Types.PaymentRequirements,
   resource: x402_Types.ResourceInfo,
+  extensions: Record<string, unknown> | undefined,
 ): Promise<string> {
   const authorization = {
     from: accounts[0].address,
@@ -2698,6 +2745,7 @@ async function x402PaymentSignature(
 
   return x402_Header.encodePaymentSignature({
     accepted,
+    ...(extensions ? { extensions } : {}),
     payload: {
       authorization,
       signature,

@@ -161,13 +161,14 @@ describe('http', () => {
         name: 'Payment auth credential for Payment auth challenge',
       },
       {
-        challenge: Challenge.from({
-          id: `${x402_Types.syntheticChallengeIdPrefix}0`,
-          intent: x402_Types.exactIntent,
-          method: x402_Types.paymentMethod,
-          realm: 'api.example.com',
-          request: x402PaymentRequired.accepts[0]!,
-        }),
+        challenge: Transport.http().getChallenges!(
+          new Response(null, {
+            status: 402,
+            headers: {
+              'PAYMENT-REQUIRED': x402_Header.encodePaymentRequired(x402PaymentRequired),
+            },
+          }),
+        )[0],
         credential: 'x402-signature',
         expectedHeader: 'PAYMENT-SIGNATURE',
         expectedValue: 'x402-signature',
@@ -194,6 +195,52 @@ describe('http', () => {
       const headers = result.headers as Headers
 
       expect(headers.get(expectedHeader)).toBe(expectedValue)
+    })
+
+    test('does not treat unbranded Payment-auth challenges as x402', () => {
+      const transport = Transport.http()
+      const untrustedChallenge = Challenge.from({
+        id: `${x402_Types.syntheticChallengeIdPrefix}0`,
+        intent: x402_Types.exactIntent,
+        method: x402_Types.paymentMethod,
+        realm: 'api.example.com',
+        request: x402PaymentRequired.accepts[0]!,
+      })
+
+      const result = transport.setCredential({}, 'credential', {
+        challenge: untrustedChallenge,
+      })
+      const headers = result.headers as Headers
+
+      expect(headers.get('Authorization')).toBe('credential')
+      expect(headers.get(x402_Types.paymentSignatureHeader)).toBeNull()
+    })
+
+    test('removes stale credential headers before setting the retry credential', () => {
+      const transport = Transport.http()
+      const x402Challenge = Transport.http().getChallenges!(
+        new Response(null, {
+          status: 402,
+          headers: {
+            'PAYMENT-REQUIRED': x402_Header.encodePaymentRequired(x402PaymentRequired),
+          },
+        }),
+      )[0]
+
+      const result = transport.setCredential(
+        {
+          headers: {
+            Authorization: 'Payment stale',
+            [x402_Types.paymentSignatureHeader]: 'stale-x402',
+          },
+        },
+        'fresh-x402',
+        { challenge: x402Challenge },
+      )
+      const headers = result.headers as Headers
+
+      expect(headers.get('Authorization')).toBeNull()
+      expect(headers.get(x402_Types.paymentSignatureHeader)).toBe('fresh-x402')
     })
 
     test('preserves existing headers', () => {

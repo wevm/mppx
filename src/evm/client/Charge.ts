@@ -4,6 +4,7 @@ import { getAddress, parseUnits } from 'viem'
 import * as Credential from '../../Credential.js'
 import * as Method from '../../Method.js'
 import * as x402_Exact from '../../x402/client/Exact.js'
+import * as x402_ChallengeBrand from '../../x402/internal/ChallengeBrand.js'
 import * as z from '../../zod.js'
 import * as Assets from '../Assets.js'
 import * as Methods from '../Methods.js'
@@ -112,7 +113,11 @@ export declare namespace charge {
 }
 
 function isX402Challenge(challenge: { request: Record<string, unknown> }) {
-  return challenge.request.scheme === 'exact' && typeof challenge.request.network === 'string'
+  return (
+    x402_ChallengeBrand.is(challenge) &&
+    challenge.request.scheme === 'exact' &&
+    typeof challenge.request.network === 'string'
+  )
 }
 
 function assertPolicy(parameters: charge.Parameters, request: Types.ChargeRequest) {
@@ -123,8 +128,8 @@ function assertPolicy(parameters: charge.Parameters, request: Types.ChargeReques
   const currencies = parameters.currencies ?? parameters.assets
   if (currencies) {
     const acceptedCurrency = getAddress(request.currency as `0x${string}`)
-    const allowed = currencies.some(
-      (currency) => getAddress(addressOf(currency)) === acceptedCurrency,
+    const allowed = currencies.some((currency) =>
+      currencyMatches(currency, acceptedCurrency, network),
     )
     if (!allowed) throw new Error(`EVM currency is not allowed: ${acceptedCurrency}.`)
   }
@@ -149,8 +154,9 @@ function resolveAuthorization(
 ): Types.AuthorizationConfig {
   const currencies = parameters.currencies ?? parameters.assets
   const acceptedCurrency = getAddress(request.currency as `0x${string}`)
-  const currency = currencies?.find(
-    (currency) => getAddress(addressOf(currency)) === acceptedCurrency,
+  const network = Types.networkOf(request.methodDetails.chainId)
+  const currency = currencies?.find((currency) =>
+    currencyMatches(currency, acceptedCurrency, network),
   )
   if (currency && Assets.isAsset(currency) && currency.transfer.type === Types.eip3009)
     return {
@@ -165,15 +171,25 @@ function addressOf(currency: `0x${string}` | Assets.KnownAsset): `0x${string}` {
   return Assets.isAsset(currency) ? currency.address : currency
 }
 
+function currencyMatches(
+  currency: `0x${string}` | Assets.KnownAsset,
+  acceptedCurrency: `0x${string}`,
+  network: Types.EvmNetwork,
+): boolean {
+  if (getAddress(addressOf(currency)) !== acceptedCurrency) return false
+  return !Assets.isAsset(currency) || currency.network === network
+}
+
 function decimalsOfAcceptedCurrency(
   parameters: charge.Parameters,
   request: Types.ChargeRequest,
 ): number | undefined {
   const currencies = parameters.currencies ?? parameters.assets
   const acceptedCurrency = getAddress(request.currency as `0x${string}`)
-  const currency = currencies?.find(
-    (currency) => getAddress(addressOf(currency)) === acceptedCurrency,
+  const network = Types.networkOf(request.methodDetails.chainId)
+  const currency = currencies?.find((currency) =>
+    currencyMatches(currency, acceptedCurrency, network),
   )
   if (currency && Assets.isAsset(currency)) return currency.decimals
-  return parameters.decimals ?? request.methodDetails.decimals
+  return parameters.decimals
 }

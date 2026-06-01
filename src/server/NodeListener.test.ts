@@ -1,7 +1,7 @@
 import { EventEmitter } from 'node:events'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 
-import { NodeListener, Request } from 'mppx/server'
+import { Mppx, NodeListener, Request } from 'mppx/server'
 import { afterEach, describe, expect, test } from 'vp/test'
 import * as Http from '~test/Http.js'
 
@@ -183,6 +183,33 @@ describe('toNodeListener', () => {
     const response = await fetch(`${server.url}/hello`)
     expect(response.status).toBe(200)
     expect(await response.json()).toEqual({ path: '/hello' })
+  })
+
+  test('copies all receipt response headers for successful payment handlers', async () => {
+    const handler = Mppx.toNodeListener(async () => ({
+      status: 200,
+      withReceipt(response?: Response) {
+        if (!response) {
+          const error = new Error('withReceipt() requires a response argument')
+          error.name = 'MissingReceiptResponseError'
+          throw error
+        }
+        const headers = new Headers(response?.headers)
+        headers.set('Payment-Receipt', 'receipt')
+        headers.set('PAYMENT-RESPONSE', 'x402-response')
+        return new Response(response?.body, { headers })
+      },
+    }))
+
+    server = await Http.createServer(async (req, res) => {
+      await handler(req, res)
+      res.end('ok')
+    })
+
+    const response = await fetch(server.url)
+    expect(response.headers.get('Payment-Receipt')).toBe('receipt')
+    expect(response.headers.get('PAYMENT-RESPONSE')).toBe('x402-response')
+    expect(await response.text()).toBe('ok')
   })
 
   test('forwards request method', async () => {

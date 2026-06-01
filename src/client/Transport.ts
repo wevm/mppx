@@ -2,11 +2,18 @@ import * as Challenge from '../Challenge.js'
 import * as Credential from '../Credential.js'
 import * as Mcp from '../Mcp.js'
 import * as x402_Header from '../x402/Header.js'
+import * as x402_ChallengeBrand from '../x402/internal/ChallengeBrand.js'
 import * as x402_Types from '../x402/Types.js'
 
 const paymentRequiredStatus = 402
 const paymentAuthChallengeHeader = 'WWW-Authenticate'
 const paymentAuthCredentialHeader = 'Authorization'
+const credentialHeaders = [
+  paymentAuthCredentialHeader,
+  x402_Types.paymentRequiredHeader,
+  x402_Types.paymentResponseHeader,
+  x402_Types.paymentSignatureHeader,
+]
 
 /**
  * Client-side transport adapter.
@@ -97,6 +104,7 @@ export function http() {
 
     setCredential(request, credential, options) {
       const headers = new Headers(request.headers)
+      for (const header of credentialHeaders) headers.delete(header)
       if (isX402Challenge(options?.challenge)) {
         headers.set(x402_Types.paymentSignatureHeader, credential)
       } else {
@@ -120,22 +128,28 @@ function x402Challenges(response: Response): Challenge.Challenge[] {
   const header = response.headers.get(x402_Types.paymentRequiredHeader)
   if (!header) return []
   const paymentRequired = x402_Header.decodePaymentRequired(header)
+  if (response.url && paymentRequired.resource.url !== response.url)
+    throw new Error('x402 payment-required resource does not match response URL.')
   return paymentRequired.accepts.map((accepted, index) =>
-    Challenge.from({
-      id: `${x402_Types.syntheticChallengeIdPrefix}${index}`,
-      intent: x402_Types.exactIntent,
-      method: x402_Types.paymentMethod,
-      realm: new URL(paymentRequired.resource.url).host,
-      request: {
-        ...accepted,
-        resource: paymentRequired.resource,
-      },
-    }),
+    x402_ChallengeBrand.mark(
+      Challenge.from({
+        id: `${x402_Types.syntheticChallengeIdPrefix}${index}`,
+        intent: x402_Types.exactIntent,
+        method: x402_Types.paymentMethod,
+        realm: new URL(paymentRequired.resource.url).host,
+        request: {
+          ...accepted,
+          ...(paymentRequired.extensions ? { extensions: paymentRequired.extensions } : {}),
+          resource: paymentRequired.resource,
+        },
+      }),
+    ),
   )
 }
 
 function isX402Challenge(challenge: Challenge.Challenge | undefined): boolean {
   return (
+    x402_ChallengeBrand.is(challenge) &&
     challenge?.method === x402_Types.paymentMethod &&
     challenge.intent === x402_Types.exactIntent &&
     typeof challenge.request === 'object' &&

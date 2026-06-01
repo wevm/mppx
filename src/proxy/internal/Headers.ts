@@ -9,6 +9,17 @@ const hopByHopHeaders = new Set([
   'trailer',
 ])
 
+// Payment credentials are consumed by the proxy and must never reach upstream services.
+const paymentHeaders = new Set([
+  'accept-payment',
+  'authorization',
+  'payment-receipt',
+  'payment-required',
+  'payment-response',
+  'payment-signature',
+  'www-authenticate',
+])
+
 /** Strips hop-by-hop, auth, encoding, cookie, and forwarding headers from a request before proxying upstream. */
 export function scrub(headers: Headers): Headers {
   const scrubbed = new Headers()
@@ -16,7 +27,7 @@ export function scrub(headers: Headers): Headers {
   for (const [name, value] of headers) {
     const lower = name.toLowerCase()
 
-    if (lower === 'authorization') continue
+    if (paymentHeaders.has(lower)) continue
     if (lower === 'accept-encoding') continue
     if (lower === 'content-length') continue
     if (lower === 'cookie') continue

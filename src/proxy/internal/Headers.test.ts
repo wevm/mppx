@@ -13,6 +13,26 @@ describe('scrub', () => {
     expect(result.get('content-type')).toBe('application/json')
   })
 
+  test('behavior: strips payment protocol headers', () => {
+    const headers = new globalThis.Headers({
+      'Accept-Payment': 'evm/charge',
+      'Content-Type': 'application/json',
+      'PAYMENT-RECEIPT': 'receipt',
+      'PAYMENT-REQUIRED': 'required',
+      'PAYMENT-RESPONSE': 'response',
+      'PAYMENT-SIGNATURE': 'signature',
+      'WWW-Authenticate': 'Payment id="abc"',
+    })
+    const result = Headers.scrub(headers)
+    expect(result.has('accept-payment')).toBe(false)
+    expect(result.has('payment-receipt')).toBe(false)
+    expect(result.has('payment-required')).toBe(false)
+    expect(result.has('payment-response')).toBe(false)
+    expect(result.has('payment-signature')).toBe(false)
+    expect(result.has('www-authenticate')).toBe(false)
+    expect(result.get('content-type')).toBe('application/json')
+  })
+
   test('behavior: strips cookie header', () => {
     const headers = new globalThis.Headers({
       Cookie: 'session=abc123',

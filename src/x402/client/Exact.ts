@@ -54,6 +54,7 @@ export async function createCredential(parameters: createCredential.Parameters):
 
   return Header.encodePaymentSignature({
     accepted,
+    ...(request.extensions ? { extensions: request.extensions } : {}),
     payload: {
       authorization,
       signature,
@@ -118,8 +119,8 @@ function assertPolicy(parameters: Config, accepted: Types.PaymentRequirements) {
   const currencies = parameters.currencies ?? parameters.assets
   if (currencies) {
     const acceptedCurrency = getAddress(accepted.asset as `0x${string}`)
-    const allowed = currencies.some(
-      (currency) => getAddress(addressOf(currency)) === acceptedCurrency,
+    const allowed = currencies.some((currency) =>
+      currencyMatches(currency, acceptedCurrency, accepted.network),
     )
     if (!allowed) throw new Error(`x402 exact currency is not allowed: ${acceptedCurrency}.`)
   }
@@ -142,14 +143,23 @@ function addressOf(currency: `0x${string}` | Assets.KnownAsset): `0x${string}` {
   return Assets.isAsset(currency) ? currency.address : currency
 }
 
+function currencyMatches(
+  currency: `0x${string}` | Assets.KnownAsset,
+  acceptedCurrency: `0x${string}`,
+  network: Types.EvmNetwork,
+): boolean {
+  if (getAddress(addressOf(currency)) !== acceptedCurrency) return false
+  return !Assets.isAsset(currency) || currency.network === network
+}
+
 function decimalsOfAcceptedCurrency(
   parameters: Config,
   accepted: Types.PaymentRequirements,
 ): number | undefined {
   const currencies = parameters.currencies ?? parameters.assets
   const acceptedCurrency = getAddress(accepted.asset as `0x${string}`)
-  const currency = currencies?.find(
-    (currency) => getAddress(addressOf(currency)) === acceptedCurrency,
+  const currency = currencies?.find((currency) =>
+    currencyMatches(currency, acceptedCurrency, accepted.network),
   )
   if (currency && Assets.isAsset(currency)) return currency.decimals
   return parameters.decimals

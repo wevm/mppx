@@ -1,3 +1,5 @@
+import { isDeepStrictEqual } from 'node:util'
+
 import * as Challenge from '../../Challenge.js'
 import * as Credential from '../../Credential.js'
 import * as ServerTransport from '../../server/Transport.js'
@@ -35,7 +37,14 @@ export function http() {
       })
     },
 
-    bindCredential({ challenge, credential }) {
+    bindCredential({ challenge, credential, input }) {
+      const request = challenge.request as Types.ExactRequest
+      const paymentPayload = Types.PaymentPayloadSchema.parse(credential.payload)
+      const resource = request.resource ?? { url: input.url }
+      if (!isDeepStrictEqual(paymentPayload.resource, resource))
+        throw new Error('x402 payment payload resource does not match route resource')
+      if (!isDeepStrictEqual(paymentPayload.extensions, request.extensions))
+        throw new Error('x402 payment payload extensions do not match route binding')
       return Credential.from({
         challenge,
         payload: credential.payload,
@@ -50,6 +59,7 @@ export function http() {
       const paymentRequired: Types.PaymentRequired = {
         accepts: [Types.toPaymentRequirements(request)],
         error: error?.message ?? `${Types.paymentSignatureHeader} header is required`,
+        ...(request.extensions ? { extensions: request.extensions } : {}),
         resource,
         x402Version: 2,
       }

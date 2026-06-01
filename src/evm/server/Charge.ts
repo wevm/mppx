@@ -263,8 +263,7 @@ function httpTransport(paths: HttpPaths): ServerTransport.Http {
     },
 
     bindCredential(options) {
-      if (X402.parsePaymentPayload(options.credential.payload))
-        return paths.x402.bindCredential(options)
+      if (X402.isPendingCredential(options.credential)) return paths.x402.bindCredential(options)
       return paths.mpp.bindCredential?.(options) ?? options.credential
     },
 
