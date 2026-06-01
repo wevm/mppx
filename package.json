@@ -150,16 +150,6 @@
       "src": "./src/x402/index.ts",
       "default": "./dist/x402/index.js"
     },
-    "./x402/client": {
-      "types": "./dist/x402/client/index.d.ts",
-      "src": "./src/x402/client/index.ts",
-      "default": "./dist/x402/client/index.js"
-    },
-    "./x402/server": {
-      "types": "./dist/x402/server/index.d.ts",
-      "src": "./src/x402/server/index.ts",
-      "default": "./dist/x402/server/index.js"
-    },
     "./tempo": {
       "types": "./dist/tempo/index.d.ts",
       "src": "./src/tempo/index.ts",

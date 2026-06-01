@@ -95,8 +95,6 @@ describe('evm charge server', () => {
     const response = result.withReceipt(Response.json({ ok: true }))
     const receipt = Receipt.fromResponse(response)
     expect(receipt).toMatchObject({
-      chainId: 84532,
-      challengeId: challenge.id,
       method: 'evm',
       reference: transaction,
       status: 'success',

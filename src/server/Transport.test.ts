@@ -408,12 +408,31 @@ describe('http', () => {
       }).toMatchInlineSnapshot(`
         {
           "headers": {
+            "cache-control": "private",
             "content-type": "text/plain;charset=UTF-8",
             "payment-receipt": "eyJtZXRob2QiOiJ0ZW1wbyIsInJlZmVyZW5jZSI6IjB4dHhoYXNoIiwic3RhdHVzIjoic3VjY2VzcyIsInRpbWVzdGFtcCI6IjIwMjUtMDEtMDFUMDA6MDA6MDAuMDAwWiJ9",
           },
           "status": 200,
         }
       `)
+    })
+
+    test('preserves existing cache directives while marking receipts private', () => {
+      const transport = Transport.http()
+      const originalResponse = new Response('OK', {
+        status: 200,
+        headers: { 'Cache-Control': 'max-age=60' },
+      })
+
+      const response = transport.respondReceipt({
+        credential,
+        input: new Request('https://example.com'),
+        receipt,
+        response: originalResponse,
+        challengeId: challenge.id,
+      })
+
+      expect(response.headers.get('Cache-Control')).toBe('max-age=60, private')
     })
   })
 })

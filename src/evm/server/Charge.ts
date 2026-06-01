@@ -94,8 +94,6 @@ export function charge(parameters: charge.NativeConfig): Method.AnyServer {
       })
 
       return Receipt.from({
-        chainId,
-        challengeId: credential.challenge.id,
         method: Types.paymentMethod,
         reference: settled.reference,
         status: 'success',

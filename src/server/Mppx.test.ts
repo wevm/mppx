@@ -2707,7 +2707,7 @@ describe('compose', () => {
 async function x402PaymentSignature(
   accepted: x402_Types.PaymentRequirements,
   resource: x402_Types.ResourceInfo,
-  extensions: Record<string, unknown> | undefined,
+  extensions: x402_Types.Extensions | undefined,
 ): Promise<string> {
   const authorization = {
     from: accounts[0].address,

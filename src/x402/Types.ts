@@ -17,9 +17,6 @@ export const evmNetworkPrefix = 'eip155:' as const
 /** Prefix for synthetic mppx challenge IDs derived from x402 `accepts` entries. */
 export const syntheticChallengeIdPrefix = 'x402:' as const
 
-/** x402 extension key used for mppx route-binding metadata. */
-export const mppxExtensionKey = 'mppx' as const
-
 /** x402 protocol version supported by this package. */
 export type Version = 2
 
@@ -100,27 +97,6 @@ export type Asset = {
   transfer: ExactTransfer
 }
 
-/** Public exact EVM route request accepted by `mppx` handlers. */
-export type ExactRequest = PaymentRequirements & {
-  extensions?: Record<string, unknown> | undefined
-  resource?: ResourceInfo | undefined
-}
-
-/** Public exact EVM route input before it is converted to x402 wire requirements. */
-export const ExactRequestInputSchema = z.object({
-  amount: z.amount(),
-  asset: address,
-  decimals: z.number(),
-  maxTimeoutSeconds: positiveNumber,
-  network: evmNetwork,
-  payTo: address,
-  resource: z.optional(ResourceInfoSchema),
-  transfer: ExactTransferSchema,
-})
-
-/** Public exact EVM route input before it is converted to x402 wire requirements. */
-export type ExactRequestInput = z.infer<typeof ExactRequestInputSchema>
-
 /** x402 v2 payment requirements for the `exact` scheme. */
 export const PaymentRequirementsSchema = z.object({
   amount: atomicAmount,
@@ -135,11 +111,32 @@ export const PaymentRequirementsSchema = z.object({
 /** x402 v2 payment requirements for the `exact` scheme. */
 export type PaymentRequirements = z.infer<typeof PaymentRequirementsSchema>
 
+/** x402 v2 protocol extension value. */
+export const ExtensionSchema = z.object({
+  info: z.record(z.string(), z.unknown()),
+  schema: z.record(z.string(), z.unknown()),
+})
+
+/** x402 v2 protocol extension value. */
+export type Extension = z.infer<typeof ExtensionSchema>
+
+/** x402 v2 protocol extensions map. */
+export const ExtensionsSchema = z.record(z.string(), ExtensionSchema)
+
+/** x402 v2 protocol extensions map. */
+export type Extensions = z.infer<typeof ExtensionsSchema>
+
+/** Public exact EVM route request accepted by `mppx` handlers. */
+export type ExactRequest = PaymentRequirements & {
+  extensions?: Extensions | undefined
+  resource?: ResourceInfo | undefined
+}
+
 /** x402 v2 payment-required response. */
 export const PaymentRequiredSchema = z.object({
   accepts: z.array(PaymentRequirementsSchema).check(z.minLength(1)),
   error: z.optional(z.string()),
-  extensions: z.optional(z.record(z.string(), z.unknown())),
+  extensions: z.optional(ExtensionsSchema),
   resource: ResourceInfoSchema,
   x402Version: z.literal(2),
 })
@@ -194,7 +191,7 @@ export type ExactPayload = z.infer<typeof ExactPayloadSchema>
 /** x402 v2 payment payload. */
 export const PaymentPayloadSchema = z.object({
   accepted: PaymentRequirementsSchema,
-  extensions: z.optional(z.record(z.string(), z.unknown())),
+  extensions: z.optional(ExtensionsSchema),
   payload: ExactPayloadSchema,
   resource: z.optional(ResourceInfoSchema),
   x402Version: z.literal(2),
@@ -205,7 +202,7 @@ export type PaymentPayload = z.infer<typeof PaymentPayloadSchema>
 
 /** Facilitator verification response. */
 export const VerifyResponseSchema = z.object({
-  extensions: z.optional(z.record(z.string(), z.unknown())),
+  extensions: z.optional(ExtensionsSchema),
   extra: z.optional(z.record(z.string(), z.unknown())),
   invalidMessage: z.optional(z.string()),
   invalidReason: z.optional(z.string()),
@@ -221,7 +218,7 @@ export const SettleResponseSchema = z.object({
   amount: z.optional(atomicAmount),
   errorMessage: z.optional(z.string()),
   errorReason: z.optional(z.string()),
-  extensions: z.optional(z.record(z.string(), z.unknown())),
+  extensions: z.optional(ExtensionsSchema),
   extra: z.optional(z.record(z.string(), z.unknown())),
   network: nonEmptyString,
   payer: z.optional(z.string()),
@@ -242,17 +239,6 @@ export type Facilitator = {
     paymentPayload: PaymentPayload,
     paymentRequirements: PaymentRequirements,
   ) => Promise<VerifyResponse>
-}
-
-/** Converts public transfer config into x402 wire `extra` fields. */
-export function transferToExtra(transfer: ExactTransfer): Record<string, unknown> {
-  return {
-    assetTransferMethod: transfer.type,
-    ...('name' in transfer && transfer.name !== undefined ? { name: transfer.name } : {}),
-    ...('version' in transfer && transfer.version !== undefined
-      ? { version: transfer.version }
-      : {}),
-  }
 }
 
 /** Extracts x402 `PaymentRequirements` from a canonical exact request. */

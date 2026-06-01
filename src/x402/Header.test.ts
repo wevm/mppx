@@ -1,6 +1,5 @@
 import * as Header from './Header.js'
 import type * as Types from './Types.js'
-import { transferToExtra } from './Types.js'
 
 describe('x402 headers', () => {
   test('round trips PAYMENT-REQUIRED header values', () => {
@@ -23,6 +22,16 @@ describe('x402 headers', () => {
       resource: {
         mimeType: 'application/json',
         url: 'https://api.example.com/premium-data',
+      },
+      extensions: {
+        mppx: {
+          info: { method: 'GET' },
+          schema: {
+            properties: { method: { type: 'string' } },
+            required: ['method'],
+            type: 'object',
+          },
+        },
       },
       x402Version: 2,
     }
@@ -60,21 +69,5 @@ describe('x402 headers', () => {
     const header = Header.encodePaymentSignature(paymentPayload)
 
     expect(Header.decodePaymentSignature(header)).toEqual(paymentPayload)
-  })
-})
-
-describe('x402 exact helpers', () => {
-  test('maps public transfer config to wire extra', () => {
-    expect(
-      transferToExtra({
-        name: 'USDC',
-        type: 'eip3009',
-        version: '2',
-      }),
-    ).toEqual({
-      assetTransferMethod: 'eip3009',
-      name: 'USDC',
-      version: '2',
-    })
   })
 })

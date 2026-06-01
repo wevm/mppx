@@ -16,6 +16,17 @@ import * as x402_Facilitator from './Facilitator.js'
 
 const pendingX402Credential = Symbol('mppx.evm.pendingX402Credential')
 const x402Credential = Symbol('mppx.evm.x402Credential')
+const mppxExtensionKey = 'mppx'
+const mppxRouteBindingSchema = {
+  additionalProperties: false,
+  properties: {
+    [Scope.reservedMetaKey]: { type: 'string' },
+    digest: { type: 'string' },
+    method: { type: 'string' },
+  },
+  required: ['method'],
+  type: 'object',
+}
 
 export type Options = {
   /** Facilitator client or base URL used for x402-compatible settlement. */
@@ -96,8 +107,7 @@ export function createPath(config: ResolvedOptions): Path {
           reason: 'x402 payment payload resource does not match route resource',
         })
 
-      const expectedExtensions = routeExtensions(challenge, input)
-      if (!isDeepStrictEqual(paymentPayload.extensions, expectedExtensions))
+      if (!containsExtensions(paymentPayload.extensions, routeExtensions(challenge, input)))
         throw new VerificationFailedError({
           reason: 'x402 payment payload extensions do not match route binding',
         })
@@ -247,8 +257,7 @@ export function toPaymentRequirements(
   }
 }
 
-/** Parses an unknown payload as an x402 payment payload when possible. */
-export function parsePaymentPayload(payload: unknown): x402_Types.PaymentPayload | undefined {
+function parsePaymentPayload(payload: unknown): x402_Types.PaymentPayload | undefined {
   const parsed = x402_Types.PaymentPayloadSchema.safeParse(payload)
   return parsed.success ? parsed.data : undefined
 }
@@ -287,15 +296,34 @@ function pendingChallengeId(paymentPayload: x402_Types.PaymentPayload): string {
   return `${x402_Types.syntheticChallengeIdPrefix}${hash}`
 }
 
-function routeExtensions(
-  challenge: Challenge.Challenge,
-  input: Request,
-): Record<string, unknown> | undefined {
+function routeExtensions(challenge: Challenge.Challenge, input: Request): x402_Types.Extensions {
   const binding: Record<string, unknown> = { method: input.method }
   const scope = Scope.read(challenge.meta)
   if (scope !== undefined) binding[Scope.reservedMetaKey] = scope
   if (challenge.digest !== undefined) binding.digest = challenge.digest
-  return { [x402_Types.mppxExtensionKey]: binding }
+  return {
+    [mppxExtensionKey]: {
+      info: binding,
+      schema: mppxRouteBindingSchema,
+    },
+  }
+}
+
+function containsExtensions(
+  actual: x402_Types.Extensions | undefined,
+  expected: x402_Types.Extensions,
+): boolean {
+  if (!actual) return false
+  return Object.entries(expected).every(([key, expectedExtension]) => {
+    const actualExtension = actual[key]
+    return (
+      actualExtension !== undefined &&
+      isDeepStrictEqual(actualExtension.schema, expectedExtension.schema) &&
+      Object.entries(expectedExtension.info).every(([infoKey, value]) =>
+        isDeepStrictEqual(actualExtension.info[infoKey], value),
+      )
+    )
+  })
 }
 
 function markPendingCredential<const credential extends Credential.Credential>(

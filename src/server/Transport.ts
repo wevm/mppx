@@ -208,6 +208,7 @@ export function http(): Http {
 
     respondReceipt({ receipt, response }) {
       const headers = new Headers(response.headers)
+      headers.set('Cache-Control', withPrivateCacheControl(headers.get('Cache-Control')))
       headers.set('Payment-Receipt', Receipt.serialize(receipt))
       return new Response(response.body, {
         status: response.status,
@@ -216,6 +217,13 @@ export function http(): Http {
       })
     },
   })
+}
+
+function withPrivateCacheControl(value: string | null): string {
+  if (!value) return 'private'
+  const directives = value.split(',').map((directive) => directive.trim().toLowerCase())
+  if (directives.includes('private')) return value
+  return `${value}, private`
 }
 
 /**

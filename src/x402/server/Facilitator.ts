@@ -16,7 +16,7 @@ export function http(url: string): Types.Facilitator {
   return {
     async verify(paymentPayload, paymentRequirements) {
       const response = await fetch(`${base}/verify`, {
-        body: JSON.stringify({ paymentPayload, paymentRequirements }),
+        body: JSON.stringify({ paymentPayload, paymentRequirements, x402Version: 2 }),
         headers: { 'Content-Type': 'application/json' },
         method: 'POST',
       })
@@ -24,7 +24,7 @@ export function http(url: string): Types.Facilitator {
     },
     async settle(paymentPayload, paymentRequirements) {
       const response = await fetch(`${base}/settle`, {
-        body: JSON.stringify({ paymentPayload, paymentRequirements }),
+        body: JSON.stringify({ paymentPayload, paymentRequirements, x402Version: 2 }),
         headers: { 'Content-Type': 'application/json' },
         method: 'POST',
       })
