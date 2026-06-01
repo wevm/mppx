@@ -5,9 +5,9 @@ import { describe, expect, test, vi } from 'vp/test'
 import * as Assets from '../Assets.js'
 import * as Header from '../Header.js'
 import * as Types from '../Types.js'
-import { exact } from './Exact.js'
+import { createCredential } from './Exact.js'
 
-type X402Challenge = Parameters<ReturnType<typeof exact>['createCredential']>[0]['challenge']
+type X402Challenge = Parameters<typeof createCredential>[0]['challenge']
 
 const account = {
   address: '0x1111111111111111111111111111111111111111',
@@ -24,32 +24,35 @@ const usdc = Assets.define({
   },
 })
 
-describe('x402.exact client', () => {
+describe('x402 exact credential helper', () => {
   test('enforces max amount, network, and currency policy before signing', async () => {
-    const method = exact({
+    const config = {
       account,
       currencies: [usdc],
       maxAmount: '0.01',
       networks: ['eip155:84532'],
-    })
+    } as const
 
     await expect(
-      method.createCredential({
+      createCredential({
         challenge: challenge({ amount: '10001' }),
+        config,
         context: {},
       }),
     ).rejects.toThrow('x402 exact amount exceeds maxAmount.')
 
     await expect(
-      method.createCredential({
+      createCredential({
         challenge: challenge({ network: 'eip155:8453' }),
+        config,
         context: {},
       }),
     ).rejects.toThrow('x402 exact network is not allowed: eip155:8453.')
 
     await expect(
-      method.createCredential({
+      createCredential({
         challenge: challenge({ asset: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913' }),
+        config,
         context: {},
       }),
     ).rejects.toThrow(
@@ -61,7 +64,7 @@ describe('x402.exact client', () => {
 
   test('signs EIP-3009 exact payment payloads', async () => {
     const signTypedData = vi.fn(async () => '0x1234')
-    const method = exact({
+    const config = {
       account: {
         ...account,
         signTypedData,
@@ -69,10 +72,11 @@ describe('x402.exact client', () => {
       currencies: [usdc],
       maxAmount: '0.01',
       networks: ['eip155:84532'],
-    })
+    } as const
 
-    const credential = await method.createCredential({
+    const credential = await createCredential({
       challenge: challenge(),
+      config,
       context: {},
     })
     const paymentPayload = Header.decodePaymentSignature(credential)

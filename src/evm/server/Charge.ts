@@ -5,10 +5,10 @@ import { VerificationFailedError } from '../../Errors.js'
 import * as Method from '../../Method.js'
 import * as Receipt from '../../Receipt.js'
 import * as ServerTransport from '../../server/Transport.js'
+import * as X402 from '../../x402/server/EvmCharge.js'
 import * as Assets from '../Assets.js'
 import * as Methods from '../Methods.js'
 import * as Types from '../Types.js'
-import * as X402 from './X402.js'
 
 /**
  * Creates an EVM charge server method.

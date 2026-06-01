@@ -7,11 +7,11 @@ import * as Challenge from '../../Challenge.js'
 import type * as Credential from '../../Credential.js'
 import * as Credential_ from '../../Credential.js'
 import { VerificationFailedError } from '../../Errors.js'
+import * as Types from '../../evm/Types.js'
 import * as ServerTransport from '../../server/Transport.js'
-import * as x402_Header from '../../x402/Header.js'
-import * as x402_Facilitator from '../../x402/server/Facilitator.js'
-import * as x402_Types from '../../x402/Types.js'
-import * as Types from '../Types.js'
+import * as x402_Header from '../Header.js'
+import * as x402_Types from '../Types.js'
+import * as x402_Facilitator from './Facilitator.js'
 
 const x402Credential = Symbol('mppx.evm.x402Credential')
 

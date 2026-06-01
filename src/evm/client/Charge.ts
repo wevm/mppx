@@ -3,7 +3,7 @@ import { getAddress, parseUnits } from 'viem'
 
 import * as Credential from '../../Credential.js'
 import * as Method from '../../Method.js'
-import { exact as x402_exact } from '../../x402/client/Exact.js'
+import * as x402_Exact from '../../x402/client/Exact.js'
 import * as z from '../../zod.js'
 import * as Assets from '../Assets.js'
 import * as Methods from '../Methods.js'
@@ -16,14 +16,17 @@ import * as Types from '../Types.js'
  * also keeps x402 exact signing for x402 compatibility challenges.
  */
 export function charge(parameters: charge.Parameters) {
-  const x402 = x402_exact(parameters as x402_exact.Parameters)
-
   return Method.toClient(Methods.charge, {
     context: z.object({
       account: z.optional(z.custom<Account>()),
     }),
     async createCredential({ challenge, context }) {
-      if (isX402Challenge(challenge)) return x402.createCredential({ challenge, context } as never)
+      if (isX402Challenge(challenge))
+        return x402_Exact.createCredential({
+          challenge: challenge as never,
+          config: parameters as x402_Exact.Config,
+          context,
+        })
 
       const account = (context?.account ?? parameters.account) as charge.Signer
       if (!account.signTypedData) throw new Error('EVM authorization requires a typed-data signer.')
