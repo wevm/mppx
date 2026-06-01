@@ -91,8 +91,10 @@ const mppx = Mppx.create({
     }),
     evm.charge({
       currency: evm.assets.baseSepolia.USDC,
-      facilitator: 'https://x402.org/facilitator',
       recipient: '0x742d35Cc6634c0532925a3b844bC9e7595F8fE00',
+      x402Options: {
+        facilitator: 'https://x402.org/facilitator',
+      },
     }),
   ],
 })
@@ -126,8 +128,10 @@ const mppx = Mppx.create({
     }),
     evm.charge({
       currency: evm.assets.baseSepolia.USDC,
-      facilitator: 'https://x402.org/facilitator',
       recipient: '0x742d35Cc6634c0532925a3b844bC9e7595F8fE00',
+      x402Options: {
+        facilitator: 'https://x402.org/facilitator',
+      },
     }),
   ],
 })
@@ -153,8 +157,10 @@ const tempoCharge = tempo.charge({
 })
 const evmCharge = evm.charge({
   currency: evm.assets.baseSepolia.USDC,
-  facilitator: 'https://x402.org/facilitator',
   recipient: '0x742d35Cc6634c0532925a3b844bC9e7595F8fE00',
+  x402Options: {
+    facilitator: 'https://x402.org/facilitator',
+  },
 })
 const payments = Mppx.create({
   methods: [tempoCharge, evmCharge],
@@ -196,10 +202,9 @@ The default HTTP transport multiplexes Payment auth and x402 headers. It reads
 `Authorization` or `PAYMENT-SIGNATURE` based on the selected challenge.
 
 EVM charge uses Payment auth by default and currently supports the
-`authorization` credential type. The `facilitator` key handles automatic
-settlement; pass `settle` only when you want to override settlement yourself.
-The same `evm.charge` method also advertises and accepts x402 exact headers for
-x402-compatible clients.
+`authorization` credential type. `x402Options.facilitator` handles automatic
+settlement and x402 exact compatibility; pass `settle` when you want to override
+settlement yourself.
 
 ## Examples
 

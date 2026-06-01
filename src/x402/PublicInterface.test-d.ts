@@ -12,15 +12,10 @@ describe('x402 public interface', () => {
       methods: [
         evm.charge({
           currency: evm.assets.base.USDC,
-          facilitator: {
-            settle: async () => ({
-              network: 'eip155:8453',
-              success: true,
-              transaction: `0x${'1'.repeat(64)}`,
-            }),
-            verify: async () => ({ isValid: true }),
-          },
           recipient: '0x209693Bc6afc0C5328bA36FaF03C514EF312287C',
+          x402Options: {
+            facilitator: 'https://x402.org/facilitator',
+          },
         }),
       ],
       secretKey,

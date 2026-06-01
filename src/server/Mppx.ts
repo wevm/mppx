@@ -2017,6 +2017,29 @@ type ConfiguredHandler = ((input: Request) => Promise<MethodFn.Response<Transpor
   }
 }
 
+const paymentAuthChallengeHeader = 'WWW-Authenticate'
+
+const challengeHeaderMerges = [
+  {
+    name: paymentAuthChallengeHeader,
+    values: (context) =>
+      context.challengeEntries
+        .map((entry) =>
+          (entry.result.challenge as Response).headers.get(paymentAuthChallengeHeader),
+        )
+        .filter((value): value is string => value !== null),
+    merge: (values) => values,
+  },
+  {
+    name: x402_Types.paymentRequiredHeader,
+    values: (context) =>
+      context.challengeResponses
+        .map((response) => response.headers.get(x402_Types.paymentRequiredHeader))
+        .filter((value): value is string => value !== null),
+    merge: mergeX402PaymentRequiredHeaders,
+  },
+] satisfies readonly ChallengeHeaderMerge[]
+
 /** An entry for `compose()`: a method reference, handler function ref, or string key paired with its options. */
 type ComposeEntry<methods extends readonly Method.AnyServer[]> =
   | {
@@ -2185,7 +2208,7 @@ export function compose(
         if (result?.status !== 402) continue
 
         const response = result.challenge as Response
-        const wwwAuth = response.headers.get('WWW-Authenticate')
+        const wwwAuth = response.headers.get(paymentAuthChallengeHeader)
         if (!wwwAuth) continue
 
         entries.push({
@@ -2220,25 +2243,8 @@ export function compose(
     const mergedHeaders = new Headers()
     mergedHeaders.set('Cache-Control', 'no-store')
 
-    const challengeHeaderMerges = [
-      {
-        name: 'WWW-Authenticate',
-        values: challengeEntries
-          .map((entry) => (entry.result.challenge as Response).headers.get('WWW-Authenticate'))
-          .filter((value): value is string => value !== null),
-        merge: (values: readonly string[]) => values,
-      },
-      {
-        name: x402_Types.paymentRequiredHeader,
-        values: challengeResponses
-          .map((response) => response.headers.get(x402_Types.paymentRequiredHeader))
-          .filter((value): value is string => value !== null),
-        merge: mergeX402PaymentRequiredHeaders,
-      },
-    ] satisfies readonly ChallengeHeaderMerge[]
-
     for (const header of challengeHeaderMerges) {
-      for (const value of header.merge(header.values)) {
+      for (const value of header.merge(header.values({ challengeEntries, challengeResponses }))) {
         mergedHeaders.append(header.name, value)
       }
     }
@@ -2316,7 +2322,14 @@ export function compose(
 
 type ChallengeHeaderMerge = {
   name: string
-  values: readonly string[]
+  values(context: {
+    challengeEntries: readonly {
+      handler: ConfiguredHandler
+      challenge: Challenge.Challenge
+      result: Extract<MethodFn.Response<Transport.Http>, { status: 402 }>
+    }[]
+    challengeResponses: readonly Response[]
+  }): readonly string[]
   merge(values: readonly string[]): readonly string[]
 }
 

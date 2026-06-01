@@ -44,8 +44,8 @@ describe('x402 exact e2e', () => {
       methods: [
         evm.charge({
           currency: evm.assets.baseSepolia.USDC,
-          facilitator,
           recipient: accounts[0].address,
+          x402Options: { facilitator },
         }),
       ],
       secretKey,
@@ -125,20 +125,22 @@ describe('x402 exact e2e', () => {
       methods: [
         evm.charge({
           currency: evm.assets.baseSepolia.USDC,
-          facilitator: {
-            async verify() {
-              verifyCalls++
-              return { isValid: true }
-            },
-            async settle(paymentPayload: Types.PaymentPayload) {
-              return {
-                network: paymentPayload.accepted.network,
-                success: true,
-                transaction,
-              }
+          recipient: accounts[0].address,
+          x402Options: {
+            facilitator: {
+              async verify() {
+                verifyCalls++
+                return { isValid: true }
+              },
+              async settle(paymentPayload: Types.PaymentPayload) {
+                return {
+                  network: paymentPayload.accepted.network,
+                  success: true,
+                  transaction,
+                }
+              },
             },
           },
-          recipient: accounts[0].address,
         }),
       ],
       secretKey,
@@ -191,23 +193,25 @@ describe('x402 exact e2e', () => {
         }),
         evm.charge({
           currency: evm.assets.baseSepolia.USDC,
-          facilitator: {
-            async verify(paymentPayload: Types.PaymentPayload) {
-              return {
-                isValid: true,
-                payer: payerOf(paymentPayload),
-              }
-            },
-            async settle(paymentPayload: Types.PaymentPayload) {
-              return {
-                network: paymentPayload.accepted.network,
-                payer: payerOf(paymentPayload),
-                success: true,
-                transaction,
-              }
+          recipient: accounts[0].address,
+          x402Options: {
+            facilitator: {
+              async verify(paymentPayload: Types.PaymentPayload) {
+                return {
+                  isValid: true,
+                  payer: payerOf(paymentPayload),
+                }
+              },
+              async settle(paymentPayload: Types.PaymentPayload) {
+                return {
+                  network: paymentPayload.accepted.network,
+                  payer: payerOf(paymentPayload),
+                  success: true,
+                  transaction,
+                }
+              },
             },
           },
-          recipient: accounts[0].address,
         }),
       ],
       secretKey,
