@@ -226,6 +226,7 @@ export function session<const parameters extends session.Parameters>(
             payload,
             methodDetails,
             resolvedFeePayer,
+            methodDetails.feePayer === true,
             feePayerPolicy,
             waitForConfirmation,
           )
@@ -240,6 +241,7 @@ export function session<const parameters extends session.Parameters>(
             payload,
             methodDetails,
             resolvedFeePayer,
+            methodDetails.feePayer === true,
             feePayerPolicy,
           )
           lastOnChainVerified.set(sessionReceipt.channelId, Date.now())
@@ -635,6 +637,7 @@ async function handleOpen(
   payload: SessionCredentialPayload & { action: 'open' },
   methodDetails: SessionMethodDetails,
   feePayer: viem_Account | undefined,
+  isSponsored: boolean,
   feePayerPolicy: session.FeePayerPolicy | undefined,
   waitForConfirmation: boolean,
 ): Promise<SessionReceipt> {
@@ -687,6 +690,7 @@ async function handleOpen(
     challengeExpires: challenge.expires,
     feePayerPolicy,
     feePayer,
+    isSponsored,
     beforeBroadcast: async (pendingOnChain) => {
       await validateOpenVoucher(pendingOnChain)
     },
@@ -772,6 +776,7 @@ async function handleTopUp(
   payload: SessionCredentialPayload & { action: 'topUp' },
   methodDetails: SessionMethodDetails,
   feePayer: viem_Account | undefined,
+  isSponsored: boolean,
   feePayerPolicy: session.FeePayerPolicy | undefined,
 ): Promise<SessionReceipt> {
   const channelId = ChannelStore.normalizeChannelId(payload.channelId)
@@ -793,6 +798,7 @@ async function handleTopUp(
     challengeExpires: challenge.expires,
     feePayerPolicy,
     feePayer,
+    isSponsored,
   })
 
   const updated = await store.updateChannel(channelId, (current) => {

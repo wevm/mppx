@@ -310,7 +310,7 @@ describe.runIf(isLocalnet)('on-chain', () => {
       expect(result.onChain.finalized).toBe(false)
     })
 
-    test('fee-payer: rejects unauthorized calls', async () => {
+    test('fee-payer relay: rejects unauthorized open calls', async () => {
       const salt = nextSalt()
       const deposit = 5_000_000n
 
@@ -349,7 +349,7 @@ describe.runIf(isLocalnet)('on-chain', () => {
           channelId,
           recipient,
           currency,
-          feePayer: accounts[0],
+          isSponsored: true,
         }),
       ).rejects.toThrow('fee-sponsored open transaction contains an unauthorized call')
     })
@@ -798,7 +798,7 @@ describe.runIf(isLocalnet)('on-chain', () => {
       expect(result.newDeposit).toBe(deposit + topUpAmount)
     })
 
-    test('fee-payer: rejects unauthorized calls', async () => {
+    test('fee-payer relay: rejects unauthorized topUp calls', async () => {
       const salt = nextSalt()
       const deposit = 5_000_000n
       const topUpAmount = 3_000_000n
@@ -847,7 +847,7 @@ describe.runIf(isLocalnet)('on-chain', () => {
           currency: asset,
           declaredDeposit: topUpAmount,
           previousDeposit: deposit,
-          feePayer: accounts[0],
+          isSponsored: true,
         }),
       ).rejects.toThrow('fee-sponsored topUp transaction contains an unauthorized call')
     })
