@@ -78,7 +78,7 @@ Mppx.create({
 const res = await fetch('https://mpp.dev/api/ping/paid')
 ```
 
-### EVM Charge with x402
+### EVM Charge
 
 ```ts
 import { evm, Mppx, tempo } from 'mppx/server'
@@ -91,10 +91,8 @@ const mppx = Mppx.create({
     }),
     evm.charge({
       currency: evm.assets.baseSepolia.USDC,
+      facilitator: 'https://x402.org/facilitator',
       recipient: '0x742d35Cc6634c0532925a3b844bC9e7595F8fE00',
-      x402: {
-        facilitator: 'https://x402.org/facilitator',
-      },
     }),
   ],
 })
@@ -106,7 +104,6 @@ export async function GET(request: Request) {
       ? await mppx.tempo.charge({ amount: '1' })(request)
       : await mppx.evm.charge({
           amount: '0.01',
-          resource: { url: request.url },
         })(request)
 
   if (result.status === 402) return result.challenge
@@ -129,16 +126,14 @@ const mppx = Mppx.create({
     }),
     evm.charge({
       currency: evm.assets.baseSepolia.USDC,
+      facilitator: 'https://x402.org/facilitator',
       recipient: '0x742d35Cc6634c0532925a3b844bC9e7595F8fE00',
-      x402: {
-        facilitator: 'https://x402.org/facilitator',
-      },
     }),
   ],
 })
 
 app.get('/mpp', mppx.tempo.charge({ amount: '1' }), (c) => c.json({ ok: true }))
-app.get('/x402', mppx.evm.charge({ amount: '0.01' }), (c) => c.json({ ok: true }))
+app.get('/evm', mppx.evm.charge({ amount: '0.01' }), (c) => c.json({ ok: true }))
 ```
 
 Like Tempo, EVM charge route `amount` values are display-unit strings; mppx converts
@@ -158,10 +153,8 @@ const tempoCharge = tempo.charge({
 })
 const evmCharge = evm.charge({
   currency: evm.assets.baseSepolia.USDC,
+  facilitator: 'https://x402.org/facilitator',
   recipient: '0x742d35Cc6634c0532925a3b844bC9e7595F8fE00',
-  x402: {
-    facilitator: 'https://x402.org/facilitator',
-  },
 })
 const payments = Mppx.create({
   methods: [tempoCharge, evmCharge],
@@ -201,6 +194,12 @@ const res = await mppx.fetch('https://api.example.com/paid')
 The default HTTP transport multiplexes Payment auth and x402 headers. It reads
 `WWW-Authenticate` and `PAYMENT-REQUIRED`, then sends credentials through either
 `Authorization` or `PAYMENT-SIGNATURE` based on the selected challenge.
+
+EVM charge uses Payment auth by default and currently supports the
+`authorization` credential type. The `facilitator` key handles automatic
+settlement; pass `settle` only when you want to override settlement yourself.
+The same `evm.charge` method also advertises and accepts x402 exact headers for
+x402-compatible clients.
 
 ## Examples
 

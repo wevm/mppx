@@ -13,6 +13,10 @@ import * as z from './zod.js'
  * ```
  */
 export const Schema = z.object({
+  /** Optional chain ID for chain-settled payment methods. */
+  chainId: z.optional(z.number()),
+  /** Optional challenge identifier this receipt settles. */
+  challengeId: z.optional(z.string()),
   /** Payment method used (e.g., "tempo", "stripe"). */
   method: z.string(),
   /** Method-specific reference (e.g., transaction hash). */

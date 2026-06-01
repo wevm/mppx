@@ -1,8 +1,9 @@
 export * as Assets from './Assets.js'
+export * as Methods from './Methods.js'
+export * as Types from './Types.js'
 export * as assets from './Assets.js'
+export * from './Types.js'
 export type {
-  Asset,
-  EvmNetwork,
   ExactEip3009Transfer,
   ExactPermit2Transfer,
   ExactTransfer,

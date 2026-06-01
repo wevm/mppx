@@ -12,17 +12,15 @@ describe('x402 public interface', () => {
       methods: [
         evm.charge({
           currency: evm.assets.base.USDC,
-          recipient: '0x209693Bc6afc0C5328bA36FaF03C514EF312287C',
-          x402: {
-            facilitator: {
-              settle: async () => ({
-                network: 'eip155:8453',
-                success: true,
-                transaction: `0x${'1'.repeat(64)}`,
-              }),
-              verify: async () => ({ isValid: true }),
-            },
+          facilitator: {
+            settle: async () => ({
+              network: 'eip155:8453',
+              success: true,
+              transaction: `0x${'1'.repeat(64)}`,
+            }),
+            verify: async () => ({ isValid: true }),
           },
+          recipient: '0x209693Bc6afc0C5328bA36FaF03C514EF312287C',
         }),
       ],
       secretKey,
@@ -35,7 +33,7 @@ describe('x402 public interface', () => {
   test('client evm charge exposes account config and policies', () => {
     const method = clientEvm.charge({
       account: {} as Account,
-      currencies: [evm.assets.baseSepolia.USDC],
+      currencies: [clientEvm.assets.baseSepolia.USDC],
       maxAmount: '0.01',
       networks: ['eip155:84532'],
     })

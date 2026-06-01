@@ -230,25 +230,23 @@ describe('charge', () => {
         }),
         evm_server.charge({
           currency: evm_server.assets.baseSepolia.USDC,
-          recipient: accounts[0].address,
-          x402: {
-            facilitator: {
-              async verify(paymentPayload: PaymentPayload) {
-                return {
-                  isValid: true,
-                  payer: payerOf(paymentPayload),
-                }
-              },
-              async settle(paymentPayload: PaymentPayload) {
-                return {
-                  network: paymentPayload.accepted.network,
-                  payer: payerOf(paymentPayload),
-                  success: true,
-                  transaction,
-                }
-              },
+          facilitator: {
+            async verify(paymentPayload: PaymentPayload) {
+              return {
+                isValid: true,
+                payer: payerOf(paymentPayload),
+              }
+            },
+            async settle(paymentPayload: PaymentPayload) {
+              return {
+                network: paymentPayload.accepted.network,
+                payer: payerOf(paymentPayload),
+                success: true,
+                transaction,
+              }
             },
           },
+          recipient: accounts[0].address,
         }),
       ],
       secretKey,
@@ -292,6 +290,8 @@ describe('charge', () => {
           account: accounts[0],
         }),
       ],
+      orderChallenges: (candidates) =>
+        candidates.filter(({ challenge }) => challenge.request.scheme === 'exact'),
       polyfill: false,
     })
     const x402Response = await x402Payment.fetch(`${server.url}/paid`)

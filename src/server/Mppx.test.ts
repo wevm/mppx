@@ -1858,25 +1858,23 @@ describe('compose', () => {
 
   const x402Method = evm.charge({
     currency: evm.assets.baseSepolia.USDC,
-    recipient: accounts[0].address,
-    x402: {
-      facilitator: {
-        async verify(paymentPayload: PaymentPayload) {
-          return {
-            isValid: true,
-            payer: payerOf(paymentPayload),
-          }
-        },
-        async settle(paymentPayload: PaymentPayload) {
-          return {
-            network: paymentPayload.accepted.network,
-            payer: payerOf(paymentPayload),
-            success: true,
-            transaction: `0x${'3'.repeat(64)}`,
-          }
-        },
+    facilitator: {
+      async verify(paymentPayload: PaymentPayload) {
+        return {
+          isValid: true,
+          payer: payerOf(paymentPayload),
+        }
+      },
+      async settle(paymentPayload: PaymentPayload) {
+        return {
+          network: paymentPayload.accepted.network,
+          payer: payerOf(paymentPayload),
+          success: true,
+          transaction: `0x${'3'.repeat(64)}`,
+        }
       },
     },
+    recipient: accounts[0].address,
   })
 
   const challengeOpts = {
@@ -1913,11 +1911,11 @@ describe('compose', () => {
     expect(result.status).toBe(402)
     if (result.status !== 402) throw new Error()
 
-    expect(result.challenge.headers.get('WWW-Authenticate')).toBeNull()
+    expect(result.challenge.headers.get('WWW-Authenticate')).toContain('method="evm"')
     const header = result.challenge.headers.get(x402_Types.paymentRequiredHeader)
     expect(header).toBeTruthy()
-    expect(result.challenge.headers.get('Content-Type')).toContain('application/json')
-    expect(await result.challenge.json()).toEqual({})
+    expect(result.challenge.headers.get('Content-Type')).toContain('application/problem+json')
+    expect(await result.challenge.json()).toMatchObject({ status: 402 })
 
     const paymentRequired = x402_Header.decodePaymentRequired(header!)
     expect(paymentRequired.accepts).toHaveLength(1)
@@ -1976,7 +1974,10 @@ describe('compose', () => {
     const paymentRequired = x402_Header.decodePaymentRequired(
       firstResult.challenge.headers.get(x402_Types.paymentRequiredHeader)!,
     )
-    const credential = x402PaymentSignature(paymentRequired.accepts[0]!, paymentRequired.resource)
+    const credential = await x402PaymentSignature(
+      paymentRequired.accepts[0]!,
+      paymentRequired.resource,
+    )
 
     const result = await handle(
       new Request('https://example.com/resource', {
@@ -2634,23 +2635,49 @@ describe('compose', () => {
   })
 })
 
-function x402PaymentSignature(
+async function x402PaymentSignature(
   accepted: x402_Types.PaymentRequirements,
   resource: x402_Types.ResourceInfo,
-): string {
+): Promise<string> {
+  const authorization = {
+    from: accounts[0].address,
+    nonce: `0x${'1'.repeat(64)}` as `0x${string}`,
+    to: accepted.payTo as `0x${string}`,
+    validAfter: '0',
+    validBefore: '9999999999',
+    value: accepted.amount,
+  }
+  const signature = await accounts[0].signTypedData({
+    domain: {
+      chainId: Number(accepted.network.slice(x402_Types.evmNetworkPrefix.length)),
+      name: accepted.extra?.name as string,
+      verifyingContract: accepted.asset as `0x${string}`,
+      version: accepted.extra?.version as string,
+    },
+    message: {
+      ...authorization,
+      validAfter: BigInt(authorization.validAfter),
+      validBefore: BigInt(authorization.validBefore),
+      value: BigInt(authorization.value),
+    },
+    primaryType: 'TransferWithAuthorization',
+    types: {
+      TransferWithAuthorization: [
+        { name: 'from', type: 'address' },
+        { name: 'to', type: 'address' },
+        { name: 'value', type: 'uint256' },
+        { name: 'validAfter', type: 'uint256' },
+        { name: 'validBefore', type: 'uint256' },
+        { name: 'nonce', type: 'bytes32' },
+      ],
+    },
+  })
+
   return x402_Header.encodePaymentSignature({
     accepted,
     payload: {
-      authorization: {
-        from: accounts[0].address,
-        nonce: `0x${'1'.repeat(64)}`,
-        to: accepted.payTo,
-        validAfter: '0',
-        validBefore: '9999999999',
-        value: accepted.amount,
-      },
-      signature:
-        '0x2d6a7588d6acca505cbf0d9a4a227e0c52c6c34008c8e8986a1283259764173608a2ce6496642e377d6da8dbbf5836e9bd15092f9ecab05ded3d6293af148b571c',
+      authorization,
+      signature,
     },
     resource,
     x402Version: 2,
