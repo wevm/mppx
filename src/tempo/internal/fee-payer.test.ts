@@ -443,7 +443,7 @@ describe('prepareSponsoredTransaction', () => {
     maxFeePerGas: 1_000_000_000n,
     maxPriorityFeePerGas: 1_000_000_000n,
     nonce: 1n,
-    nonceKey: 1n,
+    nonceKey: 'expiring',
     signature: { r: 1n, s: 1n, yParity: 0 } as any,
     validBefore: Math.floor(Date.now() / 1_000) + 300,
   } as const
@@ -458,6 +458,21 @@ describe('prepareSponsoredTransaction', () => {
         transaction: baseTransaction as any,
       }),
     ).not.toThrow()
+  })
+
+  test('error: rejects non-expiring nonce keys', () => {
+    expect(() =>
+      prepareSponsoredTransaction({
+        account: sponsor,
+        chainId: 42431,
+        details,
+        expectedFeeToken: bogus,
+        transaction: {
+          ...baseTransaction,
+          nonceKey: 1n,
+        } as any,
+      }),
+    ).toThrow('must use an expiring nonce')
   })
 
   test('accepts higher Moderato priority fees by default', () => {

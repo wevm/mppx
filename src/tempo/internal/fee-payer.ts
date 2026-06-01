@@ -358,7 +358,7 @@ export function prepareSponsoredTransaction(parameters: {
       maxPriorityFeePerGas: maxPriorityFeePerGas.toString(),
     })
 
-  if (nonceKey === undefined) fail('fee-sponsored transaction must use an expiring nonce')
+  if (nonceKey !== 'expiring') fail('fee-sponsored transaction must use an expiring nonce')
   if (validBefore === undefined)
     fail('fee-sponsored transaction must declare validBefore for the expiring nonce')
   const validBeforeValue = validBefore
