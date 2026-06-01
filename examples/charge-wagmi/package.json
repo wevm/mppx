@@ -20,7 +20,7 @@
     "wagmi": "^3.6.13"
   },
   "devDependencies": {
-    "@types/react": "^19.2.14",
+    "@types/react": "^19.2.15",
     "@types/react-dom": "^19.2.3",
     "@typescript/native-preview": "^7.0.0-dev.20260416.1",
     "@vitejs/plugin-react": "^6.0.2",
