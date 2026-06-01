@@ -6,6 +6,7 @@ import * as Receipt from '../../Receipt.js'
 import * as Assets from '../Assets.js'
 import * as Methods from '../Methods.js'
 import * as Types from '../Types.js'
+import * as Facilitator from './Facilitator.js'
 import * as Transport from './Transport.js'
 
 /**
@@ -91,32 +92,13 @@ export declare namespace exact {
   }
 
   type CurrencyConfig =
-    | {
-        /** Token contract address or known x402 asset metadata. */
-        currency: `0x${string}` | Assets.KnownAsset
-        /** Legacy alias for `currency`. */
-        asset?: `0x${string}` | Assets.KnownAsset | undefined
-      }
-    | {
-        /** Legacy alias for `currency`. */
-        asset: `0x${string}` | Assets.KnownAsset
-        /** Token contract address or known x402 asset metadata. */
-        currency?: `0x${string}` | Assets.KnownAsset | undefined
-      }
+    /** Token contract address or known x402 asset metadata. */
+    { currency: `0x${string}` | Assets.KnownAsset }
 
-  type RecipientConfig =
-    | {
-        /** Recipient wallet address. */
-        recipient: `0x${string}`
-        /** Legacy alias for `recipient`. */
-        payTo?: `0x${string}` | undefined
-      }
-    | {
-        /** Legacy alias for `recipient`. */
-        payTo: `0x${string}`
-        /** Recipient wallet address. */
-        recipient?: `0x${string}` | undefined
-      }
+  type RecipientConfig = {
+    /** Recipient wallet address. */
+    recipient: `0x${string}`
+  }
 
   type Defaults = {
     asset: `0x${string}`
@@ -140,10 +122,7 @@ type ResolvedConfig = exact.Defaults & {
 }
 
 function resolveConfig(config: exact.Config): ResolvedConfig {
-  const currency = config.currency ?? config.asset
-  const recipient = config.recipient ?? config.payTo
-  if (!currency) throw new Error('x402 exact requires `currency`.')
-  if (!recipient) throw new Error('x402 exact requires `recipient`.')
+  const { currency, recipient } = config
 
   let address: `0x${string}`
   let decimals = config.decimals
@@ -175,29 +154,5 @@ function resolveConfig(config: exact.Config): ResolvedConfig {
 }
 
 function resolveFacilitator(facilitator: string | Types.Facilitator): Types.Facilitator {
-  if (typeof facilitator === 'object' && facilitator !== null) return facilitator
-  if (typeof facilitator === 'string') return httpFacilitator(facilitator)
-  throw new Error('x402 exact requires `facilitator`.')
-}
-
-function httpFacilitator(url: string): Types.Facilitator {
-  const base = url.replace(/\/$/, '')
-  return {
-    async verify(paymentPayload, paymentRequirements) {
-      const response = await fetch(`${base}/verify`, {
-        body: JSON.stringify({ paymentPayload, paymentRequirements }),
-        headers: { 'Content-Type': 'application/json' },
-        method: 'POST',
-      })
-      return Types.VerifyResponseSchema.parse(await response.json())
-    },
-    async settle(paymentPayload, paymentRequirements) {
-      const response = await fetch(`${base}/settle`, {
-        body: JSON.stringify({ paymentPayload, paymentRequirements }),
-        headers: { 'Content-Type': 'application/json' },
-        method: 'POST',
-      })
-      return Types.SettleResponseSchema.parse(await response.json())
-    },
-  }
+  return Facilitator.resolve(facilitator)
 }

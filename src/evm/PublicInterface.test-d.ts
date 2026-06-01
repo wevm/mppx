@@ -33,8 +33,8 @@ describe('evm public interface', () => {
   test('server charge works through subpath exports and tuple helper', () => {
     const direct = serverCharge({
       currency: serverAssets.base.USDC,
-      facilitator,
       recipient,
+      x402Options: { facilitator },
     })
     expectTypeOf(direct.name).toEqualTypeOf<'evm'>()
     expectTypeOf(direct.intent).toEqualTypeOf<'charge'>()
@@ -43,8 +43,8 @@ describe('evm public interface', () => {
       methods: [
         serverEvm({
           currency: serverAssets.base.USDC,
-          facilitator,
           recipient,
+          x402Options: { facilitator },
         }),
       ],
       secretKey,
@@ -94,8 +94,8 @@ describe('evm public interface', () => {
       // @ts-expect-error evm.charge takes shared charge config, not x402 exact config.
       config: {
         currency: serverAssets.base.USDC,
-        facilitator,
         recipient,
+        x402Options: { facilitator },
       },
     })
   })

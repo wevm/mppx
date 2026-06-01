@@ -27,18 +27,20 @@ describe('evm charge server', () => {
         evm({
           currency: evm.assets.baseSepolia.USDC,
           recipient,
-          facilitator: {
-            async verify(paymentPayload, paymentRequirements) {
-              facilitated = { paymentPayload, paymentRequirements }
-              return { isValid: true }
-            },
-            async settle(paymentPayload, paymentRequirements) {
-              facilitated = { paymentPayload, paymentRequirements }
-              return {
-                network: paymentRequirements.network,
-                success: true,
-                transaction,
-              }
+          x402Options: {
+            facilitator: {
+              async verify(paymentPayload, paymentRequirements) {
+                facilitated = { paymentPayload, paymentRequirements }
+                return { isValid: true }
+              },
+              async settle(paymentPayload, paymentRequirements) {
+                facilitated = { paymentPayload, paymentRequirements }
+                return {
+                  network: paymentRequirements.network,
+                  success: true,
+                  transaction,
+                }
+              },
             },
           },
         }),

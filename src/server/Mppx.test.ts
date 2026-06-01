@@ -1858,23 +1858,25 @@ describe('compose', () => {
 
   const x402Method = evm.charge({
     currency: evm.assets.baseSepolia.USDC,
-    facilitator: {
-      async verify(paymentPayload: PaymentPayload) {
-        return {
-          isValid: true,
-          payer: payerOf(paymentPayload),
-        }
-      },
-      async settle(paymentPayload: PaymentPayload) {
-        return {
-          network: paymentPayload.accepted.network,
-          payer: payerOf(paymentPayload),
-          success: true,
-          transaction: `0x${'3'.repeat(64)}`,
-        }
+    recipient: accounts[0].address,
+    x402Options: {
+      facilitator: {
+        async verify(paymentPayload: PaymentPayload) {
+          return {
+            isValid: true,
+            payer: payerOf(paymentPayload),
+          }
+        },
+        async settle(paymentPayload: PaymentPayload) {
+          return {
+            network: paymentPayload.accepted.network,
+            payer: payerOf(paymentPayload),
+            success: true,
+            transaction: `0x${'3'.repeat(64)}`,
+          }
+        },
       },
     },
-    recipient: accounts[0].address,
   })
 
   const challengeOpts = {
