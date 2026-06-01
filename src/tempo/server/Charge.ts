@@ -63,6 +63,8 @@ export function charge<const parameters extends charge.Parameters>(
     feePayerPolicy,
     html,
     memo,
+    splits,
+    supportedModes,
     validateSender,
     waitForConfirmation = true,
   } = parameters
@@ -96,6 +98,8 @@ export function charge<const parameters extends charge.Parameters>(
       externalId,
       memo,
       recipient,
+      splits,
+      supportedModes,
     } as unknown as Defaults,
 
     html: html

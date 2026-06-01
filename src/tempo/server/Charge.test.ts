@@ -3654,6 +3654,57 @@ describe('tempo', () => {
       })
       expect(challenge.request.methodDetails?.supportedModes).toEqual(['pull'])
     })
+
+    test('challenge contains supportedModes from method defaults', async () => {
+      const handler = Mppx_server.create({
+        methods: [
+          tempo_server.charge({
+            getClient: () => client,
+            account: accounts[0].address,
+            currency: asset,
+            supportedModes: ['pull'],
+          }),
+        ],
+        realm,
+        secretKey,
+      })
+
+      const result = await handler.charge({ amount: '1' })(new Request('https://example.com'))
+      expect(result.status).toBe(402)
+      if (result.status !== 402) throw new Error()
+
+      const challenge = Challenge.fromResponse(result.challenge, {
+        methods: [tempo_client.charge()],
+      })
+      expect(challenge.request.methodDetails?.supportedModes).toEqual(['pull'])
+    })
+
+    test('challenge contains splits from method defaults', async () => {
+      const split = { amount: '0.2', recipient: accounts[2].address }
+      const handler = Mppx_server.create({
+        methods: [
+          tempo_server.charge({
+            getClient: () => client,
+            account: accounts[0].address,
+            currency: asset,
+            splits: [split],
+          }),
+        ],
+        realm,
+        secretKey,
+      })
+
+      const result = await handler.charge({ amount: '1' })(new Request('https://example.com'))
+      expect(result.status).toBe(402)
+      if (result.status !== 402) throw new Error()
+
+      const challenge = Challenge.fromResponse(result.challenge, {
+        methods: [tempo_client.charge()],
+      })
+      expect(challenge.request.methodDetails?.splits).toEqual([
+        { amount: '200000', recipient: split.recipient },
+      ])
+    })
   })
 
   describe('attribution memo', () => {
