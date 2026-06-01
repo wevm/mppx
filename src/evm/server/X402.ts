@@ -28,6 +28,19 @@ export type ResolvedOptions = {
   maxTimeoutSeconds: number
 }
 
+export type HttpPath = {
+  bindCredential: NonNullable<ServerTransport.Http['bindCredential']>
+  getCredential: ServerTransport.Http['getCredential']
+  respondChallenge: (
+    options: Parameters<ServerTransport.Http['respondChallenge']>[0],
+    response: Response,
+  ) => Response | Promise<Response>
+  respondReceipt: (
+    options: Parameters<ServerTransport.Http['respondReceipt']>[0],
+    response: Response,
+  ) => Response
+}
+
 /** Resolves optional x402 compatibility options for an EVM charge. */
 export function resolveOptions(parameters: {
   authorization: Types.AuthorizationConfig
@@ -47,19 +60,10 @@ export function resolveOptions(parameters: {
   }
 }
 
-/** Adds x402 header compatibility to the standard Payment-auth HTTP transport. */
-export function httpTransport(config: ResolvedOptions): ServerTransport.Http {
-  const base = ServerTransport.http()
-
-  return ServerTransport.from<Request, Response>({
-    name: 'evm-http',
-
-    captureRequest: base.captureRequest,
-
+/** Creates the x402 wire path for an EVM charge method. */
+export function httpPath(config: ResolvedOptions): HttpPath {
+  return {
     getCredential(request) {
-      const authorization = base.getCredential(request)
-      if (authorization) return authorization
-
       const paymentSignature = request.headers.get(x402_Types.paymentSignatureHeader)
       if (!paymentSignature) return null
       const paymentPayload = x402_Header.decodePaymentSignature(paymentSignature)
@@ -101,8 +105,7 @@ export function httpTransport(config: ResolvedOptions): ServerTransport.Http {
       )
     },
 
-    async respondChallenge(options) {
-      const response = await base.respondChallenge(options)
+    respondChallenge(options, response) {
       const headers = new Headers(response.headers)
       const request = options.challenge.request as Types.ChargeRequest
       headers.set(
@@ -122,8 +125,7 @@ export function httpTransport(config: ResolvedOptions): ServerTransport.Http {
       })
     },
 
-    respondReceipt(options) {
-      const response = base.respondReceipt(options)
+    respondReceipt(options, response) {
       if (!options.input.headers.has(x402_Types.paymentSignatureHeader)) return response
 
       const payload = Types.AuthorizationPayloadSchema.parse(options.credential.payload)
@@ -144,7 +146,7 @@ export function httpTransport(config: ResolvedOptions): ServerTransport.Http {
         statusText: response.statusText,
       })
     },
-  })
+  }
 }
 
 /** Settles a verified EVM authorization through an x402 facilitator. */

@@ -4,6 +4,7 @@ import type * as Credential from '../../Credential.js'
 import { VerificationFailedError } from '../../Errors.js'
 import * as Method from '../../Method.js'
 import * as Receipt from '../../Receipt.js'
+import * as ServerTransport from '../../server/Transport.js'
 import * as Assets from '../Assets.js'
 import * as Methods from '../Methods.js'
 import * as Types from '../Types.js'
@@ -19,7 +20,8 @@ export function charge(
 ): Method.Server<typeof Methods.charge, charge.Defaults>
 export function charge(parameters: charge.NativeConfig): Method.AnyServer {
   const config = resolveConfig(parameters)
-  const transport = X402.httpTransport(config.x402)
+  const paths = createPaths(config)
+  const transport = httpTransport(paths)
 
   return Method.toServer<typeof Methods.charge, charge.Defaults, typeof transport>(Methods.charge, {
     defaults: {
@@ -170,6 +172,11 @@ type ResolvedConfig = {
   x402: X402.ResolvedOptions
 }
 
+type HttpPaths = {
+  mpp: ServerTransport.Http
+  x402: X402.HttpPath
+}
+
 function resolveConfig(config: charge.NativeConfig): ResolvedConfig {
   const { currency, recipient } = config
   let address: `0x${string}`
@@ -211,6 +218,41 @@ function resolveConfig(config: charge.NativeConfig): ResolvedConfig {
     settle,
     x402,
   }
+}
+
+function createPaths(config: ResolvedConfig): HttpPaths {
+  return {
+    mpp: ServerTransport.http(),
+    x402: X402.httpPath(config.x402),
+  }
+}
+
+function httpTransport(paths: HttpPaths): ServerTransport.Http {
+  return ServerTransport.from<Request, Response>({
+    name: 'evm-http',
+
+    captureRequest: paths.mpp.captureRequest,
+
+    getCredential(input) {
+      return paths.mpp.getCredential(input) ?? paths.x402.getCredential(input)
+    },
+
+    bindCredential(options) {
+      if (X402.parsePaymentPayload(options.credential.payload))
+        return paths.x402.bindCredential(options)
+      return paths.mpp.bindCredential?.(options) ?? options.credential
+    },
+
+    async respondChallenge(options) {
+      const response = await paths.mpp.respondChallenge(options)
+      return paths.x402.respondChallenge(options, response)
+    },
+
+    respondReceipt(options) {
+      const response = paths.mpp.respondReceipt(options)
+      return paths.x402.respondReceipt(options, response)
+    },
+  })
 }
 
 function assertAddressEqual(actual: string, expected: string, reason: string) {
