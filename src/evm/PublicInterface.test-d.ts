@@ -37,6 +37,11 @@ describe('evm public interface', () => {
     expectTypeOf(clientChains.baseSepolia).toMatchTypeOf<number>()
   })
 
+  test('exports root EVM charge method definition', () => {
+    expectTypeOf(evmRoot.charge.name).toEqualTypeOf<'evm'>()
+    expectTypeOf(evmRoot.charge.intent).toEqualTypeOf<'charge'>()
+  })
+
   test('server charge works through subpath exports and tuple helper', () => {
     const direct = serverCharge({
       currency: serverAssets.base.USDC,
