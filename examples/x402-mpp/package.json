@@ -8,7 +8,7 @@
     "dev": "tsx src/server.ts"
   },
   "dependencies": {
-    "@types/node": "25.6.0",
+    "@types/node": "25.9.1",
     "@typescript/native-preview": "7.0.0-dev.20260323.1",
     "hono": "4.12.23",
     "mppx": "latest",

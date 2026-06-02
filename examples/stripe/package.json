@@ -10,9 +10,9 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "@remix-run/node-fetch-server": "^0.13.0",
-    "@stripe/stripe-js": "^9.4.0",
-    "@types/node": "^25.6.0",
+    "@remix-run/node-fetch-server": "^0.13.3",
+    "@stripe/stripe-js": "^9.6.0",
+    "@types/node": "^25.9.1",
     "@typescript/native-preview": "^7.0.0-dev.20260416.1",
     "mppx": "latest",
     "stripe": "^17.7.0",

@@ -33,7 +33,7 @@
     "@modelcontextprotocol/sdk": "1.29.0",
     "@playwright/test": "^1.60.0",
     "@types/express": "^5.0.6",
-    "@types/node": "^25.6.0",
+    "@types/node": "^25.9.1",
     "@types/ws": "^8.18.1",
     "@typescript/native-preview": "7.0.0-dev.20260323.1",
     "browserslist": "^4.28.2",
@@ -54,7 +54,7 @@
     "viem": "^2.51.3",
     "vite": "^8.0.10",
     "vp": "npm:vite-plus@~0.1.17",
-    "ws": "^8.20.0",
+    "ws": "^8.21.0",
     "zile": "^0.0.29"
   },
   "packageManager": "pnpm@11.0.8",
@@ -203,7 +203,7 @@
     }
   },
   "dependencies": {
-    "incur": "^0.4.5",
+    "incur": "^0.4.6",
     "ox": "0.14.24",
     "zod": "^4.4.3"
   },
