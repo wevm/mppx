@@ -103,8 +103,8 @@ export declare namespace charge {
     maxAmount?: string | undefined
     /** Optional maximum atomic amount the client is willing to pay. */
     maxAtomicAmount?: string | undefined
-    /** Optional allowlist of supported CAIP-2 EVM networks. */
-    networks?: readonly Types.EvmNetwork[] | undefined
+    /** Optional allowlist of supported EVM chain IDs. */
+    networks?: readonly number[] | undefined
     /** Optional allowlist of supported currencies. */
     currencies?: readonly (`0x${string}` | Assets.KnownAsset)[] | undefined
     /** Legacy alias for `currencies`. */
@@ -121,9 +121,10 @@ function isX402Challenge(challenge: { request: Record<string, unknown> }) {
 }
 
 function assertPolicy(parameters: charge.Parameters, request: Types.ChargeRequest) {
-  const network = Types.networkOf(request.methodDetails.chainId)
-  if (parameters.networks && !parameters.networks.includes(network))
-    throw new Error(`EVM network is not allowed: ${network}.`)
+  const chainId = request.methodDetails.chainId
+  const network = Types.networkOf(chainId)
+  if (parameters.networks && !parameters.networks.includes(chainId))
+    throw new Error(`EVM chain ID is not allowed: ${chainId}.`)
 
   const currencies = parameters.currencies ?? parameters.assets
   if (currencies?.some((currency) => !Assets.isAsset(currency)) && !parameters.networks?.length)

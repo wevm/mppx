@@ -334,7 +334,7 @@ export declare namespace toServer {
     request?: RequestFn<method> | undefined
     respond?: RespondFn<method> | undefined
     stableBinding?: StableBindingFn<method> | undefined
-    transport?: transportOverride | undefined
+    transport?: transportOverride | Transport.AnyTransport | undefined
     verify: VerifyFn<method>
   }
 }

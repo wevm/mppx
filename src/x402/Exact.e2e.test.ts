@@ -96,19 +96,21 @@ describe('x402 exact e2e', () => {
             account: accounts[0],
           }),
         ],
-        orderChallenges: (candidates) =>
-          candidates.filter(({ challenge }) => challenge.request.scheme === 'exact'),
         polyfill: false,
       })
       const x402Required = await x402ClientPayment.rawFetch(`${server.url}/x402`)
       expect(x402Required.status).toBe(402)
       expect(x402Required.headers.has(Types.paymentRequiredHeader)).toBe(true)
 
-      const paymentSignature = await x402ClientPayment.createCredential(x402Required)
+      const paymentSignature = await x402ClientPayment.createCredential(
+        pureX402Challenge(x402Required),
+      )
       const paymentPayload = Header.decodePaymentSignature(paymentSignature)
       expect(paymentPayload.accepted.scheme).toBe('exact')
 
-      const x402Response = await x402ClientPayment.fetch(`${server.url}/x402`)
+      const x402Response = await x402ClientPayment.rawFetch(`${server.url}/x402`, {
+        headers: { [Types.paymentSignatureHeader]: paymentSignature },
+      })
       expect(x402Response.status).toBe(200)
       expect(await x402Response.text()).toBe('x402 ok')
 
@@ -414,11 +416,14 @@ describe('x402 exact e2e', () => {
             account: accounts[0],
           }),
         ],
-        orderChallenges: (candidates) =>
-          candidates.filter(({ challenge }) => challenge.request.scheme === 'exact'),
         polyfill: false,
       })
-      const x402Response = await x402ClientPayment.fetch(server.url)
+      const paymentSignature = await x402ClientPayment.createCredential(
+        pureX402Challenge(challenge),
+      )
+      const x402Response = await x402ClientPayment.rawFetch(server.url, {
+        headers: { [Types.paymentSignatureHeader]: paymentSignature },
+      })
       expect(x402Response.status).toBe(200)
       expect(await x402Response.text()).toBe('paid ok')
       expect(x402Response.headers.has(Types.paymentResponseHeader)).toBe(true)
@@ -431,4 +436,13 @@ describe('x402 exact e2e', () => {
 function payerOf(paymentPayload: Types.PaymentPayload): string {
   if ('authorization' in paymentPayload.payload) return paymentPayload.payload.authorization.from
   return paymentPayload.payload.permit2Authorization.from
+}
+
+function pureX402Challenge(response: Response): Response {
+  const paymentRequired = response.headers.get(Types.paymentRequiredHeader)
+  if (!paymentRequired) throw new Error('Missing PAYMENT-REQUIRED header.')
+  return new Response(null, {
+    headers: { [Types.paymentRequiredHeader]: paymentRequired },
+    status: 402,
+  })
 }

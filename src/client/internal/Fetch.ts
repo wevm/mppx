@@ -346,7 +346,7 @@ export declare namespace from {
     /** Filters and sorts supported challenges before credential creation. */
     orderChallenges?: AcceptPayment.OrderChallenges<methods> | undefined
     /** Transport to use for challenge extraction and credential attachment. */
-    transport?: Transport.Transport<RequestInit, Response> | undefined
+    transport?: Transport.AnyTransport | undefined
   }
 
   type Fetch<methods extends readonly Method.AnyClient[] = readonly Method.AnyClient[]> = (

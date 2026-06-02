@@ -3,6 +3,7 @@ import type { Account } from 'viem'
 import { describe, expect, test, vi } from 'vp/test'
 
 import * as Assets from '../Assets.js'
+import * as Chains from '../Chains.js'
 import { charge } from './Charge.js'
 
 const account = {
@@ -20,7 +21,7 @@ describe('evm charge client', () => {
       } as unknown as Account,
       currencies: [Assets.baseSepolia.USDC],
       maxAmount: '0.01',
-      networks: ['eip155:84532'],
+      networks: [Chains.baseSepolia],
     })
     const challenge = Challenge.from({
       id: 'attacker-controlled',

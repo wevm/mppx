@@ -80,9 +80,8 @@ export function from<request, response>(
  *
  * - Detects payment required via 402 status
  * - Extracts Payment auth challenges from `WWW-Authenticate`
- * - Extracts x402 exact challenges from `PAYMENT-REQUIRED`
- * - Sends Payment auth credentials via `Authorization`
- * - Sends x402 credentials via `PAYMENT-SIGNATURE`
+ * - Falls back to x402 exact challenges from `PAYMENT-REQUIRED`
+ * - Sends credentials via `Authorization` or `PAYMENT-SIGNATURE`
  */
 export function http() {
   return from<RequestInit, Response>({
@@ -116,12 +115,8 @@ export function http() {
 }
 
 function paymentRequiredChallenges(response: Response): Challenge.Challenge[] {
-  return [...paymentAuthChallenges(response), ...x402Challenges(response)]
-}
-
-function paymentAuthChallenges(response: Response): Challenge.Challenge[] {
-  if (!response.headers.has(paymentAuthChallengeHeader)) return []
-  return Challenge.fromResponseList(response)
+  if (response.headers.has(paymentAuthChallengeHeader)) return Challenge.fromResponseList(response)
+  return x402Challenges(response)
 }
 
 function x402Challenges(response: Response): Challenge.Challenge[] {
@@ -148,15 +143,7 @@ function x402Challenges(response: Response): Challenge.Challenge[] {
 }
 
 function isX402Challenge(challenge: Challenge.Challenge | undefined): boolean {
-  return (
-    x402_ChallengeBrand.is(challenge) &&
-    challenge?.method === x402_Types.paymentMethod &&
-    challenge.intent === x402_Types.exactIntent &&
-    typeof challenge.request === 'object' &&
-    challenge.request !== null &&
-    'scheme' in challenge.request &&
-    challenge.request.scheme === x402_Types.schemes[0]
-  )
+  return x402_ChallengeBrand.is(challenge)
 }
 
 /**

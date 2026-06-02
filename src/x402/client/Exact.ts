@@ -95,8 +95,8 @@ export type Config = {
   maxAmount?: string | undefined
   /** Optional maximum atomic amount the client is willing to pay. */
   maxAtomicAmount?: string | undefined
-  /** Optional allowlist of supported x402 EVM networks. */
-  networks?: readonly Types.EvmNetwork[] | undefined
+  /** Optional allowlist of supported EVM chain IDs. */
+  networks?: readonly number[] | undefined
   /** Optional allowlist of supported currencies. */
   currencies?: readonly (`0x${string}` | Assets.KnownAsset)[] | undefined
   /** Legacy alias for `currencies`. */
@@ -119,8 +119,9 @@ function chainIdOf(network: Types.EvmNetwork): number {
 }
 
 function assertPolicy(parameters: Config, accepted: Types.PaymentRequirements) {
-  if (parameters.networks && !parameters.networks.includes(accepted.network))
-    throw new Error(`x402 exact network is not allowed: ${accepted.network}.`)
+  const chainId = chainIdOf(accepted.network)
+  if (parameters.networks && !parameters.networks.includes(chainId))
+    throw new Error(`x402 exact chain ID is not allowed: ${chainId}.`)
 
   const currencies = parameters.currencies ?? parameters.assets
   if (currencies?.some((currency) => !Assets.isAsset(currency)) && !parameters.networks?.length)

@@ -141,7 +141,7 @@ export function session<const parameters extends session.Parameters>(
       unitType,
     } as unknown as Defaults,
 
-    transport: transport as never,
+    transport,
 
     // TODO: dedupe `{charge,session}.request`
     async request({ credential, request }) {

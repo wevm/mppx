@@ -7,7 +7,7 @@ import * as Fetch from './internal/Fetch.js'
 import * as Transport from './Transport.js'
 
 export type Methods = readonly (Method.AnyClient | readonly Method.AnyClient[])[]
-type EventResponseOf<transport extends Transport.Transport> =
+type EventResponseOf<transport extends Transport.AnyTransport> =
   | Response
   | Transport.ResponseOf<transport>
 
@@ -16,7 +16,7 @@ type EventResponseOf<transport extends Transport.Transport> =
  */
 export type Mppx<
   methods extends Methods = Methods,
-  transport extends Transport.Transport = Transport.Transport,
+  transport extends Transport.AnyTransport = Transport.Transport,
 > = {
   /** Payment-aware fetch function that automatically handles 402 responses. */
   fetch: Fetch.from.Fetch<FlattenMethods<methods>>
@@ -125,7 +125,7 @@ export function create<
     ...(resolvedOnChallenge && { onChallenge: resolvedOnChallenge }),
     ...(orderChallenges && { orderChallenges }),
     methods,
-    transport: transport as never,
+    transport,
   } satisfies Fetch.from.Config<FlattenMethods<methods>>
   const fetch = Fetch.from<FlattenMethods<methods>>(config_fetch)
 
@@ -283,7 +283,7 @@ export function restore(): void {
 export declare namespace create {
   type Config<
     methods extends Methods = Methods,
-    transport extends Transport.Transport = Transport.Transport,
+    transport extends Transport.AnyTransport = Transport.Transport,
   > = {
     /** Controls when `Accept-Payment` is injected. */
     acceptPaymentPolicy?: Fetch.from.Config['acceptPaymentPolicy'] | undefined

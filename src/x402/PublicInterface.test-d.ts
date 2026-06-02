@@ -30,7 +30,7 @@ describe('x402 public interface', () => {
       account: {} as Account,
       currencies: [clientEvm.assets.baseSepolia.USDC],
       maxAmount: '0.01',
-      networks: ['eip155:84532'],
+      networks: [clientEvm.chains.baseSepolia],
     })
 
     expectTypeOf(method.intent).toEqualTypeOf<'charge'>()

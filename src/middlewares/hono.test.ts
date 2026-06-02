@@ -9,7 +9,12 @@ import {
 } from 'mppx/client'
 import { Mppx, discovery, payment } from 'mppx/hono'
 import { evm as evm_server, Mppx as ServerMppx, tempo as tempo_server } from 'mppx/server'
-import { paymentRequiredHeader, paymentResponseHeader, type PaymentPayload } from 'mppx/x402'
+import {
+  paymentRequiredHeader,
+  paymentResponseHeader,
+  paymentSignatureHeader,
+  type PaymentPayload,
+} from 'mppx/x402'
 import type { Address } from 'viem'
 import { Addresses } from 'viem/tempo'
 import { beforeAll, describe, expect, test } from 'vp/test'
@@ -292,11 +297,12 @@ describe('charge', () => {
           account: accounts[0],
         }),
       ],
-      orderChallenges: (candidates) =>
-        candidates.filter(({ challenge }) => challenge.request.scheme === 'exact'),
       polyfill: false,
     })
-    const x402Response = await x402Payment.fetch(`${server.url}/paid`)
+    const paymentSignature = await x402Payment.createCredential(pureX402Challenge(challenge))
+    const x402Response = await x402Payment.rawFetch(`${server.url}/paid`, {
+      headers: { [paymentSignatureHeader]: paymentSignature },
+    })
     expect(x402Response.status).toBe(200)
     expect(await x402Response.json()).toEqual({ data: 'paid' })
     expect(x402Response.headers.get(paymentResponseHeader)).toBeTruthy()
@@ -308,6 +314,15 @@ describe('charge', () => {
 function payerOf(paymentPayload: PaymentPayload): string {
   if ('authorization' in paymentPayload.payload) return paymentPayload.payload.authorization.from
   return paymentPayload.payload.permit2Authorization.from
+}
+
+function pureX402Challenge(response: Response): Response {
+  const paymentRequired = response.headers.get(paymentRequiredHeader)
+  if (!paymentRequired) throw new Error('Missing PAYMENT-REQUIRED header.')
+  return new Response(null, {
+    headers: { [paymentRequiredHeader]: paymentRequired },
+    status: 402,
+  })
 }
 
 describe('scope binding', () => {

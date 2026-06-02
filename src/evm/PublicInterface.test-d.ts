@@ -1,5 +1,10 @@
 import * as evmRoot from 'mppx/evm'
-import { assets as clientAssets, charge as clientCharge, evm as clientEvm } from 'mppx/evm/client'
+import {
+  assets as clientAssets,
+  chains as clientChains,
+  charge as clientCharge,
+  evm as clientEvm,
+} from 'mppx/evm/client'
 import { assets as serverAssets, charge as serverCharge, evm as serverEvm } from 'mppx/evm/server'
 import type { Account } from 'viem'
 import { describe, expectTypeOf, test } from 'vp/test'
@@ -28,6 +33,8 @@ describe('evm public interface', () => {
     expectTypeOf(clientAssets.baseSepolia.USDC).toMatchTypeOf<
       typeof serverAssets.baseSepolia.USDC
     >()
+    expectTypeOf(evmRoot.chains.base).toMatchTypeOf<number>()
+    expectTypeOf(clientChains.baseSepolia).toMatchTypeOf<number>()
   })
 
   test('server charge works through subpath exports and tuple helper', () => {
@@ -69,7 +76,7 @@ describe('evm public interface', () => {
       account,
       currencies: [clientAssets.baseSepolia.USDC],
       maxAmount: '0.01',
-      networks: ['eip155:84532'],
+      networks: [clientChains.baseSepolia],
     })
     expectTypeOf(direct.name).toEqualTypeOf<'evm'>()
     expectTypeOf(direct.intent).toEqualTypeOf<'charge'>()
@@ -80,7 +87,7 @@ describe('evm public interface', () => {
           account,
           currencies: [clientAssets.baseSepolia.USDC],
           maxAmount: '0.01',
-          networks: ['eip155:84532'],
+          networks: [clientEvm.chains.baseSepolia],
         }),
       ],
       polyfill: false,

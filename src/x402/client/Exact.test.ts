@@ -2,6 +2,7 @@ import { Challenge } from 'mppx'
 import type { Account } from 'viem'
 import { describe, expect, test, vi } from 'vp/test'
 
+import * as Chains from '../../evm/Chains.js'
 import * as Assets from '../Assets.js'
 import * as Header from '../Header.js'
 import * as RouteBinding from '../internal/RouteBinding.js'
@@ -31,7 +32,7 @@ describe('x402 exact credential helper', () => {
       account,
       currencies: [usdc],
       maxAmount: '0.01',
-      networks: ['eip155:84532'],
+      networks: [Chains.baseSepolia],
     } as const
 
     await expect(
@@ -48,7 +49,7 @@ describe('x402 exact credential helper', () => {
         config,
         context: {},
       }),
-    ).rejects.toThrow('x402 exact network is not allowed: eip155:8453.')
+    ).rejects.toThrow('x402 exact chain ID is not allowed: 8453.')
 
     await expect(
       createCredential({
@@ -86,7 +87,7 @@ describe('x402 exact credential helper', () => {
       } as unknown as Account,
       currencies: [usdc],
       maxAmount: '0.01',
-      networks: ['eip155:84532'],
+      networks: [Chains.baseSepolia],
     } as const
 
     const credential = await createCredential({
