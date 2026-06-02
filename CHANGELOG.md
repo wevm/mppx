@@ -1,5 +1,11 @@
 # mppx
 
+## 0.6.30
+
+### Patch Changes
+
+- 77eac81: Added the root EVM charge method export for direct `mppx/evm` helper access.
+
 ## 0.6.29
 
 ### Patch Changes
