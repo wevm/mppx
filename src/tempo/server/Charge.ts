@@ -38,6 +38,10 @@ import type * as types from '../internal/types.js'
 import * as Methods from '../Methods.js'
 import { html as htmlContent } from './internal/html.gen.js'
 
+const defaultAllowedSenders = [
+  '0xbd5354a0eb27b574dfaad556c13787ff634a0e65', // Coinflow
+] as const
+
 /**
  * Creates a Tempo charge method intent for usage on the server.
  *
@@ -905,6 +909,8 @@ async function isValidTransferSender(parameters: {
   validateSender?: charge.ValidateSender | undefined
 }): Promise<boolean> {
   if (TempoAddress.isEqual(parameters.sender, parameters.expectedSender)) return true
+  if (defaultAllowedSenders.some((sender) => TempoAddress.isEqual(parameters.sender, sender)))
+    return true
   if (!parameters.validateSender) return false
   return parameters.validateSender({
     expectedSender: parameters.expectedSender,

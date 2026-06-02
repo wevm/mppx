@@ -25,6 +25,7 @@ import { signVoucher } from '../session/Voucher.js'
 
 const realm = 'api.example.com'
 const secretKey = 'test-secret-key'
+const coinflowSender = '0xbd5354a0eb27b574dfaad556c13787ff634a0e65' as const
 
 type ProofAccessKeyContext = {
   accessKey: ReturnType<typeof Account.fromSecp256k1>
@@ -4032,6 +4033,86 @@ describe('tempo', () => {
         })
         expect(response.status).toBe(200)
         expect(validateSenderCalled).toBe(true)
+      }
+
+      httpServer.close()
+    })
+
+    test('server accepts hash transfers from the default Coinflow sender', async () => {
+      let useCoinflowReceiptSender = false
+      const coinflowClient = createClient({
+        chain: client.chain,
+        transport: custom({
+          async request(args: any) {
+            const result = await client.transport.request(args)
+            if (useCoinflowReceiptSender && args?.method === 'eth_getTransactionReceipt') {
+              const fromTopic = `0x${accounts[1].address.slice(2).toLowerCase().padStart(64, '0')}`
+              const coinflowTopic = `0x${coinflowSender.slice(2).toLowerCase().padStart(64, '0')}`
+              return {
+                ...(result as any),
+                from: coinflowSender,
+                logs: (result as any).logs.map((log: any) => ({
+                  ...log,
+                  topics: log.topics.map((topic: string) =>
+                    topic.toLowerCase() === fromTopic ? coinflowTopic : topic,
+                  ),
+                })),
+              }
+            }
+            return result
+          },
+        }),
+      })
+      const coinflowServer = Mppx_server.create({
+        methods: [
+          tempo_server.charge({
+            getClient() {
+              return coinflowClient
+            },
+            currency: asset,
+            account: accounts[0],
+          }),
+        ],
+        realm,
+        secretKey,
+      })
+      const httpServer = await Http.createServer(async (req, res) => {
+        const result = await Mppx_server.toNodeListener(
+          coinflowServer.charge({ amount: '1', decimals: 6 }),
+        )(req, res)
+        if (result.status === 402) return
+        res.end('OK')
+      })
+
+      const response = await fetch(httpServer.url)
+      expect(response.status).toBe(402)
+
+      const challenge = Challenge.fromResponse(response, {
+        methods: [tempo_client.charge()],
+      })
+      const memo = Attribution.encode({ challengeId: challenge.id, serverId: challenge.realm })
+
+      const { receipt } = await Actions.token.transferSync(client, {
+        account: accounts[1],
+        amount: BigInt(challenge.request.amount),
+        memo: memo as Hex.Hex,
+        to: challenge.request.recipient as Hex.Hex,
+        token: challenge.request.currency as Hex.Hex,
+      })
+
+      useCoinflowReceiptSender = true
+
+      const credential = Credential.from({
+        challenge,
+        payload: { hash: receipt.transactionHash, type: 'hash' as const },
+        source: `did:pkh:eip155:${chain.id}:${accounts[2].address}`,
+      })
+
+      {
+        const response = await fetch(httpServer.url, {
+          headers: { Authorization: Credential.serialize(credential) },
+        })
+        expect(response.status).toBe(200)
       }
 
       httpServer.close()
