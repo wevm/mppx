@@ -102,6 +102,8 @@ describe('x402 exact credential helper', () => {
     expect(paymentPayload.accepted.scheme).toBe('exact')
     expect('authorization' in paymentPayload.payload).toBe(true)
     if (!('authorization' in paymentPayload.payload)) throw new Error()
+    expect(paymentPayload.extensions?.mppx?.info.method).toBe('GET')
+    expect(paymentPayload.extensions?.mppx?.info.nonce).toEqual(expect.any(String))
     expect(paymentPayload.payload.authorization.nonce).toBe(
       RouteBinding.nonce({
         accepted: paymentPayload.accepted,
@@ -110,6 +112,35 @@ describe('x402 exact credential helper', () => {
       }),
     )
     expect(paymentPayload.payload.signature).toBe('0x1234')
+  })
+
+  test('uses a fresh route-bound nonce for repeated payments', async () => {
+    const config = {
+      account,
+      currencies: [usdc],
+      maxAmount: '0.01',
+      networks: [Chains.baseSepolia],
+    } as const
+
+    const first = Header.decodePaymentSignature(
+      await createCredential({
+        challenge: challenge(),
+        config,
+        context: {},
+      }),
+    )
+    const second = Header.decodePaymentSignature(
+      await createCredential({
+        challenge: challenge(),
+        config,
+        context: {},
+      }),
+    )
+
+    expect(first.extensions?.mppx?.info.nonce).not.toBe(second.extensions?.mppx?.info.nonce)
+    if (!('authorization' in first.payload) || !('authorization' in second.payload))
+      throw new Error()
+    expect(first.payload.authorization.nonce).not.toBe(second.payload.authorization.nonce)
   })
 })
 
@@ -136,7 +167,7 @@ function challenge(overrides: Partial<Types.PaymentRequirements> = {}): X402Chal
           info: { method: 'GET' },
           schema: {
             additionalProperties: false,
-            properties: { method: { type: 'string' } },
+            properties: { method: { type: 'string' }, nonce: { type: 'string' } },
             required: ['method'],
             type: 'object',
           },

@@ -115,8 +115,12 @@ export function http() {
 }
 
 function paymentRequiredChallenges(response: Response): Challenge.Challenge[] {
-  if (response.headers.has(paymentAuthChallengeHeader)) return Challenge.fromResponseList(response)
-  return x402Challenges(response)
+  return [
+    ...(response.headers.has(paymentAuthChallengeHeader)
+      ? Challenge.fromResponseList(response)
+      : []),
+    ...x402Challenges(response),
+  ]
 }
 
 function x402Challenges(response: Response): Challenge.Challenge[] {

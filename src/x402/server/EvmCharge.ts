@@ -26,6 +26,7 @@ const mppxRouteBindingSchema = {
     [Scope.reservedMetaKey]: { type: 'string' },
     digest: { type: 'string' },
     method: { type: 'string' },
+    nonce: { type: 'string' },
     opaque: { type: 'string' },
   },
   required: ['method'],
@@ -124,7 +125,7 @@ export function createPath(config: ResolvedOptions): Path {
       const payload = payloadToAuthorization(paymentPayload)
       const expectedNonce = x402_RouteBinding.nonce({
         accepted: paymentRequirements,
-        extensions: expectedExtensions,
+        extensions: paymentPayload.extensions!,
         resource: expectedResource,
       })
       if (payload.nonce !== expectedNonce)
@@ -341,9 +342,15 @@ function containsExtensions(
     return (
       actualExtension !== undefined &&
       isDeepStrictEqual(actualExtension.schema, expectedExtension.schema) &&
-      isDeepStrictEqual(actualExtension.info, expectedExtension.info)
+      isDeepStrictEqual(stripClientNonce(actualExtension.info), expectedExtension.info)
     )
   })
+}
+
+function stripClientNonce(info: Record<string, unknown>): Record<string, unknown> {
+  const { nonce, ...rest } = info
+  if (nonce !== undefined && typeof nonce !== 'string') return info
+  return rest
 }
 
 async function assertBodyDigest(challenge: Challenge.Challenge, input: Request): Promise<void> {
