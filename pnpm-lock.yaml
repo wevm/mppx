@@ -354,6 +354,30 @@ importers:
         specifier: latest
         version: 8.0.14(@types/node@25.6.2)(esbuild@0.28.0)(tsx@4.21.0)(yaml@2.9.0)
 
+  examples/x402-mpp:
+    dependencies:
+      '@types/node':
+        specifier: 25.6.0
+        version: 25.6.0
+      '@typescript/native-preview':
+        specifier: 7.0.0-dev.20260323.1
+        version: 7.0.0-dev.20260323.1
+      hono:
+        specifier: 4.12.23
+        version: 4.12.23
+      mppx:
+        specifier: workspace:*
+        version: link:../..
+      tsx:
+        specifier: 4.21.0
+        version: 4.21.0
+      typescript:
+        specifier: ~5.9.3
+        version: 5.9.3
+      viem:
+        specifier: ^2.51.3
+        version: 2.51.3(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.4.3)
+
   src/stripe/server/internal/html:
     dependencies:
       '@stripe/stripe-js':
