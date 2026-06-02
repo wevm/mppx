@@ -1,5 +1,22 @@
 # mppx
 
+## 0.6.29
+
+### Patch Changes
+
+- aca0e4a: Fixed challenge header serialization type checking for ES2020 TypeScript targets.
+- 1edd30e: Fixed WWW-Authenticate challenge serialization to escape quoted-string values and reject CRLF.
+- 5aed74b: Replaced Tempo session `authorizedSigner` options with `voucherSigner` accounts and added raw access-key voucher signing.
+- d337c11: Preserved charge supported modes and split payment defaults in challenges.
+- c95f4e2: Applied strict session fee-payer call validation to relay-sponsored transactions.
+- 2f5b92a: Bound session voucher verification to stored channel chain metadata.
+- 165bc9c: Required expiring nonce keys for fee-sponsored transactions.
+- a171438: Blocked WebSocket session metering after channel close requests.
+- ae76fb4: Retried payment credentials against the final challenge response URL.
+- 6715802: Stripped caller-supplied OpenAI tenant headers before proxying requests.
+- fbb7057: Added EVM charge support with x402 exact compatibility and resource-bound payment payload verification.
+- bf72175: Added an x402 and mpp example server/client, fixed HTTP clients to parse x402 offers when Payment-auth challenges were also present, and fixed repeated x402 EIP-3009 payments for live facilitators.
+
 ## 0.6.28
 
 ### Patch Changes
