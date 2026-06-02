@@ -19,6 +19,7 @@ export async function createCredential(parameters: createCredential.Parameters):
   assertPolicy(parameters.config, accepted)
   if (!request.resource || !request.extensions?.mppx)
     throw new Error('x402 exact EIP-3009 requires route binding.')
+  const extensions = withNonceSalt(request.extensions)
   const transferMethod = accepted.extra?.assetTransferMethod ?? 'eip3009'
   if (transferMethod !== 'eip3009')
     throw new Error(`x402 exact ${String(transferMethod)} signing is not implemented yet.`)
@@ -33,7 +34,7 @@ export async function createCredential(parameters: createCredential.Parameters):
     from: getAddress(account.address),
     nonce: RouteBinding.nonce({
       accepted,
-      extensions: request.extensions,
+      extensions,
       resource: request.resource,
     }),
     to: getAddress(accepted.payTo),
@@ -60,7 +61,7 @@ export async function createCredential(parameters: createCredential.Parameters):
 
   return Header.encodePaymentSignature({
     accepted,
-    ...(request.extensions ? { extensions: request.extensions } : {}),
+    extensions,
     payload: {
       authorization,
       signature,
@@ -172,4 +173,26 @@ function decimalsOfAcceptedCurrency(
   )
   if (currency && Assets.isAsset(currency)) return currency.decimals
   return parameters.decimals
+}
+
+function withNonceSalt(extensions: Types.Extensions): Types.Extensions {
+  const mppx = extensions.mppx
+  if (!mppx) return extensions
+  return {
+    ...extensions,
+    mppx: {
+      ...mppx,
+      info: {
+        ...mppx.info,
+        nonce: randomNonceSalt(),
+      },
+    },
+  }
+}
+
+function randomNonceSalt(): string {
+  const crypto = globalThis.crypto
+  if (!crypto?.getRandomValues) throw new Error('x402 exact requires crypto randomness.')
+  const bytes = crypto.getRandomValues(new Uint8Array(32))
+  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('')
 }

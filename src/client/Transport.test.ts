@@ -130,13 +130,13 @@ describe('http', () => {
         name: 'multiple x402 accepts',
       },
       {
-        expectedIds: [challenge.id],
-        expectedMethods: ['tempo'],
+        expectedIds: [challenge.id, `${x402_Types.syntheticChallengeIdPrefix}0`],
+        expectedMethods: ['tempo', x402_Types.paymentMethod],
         headers: () => ({
           'PAYMENT-REQUIRED': x402_Header.encodePaymentRequired(x402PaymentRequired),
           'WWW-Authenticate': Challenge.serialize(challenge),
         }),
-        name: 'Payment auth challenges when x402 is also present',
+        name: 'Payment auth and x402 challenges when both are present',
       },
     ])('returns $name', ({ expectedIds, expectedMethods, headers }) => {
       const transport = Transport.http()

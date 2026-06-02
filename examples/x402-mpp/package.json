@@ -1,0 +1,19 @@
+{
+  "name": "x402-mpp",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "check:types": "tsgo -p tsconfig.json",
+    "client": "tsx src/client.ts",
+    "dev": "tsx src/server.ts"
+  },
+  "dependencies": {
+    "@types/node": "25.6.0",
+    "@typescript/native-preview": "7.0.0-dev.20260323.1",
+    "hono": "4.12.23",
+    "mppx": "latest",
+    "tsx": "4.21.0",
+    "typescript": "~6.0.3",
+    "viem": "2.51.3"
+  }
+}
