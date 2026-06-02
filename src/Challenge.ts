@@ -315,7 +315,7 @@ export function serialize(challenge: Challenge): string {
 /** @internal */
 function authParam(name: string, value: string): string {
   if (/[\r\n]/.test(value)) throw new Error('Invalid quoted-string value.')
-  return `${name}="${value.replaceAll('\\', '\\\\').replaceAll('"', '\\"')}"`
+  return `${name}="${value.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`
 }
 
 /**
