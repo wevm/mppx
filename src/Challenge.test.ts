@@ -453,6 +453,34 @@ describe('serialize', () => {
     expect(header).toContain('digest="sha-256=abc"')
     expect(header).toContain('expires="2025-01-06T12:00:00Z"')
   })
+
+  test('behavior: escapes quoted-string values', () => {
+    const challenge = Challenge.from({
+      id: 'abc123',
+      realm: 'api.example.com',
+      method: 'tempo',
+      intent: 'charge',
+      request: { amount: '1000000' },
+      description: 'Pay "premium" path C:\\tempo\\api',
+    })
+
+    const header = Challenge.serialize(challenge)
+    expect(header).toContain('description="Pay \\"premium\\" path C:\\\\tempo\\\\api"')
+    expect(Challenge.deserialize(header).description).toBe('Pay "premium" path C:\\tempo\\api')
+  })
+
+  test('error: rejects CRLF in quoted-string values', () => {
+    const challenge = Challenge.from({
+      id: 'abc123',
+      realm: 'api.example.com',
+      method: 'tempo',
+      intent: 'charge',
+      request: { amount: '1000000' },
+      description: 'Line one\r\nLine two',
+    })
+
+    expect(() => Challenge.serialize(challenge)).toThrow('Invalid quoted-string value.')
+  })
 })
 
 describe('deserialize', () => {

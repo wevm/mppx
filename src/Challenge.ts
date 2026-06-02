@@ -294,21 +294,28 @@ export declare namespace fromMethod {
  */
 export function serialize(challenge: Challenge): string {
   const parts = [
-    `id="${challenge.id}"`,
-    `realm="${challenge.realm}"`,
-    `method="${challenge.method}"`,
-    `intent="${challenge.intent}"`,
-    `request="${PaymentRequest.serialize(challenge.request)}"`,
+    authParam('id', challenge.id),
+    authParam('realm', challenge.realm),
+    authParam('method', challenge.method),
+    authParam('intent', challenge.intent),
+    authParam('request', PaymentRequest.serialize(challenge.request)),
   ]
 
-  if (challenge.description !== undefined) parts.push(`description="${challenge.description}"`)
-  if (challenge.digest !== undefined) parts.push(`digest="${challenge.digest}"`)
-  if (challenge.expires !== undefined) parts.push(`expires="${challenge.expires}"`)
-  if (challenge.opaque !== undefined) parts.push(`opaque="${challenge.opaque}"`)
+  if (challenge.description !== undefined)
+    parts.push(authParam('description', challenge.description))
+  if (challenge.digest !== undefined) parts.push(authParam('digest', challenge.digest))
+  if (challenge.expires !== undefined) parts.push(authParam('expires', challenge.expires))
+  if (challenge.opaque !== undefined) parts.push(authParam('opaque', challenge.opaque))
   else if (challenge.meta !== undefined)
-    parts.push(`opaque="${PaymentRequest.serialize(challenge.meta)}"`)
+    parts.push(authParam('opaque', PaymentRequest.serialize(challenge.meta)))
 
   return `Payment ${parts.join(', ')}`
+}
+
+/** @internal */
+function authParam(name: string, value: string): string {
+  if (/[\r\n]/.test(value)) throw new Error('Invalid quoted-string value.')
+  return `${name}="${value.replaceAll('\\', '\\\\').replaceAll('"', '\\"')}"`
 }
 
 /**
