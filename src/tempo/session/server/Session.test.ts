@@ -546,6 +546,72 @@ describe('precompile server session unit guardrails', () => {
     })
   })
 
+  test('request can resolve a server session snapshot from request identity', async () => {
+    const openPayload = await createOpenPayload({ initialAmount: 100n })
+    const { method, store } = createServer({
+      resolveChannelId({ request, credential, paymentRequest, store: hookStore }) {
+        expect(request?.headers.get('cookie')).toBe('sid=session-1')
+        expect(credential).toBeNull()
+        expect(paymentRequest.unitType).toBe('request')
+        expect(hookStore).toBe(store)
+        return openPayload.channelId
+      },
+    })
+    await persistPrecompileChannel(store, openPayload, {
+      highestVoucherAmount: 250n,
+      spent: 200n,
+      units: 2,
+    })
+
+    const request = await method.request!({
+      capturedRequest: {
+        hasBody: false,
+        headers: new Headers({ cookie: 'sid=session-1' }),
+        method: 'GET',
+        url: new URL('https://api.example.com/resource'),
+      },
+      credential: null,
+      request: {
+        amount: '1',
+        currency: token,
+        decimals: 0,
+        recipient: payee,
+        unitType: 'request',
+      },
+    } as never)
+
+    expect(request.sessionSnapshot).toMatchObject({
+      channelId: openPayload.channelId,
+      descriptor: openPayload.descriptor,
+      requiredCumulative: '201',
+      spent: '200',
+    })
+  })
+
+  test('request prefers explicit channel ID over custom channel resolver', async () => {
+    const openPayload = await createOpenPayload({ initialAmount: 100n })
+    const { method, store } = createServer({
+      resolveChannelId() {
+        throw new Error('unexpected resolver call')
+      },
+    })
+    await persistPrecompileChannel(store, openPayload)
+
+    const request = await method.request!({
+      credential: null,
+      request: {
+        amount: '1',
+        channelId: openPayload.channelId,
+        currency: token,
+        decimals: 0,
+        recipient: payee,
+        unitType: 'request',
+      },
+    } as never)
+
+    expect(request.sessionSnapshot?.channelId).toBe(openPayload.channelId)
+  })
+
   test('request uses zero effective amount for non-content snapshot hints', async () => {
     const { method, store } = createServer()
     const openPayload = await createOpenPayload({ initialAmount: 100n })

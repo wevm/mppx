@@ -31,6 +31,35 @@ export type ResolveSessionSnapshotParameters = {
   store: ChannelStore.ChannelStore
 }
 
+/** Request metadata available to `resolveChannelId` without exposing a mutable `Request`. */
+export type SessionChannelIdRequest = {
+  /** Request headers, useful for cookies or auth/session headers. */
+  readonly headers: Headers
+  /** Whether the original request had a body, when known. */
+  readonly hasBody?: boolean | undefined
+  /** HTTP method for the protected request. */
+  readonly method: string
+  /** Request URL, when the transport captured it. */
+  readonly url?: URL | undefined
+}
+
+/** Inputs for resolving a reusable channel when the request did not include a channel ID. */
+export type ResolveSessionChannelIdParameters = {
+  /** Captured HTTP request metadata, when the transport provides it. */
+  request?: SessionChannelIdRequest | undefined
+  /** Credential submitted with the request, when present. */
+  credential: Credential.Credential | null | undefined
+  /** Session payment request being challenged. */
+  paymentRequest: SessionPaymentRequestInput
+  /** Channel store backing this session method. */
+  store: ChannelStore.ChannelStore
+}
+
+/** Application hook for mapping request identity to an existing session channel. */
+export type ResolveSessionChannelId = (
+  parameters: ResolveSessionChannelIdParameters,
+) => Promise<string | null | undefined> | string | null | undefined
+
 /** Normalizes a session channel ID hint when one is present. */
 export function normalizeSessionChannelId(value: unknown): Hex | undefined {
   if (typeof value !== 'string') return undefined
@@ -45,6 +74,34 @@ export function normalizeSessionChannelId(value: unknown): Hex | undefined {
 export function getCredentialChannelId(credential: Credential.Credential | null | undefined) {
   if (!isObject(credential?.payload)) return undefined
   return normalizeSessionChannelId(credential.payload.channelId)
+}
+
+function normalizeResolvedSessionChannelId(value: string | null | undefined): Hex | undefined {
+  if (value === null || value === undefined) return undefined
+  return ChannelStore.normalizeChannelId(value)
+}
+
+/** Resolves the channel ID used to build server-side session bootstrap hints. */
+export async function resolveSessionChannelId(parameters: {
+  capturedRequest?: RequestBodyProbe | undefined
+  credential: Credential.Credential | null | undefined
+  request: SessionPaymentRequestInput
+  resolveChannelId?: ResolveSessionChannelId | undefined
+  store: ChannelStore.ChannelStore
+}): Promise<Hex | undefined> {
+  const { capturedRequest, credential, request, resolveChannelId, store } = parameters
+  const explicitChannelId =
+    getCredentialChannelId(credential) ?? normalizeSessionChannelId(request.channelId)
+  if (explicitChannelId) return explicitChannelId
+  if (!resolveChannelId) return undefined
+  return normalizeResolvedSessionChannelId(
+    await resolveChannelId({
+      request: capturedRequest,
+      credential,
+      paymentRequest: request,
+      store,
+    }),
+  )
 }
 
 /** Builds server bootstrap hints for a reusable precompile session channel. */
@@ -125,6 +182,7 @@ export type ResolvedSessionPaymentRequest = SessionPaymentRequestInput & {
   chainId: number
   escrowContract: Address
   feePayer?: boolean | viem_Account | undefined
+  operator?: Address | undefined
   sessionSnapshot?: SessionSnapshot | undefined
 }
 
@@ -138,6 +196,8 @@ export type SessionMethodDetails = {
   feePayer?: boolean | undefined
   /** Minimum raw-unit increase required for voucher credentials. */
   minVoucherDelta?: string | undefined
+  /** Channel operator address the client should encode in new open transactions. */
+  operator?: Address | undefined
 }
 
 /** Inputs used to resolve the chain ID for a session challenge. */
@@ -158,6 +218,7 @@ export type ResolveSessionPaymentRequestParameters = {
   parameterEscrowContract?: Address | undefined
   parameterFeePayer?: ParameterFeePayer
   request: SessionPaymentRequestInput
+  resolveChannelId?: ResolveSessionChannelId | undefined
   store: ChannelStore.ChannelStore
 }
 
@@ -216,7 +277,9 @@ function isCanonicalSessionMethodDetails(value: unknown): value is SessionMethod
     typeof value.escrowContract === 'string' &&
     isAddress(value.escrowContract, { strict: false }) &&
     (value.feePayer === undefined || typeof value.feePayer === 'boolean') &&
-    (value.minVoucherDelta === undefined || typeof value.minVoucherDelta === 'string')
+    (value.minVoucherDelta === undefined || typeof value.minVoucherDelta === 'string') &&
+    (value.operator === undefined ||
+      (typeof value.operator === 'string' && isAddress(value.operator, { strict: false })))
   )
 }
 
@@ -273,6 +336,7 @@ export async function resolveSessionPaymentRequest(
     parameterEscrowContract,
     parameterFeePayer,
     request,
+    resolveChannelId,
     store,
   } = parameters
 
@@ -291,15 +355,24 @@ export async function resolveSessionPaymentRequest(
     request.escrowContract,
     parameterEscrowContract,
   )
+  const operator = resolveRequestOperator(request.operator)
   const requestAmount = parseUnits(request.amount, decimals)
-  const sessionSnapshot = await resolveSessionSnapshot({
-    amount: capturedRequest && !isSessionContentRequest(capturedRequest) ? 0n : requestAmount,
-    channelId: getCredentialChannelId(credential) ?? normalizeSessionChannelId(request.channelId),
+  const channelId = await resolveSessionChannelId({
+    capturedRequest,
+    credential,
+    request,
+    resolveChannelId,
     store,
   })
+  const sessionSnapshot = await resolveSessionSnapshot({
+    amount: capturedRequest && !isSessionContentRequest(capturedRequest) ? 0n : requestAmount,
+    channelId,
+    store,
+  })
+  const { operator: _operator, ...requestWithoutOperator } = request
 
   return {
-    ...request,
+    ...requestWithoutOperator,
     chainId,
     escrowContract,
     feePayer: resolveRequestFeePayer({
@@ -308,6 +381,7 @@ export async function resolveSessionPaymentRequest(
       parameterFeePayer,
       requestFeePayer: request.feePayer,
     }),
+    ...(operator ? { operator } : {}),
     ...(sessionSnapshot ? { sessionSnapshot } : {}),
   }
 }
@@ -322,6 +396,13 @@ function resolveRequestEscrowContract(
     return requestEscrowContract
   }
   return parameterEscrowContract ?? tip20ChannelEscrow
+}
+
+function resolveRequestOperator(requestOperator: unknown): Address | undefined {
+  if (requestOperator === undefined) return undefined
+  if (typeof requestOperator === 'string' && isAddress(requestOperator, { strict: false }))
+    return requestOperator as Address
+  throw new Error('Invalid operator configured for tempo.session().')
 }
 
 /** Parses the canonical session request shape used during credential verification. */

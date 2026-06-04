@@ -33,7 +33,6 @@ export function session(parameters: session.Parameters = {}) {
     getClient: getClientParameter,
     maxDeposit: maxDepositParameter,
     onChannelUpdate,
-    operator,
   } = parameters
   const getClient = Client.getResolver({
     chain: tempo_chain,
@@ -62,7 +61,6 @@ export function session(parameters: session.Parameters = {}) {
           context,
           decimals,
           maxDeposit,
-          operator,
           resolved,
         }),
         cache,
@@ -84,8 +82,6 @@ export declare namespace session {
       escrow?: Address | undefined
       /** Maximum channel deposit in human-readable units. Caps server-suggested opens and automatic top-ups. */
       maxDeposit?: string | undefined
-      /** Address authorized to operate the TIP-1034 channel on behalf of the payee. */
-      operator?: Address | undefined
       /** Called whenever channel state changes. */
       onChannelUpdate?: ((entry: ChannelEntry) => void) | undefined
     }

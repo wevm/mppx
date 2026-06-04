@@ -81,7 +81,7 @@ function deserializeCredential(credential: string) {
   return Credential.deserialize<Types.SessionCredentialPayload>(credential)
 }
 
-function openDeposit(payload: Types.SessionCredentialPayload): bigint {
+function openArgs(payload: Types.SessionCredentialPayload) {
   if (payload.action !== 'open') throw new Error('expected open payload')
   const transaction = Transaction.deserialize(payload.transaction)
   if (!('calls' in transaction)) throw new Error('expected tempo calls')
@@ -89,7 +89,11 @@ function openDeposit(payload: Types.SessionCredentialPayload): bigint {
   const call = calls[0]!
   const decoded = decodeFunctionData({ abi: escrowAbi, data: call.data! })
   if (decoded.functionName !== 'open') throw new Error('expected open call')
-  return decoded.args[3]
+  return decoded.args
+}
+
+function openDeposit(payload: Types.SessionCredentialPayload): bigint {
+  return openArgs(payload)[3]
 }
 
 describe('precompile client session', () => {
@@ -191,6 +195,23 @@ describe('precompile client session', () => {
     expect(payload.channelId).toBe(
       Channel.computeId({ ...payload.descriptor, chainId, escrow: challengeEscrow }),
     )
+  })
+
+  test('uses challenge-advertised operator for open transactions', async () => {
+    const operator = '0x0000000000000000000000000000000000000006' as Address
+    const method = session({ account, decimals: 0, getClient: () => client })
+    const payload = deserialize(
+      await method.createCredential({
+        challenge: makeChallenge({
+          methodDetails: { chainId, escrowContract: tip20ChannelEscrow, operator },
+        }),
+        context: {},
+      }),
+    )
+
+    if (payload.action !== 'open') throw new Error('expected open payload')
+    expect(openArgs(payload)[1].toLowerCase()).toBe(operator.toLowerCase())
+    expect(payload.descriptor.operator.toLowerCase()).toBe(operator.toLowerCase())
   })
 
   test('tracks cumulative amount and calls onChannelUpdate in auto mode', async () => {
