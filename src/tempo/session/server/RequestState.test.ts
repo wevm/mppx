@@ -15,6 +15,7 @@ import {
   normalizeSessionChannelId,
   respondToSessionCredential,
   resolveCredentialVerificationContext,
+  resolveSessionChannelId,
   resolveSessionPaymentRequest,
   resolveSessionSnapshot,
   resolveVerificationRequest,
@@ -346,6 +347,74 @@ describe('SessionSnapshotHints', () => {
       expect(normalizeSessionChannelId(123)).toBeUndefined()
       expect(normalizeSessionChannelId('0x1234')).toBeUndefined()
       expect(normalizeSessionChannelId(`0x${'zz'.repeat(32)}`)).toBeUndefined()
+    })
+
+    test('resolves bootstrap channel IDs from explicit hints before custom resolver', async () => {
+      let called = false
+      const resolved = await resolveSessionChannelId({
+        credential: {
+          challenge: {},
+          payload: { channelId: `0x${'AA'.repeat(32)}` },
+        } as Credential.Credential,
+        request: {
+          amount: '1',
+          currency: descriptor.token,
+          decimals: 0,
+          recipient: descriptor.payee,
+          unitType: 'request',
+        },
+        resolveChannelId() {
+          called = true
+          return `0x${'bb'.repeat(32)}`
+        },
+        store: store(null),
+      })
+
+      expect(resolved).toBe(channelId)
+      expect(called).toBe(false)
+    })
+
+    test('uses custom resolver when no explicit channel ID is present', async () => {
+      const resolved = await resolveSessionChannelId({
+        capturedRequest: {
+          headers: new Headers({ cookie: 'sid=abc' }),
+          method: 'GET',
+          url: new URL('https://api.example.com/resource'),
+        },
+        credential: null,
+        request: {
+          amount: '1',
+          currency: descriptor.token,
+          decimals: 0,
+          recipient: descriptor.payee,
+          unitType: 'request',
+        },
+        resolveChannelId({ request, paymentRequest }) {
+          expect(request?.headers.get('cookie')).toBe('sid=abc')
+          expect(paymentRequest.unitType).toBe('request')
+          return `0x${'AA'.repeat(32)}`
+        },
+        store: store(null),
+      })
+
+      expect(resolved).toBe(channelId)
+    })
+
+    test('rejects invalid channel IDs returned by custom resolver', async () => {
+      await expect(
+        resolveSessionChannelId({
+          credential: null,
+          request: {
+            amount: '1',
+            currency: descriptor.token,
+            decimals: 0,
+            recipient: descriptor.payee,
+            unitType: 'request',
+          },
+          resolveChannelId: () => '0x1234',
+          store: store(null),
+        }),
+      ).rejects.toThrow('Invalid session channel ID.')
     })
 
     test('builds reusable channel hints without lowering accepted cumulative', async () => {

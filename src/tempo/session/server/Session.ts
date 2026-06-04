@@ -22,6 +22,7 @@ import * as ChannelStore from './ChannelStore.js'
 import { verifyCredentialPayload } from './CredentialVerification.js'
 import { requireSessionCredentialPayload } from './CredentialVerification.js'
 import {
+  type ResolveSessionChannelId,
   resolveCredentialVerificationContext,
   resolveSessionPaymentRequest,
 } from './RequestState.js'
@@ -32,12 +33,19 @@ import { resolveSettlementSchedule, type SettlementSchedule } from './Settlement
 
 /** Server-side automatic settlement schedule. */
 export type { SettlementSchedule } from './Settlement.js'
+/** Server-side hook types for request-identity channel bootstrap. */
+export type {
+  ResolveSessionChannelId,
+  ResolveSessionChannelIdParameters,
+  SessionChannelIdRequest,
+} from './RequestState.js'
 export { settle, settleBatch } from './Settlement.js'
 
 type SessionDefaultValues = {
   amount: session.Parameters['amount']
   currency: session.Parameters['currency']
   decimals: number
+  operator: session.Parameters['operator']
   recipient: Address | undefined
   suggestedDeposit: session.Parameters['suggestedDeposit']
   unitType: session.Parameters['unitType']
@@ -68,6 +76,7 @@ export function session<const parameters extends session.Parameters>(
     channelStateTtl = 5_000,
     currency = defaults.resolveCurrency(parameters),
     decimals = defaults.decimals,
+    operator,
     store: rawStore = Store.memory(),
     suggestedDeposit,
     unitType,
@@ -97,6 +106,7 @@ export function session<const parameters extends session.Parameters>(
       amount,
       currency,
       decimals,
+      operator,
       recipient,
       suggestedDeposit,
       unitType,
@@ -115,6 +125,7 @@ export function session<const parameters extends session.Parameters>(
         parameterEscrowContract: parameters.escrowContract,
         parameterFeePayer: parameters.feePayer,
         request,
+        resolveChannelId: parameters.resolveChannelId,
         store,
       })
     },
@@ -206,6 +217,8 @@ export namespace session {
     feePayerPolicy?: FeePayerPolicy | undefined
     /** Minimum voucher delta to accept (numeric string, default: "0"). */
     minVoucherDelta?: string | undefined
+    /** Resolve a reusable channel ID from request identity when no credential/request channel ID is present. */
+    resolveChannelId?: ResolveSessionChannelId | undefined
     /**
      * Atomic store backend for channel state.
      *

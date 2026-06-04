@@ -279,6 +279,20 @@ describe('session', () => {
 
     expect(request.methodDetails?.sessionSnapshot).toEqual(sessionSnapshot)
   })
+
+  test('schema: advertises precompile session operator in method details', () => {
+    const operator = '0x0000000000000000000000000000000000000006'
+    const request = Methods.session.schema.request.parse({
+      amount: '1',
+      currency: '0x20c0000000000000000000000000000000000001',
+      decimals: 6,
+      operator,
+      recipient: '0x1234567890abcdef1234567890abcdef12345678',
+      unitType: 'token',
+    })
+
+    expect(request.methodDetails?.operator).toBe(operator)
+  })
 })
 
 describe('subscription', () => {

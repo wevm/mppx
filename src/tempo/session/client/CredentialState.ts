@@ -218,6 +218,8 @@ export type ClientSessionMethodDetails = {
   escrow?: Address | undefined
   /** Whether the challenge allows fee-sponsored open/top-up transactions. */
   feePayer?: boolean | undefined
+  /** Channel operator address advertised by the server. */
+  operator?: Address | undefined
   /** Server bootstrap snapshot for a reusable session channel. */
   sessionSnapshot?: SessionSnapshot | undefined
 }
@@ -282,6 +284,7 @@ export type ChallengeContext = {
   escrow: Address
   feePayer?: boolean | undefined
   key: string
+  operator?: Address | undefined
   payee: Address
   snapshot?: SessionSnapshot | undefined
   /** Server-provided raw deposit hint for opening a channel, before local maxDeposit capping. */
@@ -297,7 +300,6 @@ export type PlanCredentialParameters = {
   context?: SessionContext | undefined
   decimals: number
   maxDeposit?: bigint | undefined
-  operator?: Address | undefined
   resolved: ChallengeContext
 }
 
@@ -318,7 +320,6 @@ export type CredentialPlan =
       authorizedSigner?: Address | undefined
       context?: SessionContext | undefined
       maxDeposit?: bigint | undefined
-      operator?: Address | undefined
       resolved: ChallengeContext
     }
   /** Rehydrate a known channel from server snapshot or caller descriptor before signing. */
@@ -371,6 +372,7 @@ function readMethodDetails(challenge: Challenge.Challenge): ClientSessionMethodD
     escrowContract: readOptionalAddress(methodDetails.escrowContract),
     escrow: readOptionalAddress(methodDetails.escrow),
     feePayer: typeof methodDetails.feePayer === 'boolean' ? methodDetails.feePayer : undefined,
+    operator: readOptionalAddress(methodDetails.operator),
     sessionSnapshot: Constants.getMethodDetail<SessionSnapshot>(
       methodDetails,
       Constants.MethodDetailKeys.sessionSnapshot,
@@ -414,6 +416,7 @@ export async function resolveChallengeContext(
     escrow,
     feePayer: methodDetails.feePayer,
     key: channelKey(payee, token, escrow),
+    operator: methodDetails.operator,
     payee,
     snapshot: methodDetails.sessionSnapshot,
     suggestedDepositRaw: readSuggestedDeposit(challenge.request.suggestedDeposit),
@@ -487,8 +490,7 @@ export function resolveRecoverContext(
 
 /** Chooses the next credential plan from local channel cache and optional caller context. */
 export function planCredential(parameters: PlanCredentialParameters): CredentialPlan {
-  const { account, authorizedSigner, cache, context, decimals, maxDeposit, operator, resolved } =
-    parameters
+  const { account, authorizedSigner, cache, context, decimals, maxDeposit, resolved } = parameters
 
   if (hasSessionAction(context)) {
     if (!hasManualSessionDescriptor(context))
@@ -517,7 +519,7 @@ export function planCredential(parameters: PlanCredentialParameters): Credential
     }
   }
   if (entry?.opened) return { type: 'voucher', account, entry, maxDeposit, resolved }
-  return { type: 'open', account, authorizedSigner, context, maxDeposit, operator, resolved }
+  return { type: 'open', account, authorizedSigner, context, maxDeposit, resolved }
 }
 
 /** Executes a credential plan and returns the concrete session credential payload. */
@@ -541,7 +543,7 @@ async function open(
   plan: Extract<CredentialPlan, { type: 'open' }>,
   cache: ChannelCache,
 ): Promise<SessionCredentialPayload> {
-  const { account, authorizedSigner, operator, resolved } = plan
+  const { account, authorizedSigner, resolved } = plan
   const deposit = resolveOpeningDeposit({
     contextDepositRaw: plan.context?.depositRaw,
     maxDeposit: plan.maxDeposit,
@@ -555,7 +557,7 @@ async function open(
     escrow: resolved.escrow,
     feePayer: resolved.feePayer,
     initialAmount: resolved.amount,
-    operator,
+    operator: resolved.operator,
     payee: resolved.payee,
     token: resolved.token,
   })
