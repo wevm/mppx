@@ -986,6 +986,7 @@ describe('Session', () => {
         status: 'closed',
         channelId: closeReceipt?.channelId,
       })
+      expect(s.opened).toBe(false)
       const closePayload = postedPayloads.find((payload) => payload.action === 'close')
       expect(closePayload?.cumulativeAmount).toBe('1')
     })
@@ -1092,6 +1093,75 @@ describe('Session', () => {
       await expect(s.close()).rejects.toThrow(
         'Close request failed with status 500: close failed [WWW-Authenticate: Payment error="close_failed"]',
       )
+      expect(s.opened).toBe(true)
+      expect(s.state).toMatchObject({ status: 'active' })
+    })
+
+    test('rejects mismatched close receipts without closing local state', async () => {
+      const mockFetch = vi.fn().mockImplementation((_input, init?: RequestInit) => {
+        const authorization = new Headers(init?.headers).get('Authorization')
+        const payload = authorization
+          ? Credential.deserialize<SessionCredentialPayload>(authorization).payload
+          : undefined
+
+        if (!payload)
+          return Promise.resolve(
+            make402Response(makeChallenge({ amount: '1', suggestedDeposit: '2' })),
+          )
+        if (payload.action === 'open') {
+          return Promise.resolve(
+            new Response('ok', {
+              status: 200,
+              headers: {
+                'Payment-Receipt': serializeSessionReceipt(
+                  createSessionReceipt({
+                    acceptedCumulative: BigInt(payload.cumulativeAmount),
+                    challengeId,
+                    channelId: payload.channelId,
+                    spent: 1n,
+                    units: 1,
+                  }),
+                ),
+              },
+            }),
+          )
+        }
+        if (payload.action === 'close') {
+          return Promise.resolve(
+            new Response(null, {
+              status: 200,
+              headers: {
+                'Payment-Receipt': serializeSessionReceipt(
+                  createSessionReceipt({
+                    acceptedCumulative: BigInt(payload.cumulativeAmount),
+                    challengeId,
+                    channelId: `0x${'55'.repeat(32)}` as Hex,
+                    spent: BigInt(payload.cumulativeAmount),
+                    units: 1,
+                  }),
+                ),
+              },
+            }),
+          )
+        }
+        return Promise.resolve(makeOkResponse())
+      })
+
+      const s = sessionManager({
+        account,
+        client,
+        decimals: 0,
+        fetch: mockFetch as typeof globalThis.fetch,
+        maxDeposit: '2',
+      })
+
+      const response = await s.fetch('https://api.example.com/resource')
+      expect(response.status).toBe(200)
+      expect(response.receipt?.spent).toBe('1')
+
+      await expect(s.close()).rejects.toThrow('received mismatched payment-close receipt')
+      expect(s.opened).toBe(true)
+      expect(s.state).toMatchObject({ status: 'active', channelId: response.channelId })
     })
   })
 })

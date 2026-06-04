@@ -1849,6 +1849,64 @@ describe('precompile server session unit guardrails', () => {
       expect(replay.headers.get('Payment-Receipt')).toBeNull()
     })
 
+    test('concurrent GET content requests cannot both spend the same voucher headroom', async () => {
+      const rawStore = Store.memory()
+      const store = channelStore(rawStore)
+      const openPayload = await createOpenPayload({ initialAmount: 1n })
+      await persistPrecompileChannel(store, openPayload, {
+        highestVoucherAmount: 1n,
+        spent: 0n,
+        units: 0,
+      })
+      const route = createRoute(rawStore)
+      const voucher = await ClientOps.createVoucherPayload(
+        createSigningClient(),
+        payer,
+        openPayload.descriptor,
+        Types.uint96(1n),
+        chainId,
+      )
+
+      const challengeA = await route(new Request('https://api.example.com/resource-a'))
+      const challengeB = await route(new Request('https://api.example.com/resource-b'))
+      expect(challengeA.status).toBe(402)
+      expect(challengeB.status).toBe(402)
+      if (challengeA.status !== 402 || challengeB.status !== 402)
+        throw new Error('expected challenges')
+
+      const [first, second] = await Promise.all(
+        [challengeA.challenge, challengeB.challenge].map(async (challenge, index) => {
+          const result = await route(
+            new Request(`https://api.example.com/resource-${index}`, {
+              headers: {
+                Authorization: Credential.serialize({
+                  challenge: Challenge.fromResponse(challenge),
+                  payload: voucher,
+                }),
+              },
+            }),
+          )
+          if (result.status === 402) return result.challenge
+          return result.withReceipt(new Response(`paid-content-${index}`))
+        }),
+      )
+
+      const responses = [first, second].filter((response): response is Response =>
+        Boolean(response),
+      )
+      expect(responses).toHaveLength(2)
+      expect(responses.map((response) => response.status).sort()).toEqual([200, 402])
+      const paid = responses.find((response) => response.status === 200)
+      const rejected = responses.find((response) => response.status === 402)
+      if (!paid || !rejected) throw new Error('expected one paid and one rejected response')
+      expect(await paid.text()).toMatch(/^paid-content-/)
+      expect(rejected.headers.get('Payment-Receipt')).toBeNull()
+
+      const channel = await store.getChannel(openPayload.channelId)
+      expect(channel?.spent).toBe(1n)
+      expect(channel?.units).toBe(1)
+    })
+
     test('POST content flow charges once and rejects same-voucher replay', async () => {
       const rawStore = Store.memory()
       const store = channelStore(rawStore)
@@ -1906,6 +1964,100 @@ describe('precompile server session unit guardrails', () => {
       expect(replay.status).toBe(402)
       if (replay.status !== 402) throw new Error('expected challenge')
       expect(replay.challenge.headers.get('Payment-Receipt')).toBeNull()
+    })
+
+    test('bodyless voucher POST management request cannot serve handler content', async () => {
+      const rawStore = Store.memory()
+      const store = channelStore(rawStore)
+      const openPayload = await createOpenPayload({ initialAmount: 1n })
+      await persistPrecompileChannel(store, openPayload)
+      const route = createRoute(rawStore)
+      const voucher = await ClientOps.createVoucherPayload(
+        createSigningClient(),
+        payer,
+        openPayload.descriptor,
+        Types.uint96(1n),
+        chainId,
+      )
+
+      const first = await route(new Request('https://api.example.com/session', { method: 'POST' }))
+      expect(first.status).toBe(402)
+      if (first.status !== 402) throw new Error('expected challenge')
+
+      const result = await route(
+        new Request('https://api.example.com/session', {
+          method: 'POST',
+          headers: {
+            Authorization: Credential.serialize({
+              challenge: Challenge.fromResponse(first.challenge),
+              payload: voucher,
+            }),
+          },
+        }),
+      )
+      expect(result.status).toBe(200)
+      if (result.status !== 200) throw new Error('expected verified management response')
+
+      const response = result.withReceipt(new Response('paid-content'))
+      expect(response.status).toBe(204)
+      expect(await response.text()).toBe('')
+      const receipt = deserializeSessionReceipt(response.headers.get('Payment-Receipt') as string)
+      expect(receipt.spent).toBe('0')
+      expect(receipt.units).toBe(0)
+
+      const channel = await store.getChannel(openPayload.channelId)
+      expect(channel?.spent).toBe(0n)
+      expect(channel?.units).toBe(0)
+    })
+
+    test('bodyless POST query content request is charged before content is served', async () => {
+      const rawStore = Store.memory()
+      const store = channelStore(rawStore)
+      const openPayload = await createOpenPayload({ initialAmount: 1n })
+      await persistPrecompileChannel(store, openPayload, {
+        highestVoucherAmount: 1n,
+        spent: 0n,
+        units: 0,
+      })
+      const route = createRoute(rawStore)
+      const voucher = await ClientOps.createVoucherPayload(
+        createSigningClient(),
+        payer,
+        openPayload.descriptor,
+        Types.uint96(1n),
+        chainId,
+      )
+      const makeRequest = (authorization?: string) =>
+        new Request('https://api.example.com/search?q=paid', {
+          method: 'POST',
+          ...(authorization ? { headers: { Authorization: authorization } } : {}),
+        })
+
+      const first = await route(makeRequest())
+      expect(first.status).toBe(402)
+      if (first.status !== 402) throw new Error('expected challenge')
+
+      const result = await route(
+        makeRequest(
+          Credential.serialize({
+            challenge: Challenge.fromResponse(first.challenge),
+            payload: voucher,
+          }),
+        ),
+      )
+      expect(result.status).toBe(200)
+      if (result.status !== 200) throw new Error('expected paid response')
+      const response = result.withReceipt(new Response('paid-content'))
+      expect(response.status).toBe(200)
+      expect(await response.text()).toBe('paid-content')
+
+      const receipt = deserializeSessionReceipt(response.headers.get('Payment-Receipt') as string)
+      expect(receipt.spent).toBe('1')
+      expect(receipt.units).toBe(1)
+
+      const channel = await store.getChannel(openPayload.channelId)
+      expect(channel?.spent).toBe(1n)
+      expect(channel?.units).toBe(1)
     })
 
     test('verification errors do not include Payment-Receipt', async () => {

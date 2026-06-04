@@ -71,6 +71,12 @@ function makeCredential(
         channelId: `0x${string}`
         transaction: `0x${string}`
         additionalDeposit: string
+      }
+    | {
+        action: 'close'
+        channelId: `0x${string}`
+        cumulativeAmount: string
+        signature: `0x${string}`
       },
 ) {
   return Credential.serialize(
@@ -343,6 +349,111 @@ describe('isows', () => {
       socket.sent.some((m) => m.includes('credential amount does not match this endpoint')),
     ).toBe(true)
     expect(socket.sent.some((m) => m.includes('should-not-reach'))).toBe(false)
+  })
+
+  test('does not start application stream from a top-up management credential', async () => {
+    const socket = new MockSocket()
+
+    await Ws.serve({
+      socket,
+      store: Store.memory(),
+      url: 'ws://example.test/stream',
+      route: async () => ({
+        status: 200,
+        withReceipt(response = new Response(null, { status: 204 })) {
+          response.headers.set(
+            'Payment-Receipt',
+            serializeSessionReceipt(
+              createSessionReceipt({
+                challengeId: challenge.id,
+                channelId,
+                acceptedCumulative: 1n,
+                spent: 0n,
+                units: 0,
+              }),
+            ),
+          )
+          return response
+        },
+      }),
+      generate: async function* () {
+        yield 'should-not-reach'
+      },
+    })
+
+    socket.receive(
+      Ws.formatAuthorizationMessage(
+        makeCredential({
+          action: 'topUp',
+          channelId,
+          additionalDeposit: '1',
+          transaction: '0x01',
+          type: 'transaction',
+        }),
+      ),
+    )
+
+    await sleep(10)
+
+    expect(socket.closed).toBe(false)
+    expect(socket.sent.some((message) => message.includes('should-not-reach'))).toBe(false)
+    expect(
+      socket.sent
+        .map((message) => Ws.parseMessage(message))
+        .filter((message) => message?.mpp === 'payment-receipt'),
+    ).toHaveLength(1)
+  })
+
+  test('closes without starting application stream from a close management credential', async () => {
+    const socket = new MockSocket()
+
+    await Ws.serve({
+      socket,
+      store: Store.memory(),
+      url: 'ws://example.test/stream',
+      route: async () => ({
+        status: 200,
+        withReceipt(response = new Response(null, { status: 204 })) {
+          response.headers.set(
+            'Payment-Receipt',
+            serializeSessionReceipt(
+              createSessionReceipt({
+                challengeId: challenge.id,
+                channelId,
+                acceptedCumulative: 1n,
+                spent: 0n,
+                units: 0,
+              }),
+            ),
+          )
+          return response
+        },
+      }),
+      generate: async function* () {
+        yield 'should-not-reach'
+      },
+    })
+
+    socket.receive(
+      Ws.formatAuthorizationMessage(
+        makeCredential({
+          action: 'close',
+          channelId,
+          cumulativeAmount: '1',
+          signature: `0x${'77'.repeat(65)}`,
+        }),
+      ),
+    )
+
+    await sleep(10)
+
+    expect(socket.closed).toBe(true)
+    expect(socket.sent.some((message) => message.includes('should-not-reach'))).toBe(false)
+    expect(
+      socket.sent
+        .map((message) => Ws.parseMessage(message))
+        .filter((message) => message?.mpp === 'payment-receipt'),
+    ).toHaveLength(1)
   })
 
   test('drops reserved charges when the stream ends without delivering a chunk', async () => {

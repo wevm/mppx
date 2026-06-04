@@ -576,22 +576,32 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
       })
       if (!target) return undefined
 
+      const previous = captureRuntimeStateSnapshot({
+        channel: runtime.channel,
+        spent: runtime.spent,
+        state: runtime.state,
+      })
       const activeSocket = currentSocket?.socket
-      if (currentSocket && activeSocket?.readyState === WebSocketReadyState.OPEN) {
-        const receipt = await closeSocketSession({
-          activeSocket,
-          createSessionCredential,
-          currentSocket,
-          spent: runtime.spent,
-          target,
-          waitForCloseReady: receipts.waitForCloseReady,
-          waitForReceipt: receipts.waitForReceipt,
-        })
-        runtime.state = closedStateFromReceipt(receipt, target.channel)
-        return receipt
-      }
+      try {
+        if (currentSocket && activeSocket?.readyState === WebSocketReadyState.OPEN) {
+          const receipt = await closeSocketSession({
+            activeSocket,
+            createSessionCredential,
+            currentSocket,
+            spent: runtime.spent,
+            target,
+            waitForCloseReady: receipts.waitForCloseReady,
+            waitForReceipt: receipts.waitForReceipt,
+          })
+          runtime.state = closedStateFromReceipt(receipt, target.channel)
+          return receipt
+        }
 
-      return closeHttpSessionAndApply(target)
+        return await closeHttpSessionAndApply(target)
+      } catch (error) {
+        restoreRuntime(previous)
+        throw error
+      }
     },
   }
 

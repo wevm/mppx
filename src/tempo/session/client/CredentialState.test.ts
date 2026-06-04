@@ -139,6 +139,19 @@ describe('ChannelCache', () => {
       expect(entry.cumulativeAmount).toBe(10n)
     })
 
+    test('ignores cumulative credentials for another channel', () => {
+      const cache = createChannelCache()
+      const entry = channel({ cumulativeAmount: 10n })
+      storeChannelEntry(cache, 'payee:token:escrow', entry)
+
+      updateCachedCumulative(cache, channelId, {
+        ...voucher('12'),
+        channelId: `0x${'55'.repeat(32)}`,
+      })
+
+      expect(entry.cumulativeAmount).toBe(10n)
+    })
+
     test('marks cached channels closed from close credentials', () => {
       const cache = createChannelCache()
       const entry = channel({ opened: true })
@@ -147,6 +160,18 @@ describe('ChannelCache', () => {
       updateCachedCumulative(cache, channelId, close('12'))
 
       expect(entry.cumulativeAmount).toBe(12n)
+      expect(entry.opened).toBe(false)
+    })
+
+    test('does not reopen cached channels from stale voucher credentials after close', () => {
+      const cache = createChannelCache()
+      const entry = channel({ cumulativeAmount: 10n, opened: true })
+      storeChannelEntry(cache, 'payee:token:escrow', entry)
+
+      updateCachedCumulative(cache, channelId, close('12'))
+      updateCachedCumulative(cache, channelId, voucher('20'))
+
+      expect(entry.cumulativeAmount).toBe(20n)
       expect(entry.opened).toBe(false)
     })
   })

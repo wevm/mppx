@@ -134,6 +134,31 @@ describe('MeteredStream', () => {
       await reserved
     })
 
+    test('reserveChargeOrWait rejects when channel closes while waiting for headroom', async () => {
+      const emitted: string[] = []
+      const store = memoryStore(channel({ highestVoucherAmount: 25n, spent: 20n }))
+      const reserved = reserveChargeOrWait({
+        amount: 10n,
+        channelId,
+        emit(message) {
+          emitted.push(message)
+        },
+        formatNeedVoucher,
+        pollIntervalMs: 1,
+        reservedAmount: 0n,
+        store,
+      })
+
+      await Promise.resolve()
+      expect(emitted).toHaveLength(1)
+
+      await store.updateChannel(channelId, (current) =>
+        current ? { ...current, closeRequestedAt: 1n } : current,
+      )
+
+      await expect(reserved).rejects.toThrow(ChannelClosedError)
+    })
+
     test('commitReservedCharges increments spend and units', async () => {
       const store = memoryStore(channel({ spent: 20n, units: 2, highestVoucherAmount: 50n }))
 

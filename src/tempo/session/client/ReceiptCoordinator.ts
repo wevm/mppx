@@ -61,6 +61,14 @@ export function createSessionReceiptCoordinator(
 ): SessionReceiptCoordinator {
   const closeReadyWaiter = createSingleWaiter<SessionReceipt>('close-ready')
   const receiptWaiter = createSingleWaiter<SessionReceipt>('receipt')
+  const matchesSocketSession = (receipt: SessionReceipt) => {
+    const socketSession = parameters.getSocketSession()
+    return (
+      !socketSession ||
+      (socketSession.challenge.id === receipt.challengeId &&
+        socketSession.channelId === receipt.channelId)
+    )
+  }
 
   return {
     waitForReceipt(predicate) {
@@ -69,18 +77,14 @@ export function createSessionReceiptCoordinator(
     waitForCloseReady() {
       const receipt = parameters.getSocketSession()?.closeReadyReceipt
       if (receipt) return Promise.resolve(receipt)
-      return closeReadyWaiter.wait()
+      return closeReadyWaiter.wait(matchesSocketSession)
     },
     settleReceipt(receipt) {
       receiptWaiter.settle(receipt)
     },
     settleCloseReady(receipt) {
       const socketSession = parameters.getSocketSession()
-      if (
-        socketSession &&
-        socketSession.challenge.id === receipt.challengeId &&
-        socketSession.channelId === receipt.channelId
-      ) {
+      if (socketSession && matchesSocketSession(receipt)) {
         socketSession.closeReadyReceipt = receipt
       }
       closeReadyWaiter.settle(receipt)

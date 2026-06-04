@@ -58,6 +58,11 @@ describe('Machine', () => {
   } as const satisfies ChannelDescriptor
 
   const channelId = `0x${'33'.repeat(32)}` as const
+  const otherChannelId = `0x${'44'.repeat(32)}` as const
+  const otherDescriptor = {
+    ...descriptor,
+    salt: `0x${'55'.repeat(32)}`,
+  } as const satisfies ChannelDescriptor
 
   const snapshot = {
     acceptedCumulative: '5',
@@ -198,6 +203,74 @@ describe('Machine', () => {
       })
     })
 
+    test('allows active challenge snapshots for the same channel', () => {
+      const challenged = reduce(states.active, {
+        type: 'challenge',
+        challengeId: 'challenge-2',
+        snapshot,
+      })
+
+      expect(challenged.state).toEqual({
+        status: 'hydrating',
+        challengeId: 'challenge-2',
+        snapshot,
+      })
+      expect(challenged.effects).toEqual([{ type: 'hydrate', snapshot }])
+    })
+
+    test('rejects active challenge snapshots for another channel', () => {
+      expect(() =>
+        reduce(states.active, {
+          type: 'challenge',
+          challengeId: 'challenge-2',
+          snapshot: {
+            ...snapshot,
+            channelId: otherChannelId,
+          },
+        }),
+      ).toThrow('Invalid session transition: active + challenge')
+    })
+
+    test('hydrates pending-close snapshots into close-requested state', () => {
+      const hydrating = reduce(initialState, {
+        type: 'challenge',
+        challengeId: 'challenge-1',
+        snapshot: { ...snapshot, closeRequestedAt: '1' },
+      })
+      const hydrated = reduce(hydrating.state, {
+        type: 'hydrated',
+        snapshot: { ...snapshot, closeRequestedAt: '1' },
+      })
+
+      expect(hydrated.state).toEqual({
+        status: 'closeRequested',
+        channelId,
+        descriptor,
+      })
+      expect(hydrated.effects).toEqual([])
+    })
+
+    test('rejects impossible server snapshots', () => {
+      const hydrating = reduce(initialState, {
+        type: 'challenge',
+        challengeId: 'challenge-1',
+        snapshot,
+      }).state
+
+      expect(() =>
+        reduce(hydrating, {
+          type: 'hydrated',
+          snapshot: { ...snapshot, acceptedCumulative: '5', spent: '6' },
+        }),
+      ).toThrow('Invalid session snapshot: spent exceeds accepted cumulative.')
+      expect(() =>
+        reduce(hydrating, {
+          type: 'hydrated',
+          snapshot: { ...snapshot, acceptedCumulative: '11', deposit: '10' },
+        }),
+      ).toThrow('Invalid session snapshot: accepted cumulative exceeds deposit.')
+    })
+
     test('opens when no snapshot exists', () => {
       const next = reduce(initialState, { type: 'challenge', challengeId: 'challenge-1' })
 
@@ -230,6 +303,35 @@ describe('Machine', () => {
         deposit: '10',
         spent: '5',
       })
+    })
+
+    test('rejects open receipts with impossible accounting', () => {
+      const opening = reduce(initialState, { type: 'challenge', challengeId: 'challenge-1' }).state
+
+      expect(() =>
+        reduce(opening, {
+          type: 'opened',
+          descriptor,
+          deposit: '10',
+          receipt: {
+            ...receipt,
+            acceptedCumulative: '5',
+            spent: '6',
+          },
+        }),
+      ).toThrow('Invalid session receipt: spent exceeds accepted cumulative.')
+      expect(() =>
+        reduce(opening, {
+          type: 'opened',
+          descriptor,
+          deposit: '10',
+          receipt: {
+            ...receipt,
+            acceptedCumulative: '11',
+            spent: '5',
+          },
+        }),
+      ).toThrow('Invalid session receipt: accepted cumulative exceeds deposit.')
     })
 
     test('requests top-up before voucher when required cumulative exceeds deposit', () => {
@@ -284,6 +386,93 @@ describe('Machine', () => {
       })
     })
 
+    test('rejects impossible need-voucher accounting', () => {
+      expect(() =>
+        resolveNeedVoucherTransition({
+          challengeId: 'challenge-1',
+          descriptor,
+          event: {
+            acceptedCumulative: '8',
+            channelId,
+            deposit: '10',
+            requiredCumulative: '7',
+          },
+        }),
+      ).toThrow('Invalid need-voucher event: accepted cumulative exceeds required cumulative.')
+      expect(() =>
+        resolveNeedVoucherTransition({
+          challengeId: 'challenge-1',
+          descriptor,
+          event: {
+            acceptedCumulative: '11',
+            channelId,
+            deposit: '10',
+            requiredCumulative: '12',
+          },
+        }),
+      ).toThrow('Invalid need-voucher event: accepted cumulative exceeds deposit.')
+    })
+
+    test('need-voucher transitions preserve the active channel descriptor', () => {
+      const next = reduce(states.active, {
+        type: 'needVoucher',
+        descriptor: otherDescriptor,
+        event: {
+          acceptedCumulative: '5',
+          channelId,
+          deposit: '10',
+          requiredCumulative: '7',
+        },
+      })
+
+      expect(next.state).toMatchObject({
+        status: 'voucherNeeded',
+        channelId,
+        descriptor,
+      })
+    })
+
+    test('rejects need-voucher events for another channel', () => {
+      expect(() =>
+        reduce(states.active, {
+          type: 'needVoucher',
+          descriptor,
+          event: {
+            acceptedCumulative: '5',
+            channelId: otherChannelId,
+            deposit: '10',
+            requiredCumulative: '7',
+          },
+        }),
+      ).toThrow('Invalid session transition: active + needVoucher')
+    })
+
+    test('rejects voucher receipts for another channel', () => {
+      expect(() =>
+        reduce(states.voucherNeeded, {
+          type: 'voucherAccepted',
+          receipt: {
+            ...receipt,
+            channelId: otherChannelId,
+            reference: otherChannelId,
+          },
+        }),
+      ).toThrow('Invalid session transition: voucherNeeded + voucherAccepted')
+    })
+
+    test('rejects voucher receipts with impossible accounting', () => {
+      expect(() =>
+        reduce(states.voucherNeeded, {
+          type: 'voucherAccepted',
+          receipt: {
+            ...receipt,
+            acceptedCumulative: '11',
+            spent: '5',
+          },
+        }),
+      ).toThrow('Invalid session receipt: accepted cumulative exceeds deposit.')
+    })
+
     test('preserves deposit after settlement receipts', () => {
       const active = reduce(
         reduce(initialState, { type: 'challenge', challengeId: 'challenge-1', snapshot }).state,
@@ -311,6 +500,37 @@ describe('Machine', () => {
         deposit: '10',
         spent: '5',
       })
+    })
+
+    test('rejects settlement receipts for another channel', () => {
+      expect(() =>
+        reduce(states.settling, {
+          type: 'settled',
+          receipt: {
+            ...receipt,
+            channelId: otherChannelId,
+            reference: otherChannelId,
+          },
+        }),
+      ).toThrow('Invalid session transition: settling + settled')
+    })
+
+    test('closes with a receipt for the same channel', () => {
+      expect(reduce(states.closing, events.closed).state).toEqual(states.closed)
+    })
+
+    test('rejects close receipts for another channel', () => {
+      const event = {
+        type: 'closed',
+        receipt: { ...receipt, channelId: otherChannelId, reference: otherChannelId },
+      } as const satisfies SessionEvent
+
+      expect(() => reduce(states.closing, event)).toThrow(
+        'Invalid session transition: closing + closed',
+      )
+      expect(() => reduce(states.withdrawable, event)).toThrow(
+        'Invalid session transition: withdrawable + closed',
+      )
     })
 
     test('rejects invalid transitions', () => {
@@ -402,6 +622,20 @@ describe('RuntimeState', () => {
       })
     })
 
+    test('rejects active receipt projections for another local channel', () => {
+      const entry = channel({ deposit: 30n })
+      const receipt = createSessionReceipt({
+        acceptedCumulative: 12n,
+        challengeId: 'challenge-1',
+        channelId: `0x${'05'.repeat(32)}` as Hex.Hex,
+        spent: 8n,
+      })
+
+      expect(() => activeStateFromReceipt(receipt, entry)).toThrow(
+        'Invalid session receipt: channel does not match local channel.',
+      )
+    })
+
     test('projects final close receipts into closed machine state', () => {
       const entry = channel()
       const receipt = createSessionReceipt({
@@ -417,6 +651,21 @@ describe('RuntimeState', () => {
         channelId: entry.channelId,
         descriptor: entry.descriptor,
       })
+    })
+
+    test('rejects closed receipt projections for another local channel', () => {
+      const entry = channel()
+      const receipt = createSessionReceipt({
+        acceptedCumulative: 12n,
+        challengeId: 'challenge-1',
+        channelId: `0x${'05'.repeat(32)}` as Hex.Hex,
+        spent: 8n,
+        txHash: '0x1234',
+      })
+
+      expect(() => closedStateFromReceipt(receipt, entry)).toThrow(
+        'Invalid session receipt: channel does not match local channel.',
+      )
     })
 
     test('restores mutable channel fields from a snapshot', () => {
@@ -488,6 +737,22 @@ describe('RuntimeState', () => {
       expect(state).toBeUndefined()
     })
 
+    test('rejects restored cumulative authorization above local deposit', () => {
+      const entry = channel({ cumulativeAmount: 20n, deposit: 30n })
+
+      expect(() =>
+        restoreCumulativeAuthorization({
+          channel: entry,
+          channelId: entry.channelId,
+          challengeId: 'challenge-1',
+          cumulativeAmount: 31n,
+          spent: 7n,
+          state: initialState,
+        }),
+      ).toThrow('restored cumulative authorization exceeds local deposit')
+      expect(entry.cumulativeAmount).toBe(20n)
+    })
+
     test('creates idle mutable runtime state for a new manager', () => {
       expect(createSessionManagerRuntime()).toEqual({
         channel: null,
@@ -528,6 +793,44 @@ describe('RuntimeState', () => {
       })
     })
 
+    test('keeps public active state monotonic for stale same-channel receipts', () => {
+      const runtime = createSessionManagerRuntime()
+      runtime.channel = channel({ cumulativeAmount: 100n, deposit: 150n })
+      runtime.spent = 0n
+
+      applySessionReceiptToRuntime({
+        maxVoucherCumulative: null,
+        receipt: createSessionReceipt({
+          acceptedCumulative: 100n,
+          challengeId: 'challenge-2',
+          channelId,
+          spent: 80n,
+          units: 8,
+        }),
+        runtime,
+      })
+      applySessionReceiptToRuntime({
+        maxVoucherCumulative: null,
+        receipt: createSessionReceipt({
+          acceptedCumulative: 90n,
+          challengeId: 'challenge-1',
+          channelId,
+          spent: 20n,
+          units: 2,
+        }),
+        runtime,
+      })
+
+      expect(runtime.spent).toBe(80n)
+      expect(runtime.state).toMatchObject({
+        status: 'active',
+        challengeId: 'challenge-2',
+        acceptedCumulative: '100',
+        spent: '80',
+        units: 8,
+      })
+    })
+
     test('ignores receipts for other channels', () => {
       const runtime = createSessionManagerRuntime()
       runtime.channel = channel({ cumulativeAmount: 100n, deposit: 150n })
@@ -552,6 +855,8 @@ describe('RuntimeState', () => {
 
 describe('SessionReceiptCoordinator', () => {
   const channelId = '0x0000000000000000000000000000000000000000000000000000000000000001' as Hex.Hex
+  const otherChannelId =
+    '0x0000000000000000000000000000000000000000000000000000000000000002' as Hex.Hex
   const challenge: TempoSessionChallenge = {
     id: 'challenge-1',
     realm: 'test',
@@ -611,6 +916,30 @@ describe('SessionReceiptCoordinator', () => {
 
       expect(currentSocket.closeReadyReceipt).toBe(closeReady)
       await expect(coordinator.waitForCloseReady()).resolves.toBe(closeReady)
+    })
+
+    test('ignores close-ready receipts for another active socket channel', async () => {
+      const currentSocket = socketSession()
+      const coordinator = createSessionReceiptCoordinator({
+        getSocketSession: () => currentSocket,
+      })
+      const wait = coordinator.waitForCloseReady()
+      const stale = createSessionReceipt({
+        acceptedCumulative: 4n,
+        challengeId: challenge.id,
+        channelId: otherChannelId,
+        spent: 4n,
+      })
+      const closeReady = receipt(3n)
+
+      coordinator.settleCloseReady(stale)
+      await Promise.resolve()
+      expect(currentSocket.closeReadyReceipt).toBeNull()
+
+      coordinator.settleCloseReady(closeReady)
+
+      await expect(wait).resolves.toBe(closeReady)
+      expect(currentSocket.closeReadyReceipt).toBe(closeReady)
     })
 
     test('rejects pending waits', async () => {
@@ -693,6 +1022,24 @@ describe('CloseAuthorization', () => {
           lastChallenge: null,
         }),
       ).toThrow('Cannot close session: no challenge available.')
+    })
+
+    test('rejects close target when active socket belongs to another channel', () => {
+      expect(() =>
+        resolveCloseTarget({
+          channel: channel(),
+          currentSocket: {
+            challenge: challenge(),
+            channelId: `0x${'05'.repeat(32)}` as Hex.Hex,
+            closeReadyReceipt: null,
+            deliveredChunks: 0n,
+            expectedCloseAmount: null,
+            socket: null,
+            tickCost: 1n,
+          },
+          lastChallenge: challenge(),
+        }),
+      ).toThrow('Cannot close session: active socket channel does not match local channel.')
     })
 
     test('rejects close-ready spend beyond local voucher state', () => {
@@ -792,6 +1139,21 @@ describe('LocalAuthorization', () => {
       ).toThrow('receipt accepted cumulative exceeds local voucher state')
     })
 
+    test('rejects receipts that exceed local deposit', () => {
+      expect(() =>
+        assertReceiptWithinLocalState({
+          channel: channel({ cumulativeAmount: 150n, deposit: 100n }),
+          maxVoucherCumulative: null,
+          receipt: createSessionReceipt({
+            acceptedCumulative: 101n,
+            challengeId: 'challenge-1',
+            channelId,
+            spent: 80n,
+          }),
+        }),
+      ).toThrow('receipt accepted cumulative exceeds local deposit')
+    })
+
     test('rejects receipt spent above accepted cumulative', () => {
       expect(() =>
         assertReceiptWithinLocalState({
@@ -837,6 +1199,41 @@ describe('LocalAuthorization', () => {
           spent: 10n,
         }),
       ).toBe(10n)
+    })
+
+    test('ignores over-limit receipts for other channels', () => {
+      expect(() =>
+        assertReceiptWithinLocalState({
+          channel: channel({ cumulativeAmount: 100n }),
+          maxVoucherCumulative: 100n,
+          receipt: createSessionReceipt({
+            acceptedCumulative: 1_000n,
+            challengeId: 'challenge-1',
+            channelId: `0x${'04'.repeat(32)}` as Hex.Hex,
+            spent: 1_000n,
+          }),
+        }),
+      ).not.toThrow()
+    })
+
+    test('does not apply over-limit receipts for other channels to runtime state', () => {
+      const runtime = createSessionManagerRuntime()
+      runtime.channel = channel({ cumulativeAmount: 100n, deposit: 150n })
+      runtime.spent = 10n
+
+      applySessionReceiptToRuntime({
+        maxVoucherCumulative: 100n,
+        receipt: createSessionReceipt({
+          acceptedCumulative: 1_000n,
+          challengeId: 'challenge-1',
+          channelId: `0x${'04'.repeat(32)}` as Hex.Hex,
+          spent: 1_000n,
+        }),
+        runtime,
+      })
+
+      expect(runtime.spent).toBe(10n)
+      expect(runtime.state).toEqual({ status: 'idle' })
     })
 
     test('enforces optional maxDeposit authorization cap', () => {
@@ -1030,6 +1427,32 @@ describe('SocketClose', () => {
       expect(activeSocket.send).toHaveBeenCalledWith(
         Ws.formatAuthorizationMessage('close-credential'),
       )
+    })
+
+    test('clears expected close amount when final receipt wait rejects', async () => {
+      const activeSocket = socket()
+      const currentSocket = socketSession({ closeReadyReceipt: receipt(40n) })
+      const error = new Error('receipt wait failed')
+
+      await expect(
+        closeSocketSession({
+          activeSocket,
+          createSessionCredential: async () => 'close-credential',
+          currentSocket,
+          spent: 20n,
+          target: target(),
+          waitForCloseReady: async () => {
+            throw new Error('unexpected close-ready wait')
+          },
+          waitForReceipt: async () => {
+            expect(currentSocket.expectedCloseAmount).toBe('40')
+            throw error
+          },
+        }),
+      ).rejects.toBe(error)
+
+      expect(currentSocket.expectedCloseAmount).toBeNull()
+      expect(activeSocket.close).not.toHaveBeenCalled()
     })
 
     test('rejects close-ready spend beyond local voucher state', async () => {

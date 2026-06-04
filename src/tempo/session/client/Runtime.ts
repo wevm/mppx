@@ -218,6 +218,12 @@ export function reduce(state: SessionState, event: SessionEvent): SessionTransit
   switch (event.type) {
     case 'challenge': {
       if (state.status !== 'idle' && state.status !== 'active') return invalid(state, event)
+      if (
+        state.status === 'active' &&
+        event.snapshot &&
+        event.snapshot.channelId !== state.channelId
+      )
+        return invalid(state, event)
       if (event.snapshot) {
         return {
           state: { status: 'hydrating', challengeId: event.challengeId, snapshot: event.snapshot },
@@ -243,9 +249,10 @@ export function reduce(state: SessionState, event: SessionEvent): SessionTransit
       }
     case 'needVoucher': {
       if (state.status !== 'active') return invalid(state, event)
+      if (event.event.channelId !== state.channelId) return invalid(state, event)
       return resolveNeedVoucherTransition({
         challengeId: state.challengeId,
-        descriptor: event.descriptor,
+        descriptor: state.descriptor,
         event: event.event,
       })
     }
@@ -264,6 +271,7 @@ export function reduce(state: SessionState, event: SessionEvent): SessionTransit
     case 'voucherAccepted':
       if (state.status !== 'voucherNeeded' && state.status !== 'toppingUp')
         return invalid(state, event)
+      if (event.receipt.channelId !== state.channelId) return invalid(state, event)
       return {
         state: activeFromReceipt(
           state.challengeId,
@@ -286,6 +294,7 @@ export function reduce(state: SessionState, event: SessionEvent): SessionTransit
       }
     case 'settled':
       if (state.status !== 'settling') return invalid(state, event)
+      if (event.receipt.channelId !== state.channelId) return invalid(state, event)
       return {
         state: activeFromReceipt(
           event.receipt.challengeId,
@@ -320,6 +329,7 @@ export function reduce(state: SessionState, event: SessionEvent): SessionTransit
     case 'closed':
       if (state.status !== 'closing' && state.status !== 'withdrawable')
         return invalid(state, event)
+      if (event.receipt && event.receipt.channelId !== state.channelId) return invalid(state, event)
       return {
         state: { status: 'closed', channelId: state.channelId, descriptor: state.descriptor },
         effects: [],
@@ -332,8 +342,15 @@ export function resolveNeedVoucherTransition(
   parameters: ResolveNeedVoucherTransitionParameters,
 ): NeedVoucherTransition {
   const { challengeId, descriptor, event } = parameters
+  const accepted = BigInt(event.acceptedCumulative)
   const required = BigInt(event.requiredCumulative)
   const deposit = BigInt(event.deposit)
+  if (accepted > required) {
+    throw new Error('Invalid need-voucher event: accepted cumulative exceeds required cumulative.')
+  }
+  if (accepted > deposit) {
+    throw new Error('Invalid need-voucher event: accepted cumulative exceeds deposit.')
+  }
 
   if (required > deposit) {
     return {
@@ -364,6 +381,14 @@ export function resolveNeedVoucherTransition(
 }
 
 function activeFromSnapshot(challengeId: string, snapshot: SessionSnapshot): SessionState {
+  assertValidSnapshot(snapshot)
+  if (snapshot.closeRequestedAt !== undefined && BigInt(snapshot.closeRequestedAt) !== 0n) {
+    return {
+      status: 'closeRequested',
+      channelId: snapshot.channelId,
+      descriptor: snapshot.descriptor,
+    }
+  }
   return createActiveState({
     challengeId,
     channelId: snapshot.channelId,
@@ -375,12 +400,25 @@ function activeFromSnapshot(challengeId: string, snapshot: SessionSnapshot): Ses
   })
 }
 
+function assertValidSnapshot(snapshot: SessionSnapshot): void {
+  const acceptedCumulative = BigInt(snapshot.acceptedCumulative)
+  const deposit = BigInt(snapshot.deposit)
+  const spent = BigInt(snapshot.spent)
+  if (spent > acceptedCumulative) {
+    throw new Error('Invalid session snapshot: spent exceeds accepted cumulative.')
+  }
+  if (acceptedCumulative > deposit) {
+    throw new Error('Invalid session snapshot: accepted cumulative exceeds deposit.')
+  }
+}
+
 function activeFromReceipt(
   challengeId: string,
   receipt: SessionReceipt,
   descriptor: ChannelDescriptor,
   deposit: RawAmountString,
 ): SessionState {
+  assertValidReceiptProjection(receipt, deposit)
   return createActiveState({
     challengeId,
     channelId: receipt.channelId,
@@ -390,6 +428,18 @@ function activeFromReceipt(
     spent: receipt.spent,
     units: receipt.units ?? 0,
   })
+}
+
+function assertValidReceiptProjection(receipt: SessionReceipt, deposit: RawAmountString): void {
+  const acceptedCumulative = BigInt(receipt.acceptedCumulative)
+  const depositAmount = BigInt(deposit)
+  const spent = BigInt(receipt.spent)
+  if (spent > acceptedCumulative) {
+    throw new Error('Invalid session receipt: spent exceeds accepted cumulative.')
+  }
+  if (acceptedCumulative > depositAmount) {
+    throw new Error('Invalid session receipt: accepted cumulative exceeds deposit.')
+  }
 }
 
 function invalid(state: SessionState, event: SessionEvent): never {
@@ -459,6 +509,9 @@ export function assertReceiptWithinLocalState(parameters: LocalReceiptValidation
   }
   if (acceptedCumulative > channel.cumulativeAmount) {
     throw new Error('receipt accepted cumulative exceeds local voucher state')
+  }
+  if (acceptedCumulative > channel.deposit) {
+    throw new Error('receipt accepted cumulative exceeds local deposit')
   }
   if (receiptSpent > channel.cumulativeAmount) {
     throw new Error('receipt spent exceeds local voucher state')
@@ -569,6 +622,9 @@ export function resolveCloseTarget(
 
   const challenge = currentSocket?.challenge ?? lastChallenge
   const channelId = currentSocket?.channelId ?? channel.channelId
+  if (channelId !== channel.channelId) {
+    throw new Error('Cannot close session: active socket channel does not match local channel.')
+  }
 
   if (!challenge) {
     throw new Error(
@@ -750,12 +806,43 @@ export function applySessionReceiptToRuntime(
     spent: runtime.spent,
   })
   if (receipt && runtime.channel?.channelId === receipt.channelId) {
-    runtime.state = activeStateFromReceipt(receipt, runtime.channel)
+    const current =
+      runtime.state.status === 'active' && runtime.state.channelId === receipt.channelId
+        ? runtime.state
+        : undefined
+    const acceptedCumulative = maxBigIntString(
+      receipt.acceptedCumulative,
+      current?.acceptedCumulative,
+    )
+    const units = Math.max(receipt.units ?? 0, current?.units ?? 0)
+    const receiptAdvanced =
+      !current ||
+      BigInt(receipt.spent) > BigInt(current.spent) ||
+      BigInt(receipt.acceptedCumulative) > BigInt(current.acceptedCumulative) ||
+      (receipt.units ?? 0) > current.units
+    runtime.state = createActiveState({
+      challengeId: receiptAdvanced ? receipt.challengeId : current.challengeId,
+      channelId: receipt.channelId,
+      descriptor: runtime.channel.descriptor,
+      acceptedCumulative,
+      deposit: runtime.channel.deposit.toString(),
+      spent: runtime.spent.toString(),
+      units,
+    })
   }
+}
+
+function maxBigIntString(value: string, previous: string | undefined): string {
+  if (previous === undefined) return value
+  const next = BigInt(value)
+  const current = BigInt(previous)
+  return (next > current ? next : current).toString()
 }
 
 /** Projects a verified receipt plus local descriptor/deposit data into an active state-machine state. */
 export function activeStateFromReceipt(receipt: SessionReceipt, entry: ChannelEntry): SessionState {
+  assertReceiptMatchesEntry(receipt, entry)
+  assertValidReceiptProjection(receipt, entry.deposit.toString())
   return createActiveState({
     challengeId: receipt.challengeId,
     channelId: receipt.channelId,
@@ -778,7 +865,14 @@ export function closedStateFromChannel(parameters: ClosedStateFromChannelParamet
 
 /** Projects a final close receipt into the public closed state-machine state. */
 export function closedStateFromReceipt(receipt: SessionReceipt, entry: ChannelEntry): SessionState {
+  assertReceiptMatchesEntry(receipt, entry)
   return closedStateFromChannel({ channelId: receipt.channelId, entry })
+}
+
+function assertReceiptMatchesEntry(receipt: SessionReceipt, entry: ChannelEntry): void {
+  if (receipt.channelId !== entry.channelId) {
+    throw new Error('Invalid session receipt: channel does not match local channel.')
+  }
 }
 
 /**
@@ -830,6 +924,9 @@ export function restoreCumulativeAuthorization(
 ): SessionState | undefined {
   const { channel, channelId, challengeId, cumulativeAmount, spent, state } = parameters
   if (!channel || channel.channelId !== channelId) return undefined
+  if (cumulativeAmount > channel.deposit) {
+    throw new Error('restored cumulative authorization exceeds local deposit')
+  }
   channel.cumulativeAmount = cumulativeAmount
   if (!challengeId) return undefined
   return activeStateFromChannel({

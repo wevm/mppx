@@ -86,6 +86,7 @@ export function updateCachedCumulative(
   channelId: Hex,
   payload: SessionCredentialPayload,
 ): void {
+  if (payload.channelId !== channelId) return
   const key = cache.channelIdToKey.get(channelId)
   const cumulativeAmount = readCredentialCumulativeAmount(payload)
   if (!key || cumulativeAmount === undefined) return

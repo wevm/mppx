@@ -327,11 +327,18 @@ export type NeedVoucherResolution =
 
 /** Parses raw-unit numeric fields from a need-voucher event. */
 export function readNeedVoucherEventAmounts(event: NeedVoucherEvent): NeedVoucherEventAmounts {
-  return {
+  const amounts = {
     acceptedCumulative: BigInt(event.acceptedCumulative),
     deposit: BigInt(event.deposit),
     requiredCumulative: BigInt(event.requiredCumulative),
   }
+  if (amounts.acceptedCumulative > amounts.requiredCumulative) {
+    throw new Error('Invalid need-voucher event: accepted cumulative exceeds required cumulative.')
+  }
+  if (amounts.acceptedCumulative > amounts.deposit) {
+    throw new Error('Invalid need-voucher event: accepted cumulative exceeds deposit.')
+  }
+  return amounts
 }
 
 /** Validates local manager state and returns the concrete top-up operation to execute. */
@@ -371,21 +378,24 @@ export function applyTopUpResult(
   const { additionalDeposit, channel, channelId, challengeId, currentState, receipt, spent } =
     parameters
   if (channel?.channelId !== channelId) return undefined
+  if (receipt && receipt.channelId !== channelId) return undefined
 
-  channel.deposit += additionalDeposit
+  const nextDeposit = channel.deposit + additionalDeposit
+  const projectedChannel = { ...channel, deposit: nextDeposit }
+  const state = receipt
+    ? activeStateFromReceipt(receipt, projectedChannel)
+    : challengeId
+      ? activeStateFromChannel({
+          challengeId,
+          entry: projectedChannel,
+          spent: spent.toString(),
+          units: currentState.status === 'active' ? currentState.units : 0,
+        })
+      : undefined
 
-  if (receipt) return { channel, state: activeStateFromReceipt(receipt, channel) }
-  if (!challengeId) return { channel }
-
-  return {
-    channel,
-    state: activeStateFromChannel({
-      challengeId,
-      entry: channel,
-      spent: spent.toString(),
-      units: currentState.status === 'active' ? currentState.units : 0,
-    }),
-  }
+  channel.deposit = nextDeposit
+  if (state) return { channel, state }
+  return { channel }
 }
 
 /**
@@ -618,11 +628,10 @@ export async function retryHttpPaymentRequired(
     response: parameters.response,
   })
   if (!context) return undefined
-  const { channel, challenge, snapshot } = context
+  const { challenge, snapshot } = context
 
   parameters.setChallenge(challenge)
   const requiredCumulative = BigInt(snapshot.requiredCumulative)
-  const cumulativeBeforeVoucher = channel.cumulativeAmount
 
   await parameters.topUpIfNeeded({
     challenge,
@@ -636,6 +645,7 @@ export async function retryHttpPaymentRequired(
   if (!currentChannel?.descriptor || currentChannel.channelId !== snapshot.channelId) {
     return undefined
   }
+  const cumulativeBeforeVoucher = currentChannel.cumulativeAmount
   const cumulativeAmount =
     currentChannel.cumulativeAmount > requiredCumulative
       ? currentChannel.cumulativeAmount
@@ -651,7 +661,13 @@ export async function retryHttpPaymentRequired(
     requestInitWithAuthorization(parameters.input, parameters.init, credential),
   )
   if (!retry.ok && !retry.headers.get(Constants.Headers.paymentReceipt)) {
-    parameters.restoreCumulative(snapshot.channelId, cumulativeBeforeVoucher)
+    const latestChannel = parameters.getChannel()
+    if (
+      latestChannel?.channelId === snapshot.channelId &&
+      latestChannel.cumulativeAmount <= cumulativeAmount
+    ) {
+      parameters.restoreCumulative(snapshot.channelId, cumulativeBeforeVoucher)
+    }
   }
   return retry
 }
@@ -683,6 +699,7 @@ export async function closeHttpSession(
     )
   }
 
+  let currentChallenge = parameters.target.challenge
   const postClose = async (challenge: TempoSessionChallenge) => {
     const credential = await parameters.createSessionCredential(challenge, {
       action: 'close',
@@ -696,10 +713,11 @@ export async function closeHttpSession(
     })
   }
 
-  let response = await postClose(parameters.target.challenge)
+  let response = await postClose(currentChallenge)
   if (response.status === 402) {
     const challenge = Challenge.fromResponseList(response).find(isTempoSessionChallenge)
     if (challenge) {
+      currentChallenge = challenge
       parameters.setChallenge?.(challenge)
       response = await postClose(challenge)
     }
@@ -713,7 +731,29 @@ export async function closeHttpSession(
   }
 
   const receiptHeader = response.headers.get(Constants.Headers.paymentReceipt)
-  return receiptHeader ? deserializeSessionReceipt(receiptHeader) : undefined
+  if (!receiptHeader) return undefined
+  const receipt = deserializeSessionReceipt(receiptHeader)
+  assertHttpCloseReceipt({
+    challengeId: currentChallenge.id,
+    channelId: parameters.target.channelId,
+    expectedCloseAmount: parameters.signedCloseAmount,
+    receipt,
+  })
+  return receipt
+}
+
+function assertHttpCloseReceipt(
+  parameters: ExpectedSocketReceiptParameters & {
+    expectedCloseAmount: string
+  },
+): void {
+  const { challengeId, channelId, expectedCloseAmount, receipt } = parameters
+  if (receipt.challengeId !== challengeId || receipt.channelId !== channelId) {
+    throw new Error('received mismatched payment-close receipt')
+  }
+  if (receipt.acceptedCumulative !== expectedCloseAmount || receipt.spent !== expectedCloseAmount) {
+    throw new Error('received payment-close receipt for unexpected amount')
+  }
 }
 
 /** Options accepted by the auto-driving SSE session flow. */
@@ -1004,6 +1044,8 @@ export type ValidateSocketCloseReadyReceiptParameters = ExpectedSocketReceiptPar
 
 /** Inputs for validating a payment-receipt frame. */
 export type ValidateSocketPaymentReceiptParameters = ExpectedSocketReceiptParameters & {
+  /** Local cumulative voucher authorization for the active channel. */
+  cumulativeAmount: bigint
   /** Expected final close amount while a close credential is in flight. */
   expectedCloseAmount: string | null
 }
@@ -1078,8 +1120,16 @@ export function validateSocketCloseReadyReceipt(
 export function validateSocketPaymentReceipt(
   parameters: ValidateSocketPaymentReceiptParameters,
 ): string | undefined {
-  const { challengeId, channelId, expectedCloseAmount, receipt } = parameters
+  const { challengeId, channelId, cumulativeAmount, expectedCloseAmount, receipt } = parameters
   if (!isExpectedSocketReceipt(parameters)) return 'received mismatched payment-receipt frame'
+  const acceptedCumulative = BigInt(receipt.acceptedCumulative)
+  const spent = BigInt(receipt.spent)
+  if (spent > acceptedCumulative) {
+    return 'received payment-receipt spent above accepted cumulative'
+  }
+  if (acceptedCumulative > cumulativeAmount || spent > cumulativeAmount) {
+    return 'received payment-receipt beyond local voucher state'
+  }
   if (
     expectedCloseAmount !== null &&
     Boolean(receipt.txHash) &&
@@ -1280,6 +1330,7 @@ function handleReceipt(parameters: HandleSocketMessageParameters, receipt: Sessi
   const error = validateSocketPaymentReceipt({
     challengeId: parameters.driver.challenge.id,
     channelId: parameters.socketState.channelId,
+    cumulativeAmount: parameters.driver.getChannel()?.cumulativeAmount ?? 0n,
     expectedCloseAmount: parameters.socketState.expectedCloseAmount,
     receipt,
   })

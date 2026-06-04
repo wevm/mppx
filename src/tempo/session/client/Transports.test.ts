@@ -107,9 +107,18 @@ describe('HttpManagement', () => {
     })
   }
 
-  function receiptHeader(acceptedCumulative: bigint, spent: bigint) {
+  function receiptHeader(
+    acceptedCumulative: bigint,
+    spent: bigint,
+    overrides: Partial<{ challengeId: string; channelId: Hex.Hex }> = {},
+  ) {
     return serializeSessionReceipt(
-      createSessionReceipt({ acceptedCumulative, challengeId: 'challenge-1', channelId, spent }),
+      createSessionReceipt({
+        acceptedCumulative,
+        challengeId: overrides.challengeId ?? 'challenge-1',
+        channelId: overrides.channelId ?? channelId,
+        spent,
+      }),
     )
   }
 
@@ -263,6 +272,87 @@ describe('HttpManagement', () => {
       expect(restoreCumulative).toHaveBeenCalledWith(channelId, 5n)
     })
 
+    test('retryHttpPaymentRequired restores to the cumulative amount observed before signing', async () => {
+      const entry = channel({ cumulativeAmount: 5n })
+      const restoreCumulative = vi.fn((_channelId: Hex.Hex, cumulativeAmount: bigint) => {
+        entry.cumulativeAmount = cumulativeAmount
+      })
+
+      await retryHttpPaymentRequired({
+        createSessionCredential: async () => {
+          entry.cumulativeAmount = 8n
+          return 'voucher-credential'
+        },
+        fetch: async () => new Response('nope', { status: 500 }),
+        getChannel: () => entry,
+        input: 'https://example.test/resource',
+        response: response402(challenge(snapshot())),
+        restoreCumulative,
+        setChallenge() {},
+        topUpIfNeeded: async () => {
+          entry.cumulativeAmount = 7n
+        },
+      })
+
+      expect(restoreCumulative).toHaveBeenCalledWith(channelId, 7n)
+      expect(entry.cumulativeAmount).toBe(7n)
+    })
+
+    test('retryHttpPaymentRequired does not roll back newer same-channel authorization', async () => {
+      const entry = channel({ cumulativeAmount: 5n })
+      const restoreCumulative = vi.fn()
+
+      await retryHttpPaymentRequired({
+        createSessionCredential: async () => {
+          entry.cumulativeAmount = 8n
+          return 'voucher-credential'
+        },
+        fetch: async () => {
+          entry.cumulativeAmount = 12n
+          return new Response('nope', { status: 500 })
+        },
+        getChannel: () => entry,
+        input: 'https://example.test/resource',
+        response: response402(challenge(snapshot())),
+        restoreCumulative,
+        setChallenge() {},
+        topUpIfNeeded: async () => {},
+      })
+
+      expect(restoreCumulative).not.toHaveBeenCalled()
+      expect(entry.cumulativeAmount).toBe(12n)
+    })
+
+    test('retryHttpPaymentRequired ignores mismatched snapshots without side effects', async () => {
+      const entry = channel({ cumulativeAmount: 5n })
+      const createSessionCredential = vi.fn()
+      const fetch = vi.fn()
+      const restoreCumulative = vi.fn()
+      const setChallenge = vi.fn()
+      const topUpIfNeeded = vi.fn()
+
+      const retry = await retryHttpPaymentRequired({
+        createSessionCredential,
+        fetch,
+        getChannel: () => entry,
+        input: 'https://example.test/resource',
+        response: response402(
+          challenge(snapshot({ channelId: `0x${'99'.repeat(32)}` as Hex.Hex })),
+        ),
+        restoreCumulative,
+        setChallenge,
+        topUpIfNeeded,
+      })
+
+      expect(retry).toBeUndefined()
+      expect(setChallenge).not.toHaveBeenCalled()
+      expect(topUpIfNeeded).not.toHaveBeenCalled()
+      expect(createSessionCredential).not.toHaveBeenCalled()
+      expect(fetch).not.toHaveBeenCalled()
+      expect(restoreCumulative).not.toHaveBeenCalled()
+      expect(entry.cumulativeAmount).toBe(5n)
+    })
+
     test('closeHttpSession posts a close credential and parses the receipt', async () => {
       const entry = channel()
       const createSessionCredential = vi.fn(async (_challenge, context: SessionContext) => {
@@ -305,7 +395,11 @@ describe('HttpManagement', () => {
         .mockResolvedValueOnce(
           new Response(null, {
             status: 200,
-            headers: { [Constants.Headers.paymentReceipt]: receiptHeader(5n, 5n) },
+            headers: {
+              [Constants.Headers.paymentReceipt]: receiptHeader(5n, 5n, {
+                challengeId: 'challenge-2',
+              }),
+            },
           }),
         )
 
@@ -323,6 +417,42 @@ describe('HttpManagement', () => {
       expect(createSessionCredential).toHaveBeenCalledTimes(2)
       expect(createSessionCredential.mock.calls[1]?.[0]).toMatchObject({ id: retryChallenge.id })
       expect(authorizationHeader(fetch.mock.calls[1]?.[1])).toBe('close-challenge-2')
+    })
+
+    test('closeHttpSession rejects mismatched close receipts', async () => {
+      await expect(
+        closeHttpSession({
+          createSessionCredential: async () => 'close-credential',
+          fetch: async () =>
+            new Response(null, {
+              status: 200,
+              headers: {
+                [Constants.Headers.paymentReceipt]: receiptHeader(5n, 5n, {
+                  channelId: `0x${'99'.repeat(32)}` as Hex.Hex,
+                }),
+              },
+            }),
+          lastUrl: 'https://example.test/resource',
+          signedCloseAmount: '5',
+          target: { challenge: challenge(), channel: channel(), channelId },
+        }),
+      ).rejects.toThrow('received mismatched payment-close receipt')
+    })
+
+    test('closeHttpSession rejects close receipts for a different amount', async () => {
+      await expect(
+        closeHttpSession({
+          createSessionCredential: async () => 'close-credential',
+          fetch: async () =>
+            new Response(null, {
+              status: 200,
+              headers: { [Constants.Headers.paymentReceipt]: receiptHeader(6n, 6n) },
+            }),
+          lastUrl: 'https://example.test/resource',
+          signedCloseAmount: '5',
+          target: { challenge: challenge(), channel: channel(), channelId },
+        }),
+      ).rejects.toThrow('received payment-close receipt for unexpected amount')
     })
 
     test('closeHttpSession includes problem detail and challenge header on failure', async () => {
@@ -403,6 +533,25 @@ describe('VoucherManagement', () => {
         deposit: 3n,
         requiredCumulative: 5n,
       })
+    })
+
+    test('rejects impossible need-voucher event amounts', () => {
+      expect(() =>
+        readNeedVoucherEventAmounts({
+          channelId,
+          acceptedCumulative: '6',
+          deposit: '10',
+          requiredCumulative: '5',
+        }),
+      ).toThrow('Invalid need-voucher event: accepted cumulative exceeds required cumulative.')
+      expect(() =>
+        readNeedVoucherEventAmounts({
+          channelId,
+          acceptedCumulative: '11',
+          deposit: '10',
+          requiredCumulative: '12',
+        }),
+      ).toThrow('Invalid need-voucher event: accepted cumulative exceeds deposit.')
     })
 
     test('tops up when required and returns voucher credential context', async () => {
@@ -634,6 +783,47 @@ describe('VoucherManagement', () => {
       expect(result).toBeUndefined()
       expect(entry.deposit).toBe(500n)
     })
+
+    test('ignores top-up receipts for a different channel without mutating deposit', () => {
+      const entry = channel({ deposit: 500n })
+      const result = applyTopUpResult({
+        additionalDeposit: 50n,
+        channel: entry,
+        channelId,
+        currentState: initialState,
+        receipt: createSessionReceipt({
+          acceptedCumulative: 100n,
+          challengeId: 'challenge-1',
+          channelId: `0x${'55'.repeat(32)}` as Hex.Hex,
+          spent: 80n,
+        }),
+        spent: 0n,
+      })
+
+      expect(result).toBeUndefined()
+      expect(entry.deposit).toBe(500n)
+    })
+
+    test('rejects impossible top-up receipts without mutating deposit', () => {
+      const entry = channel({ deposit: 500n })
+
+      expect(() =>
+        applyTopUpResult({
+          additionalDeposit: 50n,
+          channel: entry,
+          channelId,
+          currentState: initialState,
+          receipt: createSessionReceipt({
+            acceptedCumulative: 600n,
+            challengeId: 'challenge-1',
+            channelId,
+            spent: 80n,
+          }),
+          spent: 0n,
+        }),
+      ).toThrow('Invalid session receipt: accepted cumulative exceeds deposit.')
+      expect(entry.deposit).toBe(500n)
+    })
   })
 })
 
@@ -728,6 +918,7 @@ describe('WsDriver', () => {
         validateSocketPaymentReceipt({
           challengeId: 'challenge-1',
           channelId,
+          cumulativeAmount: 80n,
           expectedCloseAmount: '80',
           receipt: receipt({ txHash: '0x1234' }),
         }),
@@ -737,10 +928,35 @@ describe('WsDriver', () => {
         validateSocketPaymentReceipt({
           challengeId: 'challenge-1',
           channelId,
+          cumulativeAmount: 80n,
           expectedCloseAmount: '81',
           receipt: receipt({ txHash: '0x1234' }),
         }),
       ).toBe('received mismatched payment-close receipt frame')
+    })
+
+    test('rejects socket payment receipts with impossible accounting', () => {
+      expect(
+        validateSocketPaymentReceipt({
+          challengeId: 'challenge-1',
+          channelId,
+          cumulativeAmount: 80n,
+          expectedCloseAmount: null,
+          receipt: receipt({ acceptedCumulative: 79n, spent: 80n }),
+        }),
+      ).toBe('received payment-receipt spent above accepted cumulative')
+    })
+
+    test('rejects socket payment receipts beyond local voucher state', () => {
+      expect(
+        validateSocketPaymentReceipt({
+          challengeId: 'challenge-1',
+          channelId,
+          cumulativeAmount: 79n,
+          expectedCloseAmount: null,
+          receipt: receipt(),
+        }),
+      ).toBe('received payment-receipt beyond local voucher state')
     })
   })
 
