@@ -485,11 +485,21 @@ export function parseManagerAmount(amount: string | bigint, decimals: number): b
 /** Resolves the opening deposit from explicit context, server hint, request amount, and local cap. */
 export function resolveOpeningDeposit(parameters: ResolveOpeningDepositParameters): bigint {
   const { contextDepositRaw, maxDeposit, requestAmount, suggestedDepositRaw } = parameters
-  if (contextDepositRaw !== undefined) return BigInt(contextDepositRaw)
+  assertWithinMaxDeposit(requestAmount, maxDeposit)
+  if (contextDepositRaw !== undefined) {
+    const deposit = BigInt(contextDepositRaw)
+    if (deposit < requestAmount) {
+      throw new Error(`opening deposit ${deposit} below request amount ${requestAmount}`)
+    }
+    return deposit
+  }
 
   const suggestedDeposit =
     suggestedDepositRaw !== undefined ? BigInt(suggestedDepositRaw) : undefined
-  const proposed = suggestedDeposit ?? requestAmount
+  const proposed =
+    suggestedDeposit !== undefined && suggestedDeposit > requestAmount
+      ? suggestedDeposit
+      : requestAmount
   if (maxDeposit !== undefined) return proposed < maxDeposit ? proposed : maxDeposit
   return proposed
 }

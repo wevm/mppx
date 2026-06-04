@@ -175,6 +175,25 @@ describe('precompile client session', () => {
     expect(openDeposit(payload)).toBe(100n)
   })
 
+  test('rejects open when maxDeposit is below the request amount', async () => {
+    const method = session({ account, decimals: 0, maxDeposit: '50', getClient: () => client })
+
+    await expect(
+      method.createCredential({ challenge: makeChallenge(), context: {} }),
+    ).rejects.toThrow('requested voucher amount 100 exceeds local maxDeposit 50')
+  })
+
+  test('rejects explicit opening deposits below the request amount', async () => {
+    const method = session({ account, decimals: 0, maxDeposit: '1000', getClient: () => client })
+
+    await expect(
+      method.createCredential({
+        challenge: makeChallenge(),
+        context: { depositRaw: '50' },
+      }),
+    ).rejects.toThrow('opening deposit 50 below request amount 100')
+  })
+
   test('uses resolved escrow address for open transactions', async () => {
     const challengeEscrow = '0x0000000000000000000000000000000000000005' as Address
     const method = session({ account, decimals: 0, getClient: () => client })
@@ -286,7 +305,23 @@ describe('precompile client session', () => {
     expect(updates).toEqual([100n, 200n])
   })
 
-  test('uses server session snapshot only to hydrate channel identity', async () => {
+  test('increments stored cumulative when recovering without a server snapshot', async () => {
+    const method = session({ account, decimals: 0, maxDeposit: '1000', getClient: () => client })
+    const channelId = Channel.computeId({ ...descriptor, chainId, escrow: tip20ChannelEscrow })
+    const payload = deserialize(
+      await method.createCredential({
+        challenge: makeChallenge(),
+        context: { channelId, cumulativeAmountRaw: '100', descriptor },
+      }),
+    )
+
+    expect(payload.action).toBe('voucher')
+    if (payload.action !== 'voucher') throw new Error('expected voucher')
+    expect(payload.channelId).toBe(channelId)
+    expect(payload.cumulativeAmount).toBe('200')
+  })
+
+  test('uses required server snapshot cumulative when recovering a channel', async () => {
     const method = session({ account, decimals: 0, maxDeposit: '1000', getClient: () => client })
     const channelId = Channel.computeId({ ...descriptor, chainId, escrow: tip20ChannelEscrow })
     const payload = deserialize(
@@ -315,10 +350,10 @@ describe('precompile client session', () => {
     if (payload.action !== 'voucher') throw new Error('expected voucher')
     expect(payload.channelId).toBe(channelId)
     expect(payload.descriptor).toEqual(descriptor)
-    expect(payload.cumulativeAmount).toBe('100')
+    expect(payload.cumulativeAmount).toBe('400')
   })
 
-  test('does not let accepted snapshot cumulative increase voucher authorization', async () => {
+  test('uses accepted snapshot cumulative when it is above the required amount', async () => {
     const method = session({ account, decimals: 0, maxDeposit: '1000', getClient: () => client })
     const channelId = Channel.computeId({ ...descriptor, chainId, escrow: tip20ChannelEscrow })
     const payload = deserialize(
@@ -345,7 +380,7 @@ describe('precompile client session', () => {
 
     expect(payload.action).toBe('voucher')
     if (payload.action !== 'voucher') throw new Error('expected voucher')
-    expect(payload.cumulativeAmount).toBe('100')
+    expect(payload.cumulativeAmount).toBe('500')
   })
 
   test('caps recovered voucher authorization by maxDeposit', async () => {
@@ -359,13 +394,13 @@ describe('precompile client session', () => {
             chainId,
             escrowContract: tip20ChannelEscrow,
             sessionSnapshot: {
-              acceptedCumulative: '1000',
+              acceptedCumulative: '300',
               channelId,
               deposit: '1000',
               descriptor,
-              requiredCumulative: '1000',
+              requiredCumulative: '300',
               settled: '0',
-              spent: '300',
+              spent: '200',
             },
           },
         }),
@@ -399,7 +434,7 @@ describe('precompile client session', () => {
         }),
         context: {},
       }),
-    ).rejects.toThrow('requested voucher amount 400 exceeds local maxDeposit 300')
+    ).rejects.toThrow('requested voucher amount 1000 exceeds local maxDeposit 300')
   })
 
   test('rejects descriptor recovery for closed or missing channels', async () => {

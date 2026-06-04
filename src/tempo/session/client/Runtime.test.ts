@@ -854,14 +854,14 @@ describe('LocalAuthorization', () => {
           suggestedDepositRaw: '1000',
         }),
       ).toBe(500n)
-      expect(
+      expect(() =>
         resolveOpeningDeposit({
           contextDepositRaw: '0',
           maxDeposit: 100n,
           requestAmount: 10n,
           suggestedDepositRaw: '1000',
         }),
-      ).toBe(0n)
+      ).toThrow('opening deposit 0 below request amount 10')
       expect(
         resolveOpeningDeposit({
           maxDeposit: 500n,
@@ -869,7 +869,17 @@ describe('LocalAuthorization', () => {
           suggestedDepositRaw: '1000',
         }),
       ).toBe(500n)
+      expect(
+        resolveOpeningDeposit({
+          maxDeposit: 500n,
+          requestAmount: 100n,
+          suggestedDepositRaw: '50',
+        }),
+      ).toBe(100n)
       expect(resolveOpeningDeposit({ maxDeposit: 1000n, requestAmount: 100n })).toBe(100n)
+      expect(() => resolveOpeningDeposit({ maxDeposit: 50n, requestAmount: 100n })).toThrow(
+        'requested voucher amount 100 exceeds local maxDeposit 50',
+      )
     })
 
     test('enforces optional maxDeposit through the compatibility helper', () => {

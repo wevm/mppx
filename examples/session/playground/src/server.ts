@@ -234,8 +234,8 @@ async function fundAddress(address: Address) {
 
 function hasPrecompile() {
   return (precompileAvailable ??= readContract(client, {
-    address: Session.Constants.tip20ChannelEscrow,
-    abi: Session.escrowAbi,
+    address: Session.Precompile.Constants.tip20ChannelEscrow,
+    abi: Session.Precompile.escrowAbi,
     functionName: 'CLOSE_GRACE_PERIOD',
   })
     .then(() => true)

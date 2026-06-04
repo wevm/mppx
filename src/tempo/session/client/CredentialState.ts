@@ -311,6 +311,20 @@ export type ResolveRecoverContextParameters = {
   snapshot?: SessionSnapshot | undefined
 }
 
+/** Inputs used to choose the next cumulative authorization for a recovered channel. */
+export type ResolveRecoveredCumulativeParameters = {
+  /** Caller or stored-channel recovery context. */
+  context: DescriptorSessionContext
+  /** Token decimals used to parse human-readable context amounts. */
+  decimals: number
+  /** Current request amount from the active challenge. */
+  requestAmount: bigint
+  /** Server snapshot for the recovered channel, when present. */
+  snapshot?: SessionSnapshot | undefined
+  /** On-chain settled amount used when no local/server accounting is available. */
+  settled: bigint
+}
+
 /** Data-first description of the next credential operation the client should execute. */
 export type CredentialPlan =
   /** No reusable channel is available, so create an open transaction and initial voucher. */
@@ -488,6 +502,23 @@ export function resolveRecoverContext(
   }
 }
 
+/** Resolves a voucher boundary that can satisfy the resumed request. */
+export function resolveRecoveredCumulative(
+  parameters: ResolveRecoveredCumulativeParameters,
+): bigint {
+  const { context, decimals, requestAmount, snapshot, settled } = parameters
+
+  if (snapshot) {
+    const accepted = BigInt(snapshot.acceptedCumulative)
+    const required = BigInt(snapshot.requiredCumulative)
+    return accepted > required ? accepted : required
+  }
+
+  const contextCumulative = parseOptionalContextAmount(context, decimals, 'cumulativeAmount')
+  if (contextCumulative !== undefined) return contextCumulative + requestAmount
+  return settled + requestAmount
+}
+
 /** Chooses the next credential plan from local channel cache and optional caller context. */
 export function planCredential(parameters: PlanCredentialParameters): CredentialPlan {
   const { account, authorizedSigner, cache, context, decimals, maxDeposit, resolved } = parameters
@@ -590,8 +621,13 @@ async function recover(
       token: resolved.token,
     },
   })
-  const contextCumulative = parseOptionalContextAmount(context, decimals, 'cumulativeAmount')
-  const cumulativeAmount = contextCumulative ?? reusable.state.settled + resolved.amount
+  const cumulativeAmount = resolveRecoveredCumulative({
+    context,
+    decimals,
+    requestAmount: resolved.amount,
+    settled: reusable.state.settled,
+    snapshot: resolved.snapshot,
+  })
   assertWithinMaxDeposit(cumulativeAmount, maxDeposit)
   const payload = await createVoucherPayload(
     resolved.client,

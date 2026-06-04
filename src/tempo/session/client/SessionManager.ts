@@ -23,7 +23,6 @@ import {
   createSessionManagerRuntime,
   restoreCumulativeAuthorization,
   restoreRuntimeSnapshot as restoreRuntimeStateSnapshot,
-  type FallbackCloseAmountParameters,
   type RuntimeSnapshot,
 } from './Runtime.js'
 import { createSessionReceiptCoordinator } from './Runtime.js'

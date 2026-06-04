@@ -7,7 +7,7 @@ import * as Client from '../../../viem/Client.js'
 import * as defaults from '../../internal/defaults.js'
 import * as Methods from '../../Methods.js'
 import { serializeCredential, type ChannelEntry } from './ChannelOps.js'
-import { sessionContextSchema, type SessionContext } from './CredentialState.js'
+import { sessionContextSchema } from './CredentialState.js'
 import {
   createChannelCache,
   executeCredentialPlan,

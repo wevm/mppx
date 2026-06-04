@@ -74,6 +74,16 @@ async function openRealChannel(deposit = 1_000n) {
   return { channelId, descriptor, deposit: uint96(deposit) }
 }
 
+function sessionRequest(channelId: Hex.Hex, amount = '100') {
+  return {
+    amount,
+    currency: asset,
+    recipient: payee.address,
+    unitType: 'request',
+    methodDetails: { chainId: chain.id, escrowContract: tip20ChannelEscrow, channelId },
+  }
+}
+
 describe.runIf(isPrecompileTestnet)('precompile server session chain integration', () => {
   test('broadcasts and verifies a real precompile open credential', async () => {
     const rawStore = Store.memory()
@@ -104,29 +114,11 @@ describe.runIf(isPrecompileTestnet)('precompile server session chain integration
           realm: 'api.example.com',
           method: 'tempo',
           intent: 'session',
-          request: {
-            amount: '100',
-            currency: asset,
-            recipient: payee.address,
-            methodDetails: {
-              chainId: chain.id,
-              escrowContract: tip20ChannelEscrow,
-              channelId: payload.channelId,
-            },
-          },
+          request: sessionRequest(payload.channelId),
         } as never,
         payload,
       },
-      request: {
-        amount: '100',
-        currency: asset,
-        recipient: payee.address,
-        methodDetails: {
-          chainId: chain.id,
-          escrowContract: tip20ChannelEscrow,
-          channelId: payload.channelId,
-        },
-      } as never,
+      request: sessionRequest(payload.channelId) as never,
     })
 
     expect(receipt.reference).toBe(payload.channelId)
@@ -167,17 +159,11 @@ describe.runIf(isPrecompileTestnet)('precompile server session chain integration
       credential: {
         challenge: {
           id: 'chain-topup-open',
-          request: { currency: asset, recipient: payee.address },
+          request: sessionRequest(openPayload.channelId),
         } as never,
         payload: openPayload,
       },
-      request: {
-        methodDetails: {
-          chainId: chain.id,
-          escrowContract: tip20ChannelEscrow,
-          channelId: openPayload.channelId,
-        },
-      } as never,
+      request: sessionRequest(openPayload.channelId) as never,
     })
 
     const topUpPayload = await createTopUpPayload(
@@ -191,17 +177,11 @@ describe.runIf(isPrecompileTestnet)('precompile server session chain integration
       credential: {
         challenge: {
           id: 'chain-topup',
-          request: { currency: asset, recipient: payee.address },
+          request: sessionRequest(topUpPayload.channelId),
         } as never,
         payload: topUpPayload,
       },
-      request: {
-        methodDetails: {
-          chainId: chain.id,
-          escrowContract: tip20ChannelEscrow,
-          channelId: topUpPayload.channelId,
-        },
-      } as never,
+      request: sessionRequest(topUpPayload.channelId) as never,
     })
 
     if (!('txHash' in receipt)) throw new Error('expected topUp txHash')
@@ -264,21 +244,11 @@ describe.runIf(isPrecompileTestnet)('precompile server session chain integration
           realm: 'api.example.com',
           method: 'tempo',
           intent: 'session',
-          request: {
-            amount: '100',
-            currency: asset,
-            recipient: payee.address,
-            methodDetails: { chainId: chain.id, escrowContract: tip20ChannelEscrow, channelId },
-          },
+          request: sessionRequest(channelId),
         } as never,
         payload,
       },
-      request: {
-        amount: '100',
-        currency: asset,
-        recipient: payee.address,
-        methodDetails: { chainId: chain.id, escrowContract: tip20ChannelEscrow, channelId },
-      } as never,
+      request: sessionRequest(channelId) as never,
     })
     expect(receipt.reference).toBe(channelId)
 
@@ -388,13 +358,11 @@ describe.runIf(isPrecompileTestnet)('precompile server session chain integration
       credential: {
         challenge: {
           id: 'chain-sponsored-close',
-          request: { currency: asset, recipient: payee.address },
+          request: sessionRequest(channelId),
         } as never,
         payload,
       },
-      request: {
-        methodDetails: { chainId: chain.id, escrowContract: tip20ChannelEscrow, channelId },
-      } as never,
+      request: sessionRequest(channelId) as never,
     })
     if (!('txHash' in receipt)) throw new Error('expected sponsored close txHash')
     const closeReceipt = await waitForTransactionReceipt(client, {
@@ -454,21 +422,11 @@ describe.runIf(isPrecompileTestnet)('precompile server session chain integration
           realm: 'api.example.com',
           method: 'tempo',
           intent: 'session',
-          request: {
-            amount: '100',
-            currency: asset,
-            recipient: payee.address,
-            methodDetails: { chainId: chain.id, escrowContract: tip20ChannelEscrow, channelId },
-          },
+          request: sessionRequest(channelId),
         } as never,
         payload,
       },
-      request: {
-        amount: '100',
-        currency: asset,
-        recipient: payee.address,
-        methodDetails: { chainId: chain.id, escrowContract: tip20ChannelEscrow, channelId },
-      } as never,
+      request: sessionRequest(channelId) as never,
     })
 
     if (!('txHash' in receipt)) throw new Error('expected close txHash')
