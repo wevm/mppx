@@ -19,17 +19,11 @@ import {
   type SessionReceipt,
 } from '../precompile/Protocol.js'
 import * as ChannelStore from './ChannelStore.js'
-import type { SessionController } from './Sse.js'
-export type { SessionController } from './Sse.js'
+import type { SessionController } from './MeteredStream.js'
+export type { SessionController } from './MeteredStream.js'
 export type { Socket } from './Transports.js'
-import {
-  commitReservedCharges,
-  reserveChargeOrWait,
-  send,
-  subscribe,
-  toText,
-  type Socket,
-} from './Transports.js'
+import { meterIterable } from './MeteredStream.js'
+import { send, subscribe, toText, type Socket } from './Transports.js'
 
 /** Public WebSocket payment frame helpers. */
 export {
@@ -156,39 +150,18 @@ export async function serve(options: serve.Options): Promise<void> {
   }
 
   const runStream = async (context: StreamContext) => {
-    let reservedAmount = 0n
-    let reservedUnits = 0
-
-    const charge = () =>
-      reserveChargeOrWait({
-        amount: context.tickCost,
+    try {
+      for await (const value of meterIterable({
+        store,
         channelId: context.channelId,
-        reservedAmount,
-        emit: (message) => send(socket, message),
-        formatNeedVoucher: formatNeedVoucherMessage,
+        tickCost: context.tickCost,
+        generate,
         pollIntervalMs,
         signal: abortController.signal,
-        store,
-      }).then(() => {
-        reservedAmount += context.tickCost
-        reservedUnits += 1
-      })
-
-    const iterable: AsyncIterable<string> =
-      typeof generate === 'function' ? generate({ charge }) : generate
-
-    try {
-      for await (const value of iterable) {
+        emitNeedVoucher: (message) => send(socket, message),
+        formatNeedVoucher: formatNeedVoucherMessage,
+      })) {
         if (abortController.signal.aborted) break
-        if (typeof generate !== 'function') await charge()
-        await commitReservedCharges({
-          store,
-          channelId: context.channelId,
-          amount: reservedAmount,
-          units: reservedUnits,
-        })
-        reservedAmount = 0n
-        reservedUnits = 0
         await send(socket, formatApplicationMessage(value))
       }
 

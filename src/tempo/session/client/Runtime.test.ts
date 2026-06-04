@@ -10,6 +10,7 @@ import {
   type ChannelDescriptor,
   type SessionReceipt,
 } from '../precompile/Protocol.js'
+import { createSessionReceiptCoordinator } from './ReceiptCoordinator.js'
 import {
   activeStateFromChannel,
   activeStateFromReceipt,
@@ -23,7 +24,6 @@ import {
   closeSocketSession,
   createActiveState,
   createSessionManagerRuntime,
-  createSessionReceiptCoordinator,
   initialState,
   isExpectedCloseReceipt,
   localCloseSpendLimit,

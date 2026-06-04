@@ -14,7 +14,7 @@ import {
   type SseEvent,
 } from '../precompile/Protocol.js'
 import * as ChannelStore from './ChannelStore.js'
-import { commitReservedCharges, reserveChargeOrWait } from './Transports.js'
+import { meterIterable, type SessionController } from './MeteredStream.js'
 
 /**
  * SSE (Server-Sent Events) utilities for metered streaming payments.
@@ -37,26 +37,7 @@ export {
 } from '../precompile/Protocol.js'
 
 /** Controller passed to manual-charge SSE generators. */
-export type SessionController = {
-  /**
-   * Reserve voucher coverage for the next emitted chunk.
-   *
-   * The reservation blocks until sufficient voucher headroom exists, but the
-   * charge is only committed once a chunk is actually emitted. If the stream
-   * ends or aborts before that emission, the reservation is dropped.
-   */
-  charge(): Promise<void>
-}
-
-/** Mutable charge state for one SSE stream response. */
-type ServeRuntime = {
-  /** Pre-authorized units that may be emitted without reserving new voucher headroom. */
-  prepaidUnits: number
-  /** Voucher amount reserved for yielded chunks but not yet committed to channel spend. */
-  reservedAmount: bigint
-  /** Number of reserved units not yet committed to channel spend. */
-  reservedUnits: number
-}
+export type { SessionController } from './MeteredStream.js'
 
 /**
  * Wrap an async iterable with payment metering, producing an SSE stream.
@@ -95,48 +76,20 @@ export function serve(options: serve.Options): ReadableStream<Uint8Array> {
     async start(controller) {
       const aborted = () => signal?.aborted ?? false
       const emit = (event: string) => controller.enqueue(encoder.encode(event))
-      const runtime: ServeRuntime = {
-        prepaidUnits: options.prepaidUnits ?? 0,
-        reservedAmount: 0n,
-        reservedUnits: 0,
-      }
-
-      const charge = () => {
-        if (runtime.prepaidUnits > 0) {
-          runtime.prepaidUnits -= 1
-          return Promise.resolve()
-        }
-        return reserveChargeOrWait({
-          store,
-          channelId,
-          amount: tickCost,
-          reservedAmount: runtime.reservedAmount,
-          emit,
-          formatNeedVoucher: formatNeedVoucherEvent,
-          pollIntervalMs,
-          signal,
-        }).then(() => {
-          runtime.reservedAmount += tickCost
-          runtime.reservedUnits += 1
-        })
-      }
-
-      const iterable: AsyncIterable<string> =
-        typeof generate === 'function' ? generate({ charge }) : generate
 
       try {
-        for await (const value of iterable) {
+        for await (const value of meterIterable({
+          store,
+          channelId,
+          tickCost,
+          generate,
+          pollIntervalMs,
+          prepaidUnits: options.prepaidUnits,
+          signal,
+          emitNeedVoucher: emit,
+          formatNeedVoucher: formatNeedVoucherEvent,
+        })) {
           if (aborted()) break
-
-          if (typeof generate !== 'function') await charge()
-          await commitReservedCharges({
-            store,
-            channelId,
-            amount: runtime.reservedAmount,
-            units: runtime.reservedUnits,
-          })
-          runtime.reservedAmount = 0n
-          runtime.reservedUnits = 0
           controller.enqueue(encoder.encode(formatMessageEvent(value)))
         }
 
