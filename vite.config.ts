@@ -23,6 +23,10 @@ const alias = {
   '~test': path.resolve(import.meta.dirname, 'test'),
 }
 
+const sharedTempoRpcTestOptions = {
+  fileParallelism: false,
+}
+
 export default defineConfig({
   test: {
     coverage: {
@@ -45,9 +49,9 @@ export default defineConfig({
           typecheck: {
             include: ['src/**/*.test-d.ts'],
           },
+          ...sharedTempoRpcTestOptions,
           globals: true,
           retry: 3,
-          setupFiles: ['./test/setup.ts'],
           testTimeout: 10_000,
           hookTimeout: 60_000,
         },
@@ -57,9 +61,9 @@ export default defineConfig({
           name: 'cli',
           alias,
           include: ['src/cli/**/*.test.ts'],
+          ...sharedTempoRpcTestOptions,
           globals: true,
           retry: 3,
-          setupFiles: ['./test/setup.ts'],
           testTimeout: 10_000,
           hookTimeout: 60_000,
         },

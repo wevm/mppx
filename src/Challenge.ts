@@ -1,5 +1,6 @@
 import { Base64, Bytes, Hash } from 'ox'
 
+import * as Constants from './Constants.js'
 import { constantTimeEqual } from './internal/constantTimeEqual.js'
 import type { OneOf } from './internal/types.js'
 import type * as Method from './Method.js'
@@ -309,7 +310,7 @@ export function serialize(challenge: Challenge): string {
   else if (challenge.meta !== undefined)
     parts.push(authParam('opaque', PaymentRequest.serialize(challenge.meta)))
 
-  return `Payment ${parts.join(', ')}`
+  return `${Constants.Schemes.payment} ${parts.join(', ')}`
 }
 
 /** @internal */
@@ -361,7 +362,7 @@ export function deserialize<const methods extends readonly Method.Method[] | und
 
 /** @internal Extracts the `Payment` scheme from a WWW-Authenticate value that may contain multiple schemes. */
 function extractPaymentAuthParams(header: string): string | null {
-  const token = 'Payment'
+  const token = Constants.Schemes.payment
   let inQuotes = false
   let escaped = false
 
@@ -493,8 +494,8 @@ export function fromHeaders<const methods extends readonly Method.Method[] | und
   headers: Headers,
   options?: from.Options<methods>,
 ): from.ReturnType<from.Parameters, methods> {
-  const header = headers.get('WWW-Authenticate')
-  if (!header) throw new Error('Missing WWW-Authenticate header.')
+  const header = headers.get(Constants.Headers.wwwAuthenticate)
+  if (!header) throw new Error(`Missing ${Constants.Headers.wwwAuthenticate} header.`)
   return deserialize(header, options)
 }
 
@@ -564,8 +565,8 @@ export function fromResponseList<
 export function fromHeadersList<
   const methods extends readonly Method.Method[] | undefined = undefined,
 >(headers: Headers, options?: from.Options<methods>): from.ReturnType<from.Parameters, methods>[] {
-  const header = headers.get('WWW-Authenticate')
-  if (!header) throw new Error('Missing WWW-Authenticate header.')
+  const header = headers.get(Constants.Headers.wwwAuthenticate)
+  if (!header) throw new Error(`Missing ${Constants.Headers.wwwAuthenticate} header.`)
   return deserializeList(header, options)
 }
 
@@ -582,7 +583,8 @@ export function deserializeList<
 >(value: string, options?: from.Options<methods>): from.ReturnType<from.Parameters, methods>[] {
   // Find the start index of each `Payment ` scheme prefix.
   const starts: number[] = []
-  for (const match of value.matchAll(/Payment\s+/gi)) {
+  const schemePattern = new RegExp(`${Constants.Schemes.payment}\\s+`, 'gi')
+  for (const match of value.matchAll(schemePattern)) {
     starts.push(match.index!)
   }
   if (starts.length === 0) throw new Error('No Payment schemes found.')

@@ -72,113 +72,113 @@
   ],
   "exports": {
     ".": {
-      "types": "./dist/index.d.ts",
       "src": "./src/index.ts",
+      "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
     },
     "./cli": {
-      "types": "./dist/cli/config.d.ts",
       "src": "./src/cli/config.ts",
+      "types": "./dist/cli/config.d.ts",
       "default": "./dist/cli/config.js"
     },
     "./cli/plugins": {
-      "types": "./dist/cli/plugins/index.d.ts",
       "src": "./src/cli/plugins/index.ts",
+      "types": "./dist/cli/plugins/index.d.ts",
       "default": "./dist/cli/plugins/index.js"
     },
     "./client": {
-      "types": "./dist/client/index.d.ts",
       "src": "./src/client/index.ts",
+      "types": "./dist/client/index.d.ts",
       "default": "./dist/client/index.js"
     },
     "./discovery": {
-      "types": "./dist/discovery/index.d.ts",
       "src": "./src/discovery/index.ts",
+      "types": "./dist/discovery/index.d.ts",
       "default": "./dist/discovery/index.js"
     },
     "./evm": {
-      "types": "./dist/evm/index.d.ts",
       "src": "./src/evm/index.ts",
+      "types": "./dist/evm/index.d.ts",
       "default": "./dist/evm/index.js"
     },
     "./evm/client": {
-      "types": "./dist/evm/client/index.d.ts",
       "src": "./src/evm/client/index.ts",
+      "types": "./dist/evm/client/index.d.ts",
       "default": "./dist/evm/client/index.js"
     },
     "./evm/server": {
-      "types": "./dist/evm/server/index.d.ts",
       "src": "./src/evm/server/index.ts",
+      "types": "./dist/evm/server/index.d.ts",
       "default": "./dist/evm/server/index.js"
     },
     "./mcp-sdk/client": {
-      "types": "./dist/mcp-sdk/client/index.d.ts",
       "src": "./src/mcp-sdk/client/index.ts",
+      "types": "./dist/mcp-sdk/client/index.d.ts",
       "default": "./dist/mcp-sdk/client/index.js"
     },
     "./mcp-sdk/server": {
-      "types": "./dist/mcp-sdk/server/index.d.ts",
       "src": "./src/mcp-sdk/server/index.ts",
+      "types": "./dist/mcp-sdk/server/index.d.ts",
       "default": "./dist/mcp-sdk/server/index.js"
     },
     "./proxy": {
-      "types": "./dist/proxy/index.d.ts",
       "src": "./src/proxy/index.ts",
+      "types": "./dist/proxy/index.d.ts",
       "default": "./dist/proxy/index.js"
     },
     "./server": {
-      "types": "./dist/server/index.d.ts",
       "src": "./src/server/index.ts",
+      "types": "./dist/server/index.d.ts",
       "default": "./dist/server/index.js"
     },
     "./stripe": {
-      "types": "./dist/stripe/index.d.ts",
       "src": "./src/stripe/index.ts",
+      "types": "./dist/stripe/index.d.ts",
       "default": "./dist/stripe/index.js"
     },
     "./stripe/client": {
-      "types": "./dist/stripe/client/index.d.ts",
       "src": "./src/stripe/client/index.ts",
+      "types": "./dist/stripe/client/index.d.ts",
       "default": "./dist/stripe/client/index.js"
     },
     "./stripe/server": {
-      "types": "./dist/stripe/server/index.d.ts",
       "src": "./src/stripe/server/index.ts",
+      "types": "./dist/stripe/server/index.d.ts",
       "default": "./dist/stripe/server/index.js"
     },
     "./x402": {
-      "types": "./dist/x402/index.d.ts",
       "src": "./src/x402/index.ts",
+      "types": "./dist/x402/index.d.ts",
       "default": "./dist/x402/index.js"
     },
     "./tempo": {
-      "types": "./dist/tempo/index.d.ts",
       "src": "./src/tempo/index.ts",
+      "types": "./dist/tempo/index.d.ts",
       "default": "./dist/tempo/index.js"
     },
     "./html": {
-      "types": "./dist/Html.d.ts",
       "src": "./src/Html.ts",
+      "types": "./dist/Html.d.ts",
       "default": "./dist/Html.js"
     },
     "./hono": {
-      "types": "./dist/middlewares/hono.d.ts",
       "src": "./src/middlewares/hono.ts",
+      "types": "./dist/middlewares/hono.d.ts",
       "default": "./dist/middlewares/hono.js"
     },
     "./express": {
-      "types": "./dist/middlewares/express.d.ts",
       "src": "./src/middlewares/express.ts",
+      "types": "./dist/middlewares/express.d.ts",
       "default": "./dist/middlewares/express.js"
     },
     "./nextjs": {
-      "types": "./dist/middlewares/nextjs.d.ts",
       "src": "./src/middlewares/nextjs.ts",
+      "types": "./dist/middlewares/nextjs.d.ts",
       "default": "./dist/middlewares/nextjs.js"
     },
     "./elysia": {
-      "types": "./dist/middlewares/elysia.d.ts",
       "src": "./src/middlewares/elysia.ts",
+      "types": "./dist/middlewares/elysia.d.ts",
       "default": "./dist/middlewares/elysia.js"
     }
   },

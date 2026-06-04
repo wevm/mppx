@@ -1,0 +1,656 @@
+import { SignatureEnvelope } from 'ox/tempo'
+import { type Address, createClient, decodeFunctionData, erc20Abi, type Hex, http } from 'viem'
+import { privateKeyToAccount } from 'viem/accounts'
+import { Account as TempoAccount, Addresses, Transaction, WebCryptoP256 } from 'viem/tempo'
+import { beforeAll, describe, expect, test } from 'vp/test'
+import { tempoNetwork } from '~test/config.js'
+import { deployEscrow, openChannel } from '~test/tempo/legacy/session.js'
+import { accounts, asset, chain, client, fundAccount } from '~test/tempo/viem.js'
+
+import * as Challenge from '../../../Challenge.js'
+import * as Credential from '../../../Credential.js'
+import { chainId, escrowContract as escrowContractDefaults } from '../../internal/defaults.js'
+import { escrowAbi } from '../session/Chain.js'
+import type { LegacySessionCredentialPayload } from '../session/Types.js'
+import { verifyVoucher } from '../session/Voucher.js'
+import { session } from './Session.js'
+
+function deserializePayload(result: string) {
+  const cred = Credential.deserialize<LegacySessionCredentialPayload>(result)
+  return cred
+}
+
+const pureAccount = privateKeyToAccount(
+  '0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80',
+)
+const pureClient = createClient({
+  account: pureAccount,
+  transport: http('http://127.0.0.1'),
+})
+
+const escrowAddress = escrowContractDefaults[chainId.testnet] as Address
+const recipient = '0x2222222222222222222222222222222222222222' as Address
+const currency = '0x3333333333333333333333333333333333333333' as Address
+const isLocalnet = tempoNetwork === 'localnet'
+
+function makeChallenge(overrides?: Record<string, unknown>) {
+  return Challenge.from({
+    id: 'test-challenge-id',
+    realm: 'test.com',
+    method: 'tempo',
+    intent: 'session',
+    request: {
+      amount: '1000000',
+      recipient,
+      currency,
+      unitType: 'token',
+      methodDetails: {
+        chainId: 42431,
+        escrowContract: escrowAddress,
+      },
+      ...overrides,
+    },
+  }) as any
+}
+
+describe('session (pure)', () => {
+  describe('error: no action and no deposit/maxDeposit', () => {
+    test('throws when neither configured', async () => {
+      const method = session({
+        getClient: () => pureClient,
+        account: pureAccount,
+      })
+
+      await expect(
+        method.createCredential({ challenge: makeChallenge(), context: {} }),
+      ).rejects.toThrow('No `action` in context and no `deposit` or `maxDeposit` configured')
+    })
+  })
+
+  describe('manual action validation', () => {
+    const channelId = '0x0000000000000000000000000000000000000000000000000000000000000001' as Hex
+
+    test('open requires transaction', async () => {
+      const method = session({ getClient: () => pureClient, account: pureAccount })
+
+      await expect(
+        method.createCredential({
+          challenge: makeChallenge(),
+          context: { action: 'open', channelId, cumulativeAmount: '1' },
+        }),
+      ).rejects.toThrow('transaction required for open action')
+    })
+
+    test('open requires cumulativeAmount', async () => {
+      const method = session({ getClient: () => pureClient, account: pureAccount })
+
+      await expect(
+        method.createCredential({
+          challenge: makeChallenge(),
+          context: { action: 'open', channelId, transaction: '0xabc' },
+        }),
+      ).rejects.toThrow('cumulativeAmount required for open action')
+    })
+
+    test('topUp requires transaction', async () => {
+      const method = session({ getClient: () => pureClient, account: pureAccount })
+
+      await expect(
+        method.createCredential({
+          challenge: makeChallenge(),
+          context: { action: 'topUp', channelId, additionalDeposit: '5' },
+        }),
+      ).rejects.toThrow('transaction required for topUp action')
+    })
+
+    test('topUp requires additionalDeposit', async () => {
+      const method = session({ getClient: () => pureClient, account: pureAccount })
+
+      await expect(
+        method.createCredential({
+          challenge: makeChallenge(),
+          context: { action: 'topUp', channelId, transaction: '0xabc' },
+        }),
+      ).rejects.toThrow('additionalDeposit required for topUp action')
+    })
+
+    test('voucher requires cumulativeAmount', async () => {
+      const method = session({ getClient: () => pureClient, account: pureAccount })
+
+      await expect(
+        method.createCredential({
+          challenge: makeChallenge(),
+          context: { action: 'voucher', channelId },
+        }),
+      ).rejects.toThrow('cumulativeAmount required for voucher action')
+    })
+
+    test('close requires cumulativeAmount', async () => {
+      const method = session({ getClient: () => pureClient, account: pureAccount })
+
+      await expect(
+        method.createCredential({
+          challenge: makeChallenge(),
+          context: { action: 'close', channelId },
+        }),
+      ).rejects.toThrow('cumulativeAmount required for close action')
+    })
+
+    test('manual voucher produces valid credential', async () => {
+      const method = session({ getClient: () => pureClient, account: pureAccount })
+
+      const result = await method.createCredential({
+        challenge: makeChallenge(),
+        context: { action: 'voucher', channelId, cumulativeAmount: '5' },
+      })
+
+      const cred = deserializePayload(result)
+      expect(cred.challenge.id).toBe('test-challenge-id')
+      expect(cred.challenge.realm).toBe('test.com')
+      expect(cred.challenge.method).toBe('tempo')
+      expect(cred.challenge.intent).toBe('session')
+      expect(cred.payload.action).toBe('voucher')
+      expect(cred.payload.channelId).toBe(channelId)
+      if (cred.payload.action === 'voucher') {
+        expect(cred.payload.cumulativeAmount).toBe('5000000')
+        expect(cred.payload.signature).toMatch(/^0x[0-9a-f]+$/)
+      }
+      expect(cred.source).toBe(`did:pkh:eip155:42431:${pureAccount.address}`)
+    })
+
+    test('manual open produces valid credential', async () => {
+      const method = session({ getClient: () => pureClient, account: pureAccount })
+
+      const result = await method.createCredential({
+        challenge: makeChallenge(),
+        context: {
+          action: 'open',
+          channelId,
+          cumulativeAmount: '5',
+          transaction: '0xdeadbeef',
+        },
+      })
+
+      const cred = deserializePayload(result)
+      expect(cred.challenge.id).toBe('test-challenge-id')
+      expect(cred.payload.action).toBe('open')
+      expect(cred.payload.channelId).toBe(channelId)
+      if (cred.payload.action === 'open') {
+        expect(cred.payload.type).toBe('transaction')
+        expect(cred.payload.transaction).toBe('0xdeadbeef')
+        expect(cred.payload.cumulativeAmount).toBe('5000000')
+        expect(cred.payload.signature).toMatch(/^0x[0-9a-f]+$/)
+        expect(cred.payload.authorizedSigner).toBe(pureAccount.address)
+      }
+      expect(cred.source).toBe(`did:pkh:eip155:42431:${pureAccount.address}`)
+    })
+
+    test('manual open rejects P256 voucher signer while TIP-1020 verification is disabled', async () => {
+      const keyPair = await WebCryptoP256.createKeyPair()
+      const voucherSigner = TempoAccount.fromWebCryptoP256(keyPair)
+      const method = session({
+        getClient: () => pureClient,
+        account: pureAccount,
+        voucherSigner,
+      })
+
+      await expect(
+        method.createCredential({
+          challenge: makeChallenge(),
+          context: {
+            action: 'open',
+            channelId,
+            cumulativeAmount: '5',
+            transaction: '0xdeadbeef',
+          },
+        }),
+      ).rejects.toThrow('Session vouchers only support secp256k1 signatures')
+    })
+
+    test('manual open signs access-key vouchers with raw signatures', async () => {
+      const accessKey = TempoAccount.fromSecp256k1(
+        '0x59c6995e998f97a5a0044966f09453863d462d2b3f1446a99f0a3d7b5d0f5a0d',
+        { access: pureAccount },
+      )
+      const accessKeyClient = createClient({
+        account: accessKey,
+        transport: http('http://127.0.0.1'),
+      })
+      const method = session({
+        getClient: () => accessKeyClient,
+        account: accessKey,
+      })
+
+      const result = await method.createCredential({
+        challenge: makeChallenge(),
+        context: {
+          action: 'open',
+          channelId,
+          cumulativeAmount: '5',
+          transaction: '0xdeadbeef',
+        },
+      })
+
+      const cred = deserializePayload(result)
+      expect(cred.payload.action).toBe('open')
+      if (cred.payload.action !== 'open') throw new Error('unexpected action')
+      expect(cred.payload.authorizedSigner).toBeDefined()
+      if (!cred.payload.authorizedSigner) throw new Error('missing authorizedSigner')
+      expect(cred.payload.authorizedSigner.toLowerCase()).toBe(
+        accessKey.accessKeyAddress.toLowerCase(),
+      )
+
+      const envelope = SignatureEnvelope.from(
+        cred.payload.signature as SignatureEnvelope.Serialized,
+      )
+      expect(envelope.type).toBe('secp256k1')
+
+      const isValid = await verifyVoucher(
+        escrowAddress,
+        42431,
+        {
+          channelId,
+          cumulativeAmount: 5_000_000n,
+          signature: cred.payload.signature,
+        },
+        accessKey.accessKeyAddress,
+      )
+      expect(isValid).toBe(true)
+      expect(cred.source).toBe(`did:pkh:eip155:42431:${pureAccount.address}`)
+    })
+
+    test('manual open signs access-key vouchers with direct voucher signer', async () => {
+      const privateKey = '0x59c6995e998f97a5a0044966f09453863d462d2b3f1446a99f0a3d7b5d0f5a0d'
+      const accessKey = TempoAccount.fromSecp256k1(privateKey, { access: pureAccount })
+      const voucherSigner = TempoAccount.fromSecp256k1(privateKey)
+      const accessKeyClient = createClient({
+        account: accessKey,
+        transport: http('http://127.0.0.1'),
+      })
+      const method = session({
+        getClient: () => accessKeyClient,
+        account: accessKey,
+        voucherSigner,
+      })
+
+      const result = await method.createCredential({
+        challenge: makeChallenge(),
+        context: {
+          action: 'open',
+          channelId,
+          cumulativeAmount: '5',
+          transaction: '0xdeadbeef',
+        },
+      })
+
+      const cred = deserializePayload(result)
+      expect(cred.payload.action).toBe('open')
+      if (cred.payload.action !== 'open') throw new Error('unexpected action')
+      expect(cred.payload.authorizedSigner).toBeDefined()
+      if (!cred.payload.authorizedSigner) throw new Error('missing authorizedSigner')
+      expect(cred.payload.authorizedSigner.toLowerCase()).toBe(
+        accessKey.accessKeyAddress.toLowerCase(),
+      )
+
+      const envelope = SignatureEnvelope.from(
+        cred.payload.signature as SignatureEnvelope.Serialized,
+      )
+      expect(envelope.type).toBe('secp256k1')
+      expect(cred.payload.signature.length).toBe(132)
+
+      const isValid = await verifyVoucher(
+        escrowAddress,
+        42431,
+        {
+          channelId,
+          cumulativeAmount: 5_000_000n,
+          signature: cred.payload.signature,
+        },
+        accessKey.accessKeyAddress,
+      )
+      expect(isValid).toBe(true)
+      expect(cred.source).toBe(`did:pkh:eip155:42431:${pureAccount.address}`)
+    })
+
+    test('manual close produces valid credential', async () => {
+      const method = session({ getClient: () => pureClient, account: pureAccount })
+
+      const result = await method.createCredential({
+        challenge: makeChallenge(),
+        context: { action: 'close', channelId, cumulativeAmount: '5' },
+      })
+
+      const cred = deserializePayload(result)
+      expect(cred.challenge.id).toBe('test-challenge-id')
+      expect(cred.payload.action).toBe('close')
+      expect(cred.payload.channelId).toBe(channelId)
+      if (cred.payload.action === 'close') {
+        expect(cred.payload.cumulativeAmount).toBe('5000000')
+        expect(cred.payload.signature).toMatch(/^0x[0-9a-f]+$/)
+      }
+      expect(cred.source).toBe(`did:pkh:eip155:42431:${pureAccount.address}`)
+    })
+  })
+})
+
+describe.runIf(isLocalnet)('session (on-chain)', () => {
+  const payer = accounts[2]
+  const payee = accounts[1].address
+  let escrowContract: Address
+  let saltCounter = 0
+
+  function nextSalt(): Hex {
+    saltCounter++
+    return `0x${saltCounter.toString(16).padStart(64, '0')}` as Hex
+  }
+
+  function makeLiveChallenge(overrides?: Record<string, unknown>) {
+    return Challenge.from({
+      id: 'live-challenge',
+      realm: 'test.com',
+      method: 'tempo',
+      intent: 'session',
+      request: {
+        amount: '1000000',
+        recipient: payee,
+        currency: asset,
+        unitType: 'token',
+        methodDetails: {
+          chainId: chain.id,
+          escrowContract,
+        },
+        ...overrides,
+      },
+    }) as any
+  }
+
+  beforeAll(async () => {
+    escrowContract = await deployEscrow()
+    await fundAccount({ address: payer.address, token: Addresses.pathUsd })
+    await fundAccount({ address: payer.address, token: asset })
+  })
+
+  describe('auto deposit selection', () => {
+    test('context.depositRaw wins over everything', async () => {
+      const method = session({
+        getClient: () => client,
+        account: payer,
+        deposit: '99',
+        escrowContract,
+      })
+
+      const result = await method.createCredential({
+        challenge: makeLiveChallenge(),
+        context: { depositRaw: '5000000' },
+      })
+
+      const cred = deserializePayload(result)
+      expect(cred.payload.action).toBe('open')
+      expect(cred.payload.channelId).toMatch(/^0x[0-9a-f]{64}$/)
+      if (cred.payload.action === 'open') {
+        expect(cred.payload.type).toBe('transaction')
+        expect(cred.payload.cumulativeAmount).toBe('1000000')
+        expect(cred.payload.signature).toMatch(/^0x[0-9a-f]+$/)
+      }
+      expect(cred.source).toContain(`did:pkh:eip155:${chain.id}:`)
+    })
+
+    test('suggestedDeposit capped by maxDeposit', async () => {
+      const method = session({
+        getClient: () => client,
+        account: payer,
+        maxDeposit: '5',
+        escrowContract,
+      })
+
+      const challenge = makeLiveChallenge({ suggestedDeposit: '10000000' })
+
+      const result = await method.createCredential({ challenge, context: {} })
+
+      const cred = deserializePayload(result)
+      expect(cred.payload.action).toBe('open')
+      if (cred.payload.action === 'open') {
+        expect(cred.payload.type).toBe('transaction')
+        expect(cred.payload.cumulativeAmount).toBe('1000000')
+      }
+      expect(cred.source).toContain(`did:pkh:eip155:${chain.id}:`)
+    })
+
+    test('suggestedDeposit used when below maxDeposit', async () => {
+      const method = session({
+        getClient: () => client,
+        account: payer,
+        maxDeposit: '10',
+        escrowContract,
+      })
+
+      const challenge = makeLiveChallenge({ suggestedDeposit: '7000000' })
+
+      const result = await method.createCredential({ challenge, context: {} })
+
+      const cred = deserializePayload(result)
+      expect(cred.payload.action).toBe('open')
+      if (cred.payload.action === 'open') {
+        expect(cred.payload.cumulativeAmount).toBe('1000000')
+      }
+    })
+
+    test('prefers local escrowContract and deposit over server challenge overrides', async () => {
+      const maliciousEscrow = '0x4444444444444444444444444444444444444444' as Address
+      const method = session({
+        getClient: () => client,
+        account: payer,
+        deposit: '10',
+        escrowContract,
+      })
+
+      const result = await method.createCredential({
+        challenge: makeLiveChallenge({
+          suggestedDeposit: '7000000',
+          methodDetails: {
+            chainId: chain.id,
+            escrowContract: maliciousEscrow,
+          },
+        }),
+        context: {},
+      })
+
+      const cred = deserializePayload(result)
+      expect(cred.payload.action).toBe('open')
+      if (cred.payload.action !== 'open') throw new Error('unexpected action')
+
+      const transaction = Transaction.deserialize(cred.payload.transaction)
+      if (!('calls' in transaction)) throw new Error('unexpected transaction type')
+      const [approveCall, openCall] = transaction.calls as readonly [
+        { to?: Address; data?: Hex },
+        { to?: Address; data?: Hex },
+      ]
+      const approve = decodeFunctionData({
+        abi: erc20Abi,
+        data: approveCall.data ?? '0x',
+      })
+      const open = decodeFunctionData({
+        abi: escrowAbi,
+        data: openCall.data ?? '0x',
+      })
+      const approveArgs = approve.args as readonly [Address, bigint]
+      const openArgs = open.args as readonly [Address, Address, bigint, string, Address]
+
+      expect(approveCall.to).toBe(asset)
+      expect(approve.functionName).toBe('approve')
+      expect(approveArgs[0].toLowerCase()).toBe(escrowContract.toLowerCase())
+      expect(approveArgs[1]).toBe(10_000_000n)
+
+      expect(openCall.to?.toLowerCase()).toBe(escrowContract.toLowerCase())
+      expect(open.functionName).toBe('open')
+      expect(openArgs[0].toLowerCase()).toBe(payee.toLowerCase())
+      expect(openArgs[1].toLowerCase()).toBe(asset.toLowerCase())
+      expect(openArgs[2]).toBe(10_000_000n)
+      expect(openArgs[3]).toEqual(expect.any(String))
+      expect(openArgs[4].toLowerCase()).toBe(payer.address.toLowerCase())
+    })
+
+    test('maxDeposit alone', async () => {
+      const method = session({
+        getClient: () => client,
+        account: payer,
+        maxDeposit: '10',
+        escrowContract,
+      })
+
+      const result = await method.createCredential({
+        challenge: makeLiveChallenge(),
+        context: {},
+      })
+
+      const cred = deserializePayload(result)
+      expect(cred.payload.action).toBe('open')
+      if (cred.payload.action === 'open') {
+        expect(cred.payload.cumulativeAmount).toBe('1000000')
+      }
+    })
+
+    test('parameters.deposit as last resort', async () => {
+      const method = session({
+        getClient: () => client,
+        account: payer,
+        deposit: '10',
+        escrowContract,
+      })
+
+      const result = await method.createCredential({
+        challenge: makeLiveChallenge(),
+        context: {},
+      })
+
+      const cred = deserializePayload(result)
+      expect(cred.payload.action).toBe('open')
+      if (cred.payload.action === 'open') {
+        expect(cred.payload.cumulativeAmount).toBe('1000000')
+      }
+    })
+
+    test('throws when no deposit source available', async () => {
+      const method = session({
+        getClient: () => client,
+        account: payer,
+        escrowContract,
+      })
+
+      await expect(
+        method.createCredential({ challenge: makeLiveChallenge(), context: {} }),
+      ).rejects.toThrow()
+    })
+  })
+
+  describe('channel recovery', () => {
+    test('recovers channel via suggestedChannelId', async () => {
+      const salt = nextSalt()
+      const { channelId } = await openChannel({
+        escrow: escrowContract,
+        payer,
+        payee,
+        token: asset,
+        deposit: 10_000_000n,
+        salt,
+      })
+
+      const method = session({
+        getClient: () => client,
+        account: payer,
+        deposit: '10',
+        escrowContract,
+      })
+
+      const challenge = makeLiveChallenge({
+        methodDetails: {
+          chainId: chain.id,
+          escrowContract,
+          channelId,
+        },
+      })
+
+      const result = await method.createCredential({ challenge, context: {} })
+
+      const cred = deserializePayload(result)
+      expect(cred.payload.action).toBe('voucher')
+      if (cred.payload.action === 'voucher') {
+        expect(cred.payload.channelId).toBe(channelId)
+        expect(cred.payload.cumulativeAmount).toBe('1000000')
+        expect(cred.payload.signature).toMatch(/^0x[0-9a-f]+$/)
+      }
+      expect(cred.source).toContain(`did:pkh:eip155:${chain.id}:`)
+    })
+
+    test('throws when explicit channelId cannot be recovered', async () => {
+      const method = session({
+        getClient: () => client,
+        account: payer,
+        deposit: '10',
+        escrowContract,
+      })
+
+      await expect(
+        method.createCredential({
+          challenge: makeLiveChallenge(),
+          context: {
+            channelId: '0x0000000000000000000000000000000000000000000000000000000000000bad',
+          },
+        }),
+      ).rejects.toThrow('cannot be reused')
+    })
+  })
+
+  describe('cumulative tracking in auto mode', () => {
+    test('first call opens channel, second issues voucher with increased cumulative', async () => {
+      const updates: { cumulativeAmount: bigint }[] = []
+      const method = session({
+        getClient: () => client,
+        account: payer,
+        deposit: '10',
+        escrowContract,
+        onChannelUpdate: (entry) => updates.push({ cumulativeAmount: entry.cumulativeAmount }),
+      })
+
+      const challenge = makeLiveChallenge()
+
+      const first = await method.createCredential({ challenge, context: {} })
+      const firstCred = deserializePayload(first)
+      expect(firstCred.payload.action).toBe('open')
+      if (firstCred.payload.action === 'open') {
+        expect(firstCred.payload.type).toBe('transaction')
+        expect(firstCred.payload.cumulativeAmount).toBe('1000000')
+      }
+
+      const second = await method.createCredential({ challenge, context: {} })
+      const secondCred = deserializePayload(second)
+      expect(secondCred.payload.action).toBe('voucher')
+      if (secondCred.payload.action === 'voucher') {
+        expect(secondCred.payload.channelId).toBe(firstCred.payload.channelId)
+        expect(secondCred.payload.cumulativeAmount).toBe('2000000')
+        expect(secondCred.payload.signature).toMatch(/^0x[0-9a-f]+$/)
+      }
+
+      expect(updates.length).toBe(2)
+      expect(updates[0]!.cumulativeAmount).toBe(1_000_000n)
+      expect(updates[1]!.cumulativeAmount).toBe(2_000_000n)
+    })
+  })
+
+  describe('onChannelUpdate callback', () => {
+    test('fires on auto-manage open', async () => {
+      const updates: unknown[] = []
+      const method = session({
+        getClient: () => client,
+        account: payer,
+        deposit: '10',
+        escrowContract,
+        onChannelUpdate: (entry) => updates.push(entry),
+      })
+
+      await method.createCredential({ challenge: makeLiveChallenge(), context: {} })
+
+      expect(updates.length).toBeGreaterThan(0)
+    })
+  })
+})

@@ -2,8 +2,8 @@ import type { Address, Hex } from 'viem'
 import { describe, expect, test } from 'vp/test'
 
 import { chainId, escrowContract as escrowContractDefaults } from '../internal/defaults.js'
-import type * as ChannelStore from '../session/ChannelStore.js'
-import { serve, toResponse } from '../session/Sse.js'
+import type * as ChannelStore from '../session/server/ChannelStore.js'
+import { serve, toResponse } from '../session/server/Sse.js'
 
 const channelId = '0x0000000000000000000000000000000000000000000000000000000000000001' as Hex
 const challengeId = 'test-challenge-id'

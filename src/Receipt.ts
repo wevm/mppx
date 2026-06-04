@@ -1,5 +1,6 @@
 import { Base64 } from 'ox'
 
+import * as Constants from './Constants.js'
 import * as z from './zod.js'
 
 /**
@@ -126,7 +127,7 @@ export function serialize(receipt: Receipt): string {
  * ```
  */
 export function fromResponse(response: Response): Receipt {
-  const header = response.headers.get('Payment-Receipt')
-  if (!header) throw new Error('Missing Payment-Receipt header.')
+  const header = response.headers.get(Constants.Headers.paymentReceipt)
+  if (!header) throw new Error(`Missing ${Constants.Headers.paymentReceipt} header.`)
   return deserialize(header)
 }

@@ -6,21 +6,21 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
 import { createMcpExpressApp } from '@modelcontextprotocol/sdk/server/express.js'
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js'
-import { session as tempo_session_client, tempo as tempo_client } from 'mppx/client'
+import { sessionLegacy as tempo_session_client, tempo as tempo_client } from 'mppx/client'
 import { Mppx as Mppx_server, tempo as tempo_server } from 'mppx/server'
 import type { Address } from 'viem'
 import { readContract } from 'viem/actions'
 import { Actions, Addresses } from 'viem/tempo'
 import { beforeAll, describe, expect, test } from 'vp/test'
-import { nodeEnv } from '~test/config.js'
-import { deployEscrow, signTopUpChannel } from '~test/tempo/session.js'
+import { tempoNetwork } from '~test/config.js'
+import { deployEscrow, signTopUpChannel } from '~test/tempo/legacy/session.js'
 import { accounts, asset, client as testClient, fundAccount } from '~test/tempo/viem.js'
 
 import * as Credential from '../../Credential.js'
 import * as core_Mcp from '../../Mcp.js'
 import * as Store from '../../Store.js'
-import * as ChannelStore from '../../tempo/session/ChannelStore.js'
-import type { SessionReceipt } from '../../tempo/session/Types.js'
+import type { SessionReceipt } from '../../tempo/session/precompile/Protocol.js'
+import * as ChannelStore from '../../tempo/session/server/ChannelStore.js'
 import * as McpServer_transport from '../server/Transport.js'
 import * as McpClient from './McpClient.js'
 
@@ -29,6 +29,7 @@ const secretKey = 'test-secret-key'
 const chargeAmountRaw = 1_000_000n
 const doubleSessionAmountRaw = chargeAmountRaw * 2n
 const topUpAmountRaw = chargeAmountRaw * 3n
+const isLocalnet = tempoNetwork === 'localnet'
 
 let escrowContract: Address
 
@@ -40,7 +41,7 @@ beforeAll(async () => {
   await fundAccount({ address: accounts[2].address, token: asset })
 }, 60_000)
 
-describe.runIf(nodeEnv === 'localnet')('McpClient.wrap integration', () => {
+describe.runIf(isLocalnet)('McpClient.wrap integration', () => {
   const scenarios: readonly Scenario[] = [
     {
       name: 'charge intent settles a paid MCP tool against the live chain',
@@ -464,7 +465,7 @@ async function createHarness(options?: {
         currency: asset,
         getClient: () => testClient,
       }),
-      tempo_server.session({
+      tempo_server.sessionLegacy({
         account: accounts[0],
         currency: asset,
         escrowContract,

@@ -2,6 +2,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import { isDeepStrictEqual } from 'node:util'
 
 import * as Challenge from '../Challenge.js'
+import * as Constants from '../Constants.js'
 import * as Credential from '../Credential.js'
 import * as Errors from '../Errors.js'
 import * as Expires from '../Expires.js'
@@ -2021,7 +2022,7 @@ type ConfiguredHandler = ((input: Request) => Promise<MethodFn.Response<Transpor
   }
 }
 
-const paymentAuthChallengeHeader = 'WWW-Authenticate'
+const paymentAuthChallengeHeader = Constants.Headers.wwwAuthenticate
 
 const challengeHeaderMerges = [
   {
@@ -2141,7 +2142,7 @@ export function compose(
     // Try to extract a Payment credential to decide whether to dispatch or challenge.
     // Only gate on the Payment scheme — other auth schemes (Bearer, Basic, etc.)
     // should fall through to the merged-402 path so all offers are presented.
-    const header = input.headers.get('Authorization')
+    const header = input.headers.get(Constants.Headers.authorization)
     const paymentHeader = header ? Credential.extractPaymentScheme(header) : null
 
     if (paymentHeader) {
@@ -2222,7 +2223,7 @@ export function compose(
         })
       }
 
-      const acceptPayment = input.headers.get('Accept-Payment')
+      const acceptPayment = input.headers.get(Constants.Headers.acceptPayment)
       if (!acceptPayment) return entries
 
       try {
@@ -2243,7 +2244,7 @@ export function compose(
       result.status === 402 ? [result.challenge as Response] : [],
     )
     const unnegotiatedX402Responses =
-      input.headers.has('Accept-Payment') || challengeEntries.length === 0
+      input.headers.has(Constants.Headers.acceptPayment) || challengeEntries.length === 0
         ? []
         : challengeResponses.filter(
             (response) =>

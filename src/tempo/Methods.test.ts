@@ -248,6 +248,37 @@ describe('session', () => {
     expect(request.amount).toBe('1000000')
     expect(request.methodDetails?.minVoucherDelta).toBe('100000')
   })
+
+  test('schema: preserves precompile session snapshots in method details', () => {
+    const sessionSnapshot = {
+      acceptedCumulative: '2',
+      channelId: `0x${'11'.repeat(32)}` as const,
+      deposit: '5',
+      descriptor: {
+        authorizedSigner: '0x0000000000000000000000000000000000000006',
+        expiringNonceHash: `0x${'22'.repeat(32)}` as const,
+        operator: '0x0000000000000000000000000000000000000000',
+        payee: '0x0000000000000000000000000000000000000002',
+        payer: '0x0000000000000000000000000000000000000001',
+        salt: `0x${'33'.repeat(32)}` as const,
+        token: '0x0000000000000000000000000000000000000003',
+      },
+      requiredCumulative: '3',
+      settled: '0',
+      spent: '2',
+      units: 2,
+    }
+    const request = Methods.session.schema.request.parse({
+      amount: '1',
+      currency: '0x20c0000000000000000000000000000000000001',
+      decimals: 6,
+      recipient: '0x1234567890abcdef1234567890abcdef12345678',
+      sessionSnapshot,
+      unitType: 'token',
+    })
+
+    expect(request.methodDetails?.sessionSnapshot).toEqual(sessionSnapshot)
+  })
 })
 
 describe('subscription', () => {
@@ -312,23 +343,6 @@ describe('subscription', () => {
 
     expect(request.periodCount).toBe(expected)
   })
-
-  test.each(['dev_second'] as const)(
-    'schema: accepts %s subscription periods for development and tests',
-    (periodUnit) => {
-      const request = Methods.subscription.schema.request.parse({
-        amount: '10',
-        currency: '0x20c0000000000000000000000000000000000001',
-        decimals: 6,
-        periodCount: '5',
-        periodUnit,
-        recipient: '0x1234567890abcdef1234567890abcdef12345678',
-        subscriptionExpires: '2026-01-01T00:00:00Z',
-      })
-
-      expect(request.periodUnit).toBe(periodUnit)
-    },
-  )
 
   test('schema: rejects non-numeric periodCount', () => {
     const result = Methods.subscription.schema.request.safeParse({

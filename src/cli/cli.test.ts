@@ -4,13 +4,12 @@ import * as os from 'node:os'
 import * as path from 'node:path'
 import { pathToFileURL } from 'node:url'
 
-import { decodeFunctionData, erc20Abi, parseUnits, type Address } from 'viem'
+import { decodeFunctionData, parseUnits, type Address } from 'viem'
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts'
 import { Addresses, Transaction } from 'viem/tempo'
 import { afterAll, describe, expect, test } from 'vp/test'
 import * as Http from '~test/Http.js'
-import { rpcUrl } from '~test/tempo/prool.js'
-import { deployEscrow, escrowAbi } from '~test/tempo/session.js'
+import { rpcUrl } from '~test/tempo/rpc.js'
 import { accounts, asset, chain, client, fundAccount } from '~test/tempo/viem.js'
 
 import * as Challenge from '../Challenge.js'
@@ -22,7 +21,9 @@ import { toNodeListener } from '../server/Mppx.js'
 import * as Store from '../Store.js'
 import { stripe as stripe_server } from '../stripe/server/Methods.js'
 import { tempo } from '../tempo/server/Methods.js'
-import type { SessionCredentialPayload } from '../tempo/session/Types.js'
+import { escrowAbi } from '../tempo/session/precompile/escrow.abi.js'
+import { tip20ChannelEscrow } from '../tempo/session/precompile/Protocol.js'
+import type { SessionCredentialPayload } from '../tempo/session/precompile/Protocol.js'
 import * as z from '../zod.js'
 import cli from './cli.js'
 
@@ -798,7 +799,7 @@ describe('session multi-fetch (examples/session/multi-fetch)', () => {
     await fundAccount({ address: testAccount.address, token: Addresses.pathUsd })
     await fundAccount({ address: testAccount.address, token: asset })
 
-    const escrow = await deployEscrow()
+    const escrow = tip20ChannelEscrow
     const store = Store.memory()
     const server = Mppx_server.create({
       methods: [
@@ -840,11 +841,11 @@ describe('session multi-fetch (examples/session/multi-fetch)', () => {
     }
   })
 
-  test('prefers CLI deposit over server suggestedDeposit', { timeout: 120_000 }, async () => {
+  test('uses server suggestedDeposit within CLI max deposit', { timeout: 120_000 }, async () => {
     await fundAccount({ address: testAccount.address, token: Addresses.pathUsd })
     await fundAccount({ address: testAccount.address, token: asset })
 
-    const escrow = await deployEscrow()
+    const escrow = tip20ChannelEscrow
     let openCredential: SessionCredentialPayload | undefined
 
     const httpServer = await Http.createServer(async (req, res) => {
@@ -897,27 +898,18 @@ describe('session multi-fetch (examples/session/multi-fetch)', () => {
 
       const transaction = Transaction.deserialize(openCredential.transaction)
       if (!('calls' in transaction)) throw new Error('unexpected transaction type')
-      const [approveCall, openCall] = transaction.calls as readonly [
-        { to?: Address; data?: `0x${string}` },
-        { to?: Address; data?: `0x${string}` },
-      ]
-      const approve = decodeFunctionData({ abi: erc20Abi, data: approveCall.data ?? '0x' })
+      const [openCall] = transaction.calls as readonly [{ to?: Address; data?: `0x${string}` }]
       const open = decodeFunctionData({ abi: escrowAbi, data: openCall.data ?? '0x' })
-      const approveArgs = approve.args as readonly [Address, bigint]
-      const openArgs = open.args as readonly [Address, Address, bigint, string, Address]
-
-      expect(approveCall.to).toBe(asset)
-      expect(approve.functionName).toBe('approve')
-      expect(approveArgs[0].toLowerCase()).toBe(escrow.toLowerCase())
-      expect(approveArgs[1]).toBe(10_000_000n)
+      const openArgs = open.args as readonly [Address, Address, Address, bigint, string, Address]
 
       expect(openCall.to?.toLowerCase()).toBe(escrow.toLowerCase())
       expect(open.functionName).toBe('open')
       expect(openArgs[0].toLowerCase()).toBe(accounts[0].address.toLowerCase())
-      expect(openArgs[1].toLowerCase()).toBe(asset.toLowerCase())
-      expect(openArgs[2]).toBe(10_000_000n)
-      expect(openArgs[3]).toEqual(expect.any(String))
-      expect(openArgs[4].toLowerCase()).toBe(testAccount.address.toLowerCase())
+      expect(openArgs[1]).toBe('0x0000000000000000000000000000000000000000')
+      expect(openArgs[2].toLowerCase()).toBe(asset.toLowerCase())
+      expect(openArgs[3]).toBe(7_000_000n)
+      expect(openArgs[4]).toEqual(expect.any(String))
+      expect(openArgs[5].toLowerCase()).toBe(testAccount.address.toLowerCase())
     } finally {
       httpServer.close()
     }
@@ -927,7 +919,7 @@ describe('session multi-fetch (examples/session/multi-fetch)', () => {
     await fundAccount({ address: testAccount.address, token: Addresses.pathUsd })
     await fundAccount({ address: testAccount.address, token: asset })
 
-    const escrow = await deployEscrow()
+    const escrow = tip20ChannelEscrow
     const store = Store.memory()
     const tickAmount = '0.001'
     const server = Mppx_server.create({
@@ -991,7 +983,7 @@ describe('session multi-fetch (examples/session/multi-fetch)', () => {
     await fundAccount({ address: testAccount.address, token: Addresses.pathUsd })
     await fundAccount({ address: testAccount.address, token: asset })
 
-    const escrow = await deployEscrow()
+    const escrow = tip20ChannelEscrow
     const store = Store.memory()
     const server = Mppx_server.create({
       methods: [
@@ -1069,7 +1061,7 @@ describe('session sse (examples/session/sse)', () => {
     await fundAccount({ address: testAccount.address, token: Addresses.pathUsd })
     await fundAccount({ address: testAccount.address, token: asset })
 
-    const escrow = await deployEscrow()
+    const escrow = tip20ChannelEscrow
     const store = Store.memory()
     const server = Mppx_server.create({
       methods: [
@@ -1251,9 +1243,10 @@ describe('stripe charge', () => {
 
 // ---------------------------------------------------------------------------
 // account [action]
-// TODO: investigate account tests timing out in CI (secret-tool/gnome-keyring hangs)
+// Keychain tests are opt-in because macOS/Linux keychain commands can block on
+// developer machines without an unlocked keychain daemon.
 // ---------------------------------------------------------------------------
-describe.skipIf(!!process.env.CI)('account', () => {
+describe.runIf(process.env.MPPX_TEST_KEYCHAIN === 'true')('account', () => {
   const binPath = path.resolve(import.meta.dirname, '../bin.ts')
   const cwd = path.resolve(import.meta.dirname, '../..')
   const accountEnv = {

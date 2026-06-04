@@ -1,5 +1,6 @@
 export * as BodyDigest from './BodyDigest.js'
 export * as Challenge from './Challenge.js'
+export * as Constants from './Constants.js'
 export * as Credential from './Credential.js'
 export * as Errors from './Errors.js'
 export * as Expires from './Expires.js'

@@ -1,8 +1,11 @@
 import type { Account, Address } from 'viem'
 import { parseUnits } from 'viem'
 
+import * as Constants from '../Constants.js'
 import * as Method from '../Method.js'
 import * as z from '../zod.js'
+import type { SessionSnapshot } from './session/client/Runtime.js'
+import type * as PrecompileChannel from './session/precompile/Channel.js'
 import type { SubscriptionPeriodUnit } from './subscription/Types.js'
 
 export const chargeModes = ['push', 'pull'] as const
@@ -196,6 +199,7 @@ export const session = Method.from({
           authorizedSigner: z.optional(z.string()),
           channelId: z.hash(),
           cumulativeAmount: z.amount(),
+          descriptor: z.optional(z.custom<PrecompileChannel.ChannelDescriptor>()),
           signature: z.signature(),
           transaction: z.signature(),
           type: z.literal('transaction'),
@@ -204,6 +208,7 @@ export const session = Method.from({
           action: z.literal('topUp'),
           additionalDeposit: z.amount(),
           channelId: z.hash(),
+          descriptor: z.optional(z.custom<PrecompileChannel.ChannelDescriptor>()),
           transaction: z.signature(),
           type: z.literal('transaction'),
         }),
@@ -211,12 +216,14 @@ export const session = Method.from({
           action: z.literal('voucher'),
           channelId: z.hash(),
           cumulativeAmount: z.amount(),
+          descriptor: z.optional(z.custom<PrecompileChannel.ChannelDescriptor>()),
           signature: z.signature(),
         }),
         z.object({
           action: z.literal('close'),
           channelId: z.hash(),
           cumulativeAmount: z.amount(),
+          descriptor: z.optional(z.custom<PrecompileChannel.ChannelDescriptor>()),
           signature: z.signature(),
         }),
       ]),
@@ -238,6 +245,7 @@ export const session = Method.from({
           ),
           minVoucherDelta: z.optional(z.amount()),
           recipient: z.optional(z.string()),
+          sessionSnapshot: z.optional(z.custom<SessionSnapshot>()),
           suggestedDeposit: z.optional(z.amount()),
           unitType: z.string(),
         })
@@ -256,6 +264,7 @@ export const session = Method.from({
           escrowContract,
           feePayer,
           minVoucherDelta,
+          sessionSnapshot,
           suggestedDeposit,
           ...rest
         }) => ({
@@ -274,6 +283,9 @@ export const session = Method.from({
             }),
             ...(chainId !== undefined && { chainId }),
             ...(feePayer !== undefined && { feePayer }),
+            ...(sessionSnapshot !== undefined && {
+              [Constants.MethodDetailKeys.sessionSnapshot]: sessionSnapshot,
+            }),
           },
         }),
       ),

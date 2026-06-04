@@ -1,6 +1,7 @@
 import { Base64 } from 'ox'
 
 import * as Challenge from './Challenge.js'
+import * as Constants from './Constants.js'
 import * as PaymentRequest from './PaymentRequest.js'
 
 /**
@@ -58,7 +59,7 @@ export class InvalidCredentialEncodingError extends Error {
  * ```
  */
 export function deserialize<payload = unknown>(value: string): Credential<payload> {
-  const prefixMatch = value.match(/^Payment\s+(.+)$/i)
+  const prefixMatch = value.match(new RegExp(`^${Constants.Schemes.payment}\\s+(.+)$`, 'i'))
   if (!prefixMatch?.[1]) throw new MissingPaymentSchemeError()
   try {
     const json = Base64.toString(prefixMatch[1])
@@ -163,7 +164,7 @@ export declare namespace from {
  * ```
  */
 export function fromRequest<payload = unknown>(request: Request): Credential<payload> {
-  const header = request.headers.get('Authorization')
+  const header = request.headers.get(Constants.Headers.authorization)
   if (!header) throw new MissingAuthorizationHeaderError()
   const payment = extractPaymentScheme(header)
   if (!payment) throw new MissingPaymentSchemeError()
@@ -200,7 +201,7 @@ export function serialize(credential: Credential): string {
   }
   const json = JSON.stringify(wire)
   const encoded = Base64.fromString(json, { pad: false, url: true })
-  return `Payment ${encoded}`
+  return `${Constants.Schemes.payment} ${encoded}`
 }
 
 /**
@@ -212,5 +213,5 @@ export function serialize(credential: Credential): string {
  */
 export function extractPaymentScheme(header: string): string | null {
   const schemes = header.split(',').map((s) => s.trim())
-  return schemes.find((s) => /^Payment\s+/i.test(s)) ?? null
+  return schemes.find((s) => new RegExp(`^${Constants.Schemes.payment}\\s+`, 'i').test(s)) ?? null
 }

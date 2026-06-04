@@ -3,7 +3,7 @@ import * as http from 'node:http'
 import { Challenge, Credential, Errors, Method, Receipt, z } from 'mppx'
 import {
   Mppx as Mppx_client,
-  session as tempo_session_client,
+  sessionLegacy as tempo_session_client,
   tempo as tempo_client,
 } from 'mppx/client'
 import { Types as evm_Types } from 'mppx/evm'
@@ -12,10 +12,10 @@ import { Header as x402_Header, Types as x402_Types, type PaymentPayload } from 
 import { getTransactionReceipt } from 'viem/actions'
 import { describe, expect, test } from 'vp/test'
 import * as Http from '~test/Http.js'
-import { deployEscrow } from '~test/tempo/session.js'
+import { deployEscrow } from '~test/tempo/legacy/session.js'
 import { accounts, asset, client } from '~test/tempo/viem.js'
 
-import type { SessionReceipt } from '../tempo/session/Types.js'
+import type { SessionReceipt } from '../tempo/session/precompile/Protocol.js'
 import * as x402_RouteBinding from '../x402/internal/RouteBinding.js'
 
 const realm = 'api.example.com'
@@ -5178,7 +5178,7 @@ describe('verifyCredential', () => {
     const escrowContract = await deployEscrow()
     const server = Mppx.create({
       methods: [
-        tempo.session({
+        tempo.sessionLegacy({
           store: Store.memory(),
           getClient: () => client,
           account: accounts[0],
@@ -5195,7 +5195,7 @@ describe('verifyCredential', () => {
       methods: [
         tempo_session_client({
           account: accounts[1],
-          deposit: '10',
+          maxDeposit: '10',
           getClient: () => client,
         }),
       ],
@@ -5241,7 +5241,7 @@ describe('verifyCredential', () => {
     const escrowContract = await deployEscrow()
     const server = Mppx.create({
       methods: [
-        tempo.session({
+        tempo.sessionLegacy({
           store: Store.memory(),
           getClient: () => client,
           account: accounts[0],
@@ -5259,7 +5259,7 @@ describe('verifyCredential', () => {
       methods: [
         tempo_session_client({
           account: accounts[1],
-          deposit: '10',
+          maxDeposit: '10',
           getClient: () => client,
         }),
       ],

@@ -11,6 +11,7 @@ import { tempo as tempoMainnet } from 'viem/tempo/chains'
 import * as Challenge from '../Challenge.js'
 import { normalizeHeaders } from '../client/internal/Fetch.js'
 import * as Mppx from '../client/Mppx.js'
+import * as Constants from '../Constants.js'
 import { validate as validateDiscovery } from '../discovery/Validate.js'
 import { createDefaultStore, createKeychain, resolveAccountName } from './account.js'
 import { loadConfig, resolveAcceptPayment, selectChallenge } from './internal.js'
@@ -373,7 +374,7 @@ const cli = Cli.create('mppx', {
       const { challenge, plugin, method: configMethod } = selected
       const selectedChallengeResponse = new Response(null, {
         status: 402,
-        headers: { 'WWW-Authenticate': Challenge.serialize(challenge) },
+        headers: { [Constants.Headers.wwwAuthenticate]: Challenge.serialize(challenge) },
       })
 
       let tokenSymbol = (challenge.request.currency as string | undefined) ?? ''
@@ -547,7 +548,7 @@ const cli = Cli.create('mppx', {
 
       if (!handled) {
         // Default: print receipt + body
-        const receiptHeader = credentialResponse.headers.get('Payment-Receipt')
+        const receiptHeader = credentialResponse.headers.get(Constants.Headers.paymentReceipt)
         if (receiptHeader && c.options.verbose >= 1) {
           try {
             const receiptJson = JSON.parse(Base64.toString(receiptHeader)) as Record<
@@ -1145,7 +1146,7 @@ const sign = Cli.create('sign', {
     const wwwAuth = Challenge.serialize(challenge)
     const fakeResponse = new Response(null, {
       status: 402,
-      headers: { 'WWW-Authenticate': wwwAuth },
+      headers: { [Constants.Headers.wwwAuthenticate]: wwwAuth },
     })
 
     let credential: string

@@ -1,4 +1,5 @@
 import * as Challenge from '../../Challenge.js'
+import * as Constants from '../../Constants.js'
 import * as Expires from '../../Expires.js'
 import * as AcceptPayment from '../../internal/AcceptPayment.js'
 import type { MaybePromise } from '../../internal/types.js'
@@ -173,7 +174,7 @@ export function from<const methods extends readonly Method.AnyClient[]>(
 
   const wrappedFetch = async (input: RequestInfo | URL, init?: from.RequestInit<methods>) => {
     const callerHeaders = getCallerHeaders(input, init?.headers)
-    const hasExplicitAcceptPayment = callerHeaders.has('Accept-Payment')
+    const hasExplicitAcceptPayment = callerHeaders.has(Constants.Headers.acceptPayment)
     const paymentPreferences = resolvePaymentPreferences(callerHeaders, resolvedAcceptPayment)
     const initialRequest = prepareInitialRequest(
       input,
@@ -717,7 +718,7 @@ function prepareInitialRequest<methods extends readonly Method.AnyClient[]>(
   callerHeaders.forEach((value, key) => {
     headers.set(key, value)
   })
-  headers.set('Accept-Payment', header)
+  headers.set(Constants.Headers.acceptPayment, header)
 
   if (init) {
     // Preserve init identity for callers like websocket upgrade helpers that
@@ -781,7 +782,7 @@ function resolvePaymentPreferences<methods extends readonly Method.AnyClient[]>(
   headers: Headers,
   acceptPayment: AcceptPayment.Resolved<methods>,
 ): AcceptPayment.Resolved<methods> {
-  const header = headers.get('Accept-Payment')
+  const header = headers.get(Constants.Headers.acceptPayment)
   if (!header) return acceptPayment
 
   try {

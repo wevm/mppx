@@ -2,6 +2,7 @@ import { expectTypeOf, test } from 'vp/test'
 
 import { tempo } from '../../server/index.js'
 import * as Store from '../../Store.js'
+import * as Tempo from '../index.js'
 
 test('tempo.charge store parameter requires AtomicStore', () => {
   type ChargeParameters = NonNullable<Parameters<typeof tempo.charge>[0]>
@@ -18,17 +19,6 @@ test('tempo.charge store parameter requires AtomicStore', () => {
   tempo.charge({ store: Store.memory() })
 })
 
-test('tempo.charge validateSender exposes only sender context', () => {
-  tempo.charge({
-    validateSender({ expectedSender, sender, source }) {
-      expectTypeOf(expectedSender).toEqualTypeOf<`0x${string}`>()
-      expectTypeOf(sender).toEqualTypeOf<`0x${string}`>()
-      expectTypeOf(source).toEqualTypeOf<{ address: `0x${string}`; chainId: number } | undefined>()
-      return true
-    },
-  })
-})
-
 test('tempo.session store parameter requires AtomicStore', () => {
   type SessionParameters = NonNullable<Parameters<typeof tempo.session>[0]>
   expectTypeOf<SessionParameters['store']>().toEqualTypeOf<Store.AtomicStore | undefined>()
@@ -42,4 +32,19 @@ test('tempo.session store parameter requires AtomicStore', () => {
   // @ts-expect-error — session state updates require AtomicStore
   tempo.session({ store: nonAtomic })
   tempo.session({ store: Store.memory() })
+})
+
+test('tempo Session server session store parameter requires AtomicStore', () => {
+  type SessionParameters = NonNullable<Parameters<typeof Tempo.Session.Server.session>[0]>
+  expectTypeOf<SessionParameters['store']>().toEqualTypeOf<Store.AtomicStore | undefined>()
+
+  const nonAtomic = Store.from({
+    get: async () => null,
+    put: async () => {},
+    delete: async () => {},
+  })
+
+  // @ts-expect-error — session state updates require AtomicStore
+  Tempo.Session.Server.session({ store: nonAtomic })
+  Tempo.Session.Server.session({ store: Store.memory() })
 })
