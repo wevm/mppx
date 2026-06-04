@@ -899,6 +899,8 @@ export type PrepareWebSocketSessionParameters = {
   input: string | URL
   /** Called after resolving the HTTP probe URL, before the network request. */
   onProbeUrl?: ((httpUrl: URL) => void) | undefined
+  /** Optional request init for the HTTP probe. */
+  probeInit?: RequestInit | undefined
   /** Optional abort signal applied to the HTTP probe. */
   signal?: AbortSignal | undefined
 }
@@ -1013,10 +1015,10 @@ export async function prepareWebSocketSession(
   const wsUrl = new URL(parameters.input.toString())
   const httpUrl = webSocketProbeUrl(wsUrl)
   parameters.onProbeUrl?.(httpUrl)
-  const probe = await parameters.fetch(
-    httpUrl,
-    parameters.signal ? { signal: parameters.signal } : undefined,
-  )
+  const probe = await parameters.fetch(httpUrl, {
+    ...parameters.probeInit,
+    ...(parameters.signal ? { signal: parameters.signal } : {}),
+  })
   if (probe.status !== 402) {
     throw new Error(
       `Expected a 402 payment challenge from ${httpUrl}, received ${probe.status} instead.`,

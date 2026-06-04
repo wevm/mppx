@@ -5,8 +5,10 @@ import * as Fetch from '../../../client/internal/Fetch.js'
 import * as Constants from '../../../Constants.js'
 import type * as Account from '../../../viem/Account.js'
 import type * as Client from '../../../viem/Client.js'
+import type { ChannelEntry } from '../client/ChannelOps.js'
 import type { SessionContext } from '../client/CredentialState.js'
 import { session as sessionPlugin } from '../client/Session.js'
+import type { ChannelDescriptor } from '../precompile/Protocol.js'
 import { deserializeSessionReceipt } from '../precompile/Protocol.js'
 import { readSessionChallengeAmount, type SessionReceipt } from '../precompile/Protocol.js'
 import { resolveCloseTarget, type CloseTarget } from './Runtime.js'
@@ -28,11 +30,13 @@ import { createSessionReceiptCoordinator } from './Runtime.js'
 import { closeSocketSession } from './Runtime.js'
 import {
   closeHttpSession,
+  getSessionSnapshot,
   isTempoSessionChallenge,
   managementInput,
   postTopUp,
   retryHttpPaymentRequired,
   type TempoSessionChallenge,
+  webSocketProbeUrl,
 } from './Transports.js'
 import {
   type SessionManagedWebSocket,
@@ -90,6 +94,36 @@ export type PaymentResponse = Response & {
   cumulative: bigint
 }
 
+/** Serializable client-side channel snapshot stored between manager instances. */
+export type StoredSessionChannel = {
+  /** Latest known channel ID. Used as the next request's channel hint. */
+  channelId: Hex.Hex
+  /** Latest local cumulative voucher authorization in raw token units. */
+  cumulativeAmount: string
+  /** Latest known deposit in raw token units. */
+  deposit: string
+  /** TIP-1034 channel descriptor, used as a fallback when the server cannot snapshot. */
+  descriptor: ChannelDescriptor
+  /** Escrow address used to derive the channel ID. */
+  escrow: Address
+  /** Chain ID used to derive the channel ID. */
+  chainId: number
+  /** Whether the channel was open when stored. Closed channels are not used as hints. */
+  opened: boolean
+  /** Client timestamp for debugging or app-level eviction. */
+  updatedAt: number
+}
+
+/** Optional per-manager store for channel hints and restart recovery. */
+export type SessionStore = {
+  /** Reads the latest stored channel snapshot for this manager scope. */
+  get(): Promise<StoredSessionChannel | null | undefined> | StoredSessionChannel | null | undefined
+  /** Persists the latest channel snapshot. */
+  set(channel: StoredSessionChannel): Promise<void> | void
+  /** Deletes the stored snapshot when a channel is closed, when supported. */
+  delete?(): Promise<void> | void
+}
+
 /** Normalized runtime dependencies derived from `sessionManager()` parameters. */
 type SessionManagerConfig = {
   /** Decimal precision used when parsing human-readable manager amounts. */
@@ -100,6 +134,53 @@ type SessionManagerConfig = {
   maxVoucherCumulative: bigint | null
   /** WebSocket constructor available in the current runtime, when configured. */
   WebSocket: WebSocketConstructor | undefined
+}
+
+function storedChannelFromEntry(entry: ChannelEntry): StoredSessionChannel {
+  return {
+    channelId: entry.channelId,
+    cumulativeAmount: entry.cumulativeAmount.toString(),
+    deposit: entry.deposit.toString(),
+    descriptor: entry.descriptor,
+    escrow: entry.escrow,
+    chainId: entry.chainId,
+    opened: entry.opened,
+    updatedAt: Date.now(),
+  }
+}
+
+function storedChannelContext(channel: StoredSessionChannel): SessionContext {
+  return {
+    channelId: channel.channelId,
+    cumulativeAmountRaw: channel.cumulativeAmount,
+    descriptor: channel.descriptor,
+  }
+}
+
+function requestInitWithSessionHint(
+  input: RequestInfo | URL,
+  init: RequestInit | undefined,
+  channelId: Hex.Hex | undefined,
+): RequestInit | undefined {
+  if (!channelId) return init
+  const requestHeaders = input instanceof Request ? input.headers : undefined
+  const headers = {
+    ...Fetch.normalizeHeaders(requestHeaders),
+    ...Fetch.normalizeHeaders(init?.headers),
+  }
+  if (
+    Object.keys(headers).some(
+      (key) => key.toLowerCase() === Constants.Headers.paymentSession.toLowerCase(),
+    )
+  )
+    return init
+  return {
+    ...init,
+    headers: {
+      ...headers,
+      [Constants.Headers.paymentSession]: channelId,
+    },
+  }
 }
 
 function resolveSessionManagerConfig(parameters: sessionManager.Parameters): SessionManagerConfig {
@@ -135,6 +216,8 @@ function resolveSessionManagerConfig(parameters: sessionManager.Parameters): Ses
  */
 export function sessionManager(parameters: sessionManager.Parameters): SessionManager {
   const config = resolveSessionManagerConfig(parameters)
+  const sessionStore = parameters.sessionStore
+  let storedChannel: StoredSessionChannel | null = null
   const runtime = createSessionManagerRuntime()
   const receipts = createSessionReceiptCoordinator({
     getSocketSession: () => runtime.socketSession,
@@ -150,6 +233,7 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
     onChannelUpdate(entry) {
       if (entry.channelId !== runtime.channel?.channelId) runtime.spent = 0n
       runtime.channel = entry
+      persistStoredChannel(entry)
       if (runtime.lastChallenge) {
         runtime.state = activeStateFromChannel({
           challengeId: runtime.lastChallenge.id,
@@ -179,12 +263,24 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
           requiredCumulative,
         })
       }
+      if (!runtime.channel?.opened && storedChannel?.opened && !getSessionSnapshot(challenge)) {
+        return _helpers.createCredential(storedChannelContext(storedChannel))
+      }
       return undefined
     },
   })
 
   function createSessionCredential(challenge: TempoSessionChallenge, context: SessionContext) {
-    return method.createCredential({ challenge, context })
+    const stored = storedChannel
+    const shouldUseStoredChannel =
+      !context.action &&
+      !runtime.channel?.opened &&
+      stored?.opened &&
+      !getSessionSnapshot(challenge)
+    return method.createCredential({
+      challenge,
+      context: shouldUseStoredChannel ? { ...context, ...storedChannelContext(stored) } : context,
+    })
   }
 
   function updateSpentFromReceipt(receipt: SessionReceipt | null | undefined) {
@@ -193,6 +289,23 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
       receipt,
       runtime,
     })
+  }
+
+  async function getStoredChannel() {
+    if (!sessionStore) return null
+    if (storedChannel) return storedChannel
+    const channel = await sessionStore.get()
+    storedChannel = channel?.opened ? channel : null
+    return storedChannel
+  }
+
+  function persistStoredChannel(entry: ChannelEntry) {
+    if (!sessionStore) return
+    const channel = storedChannelFromEntry(entry)
+    const operation =
+      entry.opened || !sessionStore.delete ? sessionStore.set(channel) : sessionStore.delete()
+    void Promise.resolve(operation).catch(() => undefined)
+    storedChannel = entry.opened ? channel : null
   }
 
   function getFallbackCloseAmount(challenge: TempoSessionChallenge, channelId: Hex.Hex): bigint {
@@ -297,6 +410,8 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
 
   async function doFetch(input: RequestInfo | URL, init?: RequestInit): Promise<PaymentResponse> {
     runtime.lastUrl = input
+    const stored = await getStoredChannel()
+    const hintedInit = requestInitWithSessionHint(input, init, stored?.channelId)
     const previous = captureRuntimeStateSnapshot({
       channel: runtime.channel,
       spent: runtime.spent,
@@ -305,7 +420,7 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
 
     let response: Response
     try {
-      response = await wrappedFetch(input, init)
+      response = await wrappedFetch(input, hintedInit)
     } catch (error) {
       restoreRuntime(previous)
       throw error
@@ -315,7 +430,7 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
     if (paymentResponse.status === 402) {
       const retry = await retryHttpPaymentRequired({
         input,
-        init,
+        init: hintedInit,
         response: paymentResponse,
         createSessionCredential,
         fetch: config.fetch,
@@ -420,6 +535,11 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
         onProbeUrl(httpUrl) {
           runtime.lastUrl = httpUrl.toString()
         },
+        probeInit: requestInitWithSessionHint(
+          webSocketProbeUrl(input),
+          init?.signal ? { signal: init.signal } : undefined,
+          (await getStoredChannel())?.channelId,
+        ),
         signal: init?.signal,
       })
       const { challenge, credential, httpUrl, wsUrl } = prepared
@@ -495,6 +615,8 @@ export declare namespace sessionManager {
       fetch?: typeof globalThis.fetch | undefined
       /** Maximum deposit in human-readable units (e.g. `'10'` for 10 tokens). Converted to raw units via `decimals`. */
       maxDeposit?: string | undefined
+      /** Optional per-manager store for persisted channel hints and restart recovery. */
+      sessionStore?: SessionStore | undefined
       /** Optional websocket constructor for runtimes without a global WebSocket. */
       webSocket?: WebSocketConstructor | undefined
     }

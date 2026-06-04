@@ -1,15 +1,18 @@
-import { createClient, custom, type Hex } from 'viem'
+import { createClient, custom, encodeFunctionResult, type Address, type Hex } from 'viem'
 import { privateKeyToAccount } from 'viem/accounts'
 import { describe, expect, test, vi } from 'vp/test'
 
 import * as Challenge from '../../../Challenge.js'
 import * as Credential from '../../../Credential.js'
+import * as Channel from '../precompile/Channel.js'
+import { escrowAbi } from '../precompile/escrow.abi.js'
 import { tip20ChannelEscrow } from '../precompile/Protocol.js'
 import { createSessionReceipt, serializeSessionReceipt } from '../precompile/Protocol.js'
 import type { NeedVoucherEvent, SessionReceipt } from '../precompile/Protocol.js'
 import { formatNeedVoucherEvent, parseEvent } from '../precompile/Protocol.js'
 import type { SessionCredentialPayload } from '../precompile/Protocol.js'
 import { computeFallbackCloseAmount, sessionManager } from './SessionManager.js'
+import type { StoredSessionChannel } from './SessionManager.js'
 
 const channelId = '0x0000000000000000000000000000000000000000000000000000000000000001' as Hex
 const challengeId = 'test-challenge-1'
@@ -28,10 +31,46 @@ const client = createClient({
       if (args.method === 'eth_estimateGas') return '0x5208'
       if (args.method === 'eth_maxPriorityFeePerGas') return '0x1'
       if (args.method === 'eth_getBlockByNumber') return { baseFeePerGas: '0x1' }
+      if (args.method === 'eth_call')
+        return encodeFunctionResult({
+          abi: escrowAbi,
+          functionName: 'getChannelState',
+          result: { settled: 0n, deposit: 10_000_000n, closeRequestedAt: 0 },
+        })
       throw new Error(`unexpected rpc request: ${args.method}`)
     },
   }),
 })
+
+const storedDescriptor = {
+  authorizedSigner: account.address,
+  expiringNonceHash: `0x${'11'.repeat(32)}` as Hex,
+  operator: '0x0000000000000000000000000000000000000000' as Address,
+  payee: '0x742d35cc6634c0532925a3b844bc9e7595f8fe00' as Address,
+  payer: account.address,
+  salt: `0x${'22'.repeat(32)}` as Hex,
+  token: '0x20c0000000000000000000000000000000000001' as Address,
+}
+
+const storedChannelId = Channel.computeId({
+  ...storedDescriptor,
+  chainId: 4217,
+  escrow: tip20ChannelEscrow,
+})
+
+function storedChannel(overrides: Partial<StoredSessionChannel> = {}): StoredSessionChannel {
+  return {
+    channelId: storedChannelId,
+    cumulativeAmount: '1000000',
+    deposit: '10000000',
+    descriptor: storedDescriptor,
+    escrow: tip20ChannelEscrow,
+    chainId: 4217,
+    opened: true,
+    updatedAt: 0,
+    ...overrides,
+  }
+}
 
 function makeChallenge(overrides: Record<string, unknown> = {}): Challenge.Challenge {
   return Challenge.from({
@@ -175,6 +214,127 @@ describe('Session', () => {
       expect(res.status).toBe(200)
       expect(await res.text()).toBe('hello')
       expect(mockFetch).toHaveBeenCalledOnce()
+    })
+
+    test('adds a stored channel hint to the first request', async () => {
+      const mockFetch = vi.fn().mockImplementation((_input, init?: RequestInit) => {
+        expect(new Headers(init?.headers).get('Payment-Session')).toBe(storedChannelId)
+        return Promise.resolve(makeOkResponse())
+      })
+      const s = sessionManager({
+        account,
+        client,
+        fetch: mockFetch as typeof globalThis.fetch,
+        sessionStore: {
+          get: () => storedChannel(),
+          set: vi.fn(),
+        },
+      })
+
+      await s.fetch('https://api.example.com/data')
+
+      expect(mockFetch).toHaveBeenCalledOnce()
+    })
+
+    test('uses stored channel details when the server does not return a snapshot', async () => {
+      const postedPayloads: SessionCredentialPayload[] = []
+      const mockFetch = vi.fn().mockImplementation((_input, init?: RequestInit) => {
+        const authorization = new Headers(init?.headers).get('Authorization')
+        const payload = authorization
+          ? Credential.deserialize<SessionCredentialPayload>(authorization).payload
+          : undefined
+        if (payload) postedPayloads.push(payload)
+
+        if (!payload) return Promise.resolve(make402Response())
+        return Promise.resolve(makeOkResponse())
+      })
+      const s = sessionManager({
+        account,
+        client,
+        fetch: mockFetch as typeof globalThis.fetch,
+        sessionStore: {
+          get: () => storedChannel(),
+          set: vi.fn(),
+        },
+      })
+
+      await s.fetch('https://api.example.com/data')
+
+      expect(postedPayloads[0]).toMatchObject({
+        action: 'voucher',
+        channelId: storedChannelId,
+      })
+    })
+
+    test('persists opened channels and deletes closed channels when supported', async () => {
+      const set = vi.fn()
+      const remove = vi.fn()
+      let callCount = 0
+      const mockFetch = vi.fn().mockImplementation((_input, init?: RequestInit) => {
+        const authorization = new Headers(init?.headers).get('Authorization')
+        const payload = authorization
+          ? Credential.deserialize<SessionCredentialPayload>(authorization).payload
+          : undefined
+        callCount++
+
+        if (callCount === 1) return Promise.resolve(make402Response())
+        if (payload?.action === 'open') {
+          return Promise.resolve(
+            new Response('ok', {
+              headers: {
+                'Payment-Receipt': serializeSessionReceipt(
+                  createSessionReceipt({
+                    acceptedCumulative: BigInt(payload.cumulativeAmount),
+                    challengeId,
+                    channelId: payload.channelId,
+                    spent: 0n,
+                  }),
+                ),
+              },
+            }),
+          )
+        }
+        if (payload?.action === 'close') {
+          return Promise.resolve(
+            new Response('ok', {
+              headers: {
+                'Payment-Receipt': serializeSessionReceipt(
+                  createSessionReceipt({
+                    acceptedCumulative: BigInt(payload.cumulativeAmount),
+                    challengeId,
+                    channelId: payload.channelId,
+                    spent: BigInt(payload.cumulativeAmount),
+                    txHash: `0x${'aa'.repeat(32)}`,
+                  }),
+                ),
+              },
+            }),
+          )
+        }
+        return Promise.resolve(makeOkResponse())
+      })
+      const s = sessionManager({
+        account,
+        client,
+        fetch: mockFetch as typeof globalThis.fetch,
+        maxDeposit: '10',
+        sessionStore: {
+          get: () => null,
+          set,
+          delete: remove,
+        },
+      })
+
+      await s.fetch('https://api.example.com/data')
+      expect(set).toHaveBeenCalledWith(
+        expect.objectContaining({
+          channelId: s.channelId,
+          opened: true,
+        }),
+      )
+
+      await s.close()
+      expect(remove).toHaveBeenCalledOnce()
     })
 
     test('rolls back state when opening a channel throws', async () => {

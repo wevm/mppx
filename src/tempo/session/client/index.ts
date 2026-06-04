@@ -4,9 +4,11 @@ export * as Machine from './Runtime.js'
 /** Public client session manager types. */
 export type {
   PaymentResponse,
+  SessionStore,
   SessionManager,
   SessionManagerSseOptions,
   SessionManagerWebSocketOptions,
+  StoredSessionChannel,
 } from './SessionManager.js'
 /** Public managed WebSocket facade returned by `sessionManager().ws()`. */
 export type { SessionManagedWebSocket } from './Transports.js'

@@ -3,6 +3,7 @@ export const Headers = {
   acceptPayment: 'Accept-Payment',
   authorization: 'Authorization',
   paymentReceipt: 'Payment-Receipt',
+  paymentSession: 'Payment-Session',
   wwwAuthenticate: 'WWW-Authenticate',
 } as const
 
