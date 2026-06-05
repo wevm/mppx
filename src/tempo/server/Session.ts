@@ -553,18 +553,12 @@ async function verifyAndAcceptVoucher(parameters: {
 
   if (voucher.cumulativeAmount <= onChain.settled) {
     throw new VerificationFailedError({
-      reason: 'voucher cumulativeAmount is below on-chain settled amount',
+      reason: 'voucher cumulativeAmount is at or below on-chain settled amount',
     })
   }
 
   if (voucher.cumulativeAmount > onChain.deposit) {
     throw new AmountExceedsDepositError({ reason: 'voucher amount exceeds on-chain deposit' })
-  }
-
-  if (voucher.cumulativeAmount < channel.highestVoucherAmount) {
-    throw new VerificationFailedError({
-      reason: 'voucher cumulativeAmount must be strictly greater than highest accepted voucher',
-    })
   }
 
   const isValid = await verifyVoucher(
@@ -578,9 +572,11 @@ async function verifyAndAcceptVoucher(parameters: {
     throw new InvalidSignatureError({ reason: 'invalid voucher signature' })
   }
 
-  // Idempotent replay: equal cumulative voucher is accepted without
-  // advancing channel state or charging additional value.
-  if (voucher.cumulativeAmount === channel.highestVoucherAmount) {
+  // Idempotent replay: a non-advancing voucher (at or below the highest
+  // accepted amount, but above the on-chain settled amount checked above)
+  // returns 200 OK with the current highest amount without advancing state,
+  // per the session spec's idempotency requirement.
+  if (voucher.cumulativeAmount <= channel.highestVoucherAmount) {
     return createSessionReceipt({
       challengeId: challenge.id,
       channelId,
@@ -660,7 +656,7 @@ async function handleOpen(
 
     if (voucher.cumulativeAmount <= onChain.settled) {
       throw new VerificationFailedError({
-        reason: 'voucher cumulativeAmount is below on-chain settled amount',
+        reason: 'voucher cumulativeAmount is at or below on-chain settled amount',
       })
     }
 
@@ -701,7 +697,7 @@ async function handleOpen(
     if (existing) {
       if (voucher.cumulativeAmount <= existing.settledOnChain) {
         throw new VerificationFailedError({
-          reason: 'voucher amount is below settled on-chain amount',
+          reason: 'voucher amount is at or below settled on-chain amount',
         })
       }
 
