@@ -8,6 +8,7 @@ import { deployEscrow, openChannel } from '~test/tempo/legacy/session.js'
 import { accounts, asset, chain, client, fundAccount } from '~test/tempo/viem.js'
 
 import * as Challenge from '../../../Challenge.js'
+import * as Constants from '../../../Constants.js'
 import * as Credential from '../../../Credential.js'
 import { chainId, escrowContract as escrowContractDefaults } from '../../internal/defaults.js'
 import { escrowAbi } from '../session/Chain.js'
@@ -54,6 +55,37 @@ function makeChallenge(overrides?: Record<string, unknown>) {
 }
 
 describe('session (pure)', () => {
+  test('handles legacy and unmarked session challenges', () => {
+    const method = session({
+      getClient: () => pureClient,
+      account: pureAccount,
+    })
+
+    expect(method.canHandleChallenge?.({ challenge: makeChallenge() })).toBe(true)
+    expect(
+      method.canHandleChallenge?.({
+        challenge: makeChallenge({
+          methodDetails: {
+            chainId: 42431,
+            escrowContract: escrowAddress,
+            sessionProtocol: Constants.SessionProtocols.legacy,
+          },
+        }),
+      }),
+    ).toBe(true)
+    expect(
+      method.canHandleChallenge?.({
+        challenge: makeChallenge({
+          methodDetails: {
+            chainId: 42431,
+            escrowContract: escrowAddress,
+            sessionProtocol: Constants.SessionProtocols.tip1034,
+          },
+        }),
+      }),
+    ).toBe(false)
+  })
+
   describe('error: no action and no deposit/maxDeposit', () => {
     test('throws when neither configured', async () => {
       const method = session({

@@ -8,6 +8,7 @@
 import { type Address, type Hex } from 'viem'
 import { tempo as tempo_chain } from 'viem/chains'
 
+import * as Constants from '../../../Constants.js'
 import type { LooseOmit, NoExtraKeys } from '../../../internal/types.js'
 import * as Method from '../../../Method.js'
 import * as Store from '../../../Store.js'
@@ -115,7 +116,7 @@ export function session<const parameters extends session.Parameters>(
     transport: deriveTransport<parameters>(transport),
 
     async request({ capturedRequest, credential, request }) {
-      return resolveSessionPaymentRequest({
+      const resolvedRequest = await resolveSessionPaymentRequest({
         capturedRequest,
         credential,
         decimals,
@@ -128,6 +129,10 @@ export function session<const parameters extends session.Parameters>(
         resolveChannelId: parameters.resolveChannelId,
         store,
       })
+      return {
+        ...resolvedRequest,
+        sessionProtocol: Constants.SessionProtocols.tip1034,
+      }
     },
 
     async verify({ credential, envelope, request }) {

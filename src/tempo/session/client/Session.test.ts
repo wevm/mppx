@@ -4,6 +4,7 @@ import { Transaction } from 'viem/tempo'
 import { describe, expect, test } from 'vp/test'
 
 import type { Challenge } from '../../../Challenge.js'
+import * as Constants from '../../../Constants.js'
 import * as Credential from '../../../Credential.js'
 import * as z from '../../../zod.js'
 import * as Methods from '../../Methods.js'
@@ -97,6 +98,34 @@ function openDeposit(payload: Types.SessionCredentialPayload): bigint {
 }
 
 describe('precompile client session', () => {
+  test('handles only TIP-1034 session challenges', () => {
+    const method = session({ account, getClient: () => client })
+
+    expect(
+      method.canHandleChallenge?.({
+        challenge: makeChallenge({
+          methodDetails: {
+            chainId,
+            escrowContract: tip20ChannelEscrow,
+            sessionProtocol: Constants.SessionProtocols.tip1034,
+          },
+        }),
+      }),
+    ).toBe(true)
+    expect(method.canHandleChallenge?.({ challenge: makeChallenge() })).toBe(false)
+    expect(
+      method.canHandleChallenge?.({
+        challenge: makeChallenge({
+          methodDetails: {
+            chainId,
+            escrowContract: tip20ChannelEscrow,
+            sessionProtocol: Constants.SessionProtocols.legacy,
+          },
+        }),
+      }),
+    ).toBe(false)
+  })
+
   test('opens for the current amount without client deposit configuration', async () => {
     const method = session({ account, getClient: () => client })
     const payload = deserialize(

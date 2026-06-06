@@ -1,6 +1,6 @@
 import * as node_http from 'node:http'
 
-import { Challenge, Credential } from 'mppx'
+import { Challenge, Constants, Credential } from 'mppx'
 import { Mppx as Mppx_server, tempo as tempo_server } from 'mppx/server'
 import {
   type Address,
@@ -452,6 +452,23 @@ async function persistPrecompileChannel(
 }
 
 describe('precompile server session unit guardrails', () => {
+  test('request marks TIP-1034 session challenges', async () => {
+    const { method } = createServer()
+
+    const challengeRequest = await method.request!({
+      credential: null,
+      request: {
+        amount: '1',
+        currency: token,
+        decimals: 0,
+        recipient: payee,
+        unitType: 'request',
+      },
+    } as never)
+
+    expect(challengeRequest.sessionProtocol).toBe(Constants.SessionProtocols.tip1034)
+  })
+
   test('request normalizes fee-payer to boolean for challenge issuance and account for verification', async () => {
     const { method } = createServer({ feePayer: wrongPayer })
 

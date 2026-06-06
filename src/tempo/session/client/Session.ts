@@ -1,6 +1,7 @@
 import { type Address, parseUnits } from 'viem'
 import { tempo as tempo_chain } from 'viem/chains'
 
+import * as Constants from '../../../Constants.js'
 import * as Method from '../../../Method.js'
 import * as Account from '../../../viem/Account.js'
 import * as Client from '../../../viem/Client.js'
@@ -45,6 +46,14 @@ export function session(parameters: session.Parameters = {}) {
   const cache = createChannelCache(onChannelUpdate)
 
   return Method.toClient(Methods.session, {
+    canHandleChallenge({ challenge }) {
+      return (
+        Constants.getMethodDetail(
+          challenge.request.methodDetails,
+          Constants.MethodDetailKeys.sessionProtocol,
+        ) === Constants.SessionProtocols.tip1034
+      )
+    },
     context: sessionContextSchema,
     async createCredential({ challenge, context }) {
       const resolved = await resolveChallengeContext({

@@ -59,6 +59,7 @@ export type Client<
   method extends Method = Method,
   context extends z.ZodMiniType | undefined = z.ZodMiniType | undefined,
 > = method & {
+  canHandleChallenge?: CanHandleChallengeFn | undefined
   context?: context
   createCredential: CreateCredentialFn<
     method,
@@ -130,7 +131,9 @@ export type Server<
   defaults extends ExactPartial<z.input<method['schema']['request']>> = {},
   transportOverride = undefined,
   extensions extends object = {},
+  alias extends string | undefined = string | undefined,
 > = method & {
+  alias?: alias | undefined
   authorize?: AuthorizeFn<method> | undefined
   defaults?: defaults | undefined
   extensions?: extensions | undefined
@@ -141,7 +144,7 @@ export type Server<
   transport?: transportOverride | undefined
   verify: VerifyFn<method>
 }
-export type AnyServer = Server<any, any, any, any>
+export type AnyServer = Server<any, any, any, any, any>
 
 /** Credential creation function for a single method. */
 export type CreateCredentialFn<method extends Method, context = unknown> = (
@@ -153,6 +156,9 @@ export type CreateCredentialFn<method extends Method, context = unknown> = (
     >
   } & ([keyof context] extends [never] ? unknown : { context: context }),
 ) => Promise<string>
+
+/** Predicate used when multiple client implementations share a wire method/intent. */
+export type CanHandleChallengeFn = (parameters: { challenge: Challenge.Challenge }) => boolean
 
 /** Request transform function for a single method. */
 export type RequestFn<method extends Method> = (
@@ -252,9 +258,10 @@ export function toClient<
   const method extends Method,
   const context extends z.ZodMiniType | undefined = undefined,
 >(method: method, options: toClient.Options<method, context>): Client<method, context> {
-  const { context, createCredential } = options
+  const { canHandleChallenge, context, createCredential } = options
   return {
     ...method,
+    canHandleChallenge,
     context,
     createCredential,
   } as Client<method, context>
@@ -262,6 +269,7 @@ export function toClient<
 
 export declare namespace toClient {
   type Options<method extends Method, context extends z.ZodMiniType | undefined = undefined> = {
+    canHandleChallenge?: CanHandleChallengeFn | undefined
     context?: context
     createCredential: CreateCredentialFn<
       method,
@@ -291,11 +299,19 @@ export function toServer<
   const defaults extends RequestDefaults<method> = {},
   const transportOverride extends Transport.AnyTransport | undefined = undefined,
   const extensions extends object = {},
+  const options extends toServer.Options<
+    method,
+    defaults,
+    transportOverride,
+    extensions,
+    string | undefined
+  > = toServer.Options<method, defaults, transportOverride, extensions, string | undefined>,
 >(
   method: method,
-  options: toServer.Options<method, defaults, transportOverride, extensions>,
-): Server<method, defaults, transportOverride, extensions> {
+  options: options,
+): Server<method, defaults, transportOverride, extensions, toServer.Alias<options>> {
   const {
+    alias,
     authorize,
     defaults,
     extensions,
@@ -308,6 +324,7 @@ export function toServer<
   } = options
   return {
     ...method,
+    alias,
     authorize,
     defaults,
     extensions,
@@ -317,16 +334,20 @@ export function toServer<
     stableBinding,
     transport,
     verify,
-  } as Server<method, defaults, transportOverride, extensions>
+  } as Server<method, defaults, transportOverride, extensions, toServer.Alias<options>>
 }
 
 export declare namespace toServer {
+  type Alias<options> = options extends { alias: infer alias extends string } ? alias : undefined
+
   type Options<
     method extends Method,
     defaults extends RequestDefaults<method> = {},
     transportOverride extends Transport.AnyTransport | undefined = undefined,
     extensions extends object = {},
+    alias extends string | undefined = undefined,
   > = {
+    alias?: alias | undefined
     authorize?: AuthorizeFn<method> | undefined
     defaults?: defaults | undefined
     extensions?: extensions | undefined

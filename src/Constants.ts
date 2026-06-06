@@ -28,8 +28,18 @@ export const Intents = {
 
 /** Method detail object keys used by built-in methods. */
 export const MethodDetailKeys = {
+  sessionProtocol: 'sessionProtocol',
   sessionSnapshot: 'sessionSnapshot',
 } as const
+
+/** Tempo session protocol variants advertised under `request.methodDetails`. */
+export const SessionProtocols = {
+  legacy: 'legacy',
+  tip1034: 'tip1034',
+} as const
+
+/** Known Tempo session protocol marker values. */
+export type SessionProtocol = (typeof SessionProtocols)[keyof typeof SessionProtocols]
 
 /** Known keys that built-in methods place under `request.methodDetails`. */
 export type MethodDetailKey = (typeof MethodDetailKeys)[keyof typeof MethodDetailKeys]

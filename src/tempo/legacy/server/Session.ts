@@ -20,6 +20,7 @@ import {
 } from 'viem'
 import { tempo as tempo_chain } from 'viem/tempo/chains'
 
+import * as Constants from '../../../Constants.js'
 import {
   AmountExceedsDepositError,
   BadRequestError,
@@ -67,6 +68,7 @@ type SessionMethodDetails = {
   channelId?: Hex | undefined
   minVoucherDelta?: string | undefined
   feePayer?: boolean | undefined
+  sessionProtocol?: Constants.SessionProtocol | undefined
 }
 
 /**
@@ -187,6 +189,7 @@ export function session<const parameters extends session.Parameters>(
         chainId,
         escrowContract: resolvedEscrow,
         feePayer: resolvedFeePayer,
+        sessionProtocol: Constants.SessionProtocols.legacy,
       }
     },
 

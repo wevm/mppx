@@ -327,12 +327,30 @@ type UniqueIntentHandlers<
 }
 
 /** Nested handlers: `mppx.tempo.charge(...)`, grouped by method name then intent. */
+type PublicAlias<method extends Method.AnyServer> = method extends {
+  alias?: infer alias
+}
+  ? Exclude<alias, undefined> extends infer definedAlias
+    ? definedAlias extends string
+      ? string extends definedAlias
+        ? never
+        : definedAlias
+      : never
+    : never
+  : never
+
+type PublicIntent<method extends Method.AnyServer> = [PublicAlias<method>] extends [never]
+  ? method extends { intent: infer intent extends string }
+    ? intent
+    : never
+  : PublicAlias<method>
+
 type NestedHandlers<
   methods extends readonly Method.AnyServer[],
   transport extends Transport.AnyTransport,
 > = {
   [name in methods[number]['name'] as name extends ReservedKey ? never : name]: {
-    [mi in Extract<methods[number], { name: name }> as mi['intent']]: MethodFn<
+    [mi in Extract<methods[number], { name: name }> as PublicIntent<mi>]: MethodFn<
       mi,
       EffectiveTransportOf<mi, transport>,
       NonNullable<mi['defaults']>
@@ -352,7 +370,12 @@ type Handlers<
   > &
     MethodExtensions<mi>
 } & UniqueIntentHandlers<methods, transport> &
-  NestedHandlers<methods, transport>
+  NestedHandlers<methods, transport> & {
+    [mi in methods[number] as PublicAlias<mi> extends string
+      ? `${mi['name']}/${PublicAlias<mi>}`
+      : never]: MethodFn<mi, EffectiveTransportOf<mi, transport>, NonNullable<mi['defaults']>> &
+      MethodExtensions<mi>
+  }
 
 type MethodExtensions<method extends Method.AnyServer> = method extends {
   extensions?: (infer extensions) | undefined
@@ -365,7 +388,7 @@ type MethodExtensions<method extends Method.AnyServer> = method extends {
 /** Nested challenge generators: `mppx.challenge.tempo.charge(...)`. */
 type ChallengeHandlers<methods extends readonly Method.AnyServer[]> = {
   [name in methods[number]['name']]: {
-    [mi in Extract<methods[number], { name: name }> as mi['intent']]: ChallengeFn<
+    [mi in Extract<methods[number], { name: name }> as PublicIntent<mi>]: ChallengeFn<
       mi,
       NonNullable<mi['defaults']>
     >
@@ -434,8 +457,11 @@ export function create<
       transport: (mi.transport ?? transport) as never,
       verify: mi.verify as never,
     })
+    const wireKey = `${mi.name}/${mi.intent}`
+    const aliasKey = mi.alias ? `${mi.name}/${mi.alias}` : undefined
     if (mi.extensions) Object.assign(fn, mi.extensions)
-    handlers[`${mi.name}/${mi.intent}`] = fn
+    if (!handlers[wireKey]) handlers[wireKey] = fn
+    if (aliasKey) handlers[aliasKey] = fn
   }
 
   // Also set shorthand intent key when there's no collision
@@ -446,16 +472,17 @@ export function create<
   // Build nested handlers: mppx.tempo.charge(...)
   for (const mi of methods) {
     if (!handlers[mi.name]) handlers[mi.name] = {}
-    const fn = handlers[`${mi.name}/${mi.intent}`] as AnyMethodFn & { _method?: Method.AnyServer }
+    const key = mi.alias ? `${mi.name}/${mi.alias}` : `${mi.name}/${mi.intent}`
+    const fn = handlers[key] as AnyMethodFn & { _method?: Method.AnyServer }
     fn._method = mi
-    ;(handlers[mi.name] as Record<string, unknown>)[mi.intent] = fn
+    ;(handlers[mi.name] as Record<string, unknown>)[mi.alias ?? mi.intent] = fn
   }
 
   // Build challenge generators: mppx.challenge.tempo.charge(...)
   const challengeHandlers: Record<string, Record<string, unknown>> = {}
   for (const mi of methods) {
     if (!challengeHandlers[mi.name]) challengeHandlers[mi.name] = {}
-    challengeHandlers[mi.name]![mi.intent] = createChallengeFn({
+    challengeHandlers[mi.name]![mi.alias ?? mi.intent] = createChallengeFn({
       defaults: mi.defaults,
       method: mi,
       realm,
@@ -473,11 +500,13 @@ export function create<
       typeof input === 'string' ? Credential.deserialize(input) : input,
     )
 
-    // Find matching method by name + intent
+    // Find matching method by name + intent, then use method-details markers
+    // when multiple handlers intentionally share the same wire identity.
     const { method: credMethod, intent: credIntent } = credential.challenge
-    const mi = (methods as readonly Method.AnyServer[]).find(
+    const methodCandidates = (methods as readonly Method.AnyServer[]).filter(
       (m) => m.name === credMethod && m.intent === credIntent,
     )
+    const mi = selectVerificationMethod(methodCandidates, credential.challenge)
     const eventMethod =
       mi ?? ({ intent: credIntent, name: credMethod } satisfies ServerMethodDescriptor)
 
@@ -689,8 +718,8 @@ export function create<
         typeof methodOrKey === 'string'
           ? methodOrKey
           : typeof methodOrKey === 'function' && '_method' in methodOrKey
-            ? `${(methodOrKey._method as Method.AnyServer).name}/${(methodOrKey._method as Method.AnyServer).intent}`
-            : `${(methodOrKey as Method.AnyServer).name}/${(methodOrKey as Method.AnyServer).intent}`
+            ? `${(methodOrKey._method as Method.AnyServer).name}/${(methodOrKey._method as Method.AnyServer).alias ?? (methodOrKey._method as Method.AnyServer).intent}`
+            : `${(methodOrKey as Method.AnyServer).name}/${(methodOrKey as Method.AnyServer).alias ?? (methodOrKey as Method.AnyServer).intent}`
       const handlerFn = handlers[key] as AnyMethodFn | undefined
       if (!handlerFn)
         throw new Error(`No handler for "${key}". Is this method in your methods array?`)
@@ -773,75 +802,62 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
   return (options) => {
     const { description, meta, scope, ...rest } = options
     const staticMeta = Scope.merge({ meta, scope })
+    const internal: ConfiguredHandler['_internal'] = {
+      ...method,
+      ...defaults,
+      ...options,
+      ...(staticMeta !== undefined ? { meta: staticMeta } : {}),
+      name: method.name,
+      intent: method.intent,
+      html: method.html,
+      _canonicalRequest: PaymentRequest.fromMethod(method, { ...defaults, ...rest }),
+      _stableBinding: stableBinding as never,
+    }
 
-    return Object.assign(
-      async (input: Transport.InputOf): Promise<MethodFn.Response> => {
-        if (method.html && isServiceWorkerRequest(input))
-          return {
-            status: 402,
-            challenge: createServiceWorkerResponse(),
-          } as MethodFn.Response<Transport.Http>
+    const handler = async (input: Transport.InputOf): Promise<MethodFn.Response> => {
+      if (method.html && isServiceWorkerRequest(input))
+        return {
+          status: 402,
+          challenge: createServiceWorkerResponse(),
+        } as MethodFn.Response<Transport.Http>
 
-        const expires =
-          'expires' in options
-            ? normalizeExpires(options.expires as z.DatetimeInput | undefined)
-            : Expires.minutes(5)
-        const capturedRequest = await captureRequest(transport, input)
-        const effectiveMeta =
-          scope === undefined && input instanceof globalThis.Request
-            ? Scope.merge({ meta: staticMeta, scope: Scope.get(input) })
-            : staticMeta
+      const expires =
+        'expires' in options
+          ? normalizeExpires(options.expires as z.DatetimeInput | undefined)
+          : Expires.minutes(5)
+      const capturedRequest = await captureRequest(transport, input)
+      const effectiveMeta =
+        scope === undefined && input instanceof globalThis.Request
+          ? Scope.merge({ meta: staticMeta, scope: Scope.get(input) })
+          : staticMeta
 
-        // Extract credential once — getCredential may have side effects (e.g. SSE transports).
-        let [credential, credentialError] = (() => {
-          try {
-            const credential = transport.getCredential(input) as Credential.Credential | null
-            return [credential ? hydrateCredentialMeta(credential) : null, undefined] as const
-          } catch (e) {
-            return [null, e as Error] as const
-          }
-        })()
-
-        const emitChallenge = async (parameters: {
-          challenge: Challenge.Challenge
-          credential?: Credential.Credential | null | undefined
-          error?: Errors.PaymentError | undefined
-          html?: Method.Method['html'] | undefined
-          request: Record<string, unknown>
-        }) => {
-          const response = await transport.respondChallenge({
-            challenge: parameters.challenge,
-            input,
-            ...(parameters.error && { error: parameters.error }),
-            ...(parameters.html && { html: parameters.html }),
-          })
-          if (isIssuedChallengeResponse(response))
-            await events.emit(
-              'challenge.created',
-              createChallengeContext({
-                capturedRequest,
-                challenge: parameters.challenge,
-                credential: parameters.credential,
-                error: parameters.error,
-                input,
-                method,
-                request: parameters.request,
-              }) as never,
-            )
-          return response
+      // Extract credential once — getCredential may have side effects (e.g. SSE transports).
+      let [credential, credentialError] = (() => {
+        try {
+          const credential = transport.getCredential(input) as Credential.Credential | null
+          return [credential ? hydrateCredentialMeta(credential) : null, undefined] as const
+        } catch (e) {
+          return [null, e as Error] as const
         }
+      })()
 
-        const emitPaymentFailed = async (parameters: {
-          challenge: Challenge.Challenge
-          credential: Credential.Credential | null
-          error: Errors.PaymentError
-          request: Record<string, unknown>
-          retryChallenge?: Challenge.Challenge | undefined
-          submittedChallenge?: Challenge.Challenge | undefined
-        }) => {
+      const emitChallenge = async (parameters: {
+        challenge: Challenge.Challenge
+        credential?: Credential.Credential | null | undefined
+        error?: Errors.PaymentError | undefined
+        html?: Method.Method['html'] | undefined
+        request: Record<string, unknown>
+      }) => {
+        const response = await transport.respondChallenge({
+          challenge: parameters.challenge,
+          input,
+          ...(parameters.error && { error: parameters.error }),
+          ...(parameters.html && { html: parameters.html }),
+        })
+        if (isIssuedChallengeResponse(response))
           await events.emit(
-            'payment.failed',
-            createPaymentFailedContext({
+            'challenge.created',
+            createChallengeContext({
               capturedRequest,
               challenge: parameters.challenge,
               credential: parameters.credential,
@@ -849,272 +865,199 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
               input,
               method,
               request: parameters.request,
-              retryChallenge: parameters.retryChallenge,
-              submittedChallenge: parameters.submittedChallenge,
             }) as never,
           )
-        }
+        return response
+      }
 
-        const routeChallenge = await resolveRouteChallenge({
+      const emitPaymentFailed = async (parameters: {
+        challenge: Challenge.Challenge
+        credential: Credential.Credential | null
+        error: Errors.PaymentError
+        request: Record<string, unknown>
+        retryChallenge?: Challenge.Challenge | undefined
+        submittedChallenge?: Challenge.Challenge | undefined
+      }) => {
+        await events.emit(
+          'payment.failed',
+          createPaymentFailedContext({
+            capturedRequest,
+            challenge: parameters.challenge,
+            credential: parameters.credential,
+            error: parameters.error,
+            input,
+            method,
+            request: parameters.request,
+            retryChallenge: parameters.retryChallenge,
+            submittedChallenge: parameters.submittedChallenge,
+          }) as never,
+        )
+      }
+
+      const routeChallenge = await resolveRouteChallenge({
+        capturedRequest,
+        credential,
+        defaults,
+        description,
+        expires,
+        meta: effectiveMeta,
+        method,
+        realm,
+        request: parameters.request,
+        routeRequest: rest,
+        secretKey,
+      }).catch(async (e) => {
+        if (!(e instanceof Errors.PaymentError)) throw e
+        const challenge = createFallbackChallenge({
           capturedRequest,
-          credential,
-          defaults,
+          defaults: defaults ?? {},
           description,
           expires,
           meta: effectiveMeta,
           method,
           realm,
-          request: parameters.request,
           routeRequest: rest,
           secretKey,
-        }).catch(async (e) => {
-          if (!(e instanceof Errors.PaymentError)) throw e
-          const challenge = createFallbackChallenge({
-            capturedRequest,
-            defaults: defaults ?? {},
-            description,
-            expires,
-            meta: effectiveMeta,
-            method,
-            realm,
-            routeRequest: rest,
-            secretKey,
-          })
-          if (credential)
-            await emitPaymentFailed({
-              challenge,
-              credential,
-              error: e,
-              request: challenge.request,
-              retryChallenge: challenge,
-              submittedChallenge: credential.challenge,
-            })
-          const response = await emitChallenge({
-            challenge,
-            credential,
-            request: challenge.request,
-            error: e,
-            html: method.html,
-          })
-          return { response }
         })
-        if ('response' in routeChallenge) return { challenge: routeChallenge.response, status: 402 }
-        const { challenge, parsedRequest, request } = routeChallenge
-
-        if (credential && transport.bindCredential) {
-          try {
-            credential = hydrateCredentialMeta(
-              (await transport.bindCredential({
-                challenge,
-                credential,
-                input,
-              })) as Credential.Credential,
-            )
-          } catch (e) {
-            credential = null
-            credentialError = e as Error
-          }
-        }
-
-        // Credential was provided but malformed
-        if (credentialError) {
-          const reason = getSafeCredentialReason(credentialError)
-          const error = new Errors.MalformedCredentialError(reason ? { reason } : {})
+        if (credential)
           await emitPaymentFailed({
             challenge,
-            credential: null,
-            error,
-            request: parsedRequest,
+            credential,
+            error: e,
+            request: challenge.request,
             retryChallenge: challenge,
+            submittedChallenge: credential.challenge,
           })
-          const response = await emitChallenge({
-            challenge,
-            credential: null,
-            request: parsedRequest,
-            error,
-            html: method.html,
-          })
-          return { challenge: response, status: 402 }
+        const response = await emitChallenge({
+          challenge,
+          credential,
+          request: challenge.request,
+          error: e,
+          html: method.html,
+        })
+        return { response }
+      })
+      if ('response' in routeChallenge) return { challenge: routeChallenge.response, status: 402 }
+      const { challenge, parsedRequest, request } = routeChallenge
+      internal._canonicalRequest = parsedRequest
+
+      if (credential && transport.bindCredential) {
+        try {
+          credential = hydrateCredentialMeta(
+            (await transport.bindCredential({
+              challenge,
+              credential,
+              input,
+            })) as Credential.Credential,
+          )
+        } catch (e) {
+          credential = null
+          credentialError = e as Error
         }
+      }
 
-        const success = (
-          receiptData: Receipt.Receipt,
-          options: {
-            challengeId?: string | undefined
-            credentialForReceipt?: Credential.Credential | undefined
-            envelopeForReceipt?: Method.VerifiedChallengeEnvelope | undefined
-            managementResponse?: globalThis.Response | undefined
-          } = {},
-        ): MethodFn.Response => {
-          const {
-            challengeId = challenge.id,
-            credentialForReceipt = { challenge, payload: {} } as Credential.Credential,
-            envelopeForReceipt,
-            managementResponse,
-          } = options
+      // Credential was provided but malformed
+      if (credentialError) {
+        const reason = getSafeCredentialReason(credentialError)
+        const error = new Errors.MalformedCredentialError(reason ? { reason } : {})
+        await emitPaymentFailed({
+          challenge,
+          credential: null,
+          error,
+          request: parsedRequest,
+          retryChallenge: challenge,
+        })
+        const response = await emitChallenge({
+          challenge,
+          credential: null,
+          request: parsedRequest,
+          error,
+          html: method.html,
+        })
+        return { challenge: response, status: 402 }
+      }
 
-          return {
-            status: 200,
-            withReceipt<response>(response?: response) {
-              if (managementResponse) {
-                return transport.respondReceipt({
-                  challengeId,
-                  credential: credentialForReceipt,
-                  ...(envelopeForReceipt ? { envelope: envelopeForReceipt } : {}),
-                  input,
-                  receipt: receiptData,
-                  response: managementResponse as never,
-                }) as response
-              }
-              if (!response) throw new MissingReceiptResponseError()
+      const success = (
+        receiptData: Receipt.Receipt,
+        options: {
+          challengeId?: string | undefined
+          credentialForReceipt?: Credential.Credential | undefined
+          envelopeForReceipt?: Method.VerifiedChallengeEnvelope | undefined
+          managementResponse?: globalThis.Response | undefined
+        } = {},
+      ): MethodFn.Response => {
+        const {
+          challengeId = challenge.id,
+          credentialForReceipt = { challenge, payload: {} } as Credential.Credential,
+          envelopeForReceipt,
+          managementResponse,
+        } = options
+
+        return {
+          status: 200,
+          withReceipt<response>(response?: response) {
+            if (managementResponse) {
               return transport.respondReceipt({
                 challengeId,
                 credential: credentialForReceipt,
                 ...(envelopeForReceipt ? { envelope: envelopeForReceipt } : {}),
                 input,
                 receipt: receiptData,
-                response: response as never,
+                response: managementResponse as never,
               }) as response
-            },
-          }
-        }
-
-        // No credential provided—issue challenge
-        if (!credential) {
-          if (authorize && input instanceof globalThis.Request) {
-            try {
-              const authorized = await authorize({
-                challenge,
-                input,
-                request: challenge.request,
-              } as never)
-              if (authorized) {
-                await events.emit(
-                  'payment.success',
-                  createPaymentSuccessContext({
-                    capturedRequest,
-                    challenge,
-                    input,
-                    method,
-                    receipt: authorized.receipt,
-                    request: parsedRequest,
-                  }) as never,
-                )
-                return success(authorized.receipt, {
-                  managementResponse: authorized.response,
-                })
-              }
-            } catch (e) {
-              if (!(e instanceof Errors.PaymentError))
-                console.error('mppx: internal authorization error', e)
-              const error =
-                e instanceof Errors.PaymentError ? e : new Errors.VerificationFailedError()
-              await emitPaymentFailed({
-                challenge,
-                credential: null,
-                error,
-                request: parsedRequest,
-                retryChallenge: challenge,
-              })
-              const response = await emitChallenge({
-                challenge,
-                request: parsedRequest,
-                error,
-                html: method.html,
-              })
-              return { challenge: response, status: 402 }
             }
-          }
-
-          const error = new Errors.PaymentRequiredError({ description })
-          const response = await emitChallenge({
-            challenge,
-            credential: null,
-            request: parsedRequest,
-            error,
-            html: method.html,
-          })
-          return { challenge: response, status: 402 }
+            if (!response) throw new MissingReceiptResponseError()
+            return transport.respondReceipt({
+              challengeId,
+              credential: credentialForReceipt,
+              ...(envelopeForReceipt ? { envelope: envelopeForReceipt } : {}),
+              input,
+              receipt: receiptData,
+              response: response as never,
+            }) as response
+          },
         }
+      }
 
-        // ── Tier 1: HMAC provenance check (primary gate) ──────────────────
-        //
-        // Recompute the HMAC-SHA256 over the credential's echoed challenge
-        // parameters (realm|method|intent|request|expires|digest|opaque) and
-        // compare to the echoed `id`. This proves the challenge was issued by
-        // this server with these exact parameters — including opaque/meta,
-        // expires, and the full serialized request blob.
-        //
-        // This is the authoritative binding per §5.1.2.1.1 of the spec
-        // (https://paymentauth.org/draft-httpauth-payment-00.html#section-5.1.2.1.1).
-        // No database lookup is needed; the HMAC is stateless verification.
-        if (!Challenge.verify(credential.challenge, { secretKey })) {
-          const error = new Errors.InvalidChallengeError({
-            id: credential.challenge.id,
-            reason: 'challenge was not issued by this server',
-          })
-          await emitPaymentFailed({
-            challenge,
-            credential,
-            error,
-            request: parsedRequest,
-            retryChallenge: challenge,
-            submittedChallenge: credential.challenge,
-          })
-          const response = await emitChallenge({
-            challenge,
-            credential,
-            request: parsedRequest,
-            error,
-            html: method.html,
-          })
-          return { challenge: response, status: 402 }
-        }
-
-        // ── Tier 2: Pinned field safety net ──────────────────────────────
-        //
-        // The HMAC check above (Tier 1) is the primary gate — it already
-        // covers ALL challenge fields including opaque, digest, and the full
-        // serialized request. So why this second check?
-        //
-        // The `request()` hook can produce credential-dependent output: for
-        // example, `feePayer` may differ between the 402 challenge call (no
-        // credential) and the credential-bearing call. This means the
-        // recomputed challenge here has a different `request` blob — and
-        // thus a different HMAC — than the original challenge the client
-        // echoes back. The HMAC check above verifies the *echoed* challenge
-        // was signed by us, but it cannot verify that the echoed challenge
-        // matches *this route's current configuration* when the request
-        // hook transforms fields between calls.
-        //
-        // This check compares the fields that MUST be stable across both
-        // calls. That includes the economically significant request fields
-        // plus `opaque`, which can carry route-scoping metadata (for example,
-        // sibling route identity) that must not be replayable across handlers.
-        // `expires` still is not pinned here because its default is generated
-        // per invocation, and `digest` is already bound by the echoed HMAC.
-        {
-          const mismatch = getChallengeBindingMismatch(
-            challenge,
-            credential.challenge,
-            stableBinding as never,
-          )
-          if (mismatch) {
-            const error = new Errors.InvalidChallengeError({
-              id: credential.challenge.id,
-              reason: `credential ${mismatch} does not match this route's requirements`,
-            })
+      // No credential provided—issue challenge
+      if (!credential) {
+        if (authorize && input instanceof globalThis.Request) {
+          try {
+            const authorized = await authorize({
+              challenge,
+              input,
+              request: challenge.request,
+            } as never)
+            if (authorized) {
+              await events.emit(
+                'payment.success',
+                createPaymentSuccessContext({
+                  capturedRequest,
+                  challenge,
+                  input,
+                  method,
+                  receipt: authorized.receipt,
+                  request: parsedRequest,
+                }) as never,
+              )
+              return success(authorized.receipt, {
+                managementResponse: authorized.response,
+              })
+            }
+          } catch (e) {
+            if (!(e instanceof Errors.PaymentError))
+              console.error('mppx: internal authorization error', e)
+            const error =
+              e instanceof Errors.PaymentError ? e : new Errors.VerificationFailedError()
             await emitPaymentFailed({
               challenge,
-              credential,
+              credential: null,
               error,
               request: parsedRequest,
               retryChallenge: challenge,
-              submittedChallenge: credential.challenge,
             })
             const response = await emitChallenge({
               challenge,
-              credential,
               request: parsedRequest,
               error,
               html: method.html,
@@ -1123,134 +1066,220 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
           }
         }
 
-        // Reject credentials without expires (fail-closed) or with expired timestamp
-        try {
-          Expires.assert(credential.challenge.expires, credential.challenge.id)
-        } catch (error) {
-          await emitPaymentFailed({
-            challenge,
-            credential,
-            error: error as Errors.PaymentError,
-            request: parsedRequest,
-            retryChallenge: challenge,
-            submittedChallenge: credential.challenge,
-          })
-          const response = await emitChallenge({
-            challenge,
-            credential,
-            request: parsedRequest,
-            error: error as Errors.PaymentError,
-          })
-          return { challenge: response, status: 402 }
-        }
-        // Validate payload structure against method schema
-        let parsedCredential: Credential.Credential
-        try {
-          parsedCredential = withParsedCredentialPayload(
-            credential,
-            method.schema.credential.payload.parse(credential.payload),
-          )
-        } catch {
-          const error = new Errors.InvalidPayloadError()
-          await emitPaymentFailed({
-            challenge,
-            credential,
-            error,
-            request: parsedRequest,
-            retryChallenge: challenge,
-            submittedChallenge: credential.challenge,
-          })
-          const response = await emitChallenge({
-            challenge,
-            credential,
-            request: parsedRequest,
-            error,
-          })
-          return { challenge: response, status: 402 }
-        }
+        const error = new Errors.PaymentRequiredError({ description })
+        const response = await emitChallenge({
+          challenge,
+          credential: null,
+          request: parsedRequest,
+          error,
+          html: method.html,
+        })
+        return { challenge: response, status: 402 }
+      }
 
-        const envelope: Method.VerifiedChallengeEnvelope = Object.freeze({
-          capturedRequest,
-          challenge: credential.challenge,
+      // ── Tier 1: HMAC provenance check (primary gate) ──────────────────
+      //
+      // Recompute the HMAC-SHA256 over the credential's echoed challenge
+      // parameters (realm|method|intent|request|expires|digest|opaque) and
+      // compare to the echoed `id`. This proves the challenge was issued by
+      // this server with these exact parameters — including opaque/meta,
+      // expires, and the full serialized request blob.
+      //
+      // This is the authoritative binding per §5.1.2.1.1 of the spec
+      // (https://paymentauth.org/draft-httpauth-payment-00.html#section-5.1.2.1.1).
+      // No database lookup is needed; the HMAC is stateless verification.
+      if (!Challenge.verify(credential.challenge, { secretKey })) {
+        const error = new Errors.InvalidChallengeError({
+          id: credential.challenge.id,
+          reason: 'challenge was not issued by this server',
+        })
+        await emitPaymentFailed({
+          challenge,
+          credential,
+          error,
+          request: parsedRequest,
+          retryChallenge: challenge,
+          submittedChallenge: credential.challenge,
+        })
+        const response = await emitChallenge({
+          challenge,
+          credential,
+          request: parsedRequest,
+          error,
+          html: method.html,
+        })
+        return { challenge: response, status: 402 }
+      }
+
+      // ── Tier 2: Pinned field safety net ──────────────────────────────
+      //
+      // The HMAC check above (Tier 1) is the primary gate — it already
+      // covers ALL challenge fields including opaque, digest, and the full
+      // serialized request. So why this second check?
+      //
+      // The `request()` hook can produce credential-dependent output: for
+      // example, `feePayer` may differ between the 402 challenge call (no
+      // credential) and the credential-bearing call. This means the
+      // recomputed challenge here has a different `request` blob — and
+      // thus a different HMAC — than the original challenge the client
+      // echoes back. The HMAC check above verifies the *echoed* challenge
+      // was signed by us, but it cannot verify that the echoed challenge
+      // matches *this route's current configuration* when the request
+      // hook transforms fields between calls.
+      //
+      // This check compares the fields that MUST be stable across both
+      // calls. That includes the economically significant request fields
+      // plus `opaque`, which can carry route-scoping metadata (for example,
+      // sibling route identity) that must not be replayable across handlers.
+      // `expires` still is not pinned here because its default is generated
+      // per invocation, and `digest` is already bound by the echoed HMAC.
+      {
+        const mismatch = getChallengeBindingMismatch(
+          challenge,
+          credential.challenge,
+          stableBinding as never,
+        )
+        if (mismatch) {
+          const error = new Errors.InvalidChallengeError({
+            id: credential.challenge.id,
+            reason: `credential ${mismatch} does not match this route's requirements`,
+          })
+          await emitPaymentFailed({
+            challenge,
+            credential,
+            error,
+            request: parsedRequest,
+            retryChallenge: challenge,
+            submittedChallenge: credential.challenge,
+          })
+          const response = await emitChallenge({
+            challenge,
+            credential,
+            request: parsedRequest,
+            error,
+            html: method.html,
+          })
+          return { challenge: response, status: 402 }
+        }
+      }
+
+      // Reject credentials without expires (fail-closed) or with expired timestamp
+      try {
+        Expires.assert(credential.challenge.expires, credential.challenge.id)
+      } catch (error) {
+        await emitPaymentFailed({
+          challenge,
+          credential,
+          error: error as Errors.PaymentError,
+          request: parsedRequest,
+          retryChallenge: challenge,
+          submittedChallenge: credential.challenge,
+        })
+        const response = await emitChallenge({
+          challenge,
+          credential,
+          request: parsedRequest,
+          error: error as Errors.PaymentError,
+        })
+        return { challenge: response, status: 402 }
+      }
+      // Validate payload structure against method schema
+      let parsedCredential: Credential.Credential
+      try {
+        parsedCredential = withParsedCredentialPayload(
+          credential,
+          method.schema.credential.payload.parse(credential.payload),
+        )
+      } catch {
+        const error = new Errors.InvalidPayloadError()
+        await emitPaymentFailed({
+          challenge,
+          credential,
+          error,
+          request: parsedRequest,
+          retryChallenge: challenge,
+          submittedChallenge: credential.challenge,
+        })
+        const response = await emitChallenge({
+          challenge,
+          credential,
+          request: parsedRequest,
+          error,
+        })
+        return { challenge: response, status: 402 }
+      }
+
+      const envelope: Method.VerifiedChallengeEnvelope = Object.freeze({
+        capturedRequest,
+        challenge: credential.challenge,
+        credential: parsedCredential,
+        request: parsedRequest,
+      })
+
+      // User-provided verification (e.g., check signature, submit tx, verify payment).
+      // If verification fails, re-issue the challenge so the client can retry.
+      let receiptData: Receipt.Receipt
+      try {
+        receiptData = await verify({ credential: parsedCredential, envelope, request } as never)
+      } catch (e) {
+        if (!(e instanceof Errors.PaymentError))
+          console.error('mppx: internal verification error', e)
+        const error = e instanceof Errors.PaymentError ? e : new Errors.VerificationFailedError()
+        await emitPaymentFailed({
+          challenge,
+          credential: parsedCredential,
+          error,
+          request: parsedRequest,
+          retryChallenge: challenge,
+          submittedChallenge: credential.challenge,
+        })
+        const response = await emitChallenge({
+          challenge,
           credential: parsedCredential,
           request: parsedRequest,
+          error,
         })
+        return { challenge: response, status: 402 }
+      }
 
-        // User-provided verification (e.g., check signature, submit tx, verify payment).
-        // If verification fails, re-issue the challenge so the client can retry.
-        let receiptData: Receipt.Receipt
-        try {
-          receiptData = await verify({ credential: parsedCredential, envelope, request } as never)
-        } catch (e) {
-          if (!(e instanceof Errors.PaymentError))
-            console.error('mppx: internal verification error', e)
-          const error = e instanceof Errors.PaymentError ? e : new Errors.VerificationFailedError()
-          await emitPaymentFailed({
-            challenge,
-            credential: parsedCredential,
-            error,
-            request: parsedRequest,
-            retryChallenge: challenge,
-            submittedChallenge: credential.challenge,
-          })
-          const response = await emitChallenge({
-            challenge,
-            credential: parsedCredential,
-            request: parsedRequest,
-            error,
-          })
-          return { challenge: response, status: 402 }
-        }
-
-        // If the method's `respond` hook returns a Response, it means this
-        // request is a management action (e.g. channel open, voucher POST)
-        // and the user's route handler should NOT run. `withReceipt()` will
-        // return the management response directly. If undefined, `withReceipt()`
-        // expects the caller to pass the user handler's response instead.
-        const managementResponse = respond
-          ? await respond({
-              credential: parsedCredential,
-              envelope,
-              input,
-              receipt: receiptData,
-              request,
-            } as never)
-          : undefined
-
-        await events.emit(
-          'payment.success',
-          createPaymentSuccessContext({
-            capturedRequest,
-            challenge: credential.challenge,
+      // If the method's `respond` hook returns a Response, it means this
+      // request is a management action (e.g. channel open, voucher POST)
+      // and the user's route handler should NOT run. `withReceipt()` will
+      // return the management response directly. If undefined, `withReceipt()`
+      // expects the caller to pass the user handler's response instead.
+      const managementResponse = respond
+        ? await respond({
             credential: parsedCredential,
             envelope,
             input,
-            method,
             receipt: receiptData,
-            request: parsedRequest,
-          }) as never,
-        )
+            request,
+          } as never)
+        : undefined
 
-        return success(receiptData, {
-          challengeId: credential.challenge.id,
-          credentialForReceipt: parsedCredential,
-          envelopeForReceipt: envelope,
-          managementResponse,
-        })
-      },
-      {
-        _internal: {
-          ...method,
-          ...defaults,
-          ...options,
-          ...(staticMeta !== undefined ? { meta: staticMeta } : {}),
-          name: method.name,
-          intent: method.intent,
-          _canonicalRequest: PaymentRequest.fromMethod(method, { ...defaults, ...rest }),
-          _stableBinding: stableBinding as never,
-        },
-      },
-    )
+      await events.emit(
+        'payment.success',
+        createPaymentSuccessContext({
+          capturedRequest,
+          challenge: credential.challenge,
+          credential: parsedCredential,
+          envelope,
+          input,
+          method,
+          receipt: receiptData,
+          request: parsedRequest,
+        }) as never,
+      )
+
+      return success(receiptData, {
+        challengeId: credential.challenge.id,
+        credentialForReceipt: parsedCredential,
+        envelopeForReceipt: envelope,
+        managementResponse,
+      })
+    }
+
+    return Object.assign(handler, { _internal: internal })
   }
 }
 
@@ -1768,7 +1797,7 @@ function captureRequestFromInput(input: unknown): Method.CapturedRequest {
 }
 
 const coreBindingFields = ['amount', 'currency', 'recipient'] as const
-const methodBindingFields = ['chainId', 'memo', 'splits', 'unitType'] as const
+const methodBindingFields = ['chainId', 'memo', 'sessionProtocol', 'splits', 'unitType'] as const
 const pinnedRequestBindingFields = [...coreBindingFields, ...methodBindingFields] as const
 
 type CoreBindingField = (typeof coreBindingFields)[number]
@@ -1776,6 +1805,28 @@ type MethodBindingField = (typeof methodBindingFields)[number]
 type PinnedRequestBindingField = (typeof pinnedRequestBindingFields)[number]
 type PinnedChallengeField = 'method' | 'intent' | 'realm' | 'opaque' | PinnedRequestBindingField
 type StableBinding = Record<string, unknown>
+
+function selectVerificationMethod(
+  methods: readonly Method.AnyServer[],
+  challenge: Challenge.Challenge,
+): Method.AnyServer | undefined {
+  if (methods.length <= 1) return methods[0]
+  if (
+    challenge.method !== Constants.Methods.tempo ||
+    challenge.intent !== Constants.Intents.session
+  )
+    return methods[0]
+
+  const sessionProtocol = Constants.getMethodDetail<Constants.SessionProtocol>(
+    challenge.request.methodDetails,
+    Constants.MethodDetailKeys.sessionProtocol,
+  )
+  if (sessionProtocol === Constants.SessionProtocols.legacy)
+    return methods.find((method) => method.alias === 'sessionLegacy') ?? methods[0]
+  if (sessionProtocol === Constants.SessionProtocols.tip1034)
+    return methods.find((method) => method.alias === undefined) ?? methods[0]
+  return methods[0]
+}
 
 function getChallengeBindingMismatch(
   expectedChallenge: Challenge.Challenge,
@@ -1857,6 +1908,7 @@ function getPinnedRequestBinding(request: Record<string, unknown>): PinnedReques
   const currency = normalizeScalar(request.currency ?? methodDetails.currency)
   const memo = normalizeHex(methodDetails.memo)
   const recipient = normalizeScalar(request.recipient ?? methodDetails.recipient)
+  const sessionProtocol = normalizeScalar(methodDetails.sessionProtocol)
   const splits = normalizeComparable(methodDetails.splits)
   const unitType = normalizeScalar(request.unitType ?? methodDetails.unitType)
 
@@ -1869,6 +1921,7 @@ function getPinnedRequestBinding(request: Record<string, unknown>): PinnedReques
     methodBinding: {
       ...(chainId !== undefined ? { chainId } : {}),
       ...(memo !== undefined ? { memo } : {}),
+      ...(sessionProtocol !== undefined ? { sessionProtocol } : {}),
       ...(splits !== undefined ? { splits } : {}),
       ...(unitType !== undefined ? { unitType } : {}),
     },

@@ -15,7 +15,13 @@ const sessionServer = Object.assign(session_, {
   settleBatch: settleBatch_,
 })
 
-const sessionLegacyServer = Object.assign(sessionLegacy_, {
+function createSessionLegacyMethod<
+  const parameters extends NonNullable<Parameters<typeof sessionLegacy_>[0]>,
+>(parameters?: parameters) {
+  return Object.assign(sessionLegacy_(parameters as never), { alias: 'sessionLegacy' as const })
+}
+
+const sessionLegacyServer = Object.assign(createSessionLegacyMethod, {
   settle: settleLegacy_,
   Ws: Ws_,
 })

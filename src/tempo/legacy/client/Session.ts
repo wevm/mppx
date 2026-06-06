@@ -3,6 +3,7 @@ import { type Address, parseUnits, type Account as viem_Account } from 'viem'
 import { tempo as tempo_chain } from 'viem/tempo/chains'
 
 import type * as Challenge from '../../../Challenge.js'
+import * as Constants from '../../../Constants.js'
 import * as Method from '../../../Method.js'
 import * as Account from '../../../viem/Account.js'
 import * as Client from '../../../viem/Client.js'
@@ -337,6 +338,13 @@ export function session(parameters: session.Parameters = {}) {
   }
 
   return Method.toClient(Methods.session, {
+    canHandleChallenge({ challenge }) {
+      const sessionProtocol = Constants.getMethodDetail(
+        challenge.request.methodDetails,
+        Constants.MethodDetailKeys.sessionProtocol,
+      )
+      return sessionProtocol === undefined || sessionProtocol === Constants.SessionProtocols.legacy
+    },
     context: sessionContextSchema,
 
     async createCredential({ challenge, context }) {

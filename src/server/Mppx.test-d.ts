@@ -34,6 +34,22 @@ const mockChargeB = Method.from({
   },
 })
 
+const mockSession = Method.from({
+  name: 'tempo',
+  intent: 'session',
+  schema: {
+    credential: {
+      payload: z.object({ token: z.string() }),
+    },
+    request: z.object({
+      amount: z.string(),
+      currency: z.string(),
+      methodDetails: z.object({ sessionProtocol: z.string() }),
+      unitType: z.string(),
+    }),
+  },
+})
+
 const alphaMethod = Method.toServer(mockChargeA, {
   async verify() {
     return {
@@ -49,6 +65,29 @@ const betaMethod = Method.toServer(mockChargeB, {
   async verify() {
     return {
       method: 'beta',
+      reference: 'tx',
+      status: 'success' as const,
+      timestamp: new Date().toISOString(),
+    }
+  },
+})
+
+const tip1034SessionMethod = Method.toServer(mockSession, {
+  async verify() {
+    return {
+      method: 'tempo',
+      reference: 'tx',
+      status: 'success' as const,
+      timestamp: new Date().toISOString(),
+    }
+  },
+})
+
+const legacySessionMethod = Method.toServer(mockSession, {
+  alias: 'sessionLegacy',
+  async verify() {
+    return {
+      method: 'tempo',
       reference: 'tx',
       status: 'success' as const,
       timestamp: new Date().toISOString(),
@@ -103,6 +142,21 @@ describe('Mppx type tests', () => {
     expectTypeOf(mppx.alpha.charge).toBeFunction()
     expectTypeOf(mppx.beta).toBeObject()
     expectTypeOf(mppx.beta.charge).toBeFunction()
+  })
+
+  test('aliased duplicate handlers are accessible by nested and slash keys', () => {
+    const mppx = Mppx.create({
+      methods: [tip1034SessionMethod, legacySessionMethod],
+      realm,
+      secretKey,
+    })
+
+    expectTypeOf(mppx.tempo.session).toBeFunction()
+    expectTypeOf(mppx.tempo.sessionLegacy).toBeFunction()
+    expectTypeOf(mppx['tempo/session']).toBeFunction()
+    expectTypeOf(mppx['tempo/sessionLegacy']).toBeFunction()
+    expectTypeOf(mppx.challenge.tempo.session).toBeFunction()
+    expectTypeOf(mppx.challenge.tempo.sessionLegacy).toBeFunction()
   })
 
   test('slash key handlers are accessible', () => {

@@ -246,6 +246,7 @@ export const session = Method.from({
           minVoucherDelta: z.optional(z.amount()),
           operator: z.optional(z.address()),
           recipient: z.optional(z.string()),
+          sessionProtocol: z.optional(z.enum(['tip1034', 'legacy'])),
           sessionSnapshot: z.optional(z.custom<SessionSnapshot>()),
           suggestedDeposit: z.optional(z.amount()),
           unitType: z.string(),
@@ -266,6 +267,7 @@ export const session = Method.from({
           feePayer,
           minVoucherDelta,
           operator,
+          sessionProtocol,
           sessionSnapshot,
           suggestedDeposit,
           ...rest
@@ -286,6 +288,9 @@ export const session = Method.from({
             ...(chainId !== undefined && { chainId }),
             ...(feePayer !== undefined && { feePayer }),
             ...(operator !== undefined && { operator }),
+            ...(sessionProtocol !== undefined && {
+              [Constants.MethodDetailKeys.sessionProtocol]: sessionProtocol,
+            }),
             ...(sessionSnapshot !== undefined && {
               [Constants.MethodDetailKeys.sessionSnapshot]: sessionSnapshot,
             }),

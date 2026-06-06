@@ -2,6 +2,7 @@ import type * as Challenge from '../Challenge.js'
 import type { MaybePromise } from './types.js'
 
 type MethodLike = {
+  canHandleChallenge?: ((parameters: { challenge: Challenge.Challenge }) => boolean) | undefined
   intent: string
   name: string
 }
@@ -179,28 +180,34 @@ export function selectChallengeCandidates<const methods extends readonly MethodL
   methods: methods,
   preferences: readonly Entry[],
 ): ChallengeCandidate<methods[number]>[] {
-  const methodByKey = new Map<string, methods[number]>()
+  const methodsByKey = new Map<string, methods[number][]>()
   for (const method of methods) {
     const key = keyOf(method)
-    if (!methodByKey.has(key)) methodByKey.set(key, method)
+    const matchingMethods = methodsByKey.get(key)
+    if (matchingMethods) matchingMethods.push(method)
+    else methodsByKey.set(key, [method])
   }
 
   return challenges
-    .map((challenge, index) => {
-      const method = methodByKey.get(keyOf(challenge))
-      if (!method) return undefined
+    .flatMap((challenge, index) => {
+      const matchingMethods = methodsByKey.get(keyOf(challenge))
+      if (!matchingMethods) return []
 
       const match = bestMatch(challenge, preferences)
-      if (!match || match.q <= 0) return undefined
+      if (!match || match.q <= 0) return []
 
-      return {
-        challenge,
-        index,
-        match,
-        method,
-      } as ChallengeCandidate<methods[number]> & { match: Match }
+      return matchingMethods
+        .filter((method) => method.canHandleChallenge?.({ challenge }) ?? true)
+        .map(
+          (method) =>
+            ({
+              challenge,
+              index,
+              match,
+              method,
+            }) as ChallengeCandidate<methods[number]> & { match: Match },
+        )
     })
-    .filter((candidate): candidate is NonNullable<typeof candidate> => Boolean(candidate))
     .sort((left, right) => right.match.q - left.match.q || left.index - right.index)
     .map((candidate) => {
       const { match: _match, ...rest } = candidate
