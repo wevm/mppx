@@ -12,7 +12,7 @@ import type { NeedVoucherEvent, SessionReceipt } from '../precompile/Protocol.js
 import { formatNeedVoucherEvent, parseEvent } from '../precompile/Protocol.js'
 import type { SessionCredentialPayload } from '../precompile/Protocol.js'
 import { computeFallbackCloseAmount, sessionManager } from './SessionManager.js'
-import type { StoredSessionChannel } from './SessionManager.js'
+import type { SessionKeyContext, StoredSessionChannel } from './SessionManager.js'
 
 const channelId = '0x0000000000000000000000000000000000000000000000000000000000000001' as Hex
 const challengeId = 'test-challenge-1'
@@ -20,6 +20,9 @@ const realm = 'test.example.com'
 const account = privateKeyToAccount(
   '0xac0974bec39a17e36ba6a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80',
 )
+const accessKeyAddress = '0x0000000000000000000000000000000000000009' as Address
+const defaultStoreKey = `mppx:tempo-session:https://api.example.com:${account.address.toLowerCase()}:${account.address.toLowerCase()}`
+const accessKeyStoreKey = `mppx:tempo-session:https://api.example.com:${account.address.toLowerCase()}:${accessKeyAddress.toLowerCase()}`
 
 const client = createClient({
   account,
@@ -217,6 +220,10 @@ describe('Session', () => {
     })
 
     test('adds a stored channel hint to the first request', async () => {
+      const get = vi.fn((key: string) => {
+        expect(key).toBe(defaultStoreKey)
+        return storedChannel()
+      })
       const mockFetch = vi.fn().mockImplementation((_input, init?: RequestInit) => {
         expect(new Headers(init?.headers).get('Payment-Session')).toBe(storedChannelId)
         return Promise.resolve(makeOkResponse())
@@ -226,14 +233,151 @@ describe('Session', () => {
         client,
         fetch: mockFetch as typeof globalThis.fetch,
         sessionStore: {
-          get: () => storedChannel(),
+          get,
           set: vi.fn(),
         },
       })
 
       await s.fetch('https://api.example.com/data')
 
+      expect(get).toHaveBeenCalledOnce()
       expect(mockFetch).toHaveBeenCalledOnce()
+    })
+
+    test('uses access-key accounts in the default session store key', async () => {
+      const accessKeyAccount = Object.assign({}, account, { accessKeyAddress })
+      const get = vi.fn(() => null)
+      const mockFetch = vi.fn().mockResolvedValue(makeOkResponse())
+      const s = sessionManager({
+        account: accessKeyAccount,
+        client,
+        fetch: mockFetch as typeof globalThis.fetch,
+        sessionStore: { get, set: vi.fn() },
+      })
+
+      await s.fetch('https://api.example.com/data')
+
+      expect(get).toHaveBeenCalledWith(accessKeyStoreKey)
+    })
+
+    test('uses different default session store keys for different origins', async () => {
+      const keys: string[] = []
+      const mockFetch = vi.fn().mockResolvedValue(makeOkResponse())
+      const s = sessionManager({
+        account,
+        client,
+        fetch: mockFetch as typeof globalThis.fetch,
+        sessionStore: {
+          get(key) {
+            keys.push(key)
+            return null
+          },
+          set: vi.fn(),
+        },
+      })
+
+      await s.fetch('https://api.example.com/data')
+      await s.fetch('https://other.example.com/data')
+
+      expect(keys).toEqual([
+        defaultStoreKey,
+        `mppx:tempo-session:https://other.example.com:${account.address.toLowerCase()}:${account.address.toLowerCase()}`,
+      ])
+    })
+
+    test('allows an explicit session store key override', async () => {
+      const get = vi.fn(() => storedChannel())
+      const mockFetch = vi.fn().mockImplementation((_input, init?: RequestInit) => {
+        expect(new Headers(init?.headers).get('Payment-Session')).toBe(storedChannelId)
+        return Promise.resolve(makeOkResponse())
+      })
+      const s = sessionManager({
+        account,
+        client,
+        fetch: mockFetch as typeof globalThis.fetch,
+        sessionKey: 'custom-session-key',
+        sessionStore: { get, set: vi.fn() },
+      })
+
+      await s.fetch('https://api.example.com/data')
+
+      expect(get).toHaveBeenCalledWith('custom-session-key')
+    })
+
+    test('passes session key context to function overrides', async () => {
+      const contexts: SessionKeyContext[] = []
+      const mockFetch = vi.fn().mockResolvedValue(makeOkResponse())
+      const s = sessionManager({
+        account,
+        client,
+        fetch: mockFetch as typeof globalThis.fetch,
+        sessionKey(context) {
+          contexts.push(context)
+          return `${context.transport}:${context.origin}`
+        },
+        sessionStore: { get: vi.fn(() => null), set: vi.fn() },
+      })
+
+      await s.fetch(new Request('https://api.example.com/data'))
+
+      expect(contexts).toEqual([
+        {
+          account: account.address,
+          authorizedSigner: account.address,
+          input: expect.any(Request),
+          origin: 'https://api.example.com',
+          transport: 'fetch',
+        },
+      ])
+    })
+
+    test('allows explicit session store keys without a synchronous account', async () => {
+      const get = vi.fn(() => null)
+      const s = sessionManager({
+        fetch: vi.fn().mockResolvedValue(makeOkResponse()) as typeof globalThis.fetch,
+        sessionKey: 'explicit-key',
+        sessionStore: { get, set: vi.fn() },
+      })
+
+      await s.fetch('https://api.example.com/data')
+
+      expect(get).toHaveBeenCalledWith('explicit-key')
+    })
+
+    test('throws for default session store keys without a synchronous account', async () => {
+      const s = sessionManager({
+        fetch: vi.fn() as typeof globalThis.fetch,
+        sessionStore: { get: vi.fn(), set: vi.fn() },
+      })
+
+      await expect(s.fetch('https://api.example.com/data')).rejects.toThrow(
+        'Cannot derive a default session cache key without a synchronously resolvable account.',
+      )
+    })
+
+    test('ignores stored channel hints for another payer or signer', async () => {
+      const get = vi.fn(() =>
+        storedChannel({
+          descriptor: {
+            ...storedDescriptor,
+            authorizedSigner: '0x0000000000000000000000000000000000000008' as Address,
+          },
+        }),
+      )
+      const mockFetch = vi.fn().mockImplementation((_input, init?: RequestInit) => {
+        expect(new Headers(init?.headers).get('Payment-Session')).toBeNull()
+        return Promise.resolve(makeOkResponse())
+      })
+      const s = sessionManager({
+        account,
+        client,
+        fetch: mockFetch as typeof globalThis.fetch,
+        sessionStore: { get, set: vi.fn() },
+      })
+
+      await s.fetch('https://api.example.com/data')
+
+      expect(get).toHaveBeenCalledWith(defaultStoreKey)
     })
 
     test('uses stored channel details when the server does not return a snapshot', async () => {
@@ -264,6 +408,57 @@ describe('Session', () => {
         action: 'voucher',
         channelId: storedChannelId,
       })
+    })
+
+    test('does not reuse stored channel details for a different challenge chain', async () => {
+      const postedPayloads: SessionCredentialPayload[] = []
+      const mockFetch = vi.fn().mockImplementation((_input, init?: RequestInit) => {
+        const authorization = new Headers(init?.headers).get('Authorization')
+        const payload = authorization
+          ? Credential.deserialize<SessionCredentialPayload>(authorization).payload
+          : undefined
+        if (payload) postedPayloads.push(payload)
+
+        if (!payload)
+          return Promise.resolve(
+            make402Response(
+              makeChallenge({
+                methodDetails: {
+                  escrowContract: tip20ChannelEscrow,
+                  chainId: 999,
+                },
+              }),
+            ),
+          )
+        return Promise.resolve(makeOkResponse())
+      })
+      const wrongChainClient = createClient({
+        account,
+        chain: { id: 999 } as never,
+        transport: custom({
+          async request(args) {
+            if (args.method === 'eth_chainId') return '0x3e7'
+            if (args.method === 'eth_getTransactionCount') return '0x0'
+            if (args.method === 'eth_estimateGas') return '0x5208'
+            if (args.method === 'eth_maxPriorityFeePerGas') return '0x1'
+            if (args.method === 'eth_getBlockByNumber') return { baseFeePerGas: '0x1' }
+            throw new Error(`unexpected rpc request: ${args.method}`)
+          },
+        }),
+      })
+      const s = sessionManager({
+        account,
+        client: wrongChainClient,
+        fetch: mockFetch as typeof globalThis.fetch,
+        sessionStore: {
+          get: () => storedChannel(),
+          set: vi.fn(),
+        },
+      })
+
+      await s.fetch('https://api.example.com/data')
+
+      expect(postedPayloads[0]).toMatchObject({ action: 'open' })
     })
 
     test('persists opened channels and deletes closed channels when supported', async () => {
@@ -327,6 +522,7 @@ describe('Session', () => {
 
       await s.fetch('https://api.example.com/data')
       expect(set).toHaveBeenCalledWith(
+        defaultStoreKey,
         expect.objectContaining({
           channelId: s.channelId,
           opened: true,
@@ -334,7 +530,7 @@ describe('Session', () => {
       )
 
       await s.close()
-      expect(remove).toHaveBeenCalledOnce()
+      expect(remove).toHaveBeenCalledWith(defaultStoreKey)
     })
 
     test('rolls back state when opening a channel throws', async () => {

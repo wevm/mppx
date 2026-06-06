@@ -12,6 +12,7 @@ const currency = '0x20c0000000000000000000000000000000000001' as const
 const decimals = 6
 const tokenSymbol = 'pathUSD'
 const topUpAmount = '0.0005'
+const sessionStoragePrefix = 'mppx.session.playground.channel.'
 
 let privateKey = localStorage.getItem(storageKey) as Hex | null
 if (!privateKey) {
@@ -130,6 +131,18 @@ function createSession() {
     client,
     decimals,
     maxDeposit: '0.002',
+    sessionStore: {
+      get(key: string) {
+        const value = localStorage.getItem(`${sessionStoragePrefix}${key}`)
+        return value ? JSON.parse(value) : null
+      },
+      set(key: string, channel: unknown) {
+        localStorage.setItem(`${sessionStoragePrefix}${key}`, JSON.stringify(channel))
+      },
+      delete(key: string) {
+        localStorage.removeItem(`${sessionStoragePrefix}${key}`)
+      },
+    },
   })
 }
 
@@ -234,7 +247,7 @@ async function runSseStream() {
   sseLatestSpent = 0n
 
   const stream = await sseSession.sse(streamUrl(), {
-    onReceipt(receipt) {
+    onReceipt(receipt: { spent: string; units?: number | undefined }) {
       sseLatestSpent = BigInt(receipt.spent)
       if (typeof receipt.units === 'number') sseTokens = receipt.units
     },

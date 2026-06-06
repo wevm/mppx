@@ -1,10 +1,11 @@
 import type { Hex } from 'ox'
-import { parseUnits, type Address } from 'viem'
+import { isAddressEqual, parseUnits, type Address } from 'viem'
 
 import * as Fetch from '../../../client/internal/Fetch.js'
 import * as Constants from '../../../Constants.js'
 import type * as Account from '../../../viem/Account.js'
 import type * as Client from '../../../viem/Client.js'
+import { getAccountSignerAddress } from '../../internal/account.js'
 import type { ChannelEntry } from '../client/ChannelOps.js'
 import type { SessionContext } from '../client/CredentialState.js'
 import { session as sessionPlugin } from '../client/Session.js'
@@ -113,14 +114,36 @@ export type StoredSessionChannel = {
   updatedAt: number
 }
 
+/** Transport currently resolving an optional persistent session cache key. */
+export type SessionKeyTransport = 'fetch' | 'sse' | 'ws'
+
+/** Inputs used to compute an optional persistent session cache key. */
+export type SessionKeyContext = {
+  /** Root account address that owns the channel. */
+  account: Address
+  /** Address authorized to sign vouchers for the channel. */
+  authorizedSigner: Address
+  /** Origin of the paid endpoint being accessed. */
+  origin: string
+  /** Original paid endpoint input. */
+  input: RequestInfo | URL | string
+  /** Transport currently opening or reusing a session. */
+  transport: SessionKeyTransport
+}
+
+/** Resolves the persistent session cache key for a manager operation. */
+export type SessionKey = string | ((context: SessionKeyContext) => string)
+
 /** Optional per-manager store for channel hints and restart recovery. */
 export type SessionStore = {
-  /** Reads the latest stored channel snapshot for this manager scope. */
-  get(): Promise<StoredSessionChannel | null | undefined> | StoredSessionChannel | null | undefined
-  /** Persists the latest channel snapshot. */
-  set(channel: StoredSessionChannel): Promise<void> | void
+  /** Reads the latest stored channel snapshot for the supplied cache key. */
+  get(
+    key: string,
+  ): Promise<StoredSessionChannel | null | undefined> | StoredSessionChannel | null | undefined
+  /** Persists the latest channel snapshot under the supplied cache key. */
+  set(key: string, channel: StoredSessionChannel): Promise<void> | void
   /** Deletes the stored snapshot when a channel is closed, when supported. */
-  delete?(): Promise<void> | void
+  delete?(key: string): Promise<void> | void
 }
 
 /** Normalized runtime dependencies derived from `sessionManager()` parameters. */
@@ -131,6 +154,8 @@ type SessionManagerConfig = {
   fetch: typeof globalThis.fetch
   /** Local maximum cumulative voucher authorization, or null when uncapped. */
   maxVoucherCumulative: bigint | null
+  /** Optional persistent session cache key override. */
+  sessionKey: SessionKey | undefined
   /** WebSocket constructor available in the current runtime, when configured. */
   WebSocket: WebSocketConstructor | undefined
 }
@@ -154,6 +179,97 @@ function storedChannelContext(channel: StoredSessionChannel): SessionContext {
     cumulativeAmountRaw: channel.cumulativeAmount,
     descriptor: channel.descriptor,
   }
+}
+
+function resolveSessionKeyIdentity(parameters: sessionManager.Parameters):
+  | {
+      account: Address
+      authorizedSigner: Address
+    }
+  | undefined {
+  const account = parameters.account ?? parameters.client?.account
+  if (!account) return undefined
+  if (typeof account === 'string') {
+    return {
+      account,
+      authorizedSigner: parameters.authorizedSigner ?? account,
+    }
+  }
+  const signer = parameters.authorizedSigner ?? getAccountSignerAddress(account)
+  return {
+    account: account.address,
+    authorizedSigner: signer,
+  }
+}
+
+function inputOrigin(input: RequestInfo | URL | string): string {
+  const base =
+    typeof location === 'undefined' ? undefined : (location.href as `${string}:${string}`)
+  const raw =
+    input instanceof Request ? input.url : input instanceof URL ? input.href : String(input)
+  try {
+    return new URL(raw, base).origin
+  } catch {
+    throw new Error(
+      'Cannot derive a default session cache key for this input. Pass sessionKey to sessionManager().',
+    )
+  }
+}
+
+function defaultSessionKey(context: SessionKeyContext): string {
+  return `mppx:tempo-session:${context.origin}:${context.account.toLowerCase()}:${context.authorizedSigner.toLowerCase()}`
+}
+
+function resolveSessionStoreKey(parameters: {
+  identity: Pick<SessionKeyContext, 'account' | 'authorizedSigner'> | undefined
+  input: RequestInfo | URL | string
+  sessionKey: SessionKey | undefined
+  transport: SessionKeyTransport
+}): string {
+  if (typeof parameters.sessionKey === 'string') return parameters.sessionKey
+  if (!parameters.identity) {
+    throw new Error(
+      'Cannot derive a default session cache key without a synchronously resolvable account. Pass account, client.account, or a string sessionKey to sessionManager().',
+    )
+  }
+  const context = {
+    ...parameters.identity,
+    input: parameters.input,
+    origin: inputOrigin(parameters.input),
+    transport: parameters.transport,
+  } satisfies SessionKeyContext
+  return parameters.sessionKey ? parameters.sessionKey(context) : defaultSessionKey(context)
+}
+
+function maybeAddress(value: unknown): Address | undefined {
+  return typeof value === 'string' ? (value as Address) : undefined
+}
+
+function storedChannelMatchesIdentity(
+  channel: StoredSessionChannel,
+  identity: Pick<SessionKeyContext, 'account' | 'authorizedSigner'>,
+): boolean {
+  return (
+    isAddressEqual(channel.descriptor.payer, identity.account) &&
+    isAddressEqual(channel.descriptor.authorizedSigner, identity.authorizedSigner)
+  )
+}
+
+function storedChannelMatchesChallenge(
+  channel: StoredSessionChannel,
+  challenge: TempoSessionChallenge,
+): boolean {
+  const details = challenge.request.methodDetails
+  const chainId = typeof details?.chainId === 'number' ? details.chainId : undefined
+  const escrow = maybeAddress(details?.escrowContract)
+  const recipient = maybeAddress(challenge.request.recipient)
+  const currency = maybeAddress(challenge.request.currency)
+
+  if (chainId !== undefined && channel.chainId !== chainId) return false
+  if (escrow && !isAddressEqual(channel.escrow, escrow)) return false
+  if (recipient && !isAddressEqual(channel.descriptor.payee, recipient)) return false
+  if (currency && !isAddressEqual(channel.descriptor.token, currency)) return false
+  return true
 }
 
 function requestInitWithSessionHint(
@@ -193,6 +309,7 @@ function resolveSessionManagerConfig(parameters: sessionManager.Parameters): Ses
     fetch: parameters.fetch ?? globalThis.fetch,
     maxVoucherCumulative:
       parameters.maxDeposit !== undefined ? parseUnits(parameters.maxDeposit, decimals) : null,
+    sessionKey: parameters.sessionKey,
     WebSocket,
   }
 }
@@ -216,7 +333,10 @@ function resolveSessionManagerConfig(parameters: sessionManager.Parameters): Ses
 export function sessionManager(parameters: sessionManager.Parameters): SessionManager {
   const config = resolveSessionManagerConfig(parameters)
   const sessionStore = parameters.sessionStore
+  const sessionKeyIdentity = sessionStore ? resolveSessionKeyIdentity(parameters) : undefined
+  let activeStoreKey: string | null = null
   let storedChannel: StoredSessionChannel | null = null
+  let storedChannelKey: string | null = null
   const runtime = createSessionManagerRuntime()
   const receipts = createSessionReceiptCoordinator({
     getSocketSession: () => runtime.socketSession,
@@ -262,7 +382,12 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
           requiredCumulative,
         })
       }
-      if (!runtime.channel?.opened && storedChannel?.opened && !getSessionSnapshot(challenge)) {
+      if (
+        !runtime.channel?.opened &&
+        storedChannel?.opened &&
+        storedChannelMatchesChallenge(storedChannel, challenge) &&
+        !getSessionSnapshot(challenge)
+      ) {
         return _helpers.createCredential(storedChannelContext(storedChannel))
       }
       return undefined
@@ -275,6 +400,7 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
       !context.action &&
       !runtime.channel?.opened &&
       stored?.opened &&
+      storedChannelMatchesChallenge(stored, challenge) &&
       !getSessionSnapshot(challenge)
     return method.createCredential({
       challenge,
@@ -290,21 +416,49 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
     })
   }
 
-  async function getStoredChannel() {
+  function resolveActiveStoreKey(
+    input: RequestInfo | URL | string,
+    transport: SessionKeyTransport,
+  ) {
     if (!sessionStore) return null
-    if (storedChannel) return storedChannel
-    const channel = await sessionStore.get()
-    storedChannel = channel?.opened ? channel : null
+    if (activeStoreKey && runtime.channel?.opened) return activeStoreKey
+    activeStoreKey = resolveSessionStoreKey({
+      identity: sessionKeyIdentity,
+      input,
+      sessionKey: config.sessionKey,
+      transport,
+    })
+    return activeStoreKey
+  }
+
+  async function getStoredChannel(
+    input: RequestInfo | URL | string,
+    transport: SessionKeyTransport,
+  ) {
+    if (!sessionStore) return null
+    const key = resolveActiveStoreKey(input, transport)
+    if (!key) return null
+    if (storedChannelKey === key) return storedChannel
+    const channel = await sessionStore.get(key)
+    storedChannel =
+      channel?.opened &&
+      (!sessionKeyIdentity || storedChannelMatchesIdentity(channel, sessionKeyIdentity))
+        ? channel
+        : null
+    storedChannelKey = key
     return storedChannel
   }
 
   function persistStoredChannel(entry: ChannelEntry) {
-    if (!sessionStore) return
+    if (!sessionStore || !activeStoreKey) return
     const channel = storedChannelFromEntry(entry)
     const operation =
-      entry.opened || !sessionStore.delete ? sessionStore.set(channel) : sessionStore.delete()
+      entry.opened || !sessionStore.delete
+        ? sessionStore.set(activeStoreKey, channel)
+        : sessionStore.delete(activeStoreKey)
     void Promise.resolve(operation).catch(() => undefined)
     storedChannel = entry.opened ? channel : null
+    storedChannelKey = activeStoreKey
   }
 
   function getFallbackCloseAmount(challenge: TempoSessionChallenge, channelId: Hex.Hex): bigint {
@@ -407,9 +561,13 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
     })
   }
 
-  async function doFetch(input: RequestInfo | URL, init?: RequestInit): Promise<PaymentResponse> {
+  async function doFetch(
+    input: RequestInfo | URL,
+    init?: RequestInit,
+    transport: SessionKeyTransport = 'fetch',
+  ): Promise<PaymentResponse> {
     runtime.lastUrl = input
-    const stored = await getStoredChannel()
+    const stored = await getStoredChannel(input, transport)
     const hintedInit = requestInitWithSessionHint(input, init, stored?.channelId)
     const previous = captureRuntimeStateSnapshot({
       channel: runtime.channel,
@@ -484,7 +642,7 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
       return runtime.state
     },
 
-    fetch: doFetch,
+    fetch: (input, init) => doFetch(input, init, 'fetch'),
 
     async topUp(amount) {
       const target = resolveManualTopUp({
@@ -507,7 +665,7 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
     async sse(input, init) {
       return openSseSession(input, init, {
         createSessionCredential,
-        doFetch,
+        doFetch: (probeInput, probeInit) => doFetch(probeInput, probeInit, 'sse'),
         fetch: config.fetch,
         getChannel: () => runtime.channel,
         getChallenge: () => runtime.lastChallenge,
@@ -537,7 +695,7 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
         probeInit: requestInitWithSessionHint(
           webSocketProbeUrl(input),
           init?.signal ? { signal: init.signal } : undefined,
-          (await getStoredChannel())?.channelId,
+          (await getStoredChannel(input, 'ws'))?.channelId,
         ),
         signal: init?.signal,
       })
@@ -594,10 +752,13 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
             waitForReceipt: receipts.waitForReceipt,
           })
           runtime.state = closedStateFromReceipt(receipt, target.channel)
+          persistStoredChannel({ ...target.channel, opened: false })
           return receipt
         }
 
-        return await closeHttpSessionAndApply(target)
+        const receipt = await closeHttpSessionAndApply(target)
+        if (receipt) persistStoredChannel({ ...target.channel, opened: false })
+        return receipt
       } catch (error) {
         restoreRuntime(previous)
         throw error
@@ -626,6 +787,8 @@ export declare namespace sessionManager {
       maxDeposit?: string | undefined
       /** Optional per-manager store for persisted channel hints and restart recovery. */
       sessionStore?: SessionStore | undefined
+      /** Optional persistent session cache key override. Defaults to origin + account + signer. */
+      sessionKey?: SessionKey | undefined
       /** Optional websocket constructor for runtimes without a global WebSocket. */
       webSocket?: WebSocketConstructor | undefined
     }
