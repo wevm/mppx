@@ -8,7 +8,12 @@
 import { type Address, type Hex } from 'viem'
 import { tempo as tempo_chain } from 'viem/chains'
 
+import * as Challenge from '../../../Challenge.js'
 import * as Constants from '../../../Constants.js'
+import * as Credential from '../../../Credential.js'
+import * as Errors from '../../../Errors.js'
+import * as Expires from '../../../Expires.js'
+import type { MaybePromise } from '../../../internal/types.js'
 import type { LooseOmit, NoExtraKeys } from '../../../internal/types.js'
 import * as Method from '../../../Method.js'
 import * as Store from '../../../Store.js'
@@ -18,14 +23,22 @@ import * as defaults from '../../internal/defaults.js'
 import * as FeePayer from '../../internal/fee-payer.js'
 import type * as types from '../../internal/types.js'
 import * as Methods from '../../Methods.js'
+import * as ChargeServer from '../../server/Charge.js'
 import * as Transport from '../../server/internal/transport.js'
+import {
+  deserializeSnapshot as deserializeSessionSnapshot,
+  serializeSnapshot as serializeSessionSnapshot,
+} from '../client/Runtime.js'
 import * as ChannelStore from './ChannelStore.js'
 import { verifyCredentialPayload } from './CredentialVerification.js'
 import { requireSessionCredentialPayload } from './CredentialVerification.js'
 import {
   type ResolveSessionChannelId,
   resolveCredentialVerificationContext,
+  resolveSessionChannelId,
+  resolveSessionSnapshot,
   resolveSessionPaymentRequest,
+  type SessionPaymentRequestInput,
 } from './RequestState.js'
 import { respondToSessionCredential } from './RequestState.js'
 import { applyVerifiedHttpAccounting, chargeSessionChannel } from './Settlement.js'
@@ -67,6 +80,192 @@ function deriveTransport<const parameters extends session.Parameters>(
   return transport as parameters['sse'] extends false | undefined ? undefined : Transport.Sse
 }
 
+type BootstrapCharge = ReturnType<typeof ChargeServer.charge>
+
+type BootstrapPreflightParameters = {
+  capturedRequest?: Method.CapturedRequest | undefined
+  charge: BootstrapCharge
+  credential: Credential.Credential | null
+  decimals: number
+  defaultRecipient?: Address | undefined
+  expires?: string | undefined
+  getClient(parameters: {
+    chainId?: number | undefined
+  }): MaybePromise<{ chain?: { id?: number | undefined } | undefined }>
+  input: Request
+  parameterChainId?: number | undefined
+  paymentRequest: SessionPaymentRequestInput
+  realm: string
+  resolveChannelId?: ResolveSessionChannelId | undefined
+  secretKey: string
+  store: ChannelStore.ChannelStore
+}
+
+type BootstrapChargeRequest = {
+  amount: '0'
+  chainId?: number | undefined
+  currency: string
+  decimals: number
+  recipient?: string | undefined
+}
+
+async function resolveBootstrapChargeRequest(
+  parameters: Pick<
+    BootstrapPreflightParameters,
+    'decimals' | 'defaultRecipient' | 'getClient' | 'parameterChainId' | 'paymentRequest'
+  >,
+): Promise<BootstrapChargeRequest> {
+  const { decimals, defaultRecipient, getClient, parameterChainId, paymentRequest } = parameters
+  const chainId = paymentRequest.chainId ?? parameterChainId ?? (await getClient({})).chain?.id
+  return {
+    amount: '0',
+    ...(chainId !== undefined ? { chainId } : {}),
+    currency: paymentRequest.currency,
+    decimals,
+    recipient: paymentRequest.recipient ?? defaultRecipient,
+  }
+}
+
+function isBootstrapChargeCredential(credential: Credential.Credential | null) {
+  return (
+    credential?.challenge.method === Constants.Methods.tempo &&
+    credential.challenge.intent === Constants.Intents.charge
+  )
+}
+
+function createBootstrapChallenge(parameters: {
+  expires?: string | undefined
+  realm: string
+  request: BootstrapChargeRequest
+  secretKey: string
+}) {
+  return Challenge.fromMethod(Methods.charge, {
+    expires: parameters.expires,
+    realm: parameters.realm,
+    request: parameters.request,
+    secretKey: parameters.secretKey,
+  })
+}
+
+function respondBootstrapChallenge(challenge: Challenge.Challenge, error?: Errors.PaymentError) {
+  const headers = new Headers({
+    [Constants.Headers.wwwAuthenticate]: Challenge.serialize(challenge),
+    'Cache-Control': 'no-store',
+  })
+  if (!error) return new Response(null, { status: 402, headers })
+  headers.set('Content-Type', 'application/problem+json')
+  return new Response(JSON.stringify(error.toProblemDetails(challenge.id)), {
+    status: error.status,
+    headers,
+  })
+}
+
+function assertBootstrapChallengeMatches(
+  expected: Challenge.Challenge,
+  actual: Challenge.Challenge,
+) {
+  if (actual.method !== Constants.Methods.tempo || actual.intent !== Constants.Intents.charge)
+    throw new Errors.InvalidChallengeError({ id: actual.id, reason: 'not a bootstrap challenge' })
+  if (!sameRequestValue(expected.request.amount, actual.request.amount))
+    throw new Errors.InvalidChallengeError({ id: actual.id, reason: 'bootstrap amount mismatch' })
+  if (!sameRequestValue(expected.request.currency, actual.request.currency))
+    throw new Errors.InvalidChallengeError({ id: actual.id, reason: 'bootstrap currency mismatch' })
+  if (!sameRequestValue(expected.request.recipient, actual.request.recipient))
+    throw new Errors.InvalidChallengeError({
+      id: actual.id,
+      reason: 'bootstrap recipient mismatch',
+    })
+  const expectedChainId = readMethodDetail(expected.request, 'chainId')
+  const actualChainId = readMethodDetail(actual.request, 'chainId')
+  if (!sameRequestValue(expectedChainId, actualChainId))
+    throw new Errors.InvalidChallengeError({ id: actual.id, reason: 'bootstrap chain mismatch' })
+}
+
+function readMethodDetail(request: unknown, key: string) {
+  if (!request || typeof request !== 'object') return undefined
+  const methodDetails = (request as { methodDetails?: unknown }).methodDetails
+  if (!methodDetails || typeof methodDetails !== 'object') return undefined
+  return (methodDetails as Record<string, unknown>)[key]
+}
+
+function sameRequestValue(a: unknown, b: unknown) {
+  return a === b || (a === undefined && b === undefined)
+}
+
+async function verifyBootstrapCredential(parameters: {
+  challenge: Challenge.Challenge
+  charge: BootstrapCharge
+  credential: Credential.Credential
+  rawRequest: BootstrapChargeRequest
+  secretKey: string
+}) {
+  const { challenge, charge, credential, rawRequest, secretKey } = parameters
+  if (!Challenge.verify(credential.challenge, { secretKey }))
+    throw new Errors.InvalidChallengeError({
+      id: credential.challenge.id,
+      reason: 'challenge was not issued by this server',
+    })
+  Expires.assert(credential.challenge.expires, credential.challenge.id)
+  assertBootstrapChallengeMatches(challenge, credential.challenge)
+  return charge.verify({
+    credential: {
+      ...credential,
+      payload: Methods.charge.schema.credential.payload.parse(credential.payload),
+    } as never,
+    request: rawRequest,
+  })
+}
+
+async function handleBootstrapPreflight(
+  parameters: BootstrapPreflightParameters,
+): Promise<Response | undefined> {
+  const request = await resolveBootstrapChargeRequest(parameters)
+  const challenge = createBootstrapChallenge({
+    expires: parameters.expires,
+    realm: parameters.realm,
+    request,
+    secretKey: parameters.secretKey,
+  })
+
+  if (!parameters.credential) return respondBootstrapChallenge(challenge)
+  if (!isBootstrapChargeCredential(parameters.credential)) return undefined
+
+  try {
+    await verifyBootstrapCredential({
+      challenge,
+      charge: parameters.charge,
+      credential: parameters.credential,
+      rawRequest: request,
+      secretKey: parameters.secretKey,
+    })
+  } catch (error) {
+    return respondBootstrapChallenge(
+      challenge,
+      error instanceof Errors.PaymentError ? error : new Errors.VerificationFailedError(),
+    )
+  }
+
+  const channelId = await resolveSessionChannelId({
+    capturedRequest: parameters.capturedRequest,
+    credential: parameters.credential,
+    request: parameters.paymentRequest,
+    resolveChannelId: parameters.resolveChannelId,
+    source: parameters.credential.source,
+    store: parameters.store,
+  })
+  const snapshot = await resolveSessionSnapshot({
+    amount: 0n,
+    channelId,
+    store: parameters.store,
+  })
+  const headers = new Headers({ 'Cache-Control': 'no-store' })
+  if (snapshot) {
+    headers.set(Constants.Headers.paymentSession, snapshot.channelId)
+    headers.set(Constants.Headers.paymentSessionSnapshot, serializeSessionSnapshot(snapshot))
+  }
+  return new Response(null, { status: 204, headers })
+}
+
 /** Creates a server-side TIP20EscrowChannel precompile session payment method. */
 export function session<const parameters extends session.Parameters>(
   p?: NoExtraKeys<parameters, session.Parameters>,
@@ -92,6 +291,15 @@ export function session<const parameters extends session.Parameters>(
     getClient: parameters.getClient,
     rpcUrl: defaults.rpcUrl,
   })
+  const bootstrapCharge = ChargeServer.charge({
+    account,
+    chainId: parameters.chainId,
+    currency,
+    decimals,
+    getClient: parameters.getClient,
+    recipient,
+    store: rawStore,
+  })
 
   type Transport = parameters['sse'] extends false | undefined ? undefined : Transport.Sse
   const transport = parameters.sse
@@ -115,6 +323,28 @@ export function session<const parameters extends session.Parameters>(
 
     transport: deriveTransport<parameters>(transport),
 
+    preflight: parameters.bootstrap
+      ? async ({ capturedRequest, credential, expires, input, options, realm, secretKey }) => {
+          if (input.method !== 'HEAD') return undefined
+          return handleBootstrapPreflight({
+            capturedRequest,
+            credential,
+            input,
+            charge: bootstrapCharge,
+            decimals,
+            defaultRecipient: recipient,
+            expires,
+            getClient,
+            parameterChainId: parameters.chainId,
+            paymentRequest: options,
+            realm,
+            resolveChannelId: parameters.resolveChannelId,
+            secretKey,
+            store,
+          })
+        }
+      : undefined,
+
     async request({ capturedRequest, credential, request }) {
       const resolvedRequest = await resolveSessionPaymentRequest({
         capturedRequest,
@@ -127,6 +357,7 @@ export function session<const parameters extends session.Parameters>(
         parameterFeePayer: parameters.feePayer,
         request,
         resolveChannelId: parameters.resolveChannelId,
+        source: credential?.source,
         store,
       })
       return {
@@ -205,6 +436,9 @@ export function session<const parameters extends session.Parameters>(
 }
 
 export namespace session {
+  export const serializeSnapshot = serializeSessionSnapshot
+  export const deserializeSnapshot = deserializeSessionSnapshot
+
   /** Request defaults inferred from the Tempo session method schema. */
   export type Defaults = LooseOmit<
     Method.RequestDefaults<typeof Methods.session>,
@@ -224,6 +458,8 @@ export namespace session {
     minVoucherDelta?: string | undefined
     /** Resolve a reusable channel ID from request identity when no credential/request channel ID is present. */
     resolveChannelId?: ResolveSessionChannelId | undefined
+    /** Enables same-route HEAD bootstrap using a zero-amount identity proof. */
+    bootstrap?: boolean | undefined
     /**
      * Atomic store backend for channel state.
      *

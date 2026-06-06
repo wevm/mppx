@@ -16,12 +16,13 @@ import {
 } from 'viem'
 import { privateKeyToAccount } from 'viem/accounts'
 import { Transaction } from 'viem/tempo'
-import { describe, expect, test } from 'vp/test'
+import { describe, expect, test, vi } from 'vp/test'
 import { WebSocket, WebSocketServer } from 'ws'
 import * as Http from '~test/Http.js'
 
 import * as NodeRequest from '../../../server/Request.js'
 import * as Store from '../../../Store.js'
+import { charge as clientCharge } from '../../client/Charge.js'
 import * as Methods from '../../Methods.js'
 import * as ClientOps from '../client/ChannelOps.js'
 import { sessionManager as precompileSessionManager } from '../client/SessionManager.js'
@@ -34,7 +35,7 @@ import type { SessionCredentialPayload } from '../precompile/Protocol.js'
 import * as Types from '../precompile/Protocol.js'
 import * as Voucher from '../precompile/Voucher.js'
 import * as ChannelStore from './ChannelStore.js'
-import { charge, session } from './Session.js'
+import { charge, session, type ResolveSessionChannelId } from './Session.js'
 import * as TempoWs from './Ws.js'
 
 const payer = privateKeyToAccount(
@@ -1955,6 +1956,128 @@ describe('precompile server session unit guardrails', () => {
       expect(failed.status).toBe(402)
       if (failed.status !== 402) throw new Error('expected challenge')
       expect(failed.challenge.headers.get('Payment-Receipt')).toBeNull()
+    })
+  })
+
+  describe('same-route bootstrap', () => {
+    function createBootstrapRoute(parameters: {
+      rawStore: Store.AtomicStore
+      resolveChannelId?: ResolveSessionChannelId | undefined
+    }) {
+      return Mppx_server.create({
+        methods: [
+          tempo_server.session({
+            amount: '1',
+            bootstrap: true,
+            chainId,
+            currency: token,
+            decimals: 0,
+            getClient: () => createStateClient(payer),
+            recipient: payee,
+            resolveChannelId: parameters.resolveChannelId,
+            store: parameters.rawStore,
+            unitType: 'request',
+          }),
+        ],
+        realm: 'api.example.com',
+        secretKey: 'secret',
+      }).session({ amount: '1', decimals: 0, unitType: 'request' })
+    }
+
+    async function createBootstrapCredential(response: Response) {
+      const challenge = Challenge.fromResponse(response)
+      const method = clientCharge({
+        account: payer,
+        getClient: () => createSigningClient(),
+      })
+      return method.createCredential({ challenge: challenge as never, context: {} })
+    }
+
+    async function bootstrapResponse(
+      route: ReturnType<typeof createBootstrapRoute>,
+      authorization?: string,
+    ) {
+      const result = await route(
+        new Request('https://api.example.com/resource', {
+          method: 'HEAD',
+          ...(authorization ? { headers: { Authorization: authorization } } : {}),
+        }),
+      )
+      if (result.status === 402) return result.challenge
+      return result.withReceipt(new Response(null, { status: 500 }))
+    }
+
+    test('HEAD without auth emits a zero-amount tempo charge challenge', async () => {
+      const route = createBootstrapRoute({ rawStore: Store.memory() })
+
+      const response = await bootstrapResponse(route)
+      const challenge = Challenge.fromResponse(response)
+
+      expect(response.status).toBe(402)
+      expect(challenge.method).toBe('tempo')
+      expect(challenge.intent).toBe('charge')
+      expect(challenge.request.amount).toBe('0')
+    })
+
+    test('valid proof resolves channel by source and returns snapshot headers', async () => {
+      const rawStore = Store.memory()
+      const store = channelStore(rawStore)
+      const openPayload = await createOpenPayload({ initialAmount: 1n })
+      await persistPrecompileChannel(store, openPayload, {
+        highestVoucherAmount: 5n,
+        spent: 3n,
+        units: 3,
+      })
+      const resolveChannelId = vi.fn(({ source }) => {
+        expect(source).toContain(payer.address)
+        return openPayload.channelId
+      })
+      const route = createBootstrapRoute({ rawStore, resolveChannelId })
+      const challengeResponse = await bootstrapResponse(route)
+      const authorization = await createBootstrapCredential(challengeResponse)
+
+      const response = await bootstrapResponse(route, authorization)
+
+      expect(response.status).toBe(204)
+      expect(resolveChannelId).toHaveBeenCalledOnce()
+      expect(response.headers.get(Constants.Headers.paymentSession)).toBe(openPayload.channelId)
+      const snapshot = session.deserializeSnapshot(
+        response.headers.get(Constants.Headers.paymentSessionSnapshot)!,
+      )
+      expect(snapshot).toMatchObject({
+        channelId: openPayload.channelId,
+        acceptedCumulative: '5',
+        requiredCumulative: '3',
+        spent: '3',
+      })
+    })
+
+    test('valid proof with no resolved channel returns empty 204', async () => {
+      const rawStore = Store.memory()
+      const route = createBootstrapRoute({
+        rawStore,
+        resolveChannelId: () => undefined,
+      })
+      const authorization = await createBootstrapCredential(await bootstrapResponse(route))
+
+      const response = await bootstrapResponse(route, authorization)
+
+      expect(response.status).toBe(204)
+      expect(response.headers.get(Constants.Headers.paymentSession)).toBeNull()
+      expect(response.headers.get(Constants.Headers.paymentSessionSnapshot)).toBeNull()
+    })
+
+    test('replayed proof is rejected before channel resolution', async () => {
+      const rawStore = Store.memory()
+      const resolveChannelId = vi.fn(() => undefined)
+      const route = createBootstrapRoute({ rawStore, resolveChannelId })
+      const authorization = await createBootstrapCredential(await bootstrapResponse(route))
+
+      expect((await bootstrapResponse(route, authorization)).status).toBe(204)
+      const replay = await bootstrapResponse(route, authorization)
+
+      expect(replay.status).toBe(402)
+      expect(resolveChannelId).toHaveBeenCalledOnce()
     })
   })
 

@@ -125,7 +125,11 @@ async function waitForUpdate(
   throwIfAborted(signal)
 
   if (store.waitForUpdate) {
-    await Promise.race([store.waitForUpdate(channelId), ...(signal ? [onceAborted(signal)] : [])])
+    await Promise.race([
+      store.waitForUpdate(channelId),
+      sleep(pollIntervalMs, signal),
+      ...(signal ? [onceAborted(signal)] : []),
+    ])
   } else {
     await sleep(pollIntervalMs, signal)
   }

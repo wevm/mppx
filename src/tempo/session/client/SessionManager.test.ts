@@ -3,6 +3,7 @@ import { privateKeyToAccount } from 'viem/accounts'
 import { describe, expect, test, vi } from 'vp/test'
 
 import * as Challenge from '../../../Challenge.js'
+import * as Constants from '../../../Constants.js'
 import * as Credential from '../../../Credential.js'
 import * as Channel from '../precompile/Channel.js'
 import { escrowAbi } from '../precompile/escrow.abi.js'
@@ -86,8 +87,24 @@ function makeChallenge(overrides: Record<string, unknown> = {}): Challenge.Chall
       methodDetails: {
         escrowContract: tip20ChannelEscrow,
         chainId: 4217,
+        sessionProtocol: Constants.SessionProtocols.tip1034,
       },
       ...overrides,
+    },
+  })
+}
+
+function makeChargeChallenge(): Challenge.Challenge {
+  return Challenge.from({
+    id: 'charge-bootstrap',
+    realm,
+    method: 'tempo',
+    intent: 'charge',
+    request: {
+      amount: '0',
+      currency: '0x20c0000000000000000000000000000000000001',
+      recipient: '0x742d35cc6634c0532925a3b844bc9e7595f8fe00',
+      methodDetails: { chainId: 4217 },
     },
   })
 }
@@ -216,6 +233,27 @@ describe('Session', () => {
       expect(mockFetch).toHaveBeenCalledOnce()
     })
 
+    test('binds the default global fetch for browser runtimes', async () => {
+      const originalFetch = globalThis.fetch
+      const mockFetch = vi.fn(function (this: unknown) {
+        expect(this).toBe(globalThis)
+        return Promise.resolve(makeOkResponse('hello'))
+      })
+      globalThis.fetch = mockFetch as typeof globalThis.fetch
+      try {
+        const s = sessionManager({
+          account: '0x0000000000000000000000000000000000000001',
+        })
+
+        const res = await s.fetch('https://api.example.com/data')
+
+        expect(res.status).toBe(200)
+        expect(mockFetch).toHaveBeenCalledOnce()
+      } finally {
+        globalThis.fetch = originalFetch
+      }
+    })
+
     test('adds a stored channel hint to the first request', async () => {
       const mockFetch = vi.fn().mockImplementation((_input, init?: RequestInit) => {
         expect(new Headers(init?.headers).get('Payment-Session')).toBe(storedChannelId)
@@ -234,6 +272,150 @@ describe('Session', () => {
       await s.fetch('https://api.example.com/data')
 
       expect(mockFetch).toHaveBeenCalledOnce()
+    })
+
+    test('bootstraps from same-route HEAD snapshot before first request', async () => {
+      const set = vi.fn()
+      const mockFetch = vi.fn().mockImplementation((_input, init?: RequestInit) => {
+        const headers = new Headers(init?.headers)
+        if (init?.method === 'HEAD' && !headers.get(Constants.Headers.authorization)) {
+          expect(headers.get(Constants.Headers.acceptPayment)).toBe('tempo/charge')
+          return Promise.resolve(make402Response(makeChargeChallenge()))
+        }
+        if (init?.method === 'HEAD') {
+          const credential = Credential.deserialize(headers.get(Constants.Headers.authorization)!)
+          expect(credential.payload).toMatchObject({ type: 'proof' })
+          return Promise.resolve(
+            new Response(null, {
+              status: 204,
+              headers: {
+                [Constants.Headers.paymentSessionSnapshot]: sessionManager.serializeSnapshot({
+                  acceptedCumulative: '1000000',
+                  channelId: storedChannelId,
+                  deposit: '10000000',
+                  descriptor: storedDescriptor,
+                  requiredCumulative: '1000000',
+                  settled: '0',
+                  spent: '0',
+                  units: 0,
+                }),
+              },
+            }),
+          )
+        }
+        expect(headers.get(Constants.Headers.paymentSession)).toBe(storedChannelId)
+        return Promise.resolve(makeOkResponse())
+      })
+      const s = sessionManager({
+        account,
+        bootstrap: true,
+        client,
+        fetch: mockFetch as typeof globalThis.fetch,
+        sessionStore: {
+          get: () => null,
+          set,
+        },
+      })
+
+      const response = await s.fetch('https://api.example.com/data')
+
+      expect(response.status).toBe(200)
+      expect(s.channelId).toBe(storedChannelId)
+      expect(s.cumulative).toBe(1_000_000n)
+      expect(set).toHaveBeenCalledWith(expect.objectContaining({ channelId: storedChannelId }))
+      expect(mockFetch).toHaveBeenCalledTimes(3)
+    })
+
+    test('falls back to normal fetch when bootstrap is unsupported', async () => {
+      const mockFetch = vi
+        .fn()
+        .mockResolvedValueOnce(new Response(null, { status: 404 }))
+        .mockResolvedValueOnce(makeOkResponse())
+      const s = sessionManager({
+        account,
+        bootstrap: true,
+        client,
+        fetch: mockFetch as typeof globalThis.fetch,
+      })
+
+      const response = await s.fetch('https://api.example.com/data')
+
+      expect(response.status).toBe(200)
+      expect(s.channelId).toBeUndefined()
+      expect(mockFetch).toHaveBeenCalledTimes(2)
+      expect(mockFetch.mock.calls[0]?.[1]).toMatchObject({ method: 'HEAD' })
+      expect(new Headers(mockFetch.mock.calls[1]?.[1]?.headers).get('Payment-Session')).toBeNull()
+    })
+
+    test('clears stale stored channel hints and retries with a fresh channel', async () => {
+      const remove = vi.fn()
+      const staleClient = createClient({
+        account,
+        chain: { id: 4217 } as never,
+        transport: custom({
+          async request(args) {
+            if (args.method === 'eth_chainId') return '0x1079'
+            if (args.method === 'eth_getTransactionCount') return '0x0'
+            if (args.method === 'eth_estimateGas') return '0x5208'
+            if (args.method === 'eth_maxPriorityFeePerGas') return '0x1'
+            if (args.method === 'eth_getBlockByNumber') return { baseFeePerGas: '0x1' }
+            if (args.method === 'eth_call')
+              return encodeFunctionResult({
+                abi: escrowAbi,
+                functionName: 'getChannelState',
+                result: { settled: 0n, deposit: 0n, closeRequestedAt: 0 },
+              })
+            throw new Error(`unexpected rpc request: ${args.method}`)
+          },
+        }),
+      })
+      const postedPayloads: SessionCredentialPayload[] = []
+      const mockFetch = vi.fn().mockImplementation((_input, init?: RequestInit) => {
+        const headers = new Headers(init?.headers)
+        const authorization = headers.get(Constants.Headers.authorization)
+        const payload = authorization
+          ? Credential.deserialize<SessionCredentialPayload>(authorization).payload
+          : undefined
+        if (payload) postedPayloads.push(payload)
+
+        if (init?.method === 'HEAD') return Promise.resolve(new Response(null, { status: 204 }))
+        if (!payload) return Promise.resolve(make402Response())
+        return Promise.resolve(makeOkResponse())
+      })
+      const s = sessionManager({
+        account,
+        bootstrap: true,
+        client: staleClient,
+        fetch: mockFetch as typeof globalThis.fetch,
+        maxDeposit: '10',
+        sessionStore: {
+          get: () => storedChannel(),
+          set: vi.fn(),
+          delete: remove,
+        },
+      })
+
+      const response = await s.fetch('https://api.example.com/data')
+
+      expect(response.status).toBe(200)
+      expect(remove).toHaveBeenCalledOnce()
+      expect(postedPayloads.map((payload) => payload.action)).toEqual(['open'])
+      expect(s.opened).toBe(true)
+      expect(s.channelId).not.toBe(storedChannelId)
+    })
+
+    test('does not bootstrap when disabled', async () => {
+      const mockFetch = vi.fn().mockResolvedValue(makeOkResponse())
+      const s = sessionManager({
+        account,
+        client,
+        fetch: mockFetch as typeof globalThis.fetch,
+      })
+
+      await s.fetch('https://api.example.com/data')
+
+      expect(mockFetch).toHaveBeenCalledOnce()
+      expect(new Headers(mockFetch.mock.calls[0]?.[1]?.headers).get('Payment-Session')).toBeNull()
     })
 
     test('uses stored channel details when the server does not return a snapshot', async () => {

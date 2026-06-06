@@ -19,13 +19,18 @@ export function captureRequestBodyProbe(input: Request): RequestBodyProbe {
 export function hasCapturedRequestBody(
   input: Pick<RequestBodyProbe, 'headers' | 'hasBody'>,
 ): boolean {
-  const contentLength = input.headers.get('content-length')
-  const headerIndicatesBody =
-    (contentLength !== null && contentLength !== '0') || input.headers.has('transfer-encoding')
-
-  if (headerIndicatesBody) return true
+  if (hasBodyFramingHeaders(input)) return true
   if (input.hasBody === true) return true
   return false
+}
+
+function hasBodyFramingHeaders(input: Pick<RequestBodyProbe, 'headers'>): boolean {
+  const contentLength = input.headers.get('content-length')
+  return (contentLength !== null && contentLength !== '0') || input.headers.has('transfer-encoding')
+}
+
+function hasBodyIntentHeaders(input: Pick<RequestBodyProbe, 'headers'>): boolean {
+  return hasBodyFramingHeaders(input) || input.headers.has('content-type')
 }
 
 /** Returns whether a verified session credential should let the application handler serve content. */
@@ -42,5 +47,12 @@ export function shouldChargePlainResponse(
   payload: Partial<SessionCredentialContext>,
 ): boolean {
   if (payload.action === 'close' || payload.action === 'topUp') return false
+  if (
+    (payload.action === 'open' || payload.action === 'voucher') &&
+    input.method === 'POST' &&
+    !input.url?.search &&
+    !hasBodyIntentHeaders(input)
+  )
+    return false
   return isSessionContentRequest(input)
 }

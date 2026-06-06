@@ -47,6 +47,11 @@ const mppx = Mppx.create({
       currency,
       getClient: () => client,
       recipient: account.address,
+      bootstrap: true,
+      resolveChannelId({ source }) {
+        const payer = sourceAddress(source)
+        return payer ? latestChannelByPayer.get(payer.toLowerCase()) : undefined
+      },
       settlementSchedule: { units: 10 },
       sse: { poll: true },
       store,
@@ -105,21 +110,6 @@ export async function handler(request: Request): Promise<Response | null> {
     return Response.json({ funded: address })
   }
 
-  if (url.pathname === '/api/bootstrap') {
-    const payer = url.searchParams.get('payer')
-    if (!payer || !isAddress(payer)) return Response.json({ channelId: null })
-    const channelId = latestChannelByPayer.get(payer.toLowerCase())
-    const channel = channelId ? ((await store.get(channelId)) as StoredSessionChannel | null) : null
-    if (!channel || channel.finalized) return Response.json({ channelId: null })
-    return Response.json({
-      channelId: channel.channelId,
-      acceptedCumulative: channel.highestVoucherAmount.toString(),
-      deposit: channel.deposit.toString(),
-      spent: channel.spent.toString(),
-      units: channel.units,
-    })
-  }
-
   if (url.pathname === '/api/click') {
     if (!(await hasPrecompile())) {
       return Response.json(
@@ -130,10 +120,8 @@ export async function handler(request: Request): Promise<Response | null> {
         { status: 503 },
       )
     }
-    const bootstrapChannelId = normalizeChannelId(url.searchParams.get('channelId'))
     const result = await mppx.session({
       amount: pricePerClick,
-      ...(bootstrapChannelId ? { channelId: bootstrapChannelId } : {}),
       suggestedDeposit: '0.0005',
       unitType: 'click',
     })(request)
@@ -201,8 +189,9 @@ function streamTokens(prompt: string): string[] {
   ]
 }
 
-function normalizeChannelId(value: string | null): Hex | undefined {
-  return value && /^0x[0-9a-fA-F]{64}$/.test(value) ? (value as Hex) : undefined
+function sourceAddress(source: string | undefined): Address | undefined {
+  const address = source?.split(':').at(-1)
+  return address && isAddress(address) ? address : undefined
 }
 
 async function fundServer() {

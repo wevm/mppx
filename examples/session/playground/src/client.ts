@@ -8,6 +8,7 @@ import { chain, networkName, rpcUrl, transportOptions } from './config.js'
 import './style.css'
 
 const storageKey = 'mppx.session.playground.privateKey'
+const sessionStoragePrefix = 'mppx.session.playground.channel'
 const currency = '0x20c0000000000000000000000000000000000001' as const
 const decimals = 6
 const tokenSymbol = 'pathUSD'
@@ -21,11 +22,9 @@ if (!privateKey) {
 
 let account = privateKeyToAccount(privateKey)
 let client = createTempoClient()
-let session = createSession()
-let autoSession = createSession()
-let sseSession = createSession()
-let bootstrappedChannelId: Hex | null = null
-let autoBootstrappedChannelId: Hex | null = null
+let session = createSession('manual')
+let autoSession = createSession('auto')
+let sseSession = createSession('sse')
 let clicks = 0
 let autoClicks = 0
 let sseTokens = 0
@@ -45,7 +44,6 @@ const elements = {
   autoRun: button('auto-run'),
   autoSpent: byId('auto-spent'),
   balance: byId('balance'),
-  bootstrap: button('bootstrap'),
   channel: byId('channel'),
   clearLog: button('clear-log'),
   close: button('close'),
@@ -73,7 +71,6 @@ const elements = {
 }
 
 elements.fund.onclick = () => run('fund wallet', fundWallet)
-elements.bootstrap.onclick = () => run('bootstrap', bootstrap)
 elements.start.onclick = () => run('start session', () => crank({ start: true }))
 elements.crank.onclick = () => run('crank session', () => crank())
 elements.topUp.onclick = () => run('top up session', topUpSession)
@@ -93,11 +90,10 @@ elements.newWallet.onclick = () =>
     localStorage.setItem(storageKey, privateKey)
     account = privateKeyToAccount(privateKey)
     client = createTempoClient()
-    session = createSession()
-    autoSession = createSession()
-    sseSession = createSession()
-    bootstrappedChannelId = null
-    autoBootstrappedChannelId = null
+    clearSessionStores()
+    session = createSession('manual')
+    autoSession = createSession('auto')
+    sseSession = createSession('sse')
     clicks = 0
     autoClicks = 0
     sseTokens = 0
@@ -111,9 +107,6 @@ elements.newWallet.onclick = () =>
 
 await checkHealth()
 await refresh()
-await bootstrap().catch((error) => {
-  log(`bootstrap failed: ${error instanceof Error ? error.message : String(error)}`, 'error')
-})
 
 function createTempoClient() {
   return createClient({
@@ -124,13 +117,44 @@ function createTempoClient() {
   })
 }
 
-function createSession() {
+type StoredSessionChannel =
+  NonNullable<Parameters<typeof tempo.session>[0]['sessionStore']> extends {
+    set(channel: infer channel): unknown
+  }
+    ? channel
+    : never
+
+function createSession(scope: string) {
   return tempo.session({
     account,
+    bootstrap: true,
     client,
     decimals,
     maxDeposit: '0.002',
+    sessionStore: localSessionStore(scope),
   })
+}
+
+function localSessionStore(scope: string) {
+  const key = `${sessionStoragePrefix}.${account.address}.${scope}`
+  return {
+    get() {
+      const value = localStorage.getItem(key)
+      return value ? (JSON.parse(value) as StoredSessionChannel) : null
+    },
+    set(channel: StoredSessionChannel) {
+      localStorage.setItem(key, JSON.stringify(channel))
+    },
+    delete() {
+      localStorage.removeItem(key)
+    },
+  }
+}
+
+function clearSessionStores() {
+  for (const key of Object.keys(localStorage)) {
+    if (key.startsWith(sessionStoragePrefix)) localStorage.removeItem(key)
+  }
 }
 
 async function fundWallet() {
@@ -154,47 +178,11 @@ async function checkHealth() {
   if (health.network) log(`connected to ${health.network}`)
 }
 
-async function bootstrap() {
-  const response = await fetch(`/api/bootstrap?payer=${account.address}`)
-  if (!response.ok) throw new Error(await readError(response))
-  const data = (await response.json()) as {
-    acceptedCumulative?: string
-    channelId: Hex | null
-    deposit?: string
-    spent?: string
-    units?: number
-  }
-  bootstrappedChannelId = data.channelId
-  if (data.spent) latestSpent = BigInt(data.spent)
-  if (typeof data.units === 'number') clicks = data.units
-
-  if (data.channelId) {
-    log(`server bootstrap found ${short(data.channelId)}`)
-    if (session.channelId?.toLowerCase() !== data.channelId.toLowerCase())
-      await hydrateFromServerSnapshot()
-  } else {
-    log('server bootstrap found no open channel')
-  }
-  await refresh()
-}
-
-async function hydrateFromServerSnapshot() {
-  if (!bootstrappedChannelId) return
-  const response = await session.fetch(clickUrl(clicks, bootstrappedChannelId, session), {
-    method: 'HEAD',
-  })
-  if (!response.ok) throw new Error(`bootstrap HEAD failed: ${await readError(response)}`)
-  if (response.receipt) latestSpent = BigInt(response.receipt.spent)
-  if (typeof response.receipt?.units === 'number') clicks = response.receipt.units
-  log(`hydrated manager from server snapshot (${short(bootstrappedChannelId)})`)
-}
-
 async function crank(options: { start?: boolean } = {}) {
   const nextClicks = clicks + 1
-  const response = await session.fetch(clickUrl(nextClicks, bootstrappedChannelId, session))
+  const response = await session.fetch(clickUrl(nextClicks))
   if (!response.ok) throw new Error(await readError(response))
   const body = (await response.json()) as { click: number; message: string; price: string }
-  if (response.channelId) bootstrappedChannelId = response.channelId
   if (response.receipt) {
     latestSpent = BigInt(response.receipt.spent)
     clicks = response.receipt.units ?? nextClicks
@@ -207,12 +195,9 @@ async function crank(options: { start?: boolean } = {}) {
 
 async function autoClick() {
   const nextClicks = autoClicks + 1
-  const response = await autoSession.fetch(
-    clickUrl(nextClicks, autoBootstrappedChannelId, autoSession),
-  )
+  const response = await autoSession.fetch(clickUrl(nextClicks))
   if (!response.ok) throw new Error(await readError(response))
   const body = (await response.json()) as { click: number; message: string; price: string }
-  if (response.channelId) autoBootstrappedChannelId = response.channelId
   if (response.receipt) {
     autoLatestSpent = BigInt(response.receipt.spent)
     autoClicks = response.receipt.units ?? nextClicks
@@ -257,7 +242,6 @@ async function closeSession() {
     return
   }
   latestSpent = BigInt(receipt.spent)
-  bootstrappedChannelId = null
   log(`closed ${short(receipt.channelId)} at ${formatAmount(BigInt(receipt.spent))}`)
   await refresh()
 }
@@ -269,7 +253,6 @@ async function closeAutoSession() {
     return
   }
   autoLatestSpent = BigInt(receipt.spent)
-  autoBootstrappedChannelId = null
   log(`closed auto ${short(receipt.channelId)} at ${formatAmount(BigInt(receipt.spent))}`)
   await refresh()
 }
@@ -301,11 +284,11 @@ async function refresh() {
   elements.balance.textContent = await getBalance().catch((error) =>
     error instanceof Error ? error.message : 'unavailable',
   )
-  elements.channel.textContent = short(session.channelId ?? bootstrappedChannelId)
+  elements.channel.textContent = short(session.channelId)
   elements.spent.textContent = formatAmount(latestSpent)
   elements.deposit.textContent = formatAmount(depositOf(session))
   elements.cumulative.textContent = formatAmount(session.cumulative)
-  elements.autoChannel.textContent = short(autoSession.channelId ?? autoBootstrappedChannelId)
+  elements.autoChannel.textContent = short(autoSession.channelId)
   elements.autoClicks.textContent = String(autoClicks)
   elements.autoSpent.textContent = formatAmount(autoLatestSpent)
   elements.autoDeposit.textContent = formatAmount(depositOf(autoSession))
@@ -320,13 +303,13 @@ async function refresh() {
       manual: {
         manager: session.state,
         opened: session.opened,
-        channelId: session.channelId ?? bootstrappedChannelId,
+        channelId: session.channelId,
         clicks,
       },
       auto: {
         manager: autoSession.state,
         opened: autoSession.opened,
-        channelId: autoSession.channelId ?? autoBootstrappedChannelId,
+        channelId: autoSession.channelId,
         clicks: autoClicks,
       },
       sse: {
@@ -342,16 +325,9 @@ async function refresh() {
   applyControlState()
 }
 
-function clickUrl(
-  nextClicks = clicks,
-  channelId: Hex | null = bootstrappedChannelId,
-  manager = session,
-) {
+function clickUrl(nextClicks = clicks) {
   const url = new URL('/api/click', window.location.origin)
   url.searchParams.set('count', String(nextClicks))
-  if (channelId && !manager.channelId) {
-    url.searchParams.set('channelId', channelId)
-  }
   return url
 }
 
@@ -384,7 +360,6 @@ function setDisabled(disabled: boolean) {
 
 function applyControlState() {
   const allButtons = [
-    elements.bootstrap,
     elements.autoClick,
     elements.autoClose,
     elements.autoRun,
@@ -401,9 +376,8 @@ function applyControlState() {
   for (const element of allButtons) element.disabled = controlsBusy
   if (controlsBusy) return
 
-  const manualOpen = session.opened || Boolean(bootstrappedChannelId && !session.channelId)
   elements.start.disabled = session.opened
-  elements.crank.disabled = !manualOpen
+  elements.crank.disabled = !session.opened
   elements.topUp.disabled = !session.opened
   elements.close.disabled = !session.opened
 
