@@ -138,6 +138,7 @@ export type Server<
   defaults?: defaults | undefined
   extensions?: extensions | undefined
   html?: Html.Options | undefined
+  preflight?: PreflightFn<method> | undefined
   request?: RequestFn<method> | undefined
   respond?: RespondFn<method> | undefined
   stableBinding?: StableBindingFn<method> | undefined
@@ -193,6 +194,22 @@ export type AuthorizeResult = {
   receipt: Receipt.Receipt
   response?: globalThis.Response | undefined
 }
+
+/**
+ * Optional HTTP preflight hook for method-specific management requests.
+ *
+ * Called before the normal challenge/verification path. Returning a response
+ * fully handles the request.
+ */
+export type PreflightFn<method extends Method> = (parameters: {
+  capturedRequest?: CapturedRequest | undefined
+  credential: Credential.Credential | null
+  expires?: string | undefined
+  input: globalThis.Request
+  options: z.input<method['schema']['request']>
+  realm: string
+  secretKey: string
+}) => MaybePromise<globalThis.Response | undefined>
 
 /**
  * Produces the stable request fields used to bind credentials to a route.
@@ -316,6 +333,7 @@ export function toServer<
     defaults,
     extensions,
     html,
+    preflight,
     request,
     respond,
     stableBinding,
@@ -329,6 +347,7 @@ export function toServer<
     defaults,
     extensions,
     html,
+    preflight,
     request,
     respond,
     stableBinding,
@@ -352,6 +371,7 @@ export declare namespace toServer {
     defaults?: defaults | undefined
     extensions?: extensions | undefined
     html?: Html.Options | undefined
+    preflight?: PreflightFn<method> | undefined
     request?: RequestFn<method> | undefined
     respond?: RespondFn<method> | undefined
     stableBinding?: StableBindingFn<method> | undefined

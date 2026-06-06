@@ -134,6 +134,30 @@ describe('MeteredStream', () => {
       await reserved
     })
 
+    test('reserveChargeOrWait observes updates that happen before wait registration', async () => {
+      const emitted: string[] = []
+      const store = memoryStore(channel({ highestVoucherAmount: 25n, spent: 20n }), {
+        waitForUpdate: true,
+      })
+
+      await reserveChargeOrWait({
+        amount: 10n,
+        channelId,
+        async emit(message) {
+          emitted.push(message)
+          await store.updateChannel(channelId, (current) =>
+            current ? { ...current, highestVoucherAmount: 30n } : current,
+          )
+        },
+        formatNeedVoucher,
+        pollIntervalMs: 1,
+        reservedAmount: 0n,
+        store,
+      })
+
+      expect(emitted).toHaveLength(1)
+    })
+
     test('commitReservedCharges increments spend and units', async () => {
       const store = memoryStore(channel({ spent: 20n, units: 2, highestVoucherAmount: 50n }))
 

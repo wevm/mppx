@@ -1,5 +1,7 @@
 import { parseUnits, type Hex } from 'viem'
 
+import * as HeaderCodec from '../../../internal/HeaderCodec.js'
+import * as z from '../../../zod.js'
 import type {
   ChannelDescriptor,
   NeedVoucherEvent,
@@ -33,6 +35,30 @@ export type SessionSnapshot = {
   spent: RawAmountString
   /** Paid units delivered by the server, when the transport reports them. */
   units?: number | undefined
+}
+
+const sessionSnapshotSchema = z.object({
+  acceptedCumulative: z.string(),
+  channelId: z.string(),
+  closeRequestedAt: z.optional(z.string()),
+  deposit: z.string(),
+  descriptor: z.custom<ChannelDescriptor>(),
+  requiredCumulative: z.string(),
+  settled: z.string(),
+  spent: z.string(),
+  units: z.optional(z.number()),
+})
+
+const sessionSnapshotHeader = HeaderCodec.createJson(sessionSnapshotSchema)
+
+/** Serializes a session snapshot for the `Payment-Session-Snapshot` header. */
+export function serializeSnapshot(snapshot: SessionSnapshot): string {
+  return sessionSnapshotHeader.encode(snapshot)
+}
+
+/** Deserializes a session snapshot from the `Payment-Session-Snapshot` header. */
+export function deserializeSnapshot(value: string): SessionSnapshot {
+  return sessionSnapshotHeader.decode(value) as SessionSnapshot
 }
 
 /** Initial manager state before a session challenge is observed. */

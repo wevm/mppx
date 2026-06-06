@@ -1,6 +1,7 @@
 export { session } from './Session.js'
 export { sessionManager } from './SessionManager.js'
 export * as Machine from './Runtime.js'
+export { deserializeSnapshot, serializeSnapshot } from './Runtime.js'
 /** Public client session manager types. */
 export type {
   PaymentResponse,

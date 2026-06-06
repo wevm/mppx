@@ -13,7 +13,7 @@ VITE_TEMPO_NETWORK=localnet VITE_RPC_URL=http://localhost:18545 pnpm dev:example
 VITE_TEMPO_NETWORK=moderato pnpm dev:example session/playground
 ```
 
-Open the printed URL, fund the generated demo wallet, start a session, crank it
-with incremental clicks, reload the page, then use **Re-bootstrap from server**
-to hydrate the client manager from server channel state before continuing or
-closing.
+Open the printed URL, fund the generated demo wallet, start a session, and
+crank it with incremental clicks. On reload, the session manager automatically
+uses same-route `HEAD` bootstrap plus its local channel store to hydrate from
+server channel state before continuing or closing.

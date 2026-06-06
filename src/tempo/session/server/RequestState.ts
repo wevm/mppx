@@ -50,6 +50,8 @@ export type ResolveSessionChannelIdParameters = {
   request?: SessionChannelIdRequest | undefined
   /** Credential submitted with the request, when present. */
   credential: Credential.Credential | null | undefined
+  /** Cryptographic payer identity from a verified zero-amount bootstrap proof. */
+  source?: string | undefined
   /** Session payment request being challenged. */
   paymentRequest: SessionPaymentRequestInput
   /** Channel store backing this session method. */
@@ -88,9 +90,10 @@ export async function resolveSessionChannelId(parameters: {
   credential: Credential.Credential | null | undefined
   request: SessionPaymentRequestInput
   resolveChannelId?: ResolveSessionChannelId | undefined
+  source?: string | undefined
   store: ChannelStore.ChannelStore
 }): Promise<Hex | undefined> {
-  const { capturedRequest, credential, request, resolveChannelId, store } = parameters
+  const { capturedRequest, credential, request, resolveChannelId, source, store } = parameters
   const explicitChannelId =
     getCredentialChannelId(credential) ?? normalizeSessionChannelId(request.channelId)
   if (explicitChannelId) return explicitChannelId
@@ -99,6 +102,7 @@ export async function resolveSessionChannelId(parameters: {
     await resolveChannelId({
       request: capturedRequest,
       credential,
+      source,
       paymentRequest: request,
       store,
     }),
@@ -222,6 +226,7 @@ export type ResolveSessionPaymentRequestParameters = {
   parameterFeePayer?: ParameterFeePayer
   request: SessionPaymentRequestInput
   resolveChannelId?: ResolveSessionChannelId | undefined
+  source?: string | undefined
   store: ChannelStore.ChannelStore
 }
 
@@ -342,6 +347,7 @@ export async function resolveSessionPaymentRequest(
     parameterFeePayer,
     request,
     resolveChannelId,
+    source,
     store,
   } = parameters
 
@@ -367,6 +373,7 @@ export async function resolveSessionPaymentRequest(
     credential,
     request,
     resolveChannelId,
+    source,
     store,
   })
   const sessionSnapshot = await resolveSessionSnapshot({

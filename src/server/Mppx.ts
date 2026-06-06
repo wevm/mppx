@@ -450,6 +450,7 @@ export function create<
       method: mi,
       realm,
       events: serverEvents as never,
+      preflight: mi.preflight as never,
       request: mi.request as never,
       respond: mi.respond as never,
       secretKey,
@@ -791,6 +792,7 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
     defaults,
     events,
     method,
+    preflight,
     realm,
     respond,
     secretKey,
@@ -840,6 +842,27 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
           return [null, e as Error] as const
         }
       })()
+
+      if (preflight && input instanceof globalThis.Request) {
+        const response = await preflight({
+          capturedRequest,
+          credential,
+          expires,
+          input,
+          options: { ...defaults, ...rest },
+          realm: realm ?? new URL(input.url).hostname ?? 'MPP Payment',
+          secretKey,
+        } as never)
+        if (response) {
+          if (response.status === 402) return { challenge: response, status: 402 }
+          return {
+            status: 200,
+            withReceipt() {
+              return response
+            },
+          } as MethodFn.Response
+        }
+      }
 
       const emitChallenge = async (parameters: {
         challenge: Challenge.Challenge
@@ -1335,6 +1358,7 @@ declare namespace createMethodFn {
     defaults?: defaults
     method: method
     events: ServerEventDispatcher<readonly [method], transport>
+    preflight?: Method.PreflightFn<method>
     realm: string | undefined
     request?: Method.RequestFn<method>
     respond?: Method.RespondFn<method>

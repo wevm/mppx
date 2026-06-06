@@ -152,6 +152,20 @@ describe('request-body', () => {
       ).toBe(false)
     })
 
+    test('does not charge empty voucher POSTs when runtime reports a body stream', () => {
+      expect(
+        shouldChargePlainResponse(
+          {
+            hasBody: true,
+            headers: new Headers(),
+            method: 'POST',
+            url: new URL('https://api.example.com/session'),
+          },
+          { action: 'voucher' },
+        ),
+      ).toBe(false)
+    })
+
     test('charges bodyless POST query requests', () => {
       expect(
         shouldChargePlainResponse(

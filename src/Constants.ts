@@ -4,6 +4,7 @@ export const Headers = {
   authorization: 'Authorization',
   paymentReceipt: 'Payment-Receipt',
   paymentSession: 'Payment-Session',
+  paymentSessionSnapshot: 'Payment-Session-Snapshot',
   wwwAuthenticate: 'WWW-Authenticate',
 } as const
 
