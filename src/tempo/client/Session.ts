@@ -71,6 +71,15 @@ export type SessionContext = z.infer<typeof sessionContextSchema>
  * ```
  */
 export function session(parameters: session.Parameters = {}) {
+  return createSessionController(parameters).method
+}
+
+/**
+ * Creates a session method with its internal response handling controls.
+ *
+ * @internal
+ */
+export function createSessionController(parameters: session.Parameters = {}) {
   const { decimals = defaults.decimals } = parameters
 
   const getClient = Client.getResolver({
@@ -89,6 +98,41 @@ export function session(parameters: session.Parameters = {}) {
 
   function notifyUpdate(entry: ChannelEntry) {
     parameters.onChannelUpdate?.(entry)
+  }
+
+  function evictChannel(channelId: string): boolean {
+    const key =
+      channelIdToKey.get(channelId) ??
+      Array.from(channelIdToKey).find(
+        ([cachedChannelId]) => cachedChannelId.toLowerCase() === channelId.toLowerCase(),
+      )?.[1]
+    if (!key) return false
+
+    const entry = channels.get(key)
+    channels.delete(key)
+    if (entry) {
+      channelIdToKey.delete(entry.channelId)
+      escrowContractMap.delete(entry.channelId)
+    } else {
+      channelIdToKey.delete(channelId)
+      escrowContractMap.delete(channelId)
+    }
+    return true
+  }
+
+  async function syncFromResponse(
+    response: Response,
+    options: { channelId?: string | undefined } = {},
+  ): Promise<SessionSyncResult | undefined> {
+    if (response.status !== 410) return undefined
+    if (!isProblemJson(response)) return undefined
+
+    const problem = await parseProblemDetails(response)
+    if (problem?.type !== ChannelNotFoundProblemType) return undefined
+    if (!options.channelId) return undefined
+
+    if (!evictChannel(options.channelId)) return undefined
+    return { channelEvicted: true, channelId: options.channelId }
   }
 
   function channelKey(payee: Address, currency: Address, escrow: Address): string {
@@ -334,24 +378,46 @@ export function session(parameters: session.Parameters = {}) {
     return serializeCredential(challenge, payload, chainId, account)
   }
 
-  return Method.toClient(Methods.session, {
-    context: sessionContextSchema,
+  return {
+    method: Method.toClient(Methods.session, {
+      context: sessionContextSchema,
 
-    async createCredential({ challenge, context }) {
-      const chainId = challenge.request.methodDetails?.chainId ?? 0
-      const client = await getClient({ chainId })
-      const account = getAccount(client, context)
+      async createCredential({ challenge, context }) {
+        const chainId = challenge.request.methodDetails?.chainId ?? 0
+        const client = await getClient({ chainId })
+        const account = getAccount(client, context)
 
-      if (!context?.action && (parameters.deposit !== undefined || maxDeposit !== undefined))
-        return autoManageCredential(challenge, account, context)
+        if (!context?.action && (parameters.deposit !== undefined || maxDeposit !== undefined))
+          return autoManageCredential(challenge, account, context)
 
-      if (context?.action) return manualCredential(challenge, account, context)
+        if (context?.action) return manualCredential(challenge, account, context)
 
-      throw new Error(
-        'No `action` in context and no `deposit` or `maxDeposit` configured. Either provide context with action/channelId/cumulativeAmount, or configure `deposit`/`maxDeposit` for auto-management.',
-      )
-    },
-  })
+        throw new Error(
+          'No `action` in context and no `deposit` or `maxDeposit` configured. Either provide context with action/channelId/cumulativeAmount, or configure `deposit`/`maxDeposit` for auto-management.',
+        )
+      },
+    }),
+    syncFromResponse,
+  }
+}
+
+type SessionSyncResult = {
+  channelEvicted: true
+  channelId: string
+}
+
+const ChannelNotFoundProblemType = 'https://paymentauth.org/problems/session/channel-not-found'
+
+function isProblemJson(response: Response): boolean {
+  return response.headers.get('Content-Type')?.includes('application/problem+json') ?? false
+}
+
+async function parseProblemDetails(response: Response): Promise<{ type?: string } | null> {
+  try {
+    return (await response.clone().json()) as { type?: string }
+  } catch {
+    return null
+  }
 }
 
 export declare namespace session {

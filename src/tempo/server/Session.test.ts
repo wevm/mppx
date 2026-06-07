@@ -4375,6 +4375,60 @@ describe.runIf(isLocalnet)('session', () => {
       expect(closeReceipt?.status).toBe('success')
       expect(closeReceipt?.spent).toBe('1000000')
     })
+
+    test('evicts cached channel after channel-not-found and reopens on next request', async () => {
+      const backingStore = Store.memory()
+      const channelStore = ChannelStore.fromStore(backingStore)
+      const routeHandler = Mppx_server.create({
+        methods: [
+          tempo_server.session({
+            store: backingStore,
+            getClient: () => client,
+            account: recipientAccount,
+            currency,
+            escrowContract,
+            chainId: chain.id,
+          }),
+        ],
+        realm: 'api.example.com',
+        secretKey: 'secret',
+      }).session({ amount: '1', decimals: 6, unitType: 'token' })
+
+      const fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+        const request = new Request(input, init)
+        const result = await routeHandler(request)
+        if (result.status === 402) return result.challenge
+        return result.withReceipt(new Response('ok'))
+      }
+
+      const manager = sessionManager({
+        account: payer,
+        client,
+        escrowContract,
+        fetch,
+        maxDeposit: '2',
+      })
+
+      const first = await manager.fetch('https://api.example.com/resource')
+      expect(first.status).toBe(200)
+
+      const staleChannelId = manager.channelId
+      expect(staleChannelId).toBeTruthy()
+      await channelStore.updateChannel(staleChannelId!, () => null)
+
+      const failed = await manager.fetch('https://api.example.com/resource')
+      expect(failed.status).toBe(410)
+      expect(await failed.json()).toMatchObject({
+        type: 'https://paymentauth.org/problems/session/channel-not-found',
+      })
+      expect(manager.channelId).toBeUndefined()
+      expect(manager.opened).toBe(false)
+
+      const reopened = await manager.fetch('https://api.example.com/resource')
+      expect(reopened.status).toBe(200)
+      expect(manager.channelId).toBeTruthy()
+      expect(manager.channelId).not.toBe(staleChannelId)
+    })
   })
 
   describe('SSE', () => {
