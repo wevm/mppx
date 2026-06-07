@@ -13,6 +13,7 @@ import { rpcUrl } from '~test/tempo/rpc.js'
 import { accounts, asset, chain, client, fundAccount } from '~test/tempo/viem.js'
 
 import * as Challenge from '../Challenge.js'
+import * as Constants from '../Constants.js'
 import * as Credential from '../Credential.js'
 import * as Method from '../Method.js'
 import * as Receipt from '../Receipt.js'
@@ -868,6 +869,7 @@ describe('session multi-fetch (examples/session/multi-fetch)', () => {
                 methodDetails: {
                   chainId: chain.id,
                   escrowContract: escrow,
+                  sessionProtocol: Constants.SessionProtocols.tip1034,
                 },
               },
             }),
