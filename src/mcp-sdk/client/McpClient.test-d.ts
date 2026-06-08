@@ -3,6 +3,7 @@ import { tempo } from 'mppx/client'
 import type { Account } from 'viem'
 import { describe, expectTypeOf, test } from 'vp/test'
 
+import { withMppClient, wrapMcpClientWithPayment } from './index.js'
 import * as McpClient from './McpClient.js'
 
 describe('McpClient.wrap', () => {
@@ -18,6 +19,27 @@ describe('McpClient.wrap', () => {
 
     expectTypeOf(wrapped.callTool).toBeFunction()
     expectTypeOf(wrapped.callTool).returns.toExtend<Promise<McpClient.CallToolResult>>()
+  })
+
+  test('aliases return wrapped client with callTool', () => {
+    const client = {} as Client
+    const methods = [
+      tempo({
+        account: {} as Account,
+      }),
+    ] as const
+
+    const withMpp = McpClient.withMppClient(client, { methods })
+    const wrappedWithPayment = McpClient.wrapMcpClientWithPayment(client, { methods })
+    const topLevelWithMpp = withMppClient(client, { methods })
+    const topLevelWrappedWithPayment = wrapMcpClientWithPayment(client, { methods })
+
+    expectTypeOf(withMpp.callTool).returns.toExtend<Promise<McpClient.CallToolResult>>()
+    expectTypeOf(wrappedWithPayment.callTool).returns.toExtend<Promise<McpClient.CallToolResult>>()
+    expectTypeOf(topLevelWithMpp.callTool).returns.toExtend<Promise<McpClient.CallToolResult>>()
+    expectTypeOf(topLevelWrappedWithPayment.callTool).returns.toExtend<
+      Promise<McpClient.CallToolResult>
+    >()
   })
 
   test('preserves original client methods', () => {

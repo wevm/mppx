@@ -120,6 +120,36 @@ export function wrap<
   }
 }
 
+/**
+ * Alias for `wrap`.
+ *
+ * @example
+ * ```ts
+ * import { tempo } from 'mppx/client'
+ * import { withMppClient } from 'mppx/mcp-sdk/client'
+ *
+ * const mcp = withMppClient(client, {
+ *   methods: tempo({ account }),
+ * })
+ * ```
+ */
+export const withMppClient = wrap
+
+/**
+ * Alias for `wrap`.
+ *
+ * @example
+ * ```ts
+ * import { tempo } from 'mppx/client'
+ * import { wrapMcpClientWithPayment } from 'mppx/mcp-sdk/client'
+ *
+ * const mcp = wrapMcpClientWithPayment(client, {
+ *   methods: tempo({ account }),
+ * })
+ * ```
+ */
+export const wrapMcpClientWithPayment = wrap
+
 /** Union of all context types from all methods that have context schemas. */
 type AnyContextFor<methods extends readonly AnyClient[]> = {
   [key in keyof methods]: methods[key] extends Method.Client<any, infer context>
