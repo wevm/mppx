@@ -68,6 +68,18 @@ export function wrap<
           timeout !== undefined ? { timeout } : undefined,
         )
 
+        const challenges = getPaymentRequiredChallengesFromResult(result)
+        if (challenges)
+          return await payAndRetry({
+            challenges,
+            client,
+            context,
+            methods,
+            params,
+            paymentPreferences,
+            timeout,
+          })
+
         return {
           ...result,
           receipt: result._meta?.[core_Mcp.receiptMetaKey] as core_Mcp.Receipt | undefined,
@@ -79,46 +91,30 @@ export function wrap<
         const challenges = (error.data as { challenges?: Challenge.Challenge[] })?.challenges
         if (!challenges?.length) throw error
 
-        const selected = AcceptPayment.selectChallenge(
+        return await payAndRetry({
+          cause: error,
           challenges,
-          methods,
-          paymentPreferences.entries,
-        )
-        if (!selected) {
-          const available = challenges.map((c) => `${c.method}.${c.intent}`).join(', ')
-          const installed = methods.map((m) => `${m.name}.${m.intent}`).join(', ')
-          throw new Error(
-            `No compatible payment method. Server offers: ${available}. Client has: ${installed}`,
-            { cause: error },
-          )
-        }
-
-        const credential = await createCredential(selected.challenge, {
+          client,
           context,
           methods,
+          params,
+          paymentPreferences,
+          timeout,
         })
-        const parsed = Credential.deserialize(credential)
-
-        const retryResult = await client.callTool(
-          {
-            ...params,
-            _meta: {
-              ...params._meta,
-              [core_Mcp.credentialMetaKey]: parsed,
-            },
-          },
-          undefined,
-          timeout !== undefined ? { timeout } : undefined,
-        )
-
-        return {
-          ...retryResult,
-          receipt: retryResult._meta?.[core_Mcp.receiptMetaKey] as core_Mcp.Receipt | undefined,
-        }
       }
     },
   }
 }
+
+/**
+ * Alias for `wrap`, named for agent SDK integration guides.
+ */
+export const withMppClient = wrap
+
+/**
+ * Alias for `wrap`, matching common MCP payment wrapper naming.
+ */
+export const wrapMcpClientWithPayment = wrap
 
 /** Union of all context types from all methods that have context schemas. */
 type AnyContextFor<methods extends readonly AnyClient[]> = {
@@ -169,6 +165,90 @@ export function isPaymentRequiredError(
   if ((error as { code: unknown }).code !== core_Mcp.paymentRequiredCode) return false
   const data = (error as { data?: { challenges?: unknown } }).data
   return Array.isArray(data?.challenges) && data.challenges.length > 0
+}
+
+function getPaymentRequiredChallengesFromResult(
+  result: Awaited<ReturnType<Client['callTool']>>,
+): Challenge.Challenge[] | null {
+  if ((result as { isError?: boolean }).isError !== true) return null
+
+  const structured = (result as { structuredContent?: unknown }).structuredContent
+  const structuredChallenges = getPaymentRequiredChallengesFromObject(structured)
+  if (structuredChallenges) return structuredChallenges
+
+  const content = (result as { content?: readonly unknown[] }).content
+  const first = content?.[0]
+  if (
+    typeof first !== 'object' ||
+    first === null ||
+    (first as { type?: unknown }).type !== 'text' ||
+    typeof (first as { text?: unknown }).text !== 'string'
+  )
+    return null
+
+  try {
+    return getPaymentRequiredChallengesFromObject(JSON.parse((first as { text: string }).text))
+  } catch {
+    return null
+  }
+}
+
+function getPaymentRequiredChallengesFromObject(value: unknown): Challenge.Challenge[] | null {
+  if (typeof value !== 'object' || value === null) return null
+  if ((value as { httpStatus?: unknown }).httpStatus !== 402) return null
+  const challenges = (value as { challenges?: unknown }).challenges
+  if (!Array.isArray(challenges) || challenges.length === 0) return null
+  return challenges as Challenge.Challenge[]
+}
+
+async function payAndRetry<
+  const client extends Pick<Client, 'callTool'>,
+  const methods extends readonly Method.AnyClient[],
+>(parameters: {
+  cause?: unknown
+  challenges: readonly Challenge.Challenge[]
+  client: client
+  context: unknown
+  methods: methods
+  params: Parameters<wrap.McpClient<client, methods>['callTool']>[0]
+  paymentPreferences: ReturnType<typeof AcceptPayment.resolve>
+  timeout: number | undefined
+}): Promise<CallToolResult> {
+  const { cause, challenges, client, context, methods, params, paymentPreferences, timeout } =
+    parameters
+
+  const selected = AcceptPayment.selectChallenge(challenges, methods, paymentPreferences.entries)
+  if (!selected) {
+    const available = challenges.map((c) => `${c.method}.${c.intent}`).join(', ')
+    const installed = methods.map((m) => `${m.name}.${m.intent}`).join(', ')
+    throw new Error(
+      `No compatible payment method. Server offers: ${available}. Client has: ${installed}`,
+      cause !== undefined ? { cause } : undefined,
+    )
+  }
+
+  const credential = await createCredential(selected.challenge, {
+    context,
+    methods,
+  })
+  const parsed = Credential.deserialize(credential)
+
+  const retryResult = await client.callTool(
+    {
+      ...params,
+      _meta: {
+        ...params._meta,
+        [core_Mcp.credentialMetaKey]: parsed,
+      },
+    },
+    undefined,
+    timeout !== undefined ? { timeout } : undefined,
+  )
+
+  return {
+    ...retryResult,
+    receipt: retryResult._meta?.[core_Mcp.receiptMetaKey] as core_Mcp.Receipt | undefined,
+  }
 }
 
 /** @internal */

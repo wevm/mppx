@@ -20,6 +20,23 @@ describe('McpClient.wrap', () => {
     expectTypeOf(wrapped.callTool).returns.toExtend<Promise<McpClient.CallToolResult>>()
   })
 
+  test('aliases return wrapped client with callTool', () => {
+    const client = {} as Client
+    const methods = [
+      tempo({
+        account: {} as Account,
+      }),
+    ] as const
+
+    const withMppClient = McpClient.withMppClient(client, { methods })
+    const wrapMcpClientWithPayment = McpClient.wrapMcpClientWithPayment(client, { methods })
+
+    expectTypeOf(withMppClient.callTool).returns.toExtend<Promise<McpClient.CallToolResult>>()
+    expectTypeOf(wrapMcpClientWithPayment.callTool).returns.toExtend<
+      Promise<McpClient.CallToolResult>
+    >()
+  })
+
   test('preserves original client methods', () => {
     const client = {} as Client
     const wrapped = McpClient.wrap(client, {

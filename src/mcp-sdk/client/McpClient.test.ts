@@ -50,7 +50,7 @@ describe('McpClient.wrap', () => {
           recipient: accounts[0].address,
         })(extra)
 
-        if (result.status === 402) throw result.challenge
+        if (result.status === 402) return result.challenge
 
         return result.withReceipt({
           content: [{ type: 'text' as const, text: 'Premium tool executed' }],
@@ -86,6 +86,22 @@ describe('McpClient.wrap', () => {
     expect(result.receipt).toBeDefined()
     expect(result.receipt?.status).toBe('success')
     expect(result.receipt?.method).toBe('tempo')
+  })
+
+  test('default: alias handles payment and returns result with receipt', async () => {
+    const mcp = McpClient.withMppClient(client, {
+      methods: [
+        tempo_client.charge({
+          account: accounts[1],
+          getClient: () => testClient,
+        }),
+      ],
+    })
+
+    const result = await mcp.callTool({ name: 'premium_tool', arguments: {} })
+
+    expect(result.content).toEqual([{ type: 'text', text: 'Premium tool executed' }])
+    expect(result.receipt?.status).toBe('success')
   })
 
   test('default: account via context', async () => {
@@ -169,10 +185,16 @@ describe('McpClient.wrap', () => {
     })
 
     server.registerTool('tool_unknown_method', { description: 'Tool' }, async () => {
-      throw new McpError(core_Mcp.paymentRequiredCode, 'Payment Required', {
+      const paymentRequired = {
         httpStatus: 402,
         challenges: [{ ...challenge, method: 'unknown_method' }],
-      })
+      }
+
+      return {
+        structuredContent: paymentRequired,
+        content: [{ type: 'text' as const, text: JSON.stringify(paymentRequired) }],
+        isError: true,
+      }
     })
 
     const mcp = McpClient.wrap(client, {
@@ -203,10 +225,16 @@ describe('McpClient.wrap', () => {
     })
 
     server.registerTool('expired_tool', { description: 'Tool' }, async () => {
-      throw new McpError(core_Mcp.paymentRequiredCode, 'Payment Required', {
+      const paymentRequired = {
         httpStatus: 402,
         challenges: [challenge],
-      })
+      }
+
+      return {
+        structuredContent: paymentRequired,
+        content: [{ type: 'text' as const, text: JSON.stringify(paymentRequired) }],
+        isError: true,
+      }
     })
 
     const createCredential = vi.fn(async ({ challenge }) =>
