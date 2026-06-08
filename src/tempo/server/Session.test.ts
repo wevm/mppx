@@ -4484,7 +4484,7 @@ describe.runIf(isLocalnet)('session', () => {
         if (result.status === 402) return result.challenge
 
         if (action === 'voucher') {
-          return new Response(null, { status: 200 })
+          return result.withReceipt()
         }
 
         if (request.headers.get('Accept')?.includes('text/event-stream')) {
@@ -4562,7 +4562,7 @@ describe.runIf(isLocalnet)('session', () => {
         if (result.status === 402) return result.challenge
 
         if (action === 'voucher') {
-          return new Response(null, { status: 200 })
+          return result.withReceipt()
         }
 
         if (request.headers.get('Accept')?.includes('text/event-stream')) {
@@ -4730,7 +4730,7 @@ describe.runIf(isLocalnet)('session', () => {
         if (result.status === 402) return result.challenge
 
         if (action === 'voucher') {
-          return new Response(null, { status: 200 })
+          return result.withReceipt()
         }
 
         if (request.headers.get('Accept')?.includes('text/event-stream')) {

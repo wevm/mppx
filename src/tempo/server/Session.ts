@@ -285,7 +285,8 @@ export function session<const parameters extends session.Parameters>(
       if (
         envelope &&
         isSessionContentRequest(envelope.capturedRequest) &&
-        (payload.action === 'open' || payload.action === 'voucher')
+        (payload.action === 'open' ||
+          (payload.action === 'voucher' && !isSseNegotiationRequest(envelope.capturedRequest)))
       ) {
         const charged = await charge(
           store,
@@ -315,15 +316,21 @@ export function session<const parameters extends session.Parameters>(
     // updates; billable requests fall through to the application handler.
     respond({ credential, envelope, input }) {
       const { payload } = credential as Credential.Credential<SessionCredentialPayload>
+      const request = envelope?.capturedRequest ?? captureRequestBodyProbe(input)
 
       if (payload.action === 'close') return new Response(null, { status: 204 })
       if (payload.action === 'topUp') return new Response(null, { status: 204 })
+      if (parameters.sse && payload.action === 'voucher' && isSseNegotiationRequest(request))
+        return new Response(null, { status: 204 })
 
-      const request = envelope?.capturedRequest ?? captureRequestBodyProbe(input)
       if (isSessionContentRequest(request)) return undefined
       return new Response(null, { status: 204 })
     },
   })
+}
+
+function isSseNegotiationRequest(input: Pick<Method.CapturedRequest, 'headers'>): boolean {
+  return input.headers.get('Accept')?.includes('text/event-stream') ?? false
 }
 
 export declare namespace session {
