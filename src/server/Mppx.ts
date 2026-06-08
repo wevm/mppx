@@ -1845,9 +1845,9 @@ function selectVerificationMethod(
     challenge.request.methodDetails,
     Constants.MethodDetailKeys.sessionProtocol,
   )
-  if (sessionProtocol === Constants.SessionProtocols.legacy)
+  if (sessionProtocol === Constants.SessionProtocols.v1)
     return methods.find((method) => method.alias === 'sessionLegacy') ?? methods[0]
-  if (sessionProtocol === Constants.SessionProtocols.tip1034)
+  if (sessionProtocol === Constants.SessionProtocols.v2)
     return methods.find((method) => method.alias === undefined) ?? methods[0]
   return methods[0]
 }

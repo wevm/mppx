@@ -205,7 +205,7 @@ export type SessionMethodDetails = {
   minVoucherDelta?: string | undefined
   /** Channel operator address the client should encode in new open transactions. */
   operator?: Address | undefined
-  /** Tempo session protocol variant for this challenge. */
+  /** Tempo session protocol version for this challenge. */
   sessionProtocol?: Constants.SessionProtocol | undefined
 }
 
@@ -290,8 +290,7 @@ function isCanonicalSessionMethodDetails(value: unknown): value is SessionMethod
     (value.minVoucherDelta === undefined || typeof value.minVoucherDelta === 'string') &&
     (value.operator === undefined ||
       (typeof value.operator === 'string' && isAddress(value.operator, { strict: false }))) &&
-    (value.sessionProtocol === undefined ||
-      value.sessionProtocol === Constants.SessionProtocols.tip1034)
+    (value.sessionProtocol === undefined || value.sessionProtocol === Constants.SessionProtocols.v2)
   )
 }
 

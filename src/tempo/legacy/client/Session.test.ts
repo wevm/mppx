@@ -68,7 +68,7 @@ describe('session (pure)', () => {
           methodDetails: {
             chainId: 42431,
             escrowContract: escrowAddress,
-            sessionProtocol: Constants.SessionProtocols.legacy,
+            sessionProtocol: Constants.SessionProtocols.v1,
           },
         }),
       }),
@@ -79,7 +79,7 @@ describe('session (pure)', () => {
           methodDetails: {
             chainId: 42431,
             escrowContract: escrowAddress,
-            sessionProtocol: Constants.SessionProtocols.tip1034,
+            sessionProtocol: Constants.SessionProtocols.v2,
           },
         }),
       }),

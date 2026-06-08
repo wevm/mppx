@@ -343,7 +343,7 @@ export function session(parameters: session.Parameters = {}) {
         challenge.request.methodDetails,
         Constants.MethodDetailKeys.sessionProtocol,
       )
-      return sessionProtocol === undefined || sessionProtocol === Constants.SessionProtocols.legacy
+      return sessionProtocol === undefined || sessionProtocol === Constants.SessionProtocols.v1
     },
     context: sessionContextSchema,
 

@@ -362,7 +362,7 @@ export function session<const parameters extends session.Parameters>(
       })
       return {
         ...resolvedRequest,
-        sessionProtocol: Constants.SessionProtocols.tip1034,
+        sessionProtocol: Constants.SessionProtocols.v2,
       }
     },
 

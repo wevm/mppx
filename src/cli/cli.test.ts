@@ -869,7 +869,7 @@ describe('session multi-fetch (examples/session/multi-fetch)', () => {
                 methodDetails: {
                   chainId: chain.id,
                   escrowContract: escrow,
-                  sessionProtocol: Constants.SessionProtocols.tip1034,
+                  sessionProtocol: Constants.SessionProtocols.v2,
                 },
               },
             }),

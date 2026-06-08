@@ -112,35 +112,35 @@ describe('createCredential', () => {
 
   test('behavior: routes duplicate tempo/session client methods by sessionProtocol', async () => {
     const tip1034 = taggedSessionMethod(
-      'tip1034',
+      'v2',
       ({ challenge }) =>
         (challenge.request.methodDetails as { sessionProtocol?: string } | undefined)
-          ?.sessionProtocol === 'tip1034',
+          ?.sessionProtocol === 'v2',
     )
-    const legacy = taggedSessionMethod('legacy', ({ challenge }) => {
+    const legacy = taggedSessionMethod('v1', ({ challenge }) => {
       const sessionProtocol = (
         challenge.request.methodDetails as { sessionProtocol?: string } | undefined
       )?.sessionProtocol
-      return sessionProtocol === undefined || sessionProtocol === 'legacy'
+      return sessionProtocol === undefined || sessionProtocol === 'v1'
     })
     const mppx = Mppx.create({ polyfill: false, methods: [tip1034, legacy] })
 
     const [newCredential, legacyCredential, oldCredential] = await Promise.all([
-      mppx.createCredential(paymentRequiredResponse(sessionChallenge('new', 'tip1034'))),
-      mppx.createCredential(paymentRequiredResponse(sessionChallenge('legacy', 'legacy'))),
+      mppx.createCredential(paymentRequiredResponse(sessionChallenge('new', 'v2'))),
+      mppx.createCredential(paymentRequiredResponse(sessionChallenge('v1', 'v1'))),
       mppx.createCredential(paymentRequiredResponse(sessionChallenge('old'))),
     ])
-    expect(Credential.deserialize(newCredential).payload).toEqual({ tag: 'tip1034' })
-    expect(Credential.deserialize(legacyCredential).payload).toEqual({ tag: 'legacy' })
-    expect(Credential.deserialize(oldCredential).payload).toEqual({ tag: 'legacy' })
+    expect(Credential.deserialize(newCredential).payload).toEqual({ tag: 'v2' })
+    expect(Credential.deserialize(legacyCredential).payload).toEqual({ tag: 'v1' })
+    expect(Credential.deserialize(oldCredential).payload).toEqual({ tag: 'v1' })
   })
 
   test('behavior: rejects unknown tempo/session sessionProtocol', async () => {
     const method = taggedSessionMethod(
-      'tip1034',
+      'v2',
       ({ challenge }) =>
         (challenge.request.methodDetails as { sessionProtocol?: string } | undefined)
-          ?.sessionProtocol === 'tip1034',
+          ?.sessionProtocol === 'v2',
     )
     const mppx = Mppx.create({ polyfill: false, methods: [method] })
 

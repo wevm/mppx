@@ -189,7 +189,7 @@ export function session<const parameters extends session.Parameters>(
         chainId,
         escrowContract: resolvedEscrow,
         feePayer: resolvedFeePayer,
-        sessionProtocol: Constants.SessionProtocols.legacy,
+        sessionProtocol: Constants.SessionProtocols.v1,
       }
     },
 
