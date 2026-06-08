@@ -13,7 +13,8 @@ import {
   tip20ChannelEscrow,
   type ChannelDescriptor,
 } from '../precompile/Protocol.js'
-import { initialState, type SessionSnapshot, type SessionState } from './Runtime.js'
+import type { SessionSnapshot } from '../Snapshot.js'
+import { initialState, type SessionState } from './Runtime.js'
 import {
   applyTopUpResult,
   closeHttpSession,
@@ -89,9 +90,11 @@ describe('HttpManagement', () => {
   function snapshot(overrides: Partial<SessionSnapshot> = {}): SessionSnapshot {
     return {
       acceptedCumulative: '5',
+      chainId: 4217,
       channelId,
       deposit: '6',
       descriptor,
+      escrow: '0x4D50500000000000000000000000000000000000',
       requiredCumulative: '8',
       settled: '0',
       spent: '5',

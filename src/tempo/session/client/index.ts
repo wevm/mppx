@@ -1,7 +1,7 @@
 export { session } from './Session.js'
 export { sessionManager } from './SessionManager.js'
 export * as Machine from './Runtime.js'
-export { deserializeSnapshot, serializeSnapshot } from './Runtime.js'
+export { deserializeSnapshot, serializeSnapshot } from '../Snapshot.js'
 /** Public client session manager types. */
 export type {
   PaymentResponse,
@@ -27,7 +27,6 @@ export type {
   OpeningSessionState,
   SessionEffect,
   SessionEvent,
-  SessionSnapshot,
   SessionState,
   SessionTransition,
   SettlingSessionState,
@@ -35,3 +34,4 @@ export type {
   VoucherNeededSessionState,
   WithdrawableSessionState,
 } from './Runtime.js'
+export type { SessionSnapshot } from '../Snapshot.js'

@@ -58,17 +58,30 @@ describe('Machine', () => {
   } as const satisfies ChannelDescriptor
 
   const channelId = `0x${'33'.repeat(32)}` as const
+  const escrow = '0x4D50500000000000000000000000000000000000' as const
 
   const snapshot = {
     acceptedCumulative: '5',
+    chainId: 4217,
     channelId,
     deposit: '10',
     descriptor,
+    escrow,
     requiredCumulative: '6',
     settled: '0',
     spent: '2',
     units: 2,
   } satisfies SessionSnapshot
+
+  const channelEntry: ChannelEntry = {
+    channelId,
+    cumulativeAmount: 5n,
+    deposit: 10n,
+    descriptor,
+    escrow,
+    chainId: 4217,
+    opened: true,
+  }
 
   const receipt = {
     acceptedCumulative: '5',
@@ -119,9 +132,18 @@ describe('Machine', () => {
   } satisfies Record<SessionState['status'], SessionState>
 
   const events = {
+    challengeReceived: { type: 'challengeReceived', challengeId: 'challenge-2' },
     challenge: { type: 'challenge', challengeId: 'challenge-2' },
+    activated: {
+      type: 'activated',
+      challengeId: 'challenge-2',
+      entry: channelEntry,
+      spent: '2',
+      units: 2,
+    },
     hydrated: { type: 'hydrated', snapshot },
     opened: { type: 'opened', descriptor, receipt, deposit: '10' },
+    receiptAccepted: { type: 'receiptAccepted', receipt, entry: channelEntry },
     needVoucher: {
       type: 'needVoucher',
       descriptor,
@@ -143,16 +165,37 @@ describe('Machine', () => {
   } satisfies Record<SessionEvent['type'], SessionEvent>
 
   const allowedEvents = {
-    idle: ['challenge'],
-    challenged: [],
-    hydrating: ['hydrated'],
-    opening: ['opened'],
-    active: ['challenge', 'needVoucher', 'settleStarted', 'closeRequested', 'closeStarted'],
-    voucherNeeded: ['topUpStarted', 'voucherAccepted'],
-    toppingUp: ['voucherAccepted'],
-    settling: ['settled'],
-    closeRequested: ['withdrawable'],
-    withdrawable: ['closeStarted', 'closed'],
+    idle: ['challengeReceived', 'challenge', 'activated', 'receiptAccepted'],
+    challenged: ['challengeReceived', 'activated', 'receiptAccepted'],
+    hydrating: ['challengeReceived', 'activated', 'hydrated', 'receiptAccepted'],
+    opening: ['challengeReceived', 'activated', 'opened', 'receiptAccepted'],
+    active: [
+      'challengeReceived',
+      'challenge',
+      'activated',
+      'receiptAccepted',
+      'needVoucher',
+      'settleStarted',
+      'closeRequested',
+      'closeStarted',
+    ],
+    voucherNeeded: [
+      'challengeReceived',
+      'activated',
+      'receiptAccepted',
+      'topUpStarted',
+      'voucherAccepted',
+    ],
+    toppingUp: ['challengeReceived', 'activated', 'receiptAccepted', 'voucherAccepted'],
+    settling: ['challengeReceived', 'activated', 'receiptAccepted', 'settled'],
+    closeRequested: [
+      'challengeReceived',
+      'activated',
+      'receiptAccepted',
+      'withdrawable',
+      'closeStarted',
+    ],
+    withdrawable: ['challengeReceived', 'activated', 'receiptAccepted', 'closeStarted', 'closed'],
     closing: ['closed'],
     closed: [],
   } satisfies Record<SessionState['status'], readonly SessionEvent['type'][]>

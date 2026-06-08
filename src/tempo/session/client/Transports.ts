@@ -17,6 +17,7 @@ import {
   type SessionReceipt,
 } from '../precompile/Protocol.js'
 import * as Ws from '../precompile/Protocol.js'
+import type { SessionSnapshot } from '../Snapshot.js'
 import type { ChannelEntry } from './ChannelOps.js'
 import type { SessionContext } from './CredentialState.js'
 import {
@@ -25,7 +26,6 @@ import {
   isExpectedCloseReceipt,
   parseManagerAmount,
   type CloseTarget,
-  type SessionSnapshot,
   type SessionState,
 } from './Runtime.js'
 

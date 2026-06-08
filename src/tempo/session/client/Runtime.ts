@@ -1,7 +1,5 @@
 import { parseUnits, type Hex } from 'viem'
 
-import * as HeaderCodec from '../../../internal/HeaderCodec.js'
-import * as z from '../../../zod.js'
 import type {
   ChannelDescriptor,
   NeedVoucherEvent,
@@ -10,56 +8,14 @@ import type {
   SessionReceipt,
 } from '../precompile/Protocol.js'
 import * as Ws from '../precompile/Protocol.js'
+import type { SessionSnapshot } from '../Snapshot.js'
 import type { ChannelEntry } from './ChannelOps.js'
 import type { SessionContext } from './CredentialState.js'
 import type { TempoSessionChallenge } from './Transports.js'
 import type { ActiveSocketSession } from './Transports.js'
 
-/** Server-provided reusable channel state used to bootstrap a client session. */
-export type SessionSnapshot = {
-  /** Highest cumulative voucher amount the server has accepted for this channel. */
-  acceptedCumulative: RawAmountString
-  /** TIP-1034 channel ID derived from descriptor, escrow address, and chain ID. */
-  channelId: Hex
-  /** Timestamp when unilateral close was requested, when the channel is closing. */
-  closeRequestedAt?: RawAmountString | undefined
-  /** Current on-chain deposit ceiling for cumulative voucher authorization. */
-  deposit: RawAmountString
-  /** Full descriptor needed to recover the channel without client-side persistence. */
-  descriptor: ChannelDescriptor
-  /** Minimum cumulative authorization needed for the challenged request or stream continuation. */
-  requiredCumulative: RawAmountString
-  /** Amount already settled on-chain. */
-  settled: RawAmountString
-  /** Amount consumed by delivered content according to server accounting. */
-  spent: RawAmountString
-  /** Paid units delivered by the server, when the transport reports them. */
-  units?: number | undefined
-}
-
-const sessionSnapshotSchema = z.object({
-  acceptedCumulative: z.string(),
-  channelId: z.string(),
-  closeRequestedAt: z.optional(z.string()),
-  deposit: z.string(),
-  descriptor: z.custom<ChannelDescriptor>(),
-  requiredCumulative: z.string(),
-  settled: z.string(),
-  spent: z.string(),
-  units: z.optional(z.number()),
-})
-
-const sessionSnapshotHeader = HeaderCodec.createJson(sessionSnapshotSchema)
-
-/** Serializes a session snapshot for the `Payment-Session-Snapshot` header. */
-export function serializeSnapshot(snapshot: SessionSnapshot): string {
-  return sessionSnapshotHeader.encode(snapshot)
-}
-
-/** Deserializes a session snapshot from the `Payment-Session-Snapshot` header. */
-export function deserializeSnapshot(value: string): SessionSnapshot {
-  return sessionSnapshotHeader.decode(value) as SessionSnapshot
-}
+export { deserializeSnapshot, serializeSnapshot } from '../Snapshot.js'
+export type { SessionSnapshot } from '../Snapshot.js'
 
 /** Initial manager state before a session challenge is observed. */
 export type IdleSessionState = { status: 'idle' }
@@ -171,7 +127,15 @@ export type NeedVoucherSessionState = VoucherNeededSessionState | ToppingUpSessi
 
 /** Events accepted by the pure session reducer. */
 export type SessionEvent =
+  | { type: 'challengeReceived'; challengeId: string }
   | { type: 'challenge'; challengeId: string; snapshot?: SessionSnapshot | undefined }
+  | {
+      type: 'activated'
+      challengeId: string
+      entry: ChannelEntry
+      spent: RawAmountString
+      units?: number | undefined
+    }
   | {
       type: 'opened'
       receipt: SessionReceipt
@@ -179,6 +143,7 @@ export type SessionEvent =
       deposit: RawAmountString
     }
   | { type: 'hydrated'; snapshot: SessionSnapshot }
+  | { type: 'receiptAccepted'; receipt: SessionReceipt; entry: ChannelEntry }
   | { type: 'needVoucher'; event: NeedVoucherEvent; descriptor: ChannelDescriptor }
   | { type: 'topUpStarted' }
   | { type: 'voucherAccepted'; receipt: SessionReceipt; deposit?: string | undefined }
@@ -242,6 +207,12 @@ export function createActiveState(parameters: CreateActiveStateParameters): Acti
 /** Applies a state-machine event and returns the next state plus requested effects. */
 export function reduce(state: SessionState, event: SessionEvent): SessionTransition {
   switch (event.type) {
+    case 'challengeReceived':
+      if (state.status === 'closing' || state.status === 'closed') return invalid(state, event)
+      return {
+        state: { status: 'challenged', challengeId: event.challengeId },
+        effects: [],
+      }
     case 'challenge': {
       if (state.status !== 'idle' && state.status !== 'active') return invalid(state, event)
       if (event.snapshot) {
@@ -261,10 +232,27 @@ export function reduce(state: SessionState, event: SessionEvent): SessionTransit
         state: activeFromSnapshot(state.challengeId, event.snapshot),
         effects: [],
       }
+    case 'activated':
+      if (state.status === 'closing' || state.status === 'closed') return invalid(state, event)
+      return {
+        state: activeStateFromChannel({
+          challengeId: event.challengeId,
+          entry: event.entry,
+          spent: event.spent,
+          units: event.units ?? 0,
+        }),
+        effects: [],
+      }
     case 'opened':
       if (state.status !== 'opening') return invalid(state, event)
       return {
         state: activeFromReceipt(state.challengeId, event.receipt, event.descriptor, event.deposit),
+        effects: [],
+      }
+    case 'receiptAccepted':
+      if (state.status === 'closing' || state.status === 'closed') return invalid(state, event)
+      return {
+        state: activeStateFromReceipt(event.receipt, event.entry),
         effects: [],
       }
     case 'needVoucher': {
@@ -338,7 +326,12 @@ export function reduce(state: SessionState, event: SessionEvent): SessionTransit
         effects: [{ type: 'withdraw', channelId: state.channelId }],
       }
     case 'closeStarted':
-      if (state.status !== 'active' && state.status !== 'withdrawable') return invalid(state, event)
+      if (
+        state.status !== 'active' &&
+        state.status !== 'withdrawable' &&
+        state.status !== 'closeRequested'
+      )
+        return invalid(state, event)
       return {
         state: { status: 'closing', channelId: state.channelId, descriptor: state.descriptor },
         effects: [{ type: 'close', channelId: state.channelId }],
@@ -351,6 +344,16 @@ export function reduce(state: SessionState, event: SessionEvent): SessionTransit
         effects: [],
       }
   }
+}
+
+/** Applies a reducer event to mutable manager runtime state. */
+export function dispatchSessionEvent(
+  runtime: Pick<SessionManagerRuntime, 'state'>,
+  event: SessionEvent,
+): SessionTransition {
+  const transition = reduce(runtime.state, event)
+  runtime.state = transition.state
+  return transition
 }
 
 /** Decides whether a need-voucher event can be answered by voucher or requires top-up first. */
@@ -776,7 +779,11 @@ export function applySessionReceiptToRuntime(
     spent: runtime.spent,
   })
   if (receipt && runtime.channel?.channelId === receipt.channelId) {
-    runtime.state = activeStateFromReceipt(receipt, runtime.channel)
+    dispatchSessionEvent(runtime, {
+      type: 'receiptAccepted',
+      receipt,
+      entry: runtime.channel,
+    })
   }
 }
 
@@ -853,17 +860,18 @@ export function computeFallbackCloseAmount(parameters: FallbackCloseAmountParame
  */
 export function restoreCumulativeAuthorization(
   parameters: RestoreCumulativeAuthorizationParameters,
-): SessionState | undefined {
+): ActiveSessionState | undefined {
   const { channel, channelId, challengeId, cumulativeAmount, spent, state } = parameters
   if (!channel || channel.channelId !== channelId) return undefined
   channel.cumulativeAmount = cumulativeAmount
   if (!challengeId) return undefined
-  return activeStateFromChannel({
+  return reduce(state, {
+    type: 'activated',
     challengeId,
     entry: channel,
     spent: spent.toString(),
     units: state.status === 'active' ? state.units : 0,
-  })
+  }).state as ActiveSessionState
 }
 
 /** Captures mutable session runtime fields before an optimistic manager action. */

@@ -291,9 +291,11 @@ describe('Session', () => {
               headers: {
                 [Constants.Headers.paymentSessionSnapshot]: sessionManager.serializeSnapshot({
                   acceptedCumulative: '1000000',
+                  chainId: 4217,
                   channelId: storedChannelId,
                   deposit: '10000000',
                   descriptor: storedDescriptor,
+                  escrow: tip20ChannelEscrow,
                   requiredCumulative: '1000000',
                   settled: '0',
                   spent: '0',
@@ -572,9 +574,11 @@ describe('Session', () => {
                   chainId: 4217,
                   sessionSnapshot: {
                     acceptedCumulative: '2000000',
+                    chainId: 4217,
                     channelId: payload.channelId,
                     deposit: '1000000',
                     descriptor: payload.descriptor,
+                    escrow: tip20ChannelEscrow,
                     requiredCumulative: '2000000',
                     settled: '0',
                     spent: '1000000',

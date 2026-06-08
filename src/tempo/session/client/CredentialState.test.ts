@@ -7,6 +7,7 @@ import * as Constants from '../../../Constants.js'
 import type * as z from '../../../zod.js'
 import * as Channel from '../precompile/Channel.js'
 import { tip20ChannelEscrow, type SessionCredentialPayload } from '../precompile/Protocol.js'
+import type { SessionSnapshot } from '../Snapshot.js'
 import type { ChannelEntry } from './ChannelOps.js'
 import {
   channelKey,
@@ -28,7 +29,6 @@ import {
   type ChallengeContext,
   type SessionContext,
 } from './CredentialState.js'
-import type { SessionSnapshot } from './Runtime.js'
 
 describe('ChannelCache', () => {
   const channelId = `0x${'11'.repeat(32)}` as Hex
@@ -287,9 +287,11 @@ describe('CredentialPlan', () => {
   function snapshot(overrides: Partial<SessionSnapshot> = {}): SessionSnapshot {
     return {
       acceptedCumulative: '10',
+      chainId: 42431,
       channelId: snapshotChannelId,
       deposit: '20',
       descriptor: snapshotDescriptor,
+      escrow,
       requiredCumulative: '10',
       settled: '0',
       spent: '0',

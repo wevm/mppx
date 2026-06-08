@@ -11,9 +11,9 @@ import {
   isSessionContentRequest,
   type RequestBodyProbe,
 } from '../../server/internal/request-body.js'
-import type { SessionSnapshot } from '../client/Runtime.js'
 import type * as PrecompileChain from '../precompile/Chain.js'
 import { tip20ChannelEscrow, type SessionCredentialPayload } from '../precompile/Protocol.js'
+import type { SessionSnapshot } from '../Snapshot.js'
 import * as ChannelStore from './ChannelStore.js'
 import { requireSessionCredentialAction } from './CredentialVerification.js'
 import {
@@ -125,11 +125,13 @@ export async function resolveSessionSnapshot(
       : requiredCumulative
   return {
     acceptedCumulative: acceptedCumulative.toString(),
+    chainId: channel.chainId,
     channelId: channel.channelId,
     closeRequestedAt:
       channel.closeRequestedAt === 0n ? undefined : channel.closeRequestedAt.toString(),
     deposit: channel.deposit.toString(),
     descriptor: channel.descriptor,
+    escrow: channel.escrowContract,
     requiredCumulative: requiredCumulative.toString(),
     settled: channel.settledOnChain.toString(),
     spent: channel.spent.toString(),

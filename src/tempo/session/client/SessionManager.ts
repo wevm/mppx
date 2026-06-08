@@ -10,26 +10,23 @@ import { charge as chargePlugin } from '../../client/Charge.js'
 import type { ChannelEntry } from '../client/ChannelOps.js'
 import type { SessionContext } from '../client/CredentialState.js'
 import { session as sessionPlugin } from '../client/Session.js'
-import { tip20ChannelEscrow } from '../precompile/Protocol.js'
 import type { ChannelDescriptor } from '../precompile/Protocol.js'
 import { deserializeSessionReceipt } from '../precompile/Protocol.js'
 import { readSessionChallengeAmount, type SessionReceipt } from '../precompile/Protocol.js'
-import { createSessionReceiptCoordinator } from './ReceiptCoordinator.js'
 import {
   deserializeSnapshot as deserializeSessionSnapshot,
   serializeSnapshot as serializeSessionSnapshot,
-  resolveCloseTarget,
-  type CloseTarget,
-} from './Runtime.js'
+} from '../Snapshot.js'
+import { createSessionReceiptCoordinator } from './ReceiptCoordinator.js'
+import { resolveCloseTarget, type CloseTarget } from './Runtime.js'
 import { assertVoucherWithinLocalLimit as assertVoucherWithinLocalAuthorization } from './Runtime.js'
 import type { SessionState } from './Runtime.js'
 import {
-  activeStateFromChannel,
   applySessionReceiptToRuntime,
   captureRuntimeSnapshot as captureRuntimeStateSnapshot,
-  closedStateFromReceipt,
   computeFallbackCloseAmount,
   createSessionManagerRuntime,
+  dispatchSessionEvent,
   restoreCumulativeAuthorization,
   restoreRuntimeSnapshot as restoreRuntimeStateSnapshot,
   type RuntimeSnapshot,
@@ -170,21 +167,44 @@ function storedChannelContext(channel: StoredSessionChannel): SessionContext {
   }
 }
 
-function storedChannelFromSnapshot(parameters: {
-  chainId: number
-  escrow: Address
-  snapshot: ReturnType<typeof deserializeSessionSnapshot>
-}): StoredSessionChannel {
-  const { chainId, escrow, snapshot } = parameters
+function storedChannelFromSnapshot(
+  snapshot: ReturnType<typeof deserializeSessionSnapshot>,
+): StoredSessionChannel {
   return {
     channelId: snapshot.channelId,
     cumulativeAmount: snapshot.acceptedCumulative,
     deposit: snapshot.deposit,
     descriptor: snapshot.descriptor,
-    escrow,
-    chainId,
+    escrow: snapshot.escrow,
+    chainId: snapshot.chainId,
     opened: true,
     updatedAt: Date.now(),
+  }
+}
+
+type CredentialContextResolution = {
+  context: SessionContext
+  usedStoredChannel: boolean
+}
+
+function resolveCredentialContext(parameters: {
+  channel: ChannelEntry | null
+  challenge: TempoSessionChallenge
+  context: SessionContext
+  storedChannel: StoredSessionChannel | null
+}): CredentialContextResolution {
+  const { channel, challenge, context, storedChannel } = parameters
+  if (
+    context.action ||
+    channel?.opened ||
+    !storedChannel?.opened ||
+    getSessionSnapshot(challenge)
+  ) {
+    return { context, usedStoredChannel: false }
+  }
+  return {
+    context: { ...context, ...storedChannelContext(storedChannel) },
+    usedStoredChannel: true,
   }
 }
 
@@ -256,6 +276,10 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
     getSocketSession: () => runtime.socketSession,
   })
 
+  function dispatch(event: Parameters<typeof dispatchSessionEvent>[1]) {
+    return dispatchSessionEvent(runtime, event)
+  }
+
   const method = sessionPlugin({
     account: parameters.account,
     authorizedSigner: parameters.authorizedSigner,
@@ -268,7 +292,8 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
       runtime.channel = entry
       persistStoredChannel(entry)
       if (runtime.lastChallenge) {
-        runtime.state = activeStateFromChannel({
+        dispatch({
+          type: 'activated',
           challengeId: runtime.lastChallenge.id,
           entry,
           spent: runtime.spent.toString(),
@@ -288,7 +313,7 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
     onChallenge: async (challenge, _helpers) => {
       if (!isTempoSessionChallenge(challenge)) return undefined
       runtime.lastChallenge = challenge
-      runtime.state = { status: 'challenged', challengeId: challenge.id }
+      dispatch({ type: 'challengeReceived', challengeId: challenge.id })
       if (runtime.channel?.opened && runtime.lastUrl) {
         const requiredCumulative =
           runtime.channel.cumulativeAmount + readSessionChallengeAmount(challenge)
@@ -300,23 +325,27 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
           requiredCumulative,
         })
       }
-      if (!runtime.channel?.opened && storedChannel?.opened && !getSessionSnapshot(challenge)) {
-        return _helpers.createCredential(storedChannelContext(storedChannel))
-      }
+      const resolved = resolveCredentialContext({
+        challenge,
+        channel: runtime.channel,
+        context: {},
+        storedChannel,
+      })
+      if (resolved.usedStoredChannel) return _helpers.createCredential(resolved.context)
       return undefined
     },
   })
 
   function createSessionCredential(challenge: TempoSessionChallenge, context: SessionContext) {
-    const stored = storedChannel
-    const shouldUseStoredChannel =
-      !context.action &&
-      !runtime.channel?.opened &&
-      stored?.opened &&
-      !getSessionSnapshot(challenge)
+    const resolved = resolveCredentialContext({
+      challenge,
+      channel: runtime.channel,
+      context,
+      storedChannel,
+    })
     return method.createCredential({
       challenge,
-      context: shouldUseStoredChannel ? { ...context, ...storedChannelContext(stored) } : context,
+      context: resolved.context,
     })
   }
 
@@ -325,6 +354,25 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
       maxVoucherCumulative: config.maxVoucherCumulative,
       receipt,
       runtime,
+    })
+  }
+
+  function activateCurrentChannel(
+    units = runtime.state.status === 'active' ? runtime.state.units : 0,
+  ) {
+    if (!runtime.channel || !runtime.lastChallenge) return
+    if (
+      runtime.state.status === 'active' ||
+      runtime.state.status === 'withdrawable' ||
+      runtime.state.status === 'closeRequested'
+    )
+      return
+    dispatch({
+      type: 'activated',
+      challengeId: runtime.lastChallenge.id,
+      entry: runtime.channel,
+      spent: runtime.spent.toString(),
+      units,
     })
   }
 
@@ -358,12 +406,6 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
     }
   }
 
-  async function resolveSnapshotChainId() {
-    if (parameters.client?.chain?.id !== undefined) return parameters.client.chain.id
-    if (!parameters.getClient) return undefined
-    return (await parameters.getClient({})).chain?.id
-  }
-
   function hydrateStoredChannel(channel: StoredSessionChannel) {
     storedChannel = channel
     runtime.channel = {
@@ -375,7 +417,8 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
       chainId: channel.chainId,
       opened: channel.opened,
     }
-    runtime.state = activeStateFromChannel({
+    dispatch({
+      type: 'activated',
       challengeId: runtime.lastChallenge?.id ?? 'bootstrap',
       entry: runtime.channel,
       spent: '0',
@@ -389,15 +432,7 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
     if (!header) return
     const snapshot = deserializeSessionSnapshot(header)
     bootstrapChannelId = snapshot.channelId
-    const chainId = await resolveSnapshotChainId()
-    if (chainId === undefined) return
-    hydrateStoredChannel(
-      storedChannelFromSnapshot({
-        chainId,
-        escrow: parameters.escrow ?? tip20ChannelEscrow,
-        snapshot,
-      }),
-    )
+    hydrateStoredChannel(storedChannelFromSnapshot(snapshot))
   }
 
   async function bootstrapSession(input: RequestInfo | URL, init?: RequestInit | undefined) {
@@ -507,7 +542,15 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
       receipt,
       spent: runtime.spent,
     })
-    if (applied?.state) runtime.state = applied.state
+    if (applied?.channel && runtime.lastChallenge) {
+      dispatch({
+        type: 'activated',
+        challengeId: runtime.lastChallenge.id,
+        entry: applied.channel,
+        spent: runtime.spent.toString(),
+        units: runtime.state.status === 'active' ? runtime.state.units : 0,
+      })
+    }
     return receipt
   }
 
@@ -531,7 +574,15 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
       spent: runtime.spent,
       state: runtime.state,
     })
-    if (restored) runtime.state = restored
+    if (restored && runtime.channel) {
+      dispatch({
+        type: 'activated',
+        challengeId: restored.challengeId,
+        entry: runtime.channel,
+        spent: restored.spent,
+        units: restored.units,
+      })
+    }
   }
 
   function restoreRuntime(snapshot: RuntimeSnapshot) {
@@ -633,7 +684,9 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
       target,
     })
     if (receipt) {
-      runtime.state = closedStateFromReceipt(receipt, target.channel)
+      activateCurrentChannel()
+      dispatch({ type: 'closeStarted' })
+      dispatch({ type: 'closed', receipt })
     }
 
     return receipt
@@ -758,7 +811,9 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
           waitForCloseReady: receipts.waitForCloseReady,
           waitForReceipt: receipts.waitForReceipt,
         })
-        runtime.state = closedStateFromReceipt(receipt, target.channel)
+        activateCurrentChannel()
+        dispatch({ type: 'closeStarted' })
+        dispatch({ type: 'closed', receipt })
         return receipt
       }
 
