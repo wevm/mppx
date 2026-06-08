@@ -51,7 +51,7 @@ export function session(parameters: session.Parameters = {}) {
         Constants.getMethodDetail(
           challenge.request.methodDetails,
           Constants.MethodDetailKeys.sessionProtocol,
-        ) === Constants.SessionProtocols.tip1034
+        ) === Constants.SessionProtocols.v2
       )
     },
     context: sessionContextSchema,

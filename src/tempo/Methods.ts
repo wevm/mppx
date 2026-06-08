@@ -246,7 +246,9 @@ export const session = Method.from({
           minVoucherDelta: z.optional(z.amount()),
           operator: z.optional(z.address()),
           recipient: z.optional(z.string()),
-          sessionProtocol: z.optional(z.enum(['tip1034', 'legacy'])),
+          sessionProtocol: z.optional(
+            z.enum([Constants.SessionProtocols.v2, Constants.SessionProtocols.v1]),
+          ),
           sessionSnapshot: z.optional(z.custom<SessionSnapshot>()),
           suggestedDeposit: z.optional(z.amount()),
           unitType: z.string(),

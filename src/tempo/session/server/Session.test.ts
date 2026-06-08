@@ -467,7 +467,7 @@ describe('precompile server session unit guardrails', () => {
       },
     } as never)
 
-    expect(challengeRequest.sessionProtocol).toBe(Constants.SessionProtocols.tip1034)
+    expect(challengeRequest.sessionProtocol).toBe(Constants.SessionProtocols.v2)
   })
 
   test('request normalizes fee-payer to boolean for challenge issuance and account for verification', async () => {

@@ -1876,14 +1876,14 @@ describe('compose', () => {
 
   const tip1034SessionMethod = Method.toServer(mockSession, {
     async verify() {
-      return mockReceipt('tip1034')
+      return mockReceipt('v2')
     },
   })
 
   const legacySessionMethod = Method.toServer(mockSession, {
     alias: 'sessionLegacy',
     async verify() {
-      return mockReceipt('legacy')
+      return mockReceipt('v1')
     },
   })
 
@@ -1922,13 +1922,13 @@ describe('compose', () => {
     amount: '100',
     currency: asset,
     expires: new Date(Date.now() + 60_000),
-    methodDetails: { sessionProtocol: 'tip1034' },
+    methodDetails: { sessionProtocol: 'v2' },
     unitType: 'request',
   }
 
   const legacySessionChallengeOpts = {
     ...sessionChallengeOpts,
-    methodDetails: { sessionProtocol: 'legacy' },
+    methodDetails: { sessionProtocol: 'v1' },
   }
 
   test('returns 402 with multiple WWW-Authenticate headers when no credential', async () => {
@@ -1964,8 +1964,8 @@ describe('compose', () => {
 
     const challenges = Challenge.fromResponseList(result.challenge)
     expect(challenges.map((challenge) => challenge.request.methodDetails)).toEqual([
-      { sessionProtocol: 'tip1034' },
-      { sessionProtocol: 'legacy' },
+      { sessionProtocol: 'v2' },
+      { sessionProtocol: 'v1' },
     ])
   })
 
@@ -2039,8 +2039,8 @@ describe('compose', () => {
       }),
     )
 
-    expect(tip1034Receipt.reference).toBe('tx-tip1034')
-    expect(legacyReceipt.reference).toBe('tx-legacy')
+    expect(tip1034Receipt.reference).toBe('tx-v2')
+    expect(legacyReceipt.reference).toBe('tx-v1')
   })
 
   test('returns composed x402 challenge headers when no credential', async () => {

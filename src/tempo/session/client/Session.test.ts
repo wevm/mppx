@@ -107,7 +107,7 @@ describe('precompile client session', () => {
           methodDetails: {
             chainId,
             escrowContract: tip20ChannelEscrow,
-            sessionProtocol: Constants.SessionProtocols.tip1034,
+            sessionProtocol: Constants.SessionProtocols.v2,
           },
         }),
       }),
@@ -119,7 +119,7 @@ describe('precompile client session', () => {
           methodDetails: {
             chainId,
             escrowContract: tip20ChannelEscrow,
-            sessionProtocol: Constants.SessionProtocols.legacy,
+            sessionProtocol: Constants.SessionProtocols.v1,
           },
         }),
       }),

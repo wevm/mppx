@@ -87,7 +87,7 @@ function makeChallenge(overrides: Record<string, unknown> = {}): Challenge.Chall
       methodDetails: {
         escrowContract: tip20ChannelEscrow,
         chainId: 4217,
-        sessionProtocol: Constants.SessionProtocols.tip1034,
+        sessionProtocol: Constants.SessionProtocols.v2,
       },
       ...overrides,
     },
