@@ -32,6 +32,7 @@ import {
   printResponseHeaders,
   prompt,
   resolveChain,
+  resolveFundingNetwork,
   resolveRpcUrl,
 } from './utils.js'
 
@@ -704,8 +705,9 @@ const account = Cli.create('account', {
       const addrDisplay = explorerUrl
         ? link(`${explorerUrl}/address/${acct.address}`, acct.address)
         : acct.address
-      const rpcUrl = resolveRpcUrl(c.options.rpcUrl, { network: c.options.network })
-      resolveChain({ network: c.options.network, rpcUrl })
+      const fundingNetwork = resolveFundingNetwork(c.options)
+      const rpcUrl = resolveRpcUrl(c.options.rpcUrl, { network: fundingNetwork })
+      resolveChain({ network: fundingNetwork, rpcUrl })
         .then((chain) => createClient({ chain, transport: http(rpcUrl) }))
         .then((client) =>
           import('viem/tempo').then(({ Actions }) =>
@@ -715,6 +717,11 @@ const account = Cli.create('account', {
       return outputResult(c, { address: acct.address, name: resolvedName }, () => {
         console.log(`Account "${resolvedName}" saved to keychain.`)
         console.log(pc.dim(`Address ${addrDisplay}`))
+        console.log(
+          pc.dim(
+            `Fund testnet tokens: mppx account fund --account ${resolvedName} --network testnet`,
+          ),
+        )
       })
     },
   })
@@ -840,8 +847,9 @@ const account = Cli.create('account', {
           return c.error({ code: 'ACCOUNT_NOT_FOUND', message: 'No account found.', exitCode: 69 })
       }
       const acct = privateKeyToAccount(key as `0x${string}`)
-      const rpcUrl = resolveRpcUrl(c.options.rpcUrl, { network: c.options.network })
-      const chain = await resolveChain({ network: c.options.network, rpcUrl })
+      const fundingNetwork = resolveFundingNetwork(c.options)
+      const rpcUrl = resolveRpcUrl(c.options.rpcUrl, { network: fundingNetwork })
+      const chain = await resolveChain({ network: fundingNetwork, rpcUrl })
       const client = createClient({ chain, transport: http(rpcUrl) })
       if (!structured) console.log(`Funding "${accountName}" on ${chainName(chain)}`)
       try {
@@ -864,14 +872,18 @@ const account = Cli.create('account', {
           },
         )
       } catch (err) {
+        const message = err instanceof Error ? err.message : String(err)
         if (structured)
           return c.error({
             code: 'FUNDING_FAILED',
-            message: err instanceof Error ? err.message : String(err),
+            message,
             exitCode: 1,
           })
-        console.error('Funding failed:', err instanceof Error ? err.message : err)
-        return undefined as never
+        return c.error({
+          code: 'FUNDING_FAILED',
+          message: `Funding failed: ${message}`,
+          exitCode: 1,
+        })
       }
     },
   })

@@ -1,7 +1,7 @@
 import { tempo as tempoMainnet, tempoModerato } from 'viem/tempo/chains'
 import { afterEach, describe, expect, test } from 'vp/test'
 
-import { networkRpcUrls, resolveChain, resolveRpcUrl } from './utils.js'
+import { networkRpcUrls, resolveChain, resolveFundingNetwork, resolveRpcUrl } from './utils.js'
 
 describe('resolveRpcUrl', () => {
   afterEach(() => {
@@ -49,6 +49,30 @@ describe('resolveRpcUrl', () => {
     process.env.MPPX_RPC_URL = '  '
     process.env.RPC_URL = 'https://rpc.example.com'
     expect(resolveRpcUrl()).toBe('https://rpc.example.com')
+  })
+})
+
+describe('resolveFundingNetwork', () => {
+  afterEach(() => {
+    delete process.env.MPPX_RPC_URL
+    delete process.env.RPC_URL
+  })
+
+  test('defaults faucet funding to testnet', () => {
+    expect(resolveFundingNetwork()).toBe('testnet')
+  })
+
+  test('keeps explicit network selection', () => {
+    expect(resolveFundingNetwork({ network: 'mainnet' })).toBe('mainnet')
+  })
+
+  test('does not override explicit rpc url', () => {
+    expect(resolveFundingNetwork({ rpcUrl: 'https://explicit.example.com' })).toBeUndefined()
+  })
+
+  test('does not override env rpc urls', () => {
+    process.env.MPPX_RPC_URL = 'https://env.example.com'
+    expect(resolveFundingNetwork()).toBeUndefined()
   })
 })
 
