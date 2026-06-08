@@ -237,6 +237,30 @@ importers:
         specifier: latest
         version: 8.0.16(@types/node@25.9.2)(esbuild@0.28.0)(tsx@4.22.4)(yaml@2.9.0)
 
+  examples/session/playground:
+    dependencies:
+      '@remix-run/node-fetch-server':
+        specifier: latest
+        version: 0.13.3
+      '@types/node':
+        specifier: latest
+        version: 25.9.2
+      '@typescript/native-preview':
+        specifier: latest
+        version: 7.0.0-dev.20260607.1
+      mppx:
+        specifier: workspace:*
+        version: link:../../..
+      typescript:
+        specifier: ~5.9.3
+        version: 5.9.3
+      viem:
+        specifier: ^2.51.3
+        version: 2.51.3(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.4.3)
+      vite:
+        specifier: latest
+        version: 8.0.16(@types/node@25.9.2)(esbuild@0.28.0)(tsx@4.22.4)(yaml@2.9.0)
+
   examples/session/sse:
     dependencies:
       '@remix-run/node-fetch-server':
