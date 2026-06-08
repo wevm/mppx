@@ -292,6 +292,7 @@ describe('ResponseGate', () => {
 
 describe('SessionSnapshotHints', () => {
   const channelId = `0x${'aa'.repeat(32)}` as Hex
+  const escrowContract = '0x4D50500000000000000000000000000000000000' as Address
   const descriptor = {
     authorizedSigner: '0x0000000000000000000000000000000000000001',
     expiringNonceHash: `0x${'11'.repeat(32)}`,
@@ -312,7 +313,7 @@ describe('SessionSnapshotHints', () => {
       createdAt: new Date(0).toISOString(),
       deposit: 1_000n,
       descriptor,
-      escrowContract: '0x4D50500000000000000000000000000000000000' as Address,
+      escrowContract,
       expiringNonceHash: descriptor.expiringNonceHash,
       finalized: false,
       highestVoucher: null,
@@ -422,10 +423,12 @@ describe('SessionSnapshotHints', () => {
         resolveSessionSnapshot({ amount: 50n, channelId, store: store(channel()) }),
       ).resolves.toEqual({
         acceptedCumulative: '500',
+        chainId: 4217,
         channelId,
         closeRequestedAt: undefined,
         deposit: '1000',
         descriptor,
+        escrow: escrowContract,
         requiredCumulative: '350',
         settled: '100',
         spent: '300',

@@ -28,7 +28,7 @@ import * as Transport from '../../server/internal/transport.js'
 import {
   deserializeSnapshot as deserializeSessionSnapshot,
   serializeSnapshot as serializeSessionSnapshot,
-} from '../client/Runtime.js'
+} from '../Snapshot.js'
 import * as ChannelStore from './ChannelStore.js'
 import { verifyCredentialPayload } from './CredentialVerification.js'
 import { requireSessionCredentialPayload } from './CredentialVerification.js'

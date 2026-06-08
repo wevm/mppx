@@ -554,9 +554,12 @@ describe('precompile server session unit guardrails', () => {
 
     expect(request.sessionSnapshot).toEqual({
       acceptedCumulative: '250',
+      chainId,
       channelId: openPayload.channelId,
+      closeRequestedAt: undefined,
       deposit: '1000',
       descriptor: openPayload.descriptor,
+      escrow: tip20ChannelEscrow,
       requiredCumulative: '201',
       settled: '0',
       spent: '200',

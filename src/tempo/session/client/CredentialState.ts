@@ -14,6 +14,7 @@ import * as z from '../../../zod.js'
 import * as Chain from '../precompile/Chain.js'
 import * as Channel from '../precompile/Channel.js'
 import type { SessionCredentialPayload } from '../precompile/Protocol.js'
+import type { SessionSnapshot } from '../Snapshot.js'
 import {
   createClosePayload,
   createOpenPayload,
@@ -24,7 +25,6 @@ import {
   type ChannelEntry,
 } from './ChannelOps.js'
 import { assertWithinMaxDeposit, resolveOpeningDeposit } from './Runtime.js'
-import type { SessionSnapshot } from './Runtime.js'
 
 /** Credential payload variants that carry cumulative voucher authorization. */
 export type CumulativeCredentialPayload = Extract<
