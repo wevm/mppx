@@ -86,7 +86,7 @@ export function fromNodeListener(
     headers.get('Host') ??
     (req.headers as Record<string, string>)[':authority'] ??
     'localhost'
-  const url = new URL(normalizeRequestTarget(req.url), `${protocol}//${host}`)
+  const url = createRequestUrl(req.url, `${protocol}//${host}`)
 
   const init: RequestInit & { duplex?: string } = {
     method,
@@ -116,17 +116,31 @@ function hasBody(headers: Headers): boolean {
   return (contentLength !== null && contentLength !== '0') || headers.has('transfer-encoding')
 }
 
-function normalizeRequestTarget(url: string | undefined): string {
-  if (!url) return '/'
+/**
+ * Builds the request `URL` from a request target and a trusted origin.
+ *
+ * Only the parsed `pathname`/`search` are copied onto the trusted origin, so
+ * the target's authority can never override the host (protocol-relative,
+ * `///`, backslash, absolute-form, or embedded-authority targets). Components
+ * are copied onto a `URL` object rather than concatenated and re-parsed, since
+ * a normalized path can itself begin with `//` and be read as an authority.
+ */
+function createRequestUrl(target: string | undefined, origin: string): URL {
+  const url = new URL(origin)
+  if (!target) return url
 
+  let parsed: URL
   try {
-    const absoluteUrl = new URL(url)
-    // Absolute-form request targets can carry a different origin than the socket host.
-    // Keep only path+query so realm detection stays bound to Host/:authority.
-    if (absoluteUrl.protocol === 'http:' || absoluteUrl.protocol === 'https:')
-      return `${absoluteUrl.pathname}${absoluteUrl.search}`
-  } catch {}
+    parsed = new URL(target, 'http://mppx.invalid')
+  } catch {
+    throw new TypeError('Invalid request target')
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:')
+    throw new TypeError('Unsupported request target protocol')
 
+  url.pathname = parsed.pathname
+  url.search = parsed.search
+  url.hash = ''
   return url
 }
 

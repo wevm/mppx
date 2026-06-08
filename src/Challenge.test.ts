@@ -454,19 +454,45 @@ describe('serialize', () => {
     expect(header).toContain('expires="2025-01-06T12:00:00Z"')
   })
 
-  test('behavior: escapes quoted-string values', () => {
+  test.each([
+    {
+      description: 'Plain payment description',
+      escaped: 'Plain payment description',
+      label: 'plain values',
+    },
+    {
+      description: 'Pay "premium"',
+      escaped: 'Pay \\"premium\\"',
+      label: 'double quotes',
+    },
+    {
+      description: 'Path C:\\tempo\\api',
+      escaped: 'Path C:\\\\tempo\\\\api',
+      label: 'backslashes',
+    },
+    {
+      description: 'Pay "premium" path C:\\tempo\\api',
+      escaped: 'Pay \\"premium\\" path C:\\\\tempo\\\\api',
+      label: 'mixed quotes and backslashes',
+    },
+    {
+      description: 'Ends with slash \\',
+      escaped: 'Ends with slash \\\\',
+      label: 'trailing backslash',
+    },
+  ])('behavior: escapes quoted-string values: $label', ({ description, escaped }) => {
     const challenge = Challenge.from({
       id: 'abc123',
       realm: 'api.example.com',
       method: 'tempo',
       intent: 'charge',
       request: { amount: '1000000' },
-      description: 'Pay "premium" path C:\\tempo\\api',
+      description,
     })
 
     const header = Challenge.serialize(challenge)
-    expect(header).toContain('description="Pay \\"premium\\" path C:\\\\tempo\\\\api"')
-    expect(Challenge.deserialize(header).description).toBe('Pay "premium" path C:\\tempo\\api')
+    expect(header).toContain(`description="${escaped}"`)
+    expect(Challenge.deserialize(header).description).toBe(description)
   })
 
   test('error: rejects CRLF in quoted-string values', () => {

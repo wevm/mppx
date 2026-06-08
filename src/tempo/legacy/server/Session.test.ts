@@ -486,7 +486,7 @@ describe.runIf(isLocalnet)('session', () => {
           },
           request: makeRequest(),
         }),
-      ).rejects.toThrow('voucher amount is below settled on-chain amount')
+      ).rejects.toThrow('voucher amount is at or below settled on-chain amount')
     })
 
     test('zero signer fallback uses payer', async () => {
@@ -698,27 +698,128 @@ describe.runIf(isLocalnet)('session', () => {
       ).rejects.toThrow(InvalidSignatureError)
     })
 
-    test('rejects non-increasing voucher replay', async () => {
+    test('accepts lower voucher replay idempotently', async () => {
       const { channelId, serializedTransaction } = await createSignedOpenTransaction(10000000n)
       const server = createServer()
       await openServerChannel(server, channelId, serializedTransaction)
 
+      const before = await store.getChannel(channelId)
+
+      // A non-advancing voucher (below highest, above settled) is accepted
+      // idempotently with the current highest amount, per the session spec.
+      const receipt = (await server.verify({
+        credential: {
+          challenge: makeChallenge({ id: 'challenge-2', channelId }),
+          payload: {
+            action: 'voucher' as const,
+            channelId,
+            cumulativeAmount: '500000',
+            signature: await signTestVoucher(channelId, 500000n),
+          },
+        },
+        request: makeRequest(),
+      })) as SessionReceipt
+
+      expect(receipt.status).toBe('success')
+      expect(receipt.acceptedCumulative).toBe('1000000')
+
+      // Channel state is unchanged - no advance, no additional charge.
+      const after = await store.getChannel(channelId)
+      expect(after).toEqual(before)
+    })
+
+    test('accepts lower replay after a higher voucher has advanced the channel', async () => {
+      const { channelId, serializedTransaction } = await createSignedOpenTransaction(10000000n)
+      const server = createServer()
+      await openServerChannel(server, channelId, serializedTransaction)
+
+      // Advance the channel from the opening 1000000 to 5000000.
+      await server.verify({
+        credential: {
+          challenge: makeChallenge({ id: 'challenge-advance', channelId }),
+          payload: {
+            action: 'voucher' as const,
+            channelId,
+            cumulativeAmount: '5000000',
+            signature: await signTestVoucher(channelId, 5000000n),
+          },
+        },
+        request: makeRequest(),
+      })
+
+      const before = await store.getChannel(channelId)
+
+      // A lower (but above-settled) voucher returns the current highest
+      // without rewinding state.
+      const receipt = (await server.verify({
+        credential: {
+          challenge: makeChallenge({ id: 'challenge-lower', channelId }),
+          payload: {
+            action: 'voucher' as const,
+            channelId,
+            cumulativeAmount: '3000000',
+            signature: await signTestVoucher(channelId, 3000000n),
+          },
+        },
+        request: makeRequest(),
+      })) as SessionReceipt
+
+      expect(receipt.status).toBe('success')
+      expect(receipt.acceptedCumulative).toBe('5000000')
+
+      const after = await store.getChannel(channelId)
+      expect(after).toEqual(before)
+    })
+
+    test('accepts lower voucher replay even when below minVoucherDelta', async () => {
+      const { channelId, serializedTransaction } = await createSignedOpenTransaction(10000000n)
+      // Non-advancing replay must short-circuit before the delta check.
+      const server = createServer({ minVoucherDelta: '2' })
+      await openServerChannel(server, channelId, serializedTransaction)
+
+      const before = await store.getChannel(channelId)
+
+      const receipt = (await server.verify({
+        credential: {
+          challenge: makeChallenge({ id: 'challenge-lower-delta', channelId }),
+          payload: {
+            action: 'voucher' as const,
+            channelId,
+            cumulativeAmount: '500000',
+            signature: await signTestVoucher(channelId, 500000n),
+          },
+        },
+        request: makeRequest(),
+      })) as SessionReceipt
+
+      expect(receipt.status).toBe('success')
+      expect(receipt.acceptedCumulative).toBe('1000000')
+
+      const after = await store.getChannel(channelId)
+      expect(after).toEqual(before)
+    })
+
+    test('rejects lower voucher replay signed by the wrong signer', async () => {
+      const { channelId, serializedTransaction } = await createSignedOpenTransaction(10000000n)
+      const server = createServer()
+      await openServerChannel(server, channelId, serializedTransaction)
+
+      // A valid signature from a different account must NOT be treated as an
+      // idempotent replay.
       await expect(
         server.verify({
           credential: {
-            challenge: makeChallenge({ id: 'challenge-2', channelId }),
+            challenge: makeChallenge({ id: 'challenge-wrong-signer', channelId }),
             payload: {
               action: 'voucher' as const,
               channelId,
               cumulativeAmount: '500000',
-              signature: await signTestVoucher(channelId, 500000n),
+              signature: await signTestVoucher(channelId, 500000n, accounts[3]),
             },
           },
           request: makeRequest(),
         }),
-      ).rejects.toThrow(
-        'voucher cumulativeAmount must be strictly greater than highest accepted voucher',
-      )
+      ).rejects.toThrow(InvalidSignatureError)
     })
 
     test('rejects replay of settled voucher', async () => {
@@ -743,7 +844,7 @@ describe.runIf(isLocalnet)('session', () => {
           },
           request: makeRequest(),
         }),
-      ).rejects.toThrow('voucher cumulativeAmount is below on-chain settled amount')
+      ).rejects.toThrow('voucher cumulativeAmount is at or below on-chain settled amount')
     })
 
     test('rejects voucher exceeding deposit', async () => {
@@ -820,17 +921,15 @@ describe.runIf(isLocalnet)('session', () => {
             payload: {
               action: 'voucher' as const,
               channelId,
-              // Attacker submits cumulativeAmount=500000, which is <= highestVoucherAmount (1000000)
-              // but > settled (0). Rejected by non-increasing cumulative amount check before signature validation.
+              // Forged signature for a non-advancing amount (500000 <= highest
+              // 1000000, > settled 0). Rejected by signature verification.
               cumulativeAmount: '500000',
               signature: `0x${'ab'.repeat(65)}` as Hex,
             },
           },
           request: makeRequest(),
         }),
-      ).rejects.toThrow(
-        'voucher cumulativeAmount must be strictly greater than highest accepted voucher',
-      )
+      ).rejects.toThrow('invalid voucher signature')
     })
 
     test('rejects forged voucher with valid amount but invalid signature', async () => {
@@ -967,7 +1066,7 @@ describe.runIf(isLocalnet)('session', () => {
           },
           request: makeRequest(),
         }),
-      ).rejects.toThrow('voucher cumulativeAmount is below on-chain settled amount')
+      ).rejects.toThrow('voucher cumulativeAmount is at or below on-chain settled amount')
     })
 
     test('rejects leaked voucher used in open action with mismatched channel', async () => {
@@ -2510,7 +2609,7 @@ describe.runIf(isLocalnet)('session', () => {
           },
           request: makeRequest(),
         }),
-      ).rejects.toThrow('voucher cumulativeAmount is below on-chain settled amount')
+      ).rejects.toThrow('voucher cumulativeAmount is at or below on-chain settled amount')
     })
 
     test('close after recovery respects on-chain settled as minimum', async () => {
@@ -4385,7 +4484,7 @@ describe.runIf(isLocalnet)('session', () => {
         if (result.status === 402) return result.challenge
 
         if (action === 'voucher') {
-          return new Response(null, { status: 200 })
+          return result.withReceipt()
         }
 
         if (request.headers.get('Accept')?.includes('text/event-stream')) {
@@ -4463,7 +4562,7 @@ describe.runIf(isLocalnet)('session', () => {
         if (result.status === 402) return result.challenge
 
         if (action === 'voucher') {
-          return new Response(null, { status: 200 })
+          return result.withReceipt()
         }
 
         if (request.headers.get('Accept')?.includes('text/event-stream')) {
@@ -4631,7 +4730,7 @@ describe.runIf(isLocalnet)('session', () => {
         if (result.status === 402) return result.challenge
 
         if (action === 'voucher') {
-          return new Response(null, { status: 200 })
+          return result.withReceipt()
         }
 
         if (request.headers.get('Accept')?.includes('text/event-stream')) {

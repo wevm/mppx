@@ -271,6 +271,80 @@ describe('Session', () => {
   })
 
   describe('.sse() event parsing', () => {
+    test('sends SSE Accept header on voucher POST updates', async () => {
+      vi.resetModules()
+      vi.doMock('viem/actions', () => ({
+        prepareTransactionRequest: vi.fn(async () => ({})),
+        sendCallsSync: vi.fn(),
+        signTransaction: vi.fn(async () => '0xdeadbeef'),
+        signTypedData: vi.fn(),
+      }))
+
+      try {
+        const { sessionManager: sessionManagerWithMocks } = await import('./SessionManager.js')
+        const account = privateKeyToAccount(
+          '0x0000000000000000000000000000000000000000000000000000000000000001',
+        )
+        const voucherSigner = TempoAccount.fromSecp256k1(
+          '0x0000000000000000000000000000000000000000000000000000000000000002',
+          { access: account },
+        )
+        const client = createClient({
+          account,
+          transport: http('http://127.0.0.1'),
+        })
+        const challenge = makeChallenge({
+          recipient: '0x742d35cc6634c0532925a3b844bc9e7595f8fe00',
+          methodDetails: {
+            escrowContract: '0x9d136eea063ede5418a6bc7beaff009bbb6cfa70',
+            chainId: 4217,
+          },
+        })
+        const needVoucher: NeedVoucherEvent = {
+          channelId,
+          requiredCumulative: '2000000',
+          acceptedCumulative: '1000000',
+          deposit: '10000000',
+        }
+        const mockFetch = vi
+          .fn()
+          .mockResolvedValueOnce(make402Response(challenge))
+          .mockResolvedValueOnce(
+            makeSseResponse([
+              formatNeedVoucherEvent(needVoucher),
+              'event: message\ndata: chunk\n\n',
+            ]),
+          )
+          .mockResolvedValueOnce(makeOkResponse())
+
+        const s = sessionManagerWithMocks({
+          account,
+          client,
+          fetch: mockFetch as typeof globalThis.fetch,
+          maxDeposit: '10',
+          voucherSigner,
+        })
+
+        const iterable = await s.sse('https://api.example.com/stream')
+
+        const messages: string[] = []
+        for await (const msg of iterable) {
+          messages.push(msg)
+        }
+
+        const voucherRequest = mockFetch.mock.calls[2]![1] as RequestInit
+        const voucherHeaders = new Headers(voucherRequest.headers)
+
+        expect(messages).toEqual(['chunk'])
+        expect(voucherRequest.method).toBe('POST')
+        expect(voucherHeaders.get('accept')).toBe('text/event-stream')
+        expect(voucherHeaders.get('authorization')).toBeTruthy()
+      } finally {
+        vi.doUnmock('viem/actions')
+        vi.resetModules()
+      }
+    })
+
     test('yields only message data from SSE stream', async () => {
       const events = [
         'event: message\ndata: chunk1\n\n',

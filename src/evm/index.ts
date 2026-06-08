@@ -4,6 +4,7 @@ export * as Methods from './Methods.js'
 export * as Types from './Types.js'
 export * as assets from './Assets.js'
 export * as chains from './Chains.js'
+export { charge } from './Methods.js'
 export * from './Types.js'
 export type {
   ExactEip3009Transfer,
