@@ -1,5 +1,13 @@
 # mppx
 
+## 0.6.31
+
+### Patch Changes
+
+- 1c286cd: Fixed host confusion in the Node adapter (`Request.fromNodeListener`/`toNodeListener`). Protocol-relative (`//evil.com/x`), triple-slash (`///evil.com/x`), backslash (`/\evil.com/x`), and embedded-authority (`//a//evil.com/x`) request targets could previously override the request host derived from the `Host` header, which in turn poisoned the auto-detected challenge `realm`. The adapter now copies only the parsed path and query onto a trusted origin, so the request target's authority can never influence the resulting URL host.
+- e03f5c5: Fixed `tempo.session` voucher verification to treat lower-amount voucher replays idempotently. Per the session spec's idempotency requirement, a non-advancing voucher (with a `cumulativeAmount` at or below the highest accepted amount, but above the on-chain settled amount) now returns a 200 OK receipt with the current highest amount instead of being rejected as an error. Forged or at-or-below-settled vouchers are still rejected, and the at-or-below-settled rejection reason was clarified to match the inclusive (`<=`) bound.
+- f7bf20c: Fixed SSE session voucher updates being charged as content requests.
+
 ## 0.6.30
 
 ### Patch Changes
