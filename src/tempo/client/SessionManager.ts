@@ -504,7 +504,7 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
                   })
                   const voucherResponse = await fetchFn(input, {
                     method: 'POST',
-                    headers: { Authorization: credential },
+                    headers: { Accept: 'text/event-stream', Authorization: credential },
                   })
                   if (!voucherResponse.ok) {
                     throw new Error(`Voucher POST failed with status ${voucherResponse.status}`)
