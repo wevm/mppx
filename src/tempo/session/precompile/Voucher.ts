@@ -120,6 +120,9 @@ export function verifyVoucher(
     // Reject keychain signatures — the escrow contract verifies raw ECDSA
     // signatures against authorizedSigner, not keychain-wrapped ones.
     if (envelope.type === 'keychain') return false
+    if (envelope.type !== 'secp256k1') return false
+    if (SignatureEnvelope.serialize(envelope).toLowerCase() !== voucher.signature.toLowerCase())
+      return false
 
     const payload =
       escrowContract.toLowerCase() === Channel.address.toLowerCase()

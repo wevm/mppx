@@ -1847,7 +1847,7 @@ describe('compose', () => {
       request: z.object({
         amount: z.string(),
         currency: z.string(),
-        methodDetails: z.object({ sessionProtocol: z.string() }),
+        methodDetails: z.object({ sessionProtocol: z.optional(z.string()) }),
         unitType: z.string(),
       }),
     },
@@ -1991,6 +1991,24 @@ describe('compose', () => {
     expect(Challenge.fromResponseList(result.challenge)).toHaveLength(2)
   })
 
+  test('uses TIP-1034 as the bare tempo/session handler regardless of registration order', async () => {
+    const mppx = Mppx.create({
+      methods: [legacySessionMethod, tip1034SessionMethod],
+      realm,
+      secretKey,
+    })
+
+    const result = await mppx.compose([mppx.tempo.session, sessionChallengeOpts])(
+      new Request('https://example.com/resource'),
+    )
+
+    expect(result.status).toBe(402)
+    if (result.status !== 402) throw new Error()
+    expect(Challenge.fromResponse(result.challenge).request.methodDetails).toEqual({
+      sessionProtocol: 'v2',
+    })
+  })
+
   test('rejects cross-protocol tempo/session credential replay', async () => {
     const mppx = Mppx.create({
       methods: [tip1034SessionMethod, legacySessionMethod],
@@ -2041,6 +2059,43 @@ describe('compose', () => {
 
     expect(tip1034Receipt.reference).toBe('tx-v2')
     expect(legacyReceipt.reference).toBe('tx-v1')
+  })
+
+  test('verifyCredential routes unmarked tempo/session challenges to legacy v1', async () => {
+    const mppx = Mppx.create({
+      methods: [legacySessionMethod, tip1034SessionMethod],
+      realm,
+      secretKey,
+    })
+    const unmarkedLegacyChallenge = await mppx.challenge.tempo.sessionLegacy({
+      ...legacySessionChallengeOpts,
+      methodDetails: {},
+    })
+
+    await expect(
+      mppx.verifyCredential(
+        Credential.serialize({
+          challenge: unmarkedLegacyChallenge,
+          payload: { token: 'valid' },
+        }),
+      ),
+    ).resolves.toMatchObject({ reference: 'tx-v1' })
+  })
+
+  test('verifyCredential rejects unknown tempo/session protocol markers', async () => {
+    const mppx = Mppx.create({
+      methods: [legacySessionMethod, tip1034SessionMethod],
+      realm,
+      secretKey,
+    })
+    const challenge = await mppx.challenge.tempo.session({
+      ...sessionChallengeOpts,
+      methodDetails: { sessionProtocol: 'future' },
+    })
+
+    await expect(
+      mppx.verifyCredential(Credential.serialize({ challenge, payload: { token: 'valid' } })),
+    ).rejects.toThrow('no registered method for tempo/session')
   })
 
   test('returns composed x402 challenge headers when no credential', async () => {

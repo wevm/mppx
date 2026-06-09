@@ -339,11 +339,14 @@ export function session(parameters: session.Parameters = {}) {
 
   return Method.toClient(Methods.session, {
     canHandleChallenge({ challenge }) {
-      const sessionProtocol = Constants.getMethodDetail(
+      const sessionProtocolMarker = Constants.getMethodDetail(
         challenge.request.methodDetails,
         Constants.MethodDetailKeys.sessionProtocol,
       )
-      return sessionProtocol === undefined || sessionProtocol === Constants.SessionProtocols.v1
+      return (
+        sessionProtocolMarker === undefined ||
+        sessionProtocolMarker === Constants.SessionProtocols.v1
+      )
     },
     context: sessionContextSchema,
 

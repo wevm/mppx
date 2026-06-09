@@ -447,6 +447,45 @@ describe('SessionSnapshotHints', () => {
       expect(snapshot?.acceptedCumulative).toBe('600')
     })
 
+    test('omits reusable channel hints when payment fields do not match', async () => {
+      const cases = [
+        {
+          name: 'chainId',
+          expected: { chainId: 1 },
+        },
+        {
+          name: 'escrow',
+          expected: { escrowContract: '0x0000000000000000000000000000000000000004' },
+        },
+        {
+          name: 'recipient',
+          expected: { recipient: '0x0000000000000000000000000000000000000005' },
+        },
+        {
+          name: 'currency',
+          expected: { currency: '0x0000000000000000000000000000000000000006' },
+        },
+      ] as const
+
+      for (const item of cases) {
+        await expect(
+          resolveSessionSnapshot({
+            amount: 50n,
+            channelId,
+            expected: {
+              chainId: 4217,
+              currency: descriptor.token,
+              escrowContract,
+              recipient: descriptor.payee,
+              ...item.expected,
+            },
+            store: store(channel()),
+          }),
+          item.name,
+        ).resolves.toBeUndefined()
+      }
+    })
+
     test('omits hints for missing, non-precompile, or finalized channels', async () => {
       await expect(
         resolveSessionSnapshot({ amount: 1n, channelId, store: store(null) }),

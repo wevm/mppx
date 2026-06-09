@@ -146,6 +146,16 @@ function isTempoChargeChallenge(challenge: Challenge.Challenge) {
   )
 }
 
+function isZeroAmountChargeChallenge(challenge: Challenge.Challenge) {
+  if (!isTempoChargeChallenge(challenge)) return false
+  if (typeof challenge.request.amount !== 'string') return false
+  try {
+    return BigInt(challenge.request.amount) === 0n
+  } catch {
+    return false
+  }
+}
+
 function storedChannelFromEntry(entry: ChannelEntry): StoredSessionChannel {
   return {
     channelId: entry.channelId,
@@ -406,33 +416,14 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
     }
   }
 
-  function hydrateStoredChannel(channel: StoredSessionChannel) {
-    storedChannel = channel
-    runtime.channel = {
-      channelId: channel.channelId,
-      cumulativeAmount: BigInt(channel.cumulativeAmount),
-      deposit: BigInt(channel.deposit),
-      descriptor: channel.descriptor,
-      escrow: channel.escrow,
-      chainId: channel.chainId,
-      opened: channel.opened,
-    }
-    dispatch({
-      type: 'activated',
-      challengeId: runtime.lastChallenge?.id ?? 'bootstrap',
-      entry: runtime.channel,
-      spent: '0',
-      units: 0,
-    })
-    if (sessionStore) void Promise.resolve(sessionStore.set(channel)).catch(() => undefined)
-  }
-
-  async function hydrateSnapshotHeader(response: Response) {
+  async function storeSnapshotHeader(response: Response) {
     const header = response.headers.get(Constants.Headers.paymentSessionSnapshot)
     if (!header) return
     const snapshot = deserializeSessionSnapshot(header)
     bootstrapChannelId = snapshot.channelId
-    hydrateStoredChannel(storedChannelFromSnapshot(snapshot))
+    const channel = storedChannelFromSnapshot(snapshot)
+    storedChannel = channel
+    if (sessionStore) await Promise.resolve(sessionStore.set(channel)).catch(() => undefined)
   }
 
   async function bootstrapSession(input: RequestInfo | URL, init?: RequestInit | undefined) {
@@ -456,11 +447,12 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
     try {
       const challengeResponse = await config.fetch(bootstrapInput, headInit)
       if (challengeResponse.status !== 402) {
-        await hydrateSnapshotHeader(challengeResponse)
+        await storeSnapshotHeader(challengeResponse)
         return
       }
       const challenge = Challenge.fromResponseList(challengeResponse).find(isTempoChargeChallenge)
       if (!challenge) return
+      if (!isZeroAmountChargeChallenge(challenge)) return
       const credential = await chargeMethod.createCredential({
         challenge: challenge as never,
         context: {},
@@ -472,7 +464,7 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
           [Constants.Headers.authorization]: credential,
         },
       })
-      if (response.ok) await hydrateSnapshotHeader(response)
+      if (response.ok) await storeSnapshotHeader(response)
     } catch {
       return
     }

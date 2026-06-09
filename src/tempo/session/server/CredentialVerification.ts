@@ -445,9 +445,18 @@ async function handleTopUpCredential(
   parameters: TopUpCredentialActionParameters,
 ): Promise<SessionReceipt> {
   const { store, client, challenge, payload, chainId, escrow } = parameters
+  const request = getChallengePaymentFields(challenge)
   const additionalDeposit = uint96(BigInt(payload.additionalDeposit))
   assertDescriptor(payload)
   const channelId = ChannelStore.normalizeChannelId(payload.channelId)
+  validateChannelDescriptor(
+    payload.descriptor,
+    channelId,
+    chainId,
+    escrow,
+    request.recipient,
+    request.currency,
+  )
   const channel = await ChannelStore.loadPrecompileChannel({
     descriptor: payload.descriptor,
     channelId,
@@ -464,7 +473,7 @@ async function handleTopUpCredential(
     descriptor: channel.descriptor,
     escrowContract: escrow,
     expectedChannelId: channelId,
-    expectedCurrency: channel.token,
+    expectedCurrency: request.currency,
     feePayer: parameters.feePayer,
     feePayerPolicy: parameters.feePayerPolicy,
     serializedTransaction: payload.transaction,
@@ -499,6 +508,7 @@ async function handleVoucherCredential(
     channelStateTtl,
     lastOnChainVerified,
   } = parameters
+  const request = getChallengePaymentFields(challenge)
   const channelId = ChannelStore.normalizeChannelId(payload.channelId)
   const voucher = Voucher.parseVoucherFromPayload(
     channelId,
@@ -506,6 +516,14 @@ async function handleVoucherCredential(
     payload.signature,
   )
   assertDescriptor(payload)
+  validateChannelDescriptor(
+    payload.descriptor,
+    channelId,
+    chainId,
+    escrow,
+    request.recipient,
+    request.currency,
+  )
   const channel = await ChannelStore.loadPrecompileChannel({
     descriptor: payload.descriptor,
     channelId,
@@ -551,9 +569,18 @@ async function handleCloseCredential(
   parameters: CloseCredentialActionParameters,
 ): Promise<SessionReceipt> {
   const { store, client, challenge, payload, chainId, escrow } = parameters
+  const request = getChallengePaymentFields(challenge)
   const cumulativeAmount = uint96(BigInt(payload.cumulativeAmount))
   const channelId = ChannelStore.normalizeChannelId(payload.channelId)
   assertDescriptor(payload)
+  validateChannelDescriptor(
+    payload.descriptor,
+    channelId,
+    chainId,
+    escrow,
+    request.recipient,
+    request.currency,
+  )
   const channel = await ChannelStore.loadPrecompileChannel({
     descriptor: payload.descriptor,
     channelId,

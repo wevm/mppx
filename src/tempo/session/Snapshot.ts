@@ -1,4 +1,4 @@
-import type { Address, Hex } from 'viem'
+import { isAddress, type Address, type Hex } from 'viem'
 
 import * as HeaderCodec from '../../internal/HeaderCodec.js'
 import * as z from '../../zod.js'
@@ -30,14 +30,31 @@ export type SessionSnapshot = {
   units?: number | undefined
 }
 
+const addressSchema = z.custom<Address>(
+  (value) => typeof value === 'string' && isAddress(value, { strict: false }),
+)
+const hashSchema = z.custom<Hex>(
+  (value) => typeof value === 'string' && /^0x[0-9a-fA-F]{64}$/.test(value),
+)
+
+const channelDescriptorSchema = z.object({
+  authorizedSigner: addressSchema,
+  expiringNonceHash: hashSchema,
+  operator: addressSchema,
+  payee: addressSchema,
+  payer: addressSchema,
+  salt: hashSchema,
+  token: addressSchema,
+})
+
 const sessionSnapshotSchema = z.object({
   acceptedCumulative: z.string(),
   chainId: z.number(),
-  channelId: z.string(),
+  channelId: hashSchema,
   closeRequestedAt: z.optional(z.string()),
   deposit: z.string(),
-  descriptor: z.custom<ChannelDescriptor>(),
-  escrow: z.string(),
+  descriptor: channelDescriptorSchema,
+  escrow: addressSchema,
   requiredCumulative: z.string(),
   settled: z.string(),
   spent: z.string(),

@@ -250,6 +250,27 @@ describe('Precompile Voucher', () => {
     ).toBe(false)
   })
 
+  test('verify rejects magic-suffixed secp256k1 signatures', async () => {
+    const signature = await signTypedData(client, {
+      account,
+      domain: getVoucherDomain(escrowContract, chainId),
+      types: voucherTypes,
+      primaryType: 'Voucher',
+      message: { channelId, cumulativeAmount },
+    })
+    const envelope = SignatureEnvelope.from(signature as SignatureEnvelope.Serialized)
+    const suffixed = SignatureEnvelope.serialize(envelope, { magic: true })
+
+    expect(
+      verifyVoucher(
+        escrowContract,
+        chainId,
+        { channelId, cumulativeAmount, signature: suffixed },
+        account.address,
+      ),
+    ).toBe(false)
+  })
+
   test('sign rejects p256 keychain access-key voucher delegation explicitly', async () => {
     const rootAccount = TempoAccount.fromSecp256k1(Secp256k1.randomPrivateKey())
     const accessKey = TempoAccount.fromP256(P256.randomPrivateKey(), {

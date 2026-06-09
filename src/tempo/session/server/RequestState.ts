@@ -1,4 +1,11 @@
-import { isAddress, parseUnits, type Account as viem_Account, type Address, type Hex } from 'viem'
+import {
+  isAddress,
+  isAddressEqual,
+  parseUnits,
+  type Account as viem_Account,
+  type Address,
+  type Hex,
+} from 'viem'
 
 import * as Constants from '../../../Constants.js'
 import type * as Credential from '../../../Credential.js'
@@ -28,8 +35,22 @@ export type ResolveSessionSnapshotParameters = {
   amount: bigint
   /** Channel ID from credential or challenge request, when available. */
   channelId: Hex | undefined
+  /** Payment fields the reusable channel must match before it is advertised. */
+  expected?: SessionSnapshotPaymentFields | undefined
   /** Server channel store. */
   store: ChannelStore.ChannelStore
+}
+
+/** Payment fields used to bind a reusable channel hint to the current challenge. */
+export type SessionSnapshotPaymentFields = {
+  /** Tempo chain ID expected by the challenge. */
+  chainId: number
+  /** Token address expected by the challenge. */
+  currency: Address
+  /** Escrow precompile address expected by the challenge. */
+  escrowContract: Address
+  /** Payee address expected by the challenge. */
+  recipient: Address
 }
 
 /** Request metadata available to `resolveChannelId` without exposing a mutable `Request`. */
@@ -113,11 +134,12 @@ export async function resolveSessionChannelId(parameters: {
 export async function resolveSessionSnapshot(
   parameters: ResolveSessionSnapshotParameters,
 ): Promise<SessionSnapshot | undefined> {
-  const { amount, channelId, store } = parameters
+  const { amount, channelId, expected, store } = parameters
   if (!channelId) return undefined
   const channel = await store.getChannel(ChannelStore.normalizeChannelId(channelId))
   if (!channel || !ChannelStore.isPrecompileState(channel)) return undefined
   if (channel.finalized) return undefined
+  if (expected && !matchesSnapshotPaymentFields(channel, expected)) return undefined
   const requiredCumulative = channel.spent + amount
   const acceptedCumulative =
     channel.highestVoucherAmount > requiredCumulative
@@ -137,6 +159,18 @@ export async function resolveSessionSnapshot(
     spent: channel.spent.toString(),
     units: channel.units,
   }
+}
+
+function matchesSnapshotPaymentFields(
+  channel: ChannelStore.StoredPrecompileChannel,
+  expected: SessionSnapshotPaymentFields,
+) {
+  return (
+    channel.chainId === expected.chainId &&
+    isAddressEqual(channel.escrowContract, expected.escrowContract) &&
+    isAddressEqual(channel.payee, expected.recipient) &&
+    isAddressEqual(channel.token, expected.currency)
+  )
 }
 
 /** Inputs for deciding whether a verified session credential should serve content. */
@@ -380,6 +414,12 @@ export async function resolveSessionPaymentRequest(
   const sessionSnapshot = await resolveSessionSnapshot({
     amount: capturedRequest && !isSessionContentRequest(capturedRequest) ? 0n : requestAmount,
     channelId,
+    expected: {
+      chainId,
+      currency: readChallengeAddress(request.currency, 'currency'),
+      escrowContract,
+      recipient: readChallengeAddress(request.recipient, 'recipient'),
+    },
     store,
   })
   const { operator: _operator, ...requestWithoutOperator } = request

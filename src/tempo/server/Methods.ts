@@ -26,6 +26,12 @@ const sessionLegacyServer = Object.assign(createSessionLegacyMethod, {
   Ws: Ws_,
 })
 
+/** Creates a legacy contract-backed Tempo `session` server method. */
+export const sessionLegacy = sessionLegacyServer
+
+/** Settles a legacy contract-backed Tempo session channel. */
+export const settleLegacy = settleLegacy_
+
 function createChargeMethod<const parameters extends tempo.Parameters>(
   parameters: parameters | undefined,
 ) {

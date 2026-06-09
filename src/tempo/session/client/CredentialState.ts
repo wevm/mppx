@@ -680,6 +680,13 @@ async function manual(
     chainId: resolved.chainId,
     escrow: resolved.escrow,
   })
+  assertReusableChannelDescriptor({
+    channelId: context.channelId,
+    descriptor,
+    expectedChannelId: channelId,
+    payee: resolved.payee,
+    token: resolved.token,
+  })
 
   const payload = await executeManualCredential({
     account,

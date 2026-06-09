@@ -12,6 +12,7 @@ import type { ChannelEntry } from './ChannelOps.js'
 import {
   channelKey,
   createChannelCache,
+  executeCredentialPlan,
   hasCredentialCumulativeAmount,
   hasManualSessionDescriptor,
   hasSessionAction,
@@ -431,6 +432,27 @@ describe('CredentialPlan', () => {
           resolved: challengeContext(),
         }),
       ).toThrow('descriptor required for TIP-1034 session action')
+    })
+
+    test('rejects manual descriptors that do not match the active challenge', async () => {
+      const plan = planCredential({
+        account,
+        cache: createChannelCache(),
+        context: {
+          action: 'voucher',
+          cumulativeAmountRaw: '10',
+          descriptor: {
+            ...descriptor,
+            payee: '0x0000000000000000000000000000000000000003' as Address,
+          },
+        },
+        decimals: 6,
+        resolved: challengeContext(),
+      })
+
+      await expect(executeCredentialPlan(plan, createChannelCache())).rejects.toThrow(
+        'context descriptor payee does not match challenge',
+      )
     })
 
     test('plans recovery from server snapshot when no reusable cache entry exists', () => {

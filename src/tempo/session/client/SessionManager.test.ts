@@ -94,7 +94,7 @@ function makeChallenge(overrides: Record<string, unknown> = {}): Challenge.Chall
   })
 }
 
-function makeChargeChallenge(): Challenge.Challenge {
+function makeChargeChallenge(overrides: Record<string, unknown> = {}): Challenge.Challenge {
   return Challenge.from({
     id: 'charge-bootstrap',
     realm,
@@ -105,6 +105,7 @@ function makeChargeChallenge(): Challenge.Challenge {
       currency: '0x20c0000000000000000000000000000000000001',
       recipient: '0x742d35cc6634c0532925a3b844bc9e7595f8fe00',
       methodDetails: { chainId: 4217 },
+      ...overrides,
     },
   })
 }
@@ -274,7 +275,7 @@ describe('Session', () => {
       expect(mockFetch).toHaveBeenCalledOnce()
     })
 
-    test('bootstraps from same-route HEAD snapshot before first request', async () => {
+    test('stores same-route HEAD snapshot as a first-request channel hint', async () => {
       const set = vi.fn()
       const mockFetch = vi.fn().mockImplementation((_input, init?: RequestInit) => {
         const headers = new Headers(init?.headers)
@@ -322,10 +323,34 @@ describe('Session', () => {
       const response = await s.fetch('https://api.example.com/data')
 
       expect(response.status).toBe(200)
-      expect(s.channelId).toBe(storedChannelId)
-      expect(s.cumulative).toBe(1_000_000n)
+      expect(response.channelId).toBeNull()
+      expect(s.channelId).toBeUndefined()
+      expect(s.cumulative).toBe(0n)
       expect(set).toHaveBeenCalledWith(expect.objectContaining({ channelId: storedChannelId }))
       expect(mockFetch).toHaveBeenCalledTimes(3)
+    })
+
+    test('does not answer non-zero bootstrap charge challenges', async () => {
+      const mockFetch = vi.fn().mockImplementation((_input, init?: RequestInit) => {
+        const headers = new Headers(init?.headers)
+        if (init?.method === 'HEAD' && !headers.get(Constants.Headers.authorization)) {
+          return Promise.resolve(make402Response(makeChargeChallenge({ amount: '1' })))
+        }
+        if (init?.method === 'HEAD') throw new Error('unexpected bootstrap authorization')
+        expect(headers.get(Constants.Headers.paymentSession)).toBeNull()
+        return Promise.resolve(makeOkResponse())
+      })
+      const s = sessionManager({
+        account,
+        bootstrap: true,
+        client,
+        fetch: mockFetch as typeof globalThis.fetch,
+      })
+
+      const response = await s.fetch('https://api.example.com/data')
+
+      expect(response.status).toBe(200)
+      expect(mockFetch).toHaveBeenCalledTimes(2)
     })
 
     test('falls back to normal fetch when bootstrap is unsupported', async () => {

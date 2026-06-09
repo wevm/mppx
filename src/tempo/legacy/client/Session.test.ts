@@ -84,6 +84,17 @@ describe('session (pure)', () => {
         }),
       }),
     ).toBe(false)
+    expect(
+      method.canHandleChallenge?.({
+        challenge: makeChallenge({
+          methodDetails: {
+            chainId: 42431,
+            escrowContract: escrowAddress,
+            sessionProtocol: 'future' as never,
+          },
+        }),
+      }),
+    ).toBe(false)
   })
 
   describe('error: no action and no deposit/maxDeposit', () => {

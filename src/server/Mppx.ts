@@ -461,7 +461,7 @@ export function create<
     const wireKey = `${mi.name}/${mi.intent}`
     const aliasKey = mi.alias ? `${mi.name}/${mi.alias}` : undefined
     if (mi.extensions) Object.assign(fn, mi.extensions)
-    if (!handlers[wireKey]) handlers[wireKey] = fn
+    if (!aliasKey || !handlers[wireKey]) handlers[wireKey] = fn
     if (aliasKey) handlers[aliasKey] = fn
   }
 
@@ -1841,15 +1841,18 @@ function selectVerificationMethod(
   )
     return methods[0]
 
-  const sessionProtocol = Constants.getMethodDetail<Constants.SessionProtocol>(
+  const sessionProtocolMarker = Constants.getMethodDetail(
     challenge.request.methodDetails,
     Constants.MethodDetailKeys.sessionProtocol,
   )
-  if (sessionProtocol === Constants.SessionProtocols.v1)
+  if (
+    sessionProtocolMarker === undefined ||
+    sessionProtocolMarker === Constants.SessionProtocols.v1
+  )
     return methods.find((method) => method.alias === 'sessionLegacy') ?? methods[0]
-  if (sessionProtocol === Constants.SessionProtocols.v2)
+  if (sessionProtocolMarker === Constants.SessionProtocols.v2)
     return methods.find((method) => method.alias === undefined) ?? methods[0]
-  return methods[0]
+  return undefined
 }
 
 function getChallengeBindingMismatch(
