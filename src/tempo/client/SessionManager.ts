@@ -498,6 +498,9 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
                     challenge: sseChallenge as never,
                     context: {
                       action: 'voucher',
+                      ...(channel.authorizedSigner && {
+                        authorizedSigner: channel.authorizedSigner,
+                      }),
                       channelId: channel.channelId,
                       cumulativeAmountRaw: channel.cumulativeAmount.toString(),
                     },
@@ -690,6 +693,7 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
               challenge: challenge as never,
               context: {
                 action: 'voucher',
+                ...(channel?.authorizedSigner && { authorizedSigner: channel.authorizedSigner }),
                 channelId: activeSocketChannelId,
                 cumulativeAmountRaw: nextCumulative.toString(),
               },
@@ -769,6 +773,7 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
           challenge: closeChallenge as never,
           context: {
             action: 'close',
+            ...(channel.authorizedSigner && { authorizedSigner: channel.authorizedSigner }),
             channelId: closeChannelId,
             cumulativeAmountRaw: readySpent.toString(),
           },
@@ -799,6 +804,7 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
         challenge: closeChallenge as never,
         context: {
           action: 'close',
+          ...(channel.authorizedSigner && { authorizedSigner: channel.authorizedSigner }),
           channelId: closeChannelId,
           cumulativeAmountRaw: (() => {
             const closeAmount = BigInt(getFallbackCloseAmount(closeChallenge, closeChannelId))

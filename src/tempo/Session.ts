@@ -31,6 +31,7 @@ export type SessionChallenge = Challenge.Challenge<
 >
 
 export type ChannelEntry = {
+  authorizedSigner?: Address | undefined
   channelId: Hex
   salt: Hex
   cumulativeAmount: bigint

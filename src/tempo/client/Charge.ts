@@ -1,6 +1,7 @@
 import type { Address } from 'viem'
 import { tempo as tempo_chain } from 'viem/tempo/chains'
 
+import type * as Challenge from '../../Challenge.js'
 import * as Method from '../../Method.js'
 import * as Account from '../../viem/Account.js'
 import * as Client from '../../viem/Client.js'
@@ -9,6 +10,7 @@ import * as Charge from '../Charge.js'
 import * as AutoSwap from '../internal/auto-swap.js'
 import * as defaults from '../internal/defaults.js'
 import * as Methods from '../Methods.js'
+import * as MppAuthorize from './internal/MppAuthorize.js'
 
 /**
  * Creates a Tempo charge method intent for usage on the client.
@@ -49,6 +51,14 @@ export function charge(parameters: charge.Parameters = {}) {
         expectedRecipients: parameters.expectedRecipients,
         payer: account.address,
       })
+      if (account.type === 'json-rpc') {
+        const authorization = await MppAuthorize.authorize(client, {
+          account: account.address,
+          challenge: challenge as Challenge.Challenge,
+          chainId: filled.chainId,
+        })
+        if (authorization) return authorization
+      }
       return Charge.createCredential(client, {
         filled,
         mode: context?.mode ?? parameters.mode,

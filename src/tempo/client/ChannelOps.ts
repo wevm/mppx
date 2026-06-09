@@ -26,6 +26,7 @@ import type { SessionCredentialPayload } from '../session/Types.js'
 import { signVoucher } from '../session/Voucher.js'
 
 export type ChannelEntry = {
+  authorizedSigner?: Address | undefined
   channelId: Hex.Hex
   salt: Hex.Hex
   cumulativeAmount: bigint
@@ -196,6 +197,7 @@ export async function createOpenPayload(
 
   return {
     entry: {
+      authorizedSigner,
       channelId,
       salt,
       cumulativeAmount: initialAmount,

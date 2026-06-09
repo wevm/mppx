@@ -1,5 +1,10 @@
 import type { Hex } from 'ox'
-import { type Address, parseUnits, type Account as viem_Account } from 'viem'
+import {
+  type Address,
+  type Client as viem_Client,
+  parseUnits,
+  type Account as viem_Account,
+} from 'viem'
 import { tempo as tempo_chain } from 'viem/tempo/chains'
 
 import type * as Challenge from '../../Challenge.js'
@@ -15,10 +20,12 @@ import * as SessionActions from '../Session.js'
 import type { SessionCredentialPayload } from '../session/Types.js'
 import { signVoucher } from '../session/Voucher.js'
 import { resolveEscrow, tryRecoverChannel } from './ChannelOps.js'
+import * as MppAuthorize from './internal/MppAuthorize.js'
 
 export const sessionContextSchema = z.object({
   account: z.optional(z.custom<Account.getResolver.Parameters['account']>()),
   action: z.optional(z.enum(['open', 'topUp', 'voucher', 'close'])),
+  authorizedSigner: z.optional(z.string()),
   channelId: z.optional(z.string()),
   cumulativeAmount: z.optional(z.amount()),
   cumulativeAmountRaw: z.optional(z.string()),
@@ -117,6 +124,194 @@ export function session(parameters: session.Parameters = {}) {
       payload,
       source: `did:pkh:eip155:${chainId}:${account.address}`,
     })
+  }
+
+  /**
+   * Mirrors wallet-created session credentials into the local channel cache.
+   * Only wallet-opened sessions create cache entries; continuation credentials
+   * update known entries but never reconstruct unknown channel state.
+   */
+  function applyMppAuthorizedCredential(
+    challenge: Challenge.Challenge,
+    authorization: string,
+    chainId: number,
+    expectedSession?: MppAuthorize.Session | undefined,
+  ) {
+    const credential = Credential.deserialize<SessionCredentialPayload>(authorization)
+    if (credential.challenge.id !== challenge.id) {
+      throw new Error('mpp_authorize returned a credential for a different challenge.')
+    }
+
+    const payload = credential.payload
+    if (!payload || typeof payload !== 'object' || !('action' in payload)) {
+      throw new Error('mpp_authorize returned a non-session credential.')
+    }
+
+    if (expectedSession) {
+      if (payload.action !== expectedSession.action) {
+        throw new Error('mpp_authorize returned a credential for a different session action.')
+      }
+      if (payload.channelId.toLowerCase() !== expectedSession.channelId.toLowerCase()) {
+        throw new Error('mpp_authorize returned a credential for a different session channel.')
+      }
+
+      switch (expectedSession.action) {
+        case 'voucher':
+        case 'close':
+          if (payload.action !== 'voucher' && payload.action !== 'close') return
+          if (payload.cumulativeAmount !== expectedSession.cumulativeAmount) {
+            throw new Error(
+              'mpp_authorize returned a credential for a different cumulative amount.',
+            )
+          }
+          break
+
+        case 'topUp':
+          if (payload.action !== 'topUp') return
+          if (payload.additionalDeposit !== expectedSession.additionalDeposit) {
+            throw new Error('mpp_authorize returned a credential for a different top-up amount.')
+          }
+      }
+    }
+
+    if (payload.action === 'topUp') return
+
+    const channelId = payload.channelId
+    const escrowContract = resolveEscrowCached(challenge, chainId, channelId)
+    const key = channelKey(
+      challenge.request.recipient as Address,
+      challenge.request.currency as Address,
+      escrowContract,
+    )
+
+    if (payload.action === 'open') {
+      if (!payload.authorizedSigner) {
+        throw new Error('mpp_authorize returned an open credential without authorizedSigner.')
+      }
+
+      const entry = {
+        authorizedSigner: payload.authorizedSigner,
+        channelId,
+        salt: '0x' as Hex.Hex,
+        cumulativeAmount: BigInt(payload.cumulativeAmount),
+        escrowContract,
+        chainId,
+        opened: true,
+      } satisfies SessionActions.ChannelEntry
+      channels.set(key, entry)
+      channelIdToKey.set(channelId, key)
+      escrowContractMap.set(channelId, escrowContract)
+      notifyUpdate(entry)
+      return
+    }
+
+    if (payload.action === 'voucher' || payload.action === 'close') {
+      const entry = channels.get(key)
+      if (!entry) return
+      entry.cumulativeAmount =
+        entry.cumulativeAmount > BigInt(payload.cumulativeAmount)
+          ? entry.cumulativeAmount
+          : BigInt(payload.cumulativeAmount)
+      entry.opened = payload.action !== 'close'
+      channels.set(key, entry)
+      channelIdToKey.set(channelId, key)
+      escrowContractMap.set(channelId, escrowContract)
+      notifyUpdate(entry)
+    }
+  }
+
+  /**
+   * Gives JSON-RPC wallets the first chance to create Tempo session credentials.
+   * Initial requests omit `session` so the wallet can open the channel; follow-up
+   * requests include the channel and signer discovered from the wallet response.
+   */
+  async function tryMppAuthorizeCredential(
+    challenge: Challenge.Challenge,
+    client: viem_Client,
+    account: viem_Account,
+    context?: SessionContext,
+  ): Promise<string | undefined> {
+    if (account.type !== 'json-rpc') return undefined
+
+    const md = challenge.request.methodDetails as
+      | { chainId?: number; escrowContract?: string; channelId?: string }
+      | undefined
+    const chainId = md?.chainId ?? 0
+    const resolveKnownAuthorizedSigner = (channelId: string) => {
+      const key = channelIdToKey.get(channelId)
+      const entry = key ? channels.get(key) : undefined
+      return (context?.authorizedSigner as Address | undefined) ?? entry?.authorizedSigner
+    }
+
+    let session: MppAuthorize.Session | undefined
+
+    if (context?.action === 'voucher' || context?.action === 'close') {
+      if (!context.channelId) return undefined
+      const cumulativeAmount = context.cumulativeAmountRaw
+        ? BigInt(context.cumulativeAmountRaw)
+        : context.cumulativeAmount
+          ? parseUnits(context.cumulativeAmount, decimals)
+          : undefined
+      if (cumulativeAmount === undefined) return undefined
+
+      const authorizedSigner = resolveKnownAuthorizedSigner(context.channelId)
+      if (!authorizedSigner) return undefined
+
+      session = {
+        action: context.action,
+        authorizedSigner,
+        channelId: context.channelId as Hex.Hex,
+        cumulativeAmount: cumulativeAmount.toString(),
+      }
+    } else if (context?.action === 'topUp') {
+      if (!context.channelId) return undefined
+      const additionalDeposit = context.additionalDepositRaw
+        ? BigInt(context.additionalDepositRaw)
+        : context.additionalDeposit
+          ? parseUnits(context.additionalDeposit, decimals)
+          : undefined
+      if (additionalDeposit === undefined) return undefined
+
+      const authorizedSigner = resolveKnownAuthorizedSigner(context.channelId)
+      if (!authorizedSigner) return undefined
+
+      session = {
+        action: 'topUp',
+        additionalDeposit: additionalDeposit.toString(),
+        authorizedSigner,
+        channelId: context.channelId as Hex.Hex,
+      }
+    } else if (!context?.action) {
+      const escrowContract = resolveEscrowCached(challenge, chainId)
+      const key = channelKey(
+        challenge.request.recipient as Address,
+        challenge.request.currency as Address,
+        escrowContract,
+      )
+      const entry = channels.get(key)
+      if (entry?.opened && entry.authorizedSigner) {
+        session = {
+          action: 'voucher',
+          authorizedSigner: entry.authorizedSigner,
+          channelId: entry.channelId,
+          cumulativeAmount: (
+            entry.cumulativeAmount + BigInt(challenge.request.amount as string)
+          ).toString(),
+        }
+      }
+    }
+
+    if (context?.action && !session) return undefined
+
+    const authorization = await MppAuthorize.authorize(client, {
+      account: account.address,
+      challenge,
+      chainId,
+      ...(session ? { session } : {}),
+    })
+    if (!authorization) return undefined
+    applyMppAuthorizedCredential(challenge, authorization, chainId, session)
+    return authorization
   }
 
   async function autoManageCredential(
@@ -357,6 +552,14 @@ export function session(parameters: session.Parameters = {}) {
       const chainId = challenge.request.methodDetails?.chainId ?? 0
       const client = await getClient({ chainId })
       const account = getAccount(client, context)
+
+      const authorization = await tryMppAuthorizeCredential(
+        challenge as Challenge.Challenge,
+        client,
+        account,
+        context,
+      )
+      if (authorization) return authorization
 
       if (!context?.action && (parameters.deposit !== undefined || maxDeposit !== undefined))
         return autoManageCredential(challenge, account, context)

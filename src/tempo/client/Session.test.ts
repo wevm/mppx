@@ -33,6 +33,7 @@ const pureClient = createClient({
 const escrowAddress = escrowContractDefaults[chainId.testnet] as Address
 const recipient = '0x2222222222222222222222222222222222222222' as Address
 const currency = '0x3333333333333333333333333333333333333333' as Address
+const capabilities = { '0xa5bf': { mpp: { status: 'supported' } } }
 
 function makeChallenge(overrides?: Record<string, unknown>) {
   return Challenge.from({
@@ -55,6 +56,224 @@ function makeChallenge(overrides?: Record<string, unknown>) {
 }
 
 describe('session (pure)', () => {
+  describe('mpp_authorize JSON-RPC account support', () => {
+    const channelId = '0x00000000000000000000000000000000000000000000000000000000000000aa' as Hex
+    const authorizedSigner = '0x4444444444444444444444444444444444444444' as Address
+
+    test('opens through mpp_authorize without local deposit configuration', async () => {
+      const challenge = makeChallenge()
+      const authorization = Credential.serialize({
+        challenge,
+        payload: {
+          action: 'open',
+          type: 'transaction',
+          channelId,
+          transaction: '0xdeadbeef',
+          authorizedSigner,
+          cumulativeAmount: '1000000',
+          signature: '0x1234',
+        },
+        source: `did:pkh:eip155:42431:${pureAccount.address}`,
+      })
+      const requests: unknown[] = []
+      const method = session({
+        account: pureAccount.address,
+        getClient: () =>
+          ({
+            async request(parameters: { method: string }) {
+              requests.push(parameters)
+              if (parameters.method === 'wallet_getCapabilities') return capabilities
+              return { authorization }
+            },
+          }) as never,
+      })
+
+      const result = await method.createCredential({ challenge, context: {} })
+      const credential = deserializePayload(result)
+
+      expect(result).toBe(authorization)
+      expect(credential.payload.action).toBe('open')
+      expect(requests).toEqual([
+        {
+          method: 'wallet_getCapabilities',
+          params: [pureAccount.address, ['0xa5bf']],
+        },
+        {
+          method: 'mpp_authorize',
+          params: [{ challenges: [Challenge.serialize(challenge)] }],
+        },
+      ])
+    })
+
+    test('uses the authorized signer from a wallet-opened session for the next voucher', async () => {
+      const challenge = makeChallenge()
+      const openAuthorization = Credential.serialize({
+        challenge,
+        payload: {
+          action: 'open',
+          type: 'transaction',
+          channelId,
+          transaction: '0xdeadbeef',
+          authorizedSigner,
+          cumulativeAmount: '1000000',
+          signature: '0x1234',
+        },
+        source: `did:pkh:eip155:42431:${pureAccount.address}`,
+      })
+      const voucherAuthorization = Credential.serialize({
+        challenge,
+        payload: {
+          action: 'voucher',
+          channelId,
+          cumulativeAmount: '2000000',
+          signature: '0x5678',
+        },
+        source: `did:pkh:eip155:42431:${pureAccount.address}`,
+      })
+      const requests: { params: [{ session?: unknown }] }[] = []
+      let authorizeRequests = 0
+      const method = session({
+        account: pureAccount.address,
+        getClient: () =>
+          ({
+            async request(parameters: { method: string; params: [{ session?: unknown }] }) {
+              requests.push(parameters)
+              if (parameters.method === 'wallet_getCapabilities') return capabilities
+              authorizeRequests++
+              return authorizeRequests === 1
+                ? { authorization: openAuthorization }
+                : { authorization: voucherAuthorization }
+            },
+          }) as never,
+      })
+
+      await method.createCredential({ challenge, context: {} })
+      const result = await method.createCredential({ challenge, context: {} })
+      const credential = deserializePayload(result)
+
+      expect(credential.payload.action).toBe('voucher')
+      expect(requests[3]!.params[0]!.session).toEqual({
+        action: 'voucher',
+        authorizedSigner,
+        channelId,
+        cumulativeAmount: '2000000',
+      })
+    })
+
+    test('passes additionalDeposit for top-up requests', async () => {
+      const challenge = makeChallenge()
+      const authorization = Credential.serialize({
+        challenge,
+        payload: {
+          action: 'topUp',
+          type: 'transaction',
+          channelId,
+          transaction: '0xdeadbeef',
+          additionalDeposit: '3000000',
+        },
+        source: `did:pkh:eip155:42431:${pureAccount.address}`,
+      })
+      const requests: { params: [{ session?: unknown }] }[] = []
+      const method = session({
+        account: pureAccount.address,
+        getClient: () =>
+          ({
+            async request(parameters: { method: string; params: [{ session?: unknown }] }) {
+              requests.push(parameters)
+              if (parameters.method === 'wallet_getCapabilities') return capabilities
+              return { authorization }
+            },
+          }) as never,
+      })
+
+      const result = await method.createCredential({
+        challenge,
+        context: {
+          action: 'topUp',
+          additionalDepositRaw: '3000000',
+          authorizedSigner,
+          channelId,
+        },
+      })
+
+      expect(result).toBe(authorization)
+      expect(requests[1]!.params[0]!.session).toEqual({
+        action: 'topUp',
+        additionalDeposit: '3000000',
+        authorizedSigner,
+        channelId,
+      })
+    })
+
+    test('rejects wallet-opened sessions without an authorized signer', async () => {
+      const challenge = makeChallenge()
+      const authorization = Credential.serialize({
+        challenge,
+        payload: {
+          action: 'open',
+          type: 'transaction',
+          channelId,
+          transaction: '0xdeadbeef',
+          cumulativeAmount: '1000000',
+          signature: '0x1234',
+        },
+        source: `did:pkh:eip155:42431:${pureAccount.address}`,
+      })
+      const method = session({
+        account: pureAccount.address,
+        getClient: () =>
+          ({
+            async request(parameters: { method: string }) {
+              if (parameters.method === 'wallet_getCapabilities') return capabilities
+              return { authorization }
+            },
+          }) as never,
+      })
+
+      await expect(method.createCredential({ challenge, context: {} })).rejects.toThrow(
+        'mpp_authorize returned an open credential without authorizedSigner.',
+      )
+    })
+
+    test('rejects explicit session credentials for a different channel', async () => {
+      const challenge = makeChallenge()
+      const otherChannelId =
+        '0x00000000000000000000000000000000000000000000000000000000000000bb' as Hex
+      const authorization = Credential.serialize({
+        challenge,
+        payload: {
+          action: 'voucher',
+          channelId: otherChannelId,
+          cumulativeAmount: '2000000',
+          signature: '0x5678',
+        },
+        source: `did:pkh:eip155:42431:${pureAccount.address}`,
+      })
+      const method = session({
+        account: pureAccount.address,
+        getClient: () =>
+          ({
+            async request(parameters: { method: string }) {
+              if (parameters.method === 'wallet_getCapabilities') return capabilities
+              return { authorization }
+            },
+          }) as never,
+      })
+
+      await expect(
+        method.createCredential({
+          challenge,
+          context: {
+            action: 'voucher',
+            authorizedSigner,
+            channelId,
+            cumulativeAmountRaw: '2000000',
+          },
+        }),
+      ).rejects.toThrow('mpp_authorize returned a credential for a different session channel.')
+    })
+  })
+
   describe('error: no action and no deposit/maxDeposit', () => {
     test('throws when neither configured', async () => {
       const method = session({
