@@ -9,7 +9,16 @@ import {
 
 describe('request-body', () => {
   describe('hasCapturedRequestBody', () => {
-    test('returns true when the captured request recorded a body stream', () => {
+    test('returns true when the captured request recorded a typed body stream', () => {
+      expect(
+        hasCapturedRequestBody({
+          hasBody: true,
+          headers: new Headers({ 'content-type': 'application/json' }),
+        }),
+      ).toBe(true)
+    })
+
+    test('returns true for captured body streams without body headers', () => {
       expect(
         hasCapturedRequestBody({
           hasBody: true,
@@ -63,7 +72,17 @@ describe('request-body', () => {
       ).toBe(false)
     })
 
-    test('treats POST requests with a body stream and no content-length as content requests', () => {
+    test('treats POST requests with a typed body stream and no content-length as content requests', () => {
+      expect(
+        isSessionContentRequest({
+          hasBody: true,
+          headers: new Headers({ 'content-type': 'application/json' }),
+          method: 'POST',
+        }),
+      ).toBe(true)
+    })
+
+    test('treats POST body streams without body headers as content requests', () => {
       expect(
         isSessionContentRequest({
           hasBody: true,
@@ -107,12 +126,12 @@ describe('request-body', () => {
       expect(shouldChargePlainResponse(input, { action: 'topUp' })).toBe(false)
     })
 
-    test('charges POST content requests detected via the body stream', () => {
+    test('charges POST content requests detected via the typed body stream', () => {
       expect(
         shouldChargePlainResponse(
           {
             hasBody: true,
-            headers: new Headers(),
+            headers: new Headers({ 'content-type': 'application/json' }),
             method: 'POST',
           },
           { action: 'voucher' },
@@ -131,6 +150,20 @@ describe('request-body', () => {
           { action: 'voucher' },
         ),
       ).toBe(false)
+    })
+
+    test('charges voucher POSTs when runtime reports a body stream', () => {
+      expect(
+        shouldChargePlainResponse(
+          {
+            hasBody: true,
+            headers: new Headers(),
+            method: 'POST',
+            url: new URL('https://api.example.com/session'),
+          },
+          { action: 'voucher' },
+        ),
+      ).toBe(true)
     })
 
     test('charges bodyless POST query requests', () => {

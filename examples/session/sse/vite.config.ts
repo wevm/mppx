@@ -12,8 +12,11 @@ export default defineConfig({
         server.middlewares.use(async (req, res, next) => {
           const request = createRequest(req, res)
           const response = await handler(request)
-          if (response) await sendResponse(res, response)
-          else next()
+          if (response) {
+            await sendResponse(res, response)
+            return
+          }
+          next()
         })
         server.httpServer?.once('listening', () => {
           const addr = server.httpServer!.address()

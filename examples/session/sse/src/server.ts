@@ -134,9 +134,7 @@ const mppx = Mppx.create({
       // SSE transport for streaming. The session method detects the SSE
       // transport and wires up Tempo metering (per-token charging, voucher
       // handling) automatically using the shared storage.
-      sse: true,
-      // Enable testnet mode (relaxes certain validation constraints).
-      testnet: true,
+      sse: { poll: true },
     }),
   ],
 })
@@ -210,6 +208,7 @@ export async function handler(request: Request): Promise<Response | null> {
     // `result.challenge` is a Response object with the WWW-Authenticate header
     // containing the base64url-encoded challenge parameters.
     if (result.status === 402) return result.challenge
+    if (request.method !== 'GET') return result.withReceipt(new Response(null, { status: 204 }))
 
     // Phases 2–4: `withReceipt` handles everything.
     //
@@ -239,29 +238,7 @@ export async function handler(request: Request): Promise<Response | null> {
     // After all tokens are yielded, the transport automatically appends a
     // final `event: payment-receipt` SSE event with the settlement details.
     //
-    return result.withReceipt(async function* (stream) {
-      for await (const token of generateTokens(prompt)) {
-        try {
-          // `stream.charge()` — Charge the client for one token.
-          //
-          // This is the core of the pay-per-token model. Each call:
-          //   - Deducts `pricePerToken` from the channel's available balance
-          //   - If the client's voucher doesn't cover this charge, a
-          //     `payment-need-voucher` SSE event is emitted and the call blocks
-          //     until a new voucher arrives via POST
-          //   - Only returns once payment is confirmed, ensuring the server
-          //     never gives away content for free
-          await stream.charge()
-        } catch {
-          // Client disconnected or abort signal fired — stop streaming.
-          break
-        }
-        // Yield the token — this becomes an `event: message\ndata: <token>`
-        // in the SSE stream. The client's async iterator surfaces this as
-        // the next value in `for await (const token of tokens)`.
-        yield token
-      }
-    })
+    return result.withReceipt(generateTokens(prompt))
   }
 
   // Return null for unrecognized paths (framework can handle 404).

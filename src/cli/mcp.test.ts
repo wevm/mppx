@@ -48,6 +48,14 @@ function createLineClient(child: ChildProcessWithoutNullStreams) {
   child.stderr.setEncoding('utf8')
   child.stdout.on('data', (chunk) => {
     buffer += chunk
+    drainLines()
+    drainJsonBuffer()
+  })
+  child.stderr.on('data', (chunk) => {
+    stderr += chunk
+  })
+
+  function drainLines() {
     for (;;) {
       const index = buffer.indexOf('\n')
       if (index === -1) break
@@ -60,10 +68,16 @@ function createLineClient(child: ChildProcessWithoutNullStreams) {
         nonJsonLines.push(line)
       }
     }
-  })
-  child.stderr.on('data', (chunk) => {
-    stderr += chunk
-  })
+  }
+
+  function drainJsonBuffer() {
+    const text = buffer.trim()
+    if (!text) return
+    try {
+      messages.push(JSON.parse(text))
+      buffer = ''
+    } catch {}
+  }
 
   return {
     get nonJsonLines() {
@@ -88,9 +102,9 @@ function createLineClient(child: ChildProcessWithoutNullStreams) {
         await new Promise((resolve) => setTimeout(resolve, 20))
       }
       throw new Error(
-        `Timed out waiting for MCP response ${id}. stderr=${stderr} nonJson=${JSON.stringify(
-          nonJsonLines,
-        )}`,
+        `Timed out waiting for MCP response ${id}. stderr=${stderr} buffer=${JSON.stringify(
+          buffer,
+        )} nonJson=${JSON.stringify(nonJsonLines)}`,
       )
     },
   }

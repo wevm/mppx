@@ -3,7 +3,7 @@ import * as http from 'node:http'
 import { Challenge, Credential, Errors, Method, Receipt, z } from 'mppx'
 import {
   Mppx as Mppx_client,
-  session as tempo_session_client,
+  sessionLegacy as tempo_session_client,
   tempo as tempo_client,
 } from 'mppx/client'
 import { Types as evm_Types } from 'mppx/evm'
@@ -12,10 +12,10 @@ import { Header as x402_Header, Types as x402_Types, type PaymentPayload } from 
 import { getTransactionReceipt } from 'viem/actions'
 import { describe, expect, test } from 'vp/test'
 import * as Http from '~test/Http.js'
-import { deployEscrow } from '~test/tempo/session.js'
+import { deployEscrow } from '~test/tempo/legacy/session.js'
 import { accounts, asset, client } from '~test/tempo/viem.js'
 
-import type { SessionReceipt } from '../tempo/session/Types.js'
+import type { SessionReceipt } from '../tempo/session/precompile/Protocol.js'
 import * as x402_RouteBinding from '../x402/internal/RouteBinding.js'
 
 const realm = 'api.example.com'
@@ -1837,6 +1837,22 @@ describe('compose', () => {
     },
   })
 
+  const mockSession = Method.from({
+    name: 'tempo',
+    intent: 'session',
+    schema: {
+      credential: {
+        payload: z.object({ token: z.string() }),
+      },
+      request: z.object({
+        amount: z.string(),
+        currency: z.string(),
+        methodDetails: z.object({ sessionProtocol: z.optional(z.string()) }),
+        unitType: z.string(),
+      }),
+    },
+  })
+
   function mockReceipt(name: string) {
     return {
       method: name,
@@ -1855,6 +1871,19 @@ describe('compose', () => {
   const betaMethod = Method.toServer(mockChargeB, {
     async verify() {
       return mockReceipt('beta')
+    },
+  })
+
+  const tip1034SessionMethod = Method.toServer(mockSession, {
+    async verify() {
+      return mockReceipt('v2')
+    },
+  })
+
+  const legacySessionMethod = Method.toServer(mockSession, {
+    alias: 'sessionLegacy',
+    async verify() {
+      return mockReceipt('v1')
     },
   })
 
@@ -1889,6 +1918,19 @@ describe('compose', () => {
     recipient: '0x0000000000000000000000000000000000000002',
   }
 
+  const sessionChallengeOpts = {
+    amount: '100',
+    currency: asset,
+    expires: new Date(Date.now() + 60_000),
+    methodDetails: { sessionProtocol: 'v2' },
+    unitType: 'request',
+  }
+
+  const legacySessionChallengeOpts = {
+    ...sessionChallengeOpts,
+    methodDetails: { sessionProtocol: 'v1' },
+  }
+
   test('returns 402 with multiple WWW-Authenticate headers when no credential', async () => {
     const mppx = Mppx.create({ methods: [alphaMethod, betaMethod], realm, secretKey })
 
@@ -1903,6 +1945,157 @@ describe('compose', () => {
     const wwwAuth = result.challenge.headers.get('WWW-Authenticate')!
     expect(wwwAuth).toContain('method="alpha"')
     expect(wwwAuth).toContain('method="beta"')
+  })
+
+  test('broadcasts duplicate tempo/session variants in compose order', async () => {
+    const mppx = Mppx.create({
+      methods: [tip1034SessionMethod, legacySessionMethod],
+      realm,
+      secretKey,
+    })
+
+    const result = await mppx.compose(
+      [mppx.tempo.session, sessionChallengeOpts],
+      [mppx.tempo.sessionLegacy, legacySessionChallengeOpts],
+    )(new Request('https://example.com/resource'))
+
+    expect(result.status).toBe(402)
+    if (result.status !== 402) throw new Error()
+
+    const challenges = Challenge.fromResponseList(result.challenge)
+    expect(challenges.map((challenge) => challenge.request.methodDetails)).toEqual([
+      { sessionProtocol: 'v2' },
+      { sessionProtocol: 'v1' },
+    ])
+  })
+
+  test('keeps duplicate tempo/session variants when Accept-Payment allows tempo/session', async () => {
+    const mppx = Mppx.create({
+      methods: [tip1034SessionMethod, legacySessionMethod],
+      realm,
+      secretKey,
+    })
+
+    const result = await mppx.compose(
+      [mppx.tempo.session, sessionChallengeOpts],
+      [mppx.tempo.sessionLegacy, legacySessionChallengeOpts],
+    )(
+      new Request('https://example.com/resource', {
+        headers: { 'Accept-Payment': 'tempo/session' },
+      }),
+    )
+
+    expect(result.status).toBe(402)
+    if (result.status !== 402) throw new Error()
+
+    expect(Challenge.fromResponseList(result.challenge)).toHaveLength(2)
+  })
+
+  test('uses TIP-1034 as the bare tempo/session handler regardless of registration order', async () => {
+    const mppx = Mppx.create({
+      methods: [legacySessionMethod, tip1034SessionMethod],
+      realm,
+      secretKey,
+    })
+
+    const result = await mppx.compose([mppx.tempo.session, sessionChallengeOpts])(
+      new Request('https://example.com/resource'),
+    )
+
+    expect(result.status).toBe(402)
+    if (result.status !== 402) throw new Error()
+    expect(Challenge.fromResponse(result.challenge).request.methodDetails).toEqual({
+      sessionProtocol: 'v2',
+    })
+  })
+
+  test('rejects cross-protocol tempo/session credential replay', async () => {
+    const mppx = Mppx.create({
+      methods: [tip1034SessionMethod, legacySessionMethod],
+      realm,
+      secretKey,
+    })
+    const tip1034ChallengeResponse = await mppx.compose([mppx.tempo.session, sessionChallengeOpts])(
+      new Request('https://example.com/resource'),
+    )
+    expect(tip1034ChallengeResponse.status).toBe(402)
+    if (tip1034ChallengeResponse.status !== 402) throw new Error()
+    const tip1034Challenge = Challenge.fromResponse(tip1034ChallengeResponse.challenge)
+
+    const credential = Credential.serialize({
+      challenge: tip1034Challenge,
+      payload: { token: 'valid' },
+    })
+    const legacyResult = await mppx.compose([mppx.tempo.sessionLegacy, legacySessionChallengeOpts])(
+      new Request('https://example.com/resource', {
+        headers: { Authorization: credential },
+      }),
+    )
+
+    expect(legacyResult.status).toBe(402)
+  })
+
+  test('verifyCredential dispatches duplicate tempo/session variants by sessionProtocol', async () => {
+    const mppx = Mppx.create({
+      methods: [tip1034SessionMethod, legacySessionMethod],
+      realm,
+      secretKey,
+    })
+    const tip1034Challenge = await mppx.challenge.tempo.session(sessionChallengeOpts)
+    const legacyChallenge = await mppx.challenge.tempo.sessionLegacy(legacySessionChallengeOpts)
+
+    const tip1034Receipt = await mppx.verifyCredential(
+      Credential.serialize({
+        challenge: tip1034Challenge,
+        payload: { token: 'valid' },
+      }),
+    )
+    const legacyReceipt = await mppx.verifyCredential(
+      Credential.serialize({
+        challenge: legacyChallenge,
+        payload: { token: 'valid' },
+      }),
+    )
+
+    expect(tip1034Receipt.reference).toBe('tx-v2')
+    expect(legacyReceipt.reference).toBe('tx-v1')
+  })
+
+  test('verifyCredential routes unmarked tempo/session challenges to legacy v1', async () => {
+    const mppx = Mppx.create({
+      methods: [legacySessionMethod, tip1034SessionMethod],
+      realm,
+      secretKey,
+    })
+    const unmarkedLegacyChallenge = await mppx.challenge.tempo.sessionLegacy({
+      ...legacySessionChallengeOpts,
+      methodDetails: {},
+    })
+
+    await expect(
+      mppx.verifyCredential(
+        Credential.serialize({
+          challenge: unmarkedLegacyChallenge,
+          payload: { token: 'valid' },
+        }),
+      ),
+    ).resolves.toMatchObject({ reference: 'tx-v1' })
+  })
+
+  test('verifyCredential rejects unknown tempo/session protocol markers', async () => {
+    const mppx = Mppx.create({
+      methods: [legacySessionMethod, tip1034SessionMethod],
+      realm,
+      secretKey,
+    })
+    const challenge = await mppx.challenge.tempo.session({
+      ...sessionChallengeOpts,
+      methodDetails: { sessionProtocol: 'future' },
+    })
+
+    await expect(
+      mppx.verifyCredential(Credential.serialize({ challenge, payload: { token: 'valid' } })),
+    ).rejects.toThrow('no registered method for tempo/session')
   })
 
   test('returns composed x402 challenge headers when no credential', async () => {
@@ -5178,7 +5371,7 @@ describe('verifyCredential', () => {
     const escrowContract = await deployEscrow()
     const server = Mppx.create({
       methods: [
-        tempo.session({
+        tempo.sessionLegacy({
           store: Store.memory(),
           getClient: () => client,
           account: accounts[0],
@@ -5195,7 +5388,7 @@ describe('verifyCredential', () => {
       methods: [
         tempo_session_client({
           account: accounts[1],
-          deposit: '10',
+          maxDeposit: '10',
           getClient: () => client,
         }),
       ],
@@ -5241,7 +5434,7 @@ describe('verifyCredential', () => {
     const escrowContract = await deployEscrow()
     const server = Mppx.create({
       methods: [
-        tempo.session({
+        tempo.sessionLegacy({
           store: Store.memory(),
           getClient: () => client,
           account: accounts[0],
@@ -5259,7 +5452,7 @@ describe('verifyCredential', () => {
       methods: [
         tempo_session_client({
           account: accounts[1],
-          deposit: '10',
+          maxDeposit: '10',
           getClient: () => client,
         }),
       ],

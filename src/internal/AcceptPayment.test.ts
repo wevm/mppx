@@ -178,6 +178,67 @@ describe('AcceptPayment', () => {
     ])
   })
 
+  test('selectChallengeCandidates supports duplicate method keys with challenge predicates', () => {
+    const challenges = [
+      {
+        id: 'v2',
+        intent: 'session',
+        method: 'tempo',
+        realm: 'test',
+        request: { methodDetails: { sessionProtocol: 'v2' } },
+      },
+      {
+        id: 'v1',
+        intent: 'session',
+        method: 'tempo',
+        realm: 'test',
+        request: { methodDetails: { sessionProtocol: 'v1' } },
+      },
+      {
+        id: 'old-server',
+        intent: 'session',
+        method: 'tempo',
+        realm: 'test',
+        request: {},
+      },
+    ]
+    const methods = [
+      {
+        name: 'tempo',
+        intent: 'session',
+        canHandleChallenge: ({
+          challenge,
+        }: {
+          challenge: AcceptPayment.ChallengeCandidate['challenge']
+        }) =>
+          (challenge.request.methodDetails as { sessionProtocol?: string } | undefined)
+            ?.sessionProtocol === 'v2',
+      },
+      {
+        name: 'tempo',
+        intent: 'session',
+        canHandleChallenge: ({
+          challenge,
+        }: {
+          challenge: AcceptPayment.ChallengeCandidate['challenge']
+        }) => {
+          const sessionProtocol = (
+            challenge.request.methodDetails as { sessionProtocol?: string } | undefined
+          )?.sessionProtocol
+          return sessionProtocol === undefined || sessionProtocol === 'v1'
+        },
+      },
+    ] as const
+
+    const candidates = AcceptPayment.selectChallengeCandidates(
+      challenges,
+      methods,
+      AcceptPayment.parse('tempo/session'),
+    )
+
+    expect(candidates.map(({ challenge }) => challenge.id)).toEqual(['v2', 'v1', 'old-server'])
+  })
+
   test('selectChallenge honors a specific opt-out over a broader wildcard', () => {
     const selected = AcceptPayment.selectChallenge(
       [

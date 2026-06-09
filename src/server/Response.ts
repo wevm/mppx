@@ -1,4 +1,5 @@
 import * as Challenge from '../Challenge.js'
+import * as Constants from '../Constants.js'
 import type * as Errors from '../Errors.js'
 
 /**
@@ -22,7 +23,7 @@ export function requirePayment(parameters: requirePayment.Parameters): Response 
   const { challenge, error } = parameters
 
   const headers: Record<string, string> = {
-    'WWW-Authenticate': Challenge.serialize(challenge),
+    [Constants.Headers.wwwAuthenticate]: Challenge.serialize(challenge),
     'Cache-Control': 'no-store',
   }
 

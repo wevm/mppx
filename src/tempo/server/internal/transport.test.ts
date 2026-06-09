@@ -4,10 +4,10 @@ import { describe, expect, test } from 'vp/test'
 
 import * as Store from '../../../Store.js'
 import { chainId, escrowContract as escrowContractDefaults } from '../../internal/defaults.js'
-import * as ChannelStore from '../../session/ChannelStore.js'
-import { deserializeSessionReceipt } from '../../session/Receipt.js'
-import { parseEvent } from '../../session/Sse.js'
-import type { SessionReceipt } from '../../session/Types.js'
+import { deserializeSessionReceipt } from '../../session/precompile/Protocol.js'
+import type { SessionReceipt } from '../../session/precompile/Protocol.js'
+import * as ChannelStore from '../../session/server/ChannelStore.js'
+import { parseEvent } from '../../session/server/Sse.js'
 import { markPrepaidSessionTick, sse } from './transport.js'
 
 const channelId = '0x0000000000000000000000000000000000000000000000000000000000000001' as Hex

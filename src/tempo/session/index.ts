@@ -1,8 +1,7 @@
-export * as Chain from './Chain.js'
-export * as Channel from './Channel.js'
-export * as ChannelStore from './ChannelStore.js'
-export * as Receipt from './Receipt.js'
-export * as Sse from './Sse.js'
-export * as Types from './Types.js'
-export * as Voucher from './Voucher.js'
-export * as Ws from './Ws.js'
+/** Client-side session method, session manager, state machine, and transport drivers. */
+export * as Client from './client/index.js'
+export { deserializeSnapshot, serializeSnapshot } from './Snapshot.js'
+/** Shared TIP-1034 precompile primitives: chain calls, channel IDs, vouchers, ABI, and types. */
+export * as Precompile from './precompile/index.js'
+/** Server-side session method, credential verification, charging, and settlement controls. */
+export * as Server from './server/index.js'

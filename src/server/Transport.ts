@@ -1,4 +1,5 @@
 import * as Challenge from '../Challenge.js'
+import * as Constants from '../Constants.js'
 import * as Credential from '../Credential.js'
 import * as Errors from '../Errors.js'
 import type { Distribute, MaybePromise, UnionToIntersection } from '../internal/types.js'
@@ -145,7 +146,7 @@ export function http(): Http {
     },
 
     getCredential(request) {
-      const header = request.headers.get('Authorization')
+      const header = request.headers.get(Constants.Headers.authorization)
       if (!header) return null
       const payment = Credential.extractPaymentScheme(header)
       if (!payment) return null
@@ -165,7 +166,7 @@ export function http(): Http {
         })
 
       const headers: Record<string, string> = {
-        'WWW-Authenticate': Challenge.serialize(challenge),
+        [Constants.Headers.wwwAuthenticate]: Challenge.serialize(challenge),
         'Cache-Control': 'no-store',
       }
 
@@ -209,7 +210,7 @@ export function http(): Http {
     respondReceipt({ receipt, response }) {
       const headers = new Headers(response.headers)
       headers.set('Cache-Control', withPrivateCacheControl(headers.get('Cache-Control')))
-      headers.set('Payment-Receipt', Receipt.serialize(receipt))
+      headers.set(Constants.Headers.paymentReceipt, Receipt.serialize(receipt))
       return new Response(response.body, {
         status: response.status,
         statusText: response.statusText,

@@ -4,7 +4,7 @@ import { Mppx as Mppx_server, tempo as tempo_server } from 'mppx/server'
 import { createClient, defineChain } from 'viem'
 import { describe, expect, test, vi } from 'vp/test'
 import * as Http from '~test/Http.js'
-import { rpcUrl } from '~test/tempo/prool.js'
+import { rpcUrl } from '~test/tempo/rpc.js'
 import { accounts, asset, chain, client, http } from '~test/tempo/viem.js'
 
 import * as Fetch from './Fetch.js'

@@ -11,10 +11,15 @@ import { createClient, http } from 'viem'
 import { privateKeyToAccount } from 'viem/accounts'
 
 import { normalizeHeaders } from '../../client/internal/Fetch.js'
+import * as Constants from '../../Constants.js'
 import * as Credential from '../../Credential.js'
 import { tempo as tempoMethods } from '../../tempo/client/index.js'
-import type { SessionCredentialPayload } from '../../tempo/session/Types.js'
-import { signVoucher } from '../../tempo/session/Voucher.js'
+import { tip20ChannelEscrow } from '../../tempo/session/precompile/Protocol.js'
+import type {
+  ChannelDescriptor,
+  SessionCredentialPayload,
+} from '../../tempo/session/precompile/Protocol.js'
+import { signVoucher } from '../../tempo/session/precompile/Voucher.js'
 import { createDefaultStore, createKeychain, resolveAccountName } from '../account.js'
 import {
   fetchTokenInfo,
@@ -40,6 +45,7 @@ export function tempo() {
           chainId: number
           action?: 'voucher' | 'close'
         }): Promise<string>
+        descriptor?: ChannelDescriptor | undefined
         source: string
       }
     | undefined
@@ -176,7 +182,7 @@ export function tempo() {
         account,
         getClient: () => client!,
         ...(autoSwap !== undefined ? { autoSwap } : {}),
-        deposit: (() => {
+        maxDeposit: (() => {
           if (challenge.intent !== 'session') return undefined
           const suggestedDeposit = (challenge.request as Record<string, unknown>)
             .suggestedDeposit as string | undefined
@@ -209,6 +215,7 @@ export function tempo() {
 
       // Store session support for use in lifecycle hooks
       _session = {
+        descriptor: undefined,
         async signVoucher({
           channelId,
           cumulativeAmount,
@@ -216,11 +223,14 @@ export function tempo() {
           chainId,
           action = 'voucher',
         }) {
+          const descriptor = _session?.descriptor
+          if (!descriptor) throw new Error('session descriptor not available')
           return Credential.serialize({
             challenge,
             payload: {
               action,
               channelId,
+              descriptor,
               cumulativeAmount: cumulativeAmount.toString(),
               signature: await signVoucher(
                 client!,
@@ -260,16 +270,19 @@ export function tempo() {
       const parsed = Credential.deserialize<SessionCredentialPayload>(credential)
       const challengeRequest = challenge.request as Record<string, unknown>
       const sessionMd = challengeRequest.methodDetails as
-        | { escrowContract?: string; chainId?: number }
+        | { escrow?: string; escrowContract?: string; chainId?: number }
         | undefined
       const channelId = parsed.payload.channelId
-      const escrowContract = sessionMd?.escrowContract as Address | undefined
+      const escrowContract = (sessionMd?.escrowContract ??
+        sessionMd?.escrow ??
+        tip20ChannelEscrow) as Address
       const chainId = sessionMd?.chainId ?? 0
       const tickCost = BigInt(challengeRequest.amount as string)
       let cumulativeAmount =
         'cumulativeAmount' in parsed.payload && parsed.payload.cumulativeAmount
           ? BigInt(parsed.payload.cumulativeAmount)
           : 0n
+      if ('descriptor' in parsed.payload) _session.descriptor = parsed.payload.descriptor
 
       if (verbose >= 1) {
         if (parsed.payload.action === 'open') {
@@ -302,7 +315,7 @@ export function tempo() {
       }
 
       // Print receipt from initial response headers
-      const receiptHeader = credentialResponse.headers.get('Payment-Receipt')
+      const receiptHeader = credentialResponse.headers.get(Constants.Headers.paymentReceipt)
       if (receiptHeader) {
         try {
           const receiptJson = JSON.parse(Base64.toString(receiptHeader)) as Record<string, unknown>
@@ -556,7 +569,7 @@ async function handleSseStream(
           })
           await globalThis.fetch(opts.fetchUrl, {
             method: 'POST',
-            headers: { Authorization: voucherCred },
+            headers: { [Constants.Headers.authorization]: voucherCred },
           })
         } catch (e) {
           opts.info(pc.dim(pc.yellow(` [voucher failed: ${e instanceof Error ? e.message : e}]`)))
@@ -669,7 +682,7 @@ async function closeChannel(opts: {
   if (closeRes.ok) {
     deleteChannelState(opts.channelId)
     if (opts.verbose >= 1) {
-      const closeReceiptHeader = closeRes.headers.get('Payment-Receipt')
+      const closeReceiptHeader = closeRes.headers.get(Constants.Headers.paymentReceipt)
       let closeTxHash: string | undefined
       if (closeReceiptHeader) {
         try {

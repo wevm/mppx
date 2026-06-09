@@ -1,5 +1,14 @@
+export * as Constants from '../Constants.js'
 export * as Expires from '../Expires.js'
 export * as Fetch from './internal/Fetch.js'
-export { evm, session, stripe, tempo } from './Methods.js'
+export {
+  evm,
+  session,
+  sessionMethod,
+  sessionLegacy,
+  sessionLegacyManager,
+  stripe,
+  tempo,
+} from './Methods.js'
 export * as Mppx from './Mppx.js'
 export * as Transport from './Transport.js'

@@ -5,6 +5,7 @@ import { P256, type Hex, WebAuthnP256 } from 'ox'
 import { SignatureEnvelope, TxEnvelopeTempo } from 'ox/tempo'
 import { Handler } from 'tempo.ts/server'
 import { createClient, custom, encodeFunctionData, parseUnits } from 'viem'
+import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts'
 import {
   getTransactionReceipt,
   prepareTransactionRequest,
@@ -15,16 +16,35 @@ import {
 import { Abis, Account, Actions, Addresses, Secp256k1, Tick, Transaction } from 'viem/tempo'
 import { beforeAll, describe, expect, test } from 'vp/test'
 import * as Http from '~test/Http.js'
-import { closeChannelOnChain, deployEscrow, openChannel } from '~test/tempo/session.js'
+import {
+  closeChannelOnChain,
+  deployEscrow,
+  openChannel,
+  signVoucher,
+} from '~test/tempo/legacy/session.js'
 import { accounts, asset, chain, client, fundAccount, http } from '~test/tempo/viem.js'
 
 import * as Store from '../../Store.js'
 import * as Attribution from '../Attribution.js'
 import * as Proof from '../internal/proof.js'
-import { signVoucher } from '../session/Voucher.js'
 
 const realm = 'api.example.com'
 const secretKey = 'test-secret-key'
+
+function isPairAlreadyExistsError(error: unknown) {
+  if (typeof error !== 'object' || error === null) return false
+  const candidate = error as {
+    details?: string | undefined
+    shortMessage?: string | undefined
+  }
+  return [candidate.details, candidate.shortMessage].some((message) =>
+    message?.includes('PairAlreadyExists'),
+  )
+}
+
+function testAccount() {
+  return privateKeyToAccount(generatePrivateKey())
+}
 
 type ProofAccessKeyContext = {
   accessKey: ReturnType<typeof Account.fromSecp256k1>
@@ -4931,19 +4951,21 @@ describe('tempo', () => {
 
   describe('auto-swap', () => {
     // Use accounts[3] as payer with pathUsd only (no asset).
-    // Use accounts[4] as payer with zero balance.
     const swapPayer = accounts[3]!
-    const brokePayer = accounts[4]!
 
     beforeAll(async () => {
       // Fund swap payer with pathUsd only
       await fundAccount({ address: swapPayer.address, token: Addresses.pathUsd as Hex.Hex })
 
       // Seed DEX liquidity: create pair, then place a sell order for `asset`.
-      await Actions.dex.createPair(client, {
-        account: accounts[0]!,
-        base: asset,
-      })
+      await Actions.dex
+        .createPair(client, {
+          account: accounts[0]!,
+          base: asset,
+        })
+        .catch((error) => {
+          if (!isPairAlreadyExistsError(error)) throw error
+        })
       await fundAccount({ address: accounts[0]!.address, token: asset })
       await Actions.token.approveSync(client, {
         account: accounts[0]!,
@@ -5171,6 +5193,7 @@ describe('tempo', () => {
     })
 
     test('error: throws when no fallback currency has sufficient balance', async () => {
+      const brokePayer = testAccount()
       const mppx = Mppx_client.create({
         polyfill: false,
         methods: [
@@ -5234,6 +5257,7 @@ describe('tempo', () => {
 
     test('error: throws when tokenIn list has no viable candidates', async () => {
       const bogusToken = '0x0000000000000000000000000000000000099999' as const
+      const brokePayer = testAccount()
 
       const mppx = Mppx_client.create({
         polyfill: false,

@@ -86,7 +86,6 @@ const mppx = Mppx.create({
       currency,
       getClient: () => client,
       store,
-      testnet: true,
     }),
   ],
   secretKey,

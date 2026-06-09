@@ -1,13 +1,14 @@
 import type { Account } from 'viem'
 import { createClient } from 'viem'
+import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts'
 import { Actions, Addresses } from 'viem/tempo'
 import { describe, expect, test } from 'vp/test'
-import { nodeEnv } from '~test/config.js'
-import { accounts, asset, chain, fundAccount, http } from '~test/tempo/viem.js'
+import { tempoNetwork } from '~test/config.js'
+import { asset, chain, fundAccount, http } from '~test/tempo/viem.js'
 
 import { resolveFeeToken } from './fee-token.js'
 
-const isLocalnet = nodeEnv === 'localnet'
+const isLocalnet = tempoNetwork === 'localnet'
 
 function clientFor(account: Account) {
   return createClient({
@@ -21,9 +22,13 @@ function expectAddress(actual: string | undefined, expected: string) {
   expect(actual?.toLowerCase()).toBe(expected.toLowerCase())
 }
 
+function testAccount() {
+  return privateKeyToAccount(generatePrivateKey())
+}
+
 describe.runIf(isLocalnet)('resolveFeeToken', () => {
   test('uses the funded account fee preference first', async () => {
-    const account = accounts[11]
+    const account = testAccount()
     const client = clientFor(account)
     await fundAccount({ address: account.address, token: asset })
     await Actions.fee.setUserTokenSync(client, {
@@ -41,7 +46,7 @@ describe.runIf(isLocalnet)('resolveFeeToken', () => {
   })
 
   test('falls through to the first funded candidate token', async () => {
-    const account = accounts[12]
+    const account = testAccount()
     const client = clientFor(account)
     await fundAccount({ address: account.address, token: asset })
 
@@ -55,7 +60,7 @@ describe.runIf(isLocalnet)('resolveFeeToken', () => {
   })
 
   test('falls through from an unfunded account fee preference', async () => {
-    const account = accounts[13]
+    const account = testAccount()
     const client = clientFor(account)
     await fundAccount({ address: account.address, token: asset })
     await Actions.fee.setUserTokenSync(client, {
@@ -73,7 +78,7 @@ describe.runIf(isLocalnet)('resolveFeeToken', () => {
   })
 
   test('uses a funded chain fee token when configured', async () => {
-    const account = accounts[14]
+    const account = testAccount()
     const client = createClient({
       account,
       chain: { ...chain, feeToken: asset },
@@ -91,7 +96,7 @@ describe.runIf(isLocalnet)('resolveFeeToken', () => {
   })
 
   test('falls through from an unfunded chain fee token', async () => {
-    const account = accounts[15]
+    const account = testAccount()
     const client = createClient({
       account,
       chain: { ...chain, feeToken: Addresses.pathUsd },
@@ -109,7 +114,7 @@ describe.runIf(isLocalnet)('resolveFeeToken', () => {
   })
 
   test('falls back to the first known token when none are funded', async () => {
-    const account = accounts[16]
+    const account = testAccount()
     const client = clientFor(account)
 
     const feeToken = await resolveFeeToken({

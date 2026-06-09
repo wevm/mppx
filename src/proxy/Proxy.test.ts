@@ -3,20 +3,20 @@ import { Mppx as Mppx_client, tempo as tempo_client } from 'mppx/client'
 import { Mppx as Mppx_server, tempo as tempo_server } from 'mppx/server'
 import type { Address } from 'viem'
 import { afterEach, beforeAll, describe, expect, test } from 'vp/test'
-import { nodeEnv } from '~test/config.js'
+import { tempoNetwork } from '~test/config.js'
 import * as Http from '~test/Http.js'
-import { deployEscrow } from '~test/tempo/session.js'
+import { deployEscrow } from '~test/tempo/legacy/session.js'
 import { accounts, asset, client } from '~test/tempo/viem.js'
 
-import { sessionManager } from '../tempo/client/SessionManager.js'
-import { deserializeSessionReceipt } from '../tempo/session/Receipt.js'
+import { sessionManager } from '../tempo/legacy/client/index.js'
+import { deserializeSessionReceipt } from '../tempo/session/precompile/Protocol.js'
 import * as ApiProxy from './Proxy.js'
 import * as Service from './Service.js'
 import { anthropic } from './services/anthropic.js'
 import { openai } from './services/openai.js'
 
 const secretKey = 'test-secret-key'
-const isLocalnet = nodeEnv === 'localnet'
+const isLocalnet = tempoNetwork === 'localnet'
 
 const mppx_server = Mppx_server.create({
   methods: [
@@ -907,7 +907,7 @@ describe.runIf(isLocalnet)('plain HTTP session proxy', () => {
 
     const sessionHandler = Mppx_server.create({
       methods: [
-        tempo_server.session({
+        tempo_server.sessionLegacy({
           account: accounts[0],
           currency: asset,
           escrowContract: sessionEscrow,
@@ -967,7 +967,7 @@ describe.runIf(isLocalnet)('plain HTTP session proxy', () => {
 
     const sessionHandler = Mppx_server.create({
       methods: [
-        tempo_server.session({
+        tempo_server.sessionLegacy({
           account: accounts[0],
           currency: asset,
           escrowContract: sessionEscrow,
@@ -997,7 +997,7 @@ describe.runIf(isLocalnet)('plain HTTP session proxy', () => {
     const sessionClient = Mppx_client.create({
       polyfill: false,
       methods: [
-        tempo_client({
+        tempo_client.sessionLegacy.method({
           account: accounts[1],
           getClient: () => client,
           maxDeposit: '2',

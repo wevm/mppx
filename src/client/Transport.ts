@@ -1,4 +1,5 @@
 import * as Challenge from '../Challenge.js'
+import * as Constants from '../Constants.js'
 import * as Credential from '../Credential.js'
 import * as Mcp from '../Mcp.js'
 import * as x402_Header from '../x402/Header.js'
@@ -6,10 +7,8 @@ import * as x402_ChallengeBrand from '../x402/internal/ChallengeBrand.js'
 import * as x402_Types from '../x402/Types.js'
 
 const paymentRequiredStatus = 402
-const paymentAuthChallengeHeader = 'WWW-Authenticate'
-const paymentAuthCredentialHeader = 'Authorization'
 const credentialHeaders = [
-  paymentAuthCredentialHeader,
+  Constants.Headers.authorization,
   x402_Types.paymentRequiredHeader,
   x402_Types.paymentResponseHeader,
   x402_Types.paymentSignatureHeader,
@@ -107,7 +106,7 @@ export function http() {
       if (isX402Challenge(options?.challenge)) {
         headers.set(x402_Types.paymentSignatureHeader, credential)
       } else {
-        headers.set(paymentAuthCredentialHeader, credential)
+        headers.set(Constants.Headers.authorization, credential)
       }
       return { ...request, headers }
     },
@@ -116,7 +115,7 @@ export function http() {
 
 function paymentRequiredChallenges(response: Response): Challenge.Challenge[] {
   return [
-    ...(response.headers.has(paymentAuthChallengeHeader)
+    ...(response.headers.has(Constants.Headers.wwwAuthenticate)
       ? Challenge.fromResponseList(response)
       : []),
     ...x402Challenges(response),

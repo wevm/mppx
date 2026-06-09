@@ -74,6 +74,81 @@ describe('Mppx.create', () => {
 })
 
 describe('createCredential', () => {
+  function sessionChallenge(id: string, sessionProtocol?: string) {
+    return {
+      expires: new Date(Date.now() + 60_000).toISOString(),
+      id,
+      intent: 'session',
+      method: 'tempo',
+      realm,
+      request: {
+        amount: '100',
+        currency: asset,
+        unitType: 'request',
+        methodDetails: {
+          chainId: 1,
+          escrowContract: '0x0000000000000000000000000000000000000001',
+          ...(sessionProtocol !== undefined ? { sessionProtocol } : {}),
+        },
+      },
+    } as const
+  }
+
+  function paymentRequiredResponse(...challenges: Challenge.Challenge[]) {
+    return new Response(null, {
+      status: 402,
+      headers: { 'WWW-Authenticate': challenges.map(Challenge.serialize).join(', ') },
+    })
+  }
+
+  function taggedSessionMethod(tag: string, canHandleChallenge: Method.CanHandleChallengeFn) {
+    return Method.toClient(Methods.session, {
+      canHandleChallenge,
+      async createCredential({ challenge }) {
+        return Credential.serialize({ challenge, payload: { tag } })
+      },
+    })
+  }
+
+  test('behavior: routes duplicate tempo/session client methods by sessionProtocol', async () => {
+    const tip1034 = taggedSessionMethod(
+      'v2',
+      ({ challenge }) =>
+        (challenge.request.methodDetails as { sessionProtocol?: string } | undefined)
+          ?.sessionProtocol === 'v2',
+    )
+    const legacy = taggedSessionMethod('v1', ({ challenge }) => {
+      const sessionProtocol = (
+        challenge.request.methodDetails as { sessionProtocol?: string } | undefined
+      )?.sessionProtocol
+      return sessionProtocol === undefined || sessionProtocol === 'v1'
+    })
+    const mppx = Mppx.create({ polyfill: false, methods: [tip1034, legacy] })
+
+    const [newCredential, legacyCredential, oldCredential] = await Promise.all([
+      mppx.createCredential(paymentRequiredResponse(sessionChallenge('new', 'v2'))),
+      mppx.createCredential(paymentRequiredResponse(sessionChallenge('v1', 'v1'))),
+      mppx.createCredential(paymentRequiredResponse(sessionChallenge('old'))),
+    ])
+    expect(Credential.deserialize(newCredential).payload).toEqual({ tag: 'v2' })
+    expect(Credential.deserialize(legacyCredential).payload).toEqual({ tag: 'v1' })
+    expect(Credential.deserialize(oldCredential).payload).toEqual({ tag: 'v1' })
+  })
+
+  test('behavior: rejects unknown tempo/session sessionProtocol', async () => {
+    const method = taggedSessionMethod(
+      'v2',
+      ({ challenge }) =>
+        (challenge.request.methodDetails as { sessionProtocol?: string } | undefined)
+          ?.sessionProtocol === 'v2',
+    )
+    const mppx = Mppx.create({ polyfill: false, methods: [method] })
+
+    await expect(
+      mppx.createCredential(paymentRequiredResponse(sessionChallenge('unknown', 'future'))),
+    ).rejects.toThrow('No method found for challenges: tempo.session')
+  })
+
   test('behavior: routes to correct method based on challenge', async () => {
     const mppx = Mppx.create({
       polyfill: false,

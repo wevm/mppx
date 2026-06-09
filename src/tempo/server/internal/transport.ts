@@ -6,11 +6,13 @@
  * @internal
  */
 import * as Challenge from '../../../Challenge.js'
+import * as Constants from '../../../Constants.js'
 import * as Errors from '../../../Errors.js'
 import * as Transport from '../../../server/Transport.js'
-import * as ChannelStore from '../../session/ChannelStore.js'
-import * as Sse_core from '../../session/Sse.js'
-import type { SessionCredentialPayload, SessionReceipt } from '../../session/Types.js'
+import type { SessionReceipt } from '../../session/precompile/Protocol.js'
+import { requireSessionCredentialContext } from '../../session/precompile/Protocol.js'
+import * as ChannelStore from '../../session/server/ChannelStore.js'
+import * as Sse_core from '../../session/server/Sse.js'
 import { captureRequestBodyProbe, shouldChargePlainResponse } from './request-body.js'
 
 const prepaidSessionTick = Symbol('mppx.prepaidSessionTick')
@@ -18,10 +20,12 @@ const prepaidSessionTick = Symbol('mppx.prepaidSessionTick')
 /** SSE transport with Tempo session controller. */
 export type Sse = Transport.Sse<Sse_core.SessionController>
 
+/** Receipt marker used to avoid double-charging a request already charged during verification. */
 export type PrepaidSessionReceipt = SessionReceipt & {
   [prepaidSessionTick]?: true | undefined
 }
 
+/** Marks a session receipt as already charged for the current request. */
 export function markPrepaidSessionTick(receipt: SessionReceipt): SessionReceipt {
   Object.defineProperty(receipt, prepaidSessionTick, {
     configurable: false,
@@ -83,9 +87,10 @@ export function sse(options: sse.Options & { store: ChannelStore.ChannelStore })
       const verifiedCredential = envelope?.credential ?? credential
       const verifiedChallengeId = envelope?.challenge.id ?? challengeId
       const verifiedRequest = envelope?.request ?? verifiedCredential.challenge.request
-      const payload = verifiedCredential.payload as Partial<SessionCredentialPayload>
-      if (!payload.channelId) throw new Error('No SSE context available')
-
+      const payload = requireSessionCredentialContext(
+        verifiedCredential.payload,
+        'No SSE context available',
+      )
       const channelId = payload.channelId
       const tickCost = BigInt(verifiedCredential.challenge.request.amount as string)
       const unitType =
@@ -146,7 +151,9 @@ export function sse(options: sse.Options & { store: ChannelStore.ChannelStore })
           {
             status: error.status,
             headers: {
-              'WWW-Authenticate': Challenge.serialize(verifiedCredential.challenge),
+              [Constants.Headers.wwwAuthenticate]: Challenge.serialize(
+                verifiedCredential.challenge,
+              ),
               'Cache-Control': 'no-store',
               'Content-Type': 'application/problem+json',
             },
@@ -217,6 +224,7 @@ export function sse(options: sse.Options & { store: ChannelStore.ChannelStore })
   })
 }
 
+/** Type helpers for the Tempo SSE transport adapter. */
 export declare namespace sse {
   type Options = {
     /**
@@ -235,13 +243,14 @@ export declare namespace sse {
   }
 }
 
+type DefaultServeGenerate = AsyncIterable<string> | (() => AsyncIterable<string>)
+
 /** Default SSE serve: iterates values and emits `event: message` per value. */
 export function defaultServe(options: {
-  generate: AsyncIterable<string> | ((...args: any[]) => AsyncIterable<string>)
+  generate: DefaultServeGenerate
   challengeId: string
 }): Response {
-  const iterable =
-    typeof options.generate === 'function' ? options.generate(undefined as any) : options.generate
+  const iterable = typeof options.generate === 'function' ? options.generate() : options.generate
   const encoder = new TextEncoder()
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {

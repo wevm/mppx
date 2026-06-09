@@ -1,26 +1,26 @@
 import type * as Hex from 'ox/Hex'
-import { createClient, defineChain, type HttpTransportConfig, http as viem_http } from 'viem'
-import { english, generateMnemonic, type LocalAccount, mnemonicToAccount } from 'viem/accounts'
+import {
+  createClient,
+  defineChain,
+  type Chain as viem_Chain,
+  type HttpTransportConfig,
+  http as viem_http,
+} from 'viem'
+import { type LocalAccount, mnemonicToAccount } from 'viem/accounts'
 import { Actions } from 'viem/tempo'
-import { tempo, tempoDevnet, tempoLocalnet, tempoModerato } from 'viem/tempo/chains'
 
-import { nodeEnv } from '../config.js'
-import { rpcUrl } from './prool.js'
+import { tempoNetworkConfig, tempoRpcUrl as rpcUrl } from '../config.js'
 
 export const asset = '0x20c0000000000000000000000000000000000001' as const
 
-const localnetTransportOptions =
-  nodeEnv === 'localnet'
-    ? {
-        retryCount: 0,
-        timeout: 2_000,
-      }
-    : undefined
+const localnetTransportOptions = tempoNetworkConfig.isLocalnet
+  ? {
+      retryCount: 0,
+      timeout: 30_000,
+    }
+  : undefined
 
-const accountsMnemonic = (() => {
-  if (nodeEnv === 'localnet') return 'test test test test test test test test test test test junk'
-  return generateMnemonic(english)
-})()
+const accountsMnemonic = 'test test test test test test test test test test test junk'
 
 export const accounts = Array.from({ length: 20 }, (_, i) =>
   mnemonicToAccount(accountsMnemonic, {
@@ -28,21 +28,27 @@ export const accounts = Array.from({ length: 20 }, (_, i) =>
   }),
 ) as unknown as FixedArray<LocalAccount, 20>
 
+function withRpcUrl<const chain extends viem_Chain>(chain: chain): chain {
+  if (!import.meta.env.VITE_RPC_URL) return chain
+  return defineChain({
+    ...chain,
+    rpcUrls: {
+      ...chain.rpcUrls,
+      default: {
+        ...chain.rpcUrls.default,
+        http: [rpcUrl],
+      },
+    },
+  }) as unknown as chain
+}
+
 export const chain = (() => {
-  switch (nodeEnv) {
-    case 'mainnet':
-      return tempo
-    case 'testnet':
-      return tempoModerato
-    case 'devnet':
-      return tempoDevnet
-    default:
-      return defineChain({
-        ...tempoLocalnet,
-        rpcUrls: { default: { http: [rpcUrl] } },
-      })
-  }
-})() as typeof tempoLocalnet
+  if (tempoNetworkConfig.isDevnet) return withRpcUrl(tempoNetworkConfig.chain)
+  return defineChain({
+    ...tempoNetworkConfig.chain,
+    rpcUrls: { default: { http: [rpcUrl] } },
+  })
+})() as typeof tempoNetworkConfig.chain
 
 export function debugOptions({ rpcUrl }: { rpcUrl: string }): HttpTransportConfig | undefined {
   if (import.meta.env.VITE_HTTP_LOG !== 'true') return undefined

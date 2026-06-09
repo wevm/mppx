@@ -1,14 +1,18 @@
 import * as http from 'node:http'
 
 import { Challenge, Credential, Receipt } from 'mppx'
-import { Mppx as Mppx_client, session as sessionIntent, tempo as tempo_client } from 'mppx/client'
+import {
+  Mppx as Mppx_client,
+  sessionLegacy as sessionIntent,
+  tempo as tempo_client,
+} from 'mppx/client'
 import { Mppx, discovery, payment } from 'mppx/nextjs'
 import { tempo as tempo_server } from 'mppx/server'
 import type { Address } from 'viem'
 import { Addresses } from 'viem/tempo'
 import { beforeAll, describe, expect, test } from 'vp/test'
 import * as TestHttp from '~test/Http.js'
-import { deployEscrow } from '~test/tempo/session.js'
+import { deployEscrow } from '~test/tempo/legacy/session.js'
 import { accounts, asset, chain, client, fundAccount } from '~test/tempo/viem.js'
 
 function createServer(handler: (request: Request) => Promise<Response> | Response) {
@@ -279,7 +283,7 @@ describe('session', () => {
   function createSessionHarness(feePayer: boolean) {
     const mppx = Mppx.create({
       methods: [
-        tempo_server.session({
+        tempo_server.sessionLegacy({
           getClient: () => client,
           account: accounts[0],
           currency: asset,
@@ -295,7 +299,7 @@ describe('session', () => {
       methods: [
         sessionIntent({
           account: accounts[2],
-          deposit: '10',
+          maxDeposit: '10',
           getClient: () => client,
         }),
       ],

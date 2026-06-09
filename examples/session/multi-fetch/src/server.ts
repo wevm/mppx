@@ -74,7 +74,6 @@ const client = createClient({
 // Configuration:
 //   - `currency`: The TIP-20 token address to accept payment in
 //   - `recipient`: The server's address that receives funds on settlement
-//   - `testnet: true`: Uses Tempo Moderato testnet defaults (chain ID, escrow contract)
 //   - `getClient: () => client`: Returns an account-bearing viem client.
 //     The server needs this to:
 //       (a) Read on-chain channel state (deposit, settled amounts)
@@ -89,7 +88,6 @@ const mppx = Mppx.create({
       account,
       currency,
       feePayer: true,
-      testnet: true,
       getClient: () => client,
     }),
   ],
