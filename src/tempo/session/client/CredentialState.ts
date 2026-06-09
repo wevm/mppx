@@ -21,6 +21,7 @@ import {
   createTopUpPayload,
   createVoucherPayload,
   isSameAddress,
+  resolveAuthorizedSigner,
   resolveEscrow,
   type ChannelEntry,
 } from './ChannelOps.js'
@@ -249,6 +250,10 @@ export type ReusableChannelExpectation = {
   escrow: Address
   /** Payee expected by the current challenge. */
   payee: Address
+  /** Payer address controlled by the local account. */
+  payer: Address
+  /** Voucher signer resolved from local account configuration. */
+  authorizedSigner: Address
   /** Token expected by the current challenge. */
   token: Address
 }
@@ -340,6 +345,7 @@ export type CredentialPlan =
   | {
       type: 'recover'
       account: ViemAccount
+      authorizedSigner?: Address | undefined
       context: DescriptorSessionContext
       decimals: number
       maxDeposit?: bigint | undefined
@@ -357,6 +363,7 @@ export type CredentialPlan =
   | {
       type: 'manual'
       account: ViemAccount
+      authorizedSigner?: Address | undefined
       context: ManualSessionDescriptorContext
       decimals: number
       resolved: ChallengeContext
@@ -460,6 +467,8 @@ export async function resolveReusableChannel(
     descriptor,
     expectedChannelId,
     payee: expected.payee,
+    payer: expected.payer,
+    authorizedSigner: expected.authorizedSigner,
     token: expected.token,
   })
 
@@ -477,15 +486,22 @@ function assertReusableChannelDescriptor(parameters: {
   descriptor: Channel.ChannelDescriptor
   expectedChannelId: string
   payee: Address
+  payer: Address
+  authorizedSigner: Address
   token: Address
 }) {
-  const { channelId, descriptor, expectedChannelId, payee, token } = parameters
+  const { authorizedSigner, channelId, descriptor, expectedChannelId, payee, payer, token } =
+    parameters
   if (channelId && channelId.toLowerCase() !== expectedChannelId.toLowerCase())
     throw new Error('context channelId does not match descriptor')
   if (!isSameAddress(descriptor.payee, payee))
     throw new Error('context descriptor payee does not match challenge')
   if (!isSameAddress(descriptor.token, token))
     throw new Error('context descriptor token does not match challenge')
+  if (!isSameAddress(descriptor.payer, payer))
+    throw new Error('context descriptor payer does not match account')
+  if (!isSameAddress(descriptor.authorizedSigner, authorizedSigner))
+    throw new Error('context descriptor authorizedSigner does not match account')
 }
 
 /** Resolves descriptor-based recovery data, preferring caller context over server hints. */
@@ -509,9 +525,7 @@ export function resolveRecoveredCumulative(
   const { context, decimals, requestAmount, snapshot, settled } = parameters
 
   if (snapshot) {
-    const accepted = BigInt(snapshot.acceptedCumulative)
-    const required = BigInt(snapshot.requiredCumulative)
-    return accepted > required ? accepted : required
+    return BigInt(snapshot.spent) + requestAmount
   }
 
   const contextCumulative = parseOptionalContextAmount(context, decimals, 'cumulativeAmount')
@@ -529,6 +543,7 @@ export function planCredential(parameters: PlanCredentialParameters): Credential
     return {
       type: 'manual',
       account,
+      authorizedSigner,
       context,
       decimals,
       resolved,
@@ -543,6 +558,7 @@ export function planCredential(parameters: PlanCredentialParameters): Credential
     return {
       type: 'recover',
       account,
+      authorizedSigner,
       context: recoverContext,
       decimals,
       maxDeposit,
@@ -618,6 +634,8 @@ async function recover(
       chainId: resolved.chainId,
       escrow: resolved.escrow,
       payee: resolved.payee,
+      payer: account.address,
+      authorizedSigner: resolveAuthorizedSigner(account, plan.authorizedSigner),
       token: resolved.token,
     },
   })
@@ -628,6 +646,8 @@ async function recover(
     settled: reusable.state.settled,
     snapshot: resolved.snapshot,
   })
+  if (cumulativeAmount > reusable.state.deposit)
+    throw new Error('recovered voucher amount exceeds on-chain channel deposit')
   assertWithinMaxDeposit(cumulativeAmount, maxDeposit)
   const payload = await createVoucherPayload(
     resolved.client,
@@ -685,6 +705,8 @@ async function manual(
     descriptor,
     expectedChannelId: channelId,
     payee: resolved.payee,
+    payer: account.address,
+    authorizedSigner: resolveAuthorizedSigner(account, plan.authorizedSigner),
     token: resolved.token,
   })
 

@@ -51,6 +51,7 @@ export function shouldChargePlainResponse(
     (payload.action === 'open' || payload.action === 'voucher') &&
     input.method === 'POST' &&
     !input.url?.search &&
+    input.hasBody !== true &&
     !hasBodyIntentHeaders(input)
   )
     return false

@@ -248,6 +248,8 @@ export type ApplyVerifiedHttpAccountingParameters = {
   payloadAction: SessionCredentialPayload['action']
   /** Receipt returned by credential verification before content accounting. */
   receipt: SessionReceipt
+  /** Marks an SSE receipt whose first content unit was charged during verification. */
+  markPrepaidReceipt?: ((receipt: SessionReceipt) => SessionReceipt) | undefined
   /** Whether SSE transport is enabled. SSE accounting is stream-driven, not HTTP-response-driven. */
   sseEnabled: boolean
   /** Runs optional server settlement policy after a successful content charge. */
@@ -259,19 +261,22 @@ export async function applyVerifiedHttpAccounting(
   parameters: ApplyVerifiedHttpAccountingParameters,
 ): Promise<SessionReceipt> {
   const { capturedRequest, payloadAction, receipt, sseEnabled } = parameters
-  if (!capturedRequest || sseEnabled) return receipt
+  if (!capturedRequest) return receipt
   if (!isSessionContentRequest(capturedRequest)) return receipt
   if (payloadAction !== 'open' && payloadAction !== 'voucher') return receipt
 
   const requestAmount = parameters.getRequestAmount()
   const charged = await parameters.charge(receipt.channelId, requestAmount)
   const settlementTxHash = await parameters.settleCharged(charged)
-  return {
+  const chargedReceipt = {
     ...receipt,
     spent: charged.spent.toString(),
     units: charged.units,
     ...(settlementTxHash ? { txHash: settlementTxHash } : {}),
   }
+  return sseEnabled
+    ? (parameters.markPrepaidReceipt?.(chargedReceipt) ?? chargedReceipt)
+    : chargedReceipt
 }
 
 /** Atomically deducts spend from a channel and maps store failures to typed session errors. */

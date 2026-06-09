@@ -180,17 +180,23 @@ function createServer(parameters: Partial<session.Parameters> = {}) {
   return { method, store: channelStore(rawStore), rpcCalls }
 }
 
-function makeChallenge(channelId?: Hex): Challenge.Challenge<SessionRequest, 'session', 'tempo'> {
+function makeChallenge(
+  channelId?: Hex,
+  options: { operator?: Address | undefined } = {},
+): Challenge.Challenge<SessionRequest, 'session', 'tempo'> {
   return {
     id: 'challenge-id',
     realm: 'api.example.com',
     method: 'tempo',
     intent: 'session',
-    request: makeRequest(channelId),
+    request: makeRequest(channelId, options),
   } as Challenge.Challenge<SessionRequest, 'session', 'tempo'>
 }
 
-function makeRequest(channelId?: Hex): SessionRequest {
+function makeRequest(
+  channelId?: Hex,
+  options: { operator?: Address | undefined } = {},
+): SessionRequest {
   return {
     amount: '100',
     currency: token,
@@ -200,17 +206,21 @@ function makeRequest(channelId?: Hex): SessionRequest {
       chainId,
       escrowContract: tip20ChannelEscrow,
       ...(channelId && { channelId }),
+      ...(options.operator ? { operator: options.operator } : {}),
     },
   }
 }
 
 type VerifyRequest = Parameters<NonNullable<ReturnType<typeof session>['verify']>>[0]['request']
 
-function verifyRequest(channelId?: Hex): VerifyRequest {
+function verifyRequest(
+  channelId?: Hex,
+  options: { operator?: Address | undefined } = {},
+): VerifyRequest {
   // `verify()` receives the HMAC-bound canonical challenge request. The public
   // request schema input still includes parse-only fields like `decimals`, so
   // keep this test bridge in one place instead of casting every verification.
-  return makeRequest(channelId) as unknown as VerifyRequest
+  return makeRequest(channelId, options) as unknown as VerifyRequest
 }
 
 function verifyRequestWithFeePayer(channelId: Hex, feePayer: typeof payer): VerifyRequest {
@@ -541,10 +551,11 @@ describe('precompile server session unit guardrails', () => {
     const request = await method.request!({
       credential: {
         challenge: {},
-        payload: { channelId: openPayload.channelId },
+        payload: {},
       } as never,
       request: {
         amount: '1',
+        channelId: openPayload.channelId,
         currency: token,
         decimals: 0,
         recipient: payee,
@@ -651,10 +662,11 @@ describe('precompile server session unit guardrails', () => {
       },
       credential: {
         challenge: {},
-        payload: { channelId: openPayload.channelId },
+        payload: {},
       } as never,
       request: {
         amount: '1',
+        channelId: openPayload.channelId,
         currency: token,
         decimals: 0,
         recipient: payee,
@@ -1965,6 +1977,7 @@ describe('precompile server session unit guardrails', () => {
   describe('same-route bootstrap', () => {
     function createBootstrapRoute(parameters: {
       rawStore: Store.AtomicStore
+      recipient?: Address | undefined
       resolveChannelId?: ResolveSessionChannelId | undefined
     }) {
       return Mppx_server.create({
@@ -1976,7 +1989,7 @@ describe('precompile server session unit guardrails', () => {
             currency: token,
             decimals: 0,
             getClient: () => createStateClient(payer),
-            recipient: payee,
+            recipient: parameters.recipient ?? payee,
             resolveChannelId: parameters.resolveChannelId,
             store: parameters.rawStore,
             unitType: 'request',
@@ -2060,6 +2073,25 @@ describe('precompile server session unit guardrails', () => {
       const route = createBootstrapRoute({
         rawStore,
         resolveChannelId: () => undefined,
+      })
+      const authorization = await createBootstrapCredential(await bootstrapResponse(route))
+
+      const response = await bootstrapResponse(route, authorization)
+
+      expect(response.status).toBe(204)
+      expect(response.headers.get(Constants.Headers.paymentSession)).toBeNull()
+      expect(response.headers.get(Constants.Headers.paymentSessionSnapshot)).toBeNull()
+    })
+
+    test('valid proof does not return snapshots for channels with different payment fields', async () => {
+      const rawStore = Store.memory()
+      const store = channelStore(rawStore)
+      const openPayload = await createOpenPayload({ initialAmount: 1n })
+      await persistPrecompileChannel(store, openPayload)
+      const route = createBootstrapRoute({
+        rawStore,
+        recipient: '0x0000000000000000000000000000000000000004',
+        resolveChannelId: () => openPayload.channelId,
       })
       const authorization = await createBootstrapCredential(await bootstrapResponse(route))
 
@@ -3161,6 +3193,7 @@ describe('precompile server session unit guardrails', () => {
       currency: token,
       decimals: 0,
       recipient: payee,
+      operator: wrongPayer.address,
       store: rawStore,
       unitType: 'request',
       getClient: () => createStateClient(payer),
@@ -3176,10 +3209,10 @@ describe('precompile server session unit guardrails', () => {
     await expect(
       method.verify({
         credential: {
-          challenge: makeChallenge(openPayload.channelId),
+          challenge: makeChallenge(openPayload.channelId, { operator: wrongPayer.address }),
           payload,
         },
-        request: verifyRequest(openPayload.channelId),
+        request: verifyRequest(openPayload.channelId, { operator: wrongPayer.address }),
       }),
     ).rejects.toThrow(/eth_sendRawTransaction/)
   })

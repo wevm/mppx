@@ -384,7 +384,7 @@ describe('precompile client session', () => {
     expect(payload.cumulativeAmount).toBe('400')
   })
 
-  test('uses accepted snapshot cumulative when it is above the required amount', async () => {
+  test('ignores accepted snapshot headroom above current request spend', async () => {
     const method = session({ account, decimals: 0, maxDeposit: '1000', getClient: () => client })
     const channelId = Channel.computeId({ ...descriptor, chainId, escrow: tip20ChannelEscrow })
     const payload = deserialize(
@@ -413,7 +413,7 @@ describe('precompile client session', () => {
 
     expect(payload.action).toBe('voucher')
     if (payload.action !== 'voucher') throw new Error('expected voucher')
-    expect(payload.cumulativeAmount).toBe('500')
+    expect(payload.cumulativeAmount).toBe('400')
   })
 
   test('caps recovered voucher authorization by maxDeposit', async () => {
@@ -471,7 +471,7 @@ describe('precompile client session', () => {
         }),
         context: {},
       }),
-    ).rejects.toThrow('requested voucher amount 1000 exceeds local maxDeposit 300')
+    ).rejects.toThrow('requested voucher amount 700 exceeds local maxDeposit 300')
   })
 
   test('rejects descriptor recovery for closed or missing channels', async () => {

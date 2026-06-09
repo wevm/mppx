@@ -350,15 +350,13 @@ describe('SessionSnapshotHints', () => {
       expect(normalizeSessionChannelId(`0x${'zz'.repeat(32)}`)).toBeUndefined()
     })
 
-    test('resolves bootstrap channel IDs from explicit hints before custom resolver', async () => {
+    test('resolves channel IDs from explicit request hints before custom resolver', async () => {
       let called = false
       const resolved = await resolveSessionChannelId({
-        credential: {
-          challenge: {},
-          payload: { channelId: `0x${'AA'.repeat(32)}` },
-        } as Credential.Credential,
+        credential: null,
         request: {
           amount: '1',
+          channelId: `0x${'AA'.repeat(32)}`,
           currency: descriptor.token,
           decimals: 0,
           recipient: descriptor.payee,
@@ -373,6 +371,30 @@ describe('SessionSnapshotHints', () => {
 
       expect(resolved).toBe(channelId)
       expect(called).toBe(false)
+    })
+
+    test('does not trust credential channel IDs before verification', async () => {
+      const resolved = await resolveSessionChannelId({
+        credential: {
+          challenge: {},
+          payload: { channelId: `0x${'AA'.repeat(32)}` },
+        } as Credential.Credential,
+        request: {
+          amount: '1',
+          currency: descriptor.token,
+          decimals: 0,
+          recipient: descriptor.payee,
+          unitType: 'request',
+        },
+        resolveChannelId({ credential, source }) {
+          expect(credential).toBeNull()
+          expect(source).toBeUndefined()
+          return undefined
+        },
+        store: store(null),
+      })
+
+      expect(resolved).toBeUndefined()
     })
 
     test('uses custom resolver when no explicit channel ID is present', async () => {

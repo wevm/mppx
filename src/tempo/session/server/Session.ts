@@ -5,7 +5,7 @@
  * and one-shot settlement. Each incoming request carries a session credential
  * with a cumulative voucher that the server validates and records.
  */
-import { type Address, type Hex } from 'viem'
+import { isAddress, type Address, type Hex } from 'viem'
 import { tempo as tempo_chain } from 'viem/chains'
 
 import * as Challenge from '../../../Challenge.js'
@@ -25,6 +25,7 @@ import type * as types from '../../internal/types.js'
 import * as Methods from '../../Methods.js'
 import * as ChargeServer from '../../server/Charge.js'
 import * as Transport from '../../server/internal/transport.js'
+import { tip20ChannelEscrow } from '../precompile/Protocol.js'
 import {
   deserializeSnapshot as deserializeSessionSnapshot,
   serializeSnapshot as serializeSessionSnapshot,
@@ -94,6 +95,7 @@ type BootstrapPreflightParameters = {
   }): MaybePromise<{ chain?: { id?: number | undefined } | undefined }>
   input: Request
   parameterChainId?: number | undefined
+  parameterEscrowContract?: Address | undefined
   paymentRequest: SessionPaymentRequestInput
   realm: string
   resolveChannelId?: ResolveSessionChannelId | undefined
@@ -192,6 +194,25 @@ function sameRequestValue(a: unknown, b: unknown) {
   return a === b || (a === undefined && b === undefined)
 }
 
+function readBootstrapAddress(value: unknown, label: string): Address {
+  if (typeof value === 'string' && isAddress(value, { strict: false })) return value
+  throw new Errors.VerificationFailedError({ reason: `missing bootstrap ${label}` })
+}
+
+function resolveBootstrapEscrowContract(
+  paymentRequest: SessionPaymentRequestInput,
+  parameterEscrowContract?: Address | undefined,
+): Address {
+  const requestEscrow = (paymentRequest as { escrowContract?: unknown }).escrowContract
+  if (requestEscrow === undefined) return parameterEscrowContract ?? tip20ChannelEscrow
+  return readBootstrapAddress(requestEscrow, 'escrowContract')
+}
+
+function readBootstrapChainId(value: unknown): number {
+  if (typeof value === 'number') return value
+  throw new Errors.VerificationFailedError({ reason: 'missing bootstrap chainId' })
+}
+
 async function verifyBootstrapCredential(parameters: {
   challenge: Challenge.Challenge
   charge: BootstrapCharge
@@ -256,6 +277,15 @@ async function handleBootstrapPreflight(
   const snapshot = await resolveSessionSnapshot({
     amount: 0n,
     channelId,
+    expected: {
+      chainId: readBootstrapChainId(request.chainId),
+      currency: readBootstrapAddress(request.currency, 'currency'),
+      escrowContract: resolveBootstrapEscrowContract(
+        parameters.paymentRequest,
+        parameters.parameterEscrowContract,
+      ),
+      recipient: readBootstrapAddress(request.recipient, 'recipient'),
+    },
     store: parameters.store,
   })
   const headers = new Headers({ 'Cache-Control': 'no-store' })
@@ -336,6 +366,7 @@ export function session<const parameters extends session.Parameters>(
             expires,
             getClient,
             parameterChainId: parameters.chainId,
+            parameterEscrowContract: parameters.escrowContract,
             paymentRequest: options,
             realm,
             resolveChannelId: parameters.resolveChannelId,
@@ -357,7 +388,6 @@ export function session<const parameters extends session.Parameters>(
         parameterFeePayer: parameters.feePayer,
         request,
         resolveChannelId: parameters.resolveChannelId,
-        source: credential?.source,
         store,
       })
       return {
@@ -384,6 +414,7 @@ export function session<const parameters extends session.Parameters>(
         chainId: context.chainId,
         client: context.client,
         escrow: context.escrow,
+        expectedOperator: context.methodDetails.operator,
         feePayer: context.feePayer,
         feePayerPolicy: parameters.feePayerPolicy,
         feeToken: parameters.feeToken,
@@ -399,6 +430,7 @@ export function session<const parameters extends session.Parameters>(
         receipt: sessionReceipt,
         getRequestAmount: () => BigInt(context.request.amount ?? challenge.request.amount),
         sseEnabled: Boolean(parameters.sse),
+        markPrepaidReceipt: Transport.markPrepaidSessionTick,
         charge: (channelId, requestAmount) =>
           chargeSessionChannel({ store, channelId, amount: requestAmount }),
         settleCharged: (channel) =>

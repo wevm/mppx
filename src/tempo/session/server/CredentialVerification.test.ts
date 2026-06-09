@@ -1,10 +1,12 @@
-import type { Hex } from 'viem'
+import type { Address, Hex } from 'viem'
 import { describe, expect, test } from 'vp/test'
 
+import * as Channel from '../precompile/Channel.js'
 import {
   requireSessionCredentialAction,
   requireSessionCredentialPayload,
   requireSessionCredentialPayloadHeader,
+  validateChannelDescriptor,
 } from './CredentialVerification.js'
 
 describe('SessionCredentialGuards', () => {
@@ -122,6 +124,23 @@ describe('SessionCredentialGuards', () => {
           signature,
         }),
       ).toThrow('invalid session credential descriptor.payer')
+    })
+
+    test('rejects descriptors whose operator does not match the challenge', () => {
+      const escrow = '0x4D50500000000000000000000000000000000000' as Address
+      const computed = Channel.computeId({ ...descriptor, chainId: 4217, escrow })
+
+      expect(() =>
+        validateChannelDescriptor(
+          descriptor,
+          computed,
+          4217,
+          escrow,
+          descriptor.payee,
+          descriptor.token,
+          '0x0000000000000000000000000000000000000004',
+        ),
+      ).toThrow('channel descriptor operator does not match server operator')
     })
   })
 })

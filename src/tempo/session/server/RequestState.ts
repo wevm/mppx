@@ -94,7 +94,7 @@ export function normalizeSessionChannelId(value: unknown): Hex | undefined {
   }
 }
 
-/** Extracts and normalizes a credential channel ID for server bootstrap hints. */
+/** Extracts and normalizes a credential channel ID after credential verification. */
 export function getCredentialChannelId(credential: Credential.Credential | null | undefined) {
   if (!isObject(credential?.payload)) return undefined
   return normalizeSessionChannelId(credential.payload.channelId)
@@ -115,14 +115,13 @@ export async function resolveSessionChannelId(parameters: {
   store: ChannelStore.ChannelStore
 }): Promise<Hex | undefined> {
   const { capturedRequest, credential, request, resolveChannelId, source, store } = parameters
-  const explicitChannelId =
-    getCredentialChannelId(credential) ?? normalizeSessionChannelId(request.channelId)
+  const explicitChannelId = normalizeSessionChannelId(request.channelId)
   if (explicitChannelId) return explicitChannelId
   if (!resolveChannelId) return undefined
   return normalizeResolvedSessionChannelId(
     await resolveChannelId({
       request: capturedRequest,
-      credential,
+      credential: source ? credential : null,
       source,
       paymentRequest: request,
       store,

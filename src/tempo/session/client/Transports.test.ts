@@ -440,7 +440,7 @@ describe('VoucherManagement', () => {
       ])
       expect(resolution.status).toBe('ready')
       if (resolution.status !== 'ready') throw new Error('expected ready resolution')
-      expect(entry.cumulativeAmount).toBe(5n)
+      expect(entry.cumulativeAmount).toBe(1n)
       expect(resolution.context).toMatchObject({
         action: 'voucher',
         channelId,

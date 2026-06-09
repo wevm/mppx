@@ -75,6 +75,7 @@ export function validateChannelDescriptor(
   escrow: Address,
   recipient: Address,
   currency: Address,
+  expectedOperator?: Address | undefined,
 ): void {
   const computed = Channel.computeId({ ...descriptor, chainId, escrow })
   if (computed.toLowerCase() !== channelId.toLowerCase()) {
@@ -88,6 +89,11 @@ export function validateChannelDescriptor(
   if (!isAddressEqual(descriptor.token, currency)) {
     throw new VerificationFailedError({
       reason: 'channel descriptor token does not match server token',
+    })
+  }
+  if (expectedOperator !== undefined && !isAddressEqual(descriptor.operator, expectedOperator)) {
+    throw new VerificationFailedError({
+      reason: 'channel descriptor operator does not match server operator',
     })
   }
 }
@@ -285,6 +291,8 @@ export type VerifyCredentialPayloadParameters = {
   client: Chain.TransactionClient
   /** TIP20EscrowChannel precompile address for this session method. */
   escrow: Address
+  /** Operator address advertised in the HMAC-bound challenge details. */
+  expectedOperator?: Address | undefined
   /** Optional fee-payer account for fee-sponsored management transactions. */
   feePayer?: viem_Account | undefined
   /** Optional policy for fee-sponsored close/open/top-up transactions. */
@@ -365,6 +373,7 @@ async function handleOpenCredential(
 ): Promise<SessionReceipt> {
   const { store, client, challenge, payload, chainId, escrow } = parameters
   const request = getChallengePaymentFields(challenge)
+  const expectedOperator = parameters.expectedOperator ?? zeroAddress
   const cumulativeAmount = uint96(BigInt(payload.cumulativeAmount))
   assertDescriptor(payload)
   if (
@@ -382,6 +391,7 @@ async function handleOpenCredential(
     escrow,
     request.recipient,
     request.currency,
+    expectedOperator,
   )
 
   const result = await Chain.broadcastOpenTransaction({
@@ -392,7 +402,7 @@ async function handleOpenCredential(
     expectedAuthorizedSigner: payload.descriptor.authorizedSigner,
     expectedChannelId: channelId,
     expectedCurrency: request.currency,
-    expectedOperator: payload.descriptor.operator,
+    expectedOperator,
     expectedPayee: request.recipient,
     expectedExpiringNonceHash: payload.descriptor.expiringNonceHash,
     expectedPayer: payload.descriptor.payer,
@@ -446,6 +456,7 @@ async function handleTopUpCredential(
 ): Promise<SessionReceipt> {
   const { store, client, challenge, payload, chainId, escrow } = parameters
   const request = getChallengePaymentFields(challenge)
+  const expectedOperator = parameters.expectedOperator ?? zeroAddress
   const additionalDeposit = uint96(BigInt(payload.additionalDeposit))
   assertDescriptor(payload)
   const channelId = ChannelStore.normalizeChannelId(payload.channelId)
@@ -456,6 +467,7 @@ async function handleTopUpCredential(
     escrow,
     request.recipient,
     request.currency,
+    expectedOperator,
   )
   const channel = await ChannelStore.loadPrecompileChannel({
     descriptor: payload.descriptor,
@@ -509,6 +521,7 @@ async function handleVoucherCredential(
     lastOnChainVerified,
   } = parameters
   const request = getChallengePaymentFields(challenge)
+  const expectedOperator = parameters.expectedOperator ?? zeroAddress
   const channelId = ChannelStore.normalizeChannelId(payload.channelId)
   const voucher = Voucher.parseVoucherFromPayload(
     channelId,
@@ -523,6 +536,7 @@ async function handleVoucherCredential(
     escrow,
     request.recipient,
     request.currency,
+    expectedOperator,
   )
   const channel = await ChannelStore.loadPrecompileChannel({
     descriptor: payload.descriptor,
@@ -570,6 +584,7 @@ async function handleCloseCredential(
 ): Promise<SessionReceipt> {
   const { store, client, challenge, payload, chainId, escrow } = parameters
   const request = getChallengePaymentFields(challenge)
+  const expectedOperator = parameters.expectedOperator ?? zeroAddress
   const cumulativeAmount = uint96(BigInt(payload.cumulativeAmount))
   const channelId = ChannelStore.normalizeChannelId(payload.channelId)
   assertDescriptor(payload)
@@ -580,6 +595,7 @@ async function handleCloseCredential(
     escrow,
     request.recipient,
     request.currency,
+    expectedOperator,
   )
   const channel = await ChannelStore.loadPrecompileChannel({
     descriptor: payload.descriptor,

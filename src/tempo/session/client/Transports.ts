@@ -419,7 +419,6 @@ export async function resolveNeedVoucherContext(
     channel.cumulativeAmount > eventAmounts.requiredCumulative
       ? channel.cumulativeAmount
       : uint96(eventAmounts.requiredCumulative)
-  channel.cumulativeAmount = cumulativeAmount
 
   return {
     status: 'ready',

@@ -22,6 +22,7 @@ import {
   readCredentialCumulativeAmount,
   requireContextAmount,
   resolveChallengeContext,
+  resolveRecoveredCumulative,
   resolveRecoverContext,
   resolveReusableChannel,
   sessionContextSchema,
@@ -407,6 +408,22 @@ describe('CredentialPlan', () => {
       })
     })
 
+    test('recovery cumulative ignores server-advertised unused voucher headroom', () => {
+      expect(
+        resolveRecoveredCumulative({
+          context: { descriptor, channelId },
+          decimals: 6,
+          requestAmount: 5n,
+          settled: 0n,
+          snapshot: snapshot({
+            acceptedCumulative: '1000000',
+            requiredCumulative: '1000000',
+            spent: '10',
+          }),
+        }),
+      ).toBe(15n)
+    })
+
     test('plans manual credentials only when an explicit action includes descriptor', () => {
       const cache = createChannelCache()
       const plan = planCredential({
@@ -505,7 +522,14 @@ describe('CredentialPlan', () => {
           channelId: reusableChannelId,
           client,
           descriptor,
-          expected: { chainId: 42431, escrow, payee, token },
+          expected: {
+            chainId: 42431,
+            escrow,
+            payee,
+            payer: account.address,
+            authorizedSigner: account.address,
+            token,
+          },
           readChannelState: async () => state,
         }),
       ).resolves.toEqual({ channelId: reusableChannelId, state })
@@ -538,6 +562,26 @@ describe('CredentialPlan', () => {
           },
           message: 'context descriptor token does not match challenge',
         },
+        {
+          name: 'payer',
+          parameters: {
+            descriptor: {
+              ...descriptor,
+              payer: '0x0000000000000000000000000000000000000005' as Address,
+            },
+          },
+          message: 'context descriptor payer does not match account',
+        },
+        {
+          name: 'authorizedSigner',
+          parameters: {
+            descriptor: {
+              ...descriptor,
+              authorizedSigner: '0x0000000000000000000000000000000000000006' as Address,
+            },
+          },
+          message: 'context descriptor authorizedSigner does not match account',
+        },
       ] as const
 
       for (const item of cases) {
@@ -546,7 +590,14 @@ describe('CredentialPlan', () => {
           resolveReusableChannel({
             client,
             descriptor,
-            expected: { chainId: 42431, escrow, payee, token },
+            expected: {
+              chainId: 42431,
+              escrow,
+              payee,
+              payer: account.address,
+              authorizedSigner: account.address,
+              token,
+            },
             readChannelState: async () => {
               reads += 1
               return { deposit: 1n, settled: 0n, closeRequestedAt: 0 }
@@ -577,7 +628,14 @@ describe('CredentialPlan', () => {
             channelId: reusableChannelId,
             client,
             descriptor,
-            expected: { chainId: 42431, escrow, payee, token },
+            expected: {
+              chainId: 42431,
+              escrow,
+              payee,
+              payer: account.address,
+              authorizedSigner: account.address,
+              token,
+            },
             readChannelState: async () => item.state,
           }),
         ).rejects.toThrow(item.message)

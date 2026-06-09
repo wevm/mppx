@@ -78,7 +78,8 @@ function readAccessKeyAddress(account: Account): Address | undefined {
   return readOptionalAddress((account as AccountWithAccessKey).accessKeyAddress)
 }
 
-function resolveAuthorizedSigner(account: Account, override?: Address | undefined): Address {
+/** Resolves the voucher signer address for a client account and optional override. */
+export function resolveAuthorizedSigner(account: Account, override?: Address | undefined): Address {
   return override ?? readAccessKeyAddress(account) ?? account.address
 }
 

@@ -152,7 +152,7 @@ describe('request-body', () => {
       ).toBe(false)
     })
 
-    test('does not charge empty voucher POSTs when runtime reports a body stream', () => {
+    test('charges voucher POSTs when runtime reports a body stream', () => {
       expect(
         shouldChargePlainResponse(
           {
@@ -163,7 +163,7 @@ describe('request-body', () => {
           },
           { action: 'voucher' },
         ),
-      ).toBe(false)
+      ).toBe(true)
     })
 
     test('charges bodyless POST query requests', () => {
