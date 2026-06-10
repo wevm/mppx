@@ -65,6 +65,10 @@
   "version": "0.6.31",
   "main": "./dist/index.js",
   "license": "MIT",
+  "homepage": "https://github.com/wevm/mppx#readme",
+  "bugs": {
+    "url": "https://github.com/wevm/mppx/issues"
+  },
   "files": [
     "CHANGELOG.md",
     "dist",
