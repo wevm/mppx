@@ -26,8 +26,8 @@
 //      the server settles the channel on-chain, returning any unspent deposit.
 //
 
-// `tempo` from 'mppx/client' provides the session API for Tempo payment channels.
-// A session manages the full lifecycle: open → voucher → close.
+// `tempo` from 'mppx/client' provides the session method and manager APIs.
+// The manager handles the full lifecycle: open → voucher → close.
 import { tempo } from 'mppx/client'
 import { createClient, type Hex, http } from 'viem'
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts'
@@ -80,7 +80,7 @@ console.log(`Balance: ${fmt(balanceBefore)}`)
 // Step 1: Create a Session
 
 //
-// `tempo.session()` creates a payment session — a stateful object that manages
+// `tempo.session.manager()` creates a payment session — a stateful object that manages
 // the full payment channel lifecycle for SSE streaming.
 //
 // Key parameters:
@@ -105,7 +105,7 @@ console.log(`Balance: ${fmt(balanceBefore)}`)
 //   refunded to the client.
 //
 const DEPOSIT = '1'
-const s = tempo.session({
+const s = tempo.session.manager({
   account,
   client,
   maxDeposit: DEPOSIT,

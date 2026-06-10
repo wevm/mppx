@@ -10,14 +10,18 @@ import type * as AutoSwap from '../tempo/internal/auto-swap.js'
 import * as Methods from '../tempo/Methods.js'
 import * as z from '../zod.js'
 import * as Fetch from './internal/Fetch.js'
-import { session, sessionMethod } from './Methods.js'
+import { session, sessionManager, sessionMethod } from './Methods.js'
 import * as Mppx from './Mppx.js'
 import * as Transport from './Transport.js'
 
 describe('Mppx', () => {
-  test('exports managed session and low-level session method separately', () => {
-    expectTypeOf(session({ account: {} as Account })).toHaveProperty('fetch')
+  test('exports low-level session method and explicit managed session helper', () => {
+    expectTypeOf(session({ account: {} as Account })).toMatchTypeOf<Method.AnyClient>()
+    expectTypeOf(session.manager({ account: {} as Account })).toHaveProperty('fetch')
+    expectTypeOf(sessionManager({ account: {} as Account })).toHaveProperty('fetch')
     expectTypeOf(sessionMethod({ account: {} as Account })).toMatchTypeOf<Method.AnyClient>()
+    expectTypeOf(tempo.session({ account: {} as Account })).toMatchTypeOf<Method.AnyClient>()
+    expectTypeOf(tempo.session.manager({ account: {} as Account })).toHaveProperty('fetch')
   })
 
   test('has methods array', () => {

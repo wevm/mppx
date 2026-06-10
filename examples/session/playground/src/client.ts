@@ -118,14 +118,14 @@ function createTempoClient() {
 }
 
 type StoredSessionChannel =
-  NonNullable<Parameters<typeof tempo.session>[0]['sessionStore']> extends {
+  NonNullable<Parameters<typeof tempo.session.manager>[0]['sessionStore']> extends {
     set(channel: infer channel): unknown
   }
     ? channel
     : never
 
 function createSession(scope: string) {
-  return tempo.session({
+  return tempo.session.manager({
     account,
     bootstrap: true,
     client,

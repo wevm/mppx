@@ -29,8 +29,8 @@
 //     Server keeps the voucher amount, remainder refunded to client.
 //
 
-// `tempo` from 'mppx/client' provides the streaming payment session API.
-// It handles the full 402 → open → voucher → close lifecycle automatically.
+// `tempo` from 'mppx/client' provides the session method and manager APIs.
+// The manager handles the full 402 → open → voucher → close lifecycle automatically.
 import { tempo } from 'mppx/client'
 import { createClient, type Hex, http } from 'viem'
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts'
@@ -75,7 +75,7 @@ console.log(`Balance: ${fmt(balanceBefore)}`)
 // Step 1: Create a payment session
 
 //
-// `tempo.session()` creates a reusable session that manages a single payment
+// `tempo.session.manager()` creates a reusable session that manages a single payment
 // channel. It handles:
 //   - Receiving the 402 challenge on the first request
 //   - Opening the channel on-chain (approve token + open escrow)
@@ -91,7 +91,7 @@ console.log(`Balance: ${fmt(balanceBefore)}`)
 // Example: maxDeposit='1' means 1 pathUSD is locked. If each request costs
 // 0.01, you can make up to 100 requests before the channel runs out.
 const DEPOSIT = '1'
-const s = tempo.session({
+const s = tempo.session.manager({
   client,
   maxDeposit: DEPOSIT,
 })

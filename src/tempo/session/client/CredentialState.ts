@@ -118,7 +118,7 @@ export const sessionContextSchema = z.object({
   depositRaw: z.optional(z.string()),
 })
 
-/** Low-level context accepted by `tempo.session.method()` for manual credentials. */
+/** Low-level context accepted by `tempo.session()` for manual credentials. */
 export type SessionContext = {
   /** Optional account override used for this credential only. */
   account?: Account.getResolver.Parameters['account'] | undefined

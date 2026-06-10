@@ -4,6 +4,7 @@ export * as Fetch from './internal/Fetch.js'
 export {
   evm,
   session,
+  sessionManager,
   sessionMethod,
   sessionLegacy,
   sessionLegacyManager,
