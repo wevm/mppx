@@ -7,8 +7,11 @@ import { sessionManager as session_ } from '../session/client/SessionManager.js'
 import { charge as charge_ } from './Charge.js'
 import { subscription as subscription_ } from './Subscription.js'
 
-const sessionClient = Object.assign(session_, { method: sessionMethod_ })
+const sessionClient = Object.assign(sessionMethod_, { manager: session_ })
 const sessionLegacyClient = Object.assign(sessionLegacy_, { method: sessionLegacyIntent_ })
+
+/** Creates a TIP-1034 client method, with explicit managed lifecycle helpers attached. */
+export { sessionClient as session }
 
 /**
  * Creates both Tempo `charge` and `session` client methods from shared parameters.
@@ -23,7 +26,7 @@ const sessionLegacyClient = Object.assign(sessionLegacy_, { method: sessionLegac
  * ```
  */
 export function tempo(parameters: tempo.Parameters = {}) {
-  return [charge_(parameters), sessionClient.method(parameters)] as const
+  return [charge_(parameters), sessionClient(parameters)] as const
 }
 
 export namespace tempo {
@@ -31,9 +34,9 @@ export namespace tempo {
 
   /** Creates a Tempo `charge` client method for one-time TIP-20 token transfers. */
   export const charge = charge_
-  /** Creates a TIP-1034 client-side streaming session that auto-manages channel open, voucher, top-up, and close flows. */
+  /** Creates a TIP-1034 client method for Mppx registration. Use `tempo.session.manager()` for direct lifecycle control. */
   export const session = sessionClient
-  /** @deprecated Use `tempo.session()` for the TIP-1034 session client. */
+  /** @deprecated Use `tempo.session()` for the TIP-1034 session client method. */
   export const sessionLegacy = sessionLegacyClient
   /** Creates a Tempo `subscription` client method for recurring TIP-20 payments. */
   export const subscription = subscription_
