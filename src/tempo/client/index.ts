@@ -1,5 +1,5 @@
 export { charge } from './Charge.js'
-export { tempo } from './Methods.js'
+export { session, tempo } from './Methods.js'
 export { session as sessionLegacy } from '../legacy/client/index.js'
 export { subscription } from './Subscription.js'
 export type {
@@ -14,4 +14,4 @@ export type {
   SessionManagerSseOptions,
   SessionManagerWebSocketOptions,
 } from '../session/client/SessionManager.js'
-export { sessionManager, sessionManager as session } from '../session/client/SessionManager.js'
+export { sessionManager } from '../session/client/SessionManager.js'

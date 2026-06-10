@@ -13,7 +13,7 @@
 //   6. Client sends a final `close()` credential to settle on-chain
 
 import { WebSocket } from 'isows'
-// `tempo` from 'mppx/client' provides the session manager used for this demo.
+// `tempo` from 'mppx/client' provides the session method and manager APIs.
 import { tempo } from 'mppx/client'
 import { createClient, type Hex, http } from 'viem'
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts'
@@ -64,13 +64,13 @@ console.log(`Balance: ${fmt(balanceBefore)}`)
 // Step 1: Create a Session Manager
 
 //
-// `tempo.session()` returns a stateful session manager. For WebSocket flows it
+// `tempo.session.manager()` returns a stateful session manager. For WebSocket flows it
 // still handles the hard parts: HTTP challenge probing, channel open, voucher
 // creation, cumulative accounting, and final close.
 //
 // We pass the `ws` package's constructor explicitly because Node 18 does not
 // provide a reliable global `WebSocket` in the same way browsers do.
-const session = tempo.session({
+const session = tempo.session.manager({
   account,
   client,
   maxDeposit: '1',

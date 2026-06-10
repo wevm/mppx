@@ -1,8 +1,8 @@
 /**
  * Shared client-side TIP-1034 channel operations.
  *
- * Provides the low-level helpers that both `tempo.session.method()` and
- * `tempo.session()` rely on: channel ID computation,
+ * Provides the low-level helpers that both `tempo.session()` and
+ * `tempo.session.manager()` rely on: channel ID computation,
  * transaction-bound descriptor construction, on-chain open/top-up payload
  * construction, voucher/close payload serialization, and transaction signing.
  *
