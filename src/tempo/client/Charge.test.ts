@@ -123,4 +123,89 @@ describe('tempo.charge client', () => {
       vi.resetModules()
     }
   })
+
+  describe('chain pinning', () => {
+    const client = createClient({
+      account,
+      chain: tempoLocalnet,
+      transport: http('http://127.0.0.1'),
+    })
+
+    test('rejects a challenge whose chainId conflicts with the pin', async () => {
+      const getClient = vi.fn(() => client)
+      const method = charge({
+        account,
+        expectedChainId: 42431,
+        getClient,
+      })
+
+      await expect(
+        method.createCredential({
+          challenge: createChallenge({ chainId: 1 }),
+          context: {},
+        }),
+      ).rejects.toThrow('Chain ID mismatch: expected 42431, got 1.')
+
+      // The mismatch is rejected before resolving a client or signing.
+      expect(getClient).not.toHaveBeenCalled()
+    })
+
+    test('accepts a challenge whose chainId matches the pin', async () => {
+      const chainId = 42431
+      const method = charge({
+        account,
+        expectedChainId: chainId,
+        getClient: () => client,
+      })
+
+      const credential = Credential.deserialize(
+        await method.createCredential({
+          challenge: createChallenge({ chainId }),
+          context: {},
+        }),
+      )
+
+      expect(credential.source).toBe(`did:pkh:eip155:${chainId}:${account.address}`)
+    })
+
+    test('signs on the pin when the challenge omits chainId', async () => {
+      let requestedChainId: number | undefined
+      const chainId = 42431
+      const method = charge({
+        account,
+        expectedChainId: chainId,
+        getClient: (parameters) => {
+          requestedChainId = parameters.chainId
+          return client
+        },
+      })
+
+      const credential = Credential.deserialize(
+        await method.createCredential({
+          challenge: createChallenge(),
+          context: {},
+        }),
+      )
+
+      expect(requestedChainId).toBe(chainId)
+      expect(credential.source).toBe(`did:pkh:eip155:${chainId}:${account.address}`)
+    })
+
+    test('unpinned client accepts any challenge chainId', async () => {
+      const chainId = 1
+      const method = charge({
+        account,
+        getClient: () => client,
+      })
+
+      const credential = Credential.deserialize(
+        await method.createCredential({
+          challenge: createChallenge({ chainId }),
+          context: {},
+        }),
+      )
+
+      expect(credential.source).toBe(`did:pkh:eip155:${chainId}:${account.address}`)
+    })
+  })
 })

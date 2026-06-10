@@ -51,9 +51,20 @@ export function charge(parameters: charge.Parameters = {}) {
     }),
 
     async createCredential({ challenge, context }) {
+      // Chain pinning: reject a challenge whose chain ID conflicts with the
+      // pinned one, and sign on the pin when the challenge omits a chain ID.
       const challengeChainId = challenge.request.methodDetails?.chainId
-      const client = await getClient({ chainId: challengeChainId })
-      const chainId = challengeChainId ?? client.chain?.id
+      if (
+        parameters.expectedChainId !== undefined &&
+        challengeChainId !== undefined &&
+        challengeChainId !== parameters.expectedChainId
+      )
+        throw new Error(
+          `Chain ID mismatch: expected ${parameters.expectedChainId}, got ${challengeChainId}.`,
+        )
+      const resolvedChainId = challengeChainId ?? parameters.expectedChainId
+      const client = await getClient({ chainId: resolvedChainId })
+      const chainId = resolvedChainId ?? client.chain?.id
       if (chainId === undefined)
         throw new Error('No `chainId` provided. Pass a chain ID in the challenge or client.')
 
@@ -198,6 +209,12 @@ export declare namespace charge {
     autoSwap?: AutoSwap | undefined
     /** Client identifier used to derive the client fingerprint in attribution memos. */
     clientId?: string | undefined
+    /**
+     * Chain ID this client is willing to pay on. When set, the client rejects
+     * any challenge whose `methodDetails.chainId` differs, and signs on this
+     * chain when the challenge omits a chain ID.
+     */
+    expectedChainId?: number | undefined
     /**
      * Allowlist of expected split recipient addresses. When set, the client
      * rejects any challenge whose split recipients are not in this list.
