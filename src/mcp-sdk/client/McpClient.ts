@@ -11,6 +11,14 @@ import type * as z from '../../zod.js'
 
 type AnyClient = Method.Client<any, any>
 
+export type CallToolParameters = {
+  name: string
+  arguments?: Record<string, unknown>
+  _meta?: Record<string, unknown>
+}
+
+export type OnPaymentRequired = (challenge: Challenge.Challenge) => boolean | Promise<boolean>
+
 /**
  * Result of a tool call with payment handling.
  * Extends the SDK's callTool return type with an optional payment receipt.
@@ -55,69 +63,91 @@ export function wrap<
   const { methods } = config
   const paymentPreferences = AcceptPayment.resolve(methods)
 
-  return {
-    ...client,
-    async callTool(params, options) {
-      const context = options?.context
-      const timeout = options?.timeout
+  const callTool = (async (
+    first: CallToolParameters | OnPaymentRequired | null | undefined,
+    second?: CallToolParameters | wrap.CallToolOptions<methods>,
+    third?: wrap.CallToolOptions<methods>,
+  ) => {
+    const hasApprovalArgument = typeof first === 'function' || first === null || first === undefined
+    const params = (hasApprovalArgument ? second : first) as CallToolParameters
+    const options = (hasApprovalArgument ? third : second) as
+      | wrap.CallToolOptions<methods>
+      | undefined
+    const onPaymentRequired =
+      first === null
+        ? undefined
+        : hasApprovalArgument
+          ? ((first as OnPaymentRequired | undefined) ?? config.onPaymentRequired)
+          : config.onPaymentRequired
+    const context = options?.context
+    const timeout = options?.timeout
 
-      try {
-        const result = await client.callTool(
-          params,
-          undefined,
-          timeout !== undefined ? { timeout } : undefined,
-        )
+    try {
+      const result = await client.callTool(
+        params,
+        undefined,
+        timeout !== undefined ? { timeout } : undefined,
+      )
 
-        return {
-          ...result,
-          receipt: result._meta?.[core_Mcp.receiptMetaKey] as core_Mcp.Receipt | undefined,
-        }
-      } catch (error) {
-        // Check if this is a payment required error
-        if (!isPaymentRequiredError(error)) throw error
-
-        const challenges = (error.data as { challenges?: Challenge.Challenge[] })?.challenges
-        if (!challenges?.length) throw error
-
-        const selected = AcceptPayment.selectChallenge(
-          challenges,
-          methods,
-          paymentPreferences.entries,
-        )
-        if (!selected) {
-          const available = challenges.map((c) => `${c.method}.${c.intent}`).join(', ')
-          const installed = methods.map((m) => `${m.name}.${m.intent}`).join(', ')
-          throw new Error(
-            `No compatible payment method. Server offers: ${available}. Client has: ${installed}`,
-            { cause: error },
-          )
-        }
-
-        const credential = await createCredential(selected.challenge, {
-          context,
-          methods,
-        })
-        const parsed = Credential.deserialize(credential)
-
-        const retryResult = await client.callTool(
-          {
-            ...params,
-            _meta: {
-              ...params._meta,
-              [core_Mcp.credentialMetaKey]: parsed,
-            },
-          },
-          undefined,
-          timeout !== undefined ? { timeout } : undefined,
-        )
-
-        return {
-          ...retryResult,
-          receipt: retryResult._meta?.[core_Mcp.receiptMetaKey] as core_Mcp.Receipt | undefined,
-        }
+      return {
+        ...result,
+        receipt: result._meta?.[core_Mcp.receiptMetaKey] as core_Mcp.Receipt | undefined,
       }
-    },
-  }
+    } catch (error) {
+      // Check if this is a payment required error
+      if (!isPaymentRequiredError(error)) throw error
+
+      const challenges = (error.data as { challenges?: Challenge.Challenge[] })?.challenges
+      if (!challenges?.length) throw error
+
+      const selected = AcceptPayment.selectChallenge(
+        challenges,
+        methods,
+        paymentPreferences.entries,
+      )
+      if (!selected) {
+        const available = challenges.map((c) => `${c.method}.${c.intent}`).join(', ')
+        const installed = methods.map((m) => `${m.name}.${m.intent}`).join(', ')
+        throw new Error(
+          `No compatible payment method. Server offers: ${available}. Client has: ${installed}`,
+          { cause: error },
+        )
+      }
+
+      if (selected.challenge.expires)
+        Expires.assert(selected.challenge.expires, selected.challenge.id)
+
+      if (onPaymentRequired) {
+        const approved = await onPaymentRequired(selected.challenge)
+        if (!approved) throw new Error('Payment declined.', { cause: error })
+      }
+
+      const credential = await createCredential(selected.challenge, {
+        context,
+        methods,
+      })
+      const parsed = Credential.deserialize(credential)
+
+      const retryResult = await client.callTool(
+        {
+          ...params,
+          _meta: {
+            ...params._meta,
+            [core_Mcp.credentialMetaKey]: parsed,
+          },
+        },
+        undefined,
+        timeout !== undefined ? { timeout } : undefined,
+      )
+
+      return {
+        ...retryResult,
+        receipt: retryResult._meta?.[core_Mcp.receiptMetaKey] as core_Mcp.Receipt | undefined,
+      }
+    }
+  }) as wrap.McpClient<client, methods>['callTool']
+
+  return { ...client, callTool } as wrap.McpClient<client, methods>
 }
 
 /** Union of all context types from all methods that have context schemas. */
@@ -133,6 +163,8 @@ export declare namespace wrap {
   type Config<methods extends readonly Method.AnyClient[] = readonly Method.AnyClient[]> = {
     /** Array of methods to use. */
     methods: methods
+    /** Optional approval hook called before creating a payment credential. */
+    onPaymentRequired?: OnPaymentRequired
   }
 
   type McpClient<
@@ -140,14 +172,14 @@ export declare namespace wrap {
     methods extends readonly AnyClient[] = readonly AnyClient[],
   > = Omit<client, 'callTool'> & {
     /** Call a tool with automatic payment handling. */
-    callTool: (
-      params: {
-        name: string
-        arguments?: Record<string, unknown>
-        _meta?: Record<string, unknown>
-      },
-      options?: CallToolOptions<methods>,
-    ) => Promise<CallToolResult>
+    callTool: {
+      (params: CallToolParameters, options?: CallToolOptions<methods>): Promise<CallToolResult>
+      (
+        onPaymentRequired: OnPaymentRequired | null | undefined,
+        params: CallToolParameters,
+        options?: CallToolOptions<methods>,
+      ): Promise<CallToolResult>
+    }
   }
 
   type CallToolOptions<methods extends readonly AnyClient[] = readonly AnyClient[]> = {

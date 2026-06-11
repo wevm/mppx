@@ -73,8 +73,15 @@ describe('McpClient.wrap', () => {
     })
 
     expectTypeOf(wrapped.callTool).toBeCallableWith({ name: 'tool' })
+    expectTypeOf(wrapped.callTool).toBeCallableWith(null, { name: 'tool' })
+    expectTypeOf(wrapped.callTool).toBeCallableWith(() => true, { name: 'tool' })
     expectTypeOf(wrapped.callTool).toBeCallableWith({ name: 'tool' }, {})
     expectTypeOf(wrapped.callTool).toBeCallableWith({ name: 'tool' }, { timeout: 5000 })
+    expectTypeOf(wrapped.callTool).toBeCallableWith(
+      async (challenge) => challenge.intent === 'charge',
+      { name: 'tool' },
+      { timeout: 5000 },
+    )
   })
 
   test('callTool result includes receipt', () => {
