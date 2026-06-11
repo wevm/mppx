@@ -39,6 +39,9 @@ importers:
 
   .:
     dependencies:
+      '@stripe/stripe-js':
+        specifier: 9.7.0
+        version: 9.7.0
       incur:
         specifier: ^0.4.8
         version: 0.4.8

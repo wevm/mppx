@@ -204,6 +204,7 @@
     }
   },
   "dependencies": {
+    "@stripe/stripe-js": "9.7.0",
     "incur": "^0.4.8",
     "ox": "0.14.27",
     "zod": "^4.4.3"
