@@ -242,6 +242,16 @@ export function resolveRpcUrl(
   )
 }
 
+/** Select the default network for faucet funding without overriding explicit RPC configuration. */
+export function resolveFundingNetwork(
+  options: { network?: Network | undefined; rpcUrl?: string | undefined } = {},
+): Network | undefined {
+  if (options.network) return options.network
+  if (options.rpcUrl) return undefined
+  if (process.env.MPPX_RPC_URL?.trim() || process.env.RPC_URL?.trim()) return undefined
+  return 'testnet'
+}
+
 export async function resolveChain(
   opts: { network?: Network | undefined; rpcUrl?: string | undefined } = {},
 ): Promise<Chain> {
