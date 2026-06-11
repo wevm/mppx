@@ -731,4 +731,111 @@ describe('precompile client session', () => {
       ),
     ).toBe(true)
   })
+
+  describe('wallet_authorizeChallenge', () => {
+    const walletAddress = '0x1111111111111111111111111111111111111111' as Address
+
+    test('json-rpc accounts use a supporting wallet instead of local planning', async () => {
+      const challenge = makeChallenge()
+      const authorization = Credential.serialize({
+        challenge,
+        payload: { hash: '0x1234', type: 'hash' },
+      })
+      const requests: { method: string }[] = []
+      const walletClient = createClient({
+        chain: { id: chainId } as never,
+        transport: custom({
+          async request({ method }: { method: string }) {
+            requests.push({ method })
+            if (method === 'wallet_getCapabilities')
+              return { '0xa5bf': { mpp: { status: 'supported' } } }
+            if (method === 'wallet_authorizeChallenge') return { authorization }
+            throw new Error(`unexpected rpc request: ${method}`)
+          },
+        }),
+      })
+      const method = session({ account: walletAddress, getClient: () => walletClient })
+
+      await expect(method.createCredential({ challenge, context: {} })).resolves.toBe(authorization)
+      expect(requests.map(({ method }) => method)).toEqual([
+        'wallet_getCapabilities',
+        'wallet_authorizeChallenge',
+      ])
+    })
+
+    test('probes a supporting wallet once per session instance', async () => {
+      const challenge = makeChallenge()
+      const authorization = Credential.serialize({
+        challenge,
+        payload: { hash: '0x1234', type: 'hash' },
+      })
+      const requests: { method: string }[] = []
+      const walletClient = createClient({
+        chain: { id: chainId } as never,
+        transport: custom({
+          async request({ method }: { method: string }) {
+            requests.push({ method })
+            if (method === 'wallet_getCapabilities')
+              return { '0xa5bf': { mpp: { status: 'supported' } } }
+            if (method === 'wallet_authorizeChallenge') return { authorization }
+            throw new Error(`unexpected rpc request: ${method}`)
+          },
+        }),
+      })
+      const method = session({ account: walletAddress, getClient: () => walletClient })
+
+      await expect(method.createCredential({ challenge, context: {} })).resolves.toBe(authorization)
+      await expect(method.createCredential({ challenge, context: {} })).resolves.toBe(authorization)
+      expect(requests.map(({ method }) => method)).toEqual([
+        'wallet_getCapabilities',
+        'wallet_authorizeChallenge',
+        'wallet_authorizeChallenge',
+      ])
+    })
+
+    test('caller-supplied channel context skips the wallet', async () => {
+      const walletDescriptor = {
+        ...descriptor,
+        payer: walletAddress,
+        authorizedSigner: walletAddress,
+      } satisfies Channel.ChannelDescriptor
+      const walletChannelId = Channel.computeId({
+        ...walletDescriptor,
+        chainId,
+        escrow: tip20ChannelEscrow,
+      })
+      const requests: { method: string }[] = []
+      const walletClient = createClient({
+        chain: { id: chainId } as never,
+        transport: custom({
+          async request({ method }: { method: string }) {
+            requests.push({ method })
+            if (method === 'eth_call')
+              return encodeFunctionResult({
+                abi: escrowAbi,
+                functionName: 'getChannelState',
+                result: { settled: 0n, deposit: 1_000n, closeRequestedAt: 0 },
+              })
+            if (method === 'eth_signTypedData_v4') return `0x${'11'.repeat(64)}1b`
+            throw new Error(`unexpected rpc request: ${method}`)
+          },
+        }),
+      })
+      const method = session({ account: walletAddress, getClient: () => walletClient })
+
+      const payload = deserialize(
+        await method.createCredential({
+          challenge: makeChallenge(),
+          context: { channelId: walletChannelId, descriptor: walletDescriptor },
+        }),
+      )
+
+      expect(requests.map(({ method }) => method)).not.toContain('wallet_getCapabilities')
+      expect(requests.map(({ method }) => method)).not.toContain('wallet_authorizeChallenge')
+      expect(payload.action).toBe('voucher')
+      if (payload.action !== 'voucher') throw new Error('expected voucher')
+      expect(payload.channelId).toBe(walletChannelId)
+      expect(payload.cumulativeAmount).toBe('100')
+    })
+  })
 })

@@ -1,5 +1,5 @@
 import { Challenge, Credential } from 'mppx'
-import { createClient, http } from 'viem'
+import { createClient, custom, http } from 'viem'
 import { privateKeyToAccount } from 'viem/accounts'
 import { tempoLocalnet } from 'viem/chains'
 import { describe, expect, test, vi } from 'vp/test'
@@ -206,6 +206,77 @@ describe('tempo.charge client', () => {
       )
 
       expect(credential.source).toBe(`did:pkh:eip155:${chainId}:${account.address}`)
+    })
+  })
+
+  describe('wallet_authorizeChallenge', () => {
+    const walletAddress = '0x1111111111111111111111111111111111111111' as const
+    const chainId = 42431
+
+    test('json-rpc accounts use a supporting wallet instead of local signing', async () => {
+      const challenge = createChallenge({ chainId })
+      const authorization = Credential.serialize({
+        challenge,
+        payload: { hash: '0x1234', type: 'hash' },
+      })
+      const requests: { method: string; params?: unknown }[] = []
+      const client = createClient({
+        chain: tempoLocalnet,
+        transport: custom({
+          async request({ method, params }: { method: string; params?: unknown }) {
+            requests.push({ method, params })
+            if (method === 'wallet_getCapabilities')
+              return { '0xa5bf': { mpp: { status: 'supported' } } }
+            if (method === 'wallet_authorizeChallenge') return { authorization }
+            throw new Error(`unexpected rpc request: ${method}`)
+          },
+        }),
+      })
+      const method = charge({
+        account: walletAddress,
+        getClient: () => client,
+      })
+
+      await expect(method.createCredential({ challenge, context: {} })).resolves.toBe(authorization)
+      expect(requests.map(({ method }) => method)).toEqual([
+        'wallet_getCapabilities',
+        'wallet_authorizeChallenge',
+      ])
+      expect(requests[1]?.params).toEqual([{ challenges: [Challenge.serialize(challenge)] }])
+    })
+
+    test('json-rpc accounts fall back to local signing without wallet mpp support', async () => {
+      const signature = `0x${'11'.repeat(64)}1b` as const
+      const requests: { method: string }[] = []
+      const client = createClient({
+        chain: tempoLocalnet,
+        transport: custom({
+          async request({ method }: { method: string }) {
+            requests.push({ method })
+            if (method === 'wallet_getCapabilities') return {}
+            if (method === 'eth_signTypedData_v4') return signature
+            throw new Error(`unexpected rpc request: ${method}`)
+          },
+        }),
+      })
+      const method = charge({
+        account: walletAddress,
+        getClient: () => client,
+      })
+
+      const credential = Credential.deserialize(
+        await method.createCredential({
+          challenge: createChallenge({ chainId }),
+          context: {},
+        }),
+      )
+
+      expect(requests.map(({ method }) => method)).toEqual([
+        'wallet_getCapabilities',
+        'eth_signTypedData_v4',
+      ])
+      expect(credential.payload).toEqual({ signature, type: 'proof' })
+      expect(credential.source).toBe(`did:pkh:eip155:${chainId}:${walletAddress}`)
     })
   })
 })

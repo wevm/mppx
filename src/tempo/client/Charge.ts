@@ -19,6 +19,7 @@ import * as AutoSwap from '../internal/auto-swap.js'
 import * as Charge_internal from '../internal/charge.js'
 import * as defaults from '../internal/defaults.js'
 import * as Proof from '../internal/proof.js'
+import * as Wallet from '../internal/wallet.js'
 import * as Methods from '../Methods.js'
 
 /**
@@ -73,6 +74,30 @@ export function charge(parameters: charge.Parameters = {}) {
       const { request } = challenge
       const { amount, methodDetails } = request
 
+      // Recipient allowlist: validated before any signing path so it also
+      // covers wallet-handled payments.
+      if (parameters.expectedRecipients) {
+        const allowed = new Set(parameters.expectedRecipients.map((a) => a.toLowerCase()))
+        const splits = methodDetails?.splits as readonly { recipient: string }[] | undefined
+        if (splits) {
+          for (const split of splits) {
+            if (!allowed.has(split.recipient.toLowerCase()))
+              throw new Error(`Unexpected split recipient: ${split.recipient}`)
+          }
+        }
+      }
+
+      // Wallet-native MPP: ask a JSON-RPC wallet to satisfy the challenge via
+      // `wallet_authorizeChallenge` before falling back to the local signing path.
+      if (account.type === 'json-rpc') {
+        const authorization = await Wallet.authorize(client, {
+          account: account.address,
+          chainId,
+          challenge,
+        })
+        if (authorization) return authorization
+      }
+
       // Zero-amount: sign EIP-712 typed data instead of creating a transaction.
       if (BigInt(amount) === 0n) {
         const signature = await signTypedData(client, {
@@ -90,16 +115,6 @@ export function charge(parameters: charge.Parameters = {}) {
       }
 
       const currency = request.currency as Address
-      if (parameters.expectedRecipients) {
-        const allowed = new Set(parameters.expectedRecipients.map((a) => a.toLowerCase()))
-        const splits = methodDetails?.splits as readonly { recipient: string }[] | undefined
-        if (splits) {
-          for (const split of splits) {
-            if (!allowed.has(split.recipient.toLowerCase()))
-              throw new Error(`Unexpected split recipient: ${split.recipient}`)
-          }
-        }
-      }
       const supportedModes = (methodDetails?.supportedModes as
         | readonly Methods.ChargeMode[]
         | undefined) ?? ['pull', 'push']
