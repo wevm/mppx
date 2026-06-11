@@ -16,6 +16,30 @@ import * as McpClient from './McpClient.js'
 const realm = 'api.example.com'
 const secretKey = 'test-secret-key'
 
+function createChallenge() {
+  return Challenge.fromMethod(Methods.charge, {
+    realm,
+    secretKey,
+    expires: new Date(Date.now() + 60_000).toISOString(),
+    request: {
+      amount: '1',
+      currency: asset,
+      decimals: 6,
+      recipient: accounts[0].address,
+    },
+  })
+}
+
+function createReceipt(challenge: Challenge.Challenge): core_Mcp.Receipt {
+  return {
+    challengeId: challenge.id,
+    method: 'tempo',
+    reference: 'test',
+    status: 'success',
+    timestamp: new Date().toISOString(),
+  }
+}
+
 describe('McpClient.wrap', () => {
   let client: Client
   let server: McpServer
@@ -97,10 +121,9 @@ describe('McpClient.wrap', () => {
       ],
     })
 
-    const result = await mcp.callTool(
-      { name: 'premium_tool', arguments: {} },
-      { context: { account: accounts[1] } },
-    )
+    const result = await mcp.callTool({ name: 'premium_tool', arguments: {} }, undefined, {
+      context: { account: accounts[1] },
+    })
 
     expect(result.content).toEqual([{ type: 'text', text: 'Premium tool executed' }])
     expect(result.receipt?.status).toBe('success')
@@ -120,6 +143,25 @@ describe('McpClient.wrap', () => {
 
     expect(result.content).toEqual([{ type: 'text', text: 'Free tool executed' }])
     expect(result.receipt).toBeUndefined()
+  })
+
+  test('behavior: does not forward empty options', async () => {
+    const rawCallTool = vi.fn(async () => ({
+      content: [{ type: 'text' as const, text: 'Free tool executed' }],
+    }))
+    const mcp = McpClient.wrap(
+      { callTool: rawCallTool as Client['callTool'] },
+      { methods: [Method.toClient(Methods.charge, { createCredential: vi.fn() })] },
+    )
+
+    const result = await mcp.callTool({ name: 'free_tool', arguments: {} }, undefined, {})
+
+    expect(result.content).toEqual([{ type: 'text', text: 'Free tool executed' }])
+    expect(rawCallTool).toHaveBeenCalledWith(
+      { name: 'free_tool', arguments: {} },
+      undefined,
+      undefined,
+    )
   })
 
   test('behavior: throws when no account provided', async () => {
@@ -223,6 +265,170 @@ describe('McpClient.wrap', () => {
       Errors.PaymentExpiredError,
     )
     expect(createCredential).not.toHaveBeenCalled()
+  })
+})
+
+describe('McpClient.wrap (in-place)', () => {
+  test('default: mutates the existing client and handles payment', async () => {
+    const challenge = createChallenge()
+    const createCredential = vi.fn(async ({ challenge }) =>
+      Credential.serialize({
+        challenge,
+        payload: { signature: '0xsignature', type: 'transaction' },
+      }),
+    )
+    const rawCallTool = vi
+      .fn()
+      .mockRejectedValueOnce(
+        new McpError(core_Mcp.paymentRequiredCode, 'Payment Required', {
+          httpStatus: 402,
+          challenges: [challenge],
+        }),
+      )
+      .mockResolvedValueOnce({
+        _meta: { [core_Mcp.receiptMetaKey]: createReceipt(challenge) },
+        content: [{ type: 'text', text: 'Premium tool executed' }],
+      })
+    const fakeClient = { callTool: rawCallTool as Client['callTool'] }
+
+    const wrapped = McpClient.wrap(fakeClient, {
+      methods: [Method.toClient(Methods.charge, { createCredential })],
+    })
+
+    expect(wrapped).toBe(fakeClient)
+
+    const result = await wrapped.callTool({ name: 'premium_tool', arguments: {} })
+
+    expect(result.content).toEqual([{ type: 'text', text: 'Premium tool executed' }])
+    expect(result.isError).toBeUndefined()
+    expect(result.receipt).toBeDefined()
+    expect(result.receipt?.status).toBe('success')
+    expect(rawCallTool).toHaveBeenCalledTimes(2)
+    expect(createCredential).toHaveBeenCalledOnce()
+  })
+
+  test('behavior: preserves the MCP SDK callTool argument shape', async () => {
+    const rawCallTool = vi.fn(async () => ({
+      content: [{ type: 'text' as const, text: 'Free tool executed' }],
+    }))
+    const createCredential = vi.fn()
+    const fakeClient = { callTool: rawCallTool as Client['callTool'] }
+
+    const wrapped = McpClient.wrap(fakeClient, {
+      methods: [Method.toClient(Methods.charge, { createCredential })],
+    })
+
+    const result = await wrapped.callTool({ name: 'free_tool', arguments: {} }, undefined, {
+      timeout: 30_000,
+    })
+
+    expect(result.content).toEqual([{ type: 'text', text: 'Free tool executed' }])
+    expect(result.receipt).toBeUndefined()
+    expect(rawCallTool).toHaveBeenCalledWith({ name: 'free_tool', arguments: {} }, undefined, {
+      timeout: 30_000,
+    })
+    expect(createCredential).not.toHaveBeenCalled()
+  })
+
+  test('behavior: strips payment context from MCP SDK request options', async () => {
+    const rawCallTool = vi.fn(async () => ({
+      content: [{ type: 'text' as const, text: 'Free tool executed' }],
+    }))
+    const fakeClient = { callTool: rawCallTool as Client['callTool'] }
+
+    const wrapped = McpClient.wrap(fakeClient, {
+      methods: [tempo_client({})],
+    })
+
+    await wrapped.callTool({ name: 'free_tool', arguments: {} }, undefined, {
+      context: { account: accounts[1] },
+      timeout: 30_000,
+    })
+
+    expect(rawCallTool).toHaveBeenCalledWith({ name: 'free_tool', arguments: {} }, undefined, {
+      timeout: 30_000,
+    })
+  })
+
+  test('behavior: re-wrapping replaces config without stacking wrappers', async () => {
+    const challenge = createChallenge()
+
+    const rawCallTool = vi
+      .fn()
+      .mockRejectedValueOnce(
+        new McpError(core_Mcp.paymentRequiredCode, 'Payment Required', {
+          httpStatus: 402,
+          challenges: [challenge],
+        }),
+      )
+      .mockResolvedValueOnce({
+        _meta: { [core_Mcp.receiptMetaKey]: createReceipt(challenge) },
+        content: [{ type: 'text', text: 'paid' }],
+      })
+
+    const fakeClient = { callTool: rawCallTool as Client['callTool'] }
+    const staleCreateCredential = vi.fn(async () => {
+      throw new Error('stale config used')
+    })
+    const freshCreateCredential = vi.fn(async ({ challenge }) =>
+      Credential.serialize({
+        challenge,
+        payload: { signature: '0xsignature', type: 'transaction' },
+      }),
+    )
+
+    McpClient.wrap(fakeClient, {
+      methods: [Method.toClient(Methods.charge, { createCredential: staleCreateCredential })],
+    })
+    const wrapped = McpClient.wrap(fakeClient, {
+      methods: [Method.toClient(Methods.charge, { createCredential: freshCreateCredential })],
+    })
+
+    const result = await wrapped.callTool({ name: 'premium_tool', arguments: {} })
+
+    expect(result.content).toEqual([{ type: 'text', text: 'paid' }])
+    expect(result.receipt?.status).toBe('success')
+    expect(staleCreateCredential).not.toHaveBeenCalled()
+    expect(freshCreateCredential).toHaveBeenCalledOnce()
+    expect(rawCallTool).toHaveBeenCalledTimes(2)
+  })
+
+  test('behavior: handles payment challenge metadata returned as a tool result', async () => {
+    const challenge = createChallenge()
+    const createCredential = vi.fn(async ({ challenge }) =>
+      Credential.serialize({
+        challenge,
+        payload: { signature: '0xsignature', type: 'transaction' },
+      }),
+    )
+    const rawCallTool = vi
+      .fn()
+      .mockResolvedValueOnce({
+        _meta: {
+          [core_Mcp.paymentRequiredMetaKey]: {
+            challenges: [challenge],
+            httpStatus: 402,
+          },
+        },
+        content: [{ type: 'text', text: 'Payment Required' }],
+        isError: true,
+      })
+      .mockResolvedValueOnce({
+        _meta: { [core_Mcp.receiptMetaKey]: createReceipt(challenge) },
+        content: [{ type: 'text', text: 'Premium tool executed' }],
+      })
+
+    const wrapped = McpClient.wrap(
+      { callTool: rawCallTool as Client['callTool'] },
+      { methods: [Method.toClient(Methods.charge, { createCredential })] },
+    )
+
+    const result = await wrapped.callTool({ name: 'premium_tool', arguments: {} })
+
+    expect(result.content).toEqual([{ type: 'text', text: 'Premium tool executed' }])
+    expect(result.receipt?.status).toBe('success')
+    expect(createCredential).toHaveBeenCalledOnce()
+    expect(rawCallTool).toHaveBeenCalledTimes(2)
   })
 })
 

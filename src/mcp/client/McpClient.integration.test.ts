@@ -410,6 +410,7 @@ describe.runIf(isLocalnet)('McpClient.wrap integration', () => {
 type WrappedClient = {
   callTool: (
     params: { name: string; arguments?: Record<string, unknown>; _meta?: Record<string, unknown> },
+    resultSchema?: undefined,
     options?: { context?: unknown; timeout?: number },
   ) => Promise<McpClient.CallToolResult>
 }
@@ -545,9 +546,14 @@ async function createHarness(options?: {
   const clientTransport = new StreamableHTTPClientTransport(new URL(`${httpServer.url}/mcp`))
   await sdkClient.connect(clientTransport as never)
 
-  const mcp = McpClient.wrap(sdkClient, {
-    methods: [chargeMethod, sessionMethod],
-  })
+  // Wrap a facade over the same session so `sdkClient` keeps raw (challenge-
+  // throwing) behavior for the credential-level scenarios below.
+  const mcp = McpClient.wrap(
+    { callTool: sdkClient.callTool.bind(sdkClient) as Client['callTool'] },
+    {
+      methods: [chargeMethod, sessionMethod],
+    },
+  )
 
   return {
     async close() {
