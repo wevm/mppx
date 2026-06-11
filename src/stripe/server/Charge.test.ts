@@ -1,4 +1,4 @@
-import { Challenge, Credential } from 'mppx'
+import { Challenge, Credential, Receipt } from 'mppx'
 import { Mppx, stripe } from 'mppx/server'
 import { afterEach, describe, expect, test, vi } from 'vp/test'
 import * as Http from '~test/Http.js'
@@ -241,6 +241,119 @@ describe('stripe.charge with client', () => {
     expect(body.get('transfer_data[amount]')).toBe('88')
     expect(body.get('transfer_data[destination]')).toBe('acct_destination')
     expect(body.get('transfer_group')).toBe('order_123')
+  })
+
+  test('security: attributes receipt externalId from the server-bound request', async () => {
+    const { client } = createMockStripeClient()
+    const server = Mppx.create({
+      methods: [
+        stripe.charge({
+          client,
+          networkId: 'internal',
+          paymentMethodTypes: ['card'],
+        }),
+      ],
+      realm,
+      secretKey,
+    })
+
+    const handle = server.charge({
+      amount: '1',
+      currency: 'usd',
+      decimals: 2,
+      externalId: 'server-order-123',
+    })
+    const firstResult = await handle(new Request('https://example.com'))
+    expect(firstResult.status).toBe(402)
+    if (firstResult.status !== 402) throw new Error()
+
+    const credential = Credential.from({
+      challenge: Challenge.fromResponse(firstResult.challenge),
+      payload: { spt: 'spt_test_token', externalId: 'server-order-123' },
+    })
+    const result = await handle(
+      new Request('https://example.com', {
+        headers: { Authorization: Credential.serialize(credential) },
+      }),
+    )
+
+    expect(result.status).toBe(200)
+    if (result.status !== 200) throw new Error()
+    const receipt = Receipt.fromResponse(result.withReceipt(new Response('OK')))
+    expect(receipt.externalId).toBe('server-order-123')
+  })
+
+  test('security: rejects forged Stripe credential externalId', async () => {
+    const { client, create } = createMockStripeClient()
+    const server = Mppx.create({
+      methods: [
+        stripe.charge({
+          client,
+          networkId: 'internal',
+          paymentMethodTypes: ['card'],
+        }),
+      ],
+      realm,
+      secretKey,
+    })
+
+    const handle = server.charge({
+      amount: '1',
+      currency: 'usd',
+      decimals: 2,
+      externalId: 'server-order-123',
+    })
+    const firstResult = await handle(new Request('https://example.com'))
+    expect(firstResult.status).toBe(402)
+    if (firstResult.status !== 402) throw new Error()
+
+    const credential = Credential.from({
+      challenge: Challenge.fromResponse(firstResult.challenge),
+      payload: { spt: 'spt_test_token', externalId: 'attacker-order-999' },
+    })
+    const result = await handle(
+      new Request('https://example.com', {
+        headers: { Authorization: Credential.serialize(credential) },
+      }),
+    )
+
+    expect(result.status).toBe(402)
+    expect(create).not.toHaveBeenCalled()
+  })
+
+  test('security: ignores payload-only Stripe credential externalId', async () => {
+    const { client } = createMockStripeClient()
+    const server = Mppx.create({
+      methods: [
+        stripe.charge({
+          client,
+          networkId: 'internal',
+          paymentMethodTypes: ['card'],
+        }),
+      ],
+      realm,
+      secretKey,
+    })
+
+    const handle = server.charge({ amount: '1', currency: 'usd', decimals: 2 })
+    const firstResult = await handle(new Request('https://example.com'))
+    expect(firstResult.status).toBe(402)
+    if (firstResult.status !== 402) throw new Error()
+
+    const credential = Credential.from({
+      challenge: Challenge.fromResponse(firstResult.challenge),
+      payload: { spt: 'spt_test_token', externalId: 'attacker-order-999' },
+    })
+    const result = await handle(
+      new Request('https://example.com', {
+        headers: { Authorization: Credential.serialize(credential) },
+      }),
+    )
+
+    expect(result.status).toBe(200)
+    if (result.status !== 200) throw new Error()
+    const receipt = Receipt.fromResponse(result.withReceipt(new Response('OK')))
+    expect(receipt.externalId).toBeUndefined()
   })
 
   test('error: surfaces Connect PaymentIntent creation failures', async () => {

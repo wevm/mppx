@@ -610,8 +610,8 @@ export async function broadcastOpenTransaction(
       reason: 'open transaction does not match claimed channelId',
     })
 
-  const resolvedFeeToken =
-    transaction.feeToken ?? defaults.currency[client.chain?.id as keyof typeof defaults.currency]
+  const defaultFeeToken = defaults.currency[client.chain?.id as keyof typeof defaults.currency]
+  const resolvedFeeToken = transaction.feeToken ?? defaultFeeToken
 
   const pendingOnChain = {
     finalized: false,
@@ -635,10 +635,10 @@ export async function broadcastOpenTransaction(
 
       const sponsored = FeePayer.prepareSponsoredTransaction({
         account: feePayer,
+        allowedFeeTokens: defaultFeeToken ? [defaultFeeToken] : undefined,
         challengeExpires,
         chainId: client.chain!.id,
         details: { channelId, currency, recipient },
-        expectedFeeToken: defaults.currency[client.chain?.id as keyof typeof defaults.currency],
         policy: feePayerPolicy,
         transaction: {
           ...transaction,
@@ -774,9 +774,10 @@ export async function broadcastTopUpTransaction(
           reason: 'transaction does not contain a valid escrow topUp call',
         })
 
-      const expectedFeeToken = defaults.currency[client.chain?.id as keyof typeof defaults.currency]
+      const defaultFeeToken = defaults.currency[client.chain?.id as keyof typeof defaults.currency]
       const sponsored = FeePayer.prepareSponsoredTransaction({
         account: feePayer,
+        allowedFeeTokens: defaultFeeToken ? [defaultFeeToken] : undefined,
         challengeExpires,
         chainId: client.chain!.id,
         details: {
@@ -784,12 +785,11 @@ export async function broadcastTopUpTransaction(
           channelId,
           currency,
         },
-        expectedFeeToken,
         policy: feePayerPolicy,
         transaction: {
           ...transaction,
-          ...((transaction.feeToken ?? expectedFeeToken)
-            ? { feeToken: transaction.feeToken ?? expectedFeeToken }
+          ...((transaction.feeToken ?? defaultFeeToken)
+            ? { feeToken: transaction.feeToken ?? defaultFeeToken }
             : {}),
         },
       })

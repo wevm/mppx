@@ -2,7 +2,7 @@ import type { TempoAddress } from 'ox/tempo'
 import { TxEnvelopeTempo } from 'ox/tempo'
 import type { Hex } from 'viem'
 import type { Account } from 'viem'
-import { decodeFunctionData, maxUint256 } from 'viem'
+import { decodeFunctionData, maxUint256, toHex } from 'viem'
 import { Abis, Addresses, Transaction } from 'viem/tempo'
 
 import * as TempoAddress_internal from './address.js'
@@ -42,6 +42,16 @@ export type Policy = {
 // for that function's return type so this helper stays aligned with upstream
 // Tempo transaction fields.
 type SponsoredTransaction = ReturnType<(typeof Transaction)['deserialize']>
+
+type HostedFeePayerFillResponse = {
+  error?: { message?: string | undefined } | undefined
+  result?: {
+    tx?: {
+      feePayerSignature?: unknown
+      feeToken?: unknown
+    }
+  }
+}
 
 type ExpectedTransfer = {
   amount: string
@@ -91,6 +101,137 @@ const supportedTransactionKeys = new Set<string>([
   ...rejectedTransactionKeys,
   ...rewrittenTransactionKeys,
 ])
+
+function pushAllowedFeeToken(tokens: TempoAddress.Address[], token: string | undefined) {
+  if (!token) return
+  const normalized = token as TempoAddress.Address
+  if (tokens.some((existing) => TempoAddress_internal.isEqual(existing, normalized))) return
+  tokens.push(normalized)
+}
+
+/** Returns fee tokens that mppx allows sponsored transactions to charge. */
+export function defaultAllowedFeeTokens(chainId: number | undefined) {
+  const tokens: TempoAddress.Address[] = []
+  pushAllowedFeeToken(tokens, defaults.tokens.pathUsd)
+  pushAllowedFeeToken(tokens, defaults.currency[chainId as keyof typeof defaults.currency])
+  return tokens
+}
+
+/** Rejects a sponsored fee token outside the server's allowlist. */
+export function assertAllowedFeeToken(
+  transaction: { feeToken?: unknown },
+  allowedFeeTokens: readonly TempoAddress.Address[],
+) {
+  const { feeToken } = transaction
+  if (feeToken === undefined) return
+  if (typeof feeToken !== 'string')
+    throw new FeePayerValidationError('fee-sponsored transaction feeToken is invalid', {})
+  const normalized = feeToken as TempoAddress.Address
+  if (!allowedFeeTokens.some((allowed) => TempoAddress_internal.isEqual(allowed, normalized)))
+    throw new FeePayerValidationError('fee-sponsored transaction feeToken is not allowed', {
+      feeToken,
+    })
+}
+
+function hostedFeePayerRequest(transaction: SponsoredTransaction) {
+  return {
+    ...(transaction.accessList?.length ? { accessList: transaction.accessList } : {}),
+    calls: transaction.calls.map(
+      (call: {
+        data?: `0x${string}` | undefined
+        to?: TempoAddress.Address | undefined
+        value?: bigint | undefined
+      }) => ({
+        ...(call.to ? { to: call.to } : {}),
+        ...(call.data ? { data: call.data } : {}),
+        value: call.value === undefined ? '0x' : toHex(call.value),
+      }),
+    ),
+    feePayer: true,
+    from: transaction.from,
+    ...(transaction.gas !== undefined ? { gas: toHex(transaction.gas) } : {}),
+    ...(transaction.keyAuthorization !== undefined
+      ? { keyAuthorization: transaction.keyAuthorization }
+      : {}),
+    ...(transaction.maxFeePerGas !== undefined
+      ? { maxFeePerGas: toHex(transaction.maxFeePerGas) }
+      : {}),
+    ...(transaction.maxPriorityFeePerGas !== undefined
+      ? { maxPriorityFeePerGas: toHex(transaction.maxPriorityFeePerGas) }
+      : {}),
+    nonce: toHex(transaction.nonce ?? 0),
+    ...(transaction.nonceKey !== undefined ? { nonceKey: toHex(transaction.nonceKey) } : {}),
+    type: '0x76',
+    ...(transaction.validAfter !== undefined ? { validAfter: toHex(transaction.validAfter) } : {}),
+    ...(transaction.validBefore !== undefined
+      ? { validBefore: toHex(transaction.validBefore) }
+      : {}),
+  }
+}
+
+/**
+ * Co-signs a sender-signed partial sponsorship envelope using a hosted
+ * fee-payer endpoint without letting the endpoint mutate sender-committed
+ * transaction fields.
+ */
+export async function fillHostedFeePayerTransaction(parameters: {
+  allowedFeeTokens: readonly TempoAddress.Address[]
+  transaction: SponsoredTransaction
+  url: string
+}) {
+  const { allowedFeeTokens, transaction, url } = parameters
+  const response = await fetch(url, {
+    body: JSON.stringify(
+      {
+        id: 1,
+        jsonrpc: '2.0',
+        method: 'eth_fillTransaction',
+        params: [hostedFeePayerRequest(transaction)],
+      },
+      (_key, value) => (typeof value === 'bigint' ? toHex(value) : value),
+    ),
+    headers: { 'content-type': 'application/json' },
+    method: 'POST',
+  })
+  const payload = (await response.json().catch(async () => ({
+    error: { message: await response.text() },
+  }))) as HostedFeePayerFillResponse
+  const filled = payload.result?.tx
+  if (!response.ok || payload.error || !filled?.feePayerSignature)
+    throw new FeePayerValidationError(
+      payload.error?.message ?? 'hosted fee payer failed to sponsor transaction',
+      {},
+    )
+  if (typeof filled.feeToken !== 'string')
+    throw new FeePayerValidationError('hosted fee payer did not return a feeToken', {})
+
+  assertAllowedFeeToken({ feeToken: filled.feeToken }, allowedFeeTokens)
+
+  return Transaction.serialize({
+    ...transaction,
+    feePayer: true,
+    feePayerSignature: filled.feePayerSignature,
+    feeToken: filled.feeToken,
+  } as never)
+}
+
+/** Returns a transaction shape suitable for pre-broadcast simulation. */
+export function simulationTransaction(
+  transaction: SponsoredTransaction,
+  options: { feePayer: boolean },
+) {
+  if (options.feePayer)
+    return {
+      account: transaction.from,
+      calls: transaction.calls,
+    }
+  return {
+    ...transaction,
+    account: transaction.from,
+    calls: transaction.calls,
+    feePayerSignature: undefined,
+  }
+}
 
 /**
  * maxTotalFee must be high enough to cover `transferWithMemo` and
@@ -258,20 +399,20 @@ export function validateCalls(
 
 export function prepareSponsoredTransaction(parameters: {
   account: Account
+  allowedFeeTokens?: readonly TempoAddress.Address[] | undefined
   challengeExpires?: string | undefined
   chainId: number
   details: Record<string, string>
-  expectedFeeToken?: TempoAddress.Address | undefined
   now?: Date | undefined
   policy?: Partial<Policy> | undefined
   transaction: SponsoredTransaction
 }) {
   const {
     account,
+    allowedFeeTokens,
     challengeExpires,
     chainId,
     details,
-    expectedFeeToken,
     now = new Date(),
     policy: policyOverrides,
     transaction,
@@ -392,7 +533,12 @@ export function prepareSponsoredTransaction(parameters: {
   })()
 
   if (normalizedFeeToken !== undefined) {
-    if (expectedFeeToken && !TempoAddress_internal.isEqual(normalizedFeeToken, expectedFeeToken))
+    if (
+      allowedFeeTokens &&
+      !allowedFeeTokens.some((allowed) =>
+        TempoAddress_internal.isEqual(normalizedFeeToken, allowed),
+      )
+    )
       fail('fee-sponsored transaction feeToken is not allowed', {
         feeToken: normalizedFeeToken,
       })

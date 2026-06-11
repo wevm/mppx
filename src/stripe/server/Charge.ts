@@ -1,6 +1,10 @@
 import type * as Challenge from '../../Challenge.js'
 import type * as Credential from '../../Credential.js'
-import { PaymentActionRequiredError, VerificationFailedError } from '../../Errors.js'
+import {
+  InvalidChallengeError,
+  PaymentActionRequiredError,
+  VerificationFailedError,
+} from '../../Errors.js'
 import * as Expires from '../../Expires.js'
 import type { LooseOmit, MaybePromise, OneOf } from '../../internal/types.js'
 import * as Method from '../../Method.js'
@@ -112,6 +116,13 @@ export function charge<const parameters extends charge.Parameters>(parameters: p
         spt: string
         externalId?: string
       }
+      const requestExternalId = resolvedRequest.externalId
+      if (requestExternalId !== undefined && credentialExternalId !== requestExternalId) {
+        throw new InvalidChallengeError({
+          id: challenge.id,
+          reason: 'credential externalId does not match this route request',
+        })
+      }
 
       const userMetadata = resolvedRequest.methodDetails?.metadata as
         | Record<string, string>
@@ -156,7 +167,7 @@ export function charge<const parameters extends charge.Parameters>(parameters: p
         status: 'success',
         timestamp: new Date().toISOString(),
         reference: pi.id,
-        ...(credentialExternalId ? { externalId: credentialExternalId } : {}),
+        ...(requestExternalId !== undefined ? { externalId: requestExternalId } : {}),
       } as const
     },
   })

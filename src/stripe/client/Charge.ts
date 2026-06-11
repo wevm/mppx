@@ -55,6 +55,8 @@ export function charge(parameters: charge.Parameters) {
 
       const amount = challenge.request.amount as string
       const currency = challenge.request.currency as string
+      const requestExternalId =
+        typeof challenge.request.externalId === 'string' ? challenge.request.externalId : undefined
       const networkId = challenge.request.methodDetails?.networkId as string | undefined
       if (!networkId) throw new Error('networkId is required in challenge.methodDetails')
       const metadata = challenge.request.methodDetails?.metadata as
@@ -81,11 +83,13 @@ export function charge(parameters: charge.Parameters) {
         paymentMethod,
       })
 
+      const payloadExternalId = requestExternalId ?? externalId
+
       return Credential.serialize({
         challenge,
         payload: {
           spt,
-          ...(externalId ? { externalId } : {}),
+          ...(payloadExternalId !== undefined ? { externalId: payloadExternalId } : {}),
         },
       })
     },
@@ -98,7 +102,7 @@ export declare namespace charge {
     client?: StripeJs | undefined
     /** Called when a Stripe challenge is received. Create an SPT to retry. */
     createToken: (parameters: OnChallengeParameters) => Promise<string>
-    /** Optional client-side external reference ID for the credential payload. */
+    /** Optional fallback external reference ID. A request-bound externalId is echoed and takes precedence. */
     externalId?: string | undefined
     /** Default payment method ID. Overridden by `context.paymentMethod`. */
     paymentMethod?: string | undefined

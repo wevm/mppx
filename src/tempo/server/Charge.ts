@@ -400,30 +400,28 @@ export function charge<const parameters extends charge.Parameters>(
               )
             }
 
-            const expectedFeeToken = defaults.currency[chainId as keyof typeof defaults.currency]
-            const resolvedFeeToken = transaction.feeToken ?? expectedFeeToken
+            const allowedFeeTokens = FeePayer.defaultAllowedFeeTokens(chainId)
+            if (isFeePayerTx) FeePayer.assertAllowedFeeToken(transaction, allowedFeeTokens)
 
             // Request for the pre-broadcast simulation; for sponsored payments
             // this is overwritten below with the co-signed shape.
-            let simulationRequest: Record<string, unknown> = {
-              ...transaction,
-              account: transaction.from,
-              calls: transaction.calls,
-              feePayerSignature: undefined,
-            }
+            let simulationRequest: Record<string, unknown> = FeePayer.simulationTransaction(
+              transaction,
+              { feePayer: isFeePayerTx },
+            )
 
             const serializedTransaction_final = await (async () => {
               if (feePayerAccount && methodDetails?.feePayer !== false) {
                 const sponsored = FeePayer.prepareSponsoredTransaction({
                   account: feePayerAccount,
+                  allowedFeeTokens,
                   challengeExpires: expires,
                   chainId: chainId ?? client.chain!.id,
                   details: { amount, currency, recipient },
-                  expectedFeeToken,
                   policy: feePayerPolicy,
                   transaction: {
                     ...transaction,
-                    ...(resolvedFeeToken ? { feeToken: resolvedFeeToken } : {}),
+                    feeToken: transaction.feeToken ?? defaults.tokens.pathUsd,
                   },
                 })
                 // `account` is the sender (eth_call `from`); `feePayer` is the
@@ -437,6 +435,12 @@ export function charge<const parameters extends charge.Parameters>(
                 }
                 return signTransaction(client, sponsored as never)
               }
+              if (feePayerUrl && isFeePayerTx)
+                return FeePayer.fillHostedFeePayerTransaction({
+                  allowedFeeTokens,
+                  transaction,
+                  url: feePayerUrl,
+                })
               return serializedTransaction
             })()
 

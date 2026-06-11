@@ -619,10 +619,10 @@ export type SendCredentialTransactionParameters = {
   chainId: number
   /** viem client used to submit the transaction. */
   client: TransactionClient
+  /** Fee tokens allowed by the server for sponsored transactions. */
+  allowedFeeTokens?: readonly Address[] | undefined
   /** Human-readable transaction details used by fee-payer policy hooks. */
   details: Record<string, string>
-  /** Fee token expected by the server for sponsored transactions. */
-  expectedFeeToken?: Address | undefined
   /** Fee-payer account used to co-sign Tempo transactions. */
   feePayer?: Account | undefined
   /** Optional fee-payer policy enforced before co-signing. */
@@ -641,8 +641,8 @@ export async function sendCredentialTransaction(parameters: SendCredentialTransa
     challengeExpires,
     chainId,
     client,
+    allowedFeeTokens,
     details,
-    expectedFeeToken,
     feePayer,
     feePayerPolicy,
     label,
@@ -663,14 +663,14 @@ export async function sendCredentialTransaction(parameters: SendCredentialTransa
 
   const sponsored = FeePayer.prepareSponsoredTransaction({
     account: feePayer,
+    allowedFeeTokens,
     challengeExpires,
     chainId,
     details,
-    expectedFeeToken,
     policy: feePayerPolicy,
     transaction: {
       ...transaction,
-      ...(expectedFeeToken ? { feeToken: transaction.feeToken ?? expectedFeeToken } : {}),
+      ...(allowedFeeTokens?.[0] ? { feeToken: transaction.feeToken ?? allowedFeeTokens[0] } : {}),
     },
   })
   const serialized = await signTempoTransaction(client, sponsored)
@@ -783,12 +783,12 @@ export async function broadcastOpenTransaction(
     challengeExpires: parameters.challengeExpires,
     chainId: parameters.chainId,
     client: parameters.client,
+    allowedFeeTokens: [parameters.expectedCurrency],
     details: {
       channelId: parameters.expectedChannelId,
       currency: parameters.expectedCurrency,
       recipient: parameters.expectedPayee,
     },
-    expectedFeeToken: parameters.expectedCurrency,
     feePayer: parameters.feePayer,
     feePayerPolicy: parameters.feePayerPolicy,
     label: 'open',
@@ -877,12 +877,12 @@ export async function broadcastTopUpTransaction(
     challengeExpires: parameters.challengeExpires,
     chainId: parameters.chainId,
     client: parameters.client,
+    allowedFeeTokens: [parameters.expectedCurrency],
     details: {
       additionalDeposit: parameters.additionalDeposit.toString(),
       channelId: parameters.expectedChannelId,
       currency: parameters.expectedCurrency,
     },
-    expectedFeeToken: parameters.expectedCurrency,
     feePayer: parameters.feePayer,
     feePayerPolicy: parameters.feePayerPolicy,
     label: 'topUp',
