@@ -7,8 +7,10 @@ import { playwright } from 'vp/test/browser-playwright'
 const alias = {
   'mppx/client': path.resolve(import.meta.dirname, 'src/client'),
   'mppx/discovery': path.resolve(import.meta.dirname, 'src/discovery'),
-  'mppx/mcp-sdk/client': path.resolve(import.meta.dirname, 'src/mcp-sdk/client'),
-  'mppx/mcp-sdk/server': path.resolve(import.meta.dirname, 'src/mcp-sdk/server'),
+  'mppx/mcp/client': path.resolve(import.meta.dirname, 'src/mcp/client'),
+  'mppx/mcp/server': path.resolve(import.meta.dirname, 'src/mcp/server'),
+  'mppx/mcp-sdk/client': path.resolve(import.meta.dirname, 'src/mcp/client'),
+  'mppx/mcp-sdk/server': path.resolve(import.meta.dirname, 'src/mcp/server'),
   'mppx/proxy': path.resolve(import.meta.dirname, 'src/proxy'),
   'mppx/server': path.resolve(import.meta.dirname, 'src/server'),
   'mppx/tempo': path.resolve(import.meta.dirname, 'src/tempo'),

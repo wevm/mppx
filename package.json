@@ -115,15 +115,25 @@
       "types": "./dist/evm/server/index.d.ts",
       "default": "./dist/evm/server/index.js"
     },
+    "./mcp/client": {
+      "src": "./src/mcp/client/index.ts",
+      "types": "./dist/mcp/client/index.d.ts",
+      "default": "./dist/mcp/client/index.js"
+    },
+    "./mcp/server": {
+      "src": "./src/mcp/server/index.ts",
+      "types": "./dist/mcp/server/index.d.ts",
+      "default": "./dist/mcp/server/index.js"
+    },
     "./mcp-sdk/client": {
-      "src": "./src/mcp-sdk/client/index.ts",
-      "types": "./dist/mcp-sdk/client/index.d.ts",
-      "default": "./dist/mcp-sdk/client/index.js"
+      "src": "./src/mcp/client/index.ts",
+      "types": "./dist/mcp/client/index.d.ts",
+      "default": "./dist/mcp/client/index.js"
     },
     "./mcp-sdk/server": {
-      "src": "./src/mcp-sdk/server/index.ts",
-      "types": "./dist/mcp-sdk/server/index.d.ts",
-      "default": "./dist/mcp-sdk/server/index.js"
+      "src": "./src/mcp/server/index.ts",
+      "types": "./dist/mcp/server/index.d.ts",
+      "default": "./dist/mcp/server/index.js"
     },
     "./proxy": {
       "src": "./src/proxy/index.ts",

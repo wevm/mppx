@@ -48,7 +48,9 @@ describe('MCP client payment approval', () => {
       methods: [Method.toClient(Methods.charge, { createCredential })],
     })
 
-    const result = await mcp.callTool(onPaymentRequired, { name: 'paid_tool', arguments: {} })
+    const result = await mcp.callTool({ name: 'paid_tool', arguments: {} }, undefined, {
+      onPaymentRequired,
+    })
 
     expect(result.content).toEqual([{ type: 'text', text: 'ok' }])
     expect(onPaymentRequired).toHaveBeenCalledWith(challenge)
@@ -82,9 +84,9 @@ describe('MCP client payment approval', () => {
       methods: [Method.toClient(Methods.charge, { createCredential })],
     })
 
-    await expect(mcp.callTool(() => false, { name: 'paid_tool' })).rejects.toThrow(
-      'Payment declined.',
-    )
+    await expect(
+      mcp.callTool({ name: 'paid_tool' }, undefined, { onPaymentRequired: () => false }),
+    ).rejects.toThrow('Payment declined.')
     expect(createCredential).not.toHaveBeenCalled()
   })
 
@@ -122,7 +124,9 @@ describe('MCP client payment approval', () => {
       onPaymentRequired,
     })
 
-    await expect(mcp.callTool(null, { name: 'paid_tool' })).resolves.toMatchObject({
+    await expect(
+      mcp.callTool({ name: 'paid_tool' }, undefined, { onPaymentRequired: null }),
+    ).resolves.toMatchObject({
       content: [{ type: 'text', text: 'ok' }],
     })
     expect(onPaymentRequired).not.toHaveBeenCalled()
