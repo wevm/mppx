@@ -14,7 +14,7 @@ const dummyClientCharge = clientCharge_({
   paymentMethod: 'pm_test',
 })
 
-async function createChallenge() {
+async function createChallenge(request: { externalId?: string } = {}) {
   const server = Mppx_server.create({
     methods: [
       stripe_server.charge({
@@ -27,7 +27,7 @@ async function createChallenge() {
     secretKey,
   })
 
-  const handle = server.charge({ amount: '100', currency: 'usd', decimals: 2 })
+  const handle = server.charge({ amount: '100', currency: 'usd', decimals: 2, ...request })
   const result = await handle(new Request('https://example.com'))
   if (result.status !== 402) throw new Error('Expected 402')
   return Challenge.fromResponse(result.challenge, { methods: [dummyClientCharge] })
@@ -121,18 +121,33 @@ describe('stripe.charge client param', () => {
     expect(parsed.payload).toMatchObject({ spt: 'spt_test_123' })
   })
 
-  test('behavior: includes externalId in credential payload', async () => {
+  test('behavior: echoes request-bound externalId in credential payload', async () => {
     const charge = stripe.charge({
       createToken: async () => 'spt_test_123',
-      externalId: 'order_456',
       paymentMethod: 'pm_card_visa',
     })
 
-    const challenge = await createChallenge()
+    const challenge = await createChallenge({ externalId: 'order_456' })
     const credential = await charge.createCredential({ challenge, context: {} })
     const parsed = Credential.deserialize(credential)
     expect(parsed.payload).toMatchObject({
       externalId: 'order_456',
+      spt: 'spt_test_123',
+    })
+  })
+
+  test('behavior: request-bound externalId overrides local externalId', async () => {
+    const charge = stripe.charge({
+      createToken: async () => 'spt_test_123',
+      externalId: 'client_order_999',
+      paymentMethod: 'pm_card_visa',
+    })
+
+    const challenge = await createChallenge({ externalId: 'server_order_456' })
+    const credential = await charge.createCredential({ challenge, context: {} })
+    const parsed = Credential.deserialize(credential)
+    expect(parsed.payload).toMatchObject({
+      externalId: 'server_order_456',
       spt: 'spt_test_123',
     })
   })
