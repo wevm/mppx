@@ -9,7 +9,7 @@ import * as Receipt from '../Receipt.js'
 import * as Html from './internal/html/config.js'
 import { serviceWorker } from './internal/html/serviceWorker.gen.js'
 
-export { type McpSdk, mcpSdk } from '../mcp-sdk/server/Transport.js'
+export { type McpSdk, mcpSdk } from '../mcp/server/Transport.js'
 
 /**
  * Server-side transport adapter.
