@@ -3,8 +3,7 @@ import { Mppx as Mppx_client, tempo as tempo_client } from 'mppx/client'
 import { Mppx as Mppx_server, tempo as tempo_server } from 'mppx/server'
 import { P256, type Hex, WebAuthnP256 } from 'ox'
 import { SignatureEnvelope, TxEnvelopeTempo } from 'ox/tempo'
-import { Handler } from 'tempo.ts/server'
-import { createClient, custom, encodeFunctionData, parseUnits } from 'viem'
+import { createClient, custom, encodeFunctionData, parseSignature, parseUnits } from 'viem'
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts'
 import {
   getTransactionReceipt,
@@ -26,6 +25,7 @@ import { accounts, asset, chain, client, fundAccount, http } from '~test/tempo/v
 
 import * as Store from '../../Store.js'
 import * as Attribution from '../Attribution.js'
+import * as defaults from '../internal/defaults.js'
 import * as Proof from '../internal/proof.js'
 
 const realm = 'api.example.com'
@@ -1816,11 +1816,64 @@ describe('tempo', () => {
     })
 
     test('behavior: fee payer URL (withFeePayer transport)', async () => {
-      const feePayerHandler = Handler.feePayer({
-        account: accounts[0],
-        client,
+      const feePayerRequests: any[] = []
+      const feePayerServer = await Http.createServer(async (req, res) => {
+        let requestBody = ''
+        for await (const chunk of req) requestBody += chunk
+        const request = JSON.parse(requestBody)
+        feePayerRequests.push(request)
+
+        const transaction = request.params[0]
+        const quantity = (value: unknown) =>
+          value === undefined ? undefined : BigInt(value as string | number | bigint | boolean)
+        const envelope = TxEnvelopeTempo.from({
+          accessList: transaction.accessList,
+          calls: transaction.calls.map(({ value, ...call }: any) => ({
+            ...call,
+            ...(value && value !== '0x' ? { value: BigInt(value) } : {}),
+          })),
+          chainId: chain.id,
+          feeToken: defaults.tokens.pathUsd,
+          from: transaction.from,
+          ...(quantity(transaction.gas) !== undefined ? { gas: quantity(transaction.gas) } : {}),
+          ...(quantity(transaction.maxFeePerGas) !== undefined
+            ? { maxFeePerGas: quantity(transaction.maxFeePerGas) }
+            : {}),
+          ...(quantity(transaction.maxPriorityFeePerGas) !== undefined
+            ? { maxPriorityFeePerGas: quantity(transaction.maxPriorityFeePerGas) }
+            : {}),
+          ...(quantity(transaction.nonce) !== undefined
+            ? { nonce: quantity(transaction.nonce) }
+            : {}),
+          ...(quantity(transaction.nonceKey) !== undefined
+            ? { nonceKey: quantity(transaction.nonceKey) }
+            : {}),
+          type: 'tempo',
+          ...(transaction.validAfter ? { validAfter: Number(BigInt(transaction.validAfter)) } : {}),
+          ...(transaction.validBefore
+            ? { validBefore: Number(BigInt(transaction.validBefore)) }
+            : {}),
+        })
+        const hash = TxEnvelopeTempo.getFeePayerSignPayload(envelope, {
+          sender: transaction.from,
+        })
+        const { r, s, yParity } = parseSignature(await accounts[0].sign!({ hash }))
+        const feePayerSignature = { r, s, yParity }
+
+        res.setHeader('content-type', 'application/json')
+        res.end(
+          JSON.stringify({
+            id: request.id,
+            jsonrpc: '2.0',
+            result: {
+              tx: {
+                feePayerSignature,
+                feeToken: defaults.tokens.pathUsd,
+              },
+            },
+          }),
+        )
       })
-      const feePayerServer = await Http.createServer(feePayerHandler.listener)
 
       const serverWithFeePayer = Mppx_server.create({
         methods: [
@@ -1858,6 +1911,7 @@ describe('tempo', () => {
 
       const response = await mppx.fetch(httpServer.url)
       expect(response.status).toBe(200)
+      expect(feePayerRequests.map(({ method }) => method)).toEqual(['eth_fillTransaction'])
 
       const receipt = Receipt.fromResponse(response)
       expect(receipt.status).toBe('success')

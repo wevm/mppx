@@ -1,11 +1,16 @@
-import { encodeFunctionData, maxUint256 } from 'viem'
-import { Abis, Addresses } from 'viem/tempo'
-import { describe, expect, test } from 'vp/test'
+import { encodeFunctionData, maxUint256, toHex } from 'viem'
+import { Abis, Addresses, Transaction } from 'viem/tempo'
+import { afterEach, describe, expect, test, vi } from 'vp/test'
 
+import * as defaults from './defaults.js'
 import {
+  assertAllowedFeeToken,
   callScopes,
+  defaultAllowedFeeTokens,
   FeePayerValidationError,
+  fillHostedFeePayerTransaction,
   prepareSponsoredTransaction,
+  simulationTransaction,
   validateCalls,
 } from './fee-payer.js'
 import * as Selectors from './selectors.js'
@@ -19,7 +24,16 @@ const swapData = encodeFunctionData({
   functionName: 'swapExactAmountOut',
   args: [swapTokenIn, swapTokenOut, 100n, 100n],
 })
+const feePayerSignature = {
+  r: '0x0000000000000000000000000000000000000000000000000000000000000002',
+  s: '0x0000000000000000000000000000000000000000000000000000000000000003',
+  yParity: 1,
+}
 const sponsor = { address: bogus, type: 'local' } as any
+
+afterEach(() => {
+  vi.unstubAllGlobals()
+})
 
 describe('callScopes', () => {
   test('has 4 allowed patterns', () => {
@@ -423,6 +437,216 @@ describe('validateCalls', () => {
   })
 })
 
+describe('fee token allowlist', () => {
+  test('includes pathUSD and the chain default currency', () => {
+    expect(defaultAllowedFeeTokens(defaults.chainId.mainnet)).toEqual([
+      defaults.tokens.pathUsd,
+      defaults.tokens.usdc,
+    ])
+  })
+
+  test('dedupes when pathUSD is the chain default currency', () => {
+    expect(defaultAllowedFeeTokens(defaults.chainId.testnet)).toEqual([defaults.tokens.pathUsd])
+  })
+
+  test('accepts allowlisted fee tokens', () => {
+    expect(() =>
+      assertAllowedFeeToken(
+        { feeToken: defaults.tokens.usdc },
+        defaultAllowedFeeTokens(defaults.chainId.mainnet),
+      ),
+    ).not.toThrow()
+  })
+
+  test('error: rejects non-string fee tokens', () => {
+    expect(() =>
+      assertAllowedFeeToken({ feeToken: 1n }, defaultAllowedFeeTokens(defaults.chainId.mainnet)),
+    ).toThrow('feeToken is invalid')
+  })
+
+  test('error: rejects fee tokens outside the allowlist', () => {
+    expect(() =>
+      assertAllowedFeeToken(
+        { feeToken: swapTokenIn },
+        defaultAllowedFeeTokens(defaults.chainId.mainnet),
+      ),
+    ).toThrow('feeToken is not allowed')
+  })
+})
+
+describe('fillHostedFeePayerTransaction', () => {
+  const hostedTransaction = {
+    accessList: [],
+    calls: [
+      {
+        data: encodeFunctionData({
+          abi: Abis.tip20,
+          functionName: 'transfer',
+          args: [bogus, 100n],
+        }),
+        to: bogus,
+      },
+    ],
+    chainId: defaults.chainId.mainnet,
+    from: bogus,
+    gas: 150_000n,
+    maxFeePerGas: 1_000_000_000n,
+    maxPriorityFeePerGas: 0n,
+    nonce: 1n,
+    nonceKey: maxUint256,
+    signature: { r: 1n, s: 1n, yParity: 0 } as any,
+    validBefore: Math.floor(Date.now() / 1_000) + 300,
+  } as const
+
+  test('uses hosted fillTransaction and preserves sender-committed fields', async () => {
+    const calls: { init?: RequestInit | undefined; input: RequestInfo | URL }[] = []
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      calls.push({ init, input })
+      return new Response(
+        JSON.stringify({
+          result: {
+            tx: {
+              feePayerSignature,
+              feeToken: defaults.tokens.pathUsd,
+              gas: '0x1',
+              maxFeePerGas: '0x2',
+            },
+          },
+        }),
+      )
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const serialized = await fillHostedFeePayerTransaction({
+      allowedFeeTokens: defaultAllowedFeeTokens(defaults.chainId.mainnet),
+      transaction: hostedTransaction as any,
+      url: 'https://sponsor.example/tp_key',
+    })
+
+    expect(fetchMock).toHaveBeenCalledOnce()
+    expect(calls[0]!.input).toBe('https://sponsor.example/tp_key')
+    const body = JSON.parse(calls[0]!.init!.body as string)
+    expect(body).toMatchObject({
+      jsonrpc: '2.0',
+      method: 'eth_fillTransaction',
+    })
+    expect(body.params[0]).toMatchObject({
+      calls: hostedTransaction.calls.map((call) => ({
+        data: call.data,
+        to: call.to,
+        value: '0x',
+      })),
+      feePayer: true,
+      from: hostedTransaction.from,
+      gas: toHex(hostedTransaction.gas),
+      maxFeePerGas: toHex(hostedTransaction.maxFeePerGas),
+      maxPriorityFeePerGas: toHex(hostedTransaction.maxPriorityFeePerGas),
+      nonce: toHex(hostedTransaction.nonce),
+      nonceKey: toHex(hostedTransaction.nonceKey),
+      type: '0x76',
+      validBefore: toHex(hostedTransaction.validBefore),
+    })
+
+    const transaction: Transaction.TransactionSerializableTempo = Transaction.deserialize(
+      serialized as Transaction.TransactionSerializedTempo,
+    )
+    expect(transaction.gas).toBe(hostedTransaction.gas)
+    expect(transaction.maxFeePerGas).toBe(hostedTransaction.maxFeePerGas)
+    expect(transaction.calls).toEqual(hostedTransaction.calls)
+    expect(transaction.feeToken).toBe(defaults.tokens.pathUsd)
+    expect(transaction.feePayerSignature).toEqual(feePayerSignature)
+  })
+
+  test('error: requires hosted fee payer to return a feeToken', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => new Response(JSON.stringify({ result: { tx: { feePayerSignature } } }))),
+    )
+
+    await expect(
+      fillHostedFeePayerTransaction({
+        allowedFeeTokens: defaultAllowedFeeTokens(defaults.chainId.mainnet),
+        transaction: hostedTransaction as any,
+        url: 'https://sponsor.example/tp_key',
+      }),
+    ).rejects.toThrow('did not return a feeToken')
+  })
+
+  test('error: rejects hosted feeToken outside the allowlist', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({
+              result: { tx: { feePayerSignature, feeToken: swapTokenIn } },
+            }),
+          ),
+      ),
+    )
+
+    await expect(
+      fillHostedFeePayerTransaction({
+        allowedFeeTokens: defaultAllowedFeeTokens(defaults.chainId.mainnet),
+        transaction: hostedTransaction as any,
+        url: 'https://sponsor.example/tp_key',
+      }),
+    ).rejects.toThrow('feeToken is not allowed')
+  })
+
+  test('error: surfaces hosted fee payer errors', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        async () =>
+          new Response(JSON.stringify({ error: { message: 'Invalid or revoked API key' } }), {
+            status: 401,
+          }),
+      ),
+    )
+
+    await expect(
+      fillHostedFeePayerTransaction({
+        allowedFeeTokens: defaultAllowedFeeTokens(defaults.chainId.mainnet),
+        transaction: hostedTransaction as any,
+        url: 'https://sponsor.example/tp_key',
+      }),
+    ).rejects.toThrow('Invalid or revoked API key')
+  })
+})
+
+describe('simulationTransaction', () => {
+  test('strips signed fee-payer fields for sponsored preflight simulation', () => {
+    const transaction = {
+      calls: [{ to: bogus }],
+      feePayerSignature,
+      from: bogus,
+    }
+
+    expect(simulationTransaction(transaction as any, { feePayer: true })).toEqual({
+      account: bogus,
+      calls: transaction.calls,
+    })
+  })
+
+  test('preserves non-sponsored transaction fields except feePayerSignature', () => {
+    const transaction = {
+      calls: [{ to: bogus }],
+      feePayerSignature,
+      from: bogus,
+      gas: 1n,
+    }
+
+    expect(simulationTransaction(transaction as any, { feePayer: false })).toEqual({
+      account: bogus,
+      calls: transaction.calls,
+      from: bogus,
+      gas: 1n,
+      feePayerSignature: undefined,
+    })
+  })
+})
+
 describe('prepareSponsoredTransaction', () => {
   const baseTransaction = {
     accessList: [],
@@ -454,7 +678,7 @@ describe('prepareSponsoredTransaction', () => {
         account: sponsor,
         chainId: 42431,
         details,
-        expectedFeeToken: bogus,
+        allowedFeeTokens: [bogus],
         transaction: baseTransaction as any,
       }),
     ).not.toThrow()
@@ -466,7 +690,7 @@ describe('prepareSponsoredTransaction', () => {
         account: sponsor,
         chainId: 42431,
         details,
-        expectedFeeToken: bogus,
+        allowedFeeTokens: [bogus],
         transaction: {
           ...baseTransaction,
           nonceKey: maxUint256,
@@ -481,7 +705,7 @@ describe('prepareSponsoredTransaction', () => {
         account: sponsor,
         chainId: 42431,
         details,
-        expectedFeeToken: bogus,
+        allowedFeeTokens: [bogus],
         transaction: {
           ...baseTransaction,
           nonceKey: 1n,
@@ -496,7 +720,7 @@ describe('prepareSponsoredTransaction', () => {
         account: sponsor,
         chainId: 42431,
         details,
-        expectedFeeToken: bogus,
+        allowedFeeTokens: [bogus],
         transaction: {
           ...baseTransaction,
           gas: 626_497n,
@@ -513,7 +737,7 @@ describe('prepareSponsoredTransaction', () => {
         account: sponsor,
         chainId: 4217,
         details,
-        expectedFeeToken: bogus,
+        allowedFeeTokens: [bogus],
         policy: { maxPriorityFeePerGas: 50_000_000_000n },
         transaction: {
           ...baseTransaction,
@@ -532,7 +756,7 @@ describe('prepareSponsoredTransaction', () => {
         account: sponsor,
         chainId: 4217,
         details,
-        expectedFeeToken: bogus,
+        allowedFeeTokens: [bogus],
         policy: { maxPriorityFeePerGas: 20_000_000_000n },
         transaction: {
           ...baseTransaction,
@@ -551,7 +775,7 @@ describe('prepareSponsoredTransaction', () => {
         account: sponsor,
         chainId: 4217,
         details,
-        expectedFeeToken: bogus,
+        allowedFeeTokens: [bogus],
         policy: { maxPriorityFeePerGas: undefined } as any,
         transaction: {
           ...baseTransaction,
@@ -578,7 +802,7 @@ describe('prepareSponsoredTransaction', () => {
       account: sponsor,
       chainId: 42431,
       details,
-      expectedFeeToken: bogus,
+      allowedFeeTokens: [bogus],
       transaction: { ...baseTransaction, keyAuthorization } as any,
     }) as { keyAuthorization?: unknown }
 
@@ -591,7 +815,7 @@ describe('prepareSponsoredTransaction', () => {
         account: sponsor,
         chainId: 42431,
         details,
-        expectedFeeToken: bogus,
+        allowedFeeTokens: [bogus],
         transaction: { ...baseTransaction, unexpectedField: 'ignored' } as any,
       }),
     ).toThrow('contains unsupported fields')
@@ -603,7 +827,7 @@ describe('prepareSponsoredTransaction', () => {
         account: sponsor,
         chainId: 42431,
         details,
-        expectedFeeToken: bogus,
+        allowedFeeTokens: [bogus],
         transaction: {
           ...baseTransaction,
           feePayerSignature: { r: 2n, s: 3n, yParity: 1 },
@@ -618,7 +842,7 @@ describe('prepareSponsoredTransaction', () => {
         account: sponsor,
         chainId: 42431,
         details,
-        expectedFeeToken: bogus,
+        allowedFeeTokens: [bogus],
         transaction: {
           ...baseTransaction,
           maxFeePerGas: 200_000_000_000n,
@@ -633,7 +857,7 @@ describe('prepareSponsoredTransaction', () => {
         account: sponsor,
         chainId: 42431,
         details,
-        expectedFeeToken: bogus,
+        allowedFeeTokens: [bogus],
         transaction: {
           ...baseTransaction,
           gas: 1_500_000n,
@@ -649,7 +873,7 @@ describe('prepareSponsoredTransaction', () => {
         account: sponsor,
         chainId: 42431,
         details,
-        expectedFeeToken: '0x0000000000000000000000000000000000000002',
+        allowedFeeTokens: ['0x0000000000000000000000000000000000000002'],
         transaction: baseTransaction as any,
       }),
     ).toThrow('feeToken is not allowed')
@@ -661,7 +885,7 @@ describe('prepareSponsoredTransaction', () => {
         account: sponsor,
         chainId: 42431,
         details,
-        expectedFeeToken: bogus,
+        allowedFeeTokens: [bogus],
         transaction: {
           ...baseTransaction,
           validBefore: Math.floor(Date.now() / 1_000) + 3_600,
