@@ -1,5 +1,22 @@
 # mppx
 
+## 0.7.0
+
+### Minor Changes
+
+- 6ae92c4: Added TIP-1034-backed Tempo sessions as the default `tempo.session` interface and moved the previous session flow to `tempo.sessionLegacy`.
+
+### Patch Changes
+
+- da6383e: Defaulted account faucet funding to testnet unless a network or RPC URL was specified.
+- 64e9d5f: Fixed hosted Tempo fee-payer fills for sender-signed sponsored charge transactions and validated sponsored fee tokens against pathUSD and chain default currencies.
+- eaac057: Added MCP client payment approval callbacks before credential creation.
+- 77520fa: Changed the Tempo session client API so `tempo.session()` created the low-level Mppx client method and `tempo.session.manager()` created the managed session lifecycle client.
+- 9859f8f: Fixed payment-aware fetch to refuse credential retries when a redirected 402 challenge response resolves to a different origin.
+- ef81337: Send the SSE `Accept` header on automatic session voucher POST updates.
+- f0ff266: Declared `@stripe/stripe-js` as a dependency so the shipped sources type-check for consumers resolving the `src` export condition. The import is type-only, so no runtime code is added.
+- 5a35a02: Added client-side Tempo chain pinning. `tempo.charge({ expectedChainId })` rejects charge challenges whose `methodDetails.chainId` conflicts with the configured chain ID, and signs on the pinned chain when the challenge omits it.
+
 ## 0.6.31
 
 ### Patch Changes
