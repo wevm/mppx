@@ -6,6 +6,7 @@ import * as Method from '../../../Method.js'
 import * as Account from '../../../viem/Account.js'
 import * as Client from '../../../viem/Client.js'
 import * as defaults from '../../internal/defaults.js'
+import * as Wallet from '../../internal/wallet.js'
 import * as Methods from '../../Methods.js'
 import { serializeCredential, type ChannelEntry } from './ChannelOps.js'
 import { sessionContextSchema } from './CredentialState.js'
@@ -44,6 +45,9 @@ export function session(parameters: session.Parameters = {}) {
   const maxDeposit =
     maxDepositParameter !== undefined ? parseUnits(maxDepositParameter, decimals) : undefined
   const cache = createChannelCache(onChannelUpdate)
+  // Positive-only memo of accounts/chains that already passed the wallet MPP
+  // capability probe, so a supporting wallet is probed once per instance.
+  const probeCache = new Map<string, true>()
 
   return Method.toClient(Methods.session, {
     canHandleChallenge({ challenge }) {
@@ -62,6 +66,27 @@ export function session(parameters: session.Parameters = {}) {
         getClient,
       })
       const account = getAccount(resolved.client, context)
+
+      // Manual actions, caller-supplied channels, and challenges an opened
+      // local channel can serve stay local (the wallet would strand its deposit).
+      const manualContext =
+        context?.action !== undefined ||
+        context?.descriptor !== undefined ||
+        context?.channelId !== undefined
+      const openedLocally = cache.channels.get(resolved.key)?.opened
+
+      // Wallet-native MPP: ask a JSON-RPC wallet to satisfy automatic-mode
+      // challenges via `wallet_authorizeChallenge` before falling back to local planning.
+      if (account.type === 'json-rpc' && !manualContext && !openedLocally) {
+        const authorization = await Wallet.authorize(resolved.client, {
+          account: account.address,
+          chainId: resolved.chainId,
+          challenge,
+          probeCache,
+        })
+        if (authorization) return authorization
+      }
+
       const payload = await executeCredentialPlan(
         planCredential({
           account,
