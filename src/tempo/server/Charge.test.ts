@@ -2719,6 +2719,91 @@ describe('tempo', () => {
       },
     )
 
+    test('behavior: rejects access-key proof replayed across a co-authorized account', async () => {
+      // The same access key is authorized by two roots (`payer` and `other`),
+      // so a proof bound to `payer` must not be claimable as `other` even
+      // though `other` independently authorized the key.
+      const payer = accounts[1]
+      const other = accounts[2]
+      const accessKey = Account.fromSecp256k1(Secp256k1.randomPrivateKey(), {
+        access: payer,
+      })
+
+      await fundAccount({ address: other.address, token: asset })
+      await Actions.accessKey.authorizeSync(client, {
+        account: payer,
+        accessKey,
+        feeToken: asset,
+      })
+      await Actions.accessKey.authorizeSync(client, {
+        account: other,
+        accessKey,
+        feeToken: asset,
+      })
+
+      const httpServer = await Http.createServer(async (req, res) => {
+        const result = await Mppx_server.toNodeListener(
+          server.charge({ amount: '0', decimals: 6 }),
+        )(req, res)
+        if (result.status === 402) return
+        res.end('OK')
+      })
+
+      try {
+        const response1 = await fetch(httpServer.url)
+        expect(response1.status).toBe(402)
+
+        const challenge = Challenge.fromResponse(response1, {
+          methods: [tempo_client.charge()],
+        })
+
+        // Access key signs a proof bound to `payer` (the `account` field).
+        const signature = await signTypedData(client, {
+          account: accessKey,
+          domain: Proof.domain(chain.id),
+          types: Proof.types,
+          primaryType: 'Proof',
+          message: Proof.message({
+            account: payer.address,
+            challengeId: challenge.id,
+            realm: challenge.realm,
+          }),
+        })
+
+        // The bound payer accepts the proof.
+        const accepted = await fetch(httpServer.url, {
+          headers: {
+            Authorization: Credential.serialize(
+              Credential.from({
+                challenge,
+                payload: { signature, type: 'proof' as const },
+                source: `did:pkh:eip155:${chain.id}:${payer.address}`,
+              }),
+            ),
+          },
+        })
+        expect(accepted.status).toBe(200)
+
+        // Replaying the same proof as `other` is rejected by the wallet binding.
+        const replay = await fetch(httpServer.url, {
+          headers: {
+            Authorization: Credential.serialize(
+              Credential.from({
+                challenge,
+                payload: { signature, type: 'proof' as const },
+                source: `did:pkh:eip155:${chain.id}:${other.address}`,
+              }),
+            ),
+          },
+        })
+        expect(replay.status).toBe(402)
+        const body = (await replay.json()) as { detail: string }
+        expect(body.detail).toContain('Proof signature does not match source.')
+      } finally {
+        httpServer.close()
+      }
+    })
+
     test('behavior: rejects replayed proof credential when store is configured', async () => {
       const replayStore = Store.memory()
       const server_ = Mppx_server.create({
