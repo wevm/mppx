@@ -2,7 +2,6 @@ import * as SignatureEnvelope from 'ox/tempo/SignatureEnvelope'
 import {
   decodeFunctionData,
   formatUnits,
-  hashTypedData,
   keccak256,
   parseEventLogs,
   type TransactionReceipt,
@@ -292,11 +291,15 @@ export function charge<const parameters extends charge.Parameters>(
           }
 
           const valid = await verifyTypedData(client, {
+            // Bind verification to the claimed payer (`source.address`): the
+            // signer may be the payer itself or an access key authorized for it.
             address: source.address,
-            domain: Proof.domain(resolvedChainId),
-            types: Proof.types,
-            primaryType: 'Proof',
-            message: Proof.message(challenge.id, challenge.realm),
+            ...Proof.typedData({
+              account: source.address,
+              chainId: resolvedChainId,
+              challengeId: challenge.id,
+              realm: challenge.realm,
+            }),
             signature: payload.signature as `0x${string}`,
           })
           if (!valid) {
@@ -1007,12 +1010,7 @@ function recoverAuthorizedProofSigner(parameters: {
 
   try {
     const envelope = SignatureEnvelope.from(signature)
-    const proofHash = hashTypedData({
-      domain: Proof.domain(chainId),
-      types: Proof.types,
-      primaryType: 'Proof',
-      message: Proof.message(challengeId, realm),
-    })
+    const proofHash = Proof.hash({ account: sourceAddress, chainId, challengeId, realm })
 
     if (envelope.type === 'keychain') {
       if (!TempoAddress.isEqual(envelope.userAddress, sourceAddress)) return null

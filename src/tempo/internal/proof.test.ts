@@ -44,9 +44,10 @@ const parsePkhSourceCases = [
 ] as const
 
 describe('Proof', () => {
-  test('types has Proof with challengeId and realm fields', () => {
+  test('types has Proof with account, challengeId and realm fields', () => {
     expect(Proof.types).toEqual({
       Proof: [
+        { name: 'account', type: 'address' },
         { name: 'challengeId', type: 'string' },
         { name: 'realm', type: 'string' },
       ],
@@ -55,7 +56,7 @@ describe('Proof', () => {
 
   test('domain returns EIP-712 domain with name, version, chainId', () => {
     const d = Proof.domain(42431)
-    expect(d).toEqual({ name: 'MPP', version: '2', chainId: 42431 })
+    expect(d).toEqual({ name: 'MPP', version: '3', chainId: 42431 })
   })
 
   test('domain uses provided chainId', () => {
@@ -63,8 +64,15 @@ describe('Proof', () => {
     expect(Proof.domain(99999).chainId).toBe(99999)
   })
 
-  test('message wraps challengeId and realm', () => {
-    expect(Proof.message('abc123', 'api.example.com')).toEqual({
+  test('message wraps account, challengeId and realm', () => {
+    expect(
+      Proof.message({
+        account: '0xAbCdEf1234567890AbCdEf1234567890AbCdEf12',
+        challengeId: 'abc123',
+        realm: 'api.example.com',
+      }),
+    ).toEqual({
+      account: '0xAbCdEf1234567890AbCdEf1234567890AbCdEf12',
       challengeId: 'abc123',
       realm: 'api.example.com',
     })

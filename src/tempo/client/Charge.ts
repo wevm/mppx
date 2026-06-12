@@ -77,10 +77,14 @@ export function charge(parameters: charge.Parameters = {}) {
       if (BigInt(amount) === 0n) {
         const signature = await signTypedData(client, {
           account,
-          domain: Proof.domain(chainId),
-          types: Proof.types,
-          primaryType: 'Proof',
-          message: Proof.message(challenge.id, challenge.realm),
+          // `account` here is the signing account; the proof's bound payer is
+          // `account.address` (echoed in the credential `source` below).
+          ...Proof.typedData({
+            account: account.address,
+            chainId,
+            challengeId: challenge.id,
+            realm: challenge.realm,
+          }),
         })
         return Credential.serialize({
           challenge,

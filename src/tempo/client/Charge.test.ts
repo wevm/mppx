@@ -2,6 +2,7 @@ import { Challenge, Credential } from 'mppx'
 import { createClient, http } from 'viem'
 import { privateKeyToAccount } from 'viem/accounts'
 import { tempoLocalnet } from 'viem/chains'
+import { Account, Secp256k1 } from 'viem/tempo'
 import { describe, expect, test, vi } from 'vp/test'
 
 import * as Methods from '../Methods.js'
@@ -81,6 +82,59 @@ describe('tempo.charge client', () => {
 
     expect(requestedChainId).toBe(chainId)
     expect(credential.source).toBe(`did:pkh:eip155:${chainId}:${account.address}`)
+  })
+
+  test('zero-amount proof binds to the root payer for an access-key account', async () => {
+    vi.resetModules()
+    // Capture the typed data so we can assert what the proof commits to.
+    let signedTypedData: { message: { account: string } } | undefined
+    const signTypedData = vi.fn(async (_client: unknown, parameters: typeof signedTypedData) => {
+      signedTypedData = parameters
+      return '0xdeadbeef'
+    })
+    vi.doMock('viem/actions', () => ({
+      prepareTransactionRequest: vi.fn(),
+      sendCallsSync: vi.fn(),
+      signTransaction: vi.fn(),
+      signTypedData,
+    }))
+
+    try {
+      const { charge: chargeWithMockedActions } = await import('./Charge.js')
+      const chainId = 42431
+      // An access-key account signs with its own key but reports the root
+      // account as `address`; the proof must bind to that root payer.
+      const accessKey = Account.fromSecp256k1(Secp256k1.randomPrivateKey(), {
+        access: account,
+      })
+      expect(accessKey.address).toBe(account.address)
+      expect(accessKey.accessKeyAddress).not.toBe(account.address)
+
+      const client = createClient({
+        account: accessKey,
+        chain: tempoLocalnet,
+        transport: http('http://127.0.0.1'),
+      })
+      const method = chargeWithMockedActions({
+        account: accessKey,
+        getClient: () => client,
+      })
+
+      const credential = Credential.deserialize(
+        await method.createCredential({
+          challenge: createChallenge({ chainId }),
+          context: {},
+        }),
+      )
+
+      expect(signTypedData).toHaveBeenCalledOnce()
+      expect(signedTypedData?.message.account).toBe(account.address)
+      expect(credential.payload).toEqual({ signature: '0xdeadbeef', type: 'proof' })
+      expect(credential.source).toBe(`did:pkh:eip155:${chainId}:${account.address}`)
+    } finally {
+      vi.doUnmock('viem/actions')
+      vi.resetModules()
+    }
   })
 
   test('uses challenge chainId for non-zero transaction source', async () => {
