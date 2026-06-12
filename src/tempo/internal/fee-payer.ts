@@ -1,3 +1,4 @@
+import { Secp256k1 } from 'ox'
 import type { TempoAddress } from 'ox/tempo'
 import { TxEnvelopeTempo } from 'ox/tempo'
 import type { Hex } from 'viem'
@@ -173,6 +174,10 @@ function hostedFeePayerRequest(transaction: SponsoredTransaction) {
  * Co-signs a sender-signed partial sponsorship envelope using a hosted
  * fee-payer endpoint without letting the endpoint mutate sender-committed
  * transaction fields.
+ *
+ * @returns The serialized co-signed transaction plus the sponsor's recovered
+ *   `feePayer` address and chosen `feeToken`, so callers can pre-broadcast
+ *   simulate the exact transaction the sponsor broadcasts.
  */
 export async function fillHostedFeePayerTransaction(parameters: {
   allowedFeeTokens: readonly TempoAddress.Address[]
@@ -207,12 +212,43 @@ export async function fillHostedFeePayerTransaction(parameters: {
 
   assertAllowedFeeToken({ feeToken: filled.feeToken }, allowedFeeTokens)
 
-  return Transaction.serialize({
-    ...transaction,
-    feePayer: true,
-    feePayerSignature: filled.feePayerSignature,
-    feeToken: filled.feeToken,
-  } as never)
+  const feePayerSignature = filled.feePayerSignature
+  const feeToken = filled.feeToken
+
+  // Recover the concrete sponsor address so the simulation can use a concrete
+  // `feePayer` (the node rejects `eth_call` with `feePayer: true`).
+  const feePayer = (() => {
+    try {
+      return Secp256k1.recoverAddress({
+        payload: TxEnvelopeTempo.getFeePayerSignPayload(
+          TxEnvelopeTempo.from({
+            ...transaction,
+            feePayerSignature: undefined,
+            feeToken,
+            signature: undefined,
+          } as never),
+          { sender: transaction.from as never },
+        ),
+        signature: feePayerSignature as never,
+      })
+    } catch {
+      throw new FeePayerValidationError(
+        'hosted fee payer returned an invalid feePayerSignature',
+        {},
+      )
+    }
+  })()
+
+  return {
+    feePayer,
+    feeToken,
+    serializedTransaction: await Transaction.serialize({
+      ...transaction,
+      feePayer: true,
+      feePayerSignature,
+      feeToken,
+    } as never),
+  }
 }
 
 /** Returns a transaction shape suitable for pre-broadcast simulation. */
