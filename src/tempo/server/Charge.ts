@@ -441,17 +441,13 @@ export function charge<const parameters extends charge.Parameters>(
                   transaction,
                   url: feePayerUrl,
                 })
-                // Simulate the co-signed envelope the hosted sponsor
-                // broadcasts: the sender executes (`account`/`from`) while the
-                // sponsor's chosen `feeToken` settles fees. Keeping
-                // `feePayerSignature` is required — viem strips `feeToken` from
-                // the `eth_call` request when `feePayer === true` and no
-                // `feePayerSignature` is present.
+                // Simulate the co-signed envelope (concrete fee payer + chosen
+                // fee token), mirroring the local-sponsor path.
                 simulationRequest = {
                   ...transaction,
                   account: transaction.from,
-                  feePayer: true,
-                  feePayerSignature: hosted.feePayerSignature,
+                  feePayer: hosted.feePayer,
+                  feePayerSignature: undefined,
                   feeToken: hosted.feeToken,
                   signature: undefined,
                 }

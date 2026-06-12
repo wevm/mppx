@@ -1,3 +1,5 @@
+import { Address, Secp256k1 } from 'ox'
+import { TxEnvelopeTempo } from 'ox/tempo'
 import { encodeFunctionData, maxUint256, toHex } from 'viem'
 import { Abis, Addresses, Transaction } from 'viem/tempo'
 import { afterEach, describe, expect, test, vi } from 'vp/test'
@@ -499,20 +501,68 @@ describe('fillHostedFeePayerTransaction', () => {
   } as const
 
   test('uses hosted fillTransaction and preserves sender-committed fields', async () => {
+    // Sign over the payload built from the actual RPC request body so this
+    // verifies recovery parity with the real request shape.
+    const sponsorPrivateKey =
+      '0x0000000000000000000000000000000000000000000000000000000000000042' as const
+    const sponsorAddress = Address.fromPublicKey(
+      Secp256k1.getPublicKey({ privateKey: sponsorPrivateKey }),
+    )
+    let realFeePayerSignature: ReturnType<typeof Secp256k1.sign> | undefined
+
     const calls: { init?: RequestInit | undefined; input: RequestInfo | URL }[] = []
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       calls.push({ init, input })
+      const rpc = JSON.parse(init!.body as string).params[0]
+      const quantity = (value: unknown) =>
+        value === undefined ? undefined : BigInt(value as string)
+      realFeePayerSignature = Secp256k1.sign({
+        payload: TxEnvelopeTempo.getFeePayerSignPayload(
+          TxEnvelopeTempo.from({
+            accessList: rpc.accessList,
+            calls: rpc.calls.map(({ value, ...call }: any) => ({
+              ...call,
+              ...(value && value !== '0x' ? { value: BigInt(value) } : {}),
+            })),
+            chainId: hostedTransaction.chainId,
+            feeToken: defaults.tokens.pathUsd,
+            from: rpc.from,
+            ...(quantity(rpc.gas) !== undefined ? { gas: quantity(rpc.gas) } : {}),
+            ...(rpc.keyAuthorization !== undefined
+              ? { keyAuthorization: rpc.keyAuthorization }
+              : {}),
+            ...(quantity(rpc.maxFeePerGas) !== undefined
+              ? { maxFeePerGas: quantity(rpc.maxFeePerGas) }
+              : {}),
+            ...(quantity(rpc.maxPriorityFeePerGas) !== undefined
+              ? { maxPriorityFeePerGas: quantity(rpc.maxPriorityFeePerGas) }
+              : {}),
+            ...(quantity(rpc.nonce) !== undefined ? { nonce: quantity(rpc.nonce) } : {}),
+            ...(quantity(rpc.nonceKey) !== undefined ? { nonceKey: quantity(rpc.nonceKey) } : {}),
+            type: 'tempo',
+            ...(rpc.validAfter !== undefined ? { validAfter: Number(BigInt(rpc.validAfter)) } : {}),
+            ...(rpc.validBefore !== undefined
+              ? { validBefore: Number(BigInt(rpc.validBefore)) }
+              : {}),
+          } as any) as any,
+          { sender: rpc.from },
+        ),
+        privateKey: sponsorPrivateKey,
+      })
       return new Response(
-        JSON.stringify({
-          result: {
-            tx: {
-              feePayerSignature,
-              feeToken: defaults.tokens.pathUsd,
-              gas: '0x1',
-              maxFeePerGas: '0x2',
+        JSON.stringify(
+          {
+            result: {
+              tx: {
+                feePayerSignature: realFeePayerSignature,
+                feeToken: defaults.tokens.pathUsd,
+                gas: '0x1',
+                maxFeePerGas: '0x2',
+              },
             },
           },
-        }),
+          (_key, value) => (typeof value === 'bigint' ? toHex(value) : value),
+        ),
       )
     })
     vi.stubGlobal('fetch', fetchMock)
@@ -523,10 +573,8 @@ describe('fillHostedFeePayerTransaction', () => {
       url: 'https://sponsor.example/tp_key',
     })
 
-    // Surfaces the sponsor's chosen feeToken/feePayerSignature so callers can
-    // pre-broadcast simulate the co-signed transaction.
     expect(result.feeToken).toBe(defaults.tokens.pathUsd)
-    expect(result.feePayerSignature).toEqual(feePayerSignature)
+    expect(result.feePayer.toLowerCase()).toBe(sponsorAddress.toLowerCase())
     const serialized = result.serializedTransaction
 
     expect(fetchMock).toHaveBeenCalledOnce()
@@ -560,7 +608,8 @@ describe('fillHostedFeePayerTransaction', () => {
     expect(transaction.maxFeePerGas).toBe(hostedTransaction.maxFeePerGas)
     expect(transaction.calls).toEqual(hostedTransaction.calls)
     expect(transaction.feeToken).toBe(defaults.tokens.pathUsd)
-    expect(transaction.feePayerSignature).toEqual(feePayerSignature)
+    expect(BigInt(transaction.feePayerSignature!.r)).toBe(realFeePayerSignature!.r)
+    expect(BigInt(transaction.feePayerSignature!.s)).toBe(realFeePayerSignature!.s)
   })
 
   test('error: requires hosted fee payer to return a feeToken', async () => {

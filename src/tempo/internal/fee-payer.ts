@@ -1,3 +1,4 @@
+import { Secp256k1 } from 'ox'
 import type { TempoAddress } from 'ox/tempo'
 import { TxEnvelopeTempo } from 'ox/tempo'
 import type { Hex } from 'viem'
@@ -174,9 +175,9 @@ function hostedFeePayerRequest(transaction: SponsoredTransaction) {
  * fee-payer endpoint without letting the endpoint mutate sender-committed
  * transaction fields.
  *
- * @returns The serialized co-signed transaction plus the sponsor's chosen
- *   `feeToken` and `feePayerSignature`, so callers can pre-broadcast simulate
- *   the exact transaction the sponsor broadcasts.
+ * @returns The serialized co-signed transaction plus the sponsor's recovered
+ *   `feePayer` address and chosen `feeToken`, so callers can pre-broadcast
+ *   simulate the exact transaction the sponsor broadcasts.
  */
 export async function fillHostedFeePayerTransaction(parameters: {
   allowedFeeTokens: readonly TempoAddress.Address[]
@@ -214,11 +215,32 @@ export async function fillHostedFeePayerTransaction(parameters: {
   const feePayerSignature = filled.feePayerSignature
   const feeToken = filled.feeToken
 
-  // Return the sponsor's chosen `feeToken` and `feePayerSignature` alongside
-  // the serialized envelope so the caller can pre-broadcast simulate the
-  // co-signed transaction (concrete fee settlement), not just the calls.
+  // Recover the concrete sponsor address so the simulation can use a concrete
+  // `feePayer` (the node rejects `eth_call` with `feePayer: true`).
+  const feePayer = (() => {
+    try {
+      return Secp256k1.recoverAddress({
+        payload: TxEnvelopeTempo.getFeePayerSignPayload(
+          TxEnvelopeTempo.from({
+            ...transaction,
+            feePayerSignature: undefined,
+            feeToken,
+            signature: undefined,
+          } as never),
+          { sender: transaction.from as never },
+        ),
+        signature: feePayerSignature as never,
+      })
+    } catch {
+      throw new FeePayerValidationError(
+        'hosted fee payer returned an invalid feePayerSignature',
+        {},
+      )
+    }
+  })()
+
   return {
-    feePayerSignature,
+    feePayer,
     feeToken,
     serializedTransaction: await Transaction.serialize({
       ...transaction,
