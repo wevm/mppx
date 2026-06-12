@@ -517,11 +517,17 @@ describe('fillHostedFeePayerTransaction', () => {
     })
     vi.stubGlobal('fetch', fetchMock)
 
-    const serialized = await fillHostedFeePayerTransaction({
+    const result = await fillHostedFeePayerTransaction({
       allowedFeeTokens: defaultAllowedFeeTokens(defaults.chainId.mainnet),
       transaction: hostedTransaction as any,
       url: 'https://sponsor.example/tp_key',
     })
+
+    // Surfaces the sponsor's chosen feeToken/feePayerSignature so callers can
+    // pre-broadcast simulate the co-signed transaction.
+    expect(result.feeToken).toBe(defaults.tokens.pathUsd)
+    expect(result.feePayerSignature).toEqual(feePayerSignature)
+    const serialized = result.serializedTransaction
 
     expect(fetchMock).toHaveBeenCalledOnce()
     expect(calls[0]!.input).toBe('https://sponsor.example/tp_key')
