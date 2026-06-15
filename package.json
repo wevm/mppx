@@ -52,8 +52,8 @@
     "testcontainers": "^12.0.1",
     "tsx": "^4.22.4",
     "typescript": "~6.0.3",
-    "viem": "^2.51.3",
-    "vite": "^8.0.10",
+    "viem": "^2.52.2",
+    "vite": "^8.0.16",
     "vp": "npm:vite-plus@~0.1.17",
     "ws": "^8.21.0",
     "zile": "^0.0.29"
@@ -210,7 +210,7 @@
   "dependencies": {
     "@stripe/stripe-js": "9.7.0",
     "incur": "^0.4.8",
-    "ox": "0.14.27",
+    "ox": "0.14.29",
     "zod": "^4.4.3"
   },
   "repository": {
