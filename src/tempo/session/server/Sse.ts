@@ -8,10 +8,8 @@ import {
   formatMessageEvent,
   formatNeedVoucherEvent,
   formatReceiptEvent,
-  parseEvent,
   readSessionChallengeAmount,
   requireSessionCredentialContext,
-  type SseEvent,
 } from '../precompile/Protocol.js'
 import * as ChannelStore from './ChannelStore.js'
 import { meterIterable, type SessionController } from './MeteredStream.js'
