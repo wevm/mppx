@@ -1604,6 +1604,228 @@ describe('tempo', () => {
       httpServer.close()
     })
 
+    test('behavior: fee payer pre-broadcast simulation targets the co-signed transaction', async () => {
+      // The pre-broadcast simulation must reflect the FINAL co-signed envelope
+      // (concrete sponsor fee payer), not the pre-cosign 0x78 (`feePayer: true`).
+      const callRequests: any[] = []
+      const interceptingClient = createClient({
+        account: accounts[0],
+        chain: client.chain,
+        transport: custom({
+          async request(args: any) {
+            if (args.method === 'eth_call') callRequests.push(args.params?.[0])
+            return client.transport.request(args)
+          },
+        }),
+      })
+
+      const serverWithTrace = Mppx_server.create({
+        methods: [
+          tempo_server.charge({
+            getClient() {
+              return interceptingClient
+            },
+            currency: asset,
+            account: accounts[0],
+          }),
+        ],
+        realm,
+        secretKey,
+      })
+
+      const mppx = Mppx_client.create({
+        polyfill: false,
+        methods: [
+          tempo_client({
+            account: accounts[1],
+            getClient() {
+              return client
+            },
+          }),
+        ],
+      })
+
+      const httpServer = await Http.createServer(async (req, res) => {
+        const result = await Mppx_server.toNodeListener(
+          serverWithTrace.charge({
+            feePayer: accounts[0],
+            amount: '1',
+            currency: asset,
+            recipient: accounts[0].address,
+          }),
+        )(req, res)
+        if (result.status === 402) return
+        res.end('OK')
+      })
+
+      const challengeResponse = await fetch(httpServer.url)
+      const credential = await mppx.createCredential(challengeResponse)
+      callRequests.length = 0
+
+      const authResponse = await fetch(httpServer.url, {
+        headers: { Authorization: credential },
+      })
+      expect(authResponse.status).toBe(200)
+
+      expect(callRequests.length).toBeGreaterThan(0)
+      const simRequest = callRequests[0]
+      // The co-signed envelope names a concrete sponsor as fee payer. The
+      // pre-cosign 0x78 instead carries `feePayer: true`; asserting the address
+      // proves we simulate the transaction the sponsor actually broadcasts.
+      expect(simRequest.feePayer).not.toBe(true)
+      expect(typeof simRequest.feePayer).toBe('string')
+      expect((simRequest.feePayer as string).toLowerCase()).toBe(accounts[0].address.toLowerCase())
+      // Execution runs as the sender, not the sponsor.
+      expect((simRequest.from as string).toLowerCase()).toBe(accounts[1].address.toLowerCase())
+      expect(simRequest.calls?.length).toBeGreaterThan(0)
+
+      httpServer.close()
+    })
+
+    test('behavior: fee payer fails closed when pre-broadcast simulation reverts', async () => {
+      // A reverting pre-broadcast simulation must abort before broadcast so the
+      // sponsor never pays gas for a transaction that would revert.
+      const rpcMethods: string[] = []
+      const interceptingClient = createClient({
+        account: accounts[0],
+        chain: client.chain,
+        transport: custom({
+          async request(args: any) {
+            rpcMethods.push(args.method)
+            if (args.method === 'eth_call')
+              throw new Error('execution reverted: simulation fixture')
+            return client.transport.request(args)
+          },
+        }),
+      })
+
+      const serverWithRevert = Mppx_server.create({
+        methods: [
+          tempo_server.charge({
+            getClient() {
+              return interceptingClient
+            },
+            currency: asset,
+            account: accounts[0],
+          }),
+        ],
+        realm,
+        secretKey,
+      })
+
+      const mppx = Mppx_client.create({
+        polyfill: false,
+        methods: [
+          tempo_client({
+            account: accounts[1],
+            getClient() {
+              return client
+            },
+          }),
+        ],
+      })
+
+      const httpServer = await Http.createServer(async (req, res) => {
+        const result = await Mppx_server.toNodeListener(
+          serverWithRevert.charge({
+            feePayer: accounts[0],
+            amount: '1',
+            currency: asset,
+            recipient: accounts[0].address,
+          }),
+        )(req, res)
+        if (result.status === 402) return
+        res.end('OK')
+      })
+
+      const challengeResponse = await fetch(httpServer.url)
+      const credential = await mppx.createCredential(challengeResponse)
+      rpcMethods.length = 0
+
+      const authResponse = await fetch(httpServer.url, {
+        headers: { Authorization: credential },
+      })
+
+      // Fails closed: not successful, and the transaction is never broadcast.
+      expect(authResponse.status).not.toBe(200)
+      expect(rpcMethods).toContain('eth_call')
+      expect(rpcMethods).not.toContain('eth_sendRawTransactionSync')
+      expect(rpcMethods).not.toContain('eth_sendRawTransaction')
+
+      httpServer.close()
+    })
+
+    test('behavior: fee payer fails closed when simulation reverts (optimistic mode)', async () => {
+      const rpcMethods: string[] = []
+      const interceptingClient = createClient({
+        account: accounts[0],
+        chain: client.chain,
+        transport: custom({
+          async request(args: any) {
+            rpcMethods.push(args.method)
+            if (args.method === 'eth_call')
+              throw new Error('execution reverted: simulation fixture')
+            return client.transport.request(args)
+          },
+        }),
+      })
+
+      const serverNoWait = Mppx_server.create({
+        methods: [
+          tempo_server.charge({
+            getClient() {
+              return interceptingClient
+            },
+            currency: asset,
+            account: accounts[0],
+            waitForConfirmation: false,
+          }),
+        ],
+        realm,
+        secretKey,
+      })
+
+      const mppx = Mppx_client.create({
+        polyfill: false,
+        methods: [
+          tempo_client({
+            account: accounts[1],
+            getClient() {
+              return client
+            },
+          }),
+        ],
+      })
+
+      const httpServer = await Http.createServer(async (req, res) => {
+        const result = await Mppx_server.toNodeListener(
+          serverNoWait.charge({
+            feePayer: accounts[0],
+            amount: '1',
+            currency: asset,
+            recipient: accounts[0].address,
+          }),
+        )(req, res)
+        if (result.status === 402) return
+        res.end('OK')
+      })
+
+      const challengeResponse = await fetch(httpServer.url)
+      const credential = await mppx.createCredential(challengeResponse)
+      rpcMethods.length = 0
+
+      const authResponse = await fetch(httpServer.url, {
+        headers: { Authorization: credential },
+      })
+
+      expect(authResponse.status).not.toBe(200)
+      expect(rpcMethods).toContain('eth_call')
+      expect(rpcMethods).not.toContain('eth_sendRawTransaction')
+      expect(rpcMethods).not.toContain('eth_sendRawTransactionSync')
+
+      httpServer.close()
+    })
+
     test('behavior: fee payer rejects concurrent in-flight transactions from one sender', async () => {
       let releaseSimulation!: () => void
       let resolveSimulationStarted!: () => void

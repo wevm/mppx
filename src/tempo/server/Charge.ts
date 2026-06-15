@@ -406,6 +406,13 @@ export function charge<const parameters extends charge.Parameters>(
             const allowedFeeTokens = FeePayer.defaultAllowedFeeTokens(chainId)
             if (isFeePayerTx) FeePayer.assertAllowedFeeToken(transaction, allowedFeeTokens)
 
+            // Request for the pre-broadcast simulation; for sponsored payments
+            // this is overwritten below with the co-signed shape.
+            let simulationRequest: Record<string, unknown> = FeePayer.simulationTransaction(
+              transaction,
+              { feePayer: isFeePayerTx },
+            )
+
             const serializedTransaction_final = await (async () => {
               if (feePayerAccount && methodDetails?.feePayer !== false) {
                 const sponsored = FeePayer.prepareSponsoredTransaction({
@@ -420,22 +427,43 @@ export function charge<const parameters extends charge.Parameters>(
                     feeToken: transaction.feeToken ?? defaults.tokens.pathUsd,
                   },
                 })
+                // `account` is the sender (eth_call `from`); `feePayer` is the
+                // sponsor that pays gas.
+                simulationRequest = {
+                  ...sponsored,
+                  account: transaction.from,
+                  feePayer: feePayerAccount.address,
+                  feePayerSignature: undefined,
+                  signature: undefined,
+                }
                 return signTransaction(client, sponsored as never)
               }
-              if (feePayerUrl && isFeePayerTx)
-                return FeePayer.fillHostedFeePayerTransaction({
+              if (feePayerUrl && isFeePayerTx) {
+                const hosted = await FeePayer.fillHostedFeePayerTransaction({
                   allowedFeeTokens,
                   transaction,
                   url: feePayerUrl,
                 })
+                // Simulate the co-signed envelope (concrete fee payer + chosen
+                // fee token), mirroring the local-sponsor path.
+                simulationRequest = {
+                  ...transaction,
+                  account: transaction.from,
+                  feePayer: hosted.feePayer,
+                  feePayerSignature: undefined,
+                  feeToken: hosted.feeToken,
+                  signature: undefined,
+                }
+                return hosted.serializedTransaction
+              }
               return serializedTransaction
             })()
 
+            // Pre-broadcast simulation: fail closed before broadcast so the
+            // sponsor never pays gas for a transaction that would revert.
+            await viem_call(client, simulationRequest as never)
+
             if (waitForConfirmation) {
-              await viem_call(
-                client,
-                FeePayer.simulationTransaction(transaction, { feePayer: isFeePayerTx }),
-              )
               const receipt = await sendRawTransactionSync(client, {
                 serializedTransaction: serializedTransaction_final,
               })
@@ -465,13 +493,9 @@ export function charge<const parameters extends charge.Parameters>(
               return toReceipt(receipt)
             }
 
-            // Optimistic path: simulate to catch obvious reverts, then broadcast
-            // without waiting for on-chain confirmation. The returned receipt
-            // assumes success — callers opt into this risk via waitForConfirmation: false.
-            await viem_call(
-              client,
-              FeePayer.simulationTransaction(transaction, { feePayer: isFeePayerTx }),
-            )
+            // Optimistic path: broadcast without waiting for confirmation
+            // (simulation above already ran). The returned receipt assumes
+            // success — callers opt in via waitForConfirmation: false.
             const reference = await sendRawTransaction(client, {
               serializedTransaction: serializedTransaction_final,
             })
