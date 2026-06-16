@@ -78,6 +78,116 @@ Mppx.create({
 const res = await fetch('https://mpp.dev/api/ping/paid')
 ```
 
+## Tempo Sessions
+
+`tempo.session()` creates the low-level `tempo/session` client method for `Mppx.create()`. Use `tempo.session.manager()` when you want direct lifecycle control for HTTP, SSE, WebSocket, top-up, and close flows.
+
+### Managed Client
+
+```ts
+import { tempo } from 'mppx/client'
+
+const session = tempo.session.manager({
+  account,
+  client,
+  maxDeposit: '1',
+  bootstrap: true,
+  sessionStore: {
+    get: () => JSON.parse(localStorage.getItem('mppx-session') ?? 'null'),
+    set: (channel) => localStorage.setItem('mppx-session', JSON.stringify(channel)),
+    delete: () => localStorage.removeItem('mppx-session'),
+  },
+})
+
+const response = await session.fetch('/api/search')
+const stream = await session.sse('/api/chat')
+await session.close()
+```
+
+`sessionStore` lets a client persist the latest channel hint between manager instances or page reloads. Stored channels are sent as a `Payment-Session` request header. Servers can use that hint to return a fresh `Payment-Session-Snapshot`, allowing the client to hydrate state without manually passing channel descriptors around.
+
+```ts
+type SessionStore = {
+  get(): StoredSessionChannel | null | undefined | Promise<StoredSessionChannel | null | undefined>
+  set(channel: StoredSessionChannel): void | Promise<void>
+  delete?(): void | Promise<void>
+}
+```
+
+Stored channel fields:
+
+| Field              | Description                                                         |
+| ------------------ | ------------------------------------------------------------------- |
+| `channelId`        | Latest known TIP-1034 channel ID.                                   |
+| `cumulativeAmount` | Latest local cumulative voucher authorization in raw token units.   |
+| `deposit`          | Latest known deposit in raw token units.                            |
+| `descriptor`       | Channel descriptor used to recover when the server cannot snapshot. |
+| `escrow`           | Escrow address used to derive the channel ID.                       |
+| `chainId`          | Chain ID used to derive the channel ID.                             |
+| `opened`           | Whether the channel was open when persisted.                        |
+| `updatedAt`        | Client timestamp for app-level eviction or debugging.               |
+
+Managed client options:
+
+| Option             | Description                                                                                 |
+| ------------------ | ------------------------------------------------------------------------------------------- |
+| `account`          | Viem account used to sign vouchers.                                                         |
+| `getClient`        | Lazy viem client resolver.                                                                  |
+| `client`           | Viem client shorthand for `getClient: () => client`.                                        |
+| `authorizedSigner` | Address authorized to sign vouchers. Defaults to the account access key address or account. |
+| `bootstrap`        | Enables same-route `HEAD` bootstrap before opening a new channel.                           |
+| `decimals`         | Token decimals used to parse `maxDeposit`. Defaults to `6`.                                 |
+| `escrow`           | TIP-1034 escrow precompile override.                                                        |
+| `fetch`            | Fetch implementation used for probes, retries, and management posts.                        |
+| `maxDeposit`       | Maximum human-readable deposit to lock or top up into the channel.                          |
+| `sessionStore`     | Optional persisted channel hint store.                                                      |
+| `webSocket`        | WebSocket constructor for runtimes without a global `WebSocket`.                            |
+
+Managed client fields and methods:
+
+| Member       | Description                                                                                  |
+| ------------ | -------------------------------------------------------------------------------------------- |
+| `channelId`  | Active channel ID, when a channel has been opened or recovered.                              |
+| `cumulative` | Local cumulative voucher authorization in raw token units.                                   |
+| `opened`     | Whether the manager currently has an open local channel.                                     |
+| `state`      | Current pure session state-machine state.                                                    |
+| `fetch()`    | Runs the HTTP 402 flow, signs/open/top-ups as needed, retries, and returns receipt metadata. |
+| `sse()`      | Opens a paid SSE stream and automatically posts vouchers/top-ups as needed.                  |
+| `ws()`       | Opens a paid WebSocket session and manages in-band voucher frames.                           |
+| `topUp()`    | Tops up the active channel deposit. String amounts use manager decimals; bigint is raw.      |
+| `close()`    | Cooperatively closes the active channel and returns the final receipt when available.        |
+
+### Server Bootstrap
+
+Servers opt into same-route bootstrap with `bootstrap: true` and a `resolveChannelId` hook. The hook receives request metadata, the verified payer `source` for `$0` identity bootstrap, the payment request, and the session store. Return a channel ID when the server can associate the request with an existing channel.
+
+```ts
+import { tempo } from 'mppx/server'
+
+tempo.session({
+  store,
+  bootstrap: true,
+  resolveChannelId({ request, source, credential, paymentRequest, store }) {
+    return request?.headers.get('Payment-Session') ?? lookupChannelId(source)
+  },
+})
+```
+
+When a channel is found, the server responds with:
+
+| Header                     | Description                                     |
+| -------------------------- | ----------------------------------------------- |
+| `Payment-Session`          | Channel ID hint for the reusable session.       |
+| `Payment-Session-Snapshot` | Serialized channel snapshot used for hydration. |
+
+Server bootstrap options:
+
+| Option             | Description                                                                                                |
+| ------------------ | ---------------------------------------------------------------------------------------------------------- |
+| `bootstrap`        | Enables same-route `HEAD` bootstrap using a zero-amount Tempo charge proof.                                |
+| `resolveChannelId` | Resolves a reusable channel ID from request identity, source, credential, payment request, or store state. |
+| `store`            | Atomic store backend for channel state.                                                                    |
+
 ## Examples
 
 | Example                                                | Description                                          |
