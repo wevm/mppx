@@ -1,0 +1,53 @@
+# Starts automatic dependency remediation after Main fails on the configured
+# branch. The reusable workflow verifies the failure came from dependency audit
+# before opening or updating a PR.
+name: Audit Remediation
+
+on:
+  workflow_run:
+    workflows: [Main]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      failed-run-id:
+        description: Failed workflow run id to inspect
+        required: true
+        type: string
+      failed-run-url:
+        description: Optional failed workflow run URL for the pull request body
+        required: false
+        type: string
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.workflow_run.id || github.event.inputs['failed-run-id'] }}
+  cancel-in-progress: true
+
+jobs:
+  remediate:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (
+        github.event.workflow_run.conclusion == 'failure' &&
+        github.event.workflow_run.head_branch == 'main' &&
+        github.repository == 'wevm/mppx'
+      )
+    permissions:
+      actions: read
+      contents: write
+      pull-requests: write
+    uses: ./.github/workflows/audit-remediation-reusable.yml
+    with:
+      audit-command: pnpm audit --json --ignore-registry-errors
+      audit-step-name: Audit dependencies
+      base-branch: main
+      branch-prefix: automation/audit
+      failed-run-id: ${{ github.event.workflow_run.id || github.event.inputs['failed-run-id'] }}
+      failed-run-url: ${{ github.event.workflow_run.html_url || github.event.inputs['failed-run-url'] }}
+      install-command: pnpm install
+      labels: dependencies,javascript
+      override-file: pnpm-workspace.yaml
+      package-manager: pnpm
+      pr-body-summary: Updated vulnerable dependencies reported by `pnpm audit`
+      pr-title: 'fix: resolve dependency audit failures'

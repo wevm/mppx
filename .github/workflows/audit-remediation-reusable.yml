@@ -1,0 +1,190 @@
+# Automatically creates or updates a dependency remediation PR when a configured
+# audit step fails. Branches are keyed by audit fingerprint so identical failures
+# update one PR, while distinct advisory sets use distinct branches.
+name: Audit Remediation Reusable
+
+on:
+  workflow_call:
+    inputs:
+      audit-command:
+        default: pnpm audit --json --ignore-registry-errors
+        required: false
+        type: string
+      audit-step-name:
+        default: Audit dependencies
+        required: false
+        type: string
+      base-branch:
+        default: main
+        required: false
+        type: string
+      branch-prefix:
+        default: automation/audit
+        required: false
+        type: string
+      failed-run-id:
+        required: true
+        type: string
+      failed-run-url:
+        default: ''
+        required: false
+        type: string
+      install-command:
+        default: pnpm install
+        required: false
+        type: string
+      labels:
+        default: dependencies,javascript
+        required: false
+        type: string
+      node-version:
+        default: '24.5'
+        required: false
+        type: string
+      override-file:
+        default: pnpm-workspace.yaml
+        required: false
+        type: string
+      package-manager:
+        default: pnpm
+        required: false
+        type: string
+      pr-body-summary:
+        default: Updated vulnerable dependencies reported by `pnpm audit`
+        required: false
+        type: string
+      pr-title:
+        default: 'fix: resolve dependency audit failures'
+        required: false
+        type: string
+
+permissions: {}
+
+jobs:
+  remediate:
+    name: Remediate audit failure
+    permissions:
+      actions: read
+      contents: write
+      pull-requests: write
+    runs-on: ubuntu-latest
+    steps:
+      - name: Clone repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: true
+          ref: ${{ inputs['base-branch'] }}
+
+      - name: Set up pnpm
+        if: inputs['package-manager'] == 'pnpm'
+        uses: pnpm/action-setup@b307475762933b98ed359c036b0e51f26b63b74b # v5.0.0
+
+      - name: Set up Node
+        uses: actions/setup-node@6044e13b5dc448c55e2357c09f80417699197238 # v6.2.0
+        with:
+          cache: ${{ inputs['package-manager'] }}
+          node-version: ${{ inputs['node-version'] }}
+
+      - name: Install dependencies
+        run: ${{ inputs['install-command'] }}
+
+      - name: Detect failed audit step
+        id: detect
+        env:
+          AUDIT_STEP_NAME: ${{ inputs['audit-step-name'] }}
+          FAILED_RUN_ID: ${{ inputs['failed-run-id'] }}
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+        run: node --import tsx scripts/audit-remediation.ts detect
+
+      - name: Analyze audit failure
+        id: analyze
+        if: steps.detect.outputs.should-run == 'true'
+        env:
+          AUDIT_COMMAND: ${{ inputs['audit-command'] }}
+          BRANCH_PREFIX: ${{ inputs['branch-prefix'] }}
+          FAILED_CI_URL: ${{ steps.detect.outputs.failed-job-url || inputs['failed-run-url'] }}
+          PR_BODY_PATH: ${{ runner.temp }}/audit-remediation-pr-body.md
+          PR_BODY_SUMMARY: ${{ inputs['pr-body-summary'] }}
+        run: node --import tsx scripts/audit-remediation.ts analyze
+
+      - name: Prepare remediation branch
+        if: steps.analyze.outputs.fixable == 'true'
+        env:
+          BASE_BRANCH: ${{ inputs['base-branch'] }}
+          BRANCH: ${{ steps.analyze.outputs.branch }}
+        run: |
+          set -euo pipefail
+
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git fetch origin "$BASE_BRANCH"
+          git checkout -B "$BRANCH" "origin/$BASE_BRANCH"
+
+      - name: Apply audit remediation
+        id: apply
+        if: steps.analyze.outputs.fixable == 'true'
+        env:
+          AUDIT_COMMAND: ${{ inputs['audit-command'] }}
+          INSTALL_COMMAND: ${{ inputs['install-command'] }}
+          OVERRIDE_FILE: ${{ inputs['override-file'] }}
+          PACKAGE_MANAGER: ${{ inputs['package-manager'] }}
+        run: node --import tsx scripts/audit-remediation.ts apply
+
+      - name: Check remediation diff
+        id: diff
+        if: steps.apply.outputs.fixable == 'true'
+        run: |
+          set -euo pipefail
+
+          if git diff --quiet; then
+            echo "has-diff=false" >> "$GITHUB_OUTPUT"
+            echo "Audit remediation produced no diff. No pull request will be opened." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "has-diff=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Push remediation branch
+        if: steps.diff.outputs.has-diff == 'true'
+        env:
+          BRANCH: ${{ steps.analyze.outputs.branch }}
+          PR_TITLE: ${{ inputs['pr-title'] }}
+        run: |
+          set -euo pipefail
+
+          git add .
+          git commit -m "$PR_TITLE"
+          git push --force-with-lease origin "HEAD:$BRANCH"
+
+      - name: Open or update pull request
+        if: steps.diff.outputs.has-diff == 'true'
+        env:
+          BASE_BRANCH: ${{ inputs['base-branch'] }}
+          BRANCH: ${{ steps.analyze.outputs.branch }}
+          GH_TOKEN: ${{ github.token }}
+          LABELS: ${{ inputs.labels }}
+          PR_BODY_PATH: ${{ steps.analyze.outputs.pr-body-path }}
+          PR_TITLE: ${{ inputs['pr-title'] }}
+        run: |
+          set -euo pipefail
+
+          pr_number="$(gh pr list \
+            --base "$BASE_BRANCH" \
+            --head "$BRANCH" \
+            --json number \
+            --jq '.[0].number // ""')"
+
+          if [[ -n "$pr_number" ]]; then
+            gh pr edit "$pr_number" --title "$PR_TITLE" --body-file "$PR_BODY_PATH"
+          else
+            gh pr create --base "$BASE_BRANCH" --head "$BRANCH" --title "$PR_TITLE" --body-file "$PR_BODY_PATH"
+            pr_number="$(gh pr view "$BRANCH" --json number --jq '.number')"
+          fi
+
+          IFS=',' read -ra label_names <<< "$LABELS"
+          for label in "${label_names[@]}"; do
+            label="$(printf '%s' "$label" | xargs)"
+            if [[ -n "$label" ]]; then
+              gh pr edit "$pr_number" --add-label "$label"
+            fi
+          done
