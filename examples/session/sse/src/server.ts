@@ -44,12 +44,13 @@ const currency = '0x20c0000000000000000000000000000000000000' as const
 // SSE event for each token, and the client must respond with an updated
 // cumulative voucher covering this amount before the next token is sent.
 const pricePerToken = '0.000075'
+const suggestedDeposit = '1'
 
 // Viem Client
 //
 // The viem client MUST have an `account` attached. This is critical because
 // the server needs to sign on-chain transactions when closing/settling
-// payment channels and co-signing fee-payer transactions.
+// payment channels.
 const client = createClient({
   account,
   chain: Chain.testnet,
@@ -126,13 +127,9 @@ const mppx = Mppx.create({
       account,
       // The TIP-20 token to accept payment in.
       currency,
-      // Enable fee-sponsored transactions. When true, the server co-signs
-      // the client's channel-open transaction so the protocol covers gas
-      // fees instead of the client paying them.
-      feePayer: true,
       // Returns an account-bearing viem client for on-chain operations:
-      // broadcasting channel-open txs, verifying channel state, and
-      // submitting close/settle transactions.
+      // broadcasting client-signed channel-open txs, verifying channel state,
+      // and submitting close/settle transactions.
       getClient: () => client,
       // Shared store so mid-stream voucher POSTs update the same state
       // that `stream.charge()` reads from.
@@ -140,7 +137,7 @@ const mppx = Mppx.create({
       // SSE transport for streaming. The session method detects the SSE
       // transport and wires up Tempo metering (per-token charging, voucher
       // handling) automatically using the shared storage.
-      sse: { poll: true },
+      sse: true,
     }),
   ],
 })
@@ -207,6 +204,7 @@ export async function handler(request: Request): Promise<Response | null> {
     // describing what phase we're in and how to respond.
     const result = await mppx.session({
       amount: pricePerToken,
+      suggestedDeposit,
       unitType: 'token',
     })(request)
 
@@ -244,7 +242,12 @@ export async function handler(request: Request): Promise<Response | null> {
     // After all tokens are yielded, the transport automatically appends a
     // final `event: payment-receipt` SSE event with the settlement details.
     //
-    return result.withReceipt(generateTokens(prompt))
+    return result.withReceipt(async function* (stream) {
+      for await (const token of generateTokens(prompt)) {
+        await stream.charge()
+        yield token
+      }
+    })
   }
 
   // Return null for unrecognized paths (framework can handle 404).
@@ -328,8 +331,7 @@ async function* generateTokens(prompt: string): AsyncGenerator<string> {
 //
 // Log the server's recipient address (where settled funds go) and fund it
 // via the testnet faucet. The server account needs a small amount of native
-// tokens (for gas) to settle channels on-chain, though in production the
-// `feePayer` option can be used to have the protocol cover gas.
+// tokens (for gas) to settle channels on-chain.
 console.log(`Server recipient: ${account.address}`)
 await Actions.faucet.fundSync(client, { account, timeout: 30_000 })
 console.log('Server account funded')
