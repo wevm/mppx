@@ -18,6 +18,7 @@ type ChargeRequest = ReturnType<typeof Methods.charge.schema.request.parse>
 
 function createChallenge(
   overrides: Partial<Parameters<typeof Methods.charge.schema.request.parse>[0]> = {},
+  options: { expires?: string | undefined } = {},
 ): Challenge.Challenge<ChargeRequest, 'charge', 'tempo'> {
   const request = Methods.charge.schema.request.parse({
     amount: '0',
@@ -32,6 +33,7 @@ function createChallenge(
     method: 'tempo',
     realm: 'api.example.com',
     request,
+    ...options,
   }) as Challenge.Challenge<ChargeRequest, 'charge', 'tempo'>
 }
 
@@ -176,6 +178,120 @@ describe('tempo.charge client', () => {
       vi.doUnmock('viem/actions')
       vi.resetModules()
     }
+  })
+
+  describe('nonce strategy', () => {
+    async function createWithMockedTransaction(
+      parameters: Parameters<typeof charge>[0],
+      challenge: Challenge.Challenge<ChargeRequest, 'charge', 'tempo'>,
+    ) {
+      vi.resetModules()
+      const prepareTransactionRequest = vi.fn(
+        async (_client: unknown, _parameters: Record<string, unknown>) => ({}),
+      )
+      const signTransaction = vi.fn(async (_client: unknown, _parameters: unknown) => '0xdeadbeef')
+      vi.doMock('viem/actions', () => ({
+        prepareTransactionRequest,
+        sendCallsSync: vi.fn(),
+        signTransaction,
+        signTypedData: vi.fn(),
+      }))
+
+      const { charge: chargeWithMockedActions } = await import('./Charge.js')
+      const client = createClient({
+        account,
+        chain: tempoLocalnet,
+        transport: http('http://127.0.0.1'),
+      })
+      const method = chargeWithMockedActions({
+        account,
+        getClient: () => client,
+        ...parameters,
+      })
+
+      await method.createCredential({ challenge, context: {} })
+
+      return { prepareTransactionRequest, signTransaction }
+    }
+
+    test('uses expiring nonce parameters by default', async () => {
+      vi.useFakeTimers()
+      vi.setSystemTime(new Date('2025-01-01T00:00:00Z'))
+
+      try {
+        const { prepareTransactionRequest, signTransaction } = await createWithMockedTransaction(
+          {},
+          createChallenge({ amount: '1', supportedModes: ['pull'] }),
+        )
+
+        expect(prepareTransactionRequest).toHaveBeenCalledOnce()
+        expect(signTransaction).toHaveBeenCalledOnce()
+        expect(prepareTransactionRequest.mock.calls[0]?.[1]).toMatchObject({
+          nonceKey: 'expiring',
+          validBefore: 1_735_689_625,
+        })
+      } finally {
+        vi.doUnmock('viem/actions')
+        vi.resetModules()
+        vi.useRealTimers()
+      }
+    })
+
+    test('clamps expiring nonce validity to challenge expiration', async () => {
+      vi.useFakeTimers()
+      vi.setSystemTime(new Date('2025-01-01T00:00:00Z'))
+
+      try {
+        const { prepareTransactionRequest } = await createWithMockedTransaction(
+          {},
+          createChallenge(
+            { amount: '1', supportedModes: ['pull'] },
+            { expires: '2025-01-01T00:00:10Z' },
+          ),
+        )
+
+        expect(prepareTransactionRequest).toHaveBeenCalledOnce()
+        expect(prepareTransactionRequest.mock.calls[0]?.[1]).toMatchObject({
+          nonceKey: 'expiring',
+          validBefore: 1_735_689_610,
+        })
+      } finally {
+        vi.doUnmock('viem/actions')
+        vi.resetModules()
+        vi.useRealTimers()
+      }
+    })
+
+    test('omits expiring nonce parameters for sequential nonces', async () => {
+      try {
+        const { prepareTransactionRequest } = await createWithMockedTransaction(
+          { nonceStrategy: 'sequential' },
+          createChallenge({ amount: '1', supportedModes: ['pull'] }),
+        )
+
+        expect(prepareTransactionRequest).toHaveBeenCalledOnce()
+        const request = prepareTransactionRequest.mock.calls[0]?.[1] as Record<string, unknown>
+        expect(request.nonceKey).toBeUndefined()
+        expect(request.validBefore).toBeUndefined()
+      } finally {
+        vi.doUnmock('viem/actions')
+        vi.resetModules()
+      }
+    })
+
+    test('rejects sequential nonces for fee-sponsored charges', async () => {
+      try {
+        await expect(
+          createWithMockedTransaction(
+            { nonceStrategy: 'sequential' },
+            createChallenge({ amount: '1', feePayer: true, supportedModes: ['pull'] }),
+          ),
+        ).rejects.toThrow('Sequential nonces are not supported for fee-sponsored charges.')
+      } finally {
+        vi.doUnmock('viem/actions')
+        vi.resetModules()
+      }
+    })
   })
 
   describe('chain pinning', () => {
