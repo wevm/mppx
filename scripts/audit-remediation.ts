@@ -240,5 +240,5 @@ function summary(value: string) {
 }
 
 function quote(value: string) {
-  return `'${value.replaceAll("'", "'\\''")}'`
+  return `'${value.split("'").join("'\\''")}'`
 }
