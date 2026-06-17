@@ -28,11 +28,17 @@ export async function startServer(port: number): Promise<HtmlTestServer> {
     }
 
   const createTokenUrl = '/stripe/create-spt'
+  const feePayerPolicy = {
+    maxFeePerGas: 200_000_000_000n,
+    maxPriorityFeePerGas: 200_000_000_000n,
+    maxTotalFee: 500_000_000_000_000_000n,
+  }
   const tempoMppx = Mppx.create({
     methods: [
       tempo.charge({
         account,
         currency: '0x20c0000000000000000000000000000000000000',
+        feePayerPolicy,
         feePayer: true,
         html: true,
         recipient: account.address,
@@ -46,6 +52,7 @@ export async function startServer(port: number): Promise<HtmlTestServer> {
       tempo.charge({
         account,
         currency: '0x20c0000000000000000000000000000000000000',
+        feePayerPolicy,
         feePayer: true,
         html: { text: { pay: 'Buy Now' } },
         recipient: account.address,
@@ -60,6 +67,7 @@ export async function startServer(port: number): Promise<HtmlTestServer> {
           tempo.charge({
             account,
             currency: '0x20c0000000000000000000000000000000000000',
+            feePayerPolicy,
             feePayer: true,
             html: true,
             recipient: account.address,
