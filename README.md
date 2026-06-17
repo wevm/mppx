@@ -126,15 +126,18 @@ const proxy = Proxy.create({
       apiKey: 'sk-...',
       routes: {
         'POST /v1/chat/completions': mppx.charge({ amount: '0.05' }),
-        'POST /v1/completions': mppx.stream({ amount: '0.0001' }),
-        'GET /v1/models': mppx.free(),
+        'POST /v1/completions': mppx.tempo.session({
+          amount: '0.0001',
+          unitType: 'token',
+        }),
+        'GET /v1/models': true,
       },
     }),
     stripe({
       apiKey: 'sk-...',
       routes: {
         'POST /v1/charges': mppx.charge({ amount: '0.01' }),
-        'GET /v1/customers/:id': mppx.free(),
+        'GET /v1/customers/:id': true,
       },
     }),
   ],
@@ -155,7 +158,7 @@ This exposes the following routes:
 | Route                              | Pricing                      |
 | ---------------------------------- | ---------------------------- |
 | `POST /openai/v1/chat/completions` | charge **$0.005**            |
-| `POST /openai/v1/completions`      | stream **$0.0001 per token** |
+| `POST /openai/v1/completions`      | session **$0.0001 per token** |
 | `GET /openai/v1/models`            | free                         |
 | `POST /stripe/v1/charges`          | charge **$0.01**             |
 | `GET /stripe/v1/customers/:id`     | free                         |
