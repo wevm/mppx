@@ -49,14 +49,14 @@ function createSessionMethod<const parameters extends tempo.Parameters>(
 }
 
 /**
- * Creates both Tempo `charge` and `session` methods from shared parameters.
+ * Creates the common Tempo `charge` and `session` methods from shared parameters.
  *
  * @example
  * ```ts
  * import { Mppx, tempo } from 'mppx/server'
  *
  * const mppx = Mppx.create({
- *   methods: [tempo({ currency: '0x...', recipient: '0x...' })],
+ *   methods: [tempo.common({ currency: '0x...', recipient: '0x...' })],
  * })
  * ```
  */
@@ -69,6 +69,8 @@ export namespace tempo {
 
   /** Creates a Tempo `charge` method for one-time TIP-20 token transfers. */
   export const charge = charge_
+  /** Creates the common Tempo `charge` and `session` methods from shared parameters. */
+  export const common = tempo
   /** Creates a TIP-1034 Tempo `session` method for session-based TIP-20 token payments. */
   export const session = sessionServer
   /** @deprecated Use `tempo.session()` for the TIP-1034 session server method. */
