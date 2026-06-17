@@ -10,7 +10,7 @@ import { accounts, asset, chain, client, http } from '~test/tempo/viem.js'
 import * as Fetch from './Fetch.js'
 
 const realm = 'api.example.com'
-const secretKey = 'test-secret-key'
+const secretKey = 'test-secret-key-test-secret-key-32'
 
 const server = Mppx_server.create({
   methods: [

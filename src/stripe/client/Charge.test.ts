@@ -7,7 +7,7 @@ import type { StripeJs } from '../internal/types.js'
 import { charge as clientCharge_ } from './Charge.js'
 
 const realm = 'api.example.com'
-const secretKey = 'test-hmac-key'
+const secretKey = 'test-secret-key-test-secret-key-32'
 
 const dummyClientCharge = clientCharge_({
   createToken: async () => 'spt_test',

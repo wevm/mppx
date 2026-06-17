@@ -7,7 +7,7 @@ import * as Http from '~test/Http.js'
 import { accounts, asset, client } from '~test/tempo/viem.js'
 
 const realm = 'api.example.com'
-const secretKey = 'test-secret-key'
+const secretKey = 'test-secret-key-test-secret-key-32'
 
 afterEach(() => {
   Mppx.restore()
