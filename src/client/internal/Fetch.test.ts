@@ -1,4 +1,4 @@
-import { Challenge, Errors, Receipt } from 'mppx'
+import { Challenge, Credential, Errors, Mcp, Receipt } from 'mppx'
 import { tempo } from 'mppx/client'
 import { Mppx as Mppx_server, tempo as tempo_server } from 'mppx/server'
 import { createClient, defineChain } from 'viem'
@@ -10,6 +10,7 @@ import { accounts, asset, chain, client, http } from '~test/tempo/viem.js'
 import * as Fetch from './Fetch.js'
 
 const realm = 'api.example.com'
+const mcpMetaKey = '_meta'
 const secretKey = 'test-secret-key-test-secret-key-32'
 
 const server = Mppx_server.create({
@@ -350,6 +351,24 @@ function make402(overrides?: { expires?: string; intent?: string; method?: strin
   })
 }
 
+function makeMcpPaymentRequiredResponse(challenge: Challenge.Challenge, init?: ResponseInit) {
+  return Response.json(
+    {
+      jsonrpc: '2.0',
+      id: 1,
+      error: {
+        code: Mcp.paymentRequiredCode,
+        message: 'Payment Required',
+        data: {
+          httpStatus: 402,
+          challenges: [challenge],
+        },
+      },
+    },
+    init,
+  )
+}
+
 describe('Fetch.from: init passthrough (non-402)', () => {
   test('preserves init object identity while adding Accept-Payment', async () => {
     const receivedInits: (RequestInit | undefined)[] = []
@@ -600,6 +619,134 @@ describe('Fetch.from: init passthrough (non-402)', () => {
       expect(receivedInits[0]?.method).toBe(customInit.method)
       expect(new Headers(receivedInits[0]?.headers).get('Accept-Payment')).toBe('test/test')
     }
+  })
+})
+
+describe('Fetch.from: MCP retry path', () => {
+  test('handles JSON-RPC payment errors in fetch responses', async () => {
+    const challenge = Challenge.from({
+      id: 'mcp-json',
+      intent: 'test',
+      method: 'test',
+      realm: 'mcp.example.com',
+      request: { amount: '1' },
+    })
+    const serializedCredential = Credential.serialize({
+      challenge,
+      payload: { test: true },
+    })
+    const createCredential = vi.fn(async () => serializedCredential)
+    const method = { ...noopMethod, createCredential }
+    const calls: { init: RequestInit | undefined }[] = []
+    let callCount = 0
+    const mockFetch: typeof globalThis.fetch = async (_input, init) => {
+      calls.push({ init })
+      callCount++
+
+      if (callCount === 1) return makeMcpPaymentRequiredResponse(challenge)
+
+      expect(JSON.parse(init?.body as string)).toMatchObject({
+        method: 'tools/call',
+        params: {
+          [mcpMetaKey]: {
+            [Mcp.credentialMetaKey]: Credential.deserialize(serializedCredential),
+          },
+          name: 'premium_tool',
+        },
+      })
+      return Response.json({ jsonrpc: '2.0', id: 1, result: { content: [] } })
+    }
+
+    const fetch = Fetch.from({
+      fetch: mockFetch,
+      methods: [method],
+    })
+
+    const response = await fetch('https://mcp.example.com/mcp', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'tools/call',
+        params: { name: 'premium_tool' },
+      }),
+    })
+
+    expect(response.status).toBe(200)
+    expect(createCredential).toHaveBeenCalledOnce()
+    expect(calls).toHaveLength(2)
+  })
+
+  test('handles SSE payment errors in fetch responses', async () => {
+    const challenge = Challenge.from({
+      id: 'mcp-sse',
+      intent: 'test',
+      method: 'test',
+      realm: 'mcp.example.com',
+      request: { amount: '1' },
+    })
+    const serializedCredential = Credential.serialize({
+      challenge,
+      payload: { test: true },
+    })
+    let callCount = 0
+    const mockFetch: typeof globalThis.fetch = async (_input, init) => {
+      callCount++
+      if (callCount === 1) {
+        return new Response(
+          `event: message\ndata: ${JSON.stringify({
+            jsonrpc: '2.0',
+            id: 1,
+            error: {
+              code: Mcp.paymentRequiredCode,
+              message: 'Payment Required',
+              data: {
+                httpStatus: 402,
+                challenges: [challenge],
+              },
+            },
+          })}\n\n`,
+          { headers: { 'Content-Type': 'text/event-stream' } },
+        )
+      }
+
+      expect(JSON.parse(init?.body as string).params[mcpMetaKey][Mcp.credentialMetaKey]).toEqual(
+        Credential.deserialize(serializedCredential),
+      )
+      return Response.json({ jsonrpc: '2.0', id: 1, result: { content: [] } })
+    }
+
+    const fetch = Fetch.from({
+      fetch: mockFetch,
+      methods: [{ ...noopMethod, createCredential: async () => serializedCredential }],
+    })
+
+    await expect(
+      fetch('https://mcp.example.com/mcp', {
+        method: 'POST',
+        body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: {} }),
+      }),
+    ).resolves.toMatchObject({ status: 200 })
+    expect(callCount).toBe(2)
+  })
+
+  test('passes through non-payment MCP JSON responses without consuming the body', async () => {
+    const fetch = Fetch.from({
+      fetch: async () => Response.json({ jsonrpc: '2.0', id: 1, result: { content: [] } }),
+      methods: [noopMethod],
+    })
+
+    const response = await fetch('https://mcp.example.com/mcp', {
+      method: 'POST',
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: {} }),
+    })
+
+    await expect(response.json()).resolves.toEqual({
+      jsonrpc: '2.0',
+      id: 1,
+      result: { content: [] },
+    })
   })
 })
 

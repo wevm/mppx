@@ -3,6 +3,7 @@ import * as Constants from '../../Constants.js'
 import * as Expires from '../../Expires.js'
 import * as AcceptPayment from '../../internal/AcceptPayment.js'
 import type { MaybePromise } from '../../internal/types.js'
+import * as Mcp from '../../Mcp.js'
 import type * as Method from '../../Method.js'
 import type * as z from '../../zod.js'
 import * as Transport from '../Transport.js'
@@ -184,9 +185,16 @@ export function from<const methods extends readonly Method.AnyClient[]>(
       hasExplicitAcceptPayment,
       acceptPaymentPolicy,
     )
+    const readRequestBodyText = captureRequestBodyText(initialRequest.input, initialRequest.init)
     const response = await baseFetch(initialRequest.input, initialRequest.init)
 
-    if (!transport.isPaymentRequired(response)) return response
+    const payment = await resolvePaymentRequirement({
+      initialRequest,
+      readRequestBodyText,
+      response,
+      transport,
+    })
+    if (!payment) return response
 
     // Only extract context for payment handling after confirming 402.
     const context = (init as Record<string, unknown> | undefined)?.context
@@ -201,9 +209,9 @@ export function from<const methods extends readonly Method.AnyClient[]>(
     let mi: methods[number] | undefined
 
     try {
-      challenges = transport.getChallenges
-        ? transport.getChallenges(response)
-        : [transport.getChallenge(response)]
+      challenges = payment.transport.getChallenges
+        ? payment.transport.getChallenges(payment.response as never)
+        : [payment.transport.getChallenge(payment.response as never)]
 
       const candidates = AcceptPayment.selectChallengeCandidates(
         challenges,
@@ -238,7 +246,7 @@ export function from<const methods extends readonly Method.AnyClient[]>(
           init,
           input,
           method: selected.method,
-          response,
+          response: payment.response,
         }),
       )
       const onChallengeCredential =
@@ -258,21 +266,18 @@ export function from<const methods extends readonly Method.AnyClient[]>(
           init,
           input,
           method: selected.method,
-          response,
+          response: payment.response,
         }),
       )
 
-      const paymentResponse = await baseFetch(
-        resolvePaymentRetryInput(response, initialRequest.input, initialRequest.input),
-        transport.setCredential(
-          {
-            ...fetchInit,
-            headers: initialRequest.headers,
-          },
-          credential,
-          { challenge: selectedChallenge },
-        ),
-      )
+      const retry = payment.createRetryRequest({
+        challenge: selectedChallenge,
+        credential,
+        fetchInit,
+        initialInput: initialRequest.input,
+        initialHeaders: initialRequest.headers,
+      })
+      const paymentResponse = await baseFetch(retry.input, retry.init)
       if (paymentResponse.ok)
         await events.emit(
           'payment.response',
@@ -296,7 +301,7 @@ export function from<const methods extends readonly Method.AnyClient[]>(
           init,
           input,
           method: mi,
-          response,
+          response: payment.response,
         }),
       )
       throw error
@@ -699,6 +704,241 @@ function freezeSnapshot<value>(value: value): value {
   if (!value || typeof value !== 'object' || Object.isFrozen(value)) return value
   Object.freeze(value)
   return value
+}
+
+type InitialRequest<methods extends readonly Method.AnyClient[]> = {
+  headers: Headers
+  init: from.RequestInit<methods> | undefined
+  input: RequestInfo | URL
+}
+
+type PaymentRequirement = {
+  createRetryRequest: (parameters: {
+    challenge: Challenge.Challenge
+    credential: string
+    fetchInit: Record<string, unknown>
+    initialHeaders: Headers
+    initialInput: RequestInfo | URL
+  }) => { input: RequestInfo | URL; init: RequestInit }
+  response: unknown
+  transport: Transport.AnyTransport
+}
+
+async function resolvePaymentRequirement<methods extends readonly Method.AnyClient[]>(parameters: {
+  initialRequest: InitialRequest<methods>
+  readRequestBodyText: () => Promise<string | undefined>
+  response: Response
+  transport: Transport.AnyTransport
+}): Promise<PaymentRequirement | undefined> {
+  const { initialRequest, readRequestBodyText, response, transport } = parameters
+
+  if (transport.isPaymentRequired(response)) {
+    return {
+      createRetryRequest({ challenge, credential, fetchInit, initialHeaders, initialInput }) {
+        return {
+          input: resolvePaymentRetryInput(response, initialInput, initialInput),
+          init: transport.setCredential(
+            {
+              ...fetchInit,
+              headers: initialHeaders,
+            },
+            credential,
+            { challenge },
+          ) as RequestInit,
+        }
+      },
+      response,
+      transport,
+    }
+  }
+
+  if (!shouldDetectMcpPayment(response, transport)) return undefined
+
+  const mcpResponse = await readMcpPaymentResponse(response)
+  if (!mcpResponse) return undefined
+
+  const mcpRequest = parseMcpRequest(await readRequestBodyText(), mcpResponse)
+  if (!mcpRequest) return undefined
+
+  const mcpTransport = Transport.mcp()
+  return {
+    createRetryRequest({ challenge, credential, fetchInit, initialHeaders, initialInput }) {
+      const headers = new Headers(initialHeaders)
+      if (!headers.has('Content-Type')) headers.set('Content-Type', 'application/json')
+      headers.delete('Content-Length')
+
+      return {
+        input: normalizeRetryInput(resolvePaymentRetryInput(response, initialInput, initialInput)),
+        init: {
+          ...fetchInit,
+          body: JSON.stringify(mcpTransport.setCredential(mcpRequest, credential, { challenge })),
+          headers,
+          method: resolveRetryMethod(initialRequest.input, fetchInit),
+        },
+      }
+    },
+    response: mcpResponse,
+    transport: mcpTransport,
+  }
+}
+
+function shouldDetectMcpPayment(response: Response, transport: Transport.AnyTransport): boolean {
+  if (transport.name !== 'http' && transport.name !== 'mcp') return false
+  if (!response.ok) return false
+  const contentType = response.headers.get('Content-Type')?.toLowerCase() ?? ''
+  return contentType.includes('application/json') || contentType.includes('text/event-stream')
+}
+
+async function readMcpPaymentResponse(response: Response): Promise<Mcp.Response | undefined> {
+  const contentType = response.headers.get('Content-Type')?.toLowerCase() ?? ''
+  if (contentType.includes('text/event-stream')) return readMcpPaymentResponseFromSse(response)
+
+  try {
+    return selectMcpPaymentResponse(await response.clone().json())
+  } catch {
+    return undefined
+  }
+}
+
+async function readMcpPaymentResponseFromSse(
+  response: Response,
+): Promise<Mcp.Response | undefined> {
+  const body = response.clone().body
+  if (!body) return undefined
+
+  const reader = body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+
+  try {
+    while (buffer.length < 65_536) {
+      const { done, value } = await reader.read()
+      if (done) break
+      buffer += decoder.decode(value, { stream: true })
+
+      for (;;) {
+        const event = shiftSseEvent(buffer)
+        if (!event) break
+        buffer = event.rest
+        const data = parseSseData(event.value)
+        if (!data) continue
+
+        try {
+          const message = JSON.parse(data)
+          const payment = selectMcpPaymentResponse(message)
+          if (payment) return payment
+          if (isJsonRpcMessage(message)) return undefined
+        } catch {}
+      }
+    }
+  } finally {
+    reader.cancel().catch(() => {})
+  }
+
+  return undefined
+}
+
+function shiftSseEvent(buffer: string): { rest: string; value: string } | undefined {
+  const normalized = buffer.replace(/\r\n/g, '\n')
+  const index = normalized.indexOf('\n\n')
+  if (index === -1) return undefined
+  return {
+    rest: normalized.slice(index + 2),
+    value: normalized.slice(0, index),
+  }
+}
+
+function parseSseData(event: string): string | undefined {
+  const data = event
+    .split('\n')
+    .filter((line) => line.startsWith('data:'))
+    .map((line) => line.slice(5).trimStart())
+    .join('\n')
+  if (!data || data === '[DONE]') return undefined
+  return data
+}
+
+function selectMcpPaymentResponse(value: unknown): Mcp.Response | undefined {
+  const responses = Array.isArray(value) ? value : [value]
+  const mcpTransport = Transport.mcp()
+  return responses.find((response): response is Mcp.Response =>
+    isJsonRpcMessage(response) ? mcpTransport.isPaymentRequired(response) : false,
+  )
+}
+
+function isJsonRpcMessage(value: unknown): value is Mcp.Response {
+  return Boolean(
+    value &&
+    typeof value === 'object' &&
+    ('error' in value || 'result' in value) &&
+    ('id' in value || 'jsonrpc' in value),
+  )
+}
+
+function captureRequestBodyText<methods extends readonly Method.AnyClient[]>(
+  input: RequestInfo | URL,
+  init: from.RequestInit<methods> | undefined,
+): () => Promise<string | undefined> {
+  const body = init?.body
+  if (body !== undefined && body !== null) return () => bodyInitToText(body)
+  if (!(input instanceof Request) || !input.body) return async () => undefined
+
+  let clone: Request | undefined
+  try {
+    clone = input.clone()
+  } catch {}
+
+  return async () => {
+    try {
+      return await clone?.text()
+    } catch {
+      return undefined
+    }
+  }
+}
+
+async function bodyInitToText(body: BodyInit): Promise<string | undefined> {
+  if (typeof body === 'string') return body
+  if (body instanceof URLSearchParams) return body.toString()
+  if (body instanceof Blob) return body.text()
+  if (body instanceof ArrayBuffer) return new TextDecoder().decode(body)
+  if (ArrayBuffer.isView(body)) {
+    return new TextDecoder().decode(
+      body.buffer.slice(body.byteOffset, body.byteOffset + body.byteLength),
+    )
+  }
+  return undefined
+}
+
+function parseMcpRequest(
+  body: string | undefined,
+  response: Mcp.Response,
+): Mcp.Request | undefined {
+  if (!body) return undefined
+
+  try {
+    const parsed = JSON.parse(body)
+    const requests = Array.isArray(parsed) ? parsed : [parsed]
+    const request =
+      response.id !== undefined
+        ? requests.find((candidate) => candidate?.id === response.id)
+        : requests[0]
+    if (!request || typeof request !== 'object' || typeof request.method !== 'string')
+      return undefined
+    return request as Mcp.Request
+  } catch {
+    return undefined
+  }
+}
+
+function normalizeRetryInput(input: RequestInfo | URL): RequestInfo | URL {
+  return input instanceof Request ? input.url : input
+}
+
+function resolveRetryMethod(input: RequestInfo | URL, init: Record<string, unknown>): string {
+  if (typeof init.method === 'string' && init.method) return init.method
+  if (input instanceof Request) return input.method
+  return 'POST'
 }
 
 /** @internal */
