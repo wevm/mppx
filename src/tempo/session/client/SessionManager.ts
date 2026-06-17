@@ -208,10 +208,6 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
   const backing = parameters.channelStore ?? createChannelStore()
   const ignoredChannelIds = new Set<Hex.Hex>()
 
-  function isReusable(entry: ChannelEntry | undefined): entry is ChannelEntry {
-    return Boolean(entry?.opened && !ignoredChannelIds.has(entry.channelId))
-  }
-
   // Tracks, for the duration of one `doFetch`, which channels were opened fresh
   // this request vs. resumed from the durable entry index. Stale-channel
   // recovery keys off `resumed`: a resumed channel the server rejects is evicted
@@ -219,9 +215,11 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
   type ChannelUse = { createdKeys: Set<string>; resumed: ChannelEntry | undefined }
   let channelUse: ChannelUse | undefined
 
+  /** Returns the backing entry for `key` only when it is open and not ignored. */
   async function getReusable(key: string): Promise<ChannelEntry | undefined> {
     const entry = await backing.get(key)
-    return isReusable(entry) ? entry : undefined
+    if (entry?.opened && !ignoredChannelIds.has(entry.channelId)) return entry
+    return undefined
   }
 
   const store: ChannelStore = {

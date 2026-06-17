@@ -6,11 +6,9 @@ export { deserializeSnapshot, serializeSnapshot } from '../Snapshot.js'
 export {
   createChannelStore,
   createJsonChannelStore,
-  deserializeEntry,
-  serializeEntry,
+  entryKey,
   type ChannelStore,
   type JsonChannelKv,
-  type StoredChannel,
 } from './ChannelStore.js'
 /** Public client session manager types. */
 export type {

@@ -22,15 +22,12 @@ export type ChannelStore = {
   delete(key: string): MaybePromise<void>
 }
 
-/** Observer notified after every channel write, bridging to the public `onChannelUpdate`. */
-export type ChannelNotify = (entry: ChannelEntry) => void
-
 /** A channel store paired with its update observer, used to persist credential results. */
 export type ChannelSink = {
   /** Persistence for reusable channels. */
   store: ChannelStore
-  /** Called after each write with the latest entry. */
-  notifyUpdate: ChannelNotify
+  /** Called after each write with the latest entry, bridging to the public `onChannelUpdate`. */
+  notifyUpdate: (entry: ChannelEntry) => void
 }
 
 /** Returns the scope key for a reusable payer session channel. */
