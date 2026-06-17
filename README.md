@@ -53,6 +53,7 @@ const mppx = Mppx.create({
       recipient: '0x742d35Cc6634c0532925a3b844bC9e7595F8fE00',
     }),
   ],
+  secretKey: process.env.MPP_SECRET_KEY!,
 })
 
 export async function handler(request: Request) {
@@ -118,7 +119,10 @@ npm i -g mppx
 import { openai, stripe, Proxy } from 'mppx/proxy'
 import { Mppx, tempo } from 'mppx/server'
 
-const mppx = Mppx.create({ methods: [tempo()] })
+const mppx = Mppx.create({
+  methods: [tempo()],
+  secretKey: process.env.MPP_SECRET_KEY!,
+})
 
 const proxy = Proxy.create({
   services: [
@@ -126,15 +130,18 @@ const proxy = Proxy.create({
       apiKey: 'sk-...',
       routes: {
         'POST /v1/chat/completions': mppx.charge({ amount: '0.05' }),
-        'POST /v1/completions': mppx.stream({ amount: '0.0001' }),
-        'GET /v1/models': mppx.free(),
+        'POST /v1/completions': mppx.tempo.session({
+          amount: '0.0001',
+          unitType: 'token',
+        }),
+        'GET /v1/models': true,
       },
     }),
     stripe({
       apiKey: 'sk-...',
       routes: {
         'POST /v1/charges': mppx.charge({ amount: '0.01' }),
-        'GET /v1/customers/:id': mppx.free(),
+        'GET /v1/customers/:id': true,
       },
     }),
   ],
@@ -155,7 +162,7 @@ This exposes the following routes:
 | Route                              | Pricing                      |
 | ---------------------------------- | ---------------------------- |
 | `POST /openai/v1/chat/completions` | charge **$0.005**            |
-| `POST /openai/v1/completions`      | stream **$0.0001 per token** |
+| `POST /openai/v1/completions`      | session **$0.0001 per token** |
 | `GET /openai/v1/models`            | free                         |
 | `POST /stripe/v1/charges`          | charge **$0.01**             |
 | `GET /stripe/v1/customers/:id`     | free                         |

@@ -9,9 +9,9 @@ import type * as z from './zod.js'
  *
  * @example
  * ```ts
- * import { Request } from 'mppx'
+ * import { PaymentRequest } from 'mppx'
  *
- * const request: Request.Request = {
+ * const request: PaymentRequest.Request = {
  *   amount: '1000000',
  *   currency: '0x20c0000000000000000000000000000000000001',
  *   recipient: '0x742d35Cc6634C0532925a3b844Bc9e7595f8fE00',
@@ -29,9 +29,9 @@ export type Request<request extends Record<string, unknown> = Record<string, unk
  *
  * @example
  * ```ts
- * import { Request } from 'mppx'
+ * import { PaymentRequest } from 'mppx'
  *
- * const request = Request.deserialize(serialized)
+ * const request = PaymentRequest.deserialize(serialized)
  * ```
  */
 export function deserialize(encoded: string): Request {
@@ -47,9 +47,9 @@ export function deserialize(encoded: string): Request {
  *
  * @example
  * ```ts
- * import { Request } from 'mppx'
+ * import { PaymentRequest } from 'mppx'
  *
- * const request = Request.from({
+ * const request = PaymentRequest.from({
  *   amount: '1000000',
  *   currency: '0x20c0000000000000000000000000000000000001',
  *   recipient: '0x742d35Cc6634C0532925a3b844Bc9e7595f8fE00',
@@ -69,10 +69,10 @@ export function from<const request extends Request>(request: request): request {
  *
  * @example
  * ```ts
- * import { Request } from 'mppx'
+ * import { PaymentRequest } from 'mppx'
  * import { Methods } from 'mppx/tempo'
  *
- * const request = Request.fromMethod(Methods.charge, {
+ * const request = PaymentRequest.fromMethod(Methods.charge, {
  *   amount: '1000000',
  *   currency: '0x20c0000000000000000000000000000000000001',
  *   recipient: '0x742d35Cc6634C0532925a3b844Bc9e7595f8fE00',
@@ -96,9 +96,9 @@ export function fromMethod<const method extends Method.Method>(
  *
  * @example
  * ```ts
- * import { Request } from 'mppx'
+ * import { PaymentRequest } from 'mppx'
  *
- * const serialized = Request.serialize(request)
+ * const serialized = PaymentRequest.serialize(request)
  * // => "eyJhbW91bnQiOiIxMDAwMDAwIiwiY3VycmVuY3kiOiIweC4uLiJ9"
  * ```
  */
