@@ -78,7 +78,7 @@ export type From<
  *   baseUrl: 'https://api.example.com',
  *   bearer: 'sk-...',
  *   routes: {
- *     'POST /v1/generate': mppx.charge({ amount: '0.01' }),
+ *     'POST /v1/generate': mppx.tempo.charge({ amount: '0.01' }),
  *     'GET /v1/status': true,
  *   },
  * })

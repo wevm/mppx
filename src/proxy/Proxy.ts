@@ -35,7 +35,7 @@ export type Proxy = {
  *     openai({
  *       apiKey: 'sk-...',
  *       routes: {
- *         'POST /v1/chat/completions': mppx.charge({ amount: '0.05' }),
+ *         'POST /v1/chat/completions': mppx.tempo.charge({ amount: '0.05' }),
  *         'GET /v1/models': true,
  *       },
  *     }),

@@ -25,7 +25,7 @@ export namespace Mppx {
    * const app = express()
    * const mppx = Mppx.create({ methods: [tempo()] })
    *
-   * app.get('/premium', mppx.charge({ amount: '1' }), (req, res) => {
+   * app.get('/premium', mppx.tempo.charge({ amount: '1' }), (req, res) => {
    *   res.json({ data: 'paid content' })
    * })
    * ```
@@ -46,13 +46,13 @@ export namespace Mppx {
  * @example
  * ```ts
  * import express from 'express'
- * import { Mppx } from 'mppx/server'
+ * import { Mppx, tempo } from 'mppx/server'
  * import { payment } from 'mppx/express'
  *
  * const mppx = Mppx.create({ methods: [tempo()] })
  *
  * const app = express()
- * app.get('/premium', payment(mppx.charge, { amount: '1' }), (req, res) => {
+ * app.get('/premium', payment(mppx.tempo.charge, { amount: '1' }), (req, res) => {
  *   res.json({ data: 'paid content' })
  * })
  * ```

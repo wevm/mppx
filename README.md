@@ -57,7 +57,7 @@ const mppx = Mppx.create({
 })
 
 export async function handler(request: Request) {
-  const response = await mppx.charge({ amount: '1' })(request)
+  const response = await mppx.tempo.charge({ amount: '1' })(request)
 
   if (response.status === 402) return response.challenge
 
@@ -129,7 +129,7 @@ const proxy = Proxy.create({
     openai({
       apiKey: 'sk-...',
       routes: {
-        'POST /v1/chat/completions': mppx.charge({ amount: '0.05' }),
+        'POST /v1/chat/completions': mppx.tempo.charge({ amount: '0.05' }),
         'POST /v1/completions': mppx.tempo.session({
           amount: '0.0001',
           unitType: 'token',
@@ -140,7 +140,7 @@ const proxy = Proxy.create({
     stripe({
       apiKey: 'sk-...',
       routes: {
-        'POST /v1/charges': mppx.charge({ amount: '0.01' }),
+        'POST /v1/charges': mppx.tempo.charge({ amount: '0.01' }),
         'GET /v1/customers/:id': true,
       },
     }),

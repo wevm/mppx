@@ -216,8 +216,8 @@ export type Mppx<
        *
        * app.get('/api/resource', async (req) => {
        *   const result = await mppx.compose(
-       *     ['tempo/charge', { amount: '100' }],
-       *     ['stripe/charge', { amount: '100' }],
+       *     [mppx.tempo.charge, { amount: '100' }],
+       *     [mppx.stripe.charge, { amount: '100' }],
        *   )(req)
        *   if (result.status === 402) return result.challenge
        *   return result.withReceipt(new Response('OK'))
@@ -2089,7 +2089,7 @@ declare namespace MethodFn {
       }
 }
 
-/** A configured handler — the return value of e.g. `mppx.charge({ ... })`. @internal */
+/** A configured handler — the return value of e.g. `mppx.tempo.charge({ ... })`. @internal */
 type ConfiguredHandler = ((input: Request) => Promise<MethodFn.Response<Transport.Http>>) & {
   _internal: {
     name: string
@@ -2165,8 +2165,8 @@ type ComposeEntry<methods extends readonly Method.AnyServer[]> =
  *
  * app.get('/api/resource', async (req) => {
  *   const result = await Mppx.compose(
- *     mppx['tempo/charge']({ amount: '100', currency: USDC, recipient: '0x...' }),
- *     mppx['stripe/charge']({ amount: '100', currency: 'usd' }),
+ *     mppx.tempo.charge({ amount: '100', currency: USDC, recipient: '0x...' }),
+ *     mppx.stripe.charge({ amount: '100', currency: 'usd' }),
  *   )(req)
  *   if (result.status === 402) return result.challenge
  *   return result.withReceipt(new Response('OK'))

@@ -25,7 +25,7 @@ export namespace Mppx {
    *
    * const app = new Elysia()
    *   .guard(
-   *     { beforeHandle: mppx.charge({ amount: '1' }) },
+   *     { beforeHandle: mppx.tempo.charge({ amount: '1' }) },
    *     (app) => app.get('/premium', () => ({ data: 'paid content' })),
    *   )
    * ```
@@ -45,14 +45,14 @@ export namespace Mppx {
  * @example
  * ```ts
  * import { Elysia } from 'elysia'
- * import { Mppx } from 'mppx/server'
+ * import { Mppx, tempo } from 'mppx/server'
  * import { payment } from 'mppx/elysia'
  *
  * const mppx = Mppx.create({ methods: [tempo()] })
  *
  * const app = new Elysia()
  *   .guard(
- *     { beforeHandle: payment(mppx.charge, { amount: '1' }) },
+ *     { beforeHandle: payment(mppx.tempo.charge, { amount: '1' }) },
  *     (app) => app.get('/premium', () => ({ data: 'paid content' })),
  *   )
  * ```

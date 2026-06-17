@@ -20,7 +20,7 @@ export namespace Mppx {
    *
    * const mppx = Mppx.create({ methods: [tempo()] })
    *
-   * export const GET = mppx.charge({ amount: '1' })(() =>
+   * export const GET = mppx.tempo.charge({ amount: '1' })(() =>
    *   Response.json({ data: 'paid content' }),
    * )
    * ```
@@ -43,12 +43,12 @@ export namespace Mppx {
  * @example
  * ```ts
  * // app/api/premium/route.ts
- * import { Mppx } from 'mppx/server'
+ * import { Mppx, tempo } from 'mppx/server'
  * import { payment } from 'mppx/nextjs'
  *
  * const mppx = Mppx.create({ methods: [tempo()] })
  *
- * export const GET = payment(mppx.charge, { amount: '1' }, () =>
+ * export const GET = payment(mppx.tempo.charge, { amount: '1' }, () =>
  *   Response.json({ data: 'paid content' }),
  * )
  * ```

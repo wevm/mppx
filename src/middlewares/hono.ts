@@ -20,7 +20,7 @@ export namespace Mppx {
    * const app = new Hono()
    * const mppx = Mppx.create({ methods: [tempo()] })
    *
-   * app.get('/premium', mppx.charge({ amount: '1' }), (c) =>
+   * app.get('/premium', mppx.tempo.charge({ amount: '1' }), (c) =>
    *   c.json({ data: 'paid content' }),
    * )
    * ```
@@ -41,13 +41,13 @@ export namespace Mppx {
  * @example
  * ```ts
  * import { Hono } from 'hono'
- * import { Mppx } from 'mppx/server'
+ * import { Mppx, tempo } from 'mppx/server'
  * import { payment } from 'mppx/hono'
  *
  * const mppx = Mppx.create({ methods: [tempo()] })
  *
  * const app = new Hono()
- * app.get('/premium', payment(mppx.charge, { amount: '1' }), (c) =>
+ * app.get('/premium', payment(mppx.tempo.charge, { amount: '1' }), (c) =>
  *   c.json({ data: 'paid content' }),
  * )
  * ```
