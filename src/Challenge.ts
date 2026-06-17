@@ -444,26 +444,36 @@ function readQuotedAuthParamValue(
   start: number,
 ): [value: string, nextIndex: number] {
   let i = start
-  let value = ''
   let escaped = false
+  let segmentStart = start
+  let parts: string[] | undefined
 
   while (i < input.length) {
     const char = input[i]!
     i++
 
     if (escaped) {
-      value += char
+      parts ??= []
+      parts.push(char)
+      segmentStart = i
       escaped = false
       continue
     }
 
     if (char === '\\') {
+      parts ??= []
+      parts.push(input.slice(segmentStart, i - 1))
+      segmentStart = i
       escaped = true
       continue
     }
 
-    if (char === '"') return [value, i]
-    value += char
+    if (char === '"') {
+      const value = parts
+        ? [...parts, input.slice(segmentStart, i - 1)].join('')
+        : input.slice(start, i - 1)
+      return [value, i]
+    }
   }
 
   throw new Error('Unterminated quoted-string.')
