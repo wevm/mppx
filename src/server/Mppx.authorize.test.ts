@@ -4,7 +4,7 @@ import { describe, expect, test } from 'vp/test'
 import * as Http from '~test/Http.js'
 
 const realm = 'api.example.com'
-const secretKey = 'test-secret-key'
+const secretKey = 'test-secret-key-test-secret-key-32'
 
 function successReceipt(method = 'mock') {
   return {

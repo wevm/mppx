@@ -9,7 +9,7 @@ import * as ApiProxy from '../Proxy.js'
 import { stripe } from './stripe.js'
 
 const apiKey = 'sk_test_fake_stripe_key'
-const secretKey = 'test-secret-key'
+const secretKey = 'test-secret-key-test-secret-key-32'
 
 const mppx_server = Mppx_server.create({
   methods: [

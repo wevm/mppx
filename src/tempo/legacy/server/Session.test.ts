@@ -123,7 +123,7 @@ describe.runIf(isLocalnet)('session', () => {
         } as session.Parameters),
       ],
       realm: 'api.example.com',
-      secretKey: 'secret',
+      secretKey: 'test-secret-key-test-secret-key-32',
     })
   }
 
@@ -4211,7 +4211,7 @@ describe.runIf(isLocalnet)('session', () => {
           }),
         ],
         realm: 'api.example.com',
-        secretKey: 'secret',
+        secretKey: 'test-secret-key-test-secret-key-32',
       }).session({ amount: '1', decimals: 6, unitType: 'token' })
 
       const fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -4253,7 +4253,7 @@ describe.runIf(isLocalnet)('session', () => {
           }),
         ],
         realm: 'api.example.com',
-        secretKey: 'secret',
+        secretKey: 'test-secret-key-test-secret-key-32',
       }).session({ amount: '1', decimals: 6, unitType: 'token' })
 
       const fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -4296,7 +4296,7 @@ describe.runIf(isLocalnet)('session', () => {
           }),
         ],
         realm: 'api.example.com',
-        secretKey: 'secret',
+        secretKey: 'test-secret-key-test-secret-key-32',
       }).session({ amount: '1', decimals: 6, unitType: 'token' })
 
       const fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -4347,7 +4347,7 @@ describe.runIf(isLocalnet)('session', () => {
           }),
         ],
         realm: 'api.example.com',
-        secretKey: 'secret',
+        secretKey: 'test-secret-key-test-secret-key-32',
       }).session({ amount: '1', decimals: 6, unitType: 'token' })
 
       const fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -4390,7 +4390,7 @@ describe.runIf(isLocalnet)('session', () => {
           }),
         ],
         realm: 'api.example.com',
-        secretKey: 'secret',
+        secretKey: 'test-secret-key-test-secret-key-32',
       })
 
       const result = await handler.session({
@@ -4434,7 +4434,7 @@ describe.runIf(isLocalnet)('session', () => {
           }),
         ],
         realm: 'api.example.com',
-        secretKey: 'secret',
+        secretKey: 'test-secret-key-test-secret-key-32',
       })
 
       const result = await handler.session({
@@ -4464,7 +4464,7 @@ describe.runIf(isLocalnet)('session', () => {
           }),
         ],
         realm: 'api.example.com',
-        secretKey: 'secret',
+        secretKey: 'test-secret-key-test-secret-key-32',
       }).session({ amount: '1', decimals: 6, unitType: 'token' })
 
       let voucherPosts = 0
@@ -4542,7 +4542,7 @@ describe.runIf(isLocalnet)('session', () => {
           }),
         ],
         realm: 'api.example.com',
-        secretKey: 'secret',
+        secretKey: 'test-secret-key-test-secret-key-32',
       }).session({ amount: '1', decimals: 6, unitType: 'request' })
 
       let voucherPosts = 0
@@ -4627,7 +4627,7 @@ describe.runIf(isLocalnet)('session', () => {
           }),
         ],
         realm: 'api.example.com',
-        secretKey: 'secret',
+        secretKey: 'test-secret-key-test-secret-key-32',
       }).session({ amount: '1', decimals: 6, unitType: 'token' })
 
       const { channelId, serializedTransaction } = await createSignedOpenTransaction(10000000n)
@@ -4710,7 +4710,7 @@ describe.runIf(isLocalnet)('session', () => {
           }),
         ],
         realm: 'api.example.com',
-        secretKey: 'secret',
+        secretKey: 'test-secret-key-test-secret-key-32',
       }).session({ amount: '1', decimals: 6, unitType: 'token' })
 
       let voucherPosts = 0
@@ -4784,7 +4784,7 @@ describe.runIf(isLocalnet)('session', () => {
           }),
         ],
         realm: 'api.example.com',
-        secretKey: 'secret',
+        secretKey: 'test-secret-key-test-secret-key-32',
       }).session({ amount: '1', decimals: 6, unitType: 'token' })
 
       const fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -4825,7 +4825,7 @@ describe.runIf(isLocalnet)('session', () => {
       const handler = Mppx_server.create({
         methods: [tempo_server.charge({ account: accounts[0], currency: asset })],
         realm: 'api.example.com',
-        secretKey: 'secret',
+        secretKey: 'test-secret-key-test-secret-key-32',
       })
 
       const result = await handler.charge({
@@ -4855,7 +4855,7 @@ describe.runIf(isLocalnet)('session', () => {
           }),
         ],
         realm: 'api.example.com',
-        secretKey: 'secret',
+        secretKey: 'test-secret-key-test-secret-key-32',
       }).session({ amount: '1', decimals: 6, unitType: 'token' })
 
       let voucherUpdates = 0
@@ -4968,7 +4968,7 @@ describe.runIf(isLocalnet)('session', () => {
           }),
         ],
         realm: 'api.example.com',
-        secretKey: 'secret',
+        secretKey: 'test-secret-key-test-secret-key-32',
       }).session({ amount: '1', decimals: 6, unitType: 'token' })
 
       let voucherUpdates = 0
@@ -5081,7 +5081,7 @@ describe.runIf(isLocalnet)('session', () => {
           }),
         ],
         realm: 'api.example.com',
-        secretKey: 'secret',
+        secretKey: 'test-secret-key-test-secret-key-32',
       }).session({ amount: '1', decimals: 6, unitType: 'token' })
 
       const route = (request: Request) => routeHandler(request)
@@ -5191,7 +5191,7 @@ describe.runIf(isLocalnet)('session', () => {
           }),
         ],
         realm: 'api.example.com',
-        secretKey: 'secret',
+        secretKey: 'test-secret-key-test-secret-key-32',
       }).session({ amount: '1', decimals: 6, unitType: 'token' })
 
       const httpHandler = NodeRequest.toNodeListener(async (request) => {
@@ -5278,7 +5278,7 @@ describe.runIf(isLocalnet)('session', () => {
           }),
         ],
         realm: 'api.example.com',
-        secretKey: 'secret',
+        secretKey: 'test-secret-key-test-secret-key-32',
       }).session({ amount: '1', decimals: 6, unitType: 'token' })
 
       const route = (request: Request) => routeHandler(request)
@@ -5371,7 +5371,7 @@ describe.runIf(isLocalnet)('session', () => {
           }),
         ],
         realm: 'api.example.com',
-        secretKey: 'secret',
+        secretKey: 'test-secret-key-test-secret-key-32',
       }).session({ amount: '1', decimals: 6, unitType: 'token' })
 
       const httpHandler = NodeRequest.toNodeListener(async (request) => {
@@ -5480,7 +5480,7 @@ describe.runIf(isLocalnet)('session', () => {
           }),
         ],
         realm: 'api.example.com',
-        secretKey: 'secret',
+        secretKey: 'test-secret-key-test-secret-key-32',
       }).session({ amount: '1', decimals: 6, unitType: 'token' })
 
       const route = (request: Request) => routeHandler(request)
@@ -5582,7 +5582,7 @@ describe.runIf(isLocalnet)('session', () => {
           }),
         ],
         realm: 'api.example.com',
-        secretKey: 'secret',
+        secretKey: 'test-secret-key-test-secret-key-32',
       }).session({ amount: '1', decimals: 6, unitType: 'token' })
 
       const httpHandler = NodeRequest.toNodeListener(async (request) => {
@@ -6041,7 +6041,7 @@ describe('session default currency resolution', () => {
         }),
       ],
       realm: 'api.example.com',
-      secretKey: 'secret',
+      secretKey: 'test-secret-key-test-secret-key-32',
     })
 
     const result = await (handler.session as Function)({
@@ -6067,7 +6067,7 @@ describe('session default currency resolution', () => {
         }),
       ],
       realm: 'api.example.com',
-      secretKey: 'secret',
+      secretKey: 'test-secret-key-test-secret-key-32',
     })
 
     const result = await (handler.session as Function)({
@@ -6094,7 +6094,7 @@ describe('session default currency resolution', () => {
         }),
       ],
       realm: 'api.example.com',
-      secretKey: 'secret',
+      secretKey: 'test-secret-key-test-secret-key-32',
     })
 
     const result = await (handler.session as Function)({
@@ -6122,7 +6122,7 @@ describe('session default currency resolution', () => {
         }),
       ],
       realm: 'api.example.com',
-      secretKey: 'secret',
+      secretKey: 'test-secret-key-test-secret-key-32',
     })
 
     const result = await handler.session({
@@ -6149,7 +6149,7 @@ describe('session default currency resolution', () => {
         }),
       ],
       realm: 'api.example.com',
-      secretKey: 'secret',
+      secretKey: 'test-secret-key-test-secret-key-32',
     })
 
     expect(() =>

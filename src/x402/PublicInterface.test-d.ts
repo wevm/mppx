@@ -4,7 +4,7 @@ import { describe, expectTypeOf, test } from 'vp/test'
 
 import { evm as clientEvm } from '../client/index.js'
 
-const secretKey = 'test-secret'
+const secretKey = 'test-secret-key-test-secret-key-32'
 
 describe('x402 public interface', () => {
   test('server evm charge accepts known assets without transfer metadata', () => {

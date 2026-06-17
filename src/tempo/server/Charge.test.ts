@@ -29,7 +29,7 @@ import * as defaults from '../internal/defaults.js'
 import * as Proof from '../internal/proof.js'
 
 const realm = 'api.example.com'
-const secretKey = 'test-secret-key'
+const secretKey = 'test-secret-key-test-secret-key-32'
 
 function isPairAlreadyExistsError(error: unknown) {
   if (typeof error !== 'object' || error === null) return false

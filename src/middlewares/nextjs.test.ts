@@ -36,7 +36,7 @@ function createServer(handler: (request: Request) => Promise<Response> | Respons
   })
 }
 
-const secretKey = 'test-secret-key'
+const secretKey = 'test-secret-key-test-secret-key-32'
 
 describe('payment', () => {
   test('short-circuits management responses', async () => {

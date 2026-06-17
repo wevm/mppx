@@ -37,7 +37,7 @@ function createServer(app: Elysia<any, any, any, any, any, any, any>) {
   })
 }
 
-const secretKey = 'test-secret-key'
+const secretKey = 'test-secret-key-test-secret-key-32'
 
 describe('payment', () => {
   test('short-circuits management responses', async () => {

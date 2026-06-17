@@ -10,7 +10,7 @@ import * as SubscriptionStore from './subscription/Store.js'
 import type { SubscriptionAccessKey, SubscriptionRecord } from './subscription/Types.js'
 
 const realm = 'news.example.com'
-const secretKey = 'subscription-lifecycle-secret'
+const secretKey = 'subscription-lifecycle-secret-key-32'
 const currency = '0x20c0000000000000000000000000000000000001'
 const recipient = '0x1234567890abcdef1234567890abcdef12345678'
 const periodCount = '30'

@@ -51,7 +51,7 @@ const pricePerToken = '0.000075'
 // `Mppx.create()` requires a secret key so challenge IDs can be verified
 // statelessly. The example ships with a default demo key so `pnpm dev` works
 // out of the box, but still allows override via `MPP_SECRET_KEY`.
-const secretKey = process.env.MPP_SECRET_KEY ?? 'mppx-demo-websocket-secret'
+const secretKey = process.env.MPP_SECRET_KEY ?? 'mppx-demo-websocket-secret-key-32'
 
 // Viem Client
 

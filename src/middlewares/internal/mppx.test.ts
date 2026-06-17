@@ -5,7 +5,7 @@ import { describe, expect, test } from 'vp/test'
 import { wrap } from './mppx.js'
 
 const realm = 'api.example.com'
-const secretKey = 'test-secret-key'
+const secretKey = 'test-secret-key-test-secret-key-32'
 
 const mockChargeA = Method.from({
   name: 'alpha',

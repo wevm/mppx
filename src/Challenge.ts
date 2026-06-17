@@ -7,6 +7,8 @@ import type * as Method from './Method.js'
 import * as PaymentRequest from './PaymentRequest.js'
 import * as z from './zod.js'
 
+const maxRequestParameterLength = 16 * 1024
+
 /**
  * Schema for a payment challenge.
  *
@@ -347,6 +349,7 @@ export function deserialize<const methods extends readonly Method.Method[] | und
 
   const { request, opaque, ...rest } = result
   if (!request) throw new Error('Missing request parameter.')
+  if (request.length > maxRequestParameterLength) throw new Error('Request parameter too large.')
   if (rest.method && !/^[a-z][a-z0-9:_-]*$/.test(rest.method))
     throw new Error(`Invalid method: "${rest.method}". Must be lowercase per spec.`)
 

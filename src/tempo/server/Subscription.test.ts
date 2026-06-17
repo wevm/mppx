@@ -15,7 +15,7 @@ import type { SubscriptionRecord } from '../subscription/Types.js'
 import { renew, subscription } from './Subscription.js'
 
 const realm = 'api.example.com'
-const secretKey = 'test-secret-key'
+const secretKey = 'test-secret-key-test-secret-key-32'
 const activeBillingAnchor = new Date(Math.floor(Date.now() / 1_000) * 1_000).toISOString()
 const activeSubscriptionExpires = new Date(
   Math.ceil((Date.now() + 365 * 24 * 60 * 60 * 1_000) / 1_000) * 1_000,

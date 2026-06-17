@@ -9,7 +9,7 @@ import * as ApiProxy from '../Proxy.js'
 import { anthropic } from './anthropic.js'
 
 const apiKey = 'sk-ant-test-fake-anthropic-key'
-const secretKey = 'test-secret-key'
+const secretKey = 'test-secret-key-test-secret-key-32'
 
 const mppx_server = Mppx_server.create({
   methods: [

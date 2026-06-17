@@ -95,7 +95,7 @@ const legacySessionMethod = Method.toServer(mockSession, {
   },
 })
 
-const secretKey = 'test-secret'
+const secretKey = 'test-secret-key-test-secret-key-32'
 const realm = 'api.example.com'
 
 describe('Mppx type tests', () => {

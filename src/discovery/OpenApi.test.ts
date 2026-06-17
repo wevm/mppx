@@ -73,7 +73,7 @@ function createMppx<const methods extends Mppx.Methods>(methods: methods) {
   return Mppx.create({
     methods,
     realm: 'test-realm',
-    secretKey: 'test-secret',
+    secretKey: 'test-secret-key-test-secret-key-32',
   })
 }
 

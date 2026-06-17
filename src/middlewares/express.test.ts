@@ -23,7 +23,7 @@ function createServer(app: express.Express) {
   })
 }
 
-const secretKey = 'test-secret-key'
+const secretKey = 'test-secret-key-test-secret-key-32'
 
 function createChargeHarness(feePayer: boolean) {
   const mppx = Mppx.create({

@@ -22,6 +22,9 @@ import * as NodeListener from './NodeListener.js'
 import * as Request from './Request.js'
 import * as Transport from './Transport.js'
 
+const minimumSecretKeyBytes = 32
+const secretKeyGenerationCommand = 'openssl rand -base64 32'
+
 export type Methods = readonly (Method.AnyServer | readonly Method.AnyServer[])[]
 
 export type ServerEventMap<
@@ -431,6 +434,7 @@ export function create<
       'Missing secret key. Set the MPP_SECRET_KEY environment variable or pass `secretKey` to Mppx.create().',
     )
   }
+  assertSecretKey(secretKey)
 
   const methods = config.methods.flat() as unknown as FlattenMethods<methods>
   const serverEvents = createServerEventDispatcher<FlattenMethods<methods>, transport>()
@@ -762,6 +766,15 @@ export function create<
   } as never
 }
 
+function assertSecretKey(secretKey: string) {
+  const byteLength = new TextEncoder().encode(secretKey).byteLength
+  if (byteLength >= minimumSecretKeyBytes) return
+
+  throw new Error(
+    `Secret key must be at least ${minimumSecretKeyBytes} bytes. Generate one with \`${secretKeyGenerationCommand}\` and set MPP_SECRET_KEY or pass it to Mppx.create().`,
+  )
+}
+
 export declare namespace create {
   type Config<
     methods extends Methods = Methods,
@@ -771,7 +784,7 @@ export declare namespace create {
     methods: methods
     /** Server realm (e.g., hostname). Resolution order: explicit value > env vars (`MPP_REALM`, `FLY_APP_NAME`, `VERCEL_URL`, etc.) > request URL hostname > `"MPP Payment"`. */
     realm?: string | undefined
-    /** Secret key for HMAC-bound challenge IDs for stateless verification. Auto-detected from `MPP_SECRET_KEY` environment variable. Throws if neither provided nor set. */
+    /** Secret key for HMAC-bound challenge IDs for stateless verification. Must be at least 32 bytes. Auto-detected from `MPP_SECRET_KEY` environment variable. */
     secretKey?: string | undefined
     /** Transport to use. @default Transport.http() */
     transport?: transport | undefined

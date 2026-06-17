@@ -25,7 +25,7 @@ import * as McpServer_transport from '../server/Transport.js'
 import * as McpClient from './McpClient.js'
 
 const realm = 'api.example.com'
-const secretKey = 'test-secret-key'
+const secretKey = 'test-secret-key-test-secret-key-32'
 const chargeAmountRaw = 1_000_000n
 const doubleSessionAmountRaw = chargeAmountRaw * 2n
 const topUpAmountRaw = chargeAmountRaw * 3n

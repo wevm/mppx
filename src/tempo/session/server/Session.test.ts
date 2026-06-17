@@ -1815,7 +1815,7 @@ describe('precompile server session unit guardrails', () => {
           }),
         ],
         realm: 'api.example.com',
-        secretKey: 'secret',
+        secretKey: 'test-secret-key-test-secret-key-32',
       }).session({ amount: '1', decimals: 0, unitType: 'request' })
     }
 
@@ -1996,7 +1996,7 @@ describe('precompile server session unit guardrails', () => {
           }),
         ],
         realm: 'api.example.com',
-        secretKey: 'secret',
+        secretKey: 'test-secret-key-test-secret-key-32',
       }).session({ amount: '1', decimals: 0, unitType: 'request' })
     }
 
@@ -2163,7 +2163,7 @@ describe('precompile server session unit guardrails', () => {
           }),
         ],
         realm: 'api.example.com',
-        secretKey: 'secret',
+        secretKey: 'test-secret-key-test-secret-key-32',
       }).session({ amount, decimals: 0, suggestedDeposit: maxDeposit.toString(), unitType })
 
       const fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -2312,7 +2312,7 @@ describe('precompile server session unit guardrails', () => {
           }),
         ],
         realm: 'api.example.com',
-        secretKey: 'secret',
+        secretKey: 'test-secret-key-test-secret-key-32',
       }).session({ amount: '1', decimals: 0, suggestedDeposit: maxDeposit.toString() })
 
       const route = async (request: Request) => {

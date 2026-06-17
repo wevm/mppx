@@ -650,6 +650,13 @@ describe('deserialize', () => {
       ),
     ).toThrow('Missing request parameter.')
   })
+
+  test('error: rejects oversized request parameter before decoding', () => {
+    const oversizedRequest = 'a'.repeat(16 * 1024 + 1)
+    const header = `Payment id="a", realm="api", method="tempo", intent="charge", request="${oversizedRequest}"`
+
+    expect(() => Challenge.deserialize(header)).toThrow('Request parameter too large.')
+  })
 })
 
 describe('fromHeaders', () => {

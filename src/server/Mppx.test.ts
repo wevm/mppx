@@ -10,7 +10,7 @@ import { Types as evm_Types } from 'mppx/evm'
 import { evm, Mppx, stripe, Store, Transport, tempo } from 'mppx/server'
 import { Header as x402_Header, Types as x402_Types, type PaymentPayload } from 'mppx/x402'
 import { getTransactionReceipt } from 'viem/actions'
-import { describe, expect, test } from 'vp/test'
+import { describe, expect, test, vi } from 'vp/test'
 import * as Http from '~test/Http.js'
 import { deployEscrow } from '~test/tempo/legacy/session.js'
 import { accounts, asset, client } from '~test/tempo/viem.js'
@@ -19,7 +19,7 @@ import type { SessionReceipt } from '../tempo/session/precompile/Protocol.js'
 import * as x402_RouteBinding from '../x402/internal/RouteBinding.js'
 
 const realm = 'api.example.com'
-const secretKey = 'test-secret-key'
+const secretKey = 'test-secret-key-test-secret-key-32'
 
 const method = tempo({
   getClient: () => client,
@@ -39,6 +39,24 @@ describe('create', () => {
     const handler = Mppx.create({ methods: [method], realm, secretKey, transport: Transport.mcp() })
 
     expect(handler.transport.name).toBe('mcp')
+  })
+
+  test('error: rejects short explicit secret key', () => {
+    expect(() => Mppx.create({ methods: [method], realm, secretKey: 'short' })).toThrow(
+      'Secret key must be at least 32 bytes.',
+    )
+  })
+
+  test('error: rejects short MPP_SECRET_KEY secret key', () => {
+    vi.stubEnv('MPP_SECRET_KEY', 'short')
+
+    try {
+      expect(() => Mppx.create({ methods: [method], realm })).toThrow(
+        'Secret key must be at least 32 bytes.',
+      )
+    } finally {
+      vi.unstubAllEnvs()
+    }
   })
 })
 

@@ -15,7 +15,7 @@ import * as Service from './Service.js'
 import { anthropic } from './services/anthropic.js'
 import { openai } from './services/openai.js'
 
-const secretKey = 'test-secret-key'
+const secretKey = 'test-secret-key-test-secret-key-32'
 const isLocalnet = tempoNetwork === 'localnet'
 
 const mppx_server = Mppx_server.create({

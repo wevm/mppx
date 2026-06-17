@@ -6,7 +6,7 @@ import { describe, expect, test } from 'vp/test'
 import { BadRequestError, ChannelClosedError } from '../Errors.js'
 
 const realm = 'api.example.com'
-const secretKey = 'test-secret-key'
+const secretKey = 'test-secret-key-test-secret-key-32'
 
 const challenge = Challenge.fromMethod(Methods.charge, {
   realm,

@@ -442,7 +442,7 @@ describe('basic charge (examples/basic)', () => {
     const server = Mppx_server.create({
       methods: [tempo.charge({ getClient: () => client })],
       realm: 'cli-test-basic',
-      secretKey: 'cli-test-secret',
+      secretKey: 'cli-test-secret-cli-test-secret-32',
     })
 
     const httpServer = await Http.createServer(async (req, res) => {
@@ -484,7 +484,7 @@ describe('basic charge (examples/basic)', () => {
     const server = Mppx_server.create({
       methods: [unsupportedMethod, tempoMethod],
       realm: 'cli-test-multi-offer',
-      secretKey: 'cli-test-secret',
+      secretKey: 'cli-test-secret-cli-test-secret-32',
     })
 
     const httpServer = await Http.createServer(async (req, res) => {
@@ -563,7 +563,7 @@ describe('basic charge (examples/basic)', () => {
     const server = Mppx_server.create({
       methods: [betaMethod, alphaMethod],
       realm: 'cli-test-config-offers',
-      secretKey: 'cli-test-secret',
+      secretKey: 'cli-test-secret-cli-test-secret-32',
     })
 
     const configDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mppx-cli-config-'))
@@ -667,7 +667,7 @@ export default defineConfig({
       const server = Mppx_server.create({
         methods: [tempo.charge({ getClient: () => client })],
         realm: 'localhost',
-        secretKey: 'cli-test-secret',
+        secretKey: 'cli-test-secret-cli-test-secret-32',
       })
       let authorization: string | undefined
 
@@ -721,7 +721,7 @@ export default defineConfig({
           }),
         ],
         realm: 'localhost',
-        secretKey: 'cli-test-secret',
+        secretKey: 'cli-test-secret-cli-test-secret-32',
       })
       let authorization: string | undefined
 
@@ -765,7 +765,7 @@ export default defineConfig({
     const server = Mppx_server.create({
       methods: [tempo.charge({ getClient: () => client })],
       realm: 'cli-test-no-account',
-      secretKey: 'cli-test-secret',
+      secretKey: 'cli-test-secret-cli-test-secret-32',
     })
 
     const httpServer = await Http.createServer(async (req, res) => {
@@ -816,7 +816,7 @@ describe('session multi-fetch (examples/session/multi-fetch)', () => {
         }),
       ],
       realm: 'cli-test-multifetch',
-      secretKey: 'cli-test-secret',
+      secretKey: 'cli-test-secret-cli-test-secret-32',
     })
 
     const httpServer = await Http.createServer(async (req, res) => {
@@ -938,7 +938,7 @@ describe('session multi-fetch (examples/session/multi-fetch)', () => {
         }),
       ],
       realm: 'cli-test-double-charge',
-      secretKey: 'cli-test-secret',
+      secretKey: 'cli-test-secret-cli-test-secret-32',
     })
 
     // Track voucher cumulative amounts from credential payloads
@@ -1001,7 +1001,7 @@ describe('session multi-fetch (examples/session/multi-fetch)', () => {
         }),
       ],
       realm: 'cli-test-close-action',
-      secretKey: 'cli-test-secret',
+      secretKey: 'cli-test-secret-cli-test-secret-32',
     })
 
     // Track the credential payload action from the close request
@@ -1079,7 +1079,7 @@ describe('session sse (examples/session/sse)', () => {
         }),
       ],
       realm: 'cli-test-sse',
-      secretKey: 'cli-test-secret',
+      secretKey: 'cli-test-secret-cli-test-secret-32',
     })
 
     const httpServer = await Http.createServer(async (req, res) => {
@@ -1146,7 +1146,7 @@ describe('stripe charge', () => {
         }),
       ],
       realm: 'cli-test-stripe',
-      secretKey: 'cli-test-secret',
+      secretKey: 'cli-test-secret-cli-test-secret-32',
     })
 
     const sptServer = await Http.createServer(async (_req, res) => {
@@ -1186,7 +1186,7 @@ describe('stripe charge', () => {
         }),
       ],
       realm: 'cli-test-stripe-nokey',
-      secretKey: 'cli-test-secret',
+      secretKey: 'cli-test-secret-cli-test-secret-32',
     })
 
     const appServer = await Http.createServer(async (req, res) => {
@@ -1219,7 +1219,7 @@ describe('stripe charge', () => {
         }),
       ],
       realm: 'cli-test-stripe-live',
-      secretKey: 'cli-test-secret',
+      secretKey: 'cli-test-secret-cli-test-secret-32',
     })
 
     const appServer = await Http.createServer(async (req, res) => {
@@ -1670,7 +1670,7 @@ export default defineConfig({
       const server = Mppx_server.create({
         methods: [tempo.charge({ getClient: () => client })],
         realm: 'cli-sign-zero',
-        secretKey: 'cli-test-secret',
+        secretKey: 'cli-test-secret-cli-test-secret-32',
       })
 
       const httpServer = await Http.createServer(async (req, res) => {
@@ -1736,7 +1736,7 @@ export default defineConfig({
           }),
         ],
         realm: 'cli-sign-zero-testnet',
-        secretKey: 'cli-test-secret',
+        secretKey: 'cli-test-secret-cli-test-secret-32',
       })
 
       const httpServer = await Http.createServer(async (req, res) => {

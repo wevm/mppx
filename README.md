@@ -65,6 +65,8 @@ export async function handler(request: Request) {
 }
 ```
 
+Generate `MPP_SECRET_KEY` with at least 32 bytes, for example: `openssl rand -base64 32`.
+
 ### Client
 
 ```ts
@@ -159,13 +161,13 @@ export const POST = proxy.fetch // Next.js
 
 This exposes the following routes:
 
-| Route                              | Pricing                      |
-| ---------------------------------- | ---------------------------- |
-| `POST /openai/v1/chat/completions` | charge **$0.005**            |
+| Route                              | Pricing                       |
+| ---------------------------------- | ----------------------------- |
+| `POST /openai/v1/chat/completions` | charge **$0.005**             |
 | `POST /openai/v1/completions`      | session **$0.0001 per token** |
-| `GET /openai/v1/models`            | free                         |
-| `POST /stripe/v1/charges`          | charge **$0.01**             |
-| `GET /stripe/v1/customers/:id`     | free                         |
+| `GET /openai/v1/models`            | free                          |
+| `POST /stripe/v1/charges`          | charge **$0.01**              |
+| `GET /stripe/v1/customers/:id`     | free                          |
 
 ## Protocol
 

@@ -93,7 +93,7 @@ const store = Store.memory()
 // `Mppx.create()` requires a secret key so challenge IDs can be verified
 // statelessly. The example ships with a default demo key so `pnpm dev` works
 // out of the box, but still allows override via `MPP_SECRET_KEY`.
-const secretKey = process.env.MPP_SECRET_KEY ?? 'mppx-demo-sse-secret'
+const secretKey = process.env.MPP_SECRET_KEY ?? 'mppx-demo-sse-secret-key-minimum-32'
 
 //
 // `Mppx.create()` assembles the payment handler from method intents.

@@ -14,7 +14,7 @@ import { Mppx as ServerMppx } from '../server/index.js'
 
 const account = {} as Account
 const recipient = '0x209693Bc6afc0C5328bA36FaF03C514EF312287C'
-const secretKey = 'test-secret'
+const secretKey = 'test-secret-key-test-secret-key-32'
 const settle = async () => ({
   reference: `0x${'1'.repeat(64)}` as `0x${string}`,
 })

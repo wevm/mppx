@@ -7,7 +7,7 @@ import * as Http from '~test/Http.js'
 const stripeSecretKey = process.env.VITE_STRIPE_SECRET_KEY
 
 const realm = 'api.example.com'
-const secretKey = 'test-secret-key'
+const secretKey = 'test-secret-key-test-secret-key-32'
 
 let httpServer: Awaited<ReturnType<typeof Http.createServer>> | undefined
 

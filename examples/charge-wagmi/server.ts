@@ -13,7 +13,7 @@ const mppx = Mppx.create({
       testnet: true,
     }),
   ],
-  secretKey: 'test',
+  secretKey: 'test-secret-key-test-secret-key-32',
 })
 
 export async function handler(request: Request): Promise<Response | null> {

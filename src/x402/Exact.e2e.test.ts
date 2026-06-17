@@ -8,7 +8,7 @@ import * as Header from './Header.js'
 import * as RouteBinding from './internal/RouteBinding.js'
 import * as Types from './Types.js'
 
-const secretKey = 'test-secret'
+const secretKey = 'test-secret-key-test-secret-key-32'
 const transaction = `0x${'1'.repeat(64)}`
 
 describe('x402 exact e2e', () => {

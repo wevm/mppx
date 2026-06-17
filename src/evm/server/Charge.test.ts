@@ -45,7 +45,7 @@ describe('evm charge server', () => {
           },
         }),
       ],
-      secretKey: 'test-secret',
+      secretKey: 'test-secret-key-test-secret-key-32',
     })
     const client = ClientMppx.create({
       methods: [

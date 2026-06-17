@@ -38,7 +38,7 @@ export function createApp(options: AppOptions) {
         x402: { facilitator },
       }),
     ],
-    secretKey: options.secretKey ?? 'x402-mpp-example',
+    secretKey: options.secretKey ?? 'x402-mpp-example-secret-key-min-32',
   })
 
   const paid = payments.compose(

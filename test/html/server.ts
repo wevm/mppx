@@ -39,7 +39,7 @@ export async function startServer(port: number): Promise<HtmlTestServer> {
         testnet: true,
       }),
     ],
-    secretKey: 'test-html-server-secret-key',
+    secretKey: 'test-html-server-secret-key-32-byte',
   })
   const tempoCustomTextMppx = Mppx.create({
     methods: [
@@ -52,7 +52,7 @@ export async function startServer(port: number): Promise<HtmlTestServer> {
         testnet: true,
       }),
     ],
-    secretKey: 'test-html-server-secret-key',
+    secretKey: 'test-html-server-secret-key-32-byte',
   })
   const stripeMppx = stripeEnabled
     ? Mppx.create({
@@ -75,7 +75,7 @@ export async function startServer(port: number): Promise<HtmlTestServer> {
             secretKey: stripeSecretKey!,
           }),
         ],
-        secretKey: 'test-html-server-secret-key',
+        secretKey: 'test-html-server-secret-key-32-byte',
       })
     : undefined
 
