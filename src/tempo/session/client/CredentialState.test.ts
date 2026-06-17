@@ -19,6 +19,7 @@ import {
   type ChannelSink,
 } from './ChannelStore.js'
 import {
+  canSignDescriptor,
   executeCredentialPlan,
   hasCredentialCumulativeAmount,
   hasManualSessionDescriptor,
@@ -90,12 +91,12 @@ describe('ChannelCache', () => {
   describe('precompile client ChannelStore', () => {
     test('creates stable case-insensitive reusable channel keys scoped by chain', () => {
       expect(
-        channelKey(
-          '0x00000000000000000000000000000000000000AA' as Address,
-          '0x20C0000000000000000000000000000000000001' as Address,
-          '0x4D50500000000000000000000000000000000000' as Address,
-          4217,
-        ),
+        channelKey({
+          payee: '0x00000000000000000000000000000000000000AA' as Address,
+          token: '0x20C0000000000000000000000000000000000001' as Address,
+          escrow: '0x4D50500000000000000000000000000000000000' as Address,
+          chainId: 4217,
+        }),
       ).toBe(
         '0x00000000000000000000000000000000000000aa:0x20c0000000000000000000000000000000000001:0x4d50500000000000000000000000000000000000:4217',
       )
@@ -104,7 +105,12 @@ describe('ChannelCache', () => {
     test('derives a stored entry key from its descriptor, escrow, and chain', () => {
       const entry = channel()
       expect(entryKey(entry)).toBe(
-        channelKey(entry.descriptor.payee, entry.descriptor.token, entry.escrow, entry.chainId),
+        channelKey({
+          payee: entry.descriptor.payee,
+          token: entry.descriptor.token,
+          escrow: entry.escrow,
+          chainId: entry.chainId,
+        }),
       )
     })
 
@@ -525,6 +531,95 @@ describe('CredentialPlan', () => {
       })
 
       expect(plan).toMatchObject({ type: 'voucher', entry })
+    })
+
+    test('opens fresh instead of vouchering when the account cannot sign the cached entry', () => {
+      // Entry was opened with an access-key signer the local account cannot produce.
+      const entry = channel({
+        descriptor: {
+          ...descriptor,
+          authorizedSigner: '0x00000000000000000000000000000000000000aa' as Address,
+        },
+      })
+
+      const plan = planCredential({
+        account,
+        entry,
+        decimals: 6,
+        resolved: challengeContext(),
+      })
+
+      expect(plan.type).toBe('open')
+    })
+
+    test('opens fresh instead of recovering when the account cannot sign the snapshot', () => {
+      const plan = planCredential({
+        account,
+        entry: undefined,
+        decimals: 6,
+        resolved: challengeContext({
+          snapshot: snapshot({
+            descriptor: {
+              ...snapshotDescriptor,
+              authorizedSigner: '0x00000000000000000000000000000000000000aa' as Address,
+            },
+          }),
+        }),
+      })
+
+      expect(plan.type).toBe('open')
+    })
+
+    test('vouchers when the resolved account can sign the cached access-key signer', () => {
+      const accessKey = privateKeyToAccount(
+        '0x2000000000000000000000000000000000000000000000000000000000000000',
+      )
+      const entry = channel({
+        descriptor: { ...descriptor, authorizedSigner: accessKey.address },
+      })
+
+      const plan = planCredential({
+        // Same payer root, but signing is delegated to the access-key account.
+        account: Object.assign({}, account, { accessKeyAddress: accessKey.address }),
+        entry,
+        decimals: 6,
+        resolved: challengeContext(),
+      })
+
+      expect(plan).toMatchObject({ type: 'voucher', entry })
+    })
+
+    test('canSignDescriptor matches root, zero, and delegated access-key signers', () => {
+      const accessKey = '0x00000000000000000000000000000000000000aa' as Address
+      // Root-signed channel: signer is the payer.
+      expect(canSignDescriptor(account, descriptor)).toBe(true)
+      // Zero signer also means the root account signs.
+      expect(
+        canSignDescriptor(account, {
+          ...descriptor,
+          authorizedSigner: '0x0000000000000000000000000000000000000000' as Address,
+        }),
+      ).toBe(true)
+      // Access-key signer the plain root account cannot produce.
+      expect(canSignDescriptor(account, { ...descriptor, authorizedSigner: accessKey })).toBe(false)
+      // Access-key account whose delegated signer matches.
+      expect(
+        canSignDescriptor(Object.assign({}, account, { accessKeyAddress: accessKey }), {
+          ...descriptor,
+          authorizedSigner: accessKey,
+        }),
+      ).toBe(true)
+      // A different payer cannot sign, even when the descriptor names the
+      // account's own address (root or access key) as the signer.
+      const otherPayer = '0x00000000000000000000000000000000000000bb' as Address
+      expect(canSignDescriptor(account, { ...descriptor, payer: otherPayer })).toBe(false)
+      expect(
+        canSignDescriptor(Object.assign({}, account, { accessKeyAddress: accessKey }), {
+          ...descriptor,
+          payer: otherPayer,
+          authorizedSigner: accessKey,
+        }),
+      ).toBe(false)
     })
 
     test('rejects channel ID reuse without descriptor or cache entry', () => {

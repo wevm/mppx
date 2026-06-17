@@ -31,18 +31,24 @@ export type ChannelSink = {
 }
 
 /** Returns the scope key for a reusable payer session channel. */
-export function channelKey(
-  payee: Address,
-  token: Address,
-  escrow: Address,
-  chainId: number,
-): string {
+export function channelKey(scope: {
+  payee: Address
+  token: Address
+  escrow: Address
+  chainId: number
+}): string {
+  const { payee, token, escrow, chainId } = scope
   return `${payee.toLowerCase()}:${token.toLowerCase()}:${escrow.toLowerCase()}:${chainId}`
 }
 
 /** Returns the scope key for a stored channel entry. */
 export function entryKey(entry: ChannelEntry): string {
-  return channelKey(entry.descriptor.payee, entry.descriptor.token, entry.escrow, entry.chainId)
+  return channelKey({
+    payee: entry.descriptor.payee,
+    token: entry.descriptor.token,
+    escrow: entry.escrow,
+    chainId: entry.chainId,
+  })
 }
 
 /** Creates the default in-memory {@link ChannelStore}. */

@@ -415,7 +415,7 @@ export async function resolveChallengeContext(
     client,
     escrow,
     feePayer: methodDetails.feePayer,
-    key: channelKey(payee, token, escrow, chainId),
+    key: channelKey({ payee, token, escrow, chainId }),
     operator: methodDetails.operator,
     payee,
     snapshot: methodDetails.sessionSnapshot,
@@ -512,6 +512,29 @@ export function resolveRecoveredCumulative(
   return settled + requestAmount
 }
 
+/**
+ * Whether `account` can produce the voucher signer a descriptor was opened with.
+ * Root-signed channels (zero or payer `authorizedSigner`) require the root
+ * account; access-key-signed channels require the account whose delegated signer
+ * matches. Used to gate automatic resume/recover: a stored entry or server
+ * snapshot the local account can no longer sign for is dropped in favor of a
+ * fresh open, rather than producing a voucher the escrow would reject.
+ */
+export function canSignDescriptor(
+  account: ViemAccount,
+  descriptor: Channel.ChannelDescriptor,
+  authorizedSigner?: Address | undefined,
+): boolean {
+  // Only the payer can deposit into and voucher against its own channel,
+  // regardless of who the voucher signer is.
+  if (!isSameAddress(account.address, descriptor.payer)) return false
+  const signer = descriptor.authorizedSigner
+  // Root-signed channels (zero or payer signer) are signable now that the payer
+  // matches; access-key-signed channels also require the delegated signer.
+  if (BigInt(signer) === 0n || isSameAddress(signer, descriptor.payer)) return true
+  return isSameAddress(resolveAuthorizedSigner(account, authorizedSigner), signer)
+}
+
 /** Chooses the next credential plan from local channel cache and optional caller context. */
 export function planCredential(parameters: PlanCredentialParameters): CredentialPlan {
   const { account, authorizedSigner, entry, context, decimals, maxDeposit, resolved } = parameters
@@ -532,7 +555,11 @@ export function planCredential(parameters: PlanCredentialParameters): Credential
   if (!entry && context?.channelId && !context.descriptor)
     throw new Error('descriptor required to reuse TIP-1034 channel')
   const recoverContext = resolveRecoverContext({ context, snapshot: resolved.snapshot })
-  if (!entry && recoverContext) {
+  if (
+    !entry &&
+    recoverContext &&
+    canSignDescriptor(account, recoverContext.descriptor, authorizedSigner)
+  ) {
     return {
       type: 'recover',
       account,
@@ -543,7 +570,8 @@ export function planCredential(parameters: PlanCredentialParameters): Credential
       resolved,
     }
   }
-  if (entry?.opened) return { type: 'voucher', account, entry, maxDeposit, resolved }
+  if (entry?.opened && canSignDescriptor(account, entry.descriptor, authorizedSigner))
+    return { type: 'voucher', account, entry, maxDeposit, resolved }
   return { type: 'open', account, authorizedSigner, context, maxDeposit, resolved }
 }
 

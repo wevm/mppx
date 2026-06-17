@@ -212,7 +212,11 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
   // this request vs. resumed from the durable entry index. Stale-channel
   // recovery keys off `resumed`: a resumed channel the server rejects is evicted
   // and the request retried once with a fresh open.
-  type ChannelUse = { createdKeys: Set<string>; resumed: ChannelEntry | undefined }
+  type ChannelUse = {
+    seenExisting: Set<string>
+    createdKeys: Set<string>
+    resumed: ChannelEntry | undefined
+  }
   let channelUse: ChannelUse | undefined
 
   /** Returns the backing entry for `key` only when it is open and not ignored. */
@@ -225,16 +229,19 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
   const store: ChannelStore = {
     async get(key) {
       const entry = await getReusable(key)
-      if (entry && channelUse && !channelUse.createdKeys.has(key)) channelUse.resumed ??= entry
+      if (entry && channelUse) {
+        channelUse.seenExisting.add(key)
+        if (!channelUse.createdKeys.has(key)) channelUse.resumed ??= entry
+      }
       return entry
     },
     async set(entry) {
       const key = entryKey(entry)
-      // A write for a key not already durable this request is a fresh open, so
-      // it must not later be mistaken for a resumed pre-existing channel.
-      const existed = channelUse ? await getReusable(key) : undefined
+      // The plugin always reads a key before writing it, so a write for a key
+      // not seen as durable this request is a fresh open and must not later be
+      // mistaken for a resumed pre-existing channel.
       if (entry.opened) ignoredChannelIds.delete(entry.channelId)
-      if (channelUse && !existed) channelUse.createdKeys.add(key)
+      if (channelUse && !channelUse.seenExisting.has(key)) channelUse.createdKeys.add(key)
       await backing.set(entry)
     },
     delete: (key) => backing.delete(key),
@@ -502,6 +509,16 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
   }
 
   async function doFetch(input: RequestInfo | URL, init?: RequestInit): Promise<PaymentResponse> {
+    // The manager drives one shared `runtime` state machine, so requests are
+    // single-flight. Reject overlap loudly instead of letting concurrent calls
+    // corrupt each other's runtime and channel tracking.
+    if (channelUse)
+      throw new Error(
+        'SessionManager: a request is already in flight; concurrent requests on one manager are not supported',
+      )
+    const use: ChannelUse = { seenExisting: new Set(), createdKeys: new Set(), resumed: undefined }
+    channelUse = use
+
     runtime.lastUrl = input
 
     const previous = captureRuntimeStateSnapshot({
@@ -514,8 +531,6 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
     // a cold start sends nothing and lets the plugin resume from the entry index
     // after the 402.
     const liveHint = runtime.channel?.opened ? runtime.channel.channelId : undefined
-    const use: ChannelUse = { createdKeys: new Set(), resumed: undefined }
-    channelUse = use
 
     try {
       await bootstrapSession(input, init)
@@ -574,7 +589,7 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
         return paymentResponse
       }
     } finally {
-      if (channelUse === use) channelUse = undefined
+      channelUse = undefined
     }
   }
 

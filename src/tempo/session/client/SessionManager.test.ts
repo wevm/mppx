@@ -255,6 +255,33 @@ describe('Session', () => {
       expect(mockFetch).toHaveBeenCalledOnce()
     })
 
+    test('rejects a concurrent request while one is in flight', async () => {
+      let release!: () => void
+      const gate = new Promise<void>((resolve) => {
+        release = resolve
+      })
+      const mockFetch = vi.fn().mockImplementation(async () => {
+        await gate
+        return makeOkResponse('hello')
+      })
+
+      const s = sessionManager({
+        account: '0x0000000000000000000000000000000000000001',
+        fetch: mockFetch as typeof globalThis.fetch,
+      })
+
+      const first = s.fetch('https://api.example.com/data')
+      await expect(s.fetch('https://api.example.com/data')).rejects.toThrow(
+        'concurrent requests on one manager are not supported',
+      )
+
+      release()
+      expect((await first).status).toBe(200)
+
+      // The guard clears after the in-flight request settles.
+      expect((await s.fetch('https://api.example.com/data')).status).toBe(200)
+    })
+
     test('binds the default global fetch for browser runtimes', async () => {
       const originalFetch = globalThis.fetch
       const mockFetch = vi.fn(function (this: unknown) {
