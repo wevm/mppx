@@ -15,6 +15,7 @@ overrides:
   typescript: '~5.9.3'
   ox: '0.14.24'
   viem: '^2.51.3'
+  hono@<4.12.25: '4.12.25'
   path-to-regexp@<8.4.0: '8.4.0'
   tar@<=7.5.15: '7.5.16'
   '@modelcontextprotocol/sdk@>=1.10.0 <=1.25.3': '1.26.0'
