@@ -278,6 +278,20 @@ describe('tempo.charge client', () => {
         vi.resetModules()
       }
     })
+
+    test('rejects sequential nonces for fee-sponsored charges', async () => {
+      try {
+        await expect(
+          createWithMockedTransaction(
+            { nonceStrategy: 'sequential' },
+            createChallenge({ amount: '1', feePayer: true, supportedModes: ['pull'] }),
+          ),
+        ).rejects.toThrow('Sequential nonces are not supported for fee-sponsored charges.')
+      } finally {
+        vi.doUnmock('viem/actions')
+        vi.resetModules()
+      }
+    })
   })
 
   describe('chain pinning', () => {

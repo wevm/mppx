@@ -189,6 +189,8 @@ export function charge(parameters: charge.Parameters = {}) {
         })
       }
 
+      if (parameters.nonceStrategy === 'sequential' && methodDetails?.feePayer)
+        throw new Error('Sequential nonces are not supported for fee-sponsored charges.')
       const nonceOptions =
         parameters.nonceStrategy === 'sequential'
           ? {}
