@@ -53,6 +53,7 @@ const mppx = Mppx.create({
       recipient: '0x742d35Cc6634c0532925a3b844bC9e7595F8fE00',
     }),
   ],
+  secretKey: process.env.MPP_SECRET_KEY!,
 })
 
 export async function handler(request: Request) {
@@ -118,7 +119,10 @@ npm i -g mppx
 import { openai, stripe, Proxy } from 'mppx/proxy'
 import { Mppx, tempo } from 'mppx/server'
 
-const mppx = Mppx.create({ methods: [tempo()] })
+const mppx = Mppx.create({
+  methods: [tempo()],
+  secretKey: process.env.MPP_SECRET_KEY!,
+})
 
 const proxy = Proxy.create({
   services: [
