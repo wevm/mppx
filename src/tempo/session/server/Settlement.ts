@@ -262,8 +262,9 @@ export async function applyVerifiedHttpAccounting(
 ): Promise<SessionReceipt> {
   const { capturedRequest, payloadAction, receipt, sseEnabled } = parameters
   if (!capturedRequest) return receipt
-  if (!isSessionContentRequest(capturedRequest)) return receipt
   if (payloadAction !== 'open' && payloadAction !== 'voucher') return receipt
+  if (sseEnabled && capturedRequest.method === 'POST') return receipt
+  if (!isSessionContentRequest(capturedRequest)) return receipt
 
   const requestAmount = parameters.getRequestAmount()
   const charged = await parameters.charge(receipt.channelId, requestAmount)

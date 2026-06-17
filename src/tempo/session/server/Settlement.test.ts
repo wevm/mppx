@@ -1,11 +1,14 @@
 import type { Hex } from 'viem'
 import { privateKeyToAccount } from 'viem/accounts'
-import { describe, expect, test } from 'vp/test'
+import { describe, expect, test, vi } from 'vp/test'
 
 import * as Challenge from '../../../Challenge.js'
 import type * as Credential from '../../../Credential.js'
+import type * as Method from '../../../Method.js'
+import { createSessionReceipt } from '../precompile/Protocol.js'
 import type * as ChannelStore from './ChannelStore.js'
 import {
+  applyVerifiedHttpAccounting,
   isSettlementDue,
   readRequestFeePayer,
   resolveCredentialFeePayer,
@@ -145,6 +148,90 @@ describe('FeePayerResolution', () => {
         }),
       ).toBe(defaultFeePayer)
     })
+  })
+})
+
+describe('applyVerifiedHttpAccounting', () => {
+  const channelId = '0x0000000000000000000000000000000000000000000000000000000000000001' as Hex
+
+  function receipt() {
+    return createSessionReceipt({
+      acceptedCumulative: 200n,
+      challengeId: 'challenge-1',
+      channelId,
+      spent: 0n,
+      units: 0,
+    })
+  }
+
+  function capturedRequest(overrides: Partial<Method.CapturedRequest>): Method.CapturedRequest {
+    return {
+      hasBody: false,
+      headers: new Headers(),
+      method: 'GET',
+      url: new URL('https://api.example.com/session'),
+      ...overrides,
+    }
+  }
+
+  function chargedChannel(): ChannelStore.State {
+    return {
+      channelId,
+      spent: 75n,
+      units: 1,
+    } as ChannelStore.State
+  }
+
+  test('precharges SSE GET content and marks the receipt as prepaid', async () => {
+    const charge = vi.fn(async () => chargedChannel())
+    const markPrepaidReceipt = vi.fn((value) => value)
+
+    await applyVerifiedHttpAccounting({
+      capturedRequest: capturedRequest({ method: 'GET' }),
+      charge,
+      getRequestAmount: () => 75n,
+      markPrepaidReceipt,
+      payloadAction: 'voucher',
+      receipt: receipt(),
+      settleCharged: async () => undefined,
+      sseEnabled: true,
+    })
+
+    expect(charge).toHaveBeenCalledWith(channelId, 75n)
+    expect(markPrepaidReceipt).toHaveBeenCalledOnce()
+  })
+
+  test('does not charge SSE voucher management POSTs', async () => {
+    const charge = vi.fn(async () => chargedChannel())
+
+    const result = await applyVerifiedHttpAccounting({
+      capturedRequest: capturedRequest({ hasBody: true, method: 'POST' }),
+      charge,
+      getRequestAmount: () => 75n,
+      payloadAction: 'voucher',
+      receipt: receipt(),
+      settleCharged: async () => undefined,
+      sseEnabled: true,
+    })
+
+    expect(charge).not.toHaveBeenCalled()
+    expect(result.spent).toBe('0')
+  })
+
+  test('keeps non-SSE POST content accounting unchanged', async () => {
+    const charge = vi.fn(async () => chargedChannel())
+
+    await applyVerifiedHttpAccounting({
+      capturedRequest: capturedRequest({ hasBody: true, method: 'POST' }),
+      charge,
+      getRequestAmount: () => 75n,
+      payloadAction: 'voucher',
+      receipt: receipt(),
+      settleCharged: async () => undefined,
+      sseEnabled: false,
+    })
+
+    expect(charge).toHaveBeenCalledWith(channelId, 75n)
   })
 })
 
