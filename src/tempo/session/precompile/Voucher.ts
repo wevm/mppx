@@ -1,4 +1,3 @@
-import { Signature } from 'ox'
 import { Channel, SignatureEnvelope } from 'ox/tempo'
 import type { Account, Address, Client, Hex } from 'viem'
 import { hashTypedData } from 'viem'
@@ -45,6 +44,27 @@ function getVoucherDigest(chainId: number, voucher: Voucher): Hex {
   }) as Hex
 }
 
+/** EIP-712 / canonical digest a voucher signature is verified against. */
+function getVoucherPayload(verifyingContract: Address, chainId: number, voucher: Voucher): Hex {
+  if (verifyingContract.toLowerCase() === Channel.address.toLowerCase())
+    return getVoucherDigest(chainId, voucher)
+  return hashTypedData({
+    domain: getVoucherDomain(verifyingContract, chainId),
+    types: voucherTypes,
+    primaryType: 'Voucher',
+    message: voucher,
+  })
+}
+
+/**
+ * Whether a signature envelope type is a TIP-1020 primitive (secp256k1, p256,
+ * webAuthn). The TIP-1020 Signature Verification Precompile only verifies these
+ * primitives for vouchers — keychain wrappers and multisig are rejected.
+ */
+function isPrimitive(type: string): boolean {
+  return (SignatureEnvelope.types as readonly string[]).includes(type)
+}
+
 function signCanonicalTempoVoucher(
   account: Account,
   parameters: {
@@ -65,6 +85,11 @@ function signCanonicalTempoVoucher(
 
 /**
  * Sign a voucher with an account.
+ *
+ * Returns a TIP-1020 primitive signature (secp256k1, p256, or webAuthn). Access
+ * keys sign the raw voucher digest, so they produce a primitive directly.
+ * Keychain wrappers and multisig signatures are rejected — the TIP-1020
+ * Signature Verification Precompile only verifies primitive voucher signatures.
  */
 export async function signVoucher(
   client: Client,
@@ -94,19 +119,20 @@ export async function signVoucher(
   })()
 
   const envelope = SignatureEnvelope.from(signature as SignatureEnvelope.Serialized)
-  if (envelope.type === 'keychain' && envelope.inner.type === 'secp256k1')
-    return Signature.toHex(envelope.inner.signature)
-  if (envelope.type === 'keychain' || envelope.type !== 'secp256k1')
-    throw new Error('TIP-1034 voucher signing only supports secp256k1 voucher signatures.')
+  if (!isPrimitive(envelope.type))
+    throw new Error(
+      `TIP-1034 vouchers require a TIP-1020 primitive signature (secp256k1, p256, or webAuthn); received "${envelope.type}".`,
+    )
 
-  return signature
+  return SignatureEnvelope.serialize(envelope)
 }
 
 /**
  * Verify a voucher signature matches the expected signer.
  *
- * Only accepts raw secp256k1 signatures — the escrow contract verifies
- * via ecrecover. Keychain, p256, and webAuthn signatures are rejected.
+ * Accepts TIP-1020 primitive signatures (secp256k1, p256, webAuthn), which the
+ * TIP-1020 Signature Verification Precompile verifies on-chain. Keychain
+ * wrappers, multisig, and magic-suffixed encodings are rejected.
  */
 export function verifyVoucher(
   escrowContract: Address,
@@ -117,25 +143,12 @@ export function verifyVoucher(
   try {
     const envelope = SignatureEnvelope.from(voucher.signature as SignatureEnvelope.Serialized)
 
-    // Reject keychain signatures — the escrow contract verifies raw ECDSA
-    // signatures against authorizedSigner, not keychain-wrapped ones.
-    if (envelope.type === 'keychain') return false
-    if (envelope.type !== 'secp256k1') return false
+    if (!isPrimitive(envelope.type)) return false
+    // Reject magic-suffixed or otherwise non-canonical encodings.
     if (SignatureEnvelope.serialize(envelope).toLowerCase() !== voucher.signature.toLowerCase())
       return false
 
-    const payload =
-      escrowContract.toLowerCase() === Channel.address.toLowerCase()
-        ? getVoucherDigest(chainId, voucher)
-        : hashTypedData({
-            domain: getVoucherDomain(escrowContract, chainId),
-            types: voucherTypes,
-            primaryType: 'Voucher',
-            message: {
-              channelId: voucher.channelId,
-              cumulativeAmount: voucher.cumulativeAmount,
-            },
-          })
+    const payload = getVoucherPayload(escrowContract, chainId, voucher)
     const signer = SignatureEnvelope.extractAddress({ payload, signature: envelope })
     const valid = SignatureEnvelope.verify(envelope, { address: signer, payload })
     return valid && TempoAddress.isEqual(signer, expectedSigner)

@@ -1,7 +1,9 @@
-import { type Address, parseUnits } from 'viem'
+import { type Account as ViemAccount, type Address, parseUnits } from 'viem'
 import { tempo as tempo_chain } from 'viem/chains'
 
+import type * as Challenge from '../../../Challenge.js'
 import * as Constants from '../../../Constants.js'
+import type { MaybePromise } from '../../../internal/types.js'
 import * as Method from '../../../Method.js'
 import * as Account from '../../../viem/Account.js'
 import * as Client from '../../../viem/Client.js'
@@ -11,13 +13,50 @@ import * as Methods from '../../Methods.js'
 import { serializeCredential, type ChannelEntry } from './ChannelOps.js'
 import { createChannelStore, type ChannelStore } from './ChannelStore.js'
 import {
+  type DescriptorSessionContext,
   executeCredentialPlan,
   planCredential,
   resolveChallengeContext,
+  resolveRecoverContext,
   sessionContextSchema,
 } from './CredentialState.js'
 
 export { sessionContextSchema, type SessionContext } from './CredentialState.js'
+
+/**
+ * Resolved payment scope of a session challenge, plus the channel state already
+ * known locally or hinted by the server, handed to {@link session.Parameters.resolveAccount}
+ * so a wallet can choose which key signs vouchers for this scope.
+ */
+export type ResolveAccountInfo = {
+  /** Default account resolved from method/context (the payer; usually a `json-rpc` root). */
+  account: ViemAccount
+  /** Chain ID the challenge settles on. */
+  chainId: number
+  /** Deserialized 402 challenge. */
+  challenge: Challenge.Challenge
+  /** Channel cached locally for this scope, when one exists. */
+  entry?: ChannelEntry | undefined
+  /** Escrow precompile the channel is opened against. */
+  escrow: Address
+  /** Payment-scope key (see {@link channelKey}). */
+  key: string
+  /** Payee (recipient) advertised by the challenge. */
+  payee: Address
+  /** Payer address (the default account's address). */
+  payer: Address
+  /** Descriptor recovery context derived from caller context or a server snapshot, when present. */
+  recoverContext?: DescriptorSessionContext | undefined
+  /** Token (currency) advertised by the challenge. */
+  token: Address
+}
+
+/**
+ * Resolves the account that signs vouchers for a session challenge. Return a
+ * concrete account (e.g. a delegated access key) to sign with it, or `undefined`
+ * to use the default {@link ResolveAccountInfo.account}.
+ */
+export type ResolveAccount = (info: ResolveAccountInfo) => MaybePromise<ViemAccount | undefined>
 
 /**
  * Creates the low-level TIP-1034 session payment method for use with `Mppx.create()`.
@@ -36,6 +75,7 @@ export function session(parameters: session.Parameters = {}) {
     getClient: getClientParameter,
     maxDeposit: maxDepositParameter,
     onChannelUpdate,
+    resolveAccount,
   } = parameters
   const getClient = Client.getResolver({
     chain: tempo_chain,
@@ -67,7 +107,7 @@ export function session(parameters: session.Parameters = {}) {
         escrowOverride,
         getClient,
       })
-      const account = getAccount(resolved.client, context)
+      const account_default = getAccount(resolved.client, context)
 
       // Manual actions, caller-supplied channels, and challenges an opened
       // local channel can serve stay local (the wallet would strand its deposit).
@@ -77,6 +117,25 @@ export function session(parameters: session.Parameters = {}) {
         context?.channelId !== undefined
       const entry = await store.get(resolved.key)
       const openedLocally = entry?.opened
+
+      // Let the caller choose which key signs vouchers for this scope (e.g. a
+      // delegated access key for resume, or a fresh-open key), given the channel
+      // state already known locally or hinted by the server. `undefined` keeps
+      // the default account. `planCredential` drops a resume/recover the resolved
+      // account cannot sign for and opens fresh instead.
+      const account =
+        (await resolveAccount?.({
+          account: account_default,
+          chainId: resolved.chainId,
+          challenge,
+          entry,
+          escrow: resolved.escrow,
+          key: resolved.key,
+          payee: resolved.payee,
+          payer: account_default.address,
+          recoverContext: resolveRecoverContext({ context, snapshot: resolved.snapshot }),
+          token: resolved.token,
+        })) ?? account_default
 
       // Wallet-native MPP: ask a JSON-RPC wallet to satisfy automatic-mode
       // challenges via `wallet_authorizeChallenge` before falling back to local planning.
@@ -123,5 +182,12 @@ export declare namespace session {
       maxDeposit?: string | undefined
       /** Called whenever channel state changes. */
       onChannelUpdate?: ((entry: ChannelEntry) => void) | undefined
+      /**
+       * Resolves the account that signs vouchers for a given challenge scope,
+       * letting a wallet pick a delegated access key (to resume without prompting
+       * the root key, or to open a fresh channel) based on the local/server
+       * channel state. Return `undefined` to use the default account.
+       */
+      resolveAccount?: ResolveAccount | undefined
     }
 }

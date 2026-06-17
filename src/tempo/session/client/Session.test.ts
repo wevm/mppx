@@ -262,6 +262,60 @@ describe('precompile client session', () => {
     expect(payload.descriptor.operator.toLowerCase()).toBe(operator.toLowerCase())
   })
 
+  test('resolveAccount selects a delegated access key as the channel signer', async () => {
+    // Same root account, but with voucher signing delegated to an access key.
+    const accessKeyAddress = '0x0000000000000000000000000000000000000009' as Address
+    const accessKey = Object.assign({}, account, { accessKeyAddress })
+
+    const seen: Array<{ entry: unknown; payer: Address }> = []
+    const method = session({
+      account,
+      decimals: 0,
+      getClient: () => client,
+      resolveAccount(info) {
+        seen.push({ entry: info.entry, payer: info.payer })
+        return accessKey
+      },
+    })
+
+    const open = deserialize(
+      await method.createCredential({ challenge: makeChallenge(), context: {} }),
+    )
+
+    expect(open.action).toBe('open')
+    // Channel is opened with the access key as its descriptor authorizedSigner.
+    if (open.action !== 'open') throw new Error('expected open payload')
+    expect(open.descriptor.authorizedSigner).toBe(accessKeyAddress)
+    // First call sees no cached entry; the default payer is the root account.
+    expect(seen[0]?.entry).toBeUndefined()
+    expect(seen[0]?.payer.toLowerCase()).toBe(account.address.toLowerCase())
+
+    // Resume: the cached entry was signed by the same access key, so it vouchers.
+    const next = deserialize(
+      await method.createCredential({ challenge: makeChallenge(), context: {} }),
+    )
+    expect(next.action).toBe('voucher')
+    expect(seen[1]?.entry).toBeDefined()
+  })
+
+  test('falls back to the default account when resolveAccount returns undefined', async () => {
+    const method = session({
+      account,
+      decimals: 0,
+      getClient: () => client,
+      resolveAccount: () => undefined,
+    })
+
+    const open = deserialize(
+      await method.createCredential({ challenge: makeChallenge(), context: {} }),
+    )
+
+    expect(open.action).toBe('open')
+    if (open.action !== 'open') throw new Error('expected open payload')
+    // Root account signs: descriptor authorizedSigner is the payer address.
+    expect(open.descriptor.authorizedSigner.toLowerCase()).toBe(account.address.toLowerCase())
+  })
+
   test('tracks cumulative amount and calls onChannelUpdate in auto mode', async () => {
     const updates: bigint[] = []
     const method = session({
