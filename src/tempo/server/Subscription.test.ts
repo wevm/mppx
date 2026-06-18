@@ -1,8 +1,17 @@
 import { Challenge, Credential, Receipt } from 'mppx'
 import { Mppx } from 'mppx/server'
 import { KeyAuthorization } from 'ox/tempo'
-import { createClient, custom } from 'viem'
+import {
+  createClient,
+  custom,
+  decodeFunctionData,
+  encodeAbiParameters,
+  encodeEventTopics,
+  type Address,
+  type Hex,
+} from 'viem'
 import { privateKeyToAccount } from 'viem/accounts'
+import { Abis, Transaction } from 'viem/tempo'
 import { tempo as tempo_chain } from 'viem/tempo/chains'
 import { describe, expect, test } from 'vp/test'
 
@@ -110,6 +119,109 @@ function createBillingClient(hashes: readonly string[]) {
         if (method === 'eth_chainId') return `0x${chainId.toString(16)}`
         if (method === 'eth_call') return '0x'
         if (method === 'eth_sendRawTransaction') return hashes[nextHash++] ?? hashActivate
+        throw new Error(`unexpected rpc method: ${method}`)
+      },
+    }),
+  })
+  return { client, rpcMethods }
+}
+
+const confirmedBlockHash = `0x${'f'.repeat(64)}` as const
+// Canonical TIP-1028 ReceivePolicyGuard precompile address.
+const receivePolicyGuard = '0xB10C000000000000000000000000000000000000' as Address
+
+/**
+ * Mock client whose `eth_sendRawTransactionSync` returns a confirmed receipt
+ * with a `TransferWithMemo` log derived from the broadcast transaction.
+ *
+ * `redirectTo` simulates a T6 (TIP-1028) held transfer (credits the guard, not
+ * the recipient); `addUnrelatedTransfer` adds a memo-less `Transfer` to the
+ * recipient. By default only the renewal (second) broadcast is affected so
+ * activation succeeds; `redirectActivation` also holds the first broadcast.
+ */
+function createConfirmingBillingClient(options?: {
+  addUnrelatedTransfer?: boolean
+  redirectActivation?: boolean
+  redirectTo?: Address
+}) {
+  const rpcMethods: string[] = []
+  let broadcastIndex = 0
+  const client = createClient({
+    chain: { ...tempo_chain, id: chainId },
+    transport: custom({
+      async request({ method, params }) {
+        rpcMethods.push(method)
+        if (method === 'eth_chainId') return `0x${chainId.toString(16)}`
+        if (method === 'eth_call') return '0x'
+        if (method === 'eth_sendRawTransactionSync') {
+          const index = broadcastIndex++
+          const isRenewal = index >= 1
+          const serialized = (params as [Hex])[0]
+          const transaction = Transaction.deserialize(
+            serialized as Transaction.TransactionSerializedTempo,
+          ) as unknown as {
+            from: Address
+            calls: readonly { data: Hex; to: Address }[]
+          }
+          const call = transaction.calls[0]!
+          const { args } = decodeFunctionData({
+            abi: Abis.tip20,
+            data: call.data,
+          })
+          const [recipient, amount, memo] = args as [Address, bigint, Hex]
+          const shouldRedirect = options?.redirectTo && (isRenewal || options?.redirectActivation)
+          const creditedTo = shouldRedirect ? options!.redirectTo! : recipient
+          const hash = `0x${index.toString(16).padStart(64, '0')}` as Hex
+          const baseLog = {
+            blockHash: confirmedBlockHash,
+            blockNumber: '0x1',
+            data: encodeAbiParameters([{ type: 'uint256' }], [amount]),
+            logIndex: '0x0',
+            removed: false,
+            transactionHash: hash,
+            transactionIndex: '0x0',
+          } as const
+          const logs: unknown[] = [
+            {
+              ...baseLog,
+              address: call.to,
+              topics: encodeEventTopics({
+                abi: Abis.tip20,
+                args: { from: transaction.from, memo, to: creditedTo },
+                eventName: 'TransferWithMemo',
+              }),
+            },
+          ]
+          // Memo-less Transfer to the recipient: must not satisfy the check.
+          if (isRenewal && options?.addUnrelatedTransfer) {
+            logs.push({
+              ...baseLog,
+              address: call.to,
+              logIndex: '0x1',
+              topics: encodeEventTopics({
+                abi: Abis.tip20,
+                args: { from: transaction.from, to: recipient },
+                eventName: 'Transfer',
+              }),
+            })
+          }
+          return {
+            blockHash: confirmedBlockHash,
+            blockNumber: '0x1',
+            contractAddress: null,
+            cumulativeGasUsed: '0x0',
+            effectiveGasPrice: '0x0',
+            from: transaction.from,
+            gasUsed: '0x0',
+            logs,
+            logsBloom: `0x${'0'.repeat(512)}`,
+            status: '0x1',
+            to: call.to,
+            transactionHash: hash,
+            transactionIndex: '0x0',
+            type: '0x0',
+          }
+        }
         throw new Error(`unexpected rpc method: ${method}`)
       },
     }),
@@ -355,6 +467,147 @@ describe('tempo.subscription', () => {
     expect(receipt.reference).toBe(hashRenewed)
     expect(rpcMethods.filter((method) => method === 'eth_sendRawTransaction')).toHaveLength(2)
     expect((await subscriptions.get(record.subscriptionId))?.lastChargedPeriod).toBeGreaterThan(0)
+  })
+
+  async function activateConfirmedSubscription(parameters: {
+    client: ReturnType<typeof createConfirmingBillingClient>['client']
+    store: ReturnType<typeof Store.memory>
+  }) {
+    const { client, store } = parameters
+    const method = subscription({
+      amount: subscriptionAmount,
+      chainId,
+      currency: subscriptionCurrency,
+      getClient: async () => client,
+      periodCount: subscriptionPeriodCount,
+      periodUnit: subscriptionPeriodUnit,
+      recipient: subscriptionRecipient,
+      resolve: async () => ({ key: subscriptionKey }),
+      store,
+      subscriptionExpires: activeSubscriptionExpires,
+    })
+    const mppx = Mppx.create({ methods: [method], realm, secretKey })
+    const challengeResult = await mppx.tempo.subscription({})(
+      new Request('https://example.com/resource'),
+    )
+    if (challengeResult.status !== 402) throw new Error('expected activation challenge')
+    const challenge = Challenge.fromResponse(challengeResult.challenge)
+    const accessKey = (
+      challenge.request as ReturnType<typeof Methods.subscription.schema.request.parse>
+    ).methodDetails?.accessKey
+    if (!accessKey) throw new Error('expected generated access key')
+    const credential = await createCredential(challenge, rootAccount.address, accessKey)
+    const activated = await mppx.tempo.subscription({})(
+      new Request('https://example.com/resource', {
+        headers: { Authorization: Credential.serialize(credential) },
+      }),
+    )
+    expect(activated.status).toBe(200)
+    return { mppx }
+  }
+
+  test('renews when the confirmed receipt credits the recipient', async () => {
+    const store = Store.memory()
+    const subscriptions = SubscriptionStore.fromStore(store)
+    const { client } = createConfirmingBillingClient()
+    const { mppx } = await activateConfirmedSubscription({ client, store })
+
+    const record = await subscriptions.getByKey(subscriptionKey)
+    if (!record) throw new Error('expected subscription record')
+    await subscriptions.put({
+      ...record,
+      billingAnchor: new Date(Date.now() - 3 * subscriptionPeriodMilliseconds).toISOString(),
+      lastChargedPeriod: 0,
+    })
+
+    const renewed = await mppx.tempo.subscription({})(new Request('https://example.com/resource'))
+    expect(renewed.status).toBe(200)
+    expect((await subscriptions.get(record.subscriptionId))?.lastChargedPeriod).toBeGreaterThan(0)
+  })
+
+  test('rejects renewal when a receive policy holds the confirmed transfer', async () => {
+    const store = Store.memory()
+    const subscriptions = SubscriptionStore.fromStore(store)
+    const { client } = createConfirmingBillingClient({ redirectTo: receivePolicyGuard })
+    const { mppx } = await activateConfirmedSubscription({ client, store })
+
+    const record = await subscriptions.getByKey(subscriptionKey)
+    if (!record) throw new Error('expected subscription record')
+    await subscriptions.put({
+      ...record,
+      billingAnchor: new Date(Date.now() - 3 * subscriptionPeriodMilliseconds).toISOString(),
+      lastChargedPeriod: 0,
+    })
+
+    const renewed = await mppx.tempo.subscription({})(new Request('https://example.com/resource'))
+    expect(renewed.status).toBe(402)
+    // The held renewal must not advance the billing period.
+    expect((await subscriptions.get(record.subscriptionId))?.lastChargedPeriod).toBe(0)
+  })
+
+  test('rejects a held renewal even when a memo-less Transfer credits the recipient', async () => {
+    const store = Store.memory()
+    const subscriptions = SubscriptionStore.fromStore(store)
+    // Settlement is held, but the receipt also has a memo-less Transfer to the
+    // recipient; the memo-bound check must still reject it.
+    const { client } = createConfirmingBillingClient({
+      addUnrelatedTransfer: true,
+      redirectTo: receivePolicyGuard,
+    })
+    const { mppx } = await activateConfirmedSubscription({ client, store })
+
+    const record = await subscriptions.getByKey(subscriptionKey)
+    if (!record) throw new Error('expected subscription record')
+    await subscriptions.put({
+      ...record,
+      billingAnchor: new Date(Date.now() - 3 * subscriptionPeriodMilliseconds).toISOString(),
+      lastChargedPeriod: 0,
+    })
+
+    const renewed = await mppx.tempo.subscription({})(new Request('https://example.com/resource'))
+    expect(renewed.status).toBe(402)
+    expect((await subscriptions.get(record.subscriptionId))?.lastChargedPeriod).toBe(0)
+  })
+
+  test('rejects activation when a receive policy holds the confirmed transfer', async () => {
+    const store = Store.memory()
+    const subscriptions = SubscriptionStore.fromStore(store)
+    const { client } = createConfirmingBillingClient({
+      redirectActivation: true,
+      redirectTo: receivePolicyGuard,
+    })
+    const method = subscription({
+      amount: subscriptionAmount,
+      chainId,
+      currency: subscriptionCurrency,
+      getClient: async () => client,
+      periodCount: subscriptionPeriodCount,
+      periodUnit: subscriptionPeriodUnit,
+      recipient: subscriptionRecipient,
+      resolve: async () => ({ key: subscriptionKey }),
+      store,
+      subscriptionExpires: activeSubscriptionExpires,
+    })
+    const mppx = Mppx.create({ methods: [method], realm, secretKey })
+    const challengeResult = await mppx.tempo.subscription({})(
+      new Request('https://example.com/resource'),
+    )
+    if (challengeResult.status !== 402) throw new Error('expected activation challenge')
+    const challenge = Challenge.fromResponse(challengeResult.challenge)
+    const generatedAccessKey = (
+      challenge.request as ReturnType<typeof Methods.subscription.schema.request.parse>
+    ).methodDetails?.accessKey
+    if (!generatedAccessKey) throw new Error('expected generated access key')
+    const credential = await createCredential(challenge, rootAccount.address, generatedAccessKey)
+    const activated = await mppx.tempo.subscription({})(
+      new Request('https://example.com/resource', {
+        headers: { Authorization: Credential.serialize(credential) },
+      }),
+    )
+
+    expect(activated.status).toBe(402)
+    // A held activation must not persist an active subscription.
+    expect(await subscriptions.getByKey(subscriptionKey)).toBeNull()
   })
 
   test('returns a management response while renewal is already in flight', async () => {

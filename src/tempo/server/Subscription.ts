@@ -1,6 +1,13 @@
 import { Base64 } from 'ox'
 import { KeyAuthorization } from 'ox/tempo'
-import { encodeFunctionData, isAddressEqual, type Address, type Client as ViemClient } from 'viem'
+import {
+  encodeFunctionData,
+  isAddressEqual,
+  parseEventLogs,
+  type Address,
+  type Client as ViemClient,
+  type TransactionReceipt,
+} from 'viem'
 import {
   call as viem_call,
   prepareTransactionRequest,
@@ -884,6 +891,8 @@ async function submitSubscriptionPayment(parameters: {
   } as never)
 
   if (!waitForConfirmation) {
+    // Optimistic mode has no receipt to inspect, so it cannot detect a T6
+    // (TIP-1028) held transfer. Use `waitForConfirmation: true` for T6-safe proof.
     return sendRawTransaction(client, {
       serializedTransaction: serializedTransaction as Transaction.TransactionSerializedTempo,
     })
@@ -897,7 +906,48 @@ async function submitSubscriptionPayment(parameters: {
       reason: `subscription transaction reverted: ${receipt.transactionHash}`,
     })
   }
+  assertSubscriptionTransfer(receipt, {
+    amount: BigInt(request.amount),
+    currency: request.currency as Address,
+    memo,
+    recipient: request.recipient as Address,
+  })
   return receipt.transactionHash
+}
+
+/**
+ * Asserts a confirmed subscription payment credited the recipient.
+ *
+ * Transaction success alone is not proof: under Tempo T6 (TIP-1028) a recipient
+ * receive policy can hold the funds in `ReceivePolicyGuard` while the tx still
+ * succeeds. Settlement always emits one `transferWithMemo(recipient, amount,
+ * memo)`, so this requires a matching `TransferWithMemo` log on the expected
+ * token. A held transfer fails because its `to` is the guard, and the memo
+ * binding excludes unrelated transfer effects in the same receipt.
+ */
+function assertSubscriptionTransfer(
+  receipt: TransactionReceipt,
+  parameters: { amount: bigint; currency: Address; memo: `0x${string}`; recipient: Address },
+): void {
+  const { amount, currency, memo, recipient } = parameters
+  const credited = parseEventLogs({
+    abi: Abis.tip20,
+    eventName: 'TransferWithMemo',
+    logs: receipt.logs,
+  }).some(
+    (log) =>
+      isAddressEqual(log.address, currency) &&
+      isAddressEqual(log.args.to, recipient) &&
+      log.args.amount === amount &&
+      log.args.memo.toLowerCase() === memo.toLowerCase(),
+  )
+  if (!credited) {
+    throw new VerificationFailedError({
+      reason:
+        `subscription transfer was not credited to the recipient ` +
+        `(funds may have been held by a receive policy): ${receipt.transactionHash}`,
+    })
+  }
 }
 
 function createSubscriptionId() {
