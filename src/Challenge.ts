@@ -27,7 +27,7 @@ export const Schema = z.object({
   /** Optional expiration timestamp (ISO 8601). */
   expires: z.optional(z.datetime()),
   /** Unique challenge identifier (HMAC-bound). */
-  id: z.string(),
+  id: z.string().check(z.minLength(1)),
   /** Intent type (e.g., "charge", "session"). */
   intent: z.string(),
   /** Payment method (e.g., "tempo", "stripe"). */
@@ -241,7 +241,7 @@ export function fromMethod<const method extends Method.Method>(
   const request = PaymentRequest.fromMethod(method, parameters.request)
 
   return from({
-    ...(id ? { id } : { secretKey }),
+    ...(id !== undefined ? { id } : { secretKey }),
     realm,
     method: methodName,
     intent: intent,

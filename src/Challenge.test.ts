@@ -66,6 +66,18 @@ describe('from', () => {
     expect(challenge.expires).toBe('2025-01-06T12:00:00.000Z')
   })
 
+  test('error: rejects empty id', () => {
+    expect(() =>
+      Challenge.from({
+        id: '',
+        realm: 'api.example.com',
+        method: 'tempo',
+        intent: 'charge',
+        request: { amount: '1000000' },
+      }),
+    ).toThrow()
+  })
+
   // ---------------------------------------------------------------------------
   // HMAC Challenge ID Test Vectors
   //
@@ -417,6 +429,22 @@ describe('fromMethod', () => {
       }),
     ).toThrow()
   })
+
+  test('error: rejects explicit empty id instead of falling back to secretKey', () => {
+    expect(() =>
+      Challenge.fromMethod(Methods.charge, {
+        id: '',
+        secretKey: 'my-secret',
+        realm: 'api.example.com',
+        request: {
+          amount: '1',
+          currency: '0x20c0000000000000000000000000000000000001',
+          decimals: 6,
+          recipient: '0x742d35Cc6634C0532925a3b844Bc9e7595f8fE00',
+        },
+      } as any),
+    ).toThrow()
+  })
 })
 
 describe('serialize', () => {
@@ -634,6 +662,11 @@ describe('deserialize', () => {
       header:
         'Payment id="a", realm="api", method="tempo", intent="charge", request="e30", ="value"',
       error: 'Malformed auth-param.',
+    },
+    {
+      name: 'empty id',
+      header: 'Payment id="", realm="api", method="tempo", intent="charge", request="e30"',
+      error: 'Invalid input',
     },
   ])('error: throws for $name', ({ header, error }) => {
     expect(() => Challenge.deserialize(header)).toThrow(error)
