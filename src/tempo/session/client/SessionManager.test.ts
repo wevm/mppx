@@ -5,6 +5,8 @@ import { describe, expect, test, vi } from 'vp/test'
 import * as Challenge from '../../../Challenge.js'
 import * as Constants from '../../../Constants.js'
 import * as Credential from '../../../Credential.js'
+import type { ChannelEntry } from '../client/ChannelOps.js'
+import { createJsonChannelStore, entryKey, type ChannelStore } from '../client/ChannelStore.js'
 import * as Channel from '../precompile/Channel.js'
 import { escrowAbi } from '../precompile/escrow.abi.js'
 import { tip20ChannelEscrow } from '../precompile/Protocol.js'
@@ -13,7 +15,6 @@ import type { NeedVoucherEvent, SessionReceipt } from '../precompile/Protocol.js
 import { formatNeedVoucherEvent, parseEvent } from '../precompile/Protocol.js'
 import type { SessionCredentialPayload } from '../precompile/Protocol.js'
 import { computeFallbackCloseAmount, sessionManager } from './SessionManager.js'
-import type { StoredSessionChannel } from './SessionManager.js'
 
 const channelId = '0x0000000000000000000000000000000000000000000000000000000000000001' as Hex
 const challengeId = 'test-challenge-1'
@@ -59,18 +60,38 @@ const storedChannelId = Channel.computeId({
   escrow: tip20ChannelEscrow,
 })
 
-function storedChannel(overrides: Partial<StoredSessionChannel> = {}): StoredSessionChannel {
+function channelEntry(overrides: Partial<ChannelEntry> = {}): ChannelEntry {
   return {
     channelId: storedChannelId,
-    cumulativeAmount: '1000000',
-    deposit: '10000000',
+    cumulativeAmount: 1_000_000n,
+    deposit: 10_000_000n,
     descriptor: storedDescriptor,
     escrow: tip20ChannelEscrow,
     chainId: 4217,
     opened: true,
-    updatedAt: 0,
     ...overrides,
   }
+}
+
+/**
+ * In-memory {@link ChannelStore} with spied `set`/`delete`, optionally seeded.
+ * Seeded entries live in the entry index, so the plugin resumes them from
+ * `store.get(resolved.key)` after a 402 (there is no first-request hint).
+ */
+function makeChannelStore(seed: readonly ChannelEntry[] = []) {
+  const map = new Map<string, ChannelEntry>(seed.map((entry) => [entryKey(entry), entry]))
+  const set = vi.fn((entry: ChannelEntry) => {
+    map.set(entryKey(entry), entry)
+  })
+  const remove = vi.fn((key: string) => {
+    map.delete(key)
+  })
+  const store: ChannelStore = {
+    get: (key) => map.get(key),
+    set,
+    delete: remove,
+  }
+  return { store, set, delete: remove, map }
 }
 
 function makeChallenge(overrides: Record<string, unknown> = {}): Challenge.Challenge {
@@ -234,6 +255,33 @@ describe('Session', () => {
       expect(mockFetch).toHaveBeenCalledOnce()
     })
 
+    test('rejects a concurrent request while one is in flight', async () => {
+      let release!: () => void
+      const gate = new Promise<void>((resolve) => {
+        release = resolve
+      })
+      const mockFetch = vi.fn().mockImplementation(async () => {
+        await gate
+        return makeOkResponse('hello')
+      })
+
+      const s = sessionManager({
+        account: '0x0000000000000000000000000000000000000001',
+        fetch: mockFetch as typeof globalThis.fetch,
+      })
+
+      const first = s.fetch('https://api.example.com/data')
+      await expect(s.fetch('https://api.example.com/data')).rejects.toThrow(
+        'concurrent requests on one manager are not supported',
+      )
+
+      release()
+      expect((await first).status).toBe(200)
+
+      // The guard clears after the in-flight request settles.
+      expect((await s.fetch('https://api.example.com/data')).status).toBe(200)
+    })
+
     test('binds the default global fetch for browser runtimes', async () => {
       const originalFetch = globalThis.fetch
       const mockFetch = vi.fn(function (this: unknown) {
@@ -255,28 +303,35 @@ describe('Session', () => {
       }
     })
 
-    test('adds a stored channel hint to the first request', async () => {
+    test('resumes a seeded channel after a 402 without a first-request hint', async () => {
+      const posted: SessionCredentialPayload[] = []
       const mockFetch = vi.fn().mockImplementation((_input, init?: RequestInit) => {
-        expect(new Headers(init?.headers).get('Payment-Session')).toBe(storedChannelId)
+        const authorization = new Headers(init?.headers).get(Constants.Headers.authorization)
+        const payload = authorization
+          ? Credential.deserialize<SessionCredentialPayload>(authorization).payload
+          : undefined
+        if (payload) posted.push(payload)
+        if (!payload) return Promise.resolve(make402Response())
         return Promise.resolve(makeOkResponse())
       })
       const s = sessionManager({
         account,
         client,
         fetch: mockFetch as typeof globalThis.fetch,
-        sessionStore: {
-          get: () => storedChannel(),
-          set: vi.fn(),
-        },
+        channelStore: makeChannelStore([channelEntry()]).store,
       })
 
       await s.fetch('https://api.example.com/data')
 
-      expect(mockFetch).toHaveBeenCalledOnce()
+      // No persisted hint: the first request carries no Payment-Session header,
+      // and the channel is resumed from the entry index with a voucher.
+      expect(new Headers(mockFetch.mock.calls[0]?.[1]?.headers).get('Payment-Session')).toBeNull()
+      expect(posted[0]).toMatchObject({ action: 'voucher', channelId: storedChannelId })
     })
 
-    test('stores same-route HEAD snapshot as a first-request channel hint', async () => {
-      const set = vi.fn()
+    test('seeds a same-route HEAD snapshot into the entry index and resumes it', async () => {
+      const { store, set } = makeChannelStore()
+      const posted: SessionCredentialPayload[] = []
       const mockFetch = vi.fn().mockImplementation((_input, init?: RequestInit) => {
         const headers = new Headers(init?.headers)
         if (init?.method === 'HEAD' && !headers.get(Constants.Headers.authorization)) {
@@ -306,7 +361,14 @@ describe('Session', () => {
             }),
           )
         }
-        expect(headers.get(Constants.Headers.paymentSession)).toBe(storedChannelId)
+        // The seeded snapshot is not sent as a first-request hint; the content
+        // request gets a 402 and resumes from the entry index with a voucher.
+        const authorization = headers.get(Constants.Headers.authorization)
+        const payload = authorization
+          ? Credential.deserialize<SessionCredentialPayload>(authorization).payload
+          : undefined
+        if (payload) posted.push(payload)
+        if (!payload) return Promise.resolve(make402Response())
         return Promise.resolve(makeOkResponse())
       })
       const s = sessionManager({
@@ -314,20 +376,16 @@ describe('Session', () => {
         bootstrap: true,
         client,
         fetch: mockFetch as typeof globalThis.fetch,
-        sessionStore: {
-          get: () => null,
-          set,
-        },
+        channelStore: store,
       })
 
       const response = await s.fetch('https://api.example.com/data')
 
       expect(response.status).toBe(200)
-      expect(response.channelId).toBeNull()
-      expect(s.channelId).toBeUndefined()
-      expect(s.cumulative).toBe(0n)
       expect(set).toHaveBeenCalledWith(expect.objectContaining({ channelId: storedChannelId }))
-      expect(mockFetch).toHaveBeenCalledTimes(3)
+      expect(posted[0]).toMatchObject({ action: 'voucher', channelId: storedChannelId })
+      const contentCall = mockFetch.mock.calls.find((call) => call[1]?.method !== 'HEAD')
+      expect(new Headers(contentCall?.[1]?.headers).get('Payment-Session')).toBeNull()
     })
 
     test('does not answer non-zero bootstrap charge challenges', async () => {
@@ -374,28 +432,8 @@ describe('Session', () => {
       expect(new Headers(mockFetch.mock.calls[1]?.[1]?.headers).get('Payment-Session')).toBeNull()
     })
 
-    test('clears stale stored channel hints and retries with a fresh channel', async () => {
-      const remove = vi.fn()
-      const staleClient = createClient({
-        account,
-        chain: { id: 4217 } as never,
-        transport: custom({
-          async request(args) {
-            if (args.method === 'eth_chainId') return '0x1079'
-            if (args.method === 'eth_getTransactionCount') return '0x0'
-            if (args.method === 'eth_estimateGas') return '0x5208'
-            if (args.method === 'eth_maxPriorityFeePerGas') return '0x1'
-            if (args.method === 'eth_getBlockByNumber') return { baseFeePerGas: '0x1' }
-            if (args.method === 'eth_call')
-              return encodeFunctionResult({
-                abi: escrowAbi,
-                functionName: 'getChannelState',
-                result: { settled: 0n, deposit: 0n, closeRequestedAt: 0 },
-              })
-            throw new Error(`unexpected rpc request: ${args.method}`)
-          },
-        }),
-      })
+    test('drops a stale stored channel the server rejects and retries with a fresh one', async () => {
+      const { store, delete: remove } = makeChannelStore([channelEntry()])
       const postedPayloads: SessionCredentialPayload[] = []
       const mockFetch = vi.fn().mockImplementation((_input, init?: RequestInit) => {
         const headers = new Headers(init?.headers)
@@ -405,28 +443,25 @@ describe('Session', () => {
           : undefined
         if (payload) postedPayloads.push(payload)
 
-        if (init?.method === 'HEAD') return Promise.resolve(new Response(null, { status: 204 }))
         if (!payload) return Promise.resolve(make402Response())
+        // Reject any reuse of the stale stored channel; accept a freshly opened one.
+        if (payload.channelId === storedChannelId)
+          return Promise.resolve(new Response('gone', { status: 500 }))
         return Promise.resolve(makeOkResponse())
       })
       const s = sessionManager({
         account,
-        bootstrap: true,
-        client: staleClient,
+        client,
         fetch: mockFetch as typeof globalThis.fetch,
         maxDeposit: '10',
-        sessionStore: {
-          get: () => storedChannel(),
-          set: vi.fn(),
-          delete: remove,
-        },
+        channelStore: store,
       })
 
       const response = await s.fetch('https://api.example.com/data')
 
       expect(response.status).toBe(200)
       expect(remove).toHaveBeenCalledOnce()
-      expect(postedPayloads.map((payload) => payload.action)).toEqual(['open'])
+      expect(postedPayloads.map((payload) => payload.action)).toEqual(['voucher', 'open'])
       expect(s.opened).toBe(true)
       expect(s.channelId).not.toBe(storedChannelId)
     })
@@ -461,10 +496,7 @@ describe('Session', () => {
         account,
         client,
         fetch: mockFetch as typeof globalThis.fetch,
-        sessionStore: {
-          get: () => storedChannel(),
-          set: vi.fn(),
-        },
+        channelStore: makeChannelStore([channelEntry()]).store,
       })
 
       await s.fetch('https://api.example.com/data')
@@ -475,9 +507,70 @@ describe('Session', () => {
       })
     })
 
+    test('resumes a persisted channel across a restart via the entry index', async () => {
+      // A shared durable KV backing two manager instances simulates a restart:
+      // the second manager shares only what survived to disk.
+      const backend = new Map<string, string>()
+      const durableStore = () =>
+        createJsonChannelStore({
+          get: (key) => backend.get(key),
+          set: (key, value) => {
+            backend.set(key, value)
+          },
+          delete: (key) => {
+            backend.delete(key)
+          },
+        })
+
+      const openFetch = vi.fn((_input: RequestInfo | URL, init?: RequestInit) => {
+        const authorization = new Headers(init?.headers).get(Constants.Headers.authorization)
+        if (!authorization) return Promise.resolve(make402Response())
+        return Promise.resolve(makeOkResponse())
+      })
+      const first = sessionManager({
+        account,
+        client,
+        fetch: openFetch as typeof globalThis.fetch,
+        maxDeposit: '10',
+        channelStore: durableStore(),
+      })
+      await first.fetch('https://api.example.com/data')
+      const channelId = first.channelId
+      expect(channelId).toBeDefined()
+
+      // The durable channel entry must have reached the KV.
+      expect([...backend.keys()].some((key) => key.startsWith('chan:'))).toBe(true)
+      // No persistent hints are written; only the durable channel entry survives.
+      expect([...backend.keys()].some((key) => key.startsWith('hint:'))).toBe(false)
+
+      const posted: SessionCredentialPayload[] = []
+      const resumeFetch = vi.fn((_input: RequestInfo | URL, init?: RequestInit) => {
+        const authorization = new Headers(init?.headers).get(Constants.Headers.authorization)
+        const payload = authorization
+          ? Credential.deserialize<SessionCredentialPayload>(authorization).payload
+          : undefined
+        if (payload) posted.push(payload)
+        if (!payload) return Promise.resolve(make402Response())
+        return Promise.resolve(makeOkResponse())
+      })
+      const restarted = sessionManager({
+        account,
+        client,
+        fetch: resumeFetch as typeof globalThis.fetch,
+        maxDeposit: '10',
+        channelStore: durableStore(),
+      })
+      await restarted.fetch('https://api.example.com/data')
+
+      // The first request carries no hint header; after the 402 the restarted
+      // manager resumes the persisted channel from the entry index with a
+      // voucher rather than opening a new one.
+      expect(new Headers(resumeFetch.mock.calls[0]?.[1]?.headers).get('Payment-Session')).toBeNull()
+      expect(posted[0]).toMatchObject({ action: 'voucher', channelId })
+    })
+
     test('persists opened channels and deletes closed channels when supported', async () => {
-      const set = vi.fn()
-      const remove = vi.fn()
+      const { store, set, delete: remove } = makeChannelStore()
       let callCount = 0
       const mockFetch = vi.fn().mockImplementation((_input, init?: RequestInit) => {
         const authorization = new Headers(init?.headers).get('Authorization')
@@ -527,11 +620,7 @@ describe('Session', () => {
         client,
         fetch: mockFetch as typeof globalThis.fetch,
         maxDeposit: '10',
-        sessionStore: {
-          get: () => null,
-          set,
-          delete: remove,
-        },
+        channelStore: store,
       })
 
       await s.fetch('https://api.example.com/data')

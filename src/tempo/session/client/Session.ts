@@ -8,12 +8,12 @@ import * as Client from '../../../viem/Client.js'
 import * as defaults from '../../internal/defaults.js'
 import * as Methods from '../../Methods.js'
 import { serializeCredential, type ChannelEntry } from './ChannelOps.js'
-import { sessionContextSchema } from './CredentialState.js'
+import { createChannelStore, type ChannelStore } from './ChannelStore.js'
 import {
-  createChannelCache,
   executeCredentialPlan,
   planCredential,
   resolveChallengeContext,
+  sessionContextSchema,
 } from './CredentialState.js'
 
 export { sessionContextSchema, type SessionContext } from './CredentialState.js'
@@ -29,6 +29,7 @@ export function session(parameters: session.Parameters = {}) {
   const {
     account,
     authorizedSigner,
+    channelStore,
     decimals = defaults.decimals,
     escrow: escrowOverride,
     getClient: getClientParameter,
@@ -43,7 +44,8 @@ export function session(parameters: session.Parameters = {}) {
   const getAccount = Account.getResolver({ account })
   const maxDeposit =
     maxDepositParameter !== undefined ? parseUnits(maxDepositParameter, decimals) : undefined
-  const cache = createChannelCache(onChannelUpdate)
+  const store = channelStore ?? createChannelStore()
+  const sink = { store, notifyUpdate: (entry: ChannelEntry) => onChannelUpdate?.(entry) }
 
   return Method.toClient(Methods.session, {
     canHandleChallenge({ challenge }) {
@@ -62,17 +64,18 @@ export function session(parameters: session.Parameters = {}) {
         getClient,
       })
       const account = getAccount(resolved.client, context)
+      const entry = await store.get(resolved.key)
       const payload = await executeCredentialPlan(
         planCredential({
           account,
           authorizedSigner,
-          cache,
+          entry,
           context,
           decimals,
           maxDeposit,
           resolved,
         }),
-        cache,
+        sink,
       )
       return serializeCredential(challenge, payload, resolved.chainId, account)
     },
@@ -83,8 +86,10 @@ export function session(parameters: session.Parameters = {}) {
 export declare namespace session {
   type Parameters = Account.getResolver.Parameters &
     Client.getResolver.Parameters & {
-      /** Address authorized to sign vouchers on behalf of the payer. Defaults to the account access key address when available, otherwise the account address. */
+      /** Address authorized to sign vouchers for the payer. Defaults to the resolved account authority. */
       authorizedSigner?: Address | undefined
+      /** Pluggable persistence for reusable channels. Defaults to an in-memory store. */
+      channelStore?: ChannelStore | undefined
       /** Token decimals for parsing human-readable amounts (default: 6). */
       decimals?: number | undefined
       /** TIP20EscrowChannel address override. */

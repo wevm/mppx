@@ -25,6 +25,7 @@ import {
   resolveEscrow,
   type ChannelEntry,
 } from './ChannelOps.js'
+import { channelKey, entryKey, type ChannelSink } from './ChannelStore.js'
 import { assertWithinMaxDeposit, resolveOpeningDeposit } from './Runtime.js'
 
 /** Credential payload variants that carry cumulative voucher authorization. */
@@ -32,39 +33,6 @@ export type CumulativeCredentialPayload = Extract<
   SessionCredentialPayload,
   { cumulativeAmount: string }
 >
-
-/** In-memory client channel cache used by automatic precompile session credential planning. */
-export type ChannelCache = {
-  /** Maps reusable channel keys to cached channel metadata. */
-  channels: Map<string, ChannelEntry>
-  /** Maps channel IDs back to reusable channel keys for manual credential cache updates. */
-  channelIdToKey: Map<string, string>
-  /** Emits cache updates to the public `onChannelUpdate` callback. */
-  notifyUpdate(entry: ChannelEntry): void
-}
-
-/** Creates an empty client channel cache with an optional update callback. */
-export function createChannelCache(
-  onUpdate?: ((entry: ChannelEntry) => void) | undefined,
-): ChannelCache {
-  return {
-    channels: new Map(),
-    channelIdToKey: new Map(),
-    notifyUpdate: (entry) => onUpdate?.(entry),
-  } satisfies ChannelCache
-}
-
-/** Returns the cache key for a reusable payer session channel. */
-export function channelKey(payee: Address, token: Address, escrow: Address): string {
-  return `${payee.toLowerCase()}:${token.toLowerCase()}:${escrow.toLowerCase()}`
-}
-
-/** Stores a channel entry and notifies observers. */
-export function storeChannelEntry(cache: ChannelCache, key: string, entry: ChannelEntry): void {
-  cache.channels.set(key, entry)
-  cache.channelIdToKey.set(entry.channelId, key)
-  cache.notifyUpdate(entry)
-}
 
 /** Returns whether a credential payload carries cumulative voucher authorization. */
 export function hasCredentialCumulativeAmount(
@@ -81,21 +49,31 @@ export function readCredentialCumulativeAmount(
   return BigInt(payload.cumulativeAmount)
 }
 
-/** Applies a credential payload's cumulative amount to an existing cached channel. */
-export function updateCachedCumulative(
-  cache: ChannelCache,
-  channelId: Hex,
+/**
+ * Persists a channel entry through the sink and notifies observers. Closed
+ * channels are removed from the store but still reported to observers so callers
+ * can react to the close.
+ */
+async function storeChannelEntry(sink: ChannelSink, entry: ChannelEntry): Promise<void> {
+  if (entry.opened) await sink.store.set(entry)
+  else await sink.store.delete(entryKey(entry))
+  sink.notifyUpdate(entry)
+}
+
+/** Applies a credential payload's cumulative amount to the stored channel at `key`. */
+async function applyCumulative(
+  sink: ChannelSink,
+  key: string,
   payload: SessionCredentialPayload,
-): void {
-  const key = cache.channelIdToKey.get(channelId)
+): Promise<void> {
   const cumulativeAmount = readCredentialCumulativeAmount(payload)
-  if (!key || cumulativeAmount === undefined) return
-  const entry = cache.channels.get(key)
+  if (cumulativeAmount === undefined) return
+  const entry = await sink.store.get(key)
   if (!entry) return
   entry.cumulativeAmount =
     entry.cumulativeAmount > cumulativeAmount ? entry.cumulativeAmount : cumulativeAmount
   if (payload.action === 'close') entry.opened = false
-  cache.notifyUpdate(entry)
+  await storeChannelEntry(sink, entry)
 }
 
 const hexSchema = z.custom<Hex>(
@@ -301,7 +279,8 @@ export type ChallengeContext = {
 export type PlanCredentialParameters = {
   account: ViemAccount
   authorizedSigner?: Address | undefined
-  cache: ChannelCache
+  /** Channel previously stored for this challenge scope, fetched by the caller. */
+  entry: ChannelEntry | undefined
   context?: SessionContext | undefined
   decimals: number
   maxDeposit?: bigint | undefined
@@ -436,7 +415,7 @@ export async function resolveChallengeContext(
     client,
     escrow,
     feePayer: methodDetails.feePayer,
-    key: channelKey(payee, token, escrow),
+    key: channelKey({ payee, token, escrow, chainId }),
     operator: methodDetails.operator,
     payee,
     snapshot: methodDetails.sessionSnapshot,
@@ -533,9 +512,22 @@ export function resolveRecoveredCumulative(
   return settled + requestAmount
 }
 
+/** Returns whether `account` can satisfy the descriptor's voucher authority. */
+export function canSignDescriptor(
+  account: ViemAccount,
+  descriptor: Channel.ChannelDescriptor,
+  authorizedSigner?: Address | undefined,
+): boolean {
+  // Only the payer can deposit into and voucher against its own channel.
+  if (!isSameAddress(account.address, descriptor.payer)) return false
+  const authority = descriptor.authorizedSigner
+  if (BigInt(authority) === 0n || isSameAddress(authority, descriptor.payer)) return true
+  return isSameAddress(resolveAuthorizedSigner(account, authorizedSigner), authority)
+}
+
 /** Chooses the next credential plan from local channel cache and optional caller context. */
 export function planCredential(parameters: PlanCredentialParameters): CredentialPlan {
-  const { account, authorizedSigner, cache, context, decimals, maxDeposit, resolved } = parameters
+  const { account, authorizedSigner, entry, context, decimals, maxDeposit, resolved } = parameters
 
   if (hasSessionAction(context)) {
     if (!hasManualSessionDescriptor(context))
@@ -550,11 +542,14 @@ export function planCredential(parameters: PlanCredentialParameters): Credential
     }
   }
 
-  const entry = cache.channels.get(resolved.key)
   if (!entry && context?.channelId && !context.descriptor)
     throw new Error('descriptor required to reuse TIP-1034 channel')
   const recoverContext = resolveRecoverContext({ context, snapshot: resolved.snapshot })
-  if (!entry && recoverContext) {
+  if (
+    !entry &&
+    recoverContext &&
+    canSignDescriptor(account, recoverContext.descriptor, authorizedSigner)
+  ) {
     return {
       type: 'recover',
       account,
@@ -565,30 +560,31 @@ export function planCredential(parameters: PlanCredentialParameters): Credential
       resolved,
     }
   }
-  if (entry?.opened) return { type: 'voucher', account, entry, maxDeposit, resolved }
+  if (entry?.opened && canSignDescriptor(account, entry.descriptor, authorizedSigner))
+    return { type: 'voucher', account, entry, maxDeposit, resolved }
   return { type: 'open', account, authorizedSigner, context, maxDeposit, resolved }
 }
 
 /** Executes a credential plan and returns the concrete session credential payload. */
 export async function executeCredentialPlan(
   plan: CredentialPlan,
-  cache: ChannelCache,
+  sink: ChannelSink,
 ): Promise<SessionCredentialPayload> {
   switch (plan.type) {
     case 'open':
-      return open(plan, cache)
+      return open(plan, sink)
     case 'recover':
-      return recover(plan, cache)
+      return recover(plan, sink)
     case 'voucher':
-      return voucher(plan, cache)
+      return voucher(plan, sink)
     case 'manual':
-      return manual(plan, cache)
+      return manual(plan, sink)
   }
 }
 
 async function open(
   plan: Extract<CredentialPlan, { type: 'open' }>,
-  cache: ChannelCache,
+  sink: ChannelSink,
 ): Promise<SessionCredentialPayload> {
   const { account, authorizedSigner, resolved } = plan
   const deposit = resolveOpeningDeposit({
@@ -608,7 +604,7 @@ async function open(
     payee: resolved.payee,
     token: resolved.token,
   })
-  storeChannelEntry(cache, resolved.key, {
+  await storeChannelEntry(sink, {
     channelId: payload.channelId,
     cumulativeAmount: resolved.amount,
     deposit,
@@ -622,7 +618,7 @@ async function open(
 
 async function recover(
   plan: Extract<CredentialPlan, { type: 'recover' }>,
-  cache: ChannelCache,
+  sink: ChannelSink,
 ): Promise<SessionCredentialPayload> {
   const { account, context, decimals, maxDeposit, resolved } = plan
   const { descriptor } = context
@@ -657,7 +653,7 @@ async function recover(
     resolved.chainId,
     resolved.escrow,
   )
-  storeChannelEntry(cache, resolved.key, {
+  await storeChannelEntry(sink, {
     channelId: reusable.channelId,
     cumulativeAmount,
     deposit: reusable.state.deposit,
@@ -671,7 +667,7 @@ async function recover(
 
 async function voucher(
   plan: Extract<CredentialPlan, { type: 'voucher' }>,
-  cache: ChannelCache,
+  sink: ChannelSink,
 ): Promise<SessionCredentialPayload> {
   const { account, entry, resolved } = plan
   const cumulativeAmount = entry.cumulativeAmount + resolved.amount
@@ -685,13 +681,13 @@ async function voucher(
     resolved.escrow,
   )
   entry.cumulativeAmount = cumulativeAmount
-  cache.notifyUpdate(entry)
+  await storeChannelEntry(sink, entry)
   return payload
 }
 
 async function manual(
   plan: Extract<CredentialPlan, { type: 'manual' }>,
-  cache: ChannelCache,
+  sink: ChannelSink,
 ): Promise<SessionCredentialPayload> {
   const { account, context, decimals, resolved } = plan
   const { descriptor } = context
@@ -718,7 +714,7 @@ async function manual(
     descriptor,
     resolved,
   })
-  updateCachedCumulative(cache, channelId, payload)
+  await applyCumulative(sink, resolved.key, payload)
   return payload
 }
 
