@@ -271,7 +271,7 @@ describe('Precompile Voucher', () => {
     ).toBe(false)
   })
 
-  test('sign rejects p256 keychain access-key voucher delegation explicitly', async () => {
+  test('signs and verifies p256 access-key vouchers as primitives', async () => {
     const rootAccount = TempoAccount.fromSecp256k1(Secp256k1.randomPrivateKey())
     const accessKey = TempoAccount.fromP256(P256.randomPrivateKey(), {
       access: rootAccount,
@@ -281,16 +281,54 @@ describe('Precompile Voucher', () => {
       transport: http('http://127.0.0.1'),
     })
 
-    await expect(
-      signVoucher(
-        accessKeyClient,
-        accessKey,
-        { channelId, cumulativeAmount },
+    const signature = await signVoucher(
+      accessKeyClient,
+      accessKey,
+      { channelId, cumulativeAmount },
+      escrowContract,
+      chainId,
+    )
+
+    const envelope = SignatureEnvelope.from(signature as SignatureEnvelope.Serialized)
+    expect(envelope.type).toBe('p256')
+    expect(
+      verifyVoucher(
         escrowContract,
         chainId,
+        { channelId, cumulativeAmount, signature },
         accessKey.accessKeyAddress,
       ),
-    ).rejects.toThrow('TIP-1034 voucher signing only supports secp256k1 voucher signatures.')
+    ).toBe(true)
+  })
+
+  test('signs and verifies webAuthn root vouchers as primitives', async () => {
+    const webAuthnAccount = TempoAccount.fromHeadlessWebAuthn(P256.randomPrivateKey(), {
+      origin: 'https://example.com',
+      rpId: 'example.com',
+    })
+    const webAuthnClient = createClient({
+      account: webAuthnAccount,
+      transport: http('http://127.0.0.1'),
+    })
+
+    const signature = await signVoucher(
+      webAuthnClient,
+      webAuthnAccount,
+      { channelId, cumulativeAmount },
+      escrowContract,
+      chainId,
+    )
+
+    const envelope = SignatureEnvelope.from(signature as SignatureEnvelope.Serialized)
+    expect(envelope.type).toBe('webAuthn')
+    expect(
+      verifyVoucher(
+        escrowContract,
+        chainId,
+        { channelId, cumulativeAmount, signature },
+        webAuthnAccount.address,
+      ),
+    ).toBe(true)
   })
 
   test('domain and type match TIP-1034', () => {
