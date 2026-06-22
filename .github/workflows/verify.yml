@@ -98,7 +98,7 @@ jobs:
         uses: docker/setup-docker-action@0234bb73ccb40f0c430b795634f9247e2b5c2d23 # v5.2.0
 
       - name: Install secret-tool (libsecret)
-        uses: awalsh128/cache-apt-pkgs-action@acb598e5ddbc6f68a970c5da0688d2f3a9f04d05 # v1.6.0
+        uses: awalsh128/cache-apt-pkgs-action@681749ae568c81c2037cb9185e38b709b261bd2f # v1.6.1
         with:
           packages: libsecret-tools gnome-keyring dbus-x11
           version: 1.0
