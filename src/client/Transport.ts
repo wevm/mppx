@@ -1,18 +1,11 @@
 import * as Challenge from '../Challenge.js'
-import * as Constants from '../Constants.js'
 import * as Credential from '../Credential.js'
 import * as Mcp from '../Mcp.js'
-import * as x402_Header from '../x402/Header.js'
-import * as x402_ChallengeBrand from '../x402/internal/ChallengeBrand.js'
-import * as x402_Types from '../x402/Types.js'
-
-const paymentRequiredStatus = 402
-const credentialHeaders = [
-  Constants.Headers.authorization,
-  x402_Types.paymentRequiredHeader,
-  x402_Types.paymentResponseHeader,
-  x402_Types.paymentSignatureHeader,
-]
+import { mcp as mcpProtocol } from './internal/protocols/Mcp.js'
+import { mpp as mppProtocol } from './internal/protocols/Mpp.js'
+import type { Protocol } from './internal/protocols/Protocol.js'
+import { paymentRequiredStatus } from './internal/protocols/Shared.js'
+import { x402 as x402Protocol } from './internal/protocols/X402.js'
 
 /**
  * Client-side transport adapter.
@@ -23,12 +16,21 @@ const credentialHeaders = [
 export type Transport<in out request = unknown, in out response = unknown> = {
   /** Transport name for identification. */
   name: string
-  /** Checks if a response indicates payment is required. */
-  isPaymentRequired: (response: response) => boolean
+  /**
+   * Checks if a response indicates payment is required. May inspect the request (to gate
+   * body reads) and be async (to read a response body).
+   */
+  isPaymentRequired: (response: response, request?: request) => boolean | Promise<boolean>
   /** Extracts all challenges from a payment-required response, when the transport supports multiple offers. */
-  getChallenges?: (response: response) => Challenge.Challenge[]
+  getChallenges?: (
+    response: response,
+    request?: request,
+  ) => Challenge.Challenge[] | Promise<Challenge.Challenge[]>
   /** Extracts the challenge from a payment-required response. */
-  getChallenge: (response: response) => Challenge.Challenge
+  getChallenge: (
+    response: response,
+    request?: request,
+  ) => Challenge.Challenge | Promise<Challenge.Challenge>
   /** Attaches a credential to a request. */
   setCredential: (
     request: request,
@@ -74,87 +76,79 @@ export function from<request, response>(
   return transport
 }
 
-/**
- * HTTP transport for client-side payment handling.
- *
- * - Detects payment required via 402 status
- * - Extracts Payment auth challenges from `WWW-Authenticate`
- * - Falls back to x402 exact challenges from `PAYMENT-REQUIRED`
- * - Sends credentials via `Authorization` or `PAYMENT-SIGNATURE`
- */
-export function http() {
+/** HTTP transport that composes payment protocols while keeping `fetch` as the single boundary. */
+export function http(): Transport<RequestInit, Response> {
+  const protocols: readonly Protocol[] = [mppProtocol(), x402Protocol(), mcpProtocol()]
+  const protocolForChallenge = new WeakMap<Challenge.Challenge, Protocol>()
+
+  const remember = (protocol: Protocol, challenges: Challenge.Challenge[]) => {
+    for (const challenge of challenges) protocolForChallenge.set(challenge, protocol)
+    return challenges
+  }
+
+  // Collect every protocol offer. Header-only 402 paths stay synchronous; MCP returns a promise
+  // only when it has to inspect a JSON-RPC/SSE body.
+  const collect = (
+    response: Response,
+    request?: RequestInit,
+  ): Challenge.Challenge[] | Promise<Challenge.Challenge[]> => {
+    const collectFrom = (
+      index: number,
+      collected: Challenge.Challenge[],
+    ): Challenge.Challenge[] | Promise<Challenge.Challenge[]> => {
+      for (let i = index; i < protocols.length; i++) {
+        const protocol = protocols[i]!
+        const challenges = protocol.getChallenges(response, request)
+        if (challenges instanceof Promise)
+          return challenges.then((list) =>
+            collectFrom(i + 1, [...collected, ...remember(protocol, list)]),
+          )
+        collected.push(...remember(protocol, challenges))
+      }
+      return collected
+    }
+    return collectFrom(0, [])
+  }
+
   return from<RequestInit, Response>({
     name: 'http',
 
-    isPaymentRequired(response) {
-      return response.status === paymentRequiredStatus
+    isPaymentRequired(response, request) {
+      if (response.status === paymentRequiredStatus) return true // HTTP 402 — sync fast path
+      const challenges = collect(response, request)
+      return challenges instanceof Promise
+        ? challenges.then((list) => list.length > 0)
+        : challenges.length > 0
     },
 
-    getChallenges(response) {
-      return paymentRequiredChallenges(response)
+    getChallenges(response, request) {
+      return collect(response, request)
     },
 
-    getChallenge(response) {
-      const challenge = paymentRequiredChallenges(response)[0]
-      if (!challenge) throw new Error('No challenge in response.')
-      return challenge
+    getChallenge(response, request) {
+      const pick = (challenges: Challenge.Challenge[]): Challenge.Challenge => {
+        const challenge = challenges[0]
+        if (!challenge) throw new Error('No challenge in response.')
+        return challenge
+      }
+      const challenges = collect(response, request)
+      return challenges instanceof Promise ? challenges.then(pick) : pick(challenges)
     },
 
     setCredential(request, credential, options) {
-      const headers = new Headers(request.headers)
-      for (const header of credentialHeaders) headers.delete(header)
-      if (isX402Challenge(options?.challenge)) {
-        headers.set(x402_Types.paymentSignatureHeader, credential)
-      } else {
-        headers.set(Constants.Headers.authorization, credential)
-      }
-      return { ...request, headers }
+      const protocol = options?.challenge ? protocolForChallenge.get(options.challenge) : undefined
+      const fallback = protocols[0]
+      if (!protocol && !fallback) throw new Error('No protocol to attach the credential.')
+      return (protocol ?? fallback)!.setCredential(request, credential)
     },
   })
 }
 
-function paymentRequiredChallenges(response: Response): Challenge.Challenge[] {
-  return [
-    ...(response.headers.has(Constants.Headers.wwwAuthenticate)
-      ? Challenge.fromResponseList(response)
-      : []),
-    ...x402Challenges(response),
-  ]
-}
-
-function x402Challenges(response: Response): Challenge.Challenge[] {
-  const header = response.headers.get(x402_Types.paymentRequiredHeader)
-  if (!header) return []
-  const paymentRequired = x402_Header.decodePaymentRequired(header)
-  if (response.url && paymentRequired.resource.url !== response.url)
-    throw new Error('x402 payment-required resource does not match response URL.')
-  return paymentRequired.accepts.map((accepted, index) =>
-    x402_ChallengeBrand.mark(
-      Challenge.from({
-        id: `${x402_Types.syntheticChallengeIdPrefix}${index}`,
-        intent: x402_Types.exactIntent,
-        method: x402_Types.paymentMethod,
-        realm: new URL(paymentRequired.resource.url).host,
-        request: {
-          ...accepted,
-          ...(paymentRequired.extensions ? { extensions: paymentRequired.extensions } : {}),
-          resource: paymentRequired.resource,
-        },
-      }),
-    ),
-  )
-}
-
-function isX402Challenge(challenge: Challenge.Challenge | undefined): boolean {
-  return x402_ChallengeBrand.is(challenge)
-}
-
 /**
- * MCP transport for client-side payment handling.
+ * MCP protocol transport for direct JSON-RPC objects.
  *
- * - Detects payment required via error code -32042
- * - Extracts challenges from `error.data.challenges[0]`
- * - Sends credentials via `_meta["org.paymentauth/credential"]`
+ * Prefer {@link http} for MCP-over-HTTP fetches; this remains for callers that already operate on
+ * parsed MCP request/response objects.
  */
 export function mcp() {
   return from<Mcp.Request, Mcp.Response>({
@@ -184,8 +178,8 @@ export function mcp() {
         ...request,
         params: {
           ...request.params,
-          _meta: {
-            ...request.params?._meta,
+          ['_meta']: {
+            ...request.params?.['_meta'],
             [Mcp.credentialMetaKey]: parsed,
           },
         },

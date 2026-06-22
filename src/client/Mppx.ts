@@ -187,8 +187,8 @@ export function create<
       options?: createCredential.Options<FlattenMethods<methods>>,
     ) {
       const challenges = transport.getChallenges
-        ? transport.getChallenges(response as never)
-        : [transport.getChallenge(response as never)]
+        ? await transport.getChallenges(response as never)
+        : [await transport.getChallenge(response as never)]
       const preferences = resolveChallengePreferences(acceptPayment.entries, options?.acceptPayment)
 
       let challenge: Challenge.Challenge | undefined

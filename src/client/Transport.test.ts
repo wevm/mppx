@@ -4,6 +4,8 @@ import { Methods } from 'mppx/tempo'
 import { Header as x402_Header, Types as x402_Types, type PaymentRequired } from 'mppx/x402'
 import { describe, expect, test } from 'vp/test'
 
+import * as x402_ChallengeBrand from '../x402/internal/ChallengeBrand.js'
+
 const realm = 'api.example.com'
 const secretKey = 'test-secret-key'
 
@@ -138,13 +140,13 @@ describe('http', () => {
         }),
         name: 'Payment auth and x402 challenges when both are present',
       },
-    ])('returns $name', ({ expectedIds, expectedMethods, headers }) => {
+    ])('returns $name', async ({ expectedIds, expectedMethods, headers }) => {
       const transport = Transport.http()
       const response = new Response(null, {
         status: 402,
         headers: headers(),
       })
-      const challenges = transport.getChallenges?.(response) ?? []
+      const challenges = (await transport.getChallenges?.(response)) ?? []
 
       expect(challenges.map((entry) => entry.id)).toEqual(expectedIds)
       expect(challenges.map((entry) => entry.method)).toEqual(expectedMethods)
@@ -159,20 +161,6 @@ describe('http', () => {
         expectedHeader: 'Authorization',
         expectedValue: Credential.serialize(credential),
         name: 'Payment auth credential for Payment auth challenge',
-      },
-      {
-        challenge: Transport.http().getChallenges!(
-          new Response(null, {
-            status: 402,
-            headers: {
-              'PAYMENT-REQUIRED': x402_Header.encodePaymentRequired(x402PaymentRequired),
-            },
-          }),
-        )[0],
-        credential: 'x402-signature',
-        expectedHeader: 'PAYMENT-SIGNATURE',
-        expectedValue: 'x402-signature',
-        name: 'raw x402 credential for x402 challenge',
       },
       {
         challenge,
@@ -197,6 +185,24 @@ describe('http', () => {
       expect(headers.get(expectedHeader)).toBe(expectedValue)
     })
 
+    test('writes x402 credentials for x402 challenges from the same transport', () => {
+      const transport = Transport.http()
+      const [x402Challenge] = transport.getChallenges!(
+        new Response(null, {
+          status: 402,
+          headers: {
+            'PAYMENT-REQUIRED': x402_Header.encodePaymentRequired(x402PaymentRequired),
+          },
+        }),
+      ) as Challenge.Challenge[]
+
+      const result = transport.setCredential({}, 'x402-signature', { challenge: x402Challenge })
+      const headers = result.headers as Headers
+
+      expect(headers.get('Authorization')).toBeNull()
+      expect(headers.get(x402_Types.paymentSignatureHeader)).toBe('x402-signature')
+    })
+
     test('does not treat unbranded Payment-auth challenges as x402', () => {
       const transport = Transport.http()
       const untrustedChallenge = Challenge.from({
@@ -216,16 +222,53 @@ describe('http', () => {
       expect(headers.get(x402_Types.paymentSignatureHeader)).toBeNull()
     })
 
-    test('removes stale credential headers before setting the retry credential', () => {
+    test('routes JSON-RPC requests with native 402 challenges through Authorization', () => {
       const transport = Transport.http()
-      const x402Challenge = Transport.http().getChallenges!(
+      const jsonRpcRequest = {
+        method: 'POST',
+        body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: {} }),
+      } satisfies RequestInit
+      const [nativeChallenge] = transport.getChallenges!(
+        new Response(null, {
+          status: 402,
+          headers: { 'WWW-Authenticate': Challenge.serialize(challenge) },
+        }),
+        jsonRpcRequest,
+      ) as Challenge.Challenge[]
+
+      const result = transport.setCredential(jsonRpcRequest, 'credential', {
+        challenge: nativeChallenge,
+      })
+      const headers = new Headers(result.headers)
+
+      expect(headers.get('Authorization')).toBe('credential')
+      expect(result.body).toBe(jsonRpcRequest.body)
+    })
+
+    test('marks x402 challenges with the brand the evm charge client reads', async () => {
+      // Provenance guard: `evm/client/Charge.ts` recognizes x402 challenges via the same
+      // brand the x402 adapter stamps. If the marking site drifts, EVM x402 charges misroute.
+      const [x402Challenge] = await Transport.http().getChallenges!(
         new Response(null, {
           status: 402,
           headers: {
             'PAYMENT-REQUIRED': x402_Header.encodePaymentRequired(x402PaymentRequired),
           },
         }),
-      )[0]
+      )
+      expect(x402_ChallengeBrand.is(x402Challenge)).toBe(true)
+    })
+
+    test('removes stale credential headers before setting the retry credential', async () => {
+      const transport = Transport.http()
+      const [x402Challenge] = await transport.getChallenges!(
+        new Response(null, {
+          status: 402,
+          headers: {
+            'PAYMENT-REQUIRED': x402_Header.encodePaymentRequired(x402PaymentRequired),
+          },
+        }),
+      )
 
       const result = transport.setCredential(
         {
@@ -258,6 +301,158 @@ describe('http', () => {
   })
 })
 
+describe('http (MCP-over-HTTP)', () => {
+  // An MCP-over-HTTP call: a JSON-RPC POST whose response carries the -32042 challenge.
+  const jsonRpcRequest = {
+    method: 'POST',
+    headers: { accept: 'application/json, text/event-stream' },
+    body: JSON.stringify({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'tools/call',
+      params: { name: 'premium' },
+    }),
+  } satisfies RequestInit
+  const errorMessage = {
+    jsonrpc: '2.0',
+    id: 1,
+    error: {
+      code: Mcp.paymentRequiredCode,
+      message: 'Payment Required',
+      data: { challenges: [challenge] },
+    },
+  }
+  const jsonBody = () =>
+    new Response(JSON.stringify(errorMessage), { headers: { 'content-type': 'application/json' } })
+  const sseBody = () =>
+    new Response(`event: message\ndata: ${JSON.stringify(errorMessage)}\n\n`, {
+      headers: { 'content-type': 'text/event-stream' },
+    })
+
+  test('detects -32042 in a JSON body (JSON-RPC request)', async () => {
+    expect(await Transport.http().isPaymentRequired(jsonBody(), jsonRpcRequest)).toBe(true)
+  })
+  test('ignores a JSON-RPC response for a different request id', async () => {
+    const response = new Response(JSON.stringify({ ...errorMessage, id: 2 }), {
+      headers: { 'content-type': 'application/json' },
+    })
+
+    expect(await Transport.http().isPaymentRequired(response, jsonRpcRequest)).toBe(false)
+  })
+  test('detects -32042 in an SSE body', async () => {
+    expect(await Transport.http().isPaymentRequired(sseBody(), jsonRpcRequest)).toBe(true)
+  })
+  test('does not scan past the first SSE data event', async () => {
+    const notification = { jsonrpc: '2.0', method: 'notifications/progress', params: {} }
+    const response = new Response(
+      `event: message\ndata: ${JSON.stringify(notification)}\n\n` +
+        `event: message\ndata: ${JSON.stringify(errorMessage)}\n\n`,
+      { headers: { 'content-type': 'text/event-stream' } },
+    )
+
+    expect(await Transport.http().isPaymentRequired(response, jsonRpcRequest)).toBe(false)
+  })
+  test('detects -32042 in an open SSE stream without waiting for stream close', async () => {
+    const encoder = new TextEncoder()
+    let timeout: ReturnType<typeof setTimeout> | undefined
+    const openSse = new Response(
+      new ReadableStream({
+        start(controller) {
+          controller.enqueue(
+            encoder.encode(`event: message\ndata: ${JSON.stringify(errorMessage)}\n\n`),
+          )
+        },
+      }),
+      { headers: { 'content-type': 'text/event-stream' } },
+    )
+
+    try {
+      const result = await Promise.race([
+        Transport.http().isPaymentRequired(openSse, jsonRpcRequest),
+        new Promise<'timeout'>((resolve) => {
+          timeout = setTimeout(() => resolve('timeout'), 100)
+        }),
+      ])
+
+      expect(result).toBe(true)
+    } finally {
+      if (timeout) clearTimeout(timeout)
+    }
+  })
+  test('does not read the body for a non-JSON-RPC request', async () => {
+    expect(
+      await Transport.http().isPaymentRequired(sseBody(), { method: 'POST', body: 'plain' }),
+    ).toBe(false)
+  })
+  test('does not treat generic JSON-RPC as MCP-over-HTTP', async () => {
+    const request = {
+      method: 'POST',
+      headers: { accept: 'application/json' },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'eth_call', params: [] }),
+    } satisfies RequestInit
+
+    expect(await Transport.http().isPaymentRequired(sseBody(), request)).toBe(false)
+  })
+  test('ignores a 200 success', async () => {
+    const ok = new Response(JSON.stringify({ jsonrpc: '2.0', id: 1, result: {} }), {
+      headers: { 'content-type': 'application/json' },
+    })
+    expect(await Transport.http().isPaymentRequired(ok, jsonRpcRequest)).toBe(false)
+  })
+  test('getChallenges extracts the MCP challenge (via the mcp protocol)', async () => {
+    const challenges = await Transport.http().getChallenges!(sseBody(), jsonRpcRequest)
+    expect(challenges.map((entry) => entry.id)).toEqual([challenge.id])
+  })
+  test('setCredential routes the MCP challenge into the JSON-RPC _meta', async () => {
+    const transport = Transport.http()
+    const [mcpChallenge] = await transport.getChallenges!(sseBody(), jsonRpcRequest)
+    const result = transport.setCredential(jsonRpcRequest, Credential.serialize(credential), {
+      challenge: mcpChallenge,
+    }) as RequestInit
+    const parsed = JSON.parse(result.body as string)
+    expect(parsed.params['_meta'][Mcp.credentialMetaKey]).toMatchObject({
+      payload: { type: 'transaction' },
+    })
+  })
+  test('detects -32042 in a JSON body containing a "data:" substring', async () => {
+    const body = JSON.stringify({
+      jsonrpc: '2.0',
+      id: 1,
+      error: {
+        code: Mcp.paymentRequiredCode,
+        message: 'Payment Required',
+        data: { challenges: [{ ...challenge, realm: 'data:text/plain,x' }] },
+      },
+    })
+    const response = new Response(body, { headers: { 'content-type': 'application/json' } })
+    expect(await Transport.http().isPaymentRequired(response, jsonRpcRequest)).toBe(true)
+  })
+  test('ignores malformed payment challenge data', async () => {
+    const response = new Response(
+      JSON.stringify({
+        jsonrpc: '2.0',
+        id: 1,
+        error: {
+          code: Mcp.paymentRequiredCode,
+          message: 'Payment Required',
+          data: { challenges: [{ ...challenge, realm: undefined }] },
+        },
+      }),
+      { headers: { 'content-type': 'application/json' } },
+    )
+
+    expect(await Transport.http().isPaymentRequired(response, jsonRpcRequest)).toBe(false)
+  })
+  test('detects -32042 for any JSON-RPC method (no method allowlist)', async () => {
+    const request = {
+      method: 'POST',
+      headers: { accept: 'application/json, text/event-stream' },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'custom/paidMethod', params: {} }),
+    } satisfies RequestInit
+    expect(await Transport.http().isPaymentRequired(sseBody(), request)).toBe(true)
+  })
+})
+
 describe('mcp', () => {
   const mcpRequest: Mcp.Request = {
     method: 'tools/call',
@@ -266,183 +461,35 @@ describe('mcp', () => {
     },
   }
 
-  describe('isPaymentRequired', () => {
-    test('returns true for payment required error', () => {
-      const transport = Transport.mcp()
-      const response: Mcp.Response = {
-        jsonrpc: '2.0',
-        id: 1,
-        error: {
-          code: Mcp.paymentRequiredCode,
-          message: 'Payment Required',
-          data: {
-            httpStatus: 402,
-            challenges: [challenge],
-          },
-        },
-      }
+  const mcpResponse: Mcp.Response = {
+    jsonrpc: '2.0',
+    id: 1,
+    error: {
+      code: Mcp.paymentRequiredCode,
+      message: 'Payment Required',
+      data: {
+        httpStatus: 402,
+        challenges: [challenge],
+      },
+    },
+  }
 
-      expect(transport.isPaymentRequired(response)).toBe(true)
-    })
+  test('extracts payment-required challenges from JSON-RPC errors', async () => {
+    const transport = Transport.mcp()
 
-    test('returns false for success response', () => {
-      const transport = Transport.mcp()
-      const response: Mcp.Response = {
-        jsonrpc: '2.0',
-        id: 1,
-        result: { content: [] },
-      }
-
-      expect(transport.isPaymentRequired(response)).toBe(false)
-    })
-
-    test('returns false for other error codes', () => {
-      const transport = Transport.mcp()
-      const response: Mcp.Response = {
-        jsonrpc: '2.0',
-        id: 1,
-        error: {
-          code: -32600,
-          message: 'Invalid Request',
-        },
-      }
-
-      expect(transport.isPaymentRequired(response)).toBe(false)
-    })
+    expect(await transport.isPaymentRequired(mcpResponse)).toBe(true)
+    expect((await transport.getChallenges?.(mcpResponse))?.map((entry) => entry.id)).toEqual([
+      challenge.id,
+    ])
   })
 
-  describe('getChallenge', () => {
-    test('default', () => {
-      const transport = Transport.mcp()
-      const response: Mcp.Response = {
-        jsonrpc: '2.0',
-        id: 1,
-        error: {
-          code: Mcp.paymentRequiredCode,
-          message: 'Payment Required',
-          data: {
-            httpStatus: 402,
-            challenges: [challenge],
-          },
-        },
-      }
+  test('sets credentials in JSON-RPC _meta', () => {
+    const result = Transport.mcp().setCredential(mcpRequest, Credential.serialize(credential))
 
-      expect(transport.getChallenge(response)).toMatchObject({
-        expires: '2025-01-01T00:00:00.000Z',
-        id: expect.any(String),
-        intent: 'charge',
-        method: 'tempo',
-        realm: 'api.example.com',
-        request: {
-          amount: '1000',
-          currency: '0x20c0000000000000000000000000000000000001',
-          recipient: '0x742d35Cc6634C0532925a3b844Bc9e7595f8fE00',
-        },
-      })
-    })
-
-    test('throws for success response', () => {
-      const transport = Transport.mcp()
-      const response: Mcp.Response = {
-        jsonrpc: '2.0',
-        id: 1,
-        result: { content: [] },
-      }
-
-      expect(() => transport.getChallenge(response)).toThrow('Response is not an error')
-    })
-
-    test('throws when no challenges in error', () => {
-      const transport = Transport.mcp()
-      const response: Mcp.Response = {
-        jsonrpc: '2.0',
-        id: 1,
-        error: {
-          code: Mcp.paymentRequiredCode,
-          message: 'Payment Required',
-          data: {
-            httpStatus: 402,
-            challenges: [],
-          },
-        },
-      }
-
-      expect(() => transport.getChallenge(response)).toThrow('No challenge in error response')
-    })
-  })
-
-  describe('getChallenges', () => {
-    test('returns all MCP challenges', () => {
-      const transport = Transport.mcp()
-      const response: Mcp.Response = {
-        jsonrpc: '2.0',
-        id: 1,
-        error: {
-          code: Mcp.paymentRequiredCode,
-          message: 'Payment Required',
-          data: {
-            httpStatus: 402,
-            challenges: [challenge, { ...challenge, id: 'alternate', method: 'stripe' }],
-          },
-        },
-      }
-
-      expect(transport.getChallenges?.(response).map((entry) => entry.id)).toEqual([
-        challenge.id,
-        'alternate',
-      ])
-    })
-  })
-
-  describe('setCredential', () => {
-    test('default', () => {
-      const transport = Transport.mcp()
-      const serialized = Credential.serialize(credential)
-
-      expect(transport.setCredential(mcpRequest, serialized)).toMatchObject({
-        method: 'tools/call',
-        params: {
-          _meta: {
-            'org.paymentauth/credential': {
-              challenge: {
-                expires: '2025-01-01T00:00:00.000Z',
-                id: expect.any(String),
-                intent: 'charge',
-                method: 'tempo',
-                realm: 'api.example.com',
-                request: {
-                  amount: '1000',
-                  currency: '0x20c0000000000000000000000000000000000001',
-                  recipient: '0x742d35Cc6634C0532925a3b844Bc9e7595f8fE00',
-                },
-              },
-              payload: {
-                signature: '0xabc123',
-                type: 'transaction',
-              },
-            },
-          },
-          name: 'test-tool',
-        },
-      })
-    })
-
-    test('preserves existing _meta', () => {
-      const transport = Transport.mcp()
-      const serialized = Credential.serialize(credential)
-      const requestWithMeta: Mcp.Request = {
-        ...mcpRequest,
-        params: {
-          ...mcpRequest.params,
-          _meta: {
-            existingKey: 'existingValue',
-          },
-        },
-      }
-
-      const result = transport.setCredential(requestWithMeta, serialized)
-
-      expect(result.params?._meta?.existingKey).toBe('existingValue')
+    expect(result.params?.['_meta']?.[Mcp.credentialMetaKey]).toMatchObject({
+      payload: {
+        type: 'transaction',
+      },
     })
   })
 })

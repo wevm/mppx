@@ -49,6 +49,9 @@ importers:
       '@stripe/stripe-js':
         specifier: 9.8.0
         version: 9.8.0
+      eventsource-parser:
+        specifier: 3.0.6
+        version: 3.0.6
       incur:
         specifier: ^0.4.8
         version: 0.4.8

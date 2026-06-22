@@ -1,6 +1,7 @@
-import { Challenge, Errors, Receipt } from 'mppx'
+import { Challenge, Credential, Errors, Mcp, Receipt } from 'mppx'
 import { tempo } from 'mppx/client'
 import { Mppx as Mppx_server, tempo as tempo_server } from 'mppx/server'
+import { Header as x402_Header, Types as x402_Types, type PaymentRequired } from 'mppx/x402'
 import { createClient, defineChain } from 'viem'
 import { describe, expect, test, vi } from 'vp/test'
 import * as Http from '~test/Http.js'
@@ -334,6 +335,21 @@ const noopMethod = {
   createCredential: async () => 'credential',
 } as any
 
+const x402PaymentRequired = {
+  accepts: [
+    {
+      amount: '10000',
+      asset: '0x036CbD53842c5426634e7929541eC2318f3dCF7e',
+      maxTimeoutSeconds: 60,
+      network: 'eip155:84532',
+      payTo: '0x209693Bc6afc0C5328bA36FaF03C514EF312287C',
+      scheme: x402_Types.schemes[0],
+    },
+  ],
+  resource: { url: 'https://example.com/api' },
+  x402Version: 2,
+} satisfies PaymentRequired
+
 /** Builds a valid 402 response with a WWW-Authenticate header. */
 function make402(overrides?: { expires?: string; intent?: string; method?: string }) {
   const method = overrides?.method ?? 'test'
@@ -347,6 +363,19 @@ function make402(overrides?: { expires?: string; intent?: string; method?: strin
   return new Response(null, {
     status: 402,
     headers: { 'WWW-Authenticate': header },
+  })
+}
+
+function makeCombined402() {
+  const response = make402()
+  const headers = new Headers(response.headers)
+  headers.set(
+    x402_Types.paymentRequiredHeader,
+    x402_Header.encodePaymentRequired(x402PaymentRequired),
+  )
+  return new Response(null, {
+    status: 402,
+    headers,
   })
 }
 
@@ -667,6 +696,182 @@ describe('Fetch.from: 402 retry path', () => {
     const retryInit = calls[1]!.init as Record<string, unknown>
     const headers = new Headers(retryInit.headers as HeadersInit)
     expect(headers.get('Authorization')).toBe('credential')
+  })
+
+  test('chooses native Payment-auth from combined MPP and x402 HTTP 402 offers', async () => {
+    let callCount = 0
+    const calls: { init: RequestInit | undefined }[] = []
+    const mockFetch: typeof globalThis.fetch = async (_input, init) => {
+      calls.push({ init })
+      callCount++
+      if (callCount === 1) return makeCombined402()
+      return new Response('OK', { status: 200 })
+    }
+
+    const fetch = Fetch.from({
+      fetch: mockFetch,
+      methods: [noopMethod],
+    })
+
+    const response = await fetch('https://example.com/api')
+
+    expect(response.status).toBe(200)
+    expect(calls).toHaveLength(2)
+    const retryHeaders = new Headers(calls[1]!.init?.headers)
+    expect(retryHeaders.get('Authorization')).toBe('credential')
+    expect(retryHeaders.get(x402_Types.paymentSignatureHeader)).toBeNull()
+  })
+
+  test('settles MCP-over-HTTP JSON-RPC payment challenges at the fetch boundary', async () => {
+    const mcpChallenge = Challenge.from({
+      id: 'mcp-challenge',
+      intent: 'test',
+      method: 'test',
+      realm: 'test',
+      request: { amount: '1' },
+    })
+    const method = {
+      ...noopMethod,
+      createCredential: async ({ challenge }: { challenge: Challenge.Challenge }) =>
+        Credential.serialize({ challenge, payload: { source: 'mcp' } }),
+    }
+    const initialBody = JSON.stringify({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'tools/call',
+      params: { name: 'paid-tool' },
+    })
+    let callCount = 0
+    const calls: { init: RequestInit | undefined }[] = []
+    const mockFetch: typeof globalThis.fetch = async (_input, init) => {
+      calls.push({ init })
+      callCount++
+      if (callCount === 1)
+        return Response.json({
+          jsonrpc: '2.0',
+          id: 1,
+          error: {
+            code: Mcp.paymentRequiredCode,
+            message: 'Payment Required',
+            data: { challenges: [mcpChallenge] },
+          },
+        })
+
+      const body = JSON.parse(init?.body as string)
+      expect(new Headers(init?.headers).get('Authorization')).toBeNull()
+      expect(body.params['_meta'][Mcp.credentialMetaKey]).toMatchObject({
+        payload: { source: 'mcp' },
+      })
+      return Response.json({ ok: true })
+    }
+
+    const fetch = Fetch.from({
+      fetch: mockFetch,
+      methods: [method],
+    })
+
+    const response = await fetch('https://example.com/mcp', {
+      method: 'POST',
+      headers: { accept: 'application/json, text/event-stream' },
+      body: initialBody,
+    })
+
+    expect(response.status).toBe(200)
+    expect(calls).toHaveLength(2)
+  })
+
+  test('settles MCP-over-HTTP when the JSON-RPC request body is carried by Request input', async () => {
+    const mcpChallenge = Challenge.from({
+      id: 'mcp-request-input-challenge',
+      intent: 'test',
+      method: 'test',
+      realm: 'test',
+      request: { amount: '1' },
+    })
+    const method = {
+      ...noopMethod,
+      createCredential: async ({ challenge }: { challenge: Challenge.Challenge }) =>
+        Credential.serialize({ challenge, payload: { source: 'request-input' } }),
+    }
+    const initialBody = JSON.stringify({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'tools/call',
+      params: { name: 'paid-tool' },
+    })
+    let callCount = 0
+    const calls: { init: RequestInit | undefined; input: RequestInfo | URL }[] = []
+    const mockFetch: typeof globalThis.fetch = async (input, init) => {
+      calls.push({ input, init })
+      callCount++
+      if (callCount === 1) {
+        expect(input).toBeInstanceOf(Request)
+        expect(await (input as Request).text()).toBe(initialBody)
+        return Response.json({
+          jsonrpc: '2.0',
+          id: 1,
+          error: {
+            code: Mcp.paymentRequiredCode,
+            message: 'Payment Required',
+            data: { challenges: [mcpChallenge] },
+          },
+        })
+      }
+
+      const body = JSON.parse(init?.body as string)
+      expect(body.params['_meta'][Mcp.credentialMetaKey]).toMatchObject({
+        payload: { source: 'request-input' },
+      })
+      return Response.json({ ok: true })
+    }
+
+    const fetch = Fetch.from({
+      fetch: mockFetch,
+      methods: [method],
+    })
+    const request = new Request('https://example.com/mcp', {
+      method: 'POST',
+      headers: { accept: 'application/json, text/event-stream' },
+      body: initialBody,
+    })
+
+    const response = await fetch(request)
+
+    expect(response.status).toBe(200)
+    expect(calls).toHaveLength(2)
+    expect(calls[1]?.input).toBe(request)
+  })
+
+  test('settles native HTTP 402 when a POST body is carried by Request input', async () => {
+    const initialBody = JSON.stringify({ ok: true })
+    let callCount = 0
+    const calls: { init: RequestInit | undefined; input: RequestInfo | URL }[] = []
+    const mockFetch: typeof globalThis.fetch = async (input, init) => {
+      calls.push({ input, init })
+      callCount++
+      const request = input instanceof Request && !init ? input : new Request(input, init)
+      expect(await request.text()).toBe(initialBody)
+      if (callCount === 1) return make402()
+
+      expect(request.headers.get('Authorization')).toBe('credential')
+      return new Response('OK', { status: 200 })
+    }
+
+    const fetch = Fetch.from({
+      fetch: mockFetch,
+      methods: [noopMethod],
+    })
+    const request = new Request('https://example.com/api', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: initialBody,
+    })
+
+    const response = await fetch(request)
+
+    expect(response.status).toBe(200)
+    expect(calls).toHaveLength(2)
+    expect(calls[1]?.input).toBe(request)
   })
 
   test('sends credential retry to the final same-origin 402 response URL', async () => {

@@ -219,6 +219,7 @@
   },
   "dependencies": {
     "@stripe/stripe-js": "9.8.0",
+    "eventsource-parser": "3.0.6",
     "incur": "^0.4.8",
     "ox": "0.14.29",
     "zod": "^4.4.3"
