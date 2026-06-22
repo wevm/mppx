@@ -37,3 +37,7 @@ export type {
   WithdrawableSessionState,
 } from './Runtime.js'
 export type { SessionSnapshot } from '../Snapshot.js'
+export type {
+  ResolveAccount,
+  ResolveSessionAccountInfo as ResolveAccountInfo,
+} from '../../client/ResolveAccount.js'

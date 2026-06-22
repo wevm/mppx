@@ -20,6 +20,13 @@ import * as Charge_internal from '../internal/charge.js'
 import * as defaults from '../internal/defaults.js'
 import * as Proof from '../internal/proof.js'
 import * as Methods from '../Methods.js'
+import type * as AccountResolution from './ResolveAccount.js'
+
+const chargeContextSchema = z.object({
+  account: z.optional(z.custom<Account.getResolver.Parameters['account']>()),
+  autoSwap: z.optional(z.custom<charge.AutoSwap>()),
+  mode: z.optional(z.enum(Methods.chargeModes)),
+})
 
 /**
  * Creates a Tempo charge method intent for usage on the client.
@@ -44,11 +51,7 @@ export function charge(parameters: charge.Parameters = {}) {
   const getAccount = Account.getResolver({ account: parameters.account })
 
   return Method.toClient(Methods.charge, {
-    context: z.object({
-      account: z.optional(z.custom<Account.getResolver.Parameters['account']>()),
-      autoSwap: z.optional(z.custom<charge.AutoSwap>()),
-      mode: z.optional(z.enum(Methods.chargeModes)),
-    }),
+    context: chargeContextSchema,
 
     async createCredential({ challenge, context }) {
       // Chain pinning: reject a challenge whose chain ID conflicts with the
@@ -68,10 +71,22 @@ export function charge(parameters: charge.Parameters = {}) {
       if (chainId === undefined)
         throw new Error('No `chainId` provided. Pass a chain ID in the challenge or client.')
 
-      const account = getAccount(client, context)
-
       const { request } = challenge
       const { amount, methodDetails } = request
+      const supportedModes = (methodDetails?.supportedModes as
+        | readonly Methods.ChargeMode[]
+        | undefined) ?? ['pull', 'push']
+      const defaultAccount = getAccount(client, context)
+      const account =
+        (await parameters.resolveAccount?.({
+          account: defaultAccount,
+          chainId,
+          challenge,
+          context,
+          intent: 'charge',
+          request,
+          supportedModes,
+        })) ?? defaultAccount
 
       // Zero-amount: sign EIP-712 typed data instead of creating a transaction.
       if (BigInt(amount) === 0n) {
@@ -104,9 +119,6 @@ export function charge(parameters: charge.Parameters = {}) {
           }
         }
       }
-      const supportedModes = (methodDetails?.supportedModes as
-        | readonly Methods.ChargeMode[]
-        | undefined) ?? ['pull', 'push']
       const mode = (() => {
         const explicitMode = context?.mode ?? parameters.mode
         if (explicitMode) {
@@ -202,6 +214,9 @@ export function charge(parameters: charge.Parameters = {}) {
 
 export declare namespace charge {
   type AutoSwap = AutoSwap.resolve.Value
+  type Context = AccountResolution.ChargeContext
+  type ResolveAccount = AccountResolution.ResolveAccount
+  type ResolveAccountInfo = AccountResolution.ResolveChargeAccountInfo
 
   type Parameters = {
     /**
@@ -236,6 +251,8 @@ export declare namespace charge {
      * @default `'push'` for JSON-RPC accounts, `'pull'` for local accounts.
      */
     mode?: Methods.ChargeMode | undefined
+    /** Selects the account that signs this charge after the challenge and chain are known. */
+    resolveAccount?: ResolveAccount | undefined
   } & Account.getResolver.Parameters &
     Client.getResolver.Parameters
 }

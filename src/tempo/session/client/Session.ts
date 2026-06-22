@@ -5,6 +5,7 @@ import * as Constants from '../../../Constants.js'
 import * as Method from '../../../Method.js'
 import * as Account from '../../../viem/Account.js'
 import * as Client from '../../../viem/Client.js'
+import type * as AccountResolution from '../../client/ResolveAccount.js'
 import * as defaults from '../../internal/defaults.js'
 import * as Methods from '../../Methods.js'
 import { serializeCredential, type ChannelEntry } from './ChannelOps.js'
@@ -13,6 +14,7 @@ import {
   executeCredentialPlan,
   planCredential,
   resolveChallengeContext,
+  resolveRecoverContext,
   sessionContextSchema,
 } from './CredentialState.js'
 
@@ -35,6 +37,7 @@ export function session(parameters: session.Parameters = {}) {
     getClient: getClientParameter,
     maxDeposit: maxDepositParameter,
     onChannelUpdate,
+    resolveAccount,
   } = parameters
   const getClient = Client.getResolver({
     chain: tempo_chain,
@@ -63,8 +66,27 @@ export function session(parameters: session.Parameters = {}) {
         escrowOverride,
         getClient,
       })
-      const account = getAccount(resolved.client, context)
+      const defaultAccount = getAccount(resolved.client, context)
       const entry = await store.get(resolved.key)
+      const recoverContext = resolveRecoverContext({ context, snapshot: resolved.snapshot })
+      const request = resolved.challenge
+        .request as AccountResolution.ResolveSessionAccountInfo['request']
+      const account =
+        (await resolveAccount?.({
+          account: defaultAccount,
+          chainId: resolved.chainId,
+          challenge,
+          context,
+          entry,
+          escrow: resolved.escrow,
+          intent: 'session',
+          key: resolved.key,
+          payee: resolved.payee,
+          payer: defaultAccount.address,
+          recoverContext,
+          request,
+          token: resolved.token,
+        })) ?? defaultAccount
       const payload = await executeCredentialPlan(
         planCredential({
           account,
@@ -84,6 +106,9 @@ export function session(parameters: session.Parameters = {}) {
 
 /** Type helpers for the low-level TIP-1034 session client method. */
 export declare namespace session {
+  type ResolveAccount = AccountResolution.ResolveAccount
+  type ResolveAccountInfo = AccountResolution.ResolveSessionAccountInfo
+
   type Parameters = Account.getResolver.Parameters &
     Client.getResolver.Parameters & {
       /** Address authorized to sign vouchers for the payer. Defaults to the resolved account authority. */
@@ -98,5 +123,7 @@ export declare namespace session {
       maxDeposit?: string | undefined
       /** Called whenever channel state changes. */
       onChannelUpdate?: ((entry: ChannelEntry) => void) | undefined
+      /** Selects the account that signs this session credential after the challenge is known. */
+      resolveAccount?: ResolveAccount | undefined
     }
 }

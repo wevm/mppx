@@ -84,6 +84,43 @@ describe('tempo.charge client', () => {
     expect(credential.source).toBe(`did:pkh:eip155:${chainId}:${account.address}`)
   })
 
+  test('resolveAccount selects the proof account after challenge resolution', async () => {
+    const selectedAccount = privateKeyToAccount(
+      '0x0000000000000000000000000000000000000000000000000000000000000002',
+    )
+    const chainId = 42431
+    const calls: charge.ResolveAccountInfo[] = []
+    const client = createClient({
+      account,
+      chain: tempoLocalnet,
+      transport: http('http://127.0.0.1'),
+    })
+    const method = charge({
+      account,
+      getClient: () => client,
+      resolveAccount(info) {
+        if (info.intent !== 'charge') throw new Error('expected charge account resolution')
+        calls.push(info)
+        return selectedAccount
+      },
+    })
+
+    const credential = Credential.deserialize(
+      await method.createCredential({
+        challenge: createChallenge({ chainId }),
+        context: {},
+      }),
+    )
+
+    expect(calls).toHaveLength(1)
+    expect(calls[0]!.account.address).toBe(account.address)
+    expect(calls[0]!.chainId).toBe(chainId)
+    expect(calls[0]!.request.recipient).toBe(recipient)
+    expect(calls[0]!.supportedModes).toEqual(['pull', 'push'])
+    expect(credential.payload).toMatchObject({ type: 'proof' })
+    expect(credential.source).toBe(`did:pkh:eip155:${chainId}:${selectedAccount.address}`)
+  })
+
   test('zero-amount proof binds to the root payer for an access-key account', async () => {
     vi.resetModules()
     // Capture the typed data so we can assert what the proof commits to.

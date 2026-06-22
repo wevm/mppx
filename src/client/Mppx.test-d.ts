@@ -9,6 +9,7 @@ import { tempo } from '../tempo/client/Methods.js'
 import type * as AutoSwap from '../tempo/internal/auto-swap.js'
 import * as Methods from '../tempo/Methods.js'
 import * as z from '../zod.js'
+import type { ResolveAccount } from './index.js'
 import * as Fetch from './internal/Fetch.js'
 import { session, sessionManager, sessionMethod } from './Methods.js'
 import * as Mppx from './Mppx.js'
@@ -76,6 +77,24 @@ describe('create.Config', () => {
     })
 
     expectTypeOf(mppx.fetch).toBeFunction()
+  })
+
+  test('tempo common accepts one resolveAccount hook for charge and session', () => {
+    const resolveAccount: ResolveAccount = (info) => {
+      expectTypeOf(info.intent).toEqualTypeOf<'charge' | 'session'>()
+      if (info.intent === 'charge') {
+        expectTypeOf(info.request.amount).toEqualTypeOf<string>()
+        expectTypeOf(info.supportedModes).toMatchTypeOf<readonly Methods.ChargeMode[]>()
+      }
+      if (info.intent === 'session') {
+        if (info.entry) expectTypeOf(info.entry).toHaveProperty('descriptor')
+        if (info.recoverContext) expectTypeOf(info.recoverContext).toHaveProperty('descriptor')
+      }
+      return info.account
+    }
+
+    const methods = tempo({ account: {} as Account, resolveAccount })
+    expectTypeOf(methods).toMatchTypeOf<readonly Method.AnyClient[]>()
   })
 
   test('orderChallenges receives supported challenge candidates', () => {
