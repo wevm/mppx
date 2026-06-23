@@ -22,6 +22,8 @@ export type SubscriptionStore = {
   get(subscriptionId: string): Promise<SubscriptionRecord | null>
   /** Looks up a generated access key for a resolved request key. */
   getAccessKey(key: string): Promise<SubscriptionAccessKeyRecord | null>
+  /** Looks up a generated access key by its public access key address. */
+  getAccessKeyByAddress(address: string): Promise<SubscriptionAccessKeyRecord | null>
   /** Looks up the active subscription for a resolved request key. */
   getByKey(key: string): Promise<SubscriptionRecord | null>
   /** Gets or creates the server-owned access key for a resolved request key. */
@@ -102,6 +104,10 @@ export function fromStore(
 
   function accessKeyKey(key: string): string {
     return `${accessKeyPrefix}${key}`
+  }
+
+  function accessKeyAddressKey(address: string): string {
+    return `${accessKeyPrefix}address:${address.toLowerCase()}`
   }
 
   function lookupRecordKey(key: string): string {
@@ -243,6 +249,10 @@ export function fromStore(
       return (await store.get(accessKeyKey(key))) as SubscriptionAccessKeyRecord | null
     },
 
+    async getAccessKeyByAddress(address) {
+      return (await store.get(accessKeyAddressKey(address))) as SubscriptionAccessKeyRecord | null
+    },
+
     async getByKey(key) {
       return getByLookupKey(key)
     },
@@ -258,15 +268,23 @@ export function fromStore(
         keyType: account.keyType,
         privateKey,
       } satisfies SubscriptionAccessKeyRecord
-      return store.update(
-        accessKeyKey(key),
-        (current): Store.Change<unknown, SubscriptionAccessKeyRecord> => {
-          if (current) {
-            return { op: 'noop', result: current as SubscriptionAccessKeyRecord }
-          }
-          return { op: 'set', value: candidate, result: candidate }
-        },
-      )
+      return store
+        .update(
+          accessKeyKey(key),
+          (current): Store.Change<unknown, SubscriptionAccessKeyRecord> => {
+            if (current) {
+              return { op: 'noop', result: current as SubscriptionAccessKeyRecord }
+            }
+            return { op: 'set', value: candidate, result: candidate }
+          },
+        )
+        .then(async (record) => {
+          await store.update(accessKeyAddressKey(record.accessKeyAddress), (current) => {
+            if (current) return { op: 'noop', result: undefined }
+            return { op: 'set', value: record, result: undefined }
+          })
+          return record
+        })
     },
 
     async put(record) {

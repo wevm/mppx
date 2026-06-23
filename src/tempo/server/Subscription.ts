@@ -113,6 +113,8 @@ export function subscription<const parameters extends subscription.Parameters>(
     },
 
     async authorize({ input, request }) {
+      if (parameters.requireCredential) return undefined
+
       const resolved = await parameters.resolve({ input, request })
       if (!resolved) return undefined
 
@@ -182,8 +184,8 @@ export function subscription<const parameters extends subscription.Parameters>(
       const input = requestFromCaptured(capturedRequest)
       const resolved = await parameters.resolve({ input, request: parsedRequest })
       const existing = resolved ? await store.getByKey(resolved.key) : null
-      const accessKey =
-        resolved && !credential
+      const accessKey = !credential
+        ? resolved
           ? await resolveChallengeAccessKey({
               existing,
               input,
@@ -192,7 +194,10 @@ export function subscription<const parameters extends subscription.Parameters>(
               resolved,
               store,
             })
-          : (credentialRequest?.methodDetails?.accessKey ?? parsedRequest.methodDetails?.accessKey)
+          : parameters.requireCredential && !parameters.activate
+            ? await createUnboundChallengeAccessKey({ store })
+            : undefined
+        : (credentialRequest?.methodDetails?.accessKey ?? parsedRequest.methodDetails?.accessKey)
       if (!accessKey) {
         throw new VerificationFailedError({ reason: 'subscription accessKey is missing' })
       }
@@ -218,16 +223,17 @@ export function subscription<const parameters extends subscription.Parameters>(
         challengeExpires: credential.challenge.expires,
         request: parsedRequest,
       })
-      const resolved = await parameters.resolve({ input, request: parsedRequest })
-
-      if (!resolved) {
-        throw new VerificationFailedError({ reason: 'subscription could not be resolved' })
-      }
       const challengeRequest = credential.challenge.request as SubscriptionRequest
-      const accessKey =
-        challengeRequest.methodDetails?.accessKey ??
-        parsedRequest.methodDetails?.accessKey ??
-        (await resolveAccessKey({ input, parameters, request: parsedRequest, resolved }))
+      let resolved: subscription.ResolvedSubscription | null = null
+      let accessKey =
+        challengeRequest.methodDetails?.accessKey ?? parsedRequest.methodDetails?.accessKey
+      if (!accessKey) {
+        resolved = await parameters.resolve({ input, request: parsedRequest })
+        if (!resolved) {
+          throw new VerificationFailedError({ reason: 'subscription could not be resolved' })
+        }
+        accessKey = await resolveAccessKey({ input, parameters, request: parsedRequest, resolved })
+      }
       if (!accessKey) {
         throw new VerificationFailedError({ reason: 'subscription accessKey is missing' })
       }
@@ -247,10 +253,20 @@ export function subscription<const parameters extends subscription.Parameters>(
           reason: 'credential source does not match signature',
         })
       }
+      resolved =
+        (await parameters.resolve({ input, request: parsedRequest, source: verified.source })) ??
+        resolved
+
+      if (!resolved) {
+        throw new VerificationFailedError({ reason: 'subscription could not be resolved' })
+      }
 
       const activation = await store.activate({
         challengeId: credential.challenge.id,
-        isReusable: (subscription) => isReusableSubscription(subscription, parsedRequest),
+        isReusable: (subscription) =>
+          parameters.requireCredential
+            ? isActiveSubscriptionForRequest(subscription, parsedRequest)
+            : isReusableSubscription(subscription, parsedRequest),
         lookupKey: resolved.key,
         async create() {
           const activation = withSubscriptionAccessKey(
@@ -299,7 +315,50 @@ export function subscription<const parameters extends subscription.Parameters>(
         throw new VerificationFailedError({ reason: 'subscription activation claim mismatch' })
       }
       if (activation.status === 'existing') {
-        return SubscriptionReceipt.fromRecord(activation.subscription)
+        const subscription = activation.subscription
+        assertSubscriptionPayer(subscription, verified.source, {
+          required: parameters.requireCredential,
+        })
+
+        const periodIndex = getPeriodIndex(subscription)
+        if (periodIndex > subscription.lastChargedPeriod) {
+          const renew = resolveRenewalHandler({
+            feePayer,
+            feePayerPolicy,
+            getClient,
+            parameters,
+            store,
+            subscription,
+            waitForConfirmation,
+          })
+          if (!renew) {
+            throw new VerificationFailedError({ reason: 'subscription renewal is required' })
+          }
+
+          const renewal = await settleRenewal({
+            expectedLookupKey: resolved.key,
+            periodIndex,
+            renew,
+            request: parsedRequest,
+            store,
+            subscription,
+          })
+          if (!renewal) {
+            throw new VerificationFailedError({ reason: 'subscription renewal failed' })
+          }
+          if (renewal.status === 'charged' || renewal.status === 'inFlight') {
+            return renewal.receipt
+          }
+
+          await parameters.hooks?.renewed?.({
+            periodIndex,
+            receipt: renewal.result.receipt,
+            subscription: renewal.result.subscription,
+          })
+          return renewal.result.receipt
+        }
+
+        return SubscriptionReceipt.fromRecord(subscription)
       }
 
       await parameters.hooks?.activated?.({
@@ -378,6 +437,18 @@ async function resolveChallengeAccessKey(parameters: {
     (await resolveAccessKey({ input, parameters: subscriptionParameters, request, resolved })) ??
     (existing && isActive(existing) ? existing.accessKey : undefined)
   )
+}
+
+async function createUnboundChallengeAccessKey(parameters: {
+  store: SubscriptionStore.SubscriptionStore
+}) {
+  const accessKey = await parameters.store.getOrCreateAccessKey(
+    `challenge:${createSubscriptionId()}`,
+  )
+  return {
+    accessKeyAddress: accessKey.accessKeyAddress,
+    keyType: accessKey.keyType,
+  } satisfies SubscriptionAccessKey
 }
 
 async function activateSubscription(parameters: {
@@ -567,14 +638,20 @@ function isActive(subscription: SubscriptionRecord): boolean {
   return new Date(subscription.subscriptionExpires).getTime() > Date.now()
 }
 
+function isActiveSubscriptionForRequest(
+  subscription: SubscriptionRecord,
+  request: SubscriptionRequest,
+): boolean {
+  return isActive(subscription) && subscriptionMatchesRequest(subscription, request)
+}
+
 function isReusableSubscription(
   subscription: SubscriptionRecord,
   request: SubscriptionRequest,
 ): boolean {
   return (
-    isActive(subscription) &&
-    getPeriodIndex(subscription) <= subscription.lastChargedPeriod &&
-    subscriptionMatchesRequest(subscription, request)
+    isActiveSubscriptionForRequest(subscription, request) &&
+    getPeriodIndex(subscription) <= subscription.lastChargedPeriod
   )
 }
 
@@ -587,6 +664,25 @@ function subscriptionMatchesRequest(
   return (Object.keys(expected) as (keyof typeof expected)[]).every(
     (key) => actual[key] === expected[key],
   )
+}
+
+function assertSubscriptionPayer(
+  subscription: SubscriptionRecord,
+  source: { address: Address; chainId: number },
+  options?: { required?: boolean | undefined },
+) {
+  if (!subscription.payer) {
+    if (options?.required) {
+      throw new VerificationFailedError({ reason: 'subscription payer is missing' })
+    }
+    return
+  }
+  if (
+    subscription.payer.chainId !== source.chainId ||
+    !isAddressEqual(subscription.payer.address, source.address)
+  ) {
+    throw new VerificationFailedError({ reason: 'subscription payer mismatch' })
+  }
 }
 
 function comparableSubscriptionBinding(value: SubscriptionRecord | SubscriptionRequest) {
@@ -804,7 +900,9 @@ async function submitSubscriptionPayment(parameters: {
     store,
     waitForConfirmation,
   } = parameters
-  const stored = await store.getAccessKey(lookupKey)
+  const stored =
+    (await store.getAccessKey(lookupKey)) ??
+    (await store.getAccessKeyByAddress(accessKey.accessKeyAddress))
   if (!stored) {
     throw new VerificationFailedError({ reason: 'subscription access key is missing' })
   }
@@ -1055,6 +1153,11 @@ export declare namespace subscription {
        */
       renewalTimeoutMs?: number | undefined
       /**
+       * Requires a fresh subscription Credential even when a subscription is active.
+       * This binds access reuse to the stored payer instead of trusting request metadata alone.
+       */
+      requireCredential?: boolean | undefined
+      /**
        * Override the fee-payer policy for sponsored subscription payments.
        * Useful when the access key + key authorization tx requires more gas
        * than the default policy allows.
@@ -1101,6 +1204,8 @@ export declare namespace subscription {
       resolve: (parameters: {
         input: Request
         request: SubscriptionRequest
+        /** Verified payer identity recovered from a signed subscription credential. */
+        source?: { address: Address; chainId: number } | undefined
       }) => MaybePromise<ResolvedSubscription | null>
       renew?: (parameters: {
         /** Stable idempotency/reconciliation reference persisted before the renewal hook runs. */

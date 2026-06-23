@@ -6,7 +6,6 @@ import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts'
 import { Chain } from 'viem/tempo'
 
 const baseUrl = process.env.BASE_URL ?? 'http://localhost:5173'
-const userId = process.env.USER_ID ?? 'user-1'
 const account = privateKeyToAccount((process.env.PRIVATE_KEY as Hex) ?? generatePrivateKey())
 
 const client = createClient({
@@ -29,9 +28,7 @@ const mppx = Mppx.create({
 })
 
 async function readArticle(label: string) {
-  const response = await mppx.fetch(`${baseUrl}/api/article`, {
-    headers: { 'X-User-Id': userId },
-  })
+  const response = await mppx.fetch(`${baseUrl}/api/article`)
   if (!response.ok) throw new Error(`article request failed: ${response.status}`)
 
   const receipt = Receipt.fromResponse(response)
@@ -50,6 +47,8 @@ console.log('Run the server with an overdue stored subscription to exercise rene
 
 await readArticle('Reused access')
 
-const subscriptionResponse = await fetch(`${baseUrl}/api/subscription?userId=${userId}`)
+const subscriptionResponse = await fetch(
+  `${baseUrl}/api/subscription?address=${account.address}&chainId=${client.chain.id}`,
+)
 const subscription = (await subscriptionResponse.json()) as Subscription.SubscriptionRecord
 console.log(`lastChargedPeriod=${subscription.lastChargedPeriod}`)

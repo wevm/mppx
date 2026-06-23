@@ -32,6 +32,9 @@ const subscriptionRecipient = '0x1234567890abcdef1234567890abcdef12345678'
 const rootAccount = privateKeyToAccount(
   '0x0000000000000000000000000000000000000000000000000000000000000001',
 )
+const otherRootAccount = privateKeyToAccount(
+  '0x0000000000000000000000000000000000000000000000000000000000000004',
+)
 const accessAccount = privateKeyToAccount(
   '0x0000000000000000000000000000000000000000000000000000000000000002',
 )
@@ -81,10 +84,11 @@ async function createCredential(
   challenge: Challenge.Challenge,
   source = rootAccount.address,
   key: SubscriptionAccessKey = accessKey,
+  account = rootAccount,
 ) {
   const keyAuthorization = await signSubscriptionKeyAuthorization({
     accessKey: key,
-    account: rootAccount,
+    account,
     chainId,
     request: challenge.request as ReturnType<typeof Methods.subscription.schema.request.parse>,
   })
@@ -269,6 +273,211 @@ describe('tempo.subscription', () => {
     const reused = await mppx.tempo.subscription({})(new Request('https://example.com/resource'))
     expect(reused.status).toBe(200)
     expect(rpcMethods.filter((method) => method === 'eth_sendRawTransaction')).toHaveLength(1)
+  })
+
+  test('requires a fresh credential for active subscription reuse when configured', async () => {
+    const store = Store.memory()
+    const subscriptions = SubscriptionStore.fromStore(store)
+    await subscriptions.put(
+      createRecord({
+        accessKey,
+        payer: { address: rootAccount.address, chainId },
+      }),
+    )
+    const method = subscription({
+      activate: async () => {
+        throw new Error('active subscription reuse should not activate')
+      },
+      amount: subscriptionAmount,
+      chainId,
+      currency: subscriptionCurrency,
+      periodCount: subscriptionPeriodCount,
+      periodUnit: subscriptionPeriodUnit,
+      recipient: subscriptionRecipient,
+      requireCredential: true,
+      resolve: async () => ({ accessKey, key: subscriptionKey }),
+      store,
+      subscriptionExpires: activeSubscriptionExpires,
+    })
+
+    const mppx = Mppx.create({ methods: [method], realm, secretKey })
+    const unauthenticated = await mppx.tempo.subscription({})(
+      new Request('https://example.com/resource'),
+    )
+
+    expect(unauthenticated.status).toBe(402)
+    if (unauthenticated.status !== 402) throw new Error('expected reuse challenge')
+
+    const challenge = Challenge.fromResponse(unauthenticated.challenge)
+    const credential = await createCredential(challenge)
+    const reused = await mppx.tempo.subscription({})(
+      new Request('https://example.com/resource', {
+        headers: { Authorization: Credential.serialize(credential) },
+      }),
+    )
+
+    expect(reused.status).toBe(200)
+  })
+
+  test('can derive the subscription lookup key only from the signed credential source', async () => {
+    const store = Store.memory()
+    const subscriptions = SubscriptionStore.fromStore(store)
+    const { client, rpcMethods } = createBillingClient([hashActivate])
+    const sourceKey = (source: { address: string; chainId: number }) =>
+      `payer:${source.chainId}:${source.address.toLowerCase()}:pro`
+    const method = subscription({
+      amount: subscriptionAmount,
+      chainId,
+      currency: subscriptionCurrency,
+      getClient: async () => client,
+      periodCount: subscriptionPeriodCount,
+      periodUnit: subscriptionPeriodUnit,
+      recipient: subscriptionRecipient,
+      requireCredential: true,
+      resolve: async ({ source }) => {
+        if (!source) return null
+        return { key: sourceKey(source) }
+      },
+      store,
+      subscriptionExpires: activeSubscriptionExpires,
+      waitForConfirmation: false,
+    })
+
+    const mppx = Mppx.create({ methods: [method], realm, secretKey })
+    const challengeResult = await mppx.tempo.subscription({})(
+      new Request('https://example.com/resource'),
+    )
+
+    expect(challengeResult.status).toBe(402)
+    if (challengeResult.status !== 402) throw new Error('expected source challenge')
+
+    const challenge = Challenge.fromResponse(challengeResult.challenge)
+    const challengeAccessKey = (
+      challenge.request as ReturnType<typeof Methods.subscription.schema.request.parse>
+    ).methodDetails?.accessKey
+    if (!challengeAccessKey) throw new Error('expected challenge access key')
+
+    const credential = await createCredential(challenge, rootAccount.address, challengeAccessKey)
+    const activated = await mppx.tempo.subscription({})(
+      new Request('https://example.com/resource', {
+        headers: { Authorization: Credential.serialize(credential) },
+      }),
+    )
+
+    expect(activated.status).toBe(200)
+    const lookupKey = sourceKey({ address: rootAccount.address, chainId })
+    const record = await subscriptions.getByKey(lookupKey)
+    expect(record?.lookupKey).toBe(lookupKey)
+    expect(record?.payer?.address.toLowerCase()).toBe(rootAccount.address.toLowerCase())
+    expect(record?.accessKey).toEqual(challengeAccessKey)
+    expect(rpcMethods.filter((method) => method === 'eth_sendRawTransaction')).toHaveLength(1)
+  })
+
+  test('rejects credential reuse when the signer does not match the stored payer', async () => {
+    const store = Store.memory()
+    const subscriptions = SubscriptionStore.fromStore(store)
+    await subscriptions.put(
+      createRecord({
+        accessKey,
+        payer: { address: rootAccount.address, chainId },
+      }),
+    )
+    const method = subscription({
+      activate: async () => {
+        throw new Error('active subscription reuse should not activate')
+      },
+      amount: subscriptionAmount,
+      chainId,
+      currency: subscriptionCurrency,
+      periodCount: subscriptionPeriodCount,
+      periodUnit: subscriptionPeriodUnit,
+      recipient: subscriptionRecipient,
+      requireCredential: true,
+      resolve: async () => ({ accessKey, key: subscriptionKey }),
+      store,
+      subscriptionExpires: activeSubscriptionExpires,
+    })
+
+    const mppx = Mppx.create({ methods: [method], realm, secretKey })
+    const challengeResult = await mppx.tempo.subscription({})(
+      new Request('https://example.com/resource'),
+    )
+    if (challengeResult.status !== 402) throw new Error('expected reuse challenge')
+
+    const challenge = Challenge.fromResponse(challengeResult.challenge)
+    const credential = await createCredential(
+      challenge,
+      otherRootAccount.address,
+      accessKey,
+      otherRootAccount,
+    )
+    const rejected = await mppx.tempo.subscription({})(
+      new Request('https://example.com/resource', {
+        headers: { Authorization: Credential.serialize(credential) },
+      }),
+    )
+
+    expect(rejected.status).toBe(402)
+    if (rejected.status !== 402) throw new Error('expected payer mismatch challenge')
+    const body = await rejected.challenge.json()
+    expect(body.detail).toBe('Payment verification failed: subscription payer mismatch.')
+  })
+
+  test('renews an overdue active subscription after credential-required payer proof', async () => {
+    const store = Store.memory()
+    const subscriptions = SubscriptionStore.fromStore(store)
+    await subscriptions.put(
+      createRecord({
+        accessKey,
+        billingAnchor: new Date(Date.now() - 3 * subscriptionPeriodMilliseconds).toISOString(),
+        lastChargedPeriod: 0,
+        payer: { address: rootAccount.address, chainId },
+        reference: hashStale,
+      }),
+    )
+    const method = subscription({
+      activate: async () => {
+        throw new Error('active subscription renewal should not activate')
+      },
+      amount: subscriptionAmount,
+      chainId,
+      currency: subscriptionCurrency,
+      periodCount: subscriptionPeriodCount,
+      periodUnit: subscriptionPeriodUnit,
+      recipient: subscriptionRecipient,
+      renew: async ({ periodIndex, subscription }) => ({
+        receipt: createReceipt(subscription.subscriptionId, hashRenewed),
+        subscription: {
+          ...subscription,
+          lastChargedPeriod: periodIndex,
+          reference: hashRenewed,
+        },
+      }),
+      requireCredential: true,
+      resolve: async () => ({ accessKey, key: subscriptionKey }),
+      store,
+      subscriptionExpires: activeSubscriptionExpires,
+    })
+
+    const mppx = Mppx.create({ methods: [method], realm, secretKey })
+    const challengeResult = await mppx.tempo.subscription({})(
+      new Request('https://example.com/resource'),
+    )
+    if (challengeResult.status !== 402) throw new Error('expected reuse challenge')
+
+    const challenge = Challenge.fromResponse(challengeResult.challenge)
+    const credential = await createCredential(challenge)
+    const renewed = await mppx.tempo.subscription({})(
+      new Request('https://example.com/resource', {
+        headers: { Authorization: Credential.serialize(credential) },
+      }),
+    )
+
+    expect(renewed.status).toBe(200)
+    if (renewed.status !== 200) throw new Error('expected credential renewal')
+    const receipt = Receipt.fromResponse(renewed.withReceipt(new Response('OK')))
+    expect(receipt.reference).toBe(hashRenewed)
+    expect((await subscriptions.getByKey(subscriptionKey))?.lastChargedPeriod).toBeGreaterThan(0)
   })
 
   test('verifyCredential activates a subscription credential with a canonical challenge request', async () => {
