@@ -244,7 +244,6 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
 
   const method = sessionPlugin({
     account: parameters.account,
-    authorizedSigner: parameters.authorizedSigner,
     getClient: parameters.client ? () => parameters.client! : parameters.getClient,
     escrow: parameters.escrow,
     decimals: config.decimals,
@@ -732,8 +731,6 @@ export namespace sessionManager {
 
   export type Parameters = Account.getResolver.Parameters &
     Client.getResolver.Parameters & {
-      /** Address authorized to sign vouchers for the payer. Defaults to the resolved account authority. */
-      authorizedSigner?: Address | undefined
       /** Enables same-route HEAD bootstrap from a server session snapshot before opening a new channel. */
       bootstrap?: boolean | undefined
       /** Viem client instance. Shorthand for `getClient: () => client`. */

@@ -230,7 +230,7 @@ export type ReusableChannelExpectation = {
   payee: Address
   /** Payer address controlled by the local account. */
   payer: Address
-  /** Voucher signer resolved from local account configuration. */
+  /** Voucher authority resolved from the local account. */
   authorizedSigner: Address
   /** Token expected by the current challenge. */
   token: Address
@@ -278,7 +278,6 @@ export type ChallengeContext = {
 /** Inputs used to choose the next client-side session credential operation. */
 export type PlanCredentialParameters = {
   account: ViemAccount
-  authorizedSigner?: Address | undefined
   /** Channel previously stored for this challenge scope, fetched by the caller. */
   entry: ChannelEntry | undefined
   context?: SessionContext | undefined
@@ -315,7 +314,6 @@ export type CredentialPlan =
   | {
       type: 'open'
       account: ViemAccount
-      authorizedSigner?: Address | undefined
       context?: SessionContext | undefined
       maxDeposit?: bigint | undefined
       resolved: ChallengeContext
@@ -324,7 +322,6 @@ export type CredentialPlan =
   | {
       type: 'recover'
       account: ViemAccount
-      authorizedSigner?: Address | undefined
       context: DescriptorSessionContext
       decimals: number
       maxDeposit?: bigint | undefined
@@ -342,7 +339,6 @@ export type CredentialPlan =
   | {
       type: 'manual'
       account: ViemAccount
-      authorizedSigner?: Address | undefined
       context: ManualSessionDescriptorContext
       decimals: number
       resolved: ChallengeContext
@@ -516,18 +512,17 @@ export function resolveRecoveredCumulative(
 export function canSignDescriptor(
   account: ViemAccount,
   descriptor: Channel.ChannelDescriptor,
-  authorizedSigner?: Address | undefined,
 ): boolean {
   // Only the payer can deposit into and voucher against its own channel.
   if (!isSameAddress(account.address, descriptor.payer)) return false
   const authority = descriptor.authorizedSigner
   if (BigInt(authority) === 0n || isSameAddress(authority, descriptor.payer)) return true
-  return isSameAddress(resolveAuthorizedSigner(account, authorizedSigner), authority)
+  return isSameAddress(resolveAuthorizedSigner(account), authority)
 }
 
 /** Chooses the next credential plan from local channel cache and optional caller context. */
 export function planCredential(parameters: PlanCredentialParameters): CredentialPlan {
-  const { account, authorizedSigner, entry, context, decimals, maxDeposit, resolved } = parameters
+  const { account, entry, context, decimals, maxDeposit, resolved } = parameters
 
   if (hasSessionAction(context)) {
     if (!hasManualSessionDescriptor(context))
@@ -535,7 +530,6 @@ export function planCredential(parameters: PlanCredentialParameters): Credential
     return {
       type: 'manual',
       account,
-      authorizedSigner,
       context,
       decimals,
       resolved,
@@ -545,24 +539,19 @@ export function planCredential(parameters: PlanCredentialParameters): Credential
   if (!entry && context?.channelId && !context.descriptor)
     throw new Error('descriptor required to reuse TIP-1034 channel')
   const recoverContext = resolveRecoverContext({ context, snapshot: resolved.snapshot })
-  if (
-    !entry &&
-    recoverContext &&
-    canSignDescriptor(account, recoverContext.descriptor, authorizedSigner)
-  ) {
+  if (!entry && recoverContext && canSignDescriptor(account, recoverContext.descriptor)) {
     return {
       type: 'recover',
       account,
-      authorizedSigner,
       context: recoverContext,
       decimals,
       maxDeposit,
       resolved,
     }
   }
-  if (entry?.opened && canSignDescriptor(account, entry.descriptor, authorizedSigner))
+  if (entry?.opened && canSignDescriptor(account, entry.descriptor))
     return { type: 'voucher', account, entry, maxDeposit, resolved }
-  return { type: 'open', account, authorizedSigner, context, maxDeposit, resolved }
+  return { type: 'open', account, context, maxDeposit, resolved }
 }
 
 /** Executes a credential plan and returns the concrete session credential payload. */
@@ -586,7 +575,7 @@ async function open(
   plan: Extract<CredentialPlan, { type: 'open' }>,
   sink: ChannelSink,
 ): Promise<SessionCredentialPayload> {
-  const { account, authorizedSigner, resolved } = plan
+  const { account, resolved } = plan
   const deposit = resolveOpeningDeposit({
     contextDepositRaw: plan.context?.depositRaw,
     maxDeposit: plan.maxDeposit,
@@ -594,7 +583,6 @@ async function open(
     suggestedDepositRaw: resolved.suggestedDepositRaw,
   })
   const payload = await createOpenPayload(resolved.client, account, {
-    authorizedSigner,
     chainId: resolved.chainId,
     deposit,
     escrow: resolved.escrow,
@@ -631,7 +619,7 @@ async function recover(
       escrow: resolved.escrow,
       payee: resolved.payee,
       payer: account.address,
-      authorizedSigner: resolveAuthorizedSigner(account, plan.authorizedSigner),
+      authorizedSigner: resolveAuthorizedSigner(account),
       token: resolved.token,
     },
   })
@@ -702,7 +690,7 @@ async function manual(
     expectedChannelId: channelId,
     payee: resolved.payee,
     payer: account.address,
-    authorizedSigner: resolveAuthorizedSigner(account, plan.authorizedSigner),
+    authorizedSigner: resolveAuthorizedSigner(account),
     token: resolved.token,
   })
 

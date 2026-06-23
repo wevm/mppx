@@ -28,7 +28,6 @@ export { sessionContextSchema, type SessionContext } from './CredentialState.js'
 export function session(parameters: session.Parameters = {}) {
   const {
     account,
-    authorizedSigner,
     channelStore,
     decimals = defaults.decimals,
     escrow: escrowOverride,
@@ -68,7 +67,6 @@ export function session(parameters: session.Parameters = {}) {
       const payload = await executeCredentialPlan(
         planCredential({
           account,
-          authorizedSigner,
           entry,
           context,
           decimals,
@@ -86,8 +84,6 @@ export function session(parameters: session.Parameters = {}) {
 export declare namespace session {
   type Parameters = Account.getResolver.Parameters &
     Client.getResolver.Parameters & {
-      /** Address authorized to sign vouchers for the payer. Defaults to the resolved account authority. */
-      authorizedSigner?: Address | undefined
       /** Pluggable persistence for reusable channels. Defaults to an in-memory store. */
       channelStore?: ChannelStore | undefined
       /** Token decimals for parsing human-readable amounts (default: 6). */

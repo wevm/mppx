@@ -1,4 +1,4 @@
-import type { Account } from 'viem'
+import type { Account, Address } from 'viem'
 import { describe, expectTypeOf, test } from 'vp/test'
 
 import * as Challenge from '../Challenge.js'
@@ -22,6 +22,23 @@ describe('Mppx', () => {
     expectTypeOf(sessionMethod({ account: {} as Account })).toMatchTypeOf<Method.AnyClient>()
     expectTypeOf(tempo.session({ account: {} as Account })).toMatchTypeOf<Method.AnyClient>()
     expectTypeOf(tempo.session.manager({ account: {} as Account })).toHaveProperty('fetch')
+  })
+
+  test('does not expose a client-side authorizedSigner override', () => {
+    const authorizedSigner = '0x0000000000000000000000000000000000000001' as Address
+
+    // @ts-expect-error - session voucher authority is derived from the selected account.
+    session({ account: {} as Account, authorizedSigner })
+    // @ts-expect-error - managed sessions use the selected account for voucher authority.
+    session.manager({ account: {} as Account, authorizedSigner })
+    // @ts-expect-error - the direct manager helper does not accept an address-only authority override.
+    sessionManager({ account: {} as Account, authorizedSigner })
+    // @ts-expect-error - the compatibility alias has the same session parameter surface.
+    sessionMethod({ account: {} as Account, authorizedSigner })
+    // @ts-expect-error - common Tempo client parameters do not include a session authority override.
+    tempo({ account: {} as Account, authorizedSigner })
+    // @ts-expect-error - the namespaced session helper has the same session parameter surface.
+    tempo.session({ account: {} as Account, authorizedSigner })
   })
 
   test('has methods array', () => {
