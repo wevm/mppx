@@ -176,6 +176,7 @@ export function from<const methods extends readonly Method.AnyClient[]>(
     const callerHeaders = getCallerHeaders(input, init?.headers)
     const hasExplicitAcceptPayment = callerHeaders.has(Constants.Headers.acceptPayment)
     const paymentPreferences = resolvePaymentPreferences(callerHeaders, resolvedAcceptPayment)
+    const capturedBody = captureRequestBody(input, init, callerHeaders)
     const initialRequest = prepareInitialRequest(
       input,
       init,
@@ -184,9 +185,10 @@ export function from<const methods extends readonly Method.AnyClient[]>(
       hasExplicitAcceptPayment,
       acceptPaymentPolicy,
     )
-    const response = await baseFetch(initialRequest.input, initialRequest.init)
+    const response = await baseFetch(cloneRequestInput(initialRequest.input), initialRequest.init)
+    const transportRequest = withCapturedBody(initialRequest.init, await capturedBody)
 
-    if (!transport.isPaymentRequired(response)) return response
+    if (!(await transport.isPaymentRequired(response, transportRequest as never))) return response
 
     // Only extract context for payment handling after confirming 402.
     const context = (init as Record<string, unknown> | undefined)?.context
@@ -194,7 +196,7 @@ export function from<const methods extends readonly Method.AnyClient[]>(
       context: _,
       orderChallenges: requestOrderChallenges,
       ...fetchInit
-    } = (initialRequest.init ?? {}) as Record<string, unknown>
+    } = (transportRequest ?? {}) as Record<string, unknown>
 
     let challenge: Challenge.Challenge | undefined
     let challenges: readonly Challenge.Challenge[] | undefined
@@ -202,8 +204,8 @@ export function from<const methods extends readonly Method.AnyClient[]>(
 
     try {
       challenges = transport.getChallenges
-        ? transport.getChallenges(response)
-        : [transport.getChallenge(response)]
+        ? await transport.getChallenges(response, transportRequest as never)
+        : [await transport.getChallenge(response, transportRequest as never)]
 
       const candidates = AcceptPayment.selectChallengeCandidates(
         challenges,
@@ -666,7 +668,13 @@ function snapshotInit<methods extends readonly Method.AnyClient[]>(
 }
 
 function snapshotInput(input: RequestInfo | URL | undefined): RequestInfo | URL | undefined {
-  if (input instanceof Request) return input.clone()
+  if (input instanceof Request) {
+    try {
+      return input.clone()
+    } catch {
+      return input
+    }
+  }
   if (input instanceof URL) return new URL(input)
   return input
 }
@@ -738,6 +746,35 @@ function prepareInitialRequest<methods extends readonly Method.AnyClient[]>(
   }
 }
 
+function captureRequestBody<methods extends readonly Method.AnyClient[]>(
+  input: RequestInfo | URL,
+  init: from.RequestInit<methods> | undefined,
+  headers: Headers,
+): Promise<string | undefined> | undefined {
+  if (!(input instanceof Request) || init?.body !== undefined || !input.body || input.bodyUsed)
+    return undefined
+  if (!headers.has('mcp-method')) {
+    const accept = headers.get('accept')?.toLowerCase() ?? ''
+    if (!accept.includes('application/json') || !accept.includes('text/event-stream'))
+      return undefined
+  }
+  try {
+    return input
+      .clone()
+      .text()
+      .catch(() => undefined)
+  } catch {
+    return undefined
+  }
+}
+
+function withCapturedBody<methods extends readonly Method.AnyClient[]>(
+  init: from.RequestInit<methods> | undefined,
+  body: string | undefined,
+): from.RequestInit<methods> | undefined {
+  return body === undefined ? init : ({ ...init, body } as from.RequestInit<methods>)
+}
+
 /** @internal */
 function getCallerHeaders(input: RequestInfo | URL, headers: HeadersInit | undefined): Headers {
   if (headers) return new Headers(headers)
@@ -751,6 +788,15 @@ function unwrapFetch(fetch: typeof globalThis.fetch): typeof globalThis.fetch {
     current = current[MPPX_FETCH_WRAPPER] as WrappedFetch
   }
   return current as typeof globalThis.fetch
+}
+
+function cloneRequestInput(input: RequestInfo | URL): RequestInfo | URL {
+  if (!(input instanceof Request) || !input.body || input.bodyUsed) return input
+  try {
+    return input.clone()
+  } catch {
+    return input
+  }
 }
 
 /** @internal */
