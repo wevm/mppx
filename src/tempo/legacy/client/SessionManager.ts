@@ -127,6 +127,7 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
   let channel: ChannelEntry | null = null
   let lastChallenge: Challenge.Challenge | null = null
   let lastUrl: RequestInfo | URL | null = null
+  let acceptedCumulative = 0n
   let spent = 0n
   let activeSocketChallenge: Challenge.Challenge | null = null
   let activeSocketChannelId: Hex.Hex | null = null
@@ -146,7 +147,10 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
     decimals: parameters.decimals,
     maxDeposit: parameters.maxDeposit,
     onChannelUpdate(entry) {
-      if (entry.channelId !== channel?.channelId) spent = 0n
+      if (entry.channelId !== channel?.channelId) {
+        acceptedCumulative = 0n
+        spent = 0n
+      }
       channel = entry
     },
   })
@@ -164,7 +168,10 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
   function updateSpentFromReceipt(receipt: SessionReceipt | null | undefined) {
     if (!receipt || receipt.channelId !== channel?.channelId) return
     assertReceiptWithinLocalState(receipt)
+    const nextAcceptedCumulative = BigInt(receipt.acceptedCumulative)
     const next = BigInt(receipt.spent)
+    acceptedCumulative =
+      acceptedCumulative > nextAcceptedCumulative ? acceptedCumulative : nextAcceptedCumulative
     spent = spent > next ? spent : next
   }
 
@@ -253,8 +260,9 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
       return (bestSpent > cumulative ? cumulative : bestSpent).toString()
     }
 
-    // SSE/HTTP: spent is kept in sync by inline receipts, use it directly.
-    return spent.toString()
+    // Some legacy servers report receipt.spent as a per-request delta while
+    // still requiring close at the highest accepted cumulative voucher.
+    return (spent > acceptedCumulative ? spent : acceptedCumulative).toString()
   }
 
   function assertVoucherWithinLocalLimit(cumulativeAmount: bigint) {

@@ -3473,6 +3473,71 @@ describe.runIf(isLocalnet)('session', () => {
       expect(persisted?.finalized).toBe(true)
     })
 
+    test('sessionManager closes at accepted cumulative when HTTP receipt spent is per-request delta', async () => {
+      const handler = createHandler()
+      const route = handler.session({
+        amount: '1',
+        decimals: 6,
+        unitType: 'token',
+      })
+
+      let lastAcceptedCumulative = 0n
+      const fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+        const request = new Request(input, init)
+        const result = await route(request)
+        if (result.status === 402) return result.challenge
+
+        const response = result.withReceipt(new Response('ok'))
+        const receiptHeader = response.headers.get('Payment-Receipt')
+        if (!receiptHeader) return response
+
+        const receipt = deserializeSessionReceipt(receiptHeader)
+        if (
+          Credential.fromRequest<LegacySessionCredentialPayload>(request).payload?.action ===
+          'close'
+        ) {
+          return response
+        }
+
+        const acceptedCumulative = BigInt(receipt.acceptedCumulative)
+        const delta = acceptedCumulative - lastAcceptedCumulative
+        lastAcceptedCumulative = acceptedCumulative
+        return new Response(response.body, {
+          status: response.status,
+          statusText: response.statusText,
+          headers: {
+            'Payment-Receipt': serializeSessionReceipt({
+              ...receipt,
+              spent: delta.toString(),
+            }),
+          },
+        })
+      }
+
+      const manager = sessionManager({
+        account: payer,
+        client,
+        escrowContract,
+        fetch,
+        maxDeposit: '3',
+      })
+
+      const first = await manager.fetch('https://api.example.com/resource')
+      expect(first.status).toBe(200)
+      expect(first.receipt?.acceptedCumulative).toBe('1000000')
+      expect(first.receipt?.spent).toBe('1000000')
+
+      const second = await manager.fetch('https://api.example.com/resource')
+      expect(second.status).toBe(200)
+      expect(second.receipt?.acceptedCumulative).toBe('2000000')
+      expect(second.receipt?.spent).toBe('1000000')
+
+      const closeReceipt = await manager.close()
+      expect(closeReceipt?.status).toBe('success')
+      expect(closeReceipt?.acceptedCumulative).toBe('2000000')
+      expect(closeReceipt?.spent).toBe('2000000')
+    })
+
     test('sessionManager rejects receipts that exceed the locally signed voucher', async () => {
       const handler = createHandler()
       const route = handler.session({
