@@ -11,5 +11,12 @@ export {
   stripe,
   tempo,
 } from './Methods.js'
+export {
+  createChannelStore,
+  createJsonChannelStore,
+  entryKey,
+  type ChannelStore,
+  type JsonChannelKv,
+} from '../tempo/session/client/ChannelStore.js'
 export * as Mppx from './Mppx.js'
 export * as Transport from './Transport.js'

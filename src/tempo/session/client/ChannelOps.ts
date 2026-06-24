@@ -78,9 +78,9 @@ function readAccessKeyAddress(account: Account): Address | undefined {
   return readOptionalAddress((account as AccountWithAccessKey).accessKeyAddress)
 }
 
-/** Resolves the voucher signer address for a client account and optional override. */
-export function resolveAuthorizedSigner(account: Account, override?: Address | undefined): Address {
-  return override ?? readAccessKeyAddress(account) ?? account.address
+/** Resolves the voucher authority address for a client account. */
+export function resolveAuthorizedSigner(account: Account): Address {
+  return readAccessKeyAddress(account) ?? account.address
 }
 
 async function prepareTempoChannelTransaction(
@@ -223,7 +223,6 @@ export async function createOpenPayload(
   client: Client,
   account: Account,
   parameters: {
-    authorizedSigner?: Address | undefined
     chainId: number
     deposit: bigint
     escrow?: Address | undefined
@@ -234,7 +233,7 @@ export async function createOpenPayload(
     token: Address
   },
 ): Promise<OpenCredentialPayload> {
-  const authorizedSigner = resolveAuthorizedSigner(account, parameters.authorizedSigner)
+  const authorizedSigner = resolveAuthorizedSigner(account)
   const escrow = parameters.escrow ?? tip20ChannelEscrow
   const operator = parameters.operator ?? '0x0000000000000000000000000000000000000000'
   const salt = Hex.random(32)

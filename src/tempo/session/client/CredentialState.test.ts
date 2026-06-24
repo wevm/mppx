@@ -11,7 +11,15 @@ import type { SessionSnapshot } from '../Snapshot.js'
 import type { ChannelEntry } from './ChannelOps.js'
 import {
   channelKey,
-  createChannelCache,
+  createChannelStore,
+  createJsonChannelStore,
+  deserializeEntry,
+  entryKey,
+  serializeEntry,
+  type ChannelSink,
+} from './ChannelStore.js'
+import {
+  canSignDescriptor,
   executeCredentialPlan,
   hasCredentialCumulativeAmount,
   hasManualSessionDescriptor,
@@ -26,11 +34,14 @@ import {
   resolveRecoverContext,
   resolveReusableChannel,
   sessionContextSchema,
-  storeChannelEntry,
-  updateCachedCumulative,
   type ChallengeContext,
   type SessionContext,
 } from './CredentialState.js'
+
+/** Builds a credential sink backed by a fresh in-memory store. */
+function sink(): ChannelSink {
+  return { store: createChannelStore(), notifyUpdate: () => {} }
+}
 
 describe('ChannelCache', () => {
   const channelId = `0x${'11'.repeat(32)}` as Hex
@@ -66,16 +77,6 @@ describe('ChannelCache', () => {
     }
   }
 
-  function close(cumulativeAmount: string): SessionCredentialPayload {
-    return {
-      action: 'close',
-      channelId,
-      descriptor: channel().descriptor,
-      cumulativeAmount,
-      signature: '0x1234',
-    }
-  }
-
   function topUp(additionalDeposit: string): SessionCredentialPayload {
     return {
       action: 'topUp',
@@ -87,41 +88,51 @@ describe('ChannelCache', () => {
     }
   }
 
-  describe('precompile client ChannelCache', () => {
-    test('creates stable case-insensitive reusable channel keys', () => {
+  describe('precompile client ChannelStore', () => {
+    test('creates stable case-insensitive reusable channel keys scoped by chain', () => {
       expect(
-        channelKey(
-          '0x00000000000000000000000000000000000000AA' as Address,
-          '0x20C0000000000000000000000000000000000001' as Address,
-          '0x4D50500000000000000000000000000000000000' as Address,
-        ),
+        channelKey({
+          payee: '0x00000000000000000000000000000000000000AA' as Address,
+          token: '0x20C0000000000000000000000000000000000001' as Address,
+          escrow: '0x4D50500000000000000000000000000000000000' as Address,
+          chainId: 4217,
+        }),
       ).toBe(
-        '0x00000000000000000000000000000000000000aa:0x20c0000000000000000000000000000000000001:0x4d50500000000000000000000000000000000000',
+        '0x00000000000000000000000000000000000000aa:0x20c0000000000000000000000000000000000001:0x4d50500000000000000000000000000000000000:4217',
       )
     })
 
-    test('stores entries by key and channel ID and notifies observers', () => {
-      const updates: ChannelEntry[] = []
-      const cache = createChannelCache((entry) => updates.push(entry))
+    test('derives a stored entry key from its descriptor, escrow, and chain', () => {
       const entry = channel()
-
-      storeChannelEntry(cache, 'payee:token:escrow', entry)
-
-      expect(cache.channels.get('payee:token:escrow')).toBe(entry)
-      expect(cache.channelIdToKey.get(channelId)).toBe('payee:token:escrow')
-      expect(updates).toEqual([entry])
+      expect(entryKey(entry)).toBe(
+        channelKey({
+          payee: entry.descriptor.payee,
+          token: entry.descriptor.token,
+          escrow: entry.escrow,
+          chainId: entry.chainId,
+        }),
+      )
     })
 
-    test('updates cached cumulative amounts monotonically', () => {
-      const cache = createChannelCache()
-      const entry = channel({ cumulativeAmount: 10n })
-      storeChannelEntry(cache, 'payee:token:escrow', entry)
+    test('stores, gets, and deletes entries by derived key', () => {
+      const store = createChannelStore()
+      const entry = channel()
+      store.set(entry)
 
-      updateCachedCumulative(cache, channelId, voucher('8'))
-      expect(entry.cumulativeAmount).toBe(10n)
+      expect(store.get(entryKey(entry))).toBe(entry)
 
-      updateCachedCumulative(cache, channelId, voucher('12'))
-      expect(entry.cumulativeAmount).toBe(12n)
+      store.delete(entryKey(entry))
+      expect(store.get(entryKey(entry))).toBeUndefined()
+    })
+
+    test('replaces entries that share a scope key', () => {
+      const store = createChannelStore()
+      const first = channel({ cumulativeAmount: 10n })
+      const second = channel({ cumulativeAmount: 12n })
+      store.set(first)
+      store.set(second)
+
+      expect(store.get(entryKey(second))).toBe(second)
     })
 
     test('reads cumulative amounts only from cumulative credential payloads', () => {
@@ -130,26 +141,50 @@ describe('ChannelCache', () => {
       expect(hasCredentialCumulativeAmount(topUp('12'))).toBe(false)
       expect(readCredentialCumulativeAmount(topUp('12'))).toBeUndefined()
     })
+  })
 
-    test('ignores non-cumulative top-up credentials when updating cached cumulative amount', () => {
-      const cache = createChannelCache()
-      const entry = channel({ cumulativeAmount: 10n })
-      storeChannelEntry(cache, 'payee:token:escrow', entry)
-
-      updateCachedCumulative(cache, channelId, topUp('12'))
-
-      expect(entry.cumulativeAmount).toBe(10n)
+  describe('serialization', () => {
+    test('serializes bigint amounts to decimal strings', () => {
+      const entry = channel({ cumulativeAmount: 2n ** 70n, deposit: 0n })
+      const stored = serializeEntry(entry)
+      expect(stored.cumulativeAmount).toBe((2n ** 70n).toString())
+      expect(stored.deposit).toBe('0')
     })
 
-    test('marks cached channels closed from close credentials', () => {
-      const cache = createChannelCache()
-      const entry = channel({ opened: true })
-      storeChannelEntry(cache, 'payee:token:escrow', entry)
+    test('round-trips a channel entry through JSON', () => {
+      const entry = channel({ cumulativeAmount: 2n ** 100n + 7n, deposit: 999n })
+      const roundtrip = deserializeEntry(
+        JSON.parse(JSON.stringify(serializeEntry(entry))) as ReturnType<typeof serializeEntry>,
+      )
+      expect(roundtrip).toEqual(entry)
+    })
+  })
 
-      updateCachedCumulative(cache, channelId, close('12'))
+  describe('createJsonChannelStore', () => {
+    function jsonStore() {
+      const backend = new Map<string, string>()
+      const store = createJsonChannelStore({
+        get: (key) => backend.get(key),
+        set: (key, value) => {
+          backend.set(key, value)
+        },
+        delete: (key) => {
+          backend.delete(key)
+        },
+      })
+      return { backend, store }
+    }
 
-      expect(entry.cumulativeAmount).toBe(12n)
-      expect(entry.opened).toBe(false)
+    test('persists, gets, and deletes via a string KV backend', async () => {
+      const { backend, store } = jsonStore()
+      const entry = channel({ cumulativeAmount: 2n ** 64n, deposit: 5n })
+      await store.set(entry)
+
+      expect(backend.size).toBe(1)
+      expect(await store.get(entryKey(entry))).toEqual(entry)
+
+      await store.delete(entryKey(entry))
+      expect(await store.get(entryKey(entry))).toBeUndefined()
     })
   })
 })
@@ -346,7 +381,7 @@ describe('CredentialPlan', () => {
         token,
       })
       expect(resolved.key).toBe(
-        `${payee.toLowerCase()}:${token.toLowerCase()}:${escrow.toLowerCase()}`,
+        `${payee.toLowerCase()}:${token.toLowerCase()}:${escrow.toLowerCase()}:42431`,
       )
     })
 
@@ -425,10 +460,9 @@ describe('CredentialPlan', () => {
     })
 
     test('plans manual credentials only when an explicit action includes descriptor', () => {
-      const cache = createChannelCache()
       const plan = planCredential({
         account,
-        cache,
+        entry: undefined,
         context: { action: 'voucher', descriptor, cumulativeAmountRaw: '10' },
         decimals: 6,
         resolved: challengeContext(),
@@ -443,7 +477,7 @@ describe('CredentialPlan', () => {
       expect(() =>
         planCredential({
           account,
-          cache: createChannelCache(),
+          entry: undefined,
           context: { action: 'voucher', cumulativeAmountRaw: '10' },
           decimals: 6,
           resolved: challengeContext(),
@@ -454,7 +488,7 @@ describe('CredentialPlan', () => {
     test('rejects manual descriptors that do not match the active challenge', async () => {
       const plan = planCredential({
         account,
-        cache: createChannelCache(),
+        entry: undefined,
         context: {
           action: 'voucher',
           cumulativeAmountRaw: '10',
@@ -467,15 +501,44 @@ describe('CredentialPlan', () => {
         resolved: challengeContext(),
       })
 
-      await expect(executeCredentialPlan(plan, createChannelCache())).rejects.toThrow(
+      await expect(executeCredentialPlan(plan, sink())).rejects.toThrow(
         'context descriptor payee does not match challenge',
       )
+    })
+
+    test('leaves stored scope entry unchanged when a manual credential targets another channel', async () => {
+      const entry = channel()
+      const originalCumulative = entry.cumulativeAmount
+      const notifications: ChannelEntry[] = []
+      const store = createChannelStore()
+      const manualDescriptor = { ...descriptor, salt: `0x${'55'.repeat(32)}` as Hex }
+      await store.set(entry)
+
+      await executeCredentialPlan(
+        planCredential({
+          account,
+          entry,
+          context: {
+            action: 'voucher',
+            descriptor: manualDescriptor,
+            cumulativeAmountRaw: '25',
+          },
+          decimals: 6,
+          resolved: challengeContext(),
+        }),
+        { store, notifyUpdate: (updated) => notifications.push(updated) },
+      )
+
+      const stored = await store.get(entryKey(entry))
+      expect(stored?.channelId).toBe(entry.channelId)
+      expect(stored?.cumulativeAmount).toBe(originalCumulative)
+      expect(notifications).toEqual([])
     })
 
     test('plans recovery from server snapshot when no reusable cache entry exists', () => {
       const plan = planCredential({
         account,
-        cache: createChannelCache(),
+        entry: undefined,
         decimals: 6,
         resolved: challengeContext({ snapshot: snapshot() }),
       })
@@ -487,13 +550,11 @@ describe('CredentialPlan', () => {
     })
 
     test('plans voucher reuse before snapshot recovery when cache entry is open', () => {
-      const cache = createChannelCache()
       const entry = channel()
-      storeChannelEntry(cache, 'payee:token:escrow', entry)
 
       const plan = planCredential({
         account,
-        cache,
+        entry,
         decimals: 6,
         resolved: challengeContext({ snapshot: snapshot() }),
       })
@@ -501,11 +562,94 @@ describe('CredentialPlan', () => {
       expect(plan).toMatchObject({ type: 'voucher', entry })
     })
 
+    test('opens fresh instead of vouchering when the account cannot sign the cached entry', () => {
+      const entry = channel({
+        descriptor: {
+          ...descriptor,
+          authorizedSigner: '0x00000000000000000000000000000000000000aa' as Address,
+        },
+      })
+
+      const plan = planCredential({
+        account,
+        entry,
+        decimals: 6,
+        resolved: challengeContext(),
+      })
+
+      expect(plan.type).toBe('open')
+    })
+
+    test('opens fresh instead of recovering when the account cannot sign the snapshot', () => {
+      const plan = planCredential({
+        account,
+        entry: undefined,
+        decimals: 6,
+        resolved: challengeContext({
+          snapshot: snapshot({
+            descriptor: {
+              ...snapshotDescriptor,
+              authorizedSigner: '0x00000000000000000000000000000000000000aa' as Address,
+            },
+          }),
+        }),
+      })
+
+      expect(plan.type).toBe('open')
+    })
+
+    test('vouchers when the account can satisfy the cached voucher authority', () => {
+      const delegatedAccount = privateKeyToAccount(
+        '0x2000000000000000000000000000000000000000000000000000000000000000',
+      )
+      const entry = channel({
+        descriptor: { ...descriptor, authorizedSigner: delegatedAccount.address },
+      })
+
+      const plan = planCredential({
+        account: Object.assign({}, account, { accessKeyAddress: delegatedAccount.address }),
+        entry,
+        decimals: 6,
+        resolved: challengeContext(),
+      })
+
+      expect(plan).toMatchObject({ type: 'voucher', entry })
+    })
+
+    test('canSignDescriptor matches root, zero, and delegated authorities', () => {
+      const delegatedAuthority = '0x00000000000000000000000000000000000000aa' as Address
+      expect(canSignDescriptor(account, descriptor)).toBe(true)
+      expect(
+        canSignDescriptor(account, {
+          ...descriptor,
+          authorizedSigner: '0x0000000000000000000000000000000000000000' as Address,
+        }),
+      ).toBe(true)
+      expect(
+        canSignDescriptor(account, { ...descriptor, authorizedSigner: delegatedAuthority }),
+      ).toBe(false)
+      expect(
+        canSignDescriptor(Object.assign({}, account, { accessKeyAddress: delegatedAuthority }), {
+          ...descriptor,
+          authorizedSigner: delegatedAuthority,
+        }),
+      ).toBe(true)
+      const otherPayer = '0x00000000000000000000000000000000000000bb' as Address
+      expect(canSignDescriptor(account, { ...descriptor, payer: otherPayer })).toBe(false)
+      expect(
+        canSignDescriptor(Object.assign({}, account, { accessKeyAddress: delegatedAuthority }), {
+          ...descriptor,
+          payer: otherPayer,
+          authorizedSigner: delegatedAuthority,
+        }),
+      ).toBe(false)
+    })
+
     test('rejects channel ID reuse without descriptor or cache entry', () => {
       expect(() =>
         planCredential({
           account,
-          cache: createChannelCache(),
+          entry: undefined,
           context: { channelId },
           decimals: 6,
           resolved: challengeContext(),
