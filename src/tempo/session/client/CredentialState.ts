@@ -70,6 +70,7 @@ async function applyCumulative(
   if (cumulativeAmount === undefined) return
   const entry = await sink.store.get(key)
   if (!entry) return
+  if (entry.channelId.toLowerCase() !== payload.channelId.toLowerCase()) return
   entry.cumulativeAmount =
     entry.cumulativeAmount > cumulativeAmount ? entry.cumulativeAmount : cumulativeAmount
   if (payload.action === 'close') entry.opened = false

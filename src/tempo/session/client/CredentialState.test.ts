@@ -506,6 +506,35 @@ describe('CredentialPlan', () => {
       )
     })
 
+    test('leaves stored scope entry unchanged when a manual credential targets another channel', async () => {
+      const entry = channel()
+      const originalCumulative = entry.cumulativeAmount
+      const notifications: ChannelEntry[] = []
+      const store = createChannelStore()
+      const manualDescriptor = { ...descriptor, salt: `0x${'55'.repeat(32)}` as Hex }
+      await store.set(entry)
+
+      await executeCredentialPlan(
+        planCredential({
+          account,
+          entry,
+          context: {
+            action: 'voucher',
+            descriptor: manualDescriptor,
+            cumulativeAmountRaw: '25',
+          },
+          decimals: 6,
+          resolved: challengeContext(),
+        }),
+        { store, notifyUpdate: (updated) => notifications.push(updated) },
+      )
+
+      const stored = await store.get(entryKey(entry))
+      expect(stored?.channelId).toBe(entry.channelId)
+      expect(stored?.cumulativeAmount).toBe(originalCumulative)
+      expect(notifications).toEqual([])
+    })
+
     test('plans recovery from server snapshot when no reusable cache entry exists', () => {
       const plan = planCredential({
         account,
