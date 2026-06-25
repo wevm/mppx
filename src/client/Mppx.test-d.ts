@@ -1,4 +1,4 @@
-import type { Account } from 'viem'
+import type { Account, Address } from 'viem'
 import { describe, expectTypeOf, test } from 'vp/test'
 
 import * as Challenge from '../Challenge.js'
@@ -9,6 +9,7 @@ import { tempo } from '../tempo/client/Methods.js'
 import type * as AutoSwap from '../tempo/internal/auto-swap.js'
 import * as Methods from '../tempo/Methods.js'
 import * as z from '../zod.js'
+import type { ResolveAccount } from './index.js'
 import * as Fetch from './internal/Fetch.js'
 import { session, sessionManager, sessionMethod } from './Methods.js'
 import * as Mppx from './Mppx.js'
@@ -76,6 +77,25 @@ describe('create.Config', () => {
     })
 
     expectTypeOf(mppx.fetch).toBeFunction()
+  })
+
+  test('tempo common accepts one resolveAccount hook for charge and session', () => {
+    const resolveAccount: ResolveAccount = (info) => {
+      expectTypeOf(info).toHaveProperty('account')
+      expectTypeOf(info.chainId).toEqualTypeOf<number>()
+      if (info.operation.kind === 'executeCalls') {
+        expectTypeOf(info.operation.calls).toMatchTypeOf<
+          readonly { data: `0x${string}`; to: Address }[] | undefined
+        >()
+      }
+      if (info.operation.kind === 'authorizePaymentChannel') {
+        expectTypeOf(info.operation.authority).toEqualTypeOf<Address | undefined>()
+      }
+      return info.account
+    }
+
+    const methods = tempo({ account: {} as Account, resolveAccount })
+    expectTypeOf(methods).toMatchTypeOf<readonly Method.AnyClient[]>()
   })
 
   test('orderChallenges receives supported challenge candidates', () => {

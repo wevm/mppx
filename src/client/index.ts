@@ -18,5 +18,12 @@ export {
   type ChannelStore,
   type JsonChannelKv,
 } from '../tempo/session/client/ChannelStore.js'
+export type { ChargeContext } from '../tempo/client/Charge.js'
+export type {
+  ResolveAccount,
+  ResolveAccountCall,
+  ResolveAccountInfo,
+  ResolveAccountOperation,
+} from '../tempo/client/ResolveAccount.js'
 export * as Mppx from './Mppx.js'
 export * as Transport from './Transport.js'

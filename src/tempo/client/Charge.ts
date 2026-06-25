@@ -20,6 +20,20 @@ import * as Charge_internal from '../internal/charge.js'
 import * as defaults from '../internal/defaults.js'
 import * as Proof from '../internal/proof.js'
 import * as Methods from '../Methods.js'
+import type * as AccountResolution from './ResolveAccount.js'
+
+/** Runtime context accepted by the Tempo charge client method. */
+export type ChargeContext = {
+  account?: Account.getResolver.Parameters['account'] | undefined
+  autoSwap?: AutoSwap.resolve.Value | undefined
+  mode?: Methods.ChargeMode | undefined
+}
+
+const chargeContextSchema = z.object({
+  account: z.optional(z.custom<ChargeContext['account']>()),
+  autoSwap: z.optional(z.custom<ChargeContext['autoSwap']>()),
+  mode: z.optional(z.enum(Methods.chargeModes)),
+})
 
 /**
  * Creates a Tempo charge method intent for usage on the client.
@@ -44,11 +58,7 @@ export function charge(parameters: charge.Parameters = {}) {
   const getAccount = Account.getResolver({ account: parameters.account })
 
   return Method.toClient(Methods.charge, {
-    context: z.object({
-      account: z.optional(z.custom<Account.getResolver.Parameters['account']>()),
-      autoSwap: z.optional(z.custom<charge.AutoSwap>()),
-      mode: z.optional(z.enum(Methods.chargeModes)),
-    }),
+    context: chargeContextSchema,
 
     async createCredential({ challenge, context }) {
       // Chain pinning: reject a challenge whose chain ID conflicts with the
@@ -68,19 +78,21 @@ export function charge(parameters: charge.Parameters = {}) {
       if (chainId === undefined)
         throw new Error('No `chainId` provided. Pass a chain ID in the challenge or client.')
 
-      const account = getAccount(client, context)
-
       const { request } = challenge
       const { amount, methodDetails } = request
+      const supportedModes = (methodDetails?.supportedModes as
+        | readonly Methods.ChargeMode[]
+        | undefined) ?? ['pull', 'push']
+      const defaultAccount = getAccount(client, context)
 
       // Zero-amount: sign EIP-712 typed data instead of creating a transaction.
       if (BigInt(amount) === 0n) {
         const signature = await signTypedData(client, {
-          account,
+          account: defaultAccount,
           // `account` here is the signing account; the proof's bound payer is
           // `account.address` (echoed in the credential `source` below).
           ...Proof.typedData({
-            account: account.address,
+            account: defaultAccount.address,
             chainId,
             challengeId: challenge.id,
             realm: challenge.realm,
@@ -89,7 +101,7 @@ export function charge(parameters: charge.Parameters = {}) {
         return Credential.serialize({
           challenge,
           payload: { signature, type: 'proof' },
-          source: Proof.proofSource({ address: account.address, chainId }),
+          source: Proof.proofSource({ address: defaultAccount.address, chainId }),
         })
       }
 
@@ -104,9 +116,42 @@ export function charge(parameters: charge.Parameters = {}) {
           }
         }
       }
-      const supportedModes = (methodDetails?.supportedModes as
-        | readonly Methods.ChargeMode[]
-        | undefined) ?? ['pull', 'push']
+      const memo = methodDetails?.memo
+        ? (methodDetails.memo as Hex.Hex)
+        : Attribution.encode({ challengeId: challenge.id, clientId, serverId: challenge.realm })
+      const transfers = Charge_internal.getTransfers({
+        amount,
+        methodDetails: {
+          ...methodDetails,
+          memo,
+        },
+        recipient: request.recipient as Address,
+      })
+      const transferCalls = transfers.map(
+        (transfer): AccountResolution.ResolveAccountCall =>
+          Actions.token.transfer.call({
+            amount: BigInt(transfer.amount),
+            ...(transfer.memo && { memo: transfer.memo as Hex.Hex }),
+            to: transfer.recipient as Address,
+            token: currency,
+          }) as AccountResolution.ResolveAccountCall,
+      )
+
+      const autoSwap = AutoSwap.resolve(
+        context?.autoSwap ?? parameters.autoSwap,
+        AutoSwap.defaultCurrencies,
+      )
+
+      const account =
+        (await parameters.resolveAccount?.({
+          account: defaultAccount,
+          chainId,
+          operation: {
+            kind: 'executeCalls',
+            ...(autoSwap ? {} : { calls: transferCalls }),
+          },
+        })) ?? defaultAccount
+
       const mode = (() => {
         const explicitMode = context?.mode ?? parameters.mode
         if (explicitMode) {
@@ -119,31 +164,6 @@ export function charge(parameters: charge.Parameters = {}) {
         if (supportedModes.includes(preferredMode)) return preferredMode
         return supportedModes[0]!
       })()
-
-      const memo = methodDetails?.memo
-        ? (methodDetails.memo as Hex.Hex)
-        : Attribution.encode({ challengeId: challenge.id, clientId, serverId: challenge.realm })
-      const transfers = Charge_internal.getTransfers({
-        amount,
-        methodDetails: {
-          ...methodDetails,
-          memo,
-        },
-        recipient: request.recipient as Address,
-      })
-      const transferCalls = transfers.map((transfer) =>
-        Actions.token.transfer.call({
-          amount: BigInt(transfer.amount),
-          ...(transfer.memo && { memo: transfer.memo as Hex.Hex }),
-          to: transfer.recipient as Address,
-          token: currency,
-        }),
-      )
-
-      const autoSwap = AutoSwap.resolve(
-        context?.autoSwap ?? parameters.autoSwap,
-        AutoSwap.defaultCurrencies,
-      )
 
       const swapCalls = autoSwap
         ? await AutoSwap.findCalls(client, {
@@ -202,6 +222,9 @@ export function charge(parameters: charge.Parameters = {}) {
 
 export declare namespace charge {
   type AutoSwap = AutoSwap.resolve.Value
+  type Context = ChargeContext
+  type ResolveAccount = AccountResolution.ResolveAccount
+  type ResolveAccountInfo = AccountResolution.ResolveAccountInfo
 
   type Parameters = {
     /**
@@ -236,6 +259,8 @@ export declare namespace charge {
      * @default `'push'` for JSON-RPC accounts, `'pull'` for local accounts.
      */
     mode?: Methods.ChargeMode | undefined
+    /** Selects the account that signs this charge after the challenge and chain are known. */
+    resolveAccount?: ResolveAccount | undefined
   } & Account.getResolver.Parameters &
     Client.getResolver.Parameters
 }

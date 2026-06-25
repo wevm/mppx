@@ -84,6 +84,122 @@ describe('tempo.charge client', () => {
     expect(credential.source).toBe(`did:pkh:eip155:${chainId}:${account.address}`)
   })
 
+  test('resolveAccount selects the transaction account from executable calls', async () => {
+    vi.resetModules()
+    const selectedAccount = privateKeyToAccount(
+      '0x0000000000000000000000000000000000000000000000000000000000000002',
+    )
+    const chainId = 42431
+    const calls: charge.ResolveAccountInfo[] = []
+    const prepareTransactionRequest = vi.fn(async () => ({}))
+    const signTransaction = vi.fn(async () => '0xdeadbeef')
+    vi.doMock('viem/actions', () => ({
+      prepareTransactionRequest,
+      sendCallsSync: vi.fn(),
+      signTransaction,
+      signTypedData: vi.fn(),
+    }))
+
+    try {
+      const { charge: chargeWithMockedActions } = await import('./Charge.js')
+      const client = createClient({
+        account,
+        chain: tempoLocalnet,
+        transport: http('http://127.0.0.1'),
+      })
+      const method = chargeWithMockedActions({
+        account,
+        getClient: () => client,
+        resolveAccount(info) {
+          calls.push(info)
+          return selectedAccount
+        },
+      })
+
+      const credential = Credential.deserialize(
+        await method.createCredential({
+          challenge: createChallenge({ amount: '1', chainId, supportedModes: ['pull'] }),
+          context: {},
+        }),
+      )
+
+      expect(calls).toHaveLength(1)
+      expect(calls[0]!.account.address).toBe(account.address)
+      expect(calls[0]!.chainId).toBe(chainId)
+      expect(calls[0]!.operation.kind).toBe('executeCalls')
+      if (calls[0]!.operation.kind !== 'executeCalls') throw new Error('expected executeCalls')
+      expect(calls[0]!.operation.calls).toHaveLength(1)
+      expect(calls[0]!.operation.calls?.[0]?.to.toLowerCase()).toBe(currency.toLowerCase())
+      expect(prepareTransactionRequest).toHaveBeenCalledOnce()
+      expect(signTransaction).toHaveBeenCalledOnce()
+      expect(credential.payload).toEqual({ signature: '0xdeadbeef', type: 'transaction' })
+      expect(credential.source).toBe(`did:pkh:eip155:${chainId}:${selectedAccount.address}`)
+    } finally {
+      vi.doUnmock('viem/actions')
+      vi.resetModules()
+    }
+  })
+
+  test('resolveAccount omits executable calls when auto-swap routing is account-dependent', async () => {
+    vi.resetModules()
+    const selectedAccount = privateKeyToAccount(
+      '0x0000000000000000000000000000000000000000000000000000000000000002',
+    )
+    const chainId = 42431
+    const calls: charge.ResolveAccountInfo[] = []
+    const prepareTransactionRequest = vi.fn(async () => ({}))
+    const signTransaction = vi.fn(async () => '0xdeadbeef')
+    const findCalls = vi.fn(async (_client: unknown, _parameters: { account: string }) => undefined)
+    vi.doMock('viem/actions', () => ({
+      prepareTransactionRequest,
+      sendCallsSync: vi.fn(),
+      signTransaction,
+      signTypedData: vi.fn(),
+    }))
+    vi.doMock('../internal/auto-swap.js', () => ({
+      defaultCurrencies: [currency],
+      findCalls,
+      resolve: vi.fn(() => ({ tokenIn: [currency], slippage: 1 })),
+    }))
+
+    try {
+      const { charge: chargeWithMockedActions } = await import('./Charge.js')
+      const client = createClient({
+        account,
+        chain: tempoLocalnet,
+        transport: http('http://127.0.0.1'),
+      })
+      const method = chargeWithMockedActions({
+        account,
+        autoSwap: true,
+        getClient: () => client,
+        resolveAccount(info) {
+          calls.push(info)
+          return selectedAccount
+        },
+      })
+
+      const credential = Credential.deserialize(
+        await method.createCredential({
+          challenge: createChallenge({ amount: '1', chainId, supportedModes: ['pull'] }),
+          context: {},
+        }),
+      )
+
+      expect(calls).toHaveLength(1)
+      expect(calls[0]!.operation.kind).toBe('executeCalls')
+      if (calls[0]!.operation.kind !== 'executeCalls') throw new Error('expected executeCalls')
+      expect(calls[0]!.operation.calls).toBeUndefined()
+      expect(findCalls).toHaveBeenCalledOnce()
+      expect(findCalls.mock.calls[0]?.[1].account).toBe(selectedAccount.address)
+      expect(credential.payload).toEqual({ signature: '0xdeadbeef', type: 'transaction' })
+    } finally {
+      vi.doUnmock('viem/actions')
+      vi.doUnmock('../internal/auto-swap.js')
+      vi.resetModules()
+    }
+  })
+
   test('zero-amount proof binds to the root payer for an access-key account', async () => {
     vi.resetModules()
     // Capture the typed data so we can assert what the proof commits to.
@@ -115,9 +231,11 @@ describe('tempo.charge client', () => {
         chain: tempoLocalnet,
         transport: http('http://127.0.0.1'),
       })
+      const resolveAccount = vi.fn()
       const method = chargeWithMockedActions({
         account: accessKey,
         getClient: () => client,
+        resolveAccount,
       })
 
       const credential = Credential.deserialize(
@@ -128,6 +246,7 @@ describe('tempo.charge client', () => {
       )
 
       expect(signTypedData).toHaveBeenCalledOnce()
+      expect(resolveAccount).not.toHaveBeenCalled()
       expect(signedTypedData?.message.account).toBe(account.address)
       expect(credential.payload).toEqual({ signature: '0xdeadbeef', type: 'proof' })
       expect(credential.source).toBe(`did:pkh:eip155:${chainId}:${account.address}`)

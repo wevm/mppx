@@ -9,14 +9,7 @@
  * @see https://tips.sh/1034-1
  */
 import { Hex } from 'ox'
-import {
-  encodeFunctionData,
-  isAddress,
-  zeroAddress,
-  type Account,
-  type Address,
-  type Client,
-} from 'viem'
+import { encodeFunctionData, isAddress, type Account, type Address, type Client } from 'viem'
 import { prepareTransactionRequest, signTransaction } from 'viem/actions'
 import { Transaction } from 'viem/tempo'
 
@@ -60,10 +53,6 @@ export type ChannelEntry = {
   chainId: number
   /** Whether the client considers the channel reusable for new vouchers. */
   opened: boolean
-}
-
-function voucherAuthorizedSigner(address: Address): Address | undefined {
-  return address.toLowerCase() === zeroAddress ? undefined : address
 }
 
 function isObject(value: unknown): value is Record<string, unknown> {
@@ -169,7 +158,6 @@ export async function createVoucherPayload(
     { channelId, cumulativeAmount: amount },
     escrow,
     chainId,
-    voucherAuthorizedSigner(descriptor.authorizedSigner),
   )
 
   return {
@@ -281,7 +269,6 @@ export async function createOpenPayload(
     { channelId, cumulativeAmount: initialAmount },
     escrow,
     parameters.chainId,
-    voucherAuthorizedSigner(authorizedSigner),
   )
   return {
     action: 'open',

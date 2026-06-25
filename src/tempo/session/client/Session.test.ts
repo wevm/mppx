@@ -1,6 +1,6 @@
 import { type Address, createClient, custom, decodeFunctionData, encodeFunctionResult } from 'viem'
 import { privateKeyToAccount } from 'viem/accounts'
-import { Transaction } from 'viem/tempo'
+import { Account as TempoAccount, Secp256k1, Transaction } from 'viem/tempo'
 import { describe, expect, test } from 'vp/test'
 
 import type { Challenge } from '../../../Challenge.js'
@@ -284,6 +284,46 @@ describe('precompile client session', () => {
     expect(second.channelId).toBe(first.channelId)
     expect(second.cumulativeAmount).toBe('200')
     expect(updates).toEqual([100n, 200n])
+  })
+
+  test('passes existing channel authority to resolveAccount before reusing session channel', async () => {
+    const accessKey = TempoAccount.fromSecp256k1(Secp256k1.randomPrivateKey(), {
+      access: account,
+    })
+    const calls: session.ResolveAccountInfo[] = []
+    const method = session({
+      account,
+      decimals: 0,
+      maxDeposit: '1000',
+      getClient: () => client,
+      resolveAccount(info) {
+        calls.push(info)
+        return accessKey
+      },
+    })
+    const first = deserializeCredential(
+      await method.createCredential({ challenge: makeChallenge(), context: {} }),
+    )
+    const second = deserializeCredential(
+      await method.createCredential({ challenge: makeChallenge(), context: {} }),
+    )
+
+    expect(calls).toHaveLength(2)
+    expect(calls[0]!.account.address).toBe(account.address)
+    expect(calls[0]!.operation).toEqual({ kind: 'authorizePaymentChannel' })
+    expect(calls[1]!.operation).toEqual({
+      kind: 'authorizePaymentChannel',
+      authority: accessKey.accessKeyAddress,
+    })
+    expect(first.source).toBe(`did:pkh:eip155:${chainId}:${account.address}`)
+    expect(second.source).toBe(`did:pkh:eip155:${chainId}:${account.address}`)
+    expect(first.payload.action).toBe('open')
+    if (first.payload.action !== 'open' || second.payload.action !== 'voucher')
+      throw new Error('expected open then voucher payloads')
+    expect(first.payload.descriptor.payer).toBe(account.address)
+    expect(first.payload.descriptor.authorizedSigner).toBe(accessKey.accessKeyAddress)
+    expect(second.payload.channelId).toBe(first.payload.channelId)
+    expect(second.payload.cumulativeAmount).toBe('200')
   })
 
   test('enforces maxDeposit when reusing a cached auto-mode channel', async () => {
