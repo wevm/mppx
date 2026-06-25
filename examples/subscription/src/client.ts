@@ -47,8 +47,6 @@ console.log('Run the server with an overdue stored subscription to exercise rene
 
 await readArticle('Reused access')
 
-const subscriptionResponse = await fetch(
-  `${baseUrl}/api/subscription?address=${account.address}&chainId=${client.chain.id}`,
-)
+const subscriptionResponse = await mppx.fetch(`${baseUrl}/api/subscription`)
 const subscription = (await subscriptionResponse.json()) as Subscription.SubscriptionRecord
 console.log(`lastChargedPeriod=${subscription.lastChargedPeriod}`)

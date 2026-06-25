@@ -1,3 +1,4 @@
+import { Receipt } from 'mppx'
 import { Mppx, Store, tempo } from 'mppx/server'
 import { Subscription } from 'mppx/tempo'
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts'
@@ -17,13 +18,6 @@ const subscriptions = Subscription.fromStore(store)
 
 function subscriptionKey(source: { address: string; chainId: number }) {
   return `news:eip155:${source.chainId}:${source.address.toLowerCase()}:${planId}`
-}
-
-function subscriptionKeyFromUrl(url: URL) {
-  const address = url.searchParams.get('address')
-  const chainId = Number(url.searchParams.get('chainId') ?? '4217')
-  if (!address || !Number.isSafeInteger(chainId)) return null
-  return subscriptionKey({ address, chainId })
 }
 
 const mppx = Mppx.create({
@@ -60,9 +54,16 @@ export async function handler(request: Request): Promise<Response | null> {
   if (url.pathname === '/api/health') return Response.json({ status: 'ok' })
 
   if (url.pathname === '/api/subscription') {
-    const key = subscriptionKeyFromUrl(url)
-    if (!key) return Response.json({ error: 'missing address' }, { status: 400 })
-    return Response.json(await subscriptions.getByKey(key))
+    const result = await mppx.tempo.subscription({
+      description: 'News app daily subscription status',
+    })(request)
+    if (result.status === 402) return result.challenge
+
+    const receipt = Receipt.fromResponse(result.withReceipt(new Response(null)))
+    if (!receipt.subscriptionId) {
+      return Response.json({ error: 'missing subscription receipt' }, { status: 500 })
+    }
+    return result.withReceipt(Response.json(await subscriptions.get(receipt.subscriptionId)))
   }
 
   if (url.pathname === '/api/article') {

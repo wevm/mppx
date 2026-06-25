@@ -30,6 +30,7 @@ The client:
 1. Requests `/api/article` and receives a `402` challenge with a server access key.
 2. Signs a `keyAuthorization`; the server derives the subscription key from the recovered payer.
 3. Requests `/api/article` again, signs a fresh credential, and reuses the active subscription without another charge.
+4. Requests `/api/subscription`, signs the route challenge, and reads subscription state for the verified payer.
 
 ## Test with mppx CLI
 
