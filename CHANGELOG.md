@@ -1,5 +1,38 @@
 # mppx
 
+## 0.8.0
+
+### Minor Changes
+
+- daab9b8: **Breaking:** Collapsed `McpClient.wrap` and the in-place `wrapClient` variant into a single `McpClient.wrap` API on the `mppx/mcp/client` entrypoint.
+
+  `McpClient.wrap` now adds payment handling to an MCP SDK client in place: the client is mutated and the same reference is returned, so surfaces that keep using the original client become payment-aware (e.g. when another SDK owns the client reference, like Cloudflare Agents). The MCP SDK `callTool(params, resultSchema?, options?)` signature is preserved, payment challenges are handled whether they arrive as payment-required errors or as tool results carrying `org.paymentauth/payment-required` metadata, and the config accepts `orderChallenges` and `paymentPreferences` alongside `methods` and `onPaymentRequired`. Calling `wrap` on the same client again replaces its payment configuration.
+
+  Migration: move per-call options from the second argument to the third — `mcp.callTool(params, undefined, { context, timeout })` — and replace the approval-first overload `mcp.callTool(onPaymentRequired, params, options)` with the `onPaymentRequired` option: `mcp.callTool(params, undefined, { onPaymentRequired })` (pass `null` to bypass a configured hook). The MCP entrypoints moved to `mppx/mcp/client` and `mppx/mcp/server`; the `mppx/mcp-sdk/*` specifiers remain as aliases.
+
+- e755222: Settled MCP-over-HTTP payment challenges in the same payment-aware fetch as HTTP `402`s, so `Transport.http()` can extract JSON-RPC `-32042` challenges and retry with credentials in MCP metadata.
+- 18b57cc: Added a pluggable `channelStore` for persisting reusable payer session channels and removed the client-side `authorizedSigner` override so voucher authority is derived from the selected account.
+
+### Patch Changes
+
+- 4c79a78: Rejected empty Payment challenge IDs during construction and deserialization.
+- 7c38c17: Deprecated uppercase asset and chain aliases in favor of lowercase exports.
+- 0e88d07: Corrected PaymentRequest documentation examples to use the exported namespace name.
+- 8da60b5: Documented explicit server secret key configuration in README examples.
+- 7ab4e00: Fixed legacy session manager close amounts when receipts reported per-request spent deltas.
+- b5d8657: Updated Hono dependencies to patched versions.
+- 5e27ef2: Fixed SSE session accounting so voucher management posts no longer consumed stream charges.
+- ec1ad50: Hardened server secret-key validation and capped oversized `WWW-Authenticate` request parameters.
+- 11db0bd: Removed now-unused `wallet_authorizeChallenge` support.
+- a1199b0: Added credential-required Tempo subscription reuse and signed-source lookup support so active subscriptions could be bound to the recovered payer instead of request metadata alone.
+- e80feeb: The Tempo fee-payer (sponsor) pre-broadcast simulation now simulates the co-signed transaction the sponsor actually broadcasts — with the concrete fee payer and chosen fee token — instead of the pre-cosign `0x78` envelope, for both local and hosted (`feePayerUrl`) fee payers. This catches reverts in the exact transaction the sponsor pays gas for, and fails closed (no broadcast) when the simulation reverts.
+- c2611f6: Added `tempo.common()` as an explicit alias for the Tempo charge and session method bundle.
+- b84cc06: Added generic Tempo account resolution for charge/session credentials and primitive session voucher signatures.
+- 034315e: Updated proxy route examples to use current route handler APIs.
+- 4e5abf4: Hardened confirmed Tempo subscription settlement against T6 (TIP-1028) receive policies. Activation and renewal payments that wait for confirmation now verify that a TIP-20 `TransferWithMemo` log credits the intended recipient for the expected amount with the generated settlement memo, instead of trusting transaction success alone. Transfers held by a receiver's receive policy (redirected to `ReceivePolicyGuard`) are now rejected rather than treated as paid, and the memo binding excludes unrelated transfer effects in the same receipt. Documented that the optimistic `waitForConfirmation: false` mode cannot prove recipient credit under T6.
+- c15be54: Added `wallet_authorizeChallenge` support. JSON-RPC accounts now delegate Tempo charge and session challenges to wallets that advertise MPP support via `wallet_getCapabilities`, falling back to local signing otherwise.
+- d14d933: Bound Tempo zero-amount proof credentials to the payer wallet. The EIP-712 `Proof` typed-data now includes an `account` field (domain version bumped to `3`), so a proof signature commits to a specific payer address and can no longer be replayed against a different account — including across an access key authorized for multiple accounts. Exposed the canonical proof contract via `tempo.Proof` (`types`, `domain`, `primaryType`, `message`, `typedData`, `hash`) and added deterministic conformance vectors covering the wallet-binding property.
+
 ## 0.7.0
 
 ### Minor Changes
