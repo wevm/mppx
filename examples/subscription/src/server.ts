@@ -1,3 +1,4 @@
+import { Receipt } from 'mppx'
 import { Mppx, Store, tempo } from 'mppx/server'
 import { Subscription } from 'mppx/tempo'
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts'
@@ -15,12 +16,8 @@ const account = privateKeyToAccount(generatePrivateKey())
 const store = Store.memory()
 const subscriptions = Subscription.fromStore(store)
 
-function subscriptionKey(userId: string) {
-  return `news:${userId}:${planId}`
-}
-
-function getUserId(request: Request) {
-  return request.headers.get('X-User-Id') ?? new URL(request.url).searchParams.get('userId')
+function subscriptionKey(source: { address: string; chainId: number }) {
+  return `news:eip155:${source.chainId}:${source.address.toLowerCase()}:${planId}`
 }
 
 const mppx = Mppx.create({
@@ -32,10 +29,10 @@ const mppx = Mppx.create({
       periodCount,
       periodUnit,
       recipient: account.address,
-      resolve: async ({ input }) => {
-        const userId = getUserId(input)
-        if (!userId) return null
-        return { key: subscriptionKey(userId) }
+      requireCredential: true,
+      resolve: async ({ source }) => {
+        if (!source) return null
+        return { key: subscriptionKey(source) }
       },
       store,
       subscriptionExpires,
@@ -57,9 +54,17 @@ export async function handler(request: Request): Promise<Response | null> {
   if (url.pathname === '/api/health') return Response.json({ status: 'ok' })
 
   if (url.pathname === '/api/subscription') {
-    const userId = getUserId(request)
-    if (!userId) return Response.json({ error: 'missing userId' }, { status: 400 })
-    return Response.json(await subscriptions.getByKey(subscriptionKey(userId)))
+    const result = await mppx.tempo.subscription({
+      description: 'News app daily subscription status',
+    })(request)
+    if (result.status === 402) return result.challenge
+
+    // The verified credential receipt identifies the payer-bound subscription.
+    const receipt = Receipt.fromResponse(result.withReceipt(new Response(null)))
+    if (!receipt.subscriptionId) {
+      return Response.json({ error: 'missing subscription receipt' }, { status: 500 })
+    }
+    return result.withReceipt(Response.json(await subscriptions.get(receipt.subscriptionId)))
   }
 
   if (url.pathname === '/api/article') {
