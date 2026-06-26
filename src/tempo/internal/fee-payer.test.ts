@@ -668,6 +668,30 @@ describe('fillHostedFeePayerTransaction', () => {
       }),
     ).rejects.toThrow('Invalid or revoked API key')
   })
+
+  test('error: rejects keyAuthorization before requesting hosted fill', async () => {
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(
+      fillHostedFeePayerTransaction({
+        allowedFeeTokens: defaultAllowedFeeTokens(defaults.chainId.mainnet),
+        transaction: {
+          ...hostedTransaction,
+          keyAuthorization: {
+            address: bogus,
+            chainId: defaults.chainId.mainnet,
+            nonce: 1n,
+            r: 1n,
+            s: 2n,
+            yParity: 0,
+          },
+        } as any,
+        url: 'https://sponsor.example/tp_key',
+      }),
+    ).rejects.toThrow('must not include keyAuthorization')
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
 })
 
 describe('simulationTransaction', () => {
@@ -843,7 +867,7 @@ describe('prepareSponsoredTransaction', () => {
     ).toThrow('maxPriorityFeePerGas exceeds sponsor policy')
   })
 
-  test('preserves keyAuthorization', () => {
+  test('error: rejects keyAuthorization', () => {
     const keyAuthorization = {
       address: bogus,
       chainId: 42431,
@@ -853,15 +877,15 @@ describe('prepareSponsoredTransaction', () => {
       yParity: 0,
     }
 
-    const sponsored = prepareSponsoredTransaction({
-      account: sponsor,
-      chainId: 42431,
-      details,
-      allowedFeeTokens: [bogus],
-      transaction: { ...baseTransaction, keyAuthorization } as any,
-    }) as { keyAuthorization?: unknown }
-
-    expect(sponsored.keyAuthorization).toEqual(keyAuthorization)
+    expect(() =>
+      prepareSponsoredTransaction({
+        account: sponsor,
+        chainId: 42431,
+        details,
+        allowedFeeTokens: [bogus],
+        transaction: { ...baseTransaction, keyAuthorization } as any,
+      }),
+    ).toThrow('must not include keyAuthorization')
   })
 
   test('error: rejects unknown top-level fields from the sponsored transaction', () => {

@@ -151,9 +151,6 @@ function hostedFeePayerRequest(transaction: SponsoredTransaction) {
     feePayer: true,
     from: transaction.from,
     ...(transaction.gas !== undefined ? { gas: toHex(transaction.gas) } : {}),
-    ...(transaction.keyAuthorization !== undefined
-      ? { keyAuthorization: transaction.keyAuthorization }
-      : {}),
     ...(transaction.maxFeePerGas !== undefined
       ? { maxFeePerGas: toHex(transaction.maxFeePerGas) }
       : {}),
@@ -185,6 +182,7 @@ export async function fillHostedFeePayerTransaction(parameters: {
   url: string
 }) {
   const { allowedFeeTokens, transaction, url } = parameters
+  assertNoKeyAuthorization(transaction)
   const response = await fetch(url, {
     body: JSON.stringify(
       {
@@ -433,6 +431,15 @@ export function validateCalls(
   }
 }
 
+/** Rejects account key authorization payloads on fee-sponsored transactions. */
+export function assertNoKeyAuthorization(transaction: { keyAuthorization?: unknown }) {
+  if (transaction.keyAuthorization !== undefined)
+    throw new FeePayerValidationError(
+      'fee-sponsored transaction must not include keyAuthorization',
+      {},
+    )
+}
+
 export function prepareSponsoredTransaction(parameters: {
   account: Account
   allowedFeeTokens?: readonly TempoAddress.Address[] | undefined
@@ -463,7 +470,6 @@ export function prepareSponsoredTransaction(parameters: {
     feeToken,
     from,
     gas,
-    keyAuthorization,
     maxFeePerGas,
     maxPriorityFeePerGas,
     nonce,
@@ -495,6 +501,8 @@ export function prepareSponsoredTransaction(parameters: {
     fail('fee-sponsored transaction contains rejected fields', {
       rejectedFields: rejectedKeys.join(', '),
     })
+
+  assertNoKeyAuthorization(transaction)
 
   if (transaction.type !== undefined && transaction.type !== 'tempo')
     fail('fee-sponsored transaction type is invalid', {
@@ -589,7 +597,6 @@ export function prepareSponsoredTransaction(parameters: {
     ...(normalizedFeeToken ? { feeToken: normalizedFeeToken } : {}),
     ...(from ? { from } : {}),
     gas: gasLimit,
-    ...(keyAuthorization !== undefined ? { keyAuthorization } : {}),
     ...(nonce !== undefined ? { nonce } : {}),
     maxFeePerGas: maxFeePerGasValue,
     ...(maxPriorityFeePerGas !== undefined ? { maxPriorityFeePerGas } : {}),
