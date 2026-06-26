@@ -113,6 +113,19 @@ export function validateChannelState(state: Chain.ChannelState, amount?: bigint)
   }
 }
 
+/** Asserts that an opening channel covers the route's requested payment. */
+export function assertOpenCredentialCoversRequest(parameters: {
+  cumulativeAmount: bigint
+  openDeposit: bigint
+  requestAmount: bigint
+}): void {
+  const { cumulativeAmount, openDeposit, requestAmount } = parameters
+  if (openDeposit < requestAmount)
+    throw new VerificationFailedError({ reason: 'open deposit is less than request amount' })
+  if (cumulativeAmount < requestAmount)
+    throw new VerificationFailedError({ reason: 'voucher amount is less than request amount' })
+}
+
 const sessionCredentialActions = [
   'open',
   'topUp',
@@ -410,6 +423,11 @@ async function handleOpenCredential(
     feePayerPolicy: parameters.feePayerPolicy,
     serializedTransaction: payload.transaction,
     async beforeBroadcast(prepared) {
+      assertOpenCredentialCoversRequest({
+        cumulativeAmount,
+        openDeposit: prepared.openDeposit,
+        requestAmount: request.amount,
+      })
       assertSameDescriptor(prepared.descriptor, payload.descriptor)
       if (cumulativeAmount > prepared.openDeposit)
         throw new AmountExceedsDepositError({ reason: 'voucher amount exceeds open deposit' })

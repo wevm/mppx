@@ -3,6 +3,7 @@ import { describe, expect, test } from 'vp/test'
 
 import * as Channel from '../precompile/Channel.js'
 import {
+  assertOpenCredentialCoversRequest,
   requireSessionCredentialAction,
   requireSessionCredentialPayload,
   requireSessionCredentialPayloadHeader,
@@ -141,6 +142,41 @@ describe('SessionCredentialGuards', () => {
           '0x0000000000000000000000000000000000000004',
         ),
       ).toThrow('channel descriptor operator does not match server operator')
+    })
+  })
+
+  describe('assertOpenCredentialCoversRequest', () => {
+    test('accepts deposit and voucher amounts that cover the request', () => {
+      expect(() =>
+        assertOpenCredentialCoversRequest({
+          cumulativeAmount: 100n,
+          openDeposit: 100n,
+          requestAmount: 100n,
+        }),
+      ).not.toThrow()
+    })
+
+    test.each([
+      {
+        cumulativeAmount: 100n,
+        expected: 'open deposit is less than request amount',
+        openDeposit: 99n,
+        requestAmount: 100n,
+      },
+      {
+        cumulativeAmount: 99n,
+        expected: 'voucher amount is less than request amount',
+        openDeposit: 100n,
+        requestAmount: 100n,
+      },
+    ])('rejects insufficient open credential funding: $expected', (case_) => {
+      expect(() =>
+        assertOpenCredentialCoversRequest({
+          cumulativeAmount: case_.cumulativeAmount,
+          openDeposit: case_.openDeposit,
+          requestAmount: case_.requestAmount,
+        }),
+      ).toThrow(case_.expected)
     })
   })
 })
