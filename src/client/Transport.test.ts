@@ -2,6 +2,7 @@ import { Challenge, Credential, Mcp } from 'mppx'
 import { Transport } from 'mppx/client'
 import { Methods } from 'mppx/tempo'
 import { Header as x402_Header, Types as x402_Types, type PaymentRequired } from 'mppx/x402'
+import { Base64 } from 'ox'
 import { describe, expect, test } from 'vp/test'
 
 import * as x402_ChallengeBrand from '../x402/internal/ChallengeBrand.js'
@@ -42,6 +43,25 @@ const x402PaymentRequired = {
   },
   x402Version: 2,
 } satisfies PaymentRequired
+
+const unsupportedSolanaAccept = {
+  amount: '10000',
+  asset: 'USDC',
+  maxTimeoutSeconds: 60,
+  network: 'solana:mainnet',
+  payTo: '9xQeWvG816bUx9EPjHmaT23yvVM2ZWdYqPxfowV5n2kg',
+  scheme: 'exact',
+}
+
+const unsupportedSchemeAccept = {
+  ...x402PaymentRequired.accepts[0]!,
+  scheme: 'upto',
+}
+
+// Strict x402 encoding rejects unsupported accepts before the transport can filter them.
+function encodeRawPaymentRequiredHeader(value: unknown): string {
+  return Base64.fromString(JSON.stringify(value))
+}
 
 describe('http', () => {
   describe('isPaymentRequired', () => {
@@ -140,6 +160,28 @@ describe('http', () => {
         }),
         name: 'Payment auth and x402 challenges when both are present',
       },
+      {
+        expectedIds: [`${x402_Types.syntheticChallengeIdPrefix}0`],
+        expectedMethods: [x402_Types.paymentMethod],
+        headers: () => ({
+          'PAYMENT-REQUIRED': encodeRawPaymentRequiredHeader({
+            ...x402PaymentRequired,
+            accepts: [x402PaymentRequired.accepts[0]!, unsupportedSolanaAccept],
+          }),
+        }),
+        name: 'x402 challenges filtered from mixed EVM and Solana accepts',
+      },
+      {
+        expectedIds: [`${x402_Types.syntheticChallengeIdPrefix}0`],
+        expectedMethods: [x402_Types.paymentMethod],
+        headers: () => ({
+          'PAYMENT-REQUIRED': encodeRawPaymentRequiredHeader({
+            ...x402PaymentRequired,
+            accepts: [x402PaymentRequired.accepts[0]!, unsupportedSchemeAccept],
+          }),
+        }),
+        name: 'x402 challenges filtered from mixed exact and non-exact accepts',
+      },
     ])('returns $name', async ({ expectedIds, expectedMethods, headers }) => {
       const transport = Transport.http()
       const response = new Response(null, {
@@ -150,6 +192,42 @@ describe('http', () => {
 
       expect(challenges.map((entry) => entry.id)).toEqual(expectedIds)
       expect(challenges.map((entry) => entry.method)).toEqual(expectedMethods)
+    })
+
+    test('returns Payment auth challenges when x402 accepts are unsupported', async () => {
+      const transport = Transport.http()
+      const response = new Response(null, {
+        status: 402,
+        headers: {
+          'PAYMENT-REQUIRED': encodeRawPaymentRequiredHeader({
+            ...x402PaymentRequired,
+            accepts: [unsupportedSolanaAccept],
+          }),
+          'WWW-Authenticate': Challenge.serialize(challenge),
+        },
+      })
+
+      const challenges = (await transport.getChallenges?.(response)) ?? []
+
+      expect(challenges.map((entry) => entry.id)).toEqual([challenge.id])
+      expect(challenges.map((entry) => entry.method)).toEqual(['tempo'])
+    })
+
+    test('returns no challenges when only unsupported x402 accepts are present', async () => {
+      const transport = Transport.http()
+      const response = new Response(null, {
+        status: 402,
+        headers: {
+          'PAYMENT-REQUIRED': encodeRawPaymentRequiredHeader({
+            ...x402PaymentRequired,
+            accepts: [unsupportedSolanaAccept],
+          }),
+        },
+      })
+
+      const challenges = (await transport.getChallenges?.(response)) ?? []
+      expect(challenges).toEqual([])
+      expect(() => transport.getChallenge(response)).toThrow('No challenge in response.')
     })
   })
 

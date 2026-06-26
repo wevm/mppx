@@ -16,11 +16,15 @@ export function x402(): Protocol {
       if (response.status !== paymentRequiredStatus) return []
       const header = response.headers.get(x402_Types.paymentRequiredHeader)
       if (!header) return []
-      const paymentRequired = x402_Header.decodePaymentRequired(header)
+      const paymentRequired = x402_Header.decodePaymentRequiredEnvelope(header)
       if (response.url && paymentRequired.resource.url !== response.url)
         throw new Error('x402 payment-required resource does not match response URL.')
-      return paymentRequired.accepts.map((accepted, index) =>
-        x402_ChallengeBrand.mark(
+      return paymentRequired.accepts.flatMap((rawAccepted, index) => {
+        const parsed = x402_Types.PaymentRequirementsSchema.safeParse(rawAccepted)
+        if (!parsed.success) return []
+
+        const accepted = parsed.data
+        return x402_ChallengeBrand.mark(
           Challenge.from({
             id: `${x402_Types.syntheticChallengeIdPrefix}${index}`,
             intent: x402_Types.exactIntent,
@@ -32,8 +36,8 @@ export function x402(): Protocol {
               resource: paymentRequired.resource,
             },
           }),
-        ),
-      )
+        )
+      })
     },
     setCredential(request, credential) {
       return setCredentialHeader(request, x402_Types.paymentSignatureHeader, credential)

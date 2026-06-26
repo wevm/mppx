@@ -2,6 +2,7 @@ import { Challenge, Credential, Errors, Mcp, Receipt } from 'mppx'
 import { tempo } from 'mppx/client'
 import { Mppx as Mppx_server, tempo as tempo_server } from 'mppx/server'
 import { Header as x402_Header, Types as x402_Types, type PaymentRequired } from 'mppx/x402'
+import { Base64 } from 'ox'
 import { createClient, defineChain } from 'viem'
 import { describe, expect, test, vi } from 'vp/test'
 import * as Http from '~test/Http.js'
@@ -377,6 +378,11 @@ function makeCombined402() {
     status: 402,
     headers,
   })
+}
+
+// Strict x402 encoding rejects unsupported accepts before the transport can filter them.
+function encodeRawPaymentRequiredHeader(value: unknown): string {
+  return Base64.fromString(JSON.stringify(value))
 }
 
 describe('Fetch.from: init passthrough (non-402)', () => {
@@ -1354,6 +1360,63 @@ describe('Fetch.from: 402 retry path', () => {
 
     const response = await fetch('https://example.com/api')
     expect(response.status).toBe(200)
+  })
+
+  test('ignores unsupported x402 accepts when selecting a Payment auth challenge', async () => {
+    let callCount = 0
+    const createCredential = vi.fn(async () => 'tempo-credential')
+    const tempoChallenge = Challenge.from({
+      id: 'tempo',
+      realm: 'test',
+      method: 'tempo',
+      intent: 'charge',
+      request: { amount: '1' },
+    })
+    const mockFetch: typeof globalThis.fetch = async (_input, init) => {
+      callCount++
+      if (callCount === 1) {
+        return new Response(null, {
+          status: 402,
+          headers: {
+            [x402_Types.paymentRequiredHeader]: encodeRawPaymentRequiredHeader({
+              accepts: [
+                {
+                  amount: '10000',
+                  asset: 'USDC',
+                  maxTimeoutSeconds: 60,
+                  network: 'solana:mainnet',
+                  payTo: '9xQeWvG816bUx9EPjHmaT23yvVM2ZWdYqPxfowV5n2kg',
+                  scheme: 'exact',
+                },
+              ],
+              resource: { url: 'https://example.com/api' },
+              x402Version: 2,
+            }),
+            'WWW-Authenticate': Challenge.serialize(tempoChallenge),
+          },
+        })
+      }
+
+      expect(new Headers(init?.headers).get('Authorization')).toBe('tempo-credential')
+      return new Response('OK', { status: 200 })
+    }
+
+    const fetch = Fetch.from({
+      fetch: mockFetch,
+      methods: [
+        {
+          name: 'tempo',
+          intent: 'charge',
+          context: undefined,
+          createCredential,
+        },
+      ] as const,
+    })
+
+    const response = await fetch('https://example.com/api')
+
+    expect(response.status).toBe(200)
+    expect(createCredential).toHaveBeenCalledOnce()
   })
 
   test('orderChallenges filters and sorts supported challenges before signing', async () => {
