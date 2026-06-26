@@ -1,5 +1,13 @@
 # mppx
 
+## 0.8.1
+
+### Patch Changes
+
+- 2c4086f: Disabled automatic CLI configuration discovery from local directories.
+- 2158a40: Enforced sponsor fee policies before hosted fee-payer signing.
+- ca8687b: Validated session open deposit and voucher amounts before sponsored broadcast.
+
 ## 0.8.0
 
 ### Minor Changes
