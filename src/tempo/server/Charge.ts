@@ -441,6 +441,10 @@ export function charge<const parameters extends charge.Parameters>(
               if (feePayerUrl && isFeePayerTx) {
                 const hosted = await FeePayer.fillHostedFeePayerTransaction({
                   allowedFeeTokens,
+                  challengeExpires: expires,
+                  chainId: chainId ?? client.chain!.id,
+                  details: { amount, currency, recipient },
+                  policy: feePayerPolicy,
                   transaction,
                   url: feePayerUrl,
                 })

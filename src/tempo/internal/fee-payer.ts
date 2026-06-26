@@ -181,10 +181,22 @@ function hostedFeePayerRequest(transaction: SponsoredTransaction) {
  */
 export async function fillHostedFeePayerTransaction(parameters: {
   allowedFeeTokens: readonly TempoAddress.Address[]
+  challengeExpires?: string | undefined
+  chainId: number
+  details: Record<string, string>
+  policy?: Partial<Policy> | undefined
   transaction: SponsoredTransaction
   url: string
 }) {
-  const { allowedFeeTokens, transaction, url } = parameters
+  const { allowedFeeTokens, challengeExpires, chainId, details, policy, transaction, url } =
+    parameters
+  assertTransactionPolicy({
+    challengeExpires,
+    chainId,
+    details,
+    policy,
+    transaction,
+  })
   const response = await fetch(url, {
     body: JSON.stringify(
       {
@@ -433,9 +445,8 @@ export function validateCalls(
   }
 }
 
-export function prepareSponsoredTransaction(parameters: {
-  account: Account
-  allowedFeeTokens?: readonly TempoAddress.Address[] | undefined
+/** Validates sponsor fee policy limits for a fee-payer transaction. */
+export function assertTransactionPolicy(parameters: {
   challengeExpires?: string | undefined
   chainId: number
   details: Record<string, string>
@@ -444,8 +455,6 @@ export function prepareSponsoredTransaction(parameters: {
   transaction: SponsoredTransaction
 }) {
   const {
-    account,
-    allowedFeeTokens,
     challengeExpires,
     chainId,
     details,
@@ -454,47 +463,18 @@ export function prepareSponsoredTransaction(parameters: {
     transaction,
   } = parameters
   const policy = getPolicy(chainId, policyOverrides)
-  const transactionRecord = transaction as Record<string, unknown>
-
   const {
-    accessList,
-    calls,
     chainId: transactionChainId,
-    feeToken,
-    from,
     gas,
-    keyAuthorization,
     maxFeePerGas,
     maxPriorityFeePerGas,
-    nonce,
     nonceKey,
-    signature,
-    validAfter,
     validBefore,
   } = transaction
 
   const fail = (reason: string, extra: Record<string, string> = {}) => {
     throw new FeePayerValidationError(reason, { ...details, ...extra })
   }
-
-  const unsupportedKeys = Object.entries(transaction).flatMap(([key, value]) => {
-    if (value === undefined) return []
-    if (supportedTransactionKeys.has(key)) return []
-    return [key]
-  })
-  if (unsupportedKeys.length > 0)
-    fail('fee-sponsored transaction contains unsupported fields', {
-      unsupportedFields: unsupportedKeys.join(', '),
-    })
-
-  const rejectedKeys = rejectedTransactionKeys.filter((key) => {
-    const value = transactionRecord[key]
-    return value !== undefined && value !== null
-  })
-  if (rejectedKeys.length > 0)
-    fail('fee-sponsored transaction contains rejected fields', {
-      rejectedFields: rejectedKeys.join(', '),
-    })
 
   if (transaction.type !== undefined && transaction.type !== 'tempo')
     fail('fee-sponsored transaction type is invalid', {
@@ -561,6 +541,77 @@ export function prepareSponsoredTransaction(parameters: {
     fail('fee-sponsored transaction validity window exceeds sponsor policy', {
       validBefore: String(validBeforeValue),
     })
+
+  return { gasLimit, maxFeePerGasValue, validBeforeValue }
+}
+
+export function prepareSponsoredTransaction(parameters: {
+  account: Account
+  allowedFeeTokens?: readonly TempoAddress.Address[] | undefined
+  challengeExpires?: string | undefined
+  chainId: number
+  details: Record<string, string>
+  now?: Date | undefined
+  policy?: Partial<Policy> | undefined
+  transaction: SponsoredTransaction
+}) {
+  const {
+    account,
+    allowedFeeTokens,
+    challengeExpires,
+    chainId,
+    details,
+    now = new Date(),
+    policy: policyOverrides,
+    transaction,
+  } = parameters
+  const transactionRecord = transaction as Record<string, unknown>
+
+  const {
+    accessList,
+    calls,
+    chainId: transactionChainId,
+    feeToken,
+    from,
+    keyAuthorization,
+    maxPriorityFeePerGas,
+    nonce,
+    nonceKey,
+    signature,
+    validAfter,
+  } = transaction
+
+  const fail = (reason: string, extra: Record<string, string> = {}) => {
+    throw new FeePayerValidationError(reason, { ...details, ...extra })
+  }
+
+  const unsupportedKeys = Object.entries(transaction).flatMap(([key, value]) => {
+    if (value === undefined) return []
+    if (supportedTransactionKeys.has(key)) return []
+    return [key]
+  })
+  if (unsupportedKeys.length > 0)
+    fail('fee-sponsored transaction contains unsupported fields', {
+      unsupportedFields: unsupportedKeys.join(', '),
+    })
+
+  const rejectedKeys = rejectedTransactionKeys.filter((key) => {
+    const value = transactionRecord[key]
+    return value !== undefined && value !== null
+  })
+  if (rejectedKeys.length > 0)
+    fail('fee-sponsored transaction contains rejected fields', {
+      rejectedFields: rejectedKeys.join(', '),
+    })
+
+  const { gasLimit, maxFeePerGasValue, validBeforeValue } = assertTransactionPolicy({
+    challengeExpires,
+    chainId,
+    details,
+    now,
+    policy: policyOverrides,
+    transaction,
+  })
 
   const normalizedFeeToken = (() => {
     if (feeToken === undefined) return undefined

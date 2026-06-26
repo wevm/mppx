@@ -499,6 +499,10 @@ describe('fillHostedFeePayerTransaction', () => {
     signature: { r: 1n, s: 1n, yParity: 0 } as any,
     validBefore: Math.floor(Date.now() / 1_000) + 300,
   } as const
+  const hostedContext = {
+    chainId: defaults.chainId.mainnet,
+    details,
+  } as const
 
   test('uses hosted fillTransaction and preserves sender-committed fields', async () => {
     // Sign over the payload built from the actual RPC request body so this
@@ -569,6 +573,7 @@ describe('fillHostedFeePayerTransaction', () => {
 
     const result = await fillHostedFeePayerTransaction({
       allowedFeeTokens: defaultAllowedFeeTokens(defaults.chainId.mainnet),
+      ...hostedContext,
       transaction: hostedTransaction as any,
       url: 'https://sponsor.example/tp_key',
     })
@@ -621,6 +626,7 @@ describe('fillHostedFeePayerTransaction', () => {
     await expect(
       fillHostedFeePayerTransaction({
         allowedFeeTokens: defaultAllowedFeeTokens(defaults.chainId.mainnet),
+        ...hostedContext,
         transaction: hostedTransaction as any,
         url: 'https://sponsor.example/tp_key',
       }),
@@ -643,6 +649,7 @@ describe('fillHostedFeePayerTransaction', () => {
     await expect(
       fillHostedFeePayerTransaction({
         allowedFeeTokens: defaultAllowedFeeTokens(defaults.chainId.mainnet),
+        ...hostedContext,
         transaction: hostedTransaction as any,
         url: 'https://sponsor.example/tp_key',
       }),
@@ -663,10 +670,27 @@ describe('fillHostedFeePayerTransaction', () => {
     await expect(
       fillHostedFeePayerTransaction({
         allowedFeeTokens: defaultAllowedFeeTokens(defaults.chainId.mainnet),
+        ...hostedContext,
         transaction: hostedTransaction as any,
         url: 'https://sponsor.example/tp_key',
       }),
     ).rejects.toThrow('Invalid or revoked API key')
+  })
+
+  test('error: enforces sponsor policy before requesting hosted fill', async () => {
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(
+      fillHostedFeePayerTransaction({
+        allowedFeeTokens: defaultAllowedFeeTokens(defaults.chainId.mainnet),
+        ...hostedContext,
+        policy: { maxGas: hostedTransaction.gas - 1n },
+        transaction: hostedTransaction as any,
+        url: 'https://sponsor.example/tp_key',
+      }),
+    ).rejects.toThrow('gas exceeds sponsor policy')
+    expect(fetchMock).not.toHaveBeenCalled()
   })
 })
 
