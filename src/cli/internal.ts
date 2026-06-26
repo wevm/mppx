@@ -84,8 +84,7 @@ function supportsPlugin(plugin: Plugin, challenge: Challenge.Challenge): boolean
   return plugin.supports ? plugin.supports(challenge) : plugin.method === challenge.method
 }
 
-const CONFIG_NAMES = ['mppx.config.ts', 'mppx.config.js', 'mppx.config.mjs'] as const
-
+/** Loads CLI config only from explicit, user-selected paths. */
 export async function loadConfig(
   configFile?: string | undefined,
 ): Promise<{ config: Config; path: string } | undefined> {
@@ -109,20 +108,6 @@ function resolveConfigPath(configFile?: string | undefined): string | undefined 
     const resolved = path.resolve(envPath)
     if (fs.existsSync(resolved)) return resolved
     return undefined
-  }
-
-  // 2. Walk up from cwd, stopping at project root
-  let dir = process.cwd()
-  while (true) {
-    for (const name of CONFIG_NAMES) {
-      const candidate = path.join(dir, name)
-      if (fs.existsSync(candidate)) return candidate
-    }
-    const isProjectRoot =
-      fs.existsSync(path.join(dir, 'package.json')) || fs.existsSync(path.join(dir, '.git'))
-    const parent = path.dirname(dir)
-    if (isProjectRoot || parent === dir) break
-    dir = parent
   }
 
   return undefined

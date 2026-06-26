@@ -41,35 +41,41 @@ describe('loadConfig', () => {
     expect(result?.path).toBe(configPath)
   })
 
+  test('loads config from explicit config file', async () => {
+    const configPath = path.join(tmpDir, 'custom.mjs')
+    fs.writeFileSync(configPath, 'export default { methods: [] }')
+    const result = await loadConfig(configPath)
+    expect(result?.config).toEqual({ methods: [] })
+    expect(result?.path).toBe(configPath)
+  })
+
   test('returns undefined when MPPX_CONFIG points to nonexistent file', async () => {
     vi.stubEnv('MPPX_CONFIG', path.join(tmpDir, 'nonexistent.ts'))
     const config = await loadConfig()
     expect(config).toBeUndefined()
   })
 
-  test('loads mppx.config.mjs from cwd', async () => {
+  test('ignores mppx.config.mjs from cwd without explicit selection', async () => {
     const configPath = path.join(tmpDir, 'mppx.config.mjs')
     fs.writeFileSync(configPath, 'export default { methods: [] }')
     vi.spyOn(process, 'cwd').mockReturnValue(tmpDir)
     const result = await loadConfig()
-    expect(result?.config).toEqual({ methods: [] })
-    expect(result?.path).toBe(configPath)
+    expect(result).toBeUndefined()
     vi.mocked(process.cwd).mockRestore()
   })
 
-  test('walks up from cwd to find config', async () => {
+  test('does not walk up from cwd to find config', async () => {
     const nested = path.join(tmpDir, 'a', 'b', 'c')
     fs.mkdirSync(nested, { recursive: true })
     const configPath = path.join(tmpDir, 'mppx.config.mjs')
     fs.writeFileSync(configPath, 'export default { methods: [] }')
     vi.spyOn(process, 'cwd').mockReturnValue(nested)
     const result = await loadConfig()
-    expect(result?.config).toEqual({ methods: [] })
-    expect(result?.path).toBe(configPath)
+    expect(result).toBeUndefined()
     vi.mocked(process.cwd).mockRestore()
   })
 
-  test('MPPX_CONFIG takes priority over cwd config', async () => {
+  test('MPPX_CONFIG loads even when cwd config exists', async () => {
     fs.writeFileSync(path.join(tmpDir, 'mppx.config.mjs'), 'export default { methods: ["cwd"] }')
     const envConfig = path.join(tmpDir, 'env.mjs')
     fs.writeFileSync(envConfig, 'export default { methods: ["env"] }')
