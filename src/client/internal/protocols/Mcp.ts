@@ -21,6 +21,11 @@ function jsonRpcRequestId(body: unknown): number | string | undefined {
 
 const responseCache = new WeakMap<Response, Promise<Mcp.Response | undefined>>()
 
+type CorePaymentRequiredData = NonNullable<Mcp.ErrorObject['data']>
+
+export type PaymentRequiredData = Pick<CorePaymentRequiredData, 'challenges'> &
+  Partial<Pick<CorePaymentRequiredData, 'httpStatus' | 'problem'>>
+
 function mcpHttpRequestId(request?: RequestInit): number | string | undefined {
   const id = jsonRpcRequestId(request?.body)
   if (id === undefined) return undefined
@@ -55,26 +60,45 @@ function parseMessage(value: unknown): Mcp.Response | undefined {
     : undefined
 }
 
+function paymentRequiredDataFromValue(data: unknown): PaymentRequiredData | undefined {
+  if (!data || typeof data !== 'object') return undefined
+  const challenges = (data as { challenges?: unknown } | undefined)?.challenges
+  if (!Array.isArray(challenges) || challenges.length === 0) return undefined
+  const parsed: Challenge.Challenge[] = []
+  for (const challenge of challenges) {
+    const result = Challenge.Schema.safeParse(challenge)
+    if (!result.success) return undefined
+    parsed.push(result.data as Challenge.Challenge)
+  }
+  const { httpStatus, problem } = data as {
+    httpStatus?: unknown
+    problem?: PaymentRequiredData['problem']
+  }
+  return {
+    challenges: parsed,
+    ...(typeof httpStatus === 'number' ? { httpStatus } : {}),
+    ...(problem !== undefined ? { problem } : {}),
+  }
+}
+
+/** Extracts validated payment-required data from MCP errors or tool result metadata. */
+export function paymentRequiredData(
+  message: Mcp.Response | undefined,
+): PaymentRequiredData | undefined {
+  if (!message) return undefined
+  if ('error' in message) {
+    if (message.error?.code !== Mcp.paymentRequiredCode) return undefined
+    return paymentRequiredDataFromValue(message.error.data)
+  }
+  return paymentRequiredDataFromValue(message.result?._meta?.[Mcp.paymentRequiredMetaKey])
+}
+
 function paymentRequiredChallenges(
   message: Mcp.Response | undefined,
   id: number | string,
 ): Challenge.Challenge[] {
-  if (
-    !message ||
-    message.id !== id ||
-    !('error' in message) ||
-    message.error?.code !== Mcp.paymentRequiredCode
-  )
-    return []
-  const challenges = message.error?.data?.challenges
-  if (!Array.isArray(challenges) || challenges.length === 0) return []
-  const parsed: Challenge.Challenge[] = []
-  for (const challenge of challenges) {
-    const result = Challenge.Schema.safeParse(challenge)
-    if (!result.success) return []
-    parsed.push(result.data as Challenge.Challenge)
-  }
-  return parsed
+  if (!message || message.id !== id) return []
+  return paymentRequiredData(message)?.challenges ?? []
 }
 
 async function parseSseJsonRpcResponse(response: Response): Promise<Mcp.Response | undefined> {
