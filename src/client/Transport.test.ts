@@ -400,8 +400,24 @@ describe('http (MCP-over-HTTP)', () => {
       data: { challenges: [challenge] },
     },
   }
+  const resultMessage = {
+    jsonrpc: '2.0',
+    id: 1,
+    result: {
+      content: [{ type: 'text', text: 'Payment Required' }],
+      isError: true,
+      _meta: {
+        [Mcp.paymentRequiredMetaKey]: {
+          httpStatus: 402,
+          challenges: [challenge],
+        },
+      },
+    },
+  }
   const jsonBody = () =>
     new Response(JSON.stringify(errorMessage), { headers: { 'content-type': 'application/json' } })
+  const jsonResultBody = () =>
+    new Response(JSON.stringify(resultMessage), { headers: { 'content-type': 'application/json' } })
   const sseBody = () =>
     new Response(`event: message\ndata: ${JSON.stringify(errorMessage)}\n\n`, {
       headers: { 'content-type': 'text/event-stream' },
@@ -409,6 +425,9 @@ describe('http (MCP-over-HTTP)', () => {
 
   test('detects -32042 in a JSON body (JSON-RPC request)', async () => {
     expect(await Transport.http().isPaymentRequired(jsonBody(), jsonRpcRequest)).toBe(true)
+  })
+  test('detects payment-required metadata in a JSON-RPC result', async () => {
+    expect(await Transport.http().isPaymentRequired(jsonResultBody(), jsonRpcRequest)).toBe(true)
   })
   test('ignores a JSON-RPC response for a different request id', async () => {
     const response = new Response(JSON.stringify({ ...errorMessage, id: 2 }), {
@@ -481,6 +500,10 @@ describe('http (MCP-over-HTTP)', () => {
     const challenges = await Transport.http().getChallenges!(sseBody(), jsonRpcRequest)
     expect(challenges.map((entry) => entry.id)).toEqual([challenge.id])
   })
+  test('getChallenges extracts an MCP result metadata challenge', async () => {
+    const challenges = await Transport.http().getChallenges!(jsonResultBody(), jsonRpcRequest)
+    expect(challenges.map((entry) => entry.id)).toEqual([challenge.id])
+  })
   test('setCredential routes the MCP challenge into the JSON-RPC _meta', async () => {
     const transport = Transport.http()
     const [mcpChallenge] = await transport.getChallenges!(sseBody(), jsonRpcRequest)
@@ -551,12 +574,35 @@ describe('mcp', () => {
       },
     },
   }
+  const mcpResult: Mcp.Response = {
+    jsonrpc: '2.0',
+    id: 1,
+    result: {
+      content: [],
+      isError: true,
+      _meta: {
+        [Mcp.paymentRequiredMetaKey]: {
+          httpStatus: 402,
+          challenges: [challenge],
+        },
+      },
+    },
+  }
 
   test('extracts payment-required challenges from JSON-RPC errors', async () => {
     const transport = Transport.mcp()
 
     expect(await transport.isPaymentRequired(mcpResponse)).toBe(true)
     expect((await transport.getChallenges?.(mcpResponse))?.map((entry) => entry.id)).toEqual([
+      challenge.id,
+    ])
+  })
+
+  test('extracts payment-required challenges from tool result metadata', async () => {
+    const transport = Transport.mcp()
+
+    expect(await transport.isPaymentRequired(mcpResult)).toBe(true)
+    expect((await transport.getChallenges?.(mcpResult))?.map((entry) => entry.id)).toEqual([
       challenge.id,
     ])
   })

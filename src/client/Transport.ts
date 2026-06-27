@@ -1,7 +1,7 @@
 import * as Challenge from '../Challenge.js'
 import * as Credential from '../Credential.js'
 import * as Mcp from '../Mcp.js'
-import { mcp as mcpProtocol } from './internal/protocols/Mcp.js'
+import { mcp as mcpProtocol, paymentRequiredData } from './internal/protocols/Mcp.js'
 import { mpp as mppProtocol } from './internal/protocols/Mpp.js'
 import type { Protocol } from './internal/protocols/Protocol.js'
 import { paymentRequiredStatus } from './internal/protocols/Shared.js'
@@ -144,6 +144,12 @@ export function http(): Transport<RequestInit, Response> {
   })
 }
 
+function mcpPaymentRequiredChallenges(response: Mcp.Response) {
+  const data = paymentRequiredData(response)
+  if (!data) throw new Error('No challenge in response.')
+  return data.challenges
+}
+
 /**
  * MCP protocol transport for direct JSON-RPC objects.
  *
@@ -155,20 +161,16 @@ export function mcp() {
     name: 'mcp',
 
     isPaymentRequired(response) {
-      return 'error' in response && response.error?.code === Mcp.paymentRequiredCode
+      return !!paymentRequiredData(response)
     },
 
     getChallenges(response) {
-      if (!('error' in response) || !response.error) throw new Error('Response is not an error.')
-      const challenges = response.error.data?.challenges
-      if (!challenges?.length) throw new Error('No challenge in error response.')
-      return challenges
+      return mcpPaymentRequiredChallenges(response)
     },
 
     getChallenge(response) {
-      if (!('error' in response) || !response.error) throw new Error('Response is not an error.')
-      const challenge = response.error.data?.challenges[0]
-      if (!challenge) throw new Error('No challenge in error response.')
+      const challenge = mcpPaymentRequiredChallenges(response)[0]
+      if (!challenge) throw new Error('No challenge in response.')
       return challenge
     },
 

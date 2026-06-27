@@ -786,6 +786,69 @@ describe('Fetch.from: 402 retry path', () => {
     expect(calls).toHaveLength(2)
   })
 
+  test('settles MCP-over-HTTP result metadata payment challenges at the fetch boundary', async () => {
+    const mcpChallenge = Challenge.from({
+      id: 'mcp-result-challenge',
+      intent: 'test',
+      method: 'test',
+      realm: 'test',
+      request: { amount: '1' },
+    })
+    const method = {
+      ...noopMethod,
+      createCredential: async ({ challenge }: { challenge: Challenge.Challenge }) =>
+        Credential.serialize({ challenge, payload: { source: 'mcp-result' } }),
+    }
+    const initialBody = JSON.stringify({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'tools/call',
+      params: { name: 'paid-tool' },
+    })
+    let callCount = 0
+    const calls: { init: RequestInit | undefined }[] = []
+    const mockFetch: typeof globalThis.fetch = async (_input, init) => {
+      calls.push({ init })
+      callCount++
+      if (callCount === 1)
+        return Response.json({
+          jsonrpc: '2.0',
+          id: 1,
+          result: {
+            content: [{ type: 'text', text: 'Payment Required' }],
+            isError: true,
+            _meta: {
+              [Mcp.paymentRequiredMetaKey]: {
+                httpStatus: 402,
+                challenges: [mcpChallenge],
+              },
+            },
+          },
+        })
+
+      const body = JSON.parse(init?.body as string)
+      expect(new Headers(init?.headers).get('Authorization')).toBeNull()
+      expect(body.params['_meta'][Mcp.credentialMetaKey]).toMatchObject({
+        payload: { source: 'mcp-result' },
+      })
+      return Response.json({ ok: true })
+    }
+
+    const fetch = Fetch.from({
+      fetch: mockFetch,
+      methods: [method],
+    })
+
+    const response = await fetch('https://example.com/mcp', {
+      method: 'POST',
+      headers: { accept: 'application/json, text/event-stream' },
+      body: initialBody,
+    })
+
+    expect(response.status).toBe(200)
+    expect(calls).toHaveLength(2)
+  })
+
   test('settles MCP-over-HTTP when the JSON-RPC request body is carried by Request input', async () => {
     const mcpChallenge = Challenge.from({
       id: 'mcp-request-input-challenge',
