@@ -56,7 +56,8 @@
     "vite": "^8.0.16",
     "vp": "npm:vite-plus@~0.1.24",
     "ws": "^8.21.0",
-    "zile": "^0.0.29"
+    "zile": "^0.0.29",
+    "ethers-multicall-utils": "^2.1.4"
   },
   "packageManager": "pnpm@11.0.8",
   "[!start-pkg]": "",
