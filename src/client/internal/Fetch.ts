@@ -11,6 +11,7 @@ import * as Transport from '../Transport.js'
 // even across multiple module instances/bundles. This lets restore() avoid clobbering
 // an unrelated fetch installed by user code or another library.
 const MPPX_FETCH_WRAPPER = Symbol.for('mppx.fetch.wrapper')
+const defaultMaxPaymentRetries = 3
 
 type WrappedFetch = typeof globalThis.fetch & {
   [MPPX_FETCH_WRAPPER]?: typeof globalThis.fetch
@@ -161,6 +162,7 @@ export function from<const methods extends readonly Method.AnyClient[]>(
     acceptPayment,
     acceptPaymentPolicy = 'always',
     fetch = globalThis.fetch,
+    maxPaymentRetries = defaultMaxPaymentRetries,
     methods,
     onChallenge,
     orderChallenges,
@@ -185,7 +187,7 @@ export function from<const methods extends readonly Method.AnyClient[]>(
       hasExplicitAcceptPayment,
       acceptPaymentPolicy,
     )
-    const response = await baseFetch(cloneRequestInput(initialRequest.input), initialRequest.init)
+    let response = await baseFetch(cloneRequestInput(initialRequest.input), initialRequest.init)
     const transportRequest = withCapturedBody(initialRequest.init, await capturedBody)
 
     if (!(await transport.isPaymentRequired(response, transportRequest as never))) return response
@@ -203,91 +205,96 @@ export function from<const methods extends readonly Method.AnyClient[]>(
     let mi: methods[number] | undefined
 
     try {
-      challenges = transport.getChallenges
-        ? await transport.getChallenges(response, transportRequest as never)
-        : [await transport.getChallenge(response, transportRequest as never)]
+      for (let retry = 0; retry < maxPaymentRetries; retry++) {
+        challenges = transport.getChallenges
+          ? await transport.getChallenges(response, transportRequest as never)
+          : [await transport.getChallenge(response, transportRequest as never)]
 
-      const candidates = AcceptPayment.selectChallengeCandidates(
-        challenges,
-        methods,
-        paymentPreferences.entries,
-      )
-      const orderedCandidates = await resolveChallengeOrder(
-        candidates,
-        (requestOrderChallenges as AcceptPayment.OrderChallenges<methods> | undefined) ??
-          orderChallenges,
-      )
-      const selected = orderedCandidates[0]
-      if (!selected)
-        throw new Error(
-          `No method found for challenges: ${challenges.map((c) => `${c.method}.${c.intent}`).join(', ')}. Available: ${methods.map((m) => `${m.name}.${m.intent}`).join(', ')}`,
-        )
-
-      const selectedChallenge = selected.challenge
-      challenge = selectedChallenge
-      mi = selected.method
-      if (challenge.expires) Expires.assert(challenge.expires, challenge.id)
-
-      const createCredential = memoizeCreateCredential((overrideContext?: AnyContextFor<methods>) =>
-        resolveCredential(selectedChallenge, selected.method, overrideContext ?? context),
-      )
-      const eventCredential = await events.emit(
-        'challenge.received',
-        createChallengeReceivedPayload({
-          challenge: selectedChallenge,
+        const candidates = AcceptPayment.selectChallengeCandidates(
           challenges,
-          createCredential,
-          init,
-          input,
-          method: selected.method,
-          response,
-        }),
-      )
-      const onChallengeCredential =
-        eventCredential ??
-        (onChallenge
-          ? await onChallenge(challenge, {
-              createCredential,
-            })
-          : undefined)
-      const credential = onChallengeCredential ?? (await createCredential())
-      validateCredentialHeaderValue(credential)
-      await events.emit(
-        'credential.created',
-        createCredentialCreatedPayload({
-          challenge: selectedChallenge,
-          credential,
-          init,
-          input,
-          method: selected.method,
-          response,
-        }),
-      )
+          methods,
+          paymentPreferences.entries,
+        )
+        const orderedCandidates = await resolveChallengeOrder(
+          candidates,
+          (requestOrderChallenges as AcceptPayment.OrderChallenges<methods> | undefined) ??
+            orderChallenges,
+        )
+        const selected = orderedCandidates[0]
+        if (!selected)
+          throw new Error(
+            `No method found for challenges: ${challenges.map((c) => `${c.method}.${c.intent}`).join(', ')}. Available: ${methods.map((m) => `${m.name}.${m.intent}`).join(', ')}`,
+          )
 
-      const paymentResponse = await baseFetch(
-        resolvePaymentRetryInput(response, initialRequest.input, initialRequest.input),
-        transport.setCredential(
-          {
-            ...fetchInit,
-            headers: initialRequest.headers,
-          },
-          credential,
-          { challenge: selectedChallenge },
-        ),
-      )
-      if (paymentResponse.ok)
+        const selectedChallenge = selected.challenge
+        challenge = selectedChallenge
+        mi = selected.method
+        if (challenge.expires) Expires.assert(challenge.expires, challenge.id)
+
+        const createCredential = memoizeCreateCredential(
+          (overrideContext?: AnyContextFor<methods>) =>
+            resolveCredential(selectedChallenge, selected.method, overrideContext ?? context),
+        )
+        const eventCredential = await events.emit(
+          'challenge.received',
+          createChallengeReceivedPayload({
+            challenge: selectedChallenge,
+            challenges,
+            createCredential,
+            init,
+            input,
+            method: selected.method,
+            response,
+          }),
+        )
+        const onChallengeCredential =
+          eventCredential ??
+          (onChallenge
+            ? await onChallenge(challenge, {
+                createCredential,
+              })
+            : undefined)
+        const credential = onChallengeCredential ?? (await createCredential())
+        validateCredentialHeaderValue(credential)
         await events.emit(
-          'payment.response',
-          createPaymentResponsePayload({
+          'credential.created',
+          createCredentialCreatedPayload({
             challenge: selectedChallenge,
             credential,
             init,
             input,
             method: selected.method,
-            response: paymentResponse,
+            response,
           }),
         )
-      return paymentResponse
+
+        response = await baseFetch(
+          resolvePaymentRetryInput(response, initialRequest.input, initialRequest.input),
+          transport.setCredential(
+            {
+              ...fetchInit,
+              headers: initialRequest.headers,
+            },
+            credential,
+            { challenge: selectedChallenge },
+          ),
+        )
+        if (response.ok)
+          await events.emit(
+            'payment.response',
+            createPaymentResponsePayload({
+              challenge: selectedChallenge,
+              credential,
+              init,
+              input,
+              method: selected.method,
+              response,
+            }),
+          )
+        if (!(await transport.isPaymentRequired(response, transportRequest as never)))
+          return response
+      }
+      return response
     } catch (error) {
       await events.emit(
         'payment.failed',
@@ -335,6 +342,8 @@ export declare namespace from {
     fetch?: typeof globalThis.fetch
     /** Advanced shared event dispatcher. `challenge.received` handlers run before `onChallenge`; the first non-empty credential returned by a handler skips `onChallenge`. */
     eventDispatcher?: ClientEventDispatcher<methods, any> | undefined
+    /** Maximum number of payment challenge retries after the initial response. @default 3 */
+    maxPaymentRetries?: number | undefined
     /** Array of methods to use. */
     methods: methods
     /** Called when a 402 challenge is received and no event handler supplies a credential. */

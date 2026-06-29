@@ -57,6 +57,15 @@ describe('Fetch.from', () => {
     })
   })
 
+  test('behavior: accepts payment retry cap', () => {
+    const fetch = Fetch.from({
+      maxPaymentRetries: 1,
+      methods: [charge()],
+    })
+
+    expectTypeOf(fetch).toBeFunction()
+  })
+
   test('behavior: events infer payload types from methods', () => {
     const method = charge()
     const dispatcher = Fetch.createEventDispatcher<[typeof method]>()

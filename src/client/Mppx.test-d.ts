@@ -62,6 +62,15 @@ describe('create.Config', () => {
     expectTypeOf<Config>().toHaveProperty('methods')
   })
 
+  test('accepts payment retry cap', () => {
+    const mppx = Mppx.create({
+      maxPaymentRetries: 1,
+      methods: [charge()],
+    })
+
+    expectTypeOf(mppx.fetch).toBeFunction()
+  })
+
   test('paymentPreferences callback exposes typed method keys', () => {
     const mppx = Mppx.create({
       methods: [tempo({ account: {} as Account })],

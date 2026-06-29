@@ -100,6 +100,7 @@ export function create<
   >,
 >(config: create.Config<methods, transport>): Mppx<methods, transport> {
   const {
+    maxPaymentRetries,
     onChallenge,
     orderChallenges,
     polyfill = true,
@@ -122,6 +123,7 @@ export function create<
     acceptPaymentPolicy,
     ...(config.fetch && { fetch: config.fetch }),
     eventDispatcher: events,
+    ...(maxPaymentRetries !== undefined && { maxPaymentRetries }),
     ...(resolvedOnChallenge && { onChallenge: resolvedOnChallenge }),
     ...(orderChallenges && { orderChallenges }),
     methods,
@@ -298,6 +300,8 @@ export declare namespace create {
           },
         ) => Promise<string | undefined>)
       | undefined
+    /** Maximum number of payment challenge retries after the initial response. @default 3 */
+    maxPaymentRetries?: Fetch.from.Config['maxPaymentRetries'] | undefined
     /** Filters and sorts supported challenges before credential creation. */
     orderChallenges?: AcceptPayment.OrderChallenges<FlattenMethods<methods>> | undefined
     /** Client-declared supported payment methods, keyed by typed `method/intent` strings. */

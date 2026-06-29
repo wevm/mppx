@@ -466,6 +466,53 @@ describe('Session', () => {
       expect(s.channelId).not.toBe(storedChannelId)
     })
 
+    test('rolls back an optimistic open when a replacement challenge does not reference it', async () => {
+      const { store, delete: remove } = makeChannelStore()
+      const postedPayloads: SessionCredentialPayload[] = []
+      const challenge = (feePayer: boolean) =>
+        makeChallenge({
+          methodDetails: {
+            escrowContract: tip20ChannelEscrow,
+            chainId: 4217,
+            sessionProtocol: Constants.SessionProtocols.v2,
+            feePayer,
+          },
+        })
+      let openCount = 0
+      const mockFetch = vi.fn().mockImplementation((_input, init?: RequestInit) => {
+        const authorization = new Headers(init?.headers).get(Constants.Headers.authorization)
+        const payload = authorization
+          ? Credential.deserialize<SessionCredentialPayload>(authorization).payload
+          : undefined
+        if (payload) postedPayloads.push(payload)
+
+        if (!payload) return Promise.resolve(make402Response(challenge(true)))
+        if (payload.action === 'open') {
+          openCount++
+          if (openCount === 1) return Promise.resolve(make402Response(challenge(false)))
+          return Promise.resolve(makeOkResponse())
+        }
+        return Promise.resolve(new Response('unexpected voucher', { status: 500 }))
+      })
+      const s = sessionManager({
+        account,
+        client,
+        fetch: mockFetch as typeof globalThis.fetch,
+        maxDeposit: '10',
+        channelStore: store,
+      })
+
+      const response = await s.fetch('https://api.example.com/data')
+
+      expect(response.status).toBe(200)
+      // A replacement challenge with no snapshot means the server did not
+      // acknowledge the optimistic open, so the next credential must open again.
+      expect(postedPayloads.map((payload) => payload.action)).toEqual(['open', 'open'])
+      expect(postedPayloads[0]?.channelId).not.toBe(postedPayloads[1]?.channelId)
+      expect(remove).toHaveBeenCalledOnce()
+      expect(s.channelId).toBe(postedPayloads[1]?.channelId)
+    })
+
     test('does not bootstrap when disabled', async () => {
       const mockFetch = vi.fn().mockResolvedValue(makeOkResponse())
       const s = sessionManager({
@@ -686,6 +733,7 @@ describe('Session', () => {
                 methodDetails: {
                   escrowContract: tip20ChannelEscrow,
                   chainId: 4217,
+                  sessionProtocol: Constants.SessionProtocols.v2,
                   sessionSnapshot: {
                     acceptedCumulative: '2000000',
                     chainId: 4217,
@@ -887,8 +935,7 @@ describe('Session', () => {
         }
         if (callCount === 1)
           return Promise.resolve(make402Response(makeChallenge({ suggestedDeposit: '3000000' })))
-        if (callCount === 3) return Promise.resolve(make402Response())
-        if (callCount === 4) return Promise.resolve(make402Response())
+        if (callCount >= 3 && callCount <= 6) return Promise.resolve(make402Response())
         return Promise.resolve(makeOkResponse())
       })
 
@@ -907,8 +954,14 @@ describe('Session', () => {
       expect(s.cumulative).toBe(1000000n)
 
       await s.topUp('1')
-      expect(postedPayloads.map((payload) => payload.action)).toEqual(['open', 'voucher', 'topUp'])
-      const topUpPayload = postedPayloads[2]
+      expect(postedPayloads.map((payload) => payload.action)).toEqual([
+        'open',
+        'voucher',
+        'voucher',
+        'voucher',
+        'topUp',
+      ])
+      const topUpPayload = postedPayloads[4]
       if (topUpPayload?.action !== 'topUp') throw new Error('expected top-up payload')
       expect(topUpPayload.additionalDeposit).toBe('1000000')
     })

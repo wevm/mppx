@@ -201,9 +201,12 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
 
   // Tracks one fetch's channel reuse so stale stored entries can be evicted once.
   type ChannelUse = {
+    challengesReceived: number
+    created: Map<string, ChannelEntry>
     seenExisting: Set<string>
-    createdKeys: Set<string>
+    previous: RuntimeSnapshot
     resumed: ChannelEntry | undefined
+    trackCreates: boolean
   }
   let channelUse: ChannelUse | undefined
 
@@ -219,14 +222,15 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
       const entry = await getReusable(key)
       if (entry && channelUse) {
         channelUse.seenExisting.add(key)
-        if (!channelUse.createdKeys.has(key)) channelUse.resumed ??= entry
+        if (!channelUse.created.has(key)) channelUse.resumed ??= entry
       }
       return entry
     },
     async set(entry) {
       const key = entryKey(entry)
       if (entry.opened) ignoredChannelIds.delete(entry.channelId)
-      if (channelUse && !channelUse.seenExisting.has(key)) channelUse.createdKeys.add(key)
+      if (channelUse?.trackCreates && !channelUse.seenExisting.has(key))
+        channelUse.created.set(key, entry)
       await backing.set(entry)
     },
     delete: (key) => backing.delete(key),
@@ -236,6 +240,31 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
   async function ignoreChannel(entry: ChannelEntry) {
     ignoredChannelIds.add(entry.channelId)
     await Promise.resolve(backing.delete(entryKey(entry))).catch(() => undefined)
+  }
+
+  async function rollbackCreatedChannelsForRetry() {
+    const use = channelUse
+    if (!use?.created.size) return
+    for (const [key, entry] of use.created) {
+      ignoredChannelIds.add(entry.channelId)
+      await Promise.resolve(backing.delete(key)).catch(() => undefined)
+    }
+    use.created.clear()
+    restoreRuntime(use.previous)
+  }
+
+  function referencesCreatedChannel(challenge: Challenge.Challenge): boolean {
+    const snapshot = Constants.getMethodDetail<{ channelId?: unknown }>(
+      challenge.request.methodDetails,
+      Constants.MethodDetailKeys.sessionSnapshot,
+    )
+    if (typeof snapshot?.channelId !== 'string') return false
+    const use = channelUse
+    if (!use?.created.size) return false
+    for (const entry of use.created.values()) {
+      if (entry.channelId.toLowerCase() === snapshot.channelId.toLowerCase()) return true
+    }
+    return false
   }
 
   function dispatch(event: Parameters<typeof dispatchSessionEvent>[1]) {
@@ -273,6 +302,14 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
     methods: [method],
     onChallenge: async (challenge, _helpers) => {
       if (!isTempoSessionChallenge(challenge)) return undefined
+      const use = channelUse
+      const isRepeatedRetryChallenge =
+        use && use.challengesReceived > 0 && challenge.id === runtime.lastChallenge?.id
+      if (!referencesCreatedChannel(challenge)) {
+        if (use?.created.size) await rollbackCreatedChannelsForRetry()
+        else if (isRepeatedRetryChallenge) restoreRuntime(use.previous)
+      }
+      if (use) use.challengesReceived++
       runtime.lastChallenge = challenge
       dispatch({ type: 'challengeReceived', challengeId: challenge.id })
       if (runtime.channel?.opened && runtime.lastUrl) {
@@ -498,9 +535,6 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
       throw new Error(
         'SessionManager: a request is already in flight; concurrent requests on one manager are not supported',
       )
-    const use: ChannelUse = { seenExisting: new Set(), createdKeys: new Set(), resumed: undefined }
-    channelUse = use
-
     runtime.lastUrl = input
 
     const previous = captureRuntimeStateSnapshot({
@@ -508,12 +542,22 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
       spent: runtime.spent,
       state: runtime.state,
     })
+    const use: ChannelUse = {
+      challengesReceived: 0,
+      created: new Map(),
+      previous,
+      seenExisting: new Set(),
+      resumed: undefined,
+      trackCreates: false,
+    }
+    channelUse = use
 
     // Cold starts resume from `channelStore` after the 402 reveals the scope.
     const liveHint = runtime.channel?.opened ? runtime.channel.channelId : undefined
 
     try {
       await bootstrapSession(input, init)
+      use.trackCreates = true
 
       let effectiveInit = requestInitWithSessionHint(input, init, liveHint)
       // Stored channels may be stale, so retry once after evicting the resumed entry.

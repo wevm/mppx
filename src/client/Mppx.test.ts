@@ -41,6 +41,47 @@ describe('Mppx.create', () => {
     expect(mppx.transport.name).toBe('mcp')
   })
 
+  test('behavior: passes maxPaymentRetries to fetch wrapper', async () => {
+    const testMethod = Method.toClient(
+      Method.from({
+        name: 'test',
+        intent: 'test',
+        schema: Methods.charge.schema,
+      }),
+      {
+        async createCredential() {
+          return 'credential'
+        },
+      },
+    )
+    const challenge = Challenge.from({
+      id: 'retry-cap',
+      realm,
+      method: 'test',
+      intent: 'test',
+      request: { amount: '1' },
+    })
+    let callCount = 0
+    const fetch = vi.fn(async () => {
+      callCount++
+      return new Response(null, {
+        status: 402,
+        headers: { 'WWW-Authenticate': Challenge.serialize(challenge) },
+      })
+    })
+    const mppx = Mppx.create({
+      fetch: fetch as typeof globalThis.fetch,
+      maxPaymentRetries: 1,
+      methods: [testMethod],
+      polyfill: false,
+    })
+
+    const response = await mppx.fetch('https://example.com/api')
+
+    expect(response.status).toBe(402)
+    expect(callCount).toBe(2)
+  })
+
   test('behavior: with multiple methods', () => {
     const stripeCharge = Method.from({
       name: 'stripe',

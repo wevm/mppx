@@ -351,7 +351,8 @@ const x402PaymentRequired = {
 } satisfies PaymentRequired
 
 /** Builds a valid 402 response with a WWW-Authenticate header. */
-function make402(overrides?: { expires?: string; intent?: string; method?: string }) {
+function make402(overrides?: { expires?: string; id?: string; intent?: string; method?: string }) {
+  const id = overrides?.id ?? 'abc'
   const method = overrides?.method ?? 'test'
   const intent = overrides?.intent ?? 'test'
   const expires = overrides?.expires ? `, expires="${overrides.expires}"` : ''
@@ -359,7 +360,7 @@ function make402(overrides?: { expires?: string; intent?: string; method?: strin
     .replace(/\+/g, '-')
     .replace(/\//g, '_')
     .replace(/=+$/, '')
-  const header = `Payment id="abc", realm="test", method="${method}", intent="${intent}", request="${request}"${expires}`
+  const header = `Payment id="${id}", realm="test", method="${method}", intent="${intent}", request="${request}"${expires}`
   return new Response(null, {
     status: 402,
     headers: { 'WWW-Authenticate': header },
@@ -1544,8 +1545,42 @@ describe('Fetch.from: 402 retry path', () => {
     )
   })
 
-  test('retries exactly once — does not loop on repeated 402', async () => {
+  test('creates a fresh credential for each incremental 402 challenge', async () => {
+    const createCredential = vi.fn(
+      async ({ challenge }: { challenge: Challenge.Challenge }) => `credential-${challenge.id}`,
+    )
+    const calls: { init: RequestInit | undefined }[] = []
     let callCount = 0
+    const mockFetch: typeof globalThis.fetch = async (_input, init) => {
+      calls.push({ init })
+      callCount++
+      if (callCount === 1) return make402({ id: 'first' })
+      if (callCount === 2) return make402({ id: 'second' })
+      if (callCount === 3) return make402({ id: 'third' })
+      return new Response('OK', { status: 200 })
+    }
+
+    const fetch = Fetch.from({
+      fetch: mockFetch,
+      methods: [{ ...noopMethod, createCredential }],
+    })
+
+    const response = await fetch('https://example.com/api')
+
+    expect(response.status).toBe(200)
+    expect(createCredential.mock.calls.map((call) => call[0].challenge.id)).toEqual([
+      'first',
+      'second',
+      'third',
+    ])
+    expect(
+      calls.slice(1).map((call) => new Headers(call.init?.headers).get('Authorization')),
+    ).toEqual(['credential-first', 'credential-second', 'credential-third'])
+  })
+
+  test('caps repeated 402 retries at three', async () => {
+    let callCount = 0
+    const createCredential = vi.fn(async () => 'credential')
     const mockFetch: typeof globalThis.fetch = async () => {
       callCount++
       return make402()
@@ -1553,11 +1588,32 @@ describe('Fetch.from: 402 retry path', () => {
 
     const fetch = Fetch.from({
       fetch: mockFetch,
-      methods: [noopMethod],
+      methods: [{ ...noopMethod, createCredential }],
+    })
+
+    const response = await fetch('https://example.com/api')
+    expect(callCount).toBe(4)
+    expect(createCredential).toHaveBeenCalledTimes(3)
+    expect(response.status).toBe(402)
+  })
+
+  test('respects configured retry cap', async () => {
+    let callCount = 0
+    const createCredential = vi.fn(async () => 'credential')
+    const mockFetch: typeof globalThis.fetch = async () => {
+      callCount++
+      return make402()
+    }
+
+    const fetch = Fetch.from({
+      fetch: mockFetch,
+      maxPaymentRetries: 1,
+      methods: [{ ...noopMethod, createCredential }],
     })
 
     const response = await fetch('https://example.com/api')
     expect(callCount).toBe(2)
+    expect(createCredential).toHaveBeenCalledOnce()
     expect(response.status).toBe(402)
   })
 })
