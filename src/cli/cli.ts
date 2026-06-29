@@ -8,6 +8,7 @@ import { type Address, createClient, http } from 'viem'
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts'
 import { tempo as tempoMainnet } from 'viem/tempo/chains'
 
+import validate from './validate/index.js'
 import * as Challenge from '../Challenge.js'
 import { normalizeHeaders } from '../client/internal/Fetch.js'
 import * as Mppx from '../client/Mppx.js'
@@ -1539,5 +1540,6 @@ cli.command(discover)
 cli.command(init)
 cli.command(services)
 cli.command(sign)
+cli.command(validate)
 
 export default cli
