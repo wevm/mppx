@@ -194,6 +194,7 @@ test('tools/list exposes mppx commands with input and output schemas', async () 
     'services_list',
     'services_show',
     'sign',
+    'validate',
   ])
   expect(tools.find((tool: { name: string }) => tool.name === 'account_list').outputSchema).toEqual(
     expect.objectContaining({

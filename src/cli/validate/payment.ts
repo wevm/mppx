@@ -1,11 +1,20 @@
+import { createClient, http } from 'viem'
+import { privateKeyToAccount, generatePrivateKey } from 'viem/accounts'
+import { waitForTransactionReceipt } from 'viem/actions'
+import { Actions } from 'viem/tempo'
+import { tempo as tempoMethods } from '../../tempo/client/index.js'
+import { tempoModerato, tempo as tempoMainnetChain } from 'viem/tempo/chains'
+
 import * as Challenge from '../../Challenge.js'
 import * as Constants from '../../Constants.js'
 import * as Mppx from '../../client/Mppx.js'
 import * as Receipt from '../../Receipt.js'
 import { loadConfig, selectChallenge } from '../internal.js'
-import { confirm, pc } from '../utils.js'
+import { resolveAccount, resolveAccountName } from '../account.js'
+import { fetchTokenInfo, confirm, pc } from '../utils.js'
 import type { CheckResult, EndpointSpec } from './helpers.js'
-import { buildUrl, check, fail, fetchWithTimeout, formatBytes, MAINNET_CHAIN_ID, skip, warn } from './helpers.js'
+import { chainId as tempoChainIds } from '../../tempo/internal/defaults.js'
+import { buildUrl, check, fail, fetchWithTimeout, formatBytes, skip, warn } from './helpers.js'
 
 async function provisionAndPayTestnet(
   challenge: Challenge.Challenge,
@@ -13,21 +22,15 @@ async function provisionAndPayTestnet(
 ): Promise<{ methods: import('../../Method.js').AnyClient[] } | undefined> {
   try {
     console.log(pc.dim('    Provisioning testnet wallet and funding via faucet...'))
-    const { privateKeyToAccount, generatePrivateKey } = await import('viem/accounts')
     const key = generatePrivateKey()
     const account = privateKeyToAccount(key)
 
-    const { createClient, http } = await import('viem')
-    const { tempoModerato } = await import('viem/tempo/chains')
     const client = createClient({ chain: tempoModerato, transport: http() })
-    const { Actions } = await import('viem/tempo')
     const hashes = await Actions.faucet.fund(client, { account })
-    const { waitForTransactionReceipt } = await import('viem/actions')
     await Promise.all(hashes.map((hash) => waitForTransactionReceipt(client, { hash })))
     console.log(pc.dim(`    Using wallet: ${account.address}`))
 
-    const { tempo } = await import('../../tempo/client/index.js')
-    const methods = [...tempo({ account })]
+    const methods = [...tempoMethods({ account })]
     return { methods }
   } catch (error) {
     if (verbose) console.log(pc.dim(`    Provisioning failed: ${(error as Error).message}`))
@@ -35,24 +38,20 @@ async function provisionAndPayTestnet(
   }
 }
 
-// Resolves the wallet address using the same priority as the Tempo plugin:
-// MPPX_PRIVATE_KEY env > Tempo CLI keystore > OS keychain.
 async function resolveWalletAddress(): Promise<string | undefined> {
-  const { resolveAccountName, createKeychain } = await import('../account.js')
+  const accountName = resolveAccountName()
   const { isTempoAccount } = await import('../utils.js')
   const { resolveTempoAccount } = await import('../plugins/tempo.js')
-  const { privateKeyToAccount } = await import('viem/accounts')
-
-  const accountName = resolveAccountName()
-  const envKey = process.env.MPPX_PRIVATE_KEY?.trim()
-  if (envKey) return privateKeyToAccount(envKey as `0x${string}`).address
   if (isTempoAccount(accountName)) {
     const entry = resolveTempoAccount(accountName)
     if (entry) return entry.wallet_address
   }
-  const key = await createKeychain(accountName).get()
-  if (key) return privateKeyToAccount(key as `0x${string}`).address
-  return undefined
+  try {
+    const account = await resolveAccount()
+    return account.address
+  } catch {
+    return undefined
+  }
 }
 
 export async function validatePaymentFlow(
@@ -100,7 +99,7 @@ export async function validatePaymentFlow(
   // Detect network
   const request = challenge.request as Record<string, unknown>
   const methodDetails = request.methodDetails as Record<string, unknown> | undefined
-  const isTestnet = typeof methodDetails?.chainId === 'number' && methodDetails.chainId !== MAINNET_CHAIN_ID
+  const isTestnet = typeof methodDetails?.chainId === 'number' && methodDetails.chainId !== tempoChainIds.mainnet
 
   // Testnet Tempo: always use ephemeral wallet (zero-setup, free money)
   if (isTestnet && challenge.method === Constants.Methods.tempo) {
@@ -142,6 +141,7 @@ export async function validatePaymentFlow(
   }
 
   const requiredAmount = request.amount ? BigInt(request.amount as string) : undefined
+  // Display only -- defaults to 6 (standard for USDC/PathUSD tokens)
   const decimals = (request.decimals as number | undefined) ?? 6
   const currency = request.currency as string | undefined
 
@@ -151,9 +151,6 @@ export async function validatePaymentFlow(
     try {
       walletAddress = await resolveWalletAddress()
       if (walletAddress) {
-        const { fetchTokenInfo } = await import('../utils.js')
-        const { createClient, http } = await import('viem')
-        const { tempo: tempoMainnetChain } = await import('viem/tempo/chains')
         const client = createClient({ chain: tempoMainnetChain, transport: http() })
         const tokenInfo = await fetchTokenInfo(client, currency as `0x${string}`, walletAddress as `0x${string}`)
         const requiredDisplay = `$${(Number(requiredAmount) / 10 ** decimals).toFixed(2)}`
@@ -172,9 +169,14 @@ export async function validatePaymentFlow(
     }
   }
 
-  // Prompt before paying on mainnet (unless --yes)
+  // Prompt before paying on mainnet (unless --yes or non-interactive)
   const amountDisplay = requiredAmount ? `$${(Number(requiredAmount) / 10 ** decimals).toFixed(2)}` : 'unknown amount'
   if (walletAddress) console.log(pc.dim(`    Using wallet: ${walletAddress}`))
+  const isInteractive = process.stdin.isTTY ?? false
+  if (!options?.yes && !isInteractive) {
+    results.push(skip('Payment: skipped', 'Non-interactive mode. Use --yes to approve mainnet payments.'))
+    return results
+  }
   if (!options?.yes) {
     console.log('')
     const ok = await confirm(
@@ -377,7 +379,6 @@ async function sendAndValidateResponse(
     try {
       const receipt = Receipt.deserialize(receiptHeader)
       if (receipt.reference && /^0x[0-9a-fA-F]{64}$/.test(receipt.reference)) {
-        const { tempoModerato, tempo: tempoMainnetChain } = await import('viem/tempo/chains')
         const chain = isTestnet ? tempoModerato : tempoMainnetChain
         const explorerUrl = chain.blockExplorers?.default?.url
         if (explorerUrl) {

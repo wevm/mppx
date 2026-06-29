@@ -3,13 +3,14 @@ import * as Constants from '../../Constants.js'
 import { pc } from '../utils.js'
 import { extractRequestBodyFromDiscovery } from './discovery.js'
 import type { CheckResult, EndpointSpec } from './helpers.js'
-import { buildUrl, check, fail, fetchWithTimeout, isValidAddress, isValidIntegerAmount, MAINNET_CHAIN_ID, skip, warn } from './helpers.js'
+import { chainId as tempoChainIds } from '../../tempo/internal/defaults.js'
+import { buildUrl, check, fail, fetchWithTimeout, isValidAddress, isValidIntegerAmount, skip, warn } from './helpers.js'
 
 function detectTestnet(challenge: Challenge.Challenge): boolean {
   const request = challenge.request as Record<string, unknown>
   const methodDetails = request.methodDetails as Record<string, unknown> | undefined
   if (typeof methodDetails?.chainId === 'number') {
-    return methodDetails.chainId !== MAINNET_CHAIN_ID
+    return methodDetails.chainId !== tempoChainIds.mainnet
   }
   return false
 }

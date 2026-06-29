@@ -57,6 +57,18 @@ export function printSection(title: string) {
   console.log(`\n${pc.bold(title)}`)
 }
 
+export type Counts = { passed: number; failed: number; warnings: number; skipped: number }
+
+export function printResults(results: CheckResult[], counts: Counts) {
+  for (const result of results) {
+    printCheck(result)
+    if (result.severity === 'pass') counts.passed++
+    else if (result.severity === 'fail') counts.failed++
+    else if (result.severity === 'warn') counts.warnings++
+    else if (result.severity === 'skip') counts.skipped++
+  }
+}
+
 export async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs = 15_000): Promise<Response> {
   const controller = new AbortController()
   const timeout = setTimeout(() => controller.abort(), timeoutMs)
@@ -88,7 +100,6 @@ export function formatBytes(bytes: number): string {
 
 export const HTTP_METHODS = new Set(['get', 'post', 'put', 'patch', 'delete', 'head', 'options', 'trace'])
 
-export const MAINNET_CHAIN_ID = 4217
 
 export function isValidAddress(addr: unknown): boolean {
   return typeof addr === 'string' && /^0x[0-9a-fA-F]{40}$/.test(addr)
@@ -105,7 +116,8 @@ export function parseEndpointArg(input: string): EndpointSpec | null {
   if (!HTTP_METHODS.has(method)) return null
   const path = input.slice(sep + 1)
   if (!path) return null
-  return { method: method.toUpperCase(), path }
+  const normalizedPath = path.startsWith('/') ? path : '/' + path
+  return { method: method.toUpperCase(), path: normalizedPath }
 }
 
 // Resolves --body input: if JSON with all keys starting with /, it's a
