@@ -74,7 +74,7 @@ describe('McpClient.wrap', () => {
           recipient: accounts[0].address,
         })(extra)
 
-        if (result.status === 402) throw result.challenge
+        if (result.status === 402) return result.challenge
 
         return result.withReceipt({
           content: [{ type: 'text' as const, text: 'Premium tool executed' }],

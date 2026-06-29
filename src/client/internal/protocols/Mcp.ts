@@ -21,10 +21,8 @@ function jsonRpcRequestId(body: unknown): number | string | undefined {
 
 const responseCache = new WeakMap<Response, Promise<Mcp.Response | undefined>>()
 
-type CorePaymentRequiredData = NonNullable<Mcp.ErrorObject['data']>
-
-export type PaymentRequiredData = Pick<CorePaymentRequiredData, 'challenges'> &
-  Partial<Pick<CorePaymentRequiredData, 'httpStatus' | 'problem'>>
+export type PaymentRequiredData = Pick<Mcp.PaymentRequiredData, 'challenges'> &
+  Partial<Pick<Mcp.PaymentRequiredData, 'httpStatus' | 'problem'>>
 
 function mcpHttpRequestId(request?: RequestInit): number | string | undefined {
   const id = jsonRpcRequestId(request?.body)

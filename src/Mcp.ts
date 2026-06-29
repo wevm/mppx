@@ -44,11 +44,21 @@ export type JsonRpcRequest = Request & {
 }
 
 /**
+ * Payment-required metadata carried by MCP errors or tool results.
+ */
+export type PaymentRequiredData = {
+  httpStatus: number
+  challenges: Challenge.Challenge[]
+  /** RFC 9457 Problem Details for rich error context. */
+  problem?: Errors.PaymentError.ProblemDetails
+}
+
+/**
  * MCP result with optional receipt metadata.
  */
 export type Result = {
   _meta?: {
-    [paymentRequiredMetaKey]?: ErrorObject['data']
+    [paymentRequiredMetaKey]?: PaymentRequiredData
     [receiptMetaKey]?: Receipt
     [key: string]: unknown
   }
@@ -61,12 +71,7 @@ export type Result = {
 export type ErrorObject = {
   code: number
   message: string
-  data?: {
-    httpStatus: number
-    challenges: Challenge.Challenge[]
-    /** RFC 9457 Problem Details for rich error context. */
-    problem?: Errors.PaymentError.ProblemDetails
-  }
+  data?: PaymentRequiredData
 }
 
 /**

@@ -15,7 +15,7 @@ type DefaultMethods = readonly [Method.AnyClient | readonly Method.AnyClient[]]
 type CallToolParams = Parameters<Client['callTool']>[0]
 type CallToolResultSchema = Parameters<Client['callTool']>[1]
 type CallToolRequestOptions = Parameters<Client['callTool']>[2]
-type PaymentRequiredData = NonNullable<core_Mcp.ErrorObject['data']>
+type PaymentRequiredData = core_Mcp.PaymentRequiredData
 
 const MPPX_MCP_CLIENT_WRAPPER = Symbol.for('mppx.mcp.client.wrapper')
 

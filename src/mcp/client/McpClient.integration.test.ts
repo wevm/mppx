@@ -486,7 +486,7 @@ async function createHarness(options?: {
     const result = await (payment.charge({ amount: '1' }) as (input: unknown) => Promise<any>)(
       extra,
     )
-    if (result.status === 402) throw result.challenge
+    if (result.status === 402) return result.challenge
 
     return result.withReceipt({
       content: [{ type: 'text' as const, text: 'charge tool executed' }],
@@ -499,7 +499,7 @@ async function createHarness(options?: {
         input: unknown,
       ) => Promise<any>
     )(extra)
-    if (result.status === 402) throw result.challenge
+    if (result.status === 402) return result.challenge
 
     return (result as { withReceipt: (response: unknown) => unknown }).withReceipt({
       content: [{ type: 'text' as const, text: 'session tool executed' }],
@@ -515,7 +515,7 @@ async function createHarness(options?: {
           input: unknown,
         ) => Promise<any>
       )(extra)
-      if (result.status === 402) throw result.challenge
+      if (result.status === 402) return result.challenge
 
       return (result as { withReceipt: (response: unknown) => unknown }).withReceipt({
         content: [{ type: 'text' as const, text: 'session double tool executed' }],

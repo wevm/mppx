@@ -67,19 +67,19 @@ describe('mcpSdk', () => {
   })
 
   describe('respondChallenge', () => {
-    test('creates McpError with correct code and challenge data', async () => {
+    test('creates payment-required metadata with challenge data', async () => {
       const transport = mcpSdk()
       const result = await transport.respondChallenge({
         challenge,
         input: {} as Extra,
       })
 
-      expect(result).toBeInstanceOf(Error)
-      const err = result as any
-      expect(err.code).toBe(Mcp.paymentRequiredCode)
-      expect(err.message).toContain('Payment Required')
-      expect(err.data?.httpStatus).toBe(402)
-      expect(err.data?.challenges).toEqual([challenge])
+      const data = result._meta?.[Mcp.paymentRequiredMetaKey] as
+        | Mcp.PaymentRequiredData
+        | undefined
+      expect(result.isError).toBe(true)
+      expect(data?.httpStatus).toBe(402)
+      expect(data?.challenges).toEqual([challenge])
     })
 
     test('includes problem details when error is provided', async () => {
@@ -91,22 +91,25 @@ describe('mcpSdk', () => {
         input: {} as Extra,
       })
 
-      const err = result as any
-      expect(err.code).toBe(Mcp.paymentRequiredCode)
-      expect(err.message).toContain('verification failed')
-      expect(err.data?.problem).toBeDefined()
-      expect(err.data?.problem?.type).toBe(error.type)
-      expect(err.data?.problem?.challengeId).toBe(challenge.id)
+      const data = result._meta?.[Mcp.paymentRequiredMetaKey] as
+        | Mcp.PaymentRequiredData
+        | undefined
+      expect(data?.problem).toBeDefined()
+      expect(data?.problem?.type).toBe(error.type)
+      expect(data?.problem?.challengeId).toBe(challenge.id)
     })
 
-    test('uses default message when no error provided', async () => {
+    test('marks the result as a tool error', async () => {
       const transport = mcpSdk()
       const result = await transport.respondChallenge({
         challenge,
         input: {} as Extra,
       })
-      const err = result as any
-      expect(err.message).toContain('Payment Required')
+
+      expect(result).toMatchObject({
+        content: [],
+        isError: true,
+      })
     })
   })
 
