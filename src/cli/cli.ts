@@ -16,7 +16,11 @@ import { validate as validateDiscovery } from '../discovery/Validate.js'
 import { createDefaultStore, createKeychain, resolveAccountName } from './account.js'
 import { loadConfig, resolveAcceptPayment, selectChallenge } from './internal.js'
 import type { Plugin } from './plugins/plugin.js'
-import { readTempoKeystore, resolveTempoAccount } from './plugins/tempo.js'
+import {
+  orderTempoChargeChallengesByBalance,
+  readTempoKeystore,
+  resolveTempoAccount,
+} from './plugins/tempo.js'
 import {
   chainName,
   confirm,
@@ -151,6 +155,18 @@ function formatPayment(payment: unknown): string {
     .join(' ')
 }
 
+function filterChallengesByCurrency(
+  challenges: readonly Challenge.Challenge[],
+  currency: string | undefined,
+): Challenge.Challenge[] {
+  if (!currency) return [...challenges]
+  const normalized = currency.toLowerCase()
+  return challenges.filter((challenge) => {
+    const offered = challenge.request.currency
+    return typeof offered === 'string' && offered.toLowerCase() === normalized
+  })
+}
+
 async function fetchServicesRegistry(): Promise<ServiceRegistryService[]> {
   const url = process.env.MPPX_SERVICES_URL ?? servicesRegistryUrl
   const response = await globalThis.fetch(url)
@@ -198,6 +214,7 @@ const cli = Cli.create('mppx', {
     autoSwap: z.boolean().optional().describe('Auto-swap source tokens into payment currency'),
     config: z.string().optional().describe('Path to config file'),
     confirm: z.boolean().optional().default(false).describe('Show confirmation prompts'),
+    currency: z.string().optional().describe('Payment currency/token address to select'),
     data: z.string().optional().describe('Send request body (implies POST unless -X is set)'),
     fail: z.boolean().optional().describe('Fail silently on HTTP errors (exit 22)'),
     header: z.array(z.string()).optional().describe('Add header (repeatable)'),
@@ -357,12 +374,31 @@ const cli = Cli.create('mppx', {
         return
       }
 
-      const selected = selectChallenge(
-        Challenge.fromResponseList(challengeResponse),
-        loaded?.config,
-      )
+      const methodOpts = parseMethodOpts(c.options.methodOpt)
+      const offeredChallenges = Challenge.fromResponseList(challengeResponse)
+      const currencyChallenges = filterChallengesByCurrency(offeredChallenges, c.options.currency)
+      if (c.options.currency && currencyChallenges.length === 0) {
+        const offers = offeredChallenges
+          .map((challenge) => challenge.request.currency)
+          .filter((currency): currency is string => typeof currency === 'string')
+          .join(', ')
+        return c.error({
+          code: 'UNSUPPORTED_CURRENCY',
+          message: `Server did not offer payment currency ${c.options.currency}.${offers ? ` Offered currencies: ${offers}.` : ''}`,
+          exitCode: 2,
+        })
+      }
+      const challenges = await orderTempoChargeChallengesByBalance(currencyChallenges, {
+        options: {
+          account: c.options.account,
+          network: c.options.network,
+          rpcUrl: c.options.rpcUrl,
+        },
+      })
+
+      const selected = selectChallenge(challenges, loaded?.config)
       if (!selected) {
-        const offers = Challenge.fromResponseList(challengeResponse)
+        const offers = challenges
           .map((challenge) => `${challenge.method}/${challenge.intent}`)
           .join(', ')
         return c.error({
@@ -393,7 +429,7 @@ const cli = Cli.create('mppx', {
             rpcUrl: c.options.rpcUrl,
             slippage: c.options.slippage,
           },
-          methodOpts: parseMethodOpts(c.options.methodOpt),
+          methodOpts,
         })
         tokenSymbol = pluginResult.tokenSymbol
         tokenDecimals = pluginResult.tokenDecimals
