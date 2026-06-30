@@ -29,9 +29,9 @@ export async function startServer(port: number): Promise<HtmlTestServer> {
 
   const createTokenUrl = '/stripe/create-spt'
   const feePayerPolicy = {
-    maxFeePerGas: 200_000_000_000n,
-    maxPriorityFeePerGas: 200_000_000_000n,
-    maxTotalFee: 500_000_000_000_000_000n,
+    maxFeePerGas: 2_000_000_000_000n,
+    maxPriorityFeePerGas: 2_000_000_000_000n,
+    maxTotalFee: 5_000_000_000_000_000_000n,
   }
   const tempoMppx = Mppx.create({
     methods: [

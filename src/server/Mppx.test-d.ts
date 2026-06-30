@@ -223,6 +223,8 @@ describe('Mppx type tests', () => {
     const mppx = Mppx.create({ methods: [alphaMethod], realm, secretKey })
 
     expectTypeOf(mppx.verifyCredential).toBeFunction()
+    expectTypeOf(mppx.settleCredential).toBeFunction()
+    expectTypeOf(mppx.validateCredential).toBeFunction()
   })
 
   test('server events receive typed method context', () => {
