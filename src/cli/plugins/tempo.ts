@@ -9,7 +9,9 @@ import { Base64 } from 'ox'
 import type { Address } from 'viem'
 import { createClient, http } from 'viem'
 import { privateKeyToAccount } from 'viem/accounts'
+import { Actions } from 'viem/tempo'
 
+import type * as Challenge from '../../Challenge.js'
 import { normalizeHeaders } from '../../client/internal/Fetch.js'
 import * as Constants from '../../Constants.js'
 import * as Credential from '../../Credential.js'
@@ -30,10 +32,88 @@ import {
   pc,
   resolveChain,
   resolveRpcUrl,
+  type Network,
 } from '../utils.js'
 import { createPlugin, type Plugin } from './plugin.js'
 
 const packageJson = createRequire(import.meta.url)('../../../package.json') as { name: string }
+const booleanOption = z.union([
+  z.boolean(),
+  z.literal('true').transform(() => true),
+  z.literal('false').transform(() => false),
+])
+const tempoOptionSchema = z.object({
+  autoSwap: z.optional(booleanOption),
+  channel: z.optional(z.coerce.string()),
+  deposit: z.optional(z.union([z.string(), z.number()])),
+  payWith: z.optional(z.string()),
+  slippage: z.optional(z.coerce.number()),
+  tokenIn: z.optional(z.string()),
+})
+const tempoOptionKeys = [
+  'autoSwap',
+  'channel',
+  'deposit',
+  'payWith',
+  'slippage',
+  'tokenIn',
+] as const
+const tempoChargeChallengeScoreOrder = [
+  'payable',
+  'unknownBalance',
+  'insufficientBalance',
+  'unsupported',
+] as const
+
+type TempoChargeChallengeScore = (typeof tempoChargeChallengeScoreOrder)[number]
+
+/**
+ * Orders Tempo charge challenges by whether the configured wallet can satisfy them.
+ *
+ * Direct balances are preferred first. Unsupported or unpayable challenges keep
+ * their original relative order.
+ */
+export async function orderTempoChargeChallengesByBalance(
+  challenges: readonly Challenge.Challenge[],
+  ctx: {
+    options: {
+      account?: string | undefined
+      network?: Network | undefined
+      rpcUrl?: string | undefined
+    }
+  },
+): Promise<Challenge.Challenge[]> {
+  const tempoPositions: number[] = []
+  const tempoChallenges: Challenge.Challenge[] = []
+  for (const [index, challenge] of challenges.entries()) {
+    if (!isTempoChargeChallenge(challenge)) continue
+    tempoPositions.push(index)
+    tempoChallenges.push(challenge)
+  }
+  if (tempoChallenges.length < 2) return [...challenges]
+
+  const probe = await resolveBalanceProbe(ctx).catch(() => undefined)
+  if (!probe) return [...challenges]
+
+  const scored = await Promise.all(
+    tempoChallenges.map(async (challenge, index) => ({
+      challenge,
+      index,
+      score: await scoreTempoChargeChallenge(challenge, probe),
+    })),
+  )
+  scored.sort(
+    (left, right) =>
+      tempoChargeChallengeScoreOrder.indexOf(left.score) -
+        tempoChargeChallengeScoreOrder.indexOf(right.score) || left.index - right.index,
+  )
+
+  const ordered = [...challenges]
+  for (const [index, position] of tempoPositions.entries()) {
+    ordered[position] = scored[index]!.challenge
+  }
+  return ordered
+}
 
 export function tempo() {
   let _session:
@@ -60,23 +140,7 @@ export function tempo() {
       const accountName = resolveAccountName(options.account)
       const challengeRequest = challenge.request as Record<string, unknown>
       const currency = challengeRequest.currency as string | undefined
-      const booleanOption = z.union([
-        z.boolean(),
-        z.literal('true').transform(() => true),
-        z.literal('false').transform(() => false),
-      ])
-      const tempoOpts = parseOptions(
-        z.object({
-          autoSwap: z.optional(booleanOption),
-          channel: z.optional(z.coerce.string()),
-          deposit: z.optional(z.union([z.string(), z.number()])),
-          payWith: z.optional(z.string()),
-          slippage: z.optional(z.coerce.number()),
-          tokenIn: z.optional(z.string()),
-        }),
-        methodOpts,
-        ['autoSwap', 'channel', 'deposit', 'payWith', 'slippage', 'tokenIn'],
-      )
+      const tempoOpts = parseTempoOptions(methodOpts)
       const autoSwap = resolveAutoSwap({
         autoSwap: tempoOpts.autoSwap ?? options.autoSwap,
         payWith: tempoOpts.payWith ?? options.payWith,
@@ -745,6 +809,85 @@ function detectTerminalBg(
 }
 
 // --- Account helpers ---
+
+type BalanceProbe = {
+  account: Address
+  client: ReturnType<typeof createClient>
+}
+
+function parseTempoOptions(rawOptions: Record<string, string>) {
+  return parseOptions(tempoOptionSchema, rawOptions, tempoOptionKeys)
+}
+
+function isTempoChargeChallenge(challenge: Challenge.Challenge): boolean {
+  return challenge.method === 'tempo' && challenge.intent === 'charge'
+}
+
+async function resolveBalanceProbe(ctx: {
+  options: {
+    account?: string | undefined
+    network?: Network | undefined
+    rpcUrl?: string | undefined
+  }
+}): Promise<BalanceProbe | undefined> {
+  const accountName = resolveAccountName(ctx.options.account)
+  const privateKey =
+    process.env.MPPX_PRIVATE_KEY?.trim() ||
+    (isTempoAccount(accountName) ? undefined : await createKeychain(accountName).get())
+
+  let account: Address | undefined
+  if (privateKey) {
+    account = privateKeyToAccount(privateKey as `0x${string}`).address
+  } else if (isTempoAccount(accountName) && hasTempoCliSync()) {
+    account = resolveTempoAccount(accountName)?.wallet_address as Address | undefined
+  } else {
+    const fallback = fallbackFromTempo()
+    if (fallback) {
+      const fallbackKey = await createKeychain(fallback).get()
+      if (fallbackKey) account = privateKeyToAccount(fallbackKey as `0x${string}`).address
+    }
+  }
+  if (!account) return undefined
+
+  const rpcUrl = resolveRpcUrl(ctx.options.rpcUrl, { network: ctx.options.network })
+  const client = createClient({
+    chain: await resolveChain({ network: ctx.options.network, rpcUrl }),
+    transport: http(rpcUrl),
+  })
+
+  return {
+    account,
+    client,
+  }
+}
+
+async function scoreTempoChargeChallenge(
+  challenge: Challenge.Challenge,
+  probe: BalanceProbe,
+): Promise<TempoChargeChallengeScore> {
+  const request = challenge.request as Record<string, unknown>
+  const currency = request.currency
+  const amount = request.amount
+  if (typeof currency !== 'string' || typeof amount !== 'string') return 'unsupported'
+
+  const requiredChainId = (request.methodDetails as { chainId?: number } | undefined)?.chainId
+  if (requiredChainId && probe.client.chain?.id && requiredChainId !== probe.client.chain.id) {
+    return 'unsupported'
+  }
+
+  const amountRaw = BigInt(amount)
+  if (amountRaw === 0n) return 'payable'
+
+  const balance = await Actions.token
+    .getBalance(probe.client as never, {
+      account: probe.account,
+      token: currency as Address,
+    })
+    .catch(() => undefined)
+  if (balance === undefined) return 'unknownBalance'
+  if (balance >= amountRaw) return 'payable'
+  return 'insufficientBalance'
+}
 
 function parseOptions<const schema extends z.ZodType>(
   schema: schema,

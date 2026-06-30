@@ -31,6 +31,7 @@ import cli from './cli.js'
 const testPrivateKey = generatePrivateKey()
 const testAccount = privateKeyToAccount(testPrivateKey)
 const cliTestXdgDataHome = fs.mkdtempSync(path.join(os.tmpdir(), 'mppx-cli-xdg-'))
+const unfundedToken = '0x20c0000000000000000000000000000000000002' as Address
 const cliSessionFeePayerPolicy = {
   maxGas: 2_250_000n,
   maxTotalFee: 60_000_000_000_000_000n,
@@ -463,6 +464,199 @@ describe('basic charge (examples/basic)', () => {
         env: { MPPX_PRIVATE_KEY: testPrivateKey },
       })
       expect(output).toContain('paid')
+    } finally {
+      httpServer.close()
+    }
+  })
+
+  test(
+    'selects a later Tempo charge challenge when wallet has that token balance',
+    { timeout: 120_000 },
+    async () => {
+      const { Actions } = await import('viem/tempo')
+      const payerPrivateKey = generatePrivateKey()
+      const payer = privateKeyToAccount(payerPrivateKey)
+      await Actions.token.transferSync(client, {
+        account: accounts[0],
+        chain: client.chain,
+        token: asset,
+        to: payer.address,
+        amount: parseUnits('100', 6),
+      })
+      await Actions.token.transferSync(client, {
+        account: accounts[0],
+        chain: client.chain,
+        token: Addresses.pathUsd,
+        to: payer.address,
+        amount: parseUnits('100', 6),
+      })
+
+      const tempoMethod = tempo.charge({ getClient: () => client })
+      const server = Mppx_server.create({
+        methods: [tempoMethod],
+        realm: 'cli-test-balance-aware-offers',
+        secretKey: 'cli-test-secret-cli-test-secret-32',
+      })
+      let authorization: string | undefined
+
+      const httpServer = await Http.createServer(async (req, res) => {
+        if (req.headers.authorization) {
+          authorization = req.headers.authorization
+          res.end('paid-from-funded-token')
+          return
+        }
+
+        const result = await toNodeListener(
+          server.compose(
+            [
+              tempoMethod,
+              {
+                amount: '1',
+                currency: unfundedToken,
+                decimals: 6,
+                expires: new Date(Date.now() + 60_000).toISOString(),
+                recipient: accounts[0].address,
+              },
+            ],
+            [
+              tempoMethod,
+              {
+                amount: '1',
+                currency: asset,
+                decimals: 6,
+                expires: new Date(Date.now() + 60_000).toISOString(),
+                recipient: accounts[0].address,
+              },
+            ],
+          ),
+        )(req, res)
+        if (result.status === 402) return
+        res.end('unexpected')
+      })
+
+      try {
+        const { output, exitCode } = await serve([httpServer.url, '--rpc-url', rpcUrl, '-s'], {
+          env: { MPPX_PRIVATE_KEY: payerPrivateKey },
+        })
+
+        expect(exitCode, output).toBeUndefined()
+        expect(output).toContain('paid-from-funded-token')
+        expect(Credential.deserialize(authorization!).challenge.request.currency).toBe(asset)
+      } finally {
+        httpServer.close()
+      }
+    },
+  )
+
+  test('currency option selects a matching offered challenge', { timeout: 120_000 }, async () => {
+    const { Actions } = await import('viem/tempo')
+    const payerPrivateKey = generatePrivateKey()
+    const payer = privateKeyToAccount(payerPrivateKey)
+    await Actions.token.transferSync(client, {
+      account: accounts[0],
+      chain: client.chain,
+      token: asset,
+      to: payer.address,
+      amount: parseUnits('100', 6),
+    })
+    await Actions.token.transferSync(client, {
+      account: accounts[0],
+      chain: client.chain,
+      token: Addresses.pathUsd,
+      to: payer.address,
+      amount: parseUnits('100', 6),
+    })
+
+    const tempoMethod = tempo.charge({ getClient: () => client })
+    const server = Mppx_server.create({
+      methods: [tempoMethod],
+      realm: 'cli-test-currency-option',
+      secretKey: 'cli-test-secret-cli-test-secret-32',
+    })
+    let authorization: string | undefined
+
+    const httpServer = await Http.createServer(async (req, res) => {
+      if (req.headers.authorization) {
+        authorization = req.headers.authorization
+        res.end('paid-from-currency-option')
+        return
+      }
+
+      const result = await toNodeListener(
+        server.compose(
+          [
+            tempoMethod,
+            {
+              amount: '1',
+              currency: unfundedToken,
+              decimals: 6,
+              expires: new Date(Date.now() + 60_000).toISOString(),
+              recipient: accounts[0].address,
+            },
+          ],
+          [
+            tempoMethod,
+            {
+              amount: '1',
+              currency: asset,
+              decimals: 6,
+              expires: new Date(Date.now() + 60_000).toISOString(),
+              recipient: accounts[0].address,
+            },
+          ],
+        ),
+      )(req, res)
+      if (result.status === 402) return
+      res.end('unexpected')
+    })
+
+    try {
+      const { output, exitCode } = await serve(
+        [httpServer.url, '--rpc-url', rpcUrl, '--currency', asset, '-s'],
+        { env: { MPPX_PRIVATE_KEY: payerPrivateKey } },
+      )
+
+      expect(exitCode, output).toBeUndefined()
+      expect(output).toContain('paid-from-currency-option')
+      expect(Credential.deserialize(authorization!).challenge.request.currency).toBe(asset)
+    } finally {
+      httpServer.close()
+    }
+  })
+
+  test('currency option rejects currencies the server did not offer', async () => {
+    const tempoMethod = tempo.charge({ getClient: () => client })
+    const server = Mppx_server.create({
+      methods: [tempoMethod],
+      realm: 'cli-test-currency-unavailable',
+      secretKey: 'cli-test-secret-cli-test-secret-32',
+    })
+
+    const httpServer = await Http.createServer(async (req, res) => {
+      const result = await toNodeListener(
+        server.charge({
+          amount: '1',
+          currency: asset,
+          expires: new Date(Date.now() + 60_000).toISOString(),
+          recipient: accounts[0].address,
+        }),
+      )(req, res)
+      if (result.status === 402) return
+      res.end('unexpected')
+    })
+
+    try {
+      const { output, exitCode } = await serve([
+        httpServer.url,
+        '--currency',
+        Addresses.pathUsd,
+        '-s',
+      ])
+
+      expect(exitCode).toBe(2)
+      expect(output).toContain('UNSUPPORTED_CURRENCY')
+      expect(output).toContain(Addresses.pathUsd)
+      expect(output).toContain(asset)
     } finally {
       httpServer.close()
     }
