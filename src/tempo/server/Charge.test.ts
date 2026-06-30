@@ -1531,6 +1531,63 @@ describe('tempo', () => {
       httpServer.close()
     })
 
+    test('behavior: validates fee-payer pull credential before settlement', async () => {
+      const chargeServer = Mppx_server.create({
+        methods: [
+          tempo_server.charge({
+            getClient() {
+              return client
+            },
+            currency: asset,
+            account: accounts[0],
+            feePayer: accounts[0],
+            store: Store.memory(),
+          }),
+        ],
+        realm,
+        secretKey,
+      })
+      const mppx = Mppx_client.create({
+        polyfill: false,
+        methods: [
+          tempo_client({
+            account: accounts[1],
+            getClient() {
+              return client
+            },
+          }),
+        ],
+      })
+
+      const httpServer = await Http.createServer(async (req, res) => {
+        const result = await Mppx_server.toNodeListener(
+          chargeServer.charge({
+            amount: '1',
+            currency: asset,
+            recipient: accounts[0].address,
+          }),
+        )(req, res)
+        if (result.status === 402) return
+        res.end('OK')
+      })
+
+      const response = await fetch(httpServer.url)
+      expect(response.status).toBe(402)
+
+      const credential = await mppx.createCredential(response)
+      const validation = await chargeServer.validateCredential(credential)
+
+      expect(validation.details).toMatchObject({
+        mode: 'pull',
+        sender: accounts[1].address.toLowerCase(),
+      })
+
+      const receipt = await chargeServer.verifyCredential(credential)
+      expect(receipt.status).toBe('success')
+
+      httpServer.close()
+    })
+
     test('behavior: fee payer simulates before broadcasting in confirmation mode', async () => {
       const rpcMethods: string[] = []
       const interceptingClient = createClient({

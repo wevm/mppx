@@ -87,6 +87,59 @@ export function charge<const parameters extends charge.Parameters>(
     rpcUrl: defaults.rpcUrl,
   })
 
+  async function resolveCredentialContext(parameters: {
+    credential: Method.VerifyContext<typeof Methods.charge>['credential']
+    request: Method.VerifyContext<typeof Methods.charge>['request']
+  }) {
+    const { credential, request } = parameters
+    const { challenge } = credential
+    const resolvedRequest = (() => {
+      const parsed = Methods.charge.schema.request.safeParse(request)
+      if (parsed.success) return parsed.data
+      // verifyCredential() passes the HMAC-bound challenge request, which is
+      // already in canonical output form and should not be transformed again.
+      return request as unknown as z.output<typeof Methods.charge.schema.request>
+    })()
+    const chainId = resolvedRequest.methodDetails?.chainId ?? request.chainId
+    const client = await getClient({ chainId })
+
+    const { amount, methodDetails } = resolvedRequest
+    const requestAllowsFeePayer =
+      request.feePayer !== false &&
+      (request.feePayer === undefined ||
+        request.feePayer === true ||
+        typeof request.feePayer === 'object')
+    const supportedModes = methodDetails?.supportedModes as
+      | readonly Methods.ChargeMode[]
+      | undefined
+    const currency = resolvedRequest.currency as `0x${string}`
+    const recipient = resolvedRequest.recipient as `0x${string}`
+    const memo = methodDetails?.memo as `0x${string}` | undefined
+    const payload = credential.payload
+    const isZeroAmount = BigInt(amount) === 0n
+
+    Expires.assert(challenge.expires, challenge.id)
+
+    if (isZeroAmount && payload.type !== 'proof')
+      throw new MismatchError('Zero-amount challenges require a proof credential.', {})
+
+    return {
+      amount,
+      chainId,
+      challenge,
+      client,
+      currency,
+      isZeroAmount,
+      memo,
+      methodDetails,
+      payload,
+      recipient,
+      requestAllowsFeePayer,
+      resolvedRequest,
+      supportedModes,
+    }
+  }
+
   type Defaults = charge.DeriveDefaults<parameters>
   return Method.toServer<typeof Methods.charge, Defaults>(Methods.charge, {
     defaults: {
@@ -168,25 +221,195 @@ export function charge<const parameters extends charge.Parameters>(
       }
     },
 
+    async validate({ credential, request }) {
+      const {
+        amount,
+        chainId,
+        challenge,
+        client,
+        currency,
+        isZeroAmount,
+        memo,
+        methodDetails,
+        payload,
+        recipient,
+        requestAllowsFeePayer,
+        resolvedRequest,
+        supportedModes,
+      } = await resolveCredentialContext({ credential, request })
+      const isFeePayerTx =
+        methodDetails?.feePayer === true &&
+        requestAllowsFeePayer &&
+        !!(typeof request.feePayer === 'object' ? request.feePayer : feePayer || feePayerUrl)
+
+      const details: charge.ValidationDetails = {
+        mode: payload.type === 'hash' ? 'push' : payload.type === 'transaction' ? 'pull' : 'proof',
+      }
+
+      switch (payload.type) {
+        case 'hash': {
+          if (supportedModes && !supportedModes.includes('push'))
+            throw new MismatchError('Hash credentials are not supported for this challenge.', {})
+
+          const source = parseHashCredentialSource({
+            chainId: chainId ?? client.chain?.id,
+            source: credential.source,
+          })
+          const transfers = getExpectedTransfers({ amount, memo, methodDetails, recipient })
+          const receipt = await getTransactionReceipt(client, {
+            hash: payload.hash as `0x${string}`,
+          })
+          const sender = source?.address ?? receipt.from
+          const matchedLogs = await assertTransferLogs(receipt, {
+            currency,
+            sender,
+            source,
+            transfers,
+            validateSender,
+          })
+          if (!memo)
+            assertChallengeBoundMemo(matchedLogs, {
+              challengeId: challenge.id,
+              realm: challenge.realm,
+            })
+          toReceipt(receipt)
+          details.sender = sender
+          details.transfers = transfers
+          break
+        }
+
+        case 'proof': {
+          if (!isZeroAmount)
+            throw new MismatchError(
+              'Proof credentials are only valid for zero-amount challenges.',
+              {},
+            )
+
+          const expectedSource = credential.source
+          if (!expectedSource)
+            throw new MismatchError('Proof credential must include a source.', {})
+
+          const resolvedChainId = challenge.request.methodDetails?.chainId ?? chainId!
+          const source = Proof.parsePkhSource(expectedSource)
+
+          if (!source || source.chainId !== resolvedChainId) {
+            throw new MismatchError('Proof credential source is invalid.', {})
+          }
+
+          const valid = await verifyTypedData(client, {
+            address: source.address,
+            ...Proof.typedData({
+              account: source.address,
+              chainId: resolvedChainId,
+              challengeId: challenge.id,
+              realm: challenge.realm,
+            }),
+            signature: payload.signature as `0x${string}`,
+          })
+          if (!valid) {
+            const proofSigner = recoverAuthorizedProofSigner({
+              chainId: resolvedChainId,
+              challengeId: challenge.id,
+              realm: challenge.realm,
+              signature: payload.signature as `0x${string}`,
+              sourceAddress: source.address,
+            })
+            const authorized = proofSigner
+              ? await isActiveAccessKey(client, {
+                  accessKey: proofSigner,
+                  account: source.address,
+                })
+              : false
+            if (!authorized) throw new MismatchError('Proof signature does not match source.', {})
+          }
+          details.sender = source.address
+          break
+        }
+
+        case 'transaction': {
+          if (supportedModes && !supportedModes.includes('pull'))
+            throw new MismatchError(
+              'Transaction credentials are not supported for this challenge.',
+              {},
+            )
+
+          const serializedTransaction = payload.signature as Transaction.TransactionSerializedTempo
+          if (!FeePayer.isTempoTransaction(serializedTransaction))
+            throw new MismatchError('Only Tempo (0x76/0x78) transactions are supported.', {})
+
+          const transaction = Transaction.deserialize(serializedTransaction)
+          if (!transaction.signature || !transaction.from)
+            throw new MismatchError(
+              'Transaction must be signed by the sender before fee payer co-signing.',
+              {},
+            )
+
+          const calls = (transaction.calls ?? []) as readonly {
+            data?: `0x${string}` | undefined
+            to?: `0x${string}` | undefined
+          }[]
+          const transfers = getExpectedTransfers({ amount, memo, methodDetails, recipient })
+          const matchedCalls = assertTransferCalls(calls, {
+            currency,
+            exactCount: isFeePayerTx,
+            transfers,
+          })
+          if (!memo)
+            assertChallengeBoundCallMemo(matchedCalls, {
+              challengeId: challenge.id,
+              realm: challenge.realm,
+            })
+
+          if (isFeePayerTx) {
+            FeePayer.validateCalls(
+              transaction.calls,
+              { amount, currency, recipient },
+              { currency, expectedTransfers: transfers },
+            )
+            FeePayer.assertAllowedFeeToken(transaction, FeePayer.defaultAllowedFeeTokens(chainId))
+          } else {
+            await viem_call(
+              client,
+              FeePayer.simulationTransaction(transaction, { feePayer: false }) as never,
+            )
+          }
+
+          details.sender = transaction.from as `0x${string}`
+          details.serializedTransaction = serializedTransaction
+          details.transfers = transfers
+          break
+        }
+
+        default:
+          throw new Error(`Unsupported credential type "${(payload as { type: string }).type}".`)
+      }
+
+      return {
+        challenge,
+        credential,
+        details,
+        intent: 'charge',
+        method: 'tempo',
+        request: resolvedRequest,
+        source: credential.source,
+      }
+    },
+
     async verify({ credential, request }) {
-      const { challenge } = credential
-      const resolvedRequest = (() => {
-        const parsed = Methods.charge.schema.request.safeParse(request)
-        if (parsed.success) return parsed.data
-        // verifyCredential() passes the HMAC-bound challenge request, which is
-        // already in canonical output form and should not be transformed again.
-        return request as unknown as z.output<typeof Methods.charge.schema.request>
-      })()
-      const chainId = resolvedRequest.methodDetails?.chainId ?? request.chainId
-
-      const client = await getClient({ chainId })
-
-      const { amount, methodDetails } = resolvedRequest
-      const requestAllowsFeePayer =
-        request.feePayer !== false &&
-        (request.feePayer === undefined ||
-          request.feePayer === true ||
-          typeof request.feePayer === 'object')
+      const {
+        amount,
+        chainId,
+        challenge,
+        client,
+        currency,
+        isZeroAmount,
+        memo,
+        methodDetails,
+        payload,
+        recipient,
+        requestAllowsFeePayer,
+        supportedModes,
+      } = await resolveCredentialContext({ credential, request })
       const feePayerAccount =
         methodDetails?.feePayer === true && requestAllowsFeePayer
           ? typeof request.feePayer === 'object'
@@ -194,22 +417,6 @@ export function charge<const parameters extends charge.Parameters>(
             : feePayer
           : undefined
       const expires = challenge.expires
-      const supportedModes = methodDetails?.supportedModes as
-        | readonly Methods.ChargeMode[]
-        | undefined
-
-      const currency = resolvedRequest.currency as `0x${string}`
-      const recipient = resolvedRequest.recipient as `0x${string}`
-
-      Expires.assert(expires, challenge.id)
-
-      const memo = methodDetails?.memo as `0x${string}` | undefined
-
-      const payload = credential.payload
-      const isZeroAmount = BigInt(amount) === 0n
-
-      if (isZeroAmount && payload.type !== 'proof')
-        throw new MismatchError('Zero-amount challenges require a proof credential.', {})
 
       switch (payload.type) {
         case 'hash': {
@@ -541,6 +748,13 @@ export declare namespace charge {
   type Defaults = LooseOmit<Method.RequestDefaults<typeof Methods.charge>, 'feePayer' | 'recipient'>
 
   type ValidateSender = (parameters: ValidateSenderParameters) => boolean | Promise<boolean>
+
+  type ValidationDetails = {
+    mode: 'proof' | 'pull' | 'push'
+    sender?: `0x${string}` | undefined
+    serializedTransaction?: Transaction.TransactionSerializedTempo | undefined
+    transfers?: readonly ExpectedTransfer[] | undefined
+  }
 
   type ValidateSenderParameters = {
     /** Actual TIP-20 `Transfer.from` address. */

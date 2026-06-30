@@ -117,11 +117,32 @@ export type VerifyContext<method extends Method> = {
   request: z.input<method['schema']['request']>
 }
 
+/** Validation hook parameters for a single method. */
+export type ValidateContext<method extends Method> = VerifyContext<method>
+
 /** Response hook parameters for a single method. */
 export type RespondContext<method extends Method> = VerifyContext<method> & {
   input: globalThis.Request
   receipt: Receipt.Receipt
 }
+
+/** Non-mutating method-specific validation result. */
+export type Validation<method extends Method = Method, details = unknown> = Readonly<{
+  challenge: Challenge.Challenge<
+    z.output<method['schema']['request']>,
+    method['intent'],
+    method['name']
+  >
+  credential: Credential.Credential<
+    z.output<method['schema']['credential']['payload']>,
+    Challenge.Challenge<z.output<method['schema']['request']>, method['intent'], method['name']>
+  >
+  details: details
+  intent: method['intent']
+  method: method['name']
+  request: z.output<method['schema']['request']>
+  source?: string | undefined
+}>
 
 /**
  * A server-side configured method with verification logic.
@@ -141,8 +162,10 @@ export type Server<
   preflight?: PreflightFn<method> | undefined
   request?: RequestFn<method> | undefined
   respond?: RespondFn<method> | undefined
+  settle?: SettleFn<method> | undefined
   stableBinding?: StableBindingFn<method> | undefined
   transport?: transportOverride | undefined
+  validate?: ValidateFn<method> | undefined
   verify: VerifyFn<method>
 }
 export type AnyServer = Server<any, any, any, any, any>
@@ -223,6 +246,16 @@ export type StableBindingFn<method extends Method> = (
 
 /** Verification function for a single method. */
 export type VerifyFn<method extends Method> = (
+  parameters: VerifyContext<method>,
+) => Promise<Receipt.Receipt>
+
+/** Non-mutating validation function for a single method. */
+export type ValidateFn<method extends Method> = (
+  parameters: ValidateContext<method>,
+) => Promise<Validation<method>>
+
+/** Mutating settlement function for a single method. */
+export type SettleFn<method extends Method> = (
   parameters: VerifyContext<method>,
 ) => Promise<Receipt.Receipt>
 
@@ -336,8 +369,10 @@ export function toServer<
     preflight,
     request,
     respond,
+    settle,
     stableBinding,
     transport,
+    validate,
     verify,
   } = options
   return {
@@ -350,8 +385,10 @@ export function toServer<
     preflight,
     request,
     respond,
+    settle,
     stableBinding,
     transport,
+    validate,
     verify,
   } as Server<method, defaults, transportOverride, extensions, toServer.Alias<options>>
 }
@@ -374,8 +411,10 @@ export declare namespace toServer {
     preflight?: PreflightFn<method> | undefined
     request?: RequestFn<method> | undefined
     respond?: RespondFn<method> | undefined
+    settle?: SettleFn<method> | undefined
     stableBinding?: StableBindingFn<method> | undefined
     transport?: transportOverride | Transport.AnyTransport | undefined
+    validate?: ValidateFn<method> | undefined
     verify: VerifyFn<method>
   }
 }
