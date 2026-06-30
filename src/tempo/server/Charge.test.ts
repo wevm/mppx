@@ -360,6 +360,9 @@ describe('tempo', () => {
       }
       expect(await dedupStore.get(`tenant:mppx:charge:${receipt.transactionHash}`)).not.toBeNull()
       expect(await dedupStore.get(`mppx:charge:${receipt.transactionHash}`)).toBeNull()
+      await expect(
+        dedupServer.validateCredential(Credential.serialize(credential1)),
+      ).rejects.toThrow('Transaction hash has already been used')
 
       const response2 = await fetch(httpServer.url)
       expect(response2.status).toBe(402)
@@ -1584,8 +1587,82 @@ describe('tempo', () => {
 
       const receipt = await chargeServer.verifyCredential(credential)
       expect(receipt.status).toBe('success')
+      await expect(chargeServer.validateCredential(credential)).rejects.toThrow(
+        'Transaction hash has already been used',
+      )
 
       httpServer.close()
+    })
+
+    test('behavior: rejects pull credential with forged explicit sender slot', async () => {
+      const chargeServer = Mppx_server.create({
+        methods: [
+          tempo_server.charge({
+            getClient() {
+              return client
+            },
+            currency: asset,
+            account: accounts[0],
+            store: Store.memory(),
+          }),
+        ],
+        realm,
+        secretKey,
+      })
+      const mppx = Mppx_client.create({
+        polyfill: false,
+        methods: [
+          tempo_client({
+            account: accounts[1],
+            mode: 'pull',
+            getClient() {
+              return client
+            },
+          }),
+        ],
+      })
+
+      const httpServer = await Http.createServer(async (req, res) => {
+        const result = await Mppx_server.toNodeListener(
+          chargeServer.charge({
+            amount: '1',
+            currency: asset,
+            recipient: accounts[0].address,
+          }),
+        )(req, res)
+        if (result.status === 402) return
+        res.end('OK')
+      })
+
+      try {
+        const response = await fetch(httpServer.url)
+        expect(response.status).toBe(402)
+
+        const credential = await mppx.createCredential(response)
+        const decoded = Credential.deserialize<{
+          signature: Transaction.TransactionSerializedTempo
+          type: 'transaction'
+        }>(credential)
+        const forgedTransaction = TxEnvelopeTempo.serialize(
+          TxEnvelopeTempo.deserialize(decoded.payload.signature),
+          { format: 'feePayer', sender: accounts[2].address },
+        )
+        const forgedCredential = Credential.serialize(
+          Credential.from({
+            challenge: decoded.challenge,
+            payload: { signature: forgedTransaction, type: 'transaction' as const },
+          }),
+        )
+
+        await expect(chargeServer.validateCredential(forgedCredential)).rejects.toThrow(
+          'Transaction signature does not match sender.',
+        )
+        await expect(chargeServer.verifyCredential(forgedCredential)).rejects.toThrow(
+          'Transaction signature does not match sender.',
+        )
+      } finally {
+        httpServer.close()
+      }
     })
 
     test('behavior: fee payer simulates before broadcasting in confirmation mode', async () => {
@@ -1975,6 +2052,9 @@ describe('tempo', () => {
           `mppx:charge:sponsor:${chain.id}:${accounts[1].address.toLowerCase()}`,
         ),
       ).toBeNull()
+      await expect(serverWithSlowSimulation.validateCredential(credential2)).rejects.toThrow(
+        'Sponsored transaction from this sender is already in flight',
+      )
       const second = fetch(httpServer.url, { headers: { Authorization: credential2 } })
 
       try {
@@ -2188,7 +2268,17 @@ describe('tempo', () => {
         res.end('OK')
       })
 
-      const response = await mppx.fetch(httpServer.url)
+      const challengeResponse = await fetch(httpServer.url)
+      expect(challengeResponse.status).toBe(402)
+
+      const credential = await mppx.createCredential(challengeResponse)
+      const validation = await serverWithFeePayer.validateCredential(credential)
+      expect((validation.details as { settleability?: string }).settleability).toBe('shape-only')
+      expect(feePayerRequests).toEqual([])
+
+      const response = await fetch(httpServer.url, {
+        headers: { Authorization: credential },
+      })
       expect(response.status).toBe(200)
       expect(feePayerRequests.map(({ method }) => method)).toEqual(['eth_fillTransaction'])
 
@@ -3191,6 +3281,9 @@ describe('tempo', () => {
         headers: { Authorization: Credential.serialize(credential) },
       })
       expect(response2.status).toBe(200)
+      await expect(server_.validateCredential(Credential.serialize(credential))).rejects.toThrow(
+        'Proof credential has already been used',
+      )
 
       const replayResponse = await fetch(httpServer.url, {
         headers: { Authorization: Credential.serialize(credential) },
