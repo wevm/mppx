@@ -1,5 +1,15 @@
 # mppx
 
+## 0.8.2
+
+### Patch Changes
+
+- 80ed268: Added CLI selection of payable Tempo charge challenges and a currency override.
+- 24ddf52: Filtered unsupported x402 accepts during HTTP client challenge extraction.
+- 24ddcca: Rejected non-canonical fee-payer calldata and client-supplied access lists before sponsorship.
+- 685f698: Fixed MCP payment-aware fetch retries for tool results with payment-required metadata.
+- 8305a05: Added configurable incremental payment challenge retries for client fetch, defaulting to three.
+
 ## 0.8.1
 
 ### Patch Changes
