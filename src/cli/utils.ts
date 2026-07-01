@@ -318,7 +318,8 @@ export async function fetchTokenInfo(
     [usdc]: 'USDC',
   }
   const symbol = knownSymbols[token] ?? metadata.symbol
-  const decimals = 'decimals' in metadata ? metadata.decimals : 6
+  const decimals =
+    'decimals' in metadata && typeof metadata.decimals === 'number' ? metadata.decimals : 6
   return { balance, symbol, decimals, token }
 }
 

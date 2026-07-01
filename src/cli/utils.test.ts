@@ -1,7 +1,13 @@
 import { tempo as tempoMainnet, tempoModerato } from 'viem/tempo/chains'
-import { afterEach, describe, expect, test } from 'vp/test'
+import { afterEach, describe, expect, test, vi } from 'vp/test'
 
-import { networkRpcUrls, resolveChain, resolveFundingNetwork, resolveRpcUrl } from './utils.js'
+import {
+  fetchTokenInfo,
+  networkRpcUrls,
+  resolveChain,
+  resolveFundingNetwork,
+  resolveRpcUrl,
+} from './utils.js'
 
 describe('resolveRpcUrl', () => {
   afterEach(() => {
@@ -95,5 +101,33 @@ describe('resolveChain', () => {
   test('does not default to testnet', async () => {
     const chain = await resolveChain()
     expect(chain.id).not.toBe(tempoModerato.id)
+  })
+})
+
+describe('fetchTokenInfo', () => {
+  afterEach(() => {
+    vi.doUnmock('viem/tempo')
+  })
+
+  test('uses 6 decimals when token metadata omits a numeric decimals value', async () => {
+    const token = '0x1111111111111111111111111111111111111111'
+    const account = '0x2222222222222222222222222222222222222222'
+    vi.doMock('viem/tempo', () => ({
+      Actions: {
+        token: {
+          getBalance: vi.fn(async () => ({ amount: 123n })),
+          getMetadata: vi.fn(async () => ({ decimals: undefined, symbol: 'TEST' })),
+        },
+      },
+    }))
+
+    const info = await fetchTokenInfo({} as never, token, account)
+
+    expect(info).toEqual({
+      balance: 123n,
+      decimals: 6,
+      symbol: 'TEST',
+      token,
+    })
   })
 })

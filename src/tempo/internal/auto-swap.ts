@@ -1,7 +1,7 @@
 import type { Address, Client } from 'viem'
 import { readContract } from 'viem/actions'
 import { Actions, Addresses } from 'viem/tempo'
-import type { token as viem_token } from 'viem/tempo/actions'
+import type { dex as viem_dex, token as viem_token } from 'viem/tempo/actions'
 
 import * as TempoAddress from './address.js'
 import * as defaults from './defaults.js'
@@ -43,6 +43,19 @@ function getApproveCall(
       client: Client,
       parameters: viem_token.approve.Args,
     ): ReturnType<typeof viem_token.approve.call>
+  }
+  return call.length >= 2 ? call(client, parameters) : call(parameters)
+}
+
+// TODO: Remove once the minimum viem version is >=2.54.0, which uses client-first Tempo call builders.
+function getBuyCall(
+  client: Client,
+  parameters: viem_dex.buy.Args,
+): ReturnType<typeof viem_dex.buy.call> {
+  const call = Actions.dex.buy.call as unknown as {
+    length: number
+    (parameters: viem_dex.buy.Args): ReturnType<typeof viem_dex.buy.call>
+    (client: Client, parameters: viem_dex.buy.Args): ReturnType<typeof viem_dex.buy.call>
   }
   return call.length >= 2 ? call(client, parameters) : call(parameters)
 }
@@ -100,7 +113,7 @@ export async function findCalls(
             spender: Addresses.stablecoinDex,
             token: tokenIn,
           }),
-          Actions.dex.buy.call({
+          getBuyCall(client, {
             tokenIn,
             tokenOut,
             amountOut,

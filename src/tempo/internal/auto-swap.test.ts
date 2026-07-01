@@ -109,16 +109,22 @@ describe('findCalls', () => {
     const tokenOut = '0x2222222222222222222222222222222222222222' as Address
     const tokenIn = '0x3333333333333333333333333333333333333333' as Address
     const client = { chain: { id: 42431 } }
-    const tokenCalls: { client: unknown; name: string; parameters: Record<string, unknown> }[] = []
+    const builderCalls: { client: unknown; name: string; parameters: Record<string, unknown> }[] =
+      []
 
     function getBalanceCall(client: unknown, parameters: Record<string, unknown>) {
-      tokenCalls.push({ client, name: 'getBalance', parameters })
+      builderCalls.push({ client, name: 'getBalance', parameters })
       return { kind: parameters.token === tokenOut ? 'targetBalance' : 'candidateBalance' }
     }
 
     function approveCall(client: unknown, parameters: Record<string, unknown>) {
-      tokenCalls.push({ client, name: 'approve', parameters })
+      builderCalls.push({ client, name: 'approve', parameters })
       return { kind: 'approve' }
+    }
+
+    function buyCall(client: unknown, parameters: Record<string, unknown>) {
+      builderCalls.push({ client, name: 'buy', parameters })
+      return { kind: 'buy' }
     }
 
     vi.doMock('viem/actions', () => ({
@@ -129,7 +135,7 @@ describe('findCalls', () => {
     vi.doMock('viem/tempo', () => ({
       Actions: {
         dex: {
-          buy: { call: vi.fn((parameters) => ({ kind: 'buy', parameters })) },
+          buy: { call: buyCall },
           getBuyQuote: vi.fn(async () => 1_000_000n),
         },
         token: {
@@ -152,14 +158,25 @@ describe('findCalls', () => {
       })
 
       expect(calls).toHaveLength(2)
-      expect(tokenCalls.map((call) => call.client)).toEqual([client, client, client])
-      expect(tokenCalls.map((call) => call.name)).toEqual(['getBalance', 'getBalance', 'approve'])
-      expect(tokenCalls[0]!.parameters).toMatchObject({ account, token: tokenOut })
-      expect(tokenCalls[1]!.parameters).toMatchObject({ account, token: tokenIn })
-      expect(tokenCalls[2]!.parameters).toMatchObject({
+      expect(builderCalls.map((call) => call.client)).toEqual([client, client, client, client])
+      expect(builderCalls.map((call) => call.name)).toEqual([
+        'getBalance',
+        'getBalance',
+        'approve',
+        'buy',
+      ])
+      expect(builderCalls[0]!.parameters).toMatchObject({ account, token: tokenOut })
+      expect(builderCalls[1]!.parameters).toMatchObject({ account, token: tokenIn })
+      expect(builderCalls[2]!.parameters).toMatchObject({
         amount: 1_010_000n,
         spender: '0x4444444444444444444444444444444444444444',
         token: tokenIn,
+      })
+      expect(builderCalls[3]!.parameters).toMatchObject({
+        amountOut: 1_000_000n,
+        maxAmountIn: 1_010_000n,
+        tokenIn,
+        tokenOut,
       })
     } finally {
       vi.doUnmock('viem/actions')
