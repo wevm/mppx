@@ -51,11 +51,12 @@ export function stripe() {
                 'usage_limits[max_amount]': amount,
                 'usage_limits[expires_at]': expiresAt.toString(),
               })
-              const sptUrl =
-                process.env.MPPX_STRIPE_SPT_URL ??
-                (stripeSecretKey.startsWith('sk_test_')
-                  ? 'https://api.stripe.com/v1/test_helpers/shared_payment/granted_tokens'
-                  : 'https://api.stripe.com/v1/shared_payment/issued_tokens')
+              const sptUrl = (() => {
+                if (process.env.MPPX_STRIPE_SPT_URL) return process.env.MPPX_STRIPE_SPT_URL
+                if (stripeSecretKey.startsWith('sk_test_'))
+                  return 'https://api.stripe.com/v1/test_helpers/shared_payment/granted_tokens'
+                return 'https://api.stripe.com/v1/shared_payment/issued_tokens'
+              })()
               if (networkId) {
                 const sellerDetailsField = sptUrl.endsWith('/shared_payment/issued_tokens')
                   ? 'seller_details[network_business_profile]'
