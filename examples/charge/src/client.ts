@@ -54,7 +54,7 @@ async function updateBalance() {
     account,
     token: currency,
   })
-  balance.textContent = formatter.format(Number(value) / 1e6)
+  balance.textContent = formatter.format(Number(value.amount) / 1e6)
 }
 
 // Fund account on page load, then show balance

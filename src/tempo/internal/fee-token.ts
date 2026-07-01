@@ -12,7 +12,7 @@ function pushUnique(tokens: Address[], token: Address | undefined) {
 
 async function hasBalance(client: Client, account: Address, token: Address): Promise<boolean> {
   try {
-    return (await Actions.token.getBalance(client as never, { account, token })) > 0n
+    return (await Actions.token.getBalance(client as never, { account, token })).amount > 0n
   } catch {
     return false
   }

@@ -66,7 +66,8 @@ console.log('Funding account via faucet...')
 await Actions.faucet.fundSync(client, { account, timeout: 30_000 })
 
 // Helper to check our pathUSD balance (6 decimals).
-const getBalance = () => Actions.token.getBalance(client, { account, token: currency })
+const getBalance = async () =>
+  (await Actions.token.getBalance(client, { account, token: currency })).amount
 const fmt = (b: bigint) => `${Number(b) / 1e6} pathUSD`
 
 const balanceBefore = await getBalance()

@@ -68,7 +68,8 @@ console.log('Funding account via faucet...')
 await Actions.faucet.fundSync(client, { account, timeout: 30_000 })
 
 // Helper to query the on-chain pathUSD balance of our account.
-const getBalance = () => Actions.token.getBalance(client, { account, token: currency })
+const getBalance = async () =>
+  (await Actions.token.getBalance(client, { account, token: currency })).amount
 
 // Format a raw token amount (bigint with 6 decimals) into human-readable form.
 // e.g., 1_000_000n → "1 pathUSD"

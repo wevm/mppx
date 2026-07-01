@@ -287,6 +287,10 @@ export const testnetTokens = [
   '0x20c0000000000000000000000000000000000003',
 ] as const
 
+function toBaseUnitAmount(value: bigint | { amount: bigint }) {
+  return typeof value === 'bigint' ? value : value.amount
+}
+
 export function isTestnet(chain: Chain) {
   return chain.id !== tempoMainnet.id
 }
@@ -295,10 +299,18 @@ export async function fetchTokenInfo(
   client: ReturnType<typeof createClient>,
   token: Address,
   account: Address,
-) {
+): Promise<{
+  balance: bigint
+  decimals: number
+  symbol: string
+  token: Address
+}> {
   const { Actions } = await import('viem/tempo')
   const [balance, metadata] = await Promise.all([
-    Actions.token.getBalance(client, { account, token }).catch(() => 0n),
+    Actions.token
+      .getBalance(client, { account, token })
+      .then(toBaseUnitAmount)
+      .catch(() => 0n),
     Actions.token.getMetadata(client, { token }).catch(() => ({ symbol: token as string })),
   ])
   const knownSymbols: Record<string, string> = {

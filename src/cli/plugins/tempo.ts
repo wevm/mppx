@@ -883,6 +883,7 @@ async function scoreTempoChargeChallenge(
       account: probe.account,
       token: currency as Address,
     })
+    .then((value) => value.amount)
     .catch(() => undefined)
   if (balance === undefined) return 'unknownBalance'
   if (balance >= amountRaw) return 'payable'

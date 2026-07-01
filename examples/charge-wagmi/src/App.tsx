@@ -66,7 +66,7 @@ function Photo() {
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
-    if (balance !== undefined && balance === 0n && address) fund({ account: address })
+    if (balance?.amount === 0n && address) fund({ account: address })
   }, [balance, address])
 
   async function handleClick() {

@@ -3,14 +3,7 @@ import { Mppx as Mppx_client, tempo as tempo_client } from 'mppx/client'
 import { Mppx as Mppx_server, tempo as tempo_server } from 'mppx/server'
 import { P256, type Hex, WebAuthnP256 } from 'ox'
 import { SignatureEnvelope, TxEnvelopeTempo } from 'ox/tempo'
-import {
-  type Address,
-  createClient,
-  custom,
-  encodeFunctionData,
-  parseSignature,
-  parseUnits,
-} from 'viem'
+import { createClient, custom, encodeFunctionData, parseSignature, parseUnits } from 'viem'
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts'
 import {
   getTransactionReceipt,
