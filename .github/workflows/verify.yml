@@ -32,10 +32,15 @@ jobs:
       - name: Clone repository
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
+          fetch-depth: 2
           persist-credentials: false
 
       - name: Install dependencies
         uses: ./.github/actions/install-dependencies
+
+      - name: Check for changeset
+        if: "${{ github.event_name == 'pull_request' && !(github.event.pull_request.head.ref == 'changeset-release/main' && github.event.pull_request.title == 'chore: version packages') && !contains(github.event.pull_request.labels.*.name, 'skip-changeset') }}"
+        run: pnpm changeset status --since=HEAD^1
 
       - name: Ensure overrides live in pnpm-workspace.yaml
         run: |
