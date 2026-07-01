@@ -30,13 +30,6 @@ export function stripe() {
           message: 'MPPX_STRIPE_SECRET_KEY environment variable is required for Stripe payments.',
           exitCode: 2,
         })
-      if (!stripeSecretKey.startsWith('sk_test_'))
-        throw new Errors.IncurError({
-          code: 'UNSUPPORTED_MODE',
-          message:
-            'Stripe CLI payments are currently only supported in test mode (sk_test_... keys).',
-          exitCode: 2,
-        })
 
       return {
         tokenSymbol: currency?.toUpperCase() ?? '',
@@ -58,16 +51,23 @@ export function stripe() {
                 'usage_limits[max_amount]': amount,
                 'usage_limits[expires_at]': expiresAt.toString(),
               })
-              if (networkId) body.set('seller_details[network_id]', networkId)
+              const sptUrl =
+                process.env.MPPX_STRIPE_SPT_URL ??
+                (stripeSecretKey.startsWith('sk_test_')
+                  ? 'https://api.stripe.com/v1/test_helpers/shared_payment/granted_tokens'
+                  : 'https://api.stripe.com/v1/shared_payment/issued_tokens')
+              if (networkId) {
+                const sellerDetailsField = sptUrl.endsWith('/shared_payment/issued_tokens')
+                  ? 'seller_details[network_business_profile]'
+                  : 'seller_details[network_id]'
+                body.set(sellerDetailsField, networkId)
+              }
               if (metadata) {
                 for (const [key, value] of Object.entries(metadata)) {
                   body.set(`metadata[${key}]`, value)
                 }
               }
 
-              const sptUrl =
-                process.env.MPPX_STRIPE_SPT_URL ??
-                'https://api.stripe.com/v1/test_helpers/shared_payment/granted_tokens'
               const sptHeaders = {
                 Authorization: `Basic ${btoa(`${stripeSecretKey}:`)}`,
                 'Content-Type': 'application/x-www-form-urlencoded',

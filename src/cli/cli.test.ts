@@ -1403,38 +1403,70 @@ describe('stripe charge', () => {
     }
   })
 
-  test('error: production key rejected', { timeout: 60_000 }, async () => {
-    const server = Mppx_server.create({
-      methods: [
-        stripe_server.charge({
-          secretKey: 'sk_test_mock',
-          networkId: 'internal',
-          paymentMethodTypes: ['card'],
-        }),
-      ],
-      realm: 'cli-test-stripe-live',
-      secretKey: 'cli-test-secret-cli-test-secret-32',
-    })
+  test(
+    'happy path: live key uses production SPT endpoint and seller business profile',
+    { timeout: 60_000 },
+    async () => {
+      const mockStripeClient = {
+        paymentIntents: {
+          create: async () => ({ id: 'pi_mock_cli_live_123', status: 'succeeded' }),
+        },
+      }
 
-    const appServer = await Http.createServer(async (req, res) => {
-      const result = await Mppx_server.toNodeListener(
-        server.charge({ amount: '1', currency: 'usd', decimals: 2 }),
-      )(req, res)
-      if (result.status === 402) return
-      res.end('paid')
-    })
+      const server = Mppx_server.create({
+        methods: [
+          stripe_server.charge({
+            client: mockStripeClient,
+            networkId: 'bp_live_mock',
+            paymentMethodTypes: ['card'],
+          }),
+        ],
+        realm: 'cli-test-stripe-live',
+        secretKey: 'cli-test-secret-cli-test-secret-32',
+      })
 
-    try {
-      const { output, exitCode } = await serve(
-        [appServer.url, '-s', '-M', 'paymentMethod=pm_card_visa'],
-        { env: { MPPX_STRIPE_SECRET_KEY: 'sk_live_fake' } },
-      )
-      expect(exitCode).toBe(2)
-      expect(output).toContain('test mode')
-    } finally {
-      appServer.close()
-    }
-  })
+      const appServer = await Http.createServer(async (req, res) => {
+        const result = await Mppx_server.toNodeListener(
+          server.charge({ amount: '1', currency: 'usd', decimals: 2 }),
+        )(req, res)
+        if (result.status === 402) return
+        res.end('paid')
+      })
+
+      const originalFetch = globalThis.fetch
+      let stripeRequest: { body: URLSearchParams; url: string } | undefined
+      globalThis.fetch = (async (input, init) => {
+        const url =
+          typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
+        if (url === 'https://api.stripe.com/v1/shared_payment/issued_tokens') {
+          stripeRequest = {
+            body: new URLSearchParams(init?.body as string),
+            url,
+          }
+          return new Response(JSON.stringify({ id: 'spt_live_mock_cli_test' }), {
+            headers: { 'Content-Type': 'application/json' },
+            status: 200,
+          })
+        }
+        return originalFetch(input, init)
+      }) as typeof fetch
+
+      try {
+        const { output } = await serve([appServer.url, '-s', '-M', 'paymentMethod=pm_card_visa'], {
+          env: { MPPX_STRIPE_SECRET_KEY: 'sk_live_fake' },
+        })
+        expect(output).toContain('paid')
+        expect(stripeRequest?.url).toBe('https://api.stripe.com/v1/shared_payment/issued_tokens')
+        expect(stripeRequest?.body.get('seller_details[network_business_profile]')).toBe(
+          'bp_live_mock',
+        )
+        expect(stripeRequest?.body.has('seller_details[network_id]')).toBe(false)
+      } finally {
+        globalThis.fetch = originalFetch
+        appServer.close()
+      }
+    },
+  )
 })
 
 // ---------------------------------------------------------------------------
