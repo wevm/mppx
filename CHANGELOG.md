@@ -1,5 +1,11 @@
 # mppx
 
+## 0.8.3
+
+### Patch Changes
+
+- be8a655: Fixed Tempo charge credential creation with `viem@>=2.54` transfer call builders.
+
 ## 0.8.2
 
 ### Patch Changes
