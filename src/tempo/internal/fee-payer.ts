@@ -3,7 +3,7 @@ import type { TempoAddress } from 'ox/tempo'
 import { TxEnvelopeTempo } from 'ox/tempo'
 import type { Hex } from 'viem'
 import type { Account } from 'viem'
-import { decodeFunctionData, maxUint256, toHex } from 'viem'
+import { decodeFunctionData, encodeFunctionData, maxUint256, toHex } from 'viem'
 import { Abis, Addresses, Transaction } from 'viem/tempo'
 
 import * as TempoAddress_internal from './address.js'
@@ -319,6 +319,74 @@ function isExpiringNonceKey(nonceKey: SponsoredTransaction['nonceKey']): boolean
   return nonceKey === 'expiring' || nonceKey === maxUint256
 }
 
+const sponsoredCallAbi = [...Abis.tip20, ...Abis.stablecoinDex] as const
+const sponsoredCallSelectors = new Set([
+  Selectors.approve,
+  Selectors.transfer,
+  Selectors.transferWithMemo,
+  Selectors.swapExactAmountOut,
+])
+
+function canonicalSponsoredCallData(
+  data: Hex,
+  call: string,
+  fail: (reason: string, extra?: Record<string, string>) => never,
+) {
+  if (!sponsoredCallSelectors.has(data.slice(0, 10) as Hex)) return undefined
+
+  let decoded: ReturnType<typeof decodeFunctionData<typeof sponsoredCallAbi>>
+  try {
+    decoded = decodeFunctionData({ abi: sponsoredCallAbi, data })
+  } catch {
+    fail('fee-sponsored transaction call calldata is invalid', { call })
+  }
+  return encodeFunctionData({
+    abi: sponsoredCallAbi,
+    functionName: decoded.functionName,
+    args: decoded.args,
+  })
+}
+
+/**
+ * Rejects sponsored transaction fields that increase intrinsic gas without
+ * changing the decoded payment intent.
+ */
+function assertCanonicalSponsoredTransaction(
+  transaction: SponsoredTransaction,
+  fail: (reason: string, extra?: Record<string, string>) => never,
+) {
+  if (transaction.accessList !== undefined && transaction.accessList.length > 0)
+    fail('fee-sponsored transaction accessList is not allowed', {
+      accessListEntries: String(transaction.accessList.length),
+    })
+
+  const calls = transaction.calls
+  if (!Array.isArray(calls) || calls.length === 0)
+    fail('fee-sponsored transaction must declare calls')
+
+  for (const [index, call] of calls.entries()) {
+    const callIndex = String(index)
+    const value = call.value
+    if (value !== undefined && value !== 0n)
+      fail('fee-sponsored transaction call value is not allowed', {
+        call: callIndex,
+        value: value.toString(),
+      })
+
+    const data = call.data
+    if (!data)
+      fail('fee-sponsored transaction call is missing calldata', {
+        call: callIndex,
+      })
+
+    const canonical = canonicalSponsoredCallData(data, callIndex, fail)
+    if (canonical && data.toLowerCase() !== canonical.toLowerCase())
+      fail('fee-sponsored transaction call calldata is not canonical', {
+        call: callIndex,
+      })
+  }
+}
+
 /** Validates that a set of transaction calls matches an allowed fee-payer pattern. */
 export function validateCalls(
   calls: readonly { data?: `0x${string}` | undefined; to?: TempoAddress.Address | undefined }[],
@@ -485,6 +553,8 @@ export function assertTransactionPolicy(parameters: {
     fail('fee-sponsored transaction chainId does not match challenge', {
       chainId: String(transactionChainId),
     })
+
+  assertCanonicalSponsoredTransaction(transaction, fail)
 
   if (gas === undefined || gas <= 0n) fail('fee-sponsored transaction must declare gas')
   const gasLimit = gas

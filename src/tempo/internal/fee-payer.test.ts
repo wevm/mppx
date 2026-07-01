@@ -692,6 +692,47 @@ describe('fillHostedFeePayerTransaction', () => {
     ).rejects.toThrow('gas exceeds sponsor policy')
     expect(fetchMock).not.toHaveBeenCalled()
   })
+
+  test('error: rejects non-empty access lists before requesting hosted fill', async () => {
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(
+      fillHostedFeePayerTransaction({
+        allowedFeeTokens: defaultAllowedFeeTokens(defaults.chainId.mainnet),
+        ...hostedContext,
+        transaction: {
+          ...hostedTransaction,
+          accessList: [{ address: bogus, storageKeys: [] }],
+        } as any,
+        url: 'https://sponsor.example/tp_key',
+      }),
+    ).rejects.toThrow('accessList is not allowed')
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  test('error: rejects padded calldata before requesting hosted fill', async () => {
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(
+      fillHostedFeePayerTransaction({
+        allowedFeeTokens: defaultAllowedFeeTokens(defaults.chainId.mainnet),
+        ...hostedContext,
+        transaction: {
+          ...hostedTransaction,
+          calls: [
+            {
+              ...hostedTransaction.calls[0],
+              data: `${hostedTransaction.calls[0]!.data}01`,
+            },
+          ],
+        } as any,
+        url: 'https://sponsor.example/tp_key',
+      }),
+    ).rejects.toThrow('calldata is not canonical')
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
 })
 
 describe('simulationTransaction', () => {
@@ -971,5 +1012,70 @@ describe('prepareSponsoredTransaction', () => {
         } as any,
       }),
     ).toThrow('validity window exceeds sponsor policy')
+  })
+
+  test('error: rejects non-empty access lists', () => {
+    expect(() =>
+      prepareSponsoredTransaction({
+        account: sponsor,
+        chainId: 42431,
+        details,
+        allowedFeeTokens: [bogus],
+        transaction: {
+          ...baseTransaction,
+          accessList: [{ address: bogus, storageKeys: [] }],
+        } as any,
+      }),
+    ).toThrow('accessList is not allowed')
+  })
+
+  test('error: rejects padded calldata', () => {
+    expect(() =>
+      prepareSponsoredTransaction({
+        account: sponsor,
+        chainId: 42431,
+        details,
+        allowedFeeTokens: [bogus],
+        transaction: {
+          ...baseTransaction,
+          calls: [
+            {
+              ...baseTransaction.calls[0],
+              data: `${baseTransaction.calls[0]!.data}01`,
+            },
+          ],
+        } as any,
+      }),
+    ).toThrow('calldata is not canonical')
+  })
+
+  test('error: rejects missing calls', () => {
+    expect(() =>
+      prepareSponsoredTransaction({
+        account: sponsor,
+        chainId: 42431,
+        details,
+        allowedFeeTokens: [bogus],
+        transaction: {
+          ...baseTransaction,
+          calls: undefined,
+        } as any,
+      }),
+    ).toThrow('must declare calls')
+  })
+
+  test('error: rejects nonzero call value', () => {
+    expect(() =>
+      prepareSponsoredTransaction({
+        account: sponsor,
+        chainId: 42431,
+        details,
+        allowedFeeTokens: [bogus],
+        transaction: {
+          ...baseTransaction,
+          calls: [{ ...baseTransaction.calls[0], value: 1n }],
+        } as any,
+      }),
+    ).toThrow('call value is not allowed')
   })
 })
