@@ -147,11 +147,6 @@ export function stripe() {
 
 // --- Helpers ---
 
-/**
- * Whether a Stripe secret key is a test-mode key.
- *
- * Matches standard (`sk_test_...`) and restricted (`rk_test_...`) test keys.
- */
 function isTestKey(secretKey: string) {
   return secretKey.startsWith('sk_test_') || secretKey.startsWith('rk_test_')
 }
