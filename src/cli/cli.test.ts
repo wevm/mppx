@@ -20,6 +20,7 @@ import * as Receipt from '../Receipt.js'
 import * as Mppx_server from '../server/Mppx.js'
 import { toNodeListener } from '../server/Mppx.js'
 import * as Store from '../Store.js'
+import { stripePreviewVersion } from '../stripe/internal/constants.js'
 import { stripe as stripe_server } from '../stripe/server/Methods.js'
 import { tempo } from '../tempo/server/Methods.js'
 import { escrowAbi } from '../tempo/session/precompile/escrow.abi.js'
@@ -1417,7 +1418,7 @@ describe('stripe charge', () => {
         methods: [
           stripe_server.charge({
             client: mockStripeClient,
-            networkId: 'bp_live_mock',
+            networkId: 'profile_live_mock',
             paymentMethodTypes: ['card'],
           }),
         ],
@@ -1433,41 +1434,113 @@ describe('stripe charge', () => {
         res.end('paid')
       })
 
-      const originalFetch = globalThis.fetch
-      let stripeRequest: { body: URLSearchParams; url: string } | undefined
-      globalThis.fetch = (async (input, init) => {
-        const url =
-          typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
-        if (url === 'https://api.stripe.com/v1/shared_payment/issued_tokens') {
-          stripeRequest = {
-            body: new URLSearchParams(init?.body as string),
-            url,
-          }
-          return new Response(JSON.stringify({ id: 'spt_live_mock_cli_test' }), {
-            headers: { 'Content-Type': 'application/json' },
-            status: 200,
-          })
-        }
-        return originalFetch(input, init)
-      }) as typeof fetch
+      const { restore, stripeRequests } = mockSptFetch(
+        'https://api.stripe.com/v1/shared_payment/issued_tokens',
+      )
 
       try {
         const { output } = await serve([appServer.url, '-s', '-M', 'paymentMethod=pm_card_visa'], {
-          env: { MPPX_STRIPE_SECRET_KEY: 'sk_live_fake' },
+          env: { MPPX_STRIPE_SECRET_KEY: 'sk_live_fake', MPPX_STRIPE_SPT_URL: undefined },
         })
         expect(output).toContain('paid')
+        const stripeRequest = stripeRequests[0]
         expect(stripeRequest?.url).toBe('https://api.stripe.com/v1/shared_payment/issued_tokens')
         expect(stripeRequest?.body.get('seller_details[network_business_profile]')).toBe(
-          'bp_live_mock',
+          'profile_live_mock',
         )
         expect(stripeRequest?.body.has('seller_details[network_id]')).toBe(false)
+        expect(stripeRequest?.headers['Stripe-Version']).toBe(stripePreviewVersion)
       } finally {
-        globalThis.fetch = originalFetch
+        restore()
+        appServer.close()
+      }
+    },
+  )
+
+  test(
+    'happy path: test key uses test-helper SPT endpoint and network ID',
+    { timeout: 60_000 },
+    async () => {
+      const mockStripeClient = {
+        paymentIntents: {
+          create: async () => ({ id: 'pi_mock_cli_test_123', status: 'succeeded' }),
+        },
+      }
+
+      const server = Mppx_server.create({
+        methods: [
+          stripe_server.charge({
+            client: mockStripeClient,
+            networkId: 'internal',
+            paymentMethodTypes: ['card'],
+          }),
+        ],
+        realm: 'cli-test-stripe-testmode',
+        secretKey: 'cli-test-secret-cli-test-secret-32',
+      })
+
+      const appServer = await Http.createServer(async (req, res) => {
+        const result = await Mppx_server.toNodeListener(
+          server.charge({ amount: '1', currency: 'usd', decimals: 2 }),
+        )(req, res)
+        if (result.status === 402) return
+        res.end('paid')
+      })
+
+      const { restore, stripeRequests } = mockSptFetch(
+        'https://api.stripe.com/v1/test_helpers/shared_payment/granted_tokens',
+      )
+
+      try {
+        const { output } = await serve([appServer.url, '-s', '-M', 'paymentMethod=pm_card_visa'], {
+          env: { MPPX_STRIPE_SECRET_KEY: 'sk_test_fake', MPPX_STRIPE_SPT_URL: undefined },
+        })
+        expect(output).toContain('paid')
+        const stripeRequest = stripeRequests[0]
+        expect(stripeRequest?.url).toBe(
+          'https://api.stripe.com/v1/test_helpers/shared_payment/granted_tokens',
+        )
+        expect(stripeRequest?.body.get('seller_details[network_id]')).toBe('internal')
+        expect(stripeRequest?.body.has('seller_details[network_business_profile]')).toBe(false)
+        expect(stripeRequest?.headers['Stripe-Version']).toBe(stripePreviewVersion)
+      } finally {
+        restore()
         appServer.close()
       }
     },
   )
 })
+
+/**
+ * Intercepts `globalThis.fetch` calls to `sptUrl`, recording each request and
+ * responding with a mock SPT. Returns the recorded requests and a `restore`
+ * function that reinstates the original fetch.
+ */
+function mockSptFetch(sptUrl: string) {
+  const originalFetch = globalThis.fetch
+  const stripeRequests: {
+    body: URLSearchParams
+    headers: Record<string, string>
+    url: string
+  }[] = []
+  globalThis.fetch = (async (input, init) => {
+    const url =
+      typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
+    if (url === sptUrl) {
+      stripeRequests.push({
+        body: new URLSearchParams(init?.body as string),
+        headers: (init?.headers ?? {}) as Record<string, string>,
+        url,
+      })
+      return new Response(JSON.stringify({ id: 'spt_mock_cli_test' }), {
+        headers: { 'Content-Type': 'application/json' },
+        status: 200,
+      })
+    }
+    return originalFetch(input, init)
+  }) as typeof fetch
+  return { restore: () => (globalThis.fetch = originalFetch), stripeRequests }
+}
 
 // ---------------------------------------------------------------------------
 // account [action]

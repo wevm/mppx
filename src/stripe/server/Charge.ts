@@ -29,6 +29,12 @@ import { html as htmlContent } from './internal/html.gen.js'
  * `secretKey`. Using `client` is recommended—it lets you configure retries,
  * API version, and other options on the Stripe instance you control.
  *
+ * `networkId` identifies the seller to agents creating Shared Payment Tokens.
+ * With live keys, agents send it as `seller_details[network_business_profile]`,
+ * so it must be the seller's Stripe business profile ID (`profile_...`). With
+ * test keys, agents send it as `seller_details[network_id]` to Stripe's
+ * test-helper endpoint, where any identifier works.
+ *
  * @example
  * ```ts
  * import Stripe from 'stripe'
