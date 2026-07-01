@@ -1,5 +1,6 @@
 import { Challenge } from 'mppx'
 import type { Account } from 'viem'
+import { tokens } from 'viem/tokens'
 import { describe, expect, test, vi } from 'vp/test'
 
 import * as Assets from '../Assets.js'
@@ -94,6 +95,47 @@ describe('evm charge client', () => {
 
     await expect(client.createCredential({ challenge } as never)).rejects.toThrow(
       'EVM raw currency allowlists require networks.',
+    )
+  })
+
+  test('accepts viem token sets for currency policy and decimals', async () => {
+    const signTypedData = vi.fn(async () => '0x1234')
+    const client = charge({
+      account: {
+        ...account,
+        signTypedData,
+      } as unknown as Account,
+      authorization: { name: 'USD Coin', version: '2' },
+      currencies: tokens.popular,
+      maxAmount: '1',
+    })
+    const challenge = Challenge.from({
+      id: 'native',
+      intent: 'charge',
+      method: 'evm',
+      realm: 'api.example.com',
+      request: {
+        amount: '1000000',
+        currency: Assets.baseSepolia.USDC.address,
+        methodDetails: {
+          chainId: 84532,
+          credentialTypes: ['authorization'],
+          decimals: 18,
+        },
+        recipient: '0x2222222222222222222222222222222222222222',
+      },
+    })
+
+    await client.createCredential({ challenge } as never)
+
+    expect(signTypedData).toHaveBeenCalledWith(
+      expect.objectContaining({
+        domain: expect.objectContaining({
+          name: 'USD Coin',
+          verifyingContract: Assets.baseSepolia.USDC.address,
+          version: '2',
+        }),
+      }),
     )
   })
 })

@@ -106,9 +106,9 @@ export declare namespace charge {
     /** Optional allowlist of supported EVM chain IDs. */
     networks?: readonly number[] | undefined
     /** Optional allowlist of supported currencies. */
-    currencies?: readonly (`0x${string}` | Assets.KnownAsset)[] | undefined
+    currencies?: readonly Assets.Currency[] | undefined
     /** Legacy alias for `currencies`. */
-    assets?: readonly (`0x${string}` | Assets.KnownAsset)[] | undefined
+    assets?: readonly Assets.Currency[] | undefined
   }
 }
 
@@ -127,12 +127,12 @@ function assertPolicy(parameters: charge.Parameters, request: Types.ChargeReques
     throw new Error(`EVM chain ID is not allowed: ${chainId}.`)
 
   const currencies = parameters.currencies ?? parameters.assets
-  if (currencies?.some((currency) => !Assets.isAsset(currency)) && !parameters.networks?.length)
+  if (currencies?.some((currency) => Assets.isRawAddress(currency)) && !parameters.networks?.length)
     throw new Error('EVM raw currency allowlists require networks.')
   if (currencies) {
     const acceptedCurrency = getAddress(request.currency as `0x${string}`)
     const allowed = currencies.some((currency) =>
-      currencyMatches(currency, acceptedCurrency, network),
+      Assets.matches(currency, acceptedCurrency, network),
     )
     if (!allowed) throw new Error(`EVM currency is not allowed: ${acceptedCurrency}.`)
   }
@@ -159,28 +159,16 @@ function resolveAuthorization(
   const acceptedCurrency = getAddress(request.currency as `0x${string}`)
   const network = Types.networkOf(request.methodDetails.chainId)
   const currency = currencies?.find((currency) =>
-    currencyMatches(currency, acceptedCurrency, network),
+    Assets.matches(currency, acceptedCurrency, network),
   )
-  if (currency && Assets.isAsset(currency) && currency.transfer.type === Types.eip3009)
+  const resolved = currency ? Assets.resolve(currency, network) : undefined
+  if (resolved?.transfer?.type === Types.eip3009)
     return {
-      name: currency.transfer.name,
-      version: currency.transfer.version,
+      name: resolved.transfer.name,
+      version: resolved.transfer.version,
     }
   if (parameters.authorization) return parameters.authorization
   throw new Error('EVM authorization requires token name and version.')
-}
-
-function addressOf(currency: `0x${string}` | Assets.KnownAsset): `0x${string}` {
-  return Assets.isAsset(currency) ? currency.address : currency
-}
-
-function currencyMatches(
-  currency: `0x${string}` | Assets.KnownAsset,
-  acceptedCurrency: `0x${string}`,
-  network: Types.EvmNetwork,
-): boolean {
-  if (getAddress(addressOf(currency)) !== acceptedCurrency) return false
-  return !Assets.isAsset(currency) || currency.network === network
 }
 
 function decimalsOfAcceptedCurrency(
@@ -191,8 +179,9 @@ function decimalsOfAcceptedCurrency(
   const acceptedCurrency = getAddress(request.currency as `0x${string}`)
   const network = Types.networkOf(request.methodDetails.chainId)
   const currency = currencies?.find((currency) =>
-    currencyMatches(currency, acceptedCurrency, network),
+    Assets.matches(currency, acceptedCurrency, network),
   )
-  if (currency && Assets.isAsset(currency)) return currency.decimals
+  const resolved = currency ? Assets.resolve(currency, network) : undefined
+  if (resolved?.decimals !== undefined) return resolved.decimals
   return parameters.decimals
 }

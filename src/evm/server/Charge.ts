@@ -110,11 +110,11 @@ export declare namespace charge {
   type NativeConfig = BaseConfig & CurrencyConfig & RecipientConfig
 
   type BaseConfig = {
-    /** EIP-3009 token domain metadata. Required for custom currency addresses; inferred for known assets. */
+    /** EIP-3009 token domain metadata. Required for raw addresses and viem tokens; inferred for known assets. */
     authorization?: Types.AuthorizationConfig | undefined
-    /** EVM chain ID. Required for custom currency addresses; inferred for known assets. */
+    /** EVM chain ID. Required for raw addresses and viem tokens; inferred for known assets. */
     chainId?: number | undefined
-    /** Token decimal places. Required for custom currency addresses; inferred for known assets. */
+    /** Token decimal places. Required for raw addresses; inferred for known assets and viem tokens. */
     decimals?: number | undefined
     /** Custom settlement override. If omitted, `x402.facilitator` is used. */
     settle?: SettleAuthorization | undefined
@@ -123,8 +123,8 @@ export declare namespace charge {
   }
 
   type CurrencyConfig = {
-    /** Token contract address or known EVM asset metadata. */
-    currency: `0x${string}` | Assets.KnownAsset
+    /** Token contract address, known EVM asset metadata, or viem token definition. */
+    currency: Assets.Currency
   }
 
   type RecipientConfig = {
@@ -197,17 +197,24 @@ function resolveConfig(config: charge.NativeConfig): ResolvedConfig {
   let decimals = config.decimals
 
   if (Assets.isAsset(currency)) {
-    address = currency.address
-    chainId ??= Number(currency.network.slice('eip155:'.length))
-    decimals ??= currency.decimals
-    if (currency.transfer.type === Types.eip3009) {
+    chainId ??= Assets.toChainId(currency.network)
+  }
+
+  if (chainId !== undefined) {
+    const resolved = Assets.resolve(currency, Types.networkOf(chainId))
+    if (!resolved) throw new Error(`EVM currency is not available on chain ID ${chainId}.`)
+    address = resolved.address
+    decimals ??= resolved.decimals
+    if (resolved.transfer?.type === Types.eip3009) {
       authorization ??= {
-        name: currency.transfer.name,
-        version: currency.transfer.version,
+        name: resolved.transfer.name,
+        version: resolved.transfer.version,
       }
     }
-  } else {
+  } else if (Assets.isRawAddress(currency)) {
     address = currency
+  } else {
+    throw new Error('EVM authorization requires `chainId`.')
   }
 
   if (!authorization) throw new Error('EVM authorization requires `authorization` metadata.')

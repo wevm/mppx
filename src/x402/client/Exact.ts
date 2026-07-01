@@ -99,9 +99,9 @@ export type Config = {
   /** Optional allowlist of supported EVM chain IDs. */
   networks?: readonly number[] | undefined
   /** Optional allowlist of supported currencies. */
-  currencies?: readonly (`0x${string}` | Assets.KnownAsset)[] | undefined
+  currencies?: readonly Assets.Currency[] | undefined
   /** Legacy alias for `currencies`. */
-  assets?: readonly (`0x${string}` | Assets.KnownAsset)[] | undefined
+  assets?: readonly Assets.Currency[] | undefined
 }
 
 const authorizationTypes = {
@@ -125,12 +125,12 @@ function assertPolicy(parameters: Config, accepted: Types.PaymentRequirements) {
     throw new Error(`x402 exact chain ID is not allowed: ${chainId}.`)
 
   const currencies = parameters.currencies ?? parameters.assets
-  if (currencies?.some((currency) => !Assets.isAsset(currency)) && !parameters.networks?.length)
+  if (currencies?.some((currency) => Assets.isRawAddress(currency)) && !parameters.networks?.length)
     throw new Error('x402 exact raw currency allowlists require networks.')
   if (currencies) {
     const acceptedCurrency = getAddress(accepted.asset as `0x${string}`)
     const allowed = currencies.some((currency) =>
-      currencyMatches(currency, acceptedCurrency, accepted.network),
+      Assets.matches(currency, acceptedCurrency, accepted.network),
     )
     if (!allowed) throw new Error(`x402 exact currency is not allowed: ${acceptedCurrency}.`)
   }
@@ -149,19 +149,6 @@ function assertPolicy(parameters: Config, accepted: Types.PaymentRequirements) {
   }
 }
 
-function addressOf(currency: `0x${string}` | Assets.KnownAsset): `0x${string}` {
-  return Assets.isAsset(currency) ? currency.address : currency
-}
-
-function currencyMatches(
-  currency: `0x${string}` | Assets.KnownAsset,
-  acceptedCurrency: `0x${string}`,
-  network: Types.EvmNetwork,
-): boolean {
-  if (getAddress(addressOf(currency)) !== acceptedCurrency) return false
-  return !Assets.isAsset(currency) || currency.network === network
-}
-
 function decimalsOfAcceptedCurrency(
   parameters: Config,
   accepted: Types.PaymentRequirements,
@@ -169,9 +156,10 @@ function decimalsOfAcceptedCurrency(
   const currencies = parameters.currencies ?? parameters.assets
   const acceptedCurrency = getAddress(accepted.asset as `0x${string}`)
   const currency = currencies?.find((currency) =>
-    currencyMatches(currency, acceptedCurrency, accepted.network),
+    Assets.matches(currency, acceptedCurrency, accepted.network),
   )
-  if (currency && Assets.isAsset(currency)) return currency.decimals
+  const resolved = currency ? Assets.resolve(currency, accepted.network) : undefined
+  if (resolved?.decimals !== undefined) return resolved.decimals
   return parameters.decimals
 }
 

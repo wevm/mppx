@@ -4,6 +4,7 @@ import { Types as evm_Types } from 'mppx/evm'
 import { evm, Mppx } from 'mppx/server'
 import { Header as x402_Header, Types as x402_Types, type PaymentPayload } from 'mppx/x402'
 import { privateKeyToAccount } from 'viem/accounts'
+import { usdc } from 'viem/tokens'
 import { describe, expect, test } from 'vp/test'
 
 const currency = '0x036CbD53842c5426634e7929541eC2318f3dCF7e'
@@ -14,6 +15,51 @@ const account = privateKeyToAccount(
 )
 
 describe('evm charge server', () => {
+  test('resolves viem token currency config', async () => {
+    const mppx = Mppx.create({
+      methods: [
+        evm({
+          authorization: { name: 'USD Coin', version: '2' },
+          chainId: 84532,
+          currency: usdc,
+          recipient,
+          x402: {
+            facilitator: {
+              async verify() {
+                return { isValid: true }
+              },
+              async settle() {
+                return {
+                  network: evm_Types.networkOf(84532),
+                  success: true,
+                  transaction,
+                }
+              },
+            },
+          },
+        }),
+      ],
+      secretKey: 'test-secret-key-test-secret-key-32',
+    })
+    const route = mppx.evm.charge({ amount: '0.25' })
+
+    const first = await route(new Request('https://example.com/paid'))
+
+    expect(first.status).toBe(402)
+    if (first.status !== 402) throw new Error()
+    const challenge = Challenge.fromResponse(first.challenge)
+    expect(challenge.request).toEqual({
+      amount: '250000',
+      currency,
+      methodDetails: {
+        chainId: 84532,
+        credentialTypes: ['authorization'],
+        decimals: 6,
+      },
+      recipient,
+    })
+  })
+
   test('settles native Payment-auth authorization credentials', async () => {
     let facilitated:
       | {

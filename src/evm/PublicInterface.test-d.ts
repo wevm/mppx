@@ -7,6 +7,7 @@ import {
 } from 'mppx/evm/client'
 import { assets as serverAssets, charge as serverCharge, evm as serverEvm } from 'mppx/evm/server'
 import type { Account } from 'viem'
+import { tokens, usdc } from 'viem/tokens'
 import { describe, expectTypeOf, test } from 'vp/test'
 
 import { Mppx as ClientMppx } from '../client/index.js'
@@ -30,6 +31,12 @@ const facilitator = {
 describe('evm public interface', () => {
   test('exports EVM asset metadata from root and subpaths', () => {
     expectTypeOf(evmRoot.assets.base.USDC).toMatchTypeOf<typeof serverAssets.base.USDC>()
+    expectTypeOf(
+      evmRoot.assets.fromToken(usdc, {
+        chainId: clientChains.base,
+        transfer: { type: 'eip3009', version: '2' },
+      }),
+    ).toMatchTypeOf<typeof serverAssets.base.USDC>()
     expectTypeOf(clientAssets.baseSepolia.USDC).toMatchTypeOf<
       typeof serverAssets.baseSepolia.USDC
     >()
@@ -53,6 +60,13 @@ describe('evm public interface', () => {
 
     const mppx = ServerMppx.create({
       methods: [
+        serverEvm({
+          authorization: { name: 'USD Coin', version: '2' },
+          chainId: clientChains.base,
+          currency: usdc,
+          recipient,
+          x402: { facilitator },
+        }),
         serverEvm({
           currency: serverAssets.base.USDC,
           recipient,
@@ -90,9 +104,8 @@ describe('evm public interface', () => {
       methods: [
         clientEvm({
           account,
-          currencies: [clientAssets.baseSepolia.USDC],
+          currencies: tokens.popular,
           maxAmount: '0.01',
-          networks: [clientEvm.chains.baseSepolia],
         }),
       ],
       polyfill: false,
