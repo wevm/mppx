@@ -2,4 +2,4 @@
 'mppx': patch
 ---
 
-Added EVM and x402 compatibility with viem token definitions and token sets.
+Added viem token definitions and token sets to make managing tokens simpler.
