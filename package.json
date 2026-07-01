@@ -62,7 +62,7 @@
   "[!start-pkg]": "",
   "name": "mppx",
   "type": "module",
-  "version": "0.8.2",
+  "version": "0.8.3",
   "main": "./dist/index.js",
   "license": "MIT",
   "homepage": "https://github.com/wevm/mppx#readme",
