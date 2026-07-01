@@ -52,7 +52,7 @@
     "testcontainers": "^12.0.3",
     "tsx": "^4.22.4",
     "typescript": "~6.0.3",
-    "viem": "^2.53.1",
+    "viem": "^2.54.1",
     "vite": "^8.0.16",
     "vp": "npm:vite-plus@~0.1.24",
     "ws": "^8.21.0",
@@ -201,7 +201,7 @@
     "elysia": ">=1",
     "express": ">=5",
     "hono": ">=4.12.25",
-    "viem": ">=2.51.0"
+    "viem": ">=2.54.0"
   },
   "peerDependenciesMeta": {
     "@modelcontextprotocol/sdk": {

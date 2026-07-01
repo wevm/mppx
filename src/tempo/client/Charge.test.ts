@@ -84,6 +84,62 @@ describe('tempo.charge client', () => {
     expect(credential.source).toBe(`did:pkh:eip155:${chainId}:${account.address}`)
   })
 
+  test('passes the client to viem 2.54 Tempo transfer call builders', async () => {
+    vi.resetModules()
+    const chainId = 42431
+    const transferCalls: { client: unknown; parameters: Record<string, unknown> }[] = []
+    function transferCall(client: unknown, parameters: Record<string, unknown>) {
+      transferCalls.push({ client, parameters })
+      return { data: '0x', to: parameters.token }
+    }
+    const prepareTransactionRequest = vi.fn(async () => ({}))
+    const signTransaction = vi.fn(async () => '0xdeadbeef')
+    vi.doMock('viem/actions', () => ({
+      prepareTransactionRequest,
+      sendCallsSync: vi.fn(),
+      signTransaction,
+      signTypedData: vi.fn(),
+    }))
+    vi.doMock('viem/tempo', () => ({
+      Actions: { token: { transfer: { call: transferCall } } },
+    }))
+
+    try {
+      const { charge: chargeWithMockedTempo } = await import('./Charge.js')
+      const client = createClient({
+        account,
+        chain: tempoLocalnet,
+        transport: http('http://127.0.0.1'),
+      })
+      const method = chargeWithMockedTempo({
+        account,
+        getClient: () => client,
+      })
+
+      const credential = Credential.deserialize(
+        await method.createCredential({
+          challenge: createChallenge({ amount: '1', chainId, supportedModes: ['pull'] }),
+          context: {},
+        }),
+      )
+
+      expect(transferCalls).toHaveLength(1)
+      expect(transferCalls[0]!.client).toBe(client)
+      expect(transferCalls[0]!.parameters).toMatchObject({
+        amount: 1_000_000n,
+        to: recipient,
+        token: currency,
+      })
+      expect(prepareTransactionRequest).toHaveBeenCalledOnce()
+      expect(signTransaction).toHaveBeenCalledOnce()
+      expect(credential.payload).toEqual({ signature: '0xdeadbeef', type: 'transaction' })
+    } finally {
+      vi.doUnmock('viem/actions')
+      vi.doUnmock('viem/tempo')
+      vi.resetModules()
+    }
+  })
+
   test('resolveAccount selects the transaction account from executable calls', async () => {
     vi.resetModules()
     const selectedAccount = privateKeyToAccount(

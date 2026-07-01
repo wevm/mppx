@@ -33,6 +33,17 @@ const isLocalnet = tempoNetwork === 'localnet'
 
 let escrowContract: Address
 
+// TODO: Remove once the minimum viem version is >=2.54.0, which uses client-first Tempo call builders.
+function tokenGetBalanceCall(parameters: { account: Address; token: Address }) {
+  const call = Actions.token.getBalance.call as unknown as {
+    length: number
+    (parameters: { account: Address; token: Address }): unknown
+    (client: unknown, parameters: { account: Address; token: Address }): unknown
+  }
+  if (call.length >= 2) return call(testClient, parameters)
+  return call(parameters)
+}
+
 beforeAll(async () => {
   escrowContract = await deployEscrow()
   await fundAccount({ address: accounts[4].address, token: Addresses.pathUsd })
@@ -621,7 +632,7 @@ async function getPaymentRequiredError(
 async function getTokenBalance(account: Address): Promise<bigint> {
   return readContract(
     testClient,
-    Actions.token.getBalance.call({ account, token: asset }) as never,
+    tokenGetBalanceCall({ account, token: asset }) as never,
   ) as Promise<bigint>
 }
 
