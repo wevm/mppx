@@ -1,5 +1,13 @@
 # mppx
 
+## 0.8.4
+
+### Patch Changes
+
+- 3136195: Fixed Tempo auto-swap call building with `viem@>=2.54` and hardened account balance metadata formatting.
+- 86b6586: Fixed Stripe CLI live-mode Shared Payment Token creation. SPT requests now send the preview `Stripe-Version` header, live-mode requests target the issued-tokens endpoint with `seller_details[network_business_profile]`, and restricted test keys (`rk_test_...`) are recognized as test mode.
+- cdd989e: Added a `mppx validate` CLI command for discovering paid endpoints, validating payment challenges, checking malformed-credential handling, and exercising Tempo payment flows end to end.
+
 ## 0.8.3
 
 ### Patch Changes
