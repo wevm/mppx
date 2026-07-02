@@ -1,5 +1,11 @@
 # mppx
 
+## 0.8.5
+
+### Patch Changes
+
+- 754b491: Added viem token definitions and token sets to make managing tokens simpler.
+
 ## 0.8.4
 
 ### Patch Changes
