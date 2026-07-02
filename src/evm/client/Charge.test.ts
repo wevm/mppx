@@ -173,6 +173,39 @@ describe('evm charge client', () => {
     expect(signTypedData).not.toHaveBeenCalled()
   })
 
+  test('requires authorization metadata when signing viem token currencies', async () => {
+    const signTypedData = vi.fn(async () => '0x1234')
+    const client = charge({
+      account: {
+        ...account,
+        signTypedData,
+      } as unknown as Account,
+      currencies: tokens.popular,
+      maxAmount: '1',
+    })
+    const challenge = Challenge.from({
+      id: 'native',
+      intent: 'charge',
+      method: 'evm',
+      realm: 'api.example.com',
+      request: {
+        amount: '1000000',
+        currency: Assets.baseSepolia.USDC.address,
+        methodDetails: {
+          chainId: 84532,
+          credentialTypes: ['authorization'],
+          decimals: 18,
+        },
+        recipient: '0x2222222222222222222222222222222222222222',
+      },
+    })
+
+    await expect(client.createCredential({ challenge } as never)).rejects.toThrow(
+      'EVM authorization requires token name and version.',
+    )
+    expect(signTypedData).not.toHaveBeenCalled()
+  })
+
   test('accepts viem token sets through legacy assets policy', async () => {
     const signTypedData = vi.fn(async () => '0x1234')
     const client = charge({

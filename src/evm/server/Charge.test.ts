@@ -94,6 +94,17 @@ describe('evm charge server', () => {
     ).toThrow('EVM authorization requires `authorization` metadata.')
   })
 
+  test('rejects known asset currency configured for a different chain', () => {
+    expect(() =>
+      evm({
+        chainId: 8453,
+        currency: evm.assets.baseSepolia.USDC,
+        recipient,
+        settle: async () => ({ reference: transaction }),
+      }),
+    ).toThrow('EVM currency is not available on chain ID 8453.')
+  })
+
   test('infers native charge defaults from known asset metadata', async () => {
     const mppx = Mppx.create({
       methods: [

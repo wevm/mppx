@@ -150,6 +150,9 @@ describe('x402 assets', () => {
     expect(Assets.matches(usdc, '0x036CbD53842c5426634e7929541eC2318f3dCF7e', 'eip155:84532')).toBe(
       true,
     )
+    expect(Assets.matches(usdc, '0x036cbd53842c5426634e7929541ec2318f3dcf7e', 'eip155:84532')).toBe(
+      true,
+    )
     expect(
       Assets.matches(
         '0x1111111111111111111111111111111111111111',
@@ -164,6 +167,18 @@ describe('x402 assets', () => {
         'eip155:84532',
       ),
     ).toBe(false)
+  })
+
+  test('throws when creating assets from tokens unavailable on a chain', () => {
+    expect(() =>
+      Assets.fromToken(usdc, {
+        chainId: 999_999,
+        transfer: {
+          type: 'eip3009',
+          version: '2',
+        },
+      }),
+    ).toThrow('Token has no address for chain id "999999".')
   })
 
   test('exports Base USDC metadata', () => {

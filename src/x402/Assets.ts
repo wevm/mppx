@@ -154,7 +154,7 @@ export function matches(
 ): boolean {
   const resolved = resolve(currency, network)
   if (!resolved) return false
-  return getAddress(resolved.address) === acceptedCurrency
+  return getAddress(resolved.address) === getAddress(acceptedCurrency)
 }
 
 /** Converts an EVM chain ID to a CAIP-2 network identifier. */
