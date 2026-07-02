@@ -147,9 +147,9 @@ describe('x402 assets', () => {
       name: 'USD Coin',
     })
     expect(Assets.resolve(usdc, 'eip155:999999')).toBeUndefined()
-    expect(
-      Assets.matches(usdc, '0x036CbD53842c5426634e7929541eC2318f3dCF7e', 'eip155:84532'),
-    ).toBe(true)
+    expect(Assets.matches(usdc, '0x036CbD53842c5426634e7929541eC2318f3dCF7e', 'eip155:84532')).toBe(
+      true,
+    )
     expect(
       Assets.matches(
         '0x1111111111111111111111111111111111111111',
