@@ -3,17 +3,7 @@ import { Base64 } from 'ox'
 import * as Constants from './Constants.js'
 import * as z from './zod.js'
 
-/**
- * Schema for a payment receipt.
- *
- * @example
- * ```ts
- * import { Receipt } from 'mppx'
- *
- * const receipt = Receipt.Schema.parse(data)
- * ```
- */
-export const Schema = z.object({
+const shape = {
   /** Payment method used (e.g., "tempo", "stripe"). */
   method: z.string(),
   /** Method-specific reference (e.g., transaction hash). */
@@ -26,10 +16,33 @@ export const Schema = z.object({
   status: z.literal('success'),
   /** RFC 3339 settlement timestamp. */
   timestamp: z.datetime(),
-})
+}
+
+/** Base-field schema used only to derive the {@link Receipt} type without an index signature. */
+const BaseSchema = z.object(shape)
+
+/**
+ * Schema for a payment receipt.
+ *
+ * Method specifications may define additional receipt fields beyond the
+ * base set (per the core spec's Payment-Receipt section); unknown fields
+ * are preserved through parse/serialize round-trips rather than stripped.
+ *
+ * @example
+ * ```ts
+ * import { Receipt } from 'mppx'
+ *
+ * const receipt = Receipt.Schema.parse(data)
+ * ```
+ */
+export const Schema = z.looseObject(shape)
 
 /**
  * Payment receipt returned after verification.
+ *
+ * Method-specific extension fields are preserved at runtime but not part of
+ * this base type; method packages can type them via intersection
+ * (e.g. `Receipt.Receipt & { originTxHash: string }`).
  *
  * @example
  * ```ts
@@ -43,7 +56,7 @@ export const Schema = z.object({
  * }
  * ```
  */
-export type Receipt = z.infer<typeof Schema>
+export type Receipt = z.infer<typeof BaseSchema>
 
 /**
  * Deserializes a Payment-Receipt header value to a receipt.
