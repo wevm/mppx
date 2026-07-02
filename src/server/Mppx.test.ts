@@ -4872,6 +4872,234 @@ describe('verifyCredential', () => {
     expect(verifyArgs).toBeDefined()
   })
 
+  test('validateCredential uses pure method validation without settlement', async () => {
+    const calls: string[] = []
+    const splitServer = Method.toServer(mockCharge, {
+      async validate({ credential, request }) {
+        calls.push('validate')
+        return {
+          challenge: credential.challenge,
+          credential,
+          details: { token: credential.payload.token },
+          intent: 'charge',
+          method: 'alpha',
+          request,
+          source: credential.source,
+        }
+      },
+      async settle() {
+        calls.push('settle')
+        return mockReceipt('settled')
+      },
+      async verify() {
+        calls.push('verify')
+        return mockReceipt('legacy')
+      },
+    })
+    const mppx = Mppx.create({ methods: [splitServer], realm, secretKey })
+    const challenge = await mppx.challenge.alpha.charge(challengeOpts)
+    const credential = Credential.from({ challenge, payload: { token: 'valid' } })
+
+    const validation = await mppx.validateCredential(credential)
+
+    expect(validation.details).toEqual({ token: 'valid' })
+    expect(calls).toEqual(['validate'])
+  })
+
+  test('settleCredential revalidates and uses method settlement', async () => {
+    const calls: string[] = []
+    const splitServer = Method.toServer(mockCharge, {
+      async validate({ credential, request }) {
+        calls.push('validate')
+        return {
+          challenge: credential.challenge,
+          credential,
+          details: {},
+          intent: 'charge',
+          method: 'alpha',
+          request,
+          source: credential.source,
+        }
+      },
+      async settle() {
+        calls.push('settle')
+        return mockReceipt('settled')
+      },
+      async verify() {
+        calls.push('verify')
+        return mockReceipt('legacy')
+      },
+    })
+    const mppx = Mppx.create({ methods: [splitServer], realm, secretKey })
+    const challenge = await mppx.challenge.alpha.charge(challengeOpts)
+    const credential = Credential.from({ challenge, payload: { token: 'valid' } })
+
+    const receipt = await mppx.settleCredential(credential)
+
+    expect(receipt.method).toBe('settled')
+    expect(calls).toEqual(['validate', 'settle'])
+  })
+
+  test('verifyCredential remains a legacy alias for settlement', async () => {
+    const calls: string[] = []
+    const splitServer = Method.toServer(mockCharge, {
+      async validate({ credential, request }) {
+        calls.push('validate')
+        return {
+          challenge: credential.challenge,
+          credential,
+          details: {},
+          intent: 'charge',
+          method: 'alpha',
+          request,
+          source: credential.source,
+        }
+      },
+      async settle() {
+        calls.push('settle')
+        return mockReceipt('settled')
+      },
+      async verify() {
+        calls.push('verify')
+        return mockReceipt('legacy')
+      },
+    })
+    const mppx = Mppx.create({ methods: [splitServer], realm, secretKey })
+    const challenge = await mppx.challenge.alpha.charge(challengeOpts)
+    const credential = Credential.from({ challenge, payload: { token: 'valid' } })
+
+    const receipt = await mppx.verifyCredential(credential)
+
+    expect(receipt.method).toBe('settled')
+    expect(calls).toEqual(['validate', 'settle'])
+  })
+
+  test('validateCredential rejects legacy-only methods without emitting payment failure', async () => {
+    const events: string[] = []
+    const mppx = Mppx.create({ methods: [alphaChargeServer], realm, secretKey })
+    mppx.onPaymentFailed((context) => {
+      events.push(context.error.name)
+    })
+    const challenge = await mppx.challenge.alpha.charge(challengeOpts)
+    const credential = Credential.from({ challenge, payload: { token: 'valid' } })
+
+    await expect(mppx.validateCredential(credential)).rejects.toThrow(
+      'does not support non-mutating credential validation',
+    )
+
+    expect(events).toEqual([])
+  })
+
+  test('validateCredential enforces supplied route requirements', async () => {
+    const splitServer = Method.toServer(mockCharge, {
+      async validate({ credential, request }) {
+        return {
+          challenge: credential.challenge,
+          credential,
+          details: { amount: request.amount },
+          intent: 'charge',
+          method: 'alpha',
+          request,
+          source: credential.source,
+        }
+      },
+      async settle() {
+        return mockReceipt('settled')
+      },
+      async verify() {
+        return mockReceipt('legacy')
+      },
+    })
+    const mppx = Mppx.create({ methods: [splitServer], realm, secretKey })
+    const challenge = await mppx.challenge.alpha.charge(challengeOpts)
+    const credential = Credential.from({ challenge, payload: { token: 'valid' } })
+
+    const validation = await mppx.validateCredential(credential, { request: challengeOpts })
+    expect(validation.details).toEqual({ amount: '1000' })
+
+    await expect(
+      mppx.validateCredential(credential, {
+        request: {
+          ...challengeOpts,
+          amount: '2000',
+        },
+      }),
+    ).rejects.toThrow('credential amount does not match this route')
+  })
+
+  test('settleCredential emits payment failure when split validation fails', async () => {
+    const calls: string[] = []
+    const events: string[] = []
+    const splitServer = Method.toServer(mockCharge, {
+      async validate() {
+        calls.push('validate')
+        throw new Errors.VerificationFailedError({ reason: 'risk denied' })
+      },
+      async settle() {
+        calls.push('settle')
+        return mockReceipt('settled')
+      },
+      async verify() {
+        calls.push('verify')
+        return mockReceipt('legacy')
+      },
+    })
+    const mppx = Mppx.create({ methods: [splitServer], realm, secretKey })
+    mppx.onPaymentFailed((context) => {
+      events.push(context.error.name)
+    })
+    const challenge = await mppx.challenge.alpha.charge(challengeOpts)
+    const credential = Credential.from({ challenge, payload: { token: 'valid' } })
+
+    await expect(mppx.settleCredential(credential)).rejects.toThrow('risk denied')
+
+    expect(calls).toEqual(['validate'])
+    expect(events).toEqual(['VerificationFailedError'])
+  })
+
+  test('route handlers revalidate before settlement for split methods', async () => {
+    const calls: string[] = []
+    const splitServer = Method.toServer(mockCharge, {
+      async validate({ credential, request }) {
+        calls.push('validate')
+        return {
+          challenge: credential.challenge,
+          credential,
+          details: {},
+          intent: 'charge',
+          method: 'alpha',
+          request,
+          source: credential.source,
+        }
+      },
+      async settle() {
+        calls.push('settle')
+        return mockReceipt('settled')
+      },
+      async verify() {
+        calls.push('verify')
+        return mockReceipt('legacy')
+      },
+    })
+    const mppx = Mppx.create({ methods: [splitServer], realm, secretKey })
+    const firstResult = await mppx.charge(challengeOpts)(
+      new Request('https://api.example.com/resource'),
+    )
+    expect(firstResult.status).toBe(402)
+    if (firstResult.status !== 402) throw new Error()
+
+    const challenge = Challenge.fromResponse(firstResult.challenge)
+    const credential = Credential.from({ challenge, payload: { token: 'valid' } })
+    const result = await mppx.charge(challengeOpts)(
+      new Request('https://api.example.com/resource', {
+        headers: { Authorization: Credential.serialize(credential) },
+      }),
+    )
+
+    expect(result.status).toBe(200)
+    expect(calls).toEqual(['validate', 'settle'])
+  })
+
   test('verifies a parsed Credential object (charge)', async () => {
     verifyArgs = undefined
     const mppx = Mppx.create({
