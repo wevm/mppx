@@ -60,6 +60,89 @@ describe('evm charge server', () => {
     })
   })
 
+  test('requires chain ID for viem token currency config', () => {
+    expect(() =>
+      evm({
+        authorization: { name: 'USD Coin', version: '2' },
+        currency: usdc,
+        recipient,
+        settle: async () => ({ reference: transaction }),
+      }),
+    ).toThrow('EVM authorization requires `chainId`.')
+  })
+
+  test('rejects viem token currency unavailable on configured chain', () => {
+    expect(() =>
+      evm({
+        authorization: { name: 'USD Coin', version: '2' },
+        chainId: 999_999,
+        currency: usdc,
+        recipient,
+        settle: async () => ({ reference: transaction }),
+      }),
+    ).toThrow('EVM currency is not available on chain ID 999999.')
+  })
+
+  test('requires authorization metadata for viem token currency config', () => {
+    expect(() =>
+      evm({
+        chainId: 84532,
+        currency: usdc,
+        recipient,
+        settle: async () => ({ reference: transaction }),
+      }),
+    ).toThrow('EVM authorization requires `authorization` metadata.')
+  })
+
+  test('infers native charge defaults from known asset metadata', async () => {
+    const mppx = Mppx.create({
+      methods: [
+        evm({
+          currency: evm.assets.base.USDC,
+          recipient,
+          settle: async () => ({ reference: transaction }),
+        }),
+      ],
+      secretKey: 'test-secret-key-test-secret-key-32',
+    })
+    const route = mppx.evm.charge({ amount: '0.25' })
+
+    const response = await route(new Request('https://example.com/paid'))
+
+    expect(response.status).toBe(402)
+    if (response.status !== 402) throw new Error()
+    const challenge = Challenge.fromResponse(response.challenge)
+    expect(challenge.request).toEqual({
+      amount: '250000',
+      currency: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913',
+      methodDetails: {
+        chainId: 8453,
+        credentialTypes: ['authorization'],
+        decimals: 6,
+      },
+      recipient,
+    })
+  })
+
+  test('requires authorization metadata for known assets without EIP-3009 transfer metadata', () => {
+    const permit2Asset = evm.assets.define({
+      address: currency,
+      decimals: 6,
+      network: 'eip155:84532',
+      transfer: {
+        type: 'permit2',
+      },
+    })
+
+    expect(() =>
+      evm({
+        currency: permit2Asset,
+        recipient,
+        settle: async () => ({ reference: transaction }),
+      }),
+    ).toThrow('EVM authorization requires `authorization` metadata.')
+  })
+
   test('settles native Payment-auth authorization credentials', async () => {
     let facilitated:
       | {

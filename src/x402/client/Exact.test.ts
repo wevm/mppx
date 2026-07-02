@@ -1,5 +1,6 @@
 import { Challenge } from 'mppx'
 import type { Account } from 'viem'
+import { tokens } from 'viem/tokens'
 import { describe, expect, test, vi } from 'vp/test'
 
 import * as Chains from '../../evm/Chains.js'
@@ -76,6 +77,134 @@ describe('x402 exact credential helper', () => {
         context: {},
       }),
     ).rejects.toThrow('x402 exact raw currency allowlists require networks.')
+  })
+
+  test('uses known asset metadata for currency policy and maxAmount decimals', async () => {
+    const signTypedData = vi.fn(async () => '0x1234')
+
+    const credential = await createCredential({
+      challenge: challenge(),
+      config: {
+        account: {
+          ...account,
+          signTypedData,
+        } as unknown as Account,
+        currencies: [Assets.baseSepolia.USDC],
+        maxAmount: '0.01',
+      },
+      context: {},
+    })
+    const paymentPayload = Header.decodePaymentSignature(credential)
+
+    expect(signTypedData).toHaveBeenCalledOnce()
+    expect(paymentPayload.accepted.asset).toBe(Assets.baseSepolia.USDC.address)
+  })
+
+  test('pins known asset currency policy to its network', async () => {
+    const signTypedData = vi.fn(async () => '0x1234')
+
+    await expect(
+      createCredential({
+        challenge: challenge({ network: 'eip155:8453' }),
+        config: {
+          account: {
+            ...account,
+            signTypedData,
+          } as unknown as Account,
+          currencies: [Assets.baseSepolia.USDC],
+          maxAmount: '0.01',
+        },
+        context: {},
+      }),
+    ).rejects.toThrow(
+      'x402 exact currency is not allowed: 0x036CbD53842c5426634e7929541eC2318f3dCF7e.',
+    )
+    expect(signTypedData).not.toHaveBeenCalled()
+  })
+
+  test('accepts viem token sets for currency policy and decimals', async () => {
+    const signTypedData = vi.fn(async () => '0x1234')
+
+    const credential = await createCredential({
+      challenge: challenge({ amount: '1000000' }),
+      config: {
+        account: {
+          ...account,
+          signTypedData,
+        } as unknown as Account,
+        currencies: tokens.popular,
+        maxAmount: '1',
+      },
+      context: {},
+    })
+    const paymentPayload = Header.decodePaymentSignature(credential)
+
+    expect(signTypedData).toHaveBeenCalledOnce()
+    expect(paymentPayload.accepted.asset).toBe(Assets.baseSepolia.USDC.address)
+  })
+
+  test('uses viem token decimals for maxAmount policy', async () => {
+    const signTypedData = vi.fn(async () => '0x1234')
+
+    await expect(
+      createCredential({
+        challenge: challenge({ amount: '1000001' }),
+        config: {
+          account: {
+            ...account,
+            signTypedData,
+          } as unknown as Account,
+          currencies: tokens.popular,
+          maxAmount: '1',
+        },
+        context: {},
+      }),
+    ).rejects.toThrow('x402 exact amount exceeds maxAmount.')
+    expect(signTypedData).not.toHaveBeenCalled()
+  })
+
+  test('accepts viem token sets through legacy assets policy', async () => {
+    const signTypedData = vi.fn(async () => '0x1234')
+
+    const credential = await createCredential({
+      challenge: challenge({ amount: '1000000' }),
+      config: {
+        account: {
+          ...account,
+          signTypedData,
+        } as unknown as Account,
+        assets: tokens.popular,
+        maxAmount: '1',
+      },
+      context: {},
+    })
+
+    expect(signTypedData).toHaveBeenCalledOnce()
+    expect(Header.decodePaymentSignature(credential).accepted.asset).toBe(
+      Assets.baseSepolia.USDC.address,
+    )
+  })
+
+  test('pins viem token currency policy to available networks', async () => {
+    const signTypedData = vi.fn(async () => '0x1234')
+
+    await expect(
+      createCredential({
+        challenge: challenge({ network: 'eip155:999999' }),
+        config: {
+          account: {
+            ...account,
+            signTypedData,
+          } as unknown as Account,
+          currencies: tokens.popular,
+          maxAmount: '1',
+        },
+        context: {},
+      }),
+    ).rejects.toThrow(
+      'x402 exact currency is not allowed: 0x036CbD53842c5426634e7929541eC2318f3dCF7e.',
+    )
+    expect(signTypedData).not.toHaveBeenCalled()
   })
 
   test('signs EIP-3009 exact payment payloads', async () => {
