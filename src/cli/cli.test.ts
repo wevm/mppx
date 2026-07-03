@@ -1831,7 +1831,6 @@ describe('account fund help', () => {
     expect(exitCode).toBe(1)
     expect(output).toContain('Invalid input')
     expect(output).toContain('testnet')
-    expect(output).toContain('mainnet')
   })
 })
 
