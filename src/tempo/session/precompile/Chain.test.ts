@@ -51,6 +51,7 @@ function createMockClient(
     channel?: { descriptor: Channel.ChannelDescriptor; state: Chain.ChannelState } | undefined
     receipt?: Record<string, unknown> | null | undefined
     rpcMethods?: string[] | undefined
+    onRequest?: ((method: string, params: unknown) => void) | undefined
   } = {},
 ) {
   return createClient({
@@ -59,6 +60,7 @@ function createMockClient(
     transport: custom({
       async request(args) {
         parameters.rpcMethods?.push(args.method)
+        parameters.onRequest?.(args.method, args.params)
         if (args.method === 'eth_chainId') return `0x${chainId.toString(16)}`
         if (args.method === 'eth_sendRawTransaction') return txHash
         if (args.method === 'eth_sendRawTransactionSync') return parameters.receipt ?? receipt([])
@@ -639,6 +641,44 @@ describe('precompile broadcastOpenTransaction', () => {
       expiringNonceHash,
       openDeposit: deposit,
     })
+  })
+
+  test('pins the read-back to the block that included the open transaction', async () => {
+    const serializedTransaction = await createOpenTransaction()
+    const expiringNonceHash = expectedExpiringNonceHash(serializedTransaction)
+    const expectedDescriptor = { ...descriptor, expiringNonceHash }
+    const channelId = Channel.computeId({
+      ...expectedDescriptor,
+      chainId,
+      escrow: tip20ChannelEscrow,
+    })
+    const state = { settled: 0n, deposit, closeRequestedAt: 0 }
+    // The open tx is mined in block 0x1 (see `receipt`). The read-back must be
+    // pinned to that block, not `latest`, so a lagging RPC replica cannot
+    // answer with stale/empty state.
+    const ethCallBlockTags: unknown[] = []
+
+    await Chain.broadcastOpenTransaction({
+      chainId,
+      client: createMockClient({
+        channel: { descriptor: expectedDescriptor, state },
+        receipt: receipt([openedLog({ channelId, expiringNonceHash })]),
+        onRequest: (method, params) => {
+          if (method === 'eth_call') ethCallBlockTags.push((params as unknown[])[1])
+        },
+      }),
+      escrowContract: tip20ChannelEscrow,
+      expectedAuthorizedSigner: descriptor.authorizedSigner,
+      expectedChannelId: channelId,
+      expectedCurrency: descriptor.token,
+      expectedExpiringNonceHash: expiringNonceHash,
+      expectedOperator: descriptor.operator,
+      expectedPayee: descriptor.payee,
+      expectedPayer: descriptor.payer,
+      serializedTransaction,
+    })
+
+    expect(ethCallBlockTags).toEqual(['0x1'])
   })
 
   test('rejects ChannelOpened receipt deposit mismatches', async () => {
@@ -1254,5 +1294,49 @@ describe('Chain.assertPrecompileFeePayerPolicy', () => {
         }),
       ).toThrow(item.reason)
     }
+  })
+})
+
+describe('Chain.readbackWithRetry', () => {
+  test('returns immediately when the read succeeds on the first attempt', async () => {
+    let calls = 0
+    const result = await Chain.readbackWithRetry(
+      async () => {
+        calls++
+        return 'ok'
+      },
+      { delayMs: 0 },
+    )
+    expect(result).toBe('ok')
+    expect(calls).toBe(1)
+  })
+
+  test('retries a lagging read until it resolves', async () => {
+    let calls = 0
+    const result = await Chain.readbackWithRetry(
+      async () => {
+        calls++
+        if (calls < 3) throw new Error('header not found')
+        return 'ok'
+      },
+      { retries: 5, delayMs: 0 },
+    )
+    expect(result).toBe('ok')
+    expect(calls).toBe(3)
+  })
+
+  test('rethrows the last error after exhausting retries', async () => {
+    let calls = 0
+    await expect(
+      Chain.readbackWithRetry(
+        async () => {
+          calls++
+          throw new Error(`attempt ${calls}`)
+        },
+        { retries: 2, delayMs: 0 },
+      ),
+    ).rejects.toThrow('attempt 3')
+    // 1 initial attempt + 2 retries.
+    expect(calls).toBe(3)
   })
 })

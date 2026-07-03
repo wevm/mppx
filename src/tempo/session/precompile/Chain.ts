@@ -293,12 +293,14 @@ export async function getChannel(
   client: Client,
   descriptor: ChannelDescriptor,
   escrow: Address = tip20ChannelEscrow,
+  blockNumber?: bigint,
 ): Promise<Channel> {
   const channel = await readContract(client, {
     address: escrow,
     abi: escrowAbi,
     functionName: 'getChannel',
     args: [descriptorTuple(descriptor)],
+    ...(blockNumber !== undefined ? { blockNumber } : {}),
   })
   return {
     descriptor: channel.descriptor,
@@ -313,12 +315,14 @@ export async function getChannelState(
   client: Client,
   channelId: Hex,
   escrow: Address = tip20ChannelEscrow,
+  blockNumber?: bigint,
 ): Promise<ChannelState> {
   const state = await readContract(client, {
     address: escrow,
     abi: escrowAbi,
     functionName: 'getChannelState',
     args: [channelId],
+    ...(blockNumber !== undefined ? { blockNumber } : {}),
   })
   return stateFromTuple(state)
 }
@@ -338,6 +342,47 @@ export async function getChannelStatesBatch(
     args: [channelIds],
   })
   return states.map(stateFromTuple)
+}
+
+/** Tuning for {@link readbackWithRetry}. */
+export type ReadbackRetryOptions = {
+  /** Additional attempts after the first, before giving up. @default 5 */
+  retries?: number | undefined
+  /** Delay between attempts, in milliseconds. @default 250 */
+  delayMs?: number | undefined
+}
+
+/**
+ * Retry an on-chain readback that is pinned to the block containing a just-sent
+ * transaction.
+ *
+ * The escrow state read is served by a load-balanced RPC whose replicas can lag
+ * behind the block that produced the transaction receipt. Callers pin the read
+ * to that block number (via the `blockNumber` arg on {@link getChannel} /
+ * {@link getChannelState}) so a node that has imported the block returns
+ * authoritative state; replicas that have not yet imported it throw (e.g.
+ * "header not found"), so we retry with a short backoff until one catches up.
+ *
+ * This closes the read-after-write race behind
+ * `on-chain channel state does not match open receipt` — without it, a stale
+ * `latest` read on a lagging replica returns an empty channel and fails
+ * verification even though the open transaction succeeded.
+ */
+export async function readbackWithRetry<T>(
+  read: () => Promise<T>,
+  options: ReadbackRetryOptions = {},
+): Promise<T> {
+  const { retries = 5, delayMs = 250 } = options
+  let lastError: unknown
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      return await read()
+    } catch (error) {
+      lastError = error
+      if (attempt < retries) await new Promise((resolve) => setTimeout(resolve, delayMs))
+    }
+  }
+  throw lastError
 }
 
 /** Options accepted by low-level TIP-1034 on-chain management helpers. */
@@ -808,7 +853,9 @@ export async function broadcastOpenTransaction(
     expectedChannelId: parameters.expectedChannelId,
     openDeposit: open.deposit,
   })
-  const chainChannel = await getChannel(parameters.client, descriptor, parameters.escrowContract)
+  const chainChannel = await readbackWithRetry(() =>
+    getChannel(parameters.client, descriptor, parameters.escrowContract, receipt.blockNumber),
+  )
   const state = chainChannel.state
   validateOpenReadbackState({ emittedDeposit: opened.deposit, state })
   return {
@@ -896,10 +943,13 @@ export async function broadcastTopUpTransaction(
     emittedChannelId: toppedUp.channelId,
     expectedChannelId: parameters.expectedChannelId,
   })
-  const state = await getChannelState(
-    parameters.client,
-    toppedUp.channelId,
-    parameters.escrowContract,
+  const state = await readbackWithRetry(() =>
+    getChannelState(
+      parameters.client,
+      toppedUp.channelId,
+      parameters.escrowContract,
+      receipt.blockNumber,
+    ),
   )
   validateTopUpReadbackState({ newDeposit: toppedUp.newDeposit, state })
   return { txHash: receipt.transactionHash, newDeposit: toppedUp.newDeposit, state }
