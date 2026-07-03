@@ -1819,6 +1819,22 @@ test('mppx --help', async () => {
   expect(output).toContain('sign')
 })
 
+describe('account fund help', () => {
+  test('only advertises testnet network funding', async () => {
+    const { output } = await serve(['account', 'fund', '--help'])
+    expect(output).toContain('--network <testnet>')
+    expect(output).not.toContain('mainnet|testnet')
+  })
+
+  test('rejects mainnet network funding', async () => {
+    const { exitCode, output } = await serve(['account', 'fund', '--network', 'mainnet'])
+    expect(exitCode).toBe(1)
+    expect(output).toContain('Invalid input')
+    expect(output).toContain('testnet')
+    expect(output).toContain('mainnet')
+  })
+})
+
 // ---------------------------------------------------------------------------
 // sign
 // ---------------------------------------------------------------------------

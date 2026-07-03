@@ -864,7 +864,7 @@ const account = Cli.create('account', {
     description: 'Fund account with testnet tokens',
     options: z.object({
       account: z.string().optional().describe('Account name (env: MPPX_ACCOUNT)'),
-      network: z.enum(['mainnet', 'testnet']).optional().describe('Tempo network'),
+      network: z.enum(['testnet']).optional().describe('Tempo network'),
       rpcUrl: z.string().optional().describe('RPC endpoint (env: MPPX_RPC_URL)'),
     }),
     output: z.object({ account: z.string(), chain: z.string(), transactions: z.array(z.string()) }),
