@@ -353,6 +353,67 @@ describe('tempo.charge client', () => {
     }
   })
 
+  test('normalizes sponsored pull transactions before signing', async () => {
+    vi.resetModules()
+    const prepared = {
+      feePayerSignature: { r: '0x1', s: '0x2', yParity: 0 },
+      feeToken: currency,
+      gas: 100n,
+    }
+    const prepareTransactionRequest = vi.fn(async () => prepared)
+    const signTransaction = vi.fn(
+      async (_client: unknown, _transaction: Record<string, unknown>) => '0xdeadbeef',
+    )
+    vi.doMock('viem/actions', () => ({
+      prepareTransactionRequest,
+      sendCallsSync: vi.fn(),
+      signTransaction,
+      signTypedData: vi.fn(),
+    }))
+
+    try {
+      const { charge: chargeWithMockedActions } = await import('./Charge.js')
+      const chainId = 42431
+      const client = createClient({
+        account,
+        chain: tempoLocalnet,
+        transport: http('http://127.0.0.1'),
+      })
+      const method = chargeWithMockedActions({
+        account,
+        getClient: () => client,
+      })
+
+      await method.createCredential({
+        challenge: createChallenge({
+          amount: '1',
+          chainId,
+          feePayer: true,
+          supportedModes: ['pull'],
+        }),
+        context: {},
+      })
+
+      expect(prepareTransactionRequest).toHaveBeenCalledWith(
+        client,
+        expect.not.objectContaining({ feePayer: true }),
+      )
+      expect(signTransaction).toHaveBeenCalledWith(
+        client,
+        expect.objectContaining({
+          feePayer: true,
+          gas: 5_100n,
+        }),
+      )
+      const signed = signTransaction.mock.calls[0]?.[1] as Record<string, unknown>
+      expect(signed).not.toHaveProperty('feePayerSignature')
+      expect(signed).not.toHaveProperty('feeToken')
+    } finally {
+      vi.doUnmock('viem/actions')
+      vi.resetModules()
+    }
+  })
+
   describe('chain pinning', () => {
     const client = createClient({
       account,

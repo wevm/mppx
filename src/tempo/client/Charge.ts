@@ -226,7 +226,12 @@ export function charge(parameters: charge.Parameters = {}) {
       // Estimate before enabling fee-payer mode so Tempo includes sender
       // signature and access-key verification costs in the gas budget.
       prepared.gas = (prepared.gas ?? 0n) + 5_000n
-      if (methodDetails?.feePayer) (prepared as Record<string, unknown>).feePayer = true
+      if (methodDetails?.feePayer) {
+        const sponsored = prepared as Record<string, unknown>
+        delete sponsored.feePayerSignature
+        delete sponsored.feeToken
+        sponsored.feePayer = true
+      }
       const signature = await signTransaction(client, prepared as never)
 
       return Credential.serialize({
