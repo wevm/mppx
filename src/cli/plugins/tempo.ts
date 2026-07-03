@@ -42,6 +42,11 @@ const booleanOption = z.union([
   z.literal('true').transform(() => true),
   z.literal('false').transform(() => false),
 ])
+
+async function writeResponseBody(response: Response) {
+  process.stdout.write(Buffer.from(await response.arrayBuffer()))
+}
+
 const tempoOptionSchema = z.object({
   autoSwap: z.optional(booleanOption),
   channel: z.optional(z.coerce.string()),
@@ -425,8 +430,7 @@ export function tempo() {
         })
       } else {
         // Non-SSE: print body, then close channel
-        const body = (await credentialResponse.text()).replace(/\n+$/, '')
-        console.log(body)
+        await writeResponseBody(credentialResponse)
 
         if (channelId && escrowContract && chainId) {
           if (confirmEnabled) info('\n')

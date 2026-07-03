@@ -43,7 +43,7 @@ afterAll(() => {
 })
 
 async function serve(argv: string[], options?: { env?: Record<string, string | undefined> }) {
-  let output = ''
+  const stdoutChunks: Buffer[] = []
   let stderr = ''
   let exitCode: number | undefined
   const saved: Record<string, string | undefined> = {}
@@ -58,7 +58,9 @@ async function serve(argv: string[], options?: { env?: Record<string, string | u
   const origLog = console.log
   const origError = console.error
   process.stdout.write = ((chunk: unknown) => {
-    output += typeof chunk === 'string' ? chunk : String(chunk)
+    if (typeof chunk === 'string') stdoutChunks.push(Buffer.from(chunk))
+    else if (chunk instanceof Uint8Array) stdoutChunks.push(Buffer.from(chunk))
+    else stdoutChunks.push(Buffer.from(String(chunk)))
     return true
   }) as typeof process.stdout.write
   process.stderr.write = ((chunk: unknown) => {
@@ -66,7 +68,7 @@ async function serve(argv: string[], options?: { env?: Record<string, string | u
     return true
   }) as typeof process.stderr.write
   console.log = (...args: unknown[]) => {
-    output += `${args.map(String).join(' ')}\n`
+    stdoutChunks.push(Buffer.from(`${args.map(String).join(' ')}\n`))
   }
   console.error = (...args: unknown[]) => {
     stderr += `${args.map(String).join(' ')}\n`
@@ -74,7 +76,7 @@ async function serve(argv: string[], options?: { env?: Record<string, string | u
   try {
     await cli.serve(argv, {
       stdout(s: string) {
-        output += s
+        stdoutChunks.push(Buffer.from(s))
       },
       exit(code: number) {
         exitCode = code
@@ -90,7 +92,8 @@ async function serve(argv: string[], options?: { env?: Record<string, string | u
       else process.env[key] = value
     }
   }
-  return { output, stderr, exitCode }
+  const stdoutBytes = Buffer.concat(stdoutChunks)
+  return { output: stdoutBytes.toString(), stderr, exitCode, stdoutBytes }
 }
 
 function createMockChargeMethod(name: string) {
@@ -427,6 +430,24 @@ describe('services', () => {
       expect(output).toContain('3000')
       expect(output).toContain('tempo/charge')
     })
+  })
+})
+
+describe('request output', () => {
+  test('writes non-402 response bodies to stdout without text decoding', async () => {
+    const body = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x0a, 0x0a])
+    const httpServer = await Http.createServer((_req, res) => {
+      res.writeHead(200, { 'Content-Type': 'application/pdf' })
+      res.end(body)
+    })
+
+    try {
+      const { exitCode, stdoutBytes } = await serve([httpServer.url, '-s'])
+      expect(exitCode).toBeUndefined()
+      expect(stdoutBytes).toEqual(body)
+    } finally {
+      httpServer.close()
+    }
   })
 })
 

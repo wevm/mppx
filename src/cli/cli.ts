@@ -99,6 +99,10 @@ function outputResult<Data>(
   return undefined as unknown as Data
 }
 
+async function writeResponseBody(response: Response) {
+  process.stdout.write(Buffer.from(await response.arrayBuffer()))
+}
+
 function canReadCommandStdin() {
   if (process.stdin.isTTY !== false) return false
   return process.stdin.listenerCount('data') === 0 && process.stdin.listenerCount('readable') === 0
@@ -371,7 +375,7 @@ const cli = Cli.create('mppx', {
             exitCode: 22,
           })
         printResponseHeaders(challengeResponse, headerOpts)
-        console.log((await challengeResponse.text()).replace(/\n+$/, ''))
+        await writeResponseBody(challengeResponse)
         return
       }
 
@@ -625,8 +629,7 @@ const cli = Cli.create('mppx', {
           } catch {}
         }
 
-        const body = (await credentialResponse.text()).replace(/\n+$/, '')
-        console.log(body)
+        await writeResponseBody(credentialResponse)
       }
     } catch (err) {
       // Re-throw IncurError so incur's error handler formats it properly
