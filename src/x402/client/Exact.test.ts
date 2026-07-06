@@ -207,7 +207,7 @@ describe('x402 exact credential helper', () => {
     expect(signTypedData).not.toHaveBeenCalled()
   })
 
-  test('signs EIP-3009 exact payment payloads', async () => {
+  test('signs mppx-bound EIP-3009 exact payment payloads', async () => {
     const signTypedData = vi.fn(async () => '0x1234')
     const config = {
       account: {
@@ -243,6 +243,64 @@ describe('x402 exact credential helper', () => {
     expect(paymentPayload.payload.signature).toBe('0x1234')
   })
 
+  test('signs standard EIP-3009 exact payment payloads without mppx route binding', async () => {
+    const signTypedData = vi.fn(async () => '0x1234')
+    const config = {
+      account: {
+        ...account,
+        signTypedData,
+      } as unknown as Account,
+      currencies: [usdc],
+      maxAmount: '0.01',
+      networks: [Chains.baseSepolia],
+    } as const
+
+    const credential = await createCredential({
+      challenge: challenge({ extensions: undefined }),
+      config,
+      context: {},
+    })
+    const paymentPayload = Header.decodePaymentSignature(credential)
+
+    expect(signTypedData).toHaveBeenCalledOnce()
+    expect(paymentPayload.x402Version).toBe(2)
+    expect(paymentPayload.accepted.scheme).toBe('exact')
+    expect(paymentPayload.extensions).toBeUndefined()
+    expect(paymentPayload.resource?.url).toBe('https://example.com/paid')
+    expect('authorization' in paymentPayload.payload).toBe(true)
+    if (!('authorization' in paymentPayload.payload)) throw new Error()
+    expect(paymentPayload.payload.authorization.nonce).toMatch(/^0x[0-9a-f]{64}$/)
+    expect(paymentPayload.payload.signature).toBe('0x1234')
+  })
+
+  test('uses a fresh random nonce for repeated standard payments', async () => {
+    const config = {
+      account,
+      currencies: [usdc],
+      maxAmount: '0.01',
+      networks: [Chains.baseSepolia],
+    } as const
+
+    const first = Header.decodePaymentSignature(
+      await createCredential({
+        challenge: challenge({ extensions: undefined }),
+        config,
+        context: {},
+      }),
+    )
+    const second = Header.decodePaymentSignature(
+      await createCredential({
+        challenge: challenge({ extensions: undefined }),
+        config,
+        context: {},
+      }),
+    )
+
+    if (!('authorization' in first.payload) || !('authorization' in second.payload))
+      throw new Error()
+    expect(first.payload.authorization.nonce).not.toBe(second.payload.authorization.nonce)
+  })
+
   test('uses a fresh route-bound nonce for repeated payments', async () => {
     const config = {
       account,
@@ -273,7 +331,7 @@ describe('x402 exact credential helper', () => {
   })
 })
 
-function challenge(overrides: Partial<Types.PaymentRequirements> = {}): X402Challenge {
+function challenge(overrides: Partial<Types.ExactRequest> = {}): X402Challenge {
   return Challenge.from({
     id: 'x402-test',
     intent: 'charge',

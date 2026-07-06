@@ -1,5 +1,5 @@
 import { Challenge, Credential, Errors, Mcp, Receipt } from 'mppx'
-import { tempo } from 'mppx/client'
+import { evm, tempo } from 'mppx/client'
 import { Mppx as Mppx_server, tempo as tempo_server } from 'mppx/server'
 import { Header as x402_Header, Types as x402_Types, type PaymentRequired } from 'mppx/x402'
 import { Base64 } from 'ox'
@@ -800,7 +800,20 @@ describe('Fetch.from: 402 retry path', () => {
     expect(retryHeaders.get(x402_Types.paymentSignatureHeader)).toBeNull()
   })
 
-  test('uses x402 when no signable Payment-auth challenge is available', async () => {
+  test('uses x402 exact EIP-3009 when no signable Payment-auth challenge is available', async () => {
+    const paymentRequired = {
+      ...x402PaymentRequired,
+      accepts: [
+        {
+          ...x402PaymentRequired.accepts[0]!,
+          extra: {
+            assetTransferMethod: 'eip3009',
+            name: 'USDC',
+            version: '2',
+          },
+        },
+      ],
+    } satisfies PaymentRequired
     let callCount = 0
     const calls: { init: RequestInit | undefined }[] = []
     const mockFetch: typeof globalThis.fetch = async (_input, init) => {
@@ -810,31 +823,36 @@ describe('Fetch.from: 402 retry path', () => {
         return new Response(null, {
           status: 402,
           headers: {
-            [x402_Types.paymentRequiredHeader]:
-              x402_Header.encodePaymentRequired(x402PaymentRequired),
+            [x402_Types.paymentRequiredHeader]: x402_Header.encodePaymentRequired(paymentRequired),
           },
         })
+
+      const headers = new Headers(init?.headers)
+      expect(headers.get('Authorization')).toBeNull()
+      const paymentSignature = headers.get(x402_Types.paymentSignatureHeader)
+      expect(paymentSignature).toBeTruthy()
+      expect(x402_Header.decodePaymentSignature(paymentSignature!).accepted).toEqual(
+        paymentRequired.accepts[0],
+      )
       return new Response('OK', { status: 200 })
     }
 
     const fetch = Fetch.from({
       fetch: mockFetch,
       methods: [
-        {
-          name: 'evm',
-          intent: 'charge',
-          context: undefined,
-          createCredential: async () => 'x402-credential',
-        },
-      ] as const,
+        evm.charge({
+          account: accounts[0],
+          currencies: [evm.assets.baseSepolia.USDC],
+          maxAmount: '0.01',
+          networks: [84532],
+        }),
+      ],
     })
 
     const response = await fetch('https://example.com/api')
 
     expect(response.status).toBe(200)
-    const retryHeaders = new Headers(calls[1]!.init?.headers)
-    expect(retryHeaders.get('Authorization')).toBeNull()
-    expect(retryHeaders.get(x402_Types.paymentSignatureHeader)).toBe('x402-credential')
+    expect(calls).toHaveLength(2)
   })
 
   test('lets orderChallenges force x402 before native Payment-auth', async () => {

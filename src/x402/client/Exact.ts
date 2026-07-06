@@ -17,9 +17,10 @@ export async function createCredential(parameters: createCredential.Parameters):
   const request = parameters.challenge.request as Types.ExactRequest
   const accepted = Types.toPaymentRequirements(request)
   assertPolicy(parameters.config, accepted)
-  if (!request.resource || !request.extensions?.mppx)
-    throw new Error('x402 exact EIP-3009 requires route binding.')
-  const extensions = withNonceSalt(request.extensions)
+  if (!request.resource) throw new Error('x402 exact EIP-3009 requires resource information.')
+  const extensions = request.extensions?.mppx
+    ? withNonceSalt(request.extensions)
+    : request.extensions
   const transferMethod = accepted.extra?.assetTransferMethod ?? 'eip3009'
   if (transferMethod !== 'eip3009')
     throw new Error(`x402 exact ${String(transferMethod)} signing is not implemented yet.`)
@@ -32,11 +33,13 @@ export async function createCredential(parameters: createCredential.Parameters):
   const now = Math.floor(Date.now() / 1000)
   const authorization: Types.ExactEip3009Payload['authorization'] = {
     from: getAddress(account.address),
-    nonce: RouteBinding.nonce({
-      accepted,
-      extensions,
-      resource: request.resource,
-    }),
+    nonce: extensions?.mppx
+      ? RouteBinding.nonce({
+          accepted,
+          extensions,
+          resource: request.resource,
+        })
+      : randomEip3009Nonce(),
     to: getAddress(accepted.payTo),
     validAfter: (now - 600).toString(),
     validBefore: (now + accepted.maxTimeoutSeconds).toString(),
@@ -61,7 +64,7 @@ export async function createCredential(parameters: createCredential.Parameters):
 
   return Header.encodePaymentSignature({
     accepted,
-    extensions,
+    ...(extensions ? { extensions } : {}),
     payload: {
       authorization,
       signature,
@@ -183,4 +186,8 @@ function randomNonceSalt(): string {
   if (!crypto?.getRandomValues) throw new Error('x402 exact requires crypto randomness.')
   const bytes = crypto.getRandomValues(new Uint8Array(32))
   return Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('')
+}
+
+function randomEip3009Nonce(): `0x${string}` {
+  return `0x${randomNonceSalt()}`
 }
