@@ -16,6 +16,6 @@
     "mppx": "latest",
     "typescript": "~6.0.3",
     "viem": "^2.54.1",
-    "vite": "^8.0.10"
+    "vite": "^8.1.0"
   }
 }
