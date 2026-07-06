@@ -18,6 +18,10 @@ import * as Types from '../Types.js'
  */
 export function charge(parameters: charge.Parameters) {
   return Method.toClient(Methods.charge, {
+    canHandleChallenge({ challenge }) {
+      if (!isX402Challenge(challenge)) return true
+      return x402TransferMethodOf(challenge) === Types.eip3009
+    },
     context: z.object({
       account: z.optional(z.custom<Account>()),
     }),
@@ -118,6 +122,12 @@ function isX402Challenge(challenge: { request: Record<string, unknown> }) {
     challenge.request.scheme === 'exact' &&
     typeof challenge.request.network === 'string'
   )
+}
+
+function x402TransferMethodOf(challenge: { request: Record<string, unknown> }) {
+  const extra = challenge.request.extra
+  if (!extra || typeof extra !== 'object') return Types.eip3009
+  return (extra as { assetTransferMethod?: unknown }).assetTransferMethod ?? Types.eip3009
 }
 
 function assertPolicy(parameters: charge.Parameters, request: Types.ChargeRequest) {

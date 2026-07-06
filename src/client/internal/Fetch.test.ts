@@ -801,17 +801,26 @@ describe('Fetch.from: 402 retry path', () => {
   })
 
   test('uses x402 exact EIP-3009 when no signable Payment-auth challenge is available', async () => {
+    const eip3009Accept = {
+      ...x402PaymentRequired.accepts[0]!,
+      extra: {
+        assetTransferMethod: 'eip3009',
+        name: 'USDC',
+        version: '2',
+      },
+    }
     const paymentRequired = {
       ...x402PaymentRequired,
       accepts: [
         {
           ...x402PaymentRequired.accepts[0]!,
           extra: {
-            assetTransferMethod: 'eip3009',
+            assetTransferMethod: 'permit2',
             name: 'USDC',
             version: '2',
           },
         },
+        eip3009Accept,
       ],
     } satisfies PaymentRequired
     let callCount = 0
@@ -831,9 +840,7 @@ describe('Fetch.from: 402 retry path', () => {
       expect(headers.get('Authorization')).toBeNull()
       const paymentSignature = headers.get(x402_Types.paymentSignatureHeader)
       expect(paymentSignature).toBeTruthy()
-      expect(x402_Header.decodePaymentSignature(paymentSignature!).accepted).toEqual(
-        paymentRequired.accepts[0],
-      )
+      expect(x402_Header.decodePaymentSignature(paymentSignature!).accepted).toEqual(eip3009Accept)
       return new Response('OK', { status: 200 })
     }
 
