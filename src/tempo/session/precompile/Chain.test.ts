@@ -93,7 +93,7 @@ function createMockClient(
   })
 }
 
-function receipt(logs: readonly Record<string, unknown>[]) {
+function receipt(logs: readonly Record<string, unknown>[], transactionHash: Hex = txHash) {
   return {
     blockHash: `0x${'01'.repeat(32)}`,
     blockNumber: '0x1',
@@ -106,7 +106,7 @@ function receipt(logs: readonly Record<string, unknown>[]) {
     logsBloom: `0x${'00'.repeat(256)}`,
     status: '0x1',
     to: tip20ChannelEscrow,
-    transactionHash: txHash,
+    transactionHash,
     transactionIndex: '0x0',
     type: '0x76',
   }
@@ -254,6 +254,41 @@ function expectedExpiringNonceHash(serializedTransaction: `0x${string}`) {
     { sender: descriptor.payer },
   )
 }
+
+describe('precompile receipt wait', () => {
+  test('does not run replacement detection while waiting for Tempo receipts', async () => {
+    const requestedHash = `0x${'12'.repeat(32)}` as Hex
+    const rpcMethods: string[] = []
+    let receiptReads = 0
+    let blockNumber = 0n
+    const client = createClient({
+      chain: { id: chainId } as never,
+      pollingInterval: 1,
+      transport: custom({
+        async request(args) {
+          rpcMethods.push(args.method)
+          if (args.method === 'eth_chainId') return `0x${chainId.toString(16)}`
+          if (args.method === 'eth_blockNumber') {
+            blockNumber += 1n
+            return `0x${blockNumber.toString(16)}`
+          }
+          if (args.method === 'eth_getTransactionReceipt') {
+            receiptReads += 1
+            if (receiptReads === 1) return null
+            return receipt([], requestedHash)
+          }
+          throw new Error(`unexpected rpc request: ${args.method}`)
+        },
+      }),
+    })
+
+    const result = await Chain.waitForSuccessfulReceipt(client, requestedHash)
+
+    expect(result.transactionHash).toBe(requestedHash)
+    expect(rpcMethods).not.toContain('eth_getTransactionByHash')
+    expect(rpcMethods).not.toContain('eth_getBlockByNumber')
+  })
+})
 
 describe('precompile open calldata parsing', () => {
   test('parseOpenCall accepts TIP-1034 open calldata', () => {

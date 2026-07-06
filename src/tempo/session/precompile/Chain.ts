@@ -631,7 +631,7 @@ export async function sendTransaction(client: TransactionClient, transaction: He
 
 /** Wait for a receipt and reject reverted precompile transactions. */
 export async function waitForSuccessfulReceipt(client: TransactionClient, hash: Hex) {
-  const receipt = await waitForTransactionReceipt(client, { hash })
+  const receipt = await waitForTransactionReceipt(client, { hash, checkReplacement: false })
   if (receipt.status !== 'success')
     throw new VerificationFailedError({ reason: 'precompile transaction reverted' })
   return receipt
