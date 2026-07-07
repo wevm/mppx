@@ -368,8 +368,13 @@ function make402(overrides?: { expires?: string; id?: string; intent?: string; m
   })
 }
 
-function makeCombined402() {
-  const response = make402()
+function makeCombined402(overrides?: {
+  expires?: string
+  id?: string
+  intent?: string
+  method?: string
+}) {
+  const response = make402(overrides)
   const headers = new Headers(response.headers)
   headers.set(
     x402_Types.paymentRequiredHeader,
@@ -727,6 +732,141 @@ describe('Fetch.from: 402 retry path', () => {
     const retryHeaders = new Headers(calls[1]!.init?.headers)
     expect(retryHeaders.get('Authorization')).toBe('credential')
     expect(retryHeaders.get(x402_Types.paymentSignatureHeader)).toBeNull()
+  })
+
+  test('prefers mpp Payment-auth over x402 when both are signable', async () => {
+    let callCount = 0
+    const calls: { init: RequestInit | undefined }[] = []
+    const mockFetch: typeof globalThis.fetch = async (_input, init) => {
+      calls.push({ init })
+      callCount++
+      if (callCount === 1) return makeCombined402({ method: 'tempo', intent: 'charge' })
+      return new Response('OK', { status: 200 })
+    }
+
+    const fetch = Fetch.from({
+      fetch: mockFetch,
+      methods: [
+        {
+          name: 'tempo',
+          intent: 'charge',
+          context: undefined,
+          createCredential: async () => 'tempo-credential',
+        },
+        {
+          name: 'evm',
+          intent: 'charge',
+          context: undefined,
+          createCredential: async () => 'evm-credential',
+        },
+      ] as const,
+    })
+
+    const response = await fetch('https://example.com/api')
+
+    expect(response.status).toBe(200)
+    const retryHeaders = new Headers(calls[1]!.init?.headers)
+    expect(retryHeaders.get('Authorization')).toBe('tempo-credential')
+    expect(retryHeaders.get(x402_Types.paymentSignatureHeader)).toBeNull()
+  })
+
+  test('prefers native EVM Payment-auth over x402 for EVM-only clients', async () => {
+    let callCount = 0
+    const calls: { init: RequestInit | undefined }[] = []
+    const mockFetch: typeof globalThis.fetch = async (_input, init) => {
+      calls.push({ init })
+      callCount++
+      if (callCount === 1) return makeCombined402({ method: 'evm', intent: 'charge' })
+      return new Response('OK', { status: 200 })
+    }
+
+    const fetch = Fetch.from({
+      fetch: mockFetch,
+      methods: [
+        {
+          name: 'evm',
+          intent: 'charge',
+          context: undefined,
+          createCredential: async () => 'evm-credential',
+        },
+      ] as const,
+    })
+
+    const response = await fetch('https://example.com/api')
+
+    expect(response.status).toBe(200)
+    const retryHeaders = new Headers(calls[1]!.init?.headers)
+    expect(retryHeaders.get('Authorization')).toBe('evm-credential')
+    expect(retryHeaders.get(x402_Types.paymentSignatureHeader)).toBeNull()
+  })
+
+  test('uses x402 when no signable Payment-auth challenge is available', async () => {
+    let callCount = 0
+    const calls: { init: RequestInit | undefined }[] = []
+    const mockFetch: typeof globalThis.fetch = async (_input, init) => {
+      calls.push({ init })
+      callCount++
+      if (callCount === 1)
+        return new Response(null, {
+          status: 402,
+          headers: {
+            [x402_Types.paymentRequiredHeader]:
+              x402_Header.encodePaymentRequired(x402PaymentRequired),
+          },
+        })
+      return new Response('OK', { status: 200 })
+    }
+
+    const fetch = Fetch.from({
+      fetch: mockFetch,
+      methods: [
+        {
+          name: 'evm',
+          intent: 'charge',
+          context: undefined,
+          createCredential: async () => 'x402-credential',
+        },
+      ] as const,
+    })
+
+    const response = await fetch('https://example.com/api')
+
+    expect(response.status).toBe(200)
+    const retryHeaders = new Headers(calls[1]!.init?.headers)
+    expect(retryHeaders.get('Authorization')).toBeNull()
+    expect(retryHeaders.get(x402_Types.paymentSignatureHeader)).toBe('x402-credential')
+  })
+
+  test('lets orderChallenges force x402 before native Payment-auth', async () => {
+    let callCount = 0
+    const calls: { init: RequestInit | undefined }[] = []
+    const mockFetch: typeof globalThis.fetch = async (_input, init) => {
+      calls.push({ init })
+      callCount++
+      if (callCount === 1) return makeCombined402({ method: 'evm', intent: 'charge' })
+      return new Response('OK', { status: 200 })
+    }
+
+    const fetch = Fetch.from({
+      fetch: mockFetch,
+      methods: [
+        {
+          name: 'evm',
+          intent: 'charge',
+          context: undefined,
+          createCredential: async () => 'x402-credential',
+        },
+      ] as const,
+      orderChallenges: (candidates) =>
+        [...candidates].sort((left, right) => right.challenge.id.localeCompare(left.challenge.id)),
+    })
+
+    const response = await fetch('https://example.com/api')
+
+    expect(response.status).toBe(200)
+    const retryHeaders = new Headers(calls[1]!.init?.headers)
+    expect(retryHeaders.get('Authorization')).toBeNull()
+    expect(retryHeaders.get(x402_Types.paymentSignatureHeader)).toBe('x402-credential')
   })
 
   test('settles MCP-over-HTTP JSON-RPC payment challenges at the fetch boundary', async () => {

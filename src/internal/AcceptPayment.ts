@@ -1,4 +1,5 @@
 import type * as Challenge from '../Challenge.js'
+import * as x402_ChallengeBrand from '../x402/internal/ChallengeBrand.js'
 import type { MaybePromise } from './types.js'
 
 type MethodLike = {
@@ -208,7 +209,12 @@ export function selectChallengeCandidates<const methods extends readonly MethodL
             }) as ChallengeCandidate<methods[number]> & { match: Match },
         )
     })
-    .sort((left, right) => right.match.q - left.match.q || left.index - right.index)
+    .sort(
+      (left, right) =>
+        protocolRank(left.challenge) - protocolRank(right.challenge) ||
+        right.match.q - left.match.q ||
+        left.index - right.index,
+    )
     .map((candidate) => {
       const { match: _match, ...rest } = candidate
       return rest as unknown as ChallengeCandidate<methods[number]>
@@ -259,6 +265,10 @@ function matches(
 
 function specificity(preference: Pick<Entry, 'intent' | 'method'>): number {
   return Number(preference.method !== '*') + Number(preference.intent !== '*')
+}
+
+function protocolRank(challenge: Challenge.Challenge): number {
+  return x402_ChallengeBrand.is(challenge) ? 1 : 0
 }
 
 function parseEntry(part: string, index: number): Entry {

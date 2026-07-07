@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'vp/test'
 
+import * as x402_ChallengeBrand from '../x402/internal/ChallengeBrand.js'
 import * as AcceptPayment from './AcceptPayment.js'
 
 function stripIndex(entry: AcceptPayment.Entry) {
@@ -176,6 +177,50 @@ describe('AcceptPayment', () => {
       { id: '2', index: 1, key: 'tempo/session' },
       { id: '3', index: 2, key: 'stripe/charge' },
     ])
+  })
+
+  test('selectChallengeCandidates prefers Payment-auth offers before x402 offers', () => {
+    const x402Challenge = x402_ChallengeBrand.mark({
+      id: 'x402:0',
+      intent: 'charge',
+      method: 'evm',
+      realm: 'test',
+      request: { scheme: 'exact' },
+    })
+    const nativeChallenge = {
+      id: 'native',
+      intent: 'charge',
+      method: 'tempo',
+      realm: 'test',
+      request: {},
+    }
+
+    const candidates = AcceptPayment.selectChallengeCandidates(
+      [x402Challenge, nativeChallenge],
+      [
+        { name: 'evm', intent: 'charge' },
+        { name: 'tempo', intent: 'charge' },
+      ] as const,
+      AcceptPayment.parse('evm/charge, tempo/charge;q=0.5'),
+    )
+
+    expect(candidates.map(({ challenge }) => challenge.id)).toEqual(['native', 'x402:0'])
+  })
+
+  test('selectChallengeCandidates preserves preference order within Payment-auth offers', () => {
+    const candidates = AcceptPayment.selectChallengeCandidates(
+      [
+        { id: 'tempo', intent: 'charge', method: 'tempo', realm: 'test', request: {} },
+        { id: 'evm', intent: 'charge', method: 'evm', realm: 'test', request: {} },
+      ],
+      [
+        { name: 'tempo', intent: 'charge' },
+        { name: 'evm', intent: 'charge' },
+      ] as const,
+      AcceptPayment.parse('evm/charge, tempo/charge;q=0.5'),
+    )
+
+    expect(candidates.map(({ challenge }) => challenge.id)).toEqual(['evm', 'tempo'])
   })
 
   test('selectChallengeCandidates supports duplicate method keys with challenge predicates', () => {
