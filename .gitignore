@@ -10,3 +10,4 @@ coverage
 !.env.example
 test-results/
 .cursor
+_/foundry/

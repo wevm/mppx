@@ -15,7 +15,7 @@ jobs:
   ci-gate:
     name: CI Gate
     if: always()
-    needs: [checks, test, test-html]
+    needs: [checks, test, test-html, test-x402-e2e]
     runs-on: ubuntu-latest
     steps:
       - run: |
@@ -221,6 +221,68 @@ jobs:
           path: runtime-tests-${{ matrix.artifact }}.log
           if-no-files-found: ignore
           retention-days: 7
+
+  test-x402-e2e:
+    name: Test x402 E2E
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    env:
+      TESTCONTAINERS_RYUK_DISABLED: true
+      VITE_TEMPO_NETWORK: none
+      X402_ANVIL_RPC_URL: http://127.0.0.1:18546
+      X402_LOCALNET: true
+    steps:
+      - name: Clone repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Setup Docker
+        uses: docker/setup-docker-action@0234bb73ccb40f0c430b795634f9247e2b5c2d23 # v5.2.0
+
+      - name: Install dependencies
+        uses: ./.github/actions/install-dependencies
+
+      - name: Bundle HTML files
+        run: pnpm build
+
+      - name: Start Anvil localnet
+        run: |
+          docker rm -f mppx-x402-anvil 2>/dev/null || true
+          docker run -d \
+            --name mppx-x402-anvil \
+            -p 18546:8545 \
+            --entrypoint anvil \
+            ghcr.io/foundry-rs/foundry:latest \
+            --host 0.0.0.0 \
+            --port 8545 \
+            --chain-id 31337 \
+            --mnemonic 'test test test test test test test test test test test junk'
+
+          for attempt in {1..30}; do
+            if curl -fsS \
+              -H 'content-type: application/json' \
+              --data '{"jsonrpc":"2.0","id":1,"method":"eth_chainId","params":[]}' \
+              "${X402_ANVIL_RPC_URL}" >/dev/null; then
+              exit 0
+            fi
+            sleep 1
+          done
+
+          docker logs mppx-x402-anvil
+          exit 1
+
+      - name: Build Forge fixtures
+        run: |
+          docker run --rm \
+            -v "${PWD}:/workspace" \
+            -w /workspace \
+            --entrypoint forge \
+            ghcr.io/foundry-rs/foundry:latest \
+            build
+
+      - name: Run x402 localnet tests
+        run: pnpm exec vp test --run --project node src/x402/Exact.localnet.test.ts --reporter=verbose --bail=1
 
   test-html:
     name: Test HTML
