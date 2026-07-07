@@ -255,32 +255,6 @@ describe('x402 exact credential helper', () => {
       networks: [Chains.baseSepolia],
     } as const
 
-    const credential = await createCredential({
-      challenge: challenge({ extensions: undefined }),
-      config,
-      context: {},
-    })
-    const paymentPayload = Header.decodePaymentSignature(credential)
-
-    expect(signTypedData).toHaveBeenCalledOnce()
-    expect(paymentPayload.x402Version).toBe(2)
-    expect(paymentPayload.accepted.scheme).toBe('exact')
-    expect(paymentPayload.extensions).toBeUndefined()
-    expect(paymentPayload.resource?.url).toBe('https://example.com/paid')
-    expect('authorization' in paymentPayload.payload).toBe(true)
-    if (!('authorization' in paymentPayload.payload)) throw new Error()
-    expect(paymentPayload.payload.authorization.nonce).toMatch(/^0x[0-9a-f]{64}$/)
-    expect(paymentPayload.payload.signature).toBe('0x1234')
-  })
-
-  test('uses a fresh random nonce for repeated standard payments', async () => {
-    const config = {
-      account,
-      currencies: [usdc],
-      maxAmount: '0.01',
-      networks: [Chains.baseSepolia],
-    } as const
-
     const first = Header.decodePaymentSignature(
       await createCredential({
         challenge: challenge({ extensions: undefined }),
@@ -296,9 +270,16 @@ describe('x402 exact credential helper', () => {
       }),
     )
 
+    expect(signTypedData).toHaveBeenCalledTimes(2)
+    expect(first.x402Version).toBe(2)
+    expect(first.accepted.scheme).toBe('exact')
+    expect(first.extensions).toBeUndefined()
+    expect(first.resource?.url).toBe('https://example.com/paid')
     if (!('authorization' in first.payload) || !('authorization' in second.payload))
       throw new Error()
+    expect(first.payload.authorization.nonce).toMatch(/^0x[0-9a-f]{64}$/)
     expect(first.payload.authorization.nonce).not.toBe(second.payload.authorization.nonce)
+    expect(first.payload.signature).toBe('0x1234')
   })
 
   test('uses a fresh route-bound nonce for repeated payments', async () => {

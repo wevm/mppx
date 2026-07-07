@@ -820,6 +820,16 @@ describe('Fetch.from: 402 retry path', () => {
             version: '2',
           },
         },
+        {
+          ...eip3009Accept,
+          network: 'eip155:8453',
+        },
+        {
+          ...x402PaymentRequired.accepts[0]!,
+          extra: {
+            assetTransferMethod: 'eip3009',
+          },
+        },
         eip3009Accept,
       ],
     } satisfies PaymentRequired

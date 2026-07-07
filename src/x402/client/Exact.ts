@@ -74,11 +74,39 @@ export async function createCredential(parameters: createCredential.Parameters):
   })
 }
 
+/** Returns whether this client can sign the given x402 exact challenge. */
+export function canHandleChallenge(parameters: canHandleChallenge.Parameters): boolean {
+  const request = parameters.challenge.request as Types.ExactRequest
+  let accepted: Types.PaymentRequirements
+  try {
+    accepted = Types.toPaymentRequirements(request)
+    assertPolicy(parameters.config, accepted)
+  } catch {
+    return false
+  }
+
+  if (!request.resource) return false
+
+  const transferMethod = accepted.extra?.assetTransferMethod ?? 'eip3009'
+  if (transferMethod !== 'eip3009') return false
+
+  const name = accepted.extra?.name
+  const version = accepted.extra?.version
+  return typeof name === 'string' && typeof version === 'string'
+}
+
 export declare namespace createCredential {
   type Parameters = {
     challenge: Challenge.Challenge<Types.ExactRequest>
     config: Config
     context?: Context | undefined
+  }
+}
+
+export declare namespace canHandleChallenge {
+  type Parameters = {
+    challenge: Challenge.Challenge<Types.ExactRequest>
+    config: Config
   }
 }
 
