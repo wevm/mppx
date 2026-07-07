@@ -559,6 +559,23 @@ describe('ChannelStore voucher acceptance', () => {
     expect((await store.getChannel(stateUpdateChannelId))?.highestVoucherAmount).toBe(50n)
   })
 
+  test('rejects an already accepted voucher when it has settled on-chain', async () => {
+    vi.spyOn(Voucher, 'verifyVoucher').mockReturnValue(true)
+    const stored = voucherAcceptanceChannel({ highestVoucherAmount: 50n })
+
+    await expect(
+      ChannelStore.verifyAndAcceptVoucher({
+        challenge: voucherAcceptanceChallenge,
+        channel: stored,
+        channelState: { deposit: 100n, settled: 50n, closeRequestedAt: 0 },
+        methodDetails: { chainId: 4217, escrowContract: voucherAcceptanceEscrow },
+        minVoucherDelta: 5n,
+        store: memoryChannelStore(stored),
+        voucher: voucherAcceptanceVoucher(50n),
+      }),
+    ).rejects.toThrow(VerificationFailedError)
+  })
+
   test('rejects vouchers beyond deposit or below minimum delta', async () => {
     vi.spyOn(Voucher, 'verifyVoucher').mockReturnValue(true)
     const stored = voucherAcceptanceChannel({ highestVoucherAmount: 50n })

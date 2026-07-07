@@ -84,6 +84,10 @@ function sessionRequest(channelId: Hex.Hex, amount = '100') {
   }
 }
 
+function sourceFor(account = payer): string {
+  return `did:pkh:eip155:${chain.id}:${account.address}`
+}
+
 describe.runIf(isPrecompileTestnet)('precompile server session chain integration', () => {
   test('broadcasts and verifies a real precompile open credential', async () => {
     const rawStore = Store.memory()
@@ -247,6 +251,7 @@ describe.runIf(isPrecompileTestnet)('precompile server session chain integration
           request: sessionRequest(channelId),
         } as never,
         payload,
+        source: sourceFor(),
       },
       request: sessionRequest(channelId) as never,
     })

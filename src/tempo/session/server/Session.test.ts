@@ -235,6 +235,18 @@ function verifyRequestWithFeePayer(channelId: Hex, feePayer: typeof payer): Veri
   } as unknown as VerifyRequest
 }
 
+function sourceFor(account = payer): string {
+  return `did:pkh:eip155:${chainId}:${account.address}`
+}
+
+function voucherCredential(payload: SessionCredentialPayload, channelId: Hex) {
+  return {
+    challenge: makeChallenge(channelId),
+    payload,
+    source: sourceFor(),
+  }
+}
+
 let saltCounter = 0
 
 async function createOpenPayload(
@@ -1434,10 +1446,7 @@ describe('precompile server session unit guardrails', () => {
     )
 
     const receipt = (await method.verify({
-      credential: {
-        challenge: makeChallenge(openPayload.channelId),
-        payload: voucher,
-      },
+      credential: voucherCredential(voucher, openPayload.channelId),
       request: verifyRequest(openPayload.channelId),
     })) as SessionReceipt
 
@@ -1473,10 +1482,7 @@ describe('precompile server session unit guardrails', () => {
     })
 
     const receipt = (await method.verify({
-      credential: {
-        challenge: makeChallenge(openPayload.channelId),
-        payload: voucher,
-      },
+      credential: voucherCredential(voucher, openPayload.channelId),
       request: verifyRequest(openPayload.channelId),
     })) as SessionReceipt
 
@@ -1506,10 +1512,7 @@ describe('precompile server session unit guardrails', () => {
 
     await expect(
       method.verify({
-        credential: {
-          challenge: makeChallenge(openPayload.channelId),
-          payload: voucher,
-        },
+        credential: voucherCredential(voucher, openPayload.channelId),
         request: verifyRequest(openPayload.channelId),
       }),
     ).rejects.toThrow(
@@ -1534,16 +1537,13 @@ describe('precompile server session unit guardrails', () => {
 
     await expect(
       method.verify({
-        credential: {
-          challenge: makeChallenge(openPayload.channelId),
-          payload: voucher,
-        },
+        credential: voucherCredential(voucher, openPayload.channelId),
         request: verifyRequest(openPayload.channelId),
       }),
     ).rejects.toThrow(/voucher delta 150 below minimum 200/)
   })
 
-  test('accepts idempotent precompile voucher replay after on-chain settlement catches up', async () => {
+  test('rejects idempotent precompile voucher replay after on-chain settlement catches up', async () => {
     const rawStore = Store.memory()
     const store = channelStore(rawStore)
     const openPayload = await createOpenPayload({ initialAmount: 100n })
@@ -1572,17 +1572,12 @@ describe('precompile server session unit guardrails', () => {
         createStateClient(payer, { settled: 500n, deposit: 1_000n, closeRequestedAt: 0 }),
     })
 
-    const receipt = (await method.verify({
-      credential: {
-        challenge: makeChallenge(openPayload.channelId),
-        payload: voucher,
-      },
-      request: verifyRequest(openPayload.channelId),
-    })) as SessionReceipt
-
-    expect(receipt.acceptedCumulative).toBe('500')
-    expect(receipt.spent).toBe('500')
-    expect(receipt.units).toBe(10)
+    await expect(
+      method.verify({
+        credential: voucherCredential(voucher, openPayload.channelId),
+        request: verifyRequest(openPayload.channelId),
+      }),
+    ).rejects.toThrow(/below on-chain settled amount/)
   })
 
   test('rejects stale or hijacked precompile voucher signatures', async () => {
@@ -1599,16 +1594,16 @@ describe('precompile server session unit guardrails', () => {
 
     await expect(
       method.verify({
-        credential: {
-          challenge: makeChallenge(openPayload.channelId),
-          payload: {
+        credential: voucherCredential(
+          {
             action: 'voucher',
             channelId: openPayload.channelId,
             cumulativeAmount: '250',
             descriptor: openPayload.descriptor,
             signature,
           },
-        },
+          openPayload.channelId,
+        ),
         request: verifyRequest(openPayload.channelId),
       }),
     ).rejects.toThrow(/invalid voucher signature/)
@@ -1628,10 +1623,7 @@ describe('precompile server session unit guardrails', () => {
 
     await expect(
       method.verify({
-        credential: {
-          challenge: makeChallenge(openPayload.channelId),
-          payload: voucher,
-        },
+        credential: voucherCredential(voucher, openPayload.channelId),
         request: verifyRequest(openPayload.channelId),
       }),
     ).rejects.toThrow(/exceeds.*deposit|insufficient channel deposit/)
@@ -1664,10 +1656,7 @@ describe('precompile server session unit guardrails', () => {
 
     await expect(
       method.verify({
-        credential: {
-          challenge: makeChallenge(openPayload.channelId),
-          payload: voucher,
-        },
+        credential: voucherCredential(voucher, openPayload.channelId),
         request: verifyRequest(openPayload.channelId),
       }),
     ).rejects.toThrow(/pending close request/)
@@ -1699,10 +1688,7 @@ describe('precompile server session unit guardrails', () => {
 
     await expect(
       method.verify({
-        credential: {
-          challenge: makeChallenge(openPayload.channelId),
-          payload: voucher,
-        },
+        credential: voucherCredential(voucher, openPayload.channelId),
         request: verifyRequest(openPayload.channelId),
       }),
     ).rejects.toThrow(/deposit is zero|channel deposit is zero|not found/)
@@ -1853,6 +1839,7 @@ describe('precompile server session unit guardrails', () => {
             Authorization: Credential.serialize({
               challenge: Challenge.fromResponse(first.challenge),
               payload: voucher,
+              source: sourceFor(),
             }),
           },
         }),
@@ -1874,6 +1861,7 @@ describe('precompile server session unit guardrails', () => {
             Authorization: Credential.serialize({
               challenge: Challenge.fromResponse(replayChallenge.challenge),
               payload: voucher,
+              source: sourceFor(),
             }),
           },
         }),
@@ -1915,6 +1903,7 @@ describe('precompile server session unit guardrails', () => {
           Credential.serialize({
             challenge: Challenge.fromResponse(first.challenge),
             payload: voucher,
+            source: sourceFor(),
           }),
         ),
       )
@@ -1933,6 +1922,7 @@ describe('precompile server session unit guardrails', () => {
           Credential.serialize({
             challenge: Challenge.fromResponse(replayChallenge.challenge),
             payload: voucher,
+            source: sourceFor(),
           }),
         ),
       )
@@ -1963,6 +1953,7 @@ describe('precompile server session unit guardrails', () => {
                 descriptor: openPayload.descriptor,
                 signature: (await createOpenPayload({ account: wrongPayer })).signature,
               },
+              source: sourceFor(),
             }),
           },
         }),
@@ -2848,10 +2839,7 @@ describe('precompile server session unit guardrails', () => {
     })
 
     const receipt = await method.verify({
-      credential: {
-        challenge: makeChallenge(openPayload.channelId),
-        payload: lowerVoucher,
-      },
+      credential: voucherCredential(lowerVoucher, openPayload.channelId),
       request: verifyRequest(openPayload.channelId),
     })
 

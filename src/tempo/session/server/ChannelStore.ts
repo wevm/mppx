@@ -542,6 +542,10 @@ export async function verifyAndAcceptVoucher(
   )
   if (!valid) throw new InvalidSignatureError({ reason: 'invalid voucher signature' })
 
+  if (voucher.cumulativeAmount <= channelState.settled)
+    throw new VerificationFailedError({
+      reason: 'voucher cumulativeAmount is below on-chain settled amount',
+    })
   if (voucher.cumulativeAmount === channel.highestVoucherAmount)
     return createSessionReceipt({
       challengeId: challenge.id,
@@ -549,10 +553,6 @@ export async function verifyAndAcceptVoucher(
       acceptedCumulative: channel.highestVoucherAmount,
       spent: channel.spent,
       units: channel.units,
-    })
-  if (voucher.cumulativeAmount <= channelState.settled)
-    throw new VerificationFailedError({
-      reason: 'voucher cumulativeAmount is below on-chain settled amount',
     })
   const delta = voucher.cumulativeAmount - channel.highestVoucherAmount
   if (delta < minVoucherDelta)

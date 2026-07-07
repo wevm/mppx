@@ -413,6 +413,7 @@ export function session<const parameters extends session.Parameters>(
         channelStateTtl,
         chainId: context.chainId,
         client: context.client,
+        credentialSource: credential.source,
         escrow: context.escrow,
         expectedOperator: context.methodDetails.operator,
         feePayer: context.feePayer,

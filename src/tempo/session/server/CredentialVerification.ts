@@ -126,6 +126,32 @@ export function assertOpenCredentialCoversRequest(parameters: {
     throw new VerificationFailedError({ reason: 'voucher amount is less than request amount' })
 }
 
+/** Verifies that the credential source is authorized to spend from the channel. */
+export function assertCredentialSourceCanSpend(parameters: {
+  chainId: number
+  channel: Pick<ChannelStore.State, 'authorizedSigner' | 'payer'>
+  source?: string | undefined
+}): void {
+  const sourceAddress = readCredentialSourceAddress(parameters.source, parameters.chainId)
+  if (
+    isAddressEqual(sourceAddress, parameters.channel.payer) ||
+    isAddressEqual(sourceAddress, parameters.channel.authorizedSigner)
+  )
+    return
+  throw new VerificationFailedError({
+    reason: 'credential source does not match channel payer or authorized signer',
+  })
+}
+
+function readCredentialSourceAddress(source: string | undefined, chainId: number): Address {
+  const prefix = `did:pkh:eip155:${chainId}:`
+  if (!source?.startsWith(prefix))
+    throw new VerificationFailedError({ reason: 'credential source does not match channel' })
+  const address = source.slice(prefix.length)
+  if (isAddress(address, { strict: false })) return address
+  throw new VerificationFailedError({ reason: 'invalid credential source' })
+}
+
 const sessionCredentialActions = [
   'open',
   'topUp',
@@ -302,6 +328,8 @@ export type VerifyCredentialPayloadParameters = {
   chainId: number
   /** viem client used for precompile reads and transaction broadcasts. */
   client: Chain.TransactionClient
+  /** Optional payer identifier from the HTTP credential source field. */
+  credentialSource?: string | undefined
   /** TIP20EscrowChannel precompile address for this session method. */
   escrow: Address
   /** Operator address advertised in the HMAC-bound challenge details. */
@@ -531,6 +559,7 @@ async function handleVoucherCredential(
     store,
     client,
     challenge,
+    credentialSource,
     payload,
     chainId,
     escrow,
@@ -564,6 +593,7 @@ async function handleVoucherCredential(
     store,
     validateDescriptor: true,
   })
+  assertCredentialSourceCanSpend({ chainId, channel, source: credentialSource })
   if (channel.finalized) throw new ChannelClosedError({ reason: 'channel is finalized' })
   const isStale = Date.now() - (lastOnChainVerified.get(channelId) ?? 0) > channelStateTtl
   const state = isStale ? await Chain.getChannelState(client, channelId, escrow) : undefined
