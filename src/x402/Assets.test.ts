@@ -208,4 +208,46 @@ describe('x402 assets', () => {
       },
     })
   })
+
+  test('exports Celo USDC metadata', () => {
+    expect(Assets.isAsset(Assets.celo.USDC)).toBe(true)
+    expect(Assets.celo.USDC).toMatchObject({
+      address: '0xcebA9300f2b948710d2653dD7B07f33A8B32118C',
+      decimals: 6,
+      network: 'eip155:42220',
+      transfer: {
+        name: 'USDC',
+        type: 'eip3009',
+        version: '2',
+      },
+    })
+  })
+
+  test('exports Celo USDT metadata', () => {
+    expect(Assets.isAsset(Assets.celo.USDT)).toBe(true)
+    expect(Assets.celo.USDT).toMatchObject({
+      address: '0x48065fbBE25f71C9282ddf5e1cD6D6A887483D5e',
+      decimals: 6,
+      network: 'eip155:42220',
+      transfer: {
+        name: 'Tether USD',
+        type: 'eip3009',
+        version: '1',
+      },
+    })
+  })
+
+  test('exports Celo Sepolia USDC metadata', () => {
+    expect(Assets.isAsset(Assets.celoSepolia.USDC)).toBe(true)
+    expect(Assets.celoSepolia.USDC).toMatchObject({
+      address: '0x01C5C0122039549AD1493B8220cABEdD739BC44E',
+      decimals: 6,
+      network: 'eip155:11142220',
+      transfer: {
+        name: 'USDC',
+        type: 'eip3009',
+        version: '2',
+      },
+    })
+  })
 })

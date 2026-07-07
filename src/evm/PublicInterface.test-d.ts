@@ -40,8 +40,15 @@ describe('evm public interface', () => {
     expectTypeOf(clientAssets.baseSepolia.USDC).toMatchTypeOf<
       typeof serverAssets.baseSepolia.USDC
     >()
+    expectTypeOf(evmRoot.assets.celo.USDC).toMatchTypeOf<typeof serverAssets.celo.USDC>()
+    expectTypeOf(evmRoot.assets.celo.USDT).toMatchTypeOf<typeof serverAssets.celo.USDT>()
+    expectTypeOf(clientAssets.celoSepolia.USDC).toMatchTypeOf<
+      typeof serverAssets.celoSepolia.USDC
+    >()
     expectTypeOf(evmRoot.chains.base).toMatchTypeOf<number>()
     expectTypeOf(clientChains.baseSepolia).toMatchTypeOf<number>()
+    expectTypeOf(evmRoot.chains.celo).toMatchTypeOf<number>()
+    expectTypeOf(clientChains.celoSepolia).toMatchTypeOf<number>()
   })
 
   test('exports root EVM charge method definition', () => {

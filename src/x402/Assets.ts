@@ -91,6 +91,46 @@ export const baseSepolia = {
   }),
 } as const
 
+/** Celo network known assets. */
+export const celo = {
+  USDC: define({
+    address: '0xcebA9300f2b948710d2653dD7B07f33A8B32118C',
+    decimals: 6,
+    network: 'eip155:42220',
+    transfer: {
+      // Celo USDC signs with the shorter EIP-712 domain name.
+      name: 'USDC',
+      type: 'eip3009',
+      version: '2',
+    },
+  }),
+  USDT: define({
+    address: '0x48065fbBE25f71C9282ddf5e1cD6D6A887483D5e',
+    decimals: 6,
+    network: 'eip155:42220',
+    transfer: {
+      // Celo USDT signs with domain version "1", unlike Circle's FiatToken "2".
+      name: 'Tether USD',
+      type: 'eip3009',
+      version: '1',
+    },
+  }),
+} as const
+
+/** Celo Sepolia known assets. */
+export const celoSepolia = {
+  USDC: define({
+    address: '0x01C5C0122039549AD1493B8220cABEdD739BC44E',
+    decimals: 6,
+    network: 'eip155:11142220',
+    transfer: {
+      name: 'USDC',
+      type: 'eip3009',
+      version: '2',
+    },
+  }),
+} as const
+
 /** Returns true when a value is known x402 asset metadata. */
 export function isAsset(value: unknown): value is KnownAsset {
   if (typeof value !== 'object' || value === null) return false
