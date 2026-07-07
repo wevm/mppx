@@ -221,10 +221,14 @@ export function from<const methods extends readonly Method.AnyClient[]>(
             orderChallenges,
         )
         const selected = orderedCandidates[0]
-        if (!selected)
+        if (!selected) {
+          // A post-payment 402 with no actionable challenge (e.g. rejected credential)
+          // is the server's final answer, not a new challenge round.
+          if (retry > 0) return response
           throw new Error(
             `No method found for challenges: ${challenges.map((c) => `${c.method}.${c.intent}`).join(', ')}. Available: ${methods.map((m) => `${m.name}.${m.intent}`).join(', ')}`,
           )
+        }
 
         const selectedChallenge = selected.challenge
         challenge = selectedChallenge

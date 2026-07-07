@@ -1742,6 +1742,50 @@ describe('Fetch.from: 402 retry path', () => {
     expect(createCredential).toHaveBeenCalledOnce()
     expect(response.status).toBe(402)
   })
+
+  test('returns a challenge-less 402 after a rejected payment', async () => {
+    let callCount = 0
+    const createCredential = vi.fn(async () => 'credential')
+    const mockFetch: typeof globalThis.fetch = async () => {
+      callCount++
+      if (callCount === 1) return make402()
+      return new Response(JSON.stringify({ title: 'Verification Failed' }), {
+        status: 402,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    }
+
+    const fetch = Fetch.from({
+      fetch: mockFetch,
+      methods: [{ ...noopMethod, createCredential }],
+    })
+
+    const response = await fetch('https://example.com/api')
+    expect(callCount).toBe(2)
+    expect(createCredential).toHaveBeenCalledOnce()
+    expect(response.status).toBe(402)
+    await expect(response.json()).resolves.toEqual({ title: 'Verification Failed' })
+  })
+
+  test('returns a post-payment 402 with only unsupported challenges', async () => {
+    let callCount = 0
+    const createCredential = vi.fn(async () => 'credential')
+    const mockFetch: typeof globalThis.fetch = async () => {
+      callCount++
+      if (callCount === 1) return make402()
+      return make402({ method: 'stripe', intent: 'charge' })
+    }
+
+    const fetch = Fetch.from({
+      fetch: mockFetch,
+      methods: [{ ...noopMethod, createCredential }],
+    })
+
+    const response = await fetch('https://example.com/api')
+    expect(callCount).toBe(2)
+    expect(createCredential).toHaveBeenCalledOnce()
+    expect(response.status).toBe(402)
+  })
 })
 
 describe('Fetch.from: acceptPaymentPolicy', () => {
