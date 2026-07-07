@@ -1,5 +1,17 @@
 # mppx
 
+## 0.8.6
+
+### Patch Changes
+
+- adf5207: Preserve raw response bytes when writing CLI response bodies to stdout.
+- 5e27d04: Fixed payment-aware fetch to return a post-payment `402` response with no actionable challenge instead of throwing `No method found for challenges`.
+- 8958754: Fixed Tempo session receipt waits after consecutive same-nonce transactions.
+- a2bfcc5: Normalize sponsored Tempo charge transactions before client signing.
+- 591ecf4: Preserved method-specific extension fields on receipts. `Receipt.from`, `Receipt.deserialize`, and `Receipt.fromResponse` previously stripped fields outside the base set; they now pass unknown fields through, per the core spec's Payment-Receipt provision ("Payment method specifications MAY define additional fields for receipts").
+- 7fd4ecb: Removed the mainnet network option from `mppx account fund`.
+- 00d72b0: Fixed a read-after-write race in Tempo session channel open/top-up verification. The on-chain read-back now pins to the block that included the management transaction (instead of reading `latest`) and retries transient failures, so a lagging load-balanced RPC replica can no longer reject a valid open with `on-chain channel state does not match open receipt`.
+
 ## 0.8.5
 
 ### Patch Changes
