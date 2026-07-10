@@ -275,6 +275,8 @@ jobs:
       - name: Build Forge fixtures
         run: |
           docker run --rm \
+            --user "$(id -u):$(id -g)" \
+            --env HOME=/tmp \
             -v "${PWD}:/workspace" \
             -w /workspace \
             --entrypoint forge \
