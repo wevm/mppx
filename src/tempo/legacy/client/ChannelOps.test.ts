@@ -340,6 +340,27 @@ describe.runIf(isLocalnet)('tryRecoverChannel', () => {
     expect(result!.opened).toBe(true)
     expect(result!.escrowContract).toBe(escrow)
     expect(result!.chainId).toBe(chain.id)
+    // Channel opened with a zero authorizedSigner: the escrow verifies
+    // vouchers against the payer, so the recovered authority is the payer.
+    expect(result!.authorizedSigner.toLowerCase()).toBe(payer.address.toLowerCase())
+  })
+
+  test('recovers the on-chain authorizedSigner when set', async () => {
+    const authorizedSigner = accounts[4].address
+    const { channelId: signerChannelId } = await openChannel({
+      escrow,
+      payer,
+      payee,
+      token: currency,
+      deposit: 10_000_000n,
+      salt: Hex.random(32) as `0x${string}`,
+      authorizedSigner,
+    })
+
+    const result = await tryRecoverChannel(client, escrow, signerChannelId, chain.id)
+
+    expect(result).not.toBeUndefined()
+    expect(result!.authorizedSigner.toLowerCase()).toBe(authorizedSigner.toLowerCase())
   })
 
   test('returns undefined for non-existent channel', async () => {

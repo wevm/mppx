@@ -27,6 +27,8 @@ import { signVoucher } from '../session/Voucher.js'
 
 /** Cached channel metadata used by the legacy auto-driving session client. */
 export type ChannelEntry = {
+  /** Voucher authority the channel was opened with. */
+  authorizedSigner: Address
   /** Legacy contract-backed channel ID. */
   channelId: Hex.Hex
   /** Salt used to derive the channel ID. */
@@ -209,6 +211,7 @@ export async function createOpenPayload(
 
   return {
     entry: {
+      authorizedSigner,
       channelId,
       salt,
       cumulativeAmount: initialAmount,
@@ -249,6 +252,10 @@ export async function tryRecoverChannel(
 
     if (onChain.deposit > 0n && !onChain.finalized) {
       return {
+        // A zero on-chain authorizedSigner means the escrow verifies vouchers
+        // against the payer, so record the payer as the voucher authority.
+        authorizedSigner:
+          BigInt(onChain.authorizedSigner) === 0n ? onChain.payer : onChain.authorizedSigner,
         channelId,
         salt: '0x' as Hex.Hex,
         cumulativeAmount: onChain.settled,

@@ -175,6 +175,16 @@ export function session(parameters: session.Parameters = {}) {
       }
     }
 
+    // A channel only admits vouchers from the authorizedSigner it was opened
+    // with, so a cached or recovered entry stops being reusable once the
+    // resolved signer changes. Fall through to open a fresh channel instead
+    // of emitting a voucher the escrow would reject.
+    if (
+      entry?.opened &&
+      entry.authorizedSigner.toLowerCase() !== getAccountSignerAddress(voucherSigner).toLowerCase()
+    )
+      entry = undefined
+
     let payload: LegacySessionCredentialPayload
 
     if (entry?.opened) {

@@ -1,7 +1,16 @@
 import { SignatureEnvelope } from 'ox/tempo'
-import { type Address, createClient, decodeFunctionData, erc20Abi, type Hex, http } from 'viem'
+import {
+  type Address,
+  createClient,
+  custom,
+  decodeFunctionData,
+  erc20Abi,
+  type Hex,
+  http,
+} from 'viem'
 import { privateKeyToAccount } from 'viem/accounts'
 import { Account as TempoAccount, Addresses, Transaction, WebCryptoP256 } from 'viem/tempo'
+import { tempoModerato } from 'viem/tempo/chains'
 import { beforeAll, describe, expect, test } from 'vp/test'
 import { tempoNetwork } from '~test/config.js'
 import { deployEscrow, openChannel } from '~test/tempo/legacy/session.js'
@@ -372,6 +381,98 @@ describe('session (pure)', () => {
         expect(cred.payload.signature).toMatch(/^0x[0-9a-f]+$/)
       }
       expect(cred.source).toBe(`did:pkh:eip155:42431:${pureAccount.address}`)
+    })
+  })
+
+  describe('auto-manage channel reuse', () => {
+    const payerAccount = privateKeyToAccount(
+      '0x59c6995e998f97a5a0044966f09453863d462d2b3f1446a99f0a3d7b5d0f5a0d',
+    )
+    const signerA = TempoAccount.fromSecp256k1(
+      '0x5de4111afa1a4b94908f83103eb1f1706367c2e68ca870fc3fb9a804cdab365a',
+      { access: payerAccount },
+    )
+    const signerB = TempoAccount.fromSecp256k1(
+      '0x7c852118294e51e653712a81e05800f419141751be58f605c371e15141b007a6',
+      { access: payerAccount },
+    )
+
+    function makeAutoClient(account: typeof signerA) {
+      return createClient({
+        account,
+        chain: tempoModerato,
+        transport: custom({
+          async request({ method }: { method: string }) {
+            if (method === 'eth_chainId') return `0x${tempoModerato.id.toString(16)}`
+            if (method === 'eth_fillTransaction')
+              return {
+                raw: '0x',
+                tx: {
+                  chainId: `0x${tempoModerato.id.toString(16)}`,
+                  from: payerAccount.address,
+                  gas: '0x5208',
+                  input: '0x',
+                  maxFeePerGas: '0x1',
+                  maxPriorityFeePerGas: '0x1',
+                  nonce: '0x0',
+                  to: escrowAddress,
+                  type: '0x2',
+                  value: '0x0',
+                },
+              }
+            throw new Error(`unexpected rpc request: ${method}`)
+          },
+        }),
+      })
+    }
+
+    test('reuses the cached channel while the voucher signer is unchanged', async () => {
+      const method = session({
+        getClient: () => makeAutoClient(signerA),
+        maxDeposit: '10',
+      })
+
+      const first = deserializePayload(
+        await method.createCredential({ challenge: makeChallenge(), context: {} }),
+      )
+      const second = deserializePayload(
+        await method.createCredential({ challenge: makeChallenge(), context: {} }),
+      )
+
+      expect(first.payload.action).toBe('open')
+      expect(second.payload.action).toBe('voucher')
+      expect(second.payload.channelId).toBe(first.payload.channelId)
+    })
+
+    test('opens a new channel instead of reusing when the authorizedSigner changes', async () => {
+      let account = signerA
+      const method = session({
+        getClient: () => makeAutoClient(account),
+        maxDeposit: '10',
+      })
+
+      const first = deserializePayload(
+        await method.createCredential({ challenge: makeChallenge(), context: {} }),
+      )
+
+      account = signerB
+
+      const second = deserializePayload(
+        await method.createCredential({ challenge: makeChallenge(), context: {} }),
+      )
+
+      expect(first.payload.action).toBe('open')
+      if (first.payload.action !== 'open') throw new Error('expected open payload')
+      expect(first.payload.authorizedSigner?.toLowerCase()).toBe(
+        signerA.accessKeyAddress.toLowerCase(),
+      )
+
+      expect(second.payload.action).toBe('open')
+      if (second.payload.action !== 'open') throw new Error('expected open payload')
+      expect(second.payload.authorizedSigner?.toLowerCase()).toBe(
+        signerB.accessKeyAddress.toLowerCase(),
+      )
+      expect(second.payload.channelId).not.toBe(first.payload.channelId)
     })
   })
 })
