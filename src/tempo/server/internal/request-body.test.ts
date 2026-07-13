@@ -27,6 +27,15 @@ describe('request-body', () => {
       ).toBe(true)
     })
 
+    test('returns false for empty body streams with content-length zero', () => {
+      expect(
+        hasCapturedRequestBody({
+          hasBody: true,
+          headers: new Headers({ 'content-length': '0' }),
+        }),
+      ).toBe(false)
+    })
+
     test('returns true when content-length is non-zero', () => {
       expect(
         hasCapturedRequestBody({

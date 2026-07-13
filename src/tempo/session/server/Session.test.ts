@@ -1,5 +1,7 @@
 import * as node_http from 'node:http'
 
+import { serve } from '@hono/node-server'
+import { Hono } from 'hono'
 import { Challenge, Constants, Credential } from 'mppx'
 import { Mppx as Mppx_server, tempo as tempo_server } from 'mppx/server'
 import {
@@ -2116,6 +2118,7 @@ describe('precompile server session unit guardrails', () => {
       let voucherPosts = 0
       const amount = options.amount ?? '1'
       const maxDeposit = options.maxDeposit ?? 3n
+      let deposit = maxDeposit
       const unitType = options.unitType ?? 'token'
       const route = Mppx_server.create({
         methods: [
@@ -2142,12 +2145,19 @@ describe('precompile server session unit guardrails', () => {
                   receipt: transactionReceipt([
                     closedLog(payload.channelId, BigInt(payload.cumulativeAmount), 0n),
                   ]),
-                  state: { settled: 0n, deposit: maxDeposit, closeRequestedAt: 0 },
+                  state: { settled: 0n, deposit, closeRequestedAt: 0 },
+                })
+              }
+              if (payload?.action === 'topUp') {
+                deposit += BigInt(payload.additionalDeposit)
+                return createServerClient([], payer, payload.channelId, {
+                  receipt: transactionReceipt([topUpLog(payload, deposit)]),
+                  state: { settled: 0n, deposit, closeRequestedAt: 0 },
                 })
               }
               return createStateClient(payer, {
                 settled: 0n,
-                deposit: maxDeposit,
+                deposit,
                 closeRequestedAt: 0,
               })
             },
@@ -2157,8 +2167,7 @@ describe('precompile server session unit guardrails', () => {
         secretKey: 'test-secret-key-test-secret-key-32',
       }).session({ amount, decimals: 0, suggestedDeposit: maxDeposit.toString(), unitType })
 
-      const fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
-        const request = new Request(input, init)
+      const handle = async (request: Request) => {
         currentPayload = undefined
         if (request.headers.has('Authorization')) {
           try {
@@ -2169,7 +2178,7 @@ describe('precompile server session unit guardrails', () => {
 
         const result = await route(request)
         if (result.status === 402) return result.challenge
-        if (currentPayload?.action === 'voucher') return new Response(null, { status: 200 })
+        if (request.method === 'POST') return result.withReceipt()
 
         if (request.headers.get('Accept')?.includes('text/event-stream')) {
           if (unitType === 'request') {
@@ -2202,8 +2211,12 @@ describe('precompile server session unit guardrails', () => {
         return result.withReceipt(new Response('ok'))
       }
 
+      const fetch = async (input: RequestInfo | URL, init?: RequestInit) =>
+        handle(new Request(input, init))
+
       return {
         fetch,
+        handle,
         rawStore,
         get voucherPosts() {
           return voucherPosts
@@ -2236,6 +2249,71 @@ describe('precompile server session unit guardrails', () => {
       expect(channelId).toBeTruthy()
       const persisted = await channelStore(harness.rawStore).getChannel(channelId!)
       expect(persisted?.finalized).toBe(true)
+    })
+
+    test('handles empty management POST streams through a Node adapter', async () => {
+      const harness = createManagedSseFetch({ maxDeposit: 1n })
+      const managementPosts: Array<{
+        action: SessionCredentialPayload['action']
+        contentLength: string | null
+        hasBody: boolean
+        status: number
+      }> = []
+      const app = new Hono()
+      app.all('*', async (c) => {
+        const request = c.req.raw
+        const payload = request.headers.has('Authorization')
+          ? Credential.fromRequest<SessionCredentialPayload>(request).payload
+          : undefined
+        const response = await harness.handle(request)
+        if (request.method === 'POST' && payload)
+          managementPosts.push({
+            action: payload.action,
+            contentLength: request.headers.get('content-length'),
+            hasBody: request.body !== null,
+            status: response.status,
+          })
+        return response
+      })
+      const server = serve({ fetch: app.fetch, port: 0 })
+      await new Promise<void>((resolve) => server.once('listening', resolve))
+      const address = server.address()
+      if (!address || typeof address === 'string') throw new Error('expected TCP address')
+
+      try {
+        const fetch: typeof globalThis.fetch = async (input, init) => {
+          const response = await globalThis.fetch(input, init)
+          return new Response(response.body, response)
+        }
+        const manager = precompileSessionManager({
+          account: payer,
+          client: createSigningClient(),
+          decimals: 0,
+          fetch,
+          maxDeposit: '3',
+        })
+
+        const chunks: string[] = []
+        const stream = await manager.sse(`http://localhost:${address.port}/stream`)
+        for await (const chunk of stream) chunks.push(chunk)
+
+        expect(chunks).toEqual(['chunk-1', 'chunk-2', 'chunk-3'])
+        const closeReceipt = await manager.close()
+        expect(closeReceipt?.spent).toBe('3')
+        expect(managementPosts).toEqual(
+          expect.arrayContaining([
+            { action: 'topUp', contentLength: '0', hasBody: true, status: 204 },
+            { action: 'voucher', contentLength: '0', hasBody: true, status: 204 },
+            { action: 'close', contentLength: '0', hasBody: true, status: 204 },
+          ]),
+        )
+        expect(managementPosts.every(({ status }) => status === 204)).toBe(true)
+
+        const persisted = await channelStore(harness.rawStore).getChannel(manager.channelId!)
+        expect(persisted?.finalized).toBe(true)
+      } finally {
+        server.close()
+      }
     })
 
     test('unitType=request auto-metered SSE responses charge once across the stream', async () => {

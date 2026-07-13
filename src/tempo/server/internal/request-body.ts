@@ -19,6 +19,8 @@ export function captureRequestBodyProbe(input: Request): RequestBodyProbe {
 export function hasCapturedRequestBody(
   input: Pick<RequestBodyProbe, 'headers' | 'hasBody'>,
 ): boolean {
+  if (input.headers.get('content-length') === '0' && !input.headers.has('transfer-encoding'))
+    return false
   if (hasBodyFramingHeaders(input)) return true
   if (input.hasBody === true) return true
   return false
