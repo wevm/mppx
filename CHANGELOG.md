@@ -1,5 +1,11 @@
 # mppx
 
+## 0.8.8
+
+### Patch Changes
+
+- be7d166: `mppx validate`: Stripe testmode payment support. Auto-detects Stripe CLI test keys and completes card payment flows end-to-end using a test card, with graceful livemode detection.
+
 ## 0.8.7
 
 ### Patch Changes
