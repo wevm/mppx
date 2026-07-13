@@ -1,5 +1,18 @@
 # mppx
 
+## 0.8.7
+
+### Patch Changes
+
+- 38c8229: Added Celo and Celo Sepolia to known EVM chains and assets: `chains.celo`, `chains.celoSepolia`, `assets.celo.USDC`, `assets.celo.USDT`, and `assets.celoSepolia.USDC`.
+- 264f079: Fixed session voucher replay checks for settled vouchers and mismatched credential sources.
+- 89bd31e: Fixed empty Tempo session voucher POSTs being treated as application requests by HTTP adapters that expose empty body streams.
+- 33a7c52: Updated client negotiation to prefer Payment-auth challenges before x402 challenges.
+- d3d9d81: `mppx validate`: Multi-challenge support (parses all payment methods from WWW-Authenticate), per-method field validation for Stripe/EVM/Tempo, streaming CLI output, fixed URL resolution for subpaths, and improved error reporting for malformed challenges.
+- 1157a26: `mppx validate`: EVM payment testing support. Uses the same wallet as Tempo to sign EIP-3009 authorizations, with pre-flight ERC-20 balance checks and chain-aware explorer links.
+- fd45726: Added programmatic validation API (`mppx/validation` export), OpenAPI path parameter substitution, x402 protocol detection, multi-path discovery fallback, and `--outputJson` CLI flag.
+- 86eb98c: `mppx validate`: Stream results as each phase completes instead of batching until the end. Discovery and challenge checks now appear before the payment prompt.
+
 ## 0.8.6
 
 ### Patch Changes
