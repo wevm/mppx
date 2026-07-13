@@ -8,13 +8,13 @@
     "client": "tsx src/client.ts"
   },
   "dependencies": {
-    "@remix-run/node-fetch-server": "^0.13.3",
+    "@remix-run/node-fetch-server": "^0.14.0",
     "@types/node": "^25.6.0",
     "@typescript/native-preview": "7.0.0-dev.20260323.1",
     "mppx": "workspace:*",
     "tsx": "^4.22.4",
     "typescript": "~6.0.3",
-    "viem": "^2.54.1",
-    "vite": "^8.0.16"
+    "viem": "^2.54.4",
+    "vite": "^8.1.3"
   }
 }

@@ -9,13 +9,13 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "@remix-run/node-fetch-server": "^0.13.3",
+    "@remix-run/node-fetch-server": "^0.14.0",
     "@types/node": "^25.6.0",
     "@typescript/native-preview": "^7.0.0-dev.20260416.1",
     "bun": "^1.3.14",
     "mppx": "latest",
     "typescript": "~6.0.3",
-    "viem": "^2.54.1",
-    "vite": "^8.0.10"
+    "viem": "^2.54.4",
+    "vite": "^8.1.3"
   }
 }
