@@ -224,7 +224,10 @@ export async function fillHostedFeePayerTransaction(parameters: {
 
   assertAllowedFeeToken({ feeToken: filled.feeToken }, allowedFeeTokens)
 
-  const feePayerSignature = filled.feePayerSignature
+  const feePayerSignature = {
+    ...(filled.feePayerSignature as Record<string, unknown>),
+    yParity: Number((filled.feePayerSignature as { yParity?: unknown }).yParity),
+  }
   const feeToken = filled.feeToken
 
   // Recover the concrete sponsor address so the simulation can use a concrete

@@ -565,7 +565,10 @@ describe('fillHostedFeePayerTransaction', () => {
               },
             },
           },
-          (_key, value) => (typeof value === 'bigint' ? toHex(value) : value),
+          (key, value) => {
+            if (key === 'yParity') return toHex(value)
+            return typeof value === 'bigint' ? toHex(value) : value
+          },
         ),
       )
     })
