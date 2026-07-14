@@ -9,9 +9,11 @@ import type { ChannelEntry } from '../client/ChannelOps.js'
 import type { SessionContext } from '../client/CredentialState.js'
 import {
   createSessionReceipt,
+  formatNeedVoucherEvent,
   serializeSessionReceipt,
   tip20ChannelEscrow,
   type ChannelDescriptor,
+  type SessionCredentialPayload,
 } from '../precompile/Protocol.js'
 import type { SessionSnapshot } from '../Snapshot.js'
 import { initialState, type SessionState } from './Runtime.js'
@@ -31,6 +33,7 @@ import {
   validateSocketCloseReadyReceipt,
   validateSocketPaymentReceipt,
   webSocketProbeUrl,
+  wrapSseFetchResponse,
   type TempoSessionChallenge,
   type TopUpRequirement,
 } from './Transports.js'
@@ -264,6 +267,91 @@ describe('HttpManagement', () => {
       })
 
       expect(restoreCumulative).toHaveBeenCalledWith(channelId, 5n)
+    })
+
+    test('wrapSseFetchResponse posts vouchers and hides session control events', async () => {
+      const paymentChallenge = challenge()
+      const openCredential = Credential.serialize({
+        challenge: paymentChallenge,
+        payload: {
+          action: 'open',
+          type: 'transaction',
+          channelId,
+          transaction: '0x01',
+          signature: '0x02',
+          descriptor,
+          cumulativeAmount: '5',
+        },
+      })
+      const createdContexts: SessionContext[] = []
+      const createCredential = vi.fn(async (context?: SessionContext) => {
+        if (!context?.action) throw new Error('expected manual context')
+        createdContexts.push(context)
+        const payload =
+          context.action === 'topUp'
+            ? {
+                action: 'topUp' as const,
+                type: 'transaction' as const,
+                channelId,
+                transaction: '0x03' as Hex.Hex,
+                descriptor,
+                additionalDeposit: context.additionalDepositRaw!,
+              }
+            : {
+                action: 'voucher' as const,
+                channelId,
+                descriptor,
+                cumulativeAmount: context.cumulativeAmountRaw!,
+                signature: '0x04' as Hex.Hex,
+              }
+        return Credential.serialize({ challenge: paymentChallenge, payload })
+      })
+      const postedPayloads: SessionCredentialPayload[] = []
+      const fetch = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+        postedPayloads.push(
+          Credential.deserialize<SessionCredentialPayload>(authorizationHeader(init)!).payload,
+        )
+        return new Response(null, { status: 204 })
+      })
+      const receipt = createSessionReceipt({
+        acceptedCumulative: 8n,
+        challengeId: paymentChallenge.id,
+        channelId,
+        spent: 8n,
+      })
+      const response = wrapSseFetchResponse({
+        challenge: paymentChallenge,
+        createCredential,
+        credential: openCredential,
+        fetch,
+        input: 'https://example.test/stream?cursor=1',
+        response: new Response(
+          [
+            'event: message\ndata: chunk-1\n\n',
+            formatNeedVoucherEvent({
+              acceptedCumulative: '5',
+              channelId,
+              deposit: '6',
+              requiredCumulative: '8',
+            }),
+            `event: payment-receipt\ndata: ${JSON.stringify(receipt)}\n\n`,
+            'event: message\ndata: chunk-2\n\n',
+          ].join(''),
+          { headers: { 'Content-Type': 'text/event-stream' } },
+        ),
+      })
+
+      await expect(response.text()).resolves.toBe(
+        'event: message\ndata: chunk-1\n\nevent: message\ndata: chunk-2\n\n',
+      )
+      expect(createdContexts.map((context) => context.action)).toEqual(['topUp', 'voucher'])
+      expect(createdContexts[0]).toMatchObject({ additionalDepositRaw: '2' })
+      expect(createdContexts[1]).toMatchObject({ cumulativeAmountRaw: '8' })
+      expect(fetch.mock.calls.map(([input]) => input.toString())).toEqual([
+        'https://example.test/stream',
+        'https://example.test/stream',
+      ])
+      expect(postedPayloads.map((payload) => payload.action)).toEqual(['topUp', 'voucher'])
     })
 
     test('closeHttpSession posts a close credential and parses the receipt', async () => {

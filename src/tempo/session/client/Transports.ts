@@ -12,6 +12,7 @@ import {
   parseEvent,
   readSessionChallengeAmount,
   uint96,
+  type ChannelDescriptor,
   type NeedVoucherEvent,
   type SessionCredentialPayload,
   type SessionReceipt,
@@ -748,6 +749,21 @@ export type OpenSseSessionParameters = {
   topUpIfNeeded(parameters: TopUpRequirement): Promise<void>
 }
 
+export type WrapSseFetchResponseParameters = {
+  /** Challenge used to create follow-up session credentials. */
+  challenge: Challenge.Challenge
+  /** Initial session credential that opened or reused the channel. */
+  credential: string
+  /** Creates follow-up top-up and voucher credentials. */
+  createCredential(context?: SessionContext): Promise<string>
+  /** Fetch implementation used for management voucher posts. */
+  fetch: typeof globalThis.fetch
+  /** Original paid resource URL. */
+  input: RequestInfo | URL
+  /** Paid retry response returned to the caller. */
+  response: Response
+}
+
 /**
  * Opens an auto-driving paid SSE stream.
  *
@@ -787,6 +803,73 @@ export async function openSseSession(
   })
 }
 
+/** Wraps paid SSE fetch responses so session control events are handled before callers read them. */
+export function wrapSseFetchResponse(parameters: WrapSseFetchResponseParameters): Response {
+  if (!isTempoSessionChallenge(parameters.challenge)) return parameters.response
+  if (!isEventStream(parameters.response) || !parameters.response.body) return parameters.response
+
+  const channel = channelFromCredential(parameters.credential)
+  if (!channel) return parameters.response
+
+  const reader = parameters.response.body.getReader()
+  const decoder = new TextDecoder()
+  const encoder = new TextEncoder()
+  let buffer = ''
+
+  const body = new ReadableStream<Uint8Array>({
+    async start(controller) {
+      try {
+        for (;;) {
+          const { done, value } = await reader.read()
+          if (done) break
+
+          buffer += decoder.decode(value, { stream: true })
+          const parts = buffer.split('\n\n')
+          buffer = parts.pop()!
+
+          for (const part of parts) {
+            await writeSseEvent(controller, encoder, parameters, channel, part, '\n\n')
+          }
+        }
+        buffer += decoder.decode()
+        if (buffer) await writeSseEvent(controller, encoder, parameters, channel, buffer)
+        controller.close()
+      } catch (error) {
+        controller.error(error)
+      } finally {
+        reader.releaseLock()
+      }
+    },
+    cancel(reason) {
+      return reader.cancel(reason)
+    },
+  })
+
+  return new Response(body, {
+    headers: parameters.response.headers,
+    status: parameters.response.status,
+    statusText: parameters.response.statusText,
+  })
+}
+
+async function writeSseEvent(
+  controller: ReadableStreamDefaultController<Uint8Array>,
+  encoder: TextEncoder,
+  parameters: WrapSseFetchResponseParameters,
+  channel: SseFetchChannel,
+  part: string,
+  suffix = '',
+) {
+  if (!part.trim()) return
+  const event = parseEvent(part)
+  if (event?.type === 'payment-need-voucher') {
+    await postSseVoucher(parameters, channel, event.data)
+    return
+  }
+  if (event?.type === 'payment-receipt') return
+  controller.enqueue(encoder.encode(`${part}${suffix}`))
+}
+
 type IterateSseResponseParameters = {
   challenge: TempoSessionChallenge | null
   driver: OpenSseSessionParameters
@@ -794,6 +877,65 @@ type IterateSseResponseParameters = {
   onReceipt?: ((receipt: SessionReceipt) => void) | undefined
   response: Response
   signal?: AbortSignal | undefined
+}
+
+type SseFetchChannel = {
+  channelId: Hex.Hex
+  cumulativeAmount: bigint
+  descriptor: ChannelDescriptor
+}
+
+function channelFromCredential(credential: string): SseFetchChannel | undefined {
+  try {
+    const payload = PaymentCredential.deserialize<SessionCredentialPayload>(credential).payload
+    if (!payload.descriptor || !('cumulativeAmount' in payload)) return undefined
+    return {
+      channelId: payload.channelId,
+      cumulativeAmount: BigInt(payload.cumulativeAmount),
+      descriptor: payload.descriptor,
+    }
+  } catch {
+    return undefined
+  }
+}
+
+async function postSseVoucher(
+  parameters: WrapSseFetchResponseParameters,
+  channel: SseFetchChannel,
+  event: NeedVoucherEvent,
+) {
+  if (event.channelId !== channel.channelId) return
+
+  const requiredCumulative = BigInt(event.requiredCumulative)
+  const deposit = BigInt(event.deposit)
+  if (requiredCumulative > deposit) {
+    const topUp = await parameters.createCredential({
+      action: 'topUp',
+      channelId: channel.channelId,
+      descriptor: channel.descriptor,
+      additionalDepositRaw: (requiredCumulative - deposit).toString(),
+    })
+    const response = await parameters.fetch(managementInput(parameters.input), {
+      method: 'POST',
+      headers: { [Constants.Headers.authorization]: topUp },
+    })
+    if (!response.ok) throw new Error(`Top-up POST failed with status ${response.status}`)
+  }
+
+  const cumulativeAmount =
+    channel.cumulativeAmount > requiredCumulative ? channel.cumulativeAmount : requiredCumulative
+  const voucher = await parameters.createCredential({
+    action: 'voucher',
+    channelId: channel.channelId,
+    descriptor: channel.descriptor,
+    cumulativeAmountRaw: uint96(cumulativeAmount).toString(),
+  })
+  const response = await parameters.fetch(managementInput(parameters.input), {
+    method: 'POST',
+    headers: { [Constants.Headers.authorization]: voucher },
+  })
+  if (!response.ok) throw new Error(`Voucher POST failed with status ${response.status}`)
+  channel.cumulativeAmount = cumulativeAmount
 }
 
 async function* iterateSseResponse(

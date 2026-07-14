@@ -6,6 +6,7 @@ import type { MaybePromise } from '../../internal/types.js'
 import type * as Method from '../../Method.js'
 import type * as z from '../../zod.js'
 import * as Transport from '../Transport.js'
+import * as MethodResponse from './MethodResponse.js'
 
 // We tag wrappers with a global symbol so we can recognize wrappers created by mppx,
 // even across multiple module instances/bundles. This lets restore() avoid clobbering
@@ -235,10 +236,9 @@ export function from<const methods extends readonly Method.AnyClient[]>(
         mi = selected.method
         if (challenge.expires) Expires.assert(challenge.expires, challenge.id)
 
-        const createCredential = memoizeCreateCredential(
-          (overrideContext?: AnyContextFor<methods>) =>
-            resolveCredential(selectedChallenge, selected.method, overrideContext ?? context),
-        )
+        const createCredentialForContext = (overrideContext?: AnyContextFor<methods>) =>
+          resolveCredential(selectedChallenge, selected.method, overrideContext ?? context)
+        const createCredential = memoizeCreateCredential(createCredentialForContext)
         const eventCredential = await events.emit(
           'challenge.received',
           createChallengeReceivedPayload({
@@ -283,6 +283,15 @@ export function from<const methods extends readonly Method.AnyClient[]>(
             { challenge: selectedChallenge },
           ),
         )
+        response = await handleMethodResponse({
+          challenge: selectedChallenge,
+          createCredential: createCredentialForContext as (context?: unknown) => Promise<string>,
+          credential,
+          fetch: baseFetch,
+          input: initialRequest.input,
+          method: selected.method,
+          response,
+        })
         if (response.ok)
           await events.emit(
             'payment.response',
@@ -320,6 +329,27 @@ export function from<const methods extends readonly Method.AnyClient[]>(
   // and safely unwrap only mppx-installed wrappers.
   ;(wrappedFetch as WrappedFetch)[MPPX_FETCH_WRAPPER] = baseFetch
   return wrappedFetch as from.Fetch<methods>
+}
+
+async function handleMethodResponse(parameters: {
+  challenge: Challenge.Challenge
+  createCredential(context?: unknown): Promise<string>
+  credential: string
+  fetch: typeof globalThis.fetch
+  input: RequestInfo | URL
+  method: Method.AnyClient
+  response: Response
+}): Promise<Response> {
+  const handler = MethodResponse.get(parameters.method)
+  if (!handler) return parameters.response
+  return handler({
+    challenge: parameters.challenge,
+    createCredential: parameters.createCredential,
+    credential: parameters.credential,
+    fetch: parameters.fetch,
+    input: parameters.input,
+    response: parameters.response,
+  })
 }
 
 /** Union of all context types from all methods that have context schemas. */

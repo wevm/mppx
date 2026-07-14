@@ -1,6 +1,7 @@
 import { type Address, parseUnits } from 'viem'
 import { tempo as tempo_chain } from 'viem/chains'
 
+import * as MethodResponse from '../../../client/internal/MethodResponse.js'
 import * as Constants from '../../../Constants.js'
 import * as Method from '../../../Method.js'
 import * as Account from '../../../viem/Account.js'
@@ -20,6 +21,7 @@ import {
   resolveRecoverContext,
   sessionContextSchema,
 } from './CredentialState.js'
+import { wrapSseFetchResponse } from './Transports.js'
 
 export { sessionContextSchema, type SessionContext } from './CredentialState.js'
 
@@ -52,7 +54,7 @@ export function session(parameters: session.Parameters = {}) {
   const store = channelStore ?? createChannelStore()
   const sink = { store, notifyUpdate: (entry: ChannelEntry) => onChannelUpdate?.(entry) }
 
-  return Method.toClient(Methods.session, {
+  const method = Method.toClient(Methods.session, {
     canHandleChallenge({ challenge }) {
       return (
         Constants.getMethodDetail(
@@ -98,6 +100,8 @@ export function session(parameters: session.Parameters = {}) {
       return serializeCredential(challenge, payload, resolved.chainId, account)
     },
   })
+  MethodResponse.set(method, wrapSseFetchResponse)
+  return method
 }
 
 /** Type helpers for the low-level TIP-1034 session client method. */

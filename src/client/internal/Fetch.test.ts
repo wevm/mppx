@@ -10,6 +10,7 @@ import { rpcUrl } from '~test/tempo/rpc.js'
 import { accounts, asset, chain, client, http } from '~test/tempo/viem.js'
 
 import * as Fetch from './Fetch.js'
+import * as MethodResponse from './MethodResponse.js'
 
 const realm = 'api.example.com'
 const secretKey = 'test-secret-key-test-secret-key-32'
@@ -708,6 +709,26 @@ describe('Fetch.from: 402 retry path', () => {
     const retryInit = calls[1]!.init as Record<string, unknown>
     const headers = new Headers(retryInit.headers as HeadersInit)
     expect(headers.get('Authorization')).toBe('credential')
+  })
+
+  test('lets methods wrap post-payment responses', async () => {
+    let callCount = 0
+    const wrapResponse: MethodResponse.Handler = async ({ response }) =>
+      new Response(`wrapped:${await response.text()}`, response)
+    const method = MethodResponse.set({ ...noopMethod }, wrapResponse)
+    const mockFetch: typeof globalThis.fetch = async () => {
+      callCount++
+      if (callCount === 1) return make402()
+      return new Response('OK', { status: 200 })
+    }
+    const fetch = Fetch.from({
+      fetch: mockFetch,
+      methods: [method],
+    })
+
+    await expect(
+      fetch('https://example.com/api').then((response) => response.text()),
+    ).resolves.toBe('wrapped:OK')
   })
 
   test('chooses native Payment-auth from combined MPP and x402 HTTP 402 offers', async () => {
