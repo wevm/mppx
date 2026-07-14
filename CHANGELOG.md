@@ -1,5 +1,12 @@
 # mppx
 
+## 0.8.9
+
+### Patch Changes
+
+- 978f580: Fixed hosted fee-payer relays for TIP-1034 session opens and top-ups.
+- 2fb3fa8: Normalize hosted fee-payer JSON-RPC signature parity before recovery.
+
 ## 0.8.8
 
 ### Patch Changes
