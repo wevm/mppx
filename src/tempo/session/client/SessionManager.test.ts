@@ -329,9 +329,13 @@ describe('Session', () => {
       expect(posted[0]).toMatchObject({ action: 'voucher', channelId: storedChannelId })
     })
 
-    test('seeds a same-route HEAD snapshot into the entry index and resumes it', async () => {
+    test('seeds a same-route HEAD snapshot and resolves the account when resuming it', async () => {
       const { store, set } = makeChannelStore()
       const posted: SessionCredentialPayload[] = []
+      const resolveAccount = vi.fn(
+        (info: Parameters<NonNullable<sessionManager.Parameters['resolveAccount']>>[0]) =>
+          info.account,
+      )
       const mockFetch = vi.fn().mockImplementation((_input, init?: RequestInit) => {
         const headers = new Headers(init?.headers)
         if (init?.method === 'HEAD' && !headers.get(Constants.Headers.authorization)) {
@@ -377,6 +381,7 @@ describe('Session', () => {
         client,
         fetch: mockFetch as typeof globalThis.fetch,
         channelStore: store,
+        resolveAccount,
       })
 
       const response = await s.fetch('https://api.example.com/data')
@@ -384,6 +389,12 @@ describe('Session', () => {
       expect(response.status).toBe(200)
       expect(set).toHaveBeenCalledWith(expect.objectContaining({ channelId: storedChannelId }))
       expect(posted[0]).toMatchObject({ action: 'voucher', channelId: storedChannelId })
+      expect(resolveAccount).toHaveBeenCalledOnce()
+      expect(resolveAccount).toHaveBeenCalledWith({
+        account,
+        chainId: 4217,
+        operation: { authority: account.address, kind: 'authorizePaymentChannel' },
+      })
       const contentCall = mockFetch.mock.calls.find((call) => call[1]?.method !== 'HEAD')
       expect(new Headers(contentCall?.[1]?.headers).get('Payment-Session')).toBeNull()
     })

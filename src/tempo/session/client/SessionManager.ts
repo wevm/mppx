@@ -274,6 +274,7 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
   const method = sessionPlugin({
     account: parameters.account,
     getClient: parameters.client ? () => parameters.client! : parameters.getClient,
+    resolveAccount: parameters.resolveAccount,
     escrow: parameters.escrow,
     decimals: config.decimals,
     maxDeposit: parameters.maxDeposit,
@@ -787,6 +788,8 @@ export namespace sessionManager {
       fetch?: typeof globalThis.fetch | undefined
       /** Maximum deposit in human-readable units (e.g. `'10'` for 10 tokens). Converted to raw units via `decimals`. */
       maxDeposit?: string | undefined
+      /** Selects the account that signs session credentials. */
+      resolveAccount?: sessionPlugin.ResolveAccount | undefined
       /** Store for reusable session channels. Defaults to in-memory. */
       channelStore?: ChannelStore | undefined
       /** Optional websocket constructor for runtimes without a global WebSocket. */

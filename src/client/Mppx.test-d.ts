@@ -19,7 +19,9 @@ describe('Mppx', () => {
   test('exports low-level session method and explicit managed session helper', () => {
     expectTypeOf(session({ account: {} as Account })).toMatchTypeOf<Method.AnyClient>()
     expectTypeOf(session.manager({ account: {} as Account })).toHaveProperty('fetch')
-    expectTypeOf(sessionManager({ account: {} as Account })).toHaveProperty('fetch')
+    expectTypeOf(
+      sessionManager({ account: {} as Account, resolveAccount: ({ account }) => account }),
+    ).toHaveProperty('fetch')
     expectTypeOf(sessionMethod({ account: {} as Account })).toMatchTypeOf<Method.AnyClient>()
     expectTypeOf(tempo.session({ account: {} as Account })).toMatchTypeOf<Method.AnyClient>()
     expectTypeOf(tempo.session.manager({ account: {} as Account })).toHaveProperty('fetch')
