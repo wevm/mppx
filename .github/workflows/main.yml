@@ -78,6 +78,4 @@ jobs:
         run: |
           pnpm changeset version --snapshot main
           pnpm build
-          npm_config_frozen_lockfile=false pnpm exec zile publish:prepare
-          pnpm changeset publish --no-git-tag --snapshot main --tag main
-          pnpm exec zile publish:post
+          pnpm changeset:publish:main
