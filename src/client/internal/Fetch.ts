@@ -6,6 +6,7 @@ import type { MaybePromise } from '../../internal/types.js'
 import type * as Method from '../../Method.js'
 import type * as z from '../../zod.js'
 import * as Transport from '../Transport.js'
+import * as MethodResponse from './MethodResponse.js'
 
 // We tag wrappers with a global symbol so we can recognize wrappers created by mppx,
 // even across multiple module instances/bundles. This lets restore() avoid clobbering
@@ -18,6 +19,7 @@ type WrappedFetch = typeof globalThis.fetch & {
 }
 
 let originalFetch: typeof globalThis.fetch | undefined
+const eventObserverChecks = new WeakMap<object, (name: keyof ClientEventMap) => boolean>()
 
 export type ClientEventMap<
   methods extends readonly Method.AnyClient[] = readonly Method.AnyClient[],
@@ -174,7 +176,11 @@ export function from<const methods extends readonly Method.AnyClient[]>(
   // which can duplicate retries and make restore semantics fragile.
   const baseFetch = unwrapFetch(fetch)
 
-  const wrappedFetch = async (input: RequestInfo | URL, init?: from.RequestInit<methods>) => {
+  const request = async (
+    input: RequestInfo | URL,
+    init: from.RequestInit<methods> | undefined,
+    canRefetch: boolean,
+  ): Promise<Response> => {
     const callerHeaders = getCallerHeaders(input, init?.headers)
     const hasExplicitAcceptPayment = callerHeaders.has(Constants.Headers.acceptPayment)
     const paymentPreferences = resolvePaymentPreferences(callerHeaders, resolvedAcceptPayment)
@@ -272,8 +278,13 @@ export function from<const methods extends readonly Method.AnyClient[]>(
           }),
         )
 
+        const paymentInput = resolvePaymentRetryInput(
+          response,
+          initialRequest.input,
+          initialRequest.input,
+        )
         response = await baseFetch(
-          resolvePaymentRetryInput(response, initialRequest.input, initialRequest.input),
+          paymentInput,
           transport.setCredential(
             {
               ...fetchInit,
@@ -283,7 +294,8 @@ export function from<const methods extends readonly Method.AnyClient[]>(
             { challenge: selectedChallenge },
           ),
         )
-        if (response.ok)
+        // Cloning an unobserved stream would tee and buffer it indefinitely.
+        if (response.ok && hasEventObservers(events, 'payment.response'))
           await events.emit(
             'payment.response',
             createPaymentResponsePayload({
@@ -295,8 +307,23 @@ export function from<const methods extends readonly Method.AnyClient[]>(
               response,
             }),
           )
-        if (!(await transport.isPaymentRequired(response, transportRequest as never)))
-          return response
+        if (!(await transport.isPaymentRequired(response, transportRequest as never))) {
+          if (!response.ok) return response
+          return MethodResponse.handle(selected.method, {
+            challenge: selectedChallenge,
+            credential,
+            fetch: baseFetch,
+            headers: initialRequest.headers,
+            input: paymentInput,
+            ...(canRefetch
+              ? {
+                  refetch: () => request(cloneRequestInput(initialRequest.input), init, false),
+                }
+              : {}),
+            response,
+            signal: resolveRequestSignal(input, init),
+          })
+        }
       }
       return response
     } catch (error) {
@@ -315,6 +342,8 @@ export function from<const methods extends readonly Method.AnyClient[]>(
       throw error
     }
   }
+  const wrappedFetch = (input: RequestInfo | URL, init?: from.RequestInit<methods>) =>
+    request(input, init, true)
 
   // Record the wrapped target so future polyfill() / restore() calls can detect origin
   // and safely unwrap only mppx-installed wrappers.
@@ -491,7 +520,7 @@ export function createEventDispatcher<
     }
   }
 
-  return {
+  const dispatcher: ClientEventDispatcher<methods, response> = {
     async emit(name, payload) {
       switch (name) {
         case 'challenge.received': {
@@ -525,6 +554,15 @@ export function createEventDispatcher<
     },
     on,
   }
+  eventObserverChecks.set(
+    dispatcher,
+    (name) => handlers[name as keyof typeof handlers].size > 0 || handlers['*'].size > 0,
+  )
+  return dispatcher
+}
+
+function hasEventObservers(dispatcher: ClientEventDispatcher, name: keyof ClientEventMap): boolean {
+  return eventObserverChecks.get(dispatcher)?.(name) ?? true
 }
 
 async function emitChallengeReceived<methods extends readonly Method.AnyClient[], response>(
@@ -810,6 +848,13 @@ function cloneRequestInput(input: RequestInfo | URL): RequestInfo | URL {
   } catch {
     return input
   }
+}
+
+function resolveRequestSignal(
+  input: RequestInfo | URL,
+  init: RequestInit | undefined,
+): AbortSignal | undefined {
+  return init?.signal ?? (input instanceof Request ? input.signal : undefined)
 }
 
 /** @internal */

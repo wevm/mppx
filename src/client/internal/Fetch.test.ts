@@ -10,6 +10,7 @@ import { rpcUrl } from '~test/tempo/rpc.js'
 import { accounts, asset, chain, client, http } from '~test/tempo/viem.js'
 
 import * as Fetch from './Fetch.js'
+import * as MethodResponse from './MethodResponse.js'
 
 const realm = 'api.example.com'
 const secretKey = 'test-secret-key-test-secret-key-32'
@@ -390,6 +391,34 @@ function makeCombined402(overrides?: {
 function encodeRawPaymentRequiredHeader(value: unknown): string {
   return Base64.fromString(JSON.stringify(value))
 }
+
+describe('Fetch.from: method responses', () => {
+  test('handles successful paid responses without touching free responses', async () => {
+    const method = { ...noopMethod }
+    const handle = vi.fn(
+      async ({ response }: MethodResponse.HandlerParameters) =>
+        new Response(`handled:${await response.text()}`, response),
+    )
+    MethodResponse.register(method, handle)
+
+    let paidResponse: Response | undefined
+    const mockFetch: typeof globalThis.fetch = async (input, init) => {
+      if (input.toString().endsWith('/free')) return new Response('free')
+      if (!new Headers(init?.headers).has('Authorization')) return make402()
+      paidResponse = new Response('paid')
+      vi.spyOn(paidResponse, 'clone')
+      return paidResponse
+    }
+    const fetch = Fetch.from({ fetch: mockFetch, methods: [method] })
+
+    expect(await (await fetch('https://example.com/free')).text()).toBe('free')
+    expect(handle).not.toHaveBeenCalled()
+    expect(await (await fetch('https://example.com/paid')).text()).toBe('handled:paid')
+    expect(handle).toHaveBeenCalledOnce()
+    expect(handle).toHaveBeenCalledWith(expect.objectContaining({ credential: 'credential' }))
+    expect(paidResponse?.clone).not.toHaveBeenCalled()
+  })
+})
 
 describe('Fetch.from: init passthrough (non-402)', () => {
   test('preserves init object identity while adding Accept-Payment', async () => {

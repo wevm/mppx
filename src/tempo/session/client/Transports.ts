@@ -748,6 +748,17 @@ export type OpenSseSessionParameters = {
   topUpIfNeeded(parameters: TopUpRequirement): Promise<void>
 }
 
+/** Session payment operations shared with fetch-backed streams. */
+export type SsePaymentDriver = Pick<
+  OpenSseSessionParameters,
+  | 'assertVoucherWithinLocalLimit'
+  | 'createSessionCredential'
+  | 'fetch'
+  | 'getChannel'
+  | 'managementInput'
+  | 'topUpIfNeeded'
+>
+
 /**
  * Opens an auto-driving paid SSE stream.
  *
@@ -822,22 +833,32 @@ export async function* driveSseResponse(
   const reader = parameters.response.body.getReader()
   const decoder = new TextDecoder()
   let buffer = ''
+  let complete = false
+  const cancel = () => {
+    void reader.cancel(parameters.signal?.reason).catch(() => undefined)
+  }
+  parameters.signal?.addEventListener('abort', cancel, { once: true })
+  if (parameters.signal?.aborted) cancel()
 
   try {
     while (true) {
       if (parameters.signal?.aborted) break
 
       const { done, value } = await reader.read()
-      if (done) break
+      if (done) {
+        complete = true
+        buffer += decoder.decode()
+      } else buffer += decoder.decode(value, { stream: true })
 
-      buffer += decoder.decode(value, { stream: true })
-      const parts = buffer.split('\n\n')
-      buffer = parts.pop()!
-
-      for (const part of parts) {
+      while (true) {
+        const separator = findSseSeparator(buffer, done)
+        if (!separator) break
+        const end = separator.index + separator.length
+        const part = buffer.slice(0, separator.index)
+        const raw = buffer.slice(0, end)
+        buffer = buffer.slice(end)
         if (!part.trim()) continue
-        const event = parseEvent(part)
-        const raw = `${part}\n\n`
+        const event = parseEvent(part.replace(/\r\n|\r/g, '\n'))
         if (!event) {
           yield { raw }
           continue
@@ -855,16 +876,92 @@ export async function* driveSseResponse(
             break
         }
       }
+      if (done) break
     }
   } finally {
+    parameters.signal?.removeEventListener('abort', cancel)
+    if (!complete) await reader.cancel().catch(() => undefined)
     reader.releaseLock()
   }
 }
 
-async function handleSseNeedVoucher(
+function findSseSeparator(
+  value: string,
+  complete: boolean,
+): { index: number; length: number } | undefined {
+  for (let index = 0; index < value.length; index++) {
+    const first = lineEndingLength(value, index, complete)
+    if (!first) continue
+    const second = lineEndingLength(value, index + first, complete)
+    if (second) return { index, length: first + second }
+    index += first - 1
+  }
+  return undefined
+}
+
+function lineEndingLength(value: string, index: number, complete: boolean): number {
+  if (value[index] === '\n') return 1
+  if (value[index] !== '\r') return 0
+  if (value[index + 1] === '\n') return 2
+  if (index + 1 === value.length && !complete) return 0
+  return 1
+}
+
+/** Wraps an SSE response while handling session payment frames in-band. */
+export function wrapSseResponse(parameters: DriveSseResponseParameters): Response {
+  const abortController = new AbortController()
+  const abort = () => abortController.abort(parameters.signal?.reason)
+  parameters.signal?.addEventListener('abort', abort, { once: true })
+  if (parameters.signal?.aborted) abort()
+
+  const iterator = driveSseResponse({ ...parameters, signal: abortController.signal })
+  const encoder = new TextEncoder()
+  const headers = new Headers(parameters.response.headers)
+  headers.delete('content-length')
+  const cleanup = () => parameters.signal?.removeEventListener('abort', abort)
+
+  const response = new Response(
+    new ReadableStream({
+      async pull(controller) {
+        try {
+          const frame = await iterator.next()
+          if (frame.done) {
+            cleanup()
+            return controller.close()
+          }
+          controller.enqueue(encoder.encode(frame.value.raw))
+        } catch (error) {
+          cleanup()
+          throw error
+        }
+      },
+      async cancel() {
+        cleanup()
+        abortController.abort()
+        await iterator.return(undefined)
+      },
+    }),
+    {
+      headers,
+      status: parameters.response.status,
+      statusText: parameters.response.statusText,
+    },
+  )
+
+  for (const property of ['redirected', 'type', 'url'] as const)
+    Object.defineProperty(response, property, {
+      configurable: true,
+      get: () => parameters.response[property],
+    })
+
+  return response
+}
+
+/** Handles an in-band voucher request using the shared SSE payment driver. */
+export async function handleSseNeedVoucher(
   parameters: {
     challenge: TempoSessionChallenge | null
-    driver: OpenSseSessionParameters
+    driver: SsePaymentDriver
     input: RequestInfo | URL
   },
   event: NeedVoucherEvent,

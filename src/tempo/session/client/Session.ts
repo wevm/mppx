@@ -1,7 +1,9 @@
 import { type Address, parseUnits } from 'viem'
 import { tempo as tempo_chain } from 'viem/chains'
 
+import * as MethodResponse from '../../../client/internal/MethodResponse.js'
 import * as Constants from '../../../Constants.js'
+import * as Credential from '../../../Credential.js'
 import * as Method from '../../../Method.js'
 import * as Account from '../../../viem/Account.js'
 import * as Client from '../../../viem/Client.js'
@@ -11,6 +13,7 @@ import type {
 } from '../../client/ResolveAccount.js'
 import * as defaults from '../../internal/defaults.js'
 import * as Methods from '../../Methods.js'
+import { isEventStream, requireSessionCredentialContext } from '../precompile/Protocol.js'
 import { serializeCredential, type ChannelEntry } from './ChannelOps.js'
 import { createChannelStore, type ChannelStore } from './ChannelStore.js'
 import {
@@ -20,6 +23,15 @@ import {
   resolveRecoverContext,
   sessionContextSchema,
 } from './CredentialState.js'
+import { assertWithinMaxDeposit } from './Runtime.js'
+import {
+  handleSseNeedVoucher,
+  isTempoSessionChallenge,
+  managementInput,
+  postTopUp,
+  wrapSseResponse,
+  type SsePaymentDriver,
+} from './Transports.js'
 
 export { sessionContextSchema, type SessionContext } from './CredentialState.js'
 
@@ -52,7 +64,7 @@ export function session(parameters: session.Parameters = {}) {
   const store = channelStore ?? createChannelStore()
   const sink = { store, notifyUpdate: (entry: ChannelEntry) => onChannelUpdate?.(entry) }
 
-  return Method.toClient(Methods.session, {
+  const method = Method.toClient(Methods.session, {
     canHandleChallenge({ challenge }) {
       return (
         Constants.getMethodDetail(
@@ -98,6 +110,66 @@ export function session(parameters: session.Parameters = {}) {
       return serializeCredential(challenge, payload, resolved.chainId, account)
     },
   })
+
+  return MethodResponse.register(
+    method,
+    async ({ challenge, credential, fetch, headers, input, refetch, response, signal }) => {
+      if (!isTempoSessionChallenge(challenge)) return response
+      if (!isEventStream(response)) {
+        const credentialContext = requireSessionCredentialContext(
+          Credential.deserialize(credential).payload,
+        )
+        if (
+          credentialContext.action === 'open' &&
+          headers.get('accept')?.toLowerCase().includes('text/event-stream')
+        )
+          return (await refetch?.()) ?? response
+        return response
+      }
+
+      const channelKey = (
+        await resolveChallengeContext({
+          challenge,
+          escrowOverride,
+          getClient,
+        })
+      ).key
+      let channel = await store.get(channelKey)
+      const driver = {
+        assertVoucherWithinLocalLimit: (cumulativeAmount) =>
+          assertWithinMaxDeposit(cumulativeAmount, maxDeposit),
+        createSessionCredential: (challenge, context) =>
+          method.createCredential({ challenge, context }),
+        fetch,
+        getChannel: () => channel ?? null,
+        managementInput,
+        async topUpIfNeeded({ channelId, deposit, requiredCumulative }) {
+          if (requiredCumulative <= deposit || !channel) return
+          const additionalDeposit = requiredCumulative - deposit
+          await postTopUp({
+            additionalDeposit,
+            challenge,
+            channel,
+            channelId,
+            createSessionCredential: (challenge, context) =>
+              method.createCredential({ challenge, context }),
+            fetch,
+            input,
+          })
+          channel.deposit += additionalDeposit
+          await store.set(channel)
+          sink.notifyUpdate(channel)
+        },
+      } satisfies SsePaymentDriver
+
+      return wrapSseResponse({
+        onNeedVoucher: (event) => handleSseNeedVoucher({ challenge, driver, input }, event),
+        onReceipt() {},
+        response,
+        signal,
+      })
+    },
+  )
 }
 
 /** Type helpers for the low-level TIP-1034 session client method. */

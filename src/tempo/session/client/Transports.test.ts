@@ -32,6 +32,7 @@ import {
   validateSocketCloseReadyReceipt,
   validateSocketPaymentReceipt,
   webSocketProbeUrl,
+  wrapSseResponse,
   type TempoSessionChallenge,
   type TopUpRequirement,
 } from './Transports.js'
@@ -672,6 +673,80 @@ describe('SseDriver', () => {
     ])
     expect(acceptReceipt).toHaveBeenCalledWith(receipt)
   })
+
+  test('wraps standard CRLF streams and preserves response metadata', async () => {
+    const receipt = createSessionReceipt({
+      acceptedCumulative: 2n,
+      challengeId: 'challenge-1',
+      channelId: `0x${'01'.repeat(32)}`,
+      spent: 2n,
+    })
+    const encoder = new TextEncoder()
+    const source = new Response(
+      new ReadableStream({
+        start(controller) {
+          controller.enqueue(encoder.encode(': keepalive\r\n\r'))
+          controller.enqueue(
+            encoder.encode(
+              [
+                '\nevent: custom\r\ndata: hello\r\n\r\n',
+                `event: payment-receipt\r\ndata: ${JSON.stringify(receipt)}\r\n\r\n`,
+              ].join(''),
+            ),
+          )
+          controller.close()
+        },
+      }),
+      {
+        headers: { 'content-length': '100', 'content-type': 'text/event-stream' },
+        status: 201,
+        statusText: 'Created',
+      },
+    )
+    Object.defineProperty(source, 'url', { value: 'https://example.com/stream' })
+
+    const response = wrapSseResponse({
+      async onNeedVoucher() {},
+      onReceipt() {},
+      response: source,
+    })
+
+    expect(response.status).toBe(201)
+    expect(response.statusText).toBe('Created')
+    expect(response.url).toBe('https://example.com/stream')
+    expect(response.headers.get('content-type')).toBe('text/event-stream')
+    expect(response.headers.has('content-length')).toBe(false)
+    expect(await response.text()).toBe(': keepalive\r\n\r\nevent: custom\r\ndata: hello\r\n\r\n')
+  })
+
+  test.each(['consumer', 'signal'] as const)(
+    'cancels the source stream from %s',
+    async (source) => {
+      const abortController = new AbortController()
+      const cancel = vi.fn()
+      const sourceResponse = new Response(
+        new ReadableStream({
+          cancel,
+          start(controller) {
+            controller.enqueue(new TextEncoder().encode('data: first\n\n'))
+          },
+        }),
+      )
+      const response = wrapSseResponse({
+        async onNeedVoucher() {},
+        onReceipt() {},
+        response: sourceResponse,
+        signal: abortController.signal,
+      })
+
+      const reader = response.body!.getReader()
+      await reader.read()
+      if (source === 'signal') abortController.abort()
+      else await reader.cancel()
+
+      await vi.waitFor(() => expect(cancel).toHaveBeenCalledOnce())
+    },
+  )
 })
 
 describe('WsDriver', () => {

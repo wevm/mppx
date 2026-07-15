@@ -3,7 +3,8 @@ import { privateKeyToAccount } from 'viem/accounts'
 import { Account as TempoAccount, Secp256k1, Transaction } from 'viem/tempo'
 import { describe, expect, test } from 'vp/test'
 
-import type { Challenge } from '../../../Challenge.js'
+import { serialize as serializeChallenge, type Challenge } from '../../../Challenge.js'
+import * as Fetch from '../../../client/internal/Fetch.js'
 import * as Constants from '../../../Constants.js'
 import * as Credential from '../../../Credential.js'
 import * as z from '../../../zod.js'
@@ -13,6 +14,7 @@ import { escrowAbi } from '../precompile/escrow.abi.js'
 import { tip20ChannelEscrow } from '../precompile/Protocol.js'
 import * as Types from '../precompile/Protocol.js'
 import * as Voucher from '../precompile/Voucher.js'
+import { createChannelStore } from './ChannelStore.js'
 import { session } from './Session.js'
 
 const account = privateKeyToAccount(
@@ -124,6 +126,86 @@ describe('precompile client session', () => {
         }),
       }),
     ).toBe(false)
+  })
+
+  test('drives paid SSE responses with a supplied credential', async () => {
+    const challenge = makeChallenge({
+      suggestedDeposit: '100',
+      methodDetails: {
+        chainId,
+        escrowContract: tip20ChannelEscrow,
+        sessionProtocol: Constants.SessionProtocols.v2,
+      },
+    })
+    const channelStore = createChannelStore()
+    const parameters = {
+      account,
+      channelStore,
+      decimals: 0,
+      getClient: () => client,
+      maxDeposit: '300',
+    } as const
+    // The response handler must follow the credential selected by `onChallenge`.
+    const externalCredential = await session(parameters).createCredential({
+      challenge,
+      context: {},
+    })
+    let useExternalCredential = true
+    const actions: Types.SessionCredentialPayload['action'][] = []
+    const rawFetch: typeof globalThis.fetch = async (_input, init) => {
+      const authorization = new Headers(init?.headers).get(Constants.Headers.authorization)
+      if (!authorization)
+        return new Response(null, {
+          status: 402,
+          headers: { [Constants.Headers.wwwAuthenticate]: serializeChallenge(challenge) },
+        })
+
+      const payload = deserialize(authorization)
+      actions.push(payload.action)
+      if (init?.method === 'POST' || payload.action === 'open')
+        return new Response(null, { status: 204 })
+      if (payload.action !== 'voucher') throw new Error('expected voucher')
+
+      const receipt = Types.createSessionReceipt({
+        acceptedCumulative: 200n,
+        challengeId: challenge.id,
+        channelId: payload.channelId,
+        spent: 200n,
+      })
+      return new Response(
+        [
+          Types.formatMessageEvent('first'),
+          Types.formatNeedVoucherEvent({
+            acceptedCumulative: '100',
+            channelId: payload.channelId,
+            deposit: '100',
+            requiredCumulative: '200',
+          }),
+          Types.formatMessageEvent('second'),
+          Types.formatReceiptEvent(receipt),
+        ].join(''),
+        { headers: { 'content-type': 'text/event-stream' } },
+      )
+    }
+    const fetch = Fetch.from({
+      fetch: rawFetch,
+      methods: [session(parameters)],
+      async onChallenge() {
+        if (!useExternalCredential) return undefined
+        useExternalCredential = false
+        return externalCredential
+      },
+    })
+
+    const response = await fetch('https://example.com/stream', {
+      headers: { accept: 'text/event-stream' },
+    })
+
+    expect(response.headers.get('content-type')).toBe('text/event-stream')
+    expect(await response.text()).toBe(
+      `${Types.formatMessageEvent('first')}${Types.formatMessageEvent('second')}`,
+    )
+    expect(actions).toEqual(['open', 'voucher', 'topUp', 'voucher'])
   })
 
   test('opens for the current amount without client deposit configuration', async () => {

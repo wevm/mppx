@@ -3,6 +3,7 @@ import { parseUnits, type Address } from 'viem'
 
 import * as Challenge from '../../../Challenge.js'
 import * as Fetch from '../../../client/internal/Fetch.js'
+import * as MethodResponse from '../../../client/internal/MethodResponse.js'
 import * as Constants from '../../../Constants.js'
 import type * as Account from '../../../viem/Account.js'
 import type * as Client from '../../../viem/Client.js'
@@ -293,6 +294,7 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
       }
     },
   })
+  MethodResponse.unregister(method)
   const chargeMethod = chargePlugin({
     account: parameters.account,
     getClient: parameters.client ? () => parameters.client! : parameters.getClient,
