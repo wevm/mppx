@@ -1,5 +1,12 @@
 # mppx
 
+## 0.8.10
+
+### Patch Changes
+
+- a6969b8: Added account resolution to Tempo session managers.
+- fa73305: `mppx validate`: retry on 422, resolve `$ref` in body generation, add `--header`/`-H` flag, fix x402 validation for non-EVM chains.
+
 ## 0.8.9
 
 ### Patch Changes
