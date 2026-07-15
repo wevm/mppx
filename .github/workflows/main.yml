@@ -23,6 +23,8 @@ jobs:
     name: Changesets
     if: github.repository == 'wevm/mppx'
     needs: verify
+    outputs:
+      hasChangesets: ${{ steps.changesets.outputs.hasChangesets }}
     permissions:
       contents: write
       id-token: write
@@ -52,3 +54,30 @@ jobs:
           version: pnpm run changeset:version
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  snapshot:
+    name: Snapshot
+    if: github.repository == 'wevm/mppx' && needs.changesets.outputs.hasChangesets == 'true'
+    needs: [verify, changesets]
+    permissions:
+      contents: read
+      id-token: write
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Clone repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Install dependencies
+        uses: ./.github/actions/install-dependencies
+
+      - name: Publish main snapshot
+        run: |
+          pnpm changeset version --snapshot main
+          pnpm build
+          pnpm exec zile publish:prepare
+          pnpm changeset publish --no-git-tag --snapshot main --tag main
+          pnpm exec zile publish:post
