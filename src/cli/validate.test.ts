@@ -1,12 +1,32 @@
 import type * as http from 'node:http'
 
-import { afterEach, describe, expect, test } from 'vp/test'
+import { afterEach, describe, expect, test, vi } from 'vp/test'
 import * as Http from '~test/Http.js'
 
 import * as Challenge from '../Challenge.js'
 import * as Constants from '../Constants.js'
 import * as Receipt from '../Receipt.js'
-import validate from './validate/index.js'
+
+// Keep CLI orchestration tests independent of the public Tempo RPC and faucet.
+vi.doMock('viem/tempo', async () => {
+  const actual = await vi.importActual<typeof import('viem/tempo')>('viem/tempo')
+  return {
+    ...actual,
+    Actions: {
+      ...actual.Actions,
+      faucet: { ...actual.Actions.faucet, fund: vi.fn(async () => []) },
+    },
+  }
+})
+
+vi.doMock('viem/actions', async () => {
+  const actual = await vi.importActual<typeof import('viem/actions')>('viem/actions')
+  return {
+    ...actual,
+    prepareTransactionRequest: vi.fn(async () => ({})),
+    signTransaction: vi.fn(async () => '0xdeadbeef'),
+  }
+})
 
 // Auto-cleanup for test servers
 const servers: Http.TestServer[] = []
@@ -22,6 +42,7 @@ async function testServer(handler: http.RequestListener) {
 }
 
 async function serve(argv: string[]) {
+  const { default: validate } = await import('./validate/index.js')
   let output = ''
   let exitCode: number | undefined
   const origLog = console.log
