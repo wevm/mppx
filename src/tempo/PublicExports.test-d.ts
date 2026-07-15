@@ -83,6 +83,7 @@ test('tempo session public barrel hides internal session drivers', () => {
   expectTypeOf<SessionPublic>().not.toHaveProperty('settle')
   expectTypeOf<SessionClientPublic>().not.toHaveProperty('ChannelOps')
   expectTypeOf<SessionClientPublic>().not.toHaveProperty('Chain')
+  expectTypeOf<SessionClientPublic>().not.toHaveProperty('driveSseResponse')
   expectTypeOf<SessionServerPublic>().not.toHaveProperty('ChannelOps')
   expectTypeOf<SessionServerPublic>().not.toHaveProperty('Chain')
 })

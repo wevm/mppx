@@ -19,6 +19,7 @@ import {
   applyTopUpResult,
   closeHttpSession,
   createActiveSocketSession,
+  driveSseResponse,
   isExpectedSocketReceipt,
   managementInput,
   postTopUp,
@@ -637,6 +638,39 @@ describe('VoucherManagement', () => {
       expect(result).toBeUndefined()
       expect(entry.deposit).toBe(500n)
     })
+  })
+})
+
+describe('SseDriver', () => {
+  test('preserves application frames and consumes payment receipts', async () => {
+    const receipt = createSessionReceipt({
+      acceptedCumulative: 2n,
+      challengeId: 'challenge-1',
+      channelId: `0x${'01'.repeat(32)}`,
+      spent: 2n,
+    })
+    const acceptReceipt = vi.fn()
+    const response = new Response(
+      [
+        ': keepalive\n\n',
+        'event: custom\ndata: hello\n\n',
+        `event: payment-receipt\ndata: ${JSON.stringify(receipt)}\n\n`,
+      ].join(''),
+    )
+
+    const frames = []
+    for await (const frame of driveSseResponse({
+      async onNeedVoucher() {},
+      onReceipt: acceptReceipt,
+      response,
+    }))
+      frames.push(frame)
+
+    expect(frames).toEqual([
+      { raw: ': keepalive\n\n' },
+      { data: 'hello', raw: 'event: custom\ndata: hello\n\n' },
+    ])
+    expect(acceptReceipt).toHaveBeenCalledWith(receipt)
   })
 })
 

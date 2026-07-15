@@ -777,29 +777,49 @@ export async function openSseSession(
   if (!isEventStream(response)) throw new Error('SSE response is not an event stream.')
   if (!response.body) throw new Error('Response has no body.')
 
-  return iterateSseResponse({
-    challenge,
-    driver,
-    input,
-    onReceipt,
+  return iterateSseMessages({
+    onNeedVoucher: (event) => handleSseNeedVoucher({ challenge, driver, input }, event),
+    onReceipt(receipt) {
+      driver.acceptReceipt(receipt)
+      onReceipt?.(receipt)
+    },
     response,
     signal,
   })
 }
 
-type IterateSseResponseParameters = {
-  challenge: TempoSessionChallenge | null
-  driver: OpenSseSessionParameters
-  input: RequestInfo | URL
-  onReceipt?: ((receipt: SessionReceipt) => void) | undefined
+/** Application SSE frame emitted after session payment events are handled. */
+export type SseResponseFrame = {
+  /** Parsed application data, when present. */
+  data?: string | undefined
+  /** Original frame text, including its separator. */
+  raw: string
+}
+
+/** Inputs for driving an open paid SSE response. */
+export type DriveSseResponseParameters = {
+  /** Handles a request for the stream's next cumulative voucher. */
+  onNeedVoucher(event: NeedVoucherEvent): Promise<void>
+  /** Handles a payment receipt emitted by the stream. */
+  onReceipt(receipt: SessionReceipt): void
+  /** Open SSE response to drive. */
   response: Response
+  /** Abort signal used to stop reading the response. */
   signal?: AbortSignal | undefined
 }
 
-async function* iterateSseResponse(
-  parameters: IterateSseResponseParameters,
-): AsyncGenerator<string> {
-  const reader = parameters.response.body!.getReader()
+async function* iterateSseMessages(parameters: DriveSseResponseParameters): AsyncGenerator<string> {
+  for await (const frame of driveSseResponse(parameters)) {
+    if (frame.data !== undefined) yield frame.data
+  }
+}
+
+/** Handles session payment events and yields application SSE frames unchanged. */
+export async function* driveSseResponse(
+  parameters: DriveSseResponseParameters,
+): AsyncGenerator<SseResponseFrame> {
+  if (!parameters.response.body) throw new Error('Response has no body.')
+  const reader = parameters.response.body.getReader()
   const decoder = new TextDecoder()
   let buffer = ''
 
@@ -817,18 +837,21 @@ async function* iterateSseResponse(
       for (const part of parts) {
         if (!part.trim()) continue
         const event = parseEvent(part)
-        if (!event) continue
+        const raw = `${part}\n\n`
+        if (!event) {
+          yield { raw }
+          continue
+        }
 
         switch (event.type) {
           case 'message':
-            yield event.data
+            yield { data: event.data, raw }
             break
           case 'payment-need-voucher':
-            await handleSseNeedVoucher(parameters, event.data)
+            await parameters.onNeedVoucher(event.data)
             break
           case 'payment-receipt':
-            parameters.driver.acceptReceipt(event.data)
-            parameters.onReceipt?.(event.data)
+            parameters.onReceipt(event.data)
             break
         }
       }
@@ -839,7 +862,11 @@ async function* iterateSseResponse(
 }
 
 async function handleSseNeedVoucher(
-  parameters: IterateSseResponseParameters,
+  parameters: {
+    challenge: TempoSessionChallenge | null
+    driver: OpenSseSessionParameters
+    input: RequestInfo | URL
+  },
   event: NeedVoucherEvent,
 ) {
   const channel = parameters.driver.getChannel()
