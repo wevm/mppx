@@ -31,6 +31,7 @@ import * as TempoAddress from '../internal/address.js'
 import * as Charge_internal from '../internal/charge.js'
 import * as defaults from '../internal/defaults.js'
 import * as FeePayer from '../internal/fee-payer.js'
+import { resolveFeeToken } from '../internal/fee-token.js'
 import * as Proof from '../internal/proof.js'
 import * as Selectors from '../internal/selectors.js'
 import type * as types from '../internal/types.js'
@@ -59,6 +60,7 @@ export function charge<const parameters extends charge.Parameters>(
     decimals = defaults.decimals,
     description,
     externalId,
+    feeToken: configuredFeeToken,
     feePayerPolicy,
     html,
     memo,
@@ -79,6 +81,8 @@ export function charge<const parameters extends charge.Parameters>(
     : undefined
 
   const { recipient, feePayer, feePayerUrl } = Account.resolve(parameters)
+  if (configuredFeeToken && feePayerUrl)
+    throw new Error('`feeToken` can only be configured for a local fee payer.')
 
   const getClient = Client.getResolver({
     chain: { ...tempo_chain, experimental_preconfirmationTime: 500 },
@@ -405,6 +409,7 @@ export function charge<const parameters extends charge.Parameters>(
 
             const allowedFeeTokens = FeePayer.defaultAllowedFeeTokens(chainId)
             if (isFeePayerTx) FeePayer.assertAllowedFeeToken(transaction, allowedFeeTokens)
+            const selectableFeeTokens = allowedFeeTokens as readonly `0x${string}`[]
 
             // Request for the pre-broadcast simulation; for sponsored payments
             // this is overwritten below with the co-signed shape.
@@ -415,6 +420,15 @@ export function charge<const parameters extends charge.Parameters>(
 
             const serializedTransaction_final = await (async () => {
               if (feePayerAccount && methodDetails?.feePayer !== false) {
+                const feeToken =
+                  configuredFeeToken ??
+                  (await resolveFeeToken({
+                    account: feePayerAccount.address,
+                    allowedTokens: selectableFeeTokens,
+                    candidateTokens: selectableFeeTokens,
+                    client,
+                    prioritizeCandidates: true,
+                  }))
                 const sponsored = FeePayer.prepareSponsoredTransaction({
                   account: feePayerAccount,
                   allowedFeeTokens,
@@ -424,7 +438,7 @@ export function charge<const parameters extends charge.Parameters>(
                   policy: feePayerPolicy,
                   transaction: {
                     ...transaction,
-                    feeToken: transaction.feeToken ?? defaults.tokens.pathUsd,
+                    ...(feeToken ? { feeToken } : {}),
                   },
                 })
                 // `account` is the sender (eth_call `from`); `feePayer` is the
@@ -563,6 +577,14 @@ export declare namespace charge {
      * `maxTotalFee` so the combined fee budget remains valid.
      */
     feePayerPolicy?: FeePayerPolicy | undefined
+    /**
+     * Token a local fee payer uses to pay gas. If omitted, mppx selects a
+     * funded allowed token, preferring pathUSD.
+     *
+     * This option is not supported with a remote fee-payer URL, which selects
+     * its own token.
+     */
+    feeToken?: `0x${string}` | undefined
     /** Testnet mode. */
     testnet?: boolean | undefined
     /**

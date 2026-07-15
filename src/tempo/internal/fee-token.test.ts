@@ -77,6 +77,43 @@ describe.runIf(isLocalnet)('resolveFeeToken', () => {
     expectAddress(feeToken, asset)
   })
 
+  test('prioritizes funded allowed candidates', async () => {
+    const account = testAccount()
+    const client = clientFor(account)
+    await fundAccount({ address: account.address, token: asset })
+    await fundAccount({ address: account.address, token: Addresses.pathUsd })
+    await Actions.fee.setUserTokenSync(client, {
+      feeToken: asset,
+      token: asset,
+    } as never)
+
+    const feeToken = await resolveFeeToken({
+      account: account.address,
+      allowedTokens: [Addresses.pathUsd, asset],
+      candidateTokens: [Addresses.pathUsd, asset],
+      client,
+      prioritizeCandidates: true,
+    })
+
+    expectAddress(feeToken, Addresses.pathUsd)
+  })
+
+  test('falls through prioritized candidates when pathUSD is unfunded', async () => {
+    const account = testAccount()
+    const client = clientFor(account)
+    await fundAccount({ address: account.address, token: asset })
+
+    const feeToken = await resolveFeeToken({
+      account: account.address,
+      allowedTokens: [Addresses.pathUsd, asset],
+      candidateTokens: [Addresses.pathUsd, asset],
+      client,
+      prioritizeCandidates: true,
+    })
+
+    expectAddress(feeToken, asset)
+  })
+
   test('uses a funded chain fee token when configured', async () => {
     const account = testAccount()
     const client = createClient({

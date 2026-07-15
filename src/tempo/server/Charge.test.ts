@@ -1628,7 +1628,8 @@ describe('tempo', () => {
         chain: client.chain,
         transport: custom({
           async request(args: any) {
-            if (args.method === 'eth_call') callRequests.push(args.params?.[0])
+            if (args.method === 'eth_call' && args.params?.[0]?.calls)
+              callRequests.push(args.params[0])
             return client.transport.request(args)
           },
         }),
@@ -1690,6 +1691,7 @@ describe('tempo', () => {
       expect(simRequest.feePayer).not.toBe(true)
       expect(typeof simRequest.feePayer).toBe('string')
       expect((simRequest.feePayer as string).toLowerCase()).toBe(accounts[0].address.toLowerCase())
+      expect(simRequest.feeToken?.toLowerCase()).toBe(defaults.tokens.pathUsd.toLowerCase())
       // Execution runs as the sender, not the sponsor.
       expect((simRequest.from as string).toLowerCase()).toBe(accounts[1].address.toLowerCase())
       expect(simRequest.calls?.length).toBeGreaterThan(0)
@@ -2160,6 +2162,15 @@ describe('tempo', () => {
 
       httpServer.close()
       feePayerServer.close()
+    })
+
+    test('error: rejects a fee token configured for a remote fee payer', () => {
+      expect(() =>
+        tempo_server.charge({
+          feePayer: 'https://fee-payer.example',
+          feeToken: defaults.tokens.pathUsd,
+        }),
+      ).toThrow('`feeToken` can only be configured for a local fee payer.')
     })
 
     test('behavior: access keys', async () => {
