@@ -27,15 +27,9 @@ import {
   readTempoKeystore,
   resolveTempoAccount,
 } from './plugins/tempo.js'
-import {
-  closeAllSessions,
-  closeSession,
-  listSessions,
-  viewSession,
-  type SessionOutput,
-} from './sessions/commands.js'
+import sessions, { sessionCommandError } from './sessions/commands.js'
 import { runPersistentSessionRequest } from './sessions/request.js'
-import { createSessionRegistry, SessionBusyError, SessionStateError } from './sessions/store.js'
+import { createSessionRegistry } from './sessions/store.js'
 import {
   chainName,
   confirm,
@@ -98,37 +92,6 @@ const serviceEndpointSchema = z.object({
   payment: z.unknown().optional(),
 })
 
-const sessionOutputSchema = z.object({
-  status: z.enum(['opening', 'open', 'closing', 'stale']),
-  channelId: z.string(),
-  account: z.string().optional(),
-  payer: z.string(),
-  payee: z.string(),
-  authorizedSigner: z.string(),
-  token: z.string(),
-  escrow: z.string(),
-  chainId: z.number(),
-  cumulativeAmount: z.string(),
-  confirmedSpend: z.string(),
-  deposit: z.string(),
-  units: z.number(),
-  resourceUrl: z.string(),
-  createdAt: z.string(),
-  updatedAt: z.string(),
-})
-
-const sessionCloseOutputSchema = z.object({
-  channelId: z.string(),
-  status: z.enum(['closed', 'already-closed']),
-  spent: z.string(),
-  txHash: z.string().optional(),
-})
-
-const sessionBulkCloseOutputSchema = z.object({
-  closed: z.array(sessionCloseOutputSchema),
-  failed: z.array(z.object({ channelId: z.string(), message: z.string() })),
-})
-
 const servicesRegistryUrl = 'https://mpp.dev/api/services'
 
 function shouldReturnStructured(c: { format: string; formatExplicit: boolean }) {
@@ -143,43 +106,6 @@ function outputResult<Data>(
   if (shouldReturnStructured(c)) return c.ok(data)
   print()
   return undefined as unknown as Data
-}
-
-function printSession(record: SessionOutput): void {
-  console.log(record.channelId)
-  console.log(`  status              ${record.status}`)
-  console.log(`  cumulative amount   ${record.cumulativeAmount}`)
-  console.log(`  confirmed spend     ${record.confirmedSpend}`)
-  console.log(`  deposit             ${record.deposit}`)
-  console.log(`  chain               ${record.chainId}`)
-  console.log(`  payer               ${record.payer}`)
-  console.log(`  payee               ${record.payee}`)
-  console.log(`  token               ${record.token}`)
-  console.log(`  resource            ${record.resourceUrl}`)
-}
-
-function sessionCommandError(error: unknown, fallbackCode: string): never {
-  if (error instanceof Errors.IncurError) throw error
-  if (error instanceof SessionBusyError)
-    throw new Errors.IncurError({
-      code: error.code,
-      message: error.message,
-      exitCode: error.exitCode,
-      cause: error,
-    })
-  if (error instanceof SessionStateError)
-    throw new Errors.IncurError({
-      code: error.code,
-      message: error.message,
-      exitCode: 65,
-      cause: error,
-    })
-  throw new Errors.IncurError({
-    code: fallbackCode,
-    message: error instanceof Error ? error.message : String(error),
-    exitCode: 75,
-    ...(error instanceof Error && { cause: error }),
-  })
 }
 
 async function writeResponseBody(response: Response) {
@@ -835,122 +761,6 @@ const cli = Cli.create('mppx', {
     }
   },
 })
-
-const sessions = Cli.create('sessions', {
-  description: 'Manage persistent payment sessions (list, view, close)',
-})
-  .command('list', {
-    description: 'List persistent payment sessions',
-    options: z.object({
-      account: z.string().optional().describe('Filter by account name'),
-      network: z.enum(['mainnet', 'testnet']).optional().describe('Filter by Tempo network'),
-    }),
-    output: z.object({ sessions: z.array(sessionOutputSchema) }),
-    alias: { account: 'a' },
-    async run(c) {
-      try {
-        const records = await listSessions(c.options)
-        return outputResult(c, { sessions: records }, () => {
-          if (records.length === 0) console.log('No sessions.')
-          for (const [index, record] of records.entries()) {
-            if (index > 0) console.log('')
-            printSession(record)
-          }
-        })
-      } catch (error) {
-        return sessionCommandError(error, 'SESSION_LIST_FAILED')
-      }
-    },
-  })
-  .command('view', {
-    description: 'View a persistent payment session',
-    args: z.object({ channelId: z.string().describe('Full session channel ID') }),
-    output: sessionOutputSchema,
-    async run(c) {
-      try {
-        const record = await viewSession(c.args.channelId)
-        return outputResult(c, record, () => printSession(record))
-      } catch (error) {
-        return sessionCommandError(error, 'SESSION_VIEW_FAILED')
-      }
-    },
-  })
-  .command('close', {
-    description: 'Cooperatively close persistent payment sessions',
-    usage: [{ suffix: '<channel-id> [options]' }, { suffix: '--all --yes [options]' }],
-    args: z.object({ channelId: z.string().optional().describe('Full session channel ID') }),
-    options: z.object({
-      account: z.string().optional().describe('Account name'),
-      all: z.boolean().optional().default(false).describe('Close every matching session'),
-      header: z.array(z.string()).optional().describe('Add close request header (repeatable)'),
-      network: z.enum(['mainnet', 'testnet']).optional().describe('Tempo network'),
-      rpcUrl: z.string().optional().describe('RPC endpoint (env: MPPX_RPC_URL)'),
-      url: z.string().optional().describe('Override the stored resource URL'),
-      yes: z.boolean().optional().default(false).describe('Confirm closing every session'),
-    }),
-    output: z.union([sessionCloseOutputSchema, sessionBulkCloseOutputSchema]),
-    alias: { account: 'a', header: 'H', rpcUrl: 'r' },
-    async run(c) {
-      if (c.options.all && c.args.channelId)
-        return c.error({
-          code: 'INVALID_SESSION_CLOSE',
-          message: 'Specify a channel ID or --all, not both.',
-          exitCode: 2,
-        })
-      if (!c.options.all && !c.args.channelId)
-        return c.error({
-          code: 'INVALID_SESSION_CLOSE',
-          message: 'Specify a channel ID or --all.',
-          exitCode: 2,
-        })
-      if (c.options.all && !c.options.yes)
-        return c.error({
-          code: 'CONFIRMATION_REQUIRED',
-          message: 'Closing all sessions requires --yes.',
-          exitCode: 2,
-        })
-      if (c.options.all && (c.options.header || c.options.rpcUrl || c.options.url))
-        return c.error({
-          code: 'INVALID_SESSION_CLOSE',
-          message: '--header, --rpc-url, and --url only apply to a single session.',
-          exitCode: 2,
-        })
-
-      try {
-        if (c.options.all) {
-          const result = await closeAllSessions({
-            account: c.options.account,
-            network: c.options.network,
-          })
-          if (result.failed.length > 0) {
-            for (const failure of result.failed)
-              process.stderr.write(`${failure.channelId}: ${failure.message}\n`)
-            if (!c.agent) process.exitCode = 1
-          }
-          return outputResult(c, result, () => {
-            for (const closed of result.closed)
-              console.log(`${closed.channelId}  ${closed.status}  ${closed.spent}`)
-            for (const failure of result.failed)
-              console.log(`${failure.channelId}  failed  ${failure.message}`)
-          })
-        }
-
-        const result = await closeSession(c.args.channelId!, {
-          account: c.options.account,
-          headers: c.options.header,
-          network: c.options.network,
-          resourceUrl: c.options.url,
-          rpcUrl: c.options.rpcUrl,
-        })
-        return outputResult(c, result, () => {
-          console.log(`${result.channelId}  ${result.status}  ${result.spent}`)
-          if (result.txHash) console.log(`  transaction  ${result.txHash}`)
-        })
-      } catch (error) {
-        return sessionCommandError(error, 'SESSION_CLOSE_FAILED')
-      }
-    },
-  })
 
 const account = Cli.create('account', {
   description: 'Manage accounts (create, default, delete, export, fund, list, view)',

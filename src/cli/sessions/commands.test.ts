@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, test } from 'vp/test'
 
 import type * as Challenge from '../../Challenge.js'
 import type { ChannelEntry } from '../../tempo/session/client/ChannelOps.js'
-import { closeAllSessions, listSessions, viewSession } from './commands.js'
+import sessions from './commands.js'
 import { createSessionRegistry, type SessionRegistry } from './store.js'
 
 const payer = '0x1111111111111111111111111111111111111111' as Address
@@ -20,19 +20,42 @@ const mainnetChannelId = `0x${'bb'.repeat(32)}` as Hex
 
 let temporaryDirectory: string
 let registry: SessionRegistry
+let previousPrivateKey: string | undefined
+let previousStateHome: string | undefined
 
 beforeEach(async () => {
   temporaryDirectory = await fs.mkdtemp(path.join(os.tmpdir(), 'mppx-session-commands-'))
+  previousPrivateKey = process.env.MPPX_PRIVATE_KEY
+  previousStateHome = process.env.XDG_STATE_HOME
+  process.env.XDG_STATE_HOME = temporaryDirectory
   const timestamps = [new Date('2026-07-16T00:00:00.000Z'), new Date('2026-07-16T00:01:00.000Z')]
   registry = createSessionRegistry({
-    stateRoot: path.join(temporaryDirectory, 'state'),
+    stateRoot: path.join(temporaryDirectory, 'mppx', 'sessions', 'v1'),
     now: () => timestamps.shift() ?? new Date('2026-07-16T00:02:00.000Z'),
   })
 })
 
 afterEach(async () => {
+  if (previousPrivateKey === undefined) delete process.env.MPPX_PRIVATE_KEY
+  else process.env.MPPX_PRIVATE_KEY = previousPrivateKey
+  if (previousStateHome === undefined) delete process.env.XDG_STATE_HOME
+  else process.env.XDG_STATE_HOME = previousStateHome
   await fs.rm(temporaryDirectory, { force: true, recursive: true })
 })
+
+async function serve(argv: string[]) {
+  let output = ''
+  let exitCode: number | undefined
+  await sessions.serve(argv, {
+    stdout(value: string) {
+      output += value
+    },
+    exit(code: number) {
+      exitCode = code
+    },
+  })
+  return { exitCode, output }
+}
 
 function channel(parameters: {
   channelId: Hex
@@ -112,94 +135,113 @@ describe('session commands', () => {
   test('list returns stable JSON-safe decimal-string projections', async () => {
     await seedSessions()
 
-    const sessions = await listSessions({}, registry)
+    const result = await serve(['list', '--json'])
 
-    expect(sessions).toEqual([
-      {
-        status: 'open',
-        channelId: testnetChannelId,
-        account: 'testnet-payer',
-        payer,
-        payee,
-        authorizedSigner: payer,
-        token,
-        escrow,
-        chainId: 42431,
-        cumulativeAmount: '9007199254740993123456789',
-        confirmedSpend: '1234567890123456789',
-        deposit: '9999999999999999999999999',
-        units: 7,
-        resourceUrl: 'https://api.example.test/query?chainId=testnet&sql=select%201',
-        createdAt: '2026-07-16T00:00:00.000Z',
-        updatedAt: '2026-07-16T00:00:00.000Z',
-      },
-      {
-        status: 'closing',
-        channelId: mainnetChannelId,
-        account: 'mainnet-payer',
-        payer,
-        payee,
-        authorizedSigner: payer,
-        token,
-        escrow,
-        chainId: 4217,
-        cumulativeAmount: '20',
-        confirmedSpend: '5',
-        deposit: '100',
-        units: 2,
-        resourceUrl: 'https://api.example.test/query?chainId=mainnet',
-        createdAt: '2026-07-16T00:01:00.000Z',
-        updatedAt: '2026-07-16T00:01:00.000Z',
-      },
-    ])
-    expect(JSON.parse(JSON.stringify(sessions))).toEqual(sessions)
+    expect(result.exitCode).toBeUndefined()
+    expect(JSON.parse(result.output)).toEqual({
+      sessions: [
+        {
+          status: 'open',
+          channelId: testnetChannelId,
+          account: 'testnet-payer',
+          payer,
+          payee,
+          authorizedSigner: payer,
+          token,
+          escrow,
+          chainId: 42431,
+          cumulativeAmount: '9007199254740993123456789',
+          confirmedSpend: '1234567890123456789',
+          deposit: '9999999999999999999999999',
+          units: 7,
+          resourceUrl: 'https://api.example.test/query?chainId=testnet&sql=select%201',
+          createdAt: '2026-07-16T00:00:00.000Z',
+          updatedAt: '2026-07-16T00:00:00.000Z',
+        },
+        {
+          status: 'closing',
+          channelId: mainnetChannelId,
+          account: 'mainnet-payer',
+          payer,
+          payee,
+          authorizedSigner: payer,
+          token,
+          escrow,
+          chainId: 4217,
+          cumulativeAmount: '20',
+          confirmedSpend: '5',
+          deposit: '100',
+          units: 2,
+          resourceUrl: 'https://api.example.test/query?chainId=mainnet',
+          createdAt: '2026-07-16T00:01:00.000Z',
+          updatedAt: '2026-07-16T00:01:00.000Z',
+        },
+      ],
+    })
   })
 
   test('list filters by account and network', async () => {
     await seedSessions()
 
-    await expect(listSessions({ account: 'testnet-payer' }, registry)).resolves.toMatchObject([
-      { channelId: testnetChannelId },
+    const byAccount = await serve(['list', '--account', 'testnet-payer', '--json'])
+    const byNetwork = await serve(['list', '--network', 'mainnet', '--json'])
+    const mismatch = await serve([
+      'list',
+      '--account',
+      'testnet-payer',
+      '--network',
+      'mainnet',
+      '--json',
     ])
-    await expect(listSessions({ network: 'mainnet' }, registry)).resolves.toMatchObject([
-      { channelId: mainnetChannelId },
-    ])
-    await expect(
-      listSessions({ account: 'testnet-payer', network: 'mainnet' }, registry),
-    ).resolves.toEqual([])
+
+    expect(JSON.parse(byAccount.output).sessions).toMatchObject([{ channelId: testnetChannelId }])
+    expect(JSON.parse(byNetwork.output).sessions).toMatchObject([{ channelId: mainnetChannelId }])
+    expect(JSON.parse(mismatch.output)).toEqual({ sessions: [] })
   })
 
   test('view returns the same stable projection as list', async () => {
     await seedSessions()
-    const [listed] = await listSessions({ network: 'testnet' }, registry)
+    const listed = await serve(['list', '--network', 'testnet', '--json'])
+    const viewed = await serve(['view', testnetChannelId, '--json'])
 
-    await expect(viewSession(testnetChannelId, registry)).resolves.toEqual(listed)
+    expect(JSON.parse(viewed.output)).toEqual(JSON.parse(listed.output).sessions[0])
   })
 
   test('view rejects a missing full channel ID', async () => {
     const missingChannelId = `0x${'cc'.repeat(32)}`
+    const result = await serve(['view', missingChannelId, '--json'])
 
-    await expect(viewSession(missingChannelId, registry)).rejects.toMatchObject({
-      code: 'SESSION_NOT_FOUND',
-      exitCode: 2,
-      message: `Session ${missingChannelId} was not found.`,
-    })
+    expect(result.exitCode).toBe(2)
+    expect(result.output).toContain('SESSION_NOT_FOUND')
+    expect(result.output).toContain(`Session ${missingChannelId} was not found.`)
   })
 
-  test('close all runs sequentially and reports partial failure', async () => {
+  test('close all reports failures in session order', async () => {
     await seedSessions()
-    const calls: string[] = []
+    process.env.MPPX_PRIVATE_KEY = `0x${'11'.repeat(32)}`
+    const originalStderrWrite = process.stderr.write
+    let stderr = ''
+    process.stderr.write = ((chunk: unknown) => {
+      stderr += typeof chunk === 'string' ? chunk : String(chunk)
+      return true
+    }) as typeof process.stderr.write
 
-    const result = await closeAllSessions({}, registry, async (channelId) => {
-      calls.push(channelId)
-      if (channelId === mainnetChannelId) throw new Error('settlement unavailable')
-      return { channelId: testnetChannelId, status: 'closed', spent: '123' }
-    })
+    let result!: Awaited<ReturnType<typeof serve>>
+    try {
+      result = await serve(['close', '--all', '--yes', '--json'])
+    } finally {
+      process.stderr.write = originalStderrWrite
+    }
+    const output = JSON.parse(result.output)
 
-    expect(calls).toEqual([testnetChannelId, mainnetChannelId])
-    expect(result).toEqual({
-      closed: [{ channelId: testnetChannelId, status: 'closed', spent: '123' }],
-      failed: [{ channelId: mainnetChannelId, message: 'settlement unavailable' }],
-    })
+    expect(output.closed).toEqual([])
+    expect(output.failed.map((failure: { channelId: string }) => failure.channelId)).toEqual([
+      testnetChannelId,
+      mainnetChannelId,
+    ])
+    expect(output.failed[0].message).toContain('cannot sign for session')
+    expect(output.failed[1].message).toContain('cannot sign for session')
+    expect(stderr).toContain(testnetChannelId)
+    expect(stderr).toContain(mainnetChannelId)
   })
 })
