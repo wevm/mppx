@@ -374,6 +374,45 @@ describe('CLI session manager adapter', () => {
     expect(remove).toHaveBeenCalledOnce()
   })
 
+  test('restores newer snapshot spend before retrying a close', async () => {
+    const { challenge } = challengeResponse('challenge-2', sessionSnapshot())
+    const entry = channelEntry()
+    entry.cumulativeAmount = 5n
+    const { remove, store } = channelStore(entry)
+    const closeAmounts: string[] = []
+    const fetch = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const payload = credentialPayload(init)
+      if (payload?.action !== 'close') throw new Error('expected close credential')
+      closeAmounts.push(payload.cumulativeAmount)
+      return new Response(null, {
+        headers: {
+          [Constants.Headers.paymentReceipt]: serializeSessionReceipt(
+            createSessionReceipt({
+              acceptedCumulative: 4n,
+              challengeId: challenge.id,
+              channelId,
+              spent: 4n,
+              txHash: `0x${'aa'.repeat(32)}` as Hex,
+            }),
+          ),
+        },
+      })
+    })
+
+    const result = await closeWithSessionManager({
+      channel: entry,
+      challenge,
+      fetch,
+      input: 'https://api.example.test/resource?chainId=testnet',
+      manager: managerParameters(store),
+      spent: 3n,
+    })
+
+    expect(result.receipt).toMatchObject({ channelId, spent: '4' })
+    expect(closeAmounts).toEqual(['4'])
+    expect(remove).toHaveBeenCalledOnce()
+  })
+
   test('rejects refreshed snapshot spend beyond local cumulative authorization', async () => {
     const { challenge } = challengeResponse()
     const entry = channelEntry()

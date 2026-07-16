@@ -807,10 +807,10 @@ export function consumeSseSessionResponse(
 ): AsyncIterable<string> {
   if (!isEventStream(response)) throw new Error('SSE response is not an event stream.')
   if (!response.body) throw new Error('Response has no body.')
+  const challenge = driver.getChallenge()
 
   return iterateSseMessages({
-    onNeedVoucher: (event) =>
-      handleSseNeedVoucher({ challenge: driver.getChallenge(), driver, input }, event),
+    onNeedVoucher: (event) => handleSseNeedVoucher({ challenge, driver, input }, event),
     onReceipt(receipt) {
       driver.acceptReceipt(receipt)
       options?.onReceipt?.(receipt)

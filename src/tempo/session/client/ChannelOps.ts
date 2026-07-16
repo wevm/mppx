@@ -67,6 +67,14 @@ function readAccessKeyAddress(account: Account): Address | undefined {
   return readOptionalAddress((account as AccountWithAccessKey).accessKeyAddress)
 }
 
+/** Returns random past seconds to distinguish otherwise-identical expiring transactions. */
+function randomValidAfter(): number {
+  const now = BigInt(Math.floor(Date.now() / 1_000))
+  const latest = now - 60n
+  if (latest <= 0n) return 0
+  return Number(BigInt(Hex.random(8)) % latest)
+}
+
 /** Resolves the voucher authority address for a client account. */
 export function resolveAuthorizedSigner(account: Account): Address {
   return readAccessKeyAddress(account) ?? account.address
@@ -79,16 +87,17 @@ async function prepareTempoChannelTransaction(
     calls: readonly TempoChannelCall[]
     feePayer?: boolean | undefined
     feeToken: Address
+    validAfter?: number | undefined
   },
 ) {
-  const { account, calls, feePayer, feeToken } = parameters
+  const { account, calls, feePayer, feeToken, validAfter } = parameters
   // viem's stable transaction request type does not yet expose Tempo's
   // `calls`, `feePayer`, and `feeToken` fields together. Keep the cast at
   // this boundary so session credential builders stay typed.
   return prepareTransactionRequest(client, {
     account,
     calls,
-    ...(feePayer ? { feePayer: true } : {}),
+    ...(feePayer ? { feePayer: true, ...(validAfter !== undefined ? { validAfter } : {}) } : {}),
     feeToken,
   } as never)
 }
@@ -316,6 +325,7 @@ export async function createTopUpPayload(
     ],
     feePayer,
     feeToken: descriptor.token,
+    ...(feePayer ? { validAfter: randomValidAfter() } : {}),
   })
   const transaction = await signPreparedTempoTransaction(client, prepared)
 
