@@ -209,6 +209,7 @@ describe('CLI session manager adapter', () => {
     )
     const { store } = channelStore(entry)
     const fetch = vi.fn(async () => refreshed.response)
+    const onChallenge = vi.fn()
 
     await expect(
       closeWithSessionManager({
@@ -217,10 +218,12 @@ describe('CLI session manager adapter', () => {
         fetch,
         input: 'https://api.example.test/resource?chainId=testnet',
         manager: managerParameters(store),
+        onChallenge,
         spent: 3n,
       }),
     ).rejects.toThrow('close snapshot accepted cumulative exceeds local voucher state')
     expect(fetch).toHaveBeenCalledOnce()
+    expect(onChallenge).not.toHaveBeenCalled()
   })
 
   test('rejects a stored close challenge with a different payee before sending', async () => {

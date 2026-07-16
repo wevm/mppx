@@ -371,6 +371,32 @@ describe('HttpManagement', () => {
       ).rejects.toThrow('Session close response included a mismatched payment receipt.')
     })
 
+    test('closeHttpSession rejects an invalid settlement transaction hash', async () => {
+      for (const txHash of ['0x1234', `0x${'gg'.repeat(32)}`]) {
+        const receipt = serializeSessionReceipt(
+          createSessionReceipt({
+            acceptedCumulative: 5n,
+            challengeId: 'challenge-1',
+            channelId,
+            spent: 5n,
+            txHash: txHash as Hex.Hex,
+          }),
+        )
+        await expect(
+          closeHttpSession({
+            createSessionCredential: async () => 'close-credential',
+            fetch: async () =>
+              new Response(null, {
+                headers: { [Constants.Headers.paymentReceipt]: receipt },
+              }),
+            lastUrl: 'https://example.test/resource',
+            signedCloseAmount: '5',
+            target: { challenge: challenge(), channel: channel(), channelId },
+          }),
+        ).rejects.toThrow('Session close response included a mismatched payment receipt.')
+      }
+    })
+
     test('closeHttpSession includes problem detail and challenge header on failure', async () => {
       await expect(
         closeHttpSession({

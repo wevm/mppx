@@ -4,6 +4,10 @@ import * as path from 'node:path'
 
 import type { Address, Hex } from 'viem'
 
+vi.mock('node:fs/promises', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('node:fs/promises')>()),
+}))
+
 import type * as Challenge from '../../Challenge.js'
 import type { ChannelEntry } from '../../tempo/session/client/ChannelOps.js'
 import { entryKey } from '../../tempo/session/client/ChannelStore.js'
@@ -308,6 +312,78 @@ describe('createSessionRegistry', () => {
     })
     await remote.release()
   })
+
+  test('allows only one concurrent dead-lock reclaimer to acquire', async () => {
+    const deadOwner = createSessionRegistry(
+      registryOptions({ hostname: 'host-a', pid: 101, isProcessAlive: () => true }),
+    )
+    await deadOwner.acquire(scope())
+    const [lockName] = await fs.readdir(path.join(stateRoot, 'locks'))
+    if (!lockName) throw new Error('Expected a lock file.')
+    const lock = path.join(stateRoot, 'locks', lockName)
+    const stale = JSON.parse(await fs.readFile(lock, 'utf8')) as { token: string }
+
+    let unsafeUnlinks = 0
+    let releaseFirstUnlink: (() => void) | undefined
+    const secondUnlink = new Promise<void>((resolve) => {
+      releaseFirstUnlink = resolve
+    })
+    const { unlink } = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises')
+    const unlinkSpy = vi.spyOn(fs, 'unlink').mockImplementation(async (file) => {
+      if (String(file) !== lock) return unlink(file)
+      try {
+        await fs.access(`${lock}.reclaim`)
+        return unlink(file)
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+      }
+      unsafeUnlinks++
+      if (unsafeUnlinks === 1) {
+        await secondUnlink
+        return unlink(file)
+      }
+      if (unsafeUnlinks === 2) {
+        releaseFirstUnlink?.()
+        await vi.waitUntil(
+          async () => {
+            try {
+              const current = JSON.parse(await fs.readFile(lock, 'utf8')) as { token: string }
+              return current.token !== stale.token
+            } catch {
+              return false
+            }
+          },
+          { interval: 1, timeout: 1_000 },
+        )
+      }
+      return unlink(file)
+    })
+
+    const isProcessAlive = (pid: number) => pid === 202 || pid === 303
+    const first = createSessionRegistry(
+      registryOptions({ hostname: 'host-a', pid: 202, isProcessAlive }),
+    )
+    const second = createSessionRegistry(
+      registryOptions({ hostname: 'host-a', pid: 303, isProcessAlive }),
+    )
+    try {
+      const results = await Promise.allSettled([first.acquire(scope()), second.acquire(scope())])
+      unlinkSpy.mockRestore()
+      const acquired = results.filter(
+        (result): result is PromiseFulfilledResult<Awaited<ReturnType<typeof first.acquire>>> =>
+          result.status === 'fulfilled',
+      )
+      const rejected = results.filter(
+        (result): result is PromiseRejectedResult => result.status === 'rejected',
+      )
+      expect(acquired).toHaveLength(1)
+      expect(rejected).toHaveLength(1)
+      expect(rejected[0]?.reason).toBeInstanceOf(SessionBusyError)
+      await acquired[0]?.value.release()
+    } finally {
+      unlinkSpy.mockRestore()
+    }
+  })
 })
 
 describe('toChannelStore', () => {
@@ -479,6 +555,7 @@ describe('session commands', () => {
   test('close all reports failures in session order', async () => {
     await seedCommandSessions(commandRegistry())
     vi.stubEnv('MPPX_PRIVATE_KEY', `0x${'11'.repeat(32)}`)
+    const originalExitCode = process.exitCode
     const originalWrite = process.stderr.write
     let stderr = ''
     process.stderr.write = ((chunk: unknown) => {
@@ -493,9 +570,11 @@ describe('session commands', () => {
         channelId,
         mainnetChannelId,
       ])
+      expect(process.exitCode).toBe(1)
       expect(stderr).toContain(channelId)
       expect(stderr).toContain(mainnetChannelId)
     } finally {
+      process.exitCode = originalExitCode
       process.stderr.write = originalWrite
     }
   })
