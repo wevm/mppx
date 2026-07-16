@@ -1,5 +1,15 @@
 # mppx
 
+## 0.8.11
+
+### Patch Changes
+
+- be4452c: Exported SSE session controller helpers through Tempo server namespaces.
+- c40a0fc: Added continuous `main` snapshot releases.
+- 7207c0f: Added local Tempo charge fee-token selection with a pathUSD preference and an explicit override.
+- 98abd92: Extracted session SSE payment handling into a response-preserving driver.
+- 0679b0f: Added sender and final-envelope simulations before sponsored Tempo broadcasts.
+
 ## 0.8.10
 
 ### Patch Changes
