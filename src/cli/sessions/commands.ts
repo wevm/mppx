@@ -1,50 +1,24 @@
 import { Cli, Errors, z } from 'incur'
-import type { Address, Hex } from 'viem'
 import { createClient, http } from 'viem'
 import { tempo as tempoMainnet, tempoModerato } from 'viem/tempo/chains'
 
 import { normalizeHeaders } from '../../client/internal/Fetch.js'
 import { canSignDescriptor } from '../../tempo/session/client/CredentialState.js'
-import { isTempoSessionChallenge } from '../../tempo/session/client/Transports.js'
 import * as Chain from '../../tempo/session/precompile/Chain.js'
 import * as Channel from '../../tempo/session/precompile/Channel.js'
-import { resolveAccountName, resolveLocalAccount } from '../account.js'
-import { isTempoAccount, resolveChain, resolveRpcUrl, type Network } from '../utils.js'
+import { resolvePersistentAccount } from '../account.js'
+import { resolveChain, resolveRpcUrl, type Network } from '../utils.js'
 import { closeWithSessionManager } from './Manager.js'
 import {
   createSessionRegistry,
   SessionBusyError,
   SessionStateError,
   type ManagedSession,
-  type SessionScope,
+  type SessionPersistenceContext,
+  sessionResourceUrl,
+  sessionScope,
   toChannelStore,
 } from './store.js'
-
-type SessionOutput = {
-  status: ManagedSession['status']
-  channelId: Hex
-  account?: string | undefined
-  payer: Address
-  payee: Address
-  authorizedSigner: Address
-  token: Address
-  escrow: Address
-  chainId: number
-  cumulativeAmount: string
-  confirmedSpend: string
-  deposit: string
-  units: number
-  resourceUrl: string
-  createdAt: string
-  updatedAt: string
-}
-
-type SessionCloseOutput = {
-  channelId: Hex
-  status: 'closed' | 'already-closed'
-  spent: string
-  txHash?: Hex | undefined
-}
 
 type SessionCloseOptions = {
   account?: string | undefined
@@ -85,6 +59,9 @@ const sessionBulkCloseOutputSchema = z.object({
   failed: z.array(z.object({ channelId: z.string(), message: z.string() })),
 })
 
+type SessionOutput = z.infer<typeof sessionOutputSchema>
+type SessionCloseOutput = z.infer<typeof sessionCloseOutputSchema>
+
 function networkChainId(network: Network): number {
   return network === 'mainnet' ? tempoMainnet.id : tempoModerato.id
 }
@@ -93,14 +70,6 @@ function networkForChain(chainId: number): Network | undefined {
   if (chainId === tempoMainnet.id) return 'mainnet'
   if (chainId === tempoModerato.id) return 'testnet'
   return undefined
-}
-
-function exactResourceUrl(value: string): string {
-  const protocol = new URL(value).protocol
-  if (protocol !== 'http:' && protocol !== 'https:')
-    throw new Error('Invalid session resource URL.')
-  const fragment = value.indexOf('#')
-  return fragment === -1 ? value : value.slice(0, fragment)
 }
 
 function parseHeaders(values: readonly string[] | undefined): Record<string, string> {
@@ -166,21 +135,7 @@ export function sessionCommandError(error: unknown, fallbackCode: string): never
 
 async function resolveCloseAccount(record: ManagedSession, accountOverride?: string | undefined) {
   const accountName = accountOverride ?? record.account.name
-  const resolvedName = resolveAccountName(accountName)
-  if (!process.env.MPPX_PRIVATE_KEY?.trim() && isTempoAccount(resolvedName))
-    throw new Errors.IncurError({
-      code: 'UNSUPPORTED_ACCOUNT',
-      message: 'Persistent sessions require an mppx account or MPPX_PRIVATE_KEY.',
-      exitCode: 2,
-    })
-  const resolved = await resolveLocalAccount(accountName).catch((cause: unknown) => {
-    throw new Errors.IncurError({
-      code: 'ACCOUNT_NOT_FOUND',
-      message: cause instanceof Error ? cause.message : 'No account found.',
-      exitCode: 69,
-      ...(cause instanceof Error && { cause }),
-    })
-  })
+  const resolved = await resolvePersistentAccount(accountName)
   if (!canSignDescriptor(resolved.account, record.channel.descriptor))
     throw new Errors.IncurError({
       code: 'SESSION_ACCOUNT_MISMATCH',
@@ -210,16 +165,6 @@ async function resolveCloseClient(
       exitCode: 2,
     })
   return createClient({ chain, transport: http(rpcUrl) })
-}
-
-function sessionScope(record: ManagedSession): SessionScope {
-  return {
-    payer: record.channel.descriptor.payer,
-    payee: record.channel.descriptor.payee,
-    token: record.channel.descriptor.token,
-    escrow: record.channel.escrow,
-    chainId: record.channel.chainId,
-  }
 }
 
 const sessions = Cli.create('sessions', {
@@ -331,7 +276,7 @@ const sessions = Cli.create('sessions', {
             message: `Session ${channelId} was not found.`,
             exitCode: 2,
           })
-        const scope = sessionScope(candidate)
+        const scope = sessionScope(candidate.channel)
         const lock = await registry.acquire(scope)
         try {
           const record = await registry.get(channelId)
@@ -369,20 +314,23 @@ const sessions = Cli.create('sessions', {
             }
           }
 
-          const endpoint = exactResourceUrl(options.resourceUrl ?? record.endpoint)
+          const endpoint = sessionResourceUrl(options.resourceUrl ?? record.endpoint)
           const account = {
             ...(resolvedAccount.source === 'keychain' && { name: resolvedAccount.accountName }),
             address: resolvedAccount.account.address,
           }
-          const closing = await registry.upsert({
+          const closingContext = (challenge = record.challenge): SessionPersistenceContext => ({
             status: 'closing',
-            channel: record.channel,
             account,
             endpoint,
-            challenge: record.challenge,
+            challenge,
             ...(record.receipt && { receipt: record.receipt }),
             spent: record.spent,
             units: record.units,
+          })
+          const closing = await registry.upsert({
+            ...closingContext(),
+            channel: record.channel,
           })
           const headers = parseHeaders(options.headers)
           let latestChallenge = closing.challenge
@@ -393,25 +341,15 @@ const sessions = Cli.create('sessions', {
             })
           const result = await closeWithSessionManager({
             channel: closing.channel,
-            challenge: isTempoSessionChallenge(closing.challenge)
-              ? closing.challenge
-              : (() => {
-                  throw new Error('Stored session challenge is not tempo/session.')
-                })(),
+            challenge: closing.challenge,
             fetch: closeFetch,
             input: endpoint,
             spent: closing.spent,
             async onChallenge(challenge) {
               latestChallenge = challenge
               await registry.upsert({
-                status: 'closing',
+                ...closingContext(challenge),
                 channel: closing.channel,
-                account,
-                endpoint,
-                challenge,
-                ...(closing.receipt && { receipt: closing.receipt }),
-                spent: closing.spent,
-                units: closing.units,
               })
             },
             manager: {
@@ -420,15 +358,7 @@ const sessions = Cli.create('sessions', {
               channelStore: toChannelStore(registry, {
                 scope,
                 selection: closing.channel.channelId,
-                context: () => ({
-                  status: 'closing',
-                  account,
-                  endpoint,
-                  challenge: latestChallenge,
-                  ...(closing.receipt && { receipt: closing.receipt }),
-                  spent: closing.spent,
-                  units: closing.units,
-                }),
+                context: () => closingContext(latestChallenge),
               }),
             },
           })

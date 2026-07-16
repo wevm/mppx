@@ -7,18 +7,18 @@ import {
   canSignDescriptor,
   resolveChallengeContext,
 } from '../../tempo/session/client/CredentialState.js'
+import { getSessionManagerInternals } from '../../tempo/session/client/internal/SessionManager.js'
+import { sessionManager } from '../../tempo/session/client/SessionManager.js'
 import type { TempoSessionChallenge } from '../../tempo/session/client/Transports.js'
-import type { SessionReceipt } from '../../tempo/session/precompile/Protocol.js'
-import { resolveAccountName, resolveLocalAccount } from '../account.js'
+import { isEventStream, type SessionReceipt } from '../../tempo/session/precompile/Protocol.js'
+import { resolvePersistentAccount } from '../account.js'
 import {
-  isTempoAccount,
   isTestnet,
   printResponseHeaders,
   resolveChain,
   resolveRpcUrl,
   type Network,
 } from '../utils.js'
-import { requestWithSessionManager } from './Manager.js'
 import {
   createSessionRegistry,
   type ManagedSession,
@@ -27,6 +27,8 @@ import {
   type SessionSelection,
   type SessionStatus,
   SessionBusyError,
+  sessionResourceUrl,
+  sessionScope,
   sessionScopeKey,
   toChannelStore,
 } from './store.js'
@@ -76,14 +78,6 @@ export function resolveSessionSelection(
     message: 'Session must be auto, new, or a 32-byte channel ID.',
     exitCode: 2,
   })
-}
-
-function exactResourceUrl(value: string): string {
-  const protocol = new URL(value).protocol
-  if (protocol !== 'http:' && protocol !== 'https:')
-    throw new Error('Invalid session resource URL.')
-  const fragment = value.indexOf('#')
-  return fragment === -1 ? value : value.slice(0, fragment)
 }
 
 function sessionDeposit(
@@ -146,22 +140,7 @@ export async function runPersistentSessionRequest(
   parameters: PersistentSessionRequestParameters,
 ): Promise<void> {
   const { options } = parameters
-  const accountName = resolveAccountName(options.account)
-  if (!process.env.MPPX_PRIVATE_KEY?.trim() && isTempoAccount(accountName))
-    throw new Errors.IncurError({
-      code: 'UNSUPPORTED_ACCOUNT',
-      message: 'Persistent sessions require an mppx account or MPPX_PRIVATE_KEY.',
-      exitCode: 2,
-    })
-
-  const resolvedAccount = await resolveLocalAccount(options.account).catch((cause: unknown) => {
-    throw new Errors.IncurError({
-      code: 'ACCOUNT_NOT_FOUND',
-      message: cause instanceof Error ? cause.message : 'No account found.',
-      exitCode: 69,
-      ...(cause instanceof Error && { cause }),
-    })
-  })
+  const resolvedAccount = await resolvePersistentAccount(options.account)
   const rpcUrl = resolveRpcUrl(options.rpcUrl, { network: options.network })
   const chain = await resolveChain({ network: options.network, rpcUrl })
   const client = createClient({ chain, transport: http(rpcUrl) })
@@ -211,17 +190,10 @@ export async function runPersistentSessionRequest(
         exitCode: 2,
       })
     if (selected && selection !== 'auto') {
-      const selectedScope = {
-        payer: selected.channel.descriptor.payer,
-        payee: selected.channel.descriptor.payee,
-        token: selected.channel.descriptor.token,
-        escrow: selected.channel.escrow,
-        chainId: selected.channel.chainId,
-      }
       if (
         selected.status !== 'open' ||
         !selected.channel.opened ||
-        sessionScopeKey(selectedScope) !== sessionScopeKey(scope) ||
+        sessionScopeKey(sessionScope(selected.channel)) !== sessionScopeKey(scope) ||
         !canSignDescriptor(resolvedAccount.account, selected.channel.descriptor)
       )
         throw new Errors.IncurError({
@@ -237,7 +209,7 @@ export async function runPersistentSessionRequest(
     let latestReceipt = reusable?.receipt
     let spent = reusable?.spent ?? 0n
     let units = reusable?.units ?? 0
-    const endpoint = exactResourceUrl(parameters.endpoint)
+    const endpoint = sessionResourceUrl(parameters.endpoint)
     const account = {
       ...(resolvedAccount.source === 'keychain' && { name: resolvedAccount.accountName }),
       address: resolvedAccount.account.address,
@@ -272,62 +244,68 @@ export async function runPersistentSessionRequest(
         units = Math.max(units, receipt.units ?? 0)
       },
     }
-    const result = await requestWithSessionManager({
-      challengeResponse: parameters.challengeResponse,
-      fetch: parameters.fetch,
-      input: parameters.fetchInput,
-      init: requestInit,
-      manager: {
-        account: resolvedAccount.account,
-        client,
-        channelStore,
-        maxDeposit: sessionDeposit(
-          parameters.challenge,
-          parameters.methodOptions,
-          isTestnet(chain),
-        ),
+    if (parameters.challengeResponse.status !== 402 || parameters.challengeResponse.bodyUsed)
+      throw new Error('Session manager requires an unconsumed 402 challenge response.')
+    let replayPending = true
+    const manager = sessionManager({
+      account: resolvedAccount.account,
+      bootstrap: false,
+      client,
+      channelStore,
+      maxDeposit: sessionDeposit(parameters.challenge, parameters.methodOptions, isTestnet(chain)),
+      fetch: async (input, init) => {
+        if (!replayPending) return parameters.fetch(input, init)
+        replayPending = false
+        return parameters.challengeResponse
       },
-      ...(reusable && {
-        resume: {
-          channel: reusable.channel,
-          challenge: parameters.challenge,
-          spent: reusable.spent,
-        },
-      }),
     })
+    if (reusable)
+      getSessionManagerInternals(manager).rehydrate({
+        channel: reusable.channel,
+        challenge: parameters.challenge,
+        input: parameters.fetchInput,
+        spent: reusable.spent,
+      })
+    const { onReceipt, ...managerInit } = requestInit
+    const response = await manager.fetch(parameters.fetchInput, managerInit)
 
-    if (options.fail && result.response.status >= 400)
+    if (options.fail && response.status >= 400)
       throw new Errors.IncurError({
         code: 'HTTP_ERROR',
-        message: `HTTP error ${result.response.status}`,
+        message: `HTTP error ${response.status}`,
         exitCode: 22,
       })
-    if (result.response.status === 402)
+    if (response.status === 402)
       throw new Errors.IncurError({
         code: 'PAYMENT_REJECTED',
         message: 'Payment rejected.',
         exitCode: 75,
       })
 
-    printResponseHeaders(result.response, {
+    printResponseHeaders(response, {
       include: false,
       verbose: options.include ? Math.max(options.verbose, 2) : options.verbose,
       silent: options.silent,
     })
-    latestChallenge = result.response.challenge ?? parameters.challenge
-    const channelId = result.manager.channelId
+    latestChallenge = response.challenge ?? parameters.challenge
+    const channelId = manager.channelId
     if (!channelId) throw new Error('Session manager did not select a channel.')
     latestReceipt =
-      validateReceipt(result.response.receipt, {
+      validateReceipt(response.receipt, {
         challenge: latestChallenge,
         channelId,
-        cumulative: result.manager.cumulative,
+        cumulative: manager.cumulative,
       }) ?? latestReceipt
 
-    if (result.kind === 'event-stream') {
-      for await (const chunk of result.stream) writeSseChunk(chunk)
+    if (isEventStream(response)) {
+      const stream = getSessionManagerInternals(manager).consumeSseResponse(
+        parameters.fetchInput,
+        response,
+        { onReceipt, signal: parameters.init.signal ?? undefined },
+      )
+      for await (const chunk of stream) writeSseChunk(chunk)
     } else {
-      process.stdout.write(Buffer.from(await result.response.arrayBuffer()))
+      process.stdout.write(Buffer.from(await response.arrayBuffer()))
     }
 
     const record = await registry.get(channelId)
@@ -337,7 +315,7 @@ export async function runPersistentSessionRequest(
       const validatedReceipt = validateReceipt(latestReceipt, {
         challenge: latestChallenge,
         channelId,
-        cumulative: result.manager.cumulative,
+        cumulative: manager.cumulative,
       })
       if (!validatedReceipt) throw new Error('Session receipt validation failed.')
       latestReceipt = validatedReceipt

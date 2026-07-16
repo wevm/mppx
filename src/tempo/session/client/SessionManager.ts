@@ -201,7 +201,6 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
 
   const backing = parameters.channelStore ?? createChannelStore()
   const ignoredChannelIds = new Set<Hex.Hex>()
-  let lastCloseAttempt: { challengeId: string; signedCloseAmount: string } | null = null
 
   // Tracks one fetch's channel reuse so stale stored entries can be evicted once.
   type ChannelUse = {
@@ -490,9 +489,7 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
       throw new Error('fallback close amount exceeds local voucher state')
     }
     assertVoucherWithinLocalLimit(closeAmount)
-    const signedCloseAmount = closeAmount.toString()
-    lastCloseAttempt = { challengeId: challenge.id, signedCloseAmount }
-    return signedCloseAmount
+    return closeAmount.toString()
   }
 
   function assertVoucherWithinLocalLimit(cumulativeAmount: bigint) {
@@ -833,7 +830,6 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
     consumeSseResponse(input, response, options) {
       return consumeSseSessionResponse(input, response, options, sseDriver)
     },
-    getCloseAttempt: () => lastCloseAttempt,
     rehydrate({ channel, challenge, input, spent }) {
       if (!channel.opened) throw new Error('Cannot restore a closed session channel.')
       if (!isTempoSessionChallenge(challenge)) {

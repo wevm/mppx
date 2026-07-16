@@ -1321,6 +1321,7 @@ describe('Session', () => {
                     challengeId,
                     channelId: payload.channelId,
                     spent: BigInt(payload.cumulativeAmount),
+                    txHash: `0x${'aa'.repeat(32)}` as Hex,
                     units: 1,
                   }),
                 ),

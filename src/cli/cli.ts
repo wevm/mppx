@@ -14,12 +14,7 @@ import * as Mppx from '../client/Mppx.js'
 import * as Constants from '../Constants.js'
 import { validate as validateDiscovery } from '../discovery/Validate.js'
 import { isTempoSessionChallenge } from '../tempo/session/client/Transports.js'
-import {
-  createDefaultStore,
-  createKeychain,
-  resolveAccountName,
-  resolveLocalAccount,
-} from './account.js'
+import { createDefaultStore, createKeychain, resolveAccountName } from './account.js'
 import { loadConfig, resolveAcceptPayment, selectChallenge } from './internal.js'
 import type { Plugin } from './plugins/plugin.js'
 import {
@@ -944,12 +939,9 @@ const account = Cli.create('account', {
     async run(c) {
       const structured = shouldReturnStructured(c)
       const accountName = resolveAccountName(c.options.account)
-      const missingMessage = `Account "${accountName}" not found.`
-      const resolved = await resolveLocalAccount(c.options.account).catch((error) => {
-        if (error instanceof Error && error.message === missingMessage) return null
-        throw error
-      })
-      if (!resolved) {
+      const keychain = createKeychain(accountName)
+      const key = await keychain.get()
+      if (!key) {
         if (c.options.account)
           return c.error({
             code: 'ACCOUNT_NOT_FOUND',
@@ -959,16 +951,15 @@ const account = Cli.create('account', {
         else
           return c.error({ code: 'ACCOUNT_NOT_FOUND', message: 'No account found.', exitCode: 69 })
       }
-      const accountReference =
-        resolved.source === 'keychain' ? resolved.accountName : resolved.account.address
+      const acct = privateKeyToAccount(key as `0x${string}`)
       const fundingNetwork = resolveFundingNetwork(c.options)
       const rpcUrl = resolveRpcUrl(c.options.rpcUrl, { network: fundingNetwork })
       const chain = await resolveChain({ network: fundingNetwork, rpcUrl })
       const client = createClient({ chain, transport: http(rpcUrl) })
-      if (!structured) console.log(`Funding "${accountReference}" on ${chainName(chain)}`)
+      if (!structured) console.log(`Funding "${accountName}" on ${chainName(chain)}`)
       try {
         const { Actions } = await import('viem/tempo')
-        const hashes = await Actions.faucet.fund(client, { account: resolved.account })
+        const hashes = await Actions.faucet.fund(client, { account: acct })
         const explorerUrl = chain.blockExplorers?.default?.url
         if (!structured) {
           for (const hash of hashes) {
@@ -980,7 +971,7 @@ const account = Cli.create('account', {
         await Promise.all(hashes.map((hash) => waitForTransactionReceipt(client, { hash })))
         return outputResult(
           c,
-          { account: accountReference, chain: chainName(chain), transactions: [...hashes] },
+          { account: accountName, chain: chainName(chain), transactions: [...hashes] },
           () => {
             console.log('Funded successfully')
           },

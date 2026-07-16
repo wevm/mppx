@@ -684,8 +684,11 @@ export async function closeHttpSession(
     )
   }
 
+  let closeChallenge = parameters.target.challenge
+  let signedCloseAmount = parameters.signedCloseAmount
   const postClose = async (challenge: TempoSessionChallenge, refreshed = false) => {
-    const signedCloseAmount =
+    closeChallenge = challenge
+    signedCloseAmount =
       (refreshed ? parameters.resolveSignedCloseAmount?.(challenge) : undefined) ??
       parameters.signedCloseAmount
     const credential = await parameters.createSessionCredential(challenge, {
@@ -717,7 +720,18 @@ export async function closeHttpSession(
   }
 
   const receiptHeader = response.headers.get(Constants.Headers.paymentReceipt)
-  return receiptHeader ? deserializeSessionReceipt(receiptHeader) : undefined
+  if (!receiptHeader) return undefined
+  const receipt = deserializeSessionReceipt(receiptHeader)
+  if (
+    !isExpectedCloseReceipt({
+      challengeId: closeChallenge.id,
+      channelId: parameters.target.channelId,
+      expectedCloseAmount: signedCloseAmount,
+      receipt,
+    })
+  )
+    throw new Error('Session close response included a mismatched payment receipt.')
+  return receipt
 }
 
 /** Options accepted by the auto-driving SSE session flow. */
