@@ -8,6 +8,7 @@ import type * as Challenge from '../../Challenge.js'
 import type { ChannelEntry } from '../../tempo/session/client/ChannelOps.js'
 import { entryKey } from '../../tempo/session/client/ChannelStore.js'
 import type { SessionReceipt } from '../../tempo/session/precompile/Protocol.js'
+import sessions from './commands.js'
 import {
   createSessionRegistry,
   SessionBusyError,
@@ -15,6 +16,7 @@ import {
   sessionScopeKey,
   toChannelStore,
   type SessionPersistenceContext,
+  type SessionRegistry,
   type SessionScope,
 } from './store.js'
 
@@ -24,13 +26,15 @@ const token = '0x3333333333333333333333333333333333333333' as Address
 const escrow = '0x4444444444444444444444444444444444444444' as Address
 const operator = '0x0000000000000000000000000000000000000000' as Address
 const channelId = `0x${'aa'.repeat(32)}` as Hex
+const mainnetChannelId = `0x${'bb'.repeat(32)}` as Hex
 
 let temporaryDirectory: string
 let stateRoot: string
 
 beforeEach(async () => {
   temporaryDirectory = await fs.mkdtemp(path.join(os.tmpdir(), 'mppx-sessions-'))
-  stateRoot = path.join(temporaryDirectory, 'state')
+  vi.stubEnv('XDG_STATE_HOME', temporaryDirectory)
+  stateRoot = path.join(temporaryDirectory, 'mppx', 'sessions', 'v1')
 })
 
 afterEach(async () => {
@@ -59,7 +63,7 @@ function channel(overrides: Partial<ChannelEntry> = {}): ChannelEntry {
   }
 }
 
-function challenge(id = 'challenge-1'): Challenge.Challenge {
+function challenge(id = 'challenge-1', chainId = 42431): Challenge.Challenge {
   return {
     id,
     realm: 'api.example.test',
@@ -69,7 +73,7 @@ function challenge(id = 'challenge-1'): Challenge.Challenge {
       amount: '1',
       currency: token,
       recipient: payee,
-      methodDetails: { chainId: 42431, escrowContract: escrow },
+      methodDetails: { chainId, escrowContract: escrow },
     },
   }
 }
@@ -100,11 +104,53 @@ function registryOptions(
   return { stateRoot, ...overrides }
 }
 
+async function serveSessions(argv: string[]) {
+  let output = ''
+  let exitCode: number | undefined
+  await sessions.serve(argv, {
+    stdout(value: string) {
+      output += value
+    },
+    exit(code: number) {
+      exitCode = code
+    },
+  })
+  return { exitCode, output }
+}
+
+async function seedCommandSessions(registry: SessionRegistry) {
+  await registry.upsert({
+    status: 'open',
+    channel: channel({
+      cumulativeAmount: 9_007_199_254_740_993_123_456_789n,
+      deposit: 9_999_999_999_999_999_999_999_999n,
+    }),
+    account: { name: 'testnet-payer', address: payer },
+    endpoint: 'https://api.example.test/query?chainId=testnet&sql=select%201',
+    challenge: challenge('testnet-challenge'),
+    spent: 1_234_567_890_123_456_789n,
+    units: 7,
+  })
+  await registry.upsert({
+    status: 'closing',
+    channel: channel({ channelId: mainnetChannelId, chainId: 4217, cumulativeAmount: 20n }),
+    account: { name: 'mainnet-payer', address: payer },
+    endpoint: 'https://api.example.test/query?chainId=mainnet',
+    challenge: challenge('mainnet-challenge', 4217),
+    spent: 5n,
+    units: 2,
+  })
+}
+
+function commandRegistry() {
+  const timestamps = [new Date('2026-07-16T00:00:00.000Z'), new Date('2026-07-16T00:01:00.000Z')]
+  return createSessionRegistry(registryOptions({ now: () => timestamps.shift()! }))
+}
+
 describe('createSessionRegistry', () => {
   test('uses XDG_STATE_HOME for the versioned state root', () => {
-    vi.stubEnv('XDG_STATE_HOME', path.join(temporaryDirectory, 'xdg-state'))
     const registry = createSessionRegistry()
-    expect(registry.root).toBe(path.join(temporaryDirectory, 'xdg-state', 'mppx', 'sessions', 'v1'))
+    expect(registry.root).toBe(stateRoot)
   })
 
   test('persists sanitized state atomically with private permissions', async () => {
@@ -369,5 +415,88 @@ describe('toChannelStore', () => {
       units: 0,
     })
     expect((await registry.get(replacementId))?.receipt).toBeUndefined()
+  })
+})
+
+describe('session commands', () => {
+  test('list and view return stable JSON projections with filters', async () => {
+    await seedCommandSessions(commandRegistry())
+
+    const listed = JSON.parse((await serveSessions(['list', '--json'])).output)
+    expect(listed.sessions).toEqual([
+      {
+        status: 'open',
+        channelId,
+        account: 'testnet-payer',
+        payer,
+        payee,
+        authorizedSigner: payer,
+        token,
+        escrow,
+        chainId: 42431,
+        cumulativeAmount: '9007199254740993123456789',
+        confirmedSpend: '1234567890123456789',
+        deposit: '9999999999999999999999999',
+        units: 7,
+        resourceUrl: 'https://api.example.test/query?chainId=testnet&sql=select%201',
+        createdAt: '2026-07-16T00:00:00.000Z',
+        updatedAt: '2026-07-16T00:00:00.000Z',
+      },
+      expect.objectContaining({
+        status: 'closing',
+        channelId: mainnetChannelId,
+        account: 'mainnet-payer',
+        chainId: 4217,
+        cumulativeAmount: '20',
+        confirmedSpend: '5',
+      }),
+    ])
+
+    const viewed = await serveSessions(['view', channelId, '--json'])
+    const byAccount = await serveSessions(['list', '--account', 'testnet-payer', '--json'])
+    const byNetwork = await serveSessions(['list', '--network', 'mainnet', '--json'])
+    const mismatch = await serveSessions([
+      'list',
+      '--account',
+      'testnet-payer',
+      '--network',
+      'mainnet',
+      '--json',
+    ])
+    expect(JSON.parse(viewed.output)).toEqual(listed.sessions[0])
+    expect(JSON.parse(byAccount.output).sessions).toMatchObject([{ channelId }])
+    expect(JSON.parse(byNetwork.output).sessions).toMatchObject([{ channelId: mainnetChannelId }])
+    expect(JSON.parse(mismatch.output)).toEqual({ sessions: [] })
+  })
+
+  test('view rejects a missing channel', async () => {
+    const missing = `0x${'cc'.repeat(32)}`
+    const result = await serveSessions(['view', missing, '--json'])
+    expect(result).toMatchObject({ exitCode: 2 })
+    expect(result.output).toContain(`Session ${missing} was not found.`)
+  })
+
+  test('close all reports failures in session order', async () => {
+    await seedCommandSessions(commandRegistry())
+    vi.stubEnv('MPPX_PRIVATE_KEY', `0x${'11'.repeat(32)}`)
+    const originalWrite = process.stderr.write
+    let stderr = ''
+    process.stderr.write = ((chunk: unknown) => {
+      stderr += String(chunk)
+      return true
+    }) as typeof process.stderr.write
+    try {
+      const result = await serveSessions(['close', '--all', '--yes', '--json'])
+      const output = JSON.parse(result.output)
+      expect(output.closed).toEqual([])
+      expect(output.failed.map((failure: { channelId: string }) => failure.channelId)).toEqual([
+        channelId,
+        mainnetChannelId,
+      ])
+      expect(stderr).toContain(channelId)
+      expect(stderr).toContain(mainnetChannelId)
+    } finally {
+      process.stderr.write = originalWrite
+    }
   })
 })

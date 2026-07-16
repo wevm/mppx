@@ -9,18 +9,12 @@ type RehydrateParameters = {
   spent: bigint
 }
 
-type CloseAttempt = {
-  challengeId: string
-  signedCloseAmount: string
-}
-
 type SessionManagerInternals = {
   consumeSseResponse(
     input: RequestInfo | URL,
     response: PaymentResponse,
     options?: SseResponseOptions | undefined,
   ): AsyncIterable<string>
-  getCloseAttempt(): CloseAttempt | null
   rehydrate(parameters: RehydrateParameters): void
 }
 
@@ -34,31 +28,9 @@ export function registerSessionManagerInternals(
   internals.set(manager, value)
 }
 
-function getSessionManagerInternals(manager: SessionManager): SessionManagerInternals {
+/** @internal Returns private transport and recovery hooks for a session manager. */
+export function getSessionManagerInternals(manager: SessionManager): SessionManagerInternals {
   const value = internals.get(manager)
   if (!value) throw new Error('Session manager internals are unavailable.')
   return value
-}
-
-/** @internal Consumes an already-paid SSE response without issuing another resource request. */
-export function consumeSessionManagerSseResponse(
-  manager: SessionManager,
-  input: RequestInfo | URL,
-  response: PaymentResponse,
-  options?: SseResponseOptions | undefined,
-): AsyncIterable<string> {
-  return getSessionManagerInternals(manager).consumeSseResponse(input, response, options)
-}
-
-/** @internal Returns the latest close credential boundary signed by a session manager. */
-export function getSessionManagerCloseAttempt(manager: SessionManager): CloseAttempt | null {
-  return getSessionManagerInternals(manager).getCloseAttempt()
-}
-
-/** @internal Restores durable channel context before an explicit CLI close. */
-export function rehydrateSessionManager(
-  manager: SessionManager,
-  parameters: RehydrateParameters,
-): void {
-  getSessionManagerInternals(manager).rehydrate(parameters)
 }

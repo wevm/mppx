@@ -14,13 +14,14 @@ import {
   type ChannelStore,
   type StoredChannel,
 } from '../../tempo/session/client/ChannelStore.js'
-import { isSessionReceipt, type SessionReceipt } from '../../tempo/session/precompile/Protocol.js'
+import {
+  isTempoSessionChallenge,
+  type TempoSessionChallenge,
+} from '../../tempo/session/client/Transports.js'
+import type { SessionReceipt } from '../../tempo/session/precompile/Protocol.js'
+import * as z from '../../zod.js'
 
 const sessionStateVersion = 1 as const
-const sessionStatuses = new Set<SessionStatus>(['opening', 'open', 'closing', 'stale'])
-const channelIdPattern = /^0x[0-9a-fA-F]{64}$/
-const addressPattern = /^0x[0-9a-fA-F]{40}$/
-const amountPattern = /^\d+$/
 
 /** Lifecycle state recorded for a managed CLI session. */
 export type SessionStatus = 'opening' | 'open' | 'closing' | 'stale'
@@ -49,7 +50,7 @@ export type ManagedSession = {
   channel: ChannelEntry
   account: SessionAccount
   endpoint: string
-  challenge: Challenge.Challenge
+  challenge: TempoSessionChallenge
   receipt?: SessionReceipt | undefined
   spent: bigint
   units: number
@@ -144,34 +145,89 @@ export class SessionBusyError extends Error {
   }
 }
 
-type StoredManagedSession = {
-  version: typeof sessionStateVersion
-  method: 'tempo'
-  intent: 'session'
-  status: SessionStatus
-  channel: StoredChannel
+const storedChannelSchema = z.object({
+  channelId: z.hash(),
+  cumulativeAmount: z.string(),
+  deposit: z.string(),
+  descriptor: z.object({
+    payer: z.address(),
+    payee: z.address(),
+    operator: z.address(),
+    token: z.address(),
+    salt: z.hash(),
+    authorizedSigner: z.address(),
+    expiringNonceHash: z.hash(),
+  }),
+  escrow: z.address(),
+  chainId: z.number(),
+  opened: z.boolean(),
+})
+const accountSchema = z.object({
+  name: z.optional(z.string()),
+  address: z.address(),
+})
+const receiptSchema = z.object({
+  method: z.literal('tempo'),
+  intent: z.literal('session'),
+  status: z.literal('success'),
+  timestamp: z.string(),
+  reference: z.string(),
+  challengeId: z.string(),
+  channelId: z.hash(),
+  acceptedCumulative: z.string(),
+  spent: z.string(),
+  units: z.optional(z.number()),
+  txHash: z.optional(z.hash()),
+})
+const storedSessionSchema = z.object({
+  version: z.literal(sessionStateVersion),
+  method: z.literal('tempo'),
+  intent: z.literal('session'),
+  status: z.enum(['opening', 'open', 'closing', 'stale']),
+  channel: storedChannelSchema,
+  account: accountSchema,
+  endpoint: z.string(),
+  challenge: Challenge.Schema,
+  receipt: z.optional(receiptSchema),
+  spent: z.string(),
+  units: z.number(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+})
+const preferredSessionSchema = z.object({
+  version: z.literal(sessionStateVersion),
+  channelId: z.hash(),
+})
+const lockOwnerSchema = z.object({
+  version: z.literal(sessionStateVersion),
+  scope: z.string(),
+  hostname: z.string(),
+  pid: z.number(),
+  token: z.string(),
+  createdAt: z.string(),
+})
+
+type StoredManagedSession = Omit<
+  z.infer<typeof storedSessionSchema>,
+  'account' | 'challenge' | 'channel' | 'receipt'
+> & {
   account: SessionAccount
-  endpoint: string
-  challenge: Challenge.Challenge
+  challenge: TempoSessionChallenge
+  channel: StoredChannel
   receipt?: SessionReceipt | undefined
-  spent: string
-  units: number
-  createdAt: string
-  updatedAt: string
 }
+type PreferredSession = z.infer<typeof preferredSessionSchema>
+type LockOwner = z.infer<typeof lockOwnerSchema>
 
-type PreferredIndex = {
-  version: typeof sessionStateVersion
-  sessions: Record<string, Hex>
-}
-
-type LockOwner = {
-  version: typeof sessionStateVersion
-  scope: string
-  hostname: string
-  pid: number
-  token: string
-  createdAt: string
+function parseStored<schema extends z.ZodMiniType>(
+  schema: schema,
+  value: unknown,
+  file: string | undefined,
+  message: string,
+): z.output<schema> {
+  const parsed = schema.safeParse(value)
+  if (!parsed.success) throw stateError(file, message, parsed.error)
+  return parsed.data
 }
 
 type RegistryPaths = {
@@ -193,6 +249,17 @@ export function sessionScopeKey(scope: SessionScope): string {
   ].join(':')
 }
 
+/** Returns the persistent payment scope for a channel. */
+export function sessionScope(channel: ChannelEntry): SessionScope {
+  return {
+    payer: channel.descriptor.payer,
+    payee: channel.descriptor.payee,
+    token: channel.descriptor.token,
+    escrow: channel.escrow,
+    chainId: channel.chainId,
+  }
+}
+
 /** Creates a filesystem-backed CLI session registry. */
 export function createSessionRegistry(options: CreateSessionRegistryOptions = {}): SessionRegistry {
   const root = options.stateRoot ?? sessionStateRoot()
@@ -200,7 +267,7 @@ export function createSessionRegistry(options: CreateSessionRegistryOptions = {}
     root,
     channels: path.join(root, 'channels'),
     locks: path.join(root, 'locks'),
-    preferred: path.join(root, 'preferred.json'),
+    preferred: path.join(root, 'preferred'),
   }
   const hostname = options.hostname ?? os.hostname()
   const pid = options.pid ?? process.pid
@@ -208,7 +275,7 @@ export function createSessionRegistry(options: CreateSessionRegistryOptions = {}
   const isProcessAlive = options.isProcessAlive ?? processIsAlive
 
   async function ensureDirectories(): Promise<void> {
-    for (const directory of [paths.root, paths.channels, paths.locks]) {
+    for (const directory of [paths.root, paths.channels, paths.locks, paths.preferred]) {
       await fs.mkdir(directory, { recursive: true, mode: 0o700 })
       await fs.chmod(directory, 0o700)
     }
@@ -285,7 +352,7 @@ export function createSessionRegistry(options: CreateSessionRegistryOptions = {}
       version: sessionStateVersion,
       method: 'tempo',
       intent: 'session',
-      status: parseStatus(input.status, file),
+      status: input.status,
       channel: storedChannel,
       account: {
         ...(account.name !== undefined
@@ -295,7 +362,7 @@ export function createSessionRegistry(options: CreateSessionRegistryOptions = {}
             : {}),
         address: account.address,
       },
-      endpoint: sanitizeEndpoint(input.endpoint, file),
+      endpoint: sessionResourceUrl(input.endpoint, file),
       challenge,
       ...(latestReceipt !== undefined && { receipt: latestReceipt }),
       spent: spent.toString(),
@@ -308,79 +375,59 @@ export function createSessionRegistry(options: CreateSessionRegistryOptions = {}
     return deserializeSession(parsed)
   }
 
-  async function readPreferred(): Promise<PreferredIndex> {
-    const value = await readJson(paths.preferred)
-    if (value === undefined) return { version: sessionStateVersion, sessions: {} }
-    return parsePreferredIndex(value, paths.preferred)
-  }
-
-  async function mutatePreferred(update: (index: PreferredIndex) => boolean): Promise<void> {
-    const lock = await acquireKey('preferred-index')
-    try {
-      const index = await readPreferred()
-      if (update(index)) await writeJsonAtomic(paths.preferred, index)
-    } finally {
-      await lock.release()
-    }
-  }
-
   async function getPreferred(scope: SessionScope): Promise<Hex | undefined> {
-    const key = sessionScopeKey(scope)
-    const channelId = (await readPreferred()).sessions[key]
-    if (!channelId) return undefined
+    const file = preferredFile(paths, scope)
+    const value = await readJson(file)
+    if (value === undefined) return undefined
+    const { channelId } = parseStored(
+      preferredSessionSchema,
+      value,
+      file,
+      'Preferred session is invalid.',
+    )
     const record = await get(channelId)
-    if (!record) throw stateError(paths.preferred, `Preferred session ${channelId} does not exist.`)
-    assertRecordScope(record, scope, paths.preferred)
-    return channelId
+    if (!record) throw stateError(file, `Preferred session ${channelId} does not exist.`)
+    assertChannelScope(record.channel, scope, file)
+    return channelId as Hex
   }
 
   async function setPreferred(scope: SessionScope, channelId: string): Promise<void> {
     const normalizedId = normalizeChannelId(channelId)
     const record = await get(normalizedId)
-    if (!record) throw stateError(paths.preferred, `Session ${normalizedId} does not exist.`)
-    assertRecordScope(record, scope, paths.preferred)
-    const key = sessionScopeKey(scope)
-    await mutatePreferred((index) => {
-      if (index.sessions[key]?.toLowerCase() === normalizedId) return false
-      index.sessions[key] = normalizedId as Hex
-      return true
-    })
+    const file = preferredFile(paths, scope)
+    if (!record) throw stateError(file, `Session ${normalizedId} does not exist.`)
+    assertChannelScope(record.channel, scope, file)
+    await writeJsonAtomic(file, {
+      version: sessionStateVersion,
+      channelId: normalizedId as Hex,
+    } satisfies PreferredSession)
   }
 
   async function clearPreferred(
     scope: SessionScope,
     channelId?: string | undefined,
   ): Promise<void> {
-    const key = sessionScopeKey(scope)
+    const file = preferredFile(paths, scope)
     const normalizedId = channelId === undefined ? undefined : normalizeChannelId(channelId)
-    await mutatePreferred((index) => {
-      const current = index.sessions[key]
-      if (!current || (normalizedId && current.toLowerCase() !== normalizedId)) return false
-      delete index.sessions[key]
-      return true
-    })
+    const value = await readJson(file)
+    if (value === undefined) return
+    const current = parseStored(
+      preferredSessionSchema,
+      value,
+      file,
+      'Preferred session is invalid.',
+    ).channelId
+    if (normalizedId && current.toLowerCase() !== normalizedId) return
+    await removeFile(file, 'Unable to clear preferred session.')
   }
 
   async function remove(channelId: string): Promise<void> {
     const normalizedId = normalizeChannelId(channelId)
     const record = await get(normalizedId)
     if (!record) return
-    await mutatePreferred((index) => {
-      let changed = false
-      for (const [key, value] of Object.entries(index.sessions)) {
-        if (value.toLowerCase() !== normalizedId) continue
-        delete index.sessions[key]
-        changed = true
-      }
-      return changed
-    })
+    await clearPreferred(sessionScope(record.channel), normalizedId)
     const file = channelFile(paths, normalizedId)
-    try {
-      await fs.unlink(file)
-      await syncDirectory(paths.channels)
-    } catch (error) {
-      if (!hasCode(error, 'ENOENT')) throw stateError(file, 'Unable to remove session.', error)
-    }
+    await removeFile(file, 'Unable to remove session.')
   }
 
   async function acquireKey(scope: string): Promise<SessionLock> {
@@ -401,15 +448,14 @@ export function createSessionRegistry(options: CreateSessionRegistryOptions = {}
           async release() {
             const currentValue = await readJson(file)
             if (currentValue === undefined) return
-            const current = parseLockOwner(currentValue, file)
+            const current = parseStored(
+              lockOwnerSchema,
+              currentValue,
+              file,
+              'Session lock is invalid.',
+            )
             if (current.token !== owner.token) return
-            try {
-              await fs.unlink(file)
-              await syncDirectory(paths.locks)
-            } catch (error) {
-              if (!hasCode(error, 'ENOENT'))
-                throw stateError(file, 'Unable to release session lock.', error)
-            }
+            await removeFile(file, 'Unable to release session lock.')
           },
         }
       } catch (error) {
@@ -418,7 +464,7 @@ export function createSessionRegistry(options: CreateSessionRegistryOptions = {}
 
       const value = await readJson(file)
       if (value === undefined) continue
-      const current = parseLockOwner(value, file)
+      const current = parseStored(lockOwnerSchema, value, file, 'Session lock is invalid.')
       if (current.scope !== scope) throw stateError(file, 'Session lock scope is invalid.')
       if (current.hostname !== hostname || isProcessAlive(current.pid))
         throw new SessionBusyError(scope, current)
@@ -426,7 +472,7 @@ export function createSessionRegistry(options: CreateSessionRegistryOptions = {}
     }
     const value = await readJson(file)
     if (value === undefined) throw stateError(file, 'Unable to acquire session lock.')
-    const owner = parseLockOwner(value, file)
+    const owner = parseStored(lockOwnerSchema, value, file, 'Session lock is invalid.')
     throw new SessionBusyError(scope, owner)
   }
 
@@ -474,7 +520,7 @@ export function toChannelStore(
     if (!channelId) return undefined
     const record = await registry.get(channelId)
     if (!record) throw new SessionStateError(`Session ${channelId} does not exist.`)
-    assertRecordScope(record, options.scope)
+    assertChannelScope(record.channel, options.scope)
     if (reusableOnly && (record.status !== 'open' || !record.channel.opened)) return undefined
     selectedChannelId = channelId
     return record
@@ -531,16 +577,22 @@ function lockFile(paths: RegistryPaths, scope: string): string {
   return path.join(paths.locks, `${digest}.lock`)
 }
 
+function preferredFile(paths: RegistryPaths, scope: SessionScope): string {
+  const digest = createHash('sha256').update(sessionScopeKey(scope)).digest('hex')
+  return path.join(paths.preferred, `${digest}.json`)
+}
+
 function normalizeChannelId(channelId: string): string {
-  if (!channelIdPattern.test(channelId))
-    throw new SessionStateError(`Invalid session channel ID: ${channelId}.`)
-  return channelId.toLowerCase()
+  return parseStored(
+    z.hash(),
+    channelId,
+    undefined,
+    `Invalid session channel ID: ${channelId}.`,
+  ).toLowerCase()
 }
 
 function normalizeAddress(value: unknown, label: string, file?: string | undefined): Address {
-  if (typeof value !== 'string' || !addressPattern.test(value))
-    throw new SessionStateError(`Invalid ${label}.`, { file })
-  return value.toLowerCase() as Address
+  return parseStored(z.address(), value, file, `Invalid ${label}.`).toLowerCase() as Address
 }
 
 function normalizeScope(scope: SessionScope): SessionScope {
@@ -560,7 +612,8 @@ function scopeEntryKey(scope: SessionScope): string {
   return [normalized.payee, normalized.token, normalized.escrow, normalized.chainId].join(':')
 }
 
-function sanitizeEndpoint(endpoint: unknown, file?: string | undefined): string {
+/** Returns the exact HTTP resource URL persisted for session management. */
+export function sessionResourceUrl(endpoint: unknown, file?: string | undefined): string {
   if (typeof endpoint !== 'string') throw stateError(file, 'Session endpoint is invalid.')
   let parsed: URL
   try {
@@ -577,13 +630,7 @@ function sanitizeEndpoint(endpoint: unknown, file?: string | undefined): string 
 }
 
 function sanitizeAccount(value: unknown, file?: string | undefined): SessionAccount {
-  if (!isObject(value)) throw stateError(file, 'Session account is invalid.')
-  if (value.name !== undefined && typeof value.name !== 'string')
-    throw stateError(file, 'Session account name is invalid.')
-  return {
-    ...(typeof value.name === 'string' && { name: value.name }),
-    address: normalizeAddress(value.address, 'session account address', file),
-  }
+  return parseStored(accountSchema, value, file, 'Session account is invalid.') as SessionAccount
 }
 
 function sanitizeChannel(channel: ChannelEntry): ChannelEntry {
@@ -592,46 +639,17 @@ function sanitizeChannel(channel: ChannelEntry): ChannelEntry {
 }
 
 function sanitizeStoredChannel(value: unknown, file?: string | undefined): StoredChannel {
-  if (!isObject(value)) throw stateError(file, 'Stored session channel is invalid.')
-  if (!isObject(value.descriptor)) throw stateError(file, 'Stored channel descriptor is invalid.')
-  const descriptor = value.descriptor
-  const channelId = normalizeChannelId(readString(value.channelId, 'channel ID', file)) as Hex
-  const cumulativeAmount = readAmount(value.cumulativeAmount, 'cumulative amount', file)
-  const deposit = readAmount(value.deposit, 'deposit', file)
-  if (!Number.isSafeInteger(value.chainId) || (value.chainId as number) < 0)
-    throw stateError(file, 'Stored channel chain ID is invalid.')
-  if (typeof value.opened !== 'boolean')
-    throw stateError(file, 'Stored channel open state is invalid.')
-  return {
-    channelId,
-    cumulativeAmount,
-    deposit,
-    descriptor: {
-      payer: normalizeAddress(descriptor.payer, 'channel payer', file),
-      payee: normalizeAddress(descriptor.payee, 'channel payee', file),
-      operator: normalizeAddress(descriptor.operator, 'channel operator', file),
-      token: normalizeAddress(descriptor.token, 'channel token', file),
-      salt: readHash(descriptor.salt, 'channel salt', file),
-      authorizedSigner: normalizeAddress(
-        descriptor.authorizedSigner,
-        'channel authorized signer',
-        file,
-      ),
-      expiringNonceHash: readHash(
-        descriptor.expiringNonceHash,
-        'channel expiring nonce hash',
-        file,
-      ),
-    },
-    escrow: normalizeAddress(value.escrow, 'channel escrow', file),
-    chainId: value.chainId as number,
-    opened: value.opened,
-  }
+  return parseStored(
+    storedChannelSchema,
+    value,
+    file,
+    'Stored session channel is invalid.',
+  ) as StoredChannel
 }
 
-function parseSessionChallenge(value: unknown, file?: string | undefined): Challenge.Challenge {
+function parseSessionChallenge(value: unknown, file?: string | undefined): TempoSessionChallenge {
   const parsed = Challenge.Schema.safeParse(value)
-  if (!parsed.success || parsed.data.method !== 'tempo' || parsed.data.intent !== 'session')
+  if (!parsed.success || !isTempoSessionChallenge(parsed.data))
     throw stateError(file, 'Stored session challenge is invalid.')
   return parsed.data
 }
@@ -641,79 +659,51 @@ function sanitizeReceipt(
   channelId: string,
   file?: string | undefined,
 ): SessionReceipt {
-  if (!isSessionReceipt(value)) throw stateError(file, 'Stored session receipt is invalid.')
-  if (value.channelId.toLowerCase() !== channelId.toLowerCase())
+  const receipt = parseStored(
+    receiptSchema,
+    value,
+    file,
+    'Stored session receipt is invalid.',
+  ) as SessionReceipt
+  if (receipt.channelId !== channelId.toLowerCase())
     throw stateError(file, 'Stored session receipt has a different channel ID.')
-  if (value.reference.toLowerCase() !== channelId.toLowerCase())
+  if (receipt.reference.toLowerCase() !== channelId.toLowerCase())
     throw stateError(file, 'Stored session receipt has a different reference.')
-  readAmount(value.acceptedCumulative, 'receipt accepted cumulative amount', file)
-  readAmount(value.spent, 'receipt spent amount', file)
-  if (BigInt(value.spent) > BigInt(value.acceptedCumulative))
+  if (BigInt(receipt.spent) > BigInt(receipt.acceptedCumulative))
     throw stateError(file, 'Stored session receipt spend exceeds its accepted amount.')
-  if (value.units !== undefined && (!Number.isSafeInteger(value.units) || value.units < 0))
-    throw stateError(file, 'Stored session receipt units are invalid.')
-  if (!isTimestamp(value.timestamp)) throw stateError(file, 'Stored receipt timestamp is invalid.')
-  return {
-    method: 'tempo',
-    intent: 'session',
-    status: 'success',
-    timestamp: value.timestamp,
-    reference: value.reference,
-    challengeId: value.challengeId,
-    channelId: normalizeChannelId(value.channelId) as Hex,
-    acceptedCumulative: value.acceptedCumulative,
-    spent: value.spent,
-    ...(value.units !== undefined && { units: value.units }),
-    ...(value.txHash !== undefined && {
-      txHash: readHash(value.txHash, 'receipt transaction hash', file),
-    }),
-  }
+  return receipt
 }
 
 function parseStoredSession(value: unknown, file: string): StoredManagedSession {
-  if (!isObject(value)) throw stateError(file, 'Stored session is not an object.')
-  if (value.version !== sessionStateVersion)
-    throw stateError(file, 'Stored session version is unsupported.')
-  if (value.method !== 'tempo' || value.intent !== 'session')
-    throw stateError(file, 'Stored session method is invalid.')
-  const channel = sanitizeStoredChannel(value.channel, file)
-  const account = sanitizeAccount(value.account, file)
+  const candidate = parseStored(storedSessionSchema, value, file, 'Stored session is invalid.')
+  const { receipt: candidateReceipt, ...rest } = candidate
+  const channel = candidate.channel as StoredChannel
+  const account = candidate.account as SessionAccount
   if (account.address.toLowerCase() !== channel.descriptor.payer.toLowerCase())
     throw stateError(file, 'Stored session account does not match the channel payer.')
-  const receipt = value.receipt
-    ? sanitizeReceipt(value.receipt, channel.channelId, file)
+  const receipt = candidateReceipt
+    ? sanitizeReceipt(candidateReceipt, channel.channelId, file)
     : undefined
-  const spent = readAmount(value.spent, 'session spent amount', file)
+  const spent = candidate.spent
   const cumulativeAmount = BigInt(channel.cumulativeAmount)
   if (BigInt(spent) > cumulativeAmount)
     throw stateError(file, 'Stored session spend exceeds its cumulative authorization.')
   if (receipt && BigInt(receipt.acceptedCumulative) > cumulativeAmount)
     throw stateError(file, 'Stored receipt exceeds the cumulative authorization.')
-  if (!Number.isSafeInteger(value.units) || (value.units as number) < 0)
-    throw stateError(file, 'Stored session units are invalid.')
-  if (!isTimestamp(value.createdAt) || !isTimestamp(value.updatedAt))
-    throw stateError(file, 'Stored session timestamps are invalid.')
-  if (Date.parse(value.updatedAt as string) < Date.parse(value.createdAt as string))
+  if (Date.parse(candidate.updatedAt) < Date.parse(candidate.createdAt))
     throw stateError(file, 'Stored session timestamps are not monotonic.')
-  const endpoint = sanitizeEndpoint(value.endpoint, file)
-  if (endpoint !== value.endpoint)
+  const endpoint = sessionResourceUrl(candidate.endpoint, file)
+  if (endpoint !== candidate.endpoint)
     throw stateError(file, 'Stored session endpoint contains a fragment.')
-  const challenge = parseSessionChallenge(value.challenge, file)
+  const challenge = parseSessionChallenge(candidate.challenge, file)
   assertChallengeMatchesChannel(challenge, deserializeEntry(channel), file)
   return {
-    version: sessionStateVersion,
-    method: 'tempo',
-    intent: 'session',
-    status: parseStatus(value.status, file),
-    channel,
+    ...rest,
     account,
+    channel,
     endpoint,
     challenge,
     ...(receipt && { receipt }),
-    spent,
-    units: value.units as number,
-    createdAt: value.createdAt as string,
-    updatedAt: value.updatedAt as string,
   }
 }
 
@@ -731,45 +721,6 @@ function deserializeSession(record: StoredManagedSession): ManagedSession {
     createdAt: record.createdAt,
     updatedAt: record.updatedAt,
   }
-}
-
-function parsePreferredIndex(value: unknown, file: string): PreferredIndex {
-  if (!isObject(value) || value.version !== sessionStateVersion || !isObject(value.sessions))
-    throw stateError(file, 'Preferred session index is invalid.')
-  const sessions: Record<string, Hex> = {}
-  for (const [key, channelId] of Object.entries(value.sessions)) {
-    if (!isScopeKey(key)) throw stateError(file, `Preferred session scope ${key} is invalid.`)
-    sessions[key] = normalizeChannelId(readString(channelId, 'preferred channel ID', file)) as Hex
-  }
-  return { version: sessionStateVersion, sessions }
-}
-
-function parseLockOwner(value: unknown, file: string): LockOwner {
-  if (!isObject(value) || value.version !== sessionStateVersion)
-    throw stateError(file, 'Session lock is invalid.')
-  if (
-    typeof value.scope !== 'string' ||
-    typeof value.hostname !== 'string' ||
-    !Number.isSafeInteger(value.pid) ||
-    (value.pid as number) <= 0 ||
-    typeof value.token !== 'string' ||
-    !isTimestamp(value.createdAt)
-  )
-    throw stateError(file, 'Session lock is invalid.')
-  return {
-    version: sessionStateVersion,
-    scope: value.scope,
-    hostname: value.hostname,
-    pid: value.pid as number,
-    token: value.token,
-    createdAt: value.createdAt,
-  }
-}
-
-function parseStatus(value: unknown, file?: string | undefined): SessionStatus {
-  if (typeof value !== 'string' || !sessionStatuses.has(value as SessionStatus))
-    throw stateError(file, 'Session status is invalid.')
-  return value as SessionStatus
 }
 
 function assertSameSession(
@@ -820,7 +771,11 @@ function assertChallengeMatchesChannel(
   }
 }
 
-function assertChannelScope(channel: ChannelEntry, scope: SessionScope): void {
+function assertChannelScope(
+  channel: ChannelEntry,
+  scope: SessionScope,
+  file?: string | undefined,
+): void {
   const normalized = normalizeScope(scope)
   if (
     channel.descriptor.payer.toLowerCase() !== normalized.payer ||
@@ -829,19 +784,7 @@ function assertChannelScope(channel: ChannelEntry, scope: SessionScope): void {
     channel.escrow.toLowerCase() !== normalized.escrow ||
     channel.chainId !== normalized.chainId
   )
-    throw new SessionStateError('Session channel does not match the selected payment scope.')
-}
-
-function assertRecordScope(
-  record: ManagedSession,
-  scope: SessionScope,
-  file?: string | undefined,
-): void {
-  try {
-    assertChannelScope(record.channel, scope)
-  } catch (cause) {
-    throw stateError(file, 'Preferred session does not match its payment scope.', cause)
-  }
+    throw stateError(file, 'Session channel does not match the selected payment scope.')
 }
 
 function selectLatestReceipt(
@@ -862,22 +805,6 @@ function monotonicTimestamp(previous: string | undefined, next: Date, file: stri
 
 function maxBigInt(...values: bigint[]): bigint {
   return values.reduce((maximum, value) => (value > maximum ? value : maximum), 0n)
-}
-
-function isScopeKey(value: string): boolean {
-  const parts = value.split(':')
-  if (parts.length !== 5) return false
-  const chainId = Number(parts[4])
-  return (
-    value === value.toLowerCase() &&
-    addressPattern.test(parts[0] ?? '') &&
-    addressPattern.test(parts[1] ?? '') &&
-    addressPattern.test(parts[2] ?? '') &&
-    addressPattern.test(parts[3] ?? '') &&
-    /^\d+$/.test(parts[4] ?? '') &&
-    Number.isSafeInteger(chainId) &&
-    chainId >= 0
-  )
 }
 
 async function readJson(file: string): Promise<unknown | undefined> {
@@ -937,13 +864,17 @@ async function createLock(file: string, owner: LockOwner): Promise<void> {
 async function removeDeadLock(file: string, expected: LockOwner): Promise<void> {
   const currentValue = await readJson(file)
   if (currentValue === undefined) return
-  const current = parseLockOwner(currentValue, file)
+  const current = parseStored(lockOwnerSchema, currentValue, file, 'Session lock is invalid.')
   if (current.token !== expected.token) return
+  await removeFile(file, 'Unable to reclaim dead lock.')
+}
+
+async function removeFile(file: string, message: string): Promise<void> {
   try {
     await fs.unlink(file)
     await syncDirectory(path.dirname(file))
   } catch (error) {
-    if (!hasCode(error, 'ENOENT')) throw stateError(file, 'Unable to reclaim dead lock.', error)
+    if (!hasCode(error, 'ENOENT')) throw stateError(file, message, error)
   }
 }
 
@@ -965,27 +896,6 @@ function processIsAlive(pid: number): boolean {
     if (hasCode(error, 'EPERM')) return true
     throw error
   }
-}
-
-function readString(value: unknown, label: string, file?: string | undefined): string {
-  if (typeof value !== 'string') throw stateError(file, `Stored ${label} is invalid.`)
-  return value
-}
-
-function readAmount(value: unknown, label: string, file?: string | undefined): string {
-  if (typeof value !== 'string' || !amountPattern.test(value))
-    throw stateError(file, `Stored ${label} is invalid.`)
-  return value
-}
-
-function readHash(value: unknown, label: string, file?: string | undefined): Hex {
-  if (typeof value !== 'string' || !channelIdPattern.test(value))
-    throw stateError(file, `Stored ${label} is invalid.`)
-  return value.toLowerCase() as Hex
-}
-
-function isTimestamp(value: unknown): value is string {
-  return typeof value === 'string' && Number.isFinite(Date.parse(value))
 }
 
 function isObject(value: unknown): value is Record<string, unknown> {

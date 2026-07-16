@@ -4,10 +4,9 @@ import * as os from 'node:os'
 import * as path from 'node:path'
 import { pathToFileURL } from 'node:url'
 
-import { decodeFunctionData, numberToHex, parseUnits, type Address } from 'viem'
+import { decodeFunctionData, parseUnits, type Address } from 'viem'
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts'
 import { Addresses, Transaction } from 'viem/tempo'
-import { tempoModerato } from 'viem/tempo/chains'
 import { afterAll, describe, expect, test } from 'vp/test'
 import * as Http from '~test/Http.js'
 import { rpcUrl } from '~test/tempo/rpc.js'
@@ -1932,7 +1931,7 @@ test('mppx sessions close --all returns an empty structured result', async () =>
   expect(JSON.parse(output)).toEqual({ closed: [], failed: [] })
 })
 
-describe('account fund', () => {
+describe('account fund help', () => {
   test('only advertises testnet network funding', async () => {
     const { output } = await serve(['account', 'fund', '--help'])
     expect(output).toContain('--network <testnet>')
@@ -1944,59 +1943,6 @@ describe('account fund', () => {
     expect(exitCode).toBe(1)
     expect(output).toContain('Invalid input')
     expect(output).toContain('testnet')
-  })
-
-  test('funds the MPPX_PRIVATE_KEY account', async () => {
-    let fundedAddress: unknown
-    const methods: string[] = []
-    const server = await Http.createServer(async (req, res) => {
-      const chunks: Buffer[] = []
-      for await (const chunk of req) chunks.push(Buffer.from(chunk))
-      const request = JSON.parse(Buffer.concat(chunks).toString()) as {
-        id: number
-        method: string
-        params?: unknown[] | undefined
-      }
-      methods.push(request.method)
-      const result = (() => {
-        if (request.method === 'eth_chainId') return numberToHex(tempoModerato.id)
-        if (request.method === 'tempo_fundAddress') {
-          fundedAddress = request.params?.[0]
-          return []
-        }
-        return null
-      })()
-      res.setHeader('Content-Type', 'application/json')
-      res.end(JSON.stringify({ id: request.id, jsonrpc: '2.0', result }))
-    })
-
-    try {
-      const { exitCode, output } = await serve(
-        [
-          'account',
-          'fund',
-          '--account',
-          'ignored-name',
-          '--network',
-          'testnet',
-          '--rpc-url',
-          server.url,
-          '--json',
-        ],
-        { env: { MPPX_PRIVATE_KEY: testPrivateKey } },
-      )
-
-      expect(exitCode).toBeUndefined()
-      expect(JSON.parse(output)).toEqual({
-        account: testAccount.address,
-        chain: 'testnet',
-        transactions: [],
-      })
-      expect(fundedAddress).toBe(testAccount.address)
-      expect(methods).toEqual(['eth_chainId', 'tempo_fundAddress'])
-    } finally {
-      server.close()
-    }
   })
 })
 

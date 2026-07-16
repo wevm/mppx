@@ -114,9 +114,15 @@ describe('HttpManagement', () => {
     })
   }
 
-  function receiptHeader(acceptedCumulative: bigint, spent: bigint) {
+  function receiptHeader(acceptedCumulative: bigint, spent: bigint, challengeId = 'challenge-1') {
     return serializeSessionReceipt(
-      createSessionReceipt({ acceptedCumulative, challengeId: 'challenge-1', channelId, spent }),
+      createSessionReceipt({
+        acceptedCumulative,
+        challengeId,
+        channelId,
+        spent,
+        txHash: `0x${'aa'.repeat(32)}`,
+      }),
     )
   }
 
@@ -319,7 +325,7 @@ describe('HttpManagement', () => {
         .mockResolvedValueOnce(
           new Response(null, {
             status: 200,
-            headers: { [Constants.Headers.paymentReceipt]: receiptHeader(6n, 6n) },
+            headers: { [Constants.Headers.paymentReceipt]: receiptHeader(6n, 6n, 'challenge-2') },
           }),
         )
 
@@ -341,6 +347,29 @@ describe('HttpManagement', () => {
       expect(createSessionCredential).toHaveBeenCalledTimes(2)
       expect(createSessionCredential.mock.calls[1]?.[0]).toMatchObject({ id: retryChallenge.id })
       expect(authorizationHeader(fetch.mock.calls[1]?.[1])).toBe('close-challenge-2')
+    })
+
+    test('closeHttpSession rejects a receipt without settlement proof', async () => {
+      const receipt = serializeSessionReceipt(
+        createSessionReceipt({
+          acceptedCumulative: 5n,
+          challengeId: 'challenge-1',
+          channelId,
+          spent: 5n,
+        }),
+      )
+      await expect(
+        closeHttpSession({
+          createSessionCredential: async () => 'close-credential',
+          fetch: async () =>
+            new Response(null, {
+              headers: { [Constants.Headers.paymentReceipt]: receipt },
+            }),
+          lastUrl: 'https://example.test/resource',
+          signedCloseAmount: '5',
+          target: { challenge: challenge(), channel: channel(), channelId },
+        }),
+      ).rejects.toThrow('Session close response included a mismatched payment receipt.')
     })
 
     test('closeHttpSession includes problem detail and challenge header on failure', async () => {
