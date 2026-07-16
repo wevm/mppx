@@ -2257,6 +2257,7 @@ describe('precompile server session unit guardrails', () => {
         action: SessionCredentialPayload['action']
         contentLength: string | null
         hasBody: boolean
+        hasReceipt: boolean
         status: number
       }> = []
       const app = new Hono()
@@ -2271,6 +2272,7 @@ describe('precompile server session unit guardrails', () => {
             action: payload.action,
             contentLength: request.headers.get('content-length'),
             hasBody: request.body !== null,
+            hasReceipt: response.headers.has(Constants.Headers.paymentReceipt),
             status: response.status,
           })
         return response
@@ -2302,9 +2304,27 @@ describe('precompile server session unit guardrails', () => {
         expect(closeReceipt?.spent).toBe('3')
         expect(managementPosts).toEqual(
           expect.arrayContaining([
-            { action: 'topUp', contentLength: '0', hasBody: true, status: 204 },
-            { action: 'voucher', contentLength: '0', hasBody: true, status: 204 },
-            { action: 'close', contentLength: '0', hasBody: true, status: 204 },
+            {
+              action: 'topUp',
+              contentLength: '0',
+              hasBody: true,
+              hasReceipt: true,
+              status: 204,
+            },
+            {
+              action: 'voucher',
+              contentLength: '0',
+              hasBody: true,
+              hasReceipt: true,
+              status: 204,
+            },
+            {
+              action: 'close',
+              contentLength: '0',
+              hasBody: true,
+              hasReceipt: true,
+              status: 204,
+            },
           ]),
         )
         expect(managementPosts.every(({ status }) => status === 204)).toBe(true)
