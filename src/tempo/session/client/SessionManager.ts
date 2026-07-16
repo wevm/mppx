@@ -432,9 +432,9 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
     })
   }
 
-  function applyCloseSnapshot(target: CloseTarget, challenge: TempoSessionChallenge) {
+  function validateCloseSnapshot(channel: ChannelEntry, challenge: TempoSessionChallenge) {
     const snapshot = getSessionSnapshot(challenge)
-    if (!snapshot) return
+    if (!snapshot) return undefined
 
     const computedSnapshotId = Channel.computeId({
       ...snapshot.descriptor,
@@ -444,28 +444,39 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
     if (computedSnapshotId.toLowerCase() !== snapshot.channelId.toLowerCase()) {
       throw new Error('close snapshot descriptor does not match its channel ID')
     }
-    if (snapshot.channelId.toLowerCase() !== target.channelId.toLowerCase()) {
+    if (snapshot.channelId.toLowerCase() !== channel.channelId.toLowerCase()) {
       throw new Error('close snapshot channel ID does not match local session')
     }
     if (
-      snapshot.chainId !== target.channel.chainId ||
-      snapshot.escrow.toLowerCase() !== target.channel.escrow.toLowerCase()
+      snapshot.chainId !== channel.chainId ||
+      snapshot.escrow.toLowerCase() !== channel.escrow.toLowerCase()
     ) {
       throw new Error('close snapshot payment scope does not match local session')
     }
 
     const acceptedCumulative = BigInt(snapshot.acceptedCumulative)
     const snapshotSpent = BigInt(snapshot.spent)
+    if (acceptedCumulative < 0n || snapshotSpent < 0n) {
+      throw new Error('close snapshot amounts must not be negative')
+    }
     if (snapshotSpent > acceptedCumulative) {
       throw new Error('close snapshot spent exceeds accepted cumulative amount')
     }
-    if (acceptedCumulative > target.channel.cumulativeAmount) {
+    if (acceptedCumulative > channel.cumulativeAmount) {
       throw new Error('close snapshot accepted cumulative exceeds local voucher state')
     }
+    return { acceptedCumulative, spent: snapshotSpent }
+  }
+
+  function applyCloseSnapshot(target: CloseTarget, challenge: TempoSessionChallenge) {
+    const snapshot = validateCloseSnapshot(target.channel, challenge)
+    if (!snapshot) return
+
+    const { acceptedCumulative, spent } = snapshot
     if (runtime.spent > acceptedCumulative) {
       throw new Error('close snapshot accepted cumulative is below locally confirmed spend')
     }
-    if (snapshotSpent > runtime.spent) runtime.spent = snapshotSpent
+    if (spent > runtime.spent) runtime.spent = spent
   }
 
   function getValidatedFallbackCloseAmount(
@@ -833,17 +844,19 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
         throw new Error('Cannot restore session: spent exceeds local voucher state.')
       }
       assertVoucherWithinLocalLimit(channel.cumulativeAmount)
+      const snapshot = validateCloseSnapshot(channel, challenge)
+      const restoredSpent = snapshot && snapshot.spent > spent ? snapshot.spent : spent
 
       runtime.lastUrl = input
       runtime.lastChallenge = challenge
       runtime.channel = channel
-      runtime.spent = spent
+      runtime.spent = restoredSpent
       dispatch({ type: 'challengeReceived', challengeId: challenge.id })
       dispatch({
         type: 'activated',
         challengeId: challenge.id,
         entry: channel,
-        spent: spent.toString(),
+        spent: restoredSpent.toString(),
         units: 0,
       })
     },

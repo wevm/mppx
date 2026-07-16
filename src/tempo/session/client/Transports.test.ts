@@ -9,6 +9,7 @@ import type { ChannelEntry } from '../client/ChannelOps.js'
 import type { SessionContext } from '../client/CredentialState.js'
 import {
   createSessionReceipt,
+  formatNeedVoucherEvent,
   serializeSessionReceipt,
   tip20ChannelEscrow,
   type ChannelDescriptor,
@@ -18,6 +19,7 @@ import { initialState, type SessionState } from './Runtime.js'
 import {
   applyTopUpResult,
   closeHttpSession,
+  consumeSseSessionResponse,
   createActiveSocketSession,
   driveSseResponse,
   isExpectedSocketReceipt,
@@ -682,6 +684,80 @@ describe('SseDriver', () => {
       { data: 'hello', raw: 'event: custom\ndata: hello\n\n' },
     ])
     expect(acceptReceipt).toHaveBeenCalledWith(receipt)
+  })
+
+  test('keeps voucher events bound to the challenge that opened the stream', async () => {
+    const channelId = `0x${'01'.repeat(32)}` as Hex.Hex
+    const token = '0x20c0000000000000000000000000000000000001' as Address
+    const payee = '0x0000000000000000000000000000000000000002' as Address
+    const descriptor: ChannelDescriptor = {
+      authorizedSigner: '0x0000000000000000000000000000000000000001',
+      expiringNonceHash: `0x${'03'.repeat(32)}` as Hex.Hex,
+      operator: '0x0000000000000000000000000000000000000000',
+      payee,
+      payer: '0x0000000000000000000000000000000000000001',
+      salt: `0x${'02'.repeat(32)}` as Hex.Hex,
+      token,
+    }
+    const makeChallenge = (id: string) =>
+      Challenge.from({
+        id,
+        intent: Constants.Intents.session,
+        method: Constants.Methods.tempo,
+        realm: 'example.test',
+        request: {
+          amount: '1',
+          currency: token,
+          methodDetails: { chainId: 4217, escrowContract: tip20ChannelEscrow },
+          recipient: payee,
+          unitType: 'request',
+        },
+      }) as TempoSessionChallenge
+    const streamChallenge = makeChallenge('challenge-1')
+    let currentChallenge = streamChallenge
+    const createSessionCredential = vi.fn(async () => 'Payment credential')
+    const channel: ChannelEntry = {
+      chainId: 4217,
+      channelId,
+      cumulativeAmount: 1n,
+      deposit: 10n,
+      descriptor,
+      escrow: tip20ChannelEscrow,
+      opened: true,
+    }
+    const response = new Response(
+      formatNeedVoucherEvent({
+        acceptedCumulative: '1',
+        channelId,
+        deposit: '10',
+        requiredCumulative: '2',
+      }),
+      { headers: { 'Content-Type': 'text/event-stream' } },
+    )
+    const stream = consumeSseSessionResponse('https://example.test/stream', response, undefined, {
+      acceptReceipt() {},
+      assertVoucherWithinLocalLimit() {},
+      createSessionCredential,
+      async doFetch() {
+        throw new Error('unexpected resource fetch')
+      },
+      fetch: vi.fn(async () => new Response(null, { status: 204 })),
+      getChallenge: () => currentChallenge,
+      getChannel: () => channel,
+      managementInput: (input) => input,
+      async topUpIfNeeded() {},
+    })
+
+    currentChallenge = makeChallenge('challenge-2')
+    const frames: string[] = []
+    for await (const frame of stream) frames.push(frame)
+
+    expect(frames).toEqual([])
+    expect(createSessionCredential).toHaveBeenCalledOnce()
+    expect(createSessionCredential).toHaveBeenCalledWith(
+      streamChallenge,
+      expect.objectContaining({ action: 'voucher', cumulativeAmountRaw: '2' }),
+    )
   })
 })
 

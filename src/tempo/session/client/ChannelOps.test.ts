@@ -9,6 +9,17 @@ import * as Types from '../precompile/Protocol.js'
 import * as Voucher from '../precompile/Voucher.js'
 import * as ChannelOps from './ChannelOps.js'
 
+const mocks = vi.hoisted(() => ({
+  prepareTransactionRequest: vi.fn(async (_client: unknown, request: unknown) => request),
+  signTransaction: vi.fn(async () => '0x1234'),
+}))
+
+vi.mock('viem/actions', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('viem/actions')>()),
+  prepareTransactionRequest: mocks.prepareTransactionRequest,
+  signTransaction: mocks.signTransaction,
+}))
+
 const account = privateKeyToAccount(
   '0xac0974bec39a17e36ba6a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80',
 )
@@ -159,5 +170,34 @@ describe('precompile client ChannelOps credential builders', () => {
         descriptor.authorizedSigner,
       ),
     ).toBe(true)
+  })
+
+  test('distinguishes otherwise-identical fee-sponsored management transactions', async () => {
+    mocks.prepareTransactionRequest.mockClear()
+    let randomValue = 1
+    const random = vi.spyOn(globalThis.crypto, 'getRandomValues').mockImplementation((array) => {
+      if (!array) return array
+      new Uint8Array(array.buffer, array.byteOffset, array.byteLength).fill(randomValue++)
+      return array
+    })
+    try {
+      await ChannelOps.createTopUpPayload(client, account, descriptor, 10n, chainId, true)
+      await ChannelOps.createTopUpPayload(client, account, descriptor, 10n, chainId, true)
+    } finally {
+      random.mockRestore()
+    }
+
+    const requests = mocks.prepareTransactionRequest.mock.calls.map(([, request]) => request)
+    const validAfter = requests.map((request) =>
+      Number((request as { validAfter?: number }).validAfter),
+    )
+    const now = Math.floor(Date.now() / 1_000)
+
+    expect(requests).toMatchObject([
+      { feePayer: true, validAfter: expect.any(Number) },
+      { feePayer: true, validAfter: expect.any(Number) },
+    ])
+    expect(new Set(validAfter).size).toBe(2)
+    expect(validAfter.every((value) => value >= 0 && value < now)).toBe(true)
   })
 })
