@@ -402,7 +402,7 @@ const sessions = Cli.create('sessions', {
           if (failed.length > 0) {
             for (const failure of failed)
               process.stderr.write(`${failure.channelId}: ${failure.message}\n`)
-            if (!c.agent) process.exitCode = 1
+            process.exitCode = 1
           }
           if (c.format === 'json' && c.formatExplicit) return c.ok(result)
           for (const item of closed) console.log(`${item.channelId}  ${item.status}  ${item.spent}`)

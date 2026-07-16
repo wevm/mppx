@@ -1,4 +1,4 @@
-import type { Hex } from 'ox'
+import { Hex } from 'ox'
 
 import * as Challenge from '../../../Challenge.js'
 import * as Fetch from '../../../client/internal/Fetch.js'
@@ -723,6 +723,9 @@ export async function closeHttpSession(
   if (!receiptHeader) return undefined
   const receipt = deserializeSessionReceipt(receiptHeader)
   if (
+    !receipt.txHash ||
+    !Hex.validate(receipt.txHash, { strict: true }) ||
+    Hex.size(receipt.txHash) !== 32 ||
     !isExpectedCloseReceipt({
       challengeId: closeChallenge.id,
       channelId: parameters.target.channelId,

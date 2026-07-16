@@ -1,6 +1,6 @@
 import { Errors } from 'incur'
 import type { Hex } from 'ox'
-import { createClient, http } from 'viem'
+import { createClient, formatUnits, http } from 'viem'
 
 import type * as Challenge from '../../Challenge.js'
 import {
@@ -80,17 +80,21 @@ export function resolveSessionSelection(
   })
 }
 
-function sessionDeposit(
+function sessionDecimals(challenge: Challenge.Challenge): number {
+  return typeof challenge.request.decimals === 'number' ? challenge.request.decimals : 6
+}
+
+/** @internal Resolves the manager deposit cap in human-readable token units. */
+export function resolveSessionMaxDeposit(
   challenge: Challenge.Challenge,
   methodOptions: Record<string, string>,
   testnet: boolean,
 ): string | undefined {
+  if (methodOptions.deposit !== undefined) return methodOptions.deposit
   const suggested = challenge.request.suggestedDeposit
-  return (
-    methodOptions.deposit ??
-    (typeof suggested === 'string' ? suggested : undefined) ??
-    (testnet ? '10' : undefined)
-  )
+  if (typeof suggested === 'string')
+    return formatUnits(BigInt(suggested), sessionDecimals(challenge))
+  return testnet ? '10' : undefined
 }
 
 function validateReceipt(
@@ -252,7 +256,12 @@ export async function runPersistentSessionRequest(
       bootstrap: false,
       client,
       channelStore,
-      maxDeposit: sessionDeposit(parameters.challenge, parameters.methodOptions, isTestnet(chain)),
+      decimals: sessionDecimals(parameters.challenge),
+      maxDeposit: resolveSessionMaxDeposit(
+        parameters.challenge,
+        parameters.methodOptions,
+        isTestnet(chain),
+      ),
       fetch: async (input, init) => {
         if (!replayPending) return parameters.fetch(input, init)
         replayPending = false
@@ -267,7 +276,12 @@ export async function runPersistentSessionRequest(
         spent: reusable.spent,
       })
     const { onReceipt, ...managerInit } = requestInit
-    const response = await manager.fetch(parameters.fetchInput, managerInit)
+    const managerHeaders = new Headers(managerInit.headers)
+    managerHeaders.set('Accept', 'text/event-stream')
+    const response = await manager.fetch(parameters.fetchInput, {
+      ...managerInit,
+      headers: managerHeaders,
+    })
 
     if (options.fail && response.status >= 400)
       throw new Errors.IncurError({

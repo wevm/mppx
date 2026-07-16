@@ -444,18 +444,13 @@ export function createSessionRegistry(options: CreateSessionRegistryOptions = {}
       }
       try {
         await createLock(file, owner)
+        if (await fileExists(deadLockClaimFile(file))) {
+          await removeOwnedLock(file, owner)
+          continue
+        }
         return {
           async release() {
-            const currentValue = await readJson(file)
-            if (currentValue === undefined) return
-            const current = parseStored(
-              lockOwnerSchema,
-              currentValue,
-              file,
-              'Session lock is invalid.',
-            )
-            if (current.token !== owner.token) return
-            await removeFile(file, 'Unable to release session lock.')
+            await removeOwnedLock(file, owner)
           },
         }
       } catch (error) {
@@ -862,11 +857,45 @@ async function createLock(file: string, owner: LockOwner): Promise<void> {
 }
 
 async function removeDeadLock(file: string, expected: LockOwner): Promise<void> {
+  const claim = deadLockClaimFile(file)
+  try {
+    await fs.link(file, claim)
+  } catch (error) {
+    if (hasCode(error, 'EEXIST') || hasCode(error, 'ENOENT')) return
+    throw stateError(file, 'Unable to claim dead lock.', error)
+  }
+
+  try {
+    const currentValue = await readJson(claim)
+    if (currentValue === undefined) return
+    const current = parseStored(lockOwnerSchema, currentValue, claim, 'Session lock is invalid.')
+    if (current.token !== expected.token) return
+    await removeFile(file, 'Unable to reclaim dead lock.')
+  } finally {
+    await removeFile(claim, 'Unable to release dead lock claim.')
+  }
+}
+
+function deadLockClaimFile(file: string): string {
+  return `${file}.reclaim`
+}
+
+async function fileExists(file: string): Promise<boolean> {
+  try {
+    await fs.access(file)
+    return true
+  } catch (error) {
+    if (hasCode(error, 'ENOENT')) return false
+    throw stateError(file, 'Unable to inspect session lock.', error)
+  }
+}
+
+async function removeOwnedLock(file: string, expected: LockOwner): Promise<void> {
   const currentValue = await readJson(file)
   if (currentValue === undefined) return
   const current = parseStored(lockOwnerSchema, currentValue, file, 'Session lock is invalid.')
   if (current.token !== expected.token) return
-  await removeFile(file, 'Unable to reclaim dead lock.')
+  await removeFile(file, 'Unable to release session lock.')
 }
 
 async function removeFile(file: string, message: string): Promise<void> {

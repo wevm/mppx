@@ -67,13 +67,18 @@ export async function closeWithSessionManager(
 ): Promise<CloseWithSessionManagerResult> {
   assertCloseChallengeScope(parameters.challenge, parameters.channel)
   const networkFetch = resolveFetch(parameters.fetch)
+  let pendingChallenge: TempoSessionChallenge | undefined
   const validatedFetch: typeof globalThis.fetch = async (input, init) => {
+    if (pendingChallenge) {
+      await parameters.onChallenge?.(pendingChallenge)
+      pendingChallenge = undefined
+    }
     const response = await networkFetch(input, init)
     if (response.status !== 402) return response
     const refreshed = Challenge.fromResponseList(response).find(isTempoSessionChallenge)
     if (!refreshed) throw new Error('Refreshed close response did not include tempo/session.')
     assertCloseChallengeScope(refreshed, parameters.channel)
-    await parameters.onChallenge?.(refreshed)
+    pendingChallenge = refreshed
     return response
   }
   const manager = sessionManager({

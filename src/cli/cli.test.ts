@@ -1361,7 +1361,9 @@ describe('session sse (examples/session/sse)', () => {
       secretKey: 'cli-test-secret-cli-test-secret-32',
     })
 
+    const paidAcceptHeaders: (string | undefined)[] = []
     const httpServer = await Http.createServer(async (req, res) => {
+      if (req.headers.authorization) paidAcceptHeaders.push(req.headers.accept)
       const result = await toNodeListener(
         server.session({
           amount: '0.001',
@@ -1389,6 +1391,7 @@ describe('session sse (examples/session/sse)', () => {
         env: { MPPX_PRIVATE_KEY: testPrivateKey },
       })
       expect(output.trim()).toBe('Hello world!')
+      expect(paidAcceptHeaders).toEqual(['text/event-stream'])
     } finally {
       httpServer.close()
     }
