@@ -1,5 +1,12 @@
 # mppx
 
+## 0.8.12
+
+### Patch Changes
+
+- 1afe397: Fixed legacy session auto-management reusing a cached channel after the account's `authorizedSigner` changed. The client now opens a new channel instead of emitting a voucher the escrow would reject.
+- 51f948e: Added payment-aware Tempo session streams to client fetch responses.
+
 ## 0.8.11
 
 ### Patch Changes
