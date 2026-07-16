@@ -1082,7 +1082,7 @@ describe('Session', () => {
       expect(voucherPayload.channelId).toBe(openPayload.channelId)
       expect(voucherPayload.descriptor).toEqual(openPayload.descriptor)
       expect(voucherPayload.cumulativeAmount).toBe('2000000')
-      expect(requestedUrls[2]).toBe('https://api.example.com/stream')
+      expect(requestedUrls[2]).toBe('https://api.example.com/stream?prompt=paid')
     })
 
     test('ignores precompile SSE voucher requests for a different channel', async () => {

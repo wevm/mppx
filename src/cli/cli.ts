@@ -13,7 +13,13 @@ import { normalizeHeaders } from '../client/internal/Fetch.js'
 import * as Mppx from '../client/Mppx.js'
 import * as Constants from '../Constants.js'
 import { validate as validateDiscovery } from '../discovery/Validate.js'
-import { createDefaultStore, createKeychain, resolveAccountName } from './account.js'
+import { isTempoSessionChallenge } from '../tempo/session/client/Transports.js'
+import {
+  createDefaultStore,
+  createKeychain,
+  resolveAccountName,
+  resolveLocalAccount,
+} from './account.js'
 import { loadConfig, resolveAcceptPayment, selectChallenge } from './internal.js'
 import type { Plugin } from './plugins/plugin.js'
 import {
@@ -21,6 +27,15 @@ import {
   readTempoKeystore,
   resolveTempoAccount,
 } from './plugins/tempo.js'
+import {
+  closeAllSessions,
+  closeSession,
+  listSessions,
+  viewSession,
+  type SessionOutput,
+} from './sessions/commands.js'
+import { runPersistentSessionRequest } from './sessions/request.js'
+import { createSessionRegistry, SessionBusyError, SessionStateError } from './sessions/store.js'
 import {
   chainName,
   confirm,
@@ -83,6 +98,37 @@ const serviceEndpointSchema = z.object({
   payment: z.unknown().optional(),
 })
 
+const sessionOutputSchema = z.object({
+  status: z.enum(['opening', 'open', 'closing', 'stale']),
+  channelId: z.string(),
+  account: z.string().optional(),
+  payer: z.string(),
+  payee: z.string(),
+  authorizedSigner: z.string(),
+  token: z.string(),
+  escrow: z.string(),
+  chainId: z.number(),
+  cumulativeAmount: z.string(),
+  confirmedSpend: z.string(),
+  deposit: z.string(),
+  units: z.number(),
+  resourceUrl: z.string(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+})
+
+const sessionCloseOutputSchema = z.object({
+  channelId: z.string(),
+  status: z.enum(['closed', 'already-closed']),
+  spent: z.string(),
+  txHash: z.string().optional(),
+})
+
+const sessionBulkCloseOutputSchema = z.object({
+  closed: z.array(sessionCloseOutputSchema),
+  failed: z.array(z.object({ channelId: z.string(), message: z.string() })),
+})
+
 const servicesRegistryUrl = 'https://mpp.dev/api/services'
 
 function shouldReturnStructured(c: { format: string; formatExplicit: boolean }) {
@@ -97,6 +143,43 @@ function outputResult<Data>(
   if (shouldReturnStructured(c)) return c.ok(data)
   print()
   return undefined as unknown as Data
+}
+
+function printSession(record: SessionOutput): void {
+  console.log(record.channelId)
+  console.log(`  status              ${record.status}`)
+  console.log(`  cumulative amount   ${record.cumulativeAmount}`)
+  console.log(`  confirmed spend     ${record.confirmedSpend}`)
+  console.log(`  deposit             ${record.deposit}`)
+  console.log(`  chain               ${record.chainId}`)
+  console.log(`  payer               ${record.payer}`)
+  console.log(`  payee               ${record.payee}`)
+  console.log(`  token               ${record.token}`)
+  console.log(`  resource            ${record.resourceUrl}`)
+}
+
+function sessionCommandError(error: unknown, fallbackCode: string): never {
+  if (error instanceof Errors.IncurError) throw error
+  if (error instanceof SessionBusyError)
+    throw new Errors.IncurError({
+      code: error.code,
+      message: error.message,
+      exitCode: error.exitCode,
+      cause: error,
+    })
+  if (error instanceof SessionStateError)
+    throw new Errors.IncurError({
+      code: error.code,
+      message: error.message,
+      exitCode: 65,
+      cause: error,
+    })
+  throw new Errors.IncurError({
+    code: fallbackCode,
+    message: error instanceof Error ? error.message : String(error),
+    exitCode: 75,
+    ...(error instanceof Error && { cause: error }),
+  })
 }
 
 async function writeResponseBody(response: Response) {
@@ -244,6 +327,15 @@ const cli = Cli.create('mppx', {
       .string()
       .optional()
       .describe('RPC endpoint, defaults to public RPC for chain (env: MPPX_RPC_URL)'),
+    session: z
+      .string()
+      .optional()
+      .default('auto')
+      .refine(
+        (value) => value === 'auto' || value === 'new' || /^0x[0-9a-fA-F]{64}$/.test(value),
+        'Expected auto, new, or a 32-byte channel ID',
+      )
+      .describe('Session selection: auto, new, or channel ID'),
     silent: z.boolean().default(false).describe('Silent mode (suppress progress and info)'),
     slippage: z.number().optional().describe('Tempo auto-swap max slippage percentage'),
     userAgent: z
@@ -347,6 +439,9 @@ const cli = Cli.create('mppx', {
     }
 
     try {
+      const methodOpts = parseMethodOpts(c.options.methodOpt)
+      const sessionRegistry = createSessionRegistry()
+
       const init: RequestInit = { redirect: c.options.location ? 'follow' : 'manual' }
       if (c.options.jsonBody) {
         init.body = c.options.jsonBody
@@ -368,6 +463,12 @@ const cli = Cli.create('mppx', {
       if (c.options.verbose >= 2) printRequestHeaders(url, init, info)
       const challengeResponse = await targetFetch(fetchUrl, init)
       if (challengeResponse.status !== 402) {
+        if (c.options.session !== 'auto')
+          return c.error({
+            code: 'UNSUPPORTED_SESSION',
+            message: '--session requires a tempo/session payment challenge.',
+            exitCode: 2,
+          })
         if (c.options.fail && challengeResponse.status >= 400)
           return c.error({
             code: 'HTTP_ERROR',
@@ -379,7 +480,6 @@ const cli = Cli.create('mppx', {
         return
       }
 
-      const methodOpts = parseMethodOpts(c.options.methodOpt)
       const offeredChallenges = Challenge.fromResponseList(challengeResponse)
       const currencyChallenges = filterChallengesByCurrency(offeredChallenges, c.options.currency)
       if (c.options.currency && currencyChallenges.length === 0) {
@@ -446,7 +546,12 @@ const cli = Cli.create('mppx', {
       // Display challenge
       const shownKeys = new Set<string>()
       {
-        printResponseHeaders(challengeResponse, headerOpts)
+        printResponseHeaders(
+          challengeResponse,
+          challenge.method === 'tempo' && challenge.intent === 'session' && c.options.include
+            ? { ...headerOpts, include: false, verbose: Math.max(headerOpts.verbose, 2) }
+            : headerOpts,
+        )
 
         const challengeRows = (() => {
           const skip = new Set(['id', 'request'])
@@ -516,6 +621,44 @@ const cli = Cli.create('mppx', {
           }
         }
       }
+
+      const persistentSessionAccount =
+        process.env.MPPX_PRIVATE_KEY?.trim() ||
+        !isTempoAccount(resolveAccountName(c.options.account))
+      if (isTempoSessionChallenge(challenge) && persistentSessionAccount) {
+        try {
+          await runPersistentSessionRequest({
+            challenge,
+            challengeResponse: selectedChallengeResponse,
+            endpoint: url,
+            fetch: targetFetch,
+            fetchInput: fetchUrl,
+            init,
+            info,
+            methodOptions: methodOpts,
+            options: {
+              account: c.options.account,
+              fail: c.options.fail,
+              include: c.options.include,
+              network: c.options.network,
+              rpcUrl: c.options.rpcUrl,
+              session: c.options.session,
+              silent: c.options.silent,
+              verbose: c.options.verbose,
+            },
+            registry: sessionRegistry,
+          })
+        } catch (error) {
+          return sessionCommandError(error, 'SESSION_REQUEST_FAILED')
+        }
+        return
+      }
+      if (c.options.session !== 'auto')
+        return c.error({
+          code: 'UNSUPPORTED_SESSION',
+          message: '--session requires a tempo/session payment challenge.',
+          exitCode: 2,
+        })
 
       // Create credential
       let credential: string
@@ -692,6 +835,122 @@ const cli = Cli.create('mppx', {
     }
   },
 })
+
+const sessions = Cli.create('sessions', {
+  description: 'Manage persistent payment sessions (list, view, close)',
+})
+  .command('list', {
+    description: 'List persistent payment sessions',
+    options: z.object({
+      account: z.string().optional().describe('Filter by account name'),
+      network: z.enum(['mainnet', 'testnet']).optional().describe('Filter by Tempo network'),
+    }),
+    output: z.object({ sessions: z.array(sessionOutputSchema) }),
+    alias: { account: 'a' },
+    async run(c) {
+      try {
+        const records = await listSessions(c.options)
+        return outputResult(c, { sessions: records }, () => {
+          if (records.length === 0) console.log('No sessions.')
+          for (const [index, record] of records.entries()) {
+            if (index > 0) console.log('')
+            printSession(record)
+          }
+        })
+      } catch (error) {
+        return sessionCommandError(error, 'SESSION_LIST_FAILED')
+      }
+    },
+  })
+  .command('view', {
+    description: 'View a persistent payment session',
+    args: z.object({ channelId: z.string().describe('Full session channel ID') }),
+    output: sessionOutputSchema,
+    async run(c) {
+      try {
+        const record = await viewSession(c.args.channelId)
+        return outputResult(c, record, () => printSession(record))
+      } catch (error) {
+        return sessionCommandError(error, 'SESSION_VIEW_FAILED')
+      }
+    },
+  })
+  .command('close', {
+    description: 'Cooperatively close persistent payment sessions',
+    usage: [{ suffix: '<channel-id> [options]' }, { suffix: '--all --yes [options]' }],
+    args: z.object({ channelId: z.string().optional().describe('Full session channel ID') }),
+    options: z.object({
+      account: z.string().optional().describe('Account name'),
+      all: z.boolean().optional().default(false).describe('Close every matching session'),
+      header: z.array(z.string()).optional().describe('Add close request header (repeatable)'),
+      network: z.enum(['mainnet', 'testnet']).optional().describe('Tempo network'),
+      rpcUrl: z.string().optional().describe('RPC endpoint (env: MPPX_RPC_URL)'),
+      url: z.string().optional().describe('Override the stored resource URL'),
+      yes: z.boolean().optional().default(false).describe('Confirm closing every session'),
+    }),
+    output: z.union([sessionCloseOutputSchema, sessionBulkCloseOutputSchema]),
+    alias: { account: 'a', header: 'H', rpcUrl: 'r' },
+    async run(c) {
+      if (c.options.all && c.args.channelId)
+        return c.error({
+          code: 'INVALID_SESSION_CLOSE',
+          message: 'Specify a channel ID or --all, not both.',
+          exitCode: 2,
+        })
+      if (!c.options.all && !c.args.channelId)
+        return c.error({
+          code: 'INVALID_SESSION_CLOSE',
+          message: 'Specify a channel ID or --all.',
+          exitCode: 2,
+        })
+      if (c.options.all && !c.options.yes)
+        return c.error({
+          code: 'CONFIRMATION_REQUIRED',
+          message: 'Closing all sessions requires --yes.',
+          exitCode: 2,
+        })
+      if (c.options.all && (c.options.header || c.options.rpcUrl || c.options.url))
+        return c.error({
+          code: 'INVALID_SESSION_CLOSE',
+          message: '--header, --rpc-url, and --url only apply to a single session.',
+          exitCode: 2,
+        })
+
+      try {
+        if (c.options.all) {
+          const result = await closeAllSessions({
+            account: c.options.account,
+            network: c.options.network,
+          })
+          if (result.failed.length > 0) {
+            for (const failure of result.failed)
+              process.stderr.write(`${failure.channelId}: ${failure.message}\n`)
+            if (!c.agent) process.exitCode = 1
+          }
+          return outputResult(c, result, () => {
+            for (const closed of result.closed)
+              console.log(`${closed.channelId}  ${closed.status}  ${closed.spent}`)
+            for (const failure of result.failed)
+              console.log(`${failure.channelId}  failed  ${failure.message}`)
+          })
+        }
+
+        const result = await closeSession(c.args.channelId!, {
+          account: c.options.account,
+          headers: c.options.header,
+          network: c.options.network,
+          resourceUrl: c.options.url,
+          rpcUrl: c.options.rpcUrl,
+        })
+        return outputResult(c, result, () => {
+          console.log(`${result.channelId}  ${result.status}  ${result.spent}`)
+          if (result.txHash) console.log(`  transaction  ${result.txHash}`)
+        })
+      } catch (error) {
+        return sessionCommandError(error, 'SESSION_CLOSE_FAILED')
+      }
+    },
+  })
 
 const account = Cli.create('account', {
   description: 'Manage accounts (create, default, delete, export, fund, list, view)',
@@ -875,9 +1134,12 @@ const account = Cli.create('account', {
     async run(c) {
       const structured = shouldReturnStructured(c)
       const accountName = resolveAccountName(c.options.account)
-      const keychain = createKeychain(accountName)
-      const key = await keychain.get()
-      if (!key) {
+      const missingMessage = `Account "${accountName}" not found.`
+      const resolved = await resolveLocalAccount(c.options.account).catch((error) => {
+        if (error instanceof Error && error.message === missingMessage) return null
+        throw error
+      })
+      if (!resolved) {
         if (c.options.account)
           return c.error({
             code: 'ACCOUNT_NOT_FOUND',
@@ -887,15 +1149,16 @@ const account = Cli.create('account', {
         else
           return c.error({ code: 'ACCOUNT_NOT_FOUND', message: 'No account found.', exitCode: 69 })
       }
-      const acct = privateKeyToAccount(key as `0x${string}`)
+      const accountReference =
+        resolved.source === 'keychain' ? resolved.accountName : resolved.account.address
       const fundingNetwork = resolveFundingNetwork(c.options)
       const rpcUrl = resolveRpcUrl(c.options.rpcUrl, { network: fundingNetwork })
       const chain = await resolveChain({ network: fundingNetwork, rpcUrl })
       const client = createClient({ chain, transport: http(rpcUrl) })
-      if (!structured) console.log(`Funding "${accountName}" on ${chainName(chain)}`)
+      if (!structured) console.log(`Funding "${accountReference}" on ${chainName(chain)}`)
       try {
         const { Actions } = await import('viem/tempo')
-        const hashes = await Actions.faucet.fund(client, { account: acct })
+        const hashes = await Actions.faucet.fund(client, { account: resolved.account })
         const explorerUrl = chain.blockExplorers?.default?.url
         if (!structured) {
           for (const hash of hashes) {
@@ -907,7 +1170,7 @@ const account = Cli.create('account', {
         await Promise.all(hashes.map((hash) => waitForTransactionReceipt(client, { hash })))
         return outputResult(
           c,
-          { account: accountName, chain: chainName(chain), transactions: [...hashes] },
+          { account: accountReference, chain: chainName(chain), transactions: [...hashes] },
           () => {
             console.log('Funded successfully')
           },
@@ -1578,6 +1841,7 @@ cli.command(account)
 cli.command(discover)
 cli.command(init)
 cli.command(services)
+cli.command(sessions)
 cli.command(sign)
 cli.command(validate)
 

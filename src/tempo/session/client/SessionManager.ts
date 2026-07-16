@@ -11,12 +11,14 @@ import type { ChannelEntry } from '../client/ChannelOps.js'
 import { createChannelStore, entryKey, type ChannelStore } from '../client/ChannelStore.js'
 import type { SessionContext } from '../client/CredentialState.js'
 import { session as sessionPlugin } from '../client/Session.js'
+import * as Channel from '../precompile/Channel.js'
 import { deserializeSessionReceipt } from '../precompile/Protocol.js'
 import { readSessionChallengeAmount, type SessionReceipt } from '../precompile/Protocol.js'
 import {
   deserializeSnapshot as deserializeSessionSnapshot,
   serializeSnapshot as serializeSessionSnapshot,
 } from '../Snapshot.js'
+import { registerSessionManagerInternals } from './internal/SessionManager.js'
 import { createSessionReceiptCoordinator } from './ReceiptCoordinator.js'
 import { resolveCloseTarget, type CloseTarget } from './Runtime.js'
 import { assertVoucherWithinLocalLimit as assertVoucherWithinLocalAuthorization } from './Runtime.js'
@@ -34,6 +36,7 @@ import {
 import { closeSocketSession } from './Runtime.js'
 import {
   closeHttpSession,
+  getSessionSnapshot,
   isTempoSessionChallenge,
   managementInput,
   postTopUp,
@@ -46,7 +49,7 @@ import {
   type WebSocketConstructor,
   WebSocketReadyState,
 } from './Transports.js'
-import { openSseSession, type SseDriverOptions } from './Transports.js'
+import { consumeSseSessionResponse, openSseSession, type SseDriverOptions } from './Transports.js'
 import { applyTopUpResult, resolveManualTopUp, type TopUpRequirement } from './Transports.js'
 import {
   openWebSocketSession,
@@ -198,6 +201,7 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
 
   const backing = parameters.channelStore ?? createChannelStore()
   const ignoredChannelIds = new Set<Hex.Hex>()
+  let lastCloseAttempt: { challengeId: string; signedCloseAmount: string } | null = null
 
   // Tracks one fetch's channel reuse so stale stored entries can be evicted once.
   type ChannelUse = {
@@ -428,13 +432,56 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
     })
   }
 
-  function getValidatedFallbackCloseAmount(target: CloseTarget) {
-    const closeAmount = getFallbackCloseAmount(target.challenge, target.channelId)
+  function applyCloseSnapshot(target: CloseTarget, challenge: TempoSessionChallenge) {
+    const snapshot = getSessionSnapshot(challenge)
+    if (!snapshot) return
+
+    const computedSnapshotId = Channel.computeId({
+      ...snapshot.descriptor,
+      chainId: snapshot.chainId,
+      escrow: snapshot.escrow,
+    })
+    if (computedSnapshotId.toLowerCase() !== snapshot.channelId.toLowerCase()) {
+      throw new Error('close snapshot descriptor does not match its channel ID')
+    }
+    if (snapshot.channelId.toLowerCase() !== target.channelId.toLowerCase()) {
+      throw new Error('close snapshot channel ID does not match local session')
+    }
+    if (
+      snapshot.chainId !== target.channel.chainId ||
+      snapshot.escrow.toLowerCase() !== target.channel.escrow.toLowerCase()
+    ) {
+      throw new Error('close snapshot payment scope does not match local session')
+    }
+
+    const acceptedCumulative = BigInt(snapshot.acceptedCumulative)
+    const snapshotSpent = BigInt(snapshot.spent)
+    if (snapshotSpent > acceptedCumulative) {
+      throw new Error('close snapshot spent exceeds accepted cumulative amount')
+    }
+    if (acceptedCumulative > target.channel.cumulativeAmount) {
+      throw new Error('close snapshot accepted cumulative exceeds local voucher state')
+    }
+    if (runtime.spent > acceptedCumulative) {
+      throw new Error('close snapshot accepted cumulative is below locally confirmed spend')
+    }
+    if (snapshotSpent > runtime.spent) runtime.spent = snapshotSpent
+  }
+
+  function getValidatedFallbackCloseAmount(
+    target: CloseTarget,
+    challenge: TempoSessionChallenge = target.challenge,
+    applySnapshot = false,
+  ) {
+    if (applySnapshot) applyCloseSnapshot(target, challenge)
+    const closeAmount = getFallbackCloseAmount(challenge, target.channelId)
     if (closeAmount > target.channel.cumulativeAmount) {
       throw new Error('fallback close amount exceeds local voucher state')
     }
     assertVoucherWithinLocalLimit(closeAmount)
-    return closeAmount.toString()
+    const signedCloseAmount = closeAmount.toString()
+    lastCloseAttempt = { challengeId: challenge.id, signedCloseAmount }
+    return signedCloseAmount
   }
 
   function assertVoucherWithinLocalLimit(cumulativeAmount: bigint) {
@@ -467,6 +514,7 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
       spent: runtime.spent,
     })
     if (applied?.channel && runtime.lastChallenge) {
+      await store.set(applied.channel)
       dispatch({
         type: 'activated',
         challengeId: runtime.lastChallenge.id,
@@ -623,6 +671,8 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
       createSessionCredential,
       fetch: config.fetch,
       lastUrl: runtime.lastUrl,
+      resolveSignedCloseAmount: (challenge) =>
+        getValidatedFallbackCloseAmount(target, challenge, true),
       signedCloseAmount: getValidatedFallbackCloseAmount(target),
       setChallenge(challenge) {
         runtime.lastChallenge = challenge
@@ -636,6 +686,20 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
     }
 
     return receipt
+  }
+
+  const sseDriver = {
+    createSessionCredential,
+    doFetch,
+    fetch: config.fetch,
+    getChannel: () => runtime.channel,
+    getChallenge: () => runtime.lastChallenge,
+    assertVoucherWithinLocalLimit,
+    managementInput,
+    acceptReceipt(receipt: SessionReceipt) {
+      updateSpentFromReceipt(receipt)
+    },
+    topUpIfNeeded,
   }
 
   const self: SessionManager = {
@@ -673,19 +737,7 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
     },
 
     async sse(input, init) {
-      return openSseSession(input, init, {
-        createSessionCredential,
-        doFetch,
-        fetch: config.fetch,
-        getChannel: () => runtime.channel,
-        getChallenge: () => runtime.lastChallenge,
-        assertVoucherWithinLocalLimit,
-        managementInput,
-        acceptReceipt(receipt) {
-          updateSpentFromReceipt(receipt)
-        },
-        topUpIfNeeded,
-      })
+      return openSseSession(input, init, sseDriver)
     },
 
     async ws(input, init) {
@@ -765,6 +817,37 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
       return closeHttpSessionAndApply(target)
     },
   }
+
+  registerSessionManagerInternals(self, {
+    consumeSseResponse(input, response, options) {
+      return consumeSseSessionResponse(input, response, options, sseDriver)
+    },
+    getCloseAttempt: () => lastCloseAttempt,
+    rehydrate({ channel, challenge, input, spent }) {
+      if (!channel.opened) throw new Error('Cannot restore a closed session channel.')
+      if (!isTempoSessionChallenge(challenge)) {
+        throw new Error('Cannot restore session: challenge is not tempo/session.')
+      }
+      if (spent < 0n) throw new Error('Cannot restore session: spent must not be negative.')
+      if (spent > channel.cumulativeAmount) {
+        throw new Error('Cannot restore session: spent exceeds local voucher state.')
+      }
+      assertVoucherWithinLocalLimit(channel.cumulativeAmount)
+
+      runtime.lastUrl = input
+      runtime.lastChallenge = challenge
+      runtime.channel = channel
+      runtime.spent = spent
+      dispatch({ type: 'challengeReceived', challengeId: challenge.id })
+      dispatch({
+        type: 'activated',
+        challengeId: challenge.id,
+        entry: channel,
+        spent: spent.toString(),
+        units: 0,
+      })
+    },
+  })
 
   return self
 }

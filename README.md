@@ -97,7 +97,8 @@ npx gitpick wevm/mppx/examples/charge
 
 ## CLI
 
-`mppx` includes a basic CLI for making HTTP requests with automatic payment handling.
+`mppx` includes a basic CLI for making HTTP requests with automatic payment handling. Tempo
+session channels are retained and reused automatically until you close them.
 
 ```bash
 # create account - stored in keychain, autofunded on testnet
@@ -105,7 +106,19 @@ mppx account create
 
 # make request - automatic payment handling, curl-like api
 mppx example.com
+
+# open another session instead of reusing the preferred channel
+mppx example.com --session new
+
+# inspect and close retained sessions
+mppx sessions list
+mppx sessions view <channel-id>
+mppx sessions close <channel-id>
+mppx sessions close --all --yes
 ```
+
+`--session auto` is the default. Pass `new` to open another channel or a channel ID to select one
+explicitly.
 
 You can also install globally to use the `mppx` CLI from anywhere:
 
