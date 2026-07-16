@@ -502,6 +502,8 @@ export type CloseHttpSessionParameters = {
   fetch: typeof globalThis.fetch
   /** Last paid resource URL; used as the management endpoint base. */
   lastUrl: RequestInfo | URL | null
+  /** Resolves the close amount again when the server refreshes the challenge. */
+  resolveSignedCloseAmount?: ((challenge: TempoSessionChallenge) => string) | undefined
   /** Final cumulative amount the client is willing to sign. */
   signedCloseAmount: string
   /** Stores a fresh close challenge when the first close credential expired. */
@@ -544,7 +546,7 @@ export function requestInitWithAuthorization(
   }
 }
 
-/** Returns the URL used for out-of-band management POSTs, stripping resource query state. */
+/** Returns the exact resource URL used for out-of-band management POSTs, without its fragment. */
 export function managementInput(input: RequestInfo | URL): RequestInfo | URL {
   try {
     const base =
@@ -555,7 +557,7 @@ export function managementInput(input: RequestInfo | URL): RequestInfo | URL {
         : input instanceof URL
           ? new URL(input)
           : new URL(String(input), base)
-    url.search = ''
+    url.hash = ''
     return url
   } catch {
     return input
@@ -682,12 +684,15 @@ export async function closeHttpSession(
     )
   }
 
-  const postClose = async (challenge: TempoSessionChallenge) => {
+  const postClose = async (challenge: TempoSessionChallenge, refreshed = false) => {
+    const signedCloseAmount =
+      (refreshed ? parameters.resolveSignedCloseAmount?.(challenge) : undefined) ??
+      parameters.signedCloseAmount
     const credential = await parameters.createSessionCredential(challenge, {
       action: 'close',
       channelId: parameters.target.channelId,
       descriptor: parameters.target.channel.descriptor,
-      cumulativeAmountRaw: parameters.signedCloseAmount,
+      cumulativeAmountRaw: signedCloseAmount,
     })
     return parameters.fetch(parameters.lastUrl!, {
       method: 'POST',
@@ -700,7 +705,7 @@ export async function closeHttpSession(
     const challenge = Challenge.fromResponseList(response).find(isTempoSessionChallenge)
     if (challenge) {
       parameters.setChallenge?.(challenge)
-      response = await postClose(challenge)
+      response = await postClose(challenge, true)
     }
   }
   if (!response.ok) {
@@ -720,6 +725,12 @@ export type SseDriverOptions = RequestInit & {
   /** Called for each payment receipt emitted by the SSE stream. */
   onReceipt?: ((receipt: SessionReceipt) => void) | undefined
   /** Abort signal used to cancel the stream. */
+  signal?: AbortSignal | undefined
+}
+
+/** @internal Options used when consuming an already-paid SSE response. */
+export type SseResponseOptions = {
+  onReceipt?: ((receipt: SessionReceipt) => void) | undefined
   signal?: AbortSignal | undefined
 }
 
@@ -784,18 +795,28 @@ export async function openSseSession(
   if (!isEventStream(response) && driver.getChannel()?.opened)
     response = await driver.doFetch(input, sseInit)
 
-  const challenge = driver.getChallenge()
+  return consumeSseSessionResponse(input, response, { onReceipt, signal }, driver)
+}
+
+/** @internal Consumes an already-paid SSE response with the session transport driver. */
+export function consumeSseSessionResponse(
+  input: RequestInfo | URL,
+  response: Response,
+  options: SseResponseOptions | undefined,
+  driver: OpenSseSessionParameters,
+): AsyncIterable<string> {
   if (!isEventStream(response)) throw new Error('SSE response is not an event stream.')
   if (!response.body) throw new Error('Response has no body.')
 
   return iterateSseMessages({
-    onNeedVoucher: (event) => handleSseNeedVoucher({ challenge, driver, input }, event),
+    onNeedVoucher: (event) =>
+      handleSseNeedVoucher({ challenge: driver.getChallenge(), driver, input }, event),
     onReceipt(receipt) {
       driver.acceptReceipt(receipt)
-      onReceipt?.(receipt)
+      options?.onReceipt?.(receipt)
     },
     response,
-    signal,
+    signal: options?.signal,
   })
 }
 

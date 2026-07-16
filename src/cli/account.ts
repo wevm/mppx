@@ -203,6 +203,29 @@ export function createKeychain(account = 'main') {
   }
 }
 
+/** Resolves a local CLI signer together with its durable account reference. */
+export async function resolveLocalAccount(name?: string) {
+  const { privateKeyToAccount } = await import('viem/accounts')
+
+  const envKey = process.env.MPPX_PRIVATE_KEY?.trim()
+  if (envKey)
+    return {
+      account: privateKeyToAccount(envKey as `0x${string}`),
+      source: 'environment' as const,
+    }
+
+  const accountName = resolveAccountName(name)
+  const key = await createKeychain(accountName).get()
+  if (key)
+    return {
+      account: privateKeyToAccount(key as `0x${string}`),
+      accountName,
+      source: 'keychain' as const,
+    }
+
+  throw new Error(`Account "${accountName}" not found.`)
+}
+
 /**
  * Resolve a CLI account to a viem `LocalAccount`.
  *
@@ -221,14 +244,5 @@ export function createKeychain(account = 'main') {
  * ```
  */
 export async function resolveAccount(name?: string) {
-  const { privateKeyToAccount } = await import('viem/accounts')
-
-  const envKey = process.env.MPPX_PRIVATE_KEY?.trim()
-  if (envKey) return privateKeyToAccount(envKey as `0x${string}`)
-
-  const accountName = resolveAccountName(name)
-  const key = await createKeychain(accountName).get()
-  if (key) return privateKeyToAccount(key as `0x${string}`)
-
-  throw new Error(`Account "${accountName}" not found.`)
+  return (await resolveLocalAccount(name)).account
 }

@@ -139,9 +139,12 @@ describe('HttpManagement', () => {
       )
     })
 
-    test('strips resource query state from management URLs', () => {
+    test('preserves query state and strips fragments from management URLs', () => {
       expect(managementInput('https://example.test/resource?cursor=abc').toString()).toBe(
-        'https://example.test/resource',
+        'https://example.test/resource?cursor=abc',
+      )
+      expect(managementInput('https://example.test/resource?cursor=abc#result').toString()).toBe(
+        'https://example.test/resource?cursor=abc',
       )
     })
 
@@ -185,7 +188,7 @@ describe('HttpManagement', () => {
         return 'top-up-credential'
       })
       const fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-        expect(input.toString()).toBe('https://example.test/resource')
+        expect(input.toString()).toBe('https://example.test/resource?cursor=abc')
         expect(init?.method).toBe('POST')
         expect(authorizationHeader(init)).toBe('top-up-credential')
         return new Response(null, {
@@ -301,16 +304,20 @@ describe('HttpManagement', () => {
       const entry = channel()
       const retryChallenge = { ...challenge(), id: 'challenge-2' } as TempoSessionChallenge
       const setChallenge = vi.fn()
-      const createSessionCredential = vi.fn(async (challenge_) => {
+      const closeAmounts: string[] = []
+      const createSessionCredential = vi.fn(async (challenge_, context: SessionContext) => {
+        if (context.action !== 'close') throw new Error('expected close context')
+        closeAmounts.push(context.cumulativeAmountRaw!)
         return `close-${challenge_.id}`
       })
+      const resolveSignedCloseAmount = vi.fn(() => '6')
       const fetch = vi
         .fn()
         .mockResolvedValueOnce(response402(retryChallenge))
         .mockResolvedValueOnce(
           new Response(null, {
             status: 200,
-            headers: { [Constants.Headers.paymentReceipt]: receiptHeader(5n, 5n) },
+            headers: { [Constants.Headers.paymentReceipt]: receiptHeader(6n, 6n) },
           }),
         )
 
@@ -318,13 +325,17 @@ describe('HttpManagement', () => {
         createSessionCredential,
         fetch,
         lastUrl: 'https://example.test/resource',
+        resolveSignedCloseAmount,
         signedCloseAmount: '5',
         setChallenge,
         target: { challenge: challenge(), channel: entry, channelId },
       })
 
-      expect(receipt?.spent).toBe('5')
+      expect(receipt?.spent).toBe('6')
       expect(setChallenge).toHaveBeenCalledWith(retryChallenge)
+      expect(resolveSignedCloseAmount).toHaveBeenCalledOnce()
+      expect(resolveSignedCloseAmount).toHaveBeenCalledWith(retryChallenge)
+      expect(closeAmounts).toEqual(['5', '6'])
       expect(createSessionCredential).toHaveBeenCalledTimes(2)
       expect(createSessionCredential.mock.calls[1]?.[0]).toMatchObject({ id: retryChallenge.id })
       expect(authorizationHeader(fetch.mock.calls[1]?.[1])).toBe('close-challenge-2')

@@ -1,0 +1,373 @@
+import * as fs from 'node:fs/promises'
+import * as os from 'node:os'
+import * as path from 'node:path'
+
+import type { Address, Hex } from 'viem'
+
+import type * as Challenge from '../../Challenge.js'
+import type { ChannelEntry } from '../../tempo/session/client/ChannelOps.js'
+import { entryKey } from '../../tempo/session/client/ChannelStore.js'
+import type { SessionReceipt } from '../../tempo/session/precompile/Protocol.js'
+import {
+  createSessionRegistry,
+  SessionBusyError,
+  SessionStateError,
+  sessionScopeKey,
+  toChannelStore,
+  type SessionPersistenceContext,
+  type SessionScope,
+} from './store.js'
+
+const payer = '0x1111111111111111111111111111111111111111' as Address
+const payee = '0x2222222222222222222222222222222222222222' as Address
+const token = '0x3333333333333333333333333333333333333333' as Address
+const escrow = '0x4444444444444444444444444444444444444444' as Address
+const operator = '0x0000000000000000000000000000000000000000' as Address
+const channelId = `0x${'aa'.repeat(32)}` as Hex
+
+let temporaryDirectory: string
+let stateRoot: string
+
+beforeEach(async () => {
+  temporaryDirectory = await fs.mkdtemp(path.join(os.tmpdir(), 'mppx-sessions-'))
+  stateRoot = path.join(temporaryDirectory, 'state')
+})
+
+afterEach(async () => {
+  vi.unstubAllEnvs()
+  await fs.rm(temporaryDirectory, { force: true, recursive: true })
+})
+
+function channel(overrides: Partial<ChannelEntry> = {}): ChannelEntry {
+  return {
+    channelId,
+    cumulativeAmount: 10n,
+    deposit: 100n,
+    descriptor: {
+      payer,
+      payee,
+      operator,
+      token,
+      salt: `0x${'55'.repeat(32)}`,
+      authorizedSigner: payer,
+      expiringNonceHash: `0x${'66'.repeat(32)}`,
+    },
+    escrow,
+    chainId: 42431,
+    opened: true,
+    ...overrides,
+  }
+}
+
+function challenge(id = 'challenge-1'): Challenge.Challenge {
+  return {
+    id,
+    realm: 'api.example.test',
+    method: 'tempo',
+    intent: 'session',
+    request: {
+      amount: '1',
+      currency: token,
+      recipient: payee,
+      methodDetails: { chainId: 42431, escrowContract: escrow },
+    },
+  }
+}
+
+function receipt(overrides: Partial<SessionReceipt> = {}): SessionReceipt {
+  return {
+    method: 'tempo',
+    intent: 'session',
+    status: 'success',
+    timestamp: '2026-07-16T00:01:00.000Z',
+    reference: channelId,
+    challengeId: 'challenge-1',
+    channelId,
+    acceptedCumulative: '10',
+    spent: '2',
+    units: 3,
+    ...overrides,
+  }
+}
+
+function scope(overrides: Partial<SessionScope> = {}): SessionScope {
+  return { payer, payee, token, escrow, chainId: 42431, ...overrides }
+}
+
+function registryOptions(
+  overrides: Parameters<typeof createSessionRegistry>[0] = {},
+): Parameters<typeof createSessionRegistry>[0] {
+  return { stateRoot, ...overrides }
+}
+
+describe('createSessionRegistry', () => {
+  test('uses XDG_STATE_HOME for the versioned state root', () => {
+    vi.stubEnv('XDG_STATE_HOME', path.join(temporaryDirectory, 'xdg-state'))
+    const registry = createSessionRegistry()
+    expect(registry.root).toBe(path.join(temporaryDirectory, 'xdg-state', 'mppx', 'sessions', 'v1'))
+  })
+
+  test('persists sanitized state atomically with private permissions', async () => {
+    const times = [new Date('2026-07-16T00:00:00.000Z'), new Date('2026-07-15T00:00:00.000Z')]
+    const registry = createSessionRegistry(
+      registryOptions({ now: () => times.shift() ?? new Date('2026-07-17T00:00:00.000Z') }),
+    )
+    const firstChannel = Object.assign(channel(), { privateKey: 'do-not-store' })
+    const firstAccount = Object.assign(
+      { name: 'testnet', address: payer },
+      { privateKey: 'do-not-store' },
+    )
+
+    const first = await registry.upsert({
+      status: 'opening',
+      channel: firstChannel,
+      account: firstAccount,
+      endpoint: 'https://api.example.test/query?chainId=testnet&sql=select%201#response',
+      challenge: challenge(),
+      receipt: receipt(),
+      spent: 2n,
+      units: 3,
+    })
+    const second = await registry.upsert({
+      status: 'open',
+      channel: channel({ cumulativeAmount: 8n }),
+      account: { address: payer },
+      endpoint: 'https://api.example.test/query?chainId=testnet&sql=select%201#ignored',
+      challenge: challenge('challenge-2'),
+      spent: 1n,
+      units: 1,
+    })
+
+    expect(first.endpoint).toBe('https://api.example.test/query?chainId=testnet&sql=select%201')
+    expect(second).toMatchObject({
+      status: 'open',
+      account: { name: 'testnet', address: payer },
+      spent: 2n,
+      units: 3,
+      createdAt: '2026-07-16T00:00:00.000Z',
+      updatedAt: '2026-07-16T00:00:00.000Z',
+    })
+    expect(second.channel.cumulativeAmount).toBe(10n)
+    expect(second.receipt).toEqual(receipt())
+
+    const file = path.join(stateRoot, 'channels', `${channelId}.json`)
+    const source = await fs.readFile(file, 'utf8')
+    const stored: unknown = JSON.parse(source)
+    expect(stored).toMatchObject({
+      version: 1,
+      method: 'tempo',
+      intent: 'session',
+      channel: { cumulativeAmount: '10', deposit: '100' },
+      spent: '2',
+      units: 3,
+    })
+    expect(source).not.toContain('privateKey')
+    expect((await fs.stat(stateRoot)).mode & 0o777).toBe(0o700)
+    expect((await fs.stat(path.join(stateRoot, 'channels'))).mode & 0o777).toBe(0o700)
+    expect((await fs.stat(file)).mode & 0o777).toBe(0o600)
+    expect(
+      (await fs.readdir(path.join(stateRoot, 'channels'))).filter((name) => name.includes('.tmp-')),
+    ).toEqual([])
+  })
+
+  test('manages preferred sessions and removes mappings before records', async () => {
+    const registry = createSessionRegistry(registryOptions())
+    await registry.upsert({
+      status: 'open',
+      channel: channel(),
+      account: { name: 'testnet', address: payer },
+      endpoint: 'https://api.example.test/query?chainId=testnet',
+      challenge: challenge(),
+    })
+
+    await registry.setPreferred(scope(), channelId)
+    expect(await registry.getPreferred(scope())).toBe(channelId)
+    await registry.clearPreferred(scope(), `0x${'bb'.repeat(32)}`)
+    expect(await registry.getPreferred(scope())).toBe(channelId)
+    expect(await registry.list()).toEqual([
+      expect.objectContaining({ channel: expect.objectContaining({ channelId }) }),
+    ])
+    await expect(
+      registry.setPreferred(
+        scope({ payee: '0x7777777777777777777777777777777777777777' }),
+        channelId,
+      ),
+    ).rejects.toBeInstanceOf(SessionStateError)
+
+    await registry.remove(channelId)
+    expect(await registry.get(channelId)).toBeUndefined()
+    expect(await registry.getPreferred(scope())).toBeUndefined()
+  })
+
+  test('does not overwrite a corrupt managed record', async () => {
+    const file = path.join(stateRoot, 'channels', `${channelId}.json`)
+    await fs.mkdir(path.dirname(file), { recursive: true })
+    await fs.writeFile(file, '{invalid json')
+
+    await expect(createSessionRegistry(registryOptions()).get(channelId)).rejects.toMatchObject({
+      code: 'SESSION_STATE_INVALID',
+      file,
+    })
+    await expect(
+      createSessionRegistry(registryOptions()).upsert({
+        status: 'open',
+        channel: channel(),
+        account: { address: payer },
+        endpoint: 'https://api.example.test/query',
+        challenge: challenge(),
+      }),
+    ).rejects.toBeInstanceOf(SessionStateError)
+    expect(await fs.readFile(file, 'utf8')).toBe('{invalid json')
+  })
+
+  test('rejects live and remote locks, then reclaims a dead same-host lock', async () => {
+    const first = createSessionRegistry(
+      registryOptions({ hostname: 'host-a', pid: 101, isProcessAlive: () => true }),
+    )
+    const live = await first.acquire(scope())
+    const contender = createSessionRegistry(
+      registryOptions({ hostname: 'host-a', pid: 202, isProcessAlive: (pid) => pid === 101 }),
+    )
+
+    await expect(contender.acquire(scope())).rejects.toMatchObject({
+      code: 'SESSION_BUSY',
+      exitCode: 75,
+      scope: sessionScopeKey(scope()),
+      owner: { hostname: 'host-a', pid: 101 },
+    })
+    await live.release()
+
+    const deadOwner = createSessionRegistry(
+      registryOptions({ hostname: 'host-a', pid: 303, isProcessAlive: () => true }),
+    )
+    const abandoned = await deadOwner.acquire(scope())
+    const reclaimer = createSessionRegistry(
+      registryOptions({ hostname: 'host-a', pid: 404, isProcessAlive: () => false }),
+    )
+    const reclaimed = await reclaimer.acquire(scope())
+    await abandoned.release()
+    const observer = createSessionRegistry(
+      registryOptions({ hostname: 'host-a', pid: 405, isProcessAlive: () => true }),
+    )
+    await expect(observer.acquire(scope())).rejects.toBeInstanceOf(SessionBusyError)
+    await reclaimed.release()
+
+    const remoteOwner = createSessionRegistry(
+      registryOptions({ hostname: 'host-b', pid: 505, isProcessAlive: () => true }),
+    )
+    const remote = await remoteOwner.acquire(scope())
+    await expect(reclaimer.acquire(scope())).rejects.toMatchObject({
+      code: 'SESSION_BUSY',
+      owner: { hostname: 'host-b', pid: 505 },
+    })
+    await remote.release()
+  })
+})
+
+describe('toChannelStore', () => {
+  test('uses preferred open sessions and never reuses opening sessions', async () => {
+    const registry = createSessionRegistry(registryOptions())
+    let status: SessionPersistenceContext['status'] = 'opening'
+    const context = (): SessionPersistenceContext => ({
+      status,
+      account: { name: 'testnet', address: payer },
+      endpoint: 'https://api.example.test/query?chainId=testnet',
+      challenge: challenge(),
+    })
+    const store = toChannelStore(registry, { scope: scope(), selection: 'new', context })
+
+    expect(await store.get(entryKey(channel()))).toBeUndefined()
+    await store.set(channel())
+    expect((await registry.get(channelId))?.status).toBe('opening')
+    expect(await registry.getPreferred(scope())).toBe(channelId)
+    expect(await store.get(entryKey(channel()))).toBeUndefined()
+
+    await store.delete(entryKey(channel()))
+    expect((await registry.get(channelId))?.status).toBe('stale')
+    expect(await registry.getPreferred(scope())).toBeUndefined()
+
+    status = 'open'
+    const reopened = toChannelStore(registry, { scope: scope(), selection: 'new', context })
+    await reopened.set(channel())
+    const automatic = toChannelStore(registry, { scope: scope(), selection: 'auto', context })
+    expect(await automatic.get(entryKey(channel()))).toEqual(channel())
+  })
+
+  test('retains closing state when the manager deletes after creating a close credential', async () => {
+    const registry = createSessionRegistry(registryOptions())
+    let status: SessionPersistenceContext['status'] = 'open'
+    const context = (): SessionPersistenceContext => ({
+      status,
+      account: { address: payer },
+      endpoint: 'https://api.example.test/query?chainId=testnet',
+      challenge: challenge(),
+      spent: 4n,
+      units: 5,
+    })
+    const store = toChannelStore(registry, { scope: scope(), selection: 'new', context })
+    await store.set(channel())
+    status = 'closing'
+
+    await store.delete(entryKey(channel()))
+
+    expect(await registry.get(channelId)).toMatchObject({
+      status: 'closing',
+      spent: 4n,
+      units: 5,
+    })
+    expect(await registry.getPreferred(scope())).toBe(channelId)
+  })
+
+  test('resets persistence context when a rejected channel is replaced', async () => {
+    const registry = createSessionRegistry(registryOptions())
+    await registry.upsert({
+      status: 'open',
+      channel: channel(),
+      account: { address: payer },
+      endpoint: 'https://api.example.test/query?chainId=testnet',
+      challenge: challenge(),
+      receipt: receipt(),
+      spent: 2n,
+      units: 3,
+    })
+    await registry.setPreferred(scope(), channelId)
+
+    let status: SessionPersistenceContext['status'] = 'open'
+    let latestReceipt: SessionReceipt | undefined = receipt()
+    let spent = 2n
+    let units = 3
+    const context = (): SessionPersistenceContext => ({
+      status,
+      account: { address: payer },
+      endpoint: 'https://api.example.test/query?chainId=testnet',
+      challenge: challenge(),
+      ...(latestReceipt && { receipt: latestReceipt }),
+      spent,
+      units,
+    })
+    const store = toChannelStore(registry, {
+      scope: scope(),
+      selection: 'auto',
+      context,
+      onNewChannel() {
+        status = 'opening'
+        latestReceipt = undefined
+        spent = 0n
+        units = 0
+      },
+    })
+    expect(await store.get(entryKey(channel()))).toEqual(channel())
+    await store.delete(entryKey(channel()))
+
+    const replacementId = `0x${'bb'.repeat(32)}` as Hex
+    await store.set(channel({ channelId: replacementId }))
+
+    expect(await registry.get(channelId)).toMatchObject({ status: 'stale', spent: 2n, units: 3 })
+    expect(await registry.get(replacementId)).toMatchObject({
+      status: 'opening',
+      spent: 0n,
+      units: 0,
+    })
+    expect((await registry.get(replacementId))?.receipt).toBeUndefined()
+  })
+})
