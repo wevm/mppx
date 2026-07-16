@@ -276,12 +276,7 @@ export async function runPersistentSessionRequest(
         spent: reusable.spent,
       })
     const { onReceipt, ...managerInit } = requestInit
-    const managerHeaders = new Headers(managerInit.headers)
-    managerHeaders.set('Accept', 'text/event-stream')
-    const response = await manager.fetch(parameters.fetchInput, {
-      ...managerInit,
-      headers: managerHeaders,
-    })
+    const response = await manager.fetch(parameters.fetchInput, managerInit)
 
     if (options.fail && response.status >= 400)
       throw new Errors.IncurError({

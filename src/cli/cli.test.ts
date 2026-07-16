@@ -1387,11 +1387,12 @@ describe('session sse (examples/session/sse)', () => {
     })
 
     try {
-      const { output } = await serve([httpServer.url, '--rpc-url', rpcUrl, '-M', 'deposit=10'], {
-        env: { MPPX_PRIVATE_KEY: testPrivateKey },
-      })
+      const { output } = await serve(
+        [httpServer.url, '--rpc-url', rpcUrl, '-H', 'Accept: application/json', '-M', 'deposit=10'],
+        { env: { MPPX_PRIVATE_KEY: testPrivateKey } },
+      )
       expect(output.trim()).toBe('Hello world!')
-      expect(paidAcceptHeaders).toEqual(['text/event-stream'])
+      expect(paidAcceptHeaders).toEqual(['application/json'])
     } finally {
       httpServer.close()
     }
