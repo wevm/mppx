@@ -522,11 +522,12 @@ export namespace session {
   /** Defaults derived from `session()` parameters for handler type inference. */
   export type DeriveDefaults<parameters extends Parameters> = types.DeriveDefaults<
     parameters,
-    Defaults
-  > & {
-    decimals: number
-    escrowContract: Address
-  }
+    Defaults,
+    {
+      currency: string
+      decimals: number
+    }
+  >
 }
 
 /**

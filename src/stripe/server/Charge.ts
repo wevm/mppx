@@ -6,7 +6,7 @@ import {
   VerificationFailedError,
 } from '../../Errors.js'
 import * as Expires from '../../Expires.js'
-import type { DefinedKeys, LooseOmit, MaybePromise, OneOf } from '../../internal/types.js'
+import type { ConfiguredDefaults, LooseOmit, MaybePromise, OneOf } from '../../internal/types.js'
 import * as Method from '../../Method.js'
 import type * as Html from '../../server/internal/html/config.ts'
 import type * as z from '../../zod.js'
@@ -213,10 +213,7 @@ export declare namespace charge {
    * The returned handler requires any remaining request fields. In particular,
    * `decimals` remains required when it was not configured on `stripe.charge()`.
    */
-  type DeriveDefaults<parameters extends Parameters> = Pick<
-    parameters,
-    Extract<DefinedKeys<parameters>, keyof Defaults>
-  >
+  type DeriveDefaults<parameters extends Parameters> = ConfiguredDefaults<parameters, Defaults>
 
   /**
    * Server-side Stripe Connect settlement parameters.

@@ -1,3 +1,4 @@
+import type { NoExtraKeys } from '../../internal/types.js'
 import { session as sessionLegacy_, settle as settleLegacy_ } from '../legacy/server/index.js'
 import {
   charge as sessionCharge_,
@@ -37,16 +38,16 @@ function createChargeMethod<const parameters extends tempo.Parameters>(
   parameters: parameters | undefined,
 ) {
   // `tempo()` accepts the intersection of charge/session parameters, then
-  // forwards only the fields each method understands. Keep the generic bridge
-  // out of the public control-flow body.
-  return tempo.charge(parameters as charge_.Parameters)
+  // forwards only the fields each method understands. Preserve the inferred
+  // parameter type so configured request defaults remain visible to handlers.
+  return tempo.charge(parameters as NoExtraKeys<parameters, charge_.Parameters> | undefined)
 }
 
 function createSessionMethod<const parameters extends tempo.Parameters>(
   parameters: parameters | undefined,
 ) {
   // See `createChargeMethod()`: session receives the same shared parameter bag.
-  return sessionServer(parameters as session_.Parameters)
+  return sessionServer(parameters as NoExtraKeys<parameters, session_.Parameters> | undefined)
 }
 
 /**

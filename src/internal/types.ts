@@ -295,6 +295,21 @@ export type DefinedKeys<type> = {
       : key
 }[keyof type]
 
+/**
+ * Request defaults known to have been configured by a factory caller.
+ *
+ * Optional and `undefined`-able parameters are omitted: their runtime values
+ * are not guaranteed to be usable defaults for a subsequently returned
+ * handler. Factories can intersect this type with values they resolve
+ * unconditionally at runtime.
+ *
+ * @internal
+ */
+export type ConfiguredDefaults<parameters, defaults> = Pick<
+  parameters,
+  Extract<DefinedKeys<parameters>, keyof defaults>
+>
+
 /** @internal */
 export type ExactRequired<type> = {
   [key in keyof type]-?: Exclude<type[key], undefined>

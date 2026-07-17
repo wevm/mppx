@@ -313,4 +313,46 @@ describe('Mppx type tests', () => {
       }),
     ).toBeFunction()
   })
+
+  test('tempo factories expose resolved currency and decimals as defaults', () => {
+    const charge = Mppx.create({ methods: [tempo.charge()], realm, secretKey })
+    expectTypeOf(charge.tempo.charge({ amount: '1' })).toBeFunction()
+    // @ts-expect-error amount is not supplied by Tempo's runtime defaults.
+    void charge.tempo.charge({})
+
+    const subscription = Mppx.create({
+      methods: [
+        tempo.subscription({
+          recipient: '0x1234567890abcdef1234567890abcdef12345678',
+          resolve: async () => null,
+        }),
+      ],
+      realm,
+      secretKey,
+    })
+    expectTypeOf(
+      subscription.tempo.subscription({
+        amount: '1',
+        periodCount: 1n,
+        periodUnit: 'day',
+        subscriptionExpires: new Date('2026-01-01T00:00:00Z'),
+      }),
+    ).toBeFunction()
+
+    const session = Mppx.create({ methods: [tempo.session()], realm, secretKey })
+    expectTypeOf(session.tempo.session({ amount: '1', unitType: 'request' })).toBeFunction()
+
+    const common = Mppx.create({
+      methods: [
+        tempo.common({
+          amount: '1',
+          recipient: '0x1234567890abcdef1234567890abcdef12345678',
+        }),
+      ],
+      realm,
+      secretKey,
+    })
+    expectTypeOf(common.tempo.charge({})).toBeFunction()
+    expectTypeOf(common.tempo.session({ unitType: 'request' })).toBeFunction()
+  })
 })

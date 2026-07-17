@@ -399,11 +399,12 @@ export declare namespace session {
 
   type DeriveDefaults<parameters extends Parameters> = types.DeriveDefaults<
     parameters,
-    Defaults
-  > & {
-    decimals: number
-    escrowContract: Address
-  }
+    Defaults,
+    {
+      currency: string
+      decimals: number
+    }
+  >
 }
 
 function assertSettlementSender(parameters: {

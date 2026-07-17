@@ -1286,10 +1286,12 @@ export declare namespace subscription {
   /** Derived defaults after account and chain configuration are applied. */
   type DeriveDefaults<parameters extends Parameters> = types.DeriveDefaults<
     parameters,
-    Defaults
-  > & {
-    decimals: number
-  }
+    Defaults,
+    {
+      currency: string
+      decimals: number
+    }
+  >
 }
 
 function createContext<const parameters extends createContext.Parameters>(

@@ -623,10 +623,12 @@ export declare namespace charge {
 
   type DeriveDefaults<parameters extends Parameters> = types.DeriveDefaults<
     parameters,
-    Defaults
-  > & {
-    decimals: number
-  }
+    Defaults,
+    {
+      currency: string
+      decimals: number
+    }
+  >
 
   type FeePayerPolicy = Partial<FeePayer.Policy>
 }
