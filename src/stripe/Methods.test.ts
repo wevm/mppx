@@ -35,6 +35,16 @@ describe('charge', () => {
     expect(result.success).toBe(false)
   })
 
+  test('schema: requires decimals when no server default supplies it', () => {
+    const result = Methods.charge.schema.request.safeParse({
+      amount: '1',
+      currency: 'usd',
+      networkId: 'profile_123',
+      paymentMethodTypes: ['card'],
+    })
+    expect(result.success).toBe(false)
+  })
+
   test('schema: validates spt payload', () => {
     const result = Methods.charge.schema.credential.payload.safeParse({
       spt: 'spt_test_123',

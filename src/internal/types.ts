@@ -277,6 +277,24 @@ export type ExactPartial<type> = {
   [key in keyof type]?: type[key] | undefined
 }
 
+/**
+ * Keys whose values are known to be present and defined.
+ *
+ * This is useful when a factory accepts partial configuration and its return
+ * type needs to distinguish values supplied as defaults from fields that
+ * callers must still provide later. Optional and `undefined`-able properties
+ * are excluded because their runtime values cannot be assumed to be defaults.
+ *
+ * @internal
+ */
+export type DefinedKeys<type> = {
+  [key in keyof type]-?: {} extends Pick<type, key>
+    ? never
+    : undefined extends type[key]
+      ? never
+      : key
+}[keyof type]
+
 /** @internal */
 export type ExactRequired<type> = {
   [key in keyof type]-?: Exclude<type[key], undefined>
