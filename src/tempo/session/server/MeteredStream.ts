@@ -18,6 +18,8 @@ export type SessionController = {
    * used.
    */
   charge(amount?: bigint): Promise<void>
+  /** Aborted when the client closes or requests the final session receipt. */
+  signal: AbortSignal
 }
 
 /** Async stream source accepted by paid session transports. */
@@ -73,8 +75,9 @@ export async function* meterIterable(options: MeteredStreamOptions): AsyncGenera
     reservedUnits += 1
   }
 
+  const signal = options.signal ?? new AbortController().signal
   const iterable =
-    typeof options.generate === 'function' ? options.generate({ charge }) : options.generate
+    typeof options.generate === 'function' ? options.generate({ charge, signal }) : options.generate
 
   for await (const value of iterable) {
     if (options.signal?.aborted) break

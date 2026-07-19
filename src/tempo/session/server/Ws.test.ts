@@ -408,6 +408,67 @@ describe('isows', () => {
     expect(channel?.units).toBe(0)
   })
 
+  test('aborts a blocked application generator before sending close-ready', async () => {
+    const socket = new MockSocket()
+    const store = memoryChannelStore()
+    await seedChannel(store, 1n)
+    let generatorAborted = false
+
+    await Ws.serve({
+      socket,
+      store,
+      url: 'ws://example.test/stream',
+      route: async () => ({
+        status: 200,
+        withReceipt(response = new Response(null, { status: 204 })) {
+          response.headers.set(
+            'Payment-Receipt',
+            serializeSessionReceipt(
+              createSessionReceipt({
+                challengeId: challenge.id,
+                channelId,
+                acceptedCumulative: 1n,
+                spent: 0n,
+                units: 0,
+              }),
+            ),
+          )
+          return response
+        },
+      }),
+      generate: async function* (stream) {
+        await new Promise<void>((resolve) => {
+          stream.signal.addEventListener('abort', () => resolve(), { once: true })
+        })
+        generatorAborted = true
+        yield* []
+      },
+    })
+
+    socket.receive(
+      Ws.formatAuthorizationMessage(
+        makeCredential({
+          action: 'open',
+          channelId,
+          cumulativeAmount: '1',
+          signature: `0x${'77'.repeat(65)}`,
+          transaction: '0x01',
+          type: 'transaction',
+        }),
+      ),
+    )
+    await sleep(10)
+    socket.receive(Ws.formatCloseRequestMessage())
+    await sleep(10)
+
+    expect(generatorAborted).toBe(true)
+    expect(
+      socket.sent
+        .map((message) => Ws.parseMessage(message))
+        .some((message) => message?.mpp === 'payment-close-ready'),
+    ).toBe(true)
+  })
+
   test('meters an explicit per-message amount independently of the challenge tick cost', async () => {
     const socket = new MockSocket()
     const store = memoryChannelStore()
