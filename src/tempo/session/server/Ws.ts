@@ -322,6 +322,8 @@ export declare namespace serve {
      *  multiple offers — otherwise a client can select the cheapest offer
      *  and still receive the same stream. */
     amount?: string | undefined
+    /** Application stream. A manual stream can call `charge(amount)` with a
+     *  per-message raw-unit amount; omitting it uses the challenge tick cost. */
     generate: AsyncIterable<string> | ((stream: SessionController) => AsyncIterable<string>)
     pollIntervalMs?: number | undefined
     /** Payment route handler. Receives synthetic `POST` requests with only

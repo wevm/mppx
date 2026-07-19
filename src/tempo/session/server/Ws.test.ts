@@ -408,6 +408,58 @@ describe('isows', () => {
     expect(channel?.units).toBe(0)
   })
 
+  test('meters an explicit per-message amount independently of the challenge tick cost', async () => {
+    const socket = new MockSocket()
+    const store = memoryChannelStore()
+    await seedChannel(store, 25n)
+
+    await Ws.serve({
+      socket,
+      store,
+      url: 'ws://example.test/stream',
+      route: async () => ({
+        status: 200,
+        withReceipt(response = new Response(null, { status: 204 })) {
+          response.headers.set(
+            'Payment-Receipt',
+            serializeSessionReceipt(
+              createSessionReceipt({
+                challengeId: challenge.id,
+                channelId,
+                acceptedCumulative: 25n,
+                spent: 0n,
+                units: 0,
+              }),
+            ),
+          )
+          return response
+        },
+      }),
+      generate: async function* (stream) {
+        await stream.charge(7n)
+        yield 'priced-response'
+      },
+    })
+
+    socket.receive(
+      Ws.formatAuthorizationMessage(
+        makeCredential({
+          action: 'open',
+          channelId,
+          cumulativeAmount: '25',
+          signature: `0x${'77'.repeat(65)}`,
+          transaction: '0x01',
+          type: 'transaction',
+        }),
+      ),
+    )
+
+    await sleep(10)
+
+    expect(await store.getChannel(channelId)).toMatchObject({ spent: 7n, units: 1 })
+    expect(socket.sent.some((message) => message.includes('priced-response'))).toBe(true)
+  })
+
   test('does not meter or emit application messages after close is requested on-chain', async () => {
     const socket = new MockSocket()
     const store = memoryChannelStore()

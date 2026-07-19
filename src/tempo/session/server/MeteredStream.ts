@@ -12,8 +12,12 @@ export type SessionController = {
    * The reservation blocks until sufficient voucher headroom exists, but the
    * charge is only committed once a chunk is actually emitted. If the stream
    * ends or aborts before that emission, the reservation is dropped.
+   *
+   * Pass an explicit raw-unit `amount` for request-aware or otherwise dynamic
+   * pricing. When omitted, the session challenge's configured tick cost is
+   * used.
    */
-  charge(): Promise<void>
+  charge(amount?: bigint): Promise<void>
 }
 
 /** Async stream source accepted by paid session transports. */
@@ -49,7 +53,7 @@ export async function* meterIterable(options: MeteredStreamOptions): AsyncGenera
   let reservedAmount = 0n
   let reservedUnits = 0
 
-  const charge = async () => {
+  const charge = async (amount = options.tickCost) => {
     if (prepaidUnits > 0) {
       prepaidUnits -= 1
       return
@@ -58,14 +62,14 @@ export async function* meterIterable(options: MeteredStreamOptions): AsyncGenera
     await reserveChargeOrWait({
       store: options.store,
       channelId: options.channelId,
-      amount: options.tickCost,
+      amount,
       reservedAmount,
       emit: options.emitNeedVoucher,
       formatNeedVoucher: options.formatNeedVoucher,
       pollIntervalMs: options.pollIntervalMs,
       signal: options.signal,
     })
-    reservedAmount += options.tickCost
+    reservedAmount += amount
     reservedUnits += 1
   }
 
