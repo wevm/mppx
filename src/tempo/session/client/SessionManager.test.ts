@@ -403,7 +403,11 @@ describe('Session', () => {
           ? Credential.deserialize<SessionCredentialPayload>(authorization).payload
           : undefined
         if (payload) posted.push(payload)
-        if (!payload) return Promise.resolve(make402Response())
+        if (!payload) {
+          expect(s.channelId).toBe(storedChannelId)
+          expect(s.cumulative).toBe(1_000_000n)
+          return Promise.resolve(make402Response())
+        }
         return Promise.resolve(makeOkResponse())
       })
       const s = sessionManager({

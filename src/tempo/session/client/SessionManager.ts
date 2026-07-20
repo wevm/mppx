@@ -376,9 +376,11 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
           kind: 'authorizePaymentChannel',
         },
       })) ?? defaultAccount
-    const { entry } = await hydrateSessionSnapshot({ account, client, snapshot })
+    const { entry, spent } = await hydrateSessionSnapshot({ account, client, snapshot })
     assertVoucherWithinLocalLimit(entry.cumulativeAmount)
     await Promise.resolve(store.set(entry)).catch(() => undefined)
+    runtime.channel = entry
+    runtime.spent = spent
     return entry
   }
 
