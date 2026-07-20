@@ -96,6 +96,11 @@
       "types": "./dist/client/index.d.ts",
       "default": "./dist/client/index.js"
     },
+    "./client/node": {
+      "src": "./src/client/node.ts",
+      "types": "./dist/client/node.d.ts",
+      "default": "./dist/client/node.js"
+    },
     "./discovery": {
       "src": "./src/discovery/index.ts",
       "types": "./dist/discovery/index.d.ts",
