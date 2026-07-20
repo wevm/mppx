@@ -14,6 +14,7 @@ import { createSessionReceipt, serializeSessionReceipt } from '../precompile/Pro
 import type { NeedVoucherEvent, SessionReceipt } from '../precompile/Protocol.js'
 import { formatNeedVoucherEvent, parseEvent } from '../precompile/Protocol.js'
 import type { SessionCredentialPayload } from '../precompile/Protocol.js'
+import * as Voucher from '../precompile/Voucher.js'
 import { computeFallbackCloseAmount, sessionManager } from './SessionManager.js'
 
 const channelId = '0x0000000000000000000000000000000000000000000000000000000000000001' as Hex
@@ -43,6 +44,24 @@ const client = createClient({
     },
   }),
 })
+
+function channelStateClient(state: { closeRequestedAt: number; deposit: bigint; settled: bigint }) {
+  return createClient({
+    account,
+    chain: { id: 4217 } as never,
+    transport: custom({
+      async request(args) {
+        if (args.method === 'eth_call')
+          return encodeFunctionResult({
+            abi: escrowAbi,
+            functionName: 'getChannelState',
+            result: state,
+          })
+        throw new Error(`unexpected rpc request: ${args.method}`)
+      },
+    }),
+  })
+}
 
 const storedDescriptor = {
   authorizedSigner: account.address,
@@ -332,6 +351,17 @@ describe('Session', () => {
     test('seeds a same-route HEAD snapshot and resolves the account when resuming it', async () => {
       const { store, set } = makeChannelStore()
       const posted: SessionCredentialPayload[] = []
+      const highestVoucher = {
+        channelId: storedChannelId,
+        cumulativeAmount: '1000000',
+        signature: await Voucher.signVoucher(
+          client,
+          account,
+          { channelId: storedChannelId, cumulativeAmount: 1_000_000n },
+          tip20ChannelEscrow,
+          4217,
+        ),
+      }
       const resolveAccount = vi.fn(
         (info: Parameters<NonNullable<sessionManager.Parameters['resolveAccount']>>[0]) =>
           info.account,
@@ -356,6 +386,7 @@ describe('Session', () => {
                   deposit: '10000000',
                   descriptor: storedDescriptor,
                   escrow: tip20ChannelEscrow,
+                  highestVoucher,
                   requiredCumulative: '1000000',
                   settled: '0',
                   spent: '0',
@@ -389,14 +420,111 @@ describe('Session', () => {
       expect(response.status).toBe(200)
       expect(set).toHaveBeenCalledWith(expect.objectContaining({ channelId: storedChannelId }))
       expect(posted[0]).toMatchObject({ action: 'voucher', channelId: storedChannelId })
-      expect(resolveAccount).toHaveBeenCalledOnce()
-      expect(resolveAccount).toHaveBeenCalledWith({
+      expect(resolveAccount).toHaveBeenCalledTimes(2)
+      expect(resolveAccount).toHaveBeenNthCalledWith(1, {
         account,
         chainId: 4217,
         operation: { authority: account.address, kind: 'authorizePaymentChannel' },
       })
       const contentCall = mockFetch.mock.calls.find((call) => call[1]?.method !== 'HEAD')
       expect(new Headers(contentCall?.[1]?.headers).get('Payment-Session')).toBeNull()
+    })
+
+    test('does not cache a server snapshot for a channel that is closed on-chain', async () => {
+      const { store, set } = makeChannelStore()
+      const highestVoucher = {
+        channelId: storedChannelId,
+        cumulativeAmount: '1000000',
+        signature: await Voucher.signVoucher(
+          client,
+          account,
+          { channelId: storedChannelId, cumulativeAmount: 1_000_000n },
+          tip20ChannelEscrow,
+          4217,
+        ),
+      }
+      const mockFetch = vi.fn().mockImplementation((_input, init?: RequestInit) => {
+        const headers = new Headers(init?.headers)
+        if (init?.method === 'HEAD' && !headers.get(Constants.Headers.authorization))
+          return Promise.resolve(make402Response(makeChargeChallenge()))
+        if (init?.method === 'HEAD')
+          return Promise.resolve(
+            new Response(null, {
+              status: 204,
+              headers: {
+                [Constants.Headers.paymentSessionSnapshot]: sessionManager.serializeSnapshot({
+                  acceptedCumulative: '1000000',
+                  chainId: 4217,
+                  channelId: storedChannelId,
+                  deposit: '10000000',
+                  descriptor: storedDescriptor,
+                  escrow: tip20ChannelEscrow,
+                  highestVoucher,
+                  requiredCumulative: '1000000',
+                  settled: '0',
+                  spent: '0',
+                  units: 0,
+                }),
+              },
+            }),
+          )
+        return Promise.resolve(makeOkResponse())
+      })
+      const s = sessionManager({
+        account,
+        bootstrap: true,
+        client: channelStateClient({ closeRequestedAt: 0, deposit: 0n, settled: 0n }),
+        fetch: mockFetch as typeof globalThis.fetch,
+        channelStore: store,
+      })
+
+      expect((await s.fetch('https://api.example.com/data')).status).toBe(200)
+      expect(set).not.toHaveBeenCalled()
+    })
+
+    test('does not cache a server snapshot with an invalid highest voucher signature', async () => {
+      const { store, set } = makeChannelStore()
+      const mockFetch = vi.fn().mockImplementation((_input, init?: RequestInit) => {
+        const headers = new Headers(init?.headers)
+        if (init?.method === 'HEAD' && !headers.get(Constants.Headers.authorization))
+          return Promise.resolve(make402Response(makeChargeChallenge()))
+        if (init?.method === 'HEAD')
+          return Promise.resolve(
+            new Response(null, {
+              status: 204,
+              headers: {
+                [Constants.Headers.paymentSessionSnapshot]: sessionManager.serializeSnapshot({
+                  acceptedCumulative: '1000000',
+                  chainId: 4217,
+                  channelId: storedChannelId,
+                  deposit: '10000000',
+                  descriptor: storedDescriptor,
+                  escrow: tip20ChannelEscrow,
+                  highestVoucher: {
+                    channelId: storedChannelId,
+                    cumulativeAmount: '1000000',
+                    signature: `0x${'00'.repeat(64)}`,
+                  },
+                  requiredCumulative: '1000000',
+                  settled: '0',
+                  spent: '0',
+                  units: 0,
+                }),
+              },
+            }),
+          )
+        return Promise.resolve(makeOkResponse())
+      })
+      const s = sessionManager({
+        account,
+        bootstrap: true,
+        client,
+        fetch: mockFetch as typeof globalThis.fetch,
+        channelStore: store,
+      })
+
+      expect((await s.fetch('https://api.example.com/data')).status).toBe(200)
+      expect(set).not.toHaveBeenCalled()
     })
 
     test('does not answer non-zero bootstrap charge challenges', async () => {

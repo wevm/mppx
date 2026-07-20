@@ -14,6 +14,7 @@ import * as z from '../../../zod.js'
 import * as Chain from '../precompile/Chain.js'
 import * as Channel from '../precompile/Channel.js'
 import type { SessionCredentialPayload } from '../precompile/Protocol.js'
+import * as Voucher from '../precompile/Voucher.js'
 import type { SessionSnapshot } from '../Snapshot.js'
 import {
   createClosePayload,
@@ -309,6 +310,26 @@ export type ResolveRecoveredCumulativeParameters = {
   settled: bigint
 }
 
+/** Inputs used to validate and hydrate a server-provided session snapshot. */
+export type HydrateSessionSnapshotParameters = {
+  /** Account expected to own the channel and its voucher authority. */
+  account: ViemAccount
+  /** Viem client used to read authoritative TIP-1034 channel state. */
+  client: Client
+  /** Snapshot returned by an MPP server bootstrap. */
+  snapshot: SessionSnapshot
+  /** Optional state reader for deterministic tests. */
+  readChannelState?: ReadReusableChannelState | undefined
+}
+
+/** Validated client channel state reconstructed without local persistence. */
+export type HydratedSessionSnapshot = {
+  /** Reusable channel entry safe to cache locally. */
+  entry: ChannelEntry
+  /** Server-accounted delivered spend at bootstrap time. */
+  spent: bigint
+}
+
 /** Data-first description of the next credential operation the client should execute. */
 export type CredentialPlan =
   /** No reusable channel is available, so create an open transaction and initial voucher. */
@@ -501,12 +522,93 @@ export function resolveRecoveredCumulative(
   const { context, decimals, requestAmount, snapshot, settled } = parameters
 
   if (snapshot) {
-    return BigInt(snapshot.spent) + requestAmount
+    return [
+      BigInt(snapshot.acceptedCumulative),
+      BigInt(snapshot.requiredCumulative),
+      BigInt(snapshot.spent) + requestAmount,
+      settled,
+    ].reduce((highest, value) => (value > highest ? value : highest), 0n)
   }
 
   const contextCumulative = parseOptionalContextAmount(context, decimals, 'cumulativeAmount')
   if (contextCumulative !== undefined) return contextCumulative + requestAmount
   return settled + requestAmount
+}
+
+/** Checks a server snapshot against its signed voucher and current TIP-1034 state. */
+export async function hydrateSessionSnapshot(
+  parameters: HydrateSessionSnapshotParameters,
+): Promise<HydratedSessionSnapshot> {
+  const { account, client, readChannelState, snapshot } = parameters
+  const signed = snapshot.highestVoucher
+  if (!signed) throw new Error('session snapshot is missing its highest signed voucher')
+  if (signed.channelId.toLowerCase() !== snapshot.channelId.toLowerCase())
+    throw new Error('session snapshot voucher channelId does not match snapshot channelId')
+
+  const acceptedCumulative = BigInt(snapshot.acceptedCumulative)
+  const voucherCumulative = BigInt(signed.cumulativeAmount)
+  const requiredCumulative = BigInt(snapshot.requiredCumulative)
+  const snapshotDeposit = BigInt(snapshot.deposit)
+  const snapshotSettled = BigInt(snapshot.settled)
+  const spent = BigInt(snapshot.spent)
+  if (voucherCumulative !== acceptedCumulative)
+    throw new Error('session snapshot voucher amount does not match acceptedCumulative')
+  if (spent > acceptedCumulative)
+    throw new Error('session snapshot spent exceeds acceptedCumulative')
+  if (snapshotSettled > snapshotDeposit)
+    throw new Error('session snapshot settled amount exceeds deposit')
+
+  const authorizedSigner =
+    BigInt(snapshot.descriptor.authorizedSigner) === 0n
+      ? snapshot.descriptor.payer
+      : snapshot.descriptor.authorizedSigner
+  if (
+    !Voucher.verifyVoucher(
+      snapshot.escrow,
+      snapshot.chainId,
+      {
+        channelId: signed.channelId,
+        cumulativeAmount: voucherCumulative,
+        signature: signed.signature,
+      },
+      authorizedSigner,
+    )
+  )
+    throw new Error('session snapshot highest voucher signature is invalid')
+
+  const reusable = await resolveReusableChannel({
+    channelId: snapshot.channelId,
+    client,
+    descriptor: snapshot.descriptor,
+    expected: {
+      chainId: snapshot.chainId,
+      escrow: snapshot.escrow,
+      payee: snapshot.descriptor.payee,
+      payer: account.address,
+      authorizedSigner: resolveAuthorizedSigner(account),
+      token: snapshot.descriptor.token,
+    },
+    readChannelState,
+  })
+  const cumulativeAmount = [acceptedCumulative, requiredCumulative, reusable.state.settled].reduce(
+    (highest, value) => (value > highest ? value : highest),
+    0n,
+  )
+  if (cumulativeAmount > reusable.state.deposit)
+    throw new Error('recovered session cumulative amount exceeds on-chain channel deposit')
+
+  return {
+    entry: {
+      channelId: reusable.channelId,
+      cumulativeAmount,
+      deposit: reusable.state.deposit,
+      descriptor: snapshot.descriptor,
+      escrow: snapshot.escrow,
+      chainId: snapshot.chainId,
+      opened: true,
+    },
+    spent,
+  }
 }
 
 /** Returns whether `account` can satisfy the descriptor's voucher authority. */

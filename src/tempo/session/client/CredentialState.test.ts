@@ -443,7 +443,7 @@ describe('CredentialPlan', () => {
       })
     })
 
-    test('recovery cumulative ignores server-advertised unused voucher headroom', () => {
+    test('recovery cumulative never decreases below the server-accepted voucher', () => {
       expect(
         resolveRecoveredCumulative({
           context: { descriptor, channelId },
@@ -456,7 +456,7 @@ describe('CredentialPlan', () => {
             spent: '10',
           }),
         }),
-      ).toBe(15n)
+      ).toBe(1_000_000n)
     })
 
     test('plans manual credentials only when an explicit action includes descriptor', () => {

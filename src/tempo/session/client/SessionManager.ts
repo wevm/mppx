@@ -1,16 +1,18 @@
 import type { Hex } from 'ox'
 import { parseUnits, type Address } from 'viem'
+import { tempo as tempo_chain } from 'viem/chains'
 
 import * as Challenge from '../../../Challenge.js'
 import * as Fetch from '../../../client/internal/Fetch.js'
 import * as MethodResponse from '../../../client/internal/MethodResponse.js'
 import * as Constants from '../../../Constants.js'
-import type * as Account from '../../../viem/Account.js'
-import type * as Client from '../../../viem/Client.js'
+import * as Account from '../../../viem/Account.js'
+import * as Client from '../../../viem/Client.js'
 import { charge as chargePlugin } from '../../client/Charge.js'
+import * as defaults from '../../internal/defaults.js'
 import type { ChannelEntry } from '../client/ChannelOps.js'
 import { createChannelStore, entryKey, type ChannelStore } from '../client/ChannelStore.js'
-import type { SessionContext } from '../client/CredentialState.js'
+import { hydrateSessionSnapshot, type SessionContext } from '../client/CredentialState.js'
 import { session as sessionPlugin } from '../client/Session.js'
 import { deserializeSessionReceipt } from '../precompile/Protocol.js'
 import { readSessionChallengeAmount, type SessionReceipt } from '../precompile/Protocol.js'
@@ -126,19 +128,6 @@ function isZeroAmountChargeChallenge(challenge: Challenge.Challenge) {
   }
 }
 
-/** Builds a reusable channel entry from a server session snapshot header. */
-function entryFromSnapshot(snapshot: ReturnType<typeof deserializeSessionSnapshot>): ChannelEntry {
-  return {
-    channelId: snapshot.channelId,
-    cumulativeAmount: BigInt(snapshot.acceptedCumulative),
-    deposit: BigInt(snapshot.deposit),
-    descriptor: snapshot.descriptor,
-    escrow: snapshot.escrow,
-    chainId: snapshot.chainId,
-    opened: true,
-  }
-}
-
 function requestInitWithSessionHint(
   input: RequestInfo | URL,
   init: RequestInit | undefined,
@@ -192,6 +181,12 @@ function resolveSessionManagerConfig(parameters: sessionManager.Parameters): Ses
  */
 export function sessionManager(parameters: sessionManager.Parameters): SessionManager {
   const config = resolveSessionManagerConfig(parameters)
+  const getClient = Client.getResolver({
+    chain: tempo_chain,
+    getClient: parameters.client ? () => parameters.client! : parameters.getClient,
+    rpcUrl: defaults.rpcUrl,
+  })
+  const getAccount = Account.getResolver({ account: parameters.account })
   const runtime = createSessionManagerRuntime()
   const receipts = createSessionReceiptCoordinator({
     getSocketSession: () => runtime.socketSession,
@@ -365,7 +360,24 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
   async function storeSnapshotHeader(response: Response): Promise<ChannelEntry | undefined> {
     const header = response.headers.get(Constants.Headers.paymentSessionSnapshot)
     if (!header) return undefined
-    const entry = entryFromSnapshot(deserializeSessionSnapshot(header))
+    const snapshot = deserializeSessionSnapshot(header)
+    const client = await getClient({ chainId: snapshot.chainId })
+    const defaultAccount = getAccount(client)
+    const authority =
+      BigInt(snapshot.descriptor.authorizedSigner) === 0n
+        ? snapshot.descriptor.payer
+        : snapshot.descriptor.authorizedSigner
+    const account =
+      (await parameters.resolveAccount?.({
+        account: defaultAccount,
+        chainId: snapshot.chainId,
+        operation: {
+          authority,
+          kind: 'authorizePaymentChannel',
+        },
+      })) ?? defaultAccount
+    const { entry } = await hydrateSessionSnapshot({ account, client, snapshot })
+    assertVoucherWithinLocalLimit(entry.cumulativeAmount)
     await Promise.resolve(store.set(entry)).catch(() => undefined)
     return entry
   }

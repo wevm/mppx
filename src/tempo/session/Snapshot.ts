@@ -22,6 +22,17 @@ export type SessionSnapshot = {
   escrow: Address
   /** Minimum cumulative authorization needed for the challenged request or stream continuation. */
   requiredCumulative: RawAmountString
+  /** Highest client-signed voucher accepted by the server. */
+  highestVoucher?:
+    | {
+        /** Channel identifier bound into the voucher signature. */
+        channelId: Hex
+        /** Cumulative authorization bound into the voucher signature. */
+        cumulativeAmount: RawAmountString
+        /** Original client signature proving the accepted cumulative authorization. */
+        signature: Hex
+      }
+    | undefined
   /** Amount already settled on-chain. */
   settled: RawAmountString
   /** Amount consumed by delivered content according to server accounting. */
@@ -35,6 +46,9 @@ const addressSchema = z.custom<Address>(
 )
 const hashSchema = z.custom<Hex>(
   (value) => typeof value === 'string' && /^0x[0-9a-fA-F]{64}$/.test(value),
+)
+const hexSchema = z.custom<Hex>(
+  (value) => typeof value === 'string' && /^0x[0-9a-fA-F]+$/.test(value),
 )
 
 const channelDescriptorSchema = z.object({
@@ -55,6 +69,13 @@ const sessionSnapshotSchema = z.object({
   deposit: z.string(),
   descriptor: channelDescriptorSchema,
   escrow: addressSchema,
+  highestVoucher: z.optional(
+    z.object({
+      channelId: hashSchema,
+      cumulativeAmount: z.string(),
+      signature: hexSchema,
+    }),
+  ),
   requiredCumulative: z.string(),
   settled: z.string(),
   spent: z.string(),
