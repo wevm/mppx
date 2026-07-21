@@ -2,4 +2,4 @@
 'mppx': patch
 ---
 
-Added pure credential validation and explicit credential broadcast APIs.
+Added generic `validate`/`broadcast` credential lifecycle APIs and a Tempo charge implementation; Tempo session credential handling remained unchanged.
