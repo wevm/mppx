@@ -139,14 +139,12 @@ export async function resolveSessionSnapshot(
   const channel = await store.getChannel(ChannelStore.normalizeChannelId(channelId))
   if (!channel || !ChannelStore.isPrecompileState(channel)) return undefined
   if (channel.finalized) return undefined
+  if (!channel.highestVoucher) return undefined
+  if (channel.highestVoucher.cumulativeAmount !== channel.highestVoucherAmount) return undefined
   if (expected && !matchesSnapshotPaymentFields(channel, expected)) return undefined
   const requiredCumulative = channel.spent + amount
-  const acceptedCumulative =
-    channel.highestVoucherAmount > requiredCumulative
-      ? channel.highestVoucherAmount
-      : requiredCumulative
   return {
-    acceptedCumulative: acceptedCumulative.toString(),
+    acceptedCumulative: channel.highestVoucherAmount.toString(),
     chainId: channel.chainId,
     channelId: channel.channelId,
     closeRequestedAt:
@@ -154,6 +152,11 @@ export async function resolveSessionSnapshot(
     deposit: channel.deposit.toString(),
     descriptor: channel.descriptor,
     escrow: channel.escrowContract,
+    highestVoucher: {
+      channelId: channel.highestVoucher.channelId,
+      cumulativeAmount: channel.highestVoucher.cumulativeAmount.toString(),
+      signature: channel.highestVoucher.signature,
+    },
     requiredCumulative: requiredCumulative.toString(),
     settled: channel.settledOnChain.toString(),
     spent: channel.spent.toString(),

@@ -316,7 +316,11 @@ describe('SessionSnapshotHints', () => {
       escrowContract,
       expiringNonceHash: descriptor.expiringNonceHash,
       finalized: false,
-      highestVoucher: null,
+      highestVoucher: {
+        channelId,
+        cumulativeAmount: 500n,
+        signature: `0x${'44'.repeat(64)}`,
+      },
       highestVoucherAmount: 500n,
       operator: descriptor.operator,
       payee: descriptor.payee,
@@ -451,6 +455,11 @@ describe('SessionSnapshotHints', () => {
         deposit: '1000',
         descriptor,
         escrow: escrowContract,
+        highestVoucher: {
+          channelId,
+          cumulativeAmount: '500',
+          signature: `0x${'44'.repeat(64)}`,
+        },
         requiredCumulative: '350',
         settled: '100',
         spent: '300',
@@ -458,7 +467,7 @@ describe('SessionSnapshotHints', () => {
       })
     })
 
-    test('raises accepted cumulative when next request exceeds current authorization', async () => {
+    test('keeps accepted cumulative at the signed voucher when the next request needs more', async () => {
       const snapshot = await resolveSessionSnapshot({
         amount: 300n,
         channelId,
@@ -466,7 +475,34 @@ describe('SessionSnapshotHints', () => {
       })
 
       expect(snapshot?.requiredCumulative).toBe('600')
-      expect(snapshot?.acceptedCumulative).toBe('600')
+      expect(snapshot?.acceptedCumulative).toBe('500')
+      expect(snapshot?.highestVoucher?.cumulativeAmount).toBe('500')
+    })
+
+    test('omits reusable channel hints without a matching signed highest voucher', async () => {
+      await expect(
+        resolveSessionSnapshot({
+          amount: 50n,
+          channelId,
+          store: store(channel({ highestVoucher: null })),
+        }),
+      ).resolves.toBeUndefined()
+
+      await expect(
+        resolveSessionSnapshot({
+          amount: 50n,
+          channelId,
+          store: store(
+            channel({
+              highestVoucher: {
+                channelId,
+                cumulativeAmount: 499n,
+                signature: `0x${'44'.repeat(64)}`,
+              },
+            }),
+          ),
+        }),
+      ).resolves.toBeUndefined()
     })
 
     test('omits reusable channel hints when payment fields do not match', async () => {

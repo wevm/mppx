@@ -556,8 +556,21 @@ describe('precompile server session unit guardrails', () => {
   test('request returns a server session snapshot for a known precompile channel', async () => {
     const { method, store } = createServer()
     const openPayload = await createOpenPayload({ initialAmount: 100n })
+    const highestVoucher = await ClientOps.createVoucherPayload(
+      createSigningClient(),
+      payer,
+      openPayload.descriptor,
+      Types.uint96(250n),
+      chainId,
+    )
+    if (highestVoucher.action !== 'voucher') throw new Error('expected voucher payload')
     await persistPrecompileChannel(store, openPayload, {
       highestVoucherAmount: 250n,
+      highestVoucher: {
+        channelId: openPayload.channelId,
+        cumulativeAmount: 250n,
+        signature: highestVoucher.signature,
+      },
       spent: 200n,
       units: 2,
     })
@@ -585,6 +598,11 @@ describe('precompile server session unit guardrails', () => {
       deposit: '1000',
       descriptor: openPayload.descriptor,
       escrow: tip20ChannelEscrow,
+      highestVoucher: {
+        channelId: openPayload.channelId,
+        cumulativeAmount: '250',
+        signature: highestVoucher.signature,
+      },
       requiredCumulative: '201',
       settled: '0',
       spent: '200',
@@ -594,6 +612,14 @@ describe('precompile server session unit guardrails', () => {
 
   test('request can resolve a server session snapshot from request identity', async () => {
     const openPayload = await createOpenPayload({ initialAmount: 100n })
+    const highestVoucher = await ClientOps.createVoucherPayload(
+      createSigningClient(),
+      payer,
+      openPayload.descriptor,
+      Types.uint96(250n),
+      chainId,
+    )
+    if (highestVoucher.action !== 'voucher') throw new Error('expected voucher payload')
     const { method, store } = createServer({
       resolveChannelId({ request, credential, paymentRequest, store: hookStore }) {
         expect(request?.headers.get('cookie')).toBe('sid=session-1')
@@ -605,6 +631,11 @@ describe('precompile server session unit guardrails', () => {
     })
     await persistPrecompileChannel(store, openPayload, {
       highestVoucherAmount: 250n,
+      highestVoucher: {
+        channelId: openPayload.channelId,
+        cumulativeAmount: 250n,
+        signature: highestVoucher.signature,
+      },
       spent: 200n,
       units: 2,
     })
@@ -661,8 +692,21 @@ describe('precompile server session unit guardrails', () => {
   test('request uses zero effective amount for non-content snapshot hints', async () => {
     const { method, store } = createServer()
     const openPayload = await createOpenPayload({ initialAmount: 100n })
+    const highestVoucher = await ClientOps.createVoucherPayload(
+      createSigningClient(),
+      payer,
+      openPayload.descriptor,
+      Types.uint96(250n),
+      chainId,
+    )
+    if (highestVoucher.action !== 'voucher') throw new Error('expected voucher payload')
     await persistPrecompileChannel(store, openPayload, {
       highestVoucherAmount: 250n,
+      highestVoucher: {
+        channelId: openPayload.channelId,
+        cumulativeAmount: 250n,
+        signature: highestVoucher.signature,
+      },
       spent: 250n,
       units: 2,
     })
@@ -2032,8 +2076,21 @@ describe('precompile server session unit guardrails', () => {
       const rawStore = Store.memory()
       const store = channelStore(rawStore)
       const openPayload = await createOpenPayload({ initialAmount: 1n })
+      const highestVoucher = await ClientOps.createVoucherPayload(
+        createSigningClient(),
+        payer,
+        openPayload.descriptor,
+        Types.uint96(5n),
+        chainId,
+      )
+      if (highestVoucher.action !== 'voucher') throw new Error('expected voucher payload')
       await persistPrecompileChannel(store, openPayload, {
         highestVoucherAmount: 5n,
+        highestVoucher: {
+          channelId: openPayload.channelId,
+          cumulativeAmount: 5n,
+          signature: highestVoucher.signature,
+        },
         spent: 3n,
         units: 3,
       })
@@ -2056,6 +2113,10 @@ describe('precompile server session unit guardrails', () => {
       expect(snapshot).toMatchObject({
         channelId: openPayload.channelId,
         acceptedCumulative: '5',
+        highestVoucher: {
+          channelId: openPayload.channelId,
+          cumulativeAmount: '5',
+        },
         requiredCumulative: '3',
         spent: '3',
       })
