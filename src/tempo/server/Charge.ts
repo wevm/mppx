@@ -141,9 +141,14 @@ export function charge<const parameters extends charge.Parameters>(
   }
 
   type CredentialContext = Awaited<ReturnType<typeof resolveCredentialContext>>
+  type Credential = Method.VerifyContext<typeof Methods.charge>['credential']
+  type HashPayload = Extract<Credential['payload'], { type: 'hash' }>
+  type ProofPayload = Extract<Credential['payload'], { type: 'proof' }>
+  type TransactionPayload = Extract<Credential['payload'], { type: 'transaction' }>
 
   async function validateHashCredential(
-    credential: Method.VerifyContext<typeof Methods.charge>['credential'],
+    credential: Credential,
+    payload: HashPayload,
     context: CredentialContext,
   ) {
     const {
@@ -166,7 +171,7 @@ export function charge<const parameters extends charge.Parameters>(
     })
     const transfers = getExpectedTransfers({ amount, memo, methodDetails, recipient })
     const receipt = await getTransactionReceipt(client, {
-      hash: (credential.payload as { hash: string }).hash as `0x${string}`,
+      hash: payload.hash as `0x${string}`,
     })
     const sender = source?.address ?? receipt.from
     const matchedLogs = await assertTransferLogs(receipt, {
@@ -185,7 +190,8 @@ export function charge<const parameters extends charge.Parameters>(
   }
 
   async function validateProofCredential(
-    credential: Method.VerifyContext<typeof Methods.charge>['credential'],
+    credential: Credential,
+    payload: ProofPayload,
     context: CredentialContext,
   ) {
     const { chainId, challenge, client, isZeroAmount } = context
@@ -208,14 +214,14 @@ export function charge<const parameters extends charge.Parameters>(
         challengeId: challenge.id,
         realm: challenge.realm,
       }),
-      signature: (credential.payload as { signature: string }).signature as `0x${string}`,
+      signature: payload.signature as `0x${string}`,
     })
     if (!valid) {
       const proofSigner = recoverAuthorizedProofSigner({
         chainId: resolvedChainId,
         challengeId: challenge.id,
         realm: challenge.realm,
-        signature: (credential.payload as { signature: string }).signature as `0x${string}`,
+        signature: payload.signature as `0x${string}`,
         sourceAddress: source.address,
       })
       const authorized = proofSigner
@@ -227,7 +233,8 @@ export function charge<const parameters extends charge.Parameters>(
   }
 
   async function validateTransactionCredential(
-    credential: Method.VerifyContext<typeof Methods.charge>['credential'],
+    credential: Credential,
+    payload: TransactionPayload,
     request: Method.VerifyContext<typeof Methods.charge>['request'],
     context: CredentialContext,
   ) {
@@ -246,8 +253,7 @@ export function charge<const parameters extends charge.Parameters>(
     if (supportedModes && !supportedModes.includes('pull'))
       throw new MismatchError('Transaction credentials are not supported for this challenge.', {})
 
-    const serializedTransaction = (credential.payload as { signature: string })
-      .signature as Transaction.TransactionSerializedTempo
+    const serializedTransaction = payload.signature as Transaction.TransactionSerializedTempo
     if (!FeePayer.isTempoTransaction(serializedTransaction))
       throw new MismatchError('Only Tempo (0x76/0x78) transactions are supported.', {})
 
@@ -289,6 +295,51 @@ export function charge<const parameters extends charge.Parameters>(
     }
 
     return { isFeePayerTx, serializedTransaction, transaction, transfers }
+  }
+
+  async function validateCredential(
+    credential: Credential,
+    request: Method.VerifyContext<typeof Methods.charge>['request'],
+    context: CredentialContext,
+  ) {
+    switch (context.payload.type) {
+      case 'hash': {
+        const { receipt, sender, transfers } = await validateHashCredential(
+          credential,
+          context.payload,
+          context,
+        )
+        return {
+          details: { mode: 'push' as const, sender, transfers },
+          hash: context.payload.hash as `0x${string}`,
+          receipt,
+          type: 'hash' as const,
+        }
+      }
+
+      case 'proof': {
+        const { sender } = await validateProofCredential(credential, context.payload, context)
+        return { details: { mode: 'proof' as const, sender }, type: 'proof' as const }
+      }
+
+      case 'transaction': {
+        const { isFeePayerTx, serializedTransaction, transaction, transfers } =
+          await validateTransactionCredential(credential, context.payload, request, context)
+        return {
+          details: {
+            mode: 'pull' as const,
+            sender: transaction.from as `0x${string}`,
+            serializedTransaction,
+            transfers,
+          },
+          isFeePayerTx,
+          serializedTransaction,
+          transaction,
+          transfers,
+          type: 'transaction' as const,
+        }
+      }
+    }
   }
 
   type Defaults = charge.DeriveDefaults<parameters>
@@ -374,42 +425,15 @@ export function charge<const parameters extends charge.Parameters>(
 
     async validate({ credential, request }) {
       const context = await resolveCredentialContext({ credential, request })
-      const { challenge, payload, resolvedRequest } = context
-      const details: charge.ValidationDetails = await (async () => {
-        switch (payload.type) {
-          case 'hash': {
-            const { sender, transfers } = await validateHashCredential(credential, context)
-            return { mode: 'push', sender, transfers }
-          }
-
-          case 'proof': {
-            const { sender } = await validateProofCredential(credential, context)
-            return { mode: 'proof', sender }
-          }
-
-          case 'transaction': {
-            const { serializedTransaction, transaction, transfers } =
-              await validateTransactionCredential(credential, request, context)
-            return {
-              mode: 'pull',
-              sender: transaction.from as `0x${string}`,
-              serializedTransaction,
-              transfers,
-            }
-          }
-
-          default:
-            throw new Error(`Unsupported credential type "${(payload as { type: string }).type}".`)
-        }
-      })()
+      const validated = await validateCredential(credential, request, context)
 
       return {
-        challenge,
+        challenge: context.challenge,
         credential,
-        details,
+        details: validated.details,
         intent: 'charge',
         method: 'tempo',
-        request: resolvedRequest,
+        request: context.resolvedRequest,
         source: credential.source,
       }
     },
@@ -424,10 +448,10 @@ export function charge<const parameters extends charge.Parameters>(
         currency,
         memo,
         methodDetails,
-        payload,
         recipient,
         requestAllowsFeePayer,
       } = context
+      const validated = await validateCredential(credential, request, context)
       const feePayerAccount =
         methodDetails?.feePayer === true && requestAllowsFeePayer
           ? typeof request.feePayer === 'object'
@@ -436,10 +460,9 @@ export function charge<const parameters extends charge.Parameters>(
           : undefined
       const expires = challenge.expires
 
-      switch (payload.type) {
+      switch (validated.type) {
         case 'hash': {
-          const hash = payload.hash as `0x${string}`
-          const { receipt } = await validateHashCredential(credential, context)
+          const { hash, receipt } = validated
           if (!(await markHashUsed(store, hash))) {
             throw new VerificationFailedError({ reason: 'Transaction hash has already been used' })
           }
@@ -447,8 +470,6 @@ export function charge<const parameters extends charge.Parameters>(
         }
 
         case 'proof': {
-          await validateProofCredential(credential, context)
-
           if (proofStore && !(await markProofUsed(proofStore, challenge.id))) {
             throw new VerificationFailedError({ reason: 'Proof credential has already been used' })
           }
@@ -462,8 +483,7 @@ export function charge<const parameters extends charge.Parameters>(
         }
 
         case 'transaction': {
-          const { isFeePayerTx, serializedTransaction, transaction, transfers } =
-            await validateTransactionCredential(credential, request, context)
+          const { isFeePayerTx, serializedTransaction, transaction, transfers } = validated
 
           // Pre-broadcast dedup: catch exact byte-for-byte replays early.
           const hash = keccak256(serializedTransaction)
@@ -496,13 +516,6 @@ export function charge<const parameters extends charge.Parameters>(
             const allowedFeeTokens = FeePayer.defaultAllowedFeeTokens(chainId)
             if (isFeePayerTx) FeePayer.assertAllowedFeeToken(transaction, allowedFeeTokens)
             const selectableFeeTokens = allowedFeeTokens as readonly `0x${string}`[]
-
-            // Request for the pre-broadcast simulation; for sponsored payments
-            // this is overwritten below with the co-signed shape.
-            let simulationRequest: Record<string, unknown> = FeePayer.simulationTransaction(
-              transaction,
-              { feePayer: isFeePayerTx },
-            )
 
             const serializedTransaction_final = await (async () => {
               if (feePayerAccount && methodDetails?.feePayer !== false) {
@@ -625,9 +638,6 @@ export function charge<const parameters extends charge.Parameters>(
               await releaseSponsoredSenderInFlight(store, sponsoredSenderReservation)
           }
         }
-
-        default:
-          throw new Error(`Unsupported credential type "${(payload as { type: string }).type}".`)
       }
     },
   })
