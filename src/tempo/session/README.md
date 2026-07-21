@@ -102,6 +102,30 @@ validation.
 verified request identity to an existing channel ID. It does not authorize a
 channel, recreate accounting, or trust a client-provided channel ID.
 
+### Bootstrap configuration
+
+Enable `bootstrap` when a client should recover an existing channel before its
+first paid request:
+
+```ts
+tempo.session({
+  bootstrap: true,
+  resolveChannelId({ source, paymentRequest }) {
+    return db.findChannelId({
+      payer: parseSource(source),
+      payee: paymentRequest.recipient,
+      token: paymentRequest.currency,
+      // Include chain and escrow when the application supports more than one.
+    })
+  },
+})
+```
+
+The hook resolves application identity and payment scope. The channel store
+loads the returned primary key only; MPPx does not scan the store or define a
+secondary-index format. If the request supplies a channel ID, MPPx uses it and
+does not call the hook.
+
 ```mermaid
 sequenceDiagram
   participant C as Cold client
@@ -110,10 +134,14 @@ sequenceDiagram
   participant L as AtomicStore
   participant T as Tempo chain
 
-  C->>S: HEAD bootstrap with zero-amount identity proof
-  S->>R: resolve verified identity to channelId
+  C->>S: HEAD protected resource
+  S-->>C: 402 zero-amount identity challenge
+  C->>S: HEAD with signed proof
+  S->>S: verify proof and recover source
+  S->>R: resolve source and payment scope to channelId
   R-->>S: channelId or no result
   S->>L: load compatible channel record
+  S->>S: validate chain, token, escrow, payee, and signed voucher
   S-->>C: 204 with session snapshot when available
   C->>T: read live channel state
   C->>C: validate descriptor, signer, voucher, and state
