@@ -305,6 +305,20 @@ export async function broadcastCredential<const methods extends readonly AnyServ
   return broadcast({ credential: prepared.credential, request: prepared.request } as never)
 }
 
+/**
+ * Parses a submitted credential into the inputs required for method execution.
+ *
+ * Dispatch is based on the challenge method and intent. When more than one
+ * server method handles the same wire identity, session protocol details select
+ * the appropriate implementation. The helper then asserts challenge expiry and
+ * parses the method-specific credential payload before returning the selected
+ * method and the unmodified challenge request.
+ *
+ * This intentionally does not verify that the challenge was issued by a
+ * particular host, authorize the caller or requested resource, validate the
+ * method request, or invoke method lifecycle hooks. Hosts that issue challenges
+ * must verify their challenge binding before accepting the credential.
+ */
 function prepareCredential(
   methods: readonly AnyServer[],
   input: string | Credential.Credential,
