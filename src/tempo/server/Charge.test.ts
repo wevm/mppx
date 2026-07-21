@@ -1599,7 +1599,6 @@ describe('tempo', () => {
 
       const receipt = await chargeServer.verifyCredential(credential)
       expect(receipt.status).toBe('success')
-
       httpServer.close()
     })
 

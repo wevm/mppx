@@ -91,35 +91,31 @@ export function charge<const parameters extends charge.Parameters>(
     rpcUrl: defaults.rpcUrl,
   })
 
-  async function resolveCredentialContext(parameters: {
+  function resolveRequest(request: Method.VerifyContext<typeof Methods.charge>['request']) {
+    const parsed = Methods.charge.schema.request.safeParse(request)
+    if (parsed.success) return parsed.data
+    // Credential handlers receive the HMAC-bound request in canonical output
+    // form, so it must not be transformed a second time.
+    return request as unknown as z.output<typeof Methods.charge.schema.request>
+  }
+
+  async function resolveCredentialContext({
+    credential,
+    request,
+  }: {
     credential: Method.VerifyContext<typeof Methods.charge>['credential']
     request: Method.VerifyContext<typeof Methods.charge>['request']
   }) {
-    const { credential, request } = parameters
-    const { challenge } = credential
-    const resolvedRequest = (() => {
-      const parsed = Methods.charge.schema.request.safeParse(request)
-      if (parsed.success) return parsed.data
-      // verifyCredential() passes the HMAC-bound challenge request, which is
-      // already in canonical output form and should not be transformed again.
-      return request as unknown as z.output<typeof Methods.charge.schema.request>
-    })()
+    const { challenge, payload } = credential
+    const resolvedRequest = resolveRequest(request)
     const chainId = resolvedRequest.methodDetails?.chainId ?? request.chainId
-    const client = await getClient({ chainId })
-
     const { amount, methodDetails } = resolvedRequest
-    const requestAllowsFeePayer =
-      request.feePayer !== false &&
-      (request.feePayer === undefined ||
-        request.feePayer === true ||
-        typeof request.feePayer === 'object')
     const supportedModes = methodDetails?.supportedModes as
       | readonly Methods.ChargeMode[]
       | undefined
     const currency = resolvedRequest.currency as `0x${string}`
     const recipient = resolvedRequest.recipient as `0x${string}`
     const memo = methodDetails?.memo as `0x${string}` | undefined
-    const payload = credential.payload
     const isZeroAmount = BigInt(amount) === 0n
 
     Expires.assert(challenge.expires, challenge.id)
@@ -131,14 +127,14 @@ export function charge<const parameters extends charge.Parameters>(
       amount,
       chainId,
       challenge,
-      client,
+      client: await getClient({ chainId }),
       currency,
       isZeroAmount,
       memo,
       methodDetails,
       payload,
       recipient,
-      requestAllowsFeePayer,
+      requestAllowsFeePayer: request.feePayer !== false,
       resolvedRequest,
       supportedModes,
     }
@@ -347,7 +343,6 @@ export function charge<const parameters extends charge.Parameters>(
               'Transaction must be signed by the sender before fee payer co-signing.',
               {},
             )
-
           const calls = (transaction.calls ?? []) as readonly {
             data?: `0x${string}` | undefined
             to?: `0x${string}` | undefined
@@ -570,7 +565,6 @@ export function charge<const parameters extends charge.Parameters>(
                 'Transaction must be signed by the sender before fee payer co-signing.',
                 {},
               )
-
             const calls = (transaction.calls ?? []) as readonly {
               data?: `0x${string}` | undefined
               to?: `0x${string}` | undefined
