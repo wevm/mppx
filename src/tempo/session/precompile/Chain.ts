@@ -1001,8 +1001,11 @@ async function sendPrecompileTransaction(
   label: string,
   options?: ChannelTransactionOptions,
 ): Promise<Hex> {
-  if (options?.feePayer) {
-    const account = options.account ?? client.account
+  const account = options?.account ?? client.account
+  const selfSponsored =
+    account && options?.feePayer && isAddressEqual(account.address, options.feePayer.address)
+
+  if (options?.feePayer && !selfSponsored) {
     if (!account) throw new Error(`Cannot ${label} precompile channel: no account available.`)
     const feeToken =
       options.feeToken ??
@@ -1033,10 +1036,20 @@ async function sendPrecompileTransaction(
     return receipt.transactionHash
   }
 
+  const feeToken =
+    options?.feeToken ??
+    (selfSponsored
+      ? await resolveFeeToken({
+          account: account.address,
+          candidateTokens: options?.candidateFeeTokens,
+          client,
+        })
+      : undefined)
+
   return sendPrecompileContractCall(client, {
-    account: options?.account,
+    account,
     to,
     data,
-    feeToken: options?.feeToken,
+    feeToken,
   })
 }

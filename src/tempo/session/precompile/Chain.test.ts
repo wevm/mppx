@@ -62,6 +62,7 @@ function createMockClient(
         parameters.rpcMethods?.push(args.method)
         parameters.onRequest?.(args.method, args.params)
         if (args.method === 'eth_chainId') return `0x${chainId.toString(16)}`
+        if (args.method === 'eth_sendTransaction') return txHash
         if (args.method === 'eth_sendRawTransaction') return txHash
         if (args.method === 'eth_sendRawTransactionSync') return parameters.receipt ?? receipt([])
         if (args.method === 'eth_getTransactionReceipt') return parameters.receipt ?? null
@@ -287,6 +288,31 @@ describe('precompile receipt wait', () => {
     expect(result.transactionHash).toBe(requestedHash)
     expect(rpcMethods).not.toContain('eth_getTransactionByHash')
     expect(rpcMethods).not.toContain('eth_getBlockByNumber')
+  })
+})
+
+describe('precompile server transactions', () => {
+  test('does not add a fee-payer signature when the sender and fee payer are the same account', async () => {
+    const rpcMethods: string[] = []
+    const client = createMockClient({ rpcMethods })
+    const sender = { address: feePayer.address, type: 'json-rpc' } as const
+
+    await Chain.closeOnChain(
+      client,
+      descriptor,
+      1n,
+      1n,
+      `0x${'11'.repeat(65)}`,
+      tip20ChannelEscrow,
+      {
+        account: sender,
+        candidateFeeTokens: [descriptor.token],
+        feePayer,
+      },
+    )
+
+    expect(rpcMethods).toContain('eth_sendTransaction')
+    expect(rpcMethods).not.toContain('eth_sendRawTransactionSync')
   })
 })
 
