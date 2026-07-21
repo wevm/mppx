@@ -10,12 +10,12 @@
   },
   "dependencies": {
     "@remix-run/node-fetch-server": "^0.14.0",
-    "@types/node": "^25.6.0",
-    "@typescript/native-preview": "^7.0.0-dev.20260416.1",
+    "@types/node": "^26.1.1",
+    "@typescript/native-preview": "^7.0.0-dev.20260707.2",
     "bun": "^1.3.14",
     "mppx": "latest",
-    "typescript": "~6.0.3",
-    "viem": "^2.54.4",
-    "vite": "^8.1.3"
+    "typescript": "~7.0.2",
+    "viem": "^2.55.1",
+    "vite": "^8.1.4"
   }
 }
