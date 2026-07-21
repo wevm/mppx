@@ -33,6 +33,8 @@
 
 Full documentation, API reference, and guides are available at **[mpp.dev/sdk/typescript](https://mpp.dev/sdk/typescript)**.
 
+Contributors changing Tempo sessions should read the [session design](./src/tempo/session/README.md) before altering credential, recovery, accounting, or transport behavior.
+
 ## Install
 
 ```bash
