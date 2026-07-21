@@ -80,7 +80,11 @@ export type ResolveSessionChannelIdParameters = {
   store: ChannelStore.ChannelStore
 }
 
-/** Application hook for mapping request identity to an existing session channel. */
+/**
+ * Application-owned lookup from authenticated identity and payment scope to an existing session
+ * channel. MPPx does not derive a storage key or scan the channel store; the returned channel ID is
+ * loaded and independently validated before its snapshot is advertised.
+ */
 export type ResolveSessionChannelId = (
   parameters: ResolveSessionChannelIdParameters,
 ) => Promise<string | null | undefined> | string | null | undefined

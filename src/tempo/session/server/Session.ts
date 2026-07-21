@@ -492,9 +492,20 @@ export namespace session {
     feePayerPolicy?: FeePayerPolicy | undefined
     /** Minimum voucher delta to accept (numeric string, default: "0"). */
     minVoucherDelta?: string | undefined
-    /** Resolve a reusable channel ID from request identity when no credential/request channel ID is present. */
+    /**
+     * Maps authenticated application identity and payment scope to an existing channel ID.
+     * Called only when the request does not already supply a channel ID. MPPx then loads that
+     * ID from `store` and validates the channel before including its snapshot in a challenge or
+     * bootstrap response. The store is not searched automatically and does not need to implement
+     * a secondary-index format.
+     */
     resolveChannelId?: ResolveSessionChannelId | undefined
-    /** Enables same-route HEAD bootstrap using a zero-amount identity proof. */
+    /**
+     * Enables same-route `HEAD` recovery before a paid request. The server issues a zero-amount
+     * identity challenge, verifies the returned proof, passes its authenticated `source` to
+     * `resolveChannelId`, validates the loaded channel's payment scope, and returns a snapshot
+     * containing the signed highest voucher for client rehydration.
+     */
     bootstrap?: boolean | undefined
     /**
      * Atomic store backend for channel state.
