@@ -2,4 +2,4 @@
 'mppx': patch
 ---
 
-Added pure credential validation and explicit credential settlement APIs.
+Added pure credential validation and explicit credential broadcast APIs.

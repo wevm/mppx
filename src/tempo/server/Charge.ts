@@ -399,7 +399,7 @@ export function charge<const parameters extends charge.Parameters>(
       }
     },
 
-    async verify({ credential, request }) {
+    async broadcast({ credential, request }) {
       const {
         amount,
         chainId,

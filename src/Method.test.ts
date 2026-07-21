@@ -1,4 +1,4 @@
-import { Method, z } from 'mppx'
+import { Challenge, Credential, Method, z } from 'mppx'
 import { describe, expect, expectTypeOf, test } from 'vp/test'
 
 describe('from', () => {
@@ -72,5 +72,90 @@ describe('from', () => {
 
     expectTypeOf(method.schema.request).toEqualTypeOf(requestSchema)
     expectTypeOf(method.schema.credential.payload).toEqualTypeOf(payloadSchema)
+  })
+})
+
+describe('credential execution', () => {
+  const base = Method.from({
+    name: 'alpha',
+    intent: 'charge',
+    schema: {
+      credential: { payload: z.object({ token: z.string() }) },
+      request: z.object({ amount: z.string() }),
+    },
+  })
+
+  function credential() {
+    return Credential.from({
+      challenge: Challenge.from({
+        id: 'challenge-id',
+        expires: new Date(Date.now() + 60_000).toISOString(),
+        intent: 'charge',
+        method: 'alpha',
+        realm: 'example.com',
+        request: { amount: '1000' },
+      }),
+      payload: { token: 'valid' },
+    })
+  }
+
+  test('validates without broadcasting', async () => {
+    const calls: string[] = []
+    const method = Method.toServer(base, {
+      async validate({ credential, request }) {
+        calls.push('validate')
+        return {
+          challenge: credential.challenge,
+          credential,
+          details: {},
+          intent: 'charge',
+          method: 'alpha',
+          request,
+        }
+      },
+      async broadcast() {
+        calls.push('broadcast')
+        return {
+          method: 'alpha',
+          reference: 'reference',
+          status: 'success',
+          timestamp: new Date().toISOString(),
+        }
+      },
+    })
+
+    await Method.validateCredential([method], credential())
+
+    expect(calls).toEqual(['validate'])
+  })
+
+  test('revalidates before broadcasting', async () => {
+    const calls: string[] = []
+    const method = Method.toServer(base, {
+      async validate({ credential, request }) {
+        calls.push('validate')
+        return {
+          challenge: credential.challenge,
+          credential,
+          details: {},
+          intent: 'charge',
+          method: 'alpha',
+          request,
+        }
+      },
+      async broadcast() {
+        calls.push('broadcast')
+        return {
+          method: 'alpha',
+          reference: 'reference',
+          status: 'success',
+          timestamp: new Date().toISOString(),
+        }
+      },
+    })
+
+    await Method.broadcastCredential([method], credential())
+
+    expect(calls).toEqual(['validate', 'broadcast'])
   })
 })

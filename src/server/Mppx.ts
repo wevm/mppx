@@ -9,7 +9,7 @@ import * as Expires from '../Expires.js'
 import * as AcceptPayment from '../internal/AcceptPayment.js'
 import * as Env from '../internal/env.js'
 import type { MaybePromise } from '../internal/types.js'
-import type * as Method from '../Method.js'
+import * as Method from '../Method.js'
 import * as PaymentRequest from '../PaymentRequest.js'
 import type * as Receipt from '../Receipt.js'
 import * as x402_Header from '../x402/Header.js'
@@ -248,9 +248,9 @@ export type Mppx<
     /**
      * Verify a credential string or object end-to-end: deserialize,
      * HMAC-check, match to a registered method, validate payload schema,
-     * check expiry, and call the method's verify function.
+     * check expiry, and call the method's broadcast or legacy verify function.
      *
-     * Method verification can settle payments and persist state. For example,
+     * Method verification can broadcast payments and persist state. For example,
      * subscription credentials may activate or renew a subscription. Failed
      * standalone verification emits `payment.failed` once a credential challenge
      * can be parsed; strings that cannot be deserialized have no challenge
@@ -268,23 +268,23 @@ export type Mppx<
       options?: VerifyCredentialOptions | undefined,
     ): Promise<Receipt.Receipt>
     /**
-     * Validate a credential without consuming or settling it.
+     * Validate a credential without consuming or broadcasting it.
      *
      * This is an advisory pre-check. Methods that support it must not write
      * replay state, sign fee-payer transactions, broadcast, or otherwise
-     * mutate payment state. Use `settleCredential()` when accepting payment.
+     * mutate payment state. Use `broadcastCredential()` when accepting payment.
      */
     validateCredential(
       credential: string | Credential.Credential,
       options?: VerifyCredentialOptions | undefined,
     ): Promise<Method.Validation>
     /**
-     * Re-validates and consumes/settles a credential, returning a receipt.
+     * Re-validates and broadcasts a credential, returning a receipt.
      *
      * `verifyCredential()` is retained as a backwards-compatible alias for
      * this mutating path.
      */
-    settleCredential(
+    broadcastCredential(
       credential: string | Credential.Credential,
       options?: VerifyCredentialOptions | undefined,
     ): Promise<Receipt.Receipt>
@@ -313,7 +313,7 @@ const reservedMppxKeyValues = [
   'onPaymentFailed',
   'onPaymentSuccess',
   'realm',
-  'settleCredential',
+  'broadcastCredential',
   'transport',
   'validateCredential',
   'verifyCredential',
@@ -480,7 +480,7 @@ export function create<
       preflight: mi.preflight as never,
       request: mi.request as never,
       respond: mi.respond as never,
-      settle: mi.settle as never,
+      broadcast: mi.broadcast as never,
       secretKey,
       stableBinding: mi.stableBinding as never,
       transport: (mi.transport ?? transport) as never,
@@ -535,7 +535,7 @@ export function create<
     const methodCandidates = (methods as readonly Method.AnyServer[]).filter(
       (m) => m.name === credMethod && m.intent === credIntent,
     )
-    const mi = selectVerificationMethod(methodCandidates, credential.challenge)
+    const mi = Method.selectServerMethod(methodCandidates, credential.challenge)
     const eventMethod =
       mi ?? ({ intent: credIntent, name: credMethod } satisfies ServerMethodDescriptor)
 
@@ -716,8 +716,8 @@ export function create<
     } as never)
   }
 
-  // settleCredential: single-call end-to-end verification and settlement
-  async function settleCredentialFn(
+  // broadcastCredential: single-call end-to-end validation and broadcast
+  async function broadcastCredentialFn(
     input: string | Credential.Credential,
     options?: VerifyCredentialOptions,
   ): Promise<Receipt.Receipt> {
@@ -747,10 +747,10 @@ export function create<
 
     let receipt: Receipt.Receipt
     try {
-      if (mi.settle && mi.validate)
+      if (mi.broadcast && mi.validate)
         await mi.validate({ credential: parsedCredential, envelope, request } as never)
-      const settle = mi.settle ?? mi.verify
-      receipt = await settle({ credential: parsedCredential, envelope, request } as never)
+      const broadcast = mi.broadcast ?? mi.verify
+      receipt = await broadcast({ credential: parsedCredential, envelope, request } as never)
     } catch (e) {
       const error = e instanceof Errors.PaymentError ? e : new Errors.VerificationFailedError()
       await emitStandalonePaymentFailed({
@@ -779,7 +779,7 @@ export function create<
     return receipt
   }
 
-  const verifyCredentialFn = settleCredentialFn
+  const verifyCredentialFn = broadcastCredentialFn
 
   function composeFn(
     ...entries: readonly [
@@ -831,7 +831,7 @@ export function create<
     onPaymentFailed,
     onPaymentSuccess,
     realm: realm as string | undefined,
-    settleCredential: settleCredentialFn,
+    broadcastCredential: broadcastCredentialFn,
     transport,
     validateCredential: validateCredentialFn,
     verifyCredential: verifyCredentialFn,
@@ -882,7 +882,7 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
     realm,
     respond,
     secretKey,
-    settle,
+    broadcast,
     stableBinding,
     transport,
     validate,
@@ -1331,10 +1331,10 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
       // If verification fails, re-issue the challenge so the client can retry.
       let receiptData: Receipt.Receipt
       try {
-        if (settle && validate)
+        if (broadcast && validate)
           await validate({ credential: parsedCredential, envelope, request } as never)
-        const settleCredential = settle ?? verify
-        receiptData = await settleCredential({
+        const broadcastCredential = broadcast ?? verify
+        receiptData = await broadcastCredential({
           credential: parsedCredential,
           envelope,
           request,
@@ -1457,7 +1457,7 @@ declare namespace createMethodFn {
     realm: string | undefined
     request?: Method.RequestFn<method>
     respond?: Method.RespondFn<method>
-    settle?: Method.SettleFn<method>
+    broadcast?: Method.BroadcastFn<method>
     secretKey: string
     stableBinding?: Method.StableBindingFn<method>
     transport: transport
@@ -1926,31 +1926,6 @@ type MethodBindingField = (typeof methodBindingFields)[number]
 type PinnedRequestBindingField = (typeof pinnedRequestBindingFields)[number]
 type PinnedChallengeField = 'method' | 'intent' | 'realm' | 'opaque' | PinnedRequestBindingField
 type StableBinding = Record<string, unknown>
-
-function selectVerificationMethod(
-  methods: readonly Method.AnyServer[],
-  challenge: Challenge.Challenge,
-): Method.AnyServer | undefined {
-  if (methods.length <= 1) return methods[0]
-  if (
-    challenge.method !== Constants.Methods.tempo ||
-    challenge.intent !== Constants.Intents.session
-  )
-    return methods[0]
-
-  const sessionProtocolMarker = Constants.getMethodDetail(
-    challenge.request.methodDetails,
-    Constants.MethodDetailKeys.sessionProtocol,
-  )
-  if (
-    sessionProtocolMarker === undefined ||
-    sessionProtocolMarker === Constants.SessionProtocols.v1
-  )
-    return methods.find((method) => method.alias === 'sessionLegacy') ?? methods[0]
-  if (sessionProtocolMarker === Constants.SessionProtocols.v2)
-    return methods.find((method) => method.alias === undefined) ?? methods[0]
-  return undefined
-}
 
 function getChallengeBindingMismatch(
   expectedChallenge: Challenge.Challenge,
