@@ -199,16 +199,3 @@ The module boundaries implement these contracts:
 | `server/Settlement.ts`                                          | Content accounting and server-owned settlement cadence.                       |
 | `server/RequestState.ts`                                        | Challenge context, bootstrap identity lookup, snapshots, and response gating. |
 | `client/Transports.ts` and `server/Transports.ts`               | SSE and WebSocket payment control messages.                                   |
-
-## Open design decisions
-
-- Define explicit idempotency behavior for retrying open, top-up, close, and a
-  voucher after an ambiguous network failure.
-- Define a prepare/commit API if applications need payment durability to gate
-  irreversible side effects.
-- Publish transport-neutral conformance fixtures so HTTP, SSE, and WebSocket
-  cannot diverge in credential, receipt, and accounting behavior.
-- Version the JSON client-store persistence format and define invalidation rules
-  for account or wallet changes.
-- Expose snapshot rejection reasons through a diagnostic hook so recovery
-  failures are distinguishable from an ordinary cache miss.
