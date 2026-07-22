@@ -12,7 +12,7 @@ import {
   type Hex,
 } from 'viem'
 import { privateKeyToAccount } from 'viem/accounts'
-import { Transaction } from 'viem/tempo'
+import { Abis, Addresses, Transaction } from 'viem/tempo'
 import { describe, expect, test } from 'vp/test'
 
 import { VerificationFailedError } from '../../../Errors.js'
@@ -36,6 +36,7 @@ const descriptor = {
 const deposit = Types.uint96(1_000_000n)
 const chainId = 42431
 const txHash = `0x${'ab'.repeat(32)}` as const
+const sourceToken = '0x6666666666666666666666666666666666666666' as const
 const feePayer = privateKeyToAccount(
   '0x59c6995e998f97a5a0044966f0945389d1fc6e60e7346d6c36c49d32f75b9a1b',
 )
@@ -192,6 +193,28 @@ async function createSerializedTransaction(parameters: {
   } as never)) as `0x${string}`
 }
 
+function autoSwapCalls(amountOut: bigint = deposit) {
+  const maxAmountIn = amountOut + 1_000n
+  return [
+    {
+      to: sourceToken,
+      data: encodeFunctionData({
+        abi: Abis.tip20,
+        functionName: 'approve',
+        args: [Addresses.stablecoinDex, maxAmountIn],
+      }),
+    },
+    {
+      to: Addresses.stablecoinDex,
+      data: encodeFunctionData({
+        abi: Abis.stablecoinDex,
+        functionName: 'swapExactAmountOut',
+        args: [sourceToken, descriptor.token, amountOut, maxAmountIn],
+      }),
+    },
+  ] as const
+}
+
 async function createOpenTransaction(
   parameters: {
     authorizedSigner?: `0x${string}` | undefined
@@ -201,6 +224,7 @@ async function createOpenTransaction(
     signed?: boolean | undefined
     token?: `0x${string}` | undefined
     to?: `0x${string}` | undefined
+    prefixCalls?: readonly { to: `0x${string}`; data: `0x${string}` }[] | undefined
   } = {},
 ) {
   const data = encodeFunctionData({
@@ -216,7 +240,7 @@ async function createOpenTransaction(
     ],
   })
   return createSerializedTransaction({
-    calls: [{ to: parameters.to ?? tip20ChannelEscrow, data }],
+    calls: [...(parameters.prefixCalls ?? []), { to: parameters.to ?? tip20ChannelEscrow, data }],
     gas: parameters.gas,
     signed: parameters.signed,
   })
@@ -229,6 +253,7 @@ async function createTopUpTransaction(
     gas?: bigint | undefined
     signed?: boolean | undefined
     to?: `0x${string}` | undefined
+    prefixCalls?: readonly { to: `0x${string}`; data: `0x${string}` }[] | undefined
   } = {},
 ) {
   const data = encodeFunctionData({
@@ -240,7 +265,7 @@ async function createTopUpTransaction(
     ],
   })
   return createSerializedTransaction({
-    calls: [{ to: parameters.to ?? tip20ChannelEscrow, data }],
+    calls: [...(parameters.prefixCalls ?? []), { to: parameters.to ?? tip20ChannelEscrow, data }],
     gas: parameters.gas,
     signed: parameters.signed,
   })
@@ -446,7 +471,31 @@ describe('precompile broadcastOpenTransaction', () => {
         expectedPayer: descriptor.payer,
         serializedTransaction,
       }),
-    ).rejects.toThrow('TIP-1034 open transaction must contain exactly one call')
+    ).rejects.toThrow(
+      'TIP-1034 open transaction must contain one management call, optionally preceded by an auto-swap',
+    )
+  })
+
+  test('rejects an auto-swap whose output does not match the open deposit', async () => {
+    const serializedTransaction = await createOpenTransaction({
+      prefixCalls: autoSwapCalls(deposit + 1n),
+    })
+
+    await expect(
+      Chain.broadcastOpenTransaction({
+        chainId,
+        client: createMockClient(),
+        escrowContract: tip20ChannelEscrow,
+        expectedAuthorizedSigner: descriptor.authorizedSigner,
+        expectedChannelId: `0x${'11'.repeat(32)}`,
+        expectedCurrency: descriptor.token,
+        expectedExpiringNonceHash: expectedExpiringNonceHash(serializedTransaction),
+        expectedOperator: descriptor.operator,
+        expectedPayee: descriptor.payee,
+        expectedPayer: descriptor.payer,
+        serializedTransaction,
+      }),
+    ).rejects.toThrow('TIP-1034 open auto-swap output amount does not match channel deposit')
   })
 
   test('rejects open transactions targeting the wrong escrow contract', async () => {
@@ -715,8 +764,8 @@ describe('precompile broadcastOpenTransaction', () => {
     ).rejects.toThrow('credential expiringNonceHash does not match transaction')
   })
 
-  test('returns tx hash, descriptor, event fields, and read-back state on success', async () => {
-    const serializedTransaction = await createOpenTransaction()
+  test('accepts an exact-output auto-swap before open', async () => {
+    const serializedTransaction = await createOpenTransaction({ prefixCalls: autoSwapCalls() })
     const expiringNonceHash = expectedExpiringNonceHash(serializedTransaction)
     const expectedDescriptor = { ...descriptor, expiringNonceHash }
     const channelId = Channel.computeId({
@@ -858,7 +907,9 @@ describe('precompile broadcastTopUpTransaction', () => {
         expectedCurrency: descriptor.token,
         serializedTransaction,
       }),
-    ).rejects.toThrow('TIP-1034 topUp transaction must contain exactly one call')
+    ).rejects.toThrow(
+      'TIP-1034 topUp transaction must contain one management call, optionally preceded by an auto-swap',
+    )
   })
 
   test('rejects top-up transactions targeting the wrong escrow contract', async () => {
@@ -1025,8 +1076,8 @@ describe('precompile broadcastTopUpTransaction', () => {
     ).rejects.toThrow('topUp deposit does not match credential')
   })
 
-  test('returns tx hash, new deposit, and read-back state on success', async () => {
-    const serializedTransaction = await createTopUpTransaction()
+  test('accepts an exact-output auto-swap before top-up', async () => {
+    const serializedTransaction = await createTopUpTransaction({ prefixCalls: autoSwapCalls() })
     const channelId = Channel.computeId({ ...descriptor, chainId, escrow: tip20ChannelEscrow })
     const newDeposit = deposit * 2n
     const state = { settled: 0n, deposit: newDeposit, closeRequestedAt: 0 }

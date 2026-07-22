@@ -1,5 +1,5 @@
 import type { Account, Address, Client, Hex } from 'viem'
-import { encodeFunctionData, isAddressEqual, parseEventLogs } from 'viem'
+import { decodeFunctionData, encodeFunctionData, isAddressEqual, parseEventLogs } from 'viem'
 import {
   call,
   prepareTransactionRequest,
@@ -10,7 +10,7 @@ import {
   signTransaction,
   waitForTransactionReceipt,
 } from 'viem/actions'
-import { Transaction } from 'viem/tempo'
+import { Abis, Addresses, Transaction } from 'viem/tempo'
 
 import { BadRequestError, VerificationFailedError } from '../../../Errors.js'
 import * as FeePayer from '../../internal/fee-payer.js'
@@ -401,6 +401,7 @@ export type ChannelTransactionOptions = {
 
 type ParsedPrecompileCredentialTransaction = {
   call: Transaction.TransactionTempo['calls'][number] & { data: Hex; to: Address }
+  prefixCalls: readonly Transaction.TransactionTempo['calls'][number][]
   transaction: ReturnType<(typeof Transaction)['deserialize']>
 }
 
@@ -418,11 +419,11 @@ function parsePrecompileCredentialTransaction(parameters: {
     serializedTransaction as Transaction.TransactionSerializedTempo,
   )
   const calls = transaction.calls
-  if (calls.length !== 1)
+  if (calls.length !== 1 && calls.length !== 3)
     throw new VerificationFailedError({
-      reason: `TIP-1034 ${label} transaction must contain exactly one call`,
+      reason: `TIP-1034 ${label} transaction must contain one management call, optionally preceded by an auto-swap`,
     })
-  const call = calls[0]!
+  const call = calls.at(-1)!
   if (!call.to || !isAddressEqual(call.to, escrowContract))
     throw new VerificationFailedError({
       reason: `TIP-1034 ${label} transaction targets the wrong address`,
@@ -431,7 +432,88 @@ function parsePrecompileCredentialTransaction(parameters: {
     throw new VerificationFailedError({
       reason: `TIP-1034 ${label} transaction is missing calldata`,
     })
-  return { transaction, call: { ...call, data: call.data, to: call.to } }
+  return {
+    transaction,
+    call: { ...call, data: call.data, to: call.to },
+    prefixCalls: calls.slice(0, -1),
+  }
+}
+
+function validateAutoSwapPrefix(parameters: {
+  amountOut: bigint
+  currency: Address
+  label: 'open' | 'topUp'
+  prefixCalls: readonly Transaction.TransactionTempo['calls'][number][]
+}) {
+  const { amountOut, currency, label, prefixCalls } = parameters
+  if (prefixCalls.length === 0) return
+
+  const fail = (reason: string): never => {
+    throw new VerificationFailedError({ reason: `TIP-1034 ${label} auto-swap ${reason}` })
+  }
+  if (prefixCalls.length !== 2) fail('must contain exactly approve and swap calls')
+
+  const approveCall = prefixCalls[0]!
+  const swapCall = prefixCalls[1]!
+  const approveTo = approveCall.to
+  const approveData = approveCall.data
+  const swapTo = swapCall.to
+  const swapData = swapCall.data
+  if (!approveTo || !approveData || !swapTo || !swapData)
+    fail('call is missing a target or calldata')
+  const checkedApproveTo = approveTo as Address
+  const checkedApproveData = approveData as Hex
+  const checkedSwapTo = swapTo as Address
+  const checkedSwapData = swapData as Hex
+  if ((approveCall.value ?? 0n) !== 0n || (swapCall.value ?? 0n) !== 0n)
+    fail('calls must not transfer native value')
+  if (!isAddressEqual(checkedSwapTo, Addresses.stablecoinDex)) fail('targets the wrong DEX')
+
+  const approve = (() => {
+    try {
+      return decodeFunctionData({ abi: Abis.tip20, data: checkedApproveData })
+    } catch {
+      return fail('approval calldata is invalid')
+    }
+  })()
+  const swap = (() => {
+    try {
+      return decodeFunctionData({ abi: Abis.stablecoinDex, data: checkedSwapData })
+    } catch {
+      return fail('swap calldata is invalid')
+    }
+  })()
+  if (approve.functionName !== 'approve' || swap.functionName !== 'swapExactAmountOut')
+    fail('must contain approve followed by swapExactAmountOut')
+
+  const [spender, approvedAmount] = approve.args as readonly [Address, bigint]
+  const [tokenIn, tokenOut, swapAmountOut, maxAmountIn] = swap.args as readonly [
+    Address,
+    Address,
+    bigint,
+    bigint,
+  ]
+  if (!isAddressEqual(checkedApproveTo, tokenIn)) fail('approval token does not match swap input')
+  if (!isAddressEqual(spender, Addresses.stablecoinDex)) fail('approval spender is not the DEX')
+  if (approvedAmount !== maxAmountIn) fail('approval amount does not match swap maximum input')
+  if (!isAddressEqual(tokenOut, currency)) fail('output token does not match channel currency')
+  if (swapAmountOut !== amountOut) fail('output amount does not match channel deposit')
+  if (isAddressEqual(tokenIn, tokenOut)) fail('input and output tokens must differ')
+
+  const canonicalApprove = encodeFunctionData({
+    abi: Abis.tip20,
+    functionName: 'approve',
+    args: [spender, approvedAmount],
+  })
+  const canonicalSwap = encodeFunctionData({
+    abi: Abis.stablecoinDex,
+    functionName: 'swapExactAmountOut',
+    args: [tokenIn, tokenOut, swapAmountOut, maxAmountIn],
+  })
+  if (checkedApproveData.toLowerCase() !== canonicalApprove.toLowerCase())
+    fail('approval calldata is not canonical')
+  if (checkedSwapData.toLowerCase() !== canonicalSwap.toLowerCase())
+    fail('swap calldata is not canonical')
 }
 
 async function simulateTempoTransaction(client: Client, request: unknown) {
@@ -796,7 +878,7 @@ export type BroadcastOpenTransactionParameters = {
 export async function broadcastOpenTransaction(
   parameters: BroadcastOpenTransactionParameters,
 ): Promise<BroadcastOpenTransactionResult> {
-  const { transaction, call } = parsePrecompileCredentialTransaction({
+  const { transaction, call, prefixCalls } = parsePrecompileCredentialTransaction({
     escrowContract: parameters.escrowContract,
     feePayer: parameters.feePayer,
     label: 'open',
@@ -811,6 +893,12 @@ export async function broadcastOpenTransaction(
       operator: parameters.expectedOperator,
       authorizedSigner: parameters.expectedAuthorizedSigner,
     },
+  })
+  validateAutoSwapPrefix({
+    amountOut: open.deposit,
+    currency: parameters.expectedCurrency,
+    label: 'open',
+    prefixCalls,
   })
   const descriptor = ChannelOps.descriptorFromOpen({
     chainId: parameters.chainId,
@@ -920,7 +1008,7 @@ export type BroadcastTopUpTransactionParameters = {
 export async function broadcastTopUpTransaction(
   parameters: BroadcastTopUpTransactionParameters,
 ): Promise<BroadcastTopUpTransactionResult> {
-  const { transaction, call } = parsePrecompileCredentialTransaction({
+  const { transaction, call, prefixCalls } = parsePrecompileCredentialTransaction({
     escrowContract: parameters.escrowContract,
     feePayer: parameters.feePayer,
     label: 'topUp',
@@ -932,6 +1020,12 @@ export async function broadcastTopUpTransaction(
       descriptor: parameters.descriptor,
       additionalDeposit: parameters.additionalDeposit,
     },
+  })
+  validateAutoSwapPrefix({
+    amountOut: parameters.additionalDeposit,
+    currency: parameters.expectedCurrency,
+    label: 'topUp',
+    prefixCalls,
   })
   const receipt = await sendCredentialTransaction({
     challengeExpires: parameters.challengeExpires,
