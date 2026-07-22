@@ -9,6 +9,7 @@ import {
 import type { SessionController as SessionController_ } from '../session/server/Sse.js'
 import * as Ws_ from '../session/server/Ws.js'
 import { charge as charge_ } from './Charge.js'
+import { recoverSponsoredSenderLock as recoverSponsoredSenderLock_ } from './SponsoredSenderLock.js'
 import { renew as renewSubscription_, subscription as subscription_ } from './Subscription.js'
 
 const sessionServer = Object.assign(session_, {
@@ -81,6 +82,8 @@ export namespace tempo {
   export const subscription = subscription_
   /** Renews an overdue Tempo subscription outside of the HTTP request path. */
   export const renewSubscription = renewSubscription_
+  /** Safely reconciles an abandoned sponsored transaction sender lock. */
+  export const recoverSponsoredSenderLock = recoverSponsoredSenderLock_
   /** One-shot settle: reads highest voucher from storage and submits on-chain. */
   export const settle = settle_
   /** Batch-settle precompile-backed session channels. */
