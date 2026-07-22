@@ -423,7 +423,7 @@ function parsePrecompileCredentialTransaction(parameters: {
     throw new VerificationFailedError({
       reason: `TIP-1034 ${label} transaction must contain one management call, optionally preceded by an auto-swap`,
     })
-  const call = calls.at(-1)!
+  const call = calls[calls.length - 1]!
   if (!call.to || !isAddressEqual(call.to, escrowContract))
     throw new VerificationFailedError({
       reason: `TIP-1034 ${label} transaction targets the wrong address`,
