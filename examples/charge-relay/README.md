@@ -32,7 +32,7 @@ development-only default so it can run without one locally.
 
 1. The server returns a `tempo/charge` pull challenge for pathUSD.
 2. The payer signs a Tempo transaction and returns the MPP credential.
-3. `tempo.charge({ relay })` calls `POST /v1/mpp/verify`, then `POST /v1/mpp/broadcast`.
+3. `tempo.charge({ relay })` calls `POST /v1/mpp/validate`, then `POST /v1/mpp/broadcast`.
 4. The relay receipt becomes the `Payment-Receipt` response header.
 
 ## Relay configuration
