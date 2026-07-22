@@ -37,6 +37,7 @@ import * as Selectors from '../internal/selectors.js'
 import type * as types from '../internal/types.js'
 import * as Methods from '../Methods.js'
 import { html as htmlContent } from './internal/html.gen.js'
+import * as SponsoredSenderLock from './SponsoredSenderLock.js'
 
 /**
  * Creates a Tempo charge method intent for usage on the server.
@@ -66,6 +67,8 @@ export function charge<const parameters extends charge.Parameters>(
     memo,
     splits,
     supportedModes,
+    onSponsorshipEvent,
+    sponsorshipLockTimeoutMs,
     validateSender,
     waitForConfirmation = true,
   } = parameters
@@ -344,14 +347,11 @@ export function charge<const parameters extends charge.Parameters>(
 
           const serializedTransaction = payload.signature as Transaction.TransactionSerializedTempo
 
-          // Pre-broadcast dedup: catch exact byte-for-byte replays early.
           const hash = keccak256(serializedTransaction)
-          if (!(await markHashUsed(store, hash))) {
-            throw new VerificationFailedError({ reason: 'Transaction hash has already been used' })
-          }
-
           let releaseReservation = true
-          let sponsoredSenderReservation: { chainId: number; sender: `0x${string}` } | undefined
+          let hashReserved = false
+          let sponsoredSenderReservation: SponsoredSenderLock.SponsoredSenderLockRecord | undefined
+          let sponsoredSenderTarget: { chainId: number; sender: `0x${string}` } | undefined
 
           try {
             if (!FeePayer.isTempoTransaction(serializedTransaction))
@@ -386,25 +386,53 @@ export function charge<const parameters extends charge.Parameters>(
 
             if (isFeePayerTx) {
               const reservationChainId = chainId ?? client.chain!.id
-              if (
-                !(await markSponsoredSenderInFlight(store, {
-                  chainId: reservationChainId,
-                  sender: transaction.from as `0x${string}`,
-                }))
-              ) {
+              const sender = transaction.from as `0x${string}`
+              sponsoredSenderTarget = { chainId: reservationChainId, sender }
+              await SponsoredSenderLock.reconcile({
+                ...sponsoredSenderTarget,
+                client,
+                leaseTimeoutMs: sponsorshipLockTimeoutMs,
+                onEvent: onSponsorshipEvent,
+                store,
+              })
+              const reservation = await SponsoredSenderLock.acquire({
+                ...sponsoredSenderTarget,
+                inputHash: hash,
+                leaseTimeoutMs: sponsorshipLockTimeoutMs,
+                nonce: String(transaction.nonce),
+                nonceKey: String(transaction.nonceKey),
+                onEvent: onSponsorshipEvent,
+                store,
+                validBefore: resolveSponsoredLockExpiry(
+                  transaction.validBefore,
+                  sponsorshipLockTimeoutMs,
+                ),
+              })
+              if (reservation.status === 'contended') {
+                const ageSeconds = Math.max(0, Math.floor(reservation.ageMs / 1_000))
                 throw new VerificationFailedError({
-                  reason: 'Sponsored transaction from this sender is already in flight',
+                  reason: `Sponsored transaction from this sender is already in flight (lock age: ${ageSeconds}s). Retry after the transaction confirms or expires; operators can call recoverSponsoredSenderLock for safe manual recovery.`,
                 })
               }
-              sponsoredSenderReservation = {
-                chainId: reservationChainId,
-                sender: transaction.from as `0x${string}`,
-              }
+              sponsoredSenderReservation = reservation.lock
+              // Reconciliation may have discovered this exact transaction and
+              // finalized its replay marker before releasing the previous lock.
+              if ((await store.get(getHashStoreKey(hash))) !== null)
+                throw new VerificationFailedError({
+                  reason: 'Transaction hash has already been used',
+                })
               FeePayer.validateCalls(
                 transaction.calls,
                 { amount, currency, recipient },
                 { currency, expectedTransfers: transfers },
               )
+            } else {
+              // Pre-broadcast dedup for transactions without a sponsored-sender lock.
+              if (!(await markHashUsed(store, hash)))
+                throw new VerificationFailedError({
+                  reason: 'Transaction hash has already been used',
+                })
+              hashReserved = true
             }
 
             const allowedFeeTokens = FeePayer.defaultAllowedFeeTokens(chainId)
@@ -472,10 +500,46 @@ export function charge<const parameters extends charge.Parameters>(
                 FeePayer.simulationTransaction(transaction, { feePayer: false }) as never,
               )
 
+            const transactionHash = keccak256(serializedTransaction_final)
+            if (sponsoredSenderReservation?.phase === 'preparing' && sponsoredSenderTarget) {
+              const prepared = await SponsoredSenderLock.prepare({
+                ...sponsoredSenderTarget,
+                lock: sponsoredSenderReservation,
+                onEvent: onSponsorshipEvent,
+                store,
+                transactionHash,
+              })
+              if (!prepared)
+                throw new VerificationFailedError({
+                  reason:
+                    'Sponsored transaction lock expired while preparing. Retry with a fresh credential.',
+                })
+              sponsoredSenderReservation = prepared
+            }
+
             if (waitForConfirmation) {
               const receipt = await sendRawTransactionSync(client, {
                 serializedTransaction: serializedTransaction_final,
               })
+              if (receipt.transactionHash.toLowerCase() !== transactionHash.toLowerCase())
+                throw new Error(
+                  'Sponsored transaction hash returned by RPC does not match payload.',
+                )
+              if (isFeePayerTx) {
+                await markHashUsed(store, hash)
+                if (transactionHash.toLowerCase() !== hash.toLowerCase())
+                  await markHashUsed(store, transactionHash)
+                releaseReservation = false
+                if (sponsoredSenderReservation && sponsoredSenderTarget)
+                  await SponsoredSenderLock.clear({
+                    ...sponsoredSenderTarget,
+                    lock: sponsoredSenderReservation,
+                    onEvent: onSponsorshipEvent,
+                    reason: 'terminal',
+                    store,
+                  })
+                sponsoredSenderReservation = undefined
+              }
               const matchedLogs = await assertTransferLogs(receipt, {
                 currency,
                 sender: transaction.from! as `0x${string}`,
@@ -491,6 +555,7 @@ export function charge<const parameters extends charge.Parameters>(
               // bypass the pre-broadcast check. Skip if the broadcast
               // hash matches the input hash (already stored above).
               if (
+                !isFeePayerTx &&
                 receipt.transactionHash.toLowerCase() !== hash.toLowerCase() &&
                 !(await markHashUsed(store, receipt.transactionHash))
               ) {
@@ -508,8 +573,26 @@ export function charge<const parameters extends charge.Parameters>(
             const reference = await sendRawTransaction(client, {
               serializedTransaction: serializedTransaction_final,
             })
+            if (reference.toLowerCase() !== transactionHash.toLowerCase())
+              throw new Error('Sponsored transaction hash returned by RPC does not match payload.')
+            if (isFeePayerTx) {
+              await markHashUsed(store, hash)
+              if (transactionHash.toLowerCase() !== hash.toLowerCase())
+                await markHashUsed(store, transactionHash)
+              releaseReservation = false
+              if (sponsoredSenderReservation && sponsoredSenderTarget)
+                await SponsoredSenderLock.clear({
+                  ...sponsoredSenderTarget,
+                  lock: sponsoredSenderReservation,
+                  onEvent: onSponsorshipEvent,
+                  reason: 'submitted',
+                  store,
+                })
+              sponsoredSenderReservation = undefined
+            }
             // Post-broadcast dedup: same
             if (
+              !isFeePayerTx &&
               reference.toLowerCase() !== hash.toLowerCase() &&
               !(await markHashUsed(store, reference))
             ) {
@@ -525,11 +608,17 @@ export function charge<const parameters extends charge.Parameters>(
               reference,
             } as const
           } catch (error) {
-            if (releaseReservation) await releaseHashUse(store, hash)
+            if (hashReserved && releaseReservation) await releaseHashUse(store, hash)
             throw error
           } finally {
-            if (sponsoredSenderReservation)
-              await releaseSponsoredSenderInFlight(store, sponsoredSenderReservation)
+            if (sponsoredSenderReservation?.phase === 'preparing' && sponsoredSenderTarget)
+              await SponsoredSenderLock.clear({
+                ...sponsoredSenderTarget,
+                lock: sponsoredSenderReservation,
+                onEvent: onSponsorshipEvent,
+                reason: 'pre-broadcast-failure',
+                store,
+              })
           }
         }
 
@@ -541,7 +630,9 @@ export function charge<const parameters extends charge.Parameters>(
 }
 
 export declare namespace charge {
-  type StoreItemMap = { [key: `mppx:charge:${string}`]: number }
+  type StoreItemMap = {
+    [key: `mppx:charge:${string}`]: number | SponsoredSenderLock.SponsoredSenderLockRecord
+  }
 
   type Defaults = LooseOmit<Method.RequestDefaults<typeof Methods.charge>, 'feePayer' | 'recipient'>
 
@@ -576,6 +667,16 @@ export declare namespace charge {
      * its own token.
      */
     feeToken?: `0x${string}` | undefined
+    /** Receives best-effort sponsored transaction lock lifecycle events. */
+    onSponsorshipEvent?:
+      | ((event: SponsoredSenderLock.SponsorshipEvent) => void | Promise<void>)
+      | undefined
+    /**
+     * Maximum time spent preparing a sponsored transaction before its sender
+     * lock can be recovered. The lock is also capped by the transaction's
+     * `validBefore` timestamp. @default 60000
+     */
+    sponsorshipLockTimeoutMs?: number | undefined
     /** Testnet mode. */
     testnet?: boolean | undefined
     /**
@@ -971,14 +1072,6 @@ function getProofStoreKey(challengeId: string): `mppx:charge:${string}` {
   return `mppx:charge:proof:${challengeId}`
 }
 
-/** @internal */
-function getSponsoredSenderStoreKey(parameters: {
-  chainId: number
-  sender: `0x${string}`
-}): `mppx:charge:${string}` {
-  return `mppx:charge:sponsor:${parameters.chainId}:${parameters.sender.toLowerCase()}`
-}
-
 async function markHashUsed(
   store: Store.AtomicStore<charge.StoreItemMap>,
   hash: `0x${string}`,
@@ -1013,25 +1106,6 @@ function parseHashCredentialSource(parameters: {
 }
 
 /** @internal */
-async function markSponsoredSenderInFlight(
-  store: Store.AtomicStore<charge.StoreItemMap>,
-  parameters: { chainId: number; sender: `0x${string}` },
-): Promise<boolean> {
-  return store.update(getSponsoredSenderStoreKey(parameters), (current) => {
-    if (current !== null) return { op: 'noop', result: false }
-    return { op: 'set', value: Date.now(), result: true }
-  })
-}
-
-/** @internal */
-async function releaseSponsoredSenderInFlight(
-  store: Store.AtomicStore<charge.StoreItemMap>,
-  parameters: { chainId: number; sender: `0x${string}` },
-): Promise<void> {
-  await store.delete(getSponsoredSenderStoreKey(parameters))
-}
-
-/** @internal */
 async function markProofUsed(
   store: Store.AtomicStore<charge.StoreItemMap>,
   challengeId: string,
@@ -1040,6 +1114,13 @@ async function markProofUsed(
     if (current !== null) return { op: 'noop', result: false }
     return { op: 'set', value: Date.now(), result: true }
   })
+}
+
+function resolveSponsoredLockExpiry(validBefore: number | undefined, lockTimeoutMs = 60_000) {
+  const fallback = Date.now() + lockTimeoutMs
+  if (validBefore === undefined) return fallback
+  const expiry = Number(validBefore) * 1_000
+  return Number.isFinite(expiry) ? expiry : fallback
 }
 
 function recoverAuthorizedProofSigner(parameters: {

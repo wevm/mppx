@@ -1,3 +1,4 @@
+import { createClient, custom } from 'viem'
 import { expectTypeOf, test } from 'vp/test'
 
 import { tempo } from '../../server/index.js'
@@ -17,6 +18,15 @@ test('tempo.charge store parameter requires AtomicStore', () => {
   // @ts-expect-error — charge replay protection requires AtomicStore
   tempo.charge({ store: nonAtomic })
   tempo.charge({ store: Store.memory() })
+})
+
+test('tempo exposes sponsored sender lock recovery', () => {
+  tempo.recoverSponsoredSenderLock({
+    chainId: 4217,
+    client: createClient({ transport: custom({ request: async () => null }) }),
+    sender: '0x0000000000000000000000000000000000000001',
+    store: Store.memory(),
+  })
 })
 
 test('tempo.session store parameter requires AtomicStore', () => {
