@@ -1,4 +1,4 @@
-import { type Chain, type Client, createClient, http } from 'viem'
+import { type Chain, type Client, createClient, custom, http } from 'viem'
 import { withFeePayer } from 'viem/tempo'
 
 import type { MaybePromise } from '../internal/types.js'
@@ -23,31 +23,37 @@ export function getResolver(
     if (!chain?.serializers && !feePayerUrl) return getClient
     return async (params) => {
       const client = await getClient(params)
+      let resolvedClient = client
 
       // Wrap the client's transport with `withFeePayer` when a fee payer URL is provided.
       if (feePayerUrl && client.transport.key !== 'feePayer') {
-        const url = (client.transport as { url?: string }).url
-        if (url) {
-          const wrapped = createClient({
-            chain: client.chain,
-            transport: withFeePayer(http(url), http(feePayerUrl)),
-          })
-          Object.assign(client, { transport: wrapped.transport, request: wrapped.request })
-        }
+        const request = client.request.bind(client)
+        const wrapped = createClient({
+          chain: client.chain,
+          transport: withFeePayer(
+            custom({ request: (args) => request(args as never) }),
+            http(feePayerUrl),
+          ),
+        })
+        resolvedClient = Object.assign({}, client, {
+          request: wrapped.request,
+          transport: wrapped.transport,
+        })
       }
 
-      if (!chain?.serializers || client.chain?.serializers?.transaction) return client
-      return Object.assign({}, client, {
+      if (!chain?.serializers || resolvedClient.chain?.serializers?.transaction)
+        return resolvedClient
+      return Object.assign({}, resolvedClient, {
         chain: {
           ...chain,
-          ...client.chain,
-          formatters: client.chain?.formatters ?? chain.formatters,
+          ...resolvedClient.chain,
+          formatters: resolvedClient.chain?.formatters ?? chain.formatters,
           prepareTransactionRequest:
-            client.chain?.prepareTransactionRequest ?? chain.prepareTransactionRequest,
-          serializers: client.chain?.serializers?.transaction
-            ? client.chain.serializers
+            resolvedClient.chain?.prepareTransactionRequest ?? chain.prepareTransactionRequest,
+          serializers: resolvedClient.chain?.serializers?.transaction
+            ? resolvedClient.chain.serializers
             : chain.serializers,
-        } as typeof client.chain,
+        } as typeof resolvedClient.chain,
       })
     }
   }

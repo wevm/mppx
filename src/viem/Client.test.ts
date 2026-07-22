@@ -3,11 +3,15 @@ import { privateKeyToAccount } from 'viem/accounts'
 import { signTransaction } from 'viem/actions'
 import { Account as TempoAccount, Transaction } from 'viem/tempo'
 import { tempoLocalnet } from 'viem/tempo/chains'
-import { describe, expect, test } from 'vp/test'
+import { afterEach, describe, expect, test, vi } from 'vp/test'
 
 import * as Client from './Client.js'
 
 const rpcUrl = { 42: 'https://rpc.example.com', 99: 'https://rpc2.example.com' } as const
+
+afterEach(() => {
+  vi.unstubAllGlobals()
+})
 
 describe('getResolver', () => {
   test('behavior: creates client from rpcUrl for given chainId', async () => {
@@ -60,6 +64,45 @@ describe('getResolver', () => {
     expect(() => getClient({ chainId: 99 })).toThrowErrorMatchingInlineSnapshot(
       `[Error: No \`rpcUrl\` configured for \`chainId\` (99).]`,
     )
+  })
+
+  test('behavior: wraps custom client transports with a hosted fee payer', async () => {
+    const defaultRequests: string[] = []
+    const client = createClient({
+      chain: tempoLocalnet,
+      transport: custom({
+        async request({ method }) {
+          defaultRequests.push(method)
+          return { source: 'default' }
+        },
+      }),
+    })
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const request = JSON.parse(String(init?.body)) as { id: number; jsonrpc: string }
+      return Response.json({
+        id: request.id,
+        jsonrpc: request.jsonrpc,
+        result: { source: 'relay' },
+      })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const getClient = Client.getResolver({
+      chain: tempoLocalnet,
+      feePayerUrl: 'https://sponsor.example',
+      getClient: () => client,
+      rpcUrl: { [tempoLocalnet.id]: 'https://rpc.example.com' },
+    })
+    const resolved = await getClient({ chainId: tempoLocalnet.id })
+    const result = await resolved.request({
+      method: 'eth_fillTransaction',
+      params: [{ feePayer: true }],
+    } as never)
+
+    expect(result).toEqual({ source: 'relay' })
+    expect(fetchMock).toHaveBeenCalledOnce()
+    expect(String(fetchMock.mock.calls[0]?.[0])).toBe('https://sponsor.example/')
+    expect(defaultRequests).toEqual([])
   })
 })
 
