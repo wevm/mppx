@@ -1,7 +1,7 @@
 import { type Address, createClient, custom, decodeFunctionData, encodeFunctionResult } from 'viem'
 import { privateKeyToAccount } from 'viem/accounts'
 import { Account as TempoAccount, Secp256k1, Transaction } from 'viem/tempo'
-import { describe, expect, test } from 'vp/test'
+import { describe, expect, test, vi } from 'vp/test'
 
 import { serialize as serializeChallenge, type Challenge } from '../../../Challenge.js'
 import * as Fetch from '../../../client/internal/Fetch.js'
@@ -9,6 +9,7 @@ import * as MethodChallenge from '../../../client/internal/MethodChallenge.js'
 import * as Constants from '../../../Constants.js'
 import * as Credential from '../../../Credential.js'
 import * as z from '../../../zod.js'
+import * as AutoSwap from '../../internal/auto-swap.js'
 import * as Methods from '../../Methods.js'
 import * as Channel from '../precompile/Channel.js'
 import { escrowAbi } from '../precompile/escrow.abi.js'
@@ -98,6 +99,14 @@ function openArgs(payload: Types.SessionCredentialPayload) {
 
 function openDeposit(payload: Types.SessionCredentialPayload): bigint {
   return openArgs(payload)[3]
+}
+
+function transactionCalls(payload: Types.SessionCredentialPayload) {
+  if (payload.action !== 'open' && payload.action !== 'topUp')
+    throw new Error('expected transaction payload')
+  const transaction = Transaction.deserialize(payload.transaction)
+  if (!('calls' in transaction)) throw new Error('expected tempo calls')
+  return transaction.calls as readonly { to?: Address; data?: `0x${string}` }[]
 }
 
 describe('precompile client session', () => {
@@ -374,6 +383,72 @@ describe('precompile client session', () => {
 
     expect(payload.action).toBe('open')
     expect(openDeposit(payload)).toBe(100n)
+  })
+
+  test('atomically auto-swaps before opening a session channel', async () => {
+    const sourceToken = '0x0000000000000000000000000000000000000007' as Address
+    const swapCalls = [
+      { to: sourceToken, data: '0x1234' as const },
+      { to: '0x0000000000000000000000000000000000000008' as Address, data: '0x5678' as const },
+    ]
+    const findCalls = vi.spyOn(AutoSwap, 'findCalls').mockResolvedValue(swapCalls)
+    try {
+      const method = session({
+        account,
+        autoSwap: { slippage: 2, tokenIn: [sourceToken] },
+        getClient: () => client,
+      })
+      const payload = deserialize(
+        await method.createCredential({ challenge: makeChallenge(), context: {} }),
+      )
+
+      expect(findCalls).toHaveBeenCalledWith(expect.any(Object), {
+        account: account.address,
+        amountOut: 100n,
+        slippage: 2,
+        tokenIn: expect.arrayContaining([sourceToken]),
+        tokenOut: descriptor.token,
+      })
+      const calls = transactionCalls(payload)
+      expect(calls.slice(0, 2)).toEqual(swapCalls)
+      expect(calls[2]!.to?.toLowerCase()).toBe(tip20ChannelEscrow.toLowerCase())
+      expect(decodeFunctionData({ abi: escrowAbi, data: calls[2]!.data! }).functionName).toBe(
+        'open',
+      )
+    } finally {
+      findCalls.mockRestore()
+    }
+  })
+
+  test('atomically auto-swaps before topping up a session channel', async () => {
+    const sourceToken = '0x0000000000000000000000000000000000000007' as Address
+    const swapCalls = [{ to: sourceToken, data: '0x1234' as const }]
+    const findCalls = vi.spyOn(AutoSwap, 'findCalls').mockResolvedValue(swapCalls)
+    try {
+      const method = session({ account, autoSwap: true, getClient: () => client })
+      const payload = deserialize(
+        await method.createCredential({
+          challenge: makeChallenge(),
+          context: { action: 'topUp', additionalDepositRaw: '250', descriptor },
+        }),
+      )
+
+      expect(findCalls).toHaveBeenCalledWith(expect.any(Object), {
+        account: account.address,
+        amountOut: 250n,
+        slippage: 1,
+        tokenIn: AutoSwap.defaultCurrencies,
+        tokenOut: descriptor.token,
+      })
+      const calls = transactionCalls(payload)
+      expect(calls[0]).toEqual(swapCalls[0])
+      expect(calls[1]!.to?.toLowerCase()).toBe(tip20ChannelEscrow.toLowerCase())
+      expect(decodeFunctionData({ abi: escrowAbi, data: calls[1]!.data! }).functionName).toBe(
+        'topUp',
+      )
+    } finally {
+      findCalls.mockRestore()
+    }
   })
 
   test('uses client chain ID when the challenge omits chain ID', async () => {

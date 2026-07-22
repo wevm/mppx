@@ -11,6 +11,7 @@ import type * as Challenge from '../../../Challenge.js'
 import * as Constants from '../../../Constants.js'
 import * as Account from '../../../viem/Account.js'
 import * as z from '../../../zod.js'
+import * as AutoSwap from '../../internal/auto-swap.js'
 import * as Chain from '../precompile/Chain.js'
 import * as Channel from '../precompile/Channel.js'
 import type { SessionCredentialPayload } from '../precompile/Protocol.js'
@@ -25,6 +26,7 @@ import {
   resolveAuthorizedSigner,
   resolveEscrow,
   type ChannelEntry,
+  type TempoChannelCall,
 } from './ChannelOps.js'
 import { channelKey, entryKey, type ChannelSink } from './ChannelStore.js'
 import { assertWithinMaxDeposit, resolveOpeningDeposit } from './Runtime.js'
@@ -88,6 +90,7 @@ const hashSchema = z.custom<Hex>(
 /** Runtime schema for low-level TIP-1034 session credential context. */
 export const sessionContextSchema = z.object({
   account: z.optional(z.custom<Account.getResolver.Parameters['account']>()),
+  autoSwap: z.optional(z.custom<AutoSwap.resolve.Value>()),
   action: z.optional(z.enum(['open', 'topUp', 'voucher', 'close'])),
   channelId: z.optional(hashSchema),
   cumulativeAmount: z.optional(z.amount()),
@@ -103,6 +106,8 @@ export const sessionContextSchema = z.object({
 export type SessionContext = {
   /** Optional account override used for this credential only. */
   account?: Account.getResolver.Parameters['account'] | undefined
+  /** Automatically acquire the session currency from fallback stablecoins before open/top-up. */
+  autoSwap?: AutoSwap.resolve.Value | undefined
   /** Manual credential action. Omit for automatic open/recover/voucher management. */
   action?: 'open' | 'topUp' | 'voucher' | 'close' | undefined
   /** Channel ID being reused or manually operated on. */
@@ -658,22 +663,43 @@ export function planCredential(parameters: PlanCredentialParameters): Credential
 export async function executeCredentialPlan(
   plan: CredentialPlan,
   sink: ChannelSink,
+  autoSwap: AutoSwap.resolve.Resolved | false = false,
 ): Promise<SessionCredentialPayload> {
   switch (plan.type) {
     case 'open':
-      return open(plan, sink)
+      return open(plan, sink, autoSwap)
     case 'recover':
       return recover(plan, sink)
     case 'voucher':
       return voucher(plan, sink)
     case 'manual':
-      return manual(plan, sink)
+      return manual(plan, sink, autoSwap)
   }
+}
+
+async function resolveAutoSwapCalls(
+  autoSwap: AutoSwap.resolve.Resolved | false,
+  parameters: {
+    account: Address
+    amountOut: bigint
+    client: Client
+    tokenOut: Address
+  },
+): Promise<readonly TempoChannelCall[] | undefined> {
+  if (!autoSwap) return undefined
+  return (await AutoSwap.findCalls(parameters.client, {
+    account: parameters.account,
+    amountOut: parameters.amountOut,
+    tokenOut: parameters.tokenOut,
+    tokenIn: autoSwap.tokenIn,
+    slippage: autoSwap.slippage,
+  })) as readonly TempoChannelCall[] | undefined
 }
 
 async function open(
   plan: Extract<CredentialPlan, { type: 'open' }>,
   sink: ChannelSink,
+  autoSwap: AutoSwap.resolve.Resolved | false,
 ): Promise<SessionCredentialPayload> {
   const { account, resolved } = plan
   const deposit = resolveOpeningDeposit({
@@ -690,6 +716,12 @@ async function open(
     initialAmount: resolved.amount,
     operator: resolved.operator,
     payee: resolved.payee,
+    prefixCalls: await resolveAutoSwapCalls(autoSwap, {
+      account: account.address,
+      amountOut: deposit,
+      client: resolved.client,
+      tokenOut: resolved.token,
+    }),
     token: resolved.token,
   })
   await storeChannelEntry(sink, {
@@ -776,6 +808,7 @@ async function voucher(
 async function manual(
   plan: Extract<CredentialPlan, { type: 'manual' }>,
   sink: ChannelSink,
+  autoSwap: AutoSwap.resolve.Resolved | false,
 ): Promise<SessionCredentialPayload> {
   const { account, context, decimals, resolved } = plan
   const { descriptor } = context
@@ -794,26 +827,30 @@ async function manual(
     token: resolved.token,
   })
 
-  const payload = await executeManualCredential({
-    account,
-    channelId,
-    context,
-    decimals,
-    descriptor,
-    resolved,
-  })
+  const payload = await executeManualCredential(
+    {
+      account,
+      channelId,
+      context,
+      decimals,
+      descriptor,
+      resolved,
+    },
+    autoSwap,
+  )
   await applyCumulative(sink, resolved.key, payload)
   return payload
 }
 
 async function executeManualCredential(
   parameters: ManualCredentialParameters,
+  autoSwap: AutoSwap.resolve.Resolved | false,
 ): Promise<SessionCredentialPayload> {
   switch (parameters.context.action) {
     case 'open':
       return manualOpen(parameters)
     case 'topUp':
-      return manualTopUp(parameters)
+      return manualTopUp(parameters, autoSwap)
     case 'voucher':
       return manualVoucher(parameters)
     case 'close':
@@ -849,6 +886,7 @@ async function manualOpen(
 
 async function manualTopUp(
   parameters: ManualCredentialParameters,
+  autoSwap: AutoSwap.resolve.Resolved | false,
 ): Promise<SessionCredentialPayload> {
   const { account, channelId, context, decimals, descriptor, resolved } = parameters
   const additionalDeposit = requireContextAmount(context, decimals, 'additionalDeposit', 'topUp')
@@ -870,6 +908,12 @@ async function manualTopUp(
     resolved.chainId,
     resolved.feePayer,
     resolved.escrow,
+    await resolveAutoSwapCalls(autoSwap, {
+      account: account.address,
+      amountOut: additionalDeposit,
+      client: resolved.client,
+      tokenOut: resolved.token,
+    }),
   )
 }
 

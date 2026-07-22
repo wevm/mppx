@@ -28,7 +28,7 @@ import type {
 import { uint96 } from '../precompile/Protocol.js'
 import * as Voucher from '../precompile/Voucher.js'
 
-type TempoChannelCall = {
+export type TempoChannelCall = {
   to: Address
   data: Hex.Hex
 }
@@ -231,6 +231,8 @@ export async function createOpenPayload(
     initialAmount: bigint
     operator?: Address | undefined
     payee: Address
+    /** Calls executed atomically before the channel is opened. */
+    prefixCalls?: readonly TempoChannelCall[] | undefined
     token: Address
   },
 ): Promise<OpenCredentialPayload> {
@@ -248,7 +250,7 @@ export async function createOpenPayload(
   })
   const prepared = await prepareTempoChannelTransaction(client, {
     account,
-    calls: [{ to: escrow, data: openData }],
+    calls: [...(parameters.prefixCalls ?? []), { to: escrow, data: openData }],
     feePayer: parameters.feePayer,
     feeToken: parameters.token,
   })
@@ -308,6 +310,7 @@ export async function createTopUpPayload(
   chainId: number,
   feePayer?: boolean | undefined,
   escrow: Address = tip20ChannelEscrow,
+  prefixCalls: readonly TempoChannelCall[] = [],
 ): Promise<TopUpCredentialPayload> {
   const channelId = Channel.computeId({
     ...descriptor,
@@ -318,6 +321,7 @@ export async function createTopUpPayload(
   const prepared = await prepareTempoChannelTransaction(client, {
     account,
     calls: [
+      ...prefixCalls,
       {
         to: escrow,
         data: encodeFunctionData({

@@ -277,6 +277,7 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
 
   const method = sessionPlugin({
     account: parameters.account,
+    autoSwap: parameters.autoSwap,
     getClient: parameters.client ? () => parameters.client! : parameters.getClient,
     resolveAccount: parameters.resolveAccount,
     escrow: parameters.escrow,
@@ -899,6 +900,8 @@ export namespace sessionManager {
 
   export type Parameters = Account.getResolver.Parameters &
     Client.getResolver.Parameters & {
+      /** Automatically acquire the session currency from fallback stablecoins before open/top-up. */
+      autoSwap?: sessionPlugin.Parameters['autoSwap']
       /** Enables same-route HEAD bootstrap from a server session snapshot before opening a new channel. */
       bootstrap?: boolean | undefined
       /** Viem client instance. Shorthand for `getClient: () => client`. */

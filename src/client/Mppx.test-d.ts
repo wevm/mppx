@@ -262,9 +262,9 @@ describe('fetch context', () => {
     type FetchInit = NonNullable<Parameters<typeof _mppx.fetch>[1]>
     type Context = NonNullable<FetchInit['context']>
 
-    // Context is a union of charge and session contexts.
-    // `account` exists on both; `autoSwap` only on charge.
+    // Context is a union of charge and session contexts; both support auto-swap.
     expectTypeOf<Context>().toHaveProperty('account')
-    expectTypeOf<Extract<Context, { autoSwap?: unknown }>>().toHaveProperty('autoSwap')
+    expectTypeOf<Context>().toHaveProperty('autoSwap')
+    expectTypeOf<Context['autoSwap']>().toEqualTypeOf<AutoSwap.resolve.Value | undefined>()
   })
 })

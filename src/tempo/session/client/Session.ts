@@ -11,6 +11,7 @@ import type {
   ResolveAccount as ResolveAccount_,
   ResolveAccountInfo as ResolveAccountInfo_,
 } from '../../client/ResolveAccount.js'
+import * as AutoSwap from '../../internal/auto-swap.js'
 import * as defaults from '../../internal/defaults.js'
 import * as Methods from '../../Methods.js'
 import * as Channel from '../precompile/Channel.js'
@@ -54,6 +55,7 @@ export { sessionContextSchema, type SessionContext } from './CredentialState.js'
 export function session(parameters: session.Parameters = {}) {
   const {
     account,
+    autoSwap: autoSwapParameter,
     channelStore,
     decimals = defaults.decimals,
     escrow: escrowOverride,
@@ -119,6 +121,7 @@ export function session(parameters: session.Parameters = {}) {
           resolved,
         }),
         sink,
+        AutoSwap.resolve(context?.autoSwap ?? autoSwapParameter, AutoSwap.defaultCurrencies),
       )
       return serializeCredential(challenge, payload, resolved.chainId, account)
     },
@@ -258,6 +261,8 @@ export declare namespace session {
 
   type Parameters = Account.getResolver.Parameters &
     Client.getResolver.Parameters & {
+      /** Automatically acquire the session currency from fallback stablecoins before open/top-up. */
+      autoSwap?: AutoSwap.resolve.Value | undefined
       /** Pluggable persistence for reusable channels. Defaults to an in-memory store. */
       channelStore?: ChannelStore | undefined
       /** Token decimals for parsing human-readable amounts (default: 6). */
