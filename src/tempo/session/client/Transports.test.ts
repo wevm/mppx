@@ -220,6 +220,36 @@ describe('HttpManagement', () => {
       expect(fetch).toHaveBeenCalledOnce()
     })
 
+    test('postTopUp retries once with the management route challenge', async () => {
+      const routeChallenge = { ...challenge(), id: 'management-challenge' } as TempoSessionChallenge
+      const createSessionCredential = vi.fn(async (challenge_) => `top-up-${challenge_.id}`)
+      const fetch = vi
+        .fn()
+        .mockResolvedValueOnce(response402(routeChallenge))
+        .mockResolvedValueOnce(
+          new Response(null, {
+            status: 204,
+            headers: {
+              [Constants.Headers.paymentReceipt]: receiptHeader(8n, 5n, routeChallenge.id),
+            },
+          }),
+        )
+
+      const receipt = await postTopUp({
+        additionalDeposit: 3n,
+        challenge: challenge(),
+        channel: channel(),
+        channelId,
+        createSessionCredential,
+        fetch,
+        input: 'https://example.test/resource',
+      })
+
+      expect(receipt?.challengeId).toBe(routeChallenge.id)
+      expect(createSessionCredential).toHaveBeenCalledTimes(2)
+      expect(authorizationHeader(fetch.mock.calls[1]?.[1])).toBe(`top-up-${routeChallenge.id}`)
+    })
+
     test('retryHttpPaymentRequired signs the server-required cumulative voucher', async () => {
       let entry = channel({ cumulativeAmount: 5n, deposit: 6n })
       const topUpIfNeeded = vi.fn(async () => {
@@ -1046,6 +1076,9 @@ describe('WsDriver', () => {
         onProbeUrl(url) {
           events.push(`probe:${url.toString()}`)
         },
+        async prepareChallenge(selected) {
+          events.push(`prepare:${selected.id}`)
+        },
       })
 
       expect(prepared).toEqual({
@@ -1057,6 +1090,7 @@ describe('WsDriver', () => {
       expect(events).toEqual([
         'probe:https://example.test/socket?stream=1',
         'fetch:https://example.test/socket?stream=1',
+        'prepare:test-challenge',
         'credential:test-challenge:0',
       ])
     })

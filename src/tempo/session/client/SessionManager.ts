@@ -783,6 +783,18 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
         onProbeUrl(httpUrl) {
           runtime.lastUrl = httpUrl.toString()
         },
+        async prepareChallenge(challenge) {
+          runtime.lastChallenge = challenge
+          const channel = runtime.channel
+          if (!channel?.opened || !runtime.lastUrl) return
+          await topUpIfNeeded({
+            challenge,
+            input: runtime.lastUrl,
+            channelId: channel.channelId,
+            deposit: channel.deposit,
+            requiredCumulative: channel.cumulativeAmount + readSessionChallengeAmount(challenge),
+          })
+        },
         probeInit: requestInitWithSessionHint(probeUrl, signalInit, liveHint),
         signal: init?.signal,
       })

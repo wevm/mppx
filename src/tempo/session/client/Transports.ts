@@ -594,16 +594,24 @@ export async function postTopUp(
     throw new Error('Cannot top up session: no local channel descriptor available.')
   }
 
-  const credential = await parameters.createSessionCredential(parameters.challenge, {
-    action: 'topUp',
-    channelId,
-    descriptor: channel.descriptor,
-    additionalDepositRaw: parameters.additionalDeposit.toString(),
-  })
-  const response = await parameters.fetch(managementInput(parameters.input), {
-    method: 'POST',
-    headers: { [Constants.Headers.authorization]: credential },
-  })
+  const post = async (challenge: TempoSessionChallenge) => {
+    const credential = await parameters.createSessionCredential(challenge, {
+      action: 'topUp',
+      channelId,
+      descriptor: channel.descriptor,
+      additionalDepositRaw: parameters.additionalDeposit.toString(),
+    })
+    return parameters.fetch(managementInput(parameters.input), {
+      method: 'POST',
+      headers: { [Constants.Headers.authorization]: credential },
+    })
+  }
+
+  let response = await post(parameters.challenge)
+  if (response.status === 402) {
+    const challenge = Challenge.fromResponseList(response).find(isTempoSessionChallenge)
+    if (challenge) response = await post(challenge)
+  }
   if (!response.ok) throw new Error(`Top-up POST failed with status ${response.status}`)
 
   const receiptHeader = response.headers.get(Constants.Headers.paymentReceipt)
@@ -1060,6 +1068,8 @@ export type PrepareWebSocketSessionParameters = {
   input: string | URL
   /** Called after resolving the HTTP probe URL, before the network request. */
   onProbeUrl?: ((httpUrl: URL) => void) | undefined
+  /** Prepares channel headroom after the probe and before signing authorization. */
+  prepareChallenge?: ((challenge: TempoSessionChallenge) => Promise<void>) | undefined
   /** Optional request init for the HTTP probe. */
   probeInit?: RequestInit | undefined
   /** Optional abort signal applied to the HTTP probe. */
@@ -1192,6 +1202,8 @@ export async function prepareWebSocketSession(
       'No payment challenge received from HTTP endpoint for this WebSocket URL. The server may not require payment or did not advertise a challenge.',
     )
   }
+
+  await parameters.prepareChallenge?.(challenge)
 
   return {
     challenge,
