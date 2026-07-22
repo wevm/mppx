@@ -152,8 +152,7 @@ export async function resolveSessionSnapshot(
     acceptedCumulative: channel.highestVoucherAmount.toString(),
     chainId: channel.chainId,
     channelId: channel.channelId,
-    closeRequestedAt:
-      channel.closeRequestedAt === 0n ? undefined : channel.closeRequestedAt.toString(),
+    closeRequestedAt: undefined,
     deposit: channel.deposit.toString(),
     descriptor: channel.descriptor,
     escrow: channel.escrowContract,
