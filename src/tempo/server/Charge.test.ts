@@ -376,17 +376,10 @@ describe('tempo', () => {
       expect(await dedupStore.get(`tenant:mppx:charge:${receipt.transactionHash}`)).not.toBeNull()
       expect(await dedupStore.get(`mppx:charge:${receipt.transactionHash}`)).toBeNull()
 
-      const response2 = await fetch(httpServer.url)
-      expect(response2.status).toBe(402)
-
-      const challenge2 = Challenge.fromResponse(response2, {
-        methods: [tempo_client.charge()],
-      })
-
       const mixedCaseHash = `0x${receipt.transactionHash.slice(2).toUpperCase()}` as Hex.Hex
 
       const credential2 = Credential.from({
-        challenge: challenge2,
+        challenge: challenge1,
         payload: { hash: mixedCaseHash, type: 'hash' as const },
       })
 
@@ -462,15 +455,8 @@ describe('tempo', () => {
       }
 
       // Replay with lowercase — should be rejected
-      const response2 = await fetch(httpServer.url)
-      expect(response2.status).toBe(402)
-
-      const challenge2 = Challenge.fromResponse(response2, {
-        methods: [tempo_client.charge()],
-      })
-
       const credential2 = Credential.from({
-        challenge: challenge2,
+        challenge: challenge1,
         payload: { hash: receipt.transactionHash.toLowerCase() as Hex.Hex, type: 'hash' as const },
       })
 
@@ -702,17 +688,10 @@ describe('tempo', () => {
         expect(response.status).toBe(200)
       }
 
-      const response2 = await fetch(httpServer.url)
-      expect(response2.status).toBe(402)
-
-      const challenge2 = Challenge.fromResponse(response2, {
-        methods: [tempo_client.charge()],
-      })
-
       const mixedCaseHash = `0x${receipt.transactionHash.slice(2).toUpperCase()}` as Hex.Hex
 
       const credential2 = Credential.from({
-        challenge: challenge2,
+        challenge: challenge1,
         payload: { hash: mixedCaseHash, type: 'hash' as const },
       })
 
@@ -786,15 +765,8 @@ describe('tempo', () => {
         expect(response.status).toBe(200)
       }
 
-      const response2 = await fetch(httpServer.url)
-      expect(response2.status).toBe(402)
-
-      const challenge2 = Challenge.fromResponse(response2, {
-        methods: [tempo_client.charge()],
-      })
-
       const credential2 = Credential.from({
-        challenge: challenge2,
+        challenge: challenge1,
         payload: { hash: receipt.transactionHash.toLowerCase() as Hex.Hex, type: 'hash' as const },
       })
 
@@ -1131,16 +1103,10 @@ describe('tempo', () => {
       expect(pullAuthResponse.status).toBe(200)
 
       const pullReceipt = Receipt.fromResponse(pullAuthResponse)
-
-      const replayChallengeResponse = await fetch(httpServer.url)
-      expect(replayChallengeResponse.status).toBe(402)
-
-      const replayChallenge = Challenge.fromResponse(replayChallengeResponse, {
-        methods: [tempo_client.charge()],
-      })
+      const pullCredential = Credential.deserialize(pullCredentialSerialized)
 
       const replayCredential = Credential.from({
-        challenge: replayChallenge,
+        challenge: pullCredential.challenge,
         payload: { hash: pullReceipt.reference as Hex.Hex, type: 'hash' as const },
       })
 
