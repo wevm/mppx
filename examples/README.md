@@ -7,6 +7,7 @@ Standalone, runnable examples demonstrating the mppx HTTP 402 payment flow.
 | Example                                       | Description                                          |
 | --------------------------------------------- | ---------------------------------------------------- |
 | [charge](./charge/)                           | Payment-gated image generation API                   |
+| [charge-relay](./charge-relay/)               | Hono API settled by the Tempo API relay              |
 | [session/multi-fetch](./session/multi-fetch/) | Multiple paid requests over a single payment channel |
 | [session/sse](./session/sse/)                 | Pay-per-token LLM streaming with SSE                 |
 | [session/ws](./session/ws/)                   | Pay-per-token LLM streaming with WebSocket           |

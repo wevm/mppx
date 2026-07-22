@@ -1,0 +1,19 @@
+{
+  "name": "charge-relay",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "check:types": "tsgo -b",
+    "dev": "tsx src/server.ts"
+  },
+  "dependencies": {
+    "@hono/node-server": "2.0.8",
+    "@types/node": "^25.6.0",
+    "@typescript/native-preview": "^7.0.0-dev.20260416.1",
+    "hono": "4.12.27",
+    "mppx": "latest",
+    "tsx": "^4.22.4",
+    "typescript": "~6.0.3",
+    "viem": "^2.54.4"
+  }
+}
