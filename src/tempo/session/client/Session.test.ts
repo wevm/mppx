@@ -152,6 +152,7 @@ describe('precompile client session', () => {
     })
     let useExternalCredential = true
     const actions: Types.SessionCredentialPayload['action'][] = []
+    const payloads: Types.SessionCredentialPayload[] = []
     const rawFetch: typeof globalThis.fetch = async (_input, init) => {
       const authorization = new Headers(init?.headers).get(Constants.Headers.authorization)
       if (!authorization)
@@ -162,15 +163,16 @@ describe('precompile client session', () => {
 
       const payload = deserialize(authorization)
       actions.push(payload.action)
+      payloads.push(payload)
       if (init?.method === 'POST' || payload.action === 'open')
         return new Response(null, { status: 204 })
       if (payload.action !== 'voucher') throw new Error('expected voucher')
 
       const receipt = Types.createSessionReceipt({
-        acceptedCumulative: 200n,
+        acceptedCumulative: 150n,
         challengeId: challenge.id,
         channelId: payload.channelId,
-        spent: 200n,
+        spent: 150n,
       })
       return new Response(
         [
@@ -179,7 +181,7 @@ describe('precompile client session', () => {
             acceptedCumulative: '100',
             channelId: payload.channelId,
             deposit: '100',
-            requiredCumulative: '200',
+            requiredCumulative: '150',
           }),
           Types.formatMessageEvent('second'),
           Types.formatReceiptEvent(receipt),
@@ -206,6 +208,10 @@ describe('precompile client session', () => {
       `${Types.formatMessageEvent('first')}${Types.formatMessageEvent('second')}`,
     )
     expect(actions).toEqual(['open', 'voucher', 'topUp', 'voucher'])
+    expect(payloads.find((payload) => payload.action === 'topUp')).toMatchObject({
+      action: 'topUp',
+      additionalDeposit: '100',
+    })
   })
 
   test('opens for the current amount without client deposit configuration', async () => {

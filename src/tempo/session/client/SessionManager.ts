@@ -34,6 +34,7 @@ import {
   dispatchSessionEvent,
   restoreCumulativeAuthorization,
   restoreRuntimeSnapshot as restoreRuntimeStateSnapshot,
+  resolveAutomaticTopUp,
   type RuntimeSnapshot,
 } from './Runtime.js'
 import { closeSocketSession } from './Runtime.js'
@@ -552,12 +553,17 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
 
   async function topUpIfNeeded(parameters: TopUpRequirement) {
     if (parameters.requiredCumulative <= parameters.deposit) return
-    assertVoucherWithinLocalLimit(parameters.requiredCumulative)
+    const additionalDeposit = resolveAutomaticTopUp({
+      deposit: parameters.deposit,
+      maxDeposit: config.maxVoucherCumulative,
+      requiredCumulative: parameters.requiredCumulative,
+      suggestedDepositRaw: parameters.challenge.request.suggestedDeposit,
+    })
     await postTopUpAndApply({
       challenge: parameters.challenge,
       input: parameters.input,
       channelId: parameters.channelId,
-      additionalDeposit: parameters.requiredCumulative - parameters.deposit,
+      additionalDeposit,
     })
   }
 

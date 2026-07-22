@@ -23,7 +23,7 @@ import {
   resolveRecoverContext,
   sessionContextSchema,
 } from './CredentialState.js'
-import { assertWithinMaxDeposit } from './Runtime.js'
+import { assertWithinMaxDeposit, resolveAutomaticTopUp } from './Runtime.js'
 import {
   handleSseNeedVoucher,
   isTempoSessionChallenge,
@@ -145,7 +145,12 @@ export function session(parameters: session.Parameters = {}) {
         managementInput,
         async topUpIfNeeded({ channelId, deposit, requiredCumulative }) {
           if (requiredCumulative <= deposit || !channel) return
-          const additionalDeposit = requiredCumulative - deposit
+          const additionalDeposit = resolveAutomaticTopUp({
+            deposit,
+            maxDeposit,
+            requiredCumulative,
+            suggestedDepositRaw: challenge.request.suggestedDeposit,
+          })
           await postTopUp({
             additionalDeposit,
             challenge,

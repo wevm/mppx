@@ -544,7 +544,7 @@ describe('SessionSnapshotHints', () => {
       }
     })
 
-    test('omits hints for missing, non-precompile, or finalized channels', async () => {
+    test('omits hints for missing, non-precompile, closing, or finalized channels', async () => {
       await expect(
         resolveSessionSnapshot({ amount: 1n, channelId, store: store(null) }),
       ).resolves.toBe(undefined)
@@ -553,6 +553,13 @@ describe('SessionSnapshotHints', () => {
           amount: 1n,
           channelId,
           store: store(channel({ backend: 'external' } as Partial<ChannelStore.State>)),
+        }),
+      ).resolves.toBe(undefined)
+      await expect(
+        resolveSessionSnapshot({
+          amount: 1n,
+          channelId,
+          store: store(channel({ closeRequestedAt: 1n })),
         }),
       ).resolves.toBe(undefined)
       await expect(

@@ -467,6 +467,18 @@ export type ResolveOpeningDepositParameters = {
   suggestedDepositRaw?: string | undefined
 }
 
+/** Inputs for sizing an automatic channel top-up. */
+export type ResolveAutomaticTopUpParameters = {
+  /** Current channel deposit in raw token units. */
+  deposit: bigint
+  /** Optional local maximum cumulative deposit/authorization boundary. */
+  maxDeposit: bigint | null | undefined
+  /** Minimum cumulative voucher amount the server needs. */
+  requiredCumulative: bigint
+  /** Server-suggested refill amount in raw token units. */
+  suggestedDepositRaw?: string | undefined
+}
+
 /** Throws when a cumulative voucher amount exceeds the caller's local cap. */
 export function assertVoucherWithinLocalLimit(parameters: LocalVoucherLimitParameters): void {
   const { cumulativeAmount, maxVoucherCumulative } = parameters
@@ -531,6 +543,30 @@ export function resolveOpeningDeposit(parameters: ResolveOpeningDepositParameter
       : requestAmount
   if (maxDeposit !== undefined) return proposed < maxDeposit ? proposed : maxDeposit
   return proposed
+}
+
+/**
+ * Resolves an automatic top-up while preserving the caller's authorization cap.
+ *
+ * The server suggestion is used as refill headroom after a channel fills, not
+ * only as the opening deposit. The exact shortfall remains the minimum so a
+ * request can never be underfunded.
+ */
+export function resolveAutomaticTopUp(parameters: ResolveAutomaticTopUpParameters): bigint {
+  const { deposit, maxDeposit, requiredCumulative, suggestedDepositRaw } = parameters
+  if (requiredCumulative <= deposit) return 0n
+  assertVoucherWithinLocalLimit({
+    cumulativeAmount: requiredCumulative,
+    maxVoucherCumulative: maxDeposit ?? null,
+  })
+
+  const shortfall = requiredCumulative - deposit
+  const suggested = suggestedDepositRaw !== undefined ? BigInt(suggestedDepositRaw) : 0n
+  const proposed = suggested > shortfall ? suggested : shortfall
+  if (maxDeposit === null || maxDeposit === undefined) return proposed
+
+  const remaining = maxDeposit - deposit
+  return proposed < remaining ? proposed : remaining
 }
 
 /** Enforces the optional client-side maximum cumulative voucher authorization. */

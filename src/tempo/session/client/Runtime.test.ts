@@ -31,6 +31,7 @@ import {
   parseManagerAmount,
   reduce,
   resolveCloseTarget,
+  resolveAutomaticTopUp,
   resolveNeedVoucherTransition,
   resolveOpeningDeposit,
   restoreCumulativeAuthorization,
@@ -923,6 +924,41 @@ describe('LocalAuthorization', () => {
       expect(() => resolveOpeningDeposit({ maxDeposit: 50n, requestAmount: 100n })).toThrow(
         'requested voucher amount 100 exceeds local maxDeposit 50',
       )
+    })
+
+    test('uses suggested deposit as automatic refill headroom within the local cap', () => {
+      expect(
+        resolveAutomaticTopUp({
+          deposit: 5_000_000n,
+          maxDeposit: 20_000_000n,
+          requiredCumulative: 5_000_001n,
+          suggestedDepositRaw: '5000000',
+        }),
+      ).toBe(5_000_000n)
+      expect(
+        resolveAutomaticTopUp({
+          deposit: 18_000_000n,
+          maxDeposit: 20_000_000n,
+          requiredCumulative: 18_000_001n,
+          suggestedDepositRaw: '5000000',
+        }),
+      ).toBe(2_000_000n)
+      expect(
+        resolveAutomaticTopUp({
+          deposit: 5_000_000n,
+          maxDeposit: null,
+          requiredCumulative: 11_000_000n,
+          suggestedDepositRaw: '5000000',
+        }),
+      ).toBe(6_000_000n)
+      expect(() =>
+        resolveAutomaticTopUp({
+          deposit: 5_000_000n,
+          maxDeposit: 5_000_000n,
+          requiredCumulative: 5_000_001n,
+          suggestedDepositRaw: '5000000',
+        }),
+      ).toThrow('requested voucher amount 5000001 exceeds local maxDeposit 5000000')
     })
 
     test('enforces optional maxDeposit through the compatibility helper', () => {

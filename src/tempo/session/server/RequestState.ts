@@ -143,6 +143,7 @@ export async function resolveSessionSnapshot(
   const channel = await store.getChannel(ChannelStore.normalizeChannelId(channelId))
   if (!channel || !ChannelStore.isPrecompileState(channel)) return undefined
   if (channel.finalized) return undefined
+  if (channel.closeRequestedAt !== 0n) return undefined
   if (!channel.highestVoucher) return undefined
   if (channel.highestVoucher.cumulativeAmount !== channel.highestVoucherAmount) return undefined
   if (expected && !matchesSnapshotPaymentFields(channel, expected)) return undefined
