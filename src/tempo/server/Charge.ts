@@ -464,14 +464,18 @@ export function charge<const parameters extends charge.Parameters>(
         case 'hash': {
           const { hash, receipt } = validated
           if (!(await markHashUsed(store, hash))) {
-            throw new VerificationFailedError({ reason: 'Transaction hash has already been used' })
+            throw new VerificationFailedError({
+              reason: 'Transaction hash has already been used',
+            })
           }
           return receipt
         }
 
         case 'proof': {
           if (proofStore && !(await markProofUsed(proofStore, challenge.id))) {
-            throw new VerificationFailedError({ reason: 'Proof credential has already been used' })
+            throw new VerificationFailedError({
+              reason: 'Proof credential has already been used',
+            })
           }
 
           return {
@@ -488,7 +492,9 @@ export function charge<const parameters extends charge.Parameters>(
           // Pre-broadcast dedup: catch exact byte-for-byte replays early.
           const hash = keccak256(serializedTransaction)
           if (!(await markHashUsed(store, hash))) {
-            throw new VerificationFailedError({ reason: 'Transaction hash has already been used' })
+            throw new VerificationFailedError({
+              reason: 'Transaction hash has already been used',
+            })
           }
 
           let releaseReservation = true
@@ -1280,6 +1286,7 @@ class MismatchError extends PaymentError {
           : `Payment verification failed: ${reason}`,
         ...Object.entries(details).map(([k, v]) => `  - ${k}: ${v}`),
       ].join('\n'),
+      { details },
     )
   }
 }

@@ -277,6 +277,7 @@ export async function validateCredential<const methods extends readonly AnyServe
   const prepared = prepareCredential(methods, input)
   if (!prepared.method.validate)
     throw new Errors.VerificationFailedError({
+      details: { intent: prepared.method.intent, method: prepared.method.name },
       reason: `${prepared.method.name}/${prepared.method.intent} does not support non-mutating credential validation`,
     })
   return prepared.method.validate({

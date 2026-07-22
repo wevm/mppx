@@ -592,6 +592,7 @@ export function create<
     if (parameters.requireValidate && !mi.validate)
       await fail(
         new Errors.VerificationFailedError({
+          details: { intent: credIntent, method: credMethod },
           reason: `${credMethod}/${credIntent} does not support non-mutating credential validation`,
         }),
       )

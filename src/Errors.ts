@@ -12,6 +12,9 @@ export const Hints = {
  * Base class for all payment-related errors.
  */
 export abstract class PaymentError extends Error {
+  /** Safe method-specific context for diagnostics and relay responses. */
+  readonly details: Readonly<Record<string, unknown>> | undefined
+
   /** RFC 9457 Problem Details type URI. */
   abstract readonly type: string
 
@@ -24,6 +27,11 @@ export abstract class PaymentError extends Error {
   /** Actionable hint for resolving the error (RFC 9457 extension member). */
   readonly hint: string | undefined
 
+  protected constructor(message: string, options: PaymentError.Options = {}) {
+    super(message)
+    this.details = options.details
+  }
+
   /** Converts the error to RFC 9457 Problem Details format. */
   toProblemDetails(challengeId?: string): PaymentError.ProblemDetails {
     return {
@@ -31,6 +39,7 @@ export abstract class PaymentError extends Error {
       title: this.title,
       status: this.status,
       detail: this.message,
+      ...(this.details && Object.keys(this.details).length > 0 && { details: this.details }),
       ...(this.hint && { hint: this.hint }),
       ...(challengeId && { challengeId }),
     }
@@ -38,6 +47,10 @@ export abstract class PaymentError extends Error {
 }
 
 export declare namespace PaymentError {
+  type Options = {
+    details?: Record<string, unknown> | undefined
+  }
+
   type ProblemDetails = {
     /** RFC 9457 Problem Details type URI. */
     type: string
@@ -47,6 +60,8 @@ export declare namespace PaymentError {
     status: number
     /** Human-readable explanation. */
     detail: string
+    /** Safe method-specific diagnostic context. */
+    details?: Readonly<Record<string, unknown>>
     /** Actionable hint for resolving the error (RFC 9457 extension member). */
     hint?: string
     /** Associated challenge ID, if applicable. */
@@ -112,13 +127,17 @@ export class VerificationFailedError extends PaymentError {
   readonly type = 'https://paymentauth.org/problems/verification-failed'
 
   constructor(options: VerificationFailedError.Options = {}) {
-    const { reason } = options
-    super(reason ? `Payment verification failed: ${reason}.` : 'Payment verification failed.')
+    const { details, reason } = options
+    super(reason ? `Payment verification failed: ${reason}.` : 'Payment verification failed.', {
+      details,
+    })
   }
 }
 
 export declare namespace VerificationFailedError {
   type Options = {
+    /** Safe method-specific diagnostic context. */
+    details?: Record<string, unknown> | undefined
     /** Reason verification failed (e.g., "invalid signature", "insufficient amount"). */
     reason?: string
   }

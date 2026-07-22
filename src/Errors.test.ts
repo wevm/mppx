@@ -124,6 +124,29 @@ describe('VerificationFailedError', () => {
         }
       `)
   })
+
+  test('with relay metadata', () => {
+    const error = new VerificationFailedError({
+      details: { party: 'originator' },
+      reason: 'Originator matched a sanctions list',
+    })
+
+    expect(error.details).toEqual({ party: 'originator' })
+    expect(error.toProblemDetails('challenge-id')).toEqual({
+      challengeId: 'challenge-id',
+      detail: 'Payment verification failed: Originator matched a sanctions list.',
+      details: { party: 'originator' },
+      status: 402,
+      title: 'Verification Failed',
+      type: 'https://paymentauth.org/problems/verification-failed',
+    })
+  })
+
+  test('omits empty details', () => {
+    const error = new VerificationFailedError({ details: {} })
+
+    expect(error.toProblemDetails()).not.toHaveProperty('details')
+  })
 })
 
 describe('PaymentExpiredError', () => {
