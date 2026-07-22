@@ -1,5 +1,23 @@
 # mppx
 
+## 0.8.13
+
+### Patch Changes
+
+- d807f92: Improved agent environment detection for automatic JSON validate output.
+
+  Added SDK guidance when validate could not find an OpenAPI discovery document.
+
+- 2ff74a5: Fixed server method handlers to require request fields that were not configured as defaults, and exposed Tempo's resolved currency and decimals as defaults.
+- bd9b05c: Added explicit per-message amounts and cancellation signals to manual WebSocket session metering.
+- ae30448: Fixed server-driven Tempo session close and settlement transactions when the configured account is also the fee payer.
+- 92c7b6e: Fixed hosted fee payer routing for caller-provided custom Viem transports.
+- a20358e: Add a Node SQLite session `ChannelStore` that defaults to Tempo Wallet's channels database and can read existing wallet-cli v2 session rows.
+- 8e95155: Added persistent CLI payment sessions with automatic reuse, inspection, and explicit closing.
+- 8e71221: Rehydrate Tempo client sessions from server snapshots, reconciling the last accepted voucher with on-chain channel state before continuing cumulative payments.
+- fb45074: Include the highest signed voucher in Tempo session bootstrap snapshots so cold clients can safely validate and resume an existing channel.
+- 0f256ef: Added `onSessionSettlement` hook for visibility into on-chain session settlement transactions, with chain-agnostic context including trigger, txHash, channelId, cumulative amount, and incremental delta.
+
 ## 0.8.12
 
 ### Patch Changes

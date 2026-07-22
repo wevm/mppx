@@ -9,7 +9,7 @@ import * as Expires from '../Expires.js'
 import * as AcceptPayment from '../internal/AcceptPayment.js'
 import * as Env from '../internal/env.js'
 import type { MaybePromise } from '../internal/types.js'
-import type * as Method from '../Method.js'
+import * as Method from '../Method.js'
 import * as PaymentRequest from '../PaymentRequest.js'
 import type * as Receipt from '../Receipt.js'
 import * as x402_Header from '../x402/Header.js'
@@ -248,9 +248,9 @@ export type Mppx<
     /**
      * Verify a credential string or object end-to-end: deserialize,
      * HMAC-check, match to a registered method, validate payload schema,
-     * check expiry, and call the method's verify function.
+     * check expiry, and call the method's broadcast or legacy verify function.
      *
-     * Method verification can settle payments and persist state. For example,
+     * Method verification can broadcast payments and persist state. For example,
      * subscription credentials may activate or renew a subscription. Failed
      * standalone verification emits `payment.failed` once a credential challenge
      * can be parsed; strings that cannot be deserialized have no challenge
@@ -264,6 +264,27 @@ export type Mppx<
      * ```
      */
     verifyCredential(
+      credential: string | Credential.Credential,
+      options?: VerifyCredentialOptions | undefined,
+    ): Promise<Receipt.Receipt>
+    /**
+     * Validate a credential without consuming or broadcasting it.
+     *
+     * This is an advisory pre-check. Methods that support it must not write
+     * replay state, sign fee-payer transactions, broadcast, or otherwise
+     * mutate payment state. Use `broadcastCredential()` when accepting payment.
+     */
+    validateCredential(
+      credential: string | Credential.Credential,
+      options?: VerifyCredentialOptions | undefined,
+    ): Promise<Method.Validation>
+    /**
+     * Re-validates and broadcasts a credential, returning a receipt.
+     *
+     * `verifyCredential()` is retained as a backwards-compatible alias for
+     * this mutating path.
+     */
+    broadcastCredential(
       credential: string | Credential.Credential,
       options?: VerifyCredentialOptions | undefined,
     ): Promise<Receipt.Receipt>
@@ -292,7 +313,9 @@ const reservedMppxKeyValues = [
   'onPaymentFailed',
   'onPaymentSuccess',
   'realm',
+  'broadcastCredential',
   'transport',
+  'validateCredential',
   'verifyCredential',
 ] as const
 
@@ -457,9 +480,11 @@ export function create<
       preflight: mi.preflight as never,
       request: mi.request as never,
       respond: mi.respond as never,
+      broadcast: mi.broadcast as never,
       secretKey,
       stableBinding: mi.stableBinding as never,
       transport: (mi.transport ?? transport) as never,
+      validate: mi.validate as never,
       verify: mi.verify as never,
     })
     const wireKey = `${mi.name}/${mi.intent}`
@@ -496,125 +521,117 @@ export function create<
     })
   }
 
-  // verifyCredential: single-call end-to-end verification
-  async function verifyCredentialFn(
+  async function prepareStandaloneCredential(
     input: string | Credential.Credential,
-    options?: VerifyCredentialOptions,
-  ): Promise<Receipt.Receipt> {
+    options: VerifyCredentialOptions | undefined,
+    parameters: { emitFailures?: boolean | undefined; requireValidate?: boolean | undefined } = {},
+  ) {
     const credential = hydrateCredentialMeta(
       typeof input === 'string' ? Credential.deserialize(input) : input,
     )
 
-    // Find matching method by name + intent, then use method-details markers
-    // when multiple handlers intentionally share the same wire identity.
+    const emitFailures = parameters.emitFailures === true
     const { method: credMethod, intent: credIntent } = credential.challenge
     const methodCandidates = (methods as readonly Method.AnyServer[]).filter(
       (m) => m.name === credMethod && m.intent === credIntent,
     )
-    const mi = selectVerificationMethod(methodCandidates, credential.challenge)
+    const mi = Method.selectServerMethod(methodCandidates, credential.challenge)
     const eventMethod =
       mi ?? ({ intent: credIntent, name: credMethod } satisfies ServerMethodDescriptor)
 
-    const emitStandalonePaymentFailed = async (parameters: {
+    const emitStandalonePaymentFailed = async (failure: {
       challenge: Challenge.Challenge
       credential: Credential.Credential | null
       error: Errors.PaymentError
       request: Record<string, unknown>
       submittedChallenge?: Challenge.Challenge | undefined
     }) => {
+      if (!emitFailures) return
       await serverEvents.emit(
         'payment.failed',
         createPaymentFailedContext({
           capturedRequest: options?.capturedRequest,
-          challenge: parameters.challenge,
-          credential: parameters.credential,
-          error: parameters.error,
+          challenge: failure.challenge,
+          credential: failure.credential,
+          error: failure.error,
           method: eventMethod,
-          request: parameters.request,
-          submittedChallenge: parameters.submittedChallenge,
+          request: failure.request,
+          submittedChallenge: failure.submittedChallenge,
         }) as never,
       )
     }
 
+    const fail = async (
+      error: Errors.PaymentError,
+      failure: {
+        credential?: Credential.Credential | null | undefined
+        request?: Record<string, unknown> | undefined
+        submittedChallenge?: Challenge.Challenge | undefined
+      } = {},
+      thrown: unknown = error,
+    ): Promise<never> => {
+      await emitStandalonePaymentFailed({
+        challenge: credential.challenge,
+        credential: failure.credential ?? credential,
+        error,
+        request: failure.request ?? (credential.challenge.request as Record<string, unknown>),
+        submittedChallenge: failure.submittedChallenge ?? credential.challenge,
+      })
+      throw thrown
+    }
+
     if (!mi) {
-      const error = new Errors.InvalidChallengeError({
-        id: credential.challenge.id,
-        reason: `no registered method for ${credMethod}/${credIntent}`,
-      })
-      await emitStandalonePaymentFailed({
-        challenge: credential.challenge,
-        credential,
-        error,
-        request: credential.challenge.request as Record<string, unknown>,
-        submittedChallenge: credential.challenge,
-      })
-      throw error
+      await fail(
+        new Errors.InvalidChallengeError({
+          id: credential.challenge.id,
+          reason: `no registered method for ${credMethod}/${credIntent}`,
+        }),
+      )
     }
 
-    // HMAC provenance check (secretKey is guaranteed non-null by the guard at the top of create())
+    if (parameters.requireValidate && !mi.validate)
+      await fail(
+        new Errors.VerificationFailedError({
+          reason: `${credMethod}/${credIntent} does not support non-mutating credential validation`,
+        }),
+      )
+
     if (!Challenge.verify(credential.challenge, { secretKey: secretKey! })) {
-      const error = new Errors.InvalidChallengeError({
-        id: credential.challenge.id,
-        reason: 'challenge was not issued by this server',
-      })
-      await emitStandalonePaymentFailed({
-        challenge: credential.challenge,
-        credential,
-        error,
-        request: credential.challenge.request as Record<string, unknown>,
-        submittedChallenge: credential.challenge,
-      })
-      throw error
+      await fail(
+        new Errors.InvalidChallengeError({
+          id: credential.challenge.id,
+          reason: 'challenge was not issued by this server',
+        }),
+      )
     }
 
-    // Expiry check
     try {
       Expires.assert(credential.challenge.expires, credential.challenge.id)
     } catch (e) {
-      if (e instanceof Errors.PaymentError)
-        await emitStandalonePaymentFailed({
-          challenge: credential.challenge,
-          credential,
-          error: e,
-          request: credential.challenge.request as Record<string, unknown>,
-          submittedChallenge: credential.challenge,
-        })
+      if (e instanceof Errors.PaymentError) await fail(e)
       throw e
     }
 
-    // Validate payload against method schema
-    let parsedCredential: Credential.Credential
+    let parsedCredential!: Credential.Credential
     try {
       parsedCredential = withParsedCredentialPayload(
         credential,
         mi.schema.credential.payload.parse(credential.payload),
       )
     } catch (e) {
-      await emitStandalonePaymentFailed({
-        challenge: credential.challenge,
-        credential,
-        error: new Errors.InvalidPayloadError(),
-        request: credential.challenge.request as Record<string, unknown>,
-        submittedChallenge: credential.challenge,
-      })
-      throw e
+      await fail(new Errors.InvalidPayloadError(), {}, e)
     }
 
     const expectedMeta = Scope.merge({ meta: options?.meta, scope: options?.scope })
 
     if (options?.scope !== undefined && Scope.read(credential.challenge.meta) !== options.scope) {
-      const error = new Errors.InvalidChallengeError({
-        id: credential.challenge.id,
-        reason: "credential scope does not match this route's requirements",
-      })
-      await emitStandalonePaymentFailed({
-        challenge: credential.challenge,
-        credential: parsedCredential,
-        error,
-        request: credential.challenge.request as Record<string, unknown>,
-        submittedChallenge: credential.challenge,
-      })
-      throw error
+      await fail(
+        new Errors.InvalidChallengeError({
+          id: credential.challenge.id,
+          reason: "credential scope does not match this route's requirements",
+        }),
+        { credential: parsedCredential },
+      )
     }
 
     const shouldValidateRoute =
@@ -660,12 +677,9 @@ export function create<
         : (credential.challenge.request as z.input<typeof mi.schema.request>)
     } catch (e) {
       if (e instanceof Errors.PaymentError)
-        await emitStandalonePaymentFailed({
-          challenge: credential.challenge,
+        await fail(e, {
           credential: parsedCredential,
-          error: e,
           request: credential.challenge.request as Record<string, unknown>,
-          submittedChallenge: credential.challenge,
         })
       throw e
     }
@@ -679,17 +693,72 @@ export function create<
         } as Method.VerifiedChallengeEnvelope)
       : undefined
 
+    return {
+      credential,
+      envelope,
+      eventMethod,
+      method: mi,
+      parsedCredential,
+      parsedRequest,
+      request,
+    }
+  }
+
+  async function validateCredentialFn(
+    input: string | Credential.Credential,
+    options?: VerifyCredentialOptions,
+  ): Promise<Method.Validation> {
+    const prepared = await prepareStandaloneCredential(input, options, { requireValidate: true })
+    return prepared.method.validate!({
+      credential: prepared.parsedCredential,
+      envelope: prepared.envelope,
+      request: prepared.request,
+    } as never)
+  }
+
+  // broadcastCredential: single-call end-to-end validation and broadcast
+  async function broadcastCredentialFn(
+    input: string | Credential.Credential,
+    options?: VerifyCredentialOptions,
+  ): Promise<Receipt.Receipt> {
+    const prepared = await prepareStandaloneCredential(input, options, { emitFailures: true })
+    const { method: mi, parsedCredential, parsedRequest, request, envelope } = prepared
+
+    const emitStandalonePaymentFailed = async (parameters: {
+      challenge: Challenge.Challenge
+      credential: Credential.Credential | null
+      error: Errors.PaymentError
+      request: Record<string, unknown>
+      submittedChallenge?: Challenge.Challenge | undefined
+    }) => {
+      await serverEvents.emit(
+        'payment.failed',
+        createPaymentFailedContext({
+          capturedRequest: options?.capturedRequest,
+          challenge: parameters.challenge,
+          credential: parameters.credential,
+          error: parameters.error,
+          method: prepared.eventMethod,
+          request: parameters.request,
+          submittedChallenge: parameters.submittedChallenge,
+        }) as never,
+      )
+    }
+
     let receipt: Receipt.Receipt
     try {
-      receipt = await mi.verify({ credential: parsedCredential, envelope, request } as never)
+      if (mi.broadcast && mi.validate)
+        await mi.validate({ credential: parsedCredential, envelope, request } as never)
+      const broadcast = mi.broadcast ?? mi.verify
+      receipt = await broadcast({ credential: parsedCredential, envelope, request } as never)
     } catch (e) {
       const error = e instanceof Errors.PaymentError ? e : new Errors.VerificationFailedError()
       await emitStandalonePaymentFailed({
-        challenge: credential.challenge,
+        challenge: prepared.credential.challenge,
         credential: parsedCredential,
         error,
         request: parsedRequest,
-        submittedChallenge: credential.challenge,
+        submittedChallenge: prepared.credential.challenge,
       })
       throw e
     }
@@ -698,7 +767,7 @@ export function create<
       'payment.success',
       createPaymentSuccessContext({
         capturedRequest: options?.capturedRequest,
-        challenge: credential.challenge,
+        challenge: prepared.credential.challenge,
         credential: parsedCredential,
         envelope,
         method: mi,
@@ -709,6 +778,8 @@ export function create<
 
     return receipt
   }
+
+  const verifyCredentialFn = broadcastCredentialFn
 
   function composeFn(
     ...entries: readonly [
@@ -760,7 +831,9 @@ export function create<
     onPaymentFailed,
     onPaymentSuccess,
     realm: realm as string | undefined,
+    broadcastCredential: broadcastCredentialFn,
     transport,
+    validateCredential: validateCredentialFn,
     verifyCredential: verifyCredentialFn,
     ...handlers,
   } as never
@@ -809,8 +882,10 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
     realm,
     respond,
     secretKey,
+    broadcast,
     stableBinding,
     transport,
+    validate,
     verify,
   } = parameters
 
@@ -1256,7 +1331,14 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
       // If verification fails, re-issue the challenge so the client can retry.
       let receiptData: Receipt.Receipt
       try {
-        receiptData = await verify({ credential: parsedCredential, envelope, request } as never)
+        if (broadcast && validate)
+          await validate({ credential: parsedCredential, envelope, request } as never)
+        const broadcastCredential = broadcast ?? verify
+        receiptData = await broadcastCredential({
+          credential: parsedCredential,
+          envelope,
+          request,
+        } as never)
       } catch (e) {
         if (!(e instanceof Errors.PaymentError))
           console.error('mppx: internal verification error', e)
@@ -1375,9 +1457,11 @@ declare namespace createMethodFn {
     realm: string | undefined
     request?: Method.RequestFn<method>
     respond?: Method.RespondFn<method>
+    broadcast?: Method.BroadcastFn<method>
     secretKey: string
     stableBinding?: Method.StableBindingFn<method>
     transport: transport
+    validate?: Method.ValidateFn<method>
     verify: Method.VerifyFn<method>
   }
 
@@ -1842,31 +1926,6 @@ type MethodBindingField = (typeof methodBindingFields)[number]
 type PinnedRequestBindingField = (typeof pinnedRequestBindingFields)[number]
 type PinnedChallengeField = 'method' | 'intent' | 'realm' | 'opaque' | PinnedRequestBindingField
 type StableBinding = Record<string, unknown>
-
-function selectVerificationMethod(
-  methods: readonly Method.AnyServer[],
-  challenge: Challenge.Challenge,
-): Method.AnyServer | undefined {
-  if (methods.length <= 1) return methods[0]
-  if (
-    challenge.method !== Constants.Methods.tempo ||
-    challenge.intent !== Constants.Intents.session
-  )
-    return methods[0]
-
-  const sessionProtocolMarker = Constants.getMethodDetail(
-    challenge.request.methodDetails,
-    Constants.MethodDetailKeys.sessionProtocol,
-  )
-  if (
-    sessionProtocolMarker === undefined ||
-    sessionProtocolMarker === Constants.SessionProtocols.v1
-  )
-    return methods.find((method) => method.alias === 'sessionLegacy') ?? methods[0]
-  if (sessionProtocolMarker === Constants.SessionProtocols.v2)
-    return methods.find((method) => method.alias === undefined) ?? methods[0]
-  return undefined
-}
 
 function getChallengeBindingMismatch(
   expectedChallenge: Challenge.Challenge,

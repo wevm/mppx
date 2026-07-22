@@ -376,17 +376,10 @@ describe('tempo', () => {
       expect(await dedupStore.get(`tenant:mppx:charge:${receipt.transactionHash}`)).not.toBeNull()
       expect(await dedupStore.get(`mppx:charge:${receipt.transactionHash}`)).toBeNull()
 
-      const response2 = await fetch(httpServer.url)
-      expect(response2.status).toBe(402)
-
-      const challenge2 = Challenge.fromResponse(response2, {
-        methods: [tempo_client.charge()],
-      })
-
       const mixedCaseHash = `0x${receipt.transactionHash.slice(2).toUpperCase()}` as Hex.Hex
 
       const credential2 = Credential.from({
-        challenge: challenge2,
+        challenge: challenge1,
         payload: { hash: mixedCaseHash, type: 'hash' as const },
       })
 
@@ -462,15 +455,8 @@ describe('tempo', () => {
       }
 
       // Replay with lowercase — should be rejected
-      const response2 = await fetch(httpServer.url)
-      expect(response2.status).toBe(402)
-
-      const challenge2 = Challenge.fromResponse(response2, {
-        methods: [tempo_client.charge()],
-      })
-
       const credential2 = Credential.from({
-        challenge: challenge2,
+        challenge: challenge1,
         payload: { hash: receipt.transactionHash.toLowerCase() as Hex.Hex, type: 'hash' as const },
       })
 
@@ -702,17 +688,10 @@ describe('tempo', () => {
         expect(response.status).toBe(200)
       }
 
-      const response2 = await fetch(httpServer.url)
-      expect(response2.status).toBe(402)
-
-      const challenge2 = Challenge.fromResponse(response2, {
-        methods: [tempo_client.charge()],
-      })
-
       const mixedCaseHash = `0x${receipt.transactionHash.slice(2).toUpperCase()}` as Hex.Hex
 
       const credential2 = Credential.from({
-        challenge: challenge2,
+        challenge: challenge1,
         payload: { hash: mixedCaseHash, type: 'hash' as const },
       })
 
@@ -786,15 +765,8 @@ describe('tempo', () => {
         expect(response.status).toBe(200)
       }
 
-      const response2 = await fetch(httpServer.url)
-      expect(response2.status).toBe(402)
-
-      const challenge2 = Challenge.fromResponse(response2, {
-        methods: [tempo_client.charge()],
-      })
-
       const credential2 = Credential.from({
-        challenge: challenge2,
+        challenge: challenge1,
         payload: { hash: receipt.transactionHash.toLowerCase() as Hex.Hex, type: 'hash' as const },
       })
 
@@ -1131,16 +1103,10 @@ describe('tempo', () => {
       expect(pullAuthResponse.status).toBe(200)
 
       const pullReceipt = Receipt.fromResponse(pullAuthResponse)
-
-      const replayChallengeResponse = await fetch(httpServer.url)
-      expect(replayChallengeResponse.status).toBe(402)
-
-      const replayChallenge = Challenge.fromResponse(replayChallengeResponse, {
-        methods: [tempo_client.charge()],
-      })
+      const pullCredential = Credential.deserialize(pullCredentialSerialized)
 
       const replayCredential = Credential.from({
-        challenge: replayChallenge,
+        challenge: pullCredential.challenge,
         payload: { hash: pullReceipt.reference as Hex.Hex, type: 'hash' as const },
       })
 
@@ -1543,6 +1509,62 @@ describe('tempo', () => {
           `)
       }
 
+      httpServer.close()
+    })
+
+    test('behavior: validates fee-payer pull credential before settlement', async () => {
+      const chargeServer = Mppx_server.create({
+        methods: [
+          tempo_server.charge({
+            getClient() {
+              return client
+            },
+            currency: asset,
+            account: accounts[0],
+            feePayer: accounts[0],
+            store: Store.memory(),
+          }),
+        ],
+        realm,
+        secretKey,
+      })
+      const mppx = Mppx_client.create({
+        polyfill: false,
+        methods: [
+          tempo_client({
+            account: accounts[1],
+            getClient() {
+              return client
+            },
+          }),
+        ],
+      })
+
+      const httpServer = await Http.createServer(async (req, res) => {
+        const result = await Mppx_server.toNodeListener(
+          chargeServer.charge({
+            amount: '1',
+            currency: asset,
+            recipient: accounts[0].address,
+          }),
+        )(req, res)
+        if (result.status === 402) return
+        res.end('OK')
+      })
+
+      const response = await fetch(httpServer.url)
+      expect(response.status).toBe(402)
+
+      const credential = await mppx.createCredential(response)
+      const validation = await chargeServer.validateCredential(credential)
+
+      expect(validation.details).toMatchObject({
+        mode: 'pull',
+        sender: accounts[1].address.toLowerCase(),
+      })
+
+      const receipt = await chargeServer.verifyCredential(credential)
+      expect(receipt.status).toBe('success')
       httpServer.close()
     })
 

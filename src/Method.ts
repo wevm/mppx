@@ -1,5 +1,8 @@
 import type * as Challenge from './Challenge.js'
-import type * as Credential from './Credential.js'
+import * as Constants from './Constants.js'
+import * as Credential from './Credential.js'
+import * as Errors from './Errors.js'
+import * as Expires from './Expires.js'
 import type { ExactPartial, LooseOmit, MaybePromise } from './internal/types.js'
 import type * as Receipt from './Receipt.js'
 import type * as Html from './server/internal/html/config.js'
@@ -117,11 +120,32 @@ export type VerifyContext<method extends Method> = {
   request: z.input<method['schema']['request']>
 }
 
+/** Validation hook parameters for a single method. */
+export type ValidateContext<method extends Method> = VerifyContext<method>
+
 /** Response hook parameters for a single method. */
 export type RespondContext<method extends Method> = VerifyContext<method> & {
   input: globalThis.Request
   receipt: Receipt.Receipt
 }
+
+/** Non-mutating method-specific validation result. */
+export type Validation<method extends Method = Method, details = unknown> = Readonly<{
+  challenge: Challenge.Challenge<
+    z.output<method['schema']['request']>,
+    method['intent'],
+    method['name']
+  >
+  credential: Credential.Credential<
+    z.output<method['schema']['credential']['payload']>,
+    Challenge.Challenge<z.output<method['schema']['request']>, method['intent'], method['name']>
+  >
+  details: details
+  intent: method['intent']
+  method: method['name']
+  request: z.output<method['schema']['request']>
+  source?: string | undefined
+}>
 
 /**
  * A server-side configured method with verification logic.
@@ -141,8 +165,11 @@ export type Server<
   preflight?: PreflightFn<method> | undefined
   request?: RequestFn<method> | undefined
   respond?: RespondFn<method> | undefined
+  broadcast?: BroadcastFn<method> | undefined
   stableBinding?: StableBindingFn<method> | undefined
   transport?: transportOverride | undefined
+  validate?: ValidateFn<method> | undefined
+  /** @deprecated Implement `broadcast` for new methods. */
   verify: VerifyFn<method>
 }
 export type AnyServer = Server<any, any, any, any, any>
@@ -225,6 +252,131 @@ export type StableBindingFn<method extends Method> = (
 export type VerifyFn<method extends Method> = (
   parameters: VerifyContext<method>,
 ) => Promise<Receipt.Receipt>
+
+/** Non-mutating validation function for a single method. */
+export type ValidateFn<method extends Method> = (
+  parameters: ValidateContext<method>,
+) => Promise<Validation<method>>
+
+/** Terminal payment function for a single method. */
+export type BroadcastFn<method extends Method> = (
+  parameters: VerifyContext<method>,
+) => Promise<Receipt.Receipt>
+
+/**
+ * Validates a credential against one of the configured methods.
+ *
+ * This checks credential structure, challenge expiry, and method-specific
+ * validation. It does not prove that the challenge was issued by a particular
+ * server; hosts that issue challenges must verify that binding separately.
+ */
+export async function validateCredential<const methods extends readonly AnyServer[]>(
+  methods: methods,
+  input: string | Credential.Credential,
+): Promise<Validation<methods[number]>> {
+  const prepared = prepareCredential(methods, input)
+  if (!prepared.method.validate)
+    throw new Errors.VerificationFailedError({
+      reason: `${prepared.method.name}/${prepared.method.intent} does not support non-mutating credential validation`,
+    })
+  return prepared.method.validate({
+    credential: prepared.credential,
+    request: prepared.request,
+  } as never) as Promise<Validation<methods[number]>>
+}
+
+/**
+ * Re-validates and performs the terminal payment operation for a credential.
+ *
+ * This does not prove that the challenge was issued by a particular server;
+ * hosts that issue challenges must verify that binding separately.
+ */
+export async function broadcastCredential<const methods extends readonly AnyServer[]>(
+  methods: methods,
+  input: string | Credential.Credential,
+): Promise<Receipt.Receipt> {
+  const prepared = prepareCredential(methods, input)
+  const { method } = prepared
+
+  if (method.broadcast && method.validate)
+    await method.validate({ credential: prepared.credential, request: prepared.request } as never)
+
+  const broadcast = method.broadcast ?? method.verify
+  return broadcast({ credential: prepared.credential, request: prepared.request } as never)
+}
+
+/**
+ * Parses a submitted credential into the inputs required for method execution.
+ *
+ * Dispatch is based on the challenge method and intent. When more than one
+ * server method handles the same wire identity, session protocol details select
+ * the appropriate implementation. The helper then asserts challenge expiry and
+ * parses the method-specific credential payload before returning the selected
+ * method and the unmodified challenge request.
+ *
+ * This intentionally does not verify that the challenge was issued by a
+ * particular host, authorize the caller or requested resource, validate the
+ * method request, or invoke method lifecycle hooks. Hosts that issue challenges
+ * must verify their challenge binding before accepting the credential.
+ */
+function prepareCredential(
+  methods: readonly AnyServer[],
+  input: string | Credential.Credential,
+): {
+  credential: Credential.Credential
+  method: AnyServer
+  request: Record<string, unknown>
+} {
+  const credential = typeof input === 'string' ? Credential.deserialize(input) : input
+  const candidates = methods.filter(
+    (method) =>
+      method.name === credential.challenge.method && method.intent === credential.challenge.intent,
+  )
+  const method = selectServerMethod(candidates, credential.challenge)
+  if (!method)
+    throw new Errors.InvalidChallengeError({
+      id: credential.challenge.id,
+      reason: `no registered method for ${credential.challenge.method}/${credential.challenge.intent}`,
+    })
+
+  Expires.assert(credential.challenge.expires, credential.challenge.id)
+
+  let payload: unknown
+  try {
+    payload = method.schema.credential.payload.parse(credential.payload)
+  } catch (error) {
+    throw new Errors.InvalidPayloadError(error instanceof Error ? { reason: error.message } : {})
+  }
+
+  return {
+    credential: { ...credential, payload },
+    method,
+    request: credential.challenge.request,
+  }
+}
+
+/** @internal */
+export function selectServerMethod(
+  methods: readonly AnyServer[],
+  challenge: Challenge.Challenge,
+): AnyServer | undefined {
+  if (methods.length <= 1) return methods[0]
+  if (
+    challenge.method !== Constants.Methods.tempo ||
+    challenge.intent !== Constants.Intents.session
+  )
+    return methods[0]
+
+  const sessionProtocol = Constants.getMethodDetail(
+    challenge.request.methodDetails,
+    Constants.MethodDetailKeys.sessionProtocol,
+  )
+  if (sessionProtocol === undefined || sessionProtocol === Constants.SessionProtocols.v1)
+    return methods.find((method) => method.alias === 'sessionLegacy') ?? methods[0]
+  if (sessionProtocol === Constants.SessionProtocols.v2)
+    return methods.find((method) => method.alias === undefined) ?? methods[0]
+  return undefined
+}
 
 /**
  * Optional respond function for a server-side method.
@@ -336,10 +488,22 @@ export function toServer<
     preflight,
     request,
     respond,
+    broadcast,
     stableBinding,
     transport,
+    validate,
     verify,
   } = options
+  const effectiveVerify =
+    verify ??
+    (async (parameters: VerifyContext<method>) => {
+      if (validate) await validate(parameters)
+      if (!broadcast)
+        throw new Errors.VerificationFailedError({
+          reason: `${method.name}/${method.intent} does not support credential broadcast`,
+        })
+      return broadcast(parameters)
+    })
   return {
     ...method,
     alias,
@@ -350,9 +514,11 @@ export function toServer<
     preflight,
     request,
     respond,
+    broadcast,
     stableBinding,
     transport,
-    verify,
+    validate,
+    verify: effectiveVerify,
   } as Server<method, defaults, transportOverride, extensions, toServer.Alias<options>>
 }
 
@@ -376,6 +542,16 @@ export declare namespace toServer {
     respond?: RespondFn<method> | undefined
     stableBinding?: StableBindingFn<method> | undefined
     transport?: transportOverride | Transport.AnyTransport | undefined
-    verify: VerifyFn<method>
-  }
+    validate?: ValidateFn<method> | undefined
+  } & (
+    | {
+        broadcast: BroadcastFn<method>
+        /** @deprecated Implement `broadcast` for new methods. */
+        verify?: VerifyFn<method> | undefined
+      }
+    | {
+        broadcast?: undefined
+        verify: VerifyFn<method>
+      }
+  )
 }
