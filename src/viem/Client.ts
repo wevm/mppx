@@ -1,4 +1,4 @@
-import { type Chain, type Client, createClient, custom, http } from 'viem'
+import { type Chain, type Client, createClient, createTransport, custom, http } from 'viem'
 import { withFeePayer } from 'viem/tempo'
 
 import type { MaybePromise } from '../internal/types.js'
@@ -28,16 +28,24 @@ export function getResolver(
       // Wrap the client's transport with `withFeePayer` when a fee payer URL is provided.
       if (feePayerUrl && client.transport.key !== 'feePayer') {
         const request = client.request.bind(client)
-        const wrapped = createClient({
+        // The supplied client already owns retries. Keep the relay middleware retry-free so
+        // failures are not retried once per nested transport layer.
+        const feePayerTransport = withFeePayer(
+          custom({ request: (args) => request(args as never) }, { retryCount: 0 }),
+          http(feePayerUrl, { retryCount: client.transport.retryCount }),
+        )({
+          account: client.account,
           chain: client.chain,
-          transport: withFeePayer(
-            custom({ request: (args) => request(args as never) }),
-            http(feePayerUrl),
-          ),
+          pollingInterval: client.pollingInterval,
+          retryCount: 0,
         })
+        const wrapped = createTransport(
+          { ...feePayerTransport.config, retryCount: 0 },
+          feePayerTransport.value,
+        )
         resolvedClient = Object.assign({}, client, {
           request: wrapped.request,
-          transport: wrapped.transport,
+          transport: { ...wrapped.config, ...wrapped.value },
         })
       }
 
