@@ -310,6 +310,28 @@ describe('HttpManagement', () => {
       expect(restoreCumulative).toHaveBeenCalledWith(channelId, 5n)
     })
 
+    test('retryHttpPaymentRequired restores cumulative authorization when retry throws', async () => {
+      const entry = channel({ cumulativeAmount: 5n })
+      const restoreCumulative = vi.fn()
+
+      await expect(
+        retryHttpPaymentRequired({
+          createSessionCredential: async () => 'voucher-credential',
+          fetch: async () => {
+            throw new Error('network failed')
+          },
+          getChannel: () => entry,
+          input: 'https://example.test/resource',
+          response: response402(challenge(snapshot())),
+          restoreCumulative,
+          setChallenge() {},
+          topUpIfNeeded: async () => {},
+        }),
+      ).rejects.toThrow('network failed')
+
+      expect(restoreCumulative).toHaveBeenCalledWith(channelId, 5n)
+    })
+
     test('closeHttpSession posts a close credential and parses the receipt', async () => {
       const entry = channel()
       const createSessionCredential = vi.fn(async (_challenge, context: SessionContext) => {

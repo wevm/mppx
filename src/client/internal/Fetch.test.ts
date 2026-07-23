@@ -10,6 +10,7 @@ import { rpcUrl } from '~test/tempo/rpc.js'
 import { accounts, asset, chain, client, http } from '~test/tempo/viem.js'
 
 import * as Fetch from './Fetch.js'
+import * as MethodChallenge from './MethodChallenge.js'
 import * as MethodResponse from './MethodResponse.js'
 
 const realm = 'api.example.com'
@@ -1871,6 +1872,41 @@ describe('Fetch.from: 402 retry path', () => {
     expect(
       calls.slice(1).map((call) => new Headers(call.init?.headers).get('Authorization')),
     ).toEqual(['credential-first', 'credential-second', 'credential-third'])
+  })
+
+  test('invalidates a prepared credential across a generic challenge', async () => {
+    const firstCredential = vi.fn(async () => 'first')
+    const first = { ...noopMethod, name: 'first', createCredential: firstCredential }
+    const second = { ...noopMethod, name: 'second', createCredential: async () => 'second' }
+    MethodChallenge.register(first, () => undefined)
+    const responses = [
+      make402({ id: 'first', method: 'first' }),
+      make402({ id: 'second', method: 'second' }),
+      make402({ id: 'first', method: 'first' }),
+      new Response('OK'),
+    ]
+    const mockFetch = vi.fn(async () => responses.shift()!)
+    const fetch = Fetch.from({ fetch: mockFetch, methods: [first, second] })
+
+    expect((await fetch('https://example.com/api')).status).toBe(200)
+    expect(firstCredential).toHaveBeenCalledTimes(2)
+  })
+
+  test('invalidates a prepared credential after an explicit context', async () => {
+    const createCredential = vi.fn(async () => 'credential')
+    const method = { ...noopMethod, createCredential }
+    MethodChallenge.register(method, () => undefined)
+    let challenges = 0
+    const mockFetch = vi.fn(async () => (++challenges <= 3 ? make402() : new Response('OK')))
+    const fetch = Fetch.from({
+      fetch: mockFetch as typeof globalThis.fetch,
+      methods: [method],
+      onChallenge: async (_challenge, { createCredential: create }) =>
+        challenges === 2 ? create({ override: true } as never) : undefined,
+    })
+
+    expect((await fetch('https://example.com/api')).status).toBe(200)
+    expect(createCredential).toHaveBeenCalledTimes(3)
   })
 
   test('caps repeated 402 retries at three', async () => {

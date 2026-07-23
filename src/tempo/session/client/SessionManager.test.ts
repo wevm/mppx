@@ -113,6 +113,20 @@ function makeChannelStore(seed: readonly ChannelEntry[] = []) {
   return { store, set, delete: remove, map }
 }
 
+function makeDurableChannelStore() {
+  const backend = new Map<string, string>()
+  const store = createJsonChannelStore({
+    get: (key) => backend.get(key),
+    set: (key, value) => {
+      backend.set(key, value)
+    },
+    delete: (key) => {
+      backend.delete(key)
+    },
+  })
+  return { backend, store }
+}
+
 function makeChallenge(overrides: Record<string, unknown> = {}): Challenge.Challenge {
   return Challenge.from({
     id: challengeId,
@@ -657,7 +671,7 @@ describe('Session', () => {
       })
     })
 
-    test('rolls back an optimistic open when a replacement challenge does not reference it', async () => {
+    test('rolls back optimistic opens across replacement challenges', async () => {
       const { store, delete: remove } = makeChannelStore()
       const postedPayloads: SessionCredentialPayload[] = []
       const challenge = (feePayer: boolean) =>
@@ -669,6 +683,8 @@ describe('Session', () => {
             feePayer,
           },
         })
+      const original = challenge(true)
+      const replacement = challenge(false)
       let openCount = 0
       const mockFetch = vi.fn().mockImplementation((_input, init?: RequestInit) => {
         const authorization = new Headers(init?.headers).get(Constants.Headers.authorization)
@@ -677,10 +693,11 @@ describe('Session', () => {
           : undefined
         if (payload) postedPayloads.push(payload)
 
-        if (!payload) return Promise.resolve(make402Response(challenge(true)))
+        if (!payload) return Promise.resolve(make402Response(original))
         if (payload.action === 'open') {
           openCount++
-          if (openCount === 1) return Promise.resolve(make402Response(challenge(false)))
+          if (openCount === 1) return Promise.resolve(make402Response(replacement))
+          if (openCount === 2) return Promise.resolve(make402Response(original))
           return Promise.resolve(makeOkResponse())
         }
         return Promise.resolve(new Response('unexpected voucher', { status: 500 }))
@@ -696,12 +713,33 @@ describe('Session', () => {
       const response = await s.fetch('https://api.example.com/data')
 
       expect(response.status).toBe(200)
-      // A replacement challenge with no snapshot means the server did not
-      // acknowledge the optimistic open, so the next credential must open again.
-      expect(postedPayloads.map((payload) => payload.action)).toEqual(['open', 'open'])
-      expect(postedPayloads[0]?.channelId).not.toBe(postedPayloads[1]?.channelId)
-      expect(remove).toHaveBeenCalledOnce()
-      expect(s.channelId).toBe(postedPayloads[1]?.channelId)
+      expect(postedPayloads.map((payload) => payload.action)).toEqual(['open', 'open', 'open'])
+      expect(new Set(postedPayloads.map((payload) => payload.channelId)).size).toBe(3)
+      expect(remove).toHaveBeenCalledTimes(2)
+      expect(s.channelId).toBe(postedPayloads[2]?.channelId)
+    })
+
+    test('reuses prepared voucher state when an identical challenge succeeds', async () => {
+      const vouchers: Extract<SessionCredentialPayload, { action: 'voucher' }>[] = []
+      const mockFetch = vi.fn().mockImplementation((_input, init?: RequestInit) => {
+        const authorization = new Headers(init?.headers).get(Constants.Headers.authorization)
+        if (!authorization) return Promise.resolve(make402Response())
+        const payload = Credential.deserialize<SessionCredentialPayload>(authorization).payload
+        if (payload.action !== 'voucher') throw new Error('expected voucher')
+        vouchers.push(payload)
+        return Promise.resolve(vouchers.length === 1 ? make402Response() : makeOkResponse())
+      })
+      const s = sessionManager({
+        account,
+        client,
+        fetch: mockFetch as typeof globalThis.fetch,
+        channelStore: makeChannelStore([channelEntry()]).store,
+      })
+
+      expect((await s.fetch('https://api.example.com/data')).status).toBe(200)
+      expect(vouchers.map((voucher) => voucher.cumulativeAmount)).toEqual(['2000000', '2000000'])
+      expect(s.cumulative).toBe(2_000_000n)
+      expect(s.state.status).toBe('active')
     })
 
     test('does not bootstrap when disabled', async () => {
@@ -989,6 +1027,60 @@ describe('Session', () => {
       })
     })
 
+    test('preserves a snapshot-acknowledged open when its voucher fails', async () => {
+      const { backend, store } = makeDurableChannelStore()
+      const payloads: SessionCredentialPayload[] = []
+      const mockFetch = vi.fn().mockImplementation((_input, init?: RequestInit) => {
+        const authorization = new Headers(init?.headers).get(Constants.Headers.authorization)
+        if (!authorization)
+          return Promise.resolve(make402Response(makeChallenge({ suggestedDeposit: '10000000' })))
+        const payload = Credential.deserialize<SessionCredentialPayload>(authorization).payload
+        payloads.push(payload)
+        if (payload.action !== 'open')
+          return Promise.resolve(new Response('failed', { status: 500 }))
+        return Promise.resolve(
+          make402Response(
+            makeChallenge({
+              methodDetails: {
+                escrowContract: tip20ChannelEscrow,
+                chainId: 4217,
+                sessionProtocol: Constants.SessionProtocols.v2,
+                sessionSnapshot: {
+                  acceptedCumulative: '1000000',
+                  chainId: 4217,
+                  channelId: payload.channelId,
+                  deposit: '10000000',
+                  descriptor: payload.descriptor,
+                  escrow: tip20ChannelEscrow,
+                  requiredCumulative: '2000000',
+                  settled: '0',
+                  spent: '1000000',
+                  units: 1,
+                },
+              },
+            }),
+          ),
+        )
+      })
+      const s = sessionManager({
+        account,
+        client,
+        fetch: mockFetch as typeof globalThis.fetch,
+        maxDeposit: '10',
+        channelStore: store,
+      })
+
+      expect((await s.fetch('https://api.example.com/data')).status).toBe(500)
+      expect(payloads.map((payload) => payload.action)).toEqual(['open', 'voucher'])
+      expect(s.channelId).toBe(payloads[0]?.channelId)
+      expect(s.cumulative).toBe(1_000_000n)
+      expect(JSON.parse([...backend.values()][0]!)).toMatchObject({
+        channelId: payloads[0]?.channelId,
+        cumulativeAmount: '1000000',
+        opened: true,
+      })
+    })
+
     test('preemptively top-ups before signing an HTTP voucher that exceeds deposit', async () => {
       const postedPayloads: SessionCredentialPayload[] = []
       let challengeCount = 0
@@ -1054,6 +1146,121 @@ describe('Session', () => {
         spent: '2000000',
         units: 2,
       })
+    })
+
+    test('preserves a successful automatic top-up when the paid retry fails', async () => {
+      const { map, store } = makeChannelStore()
+      const payloads: SessionCredentialPayload[] = []
+      const mockFetch = vi.fn().mockImplementation((_input, init?: RequestInit) => {
+        const authorization = new Headers(init?.headers).get(Constants.Headers.authorization)
+        if (!authorization)
+          return Promise.resolve(make402Response(makeChallenge({ suggestedDeposit: '1000000' })))
+        const payload = Credential.deserialize<SessionCredentialPayload>(authorization).payload
+        payloads.push(payload)
+        if (payload.action === 'open')
+          return Promise.resolve(
+            new Response('ok', {
+              headers: {
+                [Constants.Headers.paymentReceipt]: serializeSessionReceipt(
+                  createSessionReceipt({
+                    acceptedCumulative: 1_000_000n,
+                    challengeId,
+                    channelId: payload.channelId,
+                    spent: 1_000_000n,
+                    units: 3,
+                  }),
+                ),
+              },
+            }),
+          )
+        if (payload.action === 'topUp') return Promise.resolve(new Response(null, { status: 204 }))
+        return Promise.resolve(make402Response(makeChallenge({ suggestedDeposit: '1000000' })))
+      })
+      const s = sessionManager({
+        account,
+        client,
+        fetch: mockFetch as typeof globalThis.fetch,
+        maxDeposit: '3',
+        channelStore: store,
+      })
+
+      await s.fetch('https://api.example.com/data')
+      expect((await s.fetch('https://api.example.com/data')).status).toBe(402)
+
+      expect(payloads.map((payload) => payload.action)).toEqual([
+        'open',
+        'topUp',
+        'voucher',
+        'voucher',
+        'voucher',
+      ])
+      expect(s.cumulative).toBe(1_000_000n)
+      expect(s.state).toMatchObject({ status: 'active', deposit: '2000000', units: 3 })
+      expect([...map.values()][0]).toMatchObject({
+        cumulativeAmount: 1_000_000n,
+        deposit: 2_000_000n,
+      })
+    })
+
+    test('preserves a topped-up resumed channel in durable storage after payment fails', async () => {
+      const { store } = makeDurableChannelStore()
+      const seeded = channelEntry({ cumulativeAmount: 1_000_000n, deposit: 1_000_000n })
+      await store.set(seeded)
+      const payloads: SessionCredentialPayload[] = []
+      const mockFetch = vi.fn().mockImplementation((_input, init?: RequestInit) => {
+        const authorization = new Headers(init?.headers).get(Constants.Headers.authorization)
+        if (!authorization)
+          return Promise.resolve(make402Response(makeChallenge({ suggestedDeposit: '1000000' })))
+        const payload = Credential.deserialize<SessionCredentialPayload>(authorization).payload
+        payloads.push(payload)
+        return Promise.resolve(
+          payload.action === 'topUp'
+            ? new Response(null, { status: 204 })
+            : new Response('failed', { status: 500 }),
+        )
+      })
+      const s = sessionManager({
+        account,
+        client,
+        fetch: mockFetch as typeof globalThis.fetch,
+        maxDeposit: '3',
+        channelStore: store,
+      })
+
+      expect((await s.fetch('https://api.example.com/data')).status).toBe(500)
+
+      expect(payloads.map((payload) => payload.action)).toEqual(['topUp', 'voucher'])
+      expect(s.cumulative).toBe(1_000_000n)
+      expect(s.state).toMatchObject({ status: 'active', deposit: '2000000' })
+      await expect(store.get(entryKey(seeded))).resolves.toMatchObject({
+        cumulativeAmount: 1_000_000n,
+        deposit: 2_000_000n,
+        opened: true,
+      })
+    })
+
+    test.each([
+      ['new', false],
+      ['replacement', true],
+    ] as const)('removes a failed %s durable channel', async (_kind, seeded) => {
+      const { backend, store } = makeDurableChannelStore()
+      if (seeded) await store.set(channelEntry())
+      const mockFetch = vi.fn().mockImplementation((_input, init?: RequestInit) => {
+        const authorization = new Headers(init?.headers).get(Constants.Headers.authorization)
+        return Promise.resolve(
+          authorization ? new Response('failed', { status: 500 }) : make402Response(),
+        )
+      })
+      const s = sessionManager({
+        account,
+        client,
+        fetch: mockFetch as typeof globalThis.fetch,
+        channelStore: store,
+      })
+
+      expect((await s.fetch('https://api.example.com/data')).status).toBe(500)
+      expect(s.channelId).toBeUndefined()
+      expect(backend.size).toBe(0)
     })
   })
 

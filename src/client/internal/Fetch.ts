@@ -210,6 +210,9 @@ export function from<const methods extends readonly Method.AnyClient[]>(
     let challenge: Challenge.Challenge | undefined
     let challenges: readonly Challenge.Challenge[] | undefined
     let mi: methods[number] | undefined
+    let preparedCredential:
+      | { key: string; method: Method.AnyClient; promise: Promise<string> }
+      | undefined
 
     try {
       for (let retry = 0; retry < maxPaymentRetries; retry++) {
@@ -247,16 +250,35 @@ export function from<const methods extends readonly Method.AnyClient[]>(
           initialRequest.input,
           initialRequest.input,
         )
+        const previousCredential = preparedCredential
+        preparedCredential = undefined
         const createCredential = memoizeCreateCredential(
-          async (overrideContext?: AnyContextFor<methods>) => {
-            const credentialContext = overrideContext ?? context
-            await MethodChallenge.handle(selected.method, {
-              challenge: selectedChallenge,
-              context: credentialContext,
-              fetch: baseFetch,
-              input: paymentInput,
-            })
-            return resolveCredential(selectedChallenge, selected.method, credentialContext)
+          (overrideContext?: AnyContextFor<methods>) => {
+            const create = async () => {
+              const credentialContext = overrideContext ?? context
+              await MethodChallenge.handle(selected.method, {
+                challenge: selectedChallenge,
+                context: credentialContext,
+                fetch: baseFetch,
+                input: paymentInput,
+              })
+              return resolveCredential(selectedChallenge, selected.method, credentialContext)
+            }
+            if (overrideContext !== undefined || !MethodChallenge.has(selected.method))
+              return create()
+
+            const key = Challenge.serialize(selectedChallenge)
+            if (
+              previousCredential &&
+              previousCredential.method === selected.method &&
+              previousCredential.key === key
+            ) {
+              preparedCredential = previousCredential
+              return previousCredential.promise
+            }
+            const promise = create()
+            preparedCredential = { key, method: selected.method, promise }
+            return promise
           },
         )
         const eventCredential = await events.emit(

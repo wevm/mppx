@@ -243,11 +243,14 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
 
   /** Removes a failed channel from candidacy for the rest of this manager's life. */
   async function ignoreChannel(entry: ChannelEntry) {
+    const key = entryKey(entry)
     ignoredChannelIds.add(entry.channelId)
-    await Promise.resolve(backing.delete(entryKey(entry))).catch(() => undefined)
+    channelUse?.seenExisting.delete(key)
+    if (channelUse?.resumed === entry) channelUse.resumed = undefined
+    await Promise.resolve(backing.delete(key)).catch(() => undefined)
   }
 
-  async function rollbackCreatedChannelsForRetry() {
+  async function rollbackCreatedChannels() {
     const use = channelUse
     if (!use?.created.size) return
     for (const [key, entry] of use.created) {
@@ -255,25 +258,45 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
       await Promise.resolve(backing.delete(key)).catch(() => undefined)
     }
     use.created.clear()
-    restoreRuntime(use.previous)
+    await restoreRuntime(use.committed ?? use.previous)
   }
 
-  function referencesCreatedChannel(challenge: Challenge.Challenge): boolean {
+  /** Commits a newly created channel once an authoritative server snapshot references it. */
+  function commitReferencedChannel(challenge: Challenge.Challenge): boolean {
     const snapshot = Constants.getMethodDetail<{ channelId?: unknown }>(
       challenge.request.methodDetails,
       Constants.MethodDetailKeys.sessionSnapshot,
     )
     if (typeof snapshot?.channelId !== 'string') return false
     const use = channelUse
-    if (!use?.created.size) return false
-    for (const entry of use.created.values()) {
-      if (entry.channelId.toLowerCase() === snapshot.channelId.toLowerCase()) return true
+    if (!use?.created.size || !runtime.channel) return false
+    for (const [key, entry] of use.created) {
+      if (
+        entry.channelId.toLowerCase() !== snapshot.channelId.toLowerCase() ||
+        runtime.channel.channelId.toLowerCase() !== snapshot.channelId.toLowerCase()
+      )
+        continue
+      use.created.delete(key)
+      use.committed = captureRuntimeStateSnapshot({
+        channel: runtime.channel,
+        spent: runtime.spent,
+        state: runtime.state,
+      })
+      return true
     }
     return false
   }
 
   function dispatch(event: Parameters<typeof dispatchSessionEvent>[1]) {
     return dispatchSessionEvent(runtime, event)
+  }
+
+  function activeUnits() {
+    const state =
+      runtime.state.status === 'active'
+        ? runtime.state
+        : (channelUse?.committed?.state ?? channelUse?.previous.state)
+    return state?.status === 'active' ? state.units : 0
   }
 
   function commitDurableTopUp(entry: ChannelEntry) {
@@ -312,7 +335,7 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
           challengeId: runtime.lastChallenge.id,
           entry,
           spent: runtime.spent.toString(),
-          units: 0,
+          units: activeUnits(),
         })
       }
       commitDurableTopUp(entry)
@@ -332,11 +355,15 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
       const use = channelUse
       const isRepeatedRetryChallenge =
         use && use.challengesReceived > 0 && challenge.id === runtime.lastChallenge?.id
-      if (!referencesCreatedChannel(challenge)) {
-        if (use?.created.size) await rollbackCreatedChannelsForRetry()
-        else if (isRepeatedRetryChallenge) restoreRuntime(use.previous)
-      }
+      const isSameRetryChallenge =
+        isRepeatedRetryChallenge &&
+        Challenge.serialize(challenge) === Challenge.serialize(runtime.lastChallenge!)
       if (use) use.challengesReceived++
+      if (isSameRetryChallenge) return undefined
+      if (!commitReferencedChannel(challenge)) {
+        if (use?.created.size) await rollbackCreatedChannels()
+        else if (isRepeatedRetryChallenge) await restoreRuntime(use.committed ?? use.previous)
+      }
       runtime.lastChallenge = challenge
       dispatch({ type: 'challengeReceived', challengeId: challenge.id })
       return undefined
@@ -558,7 +585,7 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
         challengeId: runtime.lastChallenge.id,
         entry: applied.channel,
         spent: runtime.spent.toString(),
-        units: runtime.state.status === 'active' ? runtime.state.units : 0,
+        units: activeUnits(),
       })
       commitDurableTopUp(applied.channel)
     }
@@ -589,7 +616,7 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
     })
   }
 
-  function restoreCumulative(channelId: Hex.Hex, cumulativeAmount: bigint) {
+  async function restoreCumulative(channelId: Hex.Hex, cumulativeAmount: bigint) {
     const restored = restoreCumulativeAuthorization({
       channel: runtime.channel,
       channelId,
@@ -606,14 +633,16 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
         spent: restored.spent,
         units: restored.units,
       })
+      await backing.set(runtime.channel)
     }
   }
 
-  function restoreRuntime(snapshot: RuntimeSnapshot) {
+  async function restoreRuntime(snapshot: RuntimeSnapshot) {
     const restored = restoreRuntimeStateSnapshot(snapshot, runtime.channel)
     runtime.channel = restored.channel
     runtime.spent = restored.spent
     runtime.state = restored.state
+    if (runtime.channel?.opened) await backing.set(runtime.channel)
   }
 
   function toPaymentResponse(response: Response): PaymentResponse {
@@ -679,7 +708,8 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
         try {
           response = await wrappedFetch(input, effectiveInit)
         } catch (error) {
-          restoreRuntime(use.committed ?? previous)
+          if (use.created.size) await rollbackCreatedChannels()
+          else await restoreRuntime(use.committed ?? previous)
           if (await retryWithoutResumed()) continue
           throw error
         }
@@ -706,7 +736,8 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
           }
         }
         if (!attemptedHttpManagement && !paymentResponse.ok && !paymentResponse.receipt) {
-          restoreRuntime(use.committed ?? previous)
+          if (use.created.size) await rollbackCreatedChannels()
+          else await restoreRuntime(use.committed ?? previous)
           if (await retryWithoutResumed()) continue
           return paymentResponse
         }

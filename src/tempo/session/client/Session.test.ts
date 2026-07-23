@@ -233,14 +233,16 @@ describe('precompile client session', () => {
       header: string | null
       method: string | undefined
     }[] = []
+    const vouchers: string[] = []
     let opened: Extract<Types.SessionCredentialPayload, { action: 'open' }> | undefined
+    const paymentRequired = () =>
+      new Response(null, {
+        status: 402,
+        headers: { [Constants.Headers.wwwAuthenticate]: serializeChallenge(challenge) },
+      })
     const rawFetch: typeof globalThis.fetch = async (_input, init) => {
       const authorization = new Headers(init?.headers).get(Constants.Headers.authorization)
-      if (!authorization)
-        return new Response(null, {
-          status: 402,
-          headers: { [Constants.Headers.wwwAuthenticate]: serializeChallenge(challenge) },
-        })
+      if (!authorization) return paymentRequired()
 
       const payload = deserialize(authorization)
       actions.push(payload.action)
@@ -250,6 +252,8 @@ describe('precompile client session', () => {
       }
       if (payload.action === 'topUp') return new Response(null, { status: 204 })
       if (payload.action !== 'voucher' || !opened) throw new Error('expected open voucher')
+      vouchers.push(authorization)
+      if (vouchers.length === 1) return paymentRequired()
 
       paidRequests.push({
         body: init?.body ?? null,
@@ -278,7 +282,8 @@ describe('precompile client session', () => {
     })
 
     expect(await response.text()).toBe('paid')
-    expect(actions).toEqual(['open', 'topUp', 'voucher'])
+    expect(actions).toEqual(['open', 'topUp', 'voucher', 'voucher'])
+    expect(new Set(vouchers).size).toBe(1)
     expect(paidRequests).toEqual([{ body: 'request-body', header: 'preserved', method: 'POST' }])
   })
 

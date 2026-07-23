@@ -24,6 +24,11 @@ export function register<const method extends Method.AnyClient>(
   return method
 }
 
+/** Returns whether a method registered pre-credential work. */
+export function has(method: Method.AnyClient): boolean {
+  return handlers.has(method)
+}
+
 /** Runs method-specific work before creating a challenge credential. */
 export function handle(method: Method.AnyClient, parameters: HandlerParameters): Promise<void> {
   return Promise.resolve(handlers.get(method)?.(parameters))

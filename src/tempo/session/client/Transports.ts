@@ -489,7 +489,7 @@ export type RetryHttpPaymentRequiredParameters = {
   /** Failed HTTP response that may contain a session challenge. */
   response: Response
   /** Restores local cumulative authorization if the voucher retry fails. */
-  restoreCumulative(channelId: Hex.Hex, cumulativeAmount: bigint): void
+  restoreCumulative(channelId: Hex.Hex, cumulativeAmount: bigint): void | Promise<void>
   /** Stores the selected follow-up challenge on the manager. */
   setChallenge(challenge: TempoSessionChallenge): void
   /** Performs automatic top-up before the voucher retry when deposit is insufficient. */
@@ -692,18 +692,25 @@ export async function retryHttpPaymentRequired(
     currentChannel.cumulativeAmount > requiredCumulative
       ? currentChannel.cumulativeAmount
       : requiredCumulative
-  const credential = await parameters.createSessionCredential(challenge, {
-    action: 'voucher',
-    channelId: snapshot.channelId,
-    descriptor: currentChannel.descriptor,
-    cumulativeAmountRaw: cumulativeAmount.toString(),
-  })
-  const retry = await parameters.fetch(
-    parameters.input,
-    requestInitWithAuthorization(parameters.input, parameters.init, credential),
-  )
+  const restore = () => parameters.restoreCumulative(snapshot.channelId, cumulativeBeforeVoucher)
+  let retry: Response
+  try {
+    const credential = await parameters.createSessionCredential(challenge, {
+      action: 'voucher',
+      channelId: snapshot.channelId,
+      descriptor: currentChannel.descriptor,
+      cumulativeAmountRaw: cumulativeAmount.toString(),
+    })
+    retry = await parameters.fetch(
+      parameters.input,
+      requestInitWithAuthorization(parameters.input, parameters.init, credential),
+    )
+  } catch (error) {
+    await restore()
+    throw error
+  }
   if (!retry.ok && !retry.headers.get(Constants.Headers.paymentReceipt)) {
-    parameters.restoreCumulative(snapshot.channelId, cumulativeBeforeVoucher)
+    await restore()
   }
   return retry
 }
