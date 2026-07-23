@@ -76,13 +76,10 @@ export function configure<const intent extends Method.Method>(
   options: configure.Options,
 ): configure.Adapter<intent> {
   const request = createRequest(options)
-  const validatedPushCredentials = new WeakSet<object>()
 
   const validate: Method.ValidateFn<intent> = async (parameters) => {
     const input = toRelayInput(parameters.credential)
     await request.validate(input)
-    if (pushTransactionHash(parameters.credential))
-      validatedPushCredentials.add(parameters.credential)
 
     return {
       challenge: parameters.credential.challenge,
@@ -98,11 +95,8 @@ export function configure<const intent extends Method.Method>(
   const broadcast: Method.BroadcastFn<intent> = async (parameters) => {
     const pushedTransactionHash = pushTransactionHash(parameters.credential)
     if (pushedTransactionHash) {
-      // Mppx validates before broadcasting, but direct method consumers may not.
-      if (!validatedPushCredentials.delete(parameters.credential)) {
-        await validate(parameters)
-        validatedPushCredentials.delete(parameters.credential)
-      }
+      // Mppx validates before this terminal step. The relay remains the
+      // authoritative validator and owner of any replay state.
       return Receipt.from({
         method: method.name,
         reference: pushedTransactionHash,

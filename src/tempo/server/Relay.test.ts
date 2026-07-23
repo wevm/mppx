@@ -4,6 +4,7 @@ import * as Http from '~test/Http.js'
 
 import * as Challenge from '../../Challenge.js'
 import * as Credential from '../../Credential.js'
+import * as Method from '../../Method.js'
 import * as Receipt from '../../Receipt.js'
 import * as Mppx from '../../server/Mppx.js'
 import { tempo } from './Methods.js'
@@ -227,20 +228,24 @@ describe('relay boundary', () => {
     expect(calls).toEqual(['/v1/mpp/validate'])
   })
 
-  test('validates a pushed transaction before direct broadcast', async () => {
+  test('validates a pushed transaction before returning its receipt', async () => {
     const calls: string[] = []
     const fetch = mockRelay((url) => {
       calls.push(url.pathname)
       return Response.json({ success: true })
     })
     const [method] = methods(fetch)
-    const pushedCredential = { ...credential, payload: pushedPayload }
+    const pushedCredential = {
+      ...credential,
+      challenge: {
+        ...credential.challenge,
+        expires: new Date(Date.now() + 60_000).toISOString(),
+      },
+      payload: pushedPayload,
+    }
 
     await expect(
-      method.broadcast!({
-        credential: pushedCredential,
-        request: credential.challenge.request,
-      } as never),
+      Method.broadcastCredential([method], pushedCredential as never),
     ).resolves.toMatchObject({
       method: 'tempo',
       reference: pushedPayload.hash,
