@@ -987,6 +987,7 @@ describe('Session', () => {
         client,
         fetch: mockFetch as typeof globalThis.fetch,
         maxDeposit: '10',
+        topUpAmount: '5',
       })
 
       await s.fetch('https://api.example.com/data')
@@ -994,10 +995,13 @@ describe('Session', () => {
 
       expect(response.status).toBe(200)
       expect(postedPayloads.map((payload) => payload.action)).toEqual(['open', 'topUp', 'voucher'])
+      const topUp = postedPayloads[1]
+      if (topUp?.action !== 'topUp') throw new Error('expected top-up payload')
+      expect(topUp.additionalDeposit).toBe('5000000')
       expect(s.state).toMatchObject({
         status: 'active',
         acceptedCumulative: '2000000',
-        deposit: '2000000',
+        deposit: '6000000',
         spent: '2000000',
         units: 2,
       })

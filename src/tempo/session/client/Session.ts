@@ -50,6 +50,7 @@ export function session(parameters: session.Parameters = {}) {
     escrow: escrowOverride,
     getClient: getClientParameter,
     maxDeposit: maxDepositParameter,
+    topUpAmount: topUpAmountParameter,
     onChannelUpdate,
     resolveAccount,
   } = parameters
@@ -61,6 +62,8 @@ export function session(parameters: session.Parameters = {}) {
   const getAccount = Account.getResolver({ account })
   const maxDeposit =
     maxDepositParameter !== undefined ? parseUnits(maxDepositParameter, decimals) : undefined
+  const topUpAmount =
+    topUpAmountParameter !== undefined ? parseUnits(topUpAmountParameter, decimals) : undefined
   const store = channelStore ?? createChannelStore()
   const sink = { store, notifyUpdate: (entry: ChannelEntry) => onChannelUpdate?.(entry) }
 
@@ -145,7 +148,11 @@ export function session(parameters: session.Parameters = {}) {
         managementInput,
         async topUpIfNeeded({ channelId, deposit, requiredCumulative }) {
           if (requiredCumulative <= deposit || !channel) return
-          const additionalDeposit = requiredCumulative - deposit
+          const shortfall = requiredCumulative - deposit
+          const preferred = topUpAmount ?? shortfall
+          const proposed = preferred > shortfall ? preferred : shortfall
+          const available = maxDeposit === undefined ? proposed : maxDeposit - deposit
+          const additionalDeposit = proposed < available ? proposed : available
           await postTopUp({
             additionalDeposit,
             challenge,
@@ -187,6 +194,8 @@ export declare namespace session {
       escrow?: Address | undefined
       /** Maximum channel deposit in human-readable units. Caps server-suggested opens and automatic top-ups. */
       maxDeposit?: string | undefined
+      /** Preferred automatic top-up size in human-readable units. Exact shortfalls are used when omitted. */
+      topUpAmount?: string | undefined
       /** Called whenever channel state changes. */
       onChannelUpdate?: ((entry: ChannelEntry) => void) | undefined
       /** Selects the account that signs this session credential after the challenge is known. */

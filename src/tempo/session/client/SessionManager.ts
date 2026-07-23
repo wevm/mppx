@@ -111,6 +111,8 @@ type SessionManagerConfig = {
   fetch: typeof globalThis.fetch
   /** Local maximum cumulative voucher authorization, or null when uncapped. */
   maxVoucherCumulative: bigint | null
+  /** Preferred additional deposit for automatic top-ups, or null for exact shortfalls. */
+  topUpAmount: bigint | null
   /** WebSocket constructor available in the current runtime, when configured. */
   WebSocket: WebSocketConstructor | undefined
 }
@@ -168,6 +170,8 @@ function resolveSessionManagerConfig(parameters: sessionManager.Parameters): Ses
     fetch: parameters.fetch ?? globalThis.fetch.bind(globalThis),
     maxVoucherCumulative:
       parameters.maxDeposit !== undefined ? parseUnits(parameters.maxDeposit, decimals) : null,
+    topUpAmount:
+      parameters.topUpAmount !== undefined ? parseUnits(parameters.topUpAmount, decimals) : null,
     WebSocket,
   }
 }
@@ -553,11 +557,18 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
   async function topUpIfNeeded(parameters: TopUpRequirement) {
     if (parameters.requiredCumulative <= parameters.deposit) return
     assertVoucherWithinLocalLimit(parameters.requiredCumulative)
+    const shortfall = parameters.requiredCumulative - parameters.deposit
+    const preferred = config.topUpAmount ?? shortfall
+    const proposed = preferred > shortfall ? preferred : shortfall
+    const available =
+      config.maxVoucherCumulative === null
+        ? proposed
+        : config.maxVoucherCumulative - parameters.deposit
     await postTopUpAndApply({
       challenge: parameters.challenge,
       input: parameters.input,
       channelId: parameters.channelId,
-      additionalDeposit: parameters.requiredCumulative - parameters.deposit,
+      additionalDeposit: proposed < available ? proposed : available,
     })
   }
 
@@ -896,6 +907,8 @@ export namespace sessionManager {
       fetch?: typeof globalThis.fetch | undefined
       /** Maximum deposit in human-readable units (e.g. `'10'` for 10 tokens). Converted to raw units via `decimals`. */
       maxDeposit?: string | undefined
+      /** Preferred automatic top-up size in human-readable units. Exact shortfalls are used when omitted. */
+      topUpAmount?: string | undefined
       /** Selects the account that signs session credentials. */
       resolveAccount?: sessionPlugin.ResolveAccount | undefined
       /** Store for reusable session channels. Defaults to in-memory. */
