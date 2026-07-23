@@ -4,6 +4,7 @@ import * as Http from '~test/Http.js'
 
 import * as Challenge from '../../Challenge.js'
 import * as Credential from '../../Credential.js'
+import * as Receipt from '../../Receipt.js'
 import * as Mppx from '../../server/Mppx.js'
 import { tempo } from './Methods.js'
 
@@ -21,6 +22,11 @@ const credential = {
   },
   payload: { signature: '0x1234', type: 'transaction' },
   source: 'did:pkh:eip155:42431:0x123',
+} as const
+
+const pushedPayload = {
+  hash: '0x1a2b3c4d5e6f7890abcdef1234567890abcdef1234567890abcdef1234567890',
+  type: 'hash',
 } as const
 
 type RelayHandler = (url: URL, init: RequestInit) => Response | Promise<Response>
@@ -52,7 +58,10 @@ function successReceipt() {
   })
 }
 
-async function createPaymentServer(fetch: typeof globalThis.fetch) {
+async function createPaymentServer(
+  fetch: typeof globalThis.fetch,
+  payload: typeof credential.payload | typeof pushedPayload = credential.payload,
+) {
   const [method] = methods(fetch, apiBaseUrl)
   const mppx = Mppx.create({ methods: [method], realm, secretKey })
   const handle = mppx.tempo.charge({ amount: '1', decimals: 6 })
@@ -65,7 +74,7 @@ async function createPaymentServer(fetch: typeof globalThis.fetch) {
   const challenge = Challenge.fromResponse(challengeResponse)
   const paymentCredential = Credential.from({
     challenge,
-    payload: credential.payload,
+    payload,
     source: credential.source,
   })
 
@@ -203,13 +212,7 @@ describe('relay boundary', () => {
       return Response.json({ success: true })
     })
     const [method] = methods(fetch)
-    const pushedCredential = {
-      ...credential,
-      payload: {
-        hash: '0x1a2b3c4d5e6f7890abcdef1234567890abcdef1234567890abcdef1234567890',
-        type: 'hash' as const,
-      },
-    }
+    const pushedCredential = { ...credential, payload: pushedPayload }
 
     await expect(
       method.verify({
@@ -231,18 +234,18 @@ describe('relay boundary', () => {
       return Response.json({ success: true })
     })
     const [method] = methods(fetch)
-    const pushedCredential = {
-      ...credential,
-      payload: {
-        hash: '0x1a2b3c4d5e6f7890abcdef1234567890abcdef1234567890abcdef1234567890',
-        type: 'hash' as const,
-      },
-    }
+    const pushedCredential = { ...credential, payload: pushedPayload }
 
-    await method.broadcast!({
-      credential: pushedCredential,
-      request: credential.challenge.request,
-    } as never)
+    await expect(
+      method.broadcast!({
+        credential: pushedCredential,
+        request: credential.challenge.request,
+      } as never),
+    ).resolves.toMatchObject({
+      method: 'tempo',
+      reference: pushedPayload.hash,
+      status: 'success',
+    })
 
     expect(calls).toEqual(['/v1/mpp/validate'])
   })
@@ -479,6 +482,58 @@ describe('relay HTTP flow', () => {
       expect(response.status).toBe(200)
       expect(response.headers.get('Payment-Receipt')).toBeTruthy()
       expect(calls).toEqual(['/v1/mpp/validate', '/v1/mpp/broadcast'])
+    } finally {
+      server.close()
+    }
+  })
+
+  test('returns a receipt for a pushed transaction without relay broadcast', async () => {
+    const calls: string[] = []
+    const fetch = mockRelay((url) => {
+      calls.push(url.pathname)
+      return Response.json({ success: true })
+    })
+    const { pay, server } = await createPaymentServer(fetch, pushedPayload)
+
+    try {
+      const response = await pay()
+
+      expect(response.status).toBe(200)
+      expect(Receipt.fromResponse(response)).toMatchObject({
+        method: 'tempo',
+        reference: pushedPayload.hash,
+        status: 'success',
+      })
+      expect(calls).toEqual(['/v1/mpp/validate'])
+    } finally {
+      server.close()
+    }
+  })
+
+  test('does not issue a receipt when relay validation rejects a pushed transaction', async () => {
+    const calls: string[] = []
+    const fetch = mockRelay((url) => {
+      calls.push(url.pathname)
+      return Response.json({
+        error: { code: 'policy_denied', message: 'private detail' },
+        success: false,
+      })
+    })
+    const { pay, server } = await createPaymentServer(fetch, pushedPayload)
+
+    try {
+      const response = await pay()
+      const body = (await response.json()) as Record<string, unknown>
+
+      expect(response.status).toBe(402)
+      expect(response.headers.get('Payment-Receipt')).toBeNull()
+      expect(body).toMatchObject({
+        detail: 'Payment verification failed.',
+        type: 'https://paymentauth.org/problems/verification-failed',
+      })
+      expect(JSON.stringify(body)).not.toContain('policy_denied')
+      expect(JSON.stringify(body)).not.toContain('private detail')
+      expect(calls).toEqual(['/v1/mpp/validate'])
     } finally {
       server.close()
     }
