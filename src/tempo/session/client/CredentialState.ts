@@ -321,7 +321,7 @@ export type HydrateSessionSnapshotParameters = {
   account: ViemAccount
   /** Viem client used to read authoritative TIP-1034 channel state. */
   client: Client
-  /** Snapshot returned by an MPP server bootstrap. */
+  /** Snapshot returned by an MPP server. */
   snapshot: SessionSnapshot
   /** Optional state reader for deterministic tests. */
   readChannelState?: ReadReusableChannelState | undefined
@@ -331,8 +331,10 @@ export type HydrateSessionSnapshotParameters = {
 export type HydratedSessionSnapshot = {
   /** Reusable channel entry safe to cache locally. */
   entry: ChannelEntry
-  /** Server-accounted delivered spend at bootstrap time. */
+  /** Server-accounted delivered spend at snapshot time. */
   spent: bigint
+  /** Paid units delivered according to the validated server snapshot. */
+  units: number
 }
 
 /** Data-first description of the next credential operation the client should execute. */
@@ -556,12 +558,27 @@ export async function hydrateSessionSnapshot(
   const snapshotDeposit = BigInt(snapshot.deposit)
   const snapshotSettled = BigInt(snapshot.settled)
   const spent = BigInt(snapshot.spent)
+  const units = snapshot.units ?? 0
+  if (
+    acceptedCumulative < 0n ||
+    requiredCumulative < 0n ||
+    snapshotDeposit < 0n ||
+    snapshotSettled < 0n ||
+    spent < 0n
+  )
+    throw new Error('session snapshot amounts must not be negative')
   if (voucherCumulative !== acceptedCumulative)
     throw new Error('session snapshot voucher amount does not match acceptedCumulative')
   if (spent > acceptedCumulative)
     throw new Error('session snapshot spent exceeds acceptedCumulative')
   if (snapshotSettled > snapshotDeposit)
     throw new Error('session snapshot settled amount exceeds deposit')
+  if (snapshotSettled > acceptedCumulative)
+    throw new Error('session snapshot settled amount exceeds acceptedCumulative')
+  if (acceptedCumulative > snapshotDeposit)
+    throw new Error('session snapshot acceptedCumulative exceeds deposit')
+  if (!Number.isSafeInteger(units) || units < 0)
+    throw new Error('session snapshot units must be a non-negative safe integer')
 
   if (
     !Voucher.verifyVoucher(
@@ -591,17 +608,17 @@ export async function hydrateSessionSnapshot(
     },
     readChannelState,
   })
-  const cumulativeAmount = [acceptedCumulative, requiredCumulative, reusable.state.settled].reduce(
-    (highest, value) => (value > highest ? value : highest),
-    0n,
-  )
-  if (cumulativeAmount > reusable.state.deposit)
-    throw new Error('recovered session cumulative amount exceeds on-chain channel deposit')
+  if (reusable.state.settled > acceptedCumulative)
+    throw new Error('session snapshot acceptedCumulative is below on-chain settlement')
+  if (snapshotDeposit > reusable.state.deposit)
+    throw new Error('session snapshot deposit exceeds on-chain channel deposit')
+  if (acceptedCumulative > reusable.state.deposit)
+    throw new Error('session snapshot acceptedCumulative exceeds on-chain channel deposit')
 
   return {
     entry: {
       channelId: reusable.channelId,
-      cumulativeAmount,
+      cumulativeAmount: acceptedCumulative,
       deposit: reusable.state.deposit,
       descriptor: snapshot.descriptor,
       escrow: snapshot.escrow,
@@ -609,6 +626,7 @@ export async function hydrateSessionSnapshot(
       opened: true,
     },
     spent,
+    units,
   }
 }
 
@@ -790,7 +808,12 @@ async function voucher(
   sink: ChannelSink,
 ): Promise<SessionCredentialPayload> {
   const { account, entry, resolved } = plan
-  const cumulativeAmount = entry.cumulativeAmount + resolved.amount
+  const nextCumulative = entry.cumulativeAmount + resolved.amount
+  const snapshotRequired =
+    resolved.snapshot?.channelId.toLowerCase() === entry.channelId.toLowerCase()
+      ? BigInt(resolved.snapshot.requiredCumulative)
+      : nextCumulative
+  const cumulativeAmount = snapshotRequired > nextCumulative ? snapshotRequired : nextCumulative
   assertWithinMaxDeposit(cumulativeAmount, plan.maxDeposit)
   const payload = await createVoucherPayload(
     resolved.client,

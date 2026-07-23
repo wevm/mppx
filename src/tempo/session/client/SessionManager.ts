@@ -13,7 +13,11 @@ import { charge as chargePlugin } from '../../client/Charge.js'
 import * as defaults from '../../internal/defaults.js'
 import type { ChannelEntry } from '../client/ChannelOps.js'
 import { createChannelStore, entryKey, type ChannelStore } from '../client/ChannelStore.js'
-import { hydrateSessionSnapshot, type SessionContext } from '../client/CredentialState.js'
+import {
+  hydrateSessionSnapshot,
+  resolveChallengeContext,
+  type SessionContext,
+} from '../client/CredentialState.js'
 import { session as sessionPlugin } from '../client/Session.js'
 import * as Channel from '../precompile/Channel.js'
 import { deserializeSessionReceipt } from '../precompile/Protocol.js'
@@ -21,6 +25,7 @@ import type { SessionReceipt } from '../precompile/Protocol.js'
 import {
   deserializeSnapshot as deserializeSessionSnapshot,
   serializeSnapshot as serializeSessionSnapshot,
+  type SessionSnapshot,
 } from '../Snapshot.js'
 import { registerSessionManagerInternals } from './internal/SessionManager.js'
 import { createSessionReceiptCoordinator } from './ReceiptCoordinator.js'
@@ -204,17 +209,38 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
   const backing = parameters.channelStore ?? createChannelStore()
   const ignoredChannelIds = new Set<Hex.Hex>()
 
-  // Tracks one fetch's channel reuse so stale stored entries can be evicted once.
+  type ManagerSnapshot = {
+    lastChallenge: TempoSessionChallenge | null
+    lastUrl: RequestInfo | URL | null
+    runtime: RuntimeSnapshot
+  }
+  type ChannelChange = {
+    before: ChannelEntry | undefined
+    current: ChannelEntry
+  }
+
+  // Journals one fetch's channel mutations until the server accepts them.
   type ChannelUse = {
     challengesReceived: number
-    committed: RuntimeSnapshot | undefined
-    created: Map<string, ChannelEntry>
-    seenExisting: Set<string>
-    previous: RuntimeSnapshot
+    changes: Map<string, ChannelChange>
+    committed: ManagerSnapshot | undefined
+    previous: ManagerSnapshot
     resumed: ChannelEntry | undefined
     trackCreates: boolean
   }
   let channelUse: ChannelUse | undefined
+
+  function captureManagerSnapshot(): ManagerSnapshot {
+    return {
+      lastChallenge: runtime.lastChallenge,
+      lastUrl: runtime.lastUrl,
+      runtime: captureRuntimeStateSnapshot({
+        channel: runtime.channel,
+        spent: runtime.spent,
+        state: runtime.state,
+      }),
+    }
+  }
 
   /** Returns the backing entry for `key` only when it is open and not ignored. */
   async function getReusable(key: string): Promise<ChannelEntry | undefined> {
@@ -227,16 +253,21 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
     async get(key) {
       const entry = await getReusable(key)
       if (entry && channelUse) {
-        channelUse.seenExisting.add(key)
-        if (!channelUse.committed && !channelUse.created.has(key)) channelUse.resumed ??= entry
+        const change = channelUse.changes.get(key)
+        if (change) change.current = entry
+        else channelUse.changes.set(key, { before: { ...entry }, current: entry })
+        if (!channelUse.committed) channelUse.resumed ??= entry
       }
       return entry
     },
     async set(entry) {
       const key = entryKey(entry)
       if (entry.opened) ignoredChannelIds.delete(entry.channelId)
-      if (channelUse?.trackCreates && !channelUse.seenExisting.has(key))
-        channelUse.created.set(key, entry)
+      if (channelUse?.trackCreates) {
+        const change = channelUse.changes.get(key)
+        if (change) change.current = entry
+        else channelUse.changes.set(key, { before: undefined, current: entry })
+      }
       await backing.set(entry)
     },
     delete: (key) => backing.delete(key),
@@ -246,43 +277,85 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
   async function ignoreChannel(entry: ChannelEntry) {
     const key = entryKey(entry)
     ignoredChannelIds.add(entry.channelId)
-    channelUse?.seenExisting.delete(key)
-    if (channelUse?.resumed === entry) channelUse.resumed = undefined
+    channelUse?.changes.delete(key)
+    if (channelUse?.resumed && entryKey(channelUse.resumed) === key) channelUse.resumed = undefined
     await Promise.resolve(backing.delete(key)).catch(() => undefined)
   }
 
-  async function rollbackCreatedChannels() {
+  async function rollbackChannelChanges(preserveLastUrl = false) {
     const use = channelUse
-    if (!use?.created.size) return
-    for (const [key, entry] of use.created) {
-      ignoredChannelIds.add(entry.channelId)
-      await Promise.resolve(backing.delete(key)).catch(() => undefined)
+    if (!use) return
+    for (const [key, change] of use.changes) {
+      if (change.before) {
+        ignoredChannelIds.delete(change.before.channelId)
+        await backing.set({ ...change.before })
+      } else {
+        change.current.opened = false
+        ignoredChannelIds.add(change.current.channelId)
+        await Promise.resolve(backing.delete(key)).catch(() => undefined)
+      }
     }
-    use.created.clear()
-    await restoreRuntime(use.committed ?? use.previous)
+    use.changes.clear()
+    await restoreManagerSnapshot(use.committed ?? use.previous, preserveLastUrl)
   }
 
-  /** Commits a newly created channel once an authoritative server snapshot references it. */
-  function commitReferencedChannel(challenge: Challenge.Challenge): boolean {
-    const snapshot = Constants.getMethodDetail<{ channelId?: unknown }>(
-      challenge.request.methodDetails,
-      Constants.MethodDetailKeys.sessionSnapshot,
-    )
-    if (typeof snapshot?.channelId !== 'string') return false
+  function commitChannel(entry: ChannelEntry) {
     const use = channelUse
-    if (!use?.created.size || !runtime.channel) return false
-    for (const [key, entry] of use.created) {
+    const key = entryKey(entry)
+    const change = use?.changes.get(key)
+    if (!use || !change) return
+    change.before = { ...entry }
+    change.current = entry
+    if (use.resumed && entryKey(use.resumed) === key) use.resumed = undefined
+    use.committed = captureManagerSnapshot()
+  }
+
+  /** Commits a channel once an authoritative server snapshot acknowledges its voucher. */
+  async function commitReferencedChannel(challenge: TempoSessionChallenge): Promise<boolean> {
+    const snapshot = getSessionSnapshot(challenge)
+    if (!snapshot) return false
+    const use = channelUse
+    if (!use || !runtime.channel) return false
+    for (const [key, change] of use.changes) {
+      const entry = change.current
       if (
         entry.channelId.toLowerCase() !== snapshot.channelId.toLowerCase() ||
         runtime.channel.channelId.toLowerCase() !== snapshot.channelId.toLowerCase()
       )
         continue
-      use.created.delete(key)
-      use.committed = captureRuntimeStateSnapshot({
-        channel: runtime.channel,
-        spent: runtime.spent,
-        state: runtime.state,
+      const resolved = await resolveChallengeContext({
+        challenge,
+        escrowOverride: parameters.escrow,
+        getClient,
       })
+      if (resolved.key !== key)
+        throw new Error('session snapshot payment scope does not match opened channel')
+      const hydrated = await hydrateSnapshot(snapshot, resolved.client)
+      const replacesChannel =
+        !change.before || change.before.channelId.toLowerCase() !== entry.channelId.toLowerCase()
+      if (replacesChannel && hydrated.entry.cumulativeAmount !== entry.cumulativeAmount)
+        throw new Error('session snapshot acceptedCumulative does not match opened voucher')
+      if (
+        !replacesChannel &&
+        change.before &&
+        hydrated.entry.cumulativeAmount < change.before.cumulativeAmount
+      )
+        return false
+      const spent = runtime.spent > hydrated.spent ? runtime.spent : hydrated.spent
+      const units = Math.max(activeUnits(hydrated.entry.channelId), hydrated.units)
+      runtime.channel = hydrated.entry
+      runtime.spent = spent
+      runtime.lastChallenge = challenge
+      dispatch({
+        type: 'activated',
+        challengeId: challenge.id,
+        entry: hydrated.entry,
+        spent: spent.toString(),
+        units,
+      })
+      await backing.set(hydrated.entry)
+      change.current = hydrated.entry
+      commitChannel(hydrated.entry)
       return true
     }
     return false
@@ -292,29 +365,28 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
     return dispatchSessionEvent(runtime, event)
   }
 
-  function activeUnits() {
-    const state =
-      runtime.state.status === 'active'
-        ? runtime.state
-        : (channelUse?.committed?.state ?? channelUse?.previous.state)
-    return state?.status === 'active' ? state.units : 0
+  function activeUnits(channelId: Hex.Hex) {
+    const states = [
+      runtime.state,
+      channelUse?.committed?.runtime.state,
+      channelUse?.previous.runtime.state,
+    ]
+    for (const state of states)
+      if (state?.status === 'active' && state.channelId.toLowerCase() === channelId.toLowerCase())
+        return state.units
+    return 0
   }
 
   function commitDurableTopUp(entry: ChannelEntry) {
     const use = channelUse
-    const baseline = use?.committed?.channel?.entry ?? use?.resumed
+    const baseline = use?.changes.get(entryKey(entry))?.before
     if (
-      !use ||
-      baseline?.channelId.toLowerCase() !== entry.channelId.toLowerCase() ||
+      !baseline ||
+      baseline.channelId.toLowerCase() !== entry.channelId.toLowerCase() ||
       entry.deposit <= baseline.deposit
     )
       return
-    use.resumed = undefined
-    use.committed = captureRuntimeStateSnapshot({
-      channel: runtime.channel,
-      spent: runtime.spent,
-      state: runtime.state,
-    })
+    commitChannel(entry)
   }
 
   const method = sessionPlugin({
@@ -336,7 +408,7 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
           challengeId: runtime.lastChallenge.id,
           entry,
           spent: runtime.spent.toString(),
-          units: activeUnits(),
+          units: activeUnits(entry.channelId),
         })
       }
       commitDurableTopUp(entry)
@@ -361,10 +433,10 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
         Challenge.serialize(challenge) === Challenge.serialize(runtime.lastChallenge!)
       if (use) use.challengesReceived++
       if (isSameRetryChallenge) return undefined
-      if (!commitReferencedChannel(challenge)) {
-        if (use?.created.size) await rollbackCreatedChannels()
-        else if (isRepeatedRetryChallenge) await restoreRuntime(use.committed ?? use.previous)
-      }
+      if (await commitReferencedChannel(challenge)) return undefined
+      if (use?.changes.size) await rollbackChannelChanges(true)
+      else if (isRepeatedRetryChallenge)
+        await restoreManagerSnapshot(use.committed ?? use.previous, true)
       runtime.lastChallenge = challenge
       dispatch({ type: 'challengeReceived', challengeId: challenge.id })
       return undefined
@@ -402,13 +474,12 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
     })
   }
 
-  /** Persists a server snapshot into the channel store and returns the entry. */
-  async function storeSnapshotHeader(response: Response): Promise<ChannelEntry | undefined> {
-    const header = response.headers.get(Constants.Headers.paymentSessionSnapshot)
-    if (!header) return undefined
-    const snapshot = deserializeSessionSnapshot(header)
-    const client = await getClient({ chainId: snapshot.chainId })
-    const defaultAccount = getAccount(client)
+  async function hydrateSnapshot(
+    snapshot: SessionSnapshot,
+    client?: Awaited<ReturnType<typeof getClient>>,
+  ) {
+    const resolvedClient = client ?? (await getClient({ chainId: snapshot.chainId }))
+    const defaultAccount = getAccount(resolvedClient)
     const account =
       (await parameters.resolveAccount?.({
         account: defaultAccount,
@@ -418,8 +489,21 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
           kind: 'authorizePaymentChannel',
         },
       })) ?? defaultAccount
-    const { entry, spent } = await hydrateSessionSnapshot({ account, client, snapshot })
-    assertVoucherWithinLocalLimit(entry.cumulativeAmount)
+    const hydrated = await hydrateSessionSnapshot({
+      account,
+      client: resolvedClient,
+      snapshot,
+    })
+    assertVoucherWithinLocalLimit(hydrated.entry.cumulativeAmount)
+    return hydrated
+  }
+
+  /** Persists a server snapshot into the channel store and returns the entry. */
+  async function storeSnapshotHeader(response: Response): Promise<ChannelEntry | undefined> {
+    const header = response.headers.get(Constants.Headers.paymentSessionSnapshot)
+    if (!header) return undefined
+    const snapshot = deserializeSessionSnapshot(header)
+    const { entry, spent } = await hydrateSnapshot(snapshot)
     await Promise.resolve(store.set(entry)).catch(() => undefined)
     runtime.channel = entry
     runtime.spent = spent
@@ -586,7 +670,7 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
         challengeId: runtime.lastChallenge.id,
         entry: applied.channel,
         spent: runtime.spent.toString(),
-        units: activeUnits(),
+        units: activeUnits(applied.channel.channelId),
       })
       commitDurableTopUp(applied.channel)
     }
@@ -638,9 +722,12 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
     }
   }
 
-  async function restoreRuntime(snapshot: RuntimeSnapshot) {
-    const restored = restoreRuntimeStateSnapshot(snapshot, runtime.channel)
+  async function restoreManagerSnapshot(snapshot: ManagerSnapshot, preserveLastUrl = false) {
+    const lastUrl = runtime.lastUrl
+    const restored = restoreRuntimeStateSnapshot(snapshot.runtime, runtime.channel)
     runtime.channel = restored.channel
+    runtime.lastChallenge = snapshot.lastChallenge
+    runtime.lastUrl = preserveLastUrl ? lastUrl : snapshot.lastUrl
     runtime.spent = restored.spent
     runtime.state = restored.state
     if (runtime.channel?.opened) await backing.set(runtime.channel)
@@ -666,19 +753,14 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
       throw new Error(
         'SessionManager: a request is already in flight; concurrent requests on one manager are not supported',
       )
-    runtime.lastUrl = input
 
-    const previous = captureRuntimeStateSnapshot({
-      channel: runtime.channel,
-      spent: runtime.spent,
-      state: runtime.state,
-    })
+    const previous = captureManagerSnapshot()
+    runtime.lastUrl = input
     const use: ChannelUse = {
       challengesReceived: 0,
+      changes: new Map(),
       committed: undefined,
-      created: new Map(),
       previous,
-      seenExisting: new Set(),
       resumed: undefined,
       trackCreates: false,
     }
@@ -693,7 +775,7 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
 
       let effectiveInit = requestInitWithSessionHint(input, init, liveHint)
       // Stored channels may be stale, so retry once after evicting the resumed entry.
-      let canRetryResumed = !previous.channel?.opened
+      let canRetryResumed = !previous.runtime.channel?.opened
 
       async function retryWithoutResumed(): Promise<boolean> {
         const resumed = use.resumed
@@ -709,8 +791,7 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
         try {
           response = await wrappedFetch(input, effectiveInit)
         } catch (error) {
-          if (use.created.size) await rollbackCreatedChannels()
-          else await restoreRuntime(use.committed ?? previous)
+          await rollbackChannelChanges(true)
           if (await retryWithoutResumed()) continue
           throw error
         }
@@ -736,14 +817,19 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
             paymentResponse = toPaymentResponse(retry)
           }
         }
-        if (!attemptedHttpManagement && !paymentResponse.ok && !paymentResponse.receipt) {
-          if (use.created.size) await rollbackCreatedChannels()
-          else await restoreRuntime(use.committed ?? previous)
-          if (await retryWithoutResumed()) continue
+        if (!paymentResponse.ok && !paymentResponse.receipt) {
+          await rollbackChannelChanges()
+          if (!attemptedHttpManagement && (await retryWithoutResumed())) {
+            runtime.lastUrl = input
+            continue
+          }
           return paymentResponse
         }
         return paymentResponse
       }
+    } catch (error) {
+      await rollbackChannelChanges()
+      throw error
     } finally {
       channelUse = undefined
     }

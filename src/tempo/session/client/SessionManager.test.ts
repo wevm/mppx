@@ -15,6 +15,7 @@ import type { NeedVoucherEvent, SessionReceipt } from '../precompile/Protocol.js
 import { formatNeedVoucherEvent, parseEvent } from '../precompile/Protocol.js'
 import type { SessionCredentialPayload } from '../precompile/Protocol.js'
 import * as Voucher from '../precompile/Voucher.js'
+import type { SessionSnapshot } from '../Snapshot.js'
 import { computeFallbackCloseAmount, sessionManager } from './SessionManager.js'
 
 const channelId = '0x0000000000000000000000000000000000000000000000000000000000000001' as Hex
@@ -24,33 +25,17 @@ const account = privateKeyToAccount(
   '0xac0974bec39a17e36ba6a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80',
 )
 
-const client = createClient({
-  account,
-  chain: { id: 4217 } as never,
-  transport: custom({
-    async request(args) {
-      if (args.method === 'eth_chainId') return '0x1079'
-      if (args.method === 'eth_getTransactionCount') return '0x0'
-      if (args.method === 'eth_estimateGas') return '0x5208'
-      if (args.method === 'eth_maxPriorityFeePerGas') return '0x1'
-      if (args.method === 'eth_getBlockByNumber') return { baseFeePerGas: '0x1' }
-      if (args.method === 'eth_call')
-        return encodeFunctionResult({
-          abi: escrowAbi,
-          functionName: 'getChannelState',
-          result: { settled: 0n, deposit: 10_000_000n, closeRequestedAt: 0 },
-        })
-      throw new Error(`unexpected rpc request: ${args.method}`)
-    },
-  }),
-})
-
-function channelStateClient(state: { closeRequestedAt: number; deposit: bigint; settled: bigint }) {
+function sessionClient(state = { closeRequestedAt: 0, deposit: 10_000_000n, settled: 0n }) {
   return createClient({
     account,
     chain: { id: 4217 } as never,
     transport: custom({
       async request(args) {
+        if (args.method === 'eth_chainId') return '0x1079'
+        if (args.method === 'eth_getTransactionCount') return '0x0'
+        if (args.method === 'eth_estimateGas') return '0x5208'
+        if (args.method === 'eth_maxPriorityFeePerGas') return '0x1'
+        if (args.method === 'eth_getBlockByNumber') return { baseFeePerGas: '0x1' }
         if (args.method === 'eth_call')
           return encodeFunctionResult({
             abi: escrowAbi,
@@ -61,6 +46,12 @@ function channelStateClient(state: { closeRequestedAt: number; deposit: bigint; 
       },
     }),
   })
+}
+
+const client = sessionClient()
+
+function channelStateClient(state: { closeRequestedAt: number; deposit: bigint; settled: bigint }) {
+  return sessionClient(state)
 }
 
 const storedDescriptor = {
@@ -174,6 +165,49 @@ function make402Response(challenge?: Challenge.Challenge): Response {
 
 function makeOkResponse(body?: string): Response {
   return new Response(body ?? 'ok', { status: 200 })
+}
+
+function makeCloseResponse(
+  payload: Extract<SessionCredentialPayload, { action: 'close' }>,
+  challengeId: string,
+) {
+  const cumulativeAmount = BigInt(payload.cumulativeAmount)
+  return new Response(null, {
+    headers: {
+      [Constants.Headers.paymentReceipt]: serializeSessionReceipt(
+        createSessionReceipt({
+          acceptedCumulative: cumulativeAmount,
+          challengeId,
+          channelId: payload.channelId,
+          spent: cumulativeAmount,
+          txHash: `0x${'ab'.repeat(32)}`,
+        }),
+      ),
+    },
+  })
+}
+
+function snapshotFromCredential(
+  payload: Extract<SessionCredentialPayload, { action: 'open' | 'voucher' }>,
+  overrides: Partial<SessionSnapshot> = {},
+): SessionSnapshot {
+  return {
+    acceptedCumulative: payload.cumulativeAmount,
+    chainId: 4217,
+    channelId: payload.channelId,
+    deposit: '10000000',
+    descriptor: payload.descriptor,
+    escrow: tip20ChannelEscrow,
+    highestVoucher: {
+      channelId: payload.channelId,
+      cumulativeAmount: payload.cumulativeAmount,
+      signature: payload.signature,
+    },
+    requiredCumulative: payload.cumulativeAmount,
+    settled: '0',
+    spent: '0',
+    ...overrides,
+  }
 }
 
 function makeSseResponse(events: string[]): Response {
@@ -592,7 +626,8 @@ describe('Session', () => {
     test('drops a stale stored channel the server rejects and retries with a fresh one', async () => {
       const { store, delete: remove } = makeChannelStore([channelEntry()])
       const postedPayloads: SessionCredentialPayload[] = []
-      const mockFetch = vi.fn().mockImplementation((_input, init?: RequestInit) => {
+      let closeInput: string | undefined
+      const mockFetch = vi.fn().mockImplementation((input, init?: RequestInit) => {
         const headers = new Headers(init?.headers)
         const authorization = headers.get(Constants.Headers.authorization)
         const payload = authorization
@@ -601,6 +636,10 @@ describe('Session', () => {
         if (payload) postedPayloads.push(payload)
 
         if (!payload) return Promise.resolve(make402Response())
+        if (payload.action === 'close') {
+          closeInput = String(input)
+          return Promise.resolve(makeCloseResponse(payload, challengeId))
+        }
         // Reject any reuse of the stale stored channel; accept a freshly opened one.
         if (payload.channelId === storedChannelId)
           return Promise.resolve(new Response('gone', { status: 500 }))
@@ -621,6 +660,8 @@ describe('Session', () => {
       expect(postedPayloads.map((payload) => payload.action)).toEqual(['voucher', 'open'])
       expect(s.opened).toBe(true)
       expect(s.channelId).not.toBe(storedChannelId)
+      await s.close()
+      expect(closeInput).toBe('https://api.example.com/data')
     })
 
     test('keeps a persisted channel after its committed top-up when the paid retry fails', async () => {
@@ -685,8 +726,9 @@ describe('Session', () => {
         })
       const original = challenge(true)
       const replacement = challenge(false)
+      let closeInput: string | undefined
       let openCount = 0
-      const mockFetch = vi.fn().mockImplementation((_input, init?: RequestInit) => {
+      const mockFetch = vi.fn().mockImplementation((input, init?: RequestInit) => {
         const authorization = new Headers(init?.headers).get(Constants.Headers.authorization)
         const payload = authorization
           ? Credential.deserialize<SessionCredentialPayload>(authorization).payload
@@ -699,6 +741,10 @@ describe('Session', () => {
           if (openCount === 1) return Promise.resolve(make402Response(replacement))
           if (openCount === 2) return Promise.resolve(make402Response(original))
           return Promise.resolve(makeOkResponse())
+        }
+        if (payload.action === 'close') {
+          closeInput = String(input)
+          return Promise.resolve(makeCloseResponse(payload, original.id))
         }
         return Promise.resolve(new Response('unexpected voucher', { status: 500 }))
       })
@@ -717,6 +763,8 @@ describe('Session', () => {
       expect(new Set(postedPayloads.map((payload) => payload.channelId)).size).toBe(3)
       expect(remove).toHaveBeenCalledTimes(2)
       expect(s.channelId).toBe(postedPayloads[2]?.channelId)
+      await s.close()
+      expect(closeInput).toBe('https://api.example.com/data')
     })
 
     test('reuses prepared voucher state when an identical challenge succeeds', async () => {
@@ -964,18 +1012,12 @@ describe('Session', () => {
                   escrowContract: tip20ChannelEscrow,
                   chainId: 4217,
                   sessionProtocol: Constants.SessionProtocols.v2,
-                  sessionSnapshot: {
-                    acceptedCumulative: '2000000',
-                    chainId: 4217,
-                    channelId: payload.channelId,
+                  sessionSnapshot: snapshotFromCredential(payload, {
                     deposit: '1000000',
-                    descriptor: payload.descriptor,
-                    escrow: tip20ChannelEscrow,
                     requiredCumulative: '2000000',
-                    settled: '0',
                     spent: '1000000',
                     units: 1,
-                  },
+                  }),
                 },
               }),
             ),
@@ -1008,7 +1050,11 @@ describe('Session', () => {
 
       const s = sessionManager({
         account,
-        client,
+        client: channelStateClient({
+          closeRequestedAt: 0,
+          deposit: 1_000_000n,
+          settled: 0n,
+        }),
         fetch: mockFetch as typeof globalThis.fetch,
         maxDeposit: '10',
       })
@@ -1027,6 +1073,180 @@ describe('Session', () => {
       })
     })
 
+    test('rolls back only the attempted channel when another scope is active', async () => {
+      const { store } = makeDurableChannelStore()
+      const first = channelEntry()
+      const secondDescriptor = {
+        ...storedDescriptor,
+        payee: '0x742d35cc6634c0532925a3b844bc9e7595f8ef01' as Address,
+      }
+      const second = channelEntry({
+        channelId: Channel.computeId({
+          ...secondDescriptor,
+          chainId: 4217,
+          escrow: tip20ChannelEscrow,
+        }),
+        descriptor: secondDescriptor,
+      })
+      await store.set(first)
+      await store.set(second)
+
+      const scopedChallenge = (entry: ChannelEntry, id: string) =>
+        Challenge.from({
+          ...makeChallenge({
+            currency: entry.descriptor.token,
+            recipient: entry.descriptor.payee,
+          }),
+          id,
+        })
+      const firstChallenge = scopedChallenge(first, 'first-scope')
+      const secondChallenge = scopedChallenge(second, 'second-scope')
+      let closeInput: string | undefined
+      let stateDuringSecond: ReturnType<typeof sessionManager>['state'] | undefined
+      let s: ReturnType<typeof sessionManager>
+      const mockFetch = vi.fn().mockImplementation((input, init?: RequestInit) => {
+        const isSecond = String(input).endsWith('/second')
+        const authorization = new Headers(init?.headers).get(Constants.Headers.authorization)
+        if (!authorization)
+          return Promise.resolve(make402Response(isSecond ? secondChallenge : firstChallenge))
+        const payload = Credential.deserialize<SessionCredentialPayload>(authorization).payload
+        if (payload.action === 'close') {
+          closeInput = String(input)
+          return Promise.resolve(makeCloseResponse(payload, firstChallenge.id))
+        }
+        if (payload.action !== 'voucher') throw new Error('expected voucher payload')
+        if (isSecond) {
+          stateDuringSecond = s.state
+          return Promise.resolve(new Response('failed', { status: 500 }))
+        }
+        return Promise.resolve(
+          new Response('ok', {
+            headers: {
+              [Constants.Headers.paymentReceipt]: serializeSessionReceipt(
+                createSessionReceipt({
+                  acceptedCumulative: BigInt(payload.cumulativeAmount),
+                  challengeId: firstChallenge.id,
+                  channelId: payload.channelId,
+                  spent: 1_000_000n,
+                  units: 3,
+                }),
+              ),
+            },
+          }),
+        )
+      })
+      s = sessionManager({
+        account,
+        client,
+        fetch: mockFetch as typeof globalThis.fetch,
+        channelStore: store,
+      })
+
+      expect((await s.fetch('https://api.example.com/first')).status).toBe(200)
+      expect((await s.fetch('https://api.example.com/second')).status).toBe(500)
+
+      expect(stateDuringSecond).toMatchObject({
+        status: 'active',
+        channelId: second.channelId,
+        spent: '0',
+        units: 0,
+      })
+      await expect(store.get(entryKey(first))).resolves.toMatchObject({
+        cumulativeAmount: 2_000_000n,
+        opened: true,
+      })
+      await expect(store.get(entryKey(second))).resolves.toMatchObject({
+        cumulativeAmount: 1_000_000n,
+        opened: true,
+      })
+      expect(s.channelId).toBe(first.channelId)
+      expect(s.cumulative).toBe(2_000_000n)
+      expect(s.state).toMatchObject({
+        status: 'active',
+        challengeId: firstChallenge.id,
+        channelId: first.channelId,
+        units: 3,
+      })
+      await s.close()
+      expect(closeInput).toBe('https://api.example.com/first')
+    })
+
+    test('preserves newer receipt accounting when committing a stale snapshot', async () => {
+      const { store } = makeDurableChannelStore()
+      const seeded = channelEntry()
+      await store.set(seeded)
+      const payloads: Extract<SessionCredentialPayload, { action: 'voucher' }>[] = []
+      const mockFetch = vi.fn().mockImplementation((_input, init?: RequestInit) => {
+        const authorization = new Headers(init?.headers).get(Constants.Headers.authorization)
+        if (!authorization) return Promise.resolve(make402Response())
+        const payload = Credential.deserialize<SessionCredentialPayload>(authorization).payload
+        if (payload.action !== 'voucher') throw new Error('expected voucher payload')
+        payloads.push(payload)
+        if (payloads.length === 1)
+          return Promise.resolve(
+            new Response('ok', {
+              headers: {
+                [Constants.Headers.paymentReceipt]: serializeSessionReceipt(
+                  createSessionReceipt({
+                    acceptedCumulative: BigInt(payload.cumulativeAmount),
+                    challengeId,
+                    channelId: payload.channelId,
+                    spent: 2_000_000n,
+                    units: 3,
+                  }),
+                ),
+              },
+            }),
+          )
+        if (payloads.length > 2) return Promise.resolve(new Response('failed', { status: 500 }))
+        return Promise.resolve(
+          make402Response(
+            Challenge.from({
+              ...makeChallenge({
+                methodDetails: {
+                  escrowContract: tip20ChannelEscrow,
+                  chainId: 4217,
+                  sessionProtocol: Constants.SessionProtocols.v2,
+                  sessionSnapshot: snapshotFromCredential(payload, {
+                    requiredCumulative: '4000000',
+                    spent: '1000000',
+                    units: 1,
+                  }),
+                },
+              }),
+              id: 'acknowledged-voucher',
+            }),
+          ),
+        )
+      })
+      const s = sessionManager({
+        account,
+        client,
+        fetch: mockFetch as typeof globalThis.fetch,
+        channelStore: store,
+      })
+
+      expect((await s.fetch('https://api.example.com/data')).status).toBe(200)
+      expect((await s.fetch('https://api.example.com/data')).status).toBe(500)
+      expect(payloads.map((payload) => payload.cumulativeAmount)).toEqual([
+        '2000000',
+        '3000000',
+        '4000000',
+      ])
+      expect(s.cumulative).toBe(3_000_000n)
+      expect(s.state).toMatchObject({
+        status: 'active',
+        challengeId: 'acknowledged-voucher',
+        acceptedCumulative: '3000000',
+        spent: '2000000',
+        units: 3,
+      })
+      await expect(store.get(entryKey(seeded))).resolves.toMatchObject({
+        cumulativeAmount: 3_000_000n,
+        opened: true,
+      })
+    })
+
     test('preserves a snapshot-acknowledged open when its voucher fails', async () => {
       const { backend, store } = makeDurableChannelStore()
       const payloads: SessionCredentialPayload[] = []
@@ -1040,24 +1260,20 @@ describe('Session', () => {
           return Promise.resolve(new Response('failed', { status: 500 }))
         return Promise.resolve(
           make402Response(
-            makeChallenge({
-              methodDetails: {
-                escrowContract: tip20ChannelEscrow,
-                chainId: 4217,
-                sessionProtocol: Constants.SessionProtocols.v2,
-                sessionSnapshot: {
-                  acceptedCumulative: '1000000',
+            Challenge.from({
+              ...makeChallenge({
+                methodDetails: {
+                  escrowContract: tip20ChannelEscrow,
                   chainId: 4217,
-                  channelId: payload.channelId,
-                  deposit: '10000000',
-                  descriptor: payload.descriptor,
-                  escrow: tip20ChannelEscrow,
-                  requiredCumulative: '2000000',
-                  settled: '0',
-                  spent: '1000000',
-                  units: 1,
+                  sessionProtocol: Constants.SessionProtocols.v2,
+                  sessionSnapshot: snapshotFromCredential(payload, {
+                    requiredCumulative: '2000000',
+                    spent: '1000000',
+                    units: 1,
+                  }),
                 },
-              },
+              }),
+              id: 'acknowledged-open',
             }),
           ),
         )
@@ -1072,10 +1288,21 @@ describe('Session', () => {
 
       expect((await s.fetch('https://api.example.com/data')).status).toBe(500)
       expect(payloads.map((payload) => payload.action)).toEqual(['open', 'voucher'])
-      expect(s.channelId).toBe(payloads[0]?.channelId)
+      const opened = payloads[0]
+      if (opened?.action !== 'open') throw new Error('expected open payload')
+      expect(s.channelId).toBe(opened.channelId)
       expect(s.cumulative).toBe(1_000_000n)
+      expect(s.state).toMatchObject({
+        status: 'active',
+        challengeId: 'acknowledged-open',
+        channelId: opened.channelId,
+        acceptedCumulative: '1000000',
+        deposit: '10000000',
+        spent: '1000000',
+        units: 1,
+      })
       expect(JSON.parse([...backend.values()][0]!)).toMatchObject({
-        channelId: payloads[0]?.channelId,
+        channelId: opened.channelId,
         cumulativeAmount: '1000000',
         opened: true,
       })
