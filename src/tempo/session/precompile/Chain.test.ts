@@ -163,7 +163,11 @@ function topUpLog(parameters: { channelId: `0x${string}`; newDeposit: bigint }) 
 }
 
 async function createSerializedTransaction(parameters: {
-  calls: { to: `0x${string}`; data?: `0x${string}` | undefined }[]
+  calls: {
+    to?: `0x${string}` | undefined
+    data?: `0x${string}` | undefined
+    value?: bigint | undefined
+  }[]
   gas?: bigint | undefined
   signed?: boolean | undefined
 }) {
@@ -224,7 +228,13 @@ async function createOpenTransaction(
     signed?: boolean | undefined
     token?: `0x${string}` | undefined
     to?: `0x${string}` | undefined
-    prefixCalls?: readonly { to: `0x${string}`; data: `0x${string}` }[] | undefined
+    prefixCalls?:
+      | readonly {
+          to?: `0x${string}` | undefined
+          data?: `0x${string}` | undefined
+          value?: bigint | undefined
+        }[]
+      | undefined
   } = {},
 ) {
   const data = encodeFunctionData({
@@ -253,7 +263,13 @@ async function createTopUpTransaction(
     gas?: bigint | undefined
     signed?: boolean | undefined
     to?: `0x${string}` | undefined
-    prefixCalls?: readonly { to: `0x${string}`; data: `0x${string}` }[] | undefined
+    prefixCalls?:
+      | readonly {
+          to?: `0x${string}` | undefined
+          data?: `0x${string}` | undefined
+          value?: bigint | undefined
+        }[]
+      | undefined
   } = {},
 ) {
   const data = encodeFunctionData({
@@ -476,27 +492,147 @@ describe('precompile broadcastOpenTransaction', () => {
     )
   })
 
-  test('rejects an auto-swap whose output does not match the open deposit', async () => {
-    const serializedTransaction = await createOpenTransaction({
-      prefixCalls: autoSwapCalls(deposit + 1n),
-    })
-
-    await expect(
-      Chain.broadcastOpenTransaction({
-        chainId,
-        client: createMockClient(),
-        escrowContract: tip20ChannelEscrow,
-        expectedAuthorizedSigner: descriptor.authorizedSigner,
-        expectedChannelId: `0x${'11'.repeat(32)}`,
-        expectedCurrency: descriptor.token,
-        expectedExpiringNonceHash: expectedExpiringNonceHash(serializedTransaction),
-        expectedOperator: descriptor.operator,
-        expectedPayee: descriptor.payee,
-        expectedPayer: descriptor.payer,
-        serializedTransaction,
-      }),
-    ).rejects.toThrow('TIP-1034 open auto-swap output amount does not match channel deposit')
+  const [validApprove, validSwap] = autoSwapCalls()
+  const wrongToken = '0x7777777777777777777777777777777777777777' as const
+  const maxAmountIn = deposit + 1_000n
+  const approve = (parameters: {
+    amount?: bigint | undefined
+    spender?: Address | undefined
+    token?: Address | undefined
+  }) => ({
+    to: parameters.token ?? sourceToken,
+    data: encodeFunctionData({
+      abi: Abis.tip20,
+      functionName: 'approve',
+      args: [parameters.spender ?? Addresses.stablecoinDex, parameters.amount ?? maxAmountIn],
+    }),
   })
+  const swap = (parameters: {
+    amountOut?: bigint | undefined
+    maxAmount?: bigint | undefined
+    tokenIn?: Address | undefined
+    tokenOut?: Address | undefined
+  }) => ({
+    to: Addresses.stablecoinDex as Address,
+    data: encodeFunctionData({
+      abi: Abis.stablecoinDex,
+      functionName: 'swapExactAmountOut',
+      args: [
+        parameters.tokenIn ?? sourceToken,
+        parameters.tokenOut ?? descriptor.token,
+        parameters.amountOut ?? deposit,
+        parameters.maxAmount ?? maxAmountIn,
+      ],
+    }),
+  })
+  const invalidAutoSwapPrefixes = [
+    {
+      name: 'missing call target',
+      prefixCalls: [{ data: validApprove.data }, validSwap],
+      reason: 'call is missing a target or calldata',
+    },
+    {
+      name: 'native value',
+      prefixCalls: [{ ...validApprove, value: 1n }, validSwap],
+      reason: 'calls must not transfer native value',
+    },
+    {
+      name: 'wrong DEX target',
+      prefixCalls: [validApprove, { ...validSwap, to: wrongToken }],
+      reason: 'targets the wrong DEX',
+    },
+    {
+      name: 'invalid approval calldata',
+      prefixCalls: [{ ...validApprove, data: '0x12345678' as const }, validSwap],
+      reason: 'approval calldata is invalid',
+    },
+    {
+      name: 'invalid swap calldata',
+      prefixCalls: [validApprove, { ...validSwap, data: '0x12345678' as const }],
+      reason: 'swap calldata is invalid',
+    },
+    {
+      name: 'wrong approval function',
+      prefixCalls: [
+        {
+          to: sourceToken,
+          data: encodeFunctionData({
+            abi: Abis.tip20,
+            functionName: 'transfer',
+            args: [Addresses.stablecoinDex, maxAmountIn],
+          }),
+        },
+        validSwap,
+      ],
+      reason: 'must contain approve followed by swapExactAmountOut',
+    },
+    {
+      name: 'approval token mismatch',
+      prefixCalls: [approve({ token: wrongToken }), validSwap],
+      reason: 'approval token does not match swap input',
+    },
+    {
+      name: 'approval spender mismatch',
+      prefixCalls: [approve({ spender: wrongToken }), validSwap],
+      reason: 'approval spender is not the DEX',
+    },
+    {
+      name: 'approval amount mismatch',
+      prefixCalls: [approve({ amount: maxAmountIn + 1n }), validSwap],
+      reason: 'approval amount does not match swap maximum input',
+    },
+    {
+      name: 'output token mismatch',
+      prefixCalls: [validApprove, swap({ tokenOut: wrongToken })],
+      reason: 'output token does not match channel currency',
+    },
+    {
+      name: 'output amount mismatch',
+      prefixCalls: [
+        approve({ amount: maxAmountIn + 1n }),
+        swap({ amountOut: deposit + 1n, maxAmount: maxAmountIn + 1n }),
+      ],
+      reason: 'output amount does not match channel deposit',
+    },
+    {
+      name: 'identical input and output tokens',
+      prefixCalls: [approve({ token: descriptor.token }), swap({ tokenIn: descriptor.token })],
+      reason: 'input and output tokens must differ',
+    },
+    {
+      name: 'non-canonical approval calldata',
+      prefixCalls: [{ ...validApprove, data: `${validApprove.data}00` as Hex }, validSwap],
+      reason: 'approval calldata is not canonical',
+    },
+    {
+      name: 'non-canonical swap calldata',
+      prefixCalls: [validApprove, { ...validSwap, data: `${validSwap.data}00` as Hex }],
+      reason: 'swap calldata is not canonical',
+    },
+  ] as const
+
+  test.each(invalidAutoSwapPrefixes)(
+    'rejects an auto-swap with $name',
+    async ({ prefixCalls, reason }) => {
+      const serializedTransaction = await createOpenTransaction({ prefixCalls })
+
+      await expect(
+        Chain.broadcastOpenTransaction({
+          chainId,
+          client: createMockClient(),
+          escrowContract: tip20ChannelEscrow,
+          expectedAuthorizedSigner: descriptor.authorizedSigner,
+          expectedChannelId: `0x${'11'.repeat(32)}`,
+          expectedCurrency: descriptor.token,
+          expectedExpiringNonceHash: expectedExpiringNonceHash(serializedTransaction),
+          expectedOperator: descriptor.operator,
+          expectedPayee: descriptor.payee,
+          expectedPayer: descriptor.payer,
+          serializedTransaction,
+        }),
+      ).rejects.toThrow(`TIP-1034 open auto-swap ${reason}`)
+    },
+  )
 
   test('rejects open transactions targeting the wrong escrow contract', async () => {
     const serializedTransaction = await createOpenTransaction({ to: descriptor.token })
