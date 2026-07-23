@@ -27,6 +27,15 @@ const transaction = {
 } as const satisfies Channel.ExpiringNonceTransaction
 
 describe('precompile Channel.computeId', () => {
+  test('uses the payer when the descriptor delegates to the zero address', () => {
+    expect(
+      Channel.resolveAuthorizedSigner({
+        ...descriptor,
+        authorizedSigner: '0x0000000000000000000000000000000000000000',
+      }),
+    ).toBe(descriptor.payer)
+  })
+
   test('returns deterministic 32-byte hash for fixed inputs', () => {
     const id = Channel.computeId({ ...descriptor, chainId })
     expect(Channel.computeId({ ...descriptor, chainId })).toBe(id)

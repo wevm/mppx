@@ -533,6 +533,28 @@ export function resolveOpeningDeposit(parameters: ResolveOpeningDepositParameter
   return proposed
 }
 
+/** Resolves a bounded automatic refill, preferring explicit policy over server headroom. */
+export function resolveAutomaticTopUp(parameters: {
+  deposit: bigint
+  maxDeposit?: bigint | null | undefined
+  requiredCumulative: bigint
+  suggestedDeposit?: bigint | undefined
+  topUpAmount?: bigint | null | undefined
+}): bigint {
+  const { deposit, maxDeposit, requiredCumulative, suggestedDeposit, topUpAmount } = parameters
+  if (requiredCumulative <= deposit) return 0n
+  assertVoucherWithinLocalLimit({
+    cumulativeAmount: requiredCumulative,
+    maxVoucherCumulative: maxDeposit ?? null,
+  })
+  const shortfall = requiredCumulative - deposit
+  const preferred = topUpAmount ?? suggestedDeposit ?? shortfall
+  const proposed = preferred > shortfall ? preferred : shortfall
+  if (maxDeposit === null || maxDeposit === undefined) return proposed
+  const remaining = maxDeposit - deposit
+  return proposed < remaining ? proposed : remaining
+}
+
 /** Enforces the optional client-side maximum cumulative voucher authorization. */
 export function assertWithinMaxDeposit(
   cumulativeAmount: bigint,

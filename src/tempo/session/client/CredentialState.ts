@@ -497,7 +497,7 @@ function assertReusableChannelDescriptor(parameters: {
     throw new Error('context descriptor token does not match challenge')
   if (!isSameAddress(descriptor.payer, payer))
     throw new Error('context descriptor payer does not match account')
-  if (!isSameAddress(descriptor.authorizedSigner, authorizedSigner))
+  if (!isSameAddress(Channel.resolveAuthorizedSigner(descriptor), authorizedSigner))
     throw new Error('context descriptor authorizedSigner does not match account')
 }
 
@@ -558,10 +558,6 @@ export async function hydrateSessionSnapshot(
   if (snapshotSettled > snapshotDeposit)
     throw new Error('session snapshot settled amount exceeds deposit')
 
-  const authorizedSigner =
-    BigInt(snapshot.descriptor.authorizedSigner) === 0n
-      ? snapshot.descriptor.payer
-      : snapshot.descriptor.authorizedSigner
   if (
     !Voucher.verifyVoucher(
       snapshot.escrow,
@@ -571,7 +567,7 @@ export async function hydrateSessionSnapshot(
         cumulativeAmount: voucherCumulative,
         signature: signed.signature,
       },
-      authorizedSigner,
+      Channel.resolveAuthorizedSigner(snapshot.descriptor),
     )
   )
     throw new Error('session snapshot highest voucher signature is invalid')
@@ -618,9 +614,10 @@ export function canSignDescriptor(
 ): boolean {
   // Only the payer can deposit into and voucher against its own channel.
   if (!isSameAddress(account.address, descriptor.payer)) return false
-  const authority = descriptor.authorizedSigner
-  if (BigInt(authority) === 0n || isSameAddress(authority, descriptor.payer)) return true
-  return isSameAddress(resolveAuthorizedSigner(account), authority)
+  return isSameAddress(
+    resolveAuthorizedSigner(account),
+    Channel.resolveAuthorizedSigner(descriptor),
+  )
 }
 
 /** Chooses the next credential plan from local channel cache and optional caller context. */

@@ -268,6 +268,8 @@ export type ApplyTopUpResultParameters = {
   challengeId?: string | undefined
   /** Current active machine state, used to preserve paid unit count when possible. */
   currentState: SessionState
+  /** Highest deposit known before the top-up. */
+  knownDeposit?: bigint | undefined
   /** Receipt returned by the top-up POST, when present. */
   receipt?: SessionReceipt | undefined
   /** Latest locally observed spend in raw units. */
@@ -362,17 +364,27 @@ export function resolveManualTopUp(parameters: ResolveManualTopUpParameters): Ma
 /**
  * Applies local deposit and state bookkeeping for a top-up response.
  *
- * `deposit` is updated from the top-up amount. Receipt cumulative values only
- * update accepted spend authorization; they do not replace deposit.
+ * Deposit advances from the highest known baseline. Receipt cumulative values
+ * only update accepted spend authorization; they do not replace deposit.
  */
 export function applyTopUpResult(
   parameters: ApplyTopUpResultParameters,
 ): AppliedTopUpResult | undefined {
-  const { additionalDeposit, channel, channelId, challengeId, currentState, receipt, spent } =
-    parameters
+  const {
+    additionalDeposit,
+    channel,
+    channelId,
+    challengeId,
+    currentState,
+    knownDeposit,
+    receipt,
+    spent,
+  } = parameters
   if (channel?.channelId !== channelId) return undefined
 
-  channel.deposit += additionalDeposit
+  const baseline =
+    knownDeposit !== undefined && knownDeposit > channel.deposit ? knownDeposit : channel.deposit
+  channel.deposit = baseline + additionalDeposit
 
   if (receipt) return { channel, state: activeStateFromReceipt(receipt, channel) }
   if (!challengeId) return { channel }
@@ -521,6 +533,19 @@ export function isTempoSessionChallenge(
   )
 }
 
+/** Returns true when a challenge selects the TIP-1034 session protocol. */
+export function isTip1034SessionChallenge(
+  challenge: Challenge.Challenge,
+): challenge is TempoSessionChallenge {
+  return (
+    isTempoSessionChallenge(challenge) &&
+    Constants.getMethodDetail(
+      challenge.request.methodDetails,
+      Constants.MethodDetailKeys.sessionProtocol,
+    ) === Constants.SessionProtocols.v2
+  )
+}
+
 /** Reads a server-provided session snapshot from challenge method details. */
 export function getSessionSnapshot(challenge: TempoSessionChallenge): SessionSnapshot | undefined {
   return Constants.getMethodDetail<SessionSnapshot>(
@@ -594,20 +619,46 @@ export async function postTopUp(
     throw new Error('Cannot top up session: no local channel descriptor available.')
   }
 
-  const credential = await parameters.createSessionCredential(parameters.challenge, {
-    action: 'topUp',
-    channelId,
-    descriptor: channel.descriptor,
-    additionalDepositRaw: parameters.additionalDeposit.toString(),
-  })
-  const response = await parameters.fetch(managementInput(parameters.input), {
-    method: 'POST',
-    headers: { [Constants.Headers.authorization]: credential },
+  const response = await postManagementCredential({
+    challenge: parameters.challenge,
+    context: {
+      action: 'topUp',
+      channelId,
+      descriptor: channel.descriptor,
+      additionalDepositRaw: parameters.additionalDeposit.toString(),
+    },
+    createSessionCredential: parameters.createSessionCredential,
+    fetch: parameters.fetch,
+    input: parameters.input,
   })
   if (!response.ok) throw new Error(`Top-up POST failed with status ${response.status}`)
 
   const receiptHeader = response.headers.get(Constants.Headers.paymentReceipt)
   return receiptHeader ? deserializeSessionReceipt(receiptHeader) : undefined
+}
+
+/** Posts a management credential and retries once with a refreshed TIP-1034 challenge. */
+async function postManagementCredential(parameters: {
+  challenge: TempoSessionChallenge
+  context: SessionContext
+  createSessionCredential: CreateSessionCredential
+  fetch: typeof globalThis.fetch
+  input: RequestInfo | URL
+}): Promise<Response> {
+  const post = async (challenge: TempoSessionChallenge) =>
+    parameters.fetch(managementInput(parameters.input), {
+      method: 'POST',
+      headers: {
+        [Constants.Headers.authorization]: await parameters.createSessionCredential(
+          challenge,
+          parameters.context,
+        ),
+      },
+    })
+  const response = await post(parameters.challenge)
+  if (response.status !== 402) return response
+  const challenge = Challenge.fromResponseList(response).find(isTip1034SessionChallenge)
+  return challenge ? post(challenge) : response
 }
 
 /** Retries an HTTP 402 when the server snapshot asks for more voucher headroom. */
@@ -662,7 +713,7 @@ export function resolveRetryHttpPaymentContext(parameters: {
   channel: ChannelEntry | null
   response: Response
 }): RetryHttpPaymentContext | undefined {
-  const challenge = Challenge.fromResponseList(parameters.response).find(isTempoSessionChallenge)
+  const challenge = Challenge.fromResponseList(parameters.response).find(isTip1034SessionChallenge)
   if (!challenge) return undefined
 
   const snapshot = getSessionSnapshot(challenge)
@@ -705,7 +756,7 @@ export async function closeHttpSession(
 
   let response = await postClose(parameters.target.challenge)
   if (response.status === 402) {
-    const challenge = Challenge.fromResponseList(response).find(isTempoSessionChallenge)
+    const challenge = Challenge.fromResponseList(response).find(isTip1034SessionChallenge)
     if (challenge) {
       parameters.setChallenge?.(challenge)
       response = await postClose(challenge, true)
@@ -768,8 +819,6 @@ export type OpenSseSessionParameters = {
   getChallenge(): TempoSessionChallenge | null
   /** Validates a cumulative amount against local client policy. */
   assertVoucherWithinLocalLimit(cumulativeAmount: bigint): void
-  /** Converts a resource URL to the server's session management URL. */
-  managementInput(input: RequestInfo | URL): RequestInfo | URL
   /** Applies an incoming receipt to manager state. */
   acceptReceipt(receipt: SessionReceipt): void
   /** Performs an automatic channel top-up when deposit is insufficient. */
@@ -783,7 +832,6 @@ export type SsePaymentDriver = Pick<
   | 'createSessionCredential'
   | 'fetch'
   | 'getChannel'
-  | 'managementInput'
   | 'topUpIfNeeded'
 >
 
@@ -1018,17 +1066,13 @@ export async function handleSseNeedVoucher(
   })
   if (resolution.status !== 'ready') return
 
-  const credential = await parameters.driver.createSessionCredential(
-    parameters.challenge,
-    resolution.context,
-  )
-  const voucherResponse = await parameters.driver.fetch(
-    parameters.driver.managementInput(parameters.input),
-    {
-      method: 'POST',
-      headers: { [Constants.Headers.authorization]: credential },
-    },
-  )
+  const voucherResponse = await postManagementCredential({
+    challenge: parameters.challenge,
+    context: resolution.context,
+    createSessionCredential: parameters.driver.createSessionCredential,
+    fetch: parameters.driver.fetch,
+    input: parameters.input,
+  })
   if (!voucherResponse.ok) {
     throw new Error(`Voucher POST failed with status ${voucherResponse.status}`)
   }
@@ -1186,7 +1230,7 @@ export async function prepareWebSocketSession(
     )
   }
 
-  const challenge = Challenge.fromResponseList(probe).find(isTempoSessionChallenge)
+  const challenge = Challenge.fromResponseList(probe).find(isTip1034SessionChallenge)
   if (!challenge) {
     throw new Error(
       'No payment challenge received from HTTP endpoint for this WebSocket URL. The server may not require payment or did not advertise a challenge.',

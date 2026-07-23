@@ -6,6 +6,7 @@ import type { MaybePromise } from '../../internal/types.js'
 import type * as Method from '../../Method.js'
 import type * as z from '../../zod.js'
 import * as Transport from '../Transport.js'
+import * as MethodChallenge from './MethodChallenge.js'
 import * as MethodResponse from './MethodResponse.js'
 
 // We tag wrappers with a global symbol so we can recognize wrappers created by mppx,
@@ -241,9 +242,22 @@ export function from<const methods extends readonly Method.AnyClient[]>(
         mi = selected.method
         if (challenge.expires) Expires.assert(challenge.expires, challenge.id)
 
+        const paymentInput = resolvePaymentRetryInput(
+          response,
+          initialRequest.input,
+          initialRequest.input,
+        )
         const createCredential = memoizeCreateCredential(
-          (overrideContext?: AnyContextFor<methods>) =>
-            resolveCredential(selectedChallenge, selected.method, overrideContext ?? context),
+          async (overrideContext?: AnyContextFor<methods>) => {
+            const credentialContext = overrideContext ?? context
+            await MethodChallenge.handle(selected.method, {
+              challenge: selectedChallenge,
+              context: credentialContext,
+              fetch: baseFetch,
+              input: paymentInput,
+            })
+            return resolveCredential(selectedChallenge, selected.method, credentialContext)
+          },
         )
         const eventCredential = await events.emit(
           'challenge.received',
@@ -278,11 +292,6 @@ export function from<const methods extends readonly Method.AnyClient[]>(
           }),
         )
 
-        const paymentInput = resolvePaymentRetryInput(
-          response,
-          initialRequest.input,
-          initialRequest.input,
-        )
         response = await baseFetch(
           paymentInput,
           transport.setCredential(

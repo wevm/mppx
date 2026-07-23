@@ -1,8 +1,8 @@
 import { type Address, parseUnits } from 'viem'
 import { tempo as tempo_chain } from 'viem/chains'
 
+import * as MethodChallenge from '../../../client/internal/MethodChallenge.js'
 import * as MethodResponse from '../../../client/internal/MethodResponse.js'
-import * as Constants from '../../../Constants.js'
 import * as Credential from '../../../Credential.js'
 import * as Method from '../../../Method.js'
 import * as Account from '../../../viem/Account.js'
@@ -13,24 +13,33 @@ import type {
 } from '../../client/ResolveAccount.js'
 import * as defaults from '../../internal/defaults.js'
 import * as Methods from '../../Methods.js'
-import { isEventStream, requireSessionCredentialContext } from '../precompile/Protocol.js'
+import * as Channel from '../precompile/Channel.js'
+import {
+  isEventStream,
+  readSessionChallengeAmount,
+  requireSessionCredentialContext,
+} from '../precompile/Protocol.js'
 import { serializeCredential, type ChannelEntry } from './ChannelOps.js'
 import { createChannelStore, type ChannelStore } from './ChannelStore.js'
 import {
+  canSignDescriptor,
   executeCredentialPlan,
+  hasSessionAction,
   planCredential,
   resolveChallengeContext,
   resolveRecoverContext,
   sessionContextSchema,
+  type ChallengeContext,
+  type SessionContext as CredentialContext,
 } from './CredentialState.js'
-import { assertWithinMaxDeposit } from './Runtime.js'
+import { assertWithinMaxDeposit, resolveAutomaticTopUp } from './Runtime.js'
 import {
   handleSseNeedVoucher,
-  isTempoSessionChallenge,
-  managementInput,
+  isTip1034SessionChallenge,
   postTopUp,
   wrapSseResponse,
   type SsePaymentDriver,
+  type TempoSessionChallenge,
 } from './Transports.js'
 
 export { sessionContextSchema, type SessionContext } from './CredentialState.js'
@@ -67,15 +76,30 @@ export function session(parameters: session.Parameters = {}) {
   const store = channelStore ?? createChannelStore()
   const sink = { store, notifyUpdate: (entry: ChannelEntry) => onChannelUpdate?.(entry) }
 
+  const resolveCredentialAccount = async (
+    resolved: ChallengeContext,
+    context: CredentialContext | undefined,
+    entry: ChannelEntry | undefined,
+  ) => {
+    const defaultAccount = getAccount(resolved.client, context)
+    const descriptor = context?.action
+      ? context.descriptor
+      : (entry?.descriptor ??
+        resolveRecoverContext({ context, snapshot: resolved.snapshot })?.descriptor)
+    return (
+      (await resolveAccount?.({
+        account: defaultAccount,
+        chainId: resolved.chainId,
+        operation: {
+          kind: 'authorizePaymentChannel',
+          ...(descriptor ? { authority: Channel.resolveAuthorizedSigner(descriptor) } : {}),
+        },
+      })) ?? defaultAccount
+    )
+  }
+
   const method = Method.toClient(Methods.session, {
-    canHandleChallenge({ challenge }) {
-      return (
-        Constants.getMethodDetail(
-          challenge.request.methodDetails,
-          Constants.MethodDetailKeys.sessionProtocol,
-        ) === Constants.SessionProtocols.v2
-      )
-    },
+    canHandleChallenge: ({ challenge }) => isTip1034SessionChallenge(challenge),
     context: sessionContextSchema,
     async createCredential({ challenge, context }) {
       const resolved = await resolveChallengeContext({
@@ -83,22 +107,8 @@ export function session(parameters: session.Parameters = {}) {
         escrowOverride,
         getClient,
       })
-      const defaultAccount = getAccount(resolved.client, context)
       const entry = await store.get(resolved.key)
-      // Resolve recovery hints early so account selection can satisfy an existing channel authority.
-      const recoverContext = resolveRecoverContext({ context, snapshot: resolved.snapshot })
-      const descriptor = context?.action
-        ? context.descriptor
-        : (entry?.descriptor ?? recoverContext?.descriptor)
-      const account =
-        (await resolveAccount?.({
-          account: defaultAccount,
-          chainId: resolved.chainId,
-          operation: {
-            kind: 'authorizePaymentChannel',
-            ...(descriptor ? { authority: descriptor.authorizedSigner } : {}),
-          },
-        })) ?? defaultAccount
+      const account = await resolveCredentialAccount(resolved, context, entry)
       const payload = await executeCredentialPlan(
         planCredential({
           account,
@@ -114,10 +124,83 @@ export function session(parameters: session.Parameters = {}) {
     },
   })
 
+  const topUpChannelIfNeeded = async ({
+    challenge,
+    channel,
+    deposit,
+    fetch,
+    input,
+    requiredCumulative,
+  }: {
+    challenge: TempoSessionChallenge
+    channel: ChannelEntry
+    deposit: bigint
+    fetch: typeof globalThis.fetch
+    input: RequestInfo | URL
+    requiredCumulative: bigint
+  }) => {
+    const knownDeposit = channel.deposit > deposit ? channel.deposit : deposit
+    const additionalDeposit = resolveAutomaticTopUp({
+      deposit: knownDeposit,
+      maxDeposit,
+      requiredCumulative,
+      suggestedDeposit:
+        challenge.request.suggestedDeposit === undefined
+          ? undefined
+          : BigInt(challenge.request.suggestedDeposit),
+      topUpAmount,
+    })
+    if (additionalDeposit > 0n)
+      await postTopUp({
+        additionalDeposit,
+        challenge,
+        channel,
+        channelId: channel.channelId,
+        createSessionCredential: (challenge, context) =>
+          method.createCredential({ challenge, context }),
+        fetch,
+        input,
+      })
+    const nextDeposit = knownDeposit + additionalDeposit
+    if (nextDeposit === channel.deposit) return
+    channel.deposit = nextDeposit
+    await store.set(channel)
+    sink.notifyUpdate(channel)
+  }
+
+  MethodChallenge.register(method, async ({ challenge, context, fetch, input }) => {
+    if (!isTip1034SessionChallenge(challenge)) return
+    const sessionContext = context === undefined ? undefined : sessionContextSchema.parse(context)
+    if (hasSessionAction(sessionContext)) return
+    const resolved = await resolveChallengeContext({ challenge, escrowOverride, getClient })
+    const channel = await store.get(resolved.key)
+    if (!channel?.opened) return
+    const snapshot =
+      resolved.snapshot?.channelId.toLowerCase() === channel.channelId.toLowerCase()
+        ? resolved.snapshot
+        : undefined
+    const nextCumulative = channel.cumulativeAmount + readSessionChallengeAmount(challenge)
+    const snapshotRequired = snapshot ? BigInt(snapshot.requiredCumulative) : nextCumulative
+    const requiredCumulative = snapshotRequired > nextCumulative ? snapshotRequired : nextCumulative
+    const snapshotDeposit = snapshot ? BigInt(snapshot.deposit) : channel.deposit
+    const deposit = snapshotDeposit > channel.deposit ? snapshotDeposit : channel.deposit
+    if (requiredCumulative <= deposit && deposit === channel.deposit) return
+    const account = await resolveCredentialAccount(resolved, sessionContext, channel)
+    if (!canSignDescriptor(account, channel.descriptor)) return
+    await topUpChannelIfNeeded({
+      challenge,
+      channel,
+      deposit,
+      fetch,
+      input,
+      requiredCumulative,
+    })
+  })
+
   return MethodResponse.register(
     method,
     async ({ challenge, credential, fetch, headers, input, refetch, response, signal }) => {
-      if (!isTempoSessionChallenge(challenge)) return response
+      if (!isTip1034SessionChallenge(challenge)) return response
       if (!isEventStream(response)) {
         const credentialContext = requireSessionCredentialContext(
           Credential.deserialize(credential).payload,
@@ -145,27 +228,16 @@ export function session(parameters: session.Parameters = {}) {
           method.createCredential({ challenge, context }),
         fetch,
         getChannel: () => channel ?? null,
-        managementInput,
-        async topUpIfNeeded({ channelId, deposit, requiredCumulative }) {
-          if (requiredCumulative <= deposit || !channel) return
-          const shortfall = requiredCumulative - deposit
-          const preferred = topUpAmount ?? shortfall
-          const proposed = preferred > shortfall ? preferred : shortfall
-          const available = maxDeposit === undefined ? proposed : maxDeposit - deposit
-          const additionalDeposit = proposed < available ? proposed : available
-          await postTopUp({
-            additionalDeposit,
+        async topUpIfNeeded({ deposit, requiredCumulative }) {
+          if (!channel) return
+          await topUpChannelIfNeeded({
             challenge,
             channel,
-            channelId,
-            createSessionCredential: (challenge, context) =>
-              method.createCredential({ challenge, context }),
+            deposit: channel.deposit > deposit ? channel.deposit : deposit,
             fetch,
             input,
+            requiredCumulative,
           })
-          channel.deposit += additionalDeposit
-          await store.set(channel)
-          sink.notifyUpdate(channel)
         },
       } satisfies SsePaymentDriver
 

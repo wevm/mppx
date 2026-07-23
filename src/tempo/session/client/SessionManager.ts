@@ -4,6 +4,7 @@ import { tempo as tempo_chain } from 'viem/chains'
 
 import * as Challenge from '../../../Challenge.js'
 import * as Fetch from '../../../client/internal/Fetch.js'
+import * as MethodChallenge from '../../../client/internal/MethodChallenge.js'
 import * as MethodResponse from '../../../client/internal/MethodResponse.js'
 import * as Constants from '../../../Constants.js'
 import * as Account from '../../../viem/Account.js'
@@ -16,7 +17,7 @@ import { hydrateSessionSnapshot, type SessionContext } from '../client/Credentia
 import { session as sessionPlugin } from '../client/Session.js'
 import * as Channel from '../precompile/Channel.js'
 import { deserializeSessionReceipt } from '../precompile/Protocol.js'
-import { readSessionChallengeAmount, type SessionReceipt } from '../precompile/Protocol.js'
+import type { SessionReceipt } from '../precompile/Protocol.js'
 import {
   deserializeSnapshot as deserializeSessionSnapshot,
   serializeSnapshot as serializeSessionSnapshot,
@@ -34,6 +35,7 @@ import {
   dispatchSessionEvent,
   restoreCumulativeAuthorization,
   restoreRuntimeSnapshot as restoreRuntimeStateSnapshot,
+  resolveAutomaticTopUp,
   type RuntimeSnapshot,
 } from './Runtime.js'
 import { closeSocketSession } from './Runtime.js'
@@ -41,7 +43,6 @@ import {
   closeHttpSession,
   getSessionSnapshot,
   isTempoSessionChallenge,
-  managementInput,
   postTopUp,
   retryHttpPaymentRequired,
   type TempoSessionChallenge,
@@ -281,6 +282,7 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
     escrow: parameters.escrow,
     decimals: config.decimals,
     maxDeposit: parameters.maxDeposit,
+    topUpAmount: parameters.topUpAmount,
     channelStore: store,
     onChannelUpdate(entry) {
       if (entry.channelId !== runtime.channel?.channelId) runtime.spent = 0n
@@ -317,17 +319,6 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
       if (use) use.challengesReceived++
       runtime.lastChallenge = challenge
       dispatch({ type: 'challengeReceived', challengeId: challenge.id })
-      if (runtime.channel?.opened && runtime.lastUrl) {
-        const requiredCumulative =
-          runtime.channel.cumulativeAmount + readSessionChallengeAmount(challenge)
-        await topUpIfNeeded({
-          challenge,
-          input: runtime.lastUrl,
-          channelId: runtime.channel.channelId,
-          deposit: runtime.channel.deposit,
-          requiredCumulative,
-        })
-      }
       return undefined
     },
   })
@@ -370,16 +361,12 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
     const snapshot = deserializeSessionSnapshot(header)
     const client = await getClient({ chainId: snapshot.chainId })
     const defaultAccount = getAccount(client)
-    const authority =
-      BigInt(snapshot.descriptor.authorizedSigner) === 0n
-        ? snapshot.descriptor.payer
-        : snapshot.descriptor.authorizedSigner
     const account =
       (await parameters.resolveAccount?.({
         account: defaultAccount,
         chainId: snapshot.chainId,
         operation: {
-          authority,
+          authority: Channel.resolveAuthorizedSigner(snapshot.descriptor),
           kind: 'authorizePaymentChannel',
         },
       })) ?? defaultAccount
@@ -524,9 +511,11 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
     challenge: TempoSessionChallenge
     channelId: Hex.Hex
     input: RequestInfo | URL
+    knownDeposit?: bigint | undefined
   }) {
+    const { knownDeposit, ...topUp } = parameters
     const receipt = await postTopUp({
-      ...parameters,
+      ...topUp,
       channel: runtime.channel,
       createSessionCredential,
       fetch: config.fetch,
@@ -538,6 +527,7 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
       channelId: parameters.channelId,
       challengeId: runtime.lastChallenge?.id,
       currentState: runtime.state,
+      knownDeposit,
       receipt,
       spent: runtime.spent,
     })
@@ -555,20 +545,26 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
   }
 
   async function topUpIfNeeded(parameters: TopUpRequirement) {
-    if (parameters.requiredCumulative <= parameters.deposit) return
-    assertVoucherWithinLocalLimit(parameters.requiredCumulative)
-    const shortfall = parameters.requiredCumulative - parameters.deposit
-    const preferred = config.topUpAmount ?? shortfall
-    const proposed = preferred > shortfall ? preferred : shortfall
-    const available =
-      config.maxVoucherCumulative === null
-        ? proposed
-        : config.maxVoucherCumulative - parameters.deposit
+    const channelDeposit =
+      runtime.channel?.channelId === parameters.channelId ? runtime.channel.deposit : 0n
+    const deposit = channelDeposit > parameters.deposit ? channelDeposit : parameters.deposit
+    const additionalDeposit = resolveAutomaticTopUp({
+      deposit,
+      maxDeposit: config.maxVoucherCumulative,
+      requiredCumulative: parameters.requiredCumulative,
+      suggestedDeposit:
+        parameters.challenge.request.suggestedDeposit === undefined
+          ? undefined
+          : BigInt(parameters.challenge.request.suggestedDeposit),
+      topUpAmount: config.topUpAmount,
+    })
+    if (additionalDeposit === 0n) return
     await postTopUpAndApply({
       challenge: parameters.challenge,
       input: parameters.input,
       channelId: parameters.channelId,
-      additionalDeposit: proposed < available ? proposed : available,
+      additionalDeposit,
+      knownDeposit: deposit,
     })
   }
 
@@ -730,7 +726,6 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
     getChannel: () => runtime.channel,
     getChallenge: () => runtime.lastChallenge,
     assertVoucherWithinLocalLimit,
-    managementInput,
     acceptReceipt(receipt: SessionReceipt) {
       updateSpentFromReceipt(receipt)
     },
@@ -788,7 +783,16 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
       const liveHint = runtime.channel?.opened ? runtime.channel.channelId : undefined
 
       const prepared = await prepareWebSocketSession({
-        createSessionCredential,
+        async createSessionCredential(challenge, context) {
+          runtime.lastChallenge = challenge
+          await MethodChallenge.handle(method, {
+            challenge,
+            context,
+            fetch: config.fetch,
+            input: probeUrl,
+          })
+          return createSessionCredential(challenge, context)
+        },
         fetch: config.fetch,
         input,
         onProbeUrl(httpUrl) {

@@ -9,6 +9,11 @@ import type { ChannelDescriptor } from './Protocol.js'
 /** Re-export of the TIP-1034 channel descriptor shape. */
 export type { ChannelDescriptor } from './Protocol.js'
 
+/** Resolves the descriptor's effective voucher signer; zero delegates to the payer. */
+export function resolveAuthorizedSigner(descriptor: ChannelDescriptor): Address {
+  return BigInt(descriptor.authorizedSigner) === 0n ? descriptor.payer : descriptor.authorizedSigner
+}
+
 /** Tempo transaction shape used to derive the TIP-1034 `expiringNonceHash`. */
 export type ExpiringNonceTransaction = (
   | z_TransactionSerializableTempo

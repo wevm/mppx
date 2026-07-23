@@ -30,6 +30,7 @@ import {
   nextSpentFromReceipt,
   parseManagerAmount,
   reduce,
+  resolveAutomaticTopUp,
   resolveCloseTarget,
   resolveNeedVoucherTransition,
   resolveOpeningDeposit,
@@ -922,6 +923,17 @@ describe('LocalAuthorization', () => {
       expect(resolveOpeningDeposit({ maxDeposit: 1000n, requestAmount: 100n })).toBe(100n)
       expect(() => resolveOpeningDeposit({ maxDeposit: 50n, requestAmount: 100n })).toThrow(
         'requested voucher amount 100 exceeds local maxDeposit 50',
+      )
+    })
+
+    test.each([
+      [{ topUpAmount: 80n, suggestedDeposit: 100n }, 80n],
+      [{ suggestedDeposit: 100n }, 100n],
+      [{}, 50n],
+      [{ maxDeposit: 180n, suggestedDeposit: 100n }, 80n],
+    ])('resolves bounded automatic top-ups %#', (policy, expected) => {
+      expect(resolveAutomaticTopUp({ deposit: 100n, requiredCumulative: 150n, ...policy })).toBe(
+        expected,
       )
     })
 

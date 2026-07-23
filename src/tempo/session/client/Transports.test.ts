@@ -85,6 +85,7 @@ describe('HttpManagement', () => {
         methodDetails: {
           chainId: 4217,
           escrowContract: undefined,
+          sessionProtocol: Constants.SessionProtocols.v2,
           ...(snapshot && { [Constants.MethodDetailKeys.sessionSnapshot]: snapshot }),
         },
       },
@@ -218,6 +219,36 @@ describe('HttpManagement', () => {
       expect(receipt?.acceptedCumulative).toBe('8')
       expect(createSessionCredential).toHaveBeenCalledOnce()
       expect(fetch).toHaveBeenCalledOnce()
+    })
+
+    test('postTopUp retries once with the management route challenge', async () => {
+      const routeChallenge = { ...challenge(), id: 'management-challenge' } as TempoSessionChallenge
+      const createSessionCredential = vi.fn(async (challenge_) => `top-up-${challenge_.id}`)
+      const fetch = vi
+        .fn()
+        .mockResolvedValueOnce(response402(routeChallenge))
+        .mockResolvedValueOnce(
+          new Response(null, {
+            status: 204,
+            headers: {
+              [Constants.Headers.paymentReceipt]: receiptHeader(8n, 5n, routeChallenge.id),
+            },
+          }),
+        )
+
+      const receipt = await postTopUp({
+        additionalDeposit: 3n,
+        challenge: challenge(),
+        channel: channel(),
+        channelId,
+        createSessionCredential,
+        fetch,
+        input: 'https://example.test/resource',
+      })
+
+      expect(receipt?.challengeId).toBe(routeChallenge.id)
+      expect(createSessionCredential).toHaveBeenCalledTimes(2)
+      expect(authorizationHeader(fetch.mock.calls[1]?.[1])).toBe(`top-up-${routeChallenge.id}`)
     })
 
     test('retryHttpPaymentRequired signs the server-required cumulative voucher', async () => {
@@ -874,7 +905,6 @@ describe('SseDriver', () => {
       fetch: vi.fn(async () => new Response(null, { status: 204 })),
       getChallenge: () => currentChallenge,
       getChannel: () => channel,
-      managementInput: (input) => input,
       async topUpIfNeeded() {},
     })
 
@@ -1011,6 +1041,7 @@ describe('WsDriver', () => {
         methodDetails: {
           chainId: 4217,
           escrowContract: tip20ChannelEscrow,
+          sessionProtocol: Constants.SessionProtocols.v2,
         },
         recipient: '0x742d35cc6634c0532925a3b844bc9e7595f8fe00',
       },

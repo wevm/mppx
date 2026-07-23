@@ -5,6 +5,7 @@ import { describe, expect, test } from 'vp/test'
 
 import { serialize as serializeChallenge, type Challenge } from '../../../Challenge.js'
 import * as Fetch from '../../../client/internal/Fetch.js'
+import * as MethodChallenge from '../../../client/internal/MethodChallenge.js'
 import * as Constants from '../../../Constants.js'
 import * as Credential from '../../../Credential.js'
 import * as z from '../../../zod.js'
@@ -205,7 +206,164 @@ describe('precompile client session', () => {
     expect(await response.text()).toBe(
       `${Types.formatMessageEvent('first')}${Types.formatMessageEvent('second')}`,
     )
-    expect(actions).toEqual(['open', 'voucher', 'topUp', 'voucher'])
+    expect(actions).toEqual(['open', 'topUp', 'voucher', 'voucher'])
+  })
+
+  test('tops up before signing plain HTTP vouchers through Fetch.from', async () => {
+    const challenge = makeChallenge({
+      suggestedDeposit: '100',
+      methodDetails: {
+        chainId,
+        escrowContract: tip20ChannelEscrow,
+        sessionProtocol: Constants.SessionProtocols.v2,
+      },
+    })
+    const actions: Types.SessionCredentialPayload['action'][] = []
+    const paidRequests: {
+      body: BodyInit | null
+      header: string | null
+      method: string | undefined
+    }[] = []
+    let opened: Extract<Types.SessionCredentialPayload, { action: 'open' }> | undefined
+    const rawFetch: typeof globalThis.fetch = async (_input, init) => {
+      const authorization = new Headers(init?.headers).get(Constants.Headers.authorization)
+      if (!authorization)
+        return new Response(null, {
+          status: 402,
+          headers: { [Constants.Headers.wwwAuthenticate]: serializeChallenge(challenge) },
+        })
+
+      const payload = deserialize(authorization)
+      actions.push(payload.action)
+      if (payload.action === 'open') {
+        opened = payload
+        return new Response('opened')
+      }
+      if (payload.action === 'topUp') return new Response(null, { status: 204 })
+      if (payload.action !== 'voucher' || !opened) throw new Error('expected open voucher')
+
+      paidRequests.push({
+        body: init?.body ?? null,
+        header: new Headers(init?.headers).get('x-test'),
+        method: init?.method,
+      })
+      return new Response('paid')
+    }
+    const fetch = Fetch.from({
+      fetch: rawFetch,
+      methods: [
+        session({
+          account,
+          decimals: 0,
+          getClient: () => client,
+          maxDeposit: '300',
+        }),
+      ],
+    })
+
+    expect(await (await fetch('https://example.com/resource')).text()).toBe('opened')
+    const response = await fetch('https://example.com/resource', {
+      body: 'request-body',
+      headers: { 'x-test': 'preserved' },
+      method: 'POST',
+    })
+
+    expect(await response.text()).toBe('paid')
+    expect(actions).toEqual(['open', 'topUp', 'voucher'])
+    expect(paidRequests).toEqual([{ body: 'request-body', header: 'preserved', method: 'POST' }])
+  })
+
+  test('does not top up a stored channel owned by another account', async () => {
+    const channelStore = createChannelStore()
+    const foreign = '0x0000000000000000000000000000000000000004' as Address
+    await channelStore.set({
+      chainId,
+      channelId: `0x${'44'.repeat(32)}`,
+      cumulativeAmount: 100n,
+      deposit: 100n,
+      descriptor: { ...descriptor, authorizedSigner: foreign, payer: foreign },
+      escrow: tip20ChannelEscrow,
+      opened: true,
+    })
+    const actions: Types.SessionCredentialPayload['action'][] = []
+    const challenge = makeChallenge({
+      methodDetails: {
+        chainId,
+        escrowContract: tip20ChannelEscrow,
+        sessionProtocol: Constants.SessionProtocols.v2,
+      },
+    })
+    const fetch = Fetch.from({
+      fetch: async (_input, init) => {
+        const authorization = new Headers(init?.headers).get(Constants.Headers.authorization)
+        if (!authorization)
+          return new Response(null, {
+            status: 402,
+            headers: { [Constants.Headers.wwwAuthenticate]: serializeChallenge(challenge) },
+          })
+        actions.push(deserialize(authorization).action)
+        return new Response('paid')
+      },
+      methods: [session({ account, channelStore, decimals: 0, getClient: () => client })],
+    })
+
+    expect(await (await fetch('https://example.com/resource')).text()).toBe('paid')
+    expect(actions).toEqual(['open'])
+  })
+
+  test('uses a matching server snapshot deposit when checking headroom', async () => {
+    const channelStore = createChannelStore()
+    const channelId = Channel.computeId({ ...descriptor, chainId, escrow: tip20ChannelEscrow })
+    await channelStore.set({
+      chainId,
+      channelId,
+      cumulativeAmount: 100n,
+      deposit: 100n,
+      descriptor,
+      escrow: tip20ChannelEscrow,
+      opened: true,
+    })
+    const challenge = makeChallenge({
+      methodDetails: {
+        chainId,
+        escrowContract: tip20ChannelEscrow,
+        sessionProtocol: Constants.SessionProtocols.v2,
+        sessionSnapshot: {
+          acceptedCumulative: '100',
+          chainId,
+          channelId,
+          deposit: '200',
+          descriptor,
+          escrow: tip20ChannelEscrow,
+          requiredCumulative: '200',
+          settled: '0',
+          spent: '100',
+          units: 1,
+        },
+      },
+    })
+    let updatedDeposit = 0n
+    const method = session({
+      account,
+      channelStore,
+      decimals: 0,
+      getClient: () => client,
+      onChannelUpdate: (entry) => {
+        updatedDeposit = entry.deposit
+      },
+    })
+
+    await expect(
+      MethodChallenge.handle(method, {
+        challenge,
+        context: {},
+        fetch: async () => {
+          throw new Error('unexpected top-up')
+        },
+        input: 'https://example.com/resource',
+      }),
+    ).resolves.toBeUndefined()
+    expect(updatedDeposit).toBe(200n)
   })
 
   test('opens for the current amount without client deposit configuration', async () => {

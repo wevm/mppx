@@ -753,10 +753,11 @@ describe('Session', () => {
       await restarted.fetch('https://api.example.com/data')
 
       // The first request carries no hint header; after the 402 the restarted
-      // manager resumes the persisted channel from the entry index with a
-      // voucher rather than opening a new one.
+      // manager tops up and resumes the full persisted channel rather than
+      // opening a new one.
       expect(new Headers(resumeFetch.mock.calls[0]?.[1]?.headers).get('Payment-Session')).toBeNull()
-      expect(posted[0]).toMatchObject({ action: 'voucher', channelId })
+      expect(posted.map((payload) => payload.action)).toEqual(['topUp', 'voucher'])
+      expect(posted[1]).toMatchObject({ channelId })
     })
 
     test('persists opened channels and deletes closed channels when supported', async () => {
@@ -1399,6 +1400,51 @@ describe('Session', () => {
       expect(calledHeaders.get('content-type')).toBe('application/json')
       expect(calledHeaders.get('x-custom')).toBe('value')
       expect(calledHeaders.get('accept')).toBe('text/event-stream')
+    })
+  })
+
+  describe('.ws()', () => {
+    test('tops up a full persisted channel before constructing the socket', async () => {
+      const events: string[] = []
+      const { map, set, store } = makeChannelStore([
+        channelEntry({ cumulativeAmount: 1_000_000n, deposit: 1_000_000n }),
+      ])
+      set.mockImplementation((entry) => {
+        map.set(entryKey(entry), entry)
+        events.push(`set:${entry.deposit}:${entry.cumulativeAmount}`)
+      })
+      const fetch = vi.fn(async (_input, init?: RequestInit) => {
+        const authorization = new Headers(init?.headers).get(Constants.Headers.authorization)
+        if (!authorization) {
+          events.push('probe')
+          return make402Response(makeChallenge({ suggestedDeposit: '1000000' }))
+        }
+        const payload = Credential.deserialize<SessionCredentialPayload>(authorization).payload
+        if (payload.action !== 'topUp') throw new Error(`unexpected ${payload.action} fetch`)
+        events.push('topUp')
+        return new Response(null, { status: 204 })
+      })
+      function WebSocket() {
+        events.push('socket')
+        throw new Error('stop after preparation')
+      }
+      const s = sessionManager({
+        account,
+        client,
+        fetch: fetch as typeof globalThis.fetch,
+        maxDeposit: '3',
+        channelStore: store,
+        webSocket: WebSocket as never,
+      })
+
+      await expect(s.ws('wss://api.example.com/socket')).rejects.toThrow('stop after preparation')
+      expect(events).toEqual([
+        'probe',
+        'topUp',
+        'set:2000000:1000000',
+        'set:2000000:2000000',
+        'socket',
+      ])
     })
   })
 
