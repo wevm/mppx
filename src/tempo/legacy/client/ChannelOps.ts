@@ -192,7 +192,8 @@ export async function createOpenPayload(
       { to: escrowContract, data: openData },
     ],
     feeToken: currency,
-    ...(feePayer ? { nonceKey: 'expiring', validBefore } : {}),
+    nonceKey: 'expiring',
+    validBefore,
   } as never)
   // Estimate before enabling fee-payer mode so Tempo includes sender
   // signature and access-key verification costs in the gas budget.

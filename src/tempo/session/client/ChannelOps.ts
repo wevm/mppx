@@ -91,14 +91,18 @@ async function prepareTempoChannelTransaction(
   },
 ) {
   const { account, calls, feePayer, feeToken, validAfter } = parameters
+  // Session management transactions are independent and short-lived, so they
+  // always use TIP-1009 expiring nonces. `feePayer` controls sponsorship only.
   // viem's stable transaction request type does not yet expose Tempo's
   // `calls`, `feePayer`, and `feeToken` fields together. Keep the cast at
   // this boundary so session credential builders stay typed.
   return prepareTransactionRequest(client, {
     account,
     calls,
-    ...(feePayer ? { feePayer: true, ...(validAfter !== undefined ? { validAfter } : {}) } : {}),
+    nonceKey: 'expiring',
+    ...(feePayer ? { feePayer: true } : {}),
     feeToken,
+    ...(validAfter !== undefined ? { validAfter } : {}),
   } as never)
 }
 
@@ -325,7 +329,7 @@ export async function createTopUpPayload(
     ],
     feePayer,
     feeToken: descriptor.token,
-    ...(feePayer ? { validAfter: randomValidAfter() } : {}),
+    validAfter: randomValidAfter(),
   })
   const transaction = await signPreparedTempoTransaction(client, prepared)
 

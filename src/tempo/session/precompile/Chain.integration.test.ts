@@ -1,5 +1,12 @@
 import { Hex } from 'ox'
-import { type Address, encodeFunctionData, isAddressEqual, parseEventLogs, zeroAddress } from 'viem'
+import {
+  type Address,
+  encodeFunctionData,
+  isAddressEqual,
+  maxUint256,
+  parseEventLogs,
+  zeroAddress,
+} from 'viem'
 import { sendTransaction, waitForTransactionReceipt } from 'viem/actions'
 import { Transaction } from 'viem/tempo'
 import { describe, expect, test } from 'vp/test'
@@ -40,6 +47,15 @@ function getSingleEvent(receipt: { logs: readonly unknown[] }, name: string) {
   })
   expect(logs).toHaveLength(1)
   return logs[0] as unknown as { args: Record<string, unknown> }
+}
+
+function expectExpiringNonce(serializedTransaction: Hex.Hex) {
+  const transaction = Transaction.deserialize(
+    serializedTransaction as Transaction.TransactionSerializedTempo,
+  ) as unknown as { nonce: number; nonceKey: bigint; validBefore?: bigint }
+  expect(transaction.nonce).toBe(0)
+  expect(transaction.nonceKey).toBe(maxUint256)
+  expect(transaction.validBefore).toBeDefined()
 }
 
 async function openChannel(parameters: { deposit?: bigint | undefined } = {}) {
@@ -120,6 +136,7 @@ describe.runIf(isPrecompileTestnet)('TIP20EscrowChannel precompile chain operati
       token: asset,
     })
     if (payload.action !== 'open') throw new Error('expected open payload')
+    expectExpiringNonce(payload.transaction)
 
     const transaction = Transaction.deserialize(
       payload.transaction as Transaction.TransactionSerializedTempo,
@@ -224,6 +241,7 @@ describe.runIf(isPrecompileTestnet)('TIP20EscrowChannel precompile chain operati
       chain.id,
     )
     if (topUp.action !== 'topUp') throw new Error('expected topUp payload')
+    expectExpiringNonce(topUp.transaction)
 
     const result = await Chain.broadcastTopUpTransaction({
       additionalDeposit,

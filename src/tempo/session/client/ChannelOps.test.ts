@@ -194,10 +194,25 @@ describe('precompile client ChannelOps credential builders', () => {
     const now = Math.floor(Date.now() / 1_000)
 
     expect(requests).toMatchObject([
-      { feePayer: true, validAfter: expect.any(Number) },
-      { feePayer: true, validAfter: expect.any(Number) },
+      { feePayer: true, nonceKey: 'expiring', validAfter: expect.any(Number) },
+      { feePayer: true, nonceKey: 'expiring', validAfter: expect.any(Number) },
     ])
     expect(new Set(validAfter).size).toBe(2)
     expect(validAfter.every((value) => value >= 0 && value < now)).toBe(true)
+  })
+
+  test('uses expiring nonces and entropy for unsponsored management transactions', async () => {
+    mocks.prepareTransactionRequest.mockClear()
+
+    await ChannelOps.createTopUpPayload(client, account, descriptor, 10n, chainId, false)
+
+    expect(mocks.prepareTransactionRequest).toHaveBeenCalledWith(
+      client,
+      expect.objectContaining({
+        nonceKey: 'expiring',
+        validAfter: expect.any(Number),
+      }),
+    )
+    expect(mocks.prepareTransactionRequest.mock.calls[0]?.[1]).not.toHaveProperty('feePayer')
   })
 })

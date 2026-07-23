@@ -245,6 +245,13 @@ describe.runIf(isLocalnet)('createOpenPayload', () => {
     expect(result.payload).toHaveProperty('transaction')
     expect(result.payload).toHaveProperty('signature')
     expect(result.payload.channelId).toBe(result.entry.channelId)
+
+    if (result.payload.action !== 'open') throw new Error('unexpected action')
+    const transaction = Transaction.deserialize(result.payload.transaction)
+    if (!('nonceKey' in transaction)) throw new Error('unexpected transaction type')
+    expect(transaction.nonce).toBe(0)
+    expect(transaction.nonceKey).toBe((1n << 256n) - 1n)
+    expect((transaction as { validBefore?: bigint }).validBefore).toBeDefined()
   })
 
   test('defaults authorizedSigner to account.address', async () => {
