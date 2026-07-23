@@ -1,5 +1,21 @@
 # mppx
 
+## 0.8.14
+
+### Patch Changes
+
+- a8e73b7: Replaced per-sender sponsored charge serialization with durable atomic aggregate fee-budget reservations. Independent expiring-nonce transactions ran concurrently, waited for capacity when the sponsor budget was full, and retained pending exposure until receipt reconciliation or transaction expiry.
+- 6156f80: Added an optional `topUpAmount` policy for batching automatic Tempo session top-ups while preserving exact-shortfall behavior by default.
+- 7711982: Added a single-file Hono Tempo API relay-backed charge example.
+- 8935947: Fixed automatic session top-ups before signing HTTP, SSE, and WebSocket credentials, including preserving a durable resumed channel after a committed top-up when the paid request failed.
+- 9cc198e: Fixed Tempo relay verification fallback and restricted server lifecycle hook combinations to unambiguous configurations.
+- a3a0d82: Use expiring nonces for sponsored and unsponsored Tempo session management transactions.
+- 4fbcd0a: Added automatic stablecoin swaps for Tempo session channel opens and top-ups.
+- 0f91d5d: Marked legacy combined payment verification hooks as deprecated in favor of separate validation and broadcast hooks.
+- 9932a58: Added structured error codes and diagnostics for payment validation failures.
+- 8f2e847: Added Tempo API relay configuration for server-side charge validation and broadcast.
+- c7c1e4b: Added generic `validate`/`broadcast` credential lifecycle APIs and a Tempo charge implementation; Tempo session credential handling remained unchanged.
+
 ## 0.8.13
 
 ### Patch Changes
