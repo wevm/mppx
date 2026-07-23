@@ -32,6 +32,7 @@ export const callScopes = [
 export type Policy = {
   maxGas: bigint
   maxFeePerGas: bigint
+  maxInFlightTotalFee: bigint
   maxPriorityFeePerGas: bigint
   maxTotalFee: bigint
   maxValidityWindowSeconds: number
@@ -353,6 +354,7 @@ export async function preflightSponsorship<sponsorship extends PreflightSponsors
 const defaultPolicy: Policy = {
   maxGas: 2_000_000n,
   maxFeePerGas: 100_000_000_000n,
+  maxInFlightTotalFee: 500_000_000_000_000_000n,
   maxPriorityFeePerGas: 10_000_000_000n,
   maxTotalFee: 50_000_000_000_000_000n,
   maxValidityWindowSeconds: 15 * 60,
@@ -371,11 +373,13 @@ function getPolicy(chainId: number, overrides: Partial<Policy> | undefined): Pol
   const base = policyByChainId[chainId as defaults.ChainId] ?? defaultPolicy
   if (!overrides) return base
 
+  const maxTotalFee = overrides.maxTotalFee ?? base.maxTotalFee
   return {
     maxGas: overrides.maxGas ?? base.maxGas,
     maxFeePerGas: overrides.maxFeePerGas ?? base.maxFeePerGas,
+    maxInFlightTotalFee: overrides.maxInFlightTotalFee ?? maxTotalFee * 10n,
     maxPriorityFeePerGas: overrides.maxPriorityFeePerGas ?? base.maxPriorityFeePerGas,
-    maxTotalFee: overrides.maxTotalFee ?? base.maxTotalFee,
+    maxTotalFee,
     maxValidityWindowSeconds: overrides.maxValidityWindowSeconds ?? base.maxValidityWindowSeconds,
   }
 }
@@ -636,11 +640,16 @@ export function assertTransactionPolicy(parameters: {
       maxFeePerGas: maxFeePerGasValue.toString(),
     })
 
-  const maxTotalFee = gasLimit * maxFeePerGasValue
+  const maxTotalFee = BigInt(gasLimit) * BigInt(maxFeePerGasValue)
   if (maxTotalFee > policy.maxTotalFee)
     fail('fee-sponsored transaction total fee budget exceeds sponsor policy', {
       gas: gasLimit.toString(),
       maxFeePerGas: maxFeePerGasValue.toString(),
+      totalFee: maxTotalFee.toString(),
+    })
+  if (maxTotalFee > policy.maxInFlightTotalFee)
+    fail('fee-sponsored transaction total fee budget exceeds sponsor in-flight policy', {
+      maxInFlightTotalFee: policy.maxInFlightTotalFee.toString(),
       totalFee: maxTotalFee.toString(),
     })
 
@@ -677,7 +686,13 @@ export function assertTransactionPolicy(parameters: {
       validBefore: String(validBeforeValue),
     })
 
-  return { gasLimit, maxFeePerGasValue, validBeforeValue }
+  return {
+    gasLimit,
+    maxFeePerGasValue,
+    maxInFlightTotalFee: policy.maxInFlightTotalFee,
+    totalFee: maxTotalFee,
+    validBeforeValue,
+  }
 }
 
 export function prepareSponsoredTransaction(parameters: {

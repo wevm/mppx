@@ -2,8 +2,10 @@ import * as SignatureEnvelope from 'ox/tempo/SignatureEnvelope'
 import {
   decodeFunctionData,
   formatUnits,
+  isAddress,
   keccak256,
   parseEventLogs,
+  stringToHex,
   type TransactionReceipt,
 } from 'viem'
 import {
@@ -500,25 +502,40 @@ export function charge<const parameters extends charge.Parameters>(
           }
 
           let releaseReservation = true
-          let sponsoredSenderReservation: { chainId: number; sender: `0x${string}` } | undefined
+          let sponsorBudgetReservation: SponsorBudgetReservation | undefined
 
           try {
             if (isFeePayerTx) {
               const reservationChainId = chainId ?? client.chain!.id
-              if (
-                !(await markSponsoredSenderInFlight(store, {
-                  chainId: reservationChainId,
-                  sender: transaction.from as `0x${string}`,
-                }))
-              ) {
+              const sponsor = feePayerAccount?.address ?? feePayerUrl
+              if (!sponsor)
                 throw new VerificationFailedError({
-                  reason: 'Sponsored transaction from this sender is already in flight',
+                  reason: 'Sponsored transaction has no configured fee payer',
                 })
-              }
-              sponsoredSenderReservation = {
+              const { maxInFlightTotalFee, totalFee, validBeforeValue } =
+                FeePayer.assertTransactionPolicy({
+                  challengeExpires: expires,
+                  chainId: reservationChainId,
+                  details: { amount, currency, recipient },
+                  policy: feePayerPolicy,
+                  transaction,
+                })
+              const reservation: SponsorBudgetReservation = {
                 chainId: reservationChainId,
-                sender: transaction.from as `0x${string}`,
+                expiresAt: Math.min(
+                  validBeforeValue * 1_000,
+                  expires ? Date.parse(expires) : Number.MAX_SAFE_INTEGER,
+                ),
+                fee: totalFee,
+                hash,
+                sponsor,
               }
+              sponsorBudgetReservation = reservation
+              await reserveSponsorBudget(store, {
+                ...reservation,
+                maxInFlightTotalFee,
+              })
+              Expires.assert(challenge.expires, challenge.id)
             }
 
             const allowedFeeTokens = FeePayer.defaultAllowedFeeTokens(chainId)
@@ -642,8 +659,8 @@ export function charge<const parameters extends charge.Parameters>(
             if (releaseReservation) await releaseHashUse(store, hash)
             throw error
           } finally {
-            if (sponsoredSenderReservation)
-              await releaseSponsoredSenderInFlight(store, sponsoredSenderReservation)
+            if (sponsorBudgetReservation)
+              await releaseSponsorBudget(store, sponsorBudgetReservation)
           }
         }
       }
@@ -653,7 +670,9 @@ export function charge<const parameters extends charge.Parameters>(
 }
 
 export declare namespace charge {
-  type StoreItemMap = { [key: `mppx:charge:${string}`]: number }
+  type StoreItemMap = {
+    [key: `mppx:charge:${string}`]: number | SponsorBudgetState
+  }
 
   type Defaults = LooseOmit<Method.RequestDefaults<typeof Methods.charge>, 'feePayer' | 'recipient'>
 
@@ -681,10 +700,13 @@ export declare namespace charge {
     /**
      * Override the fee-sponsor policy used when co-signing Tempo charge
      * transactions. Defaults resolve per chain, including a higher
-     * priority-fee ceiling on Moderato.
+     * priority-fee ceiling on Moderato and a bounded aggregate in-flight fee
+     * budget. Sponsored transactions reserve their declared maximum fee
+     * atomically; independent expiring-nonce transactions run concurrently
+     * while capacity remains and wait for capacity when the budget is full.
      *
-     * If you increase `maxGas` or `maxFeePerGas`, you may also need to raise
-     * `maxTotalFee` so the combined fee budget remains valid.
+     * If you increase `maxGas`, `maxFeePerGas`, or `maxTotalFee`, you may also
+     * need to raise `maxInFlightTotalFee`.
      */
     feePayerPolicy?: FeePayerPolicy | undefined
     /**
@@ -1095,12 +1117,29 @@ function getProofStoreKey(challengeId: string): `mppx:charge:${string}` {
   return `mppx:charge:proof:${challengeId}`
 }
 
-/** @internal */
-function getSponsoredSenderStoreKey(parameters: {
+type SponsorBudgetState = {
+  reservations: Record<string, { expiresAt: number; fee: string }>
+}
+
+type SponsorBudgetReservation = {
   chainId: number
-  sender: `0x${string}`
+  expiresAt: number
+  fee: bigint
+  hash: `0x${string}`
+  sponsor: string
+}
+
+const sponsorBudgetPollIntervalMs = 10
+const sponsorBudgetMaxPollIntervalMs = 250
+
+/** @internal */
+function getSponsorBudgetStoreKey(parameters: {
+  chainId: number
+  sponsor: string
 }): `mppx:charge:${string}` {
-  return `mppx:charge:sponsor:${parameters.chainId}:${parameters.sender.toLowerCase()}`
+  const sponsor = parameters.sponsor.toLowerCase()
+  const scope = isAddress(sponsor) ? sponsor : keccak256(stringToHex(sponsor))
+  return `mppx:charge:sponsor-budget:${parameters.chainId}:${scope}`
 }
 
 async function markHashUsed(
@@ -1136,23 +1175,85 @@ function parseHashCredentialSource(parameters: {
   return parsed
 }
 
-/** @internal */
-async function markSponsoredSenderInFlight(
+/**
+ * Atomically reserves worst-case fee exposure for one sponsored transaction.
+ *
+ * Reservations share a sponsor-scoped budget across senders and server
+ * instances. Capacity contention waits instead of turning an otherwise valid
+ * expiring-nonce transaction into a terminal payment rejection. Stale entries
+ * expire with their transaction or challenge deadline.
+ *
+ * @internal
+ */
+async function reserveSponsorBudget(
   store: Store.AtomicStore<charge.StoreItemMap>,
-  parameters: { chainId: number; sender: `0x${string}` },
-): Promise<boolean> {
-  return store.update(getSponsoredSenderStoreKey(parameters), (current) => {
-    if (current !== null) return { op: 'noop', result: false }
-    return { op: 'set', value: Date.now(), result: true }
-  })
+  parameters: SponsorBudgetReservation & { maxInFlightTotalFee: bigint },
+): Promise<void> {
+  const key = getSponsorBudgetStoreKey(parameters)
+  let pollIntervalMs = sponsorBudgetPollIntervalMs
+  for (;;) {
+    const now = Date.now()
+    if (now >= parameters.expiresAt)
+      throw new VerificationFailedError({
+        reason: 'Sponsored transaction expired while waiting for sponsor budget',
+      })
+
+    const result = await store.update(key, (current) => {
+      if (typeof current === 'number') return { op: 'noop', result: 'invalid' as const }
+
+      const reservations = Object.fromEntries(
+        Object.entries(current?.reservations ?? {}).filter(
+          ([, reservation]) => reservation.expiresAt > now,
+        ),
+      )
+      const reserved = Object.values(reservations).reduce(
+        (total, reservation) => total + BigInt(reservation.fee),
+        0n,
+      )
+      if (reserved + parameters.fee > parameters.maxInFlightTotalFee)
+        return {
+          op: 'set',
+          value: { reservations },
+          result: 'wait' as const,
+        }
+
+      reservations[parameters.hash.toLowerCase()] = {
+        expiresAt: parameters.expiresAt,
+        fee: parameters.fee.toString(),
+      }
+      return {
+        op: 'set',
+        value: { reservations },
+        result: 'reserved' as const,
+      }
+    })
+
+    if (result === 'reserved') return
+    if (result === 'invalid')
+      throw new VerificationFailedError({
+        reason: 'Sponsor budget store contains incompatible state',
+      })
+    await new Promise((resolve) =>
+      setTimeout(resolve, Math.min(pollIntervalMs, parameters.expiresAt - now)),
+    )
+    pollIntervalMs = Math.min(pollIntervalMs * 2, sponsorBudgetMaxPollIntervalMs)
+  }
 }
 
-/** @internal */
-async function releaseSponsoredSenderInFlight(
+/** Releases one transaction's fee exposure without disturbing concurrent reservations. */
+async function releaseSponsorBudget(
   store: Store.AtomicStore<charge.StoreItemMap>,
-  parameters: { chainId: number; sender: `0x${string}` },
+  parameters: SponsorBudgetReservation,
 ): Promise<void> {
-  await store.delete(getSponsoredSenderStoreKey(parameters))
+  const key = getSponsorBudgetStoreKey(parameters)
+  await store.update(key, (current) => {
+    if (current === null || typeof current === 'number') return { op: 'noop', result: undefined }
+
+    const reservations = { ...current.reservations }
+    delete reservations[parameters.hash.toLowerCase()]
+    if (Object.keys(reservations).length === 0) return { op: 'delete', result: undefined }
+    return { op: 'set', value: { reservations }, result: undefined }
+  })
 }
 
 /** @internal */
