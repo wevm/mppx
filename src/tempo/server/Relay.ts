@@ -95,6 +95,7 @@ export function configure<const intent extends Method.Method>(
     const receipt = await request.broadcast(input, {
       idempotencyKey: idempotencyKey(input),
     })
+    if (receipt.method !== method.name) throw failure()
     try {
       return Receipt.from({ ...receipt, status: 'success' })
     } catch {
@@ -102,12 +103,10 @@ export function configure<const intent extends Method.Method>(
     }
   }
 
-  // `verify` is the legacy combined validation and settlement hook. A relay
-  // cannot safely implement it: its successful result must be a receipt, which
-  // requires broadcast. Keep it inert so direct legacy calls cannot settle a
-  // payment unexpectedly; use `validate` and `broadcast` instead.
-  const verify: Method.VerifyFn<intent> = async () => {
-    throw failure()
+  // Preserve the legacy combined hook for direct method consumers.
+  const verify: Method.VerifyFn<intent> = async (parameters) => {
+    await validate(parameters)
+    return broadcast(parameters)
   }
 
   return {
@@ -122,8 +121,7 @@ export declare namespace configure {
   /**
    * Server method augmented with Tempo API validation and broadcast hooks.
    *
-   * The `verify` method is legacy-only and always fails without
-   * settling. Use `validate` followed by `broadcast` for relay payments.
+   * The legacy `verify` method validates and broadcasts in one call.
    */
   type Adapter<intent extends Method.Method> = Omit<
     Method.Server<intent>,
@@ -141,7 +139,7 @@ export declare namespace configure {
     apiKey: string
     /** Fetch implementation used to call Tempo API. */
     fetch?: typeof globalThis.fetch | undefined
-    /** Tempo API base URL. @default 'https://api.tempo.xyz' */
+    /** Tempo API base URL, including an optional path prefix. @default 'https://api.tempo.xyz' */
     apiBaseUrl?: string | undefined
   }
 
@@ -158,9 +156,10 @@ export declare namespace configure {
 function createRequest(options: configure.Options) {
   const fetch = options.fetch ?? globalThis.fetch
   const apiBaseUrl = new URL(options.apiBaseUrl ?? defaultApiBaseUrl)
+  if (!apiBaseUrl.pathname.endsWith('/')) apiBaseUrl.pathname += '/'
 
   async function post(
-    path: '/v1/mpp/broadcast' | '/v1/mpp/validate',
+    path: 'v1/mpp/broadcast' | 'v1/mpp/validate',
     input: RelayInput,
     headers?: Record<string, string>,
   ): Promise<unknown> {
@@ -185,12 +184,12 @@ function createRequest(options: configure.Options) {
   }
 
   const validate = async (input: RelayInput) => {
-    const response = await post('/v1/mpp/validate', input)
+    const response = await post('v1/mpp/validate', input)
     if (!isValidateSuccess(response)) throw failure(response)
   }
 
   const broadcast = async (input: RelayInput, broadcastOptions: { idempotencyKey: string }) => {
-    const response = await post('/v1/mpp/broadcast', input, {
+    const response = await post('v1/mpp/broadcast', input, {
       'idempotency-key': broadcastOptions.idempotencyKey,
     })
     if (!isBroadcastSuccess(response)) throw failure(response)

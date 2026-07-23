@@ -99,6 +99,22 @@ describe('credential execution', () => {
     })
   }
 
+  test('types: requires broadcast with validate', () => {
+    // @ts-expect-error Split validation requires a terminal broadcast hook.
+    Method.toServer(base, {
+      validate: async () => ({}) as never,
+      verify: async () => ({}) as never,
+    })
+  })
+
+  test('types: excludes verify with broadcast', () => {
+    // @ts-expect-error A broadcast hook replaces the legacy verify hook.
+    Method.toServer(base, {
+      broadcast: async () => ({}) as never,
+      verify: async () => ({}) as never,
+    })
+  })
+
   test('validates without broadcasting', async () => {
     const calls: string[] = []
     const method = Method.toServer(base, {

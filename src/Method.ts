@@ -597,19 +597,15 @@ export declare namespace toServer {
     respond?: RespondFn<method> | undefined
     stableBinding?: StableBindingFn<method> | undefined
     transport?: transportOverride | Transport.AnyTransport | undefined
-    validate?: ValidateFn<method> | undefined
   } & (
     | {
         broadcast: BroadcastFn<method>
-        /**
-         * @deprecated Use `validate` and `broadcast` for new methods. This
-         * combined hook may mutate payment state and cannot power a safe
-         * validation-only endpoint.
-         */
-        verify?: VerifyFn<method> | undefined
+        validate?: ValidateFn<method> | undefined
+        verify?: undefined
       }
     | {
         broadcast?: undefined
+        validate?: undefined
         /**
          * @deprecated Use `validate` and `broadcast` for new methods. This
          * combined hook may mutate payment state and cannot power a safe

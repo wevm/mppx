@@ -4891,10 +4891,6 @@ describe('verifyCredential', () => {
         calls.push('broadcast')
         return mockReceipt('broadcast')
       },
-      async verify() {
-        calls.push('verify')
-        return mockReceipt('legacy')
-      },
     })
     const mppx = Mppx.create({ methods: [splitServer], realm, secretKey })
     const challenge = await mppx.challenge.alpha.charge(challengeOpts)
@@ -4925,10 +4921,6 @@ describe('verifyCredential', () => {
         calls.push('broadcast')
         return mockReceipt('broadcast')
       },
-      async verify() {
-        calls.push('verify')
-        return mockReceipt('legacy')
-      },
     })
     const mppx = Mppx.create({ methods: [splitServer], realm, secretKey })
     const challenge = await mppx.challenge.alpha.charge(challengeOpts)
@@ -4958,10 +4950,6 @@ describe('verifyCredential', () => {
       async broadcast() {
         calls.push('broadcast')
         return mockReceipt('broadcast')
-      },
-      async verify() {
-        calls.push('verify')
-        return mockReceipt('legacy')
       },
     })
     const mppx = Mppx.create({ methods: [splitServer], realm, secretKey })
@@ -5006,9 +4994,6 @@ describe('verifyCredential', () => {
       async broadcast() {
         return mockReceipt('broadcast')
       },
-      async verify() {
-        return mockReceipt('legacy')
-      },
     })
     const mppx = Mppx.create({ methods: [splitServer], realm, secretKey })
     const challenge = await mppx.challenge.alpha.charge(challengeOpts)
@@ -5038,10 +5023,6 @@ describe('verifyCredential', () => {
       async broadcast() {
         calls.push('broadcast')
         return mockReceipt('broadcast')
-      },
-      async verify() {
-        calls.push('verify')
-        return mockReceipt('legacy')
       },
     })
     const mppx = Mppx.create({ methods: [splitServer], realm, secretKey })
@@ -5075,10 +5056,6 @@ describe('verifyCredential', () => {
       async broadcast() {
         calls.push('broadcast')
         return mockReceipt('broadcast')
-      },
-      async verify() {
-        calls.push('verify')
-        return mockReceipt('legacy')
       },
     })
     const mppx = Mppx.create({ methods: [splitServer], realm, secretKey })

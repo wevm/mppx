@@ -150,6 +150,18 @@ describe('relay boundary', () => {
     )
   })
 
+  test('preserves a configured API base path', async () => {
+    const fetch = mockRelay(() => Response.json({ success: true }))
+    const [method] = methods(fetch, 'https://relay.example/mpp')
+
+    await method.validate!({ credential, request: credential.challenge.request } as never)
+
+    expect(fetch).toHaveBeenCalledWith(
+      new URL('https://relay.example/mpp/v1/mpp/validate'),
+      expect.anything(),
+    )
+  })
+
   test('broadcasts a valid relay receipt and forwards its external ID', async () => {
     const calls: Array<{ init: RequestInit; url: URL }> = []
     const fetch = mockRelay((url, init) => {
@@ -238,14 +250,20 @@ describe('relay boundary', () => {
     expect(headers['idempotency-key']).toBe(`mppx_${expected}`)
   })
 
-  test('keeps the legacy combined verify hook inert', async () => {
-    const fetch = mockRelay(() => Response.json({ success: true }))
+  test('preserves the legacy combined verify hook', async () => {
+    const calls: string[] = []
+    const fetch = mockRelay((url) => {
+      calls.push(url.pathname)
+      return url.pathname === '/v1/mpp/validate'
+        ? Response.json({ success: true })
+        : successReceipt()
+    })
     const [method] = methods(fetch)
 
     await expect(
       method.verify({ credential, request: credential.challenge.request } as never),
-    ).rejects.toSatisfy(expectGenericFailure)
-    expect(fetch).not.toHaveBeenCalled()
+    ).resolves.toMatchObject({ method: 'tempo', status: 'success' })
+    expect(calls).toEqual(['/v1/mpp/validate', '/v1/mpp/broadcast'])
   })
 
   test.each([
@@ -286,6 +304,18 @@ describe('relay boundary', () => {
         }),
     ],
     ['broadcast', () => Response.json({ receipt: { method: 'tempo' }, success: true })],
+    [
+      'broadcast',
+      () =>
+        Response.json({
+          receipt: {
+            method: 'stripe',
+            reference: '0xabc',
+            timestamp: '2026-07-22T00:00:00.000Z',
+          },
+          success: true,
+        }),
+    ],
     [
       'broadcast',
       () =>
