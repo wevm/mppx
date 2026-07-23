@@ -1951,25 +1951,25 @@ describe('tempo', () => {
     })
 
     test('behavior: fee payer allows concurrent expiring-nonce transactions from one sender', async () => {
-      let releaseSimulation!: () => void
-      let resolveSimulationStarted!: () => void
-      const simulationStarted = new Promise<void>((resolve) => {
-        resolveSimulationStarted = resolve
+      let releaseBroadcast!: () => void
+      let resolveBroadcastStarted!: () => void
+      const broadcastStarted = new Promise<void>((resolve) => {
+        resolveBroadcastStarted = resolve
       })
-      const releaseSimulationPromise = new Promise<void>((resolve) => {
-        releaseSimulation = resolve
+      const releaseBroadcastPromise = new Promise<void>((resolve) => {
+        releaseBroadcast = resolve
       })
-      let heldFirstSimulation = false
+      let heldFirstBroadcast = false
 
       const interceptingClient = createClient({
         account: accounts[0],
         chain: client.chain,
         transport: custom({
           async request(args: any) {
-            if (args.method === 'eth_call' && !heldFirstSimulation) {
-              heldFirstSimulation = true
-              resolveSimulationStarted()
-              await releaseSimulationPromise
+            if (args.method === 'eth_sendRawTransactionSync' && !heldFirstBroadcast) {
+              heldFirstBroadcast = true
+              resolveBroadcastStarted()
+              await releaseBroadcastPromise
             }
             return client.transport.request(args)
           },
@@ -2031,13 +2031,13 @@ describe('tempo', () => {
       ])
 
       const first = fetch(httpServer.url, { headers: { Authorization: credential1 } })
-      await simulationStarted
+      await broadcastStarted
       const sponsorBudgetKey =
-        `tenant:mppx:charge:sponsor-budget:${chain.id}:${accounts[0].address.toLowerCase()}` as const
+        `mppx:charge:sponsor-budget:${chain.id}:${accounts[0].address.toLowerCase()}` as const
       expect(await sponsoredStore.get(sponsorBudgetKey)).not.toBeNull()
       expect(
         await sponsoredStore.get(
-          `mppx:charge:sponsor-budget:${chain.id}:${accounts[0].address.toLowerCase()}`,
+          `tenant:mppx:charge:sponsor-budget:${chain.id}:${accounts[0].address.toLowerCase()}`,
         ),
       ).toBeNull()
       const second = fetch(httpServer.url, { headers: { Authorization: credential2 } })
@@ -2046,7 +2046,7 @@ describe('tempo', () => {
         const secondResponse = await second
         expect(secondResponse.status).toBe(200)
       } finally {
-        releaseSimulation()
+        releaseBroadcast()
       }
 
       const firstResponse = await first
@@ -2057,25 +2057,25 @@ describe('tempo', () => {
     })
 
     test('behavior: fee payer waits for atomic sponsor budget capacity', async () => {
-      let releaseSimulation!: () => void
-      let resolveSimulationStarted!: () => void
-      const simulationStarted = new Promise<void>((resolve) => {
-        resolveSimulationStarted = resolve
+      let releaseBroadcast!: () => void
+      let resolveBroadcastStarted!: () => void
+      const broadcastStarted = new Promise<void>((resolve) => {
+        resolveBroadcastStarted = resolve
       })
-      const releaseSimulationPromise = new Promise<void>((resolve) => {
-        releaseSimulation = resolve
+      const releaseBroadcastPromise = new Promise<void>((resolve) => {
+        releaseBroadcast = resolve
       })
-      let heldFirstSimulation = false
+      let heldFirstBroadcast = false
 
       const interceptingClient = createClient({
         account: accounts[0],
         chain: client.chain,
         transport: custom({
           async request(args: any) {
-            if (args.method === 'eth_call' && !heldFirstSimulation) {
-              heldFirstSimulation = true
-              resolveSimulationStarted()
-              await releaseSimulationPromise
+            if (args.method === 'eth_sendRawTransactionSync' && !heldFirstBroadcast) {
+              heldFirstBroadcast = true
+              resolveBroadcastStarted()
+              await releaseBroadcastPromise
             }
             return client.transport.request(args)
           },
@@ -2150,7 +2150,7 @@ describe('tempo', () => {
       ].reduce((maximum, exposure) => (exposure > maximum ? exposure : maximum))
 
       const first = fetch(httpServer.url, { headers: { Authorization: credential1 } })
-      await simulationStarted
+      await broadcastStarted
       const second = fetch(httpServer.url, { headers: { Authorization: credential2 } })
       try {
         const secondBeforeRelease = await Promise.race([
@@ -2159,7 +2159,7 @@ describe('tempo', () => {
         ])
         expect(secondBeforeRelease).toBe('waiting')
       } finally {
-        releaseSimulation()
+        releaseBroadcast()
       }
       const [firstResponse, secondResponse] = await Promise.all([first, second])
       expect(firstResponse.status).toBe(200)
@@ -2182,8 +2182,13 @@ describe('tempo', () => {
           stale: {
             expiresAt: Date.now() - 1,
             fee: '500000000000000000',
+            leaseUntil: Date.now() - 1,
+            owner: 'stale-worker',
+            phase: 'pending',
+            transactionHash: `0x${'01'.repeat(32)}`,
           },
         },
+        version: 1,
       })
       const serverWithStaleBudget = Mppx_server.create({
         methods: [
@@ -2983,6 +2988,71 @@ describe('tempo', () => {
         expect(receipt.method).toBe('tempo')
         expect(receipt.reference).toBeDefined()
       }
+
+      httpServer.close()
+    })
+
+    test('retains sponsored exposure until receipt reconciliation', async () => {
+      const sponsoredStore = Store.memory()
+      const serverNoWait = Mppx_server.create({
+        methods: [
+          tempo_server.charge({
+            getClient() {
+              return client
+            },
+            currency: asset,
+            account: accounts[0],
+            store: sponsoredStore,
+            waitForConfirmation: false,
+          }),
+        ],
+        realm,
+        secretKey,
+      })
+      const mppx = Mppx_client.create({
+        polyfill: false,
+        methods: [
+          tempo_client({
+            account: accounts[1],
+            getClient() {
+              return client
+            },
+          }),
+        ],
+      })
+      const httpServer = await Http.createServer(async (req, res) => {
+        const result = await Mppx_server.toNodeListener(
+          serverNoWait.charge({
+            feePayer: accounts[0],
+            amount: '1',
+            currency: asset,
+            recipient: accounts[0].address,
+          }),
+        )(req, res)
+        if (result.status === 402) return
+        res.end('OK')
+      })
+
+      const challengeResponse = await fetch(httpServer.url)
+      const credential = await mppx.createCredential(challengeResponse)
+      const response = await fetch(httpServer.url, {
+        headers: { Authorization: credential },
+      })
+
+      expect(response.status).toBe(200)
+      const receipt = Receipt.fromResponse(response)
+      const sponsorBudgetKey =
+        `mppx:charge:sponsor-budget:${chain.id}:${accounts[0].address.toLowerCase()}` as const
+      expect(await sponsoredStore.get(sponsorBudgetKey)).toMatchObject({
+        reservations: {
+          [receipt.reference]: {
+            owner: expect.any(String),
+            phase: 'pending',
+            transactionHash: receipt.reference,
+          },
+        },
+        version: 1,
+      })
 
       httpServer.close()
     })

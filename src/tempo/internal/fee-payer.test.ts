@@ -1083,19 +1083,6 @@ describe('prepareSponsoredTransaction', () => {
     ).toThrow('total fee budget exceeds sponsor policy')
   })
 
-  test('error: rejects a transaction larger than the aggregate in-flight budget', () => {
-    expect(() =>
-      prepareSponsoredTransaction({
-        account: sponsor,
-        chainId: 42431,
-        details,
-        allowedFeeTokens: [bogus],
-        policy: { maxInFlightTotalFee: 100_000_000_000_000n },
-        transaction: baseTransaction as any,
-      }),
-    ).toThrow('total fee budget exceeds sponsor in-flight policy')
-  })
-
   test('error: rejects mismatched feeToken', () => {
     expect(() =>
       prepareSponsoredTransaction({
