@@ -99,7 +99,13 @@ async function reconcile(
         await release(store, handle)
         return
       }
-      if (reservation.phase === 'prepared') return
+      // The broadcasting owner has submitted (or is about to submit) the
+      // transaction but has not yet published that outcome to this store.
+      // Releasing its reservation here races the owner's transition to
+      // `pending`: the transaction can settle while the owner observes a lost
+      // reservation and reports a retryable payment failure. Only reconcile
+      // receipts after the owner has completed that hand-off.
+      if (reservation.phase !== 'pending') return
 
       try {
         await parameters.getReceipt(reservation.transactionHash)

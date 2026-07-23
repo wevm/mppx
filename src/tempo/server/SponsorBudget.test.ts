@@ -74,6 +74,35 @@ describe('SponsorBudget', () => {
     expect(Object.keys(state!.reservations)).toEqual([hash2])
   })
 
+  test('does not reconcile a broadcasting reservation before its owner publishes pending', async () => {
+    const store = memoryStore()
+    const getReceipt = async (hash: Hex) => {
+      if (hash === hash1) return {}
+      throw new Error('not found')
+    }
+    const first = await SponsorBudget.reserve(store, parameters({ getReceipt }))
+    expect(await SponsorBudget.transition(store, first, 'broadcasting')).toBe(true)
+
+    const second = SponsorBudget.reserve(
+      store,
+      parameters({
+        getReceipt,
+        id: hash2,
+        owner: 'worker-2',
+        transactionHash: hash2,
+      }),
+    )
+    expect(
+      await Promise.race([
+        second.then(() => 'reserved' as const),
+        new Promise<'waiting'>((resolve) => setTimeout(() => resolve('waiting'), 40)),
+      ]),
+    ).toBe('waiting')
+
+    expect(await SponsorBudget.transition(store, first, 'pending')).toBe(true)
+    await expect(second).resolves.toMatchObject({ id: hash2, owner: 'worker-2' })
+  })
+
   test('fences release and transition by reservation owner', async () => {
     const store = memoryStore()
     const handle = await SponsorBudget.reserve(store, parameters())
