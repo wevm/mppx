@@ -2,4 +2,4 @@
 'mppx': patch
 ---
 
-Fixed Tempo relay charges to skip broadcast for validated push credentials.
+Fixed Tempo relay charges to delegate push payment finalization without re-broadcasting transactions.

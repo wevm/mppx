@@ -64,10 +64,10 @@ type BroadcastResponse =
  * Configures a Tempo payment method to use Tempo API's MPP relay.
  *
  * The adapter preserves the supplied method's challenge configuration while
- * delegating credential validation to `/v1/mpp/validate`. It broadcasts pull
- * credentials through `/v1/mpp/broadcast`; for push credentials, the payer
- * has already broadcast the transaction, so the adapter returns a receipt for
- * the validated transaction hash without calling the relay broadcast endpoint.
+ * delegating validation and finalization to `/v1/mpp/validate` and
+ * `/v1/mpp/broadcast`. The relay receives every submitted credential: it
+ * broadcasts pull transactions and finalizes push transaction hashes without
+ * sending them again.
  *
  * @internal
  */
@@ -93,18 +93,6 @@ export function configure<const intent extends Method.Method>(
   }
 
   const broadcast: Method.BroadcastFn<intent> = async (parameters) => {
-    const pushedTransactionHash = pushTransactionHash(parameters.credential)
-    if (pushedTransactionHash) {
-      // Mppx validates before this terminal step. The relay remains the
-      // authoritative validator and owner of any replay state.
-      return Receipt.from({
-        method: method.name,
-        reference: pushedTransactionHash,
-        status: 'success',
-        timestamp: new Date().toISOString(),
-      })
-    }
-
     const input = toRelayInput(parameters.credential)
     const receipt = await request.broadcast(input, {
       idempotencyKey: idempotencyKey(input),
@@ -141,7 +129,7 @@ export declare namespace configure {
     Method.Server<intent>,
     'broadcast' | 'validate'
   > & {
-    /** Broadcasts pull credentials through Tempo API or returns a receipt for a validated push credential. */
+    /** Delegates payment finalization to Tempo API's relay. */
     broadcast: Method.BroadcastFn<intent>
     /** Validates the credential through Tempo API. */
     validate: Method.ValidateFn<intent>
@@ -150,9 +138,10 @@ export declare namespace configure {
   /**
    * Tempo API relay configuration for server-side Tempo charges.
    *
-   * The adapter resolves transaction broadcast ownership from the credential:
-   * it broadcasts pull credentials, while push credentials are already
-   * broadcast by the payer and receive a receipt after relay validation.
+   * The adapter sends every credential to the relay for finalization. The
+   * relay broadcasts pull credentials, while it recognizes a push credential
+   * as an already-broadcast transaction and returns its receipt without
+   * sending it again.
    */
   type Options = {
     /** Tempo API key with the `mpp:write` scope. */
@@ -232,18 +221,6 @@ function toRelayInput(credential: {
     payload: credential.payload,
     ...(credential.source ? { source: credential.source } : {}),
   }
-}
-
-function pushTransactionHash(credential: { payload: unknown }): string | undefined {
-  const payload = credential.payload
-  if (
-    !isRecord(payload) ||
-    payload.type !== 'hash' ||
-    typeof payload.hash !== 'string' ||
-    !Hex.validate(payload.hash)
-  )
-    return
-  return payload.hash
 }
 
 function idempotencyKey(input: RelayInput): string {

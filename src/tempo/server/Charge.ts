@@ -789,9 +789,10 @@ export declare namespace charge {
      * Delegates Tempo charge credential validation and broadcast to Tempo API
      * or a compatible MPP relay.
      *
-     * The adapter handles broadcast ownership automatically: it broadcasts
-     * pull credentials through the relay, while push credentials have already
-     * been broadcast by the payer and receive a receipt after relay validation.
+     * The adapter delegates finalization to the relay for both modes. The
+     * relay broadcasts pull credentials, while it recognizes a push
+     * credential as already broadcast and returns its receipt without sending
+     * it again.
      */
     relay?: RelayOptions | undefined
     /**
