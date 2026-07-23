@@ -789,10 +789,9 @@ export declare namespace charge {
      * Delegates Tempo charge credential validation and broadcast to Tempo API
      * or a compatible MPP relay.
      *
-     * Relay-backed charges should advertise `supportedModes: ['pull']`: the
-     * payer sends a signed transaction to the server and the relay broadcasts
-     * it. Do not send a push-mode transaction to the relay because the payer
-     * has already broadcast it.
+     * The adapter handles broadcast ownership automatically: it broadcasts
+     * pull credentials through the relay, while push credentials have already
+     * been broadcast by the payer and receive a receipt after relay validation.
      */
     relay?: RelayOptions | undefined
     /**

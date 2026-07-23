@@ -196,6 +196,57 @@ describe('relay boundary', () => {
     ])
   })
 
+  test('validates a pushed transaction without broadcasting it again', async () => {
+    const calls: string[] = []
+    const fetch = mockRelay((url) => {
+      calls.push(url.pathname)
+      return Response.json({ success: true })
+    })
+    const [method] = methods(fetch)
+    const pushedCredential = {
+      ...credential,
+      payload: {
+        hash: '0x1a2b3c4d5e6f7890abcdef1234567890abcdef1234567890abcdef1234567890',
+        type: 'hash' as const,
+      },
+    }
+
+    await expect(
+      method.verify({
+        credential: pushedCredential,
+        request: credential.challenge.request,
+      } as never),
+    ).resolves.toMatchObject({
+      method: 'tempo',
+      reference: pushedCredential.payload.hash,
+      status: 'success',
+    })
+    expect(calls).toEqual(['/v1/mpp/validate'])
+  })
+
+  test('validates a pushed transaction before direct broadcast', async () => {
+    const calls: string[] = []
+    const fetch = mockRelay((url) => {
+      calls.push(url.pathname)
+      return Response.json({ success: true })
+    })
+    const [method] = methods(fetch)
+    const pushedCredential = {
+      ...credential,
+      payload: {
+        hash: '0x1a2b3c4d5e6f7890abcdef1234567890abcdef1234567890abcdef1234567890',
+        type: 'hash' as const,
+      },
+    }
+
+    await method.broadcast!({
+      credential: pushedCredential,
+      request: credential.challenge.request,
+    } as never)
+
+    expect(calls).toEqual(['/v1/mpp/validate'])
+  })
+
   test('uses the transaction hash as the transaction broadcast idempotency key', async () => {
     const calls: RequestInit[] = []
     const fetch = mockRelay((_url, init) => {

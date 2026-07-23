@@ -50,9 +50,10 @@ const method = tempo.charge({
 ```
 
 Uncommenting it lets MPPX issue and bind challenges while the adapter validates
-and broadcasts submitted credentials. Relay failures are returned as MPPX
-payment failures without exposing Tempo API details.
+submitted credentials. Pull credentials are broadcast through the relay; push
+credentials have already been broadcast by the payer and receive a receipt
+after relay validation. Relay failures are returned as MPPX payment failures
+without exposing Tempo API details.
 
-Relay-backed charges must use `pull` mode. The client submits a signed
-transaction for the relay to broadcast; in `push` mode, the client has already
-broadcast the transaction and it must not be submitted to the relay again.
+The adapter derives broadcast ownership from the submitted credential, so a
+single relay-backed charge may safely advertise both `pull` and `push` modes.

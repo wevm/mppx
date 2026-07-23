@@ -64,13 +64,10 @@ type BroadcastResponse =
  * Configures a Tempo payment method to use Tempo API's MPP relay.
  *
  * The adapter preserves the supplied method's challenge configuration while
- * delegating credential validation and terminal broadcast to
- * `/v1/mpp/validate` and `/v1/mpp/broadcast` respectively.
- *
- * Configure relay-backed charges for `pull` mode only. The payer sends a
- * signed transaction to the server, and the relay broadcasts it. A `push`
- * client has already broadcast the transaction and must not submit it to the
- * relay again.
+ * delegating credential validation to `/v1/mpp/validate`. It broadcasts pull
+ * credentials through `/v1/mpp/broadcast`; for push credentials, the payer
+ * has already broadcast the transaction, so the adapter returns a receipt for
+ * the validated transaction hash without calling the relay broadcast endpoint.
  *
  * @internal
  */
@@ -79,10 +76,13 @@ export function configure<const intent extends Method.Method>(
   options: configure.Options,
 ): configure.Adapter<intent> {
   const request = createRequest(options)
+  const validatedPushCredentials = new WeakSet<object>()
 
   const validate: Method.ValidateFn<intent> = async (parameters) => {
     const input = toRelayInput(parameters.credential)
     await request.validate(input)
+    if (pushTransactionHash(parameters.credential))
+      validatedPushCredentials.add(parameters.credential)
 
     return {
       challenge: parameters.credential.challenge,
@@ -96,6 +96,21 @@ export function configure<const intent extends Method.Method>(
   }
 
   const broadcast: Method.BroadcastFn<intent> = async (parameters) => {
+    const pushedTransactionHash = pushTransactionHash(parameters.credential)
+    if (pushedTransactionHash) {
+      // Mppx validates before broadcasting, but direct method consumers may not.
+      if (!validatedPushCredentials.delete(parameters.credential)) {
+        await validate(parameters)
+        validatedPushCredentials.delete(parameters.credential)
+      }
+      return Receipt.from({
+        method: method.name,
+        reference: pushedTransactionHash,
+        status: 'success',
+        timestamp: new Date().toISOString(),
+      })
+    }
+
     const input = toRelayInput(parameters.credential)
     const receipt = await request.broadcast(input, {
       idempotencyKey: idempotencyKey(input),
@@ -132,7 +147,7 @@ export declare namespace configure {
     Method.Server<intent>,
     'broadcast' | 'validate'
   > & {
-    /** Broadcasts the credential through Tempo API. */
+    /** Broadcasts pull credentials through Tempo API or returns a receipt for a validated push credential. */
     broadcast: Method.BroadcastFn<intent>
     /** Validates the credential through Tempo API. */
     validate: Method.ValidateFn<intent>
@@ -141,10 +156,9 @@ export declare namespace configure {
   /**
    * Tempo API relay configuration for server-side Tempo charges.
    *
-   * Configure the associated charge with `supportedModes: ['pull']`. In pull
-   * mode, the payer signs the transaction and the relay broadcasts it. Do not
-   * use the relay to broadcast a transaction from a push-mode payer because it
-   * has already been broadcast by the client.
+   * The adapter resolves transaction broadcast ownership from the credential:
+   * it broadcasts pull credentials, while push credentials are already
+   * broadcast by the payer and receive a receipt after relay validation.
    */
   type Options = {
     /** Tempo API key with the `mpp:write` scope. */
@@ -224,6 +238,18 @@ function toRelayInput(credential: {
     payload: credential.payload,
     ...(credential.source ? { source: credential.source } : {}),
   }
+}
+
+function pushTransactionHash(credential: { payload: unknown }): string | undefined {
+  const payload = credential.payload
+  if (
+    !isRecord(payload) ||
+    payload.type !== 'hash' ||
+    typeof payload.hash !== 'string' ||
+    !Hex.validate(payload.hash)
+  )
+    return
+  return payload.hash
 }
 
 function idempotencyKey(input: RelayInput): string {
