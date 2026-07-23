@@ -785,7 +785,15 @@ export declare namespace charge {
      * By default, no prefix is applied.
      */
     storeKeyPrefix?: string | undefined
-    /** Delegates Tempo charge credential validation and broadcast to Tempo API or a compatible MPP relay. */
+    /**
+     * Delegates Tempo charge credential validation and broadcast to Tempo API
+     * or a compatible MPP relay.
+     *
+     * Relay-backed charges should advertise `supportedModes: ['pull']`: the
+     * payer sends a signed transaction to the server and the relay broadcasts
+     * it. Do not send a push-mode transaction to the relay because the payer
+     * has already broadcast it.
+     */
     relay?: RelayOptions | undefined
     /**
      * Whether to wait for the charge transaction to confirm on-chain before

@@ -67,6 +67,11 @@ type BroadcastResponse =
  * delegating credential validation and terminal broadcast to
  * `/v1/mpp/validate` and `/v1/mpp/broadcast` respectively.
  *
+ * Configure relay-backed charges for `pull` mode only. The payer sends a
+ * signed transaction to the server, and the relay broadcasts it. A `push`
+ * client has already broadcast the transaction and must not submit it to the
+ * relay again.
+ *
  * @internal
  */
 export function configure<const intent extends Method.Method>(
@@ -133,7 +138,14 @@ export declare namespace configure {
     validate: Method.ValidateFn<intent>
   }
 
-  /** Tempo API relay configuration for server-side Tempo charges. */
+  /**
+   * Tempo API relay configuration for server-side Tempo charges.
+   *
+   * Configure the associated charge with `supportedModes: ['pull']`. In pull
+   * mode, the payer signs the transaction and the relay broadcasts it. Do not
+   * use the relay to broadcast a transaction from a push-mode payer because it
+   * has already been broadcast by the client.
+   */
   type Options = {
     /** Tempo API key with the `mpp:write` scope. */
     apiKey: string
