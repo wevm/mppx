@@ -384,16 +384,16 @@ export function applyTopUpResult(
 
   const baseline =
     knownDeposit !== undefined && knownDeposit > channel.deposit ? knownDeposit : channel.deposit
-  channel.deposit = baseline + additionalDeposit
+  const updated = { ...channel, deposit: baseline + additionalDeposit }
 
-  if (receipt) return { channel, state: activeStateFromReceipt(receipt, channel) }
-  if (!challengeId) return { channel }
+  if (receipt) return { channel: updated, state: activeStateFromReceipt(receipt, updated) }
+  if (!challengeId) return { channel: updated }
 
   return {
-    channel,
+    channel: updated,
     state: activeStateFromChannel({
       challengeId,
-      entry: channel,
+      entry: updated,
       spent: spent.toString(),
       units: currentState.status === 'active' ? currentState.units : 0,
     }),

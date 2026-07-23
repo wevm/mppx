@@ -112,7 +112,7 @@ type SessionManagerConfig = {
   fetch: typeof globalThis.fetch
   /** Local maximum cumulative voucher authorization, or null when uncapped. */
   maxVoucherCumulative: bigint | null
-  /** Preferred additional deposit for automatic top-ups, or null for exact shortfalls. */
+  /** Preferred top-up, or null to use a bounded server suggestion and then the exact shortfall. */
   topUpAmount: bigint | null
   /** WebSocket constructor available in the current runtime, when configured. */
   WebSocket: WebSocketConstructor | undefined
@@ -206,6 +206,7 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
   // Tracks one fetch's channel reuse so stale stored entries can be evicted once.
   type ChannelUse = {
     challengesReceived: number
+    committed: RuntimeSnapshot | undefined
     created: Map<string, ChannelEntry>
     seenExisting: Set<string>
     previous: RuntimeSnapshot
@@ -226,7 +227,7 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
       const entry = await getReusable(key)
       if (entry && channelUse) {
         channelUse.seenExisting.add(key)
-        if (!channelUse.created.has(key)) channelUse.resumed ??= entry
+        if (!channelUse.committed && !channelUse.created.has(key)) channelUse.resumed ??= entry
       }
       return entry
     },
@@ -275,6 +276,23 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
     return dispatchSessionEvent(runtime, event)
   }
 
+  function commitDurableTopUp(entry: ChannelEntry) {
+    const use = channelUse
+    const baseline = use?.committed?.channel?.entry ?? use?.resumed
+    if (
+      !use ||
+      baseline?.channelId.toLowerCase() !== entry.channelId.toLowerCase() ||
+      entry.deposit <= baseline.deposit
+    )
+      return
+    use.resumed = undefined
+    use.committed = captureRuntimeStateSnapshot({
+      channel: runtime.channel,
+      spent: runtime.spent,
+      state: runtime.state,
+    })
+  }
+
   const method = sessionPlugin({
     account: parameters.account,
     getClient: parameters.client ? () => parameters.client! : parameters.getClient,
@@ -296,6 +314,7 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
           units: 0,
         })
       }
+      commitDurableTopUp(entry)
     },
   })
   MethodResponse.unregister(method)
@@ -540,6 +559,7 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
         spent: runtime.spent.toString(),
         units: runtime.state.status === 'active' ? runtime.state.units : 0,
       })
+      commitDurableTopUp(applied.channel)
     }
     return receipt
   }
@@ -624,6 +644,7 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
     })
     const use: ChannelUse = {
       challengesReceived: 0,
+      committed: undefined,
       created: new Map(),
       previous,
       seenExisting: new Set(),
@@ -657,7 +678,7 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
         try {
           response = await wrappedFetch(input, effectiveInit)
         } catch (error) {
-          restoreRuntime(previous)
+          restoreRuntime(use.committed ?? previous)
           if (await retryWithoutResumed()) continue
           throw error
         }
@@ -684,7 +705,7 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
           }
         }
         if (!attemptedHttpManagement && !paymentResponse.ok && !paymentResponse.receipt) {
-          restoreRuntime(previous)
+          restoreRuntime(use.committed ?? previous)
           if (await retryWithoutResumed()) continue
           return paymentResponse
         }
@@ -911,7 +932,10 @@ export namespace sessionManager {
       fetch?: typeof globalThis.fetch | undefined
       /** Maximum deposit in human-readable units (e.g. `'10'` for 10 tokens). Converted to raw units via `decimals`. */
       maxDeposit?: string | undefined
-      /** Preferred automatic top-up size in human-readable units. Exact shortfalls are used when omitted. */
+      /**
+       * Preferred automatic top-up size in human-readable units. When omitted,
+       * a bounded server `suggestedDeposit` is preferred, then the exact shortfall.
+       */
       topUpAmount?: string | undefined
       /** Selects the account that signs session credentials. */
       resolveAccount?: sessionPlugin.ResolveAccount | undefined

@@ -609,6 +609,54 @@ describe('Session', () => {
       expect(s.channelId).not.toBe(storedChannelId)
     })
 
+    test('keeps a persisted channel after its committed top-up when the paid retry fails', async () => {
+      const seeded = channelEntry({ cumulativeAmount: 10_000_000n, deposit: 10_000_000n })
+      const { store, delete: remove, map } = makeChannelStore([seeded])
+      const postedPayloads: SessionCredentialPayload[] = []
+      let probes = 0
+      const mockFetch = vi.fn().mockImplementation((_input, init?: RequestInit) => {
+        const authorization = new Headers(init?.headers).get(Constants.Headers.authorization)
+        const payload = authorization
+          ? Credential.deserialize<SessionCredentialPayload>(authorization).payload
+          : undefined
+        if (!payload) {
+          probes++
+          if (probes > 1) throw new Error('unexpected fresh-channel retry')
+          return Promise.resolve(make402Response())
+        }
+
+        postedPayloads.push(payload)
+        if (payload.action === 'topUp') return Promise.resolve(new Response(null, { status: 204 }))
+        if (payload.action === 'voucher')
+          return Promise.resolve(new Response('upstream failed', { status: 500 }))
+        throw new Error(`unexpected ${payload.action} credential`)
+      })
+      const s = sessionManager({
+        account,
+        client,
+        fetch: mockFetch as typeof globalThis.fetch,
+        maxDeposit: '20',
+        channelStore: store,
+      })
+
+      const response = await s.fetch('https://api.example.com/data')
+
+      expect(response.status).toBe(500)
+      expect(postedPayloads.map((payload) => payload.action)).toEqual(['topUp', 'voucher'])
+      expect(remove).not.toHaveBeenCalled()
+      expect(map.get(entryKey(seeded))).toMatchObject({
+        channelId: storedChannelId,
+        cumulativeAmount: 10_000_000n,
+        deposit: 11_000_000n,
+      })
+      expect(s.channelId).toBe(storedChannelId)
+      expect(s.state).toMatchObject({
+        status: 'active',
+        channelId: storedChannelId,
+        deposit: '11000000',
+      })
+    })
+
     test('rolls back an optimistic open when a replacement challenge does not reference it', async () => {
       const { store, delete: remove } = makeChannelStore()
       const postedPayloads: SessionCredentialPayload[] = []

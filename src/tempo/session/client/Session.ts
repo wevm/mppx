@@ -163,9 +163,9 @@ export function session(parameters: session.Parameters = {}) {
       })
     const nextDeposit = knownDeposit + additionalDeposit
     if (nextDeposit === channel.deposit) return
-    channel.deposit = nextDeposit
-    await store.set(channel)
-    sink.notifyUpdate(channel)
+    const updated = { ...channel, deposit: nextDeposit }
+    await store.set(updated)
+    sink.notifyUpdate(updated)
   }
 
   MethodChallenge.register(method, async ({ challenge, context, fetch, input }) => {
@@ -266,7 +266,10 @@ export declare namespace session {
       escrow?: Address | undefined
       /** Maximum channel deposit in human-readable units. Caps server-suggested opens and automatic top-ups. */
       maxDeposit?: string | undefined
-      /** Preferred automatic top-up size in human-readable units. Exact shortfalls are used when omitted. */
+      /**
+       * Preferred automatic top-up size in human-readable units. When omitted,
+       * a bounded server `suggestedDeposit` is preferred, then the exact shortfall.
+       */
       topUpAmount?: string | undefined
       /** Called whenever channel state changes. */
       onChannelUpdate?: ((entry: ChannelEntry) => void) | undefined
