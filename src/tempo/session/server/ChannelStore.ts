@@ -240,6 +240,18 @@ export type VerifyAndAcceptVoucherParameters = {
   voucher: SignedVoucher
 }
 
+/** Inputs for validating a cumulative voucher without recording it. */
+export type ValidateVoucherParameters = Omit<
+  VerifyAndAcceptVoucherParameters,
+  'challenge' | 'store'
+>
+
+/** Result of validating a cumulative voucher against persisted channel state. */
+export type VoucherValidation = {
+  /** Whether the voucher was already accepted at the same cumulative amount. */
+  alreadyAccepted: boolean
+}
+
 /** Channel backend-specific fields. */
 export type BackendState = CompatibilityBackendState | PrecompileBackendState
 
@@ -520,12 +532,11 @@ export async function loadPrecompileChannel(
   return channel
 }
 
-/** Verifies a cumulative voucher and returns a session receipt after store reconciliation. */
-export async function verifyAndAcceptVoucher(
-  parameters: VerifyAndAcceptVoucherParameters,
-): Promise<SessionReceipt> {
-  const { store, minVoucherDelta, challenge, channel, voucher, channelState, methodDetails } =
-    parameters
+/** Verifies a cumulative voucher without changing persisted channel state. */
+export async function validateVoucher(
+  parameters: ValidateVoucherParameters,
+): Promise<VoucherValidation> {
+  const { minVoucherDelta, channel, voucher, channelState, methodDetails } = parameters
 
   validateChannelState(channelState)
   if (voucher.cumulativeAmount > channelState.deposit)
@@ -546,18 +557,28 @@ export async function verifyAndAcceptVoucher(
     throw new VerificationFailedError({
       reason: 'voucher cumulativeAmount is below on-chain settled amount',
     })
-  if (voucher.cumulativeAmount === channel.highestVoucherAmount)
+  if (voucher.cumulativeAmount === channel.highestVoucherAmount) return { alreadyAccepted: true }
+  const delta = voucher.cumulativeAmount - channel.highestVoucherAmount
+  if (delta < minVoucherDelta)
+    throw new DeltaTooSmallError({
+      reason: `voucher delta ${delta} below minimum ${minVoucherDelta}`,
+    })
+  return { alreadyAccepted: false }
+}
+
+/** Verifies a cumulative voucher and returns a session receipt after store reconciliation. */
+export async function verifyAndAcceptVoucher(
+  parameters: VerifyAndAcceptVoucherParameters,
+): Promise<SessionReceipt> {
+  const { store, challenge, channel, voucher, channelState } = parameters
+  const validation = await validateVoucher(parameters)
+  if (validation.alreadyAccepted)
     return createSessionReceipt({
       challengeId: challenge.id,
       channelId: voucher.channelId,
       acceptedCumulative: channel.highestVoucherAmount,
       spent: channel.spent,
       units: channel.units,
-    })
-  const delta = voucher.cumulativeAmount - channel.highestVoucherAmount
-  if (delta < minVoucherDelta)
-    throw new DeltaTooSmallError({
-      reason: `voucher delta ${delta} below minimum ${minVoucherDelta}`,
     })
   const updated = await store.updateChannel(voucher.channelId, (current) =>
     acceptVoucherStateUpdate({ channelState, current, voucher }),

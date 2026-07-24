@@ -4,6 +4,8 @@ import { serve } from '@hono/node-server'
 import { Hono } from 'hono'
 import { Challenge, Constants, Credential } from 'mppx'
 import { Mppx as Mppx_server, tempo as tempo_server } from 'mppx/server'
+import { Secp256k1 } from 'ox'
+import { TxEnvelopeTempo } from 'ox/tempo'
 import {
   type Address,
   createClient,
@@ -40,9 +42,8 @@ import * as ChannelStore from './ChannelStore.js'
 import { charge, session, type ResolveSessionChannelId } from './Session.js'
 import * as TempoWs from './Ws.js'
 
-const payer = privateKeyToAccount(
-  '0xac0974bec39a17e36ba6a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80',
-)
+const payerPrivateKey = '0xac0974bec39a17e36ba6a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80'
+const payer = privateKeyToAccount(payerPrivateKey)
 const wrongPayer = privateKeyToAccount(
   '0x59c6995e998f97a5a0044966f094538a009d74290f5811cfba6a6b4d238ff944',
 )
@@ -313,6 +314,48 @@ async function createOpenPayload(
     cumulativeAmount: initialAmount.toString(),
     authorizedSigner: descriptor.authorizedSigner,
   }
+}
+
+function sponsorTransaction(serializedTransaction: Hex): Hex {
+  const transaction = Transaction.deserialize(
+    serializedTransaction as Transaction.TransactionSerializedTempo,
+  )
+  const envelope = TxEnvelopeTempo.from({
+    ...transaction,
+    feePayerSignature: null,
+    gas: 100_000n,
+    maxFeePerGas: 1n,
+    maxPriorityFeePerGas: 1n,
+    validBefore: Math.floor(Date.now() / 1_000) + 600,
+  } as never)
+  return TxEnvelopeTempo.serialize(envelope, {
+    signature: Secp256k1.sign({
+      payload: TxEnvelopeTempo.getSignPayload(envelope),
+      privateKey: payerPrivateKey,
+    }),
+  }) as Hex
+}
+
+async function createSponsoredOpenPayload(): Promise<
+  Extract<SessionCredentialPayload, { action: 'open' }>
+> {
+  const payload = await createOpenPayload()
+  const transaction = sponsorTransaction(payload.transaction)
+  const signed = Transaction.deserialize(transaction as Transaction.TransactionSerializedTempo)
+  const expiringNonceHash = Channel.computeExpiringNonceHash(
+    Channel.transactionForExpiringNonceHash({ feePayer: true, transaction: signed }),
+    { sender: payer.address },
+  )
+  const descriptor = { ...payload.descriptor, expiringNonceHash }
+  const channelId = Channel.computeId({ ...descriptor, chainId, escrow: tip20ChannelEscrow })
+  const signature = await Voucher.signVoucher(
+    createSigningClient(),
+    payer,
+    { channelId, cumulativeAmount: BigInt(payload.cumulativeAmount) },
+    tip20ChannelEscrow,
+    chainId,
+  )
+  return { ...payload, channelId, transaction, signature, descriptor }
 }
 
 function transactionReceipt(logs: readonly Record<string, unknown>[]) {
@@ -755,6 +798,106 @@ describe('precompile server session unit guardrails', () => {
         },
       } as never),
     ).rejects.toThrow('Client not configured with chainId 1.')
+  })
+
+  test('fully validates a session credential without broadcasting or changing channel state', async () => {
+    const { method, rpcCalls, store } = createServer()
+    const openPayload = await createOpenPayload()
+    await persistPrecompileChannel(store, openPayload)
+    const payload = await ClientOps.createVoucherPayload(
+      createSigningClient(),
+      payer,
+      openPayload.descriptor,
+      Types.uint96(200n),
+      chainId,
+    )
+
+    const validation = await method.validate!({
+      credential: {
+        challenge: makeChallenge(openPayload.channelId),
+        payload,
+        source: sourceFor(),
+      },
+      request: verifyRequest(openPayload.channelId),
+    })
+
+    expect(validation.details).toEqual({ action: 'voucher', channelId: openPayload.channelId })
+    expect(await store.getChannel(openPayload.channelId)).toMatchObject({
+      highestVoucherAmount: 100n,
+      spent: 0n,
+      units: 0,
+    })
+    expect(rpcCalls.map(({ method }) => method)).toContain('eth_call')
+    expect(rpcCalls.map(({ method }) => method)).not.toContain('eth_sendRawTransaction')
+    expect(rpcCalls.map(({ method }) => method)).not.toContain('eth_sendRawTransactionSync')
+  })
+
+  test('simulates unsponsored open and top-up credentials during validation', async () => {
+    const { method, rpcCalls, store } = createServer()
+    const openPayload = await createOpenPayload()
+
+    await method.validate!({
+      credential: { challenge: makeChallenge(openPayload.channelId), payload: openPayload },
+      request: verifyRequest(openPayload.channelId),
+    })
+    await persistPrecompileChannel(store, openPayload)
+    const topUpPayload = await createTopUpPayload(openPayload.descriptor, 100n)
+
+    await method.validate!({
+      credential: { challenge: makeChallenge(topUpPayload.channelId), payload: topUpPayload },
+      request: verifyRequest(topUpPayload.channelId),
+    })
+
+    expect(rpcCalls.map(({ method }) => method)).toEqual(['eth_call', 'eth_call'])
+    expect(await store.getChannel(openPayload.channelId)).toMatchObject({
+      deposit: 1_000n,
+      highestVoucherAmount: 100n,
+    })
+  })
+
+  test('does not simulate sponsored open or top-up credentials during validation', async () => {
+    const { method, rpcCalls, store } = createServer({ feePayer: payer })
+    const openPayload = await createSponsoredOpenPayload()
+
+    await method.validate!({
+      credential: { challenge: makeChallenge(openPayload.channelId), payload: openPayload },
+      request: verifyRequestWithFeePayer(openPayload.channelId, payer),
+    })
+    await persistPrecompileChannel(store, openPayload)
+    const topUpPayload = await createTopUpPayload(openPayload.descriptor, 100n)
+    topUpPayload.transaction = sponsorTransaction(topUpPayload.transaction)
+
+    await method.validate!({
+      credential: { challenge: makeChallenge(topUpPayload.channelId), payload: topUpPayload },
+      request: verifyRequestWithFeePayer(topUpPayload.channelId, payer),
+    })
+
+    expect(rpcCalls).toEqual([])
+    expect(await store.getChannel(openPayload.channelId)).toMatchObject({
+      deposit: 1_000n,
+      highestVoucherAmount: 100n,
+    })
+  })
+
+  test('validates close credentials without marking the channel pending', async () => {
+    const { method, rpcCalls, store } = createServer()
+    const openPayload = await createOpenPayload()
+    await persistPrecompileChannel(store, openPayload, { payee: payer.address })
+    const payload = await ClientOps.createClosePayload(
+      createSigningClient(),
+      payer,
+      openPayload.descriptor,
+      Types.uint96(100n),
+      chainId,
+    )
+
+    await method.validate!({
+      credential: { challenge: makeChallenge(openPayload.channelId), payload },
+      request: verifyRequest(openPayload.channelId),
+    })
+
+    expect((await store.getChannel(openPayload.channelId))?.closeRequestedAt).toBe(0n)
+    expect(rpcCalls.map(({ method }) => method)).toEqual(['eth_call'])
   })
 
   test('rejects open transactions targeting the wrong address', async () => {

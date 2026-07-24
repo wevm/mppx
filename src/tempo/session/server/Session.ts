@@ -31,7 +31,7 @@ import {
   serializeSnapshot as serializeSessionSnapshot,
 } from '../Snapshot.js'
 import * as ChannelStore from './ChannelStore.js'
-import { verifyCredentialPayload } from './CredentialVerification.js'
+import { validateCredentialPayload, verifyCredentialPayload } from './CredentialVerification.js'
 import { requireSessionCredentialPayload } from './CredentialVerification.js'
 import {
   type ResolveSessionChannelId,
@@ -349,6 +349,102 @@ export function session<const parameters extends session.Parameters>(
       })
     : undefined
 
+  const validateCredential: Method.ValidateFn<typeof Methods.session> = async ({
+    credential,
+    request,
+  }) => {
+    const payload = requireSessionCredentialPayload(credential.payload)
+    const context = await resolveCredentialVerificationContext({
+      decimals,
+      feePayer: configuredFeePayer,
+      getClient,
+      minVoucherDelta: parameters.minVoucherDelta,
+      request,
+    })
+
+    const details = await validateCredentialPayload({
+      account,
+      challenge: credential.challenge,
+      chainId: context.chainId,
+      client: context.client,
+      credentialSource: credential.source,
+      escrow: context.escrow,
+      expectedOperator: context.methodDetails.operator,
+      feePayer: context.feePayer,
+      minVoucherDelta: context.minVoucherDelta,
+      payload,
+      store,
+    })
+
+    return {
+      challenge: credential.challenge,
+      credential: { ...credential, payload },
+      details,
+      intent: 'session' as const,
+      method: 'tempo' as const,
+      request: context.request,
+      source: credential.source,
+    }
+  }
+
+  const broadcastCredential: Method.BroadcastFn<typeof Methods.session> = async ({
+    credential,
+    envelope,
+    request,
+  }) => {
+    const { challenge } = credential
+    const payload = requireSessionCredentialPayload(credential.payload)
+    const context = await resolveCredentialVerificationContext({
+      decimals,
+      feePayer: configuredFeePayer,
+      getClient,
+      minVoucherDelta: parameters.minVoucherDelta,
+      request,
+    })
+
+    const sessionReceipt = await verifyCredentialPayload({
+      account,
+      challenge,
+      channelStateTtl,
+      chainId: context.chainId,
+      client: context.client,
+      credentialSource: credential.source,
+      escrow: context.escrow,
+      expectedOperator: context.methodDetails.operator,
+      feePayer: context.feePayer,
+      feePayerPolicy: parameters.feePayerPolicy,
+      feeToken: parameters.feeToken,
+      lastOnChainVerified,
+      minVoucherDelta: context.minVoucherDelta,
+      onSessionSettlement,
+      payload,
+      store,
+    })
+
+    return applyVerifiedHttpAccounting({
+      capturedRequest: envelope?.capturedRequest,
+      payloadAction: payload.action,
+      receipt: sessionReceipt,
+      getRequestAmount: () => BigInt(context.request.amount ?? challenge.request.amount),
+      sseEnabled: Boolean(parameters.sse),
+      markPrepaidReceipt: Transport.markPrepaidSessionTick,
+      charge: (channelId, requestAmount) =>
+        chargeSessionChannel({ store, channelId, amount: requestAmount }),
+      settleCharged: (channel) =>
+        maybeSettleScheduled({
+          account,
+          client: context.client,
+          ...(typeof context.feePayer === 'object' ? { feePayer: context.feePayer } : {}),
+          feePayerPolicy: parameters.feePayerPolicy,
+          feeToken: parameters.feeToken,
+          onSessionSettlement,
+          schedule: settlementSchedule,
+          store,
+          channel,
+        }),
+    })
+  }
+
   type Defaults = session.DeriveDefaults<parameters>
   return Method.toServer<typeof Methods.session, Defaults, Transport>(Methods.session, {
     defaults: deriveServerDefaults<parameters>({
@@ -406,59 +502,8 @@ export function session<const parameters extends session.Parameters>(
       }
     },
 
-    async verify({ credential, envelope, request }) {
-      const { challenge } = credential
-      const payload = requireSessionCredentialPayload(credential.payload)
-      const context = await resolveCredentialVerificationContext({
-        decimals,
-        feePayer: configuredFeePayer,
-        getClient,
-        minVoucherDelta: parameters.minVoucherDelta,
-        request,
-      })
-
-      const sessionReceipt = await verifyCredentialPayload({
-        account,
-        challenge,
-        channelStateTtl,
-        chainId: context.chainId,
-        client: context.client,
-        credentialSource: credential.source,
-        escrow: context.escrow,
-        expectedOperator: context.methodDetails.operator,
-        feePayer: context.feePayer,
-        feePayerPolicy: parameters.feePayerPolicy,
-        feeToken: parameters.feeToken,
-        lastOnChainVerified,
-        minVoucherDelta: context.minVoucherDelta,
-        onSessionSettlement,
-        payload,
-        store,
-      })
-
-      return applyVerifiedHttpAccounting({
-        capturedRequest: envelope?.capturedRequest,
-        payloadAction: payload.action,
-        receipt: sessionReceipt,
-        getRequestAmount: () => BigInt(context.request.amount ?? challenge.request.amount),
-        sseEnabled: Boolean(parameters.sse),
-        markPrepaidReceipt: Transport.markPrepaidSessionTick,
-        charge: (channelId, requestAmount) =>
-          chargeSessionChannel({ store, channelId, amount: requestAmount }),
-        settleCharged: (channel) =>
-          maybeSettleScheduled({
-            account,
-            client: context.client,
-            ...(typeof context.feePayer === 'object' ? { feePayer: context.feePayer } : {}),
-            feePayerPolicy: parameters.feePayerPolicy,
-            feeToken: parameters.feeToken,
-            onSessionSettlement,
-            schedule: settlementSchedule,
-            store,
-            channel,
-          }),
-      })
-    },
+    validate: validateCredential,
+    broadcast: broadcastCredential,
 
     // This hook acts as a gate: when it returns a Response, `withReceipt()`
     // in Mppx.ts short-circuits and returns that response directly without

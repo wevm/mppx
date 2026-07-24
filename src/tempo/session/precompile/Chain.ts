@@ -522,6 +522,22 @@ async function simulateTempoTransaction(client: Client, request: unknown) {
   await call(client, request as never)
 }
 
+/** Simulates an unsponsored client-signed session transaction without broadcasting it. */
+export async function simulateCredentialTransaction(parameters: {
+  /** viem client used for the read-only execution simulation. */
+  client: TransactionClient
+  /** Fee-payer configuration for the eventual broadcast. Sponsored transactions are simulated after completion. */
+  feePayer?: Account | true | undefined
+  /** Parsed client-signed Tempo transaction. */
+  transaction: ReturnType<(typeof Transaction)['deserialize']>
+}): Promise<void> {
+  if (parameters.feePayer) return
+  await simulateTempoTransaction(
+    parameters.client,
+    FeePayer.simulationTransaction(parameters.transaction, { feePayer: false }),
+  )
+}
+
 async function signTempoTransaction(client: Client, transaction: unknown): Promise<Hex> {
   return (await signTransaction(client, transaction as never)) as Hex
 }
@@ -874,10 +890,25 @@ export type BroadcastOpenTransactionParameters = {
   serializedTransaction: Hex
 }
 
-/** Broadcast and validate a client-signed TIP-1034 open transaction. */
-export async function broadcastOpenTransaction(
-  parameters: BroadcastOpenTransactionParameters,
-): Promise<BroadcastOpenTransactionResult> {
+/** Inputs for validating a client-signed TIP-1034 open transaction without broadcasting it. */
+export type ValidateOpenCredentialTransactionParameters = Omit<
+  BroadcastOpenTransactionParameters,
+  'beforeBroadcast' | 'challengeExpires' | 'client' | 'feePayerPolicy'
+>
+
+/** Validated fields recovered from a client-signed TIP-1034 open transaction. */
+export type ValidatedOpenCredentialTransaction = Omit<
+  BroadcastOpenTransactionResult,
+  'state' | 'txHash'
+> & {
+  /** Parsed client-signed transaction, reused by simulation and broadcast. */
+  transaction: ReturnType<(typeof Transaction)['deserialize']>
+}
+
+/** Validates the immutable fields of a client-signed TIP-1034 open transaction. */
+export function validateOpenCredentialTransaction(
+  parameters: ValidateOpenCredentialTransactionParameters,
+): ValidatedOpenCredentialTransaction {
   const { transaction, call, prefixCalls } = parsePrecompileCredentialTransaction({
     escrowContract: parameters.escrowContract,
     feePayer: parameters.feePayer,
@@ -920,10 +951,19 @@ export async function broadcastOpenTransaction(
     throw new VerificationFailedError({
       reason: 'credential expiringNonceHash does not match transaction',
     })
+  return { descriptor, expiringNonceHash, openDeposit: open.deposit, transaction }
+}
+
+/** Broadcast and validate a client-signed TIP-1034 open transaction. */
+export async function broadcastOpenTransaction(
+  parameters: BroadcastOpenTransactionParameters,
+): Promise<BroadcastOpenTransactionResult> {
+  const { descriptor, expiringNonceHash, openDeposit, transaction } =
+    validateOpenCredentialTransaction(parameters)
   await parameters.beforeBroadcast?.({
     descriptor,
     expiringNonceHash,
-    openDeposit: open.deposit,
+    openDeposit,
   })
   const receipt = await sendCredentialTransaction({
     challengeExpires: parameters.challengeExpires,
@@ -952,7 +992,7 @@ export async function broadcastOpenTransaction(
     emittedExpiringNonceHash: opened.expiringNonceHash,
     escrow: parameters.escrowContract,
     expectedChannelId: parameters.expectedChannelId,
-    openDeposit: open.deposit,
+    openDeposit,
   })
   const chainChannel = await readbackWithRetry(() =>
     getChannel(parameters.client, descriptor, parameters.escrowContract, receipt.blockNumber),
@@ -964,7 +1004,7 @@ export async function broadcastOpenTransaction(
     descriptor,
     state,
     expiringNonceHash: opened.expiringNonceHash,
-    openDeposit: open.deposit,
+    openDeposit,
   }
 }
 
@@ -1004,10 +1044,22 @@ export type BroadcastTopUpTransactionParameters = {
   serializedTransaction: Hex
 }
 
-/** Broadcast and validate a client-signed TIP-1034 top-up transaction. */
-export async function broadcastTopUpTransaction(
-  parameters: BroadcastTopUpTransactionParameters,
-): Promise<BroadcastTopUpTransactionResult> {
+/** Inputs for validating a client-signed TIP-1034 top-up transaction without broadcasting it. */
+export type ValidateTopUpCredentialTransactionParameters = Omit<
+  BroadcastTopUpTransactionParameters,
+  'challengeExpires' | 'client' | 'feePayerPolicy'
+>
+
+/** Validated fields recovered from a client-signed TIP-1034 top-up transaction. */
+export type ValidatedTopUpCredentialTransaction = {
+  /** Parsed client-signed transaction, reused by simulation and broadcast. */
+  transaction: ReturnType<(typeof Transaction)['deserialize']>
+}
+
+/** Validates the immutable fields of a client-signed TIP-1034 top-up transaction. */
+export function validateTopUpCredentialTransaction(
+  parameters: ValidateTopUpCredentialTransactionParameters,
+): ValidatedTopUpCredentialTransaction {
   const { transaction, call, prefixCalls } = parsePrecompileCredentialTransaction({
     escrowContract: parameters.escrowContract,
     feePayer: parameters.feePayer,
@@ -1027,6 +1079,14 @@ export async function broadcastTopUpTransaction(
     label: 'topUp',
     prefixCalls,
   })
+  return { transaction }
+}
+
+/** Broadcast and validate a client-signed TIP-1034 top-up transaction. */
+export async function broadcastTopUpTransaction(
+  parameters: BroadcastTopUpTransactionParameters,
+): Promise<BroadcastTopUpTransactionResult> {
+  const { transaction } = validateTopUpCredentialTransaction(parameters)
   const receipt = await sendCredentialTransaction({
     challengeExpires: parameters.challengeExpires,
     chainId: parameters.chainId,
