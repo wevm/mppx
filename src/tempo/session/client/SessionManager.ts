@@ -58,6 +58,7 @@ import { applyTopUpResult, resolveManualTopUp, type TopUpRequirement } from './T
 import {
   openWebSocketSession,
   prepareWebSocketSession,
+  probeWebSocketSession,
   type WebSocketDriverOptions,
 } from './Transports.js'
 
@@ -868,6 +869,20 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
         getChannel: () => runtime.channel,
         setSocketSession(session) {
           runtime.socketSession = session
+        },
+        async refreshChallenge() {
+          const refreshed = await probeWebSocketSession({
+            fetch: config.fetch,
+            input: httpUrl,
+            probeInit: requestInitWithSessionHint(
+              httpUrl,
+              signalInit,
+              runtime.channel?.opened ? runtime.channel.channelId : undefined,
+            ),
+            signal: init?.signal,
+          })
+          runtime.lastChallenge = refreshed.challenge
+          return refreshed.challenge
         },
         assertVoucherWithinLocalLimit,
         acceptReceipt: updateSpentFromReceipt,

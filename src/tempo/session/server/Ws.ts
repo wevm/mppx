@@ -220,6 +220,9 @@ export async function serve(options: serve.Options): Promise<void> {
     }
 
     const { receipt } = authorizationResult
+    if (payload.action === 'voucher' && runtime.streamContext) {
+      runtime.streamContext.challengeId = credential.challenge.id
+    }
     await send(socket, formatReceiptMessage(receipt))
 
     if (payload.action === 'close') {

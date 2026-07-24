@@ -47,6 +47,8 @@ export const WebSocketReadyState = {
 /** Client-side close code used for payment protocol errors. */
 export const ClientWebSocketProtocolErrorCloseCode = 3008
 
+const webSocketChallengeRefreshWindowMs = 5_000
+
 type EventType = 'close' | 'error' | 'message' | 'open'
 type ManagedEventMap = {
   close: { code: number; reason: string; type: 'close'; wasClean: boolean }
@@ -1117,6 +1119,15 @@ export type PrepareWebSocketSessionParameters = {
   signal?: AbortSignal | undefined
 }
 
+/** Inputs for probing a paid WebSocket endpoint without creating a credential. */
+export type ProbeWebSocketSessionParameters = Omit<
+  PrepareWebSocketSessionParameters,
+  'createSessionCredential'
+>
+
+/** Result of resolving the current payment challenge for a WebSocket endpoint. */
+export type ProbedWebSocketSession = Omit<PreparedWebSocketSession, 'credential'>
+
 /** Result of the HTTP probe and opening credential creation for a WebSocket session. */
 export type PreparedWebSocketSession = {
   /** Selected tempo/session challenge from the HTTP probe. */
@@ -1180,6 +1191,8 @@ export type OpenWebSocketSessionParameters = {
   getChannel(): ChannelEntry | null
   /** Stores the active socket state in the manager. */
   setSocketSession(session: ActiveSocketSession): void
+  /** Fetches the route's current challenge after the active one expires. */
+  refreshChallenge(): Promise<TempoSessionChallenge>
   /** Validates a cumulative amount against local client policy. */
   assertVoucherWithinLocalLimit(cumulativeAmount: bigint): void
   /** Applies an incoming receipt to manager state. */
@@ -1220,10 +1233,10 @@ export type ValidateSocketPaymentReceiptParameters = ExpectedSocketReceiptParame
   expectedCloseAmount: string | null
 }
 
-/** Probes a WebSocket endpoint over HTTP and creates the opening credential. */
-export async function prepareWebSocketSession(
-  parameters: PrepareWebSocketSessionParameters,
-): Promise<PreparedWebSocketSession> {
+/** Probes a WebSocket endpoint over HTTP and returns its current session challenge. */
+export async function probeWebSocketSession(
+  parameters: ProbeWebSocketSessionParameters,
+): Promise<ProbedWebSocketSession> {
   const wsUrl = new URL(parameters.input.toString())
   const httpUrl = webSocketProbeUrl(wsUrl)
   parameters.onProbeUrl?.(httpUrl)
@@ -1246,9 +1259,19 @@ export async function prepareWebSocketSession(
 
   return {
     challenge,
-    credential: await parameters.createSessionCredential(challenge, {}),
     httpUrl,
     wsUrl,
+  }
+}
+
+/** Probes a WebSocket endpoint over HTTP and creates the opening credential. */
+export async function prepareWebSocketSession(
+  parameters: PrepareWebSocketSessionParameters,
+): Promise<PreparedWebSocketSession> {
+  const probed = await probeWebSocketSession(parameters)
+  return {
+    ...probed,
+    credential: await parameters.createSessionCredential(probed.challenge, {}),
   }
 }
 
@@ -1459,9 +1482,18 @@ async function handleNeedVoucher(
   event: NeedVoucherEvent,
 ) {
   try {
+    let challenge = parameters.driver.challenge
+    if (
+      challenge.expires &&
+      new Date(challenge.expires).getTime() <= Date.now() + webSocketChallengeRefreshWindowMs
+    ) {
+      challenge = await parameters.driver.refreshChallenge()
+      parameters.driver.challenge = challenge
+      parameters.socketState.challenge = challenge
+    }
     const resolution = await resolveNeedVoucherContext({
       assertVoucherWithinLocalLimit: parameters.driver.assertVoucherWithinLocalLimit,
-      challenge: parameters.driver.challenge,
+      challenge,
       event,
       expectedChannelId: parameters.socketState.channelId,
       getChannel: parameters.driver.getChannel,
@@ -1476,10 +1508,7 @@ async function handleNeedVoucher(
       )
       return
     }
-    const voucher = await parameters.driver.createSessionCredential(
-      parameters.driver.challenge,
-      resolution.context,
-    )
+    const voucher = await parameters.driver.createSessionCredential(challenge, resolution.context)
     parameters.rawSocket.send(Ws.formatAuthorizationMessage(voucher))
   } catch (error) {
     parameters.failSocketFlow(

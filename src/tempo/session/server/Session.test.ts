@@ -2421,12 +2421,15 @@ describe('precompile server session unit guardrails', () => {
   })
 
   describe('WebSocket parity', () => {
-    async function createManagedWsHarness(options: { maxDeposit?: bigint } = {}) {
+    async function createManagedWsHarness(
+      options: { challengeTtlMs?: number; maxDeposit?: bigint } = {},
+    ) {
       const rawStore = Store.memory()
+      let challengeRequests = 0
       let currentPayload: SessionCredentialPayload | undefined
       let voucherPosts = 0
       const maxDeposit = options.maxDeposit ?? 3n
-      const routeHandler = Mppx_server.create({
+      const payment = Mppx_server.create({
         methods: [
           tempo_server.session({
             amount: '1',
@@ -2463,7 +2466,7 @@ describe('precompile server session unit guardrails', () => {
         ],
         realm: 'api.example.com',
         secretKey: 'test-secret-key-test-secret-key-32',
-      }).session({ amount: '1', decimals: 0, suggestedDeposit: maxDeposit.toString() })
+      })
 
       const route = async (request: Request) => {
         currentPayload = undefined
@@ -2472,7 +2475,15 @@ describe('precompile server session unit guardrails', () => {
             currentPayload = Credential.fromRequest<SessionCredentialPayload>(request).payload
             if (currentPayload.action === 'voucher') voucherPosts++
           } catch {}
-        }
+        } else challengeRequests++
+        const routeHandler = payment.session({
+          amount: '1',
+          decimals: 0,
+          suggestedDeposit: maxDeposit.toString(),
+          ...(options.challengeTtlMs === undefined
+            ? {}
+            : { expires: new Date(Date.now() + options.challengeTtlMs) }),
+        })
         return routeHandler(request)
       }
 
@@ -2510,6 +2521,9 @@ describe('precompile server session unit guardrails', () => {
         get port() {
           return port
         },
+        get challengeRequests() {
+          return challengeRequests
+        },
         get voucherPosts() {
           return voucherPosts
         },
@@ -2519,6 +2533,54 @@ describe('precompile server session unit guardrails', () => {
         },
       }
     }
+
+    test('refreshes an expired challenge before sending a later websocket voucher', async () => {
+      const harness = await createManagedWsHarness({ challengeTtlMs: 2_000, maxDeposit: 2n })
+      harness.wsServer.on('connection', (socket: import('ws').WebSocket) => {
+        void TempoWs.serve({
+          socket,
+          store: harness.rawStore,
+          url: `${harness.server.url}/ws`,
+          route: harness.route,
+          generate: async function* (stream: TempoWs.SessionController) {
+            await stream.charge()
+            yield 'chunk-1'
+            await new Promise((resolve) => setTimeout(resolve, 2_200))
+            await stream.charge()
+            yield 'chunk-2'
+          },
+        })
+      })
+
+      try {
+        const manager = precompileSessionManager({
+          account: payer,
+          client: createSigningClient(),
+          decimals: 0,
+          fetch: globalThis.fetch,
+          maxDeposit: '2',
+          webSocket: WebSocket as never,
+        })
+        const ws = await manager.ws(`ws://localhost:${harness.port}/ws`)
+        const chunks: string[] = []
+
+        await new Promise<void>((resolve, reject) => {
+          ws.addEventListener('message', (event) => {
+            if (typeof event.data === 'string') chunks.push(event.data)
+          })
+          ws.addEventListener('close', () => resolve(), { once: true })
+          ws.addEventListener('error', () => reject(new Error('websocket stream failed')), {
+            once: true,
+          })
+        })
+
+        expect(chunks).toEqual(['chunk-1', 'chunk-2'])
+        expect(harness.challengeRequests).toBeGreaterThan(1)
+        expect(harness.voucherPosts).toBe(1)
+      } finally {
+        harness.close()
+      }
+    })
 
     test('open -> stream -> need-voucher -> resume -> close', async () => {
       const harness = await createManagedWsHarness({ maxDeposit: 3n })
