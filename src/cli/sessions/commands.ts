@@ -1,13 +1,15 @@
+import { Errors } from 'incur'
 import { createClient, http } from 'viem'
 
-import {
-  createSessionAdministration,
-  createSqliteChannelStore,
-  type SessionAdministration,
-  type SessionCloseSelection,
+import { normalizeHeaders } from '../../client/internal/Fetch.js'
+import type {
+  SessionAdministration,
+  SessionAdministrationOptions,
+  SessionCloseSelection,
 } from '../../client/node.js'
 import { resolvePersistentAccount } from '../account.js'
 import { resolveChain, resolveRpcUrl, type Network } from '../utils.js'
+import { loadNodeSessionApi } from './node.js'
 
 /** Shared CLI connection options for session administration. */
 export type SessionCommandOptions = {
@@ -35,7 +37,9 @@ export type SessionCommandRecord = {
 async function withAdministration<Result>(
   options: SessionCommandOptions,
   operation: (administration: SessionAdministration) => Promise<Result> | Result,
+  overrides: Pick<SessionAdministrationOptions, 'fetch'> = {},
 ): Promise<Result> {
+  const { createSessionAdministration, createSqliteChannelStore } = await loadNodeSessionApi()
   const resolved = await resolvePersistentAccount(options.account)
   const rpcUrl = resolveRpcUrl(options.rpcUrl, { network: options.network })
   const chain = await resolveChain({ network: options.network, rpcUrl })
@@ -47,6 +51,7 @@ async function withAdministration<Result>(
         account: resolved.account,
         client,
         store,
+        ...overrides,
       }),
     )
   } finally {
@@ -59,6 +64,7 @@ export async function viewPersistentSession(
   channelId: string,
   options: Pick<SessionCommandOptions, 'account'>,
 ): Promise<SessionCommandRecord | undefined> {
+  const { createSqliteChannelStore } = await loadNodeSessionApi()
   const resolved = await resolvePersistentAccount(options.account)
   const store = createSqliteChannelStore({ payer: resolved.account.address })
   try {
@@ -92,9 +98,37 @@ export async function syncPersistentSessions(
 
 /** Closes selected TIP-1034 sessions using the shared MPPx administration API. */
 export async function closePersistentSessions(
-  options: SessionCommandOptions & SessionCloseSelection,
+  options: SessionCommandOptions &
+    SessionCloseSelection & {
+      headers?: readonly string[] | undefined
+    },
 ) {
-  return withAdministration(options, (administration) => administration.close(options))
+  const headers = parseHeaders(options.headers)
+  const fetch: typeof globalThis.fetch = (input, init) =>
+    globalThis.fetch(input, {
+      ...init,
+      headers: { ...headers, ...normalizeHeaders(init?.headers) },
+    })
+  return withAdministration(
+    options,
+    (administration) => administration.close(options),
+    options.headers ? { fetch } : {},
+  )
+}
+
+function parseHeaders(values: readonly string[] | undefined): Record<string, string> {
+  const headers: Record<string, string> = {}
+  for (const value of values ?? []) {
+    const index = value.indexOf(':')
+    if (index === -1)
+      throw new Errors.IncurError({
+        code: 'INVALID_HEADER',
+        message: `Invalid header format: ${value}`,
+        exitCode: 2,
+      })
+    headers[value.slice(0, index).trim()] = value.slice(index + 1).trim()
+  }
+  return headers
 }
 
 function serializeSession(

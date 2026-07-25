@@ -490,6 +490,76 @@ describe('SQLite ChannelStore', () => {
     }
   })
 
+  test('serializes session administration with requests for the same service scope', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'mppx-session-admin-lock-'))
+    const path = join(directory, 'channels.db')
+    const account = privateKeyToAccount(`0x${'01'.repeat(32)}`)
+    const client = createClient({
+      account,
+      chain: tempoDevnet,
+      transport: custom({
+        async request({ method, params }) {
+          if (method !== 'eth_call') throw new Error(`unexpected RPC method ${method}`)
+          const request = params[0] as { data: `0x${string}` }
+          const call = decodeFunctionData({ abi: escrowAbi, data: request.data })
+          if (call.functionName === 'CLOSE_GRACE_PERIOD')
+            return encodeFunctionResult({
+              abi: escrowAbi,
+              functionName: 'CLOSE_GRACE_PERIOD',
+              result: 900n,
+            })
+          throw new Error(`unexpected contract call ${call.functionName}`)
+        },
+      }),
+    })
+    const retained = {
+      ...channel,
+      chainId: tempoDevnet.id,
+      descriptor: { ...channel.descriptor, payer: account.address },
+    }
+    const getState = vi.spyOn(Chain, 'getChannelState').mockResolvedValue({
+      closeRequestedAt: 0,
+      deposit: retained.deposit,
+      settled: retained.cumulativeAmount,
+    })
+    const requestStore = createSqliteChannelStore({
+      namespace: 'https://api.example.com',
+      path,
+      payer: account.address,
+    })
+    const administrationStore = createSqliteChannelStore({ path, payer: account.address })
+    let requestLock: Awaited<ReturnType<typeof requestStore.acquire>> | undefined
+    try {
+      requestStore.set(retained)
+      requestLock = await requestStore.acquire(entryKey(retained))
+      const administration = createSessionAdministration({
+        account,
+        client,
+        store: administrationStore,
+      })
+      let completed = false
+      const syncing = administration.sync({ discover: false }).then((records) => {
+        completed = true
+        return records
+      })
+
+      await new Promise((resolve) => setTimeout(resolve, 75))
+      expect(completed).toBe(false)
+      expect(getState).not.toHaveBeenCalled()
+
+      requestLock.release()
+      requestLock = undefined
+      await expect(syncing).resolves.toHaveLength(1)
+      expect(getState).toHaveBeenCalledOnce()
+    } finally {
+      requestLock?.release()
+      requestStore.close()
+      administrationStore.close()
+      getState.mockRestore()
+      rmSync(directory, { recursive: true })
+    }
+  })
+
   test('retains durable state when cooperative close omits its receipt', async () => {
     const directory = mkdtempSync(join(tmpdir(), 'mppx-session-close-receipt-'))
     const path = join(directory, 'channels.db')

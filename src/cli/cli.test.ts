@@ -488,6 +488,16 @@ describe('sessions', () => {
     expect(output).toContain('CONFIRMATION_REQUIRED')
     expect(output).toContain('Pass --yes to close every session.')
   })
+
+  test('fails when an explicitly selected session is not retained', async () => {
+    const channelId = `0x${'11'.repeat(32)}`
+    const { exitCode, output } = await serve(['sessions', 'close', channelId, '--json'], {
+      env: { MPPX_PRIVATE_KEY: testPrivateKey },
+    })
+
+    expect(exitCode).toBe(1)
+    expect(output).toContain(`Session ${channelId} was not found.`)
+  })
 })
 
 describe('basic charge (examples/basic)', () => {
@@ -1206,6 +1216,11 @@ describe('session multi-fetch (examples/session/multi-fetch)', () => {
       const credentials: { action: string; channelId: string }[] = []
 
       const httpServer = await Http.createServer(async (req, res) => {
+        if (req.url === '/not-a-session') {
+          res.writeHead(200)
+          res.end('not a paid resource')
+          return
+        }
         const authHeader = req.headers.authorization
         if (authHeader) {
           try {
@@ -1299,6 +1314,45 @@ describe('session multi-fetch (examples/session/multi-fetch)', () => {
             }),
           ]),
         )
+
+        const closed = await serve(
+          [
+            'sessions',
+            'close',
+            retainedChannelId,
+            '--rpc-url',
+            rpcUrl,
+            '--network',
+            'testnet',
+            '--json',
+          ],
+          { env },
+        )
+        expect(closed.exitCode, `${closed.output}\n${closed.stderr}`).toBeUndefined()
+        expect(JSON.parse(closed.output)).toMatchObject({ closed: 1, failed: 0, pending: 0 })
+        expect(credentials.at(-1)).toMatchObject({
+          action: 'close',
+          channelId: retainedChannelId,
+        })
+
+        const failed = await serve(
+          [
+            'sessions',
+            'close',
+            newChannelId,
+            '--url',
+            `${httpServer.url}/not-a-session`,
+            '--rpc-url',
+            rpcUrl,
+            '--network',
+            'testnet',
+            '--json',
+          ],
+          { env },
+        )
+        expect(failed.exitCode).toBe(1)
+        expect(failed.output).toContain('SESSION_CLOSE_FAILED')
+        expect(failed.output).toContain('Response status is not 402.')
       } finally {
         httpServer.close()
       }

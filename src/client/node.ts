@@ -35,7 +35,7 @@ export type SqliteChannelStoreOptions = {
 /** A SQLite-backed channel store that can release its database handle. */
 export type SqliteChannelStore = ChannelStore & {
   /** Serializes one payer/payment scope across Node processes. */
-  acquire(key: string): Promise<SqliteScopeLock>
+  acquire(key: string, options?: SqliteScopeLockOptions): Promise<SqliteScopeLock>
   /** Absolute or caller-supplied path opened by this store. */
   readonly path: string
   /** Returns one retained channel by its canonical channel ID. */
@@ -62,6 +62,12 @@ export type SqliteChannelStore = ChannelStore & {
 export type SqliteScopeLock = {
   /** Releases this lease. Calling release more than once is harmless. */
   release(): void
+}
+
+/** Namespace override used when administering rows from more than one service origin. */
+export type SqliteScopeLockOptions = {
+  /** Service origin that owns the payment scope. Defaults to the store namespace. */
+  namespace?: string | undefined
 }
 
 /** Durable lifecycle state attached to a SQLite session row. */
@@ -239,8 +245,10 @@ export function createSqliteChannelStore(options: SqliteChannelStoreOptions): Sq
       const row = getChannelById.get(payer, channelId.toLowerCase()) as ChannelRow | undefined
       return row ? entryFromRow(row) : undefined
     },
-    async acquire(key) {
-      const scopeKey = scopedKey(payer, namespace, key)
+    async acquire(key, lockOptions = {}) {
+      const lockNamespace =
+        lockOptions.namespace === undefined ? namespace : normalizeOrigin(lockOptions.namespace)
+      const scopeKey = scopedKey(payer, lockNamespace, key)
       const owner = randomUUID()
       const currentHost = hostname()
       for (;;) {
@@ -468,6 +476,8 @@ export type SessionCloseSelection = {
   finalize?: boolean | undefined
   /** Close only recovered sessions that have no known service origin. */
   orphaned?: boolean | undefined
+  /** Protected resource URL override used for cooperative close. */
+  requestUrl?: string | undefined
   /** Channel ID or service URL/origin. */
   target?: string | undefined
 }
@@ -533,6 +543,9 @@ export function createSessionAdministration(
   const list = (filter: SqliteSessionListOptions = {}) =>
     store.listSessions({ ...filter, chainId, payer: filter.payer ?? account.address })
 
+  const findSession = (channelId: Hex) =>
+    list().find((record) => record.entry.channelId.toLowerCase() === channelId.toLowerCase())
+
   async function discover(): Promise<void> {
     const existing = new Set(list().map((record) => record.entry.channelId.toLowerCase()))
     const head = await getBlockNumber(client)
@@ -593,43 +606,57 @@ export function createSessionAdministration(
     }
   }
 
+  async function reconcile(record: SqliteSessionRecord): Promise<SqliteSessionRecord | undefined> {
+    const state = await Chain.getChannelState(client, record.entry.channelId, record.entry.escrow)
+    if (state.deposit === 0n) {
+      store.deleteChannel(record.entry.channelId)
+      return undefined
+    }
+    const gracePeriod = await readCloseGracePeriod(client, record.entry.escrow)
+    const closeRequestedAt = state.closeRequestedAt
+    const graceReadyAt = closeRequestedAt === 0 ? 0 : closeRequestedAt + gracePeriod
+    const updated: SqliteSessionRecord = {
+      ...record,
+      acceptedCumulative:
+        state.settled > record.acceptedCumulative ? state.settled : record.acceptedCumulative,
+      closeRequestedAt,
+      entry: {
+        ...record.entry,
+        cumulativeAmount:
+          state.settled > record.entry.cumulativeAmount
+            ? state.settled
+            : record.entry.cumulativeAmount,
+        deposit: state.deposit,
+        opened: closeRequestedAt === 0,
+      },
+      graceReadyAt,
+      state:
+        closeRequestedAt === 0
+          ? record.origin
+            ? 'active'
+            : 'orphaned'
+          : graceReadyAt <= now()
+            ? 'finalizable'
+            : 'closing',
+    }
+    store.setSession(updated)
+    return updated
+  }
+
   async function sync(
     syncOptions: { discover?: boolean | undefined } = {},
   ): Promise<SqliteSessionRecord[]> {
     if (syncOptions.discover ?? true) await discover()
-    for (const record of list()) {
-      const state = await Chain.getChannelState(client, record.entry.channelId, record.entry.escrow)
-      if (state.deposit === 0n) {
-        store.deleteChannel(record.entry.channelId)
-        continue
-      }
-      const gracePeriod = await readCloseGracePeriod(client, record.entry.escrow)
-      const closeRequestedAt = state.closeRequestedAt
-      const graceReadyAt = closeRequestedAt === 0 ? 0 : closeRequestedAt + gracePeriod
-      store.setSession({
-        ...record,
-        acceptedCumulative:
-          state.settled > record.acceptedCumulative ? state.settled : record.acceptedCumulative,
-        closeRequestedAt,
-        entry: {
-          ...record.entry,
-          cumulativeAmount:
-            state.settled > record.entry.cumulativeAmount
-              ? state.settled
-              : record.entry.cumulativeAmount,
-          deposit: state.deposit,
-          opened: closeRequestedAt === 0,
-        },
-        graceReadyAt,
-        state:
-          closeRequestedAt === 0
-            ? record.origin
-              ? 'active'
-              : 'orphaned'
-            : graceReadyAt <= now()
-              ? 'finalizable'
-              : 'closing',
+    for (const candidate of list()) {
+      const lock = await store.acquire(entryKey(candidate.entry), {
+        namespace: candidate.origin,
       })
+      try {
+        const record = findSession(candidate.entry.channelId)
+        if (record) await reconcile(record)
+      } finally {
+        lock.release()
+      }
     }
     return list()
   }
@@ -645,9 +672,10 @@ export function createSessionAdministration(
       throw new Error('Resolved session signer does not control the configured payer account.')
 
     if (selection.cooperative) {
-      if (!record.requestUrl)
+      const requestUrl = selection.requestUrl ?? record.requestUrl
+      if (!requestUrl)
         throw new Error('Cooperative close requires the original protected request URL.')
-      const challengeResponse = await fetch(record.requestUrl, { method: 'POST' })
+      const challengeResponse = await fetch(requestUrl, { method: 'POST' })
       const challenge = Challenge.fromResponseList(challengeResponse).find(isTempoSessionChallenge)
       if (!challenge || !challengeMatchesSession(challenge, record))
         throw new Error('Service did not return a matching Tempo session challenge.')
@@ -668,7 +696,7 @@ export function createSessionAdministration(
       getSessionManagerInternals(manager).rehydrate({
         challenge,
         channel: { ...record.entry, cumulativeAmount: cumulative, opened: true },
-        input: record.requestUrl,
+        input: requestUrl,
         // Closing at the highest locally signed voucher is safe even when the
         // shared row predates receipt tracking or another client left
         // accepted_cumulative stale. It cannot exceed the payer's existing
@@ -742,16 +770,23 @@ export function createSessionAdministration(
   }
 
   async function close(selection: SessionCloseSelection): Promise<SessionCloseSummary> {
-    if (selection.cooperative && (selection.all || selection.orphaned || selection.finalize))
-      throw new Error('Cooperative close cannot be combined with all, orphaned, or finalize.')
-    const records = await sync({
-      discover: Boolean(selection.all || selection.orphaned || selection.finalize),
-    })
-    const selected = selectSessions(records, selection)
+    if (selection.cooperative && (selection.orphaned || selection.finalize))
+      throw new Error('Cooperative close cannot be combined with orphaned or finalize.')
+    if (selection.orphaned || selection.finalize || (selection.all && !selection.cooperative))
+      await discover()
+    const selected = selectSessions(list(), selection)
     const summary: SessionCloseSummary = { closed: 0, failed: 0, pending: 0, results: [] }
-    for (const record of selected) {
+    for (const candidate of selected) {
+      let lock: SqliteScopeLock | undefined
       try {
-        const result = await closeOne(record, selection)
+        lock = await store.acquire(entryKey(candidate.entry), {
+          namespace: candidate.origin,
+        })
+        const record = findSession(candidate.entry.channelId)
+        const reconciled = record ? await reconcile(record) : undefined
+        const result = reconciled
+          ? await closeOne(reconciled, selection)
+          : closeResult(candidate, 'closed')
         summary.results.push(result)
         if (result.status === 'closed') summary.closed += 1
         else if (result.status === 'pending') summary.pending += 1
@@ -759,10 +794,12 @@ export function createSessionAdministration(
       } catch (error) {
         summary.failed += 1
         summary.results.push(
-          closeResult(record, 'error', {
+          closeResult(candidate, 'error', {
             error: error instanceof Error ? error.message : String(error),
           }),
         )
+      } finally {
+        lock?.release()
       }
     }
     return summary
@@ -863,11 +900,23 @@ function selectSessions(
     throw new Error('Specify a URL, channel ID, or all/orphaned/finalize session selection.')
   const channelId = readHex(selection.target, 32)
   if (channelId)
-    return records.filter(
-      (record) => record.entry.channelId.toLowerCase() === channelId.toLowerCase(),
+    return requireSelectedSessions(
+      records.filter((record) => record.entry.channelId.toLowerCase() === channelId.toLowerCase()),
+      selection.target,
     )
   const origin = normalizeOrigin(selection.target)
-  return records.filter((record) => normalizeOrigin(record.origin) === origin)
+  return requireSelectedSessions(
+    records.filter((record) => normalizeOrigin(record.origin) === origin),
+    selection.target,
+  )
+}
+
+function requireSelectedSessions(
+  records: SqliteSessionRecord[],
+  target: string,
+): SqliteSessionRecord[] {
+  if (records.length === 0) throw new Error(`Session ${target} was not found.`)
+  return records
 }
 
 function challengeMatchesSession(

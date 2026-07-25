@@ -2,8 +2,7 @@ import { Errors } from 'incur'
 import { createClient, formatUnits, http, type Hex } from 'viem'
 
 import type * as Challenge from '../../Challenge.js'
-import { createSqliteChannelStore } from '../../client/node.js'
-import type { SqliteScopeLock } from '../../client/node.js'
+import type { SqliteChannelStore, SqliteScopeLock } from '../../client/node.js'
 import type { ChannelEntry } from '../../tempo/session/client/ChannelOps.js'
 import { channelKey, entryKey, type ChannelStore } from '../../tempo/session/client/ChannelStore.js'
 import {
@@ -22,6 +21,7 @@ import {
   resolveRpcUrl,
   type Network,
 } from '../utils.js'
+import { loadNodeSessionApi } from './node.js'
 
 /** CLI options needed to run a persistent Tempo session request. */
 export type PersistentSessionRequestOptions = {
@@ -78,7 +78,7 @@ export function resolveSessionSelection(
 function selectedChannelStore(parameters: {
   key: string
   selection: SessionSelection
-  store: ReturnType<typeof createSqliteChannelStore>
+  store: SqliteChannelStore
   account: Awaited<ReturnType<typeof resolvePersistentAccount>>['account']
 }): ChannelStore {
   const { account, key, selection, store } = parameters
@@ -175,6 +175,7 @@ export async function runPersistentSessionRequest(
     })
   const key = channelKey(challengeContext)
   const selection = resolveSessionSelection(options.session, parameters.methodOptions.channel)
+  const { createSqliteChannelStore } = await loadNodeSessionApi()
   const channelStore = createSqliteChannelStore({
     namespace: new URL(parameters.endpoint).origin,
     payer: resolvedAccount.account.address,

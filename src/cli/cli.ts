@@ -1740,7 +1740,10 @@ const sessions = Cli.create('sessions', {
       all: z.boolean().optional().describe('Close every session'),
       cooperative: z.boolean().optional().describe('Ask the service to close cooperatively'),
       finalize: z.boolean().optional().describe('Withdraw every finalizable session'),
+      header: z.array(z.string()).optional().describe('Add close request header (repeatable)'),
+      onChain: z.boolean().optional().describe('Close through the Tempo precompile'),
       orphaned: z.boolean().optional().describe('Close every recovered orphaned session'),
+      url: z.string().optional().describe('Override the stored resource URL'),
       yes: z.boolean().optional().default(false).describe('Confirm closing every session'),
     }),
     output: z.object({
@@ -1749,18 +1752,76 @@ const sessions = Cli.create('sessions', {
       pending: z.number(),
       results: z.array(sessionCloseResultSchema),
     }),
-    alias: { account: 'a', rpcUrl: 'r' },
+    alias: { account: 'a', header: 'H', rpcUrl: 'r' },
     async run(c) {
+      const broadSelections = [c.options.all, c.options.finalize, c.options.orphaned].filter(
+        Boolean,
+      ).length
+      if (c.args.target && broadSelections > 0)
+        return c.error({
+          code: 'INVALID_SESSION_CLOSE',
+          message: 'Specify a URL/channel ID or --all/--orphaned/--finalize, not both.',
+          exitCode: 2,
+        })
+      if (!c.args.target && broadSelections === 0)
+        return c.error({
+          code: 'INVALID_SESSION_CLOSE',
+          message: 'Specify a URL, channel ID, or --all/--orphaned/--finalize.',
+          exitCode: 2,
+        })
+      if (broadSelections > 1)
+        return c.error({
+          code: 'INVALID_SESSION_CLOSE',
+          message: 'Specify only one of --all, --orphaned, or --finalize.',
+          exitCode: 2,
+        })
+      if (c.options.cooperative && c.options.onChain)
+        return c.error({
+          code: 'INVALID_SESSION_CLOSE',
+          message: '--cooperative and --on-chain are mutually exclusive.',
+          exitCode: 2,
+        })
+      const cooperative = c.options.onChain ? false : (c.options.cooperative ?? true)
+      if (cooperative && (c.options.orphaned || c.options.finalize))
+        return c.error({
+          code: 'INVALID_SESSION_CLOSE',
+          message: '--orphaned and --finalize require --on-chain.',
+          exitCode: 2,
+        })
       if (c.options.all && !c.options.yes)
         return c.error({
           code: 'CONFIRMATION_REQUIRED',
           message: 'Pass --yes to close every session.',
           exitCode: 2,
         })
+      if (c.options.all && (c.options.header || c.options.url))
+        return c.error({
+          code: 'INVALID_SESSION_CLOSE',
+          message: '--header and --url only apply to a single session.',
+          exitCode: 2,
+        })
+      if (!cooperative && (c.options.header || c.options.url))
+        return c.error({
+          code: 'INVALID_SESSION_CLOSE',
+          message: '--header and --url only apply to cooperative close.',
+          exitCode: 2,
+        })
       const summary = await closePersistentSessions({
         ...c.options,
+        cooperative,
+        headers: c.options.header,
+        requestUrl: c.options.url,
         target: c.args.target,
       })
+      if (summary.failed > 0)
+        return c.error({
+          code: 'SESSION_CLOSE_FAILED',
+          message: summary.results
+            .filter((result) => result.status === 'error')
+            .map((result) => `${result.channelId}: ${result.error ?? 'close failed'}`)
+            .join('\n'),
+          exitCode: 1,
+        })
       return outputResult(c, summary, () => {
         console.log(
           `Closed ${summary.closed}; pending ${summary.pending}; failed ${summary.failed}.`,
