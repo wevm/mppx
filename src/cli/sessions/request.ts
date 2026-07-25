@@ -1,8 +1,15 @@
 import { Errors } from 'incur'
-import { createClient, formatUnits, http } from 'viem'
+import { createClient, formatUnits, http, type Hex } from 'viem'
 
 import type * as Challenge from '../../Challenge.js'
 import { createSqliteChannelStore } from '../../client/node.js'
+import type { SqliteScopeLock } from '../../client/node.js'
+import type { ChannelEntry } from '../../tempo/session/client/ChannelOps.js'
+import { channelKey, entryKey, type ChannelStore } from '../../tempo/session/client/ChannelStore.js'
+import {
+  canSignDescriptor,
+  resolveChallengeContext,
+} from '../../tempo/session/client/CredentialState.js'
 import { getSessionManagerInternals } from '../../tempo/session/client/internal/SessionManager.js'
 import { sessionManager } from '../../tempo/session/client/SessionManager.js'
 import type { TempoSessionChallenge } from '../../tempo/session/client/Transports.js'
@@ -23,6 +30,7 @@ export type PersistentSessionRequestOptions = {
   include?: boolean | undefined
   network?: Network | undefined
   rpcUrl?: string | undefined
+  session: string
   silent: boolean
   verbose: number
 }
@@ -42,6 +50,74 @@ export type PersistentSessionRequestParameters = {
 
 function sessionDecimals(challenge: Challenge.Challenge): number {
   return typeof challenge.request.decimals === 'number' ? challenge.request.decimals : 6
+}
+
+type SessionSelection = 'auto' | 'new' | Hex
+
+/** Resolves `--session` and the `-M channel=` compatibility alias. */
+export function resolveSessionSelection(
+  session: string,
+  channelAlias: string | undefined,
+): SessionSelection {
+  if (channelAlias && session !== 'auto' && channelAlias.toLowerCase() !== session.toLowerCase())
+    throw new Errors.IncurError({
+      code: 'SESSION_SELECTION_CONFLICT',
+      message: '--session and -M channel= select different sessions.',
+      exitCode: 2,
+    })
+  const value = channelAlias ?? session
+  if (value === 'auto' || value === 'new') return value
+  if (/^0x[0-9a-fA-F]{64}$/.test(value)) return value.toLowerCase() as Hex
+  throw new Errors.IncurError({
+    code: 'INVALID_SESSION',
+    message: 'Session must be auto, new, or a 32-byte channel ID.',
+    exitCode: 2,
+  })
+}
+
+function selectedChannelStore(parameters: {
+  key: string
+  selection: SessionSelection
+  store: ReturnType<typeof createSqliteChannelStore>
+  account: Awaited<ReturnType<typeof resolvePersistentAccount>>['account']
+}): ChannelStore {
+  const { account, key, selection, store } = parameters
+  let selected =
+    selection === 'auto' || selection === 'new' ? undefined : store.getChannel(selection)
+  if (selection !== 'auto' && selection !== 'new') {
+    if (!selected)
+      throw new Errors.IncurError({
+        code: 'SESSION_NOT_FOUND',
+        message: `Session ${selection} was not found.`,
+        exitCode: 2,
+      })
+    if (
+      !selected.opened ||
+      entryKey(selected) !== key ||
+      !canSignDescriptor(account, selected.descriptor)
+    )
+      throw new Errors.IncurError({
+        code: 'SESSION_MISMATCH',
+        message: `Session ${selection} cannot be used for this account and challenge.`,
+        exitCode: 2,
+      })
+  }
+
+  return {
+    get(requestedKey) {
+      if (requestedKey !== key) return store.get(requestedKey)
+      if (selection === 'auto') return store.get(requestedKey)
+      return selected
+    },
+    set(entry: ChannelEntry) {
+      if (entryKey(entry) === key) selected = entry
+      store.set(entry)
+    },
+    delete(requestedKey) {
+      if (requestedKey === key) selected = undefined
+      store.delete(requestedKey)
+    },
+  }
 }
 
 /** @internal Resolves the manager deposit cap in human-readable token units. */
@@ -87,12 +163,27 @@ export async function runPersistentSessionRequest(
   const chain = await resolveChain({ network: options.network, rpcUrl })
   const resolvedAccount = await resolvePersistentAccount(options.account)
   const client = createClient({ chain, transport: http(rpcUrl) })
+  const challengeContext = await resolveChallengeContext({
+    challenge: parameters.challenge,
+    getClient: async () => client,
+  })
+  if (challengeContext.chainId !== chain.id)
+    throw new Errors.IncurError({
+      code: 'CHAIN_MISMATCH',
+      message: `Challenge requires chainId ${challengeContext.chainId}, but RPC is chainId ${chain.id}.`,
+      exitCode: 2,
+    })
+  const key = channelKey(challengeContext)
+  const selection = resolveSessionSelection(options.session, parameters.methodOptions.channel)
   const channelStore = createSqliteChannelStore({
     namespace: new URL(parameters.endpoint).origin,
+    payer: resolvedAccount.account.address,
     requestUrl: parameters.endpoint,
   })
+  let lock: SqliteScopeLock | undefined
 
   try {
+    lock = await channelStore.acquire(key)
     if (parameters.challengeResponse.status !== 402 || parameters.challengeResponse.bodyUsed)
       throw new Error('Session manager requires an unconsumed 402 challenge response.')
 
@@ -107,7 +198,12 @@ export async function runPersistentSessionRequest(
       account: resolvedAccount.account,
       bootstrap: true,
       client,
-      channelStore,
+      channelStore: selectedChannelStore({
+        account: resolvedAccount.account,
+        key,
+        selection,
+        store: channelStore,
+      }),
       decimals: sessionDecimals(parameters.challenge),
       maxDeposit: resolveSessionMaxDeposit(
         parameters.challenge,
@@ -150,6 +246,7 @@ export async function runPersistentSessionRequest(
     if (!options.silent && manager.channelId)
       parameters.info(`Session retained ${manager.channelId}\n`)
   } finally {
+    lock?.release()
     channelStore.close()
   }
 }

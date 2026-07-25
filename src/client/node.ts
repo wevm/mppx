@@ -1,5 +1,6 @@
+import { randomUUID } from 'node:crypto'
 import { mkdirSync } from 'node:fs'
-import { homedir } from 'node:os'
+import { homedir, hostname } from 'node:os'
 import { dirname, join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 
@@ -7,8 +8,6 @@ import type { Account, Address, Client, Hex } from 'viem'
 import { getBlockNumber, getLogs, readContract } from 'viem/actions'
 
 import * as Challenge from '../Challenge.js'
-import * as Credential from '../Credential.js'
-import * as ChannelOps from '../tempo/session/client/ChannelOps.js'
 import type { ChannelEntry } from '../tempo/session/client/ChannelOps.js'
 import {
   deserializeEntry,
@@ -17,15 +16,20 @@ import {
   type ChannelStore,
   type StoredChannel,
 } from '../tempo/session/client/ChannelStore.js'
+import { canSignDescriptor } from '../tempo/session/client/CredentialState.js'
+import { getSessionManagerInternals } from '../tempo/session/client/internal/SessionManager.js'
+import { sessionManager } from '../tempo/session/client/SessionManager.js'
 import { isTempoSessionChallenge } from '../tempo/session/client/Transports.js'
 import * as Chain from '../tempo/session/precompile/Chain.js'
 import { escrowAbi } from '../tempo/session/precompile/escrow.abi.js'
 import { tip20ChannelEscrow } from '../tempo/session/precompile/Protocol.js'
 
-const schemaVersion = 2
+const schemaVersion = 3
 
 /** Options for the Node SQLite-backed payer channel store. */
 export type SqliteChannelStoreOptions = {
+  /** Payer/root account whose reusable channels this store exposes. */
+  payer: Address
   /** Service namespace, normally the protected API origin. */
   namespace?: string | undefined
   /** SQLite file path. Defaults to the shared Tempo channel database. */
@@ -36,8 +40,12 @@ export type SqliteChannelStoreOptions = {
 
 /** A SQLite-backed channel store that can release its database handle. */
 export type SqliteChannelStore = ChannelStore & {
+  /** Serializes one payer/payment scope across Node processes. */
+  acquire(key: string): Promise<SqliteScopeLock>
   /** Absolute or caller-supplied path opened by this store. */
   readonly path: string
+  /** Returns one retained channel by its canonical channel ID. */
+  getChannel(channelId: Hex): ChannelEntry | undefined
   /** Removes a channel by its canonical channel ID. */
   deleteChannel(channelId: Hex): void
   /** Returns all TIP-1034 sessions known to this database. */
@@ -54,6 +62,12 @@ export type SqliteChannelStore = ChannelStore & {
   ): void
   /** Closes the underlying SQLite connection. */
   close(): void
+}
+
+/** Exclusive SQLite lease held for one payer/payment scope. */
+export type SqliteScopeLock = {
+  /** Releases this lease. Calling release more than once is harmless. */
+  release(): void
 }
 
 /** Durable lifecycle state attached to a SQLite session row. */
@@ -123,11 +137,10 @@ export function defaultChannelDatabasePath(): string {
  * client can reuse v2 session records without a separate migration command. A
  * namespace keeps identical payment scopes at different services isolated.
  */
-export function createSqliteChannelStore(
-  options: SqliteChannelStoreOptions = {},
-): SqliteChannelStore {
+export function createSqliteChannelStore(options: SqliteChannelStoreOptions): SqliteChannelStore {
   const path = options.path ?? defaultChannelDatabasePath()
-  const namespace = options.namespace ?? ''
+  const payer = options.payer.toLowerCase()
+  const namespace = normalizeOrigin(options.namespace ?? '')
   const requestUrl = options.requestUrl ?? namespace
   const origin = resolveOrigin(requestUrl, namespace)
   mkdirSync(dirname(path), { recursive: true })
@@ -139,7 +152,8 @@ export function createSqliteChannelStore(
   const getRow = database.prepare(`SELECT channel_id, chain_id, escrow_contract,
       cumulative_amount, deposit, descriptor_json, entry_json, state
     FROM channels
-    WHERE scope_key = ?`)
+    WHERE lower(payer) = ? AND scope_key = ? AND state = 'active'
+    ORDER BY last_used_at DESC LIMIT 1`)
   const listRows = database.prepare(`SELECT channel_id, chain_id, escrow_contract,
       cumulative_amount, deposit, descriptor_json, entry_json, state,
       accepted_cumulative, close_requested_at, grace_ready_at, origin, request_url,
@@ -147,26 +161,33 @@ export function createSqliteChannelStore(
     FROM channels
     WHERE session_protocol = 'v2' AND descriptor_json IS NOT NULL
     ORDER BY last_used_at DESC`)
-  const getChannelById = database.prepare('SELECT channel_id FROM channels WHERE channel_id = ?')
+  const getChannelById = database.prepare(`SELECT channel_id, chain_id, escrow_contract,
+      cumulative_amount, deposit, descriptor_json, entry_json, state
+    FROM channels WHERE lower(payer) = ? AND channel_id = ?`)
   const getLatestAuthorizedSigner = database.prepare(`SELECT authorized_signer FROM channels
-    WHERE origin = ? AND state = 'active' AND session_protocol = 'v2'
+    WHERE lower(payer) = ? AND origin = ? AND state = 'active' AND session_protocol = 'v2'
       AND scope_key IS NOT NULL
     ORDER BY last_used_at DESC LIMIT 1`)
-  const deleteScope = database.prepare('DELETE FROM channels WHERE scope_key = ?')
-  const deleteChannel = database.prepare('DELETE FROM channels WHERE channel_id = ?')
-  const deleteOtherScopeChannel = database.prepare(
-    'DELETE FROM channels WHERE scope_key = ? AND channel_id <> ?',
+  const orphanScope = database.prepare(`UPDATE channels
+    SET scope_key = NULL, state = 'orphaned'
+    WHERE lower(payer) = ? AND scope_key = ?`)
+  const deleteChannel = database.prepare(
+    'DELETE FROM channels WHERE lower(payer) = ? AND channel_id = ?',
+  )
+  const clearOtherScopeChannels = database.prepare(
+    `UPDATE channels SET scope_key = NULL
+      WHERE lower(payer) = ? AND scope_key = ? AND channel_id <> ?`,
   )
   const updateSessionState = database.prepare(`UPDATE channels
     SET state = ?, close_requested_at = ?, grace_ready_at = ?
-    WHERE channel_id = ?`)
+    WHERE lower(payer) = ? AND channel_id = ?`)
   const updateSession = database.prepare(`UPDATE channels SET
       version = ?, scope_key = ?, origin = ?, request_url = ?, chain_id = ?,
       escrow_contract = ?, token = ?, payee = ?, payer = ?, authorized_signer = ?,
       salt = ?, session_protocol = 'v2', descriptor_json = ?, entry_json = ?,
       deposit = ?, cumulative_amount = ?, accepted_cumulative = ?, state = ?,
       close_requested_at = ?, grace_ready_at = ?, created_at = ?, last_used_at = ?
-    WHERE channel_id = ?`)
+    WHERE lower(payer) = ? AND channel_id = ?`)
   const upsert = database.prepare(`INSERT INTO channels (
       channel_id, version, scope_key, origin, request_url, chain_id, escrow_contract, token,
       payee, payer, authorized_signer, salt, session_protocol, descriptor_json, entry_json,
@@ -194,22 +215,93 @@ export function createSqliteChannelStore(
       state = 'active',
       close_requested_at = 0,
       last_used_at = excluded.last_used_at`)
+  const getScopeLock = database.prepare(`SELECT owner, host, pid, updated_at
+    FROM channel_scope_locks WHERE scope_key = ?`)
+  const claimScopeLock = database.prepare(`INSERT INTO channel_scope_locks (
+      scope_key, owner, host, pid, updated_at
+    ) VALUES (?, ?, ?, ?, ?)
+    ON CONFLICT(scope_key) DO UPDATE SET
+      owner = excluded.owner,
+      host = excluded.host,
+      pid = excluded.pid,
+      updated_at = excluded.updated_at`)
+  const heartbeatScopeLock = database.prepare(`UPDATE channel_scope_locks
+    SET updated_at = ? WHERE scope_key = ? AND owner = ?`)
+  const releaseScopeLock = database.prepare(
+    'DELETE FROM channel_scope_locks WHERE scope_key = ? AND owner = ?',
+  )
+  const ownedLocks = new Map<
+    string,
+    { owner: string; scopeKey: string; timer: ReturnType<typeof setInterval> }
+  >()
+  let closed = false
 
   return {
     path,
     get(key) {
-      const row = getRow.get(scopedKey(namespace, key)) as ChannelRow | undefined
+      const row = getRow.get(payer, scopedKey(payer, namespace, key)) as ChannelRow | undefined
       return row ? entryFromRow(row) : undefined
     },
+    getChannel(channelId) {
+      const row = getChannelById.get(payer, channelId.toLowerCase()) as ChannelRow | undefined
+      return row ? entryFromRow(row) : undefined
+    },
+    async acquire(key) {
+      const scopeKey = scopedKey(payer, namespace, key)
+      const owner = randomUUID()
+      const currentHost = hostname()
+      for (;;) {
+        if (closed) throw new Error('Cannot acquire a scope lock from a closed channel store.')
+        let claimed = false
+        database.exec('BEGIN IMMEDIATE')
+        try {
+          const existing = getScopeLock.get(scopeKey) as
+            | { host: string; owner: string; pid: number; updated_at: number }
+            | undefined
+          const stale = existing ? Date.now() - existing.updated_at > 30_000 : false
+          const dead = existing
+            ? existing.host === currentHost && !processIsAlive(existing.pid)
+            : false
+          if (!existing || stale || dead) {
+            claimScopeLock.run(scopeKey, owner, currentHost, process.pid, Date.now())
+            claimed = true
+          }
+          database.exec('COMMIT')
+        } catch (error) {
+          database.exec('ROLLBACK')
+          throw error
+        }
+        if (claimed) break
+        await new Promise((resolve) => setTimeout(resolve, 25))
+      }
+
+      const timer = setInterval(() => {
+        if (!closed) heartbeatScopeLock.run(Date.now(), scopeKey, owner)
+      }, 5_000)
+      timer.unref()
+      ownedLocks.set(owner, { owner, scopeKey, timer })
+      let released = false
+      return {
+        release() {
+          if (released) return
+          released = true
+          const lock = ownedLocks.get(owner)
+          if (lock) clearInterval(lock.timer)
+          ownedLocks.delete(owner)
+          if (!closed) releaseScopeLock.run(scopeKey, owner)
+        },
+      }
+    },
     set(entry) {
-      const scopeKey = scopedKey(namespace, entryKey(entry))
+      assertPayer(entry, payer)
+      const scopeKey = scopedKey(payer, namespace, entryKey(entry))
       database.exec('BEGIN IMMEDIATE')
       try {
-        const existing = getRow.get(scopeKey) as ChannelRow | undefined
+        const existing = getRow.get(payer, scopeKey) as ChannelRow | undefined
         const merged = mergeEntry(existing ? entryFromRow(existing) : undefined, entry)
         const stored = serializeEntry(merged)
         const now = Math.floor(Date.now() / 1_000)
-        deleteOtherScopeChannel.run(scopeKey, merged.channelId)
+        clearOtherScopeChannels.run(payer, scopeKey, merged.channelId)
         upsert.run(
           merged.channelId,
           schemaVersion,
@@ -237,12 +329,13 @@ export function createSqliteChannelStore(
       }
     },
     delete(key) {
-      deleteScope.run(scopedKey(namespace, key))
+      orphanScope.run(payer, scopedKey(payer, namespace, key))
     },
     deleteChannel(channelId) {
-      deleteChannel.run(channelId.toLowerCase())
+      deleteChannel.run(payer, channelId.toLowerCase())
     },
     listSessions(options = {}) {
+      if (options.payer && options.payer.toLowerCase() !== payer) return []
       return (listRows.all() as ChannelRow[])
         .filter((row) => options.chainId === undefined || row.chain_id === options.chainId)
         .filter(
@@ -250,92 +343,106 @@ export function createSqliteChannelStore(
             options.origin === undefined ||
             row.origin.toLowerCase() === normalizeOrigin(options.origin),
         )
-        .filter(
-          (row) =>
-            options.payer === undefined || row.payer.toLowerCase() === options.payer.toLowerCase(),
-        )
+        .filter((row) => row.payer.toLowerCase() === payer)
         .map(sessionRecordFromRow)
     },
     latestAuthorizedSigner() {
-      const row = getLatestAuthorizedSigner.get(origin) as
+      const row = getLatestAuthorizedSigner.get(payer, origin) as
         | { authorized_signer: Address }
         | undefined
       return row?.authorized_signer
     },
     setSession(record) {
+      assertPayer(record.entry, payer)
       const scopeKey = record.origin
-        ? scopedKey(record.origin || namespace, entryKey(record.entry))
+        ? scopedKey(payer, normalizeOrigin(record.origin || namespace), entryKey(record.entry))
         : null
       const stored = serializeEntry(record.entry)
-      if (scopeKey) deleteOtherScopeChannel.run(scopeKey, record.entry.channelId)
-      if (getChannelById.get(record.entry.channelId)) {
-        updateSession.run(
-          schemaVersion,
-          scopeKey,
-          record.origin,
-          record.requestUrl,
-          record.entry.chainId,
-          record.entry.escrow,
-          record.entry.descriptor.token,
-          record.entry.descriptor.payee,
-          record.entry.descriptor.payer,
-          record.entry.descriptor.authorizedSigner,
-          record.entry.descriptor.salt,
-          JSON.stringify(record.entry.descriptor),
-          JSON.stringify(stored),
-          record.entry.deposit.toString(),
-          record.entry.cumulativeAmount.toString(),
-          record.acceptedCumulative.toString(),
-          record.state,
-          record.closeRequestedAt,
-          record.graceReadyAt,
-          record.createdAt,
-          record.lastUsedAt,
-          record.entry.channelId,
-        )
-        return
+      database.exec('BEGIN IMMEDIATE')
+      try {
+        if (scopeKey) clearOtherScopeChannels.run(payer, scopeKey, record.entry.channelId)
+        if (getChannelById.get(payer, record.entry.channelId)) {
+          updateSession.run(
+            schemaVersion,
+            scopeKey,
+            record.origin,
+            record.requestUrl,
+            record.entry.chainId,
+            record.entry.escrow,
+            record.entry.descriptor.token,
+            record.entry.descriptor.payee,
+            record.entry.descriptor.payer,
+            record.entry.descriptor.authorizedSigner,
+            record.entry.descriptor.salt,
+            JSON.stringify(record.entry.descriptor),
+            JSON.stringify(stored),
+            record.entry.deposit.toString(),
+            record.entry.cumulativeAmount.toString(),
+            record.acceptedCumulative.toString(),
+            record.state,
+            record.closeRequestedAt,
+            record.graceReadyAt,
+            record.createdAt,
+            record.lastUsedAt,
+            payer,
+            record.entry.channelId,
+          )
+        } else {
+          upsert.run(
+            record.entry.channelId,
+            schemaVersion,
+            scopeKey,
+            record.origin,
+            record.requestUrl,
+            record.entry.chainId,
+            record.entry.escrow,
+            record.entry.descriptor.token,
+            record.entry.descriptor.payee,
+            record.entry.descriptor.payer,
+            record.entry.descriptor.authorizedSigner,
+            record.entry.descriptor.salt,
+            JSON.stringify(record.entry.descriptor),
+            JSON.stringify(stored),
+            record.entry.deposit.toString(),
+            record.entry.cumulativeAmount.toString(),
+            record.createdAt,
+            record.lastUsedAt,
+          )
+          database
+            .prepare(`UPDATE channels SET
+              accepted_cumulative = ?, state = ?, close_requested_at = ?, grace_ready_at = ?
+              WHERE lower(payer) = ? AND channel_id = ?`)
+            .run(
+              record.acceptedCumulative.toString(),
+              record.state,
+              record.closeRequestedAt,
+              record.graceReadyAt,
+              payer,
+              record.entry.channelId,
+            )
+        }
+        database.exec('COMMIT')
+      } catch (error) {
+        database.exec('ROLLBACK')
+        throw error
       }
-      upsert.run(
-        record.entry.channelId,
-        schemaVersion,
-        scopeKey,
-        record.origin,
-        record.requestUrl,
-        record.entry.chainId,
-        record.entry.escrow,
-        record.entry.descriptor.token,
-        record.entry.descriptor.payee,
-        record.entry.descriptor.payer,
-        record.entry.descriptor.authorizedSigner,
-        record.entry.descriptor.salt,
-        JSON.stringify(record.entry.descriptor),
-        JSON.stringify(stored),
-        record.entry.deposit.toString(),
-        record.entry.cumulativeAmount.toString(),
-        record.createdAt,
-        record.lastUsedAt,
-      )
-      database
-        .prepare(`UPDATE channels SET
-          accepted_cumulative = ?, state = ?, close_requested_at = ?, grace_ready_at = ?
-          WHERE channel_id = ?`)
-        .run(
-          record.acceptedCumulative.toString(),
-          record.state,
-          record.closeRequestedAt,
-          record.graceReadyAt,
-          record.entry.channelId,
-        )
     },
     updateSessionState(channelId, state, timing = {}) {
       updateSessionState.run(
         state,
         timing.closeRequestedAt ?? 0,
         timing.graceReadyAt ?? 0,
+        payer,
         channelId.toLowerCase(),
       )
     },
     close() {
+      for (const { owner, scopeKey, timer } of ownedLocks.values()) {
+        clearInterval(timer)
+        releaseScopeLock.run(scopeKey, owner)
+      }
+      ownedLocks.clear()
+      closed = true
       database.close()
     },
   }
@@ -546,44 +653,39 @@ export function createSessionAdministration(
     const signingAccount = resolveAccount
       ? await resolveAccount(record.entry.descriptor.authorizedSigner)
       : account
-    if (signingAccount.address.toLowerCase() !== account.address.toLowerCase())
+    if (!canSignDescriptor(signingAccount, record.entry.descriptor))
       throw new Error('Resolved session signer does not control the configured payer account.')
 
     if (selection.cooperative) {
       if (!record.requestUrl)
         throw new Error('Cooperative close requires the original protected request URL.')
       const challengeResponse = await fetch(record.requestUrl, { method: 'POST' })
-      const challenge = Challenge.fromResponseList(challengeResponse).find(
-        (candidate) =>
-          isTempoSessionChallenge(candidate) && challengeMatchesSession(candidate, record),
-      )
-      if (!challenge) throw new Error('Service did not return a Tempo session challenge.')
-      const cumulativeAmount =
-        record.acceptedCumulative > record.entry.cumulativeAmount
-          ? record.acceptedCumulative
-          : record.entry.cumulativeAmount
-      const payload = await ChannelOps.createClosePayload(
+      const challenge = Challenge.fromResponseList(challengeResponse).find(isTempoSessionChallenge)
+      if (!challenge || !challengeMatchesSession(challenge, record))
+        throw new Error('Service did not return a matching Tempo session challenge.')
+      if (record.acceptedCumulative > record.entry.cumulativeAmount)
+        throw new Error('Server-accepted cumulative exceeds the locally retained voucher state.')
+      const cumulative = record.entry.cumulativeAmount
+      const manager = sessionManager({
+        account: signingAccount,
+        bootstrap: false,
         client,
-        signingAccount,
-        record.entry.descriptor,
-        cumulativeAmount,
-        record.entry.chainId,
-        record.entry.escrow,
-      )
-      const response = await fetch(record.requestUrl, {
-        method: 'POST',
-        headers: {
-          Authorization: Credential.serialize({
-            challenge,
-            payload,
-            source: `did:pkh:eip155:${record.entry.chainId}:${signingAccount.address}`,
-          }),
+        channelStore: {
+          get: () => undefined,
+          set: () => {},
+          delete: () => {},
         },
+        fetch,
       })
-      if (!response.ok) {
-        const body = await response.text().catch(() => '')
-        throw new Error(body.trim() || `Cooperative close failed with HTTP ${response.status}.`)
-      }
+      getSessionManagerInternals(manager).rehydrate({
+        challenge,
+        channel: { ...record.entry, cumulativeAmount: cumulative, opened: true },
+        input: record.requestUrl,
+        spent: record.acceptedCumulative,
+      })
+      const receipt = await manager.close()
+      if (!receipt)
+        throw new Error('Cooperative close succeeded without an authoritative payment receipt.')
       store.deleteChannel(record.entry.channelId)
       return closeResult(record, 'closed')
     }
@@ -597,16 +699,31 @@ export function createSessionAdministration(
     if (state.closeRequestedAt === 0) {
       if (selection.finalize)
         return closeResult(record, 'pending', { remainingSeconds: gracePeriod })
-      await Chain.requestCloseOnChain(client, record.entry.descriptor, record.entry.escrow, {
-        account: signingAccount,
-        feeToken: record.entry.descriptor.token,
-      })
-      const requestedAt = now()
+      const hash = await Chain.requestCloseOnChain(
+        client,
+        record.entry.descriptor,
+        record.entry.escrow,
+        {
+          account: signingAccount,
+          feeToken: record.entry.descriptor.token,
+        },
+      )
+      await Chain.waitForSuccessfulReceipt(client, hash)
+      const confirmed = await Chain.getChannelState(
+        client,
+        record.entry.channelId,
+        record.entry.escrow,
+      )
+      if (confirmed.closeRequestedAt === 0)
+        throw new Error('Request-close transaction succeeded but the channel remains open.')
+      const requestedAt = confirmed.closeRequestedAt
       store.updateSessionState(record.entry.channelId, 'closing', {
         closeRequestedAt: requestedAt,
         graceReadyAt: requestedAt + gracePeriod,
       })
-      return closeResult(record, 'pending', { remainingSeconds: gracePeriod })
+      return closeResult(record, 'pending', {
+        remainingSeconds: Math.max(0, requestedAt + gracePeriod - now()),
+      })
     }
     const readyAt = state.closeRequestedAt + gracePeriod
     if (now() < readyAt) {
@@ -616,10 +733,18 @@ export function createSessionAdministration(
       })
       return closeResult(record, 'pending', { remainingSeconds: readyAt - now() })
     }
-    await Chain.withdrawOnChain(client, record.entry.descriptor, record.entry.escrow, {
+    const hash = await Chain.withdrawOnChain(client, record.entry.descriptor, record.entry.escrow, {
       account: signingAccount,
       feeToken: record.entry.descriptor.token,
     })
+    await Chain.waitForSuccessfulReceipt(client, hash)
+    const confirmed = await Chain.getChannelState(
+      client,
+      record.entry.channelId,
+      record.entry.escrow,
+    )
+    if (confirmed.deposit !== 0n)
+      throw new Error('Withdraw transaction succeeded but the channel still has a deposit.')
     store.deleteChannel(record.entry.channelId)
     return closeResult(record, 'closed')
   }
@@ -628,7 +753,7 @@ export function createSessionAdministration(
     if (selection.cooperative && (selection.all || selection.orphaned || selection.finalize))
       throw new Error('Cooperative close cannot be combined with all, orphaned, or finalize.')
     const records = await sync({
-      discover: selection.all || selection.orphaned || selection.finalize,
+      discover: Boolean(selection.all || selection.orphaned || selection.finalize),
     })
     const selected = selectSessions(records, selection)
     const summary: SessionCloseSummary = { closed: 0, failed: 0, pending: 0, results: [] }
@@ -799,8 +924,22 @@ function closeResult(
   }
 }
 
-function scopedKey(namespace: string, key: string): string {
-  return `${namespace}\n${key}`
+function scopedKey(payer: string, namespace: string, key: string): string {
+  return `${payer.toLowerCase()}\n${normalizeOrigin(namespace)}\n${key.toLowerCase()}`
+}
+
+function assertPayer(entry: ChannelEntry, payer: string): void {
+  if (entry.descriptor.payer.toLowerCase() !== payer)
+    throw new Error('Channel payer does not match the SQLite store payer.')
+}
+
+function processIsAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === 'EPERM'
+  }
 }
 
 function mergeEntry(current: ChannelEntry | undefined, incoming: ChannelEntry): ChannelEntry {
@@ -865,15 +1004,25 @@ function ensureSchema(database: DatabaseSync): void {
   )`)
   addColumn(database, 'scope_key TEXT')
   addColumn(database, 'entry_json TEXT')
+  database.exec('DROP INDEX IF EXISTS idx_channels_scope_key')
   database.exec(`UPDATE channels
-    SET scope_key = origin || char(10) || lower(payee) || ':' || lower(token) || ':' ||
-      lower(escrow_contract) || ':' || chain_id
-    WHERE scope_key IS NULL AND origin <> '' AND session_protocol = 'v2'
-      AND descriptor_json IS NOT NULL`)
+    SET version = ${schemaVersion},
+      scope_key = lower(payer) || char(10) || lower(origin) || char(10) ||
+        lower(payee) || ':' || lower(token) || ':' || lower(escrow_contract) || ':' || chain_id
+    WHERE origin <> '' AND session_protocol = 'v2'
+      AND descriptor_json IS NOT NULL
+      AND (scope_key IS NOT NULL OR version < ${schemaVersion})`)
   database.exec(
-    'CREATE UNIQUE INDEX IF NOT EXISTS idx_channels_scope_key ON channels(scope_key) WHERE scope_key IS NOT NULL',
+    'CREATE INDEX IF NOT EXISTS idx_channels_scope_key ON channels(scope_key) WHERE scope_key IS NOT NULL',
   )
   database.exec('CREATE INDEX IF NOT EXISTS idx_channels_origin ON channels(origin)')
+  database.exec(`CREATE TABLE IF NOT EXISTS channel_scope_locks (
+    scope_key TEXT PRIMARY KEY,
+    owner TEXT NOT NULL,
+    host TEXT NOT NULL,
+    pid INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+  )`)
 }
 
 function addColumn(database: DatabaseSync, definition: string): void {

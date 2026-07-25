@@ -196,6 +196,7 @@ test('tools/list exposes mppx commands with input and output schemas', async () 
     'sessions_close',
     'sessions_list',
     'sessions_sync',
+    'sessions_view',
     'sign',
     'validate',
   ])

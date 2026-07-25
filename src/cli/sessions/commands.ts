@@ -36,12 +36,12 @@ async function withAdministration<Result>(
   options: SessionCommandOptions,
   operation: (administration: SessionAdministration) => Promise<Result> | Result,
 ): Promise<Result> {
+  const resolved = await resolvePersistentAccount(options.account)
   const rpcUrl = resolveRpcUrl(options.rpcUrl, { network: options.network })
   const chain = await resolveChain({ network: options.network, rpcUrl })
   const client = createClient({ chain, transport: http(rpcUrl) })
-  const store = createSqliteChannelStore()
+  const store = createSqliteChannelStore({ payer: resolved.account.address })
   try {
-    const resolved = await resolvePersistentAccount(options.account)
     return await operation(
       createSessionAdministration({
         account: resolved.account,
@@ -49,6 +49,24 @@ async function withAdministration<Result>(
         store,
       }),
     )
+  } finally {
+    store.close()
+  }
+}
+
+/** Returns one locally retained TIP-1034 session by channel ID. */
+export async function viewPersistentSession(
+  channelId: string,
+  options: Pick<SessionCommandOptions, 'account'>,
+): Promise<SessionCommandRecord | undefined> {
+  const resolved = await resolvePersistentAccount(options.account)
+  const store = createSqliteChannelStore({ payer: resolved.account.address })
+  try {
+    const normalized = channelId.toLowerCase()
+    const record = store
+      .listSessions()
+      .find((candidate) => candidate.entry.channelId.toLowerCase() === normalized)
+    return record ? serializeSession(record) : undefined
   } finally {
     store.close()
   }

@@ -26,6 +26,7 @@ import {
   closePersistentSessions,
   listPersistentSessions,
   syncPersistentSessions,
+  viewPersistentSession,
 } from './sessions/commands.js'
 import { runPersistentSessionRequest } from './sessions/request.js'
 import {
@@ -202,6 +203,14 @@ function filterChallengesByCurrency(
   })
 }
 
+/** @internal Returns whether a session challenge should use MPPx's local SQLite account path. */
+export function shouldUsePersistentSessionAccount(
+  accountName: string,
+  privateKey: string | undefined,
+): boolean {
+  return Boolean(privateKey?.trim()) || !isTempoAccount(accountName)
+}
+
 async function fetchServicesRegistry(): Promise<ServiceRegistryService[]> {
   const url = process.env.MPPX_SERVICES_URL ?? servicesRegistryUrl
   const response = await globalThis.fetch(url)
@@ -274,6 +283,15 @@ const cli = Cli.create('mppx', {
       .string()
       .optional()
       .describe('RPC endpoint, defaults to public RPC for chain (env: MPPX_RPC_URL)'),
+    session: z
+      .string()
+      .optional()
+      .default('auto')
+      .refine(
+        (value) => value === 'auto' || value === 'new' || /^0x[0-9a-fA-F]{64}$/.test(value),
+        'Expected auto, new, or a 32-byte channel ID',
+      )
+      .describe('Session selection: auto, new, or channel ID'),
     silent: z.boolean().default(false).describe('Silent mode (suppress progress and info)'),
     slippage: z.number().optional().describe('Tempo auto-swap max slippage percentage'),
     userAgent: z
@@ -552,7 +570,11 @@ const cli = Cli.create('mppx', {
         }
       }
 
-      if (isTempoSessionChallenge(challenge)) {
+      const persistentSessionAccount = shouldUsePersistentSessionAccount(
+        resolveAccountName(c.options.account),
+        process.env.MPPX_PRIVATE_KEY,
+      )
+      if (isTempoSessionChallenge(challenge) && persistentSessionAccount) {
         await runPersistentSessionRequest({
           challenge,
           challengeResponse: selectedChallengeResponse,
@@ -568,12 +590,19 @@ const cli = Cli.create('mppx', {
             include: c.options.include,
             network: c.options.network,
             rpcUrl: c.options.rpcUrl,
+            session: c.options.session,
             silent: c.options.silent,
             verbose: c.options.verbose,
           },
         })
         return
       }
+      if (c.options.session !== 'auto')
+        return c.error({
+          code: 'UNSUPPORTED_SESSION',
+          message: '--session requires a tempo/session payment challenge.',
+          exitCode: 2,
+        })
       // Create credential
       let credential: string
       if (pluginResult?.createCredential)
@@ -1671,6 +1700,31 @@ const sessions = Cli.create('sessions', {
       })
     },
   })
+  .command('view', {
+    description: 'View one retained TIP-1034 session',
+    args: z.object({
+      channelId: z.string().describe('Full session channel ID'),
+    }),
+    options: z.object({
+      account: z.string().optional().describe('Account name (env: MPPX_ACCOUNT)'),
+    }),
+    output: sessionRecordSchema,
+    alias: { account: 'a' },
+    async run(c) {
+      const record = await viewPersistentSession(c.args.channelId, c.options)
+      if (!record)
+        return c.error({
+          code: 'SESSION_NOT_FOUND',
+          message: `Session ${c.args.channelId} was not found.`,
+          exitCode: 2,
+        })
+      return outputResult(c, record, () => {
+        console.log(
+          `${record.channelId}  ${record.state}  ${record.cumulativeAmount}/${record.deposit}${record.origin ? `  ${record.origin}` : ''}`,
+        )
+      })
+    },
+  })
   .command('close', {
     description: 'Close retained sessions cooperatively or through the Tempo precompile',
     args: z.object({
@@ -1681,6 +1735,7 @@ const sessions = Cli.create('sessions', {
       cooperative: z.boolean().optional().describe('Ask the service to close cooperatively'),
       finalize: z.boolean().optional().describe('Withdraw every finalizable session'),
       orphaned: z.boolean().optional().describe('Close every recovered orphaned session'),
+      yes: z.boolean().optional().default(false).describe('Confirm closing every session'),
     }),
     output: z.object({
       closed: z.number(),
@@ -1690,6 +1745,12 @@ const sessions = Cli.create('sessions', {
     }),
     alias: { account: 'a', rpcUrl: 'r' },
     async run(c) {
+      if (c.options.all && !c.options.yes)
+        return c.error({
+          code: 'CONFIRMATION_REQUIRED',
+          message: 'Pass --yes to close every session.',
+          exitCode: 2,
+        })
       const summary = await closePersistentSessions({
         ...c.options,
         target: c.args.target,

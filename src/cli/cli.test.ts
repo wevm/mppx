@@ -27,7 +27,7 @@ import { escrowAbi } from '../tempo/session/precompile/escrow.abi.js'
 import { tip20ChannelEscrow } from '../tempo/session/precompile/Protocol.js'
 import type { SessionCredentialPayload } from '../tempo/session/precompile/Protocol.js'
 import * as z from '../zod.js'
-import cli from './cli.js'
+import cli, { shouldUsePersistentSessionAccount } from './cli.js'
 
 const testPrivateKey = generatePrivateKey()
 const testAccount = privateKeyToAccount(testPrivateKey)
@@ -456,6 +456,22 @@ describe('request output', () => {
     } finally {
       httpServer.close()
     }
+  })
+})
+
+describe('sessions', () => {
+  test('keeps Tempo Wallet accounts on the wallet plugin path', () => {
+    expect(shouldUsePersistentSessionAccount('tempo:default', undefined)).toBe(false)
+    expect(shouldUsePersistentSessionAccount('main', undefined)).toBe(true)
+    expect(shouldUsePersistentSessionAccount('tempo:default', testPrivateKey)).toBe(true)
+  })
+
+  test('requires --yes before closing every retained session', async () => {
+    const { exitCode, output } = await serve(['sessions', 'close', '--all', '--json'])
+
+    expect(exitCode).toBe(2)
+    expect(output).toContain('CONFIRMATION_REQUIRED')
+    expect(output).toContain('Pass --yes to close every session.')
   })
 })
 
