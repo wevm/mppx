@@ -1,4 +1,4 @@
-import { KeyAuthorization } from 'ox/tempo'
+import { KeyAuthorization, SignatureEnvelope } from 'ox/tempo'
 import { privateKeyToAccount } from 'viem/accounts'
 import { describe, expect, test } from 'vp/test'
 
@@ -85,6 +85,28 @@ describe('tempo subscription key authorization', () => {
     expect(result.authorization.address.toLowerCase()).toBe(
       accessKey.accessKeyAddress.toLowerCase(),
     )
+  })
+
+  test('rejects non-primitive authorization signatures', async () => {
+    const request = parseRequest()
+
+    await expect(
+      signSubscriptionKeyAuthorization({
+        accessKey,
+        account: {
+          async sign({ hash }) {
+            const inner = SignatureEnvelope.from(await rootAccount.sign({ hash }))
+            return SignatureEnvelope.serialize({
+              inner,
+              type: 'keychain',
+              userAddress: rootAccount.address,
+            })
+          },
+        },
+        chainId: 4217,
+        request,
+      }),
+    ).rejects.toThrow('keyAuthorization must use a primitive signature')
   })
 
   test('builds wallet allowed calls from the subscription request', () => {
