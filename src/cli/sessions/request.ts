@@ -196,7 +196,7 @@ export async function runPersistentSessionRequest(
     }
     const manager = sessionManager({
       account: resolvedAccount.account,
-      bootstrap: true,
+      bootstrap: selection === 'auto',
       client,
       channelStore: selectedChannelStore({
         account: resolvedAccount.account,

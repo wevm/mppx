@@ -9,13 +9,7 @@ import { getBlockNumber, getLogs, readContract } from 'viem/actions'
 
 import * as Challenge from '../Challenge.js'
 import type { ChannelEntry } from '../tempo/session/client/ChannelOps.js'
-import {
-  deserializeEntry,
-  entryKey,
-  serializeEntry,
-  type ChannelStore,
-  type StoredChannel,
-} from '../tempo/session/client/ChannelStore.js'
+import { entryKey, type ChannelStore } from '../tempo/session/client/ChannelStore.js'
 import { canSignDescriptor } from '../tempo/session/client/CredentialState.js'
 import { getSessionManagerInternals } from '../tempo/session/client/internal/SessionManager.js'
 import { sessionManager } from '../tempo/session/client/SessionManager.js'
@@ -114,7 +108,6 @@ type ChannelRow = {
   cumulative_amount: string
   deposit: string
   descriptor_json: string | null
-  entry_json: string | null
   escrow_contract: string
   grace_ready_at: number
   last_used_at: number
@@ -150,19 +143,19 @@ export function createSqliteChannelStore(options: SqliteChannelStoreOptions): Sq
   ensureSchema(database)
 
   const getRow = database.prepare(`SELECT channel_id, chain_id, escrow_contract,
-      cumulative_amount, deposit, descriptor_json, entry_json, state
+      cumulative_amount, deposit, descriptor_json, state
     FROM channels
     WHERE lower(payer) = ? AND scope_key = ? AND state = 'active'
     ORDER BY last_used_at DESC LIMIT 1`)
   const listRows = database.prepare(`SELECT channel_id, chain_id, escrow_contract,
-      cumulative_amount, deposit, descriptor_json, entry_json, state,
+      cumulative_amount, deposit, descriptor_json, state,
       accepted_cumulative, close_requested_at, grace_ready_at, origin, request_url,
       payer, session_protocol, created_at, last_used_at
     FROM channels
     WHERE session_protocol = 'v2' AND descriptor_json IS NOT NULL
     ORDER BY last_used_at DESC`)
   const getChannelById = database.prepare(`SELECT channel_id, chain_id, escrow_contract,
-      cumulative_amount, deposit, descriptor_json, entry_json, state
+      cumulative_amount, deposit, descriptor_json, state
     FROM channels WHERE lower(payer) = ? AND channel_id = ?`)
   const getLatestAuthorizedSigner = database.prepare(`SELECT authorized_signer FROM channels
     WHERE lower(payer) = ? AND origin = ? AND state = 'active' AND session_protocol = 'v2'
@@ -184,7 +177,7 @@ export function createSqliteChannelStore(options: SqliteChannelStoreOptions): Sq
   const updateSession = database.prepare(`UPDATE channels SET
       version = ?, scope_key = ?, origin = ?, request_url = ?, chain_id = ?,
       escrow_contract = ?, token = ?, payee = ?, payer = ?, authorized_signer = ?,
-      salt = ?, session_protocol = 'v2', descriptor_json = ?, entry_json = ?,
+      salt = ?, session_protocol = 'v2', descriptor_json = ?, entry_json = NULL,
       deposit = ?, cumulative_amount = ?, accepted_cumulative = ?, state = ?,
       close_requested_at = ?, grace_ready_at = ?, created_at = ?, last_used_at = ?
     WHERE lower(payer) = ? AND channel_id = ?`)
@@ -193,7 +186,7 @@ export function createSqliteChannelStore(options: SqliteChannelStoreOptions): Sq
       payee, payer, authorized_signer, salt, session_protocol, descriptor_json, entry_json,
       deposit, cumulative_amount, accepted_cumulative, challenge_echo, state,
       close_requested_at, grace_ready_at, created_at, last_used_at, server_spent
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'v2', ?, ?, ?, ?, '0', '{}', 'active',
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'v2', ?, NULL, ?, ?, '0', '{}', 'active',
       0, 0, ?, ?, '0')
     ON CONFLICT(channel_id) DO UPDATE SET
       version = excluded.version,
@@ -209,7 +202,7 @@ export function createSqliteChannelStore(options: SqliteChannelStoreOptions): Sq
       salt = excluded.salt,
       session_protocol = excluded.session_protocol,
       descriptor_json = excluded.descriptor_json,
-      entry_json = excluded.entry_json,
+      entry_json = NULL,
       deposit = excluded.deposit,
       cumulative_amount = excluded.cumulative_amount,
       state = 'active',
@@ -299,7 +292,6 @@ export function createSqliteChannelStore(options: SqliteChannelStoreOptions): Sq
       try {
         const existing = getRow.get(payer, scopeKey) as ChannelRow | undefined
         const merged = mergeEntry(existing ? entryFromRow(existing) : undefined, entry)
-        const stored = serializeEntry(merged)
         const now = Math.floor(Date.now() / 1_000)
         clearOtherScopeChannels.run(payer, scopeKey, merged.channelId)
         upsert.run(
@@ -316,7 +308,6 @@ export function createSqliteChannelStore(options: SqliteChannelStoreOptions): Sq
           merged.descriptor.authorizedSigner,
           merged.descriptor.salt,
           JSON.stringify(merged.descriptor),
-          JSON.stringify(stored),
           merged.deposit.toString(),
           merged.cumulativeAmount.toString(),
           now,
@@ -357,7 +348,6 @@ export function createSqliteChannelStore(options: SqliteChannelStoreOptions): Sq
       const scopeKey = record.origin
         ? scopedKey(payer, normalizeOrigin(record.origin || namespace), entryKey(record.entry))
         : null
-      const stored = serializeEntry(record.entry)
       database.exec('BEGIN IMMEDIATE')
       try {
         if (scopeKey) clearOtherScopeChannels.run(payer, scopeKey, record.entry.channelId)
@@ -375,7 +365,6 @@ export function createSqliteChannelStore(options: SqliteChannelStoreOptions): Sq
             record.entry.descriptor.authorizedSigner,
             record.entry.descriptor.salt,
             JSON.stringify(record.entry.descriptor),
-            JSON.stringify(stored),
             record.entry.deposit.toString(),
             record.entry.cumulativeAmount.toString(),
             record.acceptedCumulative.toString(),
@@ -402,7 +391,6 @@ export function createSqliteChannelStore(options: SqliteChannelStoreOptions): Sq
             record.entry.descriptor.authorizedSigner,
             record.entry.descriptor.salt,
             JSON.stringify(record.entry.descriptor),
-            JSON.stringify(stored),
             record.entry.deposit.toString(),
             record.entry.cumulativeAmount.toString(),
             record.createdAt,
@@ -681,7 +669,11 @@ export function createSessionAdministration(
         challenge,
         channel: { ...record.entry, cumulativeAmount: cumulative, opened: true },
         input: record.requestUrl,
-        spent: record.acceptedCumulative,
+        // Closing at the highest locally signed voucher is safe even when the
+        // shared row predates receipt tracking or another client left
+        // accepted_cumulative stale. It cannot exceed the payer's existing
+        // authorization and avoids submitting a regressive close voucher.
+        spent: cumulative,
       })
       const receipt = await manager.close()
       if (!receipt)
@@ -956,11 +948,6 @@ function mergeEntry(current: ChannelEntry | undefined, incoming: ChannelEntry): 
 }
 
 function entryFromRow(row: ChannelRow): ChannelEntry {
-  if (row.entry_json) {
-    const stored = JSON.parse(row.entry_json) as StoredChannel
-    return deserializeEntry({ ...stored, opened: row.state === 'active' })
-  }
-
   if (!row.descriptor_json) throw new Error('v2 channel row is missing its descriptor')
   const descriptor = JSON.parse(row.descriptor_json) as ChannelEntry['descriptor']
   return {

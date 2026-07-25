@@ -10,6 +10,7 @@ import { describe, expect, test, vi } from 'vp/test'
 
 import * as Challenge from '../Challenge.js'
 import * as Constants from '../Constants.js'
+import * as Credential from '../Credential.js'
 import type { ChannelEntry } from '../tempo/session/client/ChannelOps.js'
 import { entryKey } from '../tempo/session/client/ChannelStore.js'
 import * as Chain from '../tempo/session/precompile/Chain.js'
@@ -288,6 +289,50 @@ describe('SQLite ChannelStore', () => {
     }
   })
 
+  test('uses shared scalar columns after another client updates an MPPx row', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'mppx-wallet-update-'))
+    const path = join(directory, 'channels.db')
+    try {
+      const store = createSqliteChannelStore({
+        namespace: 'https://api.example.com',
+        path,
+        payer: channel.descriptor.payer,
+      })
+      store.set(channel)
+      store.close()
+
+      const database = new DatabaseSync(path)
+      database
+        .prepare(`UPDATE channels
+          SET entry_json = ?, cumulative_amount = ?, deposit = ?
+          WHERE channel_id = ?`)
+        .run(
+          JSON.stringify({
+            ...channel,
+            cumulativeAmount: channel.cumulativeAmount.toString(),
+            deposit: channel.deposit.toString(),
+          }),
+          '3000000',
+          '12000000',
+          channel.channelId,
+        )
+      database.close()
+
+      const reopened = createSqliteChannelStore({
+        namespace: 'https://api.example.com',
+        path,
+        payer: channel.descriptor.payer,
+      })
+      expect(reopened.getChannel(channel.channelId)).toMatchObject({
+        cumulativeAmount: 3_000_000n,
+        deposit: 12_000_000n,
+      })
+      reopened.close()
+    } finally {
+      rmSync(directory, { recursive: true })
+    }
+  })
+
   test('uses the same rows for request persistence and session administration', () => {
     const directory = mkdtempSync(join(tmpdir(), 'mppx-session-administration-'))
     const path = join(directory, 'channels.db')
@@ -504,13 +549,15 @@ describe('SQLite ChannelStore', () => {
       settled: retained.cumulativeAmount,
     })
     let requests = 0
-    const fetch = vi.fn<typeof globalThis.fetch>().mockImplementation(async () => {
+    let closeCredential: string | null = null
+    const fetch = vi.fn<typeof globalThis.fetch>().mockImplementation(async (_input, init) => {
       requests++
       if (requests === 1)
         return new Response(null, {
           status: 402,
           headers: { 'WWW-Authenticate': Challenge.serialize(challenge) },
         })
+      closeCredential = new Headers(init?.headers).get('Authorization')
       return new Response('closed', { status: 200 })
     })
 
@@ -531,6 +578,10 @@ describe('SQLite ChannelStore', () => {
 
       expect(summary).toMatchObject({ closed: 0, failed: 1, pending: 0 })
       expect(summary.results[0]?.error).toContain('authoritative payment receipt')
+      expect(
+        Credential.deserialize<{ cumulativeAmount: string }>(closeCredential!).payload
+          .cumulativeAmount,
+      ).toBe(retained.cumulativeAmount.toString())
       expect(store.getChannel(retained.channelId)).toBeDefined()
       store.close()
     } finally {

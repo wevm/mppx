@@ -457,6 +457,21 @@ describe('request output', () => {
       httpServer.close()
     }
   })
+
+  test('rejects explicit session selection when no session challenge is returned', async () => {
+    const httpServer = await Http.createServer((_req, res) => {
+      res.writeHead(200)
+      res.end('ok')
+    })
+
+    try {
+      const { exitCode, output } = await serve([httpServer.url, '--session', 'new'])
+      expect(exitCode).toBe(2)
+      expect(output).toContain('--session requires a tempo/session payment challenge.')
+    } finally {
+      httpServer.close()
+    }
+  })
 })
 
 describe('sessions', () => {
@@ -1167,10 +1182,12 @@ describe('session multi-fetch (examples/session/multi-fetch)', () => {
       const escrow = tip20ChannelEscrow
       const store = Store.memory()
       const tickAmount = '0.001'
+      let preferredChannelId: string | undefined
       const server = Mppx_server.create({
         methods: [
           tempo.session({
             account: accounts[0],
+            bootstrap: true,
             store,
             getClient: () => client,
             currency: asset,
@@ -1178,6 +1195,7 @@ describe('session multi-fetch (examples/session/multi-fetch)', () => {
             chainId: client.chain.id,
             feePayer: true,
             feePayerPolicy: cliSessionFeePayerPolicy,
+            resolveChannelId: ({ source }) => (source ? preferredChannelId : undefined),
           }),
         ],
         realm: 'cli-test-double-charge',
@@ -1192,10 +1210,13 @@ describe('session multi-fetch (examples/session/multi-fetch)', () => {
         if (authHeader) {
           try {
             const cred = Credential.deserialize<SessionCredentialPayload>(authHeader)
-            credentials.push({
-              action: cred.payload.action,
-              channelId: cred.payload.channelId,
-            })
+            if (
+              typeof cred.payload.action !== 'string' ||
+              typeof cred.payload.channelId !== 'string'
+            )
+              throw new Error('not a session credential')
+            credentials.push({ action: cred.payload.action, channelId: cred.payload.channelId })
+            if (cred.payload.action === 'open') preferredChannelId = cred.payload.channelId
             if (cred.payload.action === 'voucher' && 'cumulativeAmount' in cred.payload) {
               voucherAmounts.push(cred.payload.cumulativeAmount)
             }
@@ -1227,6 +1248,18 @@ describe('session multi-fetch (examples/session/multi-fetch)', () => {
           httpServer.url,
           '--rpc-url',
           rpcUrl,
+          '--session',
+          'new',
+          '-s',
+          '-M',
+          'deposit=10',
+        ])
+        const newChannelId = credentials.filter(({ action }) => action === 'open').at(-1)!.channelId
+        expect(newChannelId).not.toBe(retainedChannelId)
+        await runRequest([
+          httpServer.url,
+          '--rpc-url',
+          rpcUrl,
           '-s',
           '-M',
           'deposit=10',
@@ -1236,10 +1269,12 @@ describe('session multi-fetch (examples/session/multi-fetch)', () => {
 
         const payments = credentials.filter(({ action }) => ['open', 'voucher'].includes(action))
         expect(voucherAmounts).toEqual(['2000'])
-        expect(payments.map(({ action }) => action)).toEqual(['open', 'voucher'])
-        expect(new Set(payments.map(({ channelId }) => channelId))).toEqual(
-          new Set([retainedChannelId]),
-        )
+        expect(payments.map(({ action }) => action)).toEqual(['open', 'open', 'voucher'])
+        expect(payments.map(({ channelId }) => channelId)).toEqual([
+          retainedChannelId,
+          newChannelId,
+          retainedChannelId,
+        ])
         expect(fs.existsSync(path.join(home, '.tempo', 'wallet', 'channels.db'))).toBe(true)
         expect(fs.existsSync(path.join(home, '.local', 'state', 'mppx', 'sessions'))).toBe(false)
 
@@ -1248,13 +1283,22 @@ describe('session multi-fetch (examples/session/multi-fetch)', () => {
           { env },
         )
         expect(listed.exitCode, `${listed.output}\n${listed.stderr}`).toBeUndefined()
-        expect(JSON.parse(listed.output).sessions).toEqual([
-          expect.objectContaining({
-            channelId: retainedChannelId,
-            cumulativeAmount: '2000',
-            state: 'active',
-          }),
-        ])
+        const sessions = JSON.parse(listed.output).sessions
+        expect(sessions).toHaveLength(2)
+        expect(sessions).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              channelId: retainedChannelId,
+              cumulativeAmount: '2000',
+              state: 'active',
+            }),
+            expect.objectContaining({
+              channelId: newChannelId,
+              cumulativeAmount: '1000',
+              state: 'active',
+            }),
+          ]),
+        )
       } finally {
         httpServer.close()
       }

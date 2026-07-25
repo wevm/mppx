@@ -417,6 +417,12 @@ const cli = Cli.create('mppx', {
       if (c.options.verbose >= 2) printRequestHeaders(url, init, info)
       const challengeResponse = await targetFetch(fetchUrl, init)
       if (challengeResponse.status !== 402) {
+        if (c.options.session !== 'auto')
+          return c.error({
+            code: 'UNSUPPORTED_SESSION',
+            message: '--session requires a tempo/session payment challenge.',
+            exitCode: 2,
+          })
         if (c.options.fail && challengeResponse.status >= 400)
           return c.error({
             code: 'HTTP_ERROR',
