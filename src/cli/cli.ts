@@ -22,9 +22,12 @@ import {
   readTempoKeystore,
   resolveTempoAccount,
 } from './plugins/tempo.js'
-import sessions, { sessionCommandError } from './sessions/commands.js'
+import {
+  closePersistentSessions,
+  listPersistentSessions,
+  syncPersistentSessions,
+} from './sessions/commands.js'
 import { runPersistentSessionRequest } from './sessions/request.js'
-import { createSessionRegistry } from './sessions/store.js'
 import {
   chainName,
   confirm,
@@ -85,6 +88,29 @@ const serviceEndpointSchema = z.object({
   method: z.string(),
   path: z.string(),
   payment: z.unknown().optional(),
+})
+
+const sessionRecordSchema = z.object({
+  acceptedCumulative: z.string(),
+  chainId: z.number(),
+  channelId: z.string(),
+  closeRequestedAt: z.number(),
+  createdAt: z.number(),
+  cumulativeAmount: z.string(),
+  deposit: z.string(),
+  graceReadyAt: z.number(),
+  lastUsedAt: z.number(),
+  origin: z.string(),
+  requestUrl: z.string(),
+  state: z.string(),
+})
+
+const sessionCloseResultSchema = z.object({
+  channelId: z.string(),
+  error: z.string().optional(),
+  origin: z.string().optional(),
+  remainingSeconds: z.number().optional(),
+  status: z.enum(['closed', 'pending', 'error']),
 })
 
 const servicesRegistryUrl = 'https://mpp.dev/api/services'
@@ -248,15 +274,6 @@ const cli = Cli.create('mppx', {
       .string()
       .optional()
       .describe('RPC endpoint, defaults to public RPC for chain (env: MPPX_RPC_URL)'),
-    session: z
-      .string()
-      .optional()
-      .default('auto')
-      .refine(
-        (value) => value === 'auto' || value === 'new' || /^0x[0-9a-fA-F]{64}$/.test(value),
-        'Expected auto, new, or a 32-byte channel ID',
-      )
-      .describe('Session selection: auto, new, or channel ID'),
     silent: z.boolean().default(false).describe('Silent mode (suppress progress and info)'),
     slippage: z.number().optional().describe('Tempo auto-swap max slippage percentage'),
     userAgent: z
@@ -361,8 +378,6 @@ const cli = Cli.create('mppx', {
 
     try {
       const methodOpts = parseMethodOpts(c.options.methodOpt)
-      const sessionRegistry = createSessionRegistry()
-
       const init: RequestInit = { redirect: c.options.location ? 'follow' : 'manual' }
       if (c.options.jsonBody) {
         init.body = c.options.jsonBody
@@ -384,12 +399,6 @@ const cli = Cli.create('mppx', {
       if (c.options.verbose >= 2) printRequestHeaders(url, init, info)
       const challengeResponse = await targetFetch(fetchUrl, init)
       if (challengeResponse.status !== 402) {
-        if (c.options.session !== 'auto')
-          return c.error({
-            code: 'UNSUPPORTED_SESSION',
-            message: '--session requires a tempo/session payment challenge.',
-            exitCode: 2,
-          })
         if (c.options.fail && challengeResponse.status >= 400)
           return c.error({
             code: 'HTTP_ERROR',
@@ -543,44 +552,28 @@ const cli = Cli.create('mppx', {
         }
       }
 
-      const persistentSessionAccount =
-        process.env.MPPX_PRIVATE_KEY?.trim() ||
-        !isTempoAccount(resolveAccountName(c.options.account))
-      if (isTempoSessionChallenge(challenge) && persistentSessionAccount) {
-        try {
-          await runPersistentSessionRequest({
-            challenge,
-            challengeResponse: selectedChallengeResponse,
-            endpoint: url,
-            fetch: targetFetch,
-            fetchInput: fetchUrl,
-            init,
-            info,
-            methodOptions: methodOpts,
-            options: {
-              account: c.options.account,
-              fail: c.options.fail,
-              include: c.options.include,
-              network: c.options.network,
-              rpcUrl: c.options.rpcUrl,
-              session: c.options.session,
-              silent: c.options.silent,
-              verbose: c.options.verbose,
-            },
-            registry: sessionRegistry,
-          })
-        } catch (error) {
-          return sessionCommandError(error, 'SESSION_REQUEST_FAILED')
-        }
+      if (isTempoSessionChallenge(challenge)) {
+        await runPersistentSessionRequest({
+          challenge,
+          challengeResponse: selectedChallengeResponse,
+          endpoint: url,
+          fetch: targetFetch,
+          fetchInput: fetchUrl,
+          init,
+          info,
+          methodOptions: methodOpts,
+          options: {
+            account: c.options.account,
+            fail: c.options.fail,
+            include: c.options.include,
+            network: c.options.network,
+            rpcUrl: c.options.rpcUrl,
+            silent: c.options.silent,
+            verbose: c.options.verbose,
+          },
+        })
         return
       }
-      if (c.options.session !== 'auto')
-        return c.error({
-          code: 'UNSUPPORTED_SESSION',
-          message: '--session requires a tempo/session payment challenge.',
-          exitCode: 2,
-        })
-
       // Create credential
       let credential: string
       if (pluginResult?.createCredential)
@@ -1634,6 +1627,81 @@ const discover = Cli.create('discover', {
             ? `Discovery document is valid with ${warningCount} warning(s).`
             : 'Discovery document is valid.',
         )
+      })
+    },
+  })
+
+const sessionConnectionOptions = z.object({
+  account: z.string().optional().describe('Account name (env: MPPX_ACCOUNT)'),
+  network: z.enum(['mainnet', 'testnet']).optional().describe('Tempo network'),
+  rpcUrl: z.string().optional().describe('RPC endpoint (env: MPPX_RPC_URL)'),
+})
+
+const sessions = Cli.create('sessions', {
+  description: 'List, recover, and close retained Tempo sessions',
+})
+  .command('list', {
+    description: 'List retained TIP-1034 sessions from the shared channels database',
+    options: sessionConnectionOptions,
+    output: z.object({ sessions: z.array(sessionRecordSchema) }),
+    alias: { account: 'a', rpcUrl: 'r' },
+    async run(c) {
+      const records = await listPersistentSessions(c.options)
+      return outputResult(c, { sessions: records }, () => {
+        if (records.length === 0) {
+          console.log('No sessions found.')
+          return
+        }
+        for (const record of records)
+          console.log(
+            `${record.channelId}  ${record.state}  ${record.cumulativeAmount}/${record.deposit}${record.origin ? `  ${record.origin}` : ''}`,
+          )
+      })
+    },
+  })
+  .command('sync', {
+    description: 'Recover payer sessions and reconcile local rows with on-chain state',
+    options: sessionConnectionOptions,
+    output: z.object({ sessions: z.array(sessionRecordSchema) }),
+    alias: { account: 'a', rpcUrl: 'r' },
+    async run(c) {
+      const records = await syncPersistentSessions(c.options)
+      return outputResult(c, { sessions: records }, () => {
+        console.log(`Synced ${records.length} session${records.length === 1 ? '' : 's'}.`)
+      })
+    },
+  })
+  .command('close', {
+    description: 'Close retained sessions cooperatively or through the Tempo precompile',
+    args: z.object({
+      target: z.string().optional().describe('Service URL/origin or channel ID'),
+    }),
+    options: sessionConnectionOptions.extend({
+      all: z.boolean().optional().describe('Close every session'),
+      cooperative: z.boolean().optional().describe('Ask the service to close cooperatively'),
+      finalize: z.boolean().optional().describe('Withdraw every finalizable session'),
+      orphaned: z.boolean().optional().describe('Close every recovered orphaned session'),
+    }),
+    output: z.object({
+      closed: z.number(),
+      failed: z.number(),
+      pending: z.number(),
+      results: z.array(sessionCloseResultSchema),
+    }),
+    alias: { account: 'a', rpcUrl: 'r' },
+    async run(c) {
+      const summary = await closePersistentSessions({
+        ...c.options,
+        target: c.args.target,
+      })
+      return outputResult(c, summary, () => {
+        console.log(
+          `Closed ${summary.closed}; pending ${summary.pending}; failed ${summary.failed}.`,
+        )
+        for (const result of summary.results)
+          console.log(
+            `${result.channelId}  ${result.status}${result.error ? `  ${result.error}` : ''}`,
+          )
       })
     },
   })

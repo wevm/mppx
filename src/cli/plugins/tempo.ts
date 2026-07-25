@@ -49,20 +49,12 @@ async function writeResponseBody(response: Response) {
 
 const tempoOptionSchema = z.object({
   autoSwap: z.optional(booleanOption),
-  channel: z.optional(z.coerce.string()),
   deposit: z.optional(z.union([z.string(), z.number()])),
   payWith: z.optional(z.string()),
   slippage: z.optional(z.coerce.number()),
   tokenIn: z.optional(z.string()),
 })
-const tempoOptionKeys = [
-  'autoSwap',
-  'channel',
-  'deposit',
-  'payWith',
-  'slippage',
-  'tokenIn',
-] as const
+const tempoOptionKeys = ['autoSwap', 'deposit', 'payWith', 'slippage', 'tokenIn'] as const
 const tempoChargeChallengeScoreOrder = [
   'payable',
   'unknownBalance',
@@ -270,16 +262,6 @@ export function tempo() {
         })(),
       })
 
-      const credentialContext = (() => {
-        if (!tempoOpts.channel) return undefined
-        const channelId = tempoOpts.channel
-        const saved = readChannelCumulative(channelId)
-        return {
-          channelId,
-          ...(saved !== undefined && { cumulativeAmountRaw: saved.toString() }),
-        }
-      })()
-
       const chainId = client.chain!.id
 
       // Store session support for use in lifecycle hooks
@@ -320,7 +302,6 @@ export function tempo() {
         tokenDecimals,
         explorerUrl,
         methods: [...methods],
-        credentialContext,
       }
     },
 
@@ -389,12 +370,6 @@ export function tempo() {
         try {
           const receiptJson = JSON.parse(Base64.toString(receiptHeader)) as Record<string, unknown>
           assertReceiptWithinCliState(receiptJson, cumulativeAmount)
-          if (
-            typeof receiptJson.acceptedCumulative === 'string' &&
-            receiptJson.acceptedCumulative
-          ) {
-            writeChannelCumulative(channelId, cumulativeAmount)
-          }
           if (verbose >= 1)
             printReceipt(receiptJson, {
               info,
@@ -748,7 +723,6 @@ async function closeChannel(opts: {
     },
   })
   if (closeRes.ok) {
-    deleteChannelState(opts.channelId)
     if (opts.verbose >= 1) {
       const closeReceiptHeader = closeRes.headers.get(Constants.Headers.paymentReceipt)
       let closeTxHash: string | undefined
@@ -962,33 +936,10 @@ function resolveAutoSwap(opts: {
   }
 }
 
-function channelStateDir() {
-  return path.join(
-    process.env.XDG_CONFIG_HOME || path.join(os.homedir(), '.config'),
-    'mppx',
-    'channels',
-  )
-}
-
-function readChannelCumulative(channelId: string): bigint | undefined {
-  try {
-    const raw = fs.readFileSync(path.join(channelStateDir(), channelId), 'utf-8').trim()
-    return raw ? BigInt(raw) : undefined
-  } catch {
-    return undefined
-  }
-}
-
-function writeChannelCumulative(channelId: string, cumulative: bigint): void {
-  const dir = channelStateDir()
-  fs.mkdirSync(dir, { recursive: true })
-  fs.writeFileSync(path.join(dir, channelId), cumulative.toString(), 'utf-8')
-}
-
-function deleteChannelState(channelId: string): void {
-  try {
-    fs.unlinkSync(path.join(channelStateDir(), channelId))
-  } catch {}
+interface TempoKeyEntry {
+  wallet_type: string
+  wallet_address: string
+  chain_id: number
 }
 
 function tempoKeystorePath(): string {
@@ -1001,12 +952,6 @@ function tempoKeystorePath(): string {
     'wallet',
     'keys.toml',
   )
-}
-
-interface TempoKeyEntry {
-  wallet_type: string
-  wallet_address: string
-  chain_id: number
 }
 
 export function readTempoKeystore(): TempoKeyEntry[] {
@@ -1022,9 +967,9 @@ export function readTempoKeystore(): TempoKeyEntry[] {
         continue
       }
       if (!current) continue
-      const m = trimmed.match(/^(\w+)\s*=\s*"?([^"]*)"?$/)
-      if (!m) continue
-      const [, key, value] = m
+      const match = trimmed.match(/^(\w+)\s*=\s*"?([^"]*)"?$/)
+      if (!match) continue
+      const [, key, value] = match
       if (key === 'wallet_type') current.wallet_type = value!
       else if (key === 'wallet_address') current.wallet_address = value!
       else if (key === 'chain_id') current.chain_id = Number.parseInt(value!, 10)
@@ -1062,8 +1007,8 @@ async function tempoCliSign(wwwAuth: string): Promise<string> {
   return new Promise((resolve, reject) => {
     child.execFile('tempo', ['mpp', 'sign', '--challenge', wwwAuth], (error, stdout, stderr) => {
       if (error) {
-        const msg = stderr?.trim() || error.message
-        reject(new Error(`tempo mpp sign failed: ${msg}`))
+        const message = stderr?.trim() || error.message
+        reject(new Error(`tempo mpp sign failed: ${message}`))
         return
       }
       const trimmed = stdout.trim()

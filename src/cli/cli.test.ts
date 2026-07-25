@@ -50,6 +50,7 @@ async function serve(argv: string[], options?: { env?: Record<string, string | u
   const saved: Record<string, string | undefined> = {}
   const invocationHome = path.join(cliTestXdgDataHome, `serve-${cliServeInvocation++}`)
   const env = {
+    HOME: invocationHome,
     XDG_CONFIG_HOME: path.join(invocationHome, 'config'),
     XDG_DATA_HOME: cliTestXdgDataHome,
     XDG_STATE_HOME: path.join(invocationHome, 'state'),
@@ -1009,7 +1010,7 @@ export default defineConfig({
         [httpServer.url, '--account', 'nonexistent-account'],
         { env: { MPPX_PRIVATE_KEY: undefined } },
       )
-      expect(exitCode).toBe(69)
+      expect(exitCode, output).toBe(69)
       expect(output).toContain('nonexistent-account')
       expect(output).toContain('not found')
     } finally {
@@ -1141,7 +1142,7 @@ describe('session multi-fetch (examples/session/multi-fetch)', () => {
   })
 
   test(
-    'selects retained non-SSE channels with auto, explicit, and new modes',
+    'reuses a retained non-SSE channel from the shared SQLite database',
     { timeout: 120_000 },
     async () => {
       await fundAccount({ address: testAccount.address, token: Addresses.pathUsd })
@@ -1198,8 +1199,8 @@ describe('session multi-fetch (examples/session/multi-fetch)', () => {
       })
 
       try {
-        const stateHome = fs.mkdtempSync(path.join(cliTestXdgDataHome, 'reuse-state-'))
-        const env = { MPPX_PRIVATE_KEY: testPrivateKey, XDG_STATE_HOME: stateHome }
+        const home = fs.mkdtempSync(path.join(cliTestXdgDataHome, 'reuse-home-'))
+        const env = { HOME: home, MPPX_PRIVATE_KEY: testPrivateKey }
         const runRequest = async (argv: string[]) => {
           const result = await serve(argv, { env })
           expect(result.exitCode, `${result.output}\n${result.stderr}`).toBeUndefined()
@@ -1207,118 +1208,33 @@ describe('session multi-fetch (examples/session/multi-fetch)', () => {
         await runRequest([httpServer.url, '--rpc-url', rpcUrl, '-s', '-M', 'deposit=10'])
         const retainedChannelId = credentials.find(({ action }) => action === 'open')!.channelId
         await runRequest([httpServer.url, '--rpc-url', rpcUrl, '-s', '-M', 'deposit=10'])
-        await runRequest([
-          httpServer.url,
-          '--rpc-url',
-          rpcUrl,
-          '--session',
-          retainedChannelId,
-          '-s',
-          '-M',
-          'deposit=10',
-        ])
-        await runRequest([
-          httpServer.url,
-          '--rpc-url',
-          rpcUrl,
-          '--session',
-          'new',
-          '-s',
-          '-M',
-          'deposit=10',
-        ])
 
         const payments = credentials.filter(({ action }) => ['open', 'voucher'].includes(action))
-        expect(voucherAmounts).toEqual(['2000', '3000'])
-        expect(payments.map(({ action }) => action)).toEqual(['open', 'voucher', 'voucher', 'open'])
-        expect(new Set(payments.slice(0, 3).map(({ channelId }) => channelId))).toEqual(
+        expect(voucherAmounts).toEqual(['2000'])
+        expect(payments.map(({ action }) => action)).toEqual(['open', 'voucher'])
+        expect(new Set(payments.map(({ channelId }) => channelId))).toEqual(
           new Set([retainedChannelId]),
         )
-        expect(payments[3]?.channelId).not.toBe(retainedChannelId)
+        expect(fs.existsSync(path.join(home, '.tempo', 'wallet', 'channels.db'))).toBe(true)
+        expect(fs.existsSync(path.join(home, '.local', 'state', 'mppx', 'sessions'))).toBe(false)
+
+        const listed = await serve(
+          ['sessions', 'list', '--rpc-url', rpcUrl, '--network', 'testnet', '--json'],
+          { env },
+        )
+        expect(listed.exitCode, `${listed.output}\n${listed.stderr}`).toBeUndefined()
+        expect(JSON.parse(listed.output).sessions).toEqual([
+          expect.objectContaining({
+            channelId: retainedChannelId,
+            cumulativeAmount: '2000',
+            state: 'active',
+          }),
+        ])
       } finally {
         httpServer.close()
       }
     },
   )
-
-  test('retains a session until `sessions close` is invoked', { timeout: 120_000 }, async () => {
-    await fundAccount({ address: testAccount.address, token: Addresses.pathUsd })
-    await fundAccount({ address: testAccount.address, token: asset })
-
-    const escrow = tip20ChannelEscrow
-    const store = Store.memory()
-    const server = Mppx_server.create({
-      methods: [
-        tempo.session({
-          account: accounts[0],
-          store,
-          getClient: () => client,
-          currency: asset,
-          escrowContract: escrow,
-          chainId: client.chain.id,
-          feePayer: accounts[1],
-          feePayerPolicy: cliSessionFeePayerPolicy,
-        }),
-      ],
-      realm: 'cli-test-close-action',
-      secretKey: 'cli-test-secret-cli-test-secret-32',
-    })
-
-    const credentialActions: string[] = []
-    let channelId: string | undefined
-
-    const httpServer = await Http.createServer(async (req, res) => {
-      // Capture credential action from every request with Authorization header
-      const authHeader = req.headers.authorization
-      if (authHeader) {
-        try {
-          const cred = Credential.deserialize<SessionCredentialPayload>(authHeader)
-          credentialActions.push(cred.payload.action)
-          channelId = cred.payload.channelId
-        } catch {}
-      }
-
-      const result = await toNodeListener(
-        server.session({
-          amount: '0.001',
-          recipient: accounts[0].address,
-          unitType: 'page',
-        }),
-      )(req, res)
-      if (result.status === 402) return
-      res.end('scraped-content')
-    })
-
-    try {
-      const stateHome = fs.mkdtempSync(path.join(cliTestXdgDataHome, 'close-state-'))
-      const env = { MPPX_PRIVATE_KEY: testPrivateKey, XDG_STATE_HOME: stateHome }
-      await serve([httpServer.url, '--rpc-url', rpcUrl, '-s', '-M', 'deposit=10'], {
-        env,
-      })
-
-      expect(credentialActions).toEqual(['open'])
-      expect(channelId).toMatch(/^0x[0-9a-f]{64}$/)
-
-      const listed = await serve(['sessions', 'list', '--json'], { env })
-      expect(JSON.parse(listed.output).sessions).toEqual([
-        expect.objectContaining({ channelId, status: 'open' }),
-      ])
-
-      const closed = await serve(['sessions', 'close', channelId!, '--rpc-url', rpcUrl, '--json'], {
-        env,
-      })
-      expect(closed.exitCode, `${closed.output}\n${closed.stderr}`).toBeUndefined()
-      expect(JSON.parse(closed.output)).toEqual(
-        expect.objectContaining({ channelId, status: 'closed' }),
-      )
-      expect(credentialActions.at(-1)).toBe('close')
-
-      const empty = await serve(['sessions', 'list', '--json'], { env })
-      expect(JSON.parse(empty.output)).toEqual({ sessions: [] })
-    } finally {
-      httpServer.close()
-    }
-  })
 
   test('error: --fail exits on server error', { timeout: 60_000 }, async () => {
     const httpServer = await Http.createServer(async (_req, res) => {
@@ -1903,36 +1819,8 @@ test('mppx --help', async () => {
   expect(output).toContain('mppx')
   expect(output).toContain('<url>')
   expect(output).toContain('account')
-  expect(output).toContain('sessions')
   expect(output).toContain('services')
   expect(output).toContain('sign')
-  expect(output).toContain('--session')
-})
-
-test('mppx sessions --help', async () => {
-  const { output } = await serve(['sessions', '--help'])
-  expect(output).toContain('close  Cooperatively close')
-  expect(output).toContain('list   List persistent')
-  expect(output).toContain('view   View a persistent')
-})
-
-test('mppx sessions close --help', async () => {
-  const { output } = await serve(['sessions', 'close', '--help'])
-  expect(output).toContain('--all')
-  expect(output).toContain('--yes')
-  expect(output).toContain('--url')
-})
-
-test('mppx sessions close --all requires confirmation', async () => {
-  const { exitCode, output } = await serve(['sessions', 'close', '--all'])
-  expect(exitCode).toBe(2)
-  expect(output).toContain('requires --yes')
-})
-
-test('mppx sessions close --all returns an empty structured result', async () => {
-  const { exitCode, output } = await serve(['sessions', 'close', '--all', '--yes', '--json'])
-  expect(exitCode).toBeUndefined()
-  expect(JSON.parse(output)).toEqual({ closed: [], failed: [] })
 })
 
 describe('account fund help', () => {

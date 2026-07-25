@@ -3,11 +3,19 @@ import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 
+import { createClient, custom, decodeFunctionData, encodeFunctionResult } from 'viem'
+import { privateKeyToAccount } from 'viem/accounts'
+import { tempoDevnet } from 'viem/chains'
 import { describe, expect, test } from 'vp/test'
 
 import type { ChannelEntry } from '../tempo/session/client/ChannelOps.js'
 import { entryKey } from '../tempo/session/client/ChannelStore.js'
-import { createSqliteChannelStore, defaultChannelDatabasePath } from './node.js'
+import { escrowAbi } from '../tempo/session/precompile/escrow.abi.js'
+import {
+  createSessionAdministration,
+  createSqliteChannelStore,
+  defaultChannelDatabasePath,
+} from './node.js'
 
 const channel: ChannelEntry = {
   channelId: `0x${'11'.repeat(32)}`,
@@ -42,6 +50,7 @@ describe('SQLite ChannelStore', () => {
 
       const second = createSqliteChannelStore({ namespace: 'https://api.example.com', path })
       expect(second.get(entryKey(channel))).toEqual(channel)
+      expect(second.latestAuthorizedSigner()).toBe(channel.descriptor.authorizedSigner)
       second.set({ ...channel, cumulativeAmount: 1_000_000n, deposit: 5_000_000n })
       expect(second.get(entryKey(channel))).toMatchObject({
         cumulativeAmount: 2_000_000n,
@@ -107,6 +116,161 @@ describe('SQLite ChannelStore', () => {
 
       const store = createSqliteChannelStore({ namespace: 'https://api.example.com', path })
       expect(store.get(entryKey(channel))).toEqual(channel)
+      store.close()
+    } finally {
+      rmSync(directory, { recursive: true })
+    }
+  })
+
+  test('uses the same rows for request persistence and session administration', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'mppx-session-administration-'))
+    const path = join(directory, 'channels.db')
+    try {
+      const store = createSqliteChannelStore({
+        namespace: 'https://api.example.com',
+        path,
+        requestUrl: 'https://api.example.com/v1/responses',
+      })
+      store.set(channel)
+
+      expect(store.listSessions({ chainId: 4217, payer: channel.descriptor.payer })).toEqual([
+        expect.objectContaining({
+          acceptedCumulative: 0n,
+          entry: channel,
+          origin: 'https://api.example.com',
+          requestUrl: 'https://api.example.com/v1/responses',
+          state: 'active',
+        }),
+      ])
+
+      store.updateSessionState(channel.channelId, 'closing', {
+        closeRequestedAt: 10,
+        graceReadyAt: 20,
+      })
+      expect(store.listSessions()[0]).toMatchObject({
+        closeRequestedAt: 10,
+        graceReadyAt: 20,
+        state: 'closing',
+      })
+
+      const record = store.listSessions()[0]!
+      store.setSession({
+        ...record,
+        acceptedCumulative: 1_500_000n,
+        entry: { ...record.entry, cumulativeAmount: 3_000_000n },
+        state: 'finalizable',
+      })
+      expect(store.listSessions()[0]).toMatchObject({
+        acceptedCumulative: 1_500_000n,
+        entry: { cumulativeAmount: 3_000_000n },
+        state: 'finalizable',
+      })
+
+      store.deleteChannel(channel.channelId)
+      expect(store.listSessions()).toEqual([])
+      store.close()
+    } finally {
+      rmSync(directory, { recursive: true })
+    }
+  })
+
+  test('retains every recovered orphan even when payment scopes match', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'mppx-session-orphans-'))
+    const path = join(directory, 'channels.db')
+    try {
+      const store = createSqliteChannelStore({ path })
+      const base = {
+        acceptedCumulative: 0n,
+        closeRequestedAt: 0,
+        createdAt: 1,
+        entry: channel,
+        graceReadyAt: 0,
+        lastUsedAt: 1,
+        origin: '',
+        requestUrl: '',
+        state: 'orphaned',
+      } as const
+      store.setSession(base)
+      store.setSession({
+        ...base,
+        entry: {
+          ...channel,
+          channelId: `0x${'44'.repeat(32)}`,
+          descriptor: { ...channel.descriptor, salt: `0x${'55'.repeat(32)}` },
+        },
+      })
+
+      expect(store.listSessions()).toHaveLength(2)
+      store.close()
+
+      const reopened = createSqliteChannelStore({ path })
+      expect(reopened.listSessions()).toHaveLength(2)
+      reopened.close()
+    } finally {
+      rmSync(directory, { recursive: true })
+    }
+  })
+
+  test('reconciles retained sessions with the canonical precompile state', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'mppx-session-sync-'))
+    const path = join(directory, 'channels.db')
+    const account = privateKeyToAccount(`0x${'01'.repeat(32)}`)
+    const client = createClient({
+      account,
+      chain: tempoDevnet,
+      transport: custom({
+        async request({ method, params }) {
+          if (method !== 'eth_call') throw new Error(`unexpected RPC method ${method}`)
+          const request = params[0] as { data: `0x${string}` }
+          const call = decodeFunctionData({ abi: escrowAbi, data: request.data })
+          if (call.functionName === 'CLOSE_GRACE_PERIOD')
+            return encodeFunctionResult({
+              abi: escrowAbi,
+              functionName: 'CLOSE_GRACE_PERIOD',
+              result: 900n,
+            })
+          if (call.functionName === 'getChannelState')
+            return encodeFunctionResult({
+              abi: escrowAbi,
+              functionName: 'getChannelState',
+              result: { closeRequestedAt: 10, deposit: 12_000_000n, settled: 3_000_000n },
+            })
+          throw new Error(`unexpected contract call ${call.functionName}`)
+        },
+      }),
+    })
+    try {
+      const store = createSqliteChannelStore({
+        namespace: 'https://api.example.com',
+        path,
+      })
+      store.set({
+        ...channel,
+        chainId: tempoDevnet.id,
+        descriptor: { ...channel.descriptor, payer: account.address },
+      })
+      const administration = createSessionAdministration({
+        account,
+        client,
+        now: () => 1_000,
+        store,
+      })
+
+      const records = await administration.sync({ discover: false })
+
+      expect(records).toEqual([
+        expect.objectContaining({
+          acceptedCumulative: 3_000_000n,
+          closeRequestedAt: 10,
+          entry: expect.objectContaining({
+            cumulativeAmount: 3_000_000n,
+            deposit: 12_000_000n,
+            opened: false,
+          }),
+          graceReadyAt: 910,
+          state: 'finalizable',
+        }),
+      ])
       store.close()
     } finally {
       rmSync(directory, { recursive: true })

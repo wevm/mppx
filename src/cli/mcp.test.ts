@@ -195,7 +195,7 @@ test('tools/list exposes mppx commands with input and output schemas', async () 
     'services_show',
     'sessions_close',
     'sessions_list',
-    'sessions_view',
+    'sessions_sync',
     'sign',
     'validate',
   ])
@@ -208,14 +208,6 @@ test('tools/list exposes mppx commands with input and output schemas', async () 
   expect(tools.find((tool: { name: string }) => tool.name === 'sign').inputSchema).toEqual(
     expect.objectContaining({
       properties: expect.objectContaining({ challenge: expect.any(Object) }),
-      type: 'object',
-    }),
-  )
-  expect(
-    tools.find((tool: { name: string }) => tool.name === 'sessions_list').outputSchema,
-  ).toEqual(
-    expect.objectContaining({
-      properties: expect.objectContaining({ sessions: expect.any(Object) }),
       type: 'object',
     }),
   )
