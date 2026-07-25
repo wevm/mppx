@@ -8,8 +8,8 @@ overrides:
   mppx: workspace:*
   vitest: npm:@voidzero-dev/vite-plus-test@~0.1.24
   typescript: ~5.9.3
-  ox: 0.14.29
-  viem: https://pkg.pr.new/viem@4880
+  ox: 0.14.32
+  viem: 2.55.8
   path-to-regexp@<8.4.0: 8.4.0
   tar@<=7.5.20: 7.5.21
   postcss@<=8.5.17: 8.5.18
@@ -31,7 +31,7 @@ overrides:
   undici@>=7.0.0 <7.28.0: 7.28.0
   socket.io-parser@>=4.0.0 <4.2.6: '>=4.2.6'
   yaml@<2.8.3: '>=2.8.3'
-  brace-expansion@>=5.0.0 <5.0.7: 5.0.7
+  brace-expansion@<=5.0.7: 5.0.8
   ws@>=8.0.0 <8.21.0: 8.21.0
   lodash@<=4.17.23: '>=4.18.0'
   protobufjs@<=7.6.4: 7.6.5
@@ -59,11 +59,8 @@ importers:
         specifier: ^0.4.10
         version: 0.4.10
       ox:
-        specifier: 0.14.29
-        version: 0.14.29(typescript@5.9.3)(zod@4.4.3)
-      viem:
-        specifier: https://pkg.pr.new/viem@4880
-        version: https://pkg.pr.new/viem@4880(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.4.3)
+        specifier: 0.14.32
+        version: 0.14.32(typescript@5.9.3)(zod@4.4.3)
       zod:
         specifier: ^4.4.3
         version: 4.4.3
@@ -127,7 +124,7 @@ importers:
         version: 1.1.5
       tempo.ts:
         specifier: ^0.14.2
-        version: 0.14.2(typescript@5.9.3)(viem@https://pkg.pr.new/viem@4880(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.4.3))(zod@4.4.3)
+        version: 0.14.2(typescript@5.9.3)(viem@2.55.8(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.4.3))(zod@4.4.3)
       testcontainers:
         specifier: ^12.0.4
         version: 12.0.4
@@ -137,6 +134,9 @@ importers:
       typescript:
         specifier: ~5.9.3
         version: 5.9.3
+      viem:
+        specifier: 2.55.8
+        version: 2.55.8(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.4.3)
       vite:
         specifier: ^8.1.3
         version: 8.1.3(@types/node@25.6.0)(esbuild@0.28.1)(tsx@4.22.4)(yaml@2.9.0)
@@ -171,8 +171,8 @@ importers:
         specifier: ~5.9.3
         version: 5.9.3
       viem:
-        specifier: https://pkg.pr.new/viem@4880
-        version: https://pkg.pr.new/viem@4880(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.4.3)
+        specifier: 2.55.8
+        version: 2.55.8(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.4.3)
       vite:
         specifier: ^8.1.3
         version: 8.1.3(@types/node@25.6.0)(esbuild@0.28.1)(tsx@4.23.1)(yaml@2.9.0)
@@ -201,8 +201,8 @@ importers:
         specifier: ~5.9.3
         version: 5.9.3
       viem:
-        specifier: https://pkg.pr.new/viem@4880
-        version: https://pkg.pr.new/viem@4880(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.4.3)
+        specifier: 2.55.8
+        version: 2.55.8(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.4.3)
 
   examples/charge-wagmi:
     dependencies:
@@ -228,11 +228,11 @@ importers:
         specifier: ^19.2.7
         version: 19.2.7(react@19.2.7)
       viem:
-        specifier: https://pkg.pr.new/viem@4880
-        version: https://pkg.pr.new/viem@4880(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.4.3)
+        specifier: 2.55.8
+        version: 2.55.8(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.4.3)
       wagmi:
         specifier: ^3.6.21
-        version: 3.6.21(@tanstack/query-core@5.101.2)(@tanstack/react-query@5.101.2(react@19.2.7))(@types/react@19.2.17)(accounts@0.14.11)(react@19.2.7)(typescript@5.9.3)(viem@https://pkg.pr.new/viem@4880(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.4.3))
+        version: 3.6.21(@tanstack/query-core@5.101.2)(@tanstack/react-query@5.101.2(react@19.2.7))(@types/react@19.2.17)(accounts@0.14.11)(react@19.2.7)(typescript@5.9.3)(viem@2.55.8(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.4.3))
     devDependencies:
       '@types/react':
         specifier: ^19.2.17
@@ -274,8 +274,8 @@ importers:
         specifier: ~5.9.3
         version: 5.9.3
       viem:
-        specifier: https://pkg.pr.new/viem@4880
-        version: https://pkg.pr.new/viem@4880(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.4.3)
+        specifier: 2.55.8
+        version: 2.55.8(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.4.3)
       vite:
         specifier: ^8.1.3
         version: 8.1.3(@types/node@26.1.1)(esbuild@0.28.1)(tsx@4.23.1)(yaml@2.9.0)
@@ -301,8 +301,8 @@ importers:
         specifier: ~5.9.3
         version: 5.9.3
       viem:
-        specifier: https://pkg.pr.new/viem@4880
-        version: https://pkg.pr.new/viem@4880(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.4.3)
+        specifier: 2.55.8
+        version: 2.55.8(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.4.3)
       vite:
         specifier: ^8.1.3
         version: 8.1.3(@types/node@26.1.1)(esbuild@0.28.1)(tsx@4.23.1)(yaml@2.9.0)
@@ -334,8 +334,8 @@ importers:
         specifier: ~5.9.3
         version: 5.9.3
       viem:
-        specifier: https://pkg.pr.new/viem@4880
-        version: https://pkg.pr.new/viem@4880(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.4.3)
+        specifier: 2.55.8
+        version: 2.55.8(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.4.3)
       vite:
         specifier: ^8.1.3
         version: 8.1.3(@types/node@25.6.0)(esbuild@0.28.1)(tsx@4.22.4)(yaml@2.9.0)
@@ -391,8 +391,8 @@ importers:
         specifier: ~5.9.3
         version: 5.9.3
       viem:
-        specifier: https://pkg.pr.new/viem@4880
-        version: https://pkg.pr.new/viem@4880(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.4.3)
+        specifier: 2.55.8
+        version: 2.55.8(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.4.3)
       vite:
         specifier: ^8.1.3
         version: 8.1.3(@types/node@25.6.2)(esbuild@0.28.1)(tsx@4.22.4)(yaml@2.9.0)
@@ -418,8 +418,8 @@ importers:
         specifier: ~5.9.3
         version: 5.9.3
       viem:
-        specifier: https://pkg.pr.new/viem@4880
-        version: https://pkg.pr.new/viem@4880(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.4.3)
+        specifier: 2.55.8
+        version: 2.55.8(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.4.3)
 
   src/stripe/server/internal/html:
     dependencies:
@@ -434,13 +434,13 @@ importers:
     dependencies:
       accounts:
         specifier: 0.14.11
-        version: 0.14.11(@types/react@19.2.17)(@wagmi/core@3.5.5)(react@19.2.7)(typescript@5.9.3)(use-sync-external-store@1.4.0(react@19.2.7))(viem@https://pkg.pr.new/viem@4880(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.4.3))(wagmi@3.6.21)
+        version: 0.14.11(@types/react@19.2.17)(@wagmi/core@3.5.5)(react@19.2.7)(typescript@5.9.3)(use-sync-external-store@1.4.0(react@19.2.7))(viem@2.55.8(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.4.3))(wagmi@3.6.21)
       mppx:
         specifier: workspace:*
         version: link:../../../../..
       viem:
-        specifier: https://pkg.pr.new/viem@4880
-        version: https://pkg.pr.new/viem@4880(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.4.3)
+        specifier: 2.55.8
+        version: 2.55.8(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.4.3)
 
 packages:
 
@@ -2033,7 +2033,6 @@ packages:
 
   '@wagmi/connectors@8.0.20':
     resolution: {integrity: sha512-c6BRWBJ2bnYq/Spxpc7H/mdnlZ90CPSEZ4NKCin3gM8yRwqkI4J1BzSXF1jAoHO0QjME1rajGGQKrCli3tV3hw==}
-    version: 8.0.20
     peerDependencies:
       '@base-org/account': ^2.5.1
       '@coinbase/wallet-sdk': ^4.3.6
@@ -2045,7 +2044,7 @@ packages:
       accounts: ~0.14
       porto: ~0.2.35
       typescript: ~5.9.3
-      viem: 2.x
+      viem: 2.55.8
     peerDependenciesMeta:
       '@base-org/account':
         optional: true
@@ -2068,12 +2067,11 @@ packages:
 
   '@wagmi/core@3.5.5':
     resolution: {integrity: sha512-JEJAwo25p9c52JwQs1WunqANPs4PjJ+eepDLXvQJ390vEXsBexYdCDmsPPcYZaGpk0Umx0w85U1ruRodXusMzg==}
-    version: 3.5.5
     peerDependencies:
       '@tanstack/query-core': '>=5.0.0'
       accounts: ~0.14
       typescript: ~5.9.3
-      viem: 2.x
+      viem: 2.55.8
     peerDependenciesMeta:
       '@tanstack/query-core':
         optional: true
@@ -2114,7 +2112,6 @@ packages:
 
   accounts@0.14.11:
     resolution: {integrity: sha512-75OHKIbtl0PTrZenrs8WwLf6QI4UZLG3l2CK21OJly4bxzY7m5PbUDYHqk4HGcSjW/NR+fZGPRFIH5ZvKtIqOw==}
-    version: 0.14.11
     peerDependencies:
       '@privy-io/react-auth': '>=3.25.0'
       '@react-native-async-storage/async-storage': ^3.0.2
@@ -2124,7 +2121,7 @@ packages:
       react: '>=18'
       react-native-mmkv: ^4.3.1
       react-native-nitro-modules: ^0.35.9
-      viem: '>=2.50.4'
+      viem: 2.55.8
       wagmi: '>=0.0.0'
     peerDependenciesMeta:
       '@privy-io/react-auth':
@@ -2235,9 +2232,6 @@ packages:
       react-native-b4a:
         optional: true
 
-  balanced-match@1.0.2:
-    resolution: {integrity: sha512-3oSeUO0TMV67hN1AmbXsK4yaqU7tjiHlbxRDZOpH0KW9+CeX4bRAaX0Anxt0tx2MrpRpWwQaPwIlISEJhYU5Pw==}
-
   balanced-match@4.0.4:
     resolution: {integrity: sha512-BLrgEcRTwX2o6gGxGOCNyMvGSp35YofuYzw9h1IMTRmKqttAZZVU67bdb9Pr2vUHA8+j3i2tJfjO6C6+4myGTA==}
     engines: {node: 18 || 20 || >=22}
@@ -2304,12 +2298,9 @@ packages:
   bowser@2.14.1:
     resolution: {integrity: sha512-tzPjzCxygAKWFOJP011oxFHs57HzIhOEracIgAePE4pqB3LikALKnSzUyU4MGs9/iCEUuHlAJTjTc5M+u7YEGg==}
 
-  brace-expansion@2.1.2:
-    resolution: {integrity: sha512-w5JZcKgdhDOgOwm8H+KgbosopHMuGcl6qbulwjtz3SM7I7P3yW1eAjzMPLrIE+NQ9vjgANKHWeMHnrT0OXW1oA==}
-
-  brace-expansion@5.0.7:
-    resolution: {integrity: sha512-7oFy703dxfY3/NLxC1fh2SUCQ0H9rmAY+5EpDVfXjUTTs+HEwR2nYaqLv+GWcTsumwxPfiz6CzCNkwXwBUwqCA==}
-    engines: {node: 18 || 20 || >=22}
+  brace-expansion@5.0.8:
+    resolution: {integrity: sha512-JZyDyq3D4AUifKTPOB7DELf6XsB3WdPuNxCtob1vFXPsSXhdAiHBWJ/tJ8HAc9aH84BK+5JFZLNkJKx3G9kzQg==}
+    engines: {node: 20 || >=22}
 
   braces@3.0.3:
     resolution: {integrity: sha512-yQbXgO/OSZVD2IsiLlro+7Hf6Q18EJrKSEsdoMzKePKXct3gvD8oLcOQdIzGupr5Fj+EDe8gO/lxc1BzfMpxvA==}
@@ -3354,8 +3345,8 @@ packages:
   outdent@0.5.0:
     resolution: {integrity: sha512-/jHxFIzoMXdqPzTaCpFzAAWhpkSjZPF4Vsn6jAfNpmbH/ymsmd7Qc6VE9BGn0L6YMj6uwpQLxCECpus4ukKS9Q==}
 
-  ox@0.14.29:
-    resolution: {integrity: sha512-M5j87Ec4V99MQdRct/g09eWXW60g6zhHTUs1lr4deUtrPDnezBdCJTgKd7pxqTpSZBFveV0ALi9jMMuT1qKyNg==}
+  ox@0.14.32:
+    resolution: {integrity: sha512-EPB214GvtsP2TtAYZXkNdizLzGp6PXtfaHcRrD4pcBk/D0Y7ZCNv71QgwrjeCsZ+82moVeMlZZG+NDEIUfxMpw==}
     peerDependencies:
       typescript: ~5.9.3
     peerDependenciesMeta:
@@ -3827,9 +3818,8 @@ packages:
 
   tempo.ts@0.14.2:
     resolution: {integrity: sha512-N4UkP2X/KDLmYUEIEWUDAk1m/USbKMzTjjUz1m0LwrIEVfoDlcSbBRc9jp14gLZcJVDlnq+fWHFVcH+GdrySgQ==}
-    version: 0.14.2
     peerDependencies:
-      viem: '>=2.43.3'
+      viem: 2.55.8
     peerDependenciesMeta:
       viem:
         optional: true
@@ -3990,9 +3980,8 @@ packages:
     resolution: {integrity: sha512-BNGbWLfd0eUPabhkXUVm0j8uuvREyTh5ovRa/dyow/BqAbZJyC+5fU+IzQOzmAKzYqYRAISoRhdQr3eIZ/PXqg==}
     engines: {node: '>= 0.8'}
 
-  viem@https://pkg.pr.new/viem@4880:
-    resolution: {integrity: sha512-ZC30AIkbk2zdGhVARNvyrnXo9BWbN4T49YhWuIAHmHd/MOjNg+tskVqhiXF72I843x7BtCPRv7/KfROdJ1MpbQ==, tarball: https://pkg.pr.new/viem@4880}
-    version: 2.55.6
+  viem@2.55.8:
+    resolution: {integrity: sha512-BHqtsmK4iMLuLnRyrPIB1jVrmFVliRIP/K0dnFT7gBOpfo8Ko4ozhkzUCRNfR+Z/ZZdnlnVrh04fAOuIm5Svkg==}
     peerDependencies:
       typescript: ~5.9.3
     peerDependenciesMeta:
@@ -4049,12 +4038,11 @@ packages:
 
   wagmi@3.6.21:
     resolution: {integrity: sha512-ao/Zb4Uz1KJvFNpo13DVeWo4eMkNb06RU1uk/xHm+PTGURwP2NHAysZx/CHCV2WS2b1f9MlhYgSCiI5shx5vUA==}
-    version: 3.6.21
     peerDependencies:
       '@tanstack/react-query': '>=5.0.0'
       react: '>=18'
       typescript: ~5.9.3
-      viem: 2.x
+      viem: 2.55.8
     peerDependenciesMeta:
       typescript:
         optional: true
@@ -5170,7 +5158,7 @@ snapshots:
 
   '@scure/bip32@1.7.0':
     dependencies:
-      '@noble/curves': 1.9.1
+      '@noble/curves': 1.9.7
       '@noble/hashes': 1.8.0
       '@scure/base': 1.2.6
 
@@ -5505,23 +5493,23 @@ snapshots:
   '@voidzero-dev/vite-plus-win32-x64-msvc@0.1.24':
     optional: true
 
-  '@wagmi/connectors@8.0.20(@wagmi/core@3.5.5)(accounts@0.14.11)(typescript@5.9.3)(viem@https://pkg.pr.new/viem@4880(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.4.3))':
+  '@wagmi/connectors@8.0.20(@wagmi/core@3.5.5)(accounts@0.14.11)(typescript@5.9.3)(viem@2.55.8(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.4.3))':
     dependencies:
-      '@wagmi/core': 3.5.5(@tanstack/query-core@5.101.2)(@types/react@19.2.17)(accounts@0.14.11)(react@19.2.7)(typescript@5.9.3)(use-sync-external-store@1.4.0(react@19.2.7))(viem@https://pkg.pr.new/viem@4880(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.4.3))
-      viem: https://pkg.pr.new/viem@4880(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.4.3)
+      '@wagmi/core': 3.5.5(@tanstack/query-core@5.101.2)(@types/react@19.2.17)(accounts@0.14.11)(react@19.2.7)(typescript@5.9.3)(use-sync-external-store@1.4.0(react@19.2.7))(viem@2.55.8(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.4.3))
+      viem: 2.55.8(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.4.3)
     optionalDependencies:
-      accounts: 0.14.11(@types/react@19.2.17)(@wagmi/core@3.5.5)(react@19.2.7)(typescript@5.9.3)(use-sync-external-store@1.4.0(react@19.2.7))(viem@https://pkg.pr.new/viem@4880(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.4.3))(wagmi@3.6.21)
+      accounts: 0.14.11(@types/react@19.2.17)(@wagmi/core@3.5.5)(react@19.2.7)(typescript@5.9.3)(use-sync-external-store@1.4.0(react@19.2.7))(viem@2.55.8(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.4.3))(wagmi@3.6.21)
       typescript: 5.9.3
 
-  '@wagmi/core@3.5.5(@tanstack/query-core@5.101.2)(@types/react@19.2.17)(accounts@0.14.11)(react@19.2.7)(typescript@5.9.3)(use-sync-external-store@1.4.0(react@19.2.7))(viem@https://pkg.pr.new/viem@4880(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.4.3))':
+  '@wagmi/core@3.5.5(@tanstack/query-core@5.101.2)(@types/react@19.2.17)(accounts@0.14.11)(react@19.2.7)(typescript@5.9.3)(use-sync-external-store@1.4.0(react@19.2.7))(viem@2.55.8(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.4.3))':
     dependencies:
       eventemitter3: 5.0.1
       mipd: 0.0.7(typescript@5.9.3)
-      viem: https://pkg.pr.new/viem@4880(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.4.3)
+      viem: 2.55.8(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.4.3)
       zustand: 5.0.0(@types/react@19.2.17)(react@19.2.7)(use-sync-external-store@1.4.0(react@19.2.7))
     optionalDependencies:
       '@tanstack/query-core': 5.101.2
-      accounts: 0.14.11(@types/react@19.2.17)(@wagmi/core@3.5.5)(react@19.2.7)(typescript@5.9.3)(use-sync-external-store@1.4.0(react@19.2.7))(viem@https://pkg.pr.new/viem@4880(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.4.3))(wagmi@3.6.21)
+      accounts: 0.14.11(@types/react@19.2.17)(@wagmi/core@3.5.5)(react@19.2.7)(typescript@5.9.3)(use-sync-external-store@1.4.0(react@19.2.7))(viem@2.55.8(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.4.3))(wagmi@3.6.21)
       typescript: 5.9.3
     transitivePeerDependencies:
       - '@types/react'
@@ -5548,23 +5536,23 @@ snapshots:
       mime-types: 3.0.2
       negotiator: 1.0.0
 
-  accounts@0.14.11(@types/react@19.2.17)(@wagmi/core@3.5.5)(react@19.2.7)(typescript@5.9.3)(use-sync-external-store@1.4.0(react@19.2.7))(viem@https://pkg.pr.new/viem@4880(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.4.3))(wagmi@3.6.21):
+  accounts@0.14.11(@types/react@19.2.17)(@wagmi/core@3.5.5)(react@19.2.7)(typescript@5.9.3)(use-sync-external-store@1.4.0(react@19.2.7))(viem@2.55.8(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.4.3))(wagmi@3.6.21):
     dependencies:
       hono: 4.12.27
       idb-keyval: 6.2.5
       jose: 6.2.3
       mipd: 0.0.7(typescript@5.9.3)
       mppx: 'link:'
-      ox: 0.14.29(typescript@5.9.3)(zod@4.4.3)
+      ox: 0.14.32(typescript@5.9.3)(zod@4.4.3)
       wata: 0.4.0(react@19.2.7)(typescript@5.9.3)
       webauthx: 0.1.2(typescript@5.9.3)(zod@4.4.3)
       zod: 4.4.3
       zustand: 5.0.14(@types/react@19.2.17)(react@19.2.7)(use-sync-external-store@1.4.0(react@19.2.7))
     optionalDependencies:
-      '@wagmi/core': 3.5.5(@tanstack/query-core@5.101.2)(@types/react@19.2.17)(accounts@0.14.11)(react@19.2.7)(typescript@5.9.3)(use-sync-external-store@1.4.0(react@19.2.7))(viem@https://pkg.pr.new/viem@4880(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.4.3))
+      '@wagmi/core': 3.5.5(@tanstack/query-core@5.101.2)(@types/react@19.2.17)(accounts@0.14.11)(react@19.2.7)(typescript@5.9.3)(use-sync-external-store@1.4.0(react@19.2.7))(viem@2.55.8(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.4.3))
       react: 19.2.7
-      viem: https://pkg.pr.new/viem@4880(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.4.3)
-      wagmi: 3.6.21(@tanstack/query-core@5.101.2)(@tanstack/react-query@5.101.2(react@19.2.7))(@types/react@19.2.17)(accounts@0.14.11)(react@19.2.7)(typescript@5.9.3)(viem@https://pkg.pr.new/viem@4880(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.4.3))
+      viem: 2.55.8(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.4.3)
+      wagmi: 3.6.21(@tanstack/query-core@5.101.2)(@tanstack/react-query@5.101.2(react@19.2.7))(@types/react@19.2.17)(accounts@0.14.11)(react@19.2.7)(typescript@5.9.3)(viem@2.55.8(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.4.3))
     transitivePeerDependencies:
       - '@types/react'
       - expo-crypto
@@ -5656,8 +5644,6 @@ snapshots:
 
   b4a@1.8.1: {}
 
-  balanced-match@1.0.2: {}
-
   balanced-match@4.0.4: {}
 
   bare-events@2.9.1: {}
@@ -5723,11 +5709,7 @@ snapshots:
 
   bowser@2.14.1: {}
 
-  brace-expansion@2.1.2:
-    dependencies:
-      balanced-match: 1.0.2
-
-  brace-expansion@5.0.7:
+  brace-expansion@5.0.8:
     dependencies:
       balanced-match: 4.0.4
 
@@ -6669,15 +6651,15 @@ snapshots:
 
   minimatch@10.2.5:
     dependencies:
-      brace-expansion: 5.0.7
+      brace-expansion: 5.0.8
 
   minimatch@5.1.8:
     dependencies:
-      brace-expansion: 2.1.2
+      brace-expansion: 5.0.8
 
   minimatch@9.0.7:
     dependencies:
-      brace-expansion: 5.0.7
+      brace-expansion: 5.0.8
 
   minipass@7.1.3: {}
 
@@ -6764,7 +6746,7 @@ snapshots:
 
   outdent@0.5.0: {}
 
-  ox@0.14.29(typescript@5.9.3)(zod@4.4.3):
+  ox@0.14.32(typescript@5.9.3)(zod@4.4.3):
     dependencies:
       '@adraffy/ens-normalize': 1.11.1
       '@noble/ciphers': 1.3.0
@@ -7361,12 +7343,12 @@ snapshots:
       - bare-abort-controller
       - react-native-b4a
 
-  tempo.ts@0.14.2(typescript@5.9.3)(viem@https://pkg.pr.new/viem@4880(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.4.3))(zod@4.4.3):
+  tempo.ts@0.14.2(typescript@5.9.3)(viem@2.55.8(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.4.3))(zod@4.4.3):
     dependencies:
       '@remix-run/fetch-router': 0.17.0
-      ox: 0.14.29(typescript@5.9.3)(zod@4.4.3)
+      ox: 0.14.32(typescript@5.9.3)(zod@4.4.3)
     optionalDependencies:
-      viem: https://pkg.pr.new/viem@4880(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.4.3)
+      viem: 2.55.8(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.4.3)
     transitivePeerDependencies:
       - typescript
       - zod
@@ -7519,7 +7501,7 @@ snapshots:
 
   vary@1.1.2: {}
 
-  viem@https://pkg.pr.new/viem@4880(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.4.3):
+  viem@2.55.8(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.4.3):
     dependencies:
       '@noble/curves': 1.9.1
       '@noble/hashes': 1.8.0
@@ -7527,7 +7509,7 @@ snapshots:
       '@scure/bip39': 1.6.0
       abitype: 1.2.3(typescript@5.9.3)(zod@4.4.3)
       isows: 1.0.7(ws@8.21.0(bufferutil@4.1.0)(utf-8-validate@5.0.10))
-      ox: 0.14.29(typescript@5.9.3)(zod@4.4.3)
+      ox: 0.14.32(typescript@5.9.3)(zod@4.4.3)
       ws: 8.21.0(bufferutil@4.1.0)(utf-8-validate@5.0.10)
     optionalDependencies:
       typescript: 5.9.3
@@ -7642,14 +7624,14 @@ snapshots:
       tsx: 4.23.1
       yaml: 2.9.0
 
-  wagmi@3.6.21(@tanstack/query-core@5.101.2)(@tanstack/react-query@5.101.2(react@19.2.7))(@types/react@19.2.17)(accounts@0.14.11)(react@19.2.7)(typescript@5.9.3)(viem@https://pkg.pr.new/viem@4880(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.4.3)):
+  wagmi@3.6.21(@tanstack/query-core@5.101.2)(@tanstack/react-query@5.101.2(react@19.2.7))(@types/react@19.2.17)(accounts@0.14.11)(react@19.2.7)(typescript@5.9.3)(viem@2.55.8(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.4.3)):
     dependencies:
       '@tanstack/react-query': 5.101.2(react@19.2.7)
-      '@wagmi/connectors': 8.0.20(@wagmi/core@3.5.5)(accounts@0.14.11)(typescript@5.9.3)(viem@https://pkg.pr.new/viem@4880(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.4.3))
-      '@wagmi/core': 3.5.5(@tanstack/query-core@5.101.2)(@types/react@19.2.17)(accounts@0.14.11)(react@19.2.7)(typescript@5.9.3)(use-sync-external-store@1.4.0(react@19.2.7))(viem@https://pkg.pr.new/viem@4880(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.4.3))
+      '@wagmi/connectors': 8.0.20(@wagmi/core@3.5.5)(accounts@0.14.11)(typescript@5.9.3)(viem@2.55.8(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.4.3))
+      '@wagmi/core': 3.5.5(@tanstack/query-core@5.101.2)(@types/react@19.2.17)(accounts@0.14.11)(react@19.2.7)(typescript@5.9.3)(use-sync-external-store@1.4.0(react@19.2.7))(viem@2.55.8(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.4.3))
       react: 19.2.7
       use-sync-external-store: 1.4.0(react@19.2.7)
-      viem: https://pkg.pr.new/viem@4880(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.4.3)
+      viem: 2.55.8(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@4.4.3)
     optionalDependencies:
       typescript: 5.9.3
     transitivePeerDependencies:
@@ -7671,7 +7653,7 @@ snapshots:
       '@noble/ciphers': 2.2.0
       '@noble/hashes': 2.2.0
       hono: 4.12.27
-      ox: 0.14.29(typescript@5.9.3)(zod@4.4.3)
+      ox: 0.14.32(typescript@5.9.3)(zod@4.4.3)
       zod: 4.4.3
     optionalDependencies:
       react: 19.2.7
@@ -7680,7 +7662,7 @@ snapshots:
 
   webauthx@0.1.2(typescript@5.9.3)(zod@4.4.3):
     dependencies:
-      ox: 0.14.29(typescript@5.9.3)(zod@4.4.3)
+      ox: 0.14.32(typescript@5.9.3)(zod@4.4.3)
     transitivePeerDependencies:
       - typescript
       - zod
