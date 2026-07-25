@@ -1223,7 +1223,16 @@ describe('session multi-fetch (examples/session/multi-fetch)', () => {
         }
         await runRequest([httpServer.url, '--rpc-url', rpcUrl, '-s', '-M', 'deposit=10'])
         const retainedChannelId = credentials.find(({ action }) => action === 'open')!.channelId
-        await runRequest([httpServer.url, '--rpc-url', rpcUrl, '-s', '-M', 'deposit=10'])
+        await runRequest([
+          httpServer.url,
+          '--rpc-url',
+          rpcUrl,
+          '-s',
+          '-M',
+          'deposit=10',
+          '-M',
+          `channel=${retainedChannelId}`,
+        ])
 
         const payments = credentials.filter(({ action }) => ['open', 'voucher'].includes(action))
         expect(voucherAmounts).toEqual(['2000'])

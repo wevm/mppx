@@ -49,12 +49,20 @@ async function writeResponseBody(response: Response) {
 
 const tempoOptionSchema = z.object({
   autoSwap: z.optional(booleanOption),
+  channel: z.optional(z.coerce.string()),
   deposit: z.optional(z.union([z.string(), z.number()])),
   payWith: z.optional(z.string()),
   slippage: z.optional(z.coerce.number()),
   tokenIn: z.optional(z.string()),
 })
-const tempoOptionKeys = ['autoSwap', 'deposit', 'payWith', 'slippage', 'tokenIn'] as const
+const tempoOptionKeys = [
+  'autoSwap',
+  'channel',
+  'deposit',
+  'payWith',
+  'slippage',
+  'tokenIn',
+] as const
 const tempoChargeChallengeScoreOrder = [
   'payable',
   'unknownBalance',
