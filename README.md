@@ -83,6 +83,23 @@ Mppx.create({
 const res = await fetch('https://mpp.dev/api/ping/paid')
 ```
 
+Node clients can persist durable session state while supplying their own account implementation:
+
+```ts
+import { sessionManager } from 'mppx/client'
+import { createSqliteChannelStore } from 'mppx/client/node'
+
+const channelStore = createSqliteChannelStore({
+  namespace: new URL(endpoint).origin,
+  payer: account.address,
+})
+const manager = sessionManager({ account, bootstrap: true, channelStore, client })
+```
+
+The default channel database is `~/.tempo/wallet/channels.db`; pass `path` to override it.
+The SQLite-backed Node APIs, CLI session requests, and persistent session commands require Node.js
+22.5 or newer. Other CLI commands continue to support the package's Node.js baseline.
+
 ## Examples
 
 | Example                                                | Description                                          |
@@ -109,18 +126,16 @@ mppx account create
 # make request - automatic payment handling, curl-like api
 mppx example.com
 
-# open another session instead of reusing the preferred channel
-mppx example.com --session new
-
 # inspect and close retained sessions
 mppx sessions list
-mppx sessions view <channel-id>
-mppx sessions close <channel-id>
-mppx sessions close --all --yes
+mppx sessions sync
+mppx sessions close <channel-id>            # cooperative by default
+mppx sessions close <channel-id> --on-chain # start/finalize precompile close
 ```
 
-`--session auto` is the default. Pass `new` to open another channel or a channel ID to select one
-explicitly.
+Cold clients recover an existing session through the server's standard session bootstrap and write
+the resulting snapshot to the SQLite channel database. MPPx does not keep a second CLI-specific
+session registry or parse external wallet state.
 
 You can also install globally to use the `mppx` CLI from anywhere:
 

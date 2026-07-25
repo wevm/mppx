@@ -27,7 +27,7 @@ import { escrowAbi } from '../tempo/session/precompile/escrow.abi.js'
 import { tip20ChannelEscrow } from '../tempo/session/precompile/Protocol.js'
 import type { SessionCredentialPayload } from '../tempo/session/precompile/Protocol.js'
 import * as z from '../zod.js'
-import cli from './cli.js'
+import cli, { shouldUsePersistentSessionAccount } from './cli.js'
 
 const testPrivateKey = generatePrivateKey()
 const testAccount = privateKeyToAccount(testPrivateKey)
@@ -50,6 +50,7 @@ async function serve(argv: string[], options?: { env?: Record<string, string | u
   const saved: Record<string, string | undefined> = {}
   const invocationHome = path.join(cliTestXdgDataHome, `serve-${cliServeInvocation++}`)
   const env = {
+    HOME: invocationHome,
     XDG_CONFIG_HOME: path.join(invocationHome, 'config'),
     XDG_DATA_HOME: cliTestXdgDataHome,
     XDG_STATE_HOME: path.join(invocationHome, 'state'),
@@ -455,6 +456,47 @@ describe('request output', () => {
     } finally {
       httpServer.close()
     }
+  })
+
+  test('rejects explicit session selection when no session challenge is returned', async () => {
+    const httpServer = await Http.createServer((_req, res) => {
+      res.writeHead(200)
+      res.end('ok')
+    })
+
+    try {
+      const { exitCode, output } = await serve([httpServer.url, '--session', 'new'])
+      expect(exitCode).toBe(2)
+      expect(output).toContain('--session requires a tempo/session payment challenge.')
+    } finally {
+      httpServer.close()
+    }
+  })
+})
+
+describe('sessions', () => {
+  test('keeps Tempo Wallet accounts on the wallet plugin path', () => {
+    expect(shouldUsePersistentSessionAccount('tempo:default', undefined)).toBe(false)
+    expect(shouldUsePersistentSessionAccount('main', undefined)).toBe(true)
+    expect(shouldUsePersistentSessionAccount('tempo:default', testPrivateKey)).toBe(true)
+  })
+
+  test('requires --yes before closing every retained session', async () => {
+    const { exitCode, output } = await serve(['sessions', 'close', '--all', '--json'])
+
+    expect(exitCode).toBe(2)
+    expect(output).toContain('CONFIRMATION_REQUIRED')
+    expect(output).toContain('Pass --yes to close every session.')
+  })
+
+  test('fails when an explicitly selected session is not retained', async () => {
+    const channelId = `0x${'11'.repeat(32)}`
+    const { exitCode, output } = await serve(['sessions', 'close', channelId, '--json'], {
+      env: { MPPX_PRIVATE_KEY: testPrivateKey },
+    })
+
+    expect(exitCode).toBe(1)
+    expect(output).toContain(`Session ${channelId} was not found.`)
   })
 })
 
@@ -1009,7 +1051,7 @@ export default defineConfig({
         [httpServer.url, '--account', 'nonexistent-account'],
         { env: { MPPX_PRIVATE_KEY: undefined } },
       )
-      expect(exitCode).toBe(69)
+      expect(exitCode, output).toBe(69)
       expect(output).toContain('nonexistent-account')
       expect(output).toContain('not found')
     } finally {
@@ -1141,7 +1183,7 @@ describe('session multi-fetch (examples/session/multi-fetch)', () => {
   })
 
   test(
-    'selects retained non-SSE channels with auto, explicit, and new modes',
+    'reuses a retained non-SSE channel from the shared SQLite database',
     { timeout: 120_000 },
     async () => {
       await fundAccount({ address: testAccount.address, token: Addresses.pathUsd })
@@ -1150,10 +1192,12 @@ describe('session multi-fetch (examples/session/multi-fetch)', () => {
       const escrow = tip20ChannelEscrow
       const store = Store.memory()
       const tickAmount = '0.001'
+      let preferredChannelId: string | undefined
       const server = Mppx_server.create({
         methods: [
           tempo.session({
             account: accounts[0],
+            bootstrap: true,
             store,
             getClient: () => client,
             currency: asset,
@@ -1161,6 +1205,7 @@ describe('session multi-fetch (examples/session/multi-fetch)', () => {
             chainId: client.chain.id,
             feePayer: true,
             feePayerPolicy: cliSessionFeePayerPolicy,
+            resolveChannelId: ({ source }) => (source ? preferredChannelId : undefined),
           }),
         ],
         realm: 'cli-test-double-charge',
@@ -1171,14 +1216,22 @@ describe('session multi-fetch (examples/session/multi-fetch)', () => {
       const credentials: { action: string; channelId: string }[] = []
 
       const httpServer = await Http.createServer(async (req, res) => {
+        if (req.url === '/not-a-session') {
+          res.writeHead(200)
+          res.end('not a paid resource')
+          return
+        }
         const authHeader = req.headers.authorization
         if (authHeader) {
           try {
             const cred = Credential.deserialize<SessionCredentialPayload>(authHeader)
-            credentials.push({
-              action: cred.payload.action,
-              channelId: cred.payload.channelId,
-            })
+            if (
+              typeof cred.payload.action !== 'string' ||
+              typeof cred.payload.channelId !== 'string'
+            )
+              throw new Error('not a session credential')
+            credentials.push({ action: cred.payload.action, channelId: cred.payload.channelId })
+            if (cred.payload.action === 'open') preferredChannelId = cred.payload.channelId
             if (cred.payload.action === 'voucher' && 'cumulativeAmount' in cred.payload) {
               voucherAmounts.push(cred.payload.cumulativeAmount)
             }
@@ -1198,25 +1251,14 @@ describe('session multi-fetch (examples/session/multi-fetch)', () => {
       })
 
       try {
-        const stateHome = fs.mkdtempSync(path.join(cliTestXdgDataHome, 'reuse-state-'))
-        const env = { MPPX_PRIVATE_KEY: testPrivateKey, XDG_STATE_HOME: stateHome }
+        const home = fs.mkdtempSync(path.join(cliTestXdgDataHome, 'reuse-home-'))
+        const env = { HOME: home, MPPX_PRIVATE_KEY: testPrivateKey }
         const runRequest = async (argv: string[]) => {
           const result = await serve(argv, { env })
           expect(result.exitCode, `${result.output}\n${result.stderr}`).toBeUndefined()
         }
         await runRequest([httpServer.url, '--rpc-url', rpcUrl, '-s', '-M', 'deposit=10'])
         const retainedChannelId = credentials.find(({ action }) => action === 'open')!.channelId
-        await runRequest([httpServer.url, '--rpc-url', rpcUrl, '-s', '-M', 'deposit=10'])
-        await runRequest([
-          httpServer.url,
-          '--rpc-url',
-          rpcUrl,
-          '--session',
-          retainedChannelId,
-          '-s',
-          '-M',
-          'deposit=10',
-        ])
         await runRequest([
           httpServer.url,
           '--rpc-url',
@@ -1227,98 +1269,95 @@ describe('session multi-fetch (examples/session/multi-fetch)', () => {
           '-M',
           'deposit=10',
         ])
+        const newChannelId = credentials.filter(({ action }) => action === 'open').at(-1)!.channelId
+        expect(newChannelId).not.toBe(retainedChannelId)
+        await runRequest([
+          httpServer.url,
+          '--rpc-url',
+          rpcUrl,
+          '-s',
+          '-M',
+          'deposit=10',
+          '-M',
+          `channel=${retainedChannelId}`,
+        ])
 
         const payments = credentials.filter(({ action }) => ['open', 'voucher'].includes(action))
-        expect(voucherAmounts).toEqual(['2000', '3000'])
-        expect(payments.map(({ action }) => action)).toEqual(['open', 'voucher', 'voucher', 'open'])
-        expect(new Set(payments.slice(0, 3).map(({ channelId }) => channelId))).toEqual(
-          new Set([retainedChannelId]),
+        expect(voucherAmounts).toEqual(['2000'])
+        expect(payments.map(({ action }) => action)).toEqual(['open', 'open', 'voucher'])
+        expect(payments.map(({ channelId }) => channelId)).toEqual([
+          retainedChannelId,
+          newChannelId,
+          retainedChannelId,
+        ])
+        expect(fs.existsSync(path.join(home, '.tempo', 'wallet', 'channels.db'))).toBe(true)
+        expect(fs.existsSync(path.join(home, '.local', 'state', 'mppx', 'sessions'))).toBe(false)
+
+        const listed = await serve(
+          ['sessions', 'list', '--rpc-url', rpcUrl, '--network', 'testnet', '--json'],
+          { env },
         )
-        expect(payments[3]?.channelId).not.toBe(retainedChannelId)
+        expect(listed.exitCode, `${listed.output}\n${listed.stderr}`).toBeUndefined()
+        const sessions = JSON.parse(listed.output).sessions
+        expect(sessions).toHaveLength(2)
+        expect(sessions).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              channelId: retainedChannelId,
+              cumulativeAmount: '2000',
+              state: 'active',
+            }),
+            expect.objectContaining({
+              channelId: newChannelId,
+              cumulativeAmount: '1000',
+              state: 'active',
+            }),
+          ]),
+        )
+
+        const closed = await serve(
+          [
+            'sessions',
+            'close',
+            retainedChannelId,
+            '--rpc-url',
+            rpcUrl,
+            '--network',
+            'testnet',
+            '--json',
+          ],
+          { env },
+        )
+        expect(closed.exitCode, `${closed.output}\n${closed.stderr}`).toBeUndefined()
+        expect(JSON.parse(closed.output)).toMatchObject({ closed: 1, failed: 0, pending: 0 })
+        expect(credentials.at(-1)).toMatchObject({
+          action: 'close',
+          channelId: retainedChannelId,
+        })
+
+        const failed = await serve(
+          [
+            'sessions',
+            'close',
+            newChannelId,
+            '--url',
+            `${httpServer.url}/not-a-session`,
+            '--rpc-url',
+            rpcUrl,
+            '--network',
+            'testnet',
+            '--json',
+          ],
+          { env },
+        )
+        expect(failed.exitCode).toBe(1)
+        expect(failed.output).toContain('SESSION_CLOSE_FAILED')
+        expect(failed.output).toContain('Response status is not 402.')
       } finally {
         httpServer.close()
       }
     },
   )
-
-  test('retains a session until `sessions close` is invoked', { timeout: 120_000 }, async () => {
-    await fundAccount({ address: testAccount.address, token: Addresses.pathUsd })
-    await fundAccount({ address: testAccount.address, token: asset })
-
-    const escrow = tip20ChannelEscrow
-    const store = Store.memory()
-    const server = Mppx_server.create({
-      methods: [
-        tempo.session({
-          account: accounts[0],
-          store,
-          getClient: () => client,
-          currency: asset,
-          escrowContract: escrow,
-          chainId: client.chain.id,
-          feePayer: accounts[1],
-          feePayerPolicy: cliSessionFeePayerPolicy,
-        }),
-      ],
-      realm: 'cli-test-close-action',
-      secretKey: 'cli-test-secret-cli-test-secret-32',
-    })
-
-    const credentialActions: string[] = []
-    let channelId: string | undefined
-
-    const httpServer = await Http.createServer(async (req, res) => {
-      // Capture credential action from every request with Authorization header
-      const authHeader = req.headers.authorization
-      if (authHeader) {
-        try {
-          const cred = Credential.deserialize<SessionCredentialPayload>(authHeader)
-          credentialActions.push(cred.payload.action)
-          channelId = cred.payload.channelId
-        } catch {}
-      }
-
-      const result = await toNodeListener(
-        server.session({
-          amount: '0.001',
-          recipient: accounts[0].address,
-          unitType: 'page',
-        }),
-      )(req, res)
-      if (result.status === 402) return
-      res.end('scraped-content')
-    })
-
-    try {
-      const stateHome = fs.mkdtempSync(path.join(cliTestXdgDataHome, 'close-state-'))
-      const env = { MPPX_PRIVATE_KEY: testPrivateKey, XDG_STATE_HOME: stateHome }
-      await serve([httpServer.url, '--rpc-url', rpcUrl, '-s', '-M', 'deposit=10'], {
-        env,
-      })
-
-      expect(credentialActions).toEqual(['open'])
-      expect(channelId).toMatch(/^0x[0-9a-f]{64}$/)
-
-      const listed = await serve(['sessions', 'list', '--json'], { env })
-      expect(JSON.parse(listed.output).sessions).toEqual([
-        expect.objectContaining({ channelId, status: 'open' }),
-      ])
-
-      const closed = await serve(['sessions', 'close', channelId!, '--rpc-url', rpcUrl, '--json'], {
-        env,
-      })
-      expect(closed.exitCode, `${closed.output}\n${closed.stderr}`).toBeUndefined()
-      expect(JSON.parse(closed.output)).toEqual(
-        expect.objectContaining({ channelId, status: 'closed' }),
-      )
-      expect(credentialActions.at(-1)).toBe('close')
-
-      const empty = await serve(['sessions', 'list', '--json'], { env })
-      expect(JSON.parse(empty.output)).toEqual({ sessions: [] })
-    } finally {
-      httpServer.close()
-    }
-  })
 
   test('error: --fail exits on server error', { timeout: 60_000 }, async () => {
     const httpServer = await Http.createServer(async (_req, res) => {
@@ -1903,36 +1942,8 @@ test('mppx --help', async () => {
   expect(output).toContain('mppx')
   expect(output).toContain('<url>')
   expect(output).toContain('account')
-  expect(output).toContain('sessions')
   expect(output).toContain('services')
   expect(output).toContain('sign')
-  expect(output).toContain('--session')
-})
-
-test('mppx sessions --help', async () => {
-  const { output } = await serve(['sessions', '--help'])
-  expect(output).toContain('close  Cooperatively close')
-  expect(output).toContain('list   List persistent')
-  expect(output).toContain('view   View a persistent')
-})
-
-test('mppx sessions close --help', async () => {
-  const { output } = await serve(['sessions', 'close', '--help'])
-  expect(output).toContain('--all')
-  expect(output).toContain('--yes')
-  expect(output).toContain('--url')
-})
-
-test('mppx sessions close --all requires confirmation', async () => {
-  const { exitCode, output } = await serve(['sessions', 'close', '--all'])
-  expect(exitCode).toBe(2)
-  expect(output).toContain('requires --yes')
-})
-
-test('mppx sessions close --all returns an empty structured result', async () => {
-  const { exitCode, output } = await serve(['sessions', 'close', '--all', '--yes', '--json'])
-  expect(exitCode).toBeUndefined()
-  expect(JSON.parse(output)).toEqual({ closed: [], failed: [] })
 })
 
 describe('account fund help', () => {

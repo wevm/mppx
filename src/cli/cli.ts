@@ -22,9 +22,13 @@ import {
   readTempoKeystore,
   resolveTempoAccount,
 } from './plugins/tempo.js'
-import sessions, { sessionCommandError } from './sessions/commands.js'
+import {
+  closePersistentSessions,
+  listPersistentSessions,
+  syncPersistentSessions,
+  viewPersistentSession,
+} from './sessions/commands.js'
 import { runPersistentSessionRequest } from './sessions/request.js'
-import { createSessionRegistry } from './sessions/store.js'
 import {
   chainName,
   confirm,
@@ -85,6 +89,29 @@ const serviceEndpointSchema = z.object({
   method: z.string(),
   path: z.string(),
   payment: z.unknown().optional(),
+})
+
+const sessionRecordSchema = z.object({
+  acceptedCumulative: z.string(),
+  chainId: z.number(),
+  channelId: z.string(),
+  closeRequestedAt: z.number(),
+  createdAt: z.number(),
+  cumulativeAmount: z.string(),
+  deposit: z.string(),
+  graceReadyAt: z.number(),
+  lastUsedAt: z.number(),
+  origin: z.string(),
+  requestUrl: z.string(),
+  state: z.string(),
+})
+
+const sessionCloseResultSchema = z.object({
+  channelId: z.string(),
+  error: z.string().optional(),
+  origin: z.string().optional(),
+  remainingSeconds: z.number().optional(),
+  status: z.enum(['closed', 'pending', 'error']),
 })
 
 const servicesRegistryUrl = 'https://mpp.dev/api/services'
@@ -174,6 +201,14 @@ function filterChallengesByCurrency(
     const offered = challenge.request.currency
     return typeof offered === 'string' && offered.toLowerCase() === normalized
   })
+}
+
+/** @internal Returns whether a session challenge should use MPPx's local SQLite account path. */
+export function shouldUsePersistentSessionAccount(
+  accountName: string,
+  privateKey: string | undefined,
+): boolean {
+  return Boolean(privateKey?.trim()) || !isTempoAccount(accountName)
 }
 
 async function fetchServicesRegistry(): Promise<ServiceRegistryService[]> {
@@ -361,8 +396,6 @@ const cli = Cli.create('mppx', {
 
     try {
       const methodOpts = parseMethodOpts(c.options.methodOpt)
-      const sessionRegistry = createSessionRegistry()
-
       const init: RequestInit = { redirect: c.options.location ? 'follow' : 'manual' }
       if (c.options.jsonBody) {
         init.body = c.options.jsonBody
@@ -543,35 +576,31 @@ const cli = Cli.create('mppx', {
         }
       }
 
-      const persistentSessionAccount =
-        process.env.MPPX_PRIVATE_KEY?.trim() ||
-        !isTempoAccount(resolveAccountName(c.options.account))
+      const persistentSessionAccount = shouldUsePersistentSessionAccount(
+        resolveAccountName(c.options.account),
+        process.env.MPPX_PRIVATE_KEY,
+      )
       if (isTempoSessionChallenge(challenge) && persistentSessionAccount) {
-        try {
-          await runPersistentSessionRequest({
-            challenge,
-            challengeResponse: selectedChallengeResponse,
-            endpoint: url,
-            fetch: targetFetch,
-            fetchInput: fetchUrl,
-            init,
-            info,
-            methodOptions: methodOpts,
-            options: {
-              account: c.options.account,
-              fail: c.options.fail,
-              include: c.options.include,
-              network: c.options.network,
-              rpcUrl: c.options.rpcUrl,
-              session: c.options.session,
-              silent: c.options.silent,
-              verbose: c.options.verbose,
-            },
-            registry: sessionRegistry,
-          })
-        } catch (error) {
-          return sessionCommandError(error, 'SESSION_REQUEST_FAILED')
-        }
+        await runPersistentSessionRequest({
+          challenge,
+          challengeResponse: selectedChallengeResponse,
+          endpoint: url,
+          fetch: targetFetch,
+          fetchInput: fetchUrl,
+          init,
+          info,
+          methodOptions: methodOpts,
+          options: {
+            account: c.options.account,
+            fail: c.options.fail,
+            include: c.options.include,
+            network: c.options.network,
+            rpcUrl: c.options.rpcUrl,
+            session: c.options.session,
+            silent: c.options.silent,
+            verbose: c.options.verbose,
+          },
+        })
         return
       }
       if (c.options.session !== 'auto')
@@ -580,7 +609,6 @@ const cli = Cli.create('mppx', {
           message: '--session requires a tempo/session payment challenge.',
           exitCode: 2,
         })
-
       // Create credential
       let credential: string
       if (pluginResult?.createCredential)
@@ -1634,6 +1662,174 @@ const discover = Cli.create('discover', {
             ? `Discovery document is valid with ${warningCount} warning(s).`
             : 'Discovery document is valid.',
         )
+      })
+    },
+  })
+
+const sessionConnectionOptions = z.object({
+  account: z.string().optional().describe('Account name (env: MPPX_ACCOUNT)'),
+  network: z.enum(['mainnet', 'testnet']).optional().describe('Tempo network'),
+  rpcUrl: z.string().optional().describe('RPC endpoint (env: MPPX_RPC_URL)'),
+})
+
+const sessions = Cli.create('sessions', {
+  description: 'List, recover, and close retained Tempo sessions',
+})
+  .command('list', {
+    description: 'List retained TIP-1034 sessions from the shared channels database',
+    options: sessionConnectionOptions,
+    output: z.object({ sessions: z.array(sessionRecordSchema) }),
+    alias: { account: 'a', rpcUrl: 'r' },
+    async run(c) {
+      const records = await listPersistentSessions(c.options)
+      return outputResult(c, { sessions: records }, () => {
+        if (records.length === 0) {
+          console.log('No sessions found.')
+          return
+        }
+        for (const record of records)
+          console.log(
+            `${record.channelId}  ${record.state}  ${record.cumulativeAmount}/${record.deposit}${record.origin ? `  ${record.origin}` : ''}`,
+          )
+      })
+    },
+  })
+  .command('sync', {
+    description: 'Recover payer sessions and reconcile local rows with on-chain state',
+    options: sessionConnectionOptions,
+    output: z.object({ sessions: z.array(sessionRecordSchema) }),
+    alias: { account: 'a', rpcUrl: 'r' },
+    async run(c) {
+      const records = await syncPersistentSessions(c.options)
+      return outputResult(c, { sessions: records }, () => {
+        console.log(`Synced ${records.length} session${records.length === 1 ? '' : 's'}.`)
+      })
+    },
+  })
+  .command('view', {
+    description: 'View one retained TIP-1034 session',
+    args: z.object({
+      channelId: z.string().describe('Full session channel ID'),
+    }),
+    options: z.object({
+      account: z.string().optional().describe('Account name (env: MPPX_ACCOUNT)'),
+    }),
+    output: sessionRecordSchema,
+    alias: { account: 'a' },
+    async run(c) {
+      const record = await viewPersistentSession(c.args.channelId, c.options)
+      if (!record)
+        return c.error({
+          code: 'SESSION_NOT_FOUND',
+          message: `Session ${c.args.channelId} was not found.`,
+          exitCode: 2,
+        })
+      return outputResult(c, record, () => {
+        console.log(
+          `${record.channelId}  ${record.state}  ${record.cumulativeAmount}/${record.deposit}${record.origin ? `  ${record.origin}` : ''}`,
+        )
+      })
+    },
+  })
+  .command('close', {
+    description: 'Close retained sessions cooperatively or through the Tempo precompile',
+    args: z.object({
+      target: z.string().optional().describe('Service URL/origin or channel ID'),
+    }),
+    options: sessionConnectionOptions.extend({
+      all: z.boolean().optional().describe('Close every session'),
+      cooperative: z.boolean().optional().describe('Ask the service to close cooperatively'),
+      finalize: z.boolean().optional().describe('Withdraw every finalizable session'),
+      header: z.array(z.string()).optional().describe('Add close request header (repeatable)'),
+      onChain: z.boolean().optional().describe('Close through the Tempo precompile'),
+      orphaned: z.boolean().optional().describe('Close every recovered orphaned session'),
+      url: z.string().optional().describe('Override the stored resource URL'),
+      yes: z.boolean().optional().default(false).describe('Confirm closing every session'),
+    }),
+    output: z.object({
+      closed: z.number(),
+      failed: z.number(),
+      pending: z.number(),
+      results: z.array(sessionCloseResultSchema),
+    }),
+    alias: { account: 'a', header: 'H', rpcUrl: 'r' },
+    async run(c) {
+      const broadSelections = [c.options.all, c.options.finalize, c.options.orphaned].filter(
+        Boolean,
+      ).length
+      if (c.args.target && broadSelections > 0)
+        return c.error({
+          code: 'INVALID_SESSION_CLOSE',
+          message: 'Specify a URL/channel ID or --all/--orphaned/--finalize, not both.',
+          exitCode: 2,
+        })
+      if (!c.args.target && broadSelections === 0)
+        return c.error({
+          code: 'INVALID_SESSION_CLOSE',
+          message: 'Specify a URL, channel ID, or --all/--orphaned/--finalize.',
+          exitCode: 2,
+        })
+      if (broadSelections > 1)
+        return c.error({
+          code: 'INVALID_SESSION_CLOSE',
+          message: 'Specify only one of --all, --orphaned, or --finalize.',
+          exitCode: 2,
+        })
+      if (c.options.cooperative && c.options.onChain)
+        return c.error({
+          code: 'INVALID_SESSION_CLOSE',
+          message: '--cooperative and --on-chain are mutually exclusive.',
+          exitCode: 2,
+        })
+      const cooperative = c.options.onChain ? false : (c.options.cooperative ?? true)
+      if (cooperative && (c.options.orphaned || c.options.finalize))
+        return c.error({
+          code: 'INVALID_SESSION_CLOSE',
+          message: '--orphaned and --finalize require --on-chain.',
+          exitCode: 2,
+        })
+      if (c.options.all && !c.options.yes)
+        return c.error({
+          code: 'CONFIRMATION_REQUIRED',
+          message: 'Pass --yes to close every session.',
+          exitCode: 2,
+        })
+      if (c.options.all && (c.options.header || c.options.url))
+        return c.error({
+          code: 'INVALID_SESSION_CLOSE',
+          message: '--header and --url only apply to a single session.',
+          exitCode: 2,
+        })
+      if (!cooperative && (c.options.header || c.options.url))
+        return c.error({
+          code: 'INVALID_SESSION_CLOSE',
+          message: '--header and --url only apply to cooperative close.',
+          exitCode: 2,
+        })
+      const summary = await closePersistentSessions({
+        ...c.options,
+        cooperative,
+        headers: c.options.header,
+        requestUrl: c.options.url,
+        target: c.args.target,
+      })
+      if (summary.failed > 0)
+        return c.error({
+          code: 'SESSION_CLOSE_FAILED',
+          message: summary.results
+            .filter((result) => result.status === 'error')
+            .map((result) => `${result.channelId}: ${result.error ?? 'close failed'}`)
+            .join('\n'),
+          exitCode: 1,
+        })
+      return outputResult(c, summary, () => {
+        console.log(
+          `Closed ${summary.closed}; pending ${summary.pending}; failed ${summary.failed}.`,
+        )
+        for (const result of summary.results)
+          console.log(
+            `${result.channelId}  ${result.status}${result.error ? `  ${result.error}` : ''}`,
+          )
       })
     },
   })
