@@ -1,4 +1,5 @@
-import { KeyAuthorization } from 'ox/tempo'
+import { Rlp } from 'ox'
+import { KeyAuthorization, SignatureEnvelope } from 'ox/tempo'
 import { privateKeyToAccount } from 'viem/accounts'
 import { describe, expect, test } from 'vp/test'
 
@@ -69,6 +70,25 @@ async function createPayload(request = parseRequest()) {
   } as const
 }
 
+function serializeCompositeSignature(
+  type: 'keychain' | 'multisig',
+  inner: SignatureEnvelope.Primitive,
+) {
+  return SignatureEnvelope.serialize(
+    type === 'keychain'
+      ? {
+          inner,
+          type,
+          userAddress: rootAccount.address,
+        }
+      : {
+          account: rootAccount.address,
+          signatures: [inner],
+          type,
+        },
+  )
+}
+
 describe('tempo subscription key authorization', () => {
   test('signs and verifies a scoped key authorization', async () => {
     const request = parseRequest()
@@ -86,6 +106,55 @@ describe('tempo subscription key authorization', () => {
       accessKey.accessKeyAddress.toLowerCase(),
     )
   })
+
+  test.each(['keychain', 'multisig'] as const)(
+    'rejects %s authorization signatures',
+    async (type) => {
+      const request = parseRequest()
+
+      await expect(
+        signSubscriptionKeyAuthorization({
+          accessKey,
+          account: {
+            async sign({ hash }) {
+              const inner = SignatureEnvelope.from(await rootAccount.sign({ hash }))
+              if (inner.type === 'keychain' || inner.type === 'multisig') {
+                throw new Error('expected primitive signature')
+              }
+              return serializeCompositeSignature(type, inner)
+            },
+          },
+          chainId: 4217,
+          request,
+        }),
+      ).rejects.toThrow('keyAuthorization must use a primitive signature')
+    },
+  )
+
+  test.each(['keychain', 'multisig'] as const)(
+    'rejects serialized %s authorization signatures',
+    async (type) => {
+      const request = parseRequest()
+      const payload = await createPayload(request)
+      const authorization = KeyAuthorization.deserialize(payload.signature)
+      const [authorizationTuple] = KeyAuthorization.toTuple(authorization)
+
+      expect(() =>
+        verifySubscriptionKeyAuthorization({
+          accessKey,
+          chainId: 4217,
+          payload: {
+            ...payload,
+            signature: Rlp.fromHex([
+              authorizationTuple,
+              serializeCompositeSignature(type, authorization.signature!),
+            ]),
+          },
+          request,
+        }),
+      ).toThrow('keyAuthorization must use a primitive signature')
+    },
+  )
 
   test('builds wallet allowed calls from the subscription request', () => {
     const request = parseRequest()

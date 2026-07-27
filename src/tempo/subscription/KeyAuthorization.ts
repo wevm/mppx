@@ -168,8 +168,14 @@ export async function signSubscriptionKeyAuthorization(parameters: {
   const signature = await account.sign({
     hash: KeyAuthorization.getSignPayload(authorization),
   })
+  const signatureEnvelope = SignatureEnvelope.from(signature)
+  if (signatureEnvelope.type === 'keychain' || signatureEnvelope.type === 'multisig') {
+    throw new VerificationFailedError({
+      reason: 'keyAuthorization must use a primitive signature',
+    })
+  }
   return KeyAuthorization.from(authorization, {
-    signature: SignatureEnvelope.from(signature),
+    signature,
   })
 }
 
@@ -238,14 +244,19 @@ function createUnsignedAuthorization(parameters: {
 function deserializeAuthorization(signature: `0x${string}`) {
   try {
     return KeyAuthorization.deserialize(signature)
-  } catch {
+  } catch (error) {
+    if (error instanceof KeyAuthorization.InvalidSignatureTypeError) {
+      throw new VerificationFailedError({
+        reason: 'keyAuthorization must use a primitive signature',
+      })
+    }
     throw new VerificationFailedError({ reason: 'invalid keyAuthorization payload' })
   }
 }
 
 function getPrimitiveSignature(authorization: Authorization) {
   const signature = authorization.signature
-  if (!signature || signature.type === 'keychain') {
+  if (!signature) {
     throw new VerificationFailedError({
       reason: 'keyAuthorization must use a primitive signature',
     })
