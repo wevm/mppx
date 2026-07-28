@@ -33,6 +33,11 @@ export function unregister(method: Method.AnyClient): void {
   handlers.delete(method)
 }
 
+/** Returns whether the method owns the paid-response lifecycle. */
+export function has(method: Method.AnyClient): boolean {
+  return handlers.has(method)
+}
+
 /** Lets the selected client method handle a successful paid response. */
 export function handle(method: Method.AnyClient, parameters: HandlerParameters): Promise<Response> {
   return Promise.resolve(handlers.get(method)?.(parameters) ?? parameters.response)

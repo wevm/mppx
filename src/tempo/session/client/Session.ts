@@ -1,8 +1,10 @@
 import { type Address, parseUnits } from 'viem'
 import { tempo as tempo_chain } from 'viem/chains'
 
+import * as CredentialAttempt from '../../../client/internal/CredentialAttempt.js'
 import * as MethodChallenge from '../../../client/internal/MethodChallenge.js'
 import * as MethodResponse from '../../../client/internal/MethodResponse.js'
+import * as Constants from '../../../Constants.js'
 import * as Credential from '../../../Credential.js'
 import * as Method from '../../../Method.js'
 import * as Account from '../../../viem/Account.js'
@@ -16,6 +18,7 @@ import * as defaults from '../../internal/defaults.js'
 import * as Methods from '../../Methods.js'
 import * as Channel from '../precompile/Channel.js'
 import {
+  deserializeSessionReceipt,
   isEventStream,
   readSessionChallengeAmount,
   requireSessionCredentialContext,
@@ -35,6 +38,7 @@ import {
 } from './CredentialState.js'
 import { assertWithinMaxDeposit, resolveAutomaticTopUp } from './Runtime.js'
 import {
+  getSessionSnapshot,
   handleSseNeedVoucher,
   isTip1034SessionChallenge,
   postTopUp,
@@ -44,6 +48,53 @@ import {
 } from './Transports.js'
 
 export { sessionContextSchema, type SessionContext } from './CredentialState.js'
+
+const channelTails = new WeakMap<ChannelStore, Map<string, Promise<void>>>()
+
+/** Serializes automatic opens for one payment scope across methods sharing a store. */
+async function lockChannel(store: ChannelStore, key: string) {
+  const tails = channelTails.get(store) ?? new Map<string, Promise<void>>()
+  channelTails.set(store, tails)
+  const previous = tails.get(key)
+  let unlock!: () => void
+  const current = new Promise<void>((resolve) => {
+    unlock = resolve
+  })
+  tails.set(key, current)
+  await previous
+  return () => {
+    unlock()
+    if (tails.get(key) === current) tails.delete(key)
+  }
+}
+
+function acknowledgesOpen(
+  outcome: CredentialAttempt.Outcome,
+  challenge: TempoSessionChallenge,
+  opened: ChannelEntry,
+): boolean {
+  const receiptHeader = outcome.response?.headers.get(Constants.Headers.paymentReceipt)
+  if (receiptHeader)
+    try {
+      const receipt = deserializeSessionReceipt(receiptHeader)
+      if (
+        receipt.challengeId === challenge.id &&
+        receipt.channelId.toLowerCase() === opened.channelId.toLowerCase() &&
+        BigInt(receipt.acceptedCumulative) === opened.cumulativeAmount
+      )
+        return true
+    } catch {}
+  return (
+    outcome.challenges?.some((candidate) => {
+      if (!isTip1034SessionChallenge(candidate)) return false
+      const snapshot = getSessionSnapshot(candidate)
+      return (
+        snapshot?.channelId.toLowerCase() === opened.channelId.toLowerCase() &&
+        BigInt(snapshot.acceptedCumulative) === opened.cumulativeAmount
+      )
+    }) ?? false
+  )
+}
 
 /**
  * Creates the low-level TIP-1034 session payment method for use with `Mppx.create()`.
@@ -103,27 +154,103 @@ export function session(parameters: session.Parameters = {}) {
   const method = Method.toClient(Methods.session, {
     canHandleChallenge: ({ challenge }) => isTip1034SessionChallenge(challenge),
     context: sessionContextSchema,
-    async createCredential({ challenge, context }) {
+    async createCredential(parameters) {
+      const { challenge, context } = parameters
       const resolved = await resolveChallengeContext({
         challenge,
         escrowOverride,
         getClient,
       })
-      const entry = await store.get(resolved.key)
-      const account = await resolveCredentialAccount(resolved, context, entry)
-      const payload = await executeCredentialPlan(
-        planCredential({
+      const controller = CredentialAttempt.get(parameters)
+      const ownsResponse = controller && MethodResponse.has(method)
+      let entry: ChannelEntry | undefined
+      let release: (() => void) | undefined
+      try {
+        entry = await store.get(resolved.key)
+        let account = await resolveCredentialAccount(resolved, context, entry)
+        let plan = planCredential({
           account,
           entry,
           context,
           decimals,
           maxDeposit,
           resolved,
-        }),
-        sink,
-        AutoSwap.resolve(context?.autoSwap ?? autoSwapParameter, AutoSwap.defaultCurrencies),
-      )
-      return serializeCredential(challenge, payload, resolved.chainId, account)
+        })
+        if (ownsResponse && plan.type === 'open') {
+          const previousChannelId = entry?.channelId
+          release = await lockChannel(store, resolved.key)
+          const nextEntry = await store.get(resolved.key)
+          if (nextEntry?.channelId !== previousChannelId) {
+            entry = nextEntry
+            if (entry?.opened) {
+              await controller?.prepare()
+              entry = await store.get(resolved.key)
+            }
+            account = await resolveCredentialAccount(resolved, context, entry)
+            plan = planCredential({
+              account,
+              entry,
+              context,
+              decimals,
+              maxDeposit,
+              resolved,
+            })
+          }
+        }
+        let pendingOpen: ChannelEntry | undefined
+        // Defer opens only when low-level Fetch owns the response lifecycle.
+        // SessionManager unregisters this hook and keeps its existing transaction boundary.
+        const credentialSink =
+          ownsResponse && plan.type === 'open'
+            ? {
+                store: {
+                  get: (key: string) => store.get(key),
+                  async set(next: ChannelEntry) {
+                    pendingOpen = next
+                  },
+                  delete: (key: string) => store.delete(key),
+                },
+                notifyUpdate() {},
+              }
+            : sink
+        const payload = await executeCredentialPlan(
+          plan,
+          credentialSink,
+          AutoSwap.resolve(context?.autoSwap ?? autoSwapParameter, AutoSwap.defaultCurrencies),
+        )
+        const credential = await serializeCredential(challenge, payload, resolved.chainId, account)
+        if (controller && pendingOpen) {
+          const opened = pendingOpen
+          controller.settle = async (outcome) => {
+            const accepted =
+              outcome.status === 'accepted' || acknowledgesOpen(outcome, challenge, opened)
+            if (!accepted && outcome.status === 'pending') return false
+            try {
+              if (accepted) {
+                const current = await store.get(resolved.key)
+                if (
+                  !current?.opened ||
+                  current.channelId.toLowerCase() !== opened.channelId.toLowerCase()
+                ) {
+                  await store.set(opened)
+                  sink.notifyUpdate(opened)
+                }
+              }
+              return true
+            } finally {
+              release?.()
+              release = undefined
+            }
+          }
+        } else {
+          release?.()
+          release = undefined
+        }
+        return credential
+      } catch (error) {
+        release?.()
+        throw error
+      }
     },
   })
 
