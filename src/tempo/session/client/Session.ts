@@ -1,7 +1,6 @@
 import { type Address, parseUnits } from 'viem'
 import { tempo as tempo_chain } from 'viem/chains'
 
-import * as CredentialAttempt from '../../../client/internal/CredentialAttempt.js'
 import * as MethodChallenge from '../../../client/internal/MethodChallenge.js'
 import * as MethodResponse from '../../../client/internal/MethodResponse.js'
 import * as Constants from '../../../Constants.js'
@@ -68,30 +67,36 @@ async function lockChannel(store: ChannelStore, key: string) {
   }
 }
 
+function matchesOpen(
+  opened: ChannelEntry,
+  acknowledgement: { acceptedCumulative: string; channelId: string } | null | undefined,
+): boolean {
+  try {
+    return (
+      acknowledgement?.channelId.toLowerCase() === opened.channelId.toLowerCase() &&
+      BigInt(acknowledgement.acceptedCumulative) === opened.cumulativeAmount
+    )
+  } catch {
+    return false
+  }
+}
+
 function acknowledgesOpen(
-  outcome: CredentialAttempt.Outcome,
+  outcome: MethodResponse.AttemptOutcome,
   challenge: TempoSessionChallenge,
   opened: ChannelEntry,
 ): boolean {
-  const receiptHeader = outcome.response?.headers.get(Constants.Headers.paymentReceipt)
-  if (receiptHeader)
-    try {
+  try {
+    const receiptHeader = outcome.response?.headers.get(Constants.Headers.paymentReceipt)
+    if (receiptHeader) {
       const receipt = deserializeSessionReceipt(receiptHeader)
-      if (
-        receipt.challengeId === challenge.id &&
-        receipt.channelId.toLowerCase() === opened.channelId.toLowerCase() &&
-        BigInt(receipt.acceptedCumulative) === opened.cumulativeAmount
-      )
-        return true
-    } catch {}
+      if (receipt.challengeId === challenge.id && matchesOpen(opened, receipt)) return true
+    }
+  } catch {}
   return (
     outcome.challenges?.some((candidate) => {
       if (!isTip1034SessionChallenge(candidate)) return false
-      const snapshot = getSessionSnapshot(candidate)
-      return (
-        snapshot?.channelId.toLowerCase() === opened.channelId.toLowerCase() &&
-        BigInt(snapshot.acceptedCumulative) === opened.cumulativeAmount
-      )
+      return matchesOpen(opened, getSessionSnapshot(candidate))
     }) ?? false
   )
 }
@@ -151,6 +156,20 @@ export function session(parameters: session.Parameters = {}) {
     )
   }
 
+  const resolveCredentialPlan = async (
+    resolved: ChallengeContext,
+    context: CredentialContext | undefined,
+    entry: ChannelEntry | undefined,
+  ) =>
+    planCredential({
+      account: await resolveCredentialAccount(resolved, context, entry),
+      entry,
+      context,
+      decimals,
+      maxDeposit,
+      resolved,
+    })
+
   const method = Method.toClient(Methods.session, {
     canHandleChallenge: ({ challenge }) => isTip1034SessionChallenge(challenge),
     context: sessionContextSchema,
@@ -161,47 +180,28 @@ export function session(parameters: session.Parameters = {}) {
         escrowOverride,
         getClient,
       })
-      const controller = CredentialAttempt.get(parameters)
-      const ownsResponse = controller && MethodResponse.has(method)
-      let entry: ChannelEntry | undefined
-      let release: (() => void) | undefined
+      const attempt = MethodResponse.getAttempt(parameters)
+      let release = () => {}
       try {
-        entry = await store.get(resolved.key)
-        let account = await resolveCredentialAccount(resolved, context, entry)
-        let plan = planCredential({
-          account,
-          entry,
-          context,
-          decimals,
-          maxDeposit,
-          resolved,
-        })
-        if (ownsResponse && plan.type === 'open') {
-          const previousChannelId = entry?.channelId
+        let entry = await store.get(resolved.key)
+        let plan = await resolveCredentialPlan(resolved, context, entry)
+        if (attempt && plan.type === 'open') {
           release = await lockChannel(store, resolved.key)
           const nextEntry = await store.get(resolved.key)
-          if (nextEntry?.channelId !== previousChannelId) {
+          if (nextEntry?.channelId !== entry?.channelId) {
             entry = nextEntry
             if (entry?.opened) {
-              await controller?.prepare()
+              await attempt.prepare()
               entry = await store.get(resolved.key)
             }
-            account = await resolveCredentialAccount(resolved, context, entry)
-            plan = planCredential({
-              account,
-              entry,
-              context,
-              decimals,
-              maxDeposit,
-              resolved,
-            })
+            plan = await resolveCredentialPlan(resolved, context, entry)
           }
         }
         let pendingOpen: ChannelEntry | undefined
         // Defer opens only when low-level Fetch owns the response lifecycle.
         // SessionManager unregisters this hook and keeps its existing transaction boundary.
         const credentialSink =
-          ownsResponse && plan.type === 'open'
+          attempt && plan.type === 'open'
             ? {
                 store: {
                   get: (key: string) => store.get(key),
@@ -218,10 +218,15 @@ export function session(parameters: session.Parameters = {}) {
           credentialSink,
           AutoSwap.resolve(context?.autoSwap ?? autoSwapParameter, AutoSwap.defaultCurrencies),
         )
-        const credential = await serializeCredential(challenge, payload, resolved.chainId, account)
-        if (controller && pendingOpen) {
+        const credential = await serializeCredential(
+          challenge,
+          payload,
+          resolved.chainId,
+          plan.account,
+        )
+        if (attempt && pendingOpen) {
           const opened = pendingOpen
-          controller.settle = async (outcome) => {
+          attempt.settle = async (outcome) => {
             const accepted =
               outcome.status === 'accepted' || acknowledgesOpen(outcome, challenge, opened)
             if (!accepted && outcome.status === 'pending') return false
@@ -238,17 +243,13 @@ export function session(parameters: session.Parameters = {}) {
               }
               return true
             } finally {
-              release?.()
-              release = undefined
+              release()
             }
           }
-        } else {
-          release?.()
-          release = undefined
-        }
+        } else release()
         return credential
       } catch (error) {
-        release?.()
+        release()
         throw error
       }
     },

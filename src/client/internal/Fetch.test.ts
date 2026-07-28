@@ -9,7 +9,6 @@ import * as Http from '~test/Http.js'
 import { rpcUrl } from '~test/tempo/rpc.js'
 import { accounts, asset, chain, client, http } from '~test/tempo/viem.js'
 
-import * as CredentialAttempt from './CredentialAttempt.js'
 import * as Fetch from './Fetch.js'
 import * as MethodChallenge from './MethodChallenge.js'
 import * as MethodResponse from './MethodResponse.js'
@@ -339,11 +338,11 @@ const noopMethod = {
   createCredential: async () => 'credential',
 } as any
 
-function trackedMethod(settlements: CredentialAttempt.Outcome['status'][]) {
+function trackedMethod(settlements: MethodResponse.AttemptOutcome['status'][]) {
   const method = {
     ...noopMethod,
     async createCredential(parameters: object) {
-      const attempt = CredentialAttempt.get(parameters)
+      const attempt = MethodResponse.getAttempt(parameters)
       if (attempt)
         attempt.settle = (outcome) => {
           settlements.push(outcome.status)
@@ -353,7 +352,7 @@ function trackedMethod(settlements: CredentialAttempt.Outcome['status'][]) {
     },
   }
   MethodChallenge.register(method, () => undefined)
-  return method
+  return MethodResponse.register(method, ({ response }) => response)
 }
 
 const x402PaymentRequired = {
@@ -438,42 +437,27 @@ describe('Fetch.from: method responses', () => {
     expect(paidResponse?.clone).not.toHaveBeenCalled()
   })
 
-  test('settles credential state after a rejected paid response', async () => {
-    const settlements: CredentialAttempt.Outcome['status'][] = []
+  test.each([
+    ['a rejected paid response', () => new Response('rejected', { status: 500 }), 500, undefined],
+    ['the final payment retry', () => make402(), 402, 1],
+    [
+      'the paid request throwing',
+      () => Promise.reject(new Error('paid request failed')),
+      undefined,
+      undefined,
+    ],
+  ])('settles credential state after %s', async (_name, paidRequest, status, maxPaymentRetries) => {
+    const settlements: MethodResponse.AttemptOutcome['status'][] = []
     let calls = 0
     const fetch = Fetch.from({
-      fetch: async () => (++calls === 1 ? make402() : new Response('rejected', { status: 500 })),
+      fetch: async () => (++calls === 1 ? make402() : paidRequest()),
+      maxPaymentRetries,
       methods: [trackedMethod(settlements)],
     })
 
-    expect((await fetch('https://example.com/paid')).status).toBe(500)
-    expect(settlements).toEqual(['rejected'])
-  })
-
-  test('settles credential state after the final payment retry', async () => {
-    const settlements: CredentialAttempt.Outcome['status'][] = []
-    const fetch = Fetch.from({
-      fetch: async () => make402(),
-      maxPaymentRetries: 1,
-      methods: [trackedMethod(settlements)],
-    })
-
-    expect((await fetch('https://example.com/paid')).status).toBe(402)
-    expect(settlements).toEqual(['pending', 'rejected'])
-  })
-
-  test('settles credential state when the paid request throws', async () => {
-    const settlements: CredentialAttempt.Outcome['status'][] = []
-    let calls = 0
-    const fetch = Fetch.from({
-      fetch: async () => {
-        if (++calls === 1) return make402()
-        throw new Error('paid request failed')
-      },
-      methods: [trackedMethod(settlements)],
-    })
-
-    await expect(fetch('https://example.com/paid')).rejects.toThrow('paid request failed')
+    const result = fetch('https://example.com/paid')
+    if (status) expect((await result).status).toBe(status)
+    else await expect(result).rejects.toThrow('paid request failed')
     expect(settlements).toEqual(['rejected'])
   })
 })

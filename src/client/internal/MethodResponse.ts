@@ -3,6 +3,20 @@ import type { MaybePromise } from '../../internal/types.js'
 import type * as Method from '../../Method.js'
 
 const handlers = new WeakMap<Method.AnyClient, Handler>()
+const attempts = new WeakMap<object, Attempt>()
+
+export type AttemptOutcome = {
+  challenges?: readonly Challenge.Challenge[] | undefined
+  response?: Response | undefined
+  status: 'accepted' | 'pending' | 'rejected'
+}
+
+export type Attempt = {
+  /** Re-runs method preparation when serialized state changed before signing. */
+  prepare: () => Promise<void>
+  /** Settles state created for one credential attempt. */
+  settle?: ((outcome: AttemptOutcome) => MaybePromise<boolean>) | undefined
+}
 
 /** Inputs available when a client method handles a successful paid response. */
 export type HandlerParameters = {
@@ -33,9 +47,18 @@ export function unregister(method: Method.AnyClient): void {
   handlers.delete(method)
 }
 
-/** Returns whether the method owns the paid-response lifecycle. */
-export function has(method: Method.AnyClient): boolean {
-  return handlers.has(method)
+/** Adds response lifecycle state to internal credential parameters. */
+export function attachAttempt(
+  method: Method.AnyClient,
+  parameters: object,
+  attempt: Attempt,
+): void {
+  if (handlers.has(method)) attempts.set(parameters, attempt)
+}
+
+/** Reads response lifecycle state when Fetch owns this credential. */
+export function getAttempt(parameters: object): Attempt | undefined {
+  return attempts.get(parameters)
 }
 
 /** Lets the selected client method handle a successful paid response. */

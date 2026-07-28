@@ -99,10 +99,54 @@ function makeSessionChallenge(
   })
 }
 
-function paymentRequired(challenge: SessionChallenge): Response {
+function paymentRequired(challenge: SessionChallenge, headers?: HeadersInit): Response {
+  const responseHeaders = new Headers(headers)
+  responseHeaders.set(Constants.Headers.wwwAuthenticate, serializeChallenge(challenge))
   return new Response(null, {
+    headers: responseHeaders,
     status: 402,
-    headers: { [Constants.Headers.wwwAuthenticate]: serializeChallenge(challenge) },
+  })
+}
+
+function withSnapshot(
+  payload: Types.SessionCredentialPayload,
+  acceptedCumulative?: string,
+): SessionChallenge {
+  if (payload.action !== 'open') throw new Error('expected open credential')
+  return {
+    ...makeSessionChallenge({
+      methodDetails: {
+        chainId,
+        escrowContract: tip20ChannelEscrow,
+        sessionProtocol: Constants.SessionProtocols.v2,
+        sessionSnapshot: {
+          acceptedCumulative: acceptedCumulative ?? payload.cumulativeAmount,
+          chainId,
+          channelId: payload.channelId,
+          deposit: '1000',
+          descriptor: payload.descriptor,
+          escrow: tip20ChannelEscrow,
+          requiredCumulative: '200',
+          settled: '0',
+          spent: payload.cumulativeAmount,
+        },
+      },
+    }),
+    id: 'replacement-id',
+  }
+}
+
+function makeSessionMethod(
+  channelStore = createChannelStore(),
+  parameters: Partial<session.Parameters> = {},
+) {
+  return session({
+    account,
+    channelStore,
+    decimals: 0,
+    getClient: () => client,
+    maxDeposit: '1000',
+    ...parameters,
   })
 }
 
@@ -114,15 +158,7 @@ function makeSessionFetch(
   return Fetch.from({
     fetch,
     maxPaymentRetries,
-    methods: [
-      session({
-        account,
-        channelStore,
-        decimals: 0,
-        getClient: () => client,
-        maxDeposit: '1000',
-      }),
-    ],
+    methods: [makeSessionMethod(channelStore)],
   })
 }
 
@@ -350,8 +386,7 @@ describe('precompile client session', () => {
     }, channelStore)
 
     expect((await fetch('https://example.com/resource')).status).toBe(500)
-    expect((await fetch('https://example.com/resource')).status).toBe(500)
-    expect(actions).toEqual(['open', 'open', 'open'])
+    expect(actions).toEqual(['open', 'open'])
     expect(await channelStore.get(defaultChannelKey)).toBeUndefined()
   })
 
@@ -374,66 +409,60 @@ describe('precompile client session', () => {
     const challenge = makeSessionChallenge({ suggestedDeposit: '1000' })
     const channelStore = createChannelStore()
     const actions: Types.SessionCredentialPayload['action'][] = []
+    const credentials: string[] = []
     let paidRequests = 0
     const fetch = makeSessionFetch(async (_input, init) => {
       const authorization = new Headers(init?.headers).get(Constants.Headers.authorization)
       if (!authorization) return paymentRequired(challenge)
       const payload = deserialize(authorization)
       actions.push(payload.action)
-      if (++paidRequests > 1) return new Response('rejected', { status: 500 })
-      return new Response('failed after payment', {
-        status: 500,
-        headers: {
-          [Constants.Headers.paymentReceipt]: Types.serializeSessionReceipt(
-            Types.createSessionReceipt({
-              acceptedCumulative: 100n,
-              challengeId: challenge.id,
-              channelId: payload.channelId,
-              spent: 100n,
-            }),
-          ),
-        },
+      credentials.push(authorization)
+      if (++paidRequests === 1) return paymentRequired(challenge)
+      if (paidRequests > 2) return new Response('rejected', { status: 500 })
+      return paymentRequired(challenge, {
+        [Constants.Headers.paymentReceipt]: Types.serializeSessionReceipt(
+          Types.createSessionReceipt({
+            acceptedCumulative: 100n,
+            challengeId: challenge.id,
+            channelId: payload.channelId,
+            spent: 100n,
+          }),
+        ),
       })
     }, channelStore)
 
     expect((await fetch('https://example.com/resource')).status).toBe(500)
-    expect((await fetch('https://example.com/resource')).status).toBe(500)
-    expect(actions).toEqual(['open', 'voucher'])
+    expect(actions).toEqual(['open', 'open', 'voucher'])
+    expect(credentials[0]).toBe(credentials[1])
     expect(await channelStore.get(defaultChannelKey)).toMatchObject({ opened: true })
   })
 
-  test('keeps an open acknowledged by the final session snapshot', async () => {
+  test.each([
+    [
+      'keeps an open acknowledged by the final session snapshot',
+      undefined,
+      ['open', 'voucher'],
+      true,
+    ],
+    [
+      'fails closed on malformed acknowledgement snapshots without leaking the open lock',
+      'not-a-number',
+      ['open', 'open'],
+      undefined,
+    ],
+  ])('%s', async (_name, acceptedCumulative, expectedActions, expectedOpened) => {
     const challenge = makeSessionChallenge({ suggestedDeposit: '1000' })
     const channelStore = createChannelStore()
     const actions: Types.SessionCredentialPayload['action'][] = []
+    let paidRequests = 0
     const fetch = makeSessionFetch(
       async (_input, init) => {
         const authorization = new Headers(init?.headers).get(Constants.Headers.authorization)
         if (!authorization) return paymentRequired(challenge)
         const payload = deserialize(authorization)
         actions.push(payload.action)
-        if (payload.action !== 'open') return new Response('rejected', { status: 500 })
-        return paymentRequired({
-          ...makeSessionChallenge({
-            methodDetails: {
-              chainId,
-              escrowContract: tip20ChannelEscrow,
-              sessionProtocol: Constants.SessionProtocols.v2,
-              sessionSnapshot: {
-                acceptedCumulative: '100',
-                chainId,
-                channelId: payload.channelId,
-                deposit: '1000',
-                descriptor: payload.descriptor,
-                escrow: tip20ChannelEscrow,
-                requiredCumulative: '200',
-                settled: '0',
-                spent: '100',
-              },
-            },
-          }),
-          id: 'replacement-id',
-        })
+        if (++paidRequests > 1) return new Response('rejected', { status: 500 })
+        return paymentRequired(withSnapshot(payload, acceptedCumulative))
       },
       channelStore,
       1,
@@ -441,6 +470,34 @@ describe('precompile client session', () => {
 
     expect((await fetch('https://example.com/resource')).status).toBe(402)
     expect((await fetch('https://example.com/resource')).status).toBe(500)
+    expect(actions).toEqual(expectedActions)
+    expect((await channelStore.get(defaultChannelKey))?.opened).toBe(expectedOpened)
+  })
+
+  test('keeps an acknowledged open when challenge ordering throws', async () => {
+    const challenge = makeSessionChallenge({ suggestedDeposit: '1000' })
+    const channelStore = createChannelStore()
+    const actions: Types.SessionCredentialPayload['action'][] = []
+    let ordered = 0
+    let paidRequests = 0
+    const fetch = Fetch.from({
+      fetch: async (_input, init) => {
+        const authorization = new Headers(init?.headers).get(Constants.Headers.authorization)
+        if (!authorization) return paymentRequired(challenge)
+        const payload = deserialize(authorization)
+        actions.push(payload.action)
+        if (++paidRequests > 1) return new Response('paid')
+        return paymentRequired(withSnapshot(payload))
+      },
+      methods: [makeSessionMethod(channelStore)],
+      orderChallenges(candidates) {
+        if (++ordered === 2) throw new Error('ordering failed')
+        return candidates
+      },
+    })
+
+    await expect(fetch('https://example.com/resource')).rejects.toThrow('ordering failed')
+    expect(await (await fetch('https://example.com/resource')).text()).toBe('paid')
     expect(actions).toEqual(['open', 'voucher'])
     expect(await channelStore.get(defaultChannelKey)).toMatchObject({ opened: true })
   })
@@ -450,19 +507,10 @@ describe('precompile client session', () => {
     const channelStore = createChannelStore()
     const actions: Types.SessionCredentialPayload['action'][] = []
     const vouchers: bigint[] = []
-    let releaseFirst!: () => void
-    const firstGate = new Promise<void>((resolve) => {
-      releaseFirst = resolve
-    })
-    let firstStarted!: () => void
-    const firstRequest = new Promise<void>((resolve) => {
-      firstStarted = resolve
-    })
+    const firstGate = Promise.withResolvers<void>()
+    const firstRequest = Promise.withResolvers<void>()
+    const waitersReady = Promise.withResolvers<void>()
     let credentialPlans = 0
-    let waitersPlanned!: () => void
-    const waitersReady = new Promise<void>((resolve) => {
-      waitersPlanned = resolve
-    })
     const fetch = Fetch.from({
       fetch: async (input, init) => {
         const authorization = new Headers(init?.headers).get(Constants.Headers.authorization)
@@ -472,21 +520,16 @@ describe('precompile client session', () => {
         if (payload.action === 'topUp') return new Response(null, { status: 204 })
         if (payload.action === 'voucher') vouchers.push(BigInt(payload.cumulativeAmount))
         if (input.toString().endsWith('/first')) {
-          firstStarted()
-          await firstGate
+          firstRequest.resolve()
+          await firstGate.promise
           return new Response('paid')
         }
         return new Response('rejected', { status: 500 })
       },
       methods: [
-        session({
-          account,
-          channelStore,
-          decimals: 0,
-          getClient: () => client,
-          maxDeposit: '1000',
+        makeSessionMethod(channelStore, {
           resolveAccount() {
-            if (++credentialPlans === 3) waitersPlanned()
+            if (++credentialPlans === 3) waitersReady.resolve()
             return account
           },
         }),
@@ -494,11 +537,11 @@ describe('precompile client session', () => {
     })
 
     const first = fetch('https://example.com/first')
-    await firstRequest
+    await firstRequest.promise
     const second = fetch('https://example.com/second')
     const third = fetch('https://example.com/third')
-    await waitersReady
-    releaseFirst()
+    await waitersReady.promise
+    firstGate.resolve()
 
     expect((await first).status).toBe(200)
     expect((await second).status).toBe(500)
@@ -522,19 +565,12 @@ describe('precompile client session', () => {
     })
     const actions: Types.SessionCredentialPayload['action'][] = []
     const challenge = makeSessionChallenge({ suggestedDeposit: '1000' })
-    const fetch = Fetch.from({
-      fetch: async (_input, init) => {
-        const authorization = new Headers(init?.headers).get(Constants.Headers.authorization)
-        if (!authorization)
-          return new Response(null, {
-            status: 402,
-            headers: { [Constants.Headers.wwwAuthenticate]: serializeChallenge(challenge) },
-          })
-        actions.push(deserialize(authorization).action)
-        return new Response('paid')
-      },
-      methods: [session({ account, channelStore, decimals: 0, getClient: () => client })],
-    })
+    const fetch = makeSessionFetch(async (_input, init) => {
+      const authorization = new Headers(init?.headers).get(Constants.Headers.authorization)
+      if (!authorization) return paymentRequired(challenge)
+      actions.push(deserialize(authorization).action)
+      return new Response('paid')
+    }, channelStore)
 
     expect(await (await fetch('https://example.com/resource')).text()).toBe('paid')
     expect(await (await fetch('https://example.com/resource')).text()).toBe('paid')
@@ -744,12 +780,17 @@ describe('precompile client session', () => {
     expect(openDeposit(payload)).toBe(100n)
   })
 
-  test('rejects open when maxDeposit is below the request amount', async () => {
+  test('rejects open above maxDeposit without leaking the Fetch lock', async () => {
     const method = session({ account, decimals: 0, maxDeposit: '50', getClient: () => client })
+    const fetch = Fetch.from({
+      fetch: async () => paymentRequired(makeSessionChallenge()),
+      methods: [method],
+    })
 
-    await expect(
-      method.createCredential({ challenge: makeChallenge(), context: {} }),
-    ).rejects.toThrow('requested voucher amount 100 exceeds local maxDeposit 50')
+    for (let attempt = 0; attempt < 2; attempt++)
+      await expect(fetch('https://example.com/resource')).rejects.toThrow(
+        'requested voucher amount 100 exceeds local maxDeposit 50',
+      )
   })
 
   test('rejects explicit opening deposits below the request amount', async () => {
