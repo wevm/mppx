@@ -382,12 +382,15 @@ const refreshOnChainVerificationCache = {
 export type ValidateCredentialPayloadParameters = Pick<
   VerifyCredentialPayloadParameters,
   | 'account'
+  | 'channelStateTtl'
   | 'chainId'
   | 'client'
   | 'credentialSource'
   | 'escrow'
   | 'expectedOperator'
   | 'feePayer'
+  | 'feePayerPolicy'
+  | 'lastOnChainVerified'
   | 'minVoucherDelta'
   | 'payload'
   | 'store'
@@ -451,6 +454,7 @@ async function validateOpenCredential(
     expectedOperator,
   )
   const transaction = Chain.validateOpenCredentialTransaction({
+    challengeExpires: challenge.expires,
     chainId,
     escrowContract: escrow,
     expectedAuthorizedSigner: payload.descriptor.authorizedSigner,
@@ -461,6 +465,7 @@ async function validateOpenCredential(
     expectedExpiringNonceHash: payload.descriptor.expiringNonceHash,
     expectedPayer: payload.descriptor.payer,
     feePayer: parameters.feePayer,
+    feePayerPolicy: parameters.feePayerPolicy,
     serializedTransaction: payload.transaction,
   })
   assertOpenCredentialCoversRequest({
@@ -514,14 +519,17 @@ async function validateTopUpCredential(
   })
   const transaction = Chain.validateTopUpCredentialTransaction({
     additionalDeposit,
+    challengeExpires: challenge.expires,
     chainId,
     descriptor: channel.descriptor,
     escrowContract: escrow,
     expectedChannelId: channelId,
     expectedCurrency: request.currency,
     feePayer: parameters.feePayer,
+    feePayerPolicy: parameters.feePayerPolicy,
     serializedTransaction: payload.transaction,
   })
+  validateChannelState(await Chain.getChannelState(client, channelId, escrow))
   await Chain.simulateCredentialTransaction({
     client,
     feePayer: parameters.feePayer,
@@ -533,8 +541,17 @@ async function validateVoucherCredential(
   parameters: ValidateCredentialPayloadParameters,
   payload: Extract<SessionCredentialPayload, { action: 'voucher' }>,
 ) {
-  const { challenge, chainId, client, credentialSource, escrow, minVoucherDelta, store } =
-    parameters
+  const {
+    challenge,
+    chainId,
+    client,
+    credentialSource,
+    escrow,
+    minVoucherDelta,
+    store,
+    channelStateTtl,
+    lastOnChainVerified,
+  } = parameters
   const request = getChallengePaymentFields(challenge)
   const expectedOperator = parameters.expectedOperator ?? zeroAddress
   const channelId = ChannelStore.normalizeChannelId(payload.channelId)
@@ -563,7 +580,14 @@ async function validateVoucherCredential(
   })
   assertCredentialSourceCanSpend({ chainId, channel, source: credentialSource })
   if (channel.finalized) throw new ChannelClosedError({ reason: 'channel is finalized' })
-  const channelState = await Chain.getChannelState(client, channelId, escrow)
+  const channelState = await resolveVoucherChannelState({
+    channel,
+    channelId,
+    channelStateTtl,
+    client,
+    escrow,
+    lastOnChainVerified,
+  })
   await ChannelStore.validateVoucher({
     channel,
     channelState,
@@ -571,6 +595,25 @@ async function validateVoucherCredential(
     minVoucherDelta,
     voucher,
   })
+}
+
+async function resolveVoucherChannelState(parameters: {
+  channel: ChannelStore.State
+  channelId: Hex
+  channelStateTtl: number
+  client: Chain.TransactionClient
+  escrow: Address
+  lastOnChainVerified: Map<Hex, number>
+}): Promise<Chain.ChannelState> {
+  const { channel, channelId, channelStateTtl, client, escrow, lastOnChainVerified } = parameters
+  const isStale = Date.now() - (lastOnChainVerified.get(channelId) ?? 0) > channelStateTtl
+  const state = isStale ? await Chain.getChannelState(client, channelId, escrow) : undefined
+  if (state) lastOnChainVerified.set(channelId, Date.now())
+  return {
+    deposit: state?.deposit ?? uint96(channel.deposit),
+    settled: state?.settled ?? uint96(channel.settledOnChain),
+    closeRequestedAt: state?.closeRequestedAt ?? Number(channel.closeRequestedAt),
+  }
 }
 
 async function validateCloseCredential(
@@ -852,14 +895,14 @@ async function handleVoucherCredential(
   })
   assertCredentialSourceCanSpend({ chainId, channel, source: credentialSource })
   if (channel.finalized) throw new ChannelClosedError({ reason: 'channel is finalized' })
-  const isStale = Date.now() - (lastOnChainVerified.get(channelId) ?? 0) > channelStateTtl
-  const state = isStale ? await Chain.getChannelState(client, channelId, escrow) : undefined
-  if (state) lastOnChainVerified.set(channelId, Date.now())
-  const channelState = {
-    deposit: state?.deposit ?? uint96(channel.deposit),
-    settled: state?.settled ?? uint96(channel.settledOnChain),
-    closeRequestedAt: state?.closeRequestedAt ?? Number(channel.closeRequestedAt),
-  }
+  const channelState = await resolveVoucherChannelState({
+    channel,
+    channelId,
+    channelStateTtl,
+    client,
+    escrow,
+    lastOnChainVerified,
+  })
   if (channelState.closeRequestedAt !== 0) {
     await store.updateChannel(channelId, (current) =>
       current

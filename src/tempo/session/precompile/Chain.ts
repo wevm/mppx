@@ -538,6 +538,39 @@ export async function simulateCredentialTransaction(parameters: {
   )
 }
 
+function validateCredentialSponsorship(parameters: {
+  allowedFeeTokens: readonly Address[]
+  challengeExpires?: string | undefined
+  chainId: number
+  details: Record<string, string>
+  feePayer?: Account | true | undefined
+  feePayerPolicy?: Partial<FeePayer.Policy> | undefined
+  transaction: ReturnType<(typeof Transaction)['deserialize']>
+}) {
+  const {
+    allowedFeeTokens,
+    challengeExpires,
+    chainId,
+    details,
+    feePayer,
+    feePayerPolicy,
+    transaction,
+  } = parameters
+  if (!feePayer || feePayer === true) return
+  FeePayer.prepareSponsoredTransaction({
+    account: feePayer,
+    allowedFeeTokens,
+    challengeExpires,
+    chainId,
+    details,
+    policy: feePayerPolicy,
+    transaction: {
+      ...transaction,
+      ...(allowedFeeTokens[0] ? { feeToken: transaction.feeToken ?? allowedFeeTokens[0] } : {}),
+    },
+  })
+}
+
 async function signTempoTransaction(client: Client, transaction: unknown): Promise<Hex> {
   return (await signTransaction(client, transaction as never)) as Hex
 }
@@ -893,7 +926,7 @@ export type BroadcastOpenTransactionParameters = {
 /** Inputs for validating a client-signed TIP-1034 open transaction without broadcasting it. */
 export type ValidateOpenCredentialTransactionParameters = Omit<
   BroadcastOpenTransactionParameters,
-  'beforeBroadcast' | 'challengeExpires' | 'client' | 'feePayerPolicy'
+  'beforeBroadcast' | 'client'
 >
 
 /** Validated fields recovered from a client-signed TIP-1034 open transaction. */
@@ -940,6 +973,19 @@ export function validateOpenCredentialTransaction(
     channelId: parameters.expectedChannelId,
   })
   if (parameters.feePayer) assertSenderSigned(transaction)
+  validateCredentialSponsorship({
+    allowedFeeTokens: [parameters.expectedCurrency],
+    challengeExpires: parameters.challengeExpires,
+    chainId: parameters.chainId,
+    details: {
+      channelId: parameters.expectedChannelId,
+      currency: parameters.expectedCurrency,
+      recipient: parameters.expectedPayee,
+    },
+    feePayer: parameters.feePayer,
+    feePayerPolicy: parameters.feePayerPolicy,
+    transaction,
+  })
   const expiringNonceHash = ChannelUtils.computeExpiringNonceHash(
     ChannelUtils.transactionForExpiringNonceHash({
       feePayer: parameters.feePayer,
@@ -1047,7 +1093,7 @@ export type BroadcastTopUpTransactionParameters = {
 /** Inputs for validating a client-signed TIP-1034 top-up transaction without broadcasting it. */
 export type ValidateTopUpCredentialTransactionParameters = Omit<
   BroadcastTopUpTransactionParameters,
-  'challengeExpires' | 'client' | 'feePayerPolicy'
+  'client'
 >
 
 /** Validated fields recovered from a client-signed TIP-1034 top-up transaction. */
@@ -1078,6 +1124,20 @@ export function validateTopUpCredentialTransaction(
     currency: parameters.expectedCurrency,
     label: 'topUp',
     prefixCalls,
+  })
+  if (parameters.feePayer) assertSenderSigned(transaction)
+  validateCredentialSponsorship({
+    allowedFeeTokens: [parameters.expectedCurrency],
+    challengeExpires: parameters.challengeExpires,
+    chainId: parameters.chainId,
+    details: {
+      additionalDeposit: parameters.additionalDeposit.toString(),
+      channelId: parameters.expectedChannelId,
+      currency: parameters.expectedCurrency,
+    },
+    feePayer: parameters.feePayer,
+    feePayerPolicy: parameters.feePayerPolicy,
+    transaction,
   })
   return { transaction }
 }

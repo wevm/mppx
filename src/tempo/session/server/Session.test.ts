@@ -16,6 +16,7 @@ import {
   encodeFunctionData,
   encodeFunctionResult,
   type Hex,
+  maxUint256,
   zeroAddress,
 } from 'viem'
 import { privateKeyToAccount } from 'viem/accounts'
@@ -316,16 +317,20 @@ async function createOpenPayload(
   }
 }
 
-function sponsorTransaction(serializedTransaction: Hex): Hex {
+function sponsorTransaction(
+  serializedTransaction: Hex,
+  options: { gas?: bigint | undefined } = {},
+): Hex {
   const transaction = Transaction.deserialize(
     serializedTransaction as Transaction.TransactionSerializedTempo,
   )
   const envelope = TxEnvelopeTempo.from({
     ...transaction,
     feePayerSignature: null,
-    gas: 100_000n,
+    gas: options.gas ?? 100_000n,
     maxFeePerGas: 1n,
     maxPriorityFeePerGas: 1n,
+    nonceKey: maxUint256,
     validBefore: Math.floor(Date.now() / 1_000) + 600,
   } as never)
   return TxEnvelopeTempo.serialize(envelope, {
@@ -821,13 +826,22 @@ describe('precompile server session unit guardrails', () => {
       request: verifyRequest(openPayload.channelId),
     })
 
+    await method.validate!({
+      credential: {
+        challenge: makeChallenge(openPayload.channelId),
+        payload,
+        source: sourceFor(),
+      },
+      request: verifyRequest(openPayload.channelId),
+    })
+
     expect(validation.details).toEqual({ action: 'voucher', channelId: openPayload.channelId })
     expect(await store.getChannel(openPayload.channelId)).toMatchObject({
       highestVoucherAmount: 100n,
       spent: 0n,
       units: 0,
     })
-    expect(rpcCalls.map(({ method }) => method)).toContain('eth_call')
+    expect(rpcCalls.map(({ method }) => method)).toEqual(['eth_call'])
     expect(rpcCalls.map(({ method }) => method)).not.toContain('eth_sendRawTransaction')
     expect(rpcCalls.map(({ method }) => method)).not.toContain('eth_sendRawTransactionSync')
   })
@@ -848,14 +862,14 @@ describe('precompile server session unit guardrails', () => {
       request: verifyRequest(topUpPayload.channelId),
     })
 
-    expect(rpcCalls.map(({ method }) => method)).toEqual(['eth_call', 'eth_call'])
+    expect(rpcCalls.map(({ method }) => method)).toEqual(['eth_call', 'eth_call', 'eth_call'])
     expect(await store.getChannel(openPayload.channelId)).toMatchObject({
       deposit: 1_000n,
       highestVoucherAmount: 100n,
     })
   })
 
-  test('does not simulate sponsored open or top-up credentials during validation', async () => {
+  test('does not simulate sponsored credentials during validation but checks top-up state', async () => {
     const { method, rpcCalls, store } = createServer({ feePayer: payer })
     const openPayload = await createSponsoredOpenPayload()
 
@@ -872,11 +886,29 @@ describe('precompile server session unit guardrails', () => {
       request: verifyRequestWithFeePayer(topUpPayload.channelId, payer),
     })
 
-    expect(rpcCalls).toEqual([])
+    expect(rpcCalls.map(({ method }) => method)).toEqual(['eth_call'])
     expect(await store.getChannel(openPayload.channelId)).toMatchObject({
       deposit: 1_000n,
       highestVoucherAmount: 100n,
     })
+  })
+
+  test('rejects sponsored credentials that exceed the fee-payer policy during validation', async () => {
+    const { method, rpcCalls } = createServer({
+      feePayer: payer,
+      feePayerPolicy: { maxGas: 1n },
+    })
+    const payload = await createSponsoredOpenPayload()
+
+    payload.transaction = sponsorTransaction(payload.transaction, { gas: 2n })
+
+    await expect(
+      method.validate!({
+        credential: { challenge: makeChallenge(payload.channelId), payload },
+        request: verifyRequestWithFeePayer(payload.channelId, payer),
+      }),
+    ).rejects.toThrow(/fee-sponsored transaction gas exceeds sponsor policy/)
+    expect(rpcCalls).toEqual([])
   })
 
   test('validates close credentials without marking the channel pending', async () => {
@@ -1552,7 +1584,7 @@ describe('precompile server session unit guardrails', () => {
     expect(stored?.units).toBe(4)
   })
 
-  test('rejects precompile top-up when on-chain state has pending close', async () => {
+  test('rejects top-up validation when on-chain state has pending close', async () => {
     const rawStore = Store.memory()
     const store = channelStore(rawStore)
     const openPayload = await createOpenPayload({ initialAmount: 100n })
@@ -1574,7 +1606,7 @@ describe('precompile server session unit guardrails', () => {
     })
 
     await expect(
-      method.verify({
+      method.validate!({
         credential: {
           challenge: makeChallenge(openPayload.channelId),
           payload: topUpPayload,
