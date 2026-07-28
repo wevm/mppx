@@ -48,6 +48,7 @@ import {
 
 export { sessionContextSchema, type SessionContext } from './CredentialState.js'
 
+/** Tail promise for each payment scope, used to serialize automatic opens per store. */
 const channelTails = new WeakMap<ChannelStore, Map<string, Promise<void>>>()
 
 /** Serializes automatic opens for one payment scope across methods sharing a store. */
@@ -81,6 +82,13 @@ function matchesOpen(
   }
 }
 
+/**
+ * Returns whether the server acknowledged an open.
+ *
+ * Receipts must match the originating challenge, channel, and cumulative amount.
+ * Replacement challenges may acknowledge the same channel and amount through a
+ * session snapshot. Malformed acknowledgements are ignored.
+ */
 function acknowledgesOpen(
   outcome: MethodResponse.AttemptOutcome,
   challenge: TempoSessionChallenge,

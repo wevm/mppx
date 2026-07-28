@@ -19,10 +19,15 @@ type WrappedFetch = typeof globalThis.fetch & {
   [MPPX_FETCH_WRAPPER]?: typeof globalThis.fetch
 }
 
+/** Credential state retained between payment retries until its method settles it. */
 type PreparedCredential = {
+  /** Method-owned preparation and settlement hooks. */
   attempt: MethodResponse.Attempt
+  /** Serialized challenge used to recognize the same retry. */
   key?: string | undefined
+  /** Method that prepared the credential. */
   method: Method.AnyClient
+  /** Memoized credential reused for the same retry. */
   promise: Promise<string>
 }
 

@@ -83,6 +83,13 @@ sequenceDiagram
 route handler. `open` and `voucher` used on non-billable requests are also
 management updates.
 
+When `Fetch.from` creates an automatic `open`, it keeps the channel entry
+provisional until the server accepts the response or acknowledges the open with
+a matching receipt or session snapshot. Rejected or unacknowledged opens are
+discarded so the next request retries `open`; concurrent automatic opens for the
+same payment scope are serialized. Direct credential creation and
+`SessionManager` retain their existing lifecycle ownership.
+
 The current HTTP contract is deliberately pre-handler: voucher acceptance and
 default request charging occur before the handler runs. A handler failure can
 therefore follow an accepted voucher and recorded `spent`. Sessions does not
