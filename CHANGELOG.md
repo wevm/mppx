@@ -1,5 +1,26 @@
 # mppx
 
+## 0.8.15
+
+### Patch Changes
+
+- 053d37d: Bumped `postcss` (via `vite`/`vite-plus`) and `tar` (via `prool`) to patched
+  versions, resolving a path-traversal advisory in `postcss`'s source map
+  loading and a stack-overflow DoS advisory in `tar`'s path filtering.
+- f538450: Replaced the expired Viem preview with the current published release, preserved primitive
+  subscription authorization validation with the updated signature types, and resolved the
+  brace-expansion audit advisory.
+- 7a277bc: Fixed `mppx validate` intermittently reporting a false `InsufficientBalance`
+  error when paying with an ephemeral Tempo testnet wallet, mislabeling
+  resolved chains in payment errors, and skipping other payment methods after
+  a Tempo testnet challenge succeeded.
+- 36bc41e: Fixed repeated session challenge retries and durable session rollback after failed payments.
+- c69087a: Refreshed expired session challenges before creating later WebSocket vouchers.
+- 538e515: Prevent sponsored Tempo charges from returning a fresh payment challenge after
+  a concurrent budget reconciliation observes their onchain receipt.
+- b900118: Fixed Tempo relay charges to delegate push payment finalization without re-broadcasting transactions.
+- f4ac248: Fixed low-level session fetches retrying vouchers for unaccepted channel opens.
+
 ## 0.8.14
 
 ### Patch Changes
