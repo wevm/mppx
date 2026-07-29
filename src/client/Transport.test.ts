@@ -77,38 +77,6 @@ describe('http', () => {
     })
   })
 
-  describe('getChallenge', () => {
-    test('default', () => {
-      const transport = Transport.http()
-      const response = new Response(null, {
-        status: 402,
-        headers: {
-          'WWW-Authenticate': Challenge.serialize(challenge),
-        },
-      })
-
-      expect(transport.getChallenge(response)).toMatchObject({
-        expires: '2025-01-01T00:00:00.000Z',
-        id: expect.any(String),
-        intent: 'charge',
-        method: 'tempo',
-        realm: 'api.example.com',
-        request: {
-          amount: '1000',
-          currency: '0x20c0000000000000000000000000000000000001',
-          recipient: '0x742d35Cc6634C0532925a3b844Bc9e7595f8fE00',
-        },
-      })
-    })
-
-    test('throws for non-402 response', () => {
-      const transport = Transport.http()
-      const response = new Response(null, { status: 200 })
-
-      expect(() => transport.getChallenge(response)).toThrow()
-    })
-  })
-
   describe('getChallenges', () => {
     test.each([
       {
@@ -188,7 +156,7 @@ describe('http', () => {
         status: 402,
         headers: headers(),
       })
-      const challenges = (await transport.getChallenges?.(response)) ?? []
+      const challenges = await transport.getChallenges(response)
 
       expect(challenges.map((entry) => entry.id)).toEqual(expectedIds)
       expect(challenges.map((entry) => entry.method)).toEqual(expectedMethods)
@@ -207,7 +175,7 @@ describe('http', () => {
         },
       })
 
-      const challenges = (await transport.getChallenges?.(response)) ?? []
+      const challenges = await transport.getChallenges(response)
 
       expect(challenges.map((entry) => entry.id)).toEqual([challenge.id])
       expect(challenges.map((entry) => entry.method)).toEqual(['tempo'])
@@ -225,9 +193,8 @@ describe('http', () => {
         },
       })
 
-      const challenges = (await transport.getChallenges?.(response)) ?? []
+      const challenges = await transport.getChallenges(response)
       expect(challenges).toEqual([])
-      expect(() => transport.getChallenge(response)).toThrow('No challenge in response.')
     })
   })
 
@@ -265,7 +232,7 @@ describe('http', () => {
 
     test('writes x402 credentials for x402 challenges from the same transport', () => {
       const transport = Transport.http()
-      const [x402Challenge] = transport.getChallenges!(
+      const [x402Challenge] = transport.getChallenges(
         new Response(null, {
           status: 402,
           headers: {
@@ -306,7 +273,7 @@ describe('http', () => {
         method: 'POST',
         body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: {} }),
       } satisfies RequestInit
-      const [nativeChallenge] = transport.getChallenges!(
+      const [nativeChallenge] = transport.getChallenges(
         new Response(null, {
           status: 402,
           headers: { 'WWW-Authenticate': Challenge.serialize(challenge) },
@@ -326,7 +293,7 @@ describe('http', () => {
     test('marks x402 challenges with the brand the evm charge client reads', async () => {
       // Provenance guard: `evm/client/Charge.ts` recognizes x402 challenges via the same
       // brand the x402 adapter stamps. If the marking site drifts, EVM x402 charges misroute.
-      const [x402Challenge] = await Transport.http().getChallenges!(
+      const [x402Challenge] = await Transport.http().getChallenges(
         new Response(null, {
           status: 402,
           headers: {
@@ -339,7 +306,7 @@ describe('http', () => {
 
     test('removes stale credential headers before setting the retry credential', async () => {
       const transport = Transport.http()
-      const [x402Challenge] = await transport.getChallenges!(
+      const [x402Challenge] = await transport.getChallenges(
         new Response(null, {
           status: 402,
           headers: {
@@ -497,16 +464,16 @@ describe('http (MCP-over-HTTP)', () => {
     expect(await Transport.http().isPaymentRequired(ok, jsonRpcRequest)).toBe(false)
   })
   test('getChallenges extracts the MCP challenge (via the mcp protocol)', async () => {
-    const challenges = await Transport.http().getChallenges!(sseBody(), jsonRpcRequest)
+    const challenges = await Transport.http().getChallenges(sseBody(), jsonRpcRequest)
     expect(challenges.map((entry) => entry.id)).toEqual([challenge.id])
   })
   test('getChallenges extracts an MCP result metadata challenge', async () => {
-    const challenges = await Transport.http().getChallenges!(jsonResultBody(), jsonRpcRequest)
+    const challenges = await Transport.http().getChallenges(jsonResultBody(), jsonRpcRequest)
     expect(challenges.map((entry) => entry.id)).toEqual([challenge.id])
   })
   test('setCredential routes the MCP challenge into the JSON-RPC _meta', async () => {
     const transport = Transport.http()
-    const [mcpChallenge] = await transport.getChallenges!(sseBody(), jsonRpcRequest)
+    const [mcpChallenge] = await transport.getChallenges(sseBody(), jsonRpcRequest)
     const result = transport.setCredential(jsonRpcRequest, Credential.serialize(credential), {
       challenge: mcpChallenge,
     }) as RequestInit
@@ -593,7 +560,7 @@ describe('mcp', () => {
     const transport = Transport.mcp()
 
     expect(await transport.isPaymentRequired(mcpResponse)).toBe(true)
-    expect((await transport.getChallenges?.(mcpResponse))?.map((entry) => entry.id)).toEqual([
+    expect((await transport.getChallenges(mcpResponse)).map((entry) => entry.id)).toEqual([
       challenge.id,
     ])
   })
@@ -602,7 +569,7 @@ describe('mcp', () => {
     const transport = Transport.mcp()
 
     expect(await transport.isPaymentRequired(mcpResult)).toBe(true)
-    expect((await transport.getChallenges?.(mcpResult))?.map((entry) => entry.id)).toEqual([
+    expect((await transport.getChallenges(mcpResult)).map((entry) => entry.id)).toEqual([
       challenge.id,
     ])
   })

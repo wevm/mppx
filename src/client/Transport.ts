@@ -21,16 +21,11 @@ export type Transport<in out request = unknown, in out response = unknown> = {
    * body reads) and be async (to read a response body).
    */
   isPaymentRequired: (response: response, request?: request) => boolean | Promise<boolean>
-  /** Extracts all challenges from a payment-required response, when the transport supports multiple offers. */
-  getChallenges?: (
+  /** Extracts all challenges from a payment-required response. */
+  getChallenges: (
     response: response,
     request?: request,
   ) => Challenge.Challenge[] | Promise<Challenge.Challenge[]>
-  /** Extracts the challenge from a payment-required response. */
-  getChallenge: (
-    response: response,
-    request?: request,
-  ) => Challenge.Challenge | Promise<Challenge.Challenge>
   /** Attaches a credential to a request. */
   setCredential: (
     request: request,
@@ -65,7 +60,7 @@ export type RequestOf<transport extends Transport> =
  * const custom = Transport.from({
  *   name: 'custom',
  *   isPaymentRequired(response) { ... },
- *   getChallenge(response) { ... },
+ *   getChallenges(response) { ... },
  *   setCredential(request, credential) { ... },
  * })
  * ```
@@ -125,16 +120,6 @@ export function http(): Transport<RequestInit, Response> {
       return collect(response, request)
     },
 
-    getChallenge(response, request) {
-      const pick = (challenges: Challenge.Challenge[]): Challenge.Challenge => {
-        const challenge = challenges[0]
-        if (!challenge) throw new Error('No challenge in response.')
-        return challenge
-      }
-      const challenges = collect(response, request)
-      return challenges instanceof Promise ? challenges.then(pick) : pick(challenges)
-    },
-
     setCredential(request, credential, options) {
       const protocol = options?.challenge ? protocolForChallenge.get(options.challenge) : undefined
       const fallback = protocols[0]
@@ -166,12 +151,6 @@ export function mcp() {
 
     getChallenges(response) {
       return mcpPaymentRequiredChallenges(response)
-    },
-
-    getChallenge(response) {
-      const challenge = mcpPaymentRequiredChallenges(response)[0]
-      if (!challenge) throw new Error('No challenge in response.')
-      return challenge
     },
 
     setCredential(request, credential) {

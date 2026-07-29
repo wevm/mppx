@@ -238,9 +238,7 @@ export function from<const methods extends readonly Method.AnyClient[]>(
 
     try {
       for (let retry = 0; retry < maxPaymentRetries; retry++) {
-        challenges = transport.getChallenges
-          ? await transport.getChallenges(response, transportRequest as never)
-          : [await transport.getChallenge(response, transportRequest as never)]
+        challenges = await transport.getChallenges(response, transportRequest as never)
 
         const candidates = AcceptPayment.selectChallengeCandidates(
           challenges,
@@ -420,9 +418,7 @@ export function from<const methods extends readonly Method.AnyClient[]>(
       }
       challenges = undefined
       try {
-        challenges = transport.getChallenges
-          ? await transport.getChallenges(response, transportRequest as never)
-          : [await transport.getChallenge(response, transportRequest as never)]
+        challenges = await transport.getChallenges(response, transportRequest as never)
       } catch {}
       await settleAttempt(preparedCredential, {
         challenges,

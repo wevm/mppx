@@ -15,6 +15,19 @@ import { session, sessionManager, sessionMethod } from './Methods.js'
 import * as Mppx from './Mppx.js'
 import * as Transport from './Transport.js'
 
+describe('Transport', () => {
+  test('custom transports extract challenge collections', () => {
+    const transport = Transport.from({
+      name: 'custom',
+      isPaymentRequired: () => true,
+      getChallenges: () => [] as Challenge.Challenge[],
+      setCredential: (request: RequestInit) => request,
+    })
+
+    expectTypeOf(transport.getChallenges).toBeFunction()
+  })
+})
+
 describe('Mppx', () => {
   test('exports low-level session method and explicit managed session helper', () => {
     expectTypeOf(session({ account: {} as Account })).toMatchTypeOf<Method.AnyClient>()
