@@ -1,4 +1,4 @@
 ---
 ---
 
-Allow intentional underscore-prefixed identifiers in the lint configuration.
+Disabled the `no-underscore-dangle` lint rule.
