@@ -58,18 +58,8 @@ function sponsoredFeeExposure(credential: string) {
   return transaction.gas * transaction.maxFeePerGas
 }
 
-// TODO: Remove once the minimum viem version is >=2.54.0, which uses client-first Tempo call builders.
 function tokenTransferCall(parameters: viem_token.transfer.Args) {
-  const call = Actions.token.transfer.call as unknown as {
-    length: number
-    (parameters: viem_token.transfer.Args): ReturnType<typeof viem_token.transfer.call>
-    (
-      client: unknown,
-      parameters: viem_token.transfer.Args,
-    ): ReturnType<typeof viem_token.transfer.call>
-  }
-  if (call.length >= 2) return call(client, parameters)
-  return call(parameters)
+  return Actions.token.transfer.call(client, parameters)
 }
 
 type ProofAccessKeyContext = {

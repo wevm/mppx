@@ -7,7 +7,6 @@ import {
   signTransaction,
 } from 'viem/actions'
 import { Actions } from 'viem/tempo'
-import type { token as viem_token } from 'viem/tempo/actions'
 import { tempo as tempo_chain } from 'viem/tempo/chains'
 
 import * as Credential from '../../Credential.js'
@@ -35,23 +34,6 @@ const chargeContextSchema = z.object({
   autoSwap: z.optional(z.custom<ChargeContext['autoSwap']>()),
   mode: z.optional(z.enum(Methods.chargeModes)),
 })
-
-// TODO: Remove once the minimum viem version is >=2.54.0, which uses client-first Tempo call builders.
-function getTransferCall(
-  client: unknown,
-  parameters: viem_token.transfer.Args,
-): AccountResolution.ResolveAccountCall {
-  const call = Actions.token.transfer.call as unknown as {
-    length: number
-    (parameters: viem_token.transfer.Args): ReturnType<typeof viem_token.transfer.call>
-    (
-      client: unknown,
-      parameters: viem_token.transfer.Args,
-    ): ReturnType<typeof viem_token.transfer.call>
-  }
-  const result = call.length >= 2 ? call(client, parameters) : call(parameters)
-  return result
-}
 
 /**
  * Creates a Tempo charge method intent for usage on the client.
@@ -147,7 +129,7 @@ export function charge(parameters: charge.Parameters = {}) {
       })
       const transferCalls = transfers.map(
         (transfer): AccountResolution.ResolveAccountCall =>
-          getTransferCall(client, {
+          Actions.token.transfer.call(client, {
             amount: BigInt(transfer.amount),
             ...(transfer.memo && { memo: transfer.memo as Hex.Hex }),
             to: transfer.recipient as Address,

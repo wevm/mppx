@@ -1,7 +1,6 @@
 import type { Address, Client } from 'viem'
 import { readContract } from 'viem/actions'
 import { Actions, Addresses } from 'viem/tempo'
-import type { dex as viem_dex, token as viem_token } from 'viem/tempo/actions'
 
 import * as TempoAddress from './address.js'
 import * as defaults from './defaults.js'
@@ -14,51 +13,6 @@ export const defaultCurrencies: readonly Address[] = [
   defaults.tokens.pathUsd as Address,
   defaults.tokens.usdc as Address,
 ]
-
-// TODO: Remove once the minimum viem version is >=2.54.0, which uses client-first Tempo call builders.
-function getBalanceCall(
-  client: Client,
-  parameters: viem_token.getBalance.Args,
-): ReturnType<typeof viem_token.getBalance.call> {
-  const call = Actions.token.getBalance.call as unknown as {
-    length: number
-    (parameters: viem_token.getBalance.Args): ReturnType<typeof viem_token.getBalance.call>
-    (
-      client: Client,
-      parameters: viem_token.getBalance.Args,
-    ): ReturnType<typeof viem_token.getBalance.call>
-  }
-  return call.length >= 2 ? call(client, parameters) : call(parameters)
-}
-
-// TODO: Remove once the minimum viem version is >=2.54.0, which uses client-first Tempo call builders.
-function getApproveCall(
-  client: Client,
-  parameters: viem_token.approve.Args,
-): ReturnType<typeof viem_token.approve.call> {
-  const call = Actions.token.approve.call as unknown as {
-    length: number
-    (parameters: viem_token.approve.Args): ReturnType<typeof viem_token.approve.call>
-    (
-      client: Client,
-      parameters: viem_token.approve.Args,
-    ): ReturnType<typeof viem_token.approve.call>
-  }
-  return call.length >= 2 ? call(client, parameters) : call(parameters)
-}
-
-// TODO: Remove once the minimum viem version is >=2.54.0, which uses client-first Tempo call builders.
-function getBuyCall(
-  client: Client,
-  parameters: viem_dex.buy.Args,
-): ReturnType<typeof viem_dex.buy.call> {
-  const call = Actions.dex.buy.call as unknown as {
-    length: number
-    (parameters: viem_dex.buy.Args): ReturnType<typeof viem_dex.buy.call>
-    (client: Client, parameters: viem_dex.buy.Args): ReturnType<typeof viem_dex.buy.call>
-  }
-  return call.length >= 2 ? call(client, parameters) : call(parameters)
-}
 
 /**
  * Finds the optimal swap calls to acquire `amountOut` of `tokenOut`,
@@ -76,9 +30,12 @@ export async function findCalls(
   const candidates = tokenIn.filter((t) => !TempoAddress.isEqual(t, tokenOut))
 
   const balanceResults = await Promise.allSettled([
-    readContract(client, getBalanceCall(client, { account, token: tokenOut }) as never),
+    readContract(
+      client,
+      Actions.token.getBalance.call(client, { account, token: tokenOut }) as never,
+    ),
     ...candidates.map((t) =>
-      readContract(client, getBalanceCall(client, { account, token: t }) as never),
+      readContract(client, Actions.token.getBalance.call(client, { account, token: t }) as never),
     ),
   ])
 
@@ -108,12 +65,12 @@ export async function findCalls(
         const maxAmountIn =
           quotedAmountIn + (quotedAmountIn * BigInt(Math.round(slippage * 100))) / bps
         return [
-          getApproveCall(client, {
+          Actions.token.approve.call(client, {
             amount: maxAmountIn,
             spender: Addresses.stablecoinDex,
             token: tokenIn,
           }),
-          getBuyCall(client, {
+          Actions.dex.buy.call({
             tokenIn,
             tokenOut,
             amountOut,

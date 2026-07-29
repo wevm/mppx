@@ -33,15 +33,8 @@ const isLocalnet = tempoNetwork === 'localnet'
 
 let escrowContract: Address
 
-// TODO: Remove once the minimum viem version is >=2.54.0, which uses client-first Tempo call builders.
 function tokenGetBalanceCall(parameters: { account: Address; token: Address }) {
-  const call = Actions.token.getBalance.call as unknown as {
-    length: number
-    (parameters: { account: Address; token: Address }): unknown
-    (client: unknown, parameters: { account: Address; token: Address }): unknown
-  }
-  if (call.length >= 2) return call(testClient, parameters)
-  return call(parameters)
+  return Actions.token.getBalance.call(testClient, parameters)
 }
 
 beforeAll(async () => {

@@ -103,7 +103,7 @@ describe('resolve', () => {
 })
 
 describe('findCalls', () => {
-  test('passes the client to viem 2.54 Tempo token call builders', async () => {
+  test('uses current viem Tempo call builder signatures', async () => {
     vi.resetModules()
     const account = '0x1111111111111111111111111111111111111111' as Address
     const tokenOut = '0x2222222222222222222222222222222222222222' as Address
@@ -122,8 +122,8 @@ describe('findCalls', () => {
       return { kind: 'approve' }
     }
 
-    function buyCall(client: unknown, parameters: Record<string, unknown>) {
-      builderCalls.push({ client, name: 'buy', parameters })
+    function buyCall(parameters: Record<string, unknown>) {
+      builderCalls.push({ client: undefined, name: 'buy', parameters })
       return { kind: 'buy' }
     }
 
@@ -158,7 +158,7 @@ describe('findCalls', () => {
       })
 
       expect(calls).toHaveLength(2)
-      expect(builderCalls.map((call) => call.client)).toEqual([client, client, client, client])
+      expect(builderCalls.map((call) => call.client)).toEqual([client, client, client, undefined])
       expect(builderCalls.map((call) => call.name)).toEqual([
         'getBalance',
         'getBalance',
