@@ -102,6 +102,11 @@
       "types": "./dist/client/node.d.ts",
       "default": "./dist/client/node.js"
     },
+    "./attestation": {
+      "src": "./src/attestation/index.ts",
+      "types": "./dist/attestation/index.d.ts",
+      "default": "./dist/attestation/index.js"
+    },
     "./discovery": {
       "src": "./src/discovery/index.ts",
       "types": "./dist/discovery/index.d.ts",
@@ -177,6 +182,36 @@
       "types": "./dist/tempo/index.d.ts",
       "default": "./dist/tempo/index.js"
     },
+    "./attestation/tap": {
+      "src": "./src/tap/index.ts",
+      "types": "./dist/tap/index.d.ts",
+      "default": "./dist/tap/index.js"
+    },
+    "./attestation/tap/client": {
+      "src": "./src/tap/client/index.ts",
+      "types": "./dist/tap/client/index.d.ts",
+      "default": "./dist/tap/client/index.js"
+    },
+    "./attestation/tap/server": {
+      "src": "./src/tap/server/index.ts",
+      "types": "./dist/tap/server/index.d.ts",
+      "default": "./dist/tap/server/index.js"
+    },
+    "./attestation/web-bot-auth": {
+      "src": "./src/web-bot-auth/index.ts",
+      "types": "./dist/web-bot-auth/index.d.ts",
+      "default": "./dist/web-bot-auth/index.js"
+    },
+    "./attestation/web-bot-auth/client": {
+      "src": "./src/web-bot-auth/client/index.ts",
+      "types": "./dist/web-bot-auth/client/index.d.ts",
+      "default": "./dist/web-bot-auth/client/index.js"
+    },
+    "./attestation/web-bot-auth/server": {
+      "src": "./src/web-bot-auth/server/index.ts",
+      "types": "./dist/web-bot-auth/server/index.d.ts",
+      "default": "./dist/web-bot-auth/server/index.js"
+    },
     "./html": {
       "src": "./src/Html.ts",
       "types": "./dist/Html.d.ts",
@@ -234,6 +269,7 @@
     "eventsource-parser": "3.1.0",
     "incur": "^0.4.19",
     "ox": "catalog:",
+    "structured-headers": "2.0.3",
     "zod": "^4.4.3"
   },
   "repository": {

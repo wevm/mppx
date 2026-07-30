@@ -63,6 +63,9 @@ importers:
       ox:
         specifier: 0.14.33
         version: 0.14.33(typescript@5.9.3)(zod@4.4.3)
+      structured-headers:
+        specifier: 2.0.3
+        version: 2.0.3
       zod:
         specifier: ^4.4.3
         version: 4.4.3
@@ -3914,6 +3917,10 @@ packages:
     resolution: {integrity: sha512-ki4hZQfh5rX0QDLLkOCj+h+CVNkqmp/CMf8v8kZpkNVK6jGQooMytqzLZYUVYIZcFZ6yDB70EfD8POcFXiF5oA==}
     engines: {node: '>=18'}
 
+  structured-headers@2.0.3:
+    resolution: {integrity: sha512-4g5yxhlDMClRwCcfKfLeS7Z8yAVdOWGDADwm80Poh1iReU2KVKLGBlqwpHWJ2qovq0+ZIf1atAEO1eua2o9Rgg==}
+    engines: {node: '>=18', npm: '>=6'}
+
   tar-fs@2.1.5:
     resolution: {integrity: sha512-OboTd8mmMhZDNPV+UjQcK9yKAatXu2aJ+r1w4im1Otd4M4fl2hwvdoXUxIYHFTHWK/3y3FarBP70v3vwmGlOxw==}
 
@@ -7543,6 +7550,8 @@ snapshots:
   strtok3@10.3.5:
     dependencies:
       '@tokenizer/token': 0.3.0
+
+  structured-headers@2.0.3: {}
 
   tar-fs@2.1.5:
     dependencies:
