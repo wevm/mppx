@@ -9,11 +9,11 @@ import * as Voucher from '../precompile/Voucher.js'
 import * as ChannelStore from './ChannelStore.js'
 import {
   assertOpenCredentialCoversRequest,
+  broadcastCredentialPayload,
   requireSessionCredentialAction,
   requireSessionCredentialPayload,
   requireSessionCredentialPayloadHeader,
   validateChannelDescriptor,
-  verifyCredentialPayload,
 } from './CredentialVerification.js'
 
 describe('SessionCredentialGuards', () => {
@@ -190,7 +190,7 @@ describe('SessionCredentialGuards', () => {
     })
   })
 
-  describe('verifyCredentialPayload', () => {
+  describe('broadcastCredentialPayload', () => {
     const escrow = '0x4D50500000000000000000000000000000000000' as Address
     const testChainId = chainIds.testnet
     const computedChannelId = Channel.computeId({ ...descriptor, chainId: testChainId, escrow })
@@ -246,7 +246,7 @@ describe('SessionCredentialGuards', () => {
       const verifyVoucher = vi.spyOn(Voucher, 'verifyVoucher').mockResolvedValue(true)
 
       await expect(
-        verifyCredentialPayload({
+        broadcastCredentialPayload({
           challenge,
           channelStateTtl: 60_000,
           chainId: testChainId,
@@ -274,7 +274,7 @@ describe('SessionCredentialGuards', () => {
       const verifyVoucher = vi.spyOn(Voucher, 'verifyVoucher').mockResolvedValue(true)
 
       await expect(
-        verifyCredentialPayload({
+        broadcastCredentialPayload({
           challenge,
           channelStateTtl: 60_000,
           chainId: testChainId,

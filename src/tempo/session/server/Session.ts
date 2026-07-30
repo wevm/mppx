@@ -31,7 +31,7 @@ import {
   serializeSnapshot as serializeSessionSnapshot,
 } from '../Snapshot.js'
 import * as ChannelStore from './ChannelStore.js'
-import { validateCredentialPayload, verifyCredentialPayload } from './CredentialVerification.js'
+import { broadcastCredentialPayload, validateCredentialPayload } from './CredentialVerification.js'
 import { requireSessionCredentialPayload } from './CredentialVerification.js'
 import {
   type ResolveSessionChannelId,
@@ -405,7 +405,7 @@ export function session<const parameters extends session.Parameters>(
       request,
     })
 
-    const sessionReceipt = await verifyCredentialPayload({
+    const sessionReceipt = await broadcastCredentialPayload({
       account,
       challenge,
       channelStateTtl,

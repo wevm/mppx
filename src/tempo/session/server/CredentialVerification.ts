@@ -316,8 +316,8 @@ function readTransactionType(value: unknown): 'transaction' {
   throw new VerificationFailedError({ reason: 'invalid session credential transaction type' })
 }
 
-/** Shared inputs required to verify a single precompile session credential payload. */
-export type VerifyCredentialPayloadParameters = {
+/** Shared inputs required to broadcast a verified precompile session credential payload. */
+export type BroadcastCredentialPayloadParameters = {
   /** Optional account override used for payee-side close settlement. */
   account?: viem_Account | undefined
   /** Challenge echoed by the credential. */
@@ -352,24 +352,31 @@ export type VerifyCredentialPayloadParameters = {
   store: ChannelStore.ChannelStore
 }
 
-/** Narrows shared credential verification inputs to one payload action. */
-export type VerifyCredentialActionParameters<action extends SessionCredentialPayload['action']> =
-  Omit<VerifyCredentialPayloadParameters, 'payload'> & {
+/** @deprecated Use {@link BroadcastCredentialPayloadParameters}. */
+export type VerifyCredentialPayloadParameters = BroadcastCredentialPayloadParameters
+
+/** Narrows shared credential broadcast inputs to one payload action. */
+export type BroadcastCredentialActionParameters<action extends SessionCredentialPayload['action']> =
+  Omit<BroadcastCredentialPayloadParameters, 'payload'> & {
     /** Credential payload for the selected action. */
     payload: Extract<SessionCredentialPayload, { action: action }>
   }
 
-/** Inputs for verifying an open transaction credential and initial voucher. */
-export type OpenCredentialActionParameters = VerifyCredentialActionParameters<'open'>
+/** @deprecated Use {@link BroadcastCredentialActionParameters}. */
+export type VerifyCredentialActionParameters<action extends SessionCredentialPayload['action']> =
+  BroadcastCredentialActionParameters<action>
 
-/** Inputs for verifying a top-up transaction credential. */
-export type TopUpCredentialActionParameters = VerifyCredentialActionParameters<'topUp'>
+/** Inputs for broadcasting an open transaction credential and initial voucher. */
+export type OpenCredentialActionParameters = BroadcastCredentialActionParameters<'open'>
 
-/** Inputs for verifying and accepting an incremental voucher credential. */
-export type VoucherCredentialActionParameters = VerifyCredentialActionParameters<'voucher'>
+/** Inputs for broadcasting a top-up transaction credential. */
+export type TopUpCredentialActionParameters = BroadcastCredentialActionParameters<'topUp'>
 
-/** Inputs for verifying and settling a cooperative close credential. */
-export type CloseCredentialActionParameters = VerifyCredentialActionParameters<'close'>
+/** Inputs for broadcasting and accepting an incremental voucher credential. */
+export type VoucherCredentialActionParameters = BroadcastCredentialActionParameters<'voucher'>
+
+/** Inputs for broadcasting and settling a cooperative close credential. */
+export type CloseCredentialActionParameters = BroadcastCredentialActionParameters<'close'>
 
 const refreshOnChainVerificationCache = {
   close: false,
@@ -380,7 +387,7 @@ const refreshOnChainVerificationCache = {
 
 /** Inputs for validating a session credential without applying its state transition. */
 export type ValidateCredentialPayloadParameters = Pick<
-  VerifyCredentialPayloadParameters,
+  BroadcastCredentialPayloadParameters,
   | 'account'
   | 'channelStateTtl'
   | 'chainId'
@@ -676,18 +683,25 @@ async function validateCloseCredential(
   })
 }
 
-/** Verifies a session credential payload and applies the action-specific state transition. */
-export async function verifyCredentialPayload(
-  context: VerifyCredentialPayloadParameters,
+/** Broadcasts a validated session credential payload and applies its state transition. */
+export async function broadcastCredentialPayload(
+  context: BroadcastCredentialPayloadParameters,
 ): Promise<SessionReceipt> {
-  const receipt = await verifyCredentialAction(context)
+  const receipt = await broadcastCredentialAction(context)
   if (refreshOnChainVerificationCache[context.payload.action])
     context.lastOnChainVerified.set(receipt.channelId, Date.now())
   return receipt
 }
 
-function verifyCredentialAction(
+/** @deprecated Use {@link broadcastCredentialPayload}. */
+export async function verifyCredentialPayload(
   context: VerifyCredentialPayloadParameters,
+): Promise<SessionReceipt> {
+  return broadcastCredentialPayload(context)
+}
+
+function broadcastCredentialAction(
+  context: BroadcastCredentialPayloadParameters,
 ): Promise<SessionReceipt> {
   const { payload } = context
   switch (payload.action) {
@@ -703,9 +717,9 @@ function verifyCredentialAction(
 }
 
 function actionContext<action extends SessionCredentialPayload['action']>(
-  context: VerifyCredentialPayloadParameters,
+  context: BroadcastCredentialPayloadParameters,
   payload: Extract<SessionCredentialPayload, { action: action }>,
-): VerifyCredentialActionParameters<action> {
+): BroadcastCredentialActionParameters<action> {
   return { ...context, payload }
 }
 
