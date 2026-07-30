@@ -203,7 +203,9 @@ describe('charge', () => {
     const { mppx } = createChargeHarness(false)
 
     const app = new Hono()
-    app.get('/', mppx.charge({ amount: '1' }), (c) => c.json({ fortune: 'You will be rich' }))
+    app.get('/', mppx.charge({ amount: '1', description: 'Daily fortune' }), (c) =>
+      c.json({ fortune: 'You will be rich' }),
+    )
     discovery(app, mppx, { auto: true, info: { title: 'Auto API', version: '2.0.0' } })
 
     const server = await createServer(app)
@@ -216,6 +218,7 @@ describe('charge', () => {
     expect(body.paths['/'].get['x-payment-info'].offers[0]).toMatchObject({
       amount: '1000000',
       currency: asset,
+      description: 'Daily fortune',
       intent: 'charge',
       method: 'tempo',
     })

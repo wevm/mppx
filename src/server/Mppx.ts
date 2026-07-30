@@ -2167,6 +2167,7 @@ declare namespace MethodFn {
 /** A configured handler — the return value of e.g. `mppx.charge({ ... })`. @internal */
 type ConfiguredHandler = ((input: Request) => Promise<MethodFn.Response<Transport.Http>>) & {
   _internal: {
+    description?: string | undefined
     name: string
     intent: string
     html: Html.Options | undefined

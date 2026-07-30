@@ -1,3 +1,4 @@
+import * as Challenge from '../Challenge.js'
 import * as Method from '../Method.js'
 import * as Mppx from '../server/Mppx.js'
 import * as z from '../zod.js'
@@ -56,12 +57,46 @@ const subscribe = Method.toServer(
       credential: { payload: z.object({ signature: z.string() }) },
       request: z.object({
         amount: z.string(),
+        interval: z.string(),
+        recipient: z.string(),
       }),
     },
   }),
   {
     verify: async () => ({
       method: 'tempo',
+      reference: '',
+      status: 'success' as const,
+      timestamp: '',
+    }),
+  },
+)
+
+const transformedCharge = Method.toServer(
+  Method.from({
+    intent: 'charge',
+    name: 'transformed',
+    schema: {
+      credential: { payload: z.object({ signature: z.string() }) },
+      request: z.pipe(
+        z.object({
+          amount: z.string(),
+          asset: z.string(),
+          decimals: z.number(),
+          recipient: z.string(),
+        }),
+        z.transform(({ amount, asset, decimals, recipient }) => ({
+          amount: String(Number(amount) * 10 ** decimals),
+          currency: asset,
+          methodDetails: { decimals },
+          recipient,
+        })),
+      ),
+    },
+  }),
+  {
+    verify: async () => ({
+      method: 'transformed',
       reference: '',
       status: 'success' as const,
       timestamp: '',
@@ -169,6 +204,7 @@ describe('generate', () => {
                   {
                     "amount": "50",
                     "currency": "usd",
+                    "description": "Search credits",
                     "intent": "charge",
                     "method": "tempo",
                     "recipient": "0x1",
@@ -180,6 +216,62 @@ describe('generate', () => {
         },
       }
     `)
+  })
+
+  test('matches handler discovery to its canonical runtime challenge', async () => {
+    const mppx = createMppx([transformedCharge])
+    const handler = mppx.charge({
+      amount: '2',
+      asset: '0xUSDC',
+      decimals: 6,
+      description: 'Canonical price',
+      recipient: '0x1',
+    })
+
+    const doc = generate(mppx, {
+      routes: [{ handler, method: 'post', path: '/api/resource' }],
+    }) as any
+    const result = await handler(new Request('https://example.com/api/resource'))
+    if (result.status !== 402) throw new Error('Expected payment challenge')
+    const challenge = Challenge.fromResponse(result.challenge)
+
+    expect(doc.paths['/api/resource'].post['x-payment-info'].offers[0]).toEqual({
+      amount: challenge.request.amount,
+      currency: challenge.request.currency,
+      description: challenge.description,
+      intent: challenge.intent,
+      method: challenge.method,
+      recipient: challenge.request.recipient,
+    })
+  })
+
+  test('applies method schema transforms to legacy route discovery', () => {
+    const mppx = createMppx([transformedCharge])
+    const doc = generate(mppx, {
+      routes: [
+        {
+          intent: 'charge',
+          method: 'post',
+          options: {
+            amount: '2',
+            asset: '0xUSDC',
+            decimals: 6,
+            description: 'Canonical price',
+            recipient: '0x1',
+          },
+          path: '/api/resource',
+        },
+      ],
+    }) as any
+
+    expect(doc.paths['/api/resource'].post['x-payment-info'].offers[0]).toEqual({
+      amount: '2000000',
+      currency: '0xUSDC',
+      description: 'Canonical price',
+      intent: 'charge',
+      method: 'transformed',
+      recipient: '0x1',
+    })
   })
 
   test('derives only explicitly composed payment offers from a handler', () => {
@@ -200,6 +292,7 @@ describe('generate', () => {
       {
         amount: '50',
         currency: '0xUSDC',
+        description: 'USDC',
         intent: 'charge',
         method: 'tempo',
         recipient: '0x1',
@@ -207,11 +300,56 @@ describe('generate', () => {
       {
         amount: '50',
         currency: '0xNANOUSD',
+        description: 'NANOUSD',
         intent: 'charge',
         method: 'tempo',
         recipient: '0x1',
       },
     ])
+  })
+
+  test('keeps nested composed discovery in runtime challenge order', async () => {
+    const mppx = createMppx([charge])
+    const handler = Mppx.compose(
+      mppx.charge({
+        amount: '1',
+        currency: '0xUSDC',
+        description: 'USDC',
+        recipient: '0x1',
+      }),
+      Mppx.compose(
+        mppx.charge({
+          amount: '2',
+          currency: '0xNANOUSD',
+          description: 'NANOUSD',
+          recipient: '0x1',
+        }),
+        mppx.charge({
+          amount: '3',
+          currency: 'usd',
+          description: 'Card',
+          recipient: '0x1',
+        }),
+      ),
+    )
+
+    const doc = generate(mppx, {
+      routes: [{ handler, method: 'post', path: '/api/search' }],
+    }) as any
+    const result = await handler(new Request('https://example.com/api/search'))
+    if (result.status !== 402) throw new Error('Expected payment challenge')
+
+    const discovered = doc.paths['/api/search'].post['x-payment-info'].offers
+    const challenged = Challenge.fromResponseList(result.challenge).map((challenge) => ({
+      amount: challenge.request.amount,
+      currency: challenge.request.currency,
+      description: challenge.description,
+      intent: challenge.intent,
+      method: challenge.method,
+      recipient: challenge.request.recipient,
+    }))
+
+    expect(discovered).toEqual(challenged)
   })
 
   test('handles null amount for session intent', () => {

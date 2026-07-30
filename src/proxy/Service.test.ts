@@ -123,7 +123,7 @@ describe('paymentOf', () => {
     expect(Service.paymentOf({ pay: handler, options: {} })).toBeNull()
   })
 
-  test('behavior: strips function internals from payment metadata', () => {
+  test('behavior: derives payment metadata from the canonical request', () => {
     const handler = Object.assign(
       async () => ({
         status: 200 as const,
@@ -131,11 +131,18 @@ describe('paymentOf', () => {
       }),
       {
         _internal: {
-          _canonicalRequest: () => ({}),
+          _canonicalRequest: {
+            amount: '1000000',
+            currency: '0xUSDC',
+            recipient: '0x1',
+          },
           _stableBinding: () => ({}),
           amount: '1',
+          asset: 'raw-asset',
           authorize: () => undefined,
+          client: { apiKey: 'secret' },
           decimals: 6,
+          description: 'Generate text',
           defaults: {},
           intent: 'charge',
           name: 'mock',
@@ -151,9 +158,11 @@ describe('paymentOf', () => {
 
     expect(Service.paymentOf(handler as never)).toEqual({
       amount: '1000000',
-      decimals: 6,
+      currency: '0xUSDC',
+      description: 'Generate text',
       intent: 'charge',
       method: 'mock',
+      recipient: '0x1',
     })
   })
 
@@ -167,16 +176,18 @@ describe('paymentOf', () => {
         _internal: {
           offers: [
             {
-              _canonicalRequest: {},
+              _canonicalRequest: { amount: '1000000', currency: '0xUSDC' },
               amount: '1',
               decimals: 6,
+              description: 'USDC',
               intent: 'charge',
               name: 'tempo',
             },
             {
-              _canonicalRequest: {},
+              _canonicalRequest: { amount: '2000000', currency: '0xNANOUSD' },
               amount: '2',
               decimals: 6,
+              description: 'NANOUSD',
               intent: 'charge',
               name: 'tempo',
             },
@@ -187,8 +198,20 @@ describe('paymentOf', () => {
 
     expect(Service.paymentOf(handler as never)).toEqual({
       offers: [
-        { amount: '1000000', decimals: 6, intent: 'charge', method: 'tempo' },
-        { amount: '2000000', decimals: 6, intent: 'charge', method: 'tempo' },
+        {
+          amount: '1000000',
+          currency: '0xUSDC',
+          description: 'USDC',
+          intent: 'charge',
+          method: 'tempo',
+        },
+        {
+          amount: '2000000',
+          currency: '0xNANOUSD',
+          description: 'NANOUSD',
+          intent: 'charge',
+          method: 'tempo',
+        },
       ],
     })
   })
