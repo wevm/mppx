@@ -310,7 +310,14 @@ function matchesPaymentBinding(endpoint: unknown, binding: PaymentBinding | null
   if (!binding) return true
   const payment = Service.paymentOf(endpoint as Exclude<Service.Endpoint, true>)
   if (!payment) return true
-  return payment.method === binding.method && payment.intent === binding.intent
+  const offers = Array.isArray(payment.offers) ? payment.offers : [payment]
+  return offers.some(
+    (offer) =>
+      typeof offer === 'object' &&
+      offer !== null &&
+      offer.method === binding.method &&
+      offer.intent === binding.intent,
+  )
 }
 
 function createFetchProxy(

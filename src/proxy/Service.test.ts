@@ -156,6 +156,42 @@ describe('paymentOf', () => {
       method: 'mock',
     })
   })
+
+  test('behavior: derives every explicitly composed payment offer', () => {
+    const handler = Object.assign(
+      async () => ({
+        status: 200 as const,
+        withReceipt: <T>(r: T) => r,
+      }),
+      {
+        _internal: {
+          offers: [
+            {
+              _canonicalRequest: {},
+              amount: '1',
+              decimals: 6,
+              intent: 'charge',
+              name: 'tempo',
+            },
+            {
+              _canonicalRequest: {},
+              amount: '2',
+              decimals: 6,
+              intent: 'charge',
+              name: 'tempo',
+            },
+          ],
+        },
+      },
+    )
+
+    expect(Service.paymentOf(handler as never)).toEqual({
+      offers: [
+        { amount: '1000000', decimals: 6, intent: 'charge', method: 'tempo' },
+        { amount: '2000000', decimals: 6, intent: 'charge', method: 'tempo' },
+      ],
+    })
+  })
 })
 
 describe('getOptions', () => {

@@ -206,10 +206,20 @@ export function getOptions(endpoint: Endpoint): EndpointOptions | undefined {
   return undefined
 }
 
+/** Derives discovery payment metadata from an explicitly priced endpoint handler. */
 export function paymentOf(endpoint: Endpoint): Record<string, unknown> | null {
   if (endpoint === true) return null
   const handler = typeof endpoint === 'function' ? endpoint : endpoint.pay
   if (!('_internal' in handler)) return null
+  const internal = handler._internal as Record<string, unknown>
+  if (Array.isArray(internal.offers) && !('_canonicalRequest' in internal))
+    return {
+      offers: internal.offers.map((offer) => paymentFromInternal(offer as Record<string, unknown>)),
+    }
+  return paymentFromInternal(internal)
+}
+
+function paymentFromInternal(internal: Record<string, unknown>): Record<string, unknown> {
   const {
     name,
     intent,
@@ -224,7 +234,7 @@ export function paymentOf(endpoint: Endpoint): Record<string, unknown> | null {
     transport: _t,
     verify: _v,
     ...rest
-  } = handler._internal as Record<string, unknown>
+  } = internal
   const amount = (() => {
     if (typeof rest.amount === 'string' && typeof rest.decimals === 'number')
       return String(Value.from(rest.amount, rest.decimals))

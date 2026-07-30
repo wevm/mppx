@@ -181,6 +181,7 @@ describe('create', () => {
   })
 
   test('behavior: GET /openapi.json returns discovery JSON', async () => {
+    const alternateAsset = '0x20c0000000000000000000000000000000000002'
     const proxy = ApiProxy.create({
       categories: ['gateway'],
       docs: {
@@ -196,6 +197,10 @@ describe('create', () => {
           routes: {
             'GET /v1/models': true,
             'POST /v1/generate': mppx_server.charge({ amount: '1', description: 'Generate text' }),
+            'POST /v1/multi': mppx_server.compose(
+              ['tempo/charge', { amount: '1', currency: asset, decimals: 6 }],
+              ['tempo/charge', { amount: '2', currency: alternateAsset, decimals: 6 }],
+            ),
             'POST /v1/stream': mppx_server.session({
               amount: '1',
               description: 'Stream text',
@@ -231,6 +236,20 @@ describe('create', () => {
       intent: 'charge',
       method: 'tempo',
     })
+    expect(body.paths['/api/v1/multi'].post['x-payment-info'].offers).toEqual([
+      expect.objectContaining({
+        amount: '1000000',
+        currency: asset,
+        intent: 'charge',
+        method: 'tempo',
+      }),
+      expect.objectContaining({
+        amount: '2000000',
+        currency: alternateAsset,
+        intent: 'charge',
+        method: 'tempo',
+      }),
+    ])
     expect(body.paths['/api/v1/stream'].post['x-payment-info'].offers[0]).toMatchObject({
       amount: '1000000',
       currency: asset,
@@ -576,7 +595,7 @@ describe('create', () => {
     expect(res.status).toBe(402)
   })
 
-  test('behavior: management POST uses credential method binding to disambiguate same-path paid routes', async () => {
+  test('behavior: management POST uses composed credential binding to disambiguate same-path paid routes', async () => {
     const alpha = Method.from({
       name: 'alpha',
       intent: 'charge',
@@ -631,7 +650,7 @@ describe('create', () => {
         Service.from('api', {
           baseUrl: 'https://example.com',
           routes: {
-            'GET /v1/stream': handler['alpha/charge']({ amount: '1' }),
+            'GET /v1/stream': handler.compose(['alpha/charge', { amount: '1' }]),
             'PATCH /v1/stream': handler['beta/charge']({ amount: '1' }),
           },
         }),

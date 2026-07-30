@@ -227,9 +227,7 @@ export type Mppx<
        * })
        * ```
        */
-      compose(
-        ...entries: ComposeEntry<FlattenMethods<methods>>[]
-      ): (input: Request) => Promise<MethodFn.Response<Transport.Http>>
+      compose(...entries: ComposeEntry<FlattenMethods<methods>>[]): ComposedHandler
     }
   : {}) &
   Handlers<FlattenMethods<methods>, transport> & {
@@ -2179,6 +2177,16 @@ type ConfiguredHandler = ((input: Request) => Promise<MethodFn.Response<Transpor
   }
 }
 
+type ComposedHandler = ((input: Request) => Promise<MethodFn.Response<Transport.Http>>) & {
+  _internal?: {
+    offers: readonly ConfiguredHandler['_internal'][]
+  }
+}
+
+type HandlerDiscoveryMetadata =
+  | ConfiguredHandler['_internal']
+  | NonNullable<ComposedHandler['_internal']>
+
 const paymentAuthChallengeHeader = Constants.Headers.wwwAuthenticate
 
 const challengeHeaderMerges = [
@@ -2252,9 +2260,7 @@ type ComposeEntry<methods extends readonly Method.AnyServer[]> =
  */
 type ComposeHtmlOptions = Html.Config
 
-export function compose(
-  ...args: readonly unknown[]
-): (input: Request) => Promise<MethodFn.Response<Transport.Http>> {
+export function compose(...args: readonly unknown[]): ComposedHandler {
   // Extract optional html options from last argument
   const last = args[args.length - 1]
   const composeOptions: Html.Options | undefined =
@@ -2279,7 +2285,7 @@ export function compose(
 
   if (handlers.length === 0) throw new Error('compose() requires at least one handler')
 
-  return async (input: Request) => {
+  const composed: ComposedHandler = async (input: Request) => {
     // Serve service worker for html-enabled compose
     if (new URL(input.url).searchParams.has(Html.params.serviceWorker)) {
       const hasHtml = handlers.some((h) => (h as ConfiguredHandler)._internal?.html)
@@ -2501,6 +2507,21 @@ export function compose(
       challenge: new Response(body, { status: 402, headers: mergedHeaders }),
     }
   }
+
+  const offers = handlers.flatMap((handler) => {
+    const internal = (handler as ConfiguredHandler | ComposedHandler)._internal
+    if (!internal) return []
+    if (isComposedHandlerMetadata(internal)) return internal.offers
+    return [internal]
+  })
+  if (offers.length > 0) composed._internal = { offers }
+  return composed
+}
+
+function isComposedHandlerMetadata(
+  internal: HandlerDiscoveryMetadata,
+): internal is NonNullable<ComposedHandler['_internal']> {
+  return 'offers' in internal && !('_canonicalRequest' in internal)
 }
 
 type ChallengeHeaderMerge = {

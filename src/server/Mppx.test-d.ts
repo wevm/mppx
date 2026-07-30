@@ -182,6 +182,7 @@ describe('Mppx type tests', () => {
     assertType<Promise<{ status: 402; challenge: Response } | { status: 200; withReceipt: any }>>(
       {} as Awaited<HandlerReturn> as any,
     )
+    expectTypeOf(_handler._internal?.offers).toMatchTypeOf<readonly unknown[] | undefined>()
   })
 
   test('static Mppx.compose accepts configured handlers', () => {

@@ -1,12 +1,19 @@
 import type * as Method from '../Method.js'
 import { PaymentInfo, type ServiceInfo } from './Discovery.js'
 
+/** Metadata for one explicitly configured payment offer. */
+export type DiscoveryOffer = {
+  _canonicalRequest: Record<string, unknown>
+  intent: string
+  name: string
+}
+
+/** Metadata retained by a single or composed payment handler. */
+export type DiscoveryMetadata = DiscoveryOffer | { offers: readonly DiscoveryOffer[] }
+
+/** Payment handler carrying metadata used to generate discovery documents. */
 export type DiscoveryHandler = ((...args: any[]) => unknown) & {
-  _internal?: {
-    _canonicalRequest: Record<string, unknown>
-    intent: string
-    name: string
-  }
+  _internal?: DiscoveryMetadata
 }
 
 export type LegacyRouteConfig = {
@@ -151,11 +158,15 @@ function resolveRoute(
     return {
       method: route.method,
       path: route.path,
-      payment: paymentInfoFromCanonical({
-        canonicalRequest: internal._canonicalRequest,
-        intent: internal.intent,
-        method: internal.name,
-      }),
+      payment: {
+        offers: discoveryOffers(internal).map((offer) =>
+          paymentInfoFromCanonical({
+            canonicalRequest: offer._canonicalRequest,
+            intent: offer.intent,
+            method: offer.name,
+          }),
+        ),
+      },
       ...(route.requestBody ? { requestBody: route.requestBody } : {}),
       ...(route.summary ? { summary: route.summary } : {}),
     }
@@ -208,6 +219,17 @@ function paymentInfoFromCanonical(route: {
   }
 
   return base
+}
+
+function discoveryOffers(internal: DiscoveryMetadata): readonly DiscoveryOffer[] {
+  if (isComposedDiscoveryMetadata(internal)) return internal.offers
+  return [internal]
+}
+
+function isComposedDiscoveryMetadata(
+  internal: DiscoveryMetadata,
+): internal is Extract<DiscoveryMetadata, { offers: unknown }> {
+  return 'offers' in internal && !('_canonicalRequest' in internal)
 }
 
 function pickString(value: unknown) {

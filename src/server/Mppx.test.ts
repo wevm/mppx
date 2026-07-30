@@ -1968,6 +1968,40 @@ describe('compose', () => {
     expect(wwwAuth).toContain('method="beta"')
   })
 
+  test('retains only explicitly configured offers as composed discovery metadata', () => {
+    const mppx = Mppx.create({ methods: [alphaMethod, betaMethod], realm, secretKey })
+    const configured = mppx.compose([alphaMethod, challengeOpts], [betaMethod, challengeOpts])
+
+    expect(configured._internal?.offers).toMatchObject([
+      {
+        _canonicalRequest: {
+          amount: challengeOpts.amount,
+          currency: challengeOpts.currency,
+          recipient: challengeOpts.recipient,
+        },
+        intent: 'charge',
+        name: 'alpha',
+      },
+      {
+        _canonicalRequest: {
+          amount: challengeOpts.amount,
+          currency: challengeOpts.currency,
+          recipient: challengeOpts.recipient,
+        },
+        intent: 'charge',
+        name: 'beta',
+      },
+    ])
+
+    const custom = async () =>
+      ({
+        status: 402,
+        challenge: new Response(null, { status: 402 }),
+      }) as const
+    const composed = Mppx.compose(mppx.alpha.charge(challengeOpts), custom)
+    expect(composed._internal?.offers).toMatchObject([{ intent: 'charge', name: 'alpha' }])
+  })
+
   test('broadcasts duplicate tempo/session variants in compose order', async () => {
     const mppx = Mppx.create({
       methods: [tip1034SessionMethod, legacySessionMethod],

@@ -182,6 +182,38 @@ describe('generate', () => {
     `)
   })
 
+  test('derives only explicitly composed payment offers from a handler', () => {
+    const mppx = createMppx([charge, session])
+    const handler = mppx.compose(
+      ['tempo/charge', { amount: '50', currency: '0xUSDC', description: 'USDC', recipient: '0x1' }],
+      [
+        'tempo/charge',
+        { amount: '50', currency: '0xNANOUSD', description: 'NANOUSD', recipient: '0x1' },
+      ],
+    )
+
+    const doc = generate(mppx, {
+      routes: [{ handler, method: 'post', path: '/api/search' }],
+    }) as any
+
+    expect(doc.paths['/api/search'].post['x-payment-info'].offers).toEqual([
+      {
+        amount: '50',
+        currency: '0xUSDC',
+        intent: 'charge',
+        method: 'tempo',
+        recipient: '0x1',
+      },
+      {
+        amount: '50',
+        currency: '0xNANOUSD',
+        intent: 'charge',
+        method: 'tempo',
+        recipient: '0x1',
+      },
+    ])
+  })
+
   test('handles null amount for session intent', () => {
     const mppx = createMppx([session])
     const doc = generate(mppx, {
