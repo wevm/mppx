@@ -2321,33 +2321,34 @@ export function compose(...args: readonly unknown[]): ComposedHandler {
         const credReq = credential.challenge.request as Record<string, unknown>
 
         // Filter by name+intent, then narrow by comparing stable request fields
-        // from the echoed challenge against each handler's canonical request.
+        // from the echoed challenge against each handler's configured offers.
         // Uses the schema-parsed canonical form (not raw options) so that
         // transformed fields (e.g. amount with decimals) match correctly.
         // Also checks inside methodDetails for fields moved there by transforms.
-        const candidates = handlers.filter((h) => {
-          try {
-            const internal = (h as ConfiguredHandler)._internal
-            if (!internal || internal.name !== credMethod || internal.intent !== credIntent)
+        const candidates = handlers.filter((handler) =>
+          getConfiguredOffers(handler).some((internal) => {
+            try {
+              if (internal.name !== credMethod || internal.intent !== credIntent) return false
+              const mismatch = internal._stableBinding
+                ? getRequestBindingMismatch(
+                    getStableBinding(internal._canonicalRequest, internal._stableBinding),
+                    getStableBinding(credReq, internal._stableBinding),
+                  )
+                : getPinnedRequestBindingMismatch(internal._canonicalRequest, credReq)
+              return !mismatch && opaqueValuesMatch(internal.meta, credential.challenge.meta)
+            } catch {
               return false
-            const mismatch = internal._stableBinding
-              ? getRequestBindingMismatch(
-                  getStableBinding(internal._canonicalRequest, internal._stableBinding),
-                  getStableBinding(credReq, internal._stableBinding),
-                )
-              : getPinnedRequestBindingMismatch(internal._canonicalRequest, credReq)
-            return !mismatch && opaqueValuesMatch(internal.meta, credential.challenge.meta)
-          } catch {
-            return false
-          }
-        })
+            }
+          }),
+        )
 
         const match =
           candidates[0] ??
-          handlers.find((h) => {
-            const meta = (h as ConfiguredHandler)._internal
-            return meta?.name === credMethod && meta?.intent === credIntent
-          })
+          handlers.find((handler) =>
+            getConfiguredOffers(handler).some(
+              (internal) => internal.name === credMethod && internal.intent === credIntent,
+            ),
+          )
         if (match) return match(input)
       }
 
@@ -2509,14 +2510,19 @@ export function compose(...args: readonly unknown[]): ComposedHandler {
     }
   }
 
-  const offers = handlers.flatMap((handler) => {
-    const internal = (handler as ConfiguredHandler | ComposedHandler)._internal
-    if (!internal) return []
-    if (isComposedHandlerMetadata(internal)) return internal.offers
-    return [internal]
-  })
+  const offers = handlers.flatMap(getConfiguredOffers)
   if (offers.length > 0) composed._internal = { offers }
   return composed
+}
+
+/** Returns the flattened configured offers accepted by a handler. */
+function getConfiguredOffers(
+  handler: ConfiguredHandler | ComposedHandler,
+): readonly ConfiguredHandler['_internal'][] {
+  const internal = handler._internal
+  if (!internal) return []
+  if (isComposedHandlerMetadata(internal)) return internal.offers
+  return [internal]
 }
 
 function isComposedHandlerMetadata(

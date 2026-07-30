@@ -2463,6 +2463,34 @@ describe('compose', () => {
     expect(result.status).toBe(200)
   })
 
+  test('dispatches credentials to a nested composed handler', async () => {
+    const mppx = Mppx.create({ methods: [alphaMethod, betaMethod], realm, secretKey })
+    const handle = Mppx.compose(
+      mppx.alpha.charge(challengeOpts),
+      Mppx.compose(mppx.beta.charge(challengeOpts)),
+    )
+
+    const firstResult = await handle(new Request('https://example.com/resource'))
+    expect(firstResult.status).toBe(402)
+    if (firstResult.status !== 402) throw new Error()
+
+    const betaChallenge = Challenge.fromResponseList(firstResult.challenge).find(
+      (challenge) => challenge.method === 'beta',
+    )!
+    const credential = Credential.from({
+      challenge: betaChallenge,
+      payload: { token: 'valid' },
+    })
+
+    const result = await handle(
+      new Request('https://example.com/resource', {
+        headers: { Authorization: Credential.serialize(credential) },
+      }),
+    )
+
+    expect(result.status).toBe(200)
+  })
+
   test('returns 402 when credential method does not match any handler', async () => {
     const mppx = Mppx.create({ methods: [alphaMethod], realm, secretKey })
 
