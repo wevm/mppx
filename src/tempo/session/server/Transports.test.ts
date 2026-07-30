@@ -1,9 +1,10 @@
 import type { Address, Hex } from 'viem'
-import { describe, expect, test } from 'vp/test'
+import { describe, expect, test, vi } from 'vp/test'
 
 import { ChannelClosedError } from '../../../Errors.js'
 import type { NeedVoucherEvent } from '../precompile/Protocol.js'
 import * as ChannelStore from './ChannelStore.js'
+import { meterIterable } from './MeteredStream.js'
 import {
   commitReservedCharges,
   reserveChargeOrWait,
@@ -186,6 +187,78 @@ describe('MeteredStream', () => {
           units: 1,
         }),
       ).rejects.toThrow(ChannelClosedError)
+    })
+
+    test('commitReservedCharges returns undefined when there is nothing to commit', async () => {
+      const store = memoryStore(channel())
+      await expect(
+        commitReservedCharges({ amount: 0n, channelId, store, units: 0 }),
+      ).resolves.toBeUndefined()
+    })
+
+    test('commitReservedCharges returns the updated channel after a successful commit', async () => {
+      const store = memoryStore(channel({ spent: 20n, units: 2, highestVoucherAmount: 50n }))
+      await expect(
+        commitReservedCharges({ amount: 10n, channelId, store, units: 1 }),
+      ).resolves.toMatchObject({ spent: 30n, units: 3 })
+    })
+
+    test('meterIterable invokes onChargesCommitted after a successful commit', async () => {
+      const store = memoryStore(channel({ spent: 0n, units: 0, highestVoucherAmount: 30n }))
+      const onChargesCommitted = vi.fn()
+
+      const values: string[] = []
+      for await (const value of meterIterable({
+        channelId,
+        emitNeedVoucher() {},
+        formatNeedVoucher,
+        generate: async function* (stream) {
+          await stream.charge(10n)
+          yield 'one'
+          await stream.charge(10n)
+          yield 'two'
+        },
+        onChargesCommitted,
+        pollIntervalMs: 1,
+        store,
+        tickCost: 10n,
+      })) {
+        values.push(value)
+      }
+
+      expect(values).toEqual(['one', 'two'])
+      expect(onChargesCommitted).toHaveBeenCalledTimes(2)
+      expect(onChargesCommitted.mock.calls[0]?.[0]).toMatchObject({ spent: 10n, units: 1 })
+      expect(onChargesCommitted.mock.calls[1]?.[0]).toMatchObject({ spent: 20n, units: 2 })
+    })
+
+    test('meterIterable does not invoke onChargesCommitted when commit fails', async () => {
+      const store = memoryStore(channel({ spent: 0n, units: 0, highestVoucherAmount: 10n }))
+      const onChargesCommitted = vi.fn()
+
+      await expect(async () => {
+        for await (const _value of meterIterable({
+          channelId,
+          emitNeedVoucher() {},
+          formatNeedVoucher,
+          generate: async function* (stream) {
+            await stream.charge(10n)
+            await store.updateChannel(channelId, (current) =>
+              current ? { ...current, highestVoucherAmount: 0n } : current,
+            )
+            yield 'blocked'
+          },
+          onChargesCommitted,
+          pollIntervalMs: 1,
+          store,
+          tickCost: 10n,
+        })) {
+          // drain
+        }
+      }).rejects.toThrow('reserved voucher coverage is no longer available')
+
+      expect(onChargesCommitted).not.toHaveBeenCalled()
+      expect(await store.getChannel(channelId)).toMatchObject({ spent: 0n, units: 0 })
     })
   })
 })

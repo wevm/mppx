@@ -49,7 +49,7 @@ function hasPrepaidSessionTick(receipt: SessionReceipt): boolean {
  * - Fallback to standard HTTP receipt handling for plain Response
  */
 export function sse(options: sse.Options & { store: ChannelStore.ChannelStore }): Sse {
-  const { pollingInterval, poll } = options
+  const { onChargesCommitted, pollingInterval, poll } = options
 
   // When `poll` is true, strip `waitForUpdate` so the SSE charge loop
   // falls back to polling. This is needed for runtimes like Cloudflare Workers
@@ -115,6 +115,7 @@ export function sse(options: sse.Options & { store: ChannelStore.ChannelStore })
           channelId,
           challengeId: verifiedChallengeId,
           tickCost,
+          onChargesCommitted,
           pollIntervalMs: pollingInterval,
           generate,
           prepaidUnits: hasPrepaidSessionTick(receipt as SessionReceipt) ? 1 : 0,
@@ -227,6 +228,13 @@ export function sse(options: sse.Options & { store: ChannelStore.ChannelStore })
 /** Type helpers for the Tempo SSE transport adapter. */
 export declare namespace sse {
   type Options = {
+    /**
+     * Invoked after each successful stream charge commit.
+     *
+     * `session({ sse: true })` uses this to evaluate whether its server-owned
+     * `settlementSchedule` is due during SSE metering.
+     */
+    onChargesCommitted?: ((channel: ChannelStore.State) => void | Promise<void>) | undefined
     /**
      * When true, the charge loop uses polling instead of `waitForUpdate()`.
      *

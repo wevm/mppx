@@ -31,7 +31,7 @@ import { sessionManager as precompileSessionManager } from '../client/SessionMan
 import * as Channel from '../precompile/Channel.js'
 import { escrowAbi } from '../precompile/escrow.abi.js'
 import { tip20ChannelEscrow } from '../precompile/Protocol.js'
-import { deserializeSessionReceipt } from '../precompile/Protocol.js'
+import { createSessionReceipt, deserializeSessionReceipt } from '../precompile/Protocol.js'
 import type { SessionReceipt } from '../precompile/Protocol.js'
 import type { SessionCredentialPayload } from '../precompile/Protocol.js'
 import * as Types from '../precompile/Protocol.js'
@@ -3570,6 +3570,87 @@ describe('onSessionSettlement', () => {
       channelId: openPayload.channelId,
       amount: 500n,
       delta: 500n,
+    })
+  })
+
+  test('evaluates the settlement schedule after committed SSE charges', async () => {
+    const events: { trigger: string; amount: bigint; delta: bigint }[] = []
+    const settlementCountsBeforeSecondCharge: number[] = []
+    const rawStore = Store.memory()
+    const store = channelStore(rawStore)
+    const openPayload = await createOpenPayload({ initialAmount: 200n })
+    await persistPrecompileChannel(store, openPayload, {
+      payee: payer.address,
+    })
+
+    const method = session({
+      account: payer,
+      amount: '100',
+      chainId,
+      currency: token,
+      decimals: 0,
+      recipient: payer.address,
+      settlementSchedule: { amount: 200n },
+      sse: true,
+      store: rawStore,
+      unitType: 'token',
+      getClient: () => createSettleClient(openPayload.channelId, 200n),
+      onSessionSettlement: (context) => {
+        events.push({
+          trigger: context.trigger,
+          amount: context.amount,
+          delta: context.delta,
+        })
+      },
+    })
+    const challenge = {
+      ...makeChallenge(openPayload.channelId),
+      request: {
+        ...makeChallenge(openPayload.channelId).request,
+        amount: '100',
+        recipient: payer.address,
+        unitType: 'token',
+      },
+    }
+    const credential = {
+      challenge,
+      payload: {
+        action: 'voucher' as const,
+        channelId: openPayload.channelId,
+        cumulativeAmount: '200',
+        signature: openPayload.signature,
+      },
+    }
+
+    const response = method.transport!.respondReceipt({
+      challengeId: challenge.id,
+      credential,
+      input: new Request('https://api.example.com/stream'),
+      receipt: createSessionReceipt({
+        acceptedCumulative: 200n,
+        challengeId: challenge.id,
+        channelId: openPayload.channelId,
+        spent: 0n,
+        units: 0,
+      }),
+      response: async function* (stream) {
+        await stream.charge(100n)
+        yield 'before-threshold'
+        settlementCountsBeforeSecondCharge.push(events.length)
+        await stream.charge(100n)
+        yield 'threshold-crossed'
+      },
+    })
+
+    await expect(response.text()).resolves.toContain('threshold-crossed')
+    expect(settlementCountsBeforeSecondCharge).toEqual([0])
+    expect(events).toEqual([{ trigger: 'scheduled', amount: 200n, delta: 200n }])
+    expect(await store.getChannel(openPayload.channelId)).toMatchObject({
+      lastSettlementSpent: 200n,
+      lastSettlementUnits: 2,
+      settledOnChain: 200n,
+      spent: 200n,
+      units: 2,
     })
   })
 

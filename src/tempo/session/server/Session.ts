@@ -346,6 +346,26 @@ export function session<const parameters extends session.Parameters>(
     ? Transport.sse({
         store,
         ...(typeof parameters.sse === 'object' ? parameters.sse : undefined),
+        ...(settlementSchedule
+          ? {
+              onChargesCommitted: async (channel) => {
+                const client = await getClient({ chainId: channel.chainId })
+                await maybeSettleScheduled({
+                  account,
+                  client,
+                  ...(typeof configuredFeePayer === 'object'
+                    ? { feePayer: configuredFeePayer }
+                    : {}),
+                  feePayerPolicy: parameters.feePayerPolicy,
+                  feeToken: parameters.feeToken,
+                  onSessionSettlement,
+                  schedule: settlementSchedule,
+                  store,
+                  channel,
+                })
+              },
+            }
+          : {}),
       })
     : undefined
 

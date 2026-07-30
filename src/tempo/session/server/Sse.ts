@@ -53,7 +53,8 @@ export type { SessionController } from './MeteredStream.js'
  * 3. If balance is exhausted, emits `event: payment-need-voucher`
  *    and polls store until the client tops up the channel.
  * 4. Commits the reserved charge immediately before the chunk is emitted.
- * 5. On generator completion, emits a final `event: payment-receipt`.
+ * 5. Optionally evaluates whether scheduled settlement is due after a successful commit.
+ * 6. On generator completion, emits a final `event: payment-receipt`.
  *
  * Returns a `ReadableStream<Uint8Array>` suitable for use as an HTTP response body.
  */
@@ -64,6 +65,7 @@ export function serve(options: serve.Options): ReadableStream<Uint8Array> {
     challengeId,
     tickCost,
     generate,
+    onChargesCommitted,
     pollIntervalMs = 100,
     signal,
   } = options
@@ -81,6 +83,7 @@ export function serve(options: serve.Options): ReadableStream<Uint8Array> {
           channelId,
           tickCost,
           generate,
+          onChargesCommitted,
           pollIntervalMs,
           prepaidUnits: options.prepaidUnits,
           signal,
@@ -121,6 +124,8 @@ export declare namespace serve {
     challengeId: string
     tickCost: bigint
     generate: AsyncIterable<string> | ((stream: SessionController) => AsyncIterable<string>)
+    /** Invoked after each successful stream charge commit, before the value is emitted. */
+    onChargesCommitted?: ((channel: ChannelStore.State) => void | Promise<void>) | undefined
     pollIntervalMs?: number | undefined
     prepaidUnits?: number | undefined
     signal?: AbortSignal | undefined

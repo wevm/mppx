@@ -97,6 +97,7 @@ export async function serve(options: serve.Options): Promise<void> {
   const {
     amount: expectedAmount,
     generate,
+    onChargesCommitted,
     pollIntervalMs = 100,
     route,
     socket,
@@ -152,6 +153,7 @@ export async function serve(options: serve.Options): Promise<void> {
         channelId: context.channelId,
         tickCost: context.tickCost,
         generate,
+        onChargesCommitted,
         pollIntervalMs,
         signal: abortController.signal,
         emitNeedVoucher: (message) => send(socket, message),
@@ -328,6 +330,8 @@ export declare namespace serve {
     /** Application stream. A manual stream can call `charge(amount)` with a
      *  per-message raw-unit amount; omitting it uses the challenge tick cost. */
     generate: AsyncIterable<string> | ((stream: SessionController) => AsyncIterable<string>)
+    /** Optional hook invoked after each successful stream charge commit. */
+    onChargesCommitted?: ((channel: ChannelStore.State) => void | Promise<void>) | undefined
     pollIntervalMs?: number | undefined
     /** Payment route handler. Receives synthetic `POST` requests with only
      *  the `Authorization` header — no cookies, bodies, or upgrade headers. */

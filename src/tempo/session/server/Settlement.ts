@@ -123,7 +123,13 @@ export type SettlementSchedule = {
   units?: number | undefined
   /** Settle after this much additional settlement amount since the previous scheduled settlement. */
   amount?: string | bigint | undefined
-  /** Settle after this many milliseconds since the previous scheduled settlement. */
+  /**
+   * Settle after this many milliseconds since the previous scheduled settlement.
+   *
+   * Evaluation is opportunistic on charge activity (ordinary paid requests and
+   * committed stream charges). There is no background timer: settlement occurs
+   * on the first charge after the interval elapses.
+   */
   intervalMs?: number | undefined
 }
 
