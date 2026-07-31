@@ -53,6 +53,7 @@ import {
   type OnSessionSettlement,
   type SettlementSchedule,
 } from './Settlement.js'
+import * as Ws from './Ws.js'
 
 /** Server-side automatic settlement schedule. */
 export type { SettlementSchedule } from './Settlement.js'
@@ -348,6 +349,12 @@ export function session<const parameters extends session.Parameters>(
       store,
     })
   }
+  const serveWebSocket: session.Extensions['serveWebSocket'] = (options) =>
+    Ws.serve({
+      ...options,
+      onChargeCommitted: settleScheduled,
+      store,
+    })
   const bootstrapCharge = ChargeServer.charge({
     account,
     chainId: parameters.chainId,
@@ -385,7 +392,7 @@ export function session<const parameters extends session.Parameters>(
       unitType,
     }),
 
-    extensions: { settleScheduled },
+    extensions: { serveWebSocket },
 
     transport: deriveTransport<parameters>(transport),
 
@@ -513,9 +520,12 @@ export namespace session {
 
   /** Extensions attached to the Tempo session method handler. */
   export type Extensions = {
-    /** Applies the configured automatic settlement policy to a committed channel charge. */
-    settleScheduled: SettleChargedSessionChannel
+    /** Serves a WebSocket route from this handler using its configured store and settlement policy. */
+    serveWebSocket: (options: ServeWebSocketOptions) => Promise<void>
   }
+
+  /** WebSocket server options supplied after the session binds shared dependencies. */
+  export type ServeWebSocketOptions = Omit<Ws.serve.Options, 'onChargeCommitted' | 'store'>
 
   /** Request defaults inferred from the Tempo session method schema. */
   export type Defaults = LooseOmit<

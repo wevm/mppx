@@ -110,7 +110,11 @@ describe('Mppx type tests', () => {
     })
     const mppx = Mppx.create({ methods: [sessionMethod], realm, secretKey })
 
-    expectTypeOf(mppx.session.settleScheduled).toBeFunction()
+    expectTypeOf(mppx.session.serveWebSocket).toBeFunction()
+    type Options = Parameters<typeof mppx.session.serveWebSocket>[0]
+    expectTypeOf<Options>().toHaveProperty('route')
+    expectTypeOf<Options>().not.toHaveProperty('store')
+    expectTypeOf<Options>().not.toHaveProperty('onChargeCommitted')
   })
 
   test('compose exists on the instance and returns a handler', () => {
