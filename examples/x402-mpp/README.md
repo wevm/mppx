@@ -10,12 +10,12 @@ pnpm dev
 
 ## Routes
 
-| Route         | Protocols        |
-| ------------- | ---------------- |
-| `/api/mpp`    | mpp              |
-| `/api/x402`   | x402 exact       |
-| `/api/paid`   | mpp or x402      |
-| `/api/health` | free healthcheck |
+| Route         | Payment options                  | Challenge headers                      |
+| ------------- | -------------------------------- | -------------------------------------- |
+| `/api/mpp`    | MPP (Tempo)                      | `WWW-Authenticate`                     |
+| `/api/x402`   | MPP (EVM) or x402 exact          | `WWW-Authenticate`, `PAYMENT-REQUIRED` |
+| `/api/paid`   | MPP (Tempo or EVM) or x402 exact | `WWW-Authenticate`, `PAYMENT-REQUIRED` |
+| `/api/health` | free healthcheck                 | none                                   |
 
 The x402 route defaults to the free no-key `https://facilitator.x402.rs` testnet facilitator.
 Set `X402_FACILITATOR_URL` to use another facilitator.
@@ -60,15 +60,23 @@ curl -i http://localhost:5173/api/x402
 curl -i http://localhost:5173/api/paid
 ```
 
+These example endpoints are GET routes. EVM-backed handlers emit both `WWW-Authenticate` and
+`PAYMENT-REQUIRED` for GET and body-bearing requests. This app invokes the core `mppx/server`
+handlers directly from Hono, so it does not attach an automatic route scope. Standard x402 clients
+can pay when no digest, scope, opaque value, or metadata binding is required. Routes using
+`mppx/hono` are automatically scoped and require a client that implements the mppx route-binding
+extension.
+
 ## Test with purl
 
 Install the current purl CLI:
 
 ```bash
 brew install stripe/purl/purl
+purl wallet add
 ```
 
-`purl v0.2.7` can inspect both Payment-auth and x402 headers:
+`purl v0.2.7` recognizes MPP and x402 challenges:
 
 ```bash
 purl inspect http://localhost:5173/api/mpp

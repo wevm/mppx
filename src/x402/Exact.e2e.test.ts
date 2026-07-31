@@ -4,6 +4,7 @@ import { describe, expect, test } from 'vp/test'
 import * as Http from '~test/Http.js'
 import { accounts, asset, client } from '~test/tempo/viem.js'
 
+import * as evm_Types from '../evm/Types.js'
 import * as Header from './Header.js'
 import * as RouteBinding from './internal/RouteBinding.js'
 import * as Types from './Types.js'
@@ -157,22 +158,8 @@ describe('x402 exact e2e', () => {
     const paymentRequired = Header.decodePaymentRequired(
       routeAChallenge.challenge.headers.get(Types.paymentRequiredHeader)!,
     )
-    const accepted = paymentRequired.accepts[0]!
-    const paymentSignature = Header.encodePaymentSignature({
-      accepted,
-      payload: {
-        authorization: {
-          from: accounts[0].address,
-          nonce: `0x${'1'.repeat(64)}`,
-          to: accepted.payTo as `0x${string}`,
-          validAfter: '0',
-          validBefore: '9999999999',
-          value: accepted.amount,
-        },
-        signature: `0x${'2'.repeat(130)}`,
-      },
-      resource: paymentRequired.resource,
-      x402Version: 2,
+    const paymentSignature = await standardPaymentSignature(paymentRequired, {
+      nonce: `0x${'1'.repeat(64)}`,
     })
 
     const result = await route(
@@ -185,7 +172,7 @@ describe('x402 exact e2e', () => {
     expect(verifyCalls).toBe(0)
   })
 
-  test('rejects x402 route extensions with extra binding fields', async () => {
+  test('rejects invalid x402 route bindings', async () => {
     let verifyCalls = 0
     const payment = ServerMppx.create({
       methods: [
@@ -223,49 +210,54 @@ describe('x402 exact e2e', () => {
     const accepted = paymentRequired.accepts[0]!
     const mppxExtension = paymentRequired.extensions!.mppx
     if (!mppxExtension) throw new Error()
-    const extensions: Types.Extensions = {
+    const extensionsWithExtra: Types.Extensions = {
       ...paymentRequired.extensions!,
       mppx: {
         schema: mppxExtension.schema,
         info: {
           ...mppxExtension.info,
           extra: 'not allowed',
+          nonce: '1'.repeat(64),
         },
       },
     }
-    const paymentSignature = Header.encodePaymentSignature({
-      accepted,
-      extensions,
-      payload: {
-        authorization: {
-          from: accounts[0].address,
-          nonce: RouteBinding.nonce({
-            accepted,
-            extensions,
-            resource: paymentRequired.resource,
-          }),
-          to: accepted.payTo as `0x${string}`,
-          validAfter: '0',
-          validBefore: '9999999999',
-          value: accepted.amount,
+    const extensionsWithNonce: Types.Extensions = {
+      ...paymentRequired.extensions!,
+      mppx: {
+        schema: mppxExtension.schema,
+        info: {
+          ...mppxExtension.info,
+          nonce: 'client-salt',
         },
-        signature: `0x${'2'.repeat(130)}`,
       },
-      resource: paymentRequired.resource,
-      x402Version: 2,
-    })
-
-    const result = await route(
-      new Request('https://example.com/a', {
-        headers: { [Types.paymentSignatureHeader]: paymentSignature },
+    }
+    const paymentSignatures = await Promise.all([
+      standardPaymentSignature(paymentRequired, {
+        extensions: extensionsWithExtra,
+        nonce: RouteBinding.nonce({
+          accepted,
+          extensions: extensionsWithExtra,
+          resource: paymentRequired.resource,
+        }),
       }),
-    )
+      standardPaymentSignature(paymentRequired, {
+        extensions: extensionsWithNonce,
+        nonce: `0x${'5'.repeat(64)}`,
+      }),
+    ])
 
-    expect(result.status).toBe(402)
+    for (const paymentSignature of paymentSignatures) {
+      const result = await route(
+        new Request('https://example.com/a', {
+          headers: { [Types.paymentSignatureHeader]: paymentSignature },
+        }),
+      )
+      expect(result.status).toBe(402)
+    }
     expect(verifyCalls).toBe(0)
   })
 
-  test('does not advertise x402 for body-bearing requests without a digest', async () => {
+  test('accepts standard x402 payments for body-bearing requests without a digest', async () => {
     let verifyCalls = 0
     const payment = ServerMppx.create({
       methods: [
@@ -292,56 +284,57 @@ describe('x402 exact e2e', () => {
       secretKey,
     })
     const route = payment.evm.charge({ amount: '0.01' })
+    const body = JSON.stringify({ a: 1 })
 
-    const result = await route(
+    const first = await route(
       new Request('https://example.com/body', {
-        body: JSON.stringify({ a: 1 }),
+        body,
         method: 'POST',
       }),
     )
 
-    expect(result.status).toBe(402)
-    if (result.status !== 402) throw new Error()
-    expect(result.challenge.headers.has('WWW-Authenticate')).toBe(true)
-    expect(result.challenge.headers.has(Types.paymentRequiredHeader)).toBe(false)
-
-    const getChallenge = await route(new Request('https://example.com/body'))
-    expect(getChallenge.status).toBe(402)
-    if (getChallenge.status !== 402) throw new Error()
+    expect(first.status).toBe(402)
+    if (first.status !== 402) throw new Error()
+    expect(first.challenge.headers.has('WWW-Authenticate')).toBe(true)
+    expect(first.challenge.headers.has(Types.paymentRequiredHeader)).toBe(true)
     const paymentRequired = Header.decodePaymentRequired(
-      getChallenge.challenge.headers.get(Types.paymentRequiredHeader)!,
+      first.challenge.headers.get(Types.paymentRequiredHeader)!,
     )
-    const accepted = paymentRequired.accepts[0]!
-    const paymentSignature = Header.encodePaymentSignature({
-      accepted,
-      extensions: paymentRequired.extensions,
-      payload: {
-        authorization: {
-          from: accounts[0].address,
-          nonce: RouteBinding.nonce({
-            accepted,
-            extensions: paymentRequired.extensions!,
-            resource: paymentRequired.resource,
-          }),
-          to: accepted.payTo as `0x${string}`,
-          validAfter: '0',
-          validBefore: '9999999999',
-          value: accepted.amount,
-        },
-        signature: `0x${'2'.repeat(130)}`,
-      },
-      resource: paymentRequired.resource,
-      x402Version: 2,
+
+    const paymentSignatures = await Promise.all([
+      standardPaymentSignature(paymentRequired, {
+        nonce: `0x${'3'.repeat(64)}`,
+      }),
+      standardPaymentSignature(paymentRequired, {
+        extensions: paymentRequired.extensions,
+        nonce: `0x${'4'.repeat(64)}`,
+      }),
+    ])
+    for (const paymentSignature of paymentSignatures) {
+      const result = await route(
+        new Request('https://example.com/body', {
+          body,
+          headers: { [Types.paymentSignatureHeader]: paymentSignature },
+          method: 'POST',
+        }),
+      )
+      expect(result.status).toBe(200)
+    }
+    expect(verifyCalls).toBe(2)
+
+    const scopedRoute = payment.evm.charge({
+      amount: '0.01',
+      scope: 'POST /body',
     })
-    const replay = await route(
+    const scopedResult = await scopedRoute(
       new Request('https://example.com/body', {
-        body: JSON.stringify({ a: 2 }),
-        headers: { [Types.paymentSignatureHeader]: paymentSignature },
+        body,
+        headers: { [Types.paymentSignatureHeader]: paymentSignatures[0]! },
         method: 'POST',
       }),
     )
-    expect(replay.status).toBe(402)
-    expect(verifyCalls).toBe(0)
+    expect(scopedResult.status).toBe(402)
+    expect(verifyCalls).toBe(2)
   })
 
   test('serves tempo and x402 from one composed live endpoint', async () => {
@@ -436,6 +429,53 @@ describe('x402 exact e2e', () => {
 function payerOf(paymentPayload: Types.PaymentPayload): string {
   if ('authorization' in paymentPayload.payload) return paymentPayload.payload.authorization.from
   return paymentPayload.payload.permit2Authorization.from
+}
+
+async function standardPaymentSignature(
+  paymentRequired: Types.PaymentRequired,
+  options: {
+    extensions?: Types.Extensions | undefined
+    nonce: `0x${string}`
+  },
+): Promise<string> {
+  const accepted = paymentRequired.accepts[0]!
+  const name = accepted.extra?.name
+  const version = accepted.extra?.version
+  if (typeof name !== 'string' || typeof version !== 'string') throw new Error()
+  const authorization = {
+    from: accounts[0].address,
+    nonce: options.nonce,
+    to: accepted.payTo as `0x${string}`,
+    validAfter: '0',
+    validBefore: '9999999999',
+    value: accepted.amount,
+  }
+  const signature = await accounts[0].signTypedData({
+    domain: {
+      chainId: Number(accepted.network.slice('eip155:'.length)),
+      name,
+      verifyingContract: accepted.asset as `0x${string}`,
+      version,
+    },
+    message: {
+      ...authorization,
+      validAfter: BigInt(authorization.validAfter),
+      validBefore: BigInt(authorization.validBefore),
+      value: BigInt(authorization.value),
+    },
+    primaryType: 'TransferWithAuthorization',
+    types: evm_Types.authorizationTypes,
+  })
+  return Header.encodePaymentSignature({
+    accepted,
+    ...(options.extensions ? { extensions: options.extensions } : {}),
+    payload: {
+      authorization,
+      signature,
+    },
+    resource: paymentRequired.resource,
+    x402Version: 2,
+  })
 }
 
 function pureX402Challenge(response: Response): Response {

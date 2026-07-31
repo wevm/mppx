@@ -111,27 +111,48 @@ export function createPath(config: ResolvedOptions): Path {
         })
 
       const expectedResource = { url: input.url }
-      if (!isDeepStrictEqual(paymentPayload.resource, expectedResource))
+      const clientNonce = paymentPayload.extensions?.[mppxExtensionKey]?.info.nonce
+      const isRouteBound = clientNonce !== undefined
+      const routeRequiresBinding =
+        challenge.digest !== undefined ||
+        challenge.opaque !== undefined ||
+        challenge.meta !== undefined
+      if (routeRequiresBinding && !isRouteBound)
+        throw new VerificationFailedError({
+          reason: 'x402 payment payload does not bind required route metadata',
+        })
+
+      if (isRouteBound) {
+        if (!isDeepStrictEqual(paymentPayload.resource, expectedResource))
+          throw new VerificationFailedError({
+            reason: 'x402 payment payload resource does not match route resource',
+          })
+
+        const expectedExtensions = routeExtensions(challenge, input)
+        if (!containsExtensions(paymentPayload.extensions, expectedExtensions))
+          throw new VerificationFailedError({
+            reason: 'x402 payment payload extensions do not match route binding',
+          })
+      } else if (
+        paymentPayload.resource !== undefined &&
+        paymentPayload.resource.url !== expectedResource.url
+      )
         throw new VerificationFailedError({
           reason: 'x402 payment payload resource does not match route resource',
         })
 
-      const expectedExtensions = routeExtensions(challenge, input)
-      if (!containsExtensions(paymentPayload.extensions, expectedExtensions))
-        throw new VerificationFailedError({
-          reason: 'x402 payment payload extensions do not match route binding',
-        })
-
       const payload = payloadToAuthorization(paymentPayload)
-      const expectedNonce = x402_RouteBinding.nonce({
-        accepted: paymentRequirements,
-        extensions: paymentPayload.extensions!,
-        resource: expectedResource,
-      })
-      if (payload.nonce !== expectedNonce)
-        throw new VerificationFailedError({
-          reason: 'x402 authorization nonce does not match route binding',
+      if (isRouteBound) {
+        const expectedNonce = x402_RouteBinding.nonce({
+          accepted: paymentRequirements,
+          extensions: paymentPayload.extensions!,
+          resource: expectedResource,
         })
+        if (payload.nonce !== expectedNonce)
+          throw new VerificationFailedError({
+            reason: 'x402 authorization nonce does not match route binding',
+          })
+      }
 
       return markCredential(
         Credential_.from({
@@ -147,7 +168,6 @@ export function createPath(config: ResolvedOptions): Path {
 
     respondChallenge(options, response) {
       if (!response) throw new Error('x402 path requires a base challenge response.')
-      if (options.input.body !== null && options.challenge.digest === undefined) return response
       const headers = new Headers(response.headers)
       const request = options.challenge.request as Types.ChargeRequest
       headers.set(
@@ -354,11 +374,7 @@ function stripClientNonce(info: Record<string, unknown>): Record<string, unknown
 }
 
 async function assertBodyDigest(challenge: Challenge.Challenge, input: Request): Promise<void> {
-  if (input.body === null) return
-  if (challenge.digest === undefined)
-    throw new VerificationFailedError({
-      reason: 'x402 payment requires a body digest for body-bearing requests',
-    })
+  if (input.body === null || challenge.digest === undefined) return
   let body: string
   try {
     body = await input.clone().text()
