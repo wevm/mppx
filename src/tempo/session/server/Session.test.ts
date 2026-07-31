@@ -88,10 +88,16 @@ function createServerClient(
   _eventChannelId: Hex = `0x${'00'.repeat(32)}` as Hex,
   options: {
     descriptor?: Channel.ChannelDescriptor
-    receipt?: Record<string, unknown>
-    state?: ChainState
+    receipt?:
+      | Record<string, unknown>
+      | (() => Record<string, unknown> | Promise<Record<string, unknown>>)
+    sentReceipt?:
+      | Record<string, unknown>
+      | (() => Record<string, unknown> | Promise<Record<string, unknown>>)
+    state?: ChainState | (() => ChainState | Promise<ChainState>)
   } = {},
 ) {
+  let sentTransaction = false
   return createClient({
     ...(account ? { account } : {}),
     chain: testChain,
@@ -103,11 +109,24 @@ function createServerClient(
         if (args.method === 'eth_estimateGas') return '0x5208'
         if (args.method === 'eth_maxPriorityFeePerGas') return '0x1'
         if (args.method === 'eth_getBlockByNumber') return { baseFeePerGas: '0x1' }
-        if (args.method === 'eth_sendRawTransaction') return `0x${'aa'.repeat(32)}`
-        if (args.method === 'eth_getTransactionReceipt') return options.receipt ?? null
-        if (args.method === 'eth_sendTransaction') return `0x${'bb'.repeat(32)}`
+        if (args.method === 'eth_sendRawTransaction') {
+          sentTransaction = true
+          return `0x${'aa'.repeat(32)}`
+        }
+        if (args.method === 'eth_getTransactionReceipt') {
+          const receipt = sentTransaction
+            ? (options.sentReceipt ?? options.receipt)
+            : options.receipt
+          return typeof receipt === 'function' ? receipt() : (receipt ?? null)
+        }
+        if (args.method === 'eth_sendTransaction') {
+          sentTransaction = true
+          return `0x${'bb'.repeat(32)}`
+        }
         if (args.method === 'eth_call') {
-          const state = options.state ?? { settled: 100n, deposit: 1_000n, closeRequestedAt: 0 }
+          const configuredState =
+            typeof options.state === 'function' ? await options.state() : options.state
+          const state = configuredState ?? { settled: 100n, deposit: 1_000n, closeRequestedAt: 0 }
           const data = (args.params as [{ data?: Hex }])[0].data
           const getChannelSelector = options.descriptor
             ? encodeFunctionData({
@@ -2172,14 +2191,23 @@ describe('precompile server session unit guardrails', () => {
 
   describe('SSE parity', () => {
     function createManagedSseFetch(
-      options: { amount?: string; maxDeposit?: bigint; unitType?: 'request' | 'token' } = {},
+      options: {
+        amount?: string
+        chunkDelayMs?: number
+        maxDeposit?: bigint
+        onSessionSettlement?: session.Parameters['onSessionSettlement']
+        settlementSchedule?: session.Parameters['settlementSchedule']
+        unitType?: 'request' | 'token'
+      } = {},
     ) {
       const rawStore = Store.memory()
+      let activeChannelId: Hex | undefined
       let currentPayload: SessionCredentialPayload | undefined
       let voucherPosts = 0
       const amount = options.amount ?? '1'
       const maxDeposit = options.maxDeposit ?? 3n
       let deposit = maxDeposit
+      let settled = 0n
       const unitType = options.unitType ?? 'token'
       const route = Mppx_server.create({
         methods: [
@@ -2189,6 +2217,8 @@ describe('precompile server session unit guardrails', () => {
             currency: token,
             decimals: 0,
             recipient: payer.address,
+            onSessionSettlement: options.onSessionSettlement,
+            settlementSchedule: options.settlementSchedule,
             sse: true,
             store: rawStore,
             unitType,
@@ -2206,20 +2236,24 @@ describe('precompile server session unit guardrails', () => {
                   receipt: transactionReceipt([
                     closedLog(payload.channelId, BigInt(payload.cumulativeAmount), 0n),
                   ]),
-                  state: { settled: 0n, deposit, closeRequestedAt: 0 },
+                  state: { settled, deposit, closeRequestedAt: 0 },
                 })
               }
               if (payload?.action === 'topUp') {
                 deposit += BigInt(payload.additionalDeposit)
                 return createServerClient([], payer, payload.channelId, {
                   receipt: transactionReceipt([topUpLog(payload, deposit)]),
-                  state: { settled: 0n, deposit, closeRequestedAt: 0 },
+                  state: { settled, deposit, closeRequestedAt: 0 },
                 })
               }
-              return createStateClient(payer, {
-                settled: 0n,
-                deposit,
-                closeRequestedAt: 0,
+              return createServerClient([], payer, undefined, {
+                sentReceipt: async () => {
+                  if (!activeChannelId) throw new Error('missing channel context')
+                  const channel = await channelStore(rawStore).getChannel(activeChannelId)
+                  settled = channel?.highestVoucherAmount ?? settled
+                  return transactionReceipt([settledLog(activeChannelId, settled)])
+                },
+                state: () => ({ settled, deposit, closeRequestedAt: 0 }),
               })
             },
           }),
@@ -2233,6 +2267,7 @@ describe('precompile server session unit guardrails', () => {
         if (request.headers.has('Authorization')) {
           try {
             currentPayload = Credential.fromRequest<SessionCredentialPayload>(request).payload
+            activeChannelId = currentPayload.channelId
             if (currentPayload.action === 'voucher') voucherPosts++
           } catch {}
         }
@@ -2259,9 +2294,12 @@ describe('precompile server session unit guardrails', () => {
             )
           }
 
+          currentPayload = undefined
           return result.withReceipt(async function* (stream) {
             await stream.charge()
             yield 'chunk-1'
+            if (options.chunkDelayMs)
+              await new Promise((resolve) => setTimeout(resolve, options.chunkDelayMs))
             await stream.charge()
             yield 'chunk-2'
             await stream.charge()
@@ -2311,6 +2349,49 @@ describe('precompile server session unit guardrails', () => {
       const persisted = await channelStore(harness.rawStore).getChannel(channelId!)
       expect(persisted?.finalized).toBe(true)
     })
+
+    test.each([
+      ['unit', { units: 2 }, 0],
+      ['amount', { amount: '2' }, 0],
+      ['interval', { intervalMs: 500 }, 750],
+    ] as const)(
+      'applies the %s settlement schedule after SSE charges',
+      async (_label, settlementSchedule, chunkDelayMs) => {
+        const settlements: Array<{ delta: bigint; trigger: string }> = []
+        const harness = createManagedSseFetch({
+          chunkDelayMs,
+          maxDeposit: 3n,
+          settlementSchedule,
+          onSessionSettlement(context) {
+            settlements.push({ delta: context.delta, trigger: context.trigger })
+          },
+        })
+        const manager = precompileSessionManager({
+          account: payer,
+          client: createSigningClient(),
+          decimals: 0,
+          fetch: harness.fetch,
+          maxDeposit: '3',
+        })
+
+        const chunks: string[] = []
+        for await (const chunk of await manager.sse('https://api.example.com/stream')) {
+          chunks.push(chunk)
+        }
+
+        expect(chunks).toEqual(['chunk-1', 'chunk-2', 'chunk-3'])
+        expect(harness.voucherPosts).toBeGreaterThan(0)
+        expect(settlements).toEqual([{ delta: 2n, trigger: 'scheduled' }])
+        const persisted = await channelStore(harness.rawStore).getChannel(manager.channelId!)
+        expect(persisted?.lastSettlementUnits).toBe(2)
+
+        await manager.close()
+        expect(settlements).toEqual([
+          { delta: 2n, trigger: 'scheduled' },
+          { delta: 1n, trigger: 'close' },
+        ])
+      },
+    )
 
     test('handles empty management POST streams through a Node adapter', async () => {
       const harness = createManagedSseFetch({ maxDeposit: 1n })
@@ -2422,11 +2503,18 @@ describe('precompile server session unit guardrails', () => {
 
   describe('WebSocket parity', () => {
     async function createManagedWsHarness(
-      options: { challengeTtlMs?: number; maxDeposit?: bigint } = {},
+      options: {
+        challengeTtlMs?: number
+        maxDeposit?: bigint
+        onSessionSettlement?: session.Parameters['onSessionSettlement']
+        settlementSchedule?: session.Parameters['settlementSchedule']
+      } = {},
     ) {
       const rawStore = Store.memory()
+      let activeChannelId: Hex | undefined
       let challengeRequests = 0
       let currentPayload: SessionCredentialPayload | undefined
+      let settled = 0n
       let voucherPosts = 0
       const maxDeposit = options.maxDeposit ?? 3n
       const payment = Mppx_server.create({
@@ -2436,7 +2524,9 @@ describe('precompile server session unit guardrails', () => {
             chainId,
             currency: token,
             decimals: 0,
+            onSessionSettlement: options.onSessionSettlement,
             recipient: payer.address,
+            settlementSchedule: options.settlementSchedule,
             store: rawStore,
             unitType: 'token',
             getClient: () => {
@@ -2453,13 +2543,17 @@ describe('precompile server session unit guardrails', () => {
                   receipt: transactionReceipt([
                     closedLog(payload.channelId, BigInt(payload.cumulativeAmount), 0n),
                   ]),
-                  state: { settled: 0n, deposit: maxDeposit, closeRequestedAt: 0 },
+                  state: { settled, deposit: maxDeposit, closeRequestedAt: 0 },
                 })
               }
-              return createStateClient(payer, {
-                settled: 0n,
-                deposit: maxDeposit,
-                closeRequestedAt: 0,
+              return createServerClient([], payer, undefined, {
+                sentReceipt: async () => {
+                  if (!activeChannelId) throw new Error('missing channel context')
+                  const channel = await channelStore(rawStore).getChannel(activeChannelId)
+                  settled = channel?.highestVoucherAmount ?? settled
+                  return transactionReceipt([settledLog(activeChannelId, settled)])
+                },
+                state: () => ({ settled, deposit: maxDeposit, closeRequestedAt: 0 }),
               })
             },
           }),
@@ -2468,23 +2562,26 @@ describe('precompile server session unit guardrails', () => {
         secretKey: 'test-secret-key-test-secret-key-32',
       })
 
+      const routeOptions = () => ({
+        amount: '1',
+        decimals: 0,
+        suggestedDeposit: maxDeposit.toString(),
+        ...(options.challengeTtlMs === undefined
+          ? {}
+          : { expires: new Date(Date.now() + options.challengeTtlMs) }),
+      })
       const route = async (request: Request) => {
         currentPayload = undefined
         if (request.headers.has('Authorization')) {
           try {
             currentPayload = Credential.fromRequest<SessionCredentialPayload>(request).payload
+            activeChannelId = currentPayload.channelId
             if (currentPayload.action === 'voucher') voucherPosts++
           } catch {}
         } else challengeRequests++
-        const routeHandler = payment.session({
-          amount: '1',
-          decimals: 0,
-          suggestedDeposit: maxDeposit.toString(),
-          ...(options.challengeTtlMs === undefined
-            ? {}
-            : { expires: new Date(Date.now() + options.challengeTtlMs) }),
-        })
-        return routeHandler(request)
+        const result = await payment.session(routeOptions())(request)
+        currentPayload = undefined
+        return result
       }
 
       const httpHandler = NodeRequest.toNodeListener(async (request) => {
@@ -2516,6 +2613,7 @@ describe('precompile server session unit guardrails', () => {
       return {
         rawStore,
         route,
+        settleScheduled: payment.session.settleScheduled,
         server,
         wsServer,
         get port() {
@@ -2542,6 +2640,7 @@ describe('precompile server session unit guardrails', () => {
           store: harness.rawStore,
           url: `${harness.server.url}/ws`,
           route: harness.route,
+          settleScheduled: harness.settleScheduled,
           generate: async function* (stream: TempoWs.SessionController) {
             await stream.charge()
             yield 'chunk-1'
@@ -2590,6 +2689,7 @@ describe('precompile server session unit guardrails', () => {
           store: harness.rawStore,
           url: `${harness.server.url}/ws`,
           route: harness.route,
+          settleScheduled: harness.settleScheduled,
           generate: async function* (stream: TempoWs.SessionController) {
             await stream.charge()
             yield 'chunk-1'
@@ -2641,6 +2741,77 @@ describe('precompile server session unit guardrails', () => {
       }
     })
 
+    test.each([
+      ['unit', { units: 2 }, 0],
+      ['amount', { amount: '2' }, 0],
+      ['interval', { intervalMs: 500 }, 750],
+    ] as const)(
+      'applies the %s settlement schedule after websocket charges',
+      async (_label, settlementSchedule, chunkDelayMs) => {
+        const settlements: Array<{ delta: bigint; trigger: string }> = []
+        const harness = await createManagedWsHarness({
+          maxDeposit: 3n,
+          settlementSchedule,
+          onSessionSettlement(context) {
+            settlements.push({ delta: context.delta, trigger: context.trigger })
+          },
+        })
+        harness.wsServer.on('connection', (socket: import('ws').WebSocket) => {
+          void TempoWs.serve({
+            socket,
+            store: harness.rawStore,
+            url: `${harness.server.url}/ws`,
+            route: harness.route,
+            settleScheduled: harness.settleScheduled,
+            generate: async function* (stream: TempoWs.SessionController) {
+              for (const chunk of ['chunk-1', 'chunk-2', 'chunk-3']) {
+                if (chunk === 'chunk-2' && chunkDelayMs)
+                  await new Promise((resolve) => setTimeout(resolve, chunkDelayMs))
+                await stream.charge()
+                yield chunk
+              }
+            },
+          })
+        })
+
+        try {
+          const manager = precompileSessionManager({
+            account: payer,
+            client: createSigningClient(),
+            decimals: 0,
+            fetch: globalThis.fetch,
+            maxDeposit: '3',
+            webSocket: WebSocket as never,
+          })
+          const ws = await manager.ws(`ws://localhost:${harness.port}/ws`)
+          const chunks: string[] = []
+
+          await new Promise<void>((resolve, reject) => {
+            ws.addEventListener('message', (event) => {
+              if (typeof event.data === 'string') chunks.push(event.data)
+            })
+            ws.addEventListener('close', () => resolve(), { once: true })
+            ws.addEventListener('error', () => reject(new Error('websocket stream failed')), {
+              once: true,
+            })
+          })
+
+          expect(chunks).toEqual(['chunk-1', 'chunk-2', 'chunk-3'])
+          expect(harness.voucherPosts).toBeGreaterThan(0)
+          expect(settlements).toEqual([{ delta: 2n, trigger: 'scheduled' }])
+          await manager.close()
+          expect(settlements).toEqual([
+            { delta: 2n, trigger: 'scheduled' },
+            { delta: 1n, trigger: 'close' },
+          ])
+          const persisted = await channelStore(harness.rawStore).getChannel(manager.channelId!)
+          expect(persisted?.lastSettlementUnits).toBe(2)
+        } finally {
+          harness.close()
+        }
+      },
+    )
+
     test('treats control-shaped application payloads as content', async () => {
       const harness = await createManagedWsHarness({ maxDeposit: 1n })
       const controlLookingChunk = JSON.stringify({
@@ -2658,6 +2829,7 @@ describe('precompile server session unit guardrails', () => {
           store: harness.rawStore,
           url: `${harness.server.url}/ws`,
           route: harness.route,
+          settleScheduled: harness.settleScheduled,
           generate: async function* (stream: TempoWs.SessionController) {
             await stream.charge()
             yield controlLookingChunk
@@ -2708,6 +2880,7 @@ describe('precompile server session unit guardrails', () => {
           store: harness.rawStore,
           url: `${harness.server.url}/ws`,
           route: harness.route,
+          settleScheduled: harness.settleScheduled,
           generate: async function* (stream: TempoWs.SessionController) {
             await stream.charge()
             yield 'chunk-1'
@@ -2870,6 +3043,7 @@ describe('precompile server session unit guardrails', () => {
           store: harness.rawStore,
           url: `${harness.server.url}/ws`,
           route: harness.route,
+          settleScheduled: harness.settleScheduled,
           generate: async function* (stream: TempoWs.SessionController) {
             await stream.charge()
             yield 'chunk-1'

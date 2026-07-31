@@ -16,6 +16,7 @@ import {
 } from '../precompile/Protocol.js'
 import * as ChannelStore from './ChannelStore.js'
 import type { SessionController } from './MeteredStream.js'
+import type { SettleChargedSessionChannel } from './Settlement.js'
 export type { SessionController } from './MeteredStream.js'
 export type { Socket } from './Transports.js'
 import { meterIterable } from './MeteredStream.js'
@@ -152,6 +153,7 @@ export async function serve(options: serve.Options): Promise<void> {
         channelId: context.channelId,
         tickCost: context.tickCost,
         generate,
+        onChargeCommitted: options.settleScheduled,
         pollIntervalMs,
         signal: abortController.signal,
         emitNeedVoucher: (message) => send(socket, message),
@@ -332,6 +334,8 @@ export declare namespace serve {
     /** Payment route handler. Receives synthetic `POST` requests with only
      *  the `Authorization` header — no cookies, bodies, or upgrade headers. */
     route: SessionRoute
+    /** Applies the session method's automatic settlement policy after each committed charge. */
+    settleScheduled?: SettleChargedSessionChannel | undefined
     socket: Socket
     store: ChannelStore.ChannelStore | import('../../../Store.js').Store
     url: string | URL

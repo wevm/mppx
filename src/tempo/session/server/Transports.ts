@@ -86,7 +86,7 @@ export async function reserveChargeOrWait(options: ReserveChargeParameters): Pro
 /** Atomically commits previously reserved stream charges to channel spend and unit counters. */
 export async function commitReservedCharges(
   options: CommitReservedChargesParameters,
-): Promise<void> {
+): Promise<ChannelStore.State | undefined> {
   const { amount, channelId, store, units } = options
   if (amount === 0n || units === 0) return
 
@@ -107,6 +107,7 @@ export async function commitReservedCharges(
   if (!channel) throw new Error('channel not found')
   throwIfChannelClosed(channel)
   if (!committed) throw new Error('reserved voucher coverage is no longer available')
+  return channel
 }
 
 /** Throws when a channel can no longer be used for streaming charges. */

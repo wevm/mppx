@@ -121,6 +121,7 @@ wsServer.on('connection', (socket, req) => {
     store,
     url,
     route,
+    settleScheduled: mppx.session.settleScheduled,
     generate: async function* (stream) {
       for await (const token of generateTokens(prompt)) {
         await stream.charge()

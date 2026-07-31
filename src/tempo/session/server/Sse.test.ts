@@ -260,6 +260,7 @@ describe('serve', () => {
 
   test('uses a prepaid unit for the first generated value', async () => {
     const storage = memoryStore()
+    const committed: Array<{ spent: bigint; units: number }> = []
     await seedChannel(storage, 3000000n)
     await storage.updateChannel(channelId, (current) =>
       current ? { ...current, spent: 1000000n, units: 1 } : current,
@@ -271,6 +272,9 @@ describe('serve', () => {
       challengeId,
       tickCost: 1000000n,
       generate: generate(['hello', 'world']),
+      onChargeCommitted(channel) {
+        committed.push({ spent: channel.spent, units: channel.units })
+      },
       prepaidUnits: 1,
     })
 
@@ -281,6 +285,79 @@ describe('serve', () => {
     const channel = await storage.getChannel(channelId)
     expect(channel!.spent).toBe(2000000n)
     expect(channel!.units).toBe(2)
+    expect(committed).toEqual([{ spent: 2000000n, units: 2 }])
+  })
+
+  test('runs the post-commit hook before emitting each charged value', async () => {
+    const storage = memoryStore()
+    const committed: Array<{ spent: bigint; units: number }> = []
+    await seedChannel(storage, 2000000n)
+
+    const output = await readStream(
+      serve({
+        store: storage,
+        channelId,
+        challengeId,
+        tickCost: 1000000n,
+        generate: generate(['first', 'second']),
+        onChargeCommitted(channel) {
+          committed.push({ spent: channel.spent, units: channel.units })
+        },
+      }),
+    )
+
+    expect(output).toContain('event: message\ndata: first\n\n')
+    expect(output).toContain('event: message\ndata: second\n\n')
+    expect(committed).toEqual([
+      { spent: 1000000n, units: 1 },
+      { spent: 2000000n, units: 2 },
+    ])
+  })
+
+  test('does not emit a charged value when the post-commit hook fails', async () => {
+    const storage = memoryStore()
+    await seedChannel(storage, 1000000n)
+
+    const reader = serve({
+      store: storage,
+      channelId,
+      challengeId,
+      tickCost: 1000000n,
+      generate: generate(['blocked']),
+      onChargeCommitted() {
+        throw new Error('settlement failed')
+      },
+    }).getReader()
+
+    await expect(reader.read()).rejects.toThrow('settlement failed')
+    const channel = await storage.getChannel(channelId)
+    expect(channel).toMatchObject({ spent: 1000000n, units: 1 })
+  })
+
+  test('does not run the post-commit hook for an unconsumed reservation', async () => {
+    const storage = memoryStore()
+    let commits = 0
+    await seedChannel(storage, 1000000n)
+
+    await readStream(
+      serve({
+        store: storage,
+        channelId,
+        challengeId,
+        tickCost: 1000000n,
+        generate: async function* (stream) {
+          await stream.charge()
+          yield* []
+        },
+        onChargeCommitted() {
+          commits++
+        },
+      }),
+    )
+
+    expect(commits).toBe(0)
+    const channel = await storage.getChannel(channelId)
+    expect(channel).toMatchObject({ spent: 0n, units: 0 })
   })
 
   test('emits multiline message values as a single SSE message event', async () => {

@@ -42,8 +42,12 @@ import {
   type SessionPaymentRequestInput,
 } from './RequestState.js'
 import { respondToSessionCredential } from './RequestState.js'
-import { applyVerifiedHttpAccounting, chargeSessionChannel } from './Settlement.js'
-import { maybeSettleScheduled } from './Settlement.js'
+import {
+  applyVerifiedHttpAccounting,
+  chargeSessionChannel,
+  type SettleChargedSessionChannel,
+} from './Settlement.js'
+import { isSettlementDue, maybeSettleScheduled } from './Settlement.js'
 import {
   resolveSettlementSchedule,
   type OnSessionSettlement,
@@ -330,6 +334,20 @@ export function session<const parameters extends session.Parameters>(
     getClient: parameters.getClient,
     rpcUrl: defaults.rpcUrl,
   })
+  const settleScheduled: SettleChargedSessionChannel = async (channel) => {
+    if (!isSettlementDue(channel, settlementSchedule)) return undefined
+    return maybeSettleScheduled({
+      account,
+      channel,
+      client: await getClient({ chainId: channel.chainId }),
+      ...(feePayer ? { feePayer } : {}),
+      feePayerPolicy: parameters.feePayerPolicy,
+      feeToken: parameters.feeToken,
+      onSessionSettlement,
+      schedule: settlementSchedule,
+      store,
+    })
+  }
   const bootstrapCharge = ChargeServer.charge({
     account,
     chainId: parameters.chainId,
@@ -341,16 +359,22 @@ export function session<const parameters extends session.Parameters>(
     store: rawStore,
   })
 
-  type Transport = parameters['sse'] extends false | undefined ? undefined : Transport.Sse
+  type SessionTransport = parameters['sse'] extends false | undefined ? undefined : Transport.Sse
   const transport = parameters.sse
     ? Transport.sse({
+        settleCharged: settleScheduled,
         store,
         ...(typeof parameters.sse === 'object' ? parameters.sse : undefined),
       })
     : undefined
 
   type Defaults = session.DeriveDefaults<parameters>
-  return Method.toServer<typeof Methods.session, Defaults, Transport>(Methods.session, {
+  const method = Method.toServer<
+    typeof Methods.session,
+    Defaults,
+    SessionTransport,
+    session.Extensions
+  >(Methods.session, {
     defaults: deriveServerDefaults<parameters>({
       amount,
       currency,
@@ -360,6 +384,8 @@ export function session<const parameters extends session.Parameters>(
       suggestedDeposit,
       unitType,
     }),
+
+    extensions: { settleScheduled },
 
     transport: deriveTransport<parameters>(transport),
 
@@ -478,11 +504,18 @@ export function session<const parameters extends session.Parameters>(
       })
     },
   })
+  return method
 }
 
 export namespace session {
   export const serializeSnapshot = serializeSessionSnapshot
   export const deserializeSnapshot = deserializeSessionSnapshot
+
+  /** Extensions attached to the Tempo session method handler. */
+  export type Extensions = {
+    /** Applies the configured automatic settlement policy to a committed channel charge. */
+    settleScheduled: SettleChargedSessionChannel
+  }
 
   /** Request defaults inferred from the Tempo session method schema. */
   export type Defaults = LooseOmit<

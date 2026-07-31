@@ -12,7 +12,11 @@ import {
   requireSessionCredentialContext,
 } from '../precompile/Protocol.js'
 import * as ChannelStore from './ChannelStore.js'
-import { meterIterable, type SessionController } from './MeteredStream.js'
+import {
+  meterIterable,
+  type MeteredStreamOptions,
+  type SessionController,
+} from './MeteredStream.js'
 
 /**
  * SSE (Server-Sent Events) utilities for metered streaming payments.
@@ -81,6 +85,7 @@ export function serve(options: serve.Options): ReadableStream<Uint8Array> {
           channelId,
           tickCost,
           generate,
+          onChargeCommitted: options.onChargeCommitted,
           pollIntervalMs,
           prepaidUnits: options.prepaidUnits,
           signal,
@@ -121,6 +126,8 @@ export declare namespace serve {
     challengeId: string
     tickCost: bigint
     generate: AsyncIterable<string> | ((stream: SessionController) => AsyncIterable<string>)
+    /** Callback invoked after each nonzero stream charge is committed. */
+    onChargeCommitted?: MeteredStreamOptions['onChargeCommitted']
     pollIntervalMs?: number | undefined
     prepaidUnits?: number | undefined
     signal?: AbortSignal | undefined

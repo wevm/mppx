@@ -1,5 +1,6 @@
 import type { Hex } from 'viem'
 
+import type { MaybePromise } from '../../../internal/types.js'
 import type { NeedVoucherEvent } from '../precompile/Protocol.js'
 import * as ChannelStore from './ChannelStore.js'
 import { commitReservedCharges, reserveChargeOrWait } from './Transports.js'
@@ -37,6 +38,8 @@ export type MeteredStreamOptions = {
   formatNeedVoucher(parameters: NeedVoucherEvent): string
   /** Async source or manual-charge source. */
   generate: SessionStreamGenerator
+  /** Runs after a nonzero reserved charge has been committed. */
+  onChargeCommitted?: ((channel: ChannelStore.State) => MaybePromise<unknown>) | undefined
   /** Store polling interval when `waitForUpdate` is unavailable. */
   pollIntervalMs: number
   /** Pre-authorized units that may be emitted without reserving new voucher headroom. */
@@ -82,7 +85,7 @@ export async function* meterIterable(options: MeteredStreamOptions): AsyncGenera
   for await (const value of iterable) {
     if (options.signal?.aborted) break
     if (typeof options.generate !== 'function') await charge()
-    await commitReservedCharges({
+    const channel = await commitReservedCharges({
       store: options.store,
       channelId: options.channelId,
       amount: reservedAmount,
@@ -90,6 +93,7 @@ export async function* meterIterable(options: MeteredStreamOptions): AsyncGenera
     })
     reservedAmount = 0n
     reservedUnits = 0
+    if (channel) await options.onChargeCommitted?.(channel)
     yield value
   }
 }
