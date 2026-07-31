@@ -2335,7 +2335,11 @@ export function compose(...args: readonly unknown[]): ComposedHandler {
                     getStableBinding(credReq, internal._stableBinding),
                   )
                 : getPinnedRequestBindingMismatch(internal._canonicalRequest, credReq)
-              return !mismatch && opaqueValuesMatch(internal.meta, credential.challenge.meta)
+              const effectiveMeta =
+                internal.scope === undefined
+                  ? Scope.merge({ meta: internal.meta, scope: Scope.get(input) })
+                  : internal.meta
+              return !mismatch && opaqueValuesMatch(effectiveMeta, credential.challenge.meta)
             } catch {
               return false
             }

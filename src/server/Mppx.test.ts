@@ -17,6 +17,7 @@ import { accounts, asset, client } from '~test/tempo/viem.js'
 
 import type { SessionReceipt } from '../tempo/session/precompile/Protocol.js'
 import * as x402_RouteBinding from '../x402/internal/RouteBinding.js'
+import * as Scope from './internal/scope.js'
 
 const realm = 'api.example.com'
 const secretKey = 'test-secret-key-test-secret-key-32'
@@ -3111,6 +3112,37 @@ describe('compose: pre-dispatch narrowing edge cases', () => {
     )
 
     // Amount is now included in narrowing, so the second handler is correctly selected.
+    expect(result.status).toBe(200)
+  })
+
+  test('dispatches scoped credentials to the matching same-intent offer', async () => {
+    const mppx = Mppx.create({ methods: [alphaMethod], realm, secretKey })
+    const alternateCurrency = '0x0000000000000000000000000000000000000003'
+    const handle = mppx.compose(
+      [alphaMethod, challengeOpts],
+      [alphaMethod, { ...challengeOpts, currency: alternateCurrency }],
+    )
+
+    const firstResult = await handle(
+      Scope.attach(new Request('https://example.com/resource'), 'GET /resource'),
+    )
+    expect(firstResult.status).toBe(402)
+    if (firstResult.status !== 402) throw new Error()
+    const challenge = Challenge.fromResponseList(firstResult.challenge).find(
+      (candidate) => candidate.request.currency === alternateCurrency,
+    )
+    if (!challenge) throw new Error('alternate challenge missing')
+
+    const credential = Credential.from({ challenge, payload: { token: 'valid' } })
+    const result = await handle(
+      Scope.attach(
+        new Request('https://example.com/resource', {
+          headers: { Authorization: Credential.serialize(credential) },
+        }),
+        'GET /resource',
+      ),
+    )
+
     expect(result.status).toBe(200)
   })
 
