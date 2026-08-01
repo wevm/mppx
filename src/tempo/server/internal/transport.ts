@@ -181,20 +181,25 @@ export function sse(
         response: response as Response,
         challengeId: verifiedChallengeId,
       })
+      const chargePlainResponse = async () => {
+        const result = await ChannelStore.deductFromChannel(store, channelId, tickCost)
+        if (result.ok) await options.settleCharged?.(result.channel)
+        return result
+      }
 
       // Non-SSE response (e.g. upstream returned JSON instead of event-stream).
       // Need to deduct tickCost so request isn't free.
       // For null-body statuses, the request shape determines whether the
       // response is management (no charge) or plain content (charge one tick).
       if (isNullBodyStatus(chargedResponse.status)) {
-        void ChannelStore.deductFromChannel(store, channelId, tickCost)
+        void chargePlainResponse()
         return chargedResponse
       }
 
       const stream = new ReadableStream<Uint8Array>({
         async start(controller) {
           // deduction completes before consumer reads
-          const result = await ChannelStore.deductFromChannel(store, channelId, tickCost)
+          const result = await chargePlainResponse()
           if (!result.ok) {
             controller.error(
               new Errors.InsufficientBalanceError({

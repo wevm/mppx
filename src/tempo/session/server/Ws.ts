@@ -16,6 +16,7 @@ import {
 } from '../precompile/Protocol.js'
 import * as ChannelStore from './ChannelStore.js'
 import type { MeteredStreamOptions, SessionController } from './MeteredStream.js'
+import type { SettleChargedSessionChannel } from './Settlement.js'
 export type { SessionController } from './MeteredStream.js'
 export type { Socket } from './Transports.js'
 import { meterIterable } from './MeteredStream.js'
@@ -152,7 +153,7 @@ export async function serve(options: serve.Options): Promise<void> {
         channelId: context.channelId,
         tickCost: context.tickCost,
         generate,
-        onChargeCommitted: options.onChargeCommitted,
+        onChargeCommitted: options.onChargeCommitted ?? options.settleScheduled,
         pollIntervalMs,
         signal: abortController.signal,
         emitNeedVoucher: (message) => send(socket, message),
@@ -335,6 +336,8 @@ export declare namespace serve {
     route: SessionRoute
     /** Optional low-level hook invoked after each committed stream charge. */
     onChargeCommitted?: MeteredStreamOptions['onChargeCommitted']
+    /** @deprecated Use `onChargeCommitted`. */
+    settleScheduled?: SettleChargedSessionChannel | undefined
     socket: Socket
     store: ChannelStore.ChannelStore | import('../../../Store.js').Store
     url: string | URL

@@ -392,7 +392,7 @@ export function session<const parameters extends session.Parameters>(
       unitType,
     }),
 
-    extensions: { serveWebSocket },
+    extensions: { serveWebSocket, settleScheduled },
 
     transport: deriveTransport<parameters>(transport),
 
@@ -520,12 +520,17 @@ export namespace session {
 
   /** Extensions attached to the Tempo session method handler. */
   export type Extensions = {
+    /** Applies the configured automatic settlement policy to a committed channel charge. */
+    settleScheduled: SettleChargedSessionChannel
     /** Serves a WebSocket route from this handler using its configured store and settlement policy. */
     serveWebSocket: (options: ServeWebSocketOptions) => Promise<void>
   }
 
   /** WebSocket server options supplied after the session binds shared dependencies. */
-  export type ServeWebSocketOptions = Omit<Ws.serve.Options, 'onChargeCommitted' | 'store'>
+  export type ServeWebSocketOptions = Omit<
+    Ws.serve.Options,
+    'onChargeCommitted' | 'settleScheduled' | 'store'
+  >
 
   /** Request defaults inferred from the Tempo session method schema. */
   export type Defaults = LooseOmit<
