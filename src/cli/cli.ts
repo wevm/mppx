@@ -212,6 +212,7 @@ function findService(
 }
 
 const cli = Cli.create('mppx', {
+  mcp: { tools: { discovery: 'direct' } },
   version: packageJson.version,
   description: 'Make HTTP requests with automatic payment handling',
   usage: [{ suffix: '<url> [options]' }],

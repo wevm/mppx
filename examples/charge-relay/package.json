@@ -7,13 +7,13 @@
     "dev": "tsx src/server.ts"
   },
   "dependencies": {
-    "@hono/node-server": "2.0.10",
+    "@hono/node-server": "2.0.11",
     "@types/node": "^25.6.0",
-    "@typescript/native-preview": "^7.0.0-dev.20260416.1",
-    "hono": "4.12.27",
+    "@typescript/native-preview": "^7.0.0-dev.20260707.2",
+    "hono": "4.12.32",
     "mppx": "latest",
-    "tsx": "^4.22.4",
-    "typescript": "~6.0.3",
+    "tsx": "^4.23.1",
+    "typescript": "~7.0.2",
     "viem": "^2.54.4"
   }
 }
