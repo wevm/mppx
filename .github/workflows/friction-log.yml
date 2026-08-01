@@ -1,0 +1,39 @@
+name: Friction Log
+on:
+  push:
+  issues:
+    types: [closed, reopened]
+  workflow_dispatch:
+  schedule:
+    - cron: '0 0 * * *'
+
+concurrency:
+  group: friction-log
+  cancel-in-progress: false
+
+permissions: {}
+
+jobs:
+  friction-log:
+    name: Friction Log
+    if: >-
+      (github.event_name != 'push' || github.ref_name == github.event.repository.default_branch) &&
+      (github.event_name != 'issues' || github.event.issue.user.login == 'github-actions[bot]')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+
+    steps:
+      - name: Clone repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+
+      - name: Report and reconcile frictions
+        uses: wevm/frog/action@a9f4314e3317975c5a8a6f0fc71332d7110f72b6 # v1
+        with:
+          issue-author: github-actions[bot]
+          version: 1.0.15

@@ -44,6 +44,7 @@
     "express": "^5.2.1",
     "fast-check": "^4.9.0",
     "file-type": "22.0.1",
+    "frog": "^1.0.15",
     "hono": "4.12.27",
     "isows": "^1.0.7",
     "playwright": "^1.61.1",

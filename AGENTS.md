@@ -2,6 +2,12 @@
 
 TypeScript implementation of the "Payment" HTTP Authentication Scheme (402 Protocol).
 
+## Friction Logging
+
+- Log papercuts and friction (tooling, docs, APIs, tests, conventions) as you hit them with `pnpx frog log`.
+- Do not add global, system, or internal friction.
+- Run `pnpx frog list` first to see what is already known.
+
 ## Vision
 
 mppx provides abstractions for the complete HTTP 402 payment flow — both client and server. The architecture has two layers:
