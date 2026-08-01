@@ -738,8 +738,15 @@ describe('sse transport', () => {
 
   test('respondReceipt with non-SSE upstream Response still deducts from channel', async () => {
     const store = memoryStore()
+    const settled: Array<{ spent: bigint; units: number }> = []
     await seedChannel(store, 10000000n)
-    const transport = sse({ store })
+    const transport = sse({
+      store,
+      async settleCharged(channel) {
+        settled.push({ spent: channel.spent, units: channel.units })
+        return undefined
+      },
+    })
     const request = new Request('https://test.example.com/session', {
       body: JSON.stringify({ prompt: 'hello' }),
       headers: makeAuthorizedRequest().headers,
@@ -768,6 +775,7 @@ describe('sse transport', () => {
     expect(channel!.units).toBe(1)
     expect(receipt.spent).toBe('1000000')
     expect(receipt.units).toBe(1)
+    expect(settled).toEqual([{ spent: 1000000n, units: 1 }])
 
     expect(JSON.parse(body)).toEqual({ content: 'hello' })
     expect(response.headers.get('Content-Type')).toBe('application/json')
@@ -806,8 +814,18 @@ describe('sse transport', () => {
 
   test('respondReceipt with 204 content response still deducts from channel', async () => {
     const store = memoryStore()
+    let resolveSettlement!: (channel: ChannelStore.State) => void
+    const settlement = new Promise<ChannelStore.State>((resolve) => {
+      resolveSettlement = resolve
+    })
     await seedChannel(store, 10000000n)
-    const transport = sse({ store })
+    const transport = sse({
+      store,
+      async settleCharged(channel) {
+        resolveSettlement(channel)
+        return undefined
+      },
+    })
     const request = new Request('https://test.example.com/session', {
       body: JSON.stringify({ prompt: 'hello' }),
       headers: makeAuthorizedRequest().headers,
@@ -827,11 +845,12 @@ describe('sse transport', () => {
     expect(await response.text()).toBe('')
     const receipt = deserializeSessionReceipt(response.headers.get('Payment-Receipt')!)
 
-    await Promise.resolve()
+    const settled = await settlement
 
     const channel = await store.getChannel(channelId)
     expect(channel!.spent).toBe(1000000n)
     expect(channel!.units).toBe(1)
+    expect(settled).toMatchObject({ spent: 1000000n, units: 1 })
     expect(receipt.spent).toBe('1000000')
     expect(receipt.units).toBe(1)
   })

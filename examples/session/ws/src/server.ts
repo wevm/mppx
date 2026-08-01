@@ -104,24 +104,23 @@ const route = mppx.session({
 // WebSocket Upgrade Handler
 
 //
-// `tempo.Ws.serve()` does not perform the HTTP upgrade itself. We use `ws`
-// only for the low-level upgrade mechanics, then hand the accepted socket to
-// mppx's Tempo websocket helper for payment-aware streaming.
+// `mppx.session.serveWebSocket()` does not perform the HTTP upgrade itself. We
+// use `ws` only for the low-level upgrade mechanics, then hand the accepted
+// socket to the session-bound helper for payment-aware streaming.
 const wsServer = new WebSocketServer({ noServer: true })
 wsServer.on('connection', (socket, req) => {
   const url = new URL(req.url ?? '/ws/chat', `ws://${req.headers.host ?? 'localhost:5173'}`)
   const prompt = url.searchParams.get('prompt') ?? 'Tell me something interesting'
 
-  // `tempo.Ws.serve()` bridges websocket control frames to the existing
-  // Tempo session lifecycle. When it receives an in-band authorization frame,
-  // it verifies it through `route`. Once paid, it runs this generator and
-  // emits application chunks interleaved with payment control frames.
-  void tempo.Ws.serve({
+  // `serveWebSocket()` bridges websocket control frames to the existing Tempo
+  // session lifecycle and reuses its store and settlement policy. When it
+  // receives an in-band authorization frame, it verifies it through `route`.
+  // Once paid, it runs this generator and emits application chunks interleaved
+  // with payment control frames.
+  void mppx.session.serveWebSocket({
     socket,
-    store,
     url,
     route,
-    settleScheduled: mppx.session.settleScheduled,
     generate: async function* (stream) {
       for await (const token of generateTokens(prompt)) {
         await stream.charge()

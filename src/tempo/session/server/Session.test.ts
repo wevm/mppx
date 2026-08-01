@@ -2613,7 +2613,7 @@ describe('precompile server session unit guardrails', () => {
       return {
         rawStore,
         route,
-        settleScheduled: payment.session.settleScheduled,
+        serveWebSocket: payment.session.serveWebSocket,
         server,
         wsServer,
         get port() {
@@ -2635,12 +2635,10 @@ describe('precompile server session unit guardrails', () => {
     test('refreshes an expired challenge before sending a later websocket voucher', async () => {
       const harness = await createManagedWsHarness({ challengeTtlMs: 2_000, maxDeposit: 2n })
       harness.wsServer.on('connection', (socket: import('ws').WebSocket) => {
-        void TempoWs.serve({
+        void harness.serveWebSocket({
           socket,
-          store: harness.rawStore,
           url: `${harness.server.url}/ws`,
           route: harness.route,
-          settleScheduled: harness.settleScheduled,
           generate: async function* (stream: TempoWs.SessionController) {
             await stream.charge()
             yield 'chunk-1'
@@ -2684,12 +2682,10 @@ describe('precompile server session unit guardrails', () => {
     test('open -> stream -> need-voucher -> resume -> close', async () => {
       const harness = await createManagedWsHarness({ maxDeposit: 3n })
       harness.wsServer.on('connection', (socket: import('ws').WebSocket) => {
-        void TempoWs.serve({
+        void harness.serveWebSocket({
           socket,
-          store: harness.rawStore,
           url: `${harness.server.url}/ws`,
           route: harness.route,
-          settleScheduled: harness.settleScheduled,
           generate: async function* (stream: TempoWs.SessionController) {
             await stream.charge()
             yield 'chunk-1'
@@ -2757,12 +2753,10 @@ describe('precompile server session unit guardrails', () => {
           },
         })
         harness.wsServer.on('connection', (socket: import('ws').WebSocket) => {
-          void TempoWs.serve({
+          void harness.serveWebSocket({
             socket,
-            store: harness.rawStore,
             url: `${harness.server.url}/ws`,
             route: harness.route,
-            settleScheduled: harness.settleScheduled,
             generate: async function* (stream: TempoWs.SessionController) {
               for (const chunk of ['chunk-1', 'chunk-2', 'chunk-3']) {
                 if (chunk === 'chunk-2' && chunkDelayMs)
@@ -2824,12 +2818,10 @@ describe('precompile server session unit guardrails', () => {
         },
       })
       harness.wsServer.on('connection', (socket: import('ws').WebSocket) => {
-        void TempoWs.serve({
+        void harness.serveWebSocket({
           socket,
-          store: harness.rawStore,
           url: `${harness.server.url}/ws`,
           route: harness.route,
-          settleScheduled: harness.settleScheduled,
           generate: async function* (stream: TempoWs.SessionController) {
             await stream.charge()
             yield controlLookingChunk
@@ -2875,12 +2867,10 @@ describe('precompile server session unit guardrails', () => {
     test('refuses websocket voucher requests beyond local maxDeposit', async () => {
       const harness = await createManagedWsHarness({ maxDeposit: 1n })
       harness.wsServer.on('connection', (socket: import('ws').WebSocket) => {
-        void TempoWs.serve({
+        void harness.serveWebSocket({
           socket,
-          store: harness.rawStore,
           url: `${harness.server.url}/ws`,
           route: harness.route,
-          settleScheduled: harness.settleScheduled,
           generate: async function* (stream: TempoWs.SessionController) {
             await stream.charge()
             yield 'chunk-1'
@@ -3038,12 +3028,10 @@ describe('precompile server session unit guardrails', () => {
       let serverSocket: import('ws').WebSocket | null = null
       harness.wsServer.on('connection', (socket: import('ws').WebSocket) => {
         serverSocket = socket
-        void TempoWs.serve({
+        void harness.serveWebSocket({
           socket,
-          store: harness.rawStore,
           url: `${harness.server.url}/ws`,
           route: harness.route,
-          settleScheduled: harness.settleScheduled,
           generate: async function* (stream: TempoWs.SessionController) {
             await stream.charge()
             yield 'chunk-1'

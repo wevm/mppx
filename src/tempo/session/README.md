@@ -186,6 +186,118 @@ sequenceDiagram
 The initial SSE POST is excluded from default HTTP charging to prevent double
 counting. Stream accounting remains owned by the transport driver.
 
+## Server transport configuration
+
+A session method owns the account, channel store, verification policy, and
+settlement schedule. Routes add prices and application content. HTTP and SSE
+run through configured route handlers; WebSocket uses a session-bound helper
+because its application messages no longer pass through HTTP.
+
+| Server shape           | Session option | Content API                         | Charging                            |
+| ---------------------- | -------------- | ----------------------------------- | ----------------------------------- |
+| HTTP only              | Omit `sse`     | `result.withReceipt(Response)`      | Once per billable request           |
+| SSE only               | `sse: true`    | `result.withReceipt(AsyncIterable)` | Each `stream.charge()`              |
+| WebSocket only         | Omit `sse`     | `mppx.session.serveWebSocket(...)`  | Each `stream.charge()`              |
+| HTTP + SSE + WebSocket | `sse: true`    | All three APIs                      | Selected by route and response type |
+
+All transports for one session service must share the same configured session
+method and store. `serveWebSocket` is bound to both the store and settlement
+policy, so callers pass neither dependency again. `tempo.Ws.serve` remains the
+low-level adapter for custom integrations.
+
+### Shared method configuration
+
+```ts
+const session = tempo.session({
+  account,
+  currency,
+  getClient: () => client,
+  settlementSchedule: { units: 100 },
+  store,
+  // Include when this instance serves any SSE route.
+  sse: true,
+})
+
+const mppx = Mppx.create({ methods: [session], secretKey })
+```
+
+`sse: true` enables async-iterable responses without changing ordinary
+`Response` handling, so a mixed server uses one session method.
+
+### HTTP
+
+```ts
+const httpRoute = mppx.session({ amount: '0.01', unitType: 'request' })
+const result = await httpRoute(request)
+
+if (result.status === 402) return result.challenge
+return result.withReceipt(Response.json({ ok: true }))
+```
+
+HTTP accounting charges the configured route amount before application content
+runs. A plain `Response` selects normal HTTP handling even when `sse: true`.
+
+### SSE
+
+```ts
+const sseRoute = mppx.session({ amount: '0.001', unitType: 'token' })
+const result = await sseRoute(request)
+
+if (result.status === 402) return result.challenge
+return result.withReceipt(async function* (stream) {
+  for await (const token of generateTokens()) {
+    await stream.charge()
+    yield token
+  }
+})
+```
+
+SSE requires `sse: true` on the shared session method. The async iterable
+selects SSE framing and transport-owned metering.
+
+### WebSocket
+
+```ts
+const wsRoute = mppx.session({ amount: '0.001', unitType: 'token' })
+
+webSocketServer.on('connection', (socket, request) => {
+  void mppx.session.serveWebSocket({
+    generate: async function* (stream) {
+      for await (const token of generateTokens()) {
+        await stream.charge()
+        yield token
+      }
+    },
+    route: wsRoute,
+    socket,
+    url: new URL(request.url!, `ws://${request.headers.host}`),
+  })
+})
+```
+
+The application still exposes `wsRoute` over HTTP for the initial challenge
+probe. The bound helper reuses the session store and automatic settlement
+schedule for in-band WebSocket vouchers and charges.
+
+### Mixed server
+
+```ts
+const httpRoute = mppx.session({ amount: '0.01', unitType: 'request' })
+const sseRoute = mppx.session({ amount: '0.001', unitType: 'token' })
+const wsRoute = mppx.session({ amount: '0.001', unitType: 'token' })
+
+async function handler(request: Request) {
+  const pathname = new URL(request.url).pathname
+  if (pathname === '/api/data') return serveHttp(httpRoute, request)
+  if (pathname === '/api/events') return serveSse(sseRoute, request)
+  if (pathname === '/ws') return serveWebSocketProbe(wsRoute, request)
+  return new Response('Not found', { status: 404 })
+}
+```
+
+Each route can choose its own price and unit type. Verification, channel state,
+and settlement policy remain shared through the single session method.
+
 ## Extension boundaries
 
 | Change                         | Preserve                                                                                        |
