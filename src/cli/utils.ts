@@ -1,10 +1,21 @@
 import * as readline from 'node:readline'
 
 import type { Chain } from 'viem'
-import { type Address, createClient, http } from 'viem'
+import { type Address, createClient, http, defineChain } from 'viem'
 import { tempo as tempoMainnet, tempoModerato } from 'viem/tempo/chains'
 
 import * as defaults from '../tempo/internal/defaults.js'
+
+// Define ThaiChain
+const thaiChain = defineChain({
+  id: 7,
+  name: 'ThaiChain',
+  nativeCurrency: { name: 'TCH', symbol: 'TCH', decimals: 6 },
+  rpcUrls: { default: { http: ['https://rpc.thaichain.org'] } },
+  blockExplorers: {
+    default: { name: 'ThaiChain Explorer', url: 'https://exp.thaichain.org' },
+  },
+})
 
 // Inlined from https://github.com/alexeyraspopov/picocolors (ISC License)
 export const pc = (() => {
@@ -270,7 +281,8 @@ export async function resolveChain(
   const { getChainId } = await import('viem/actions')
   const chainId = await getChainId(createClient({ transport: http(rpcUrl) }))
   const allExports = Object.values(await import('viem/tempo/chains')) as unknown[]
-  const candidates = allExports.filter(
+  // Add ThaiChain to candidates
+  const candidates = [...allExports, thaiChain].filter(
     (c): c is Chain =>
       typeof c === 'object' && c !== null && 'id' in c && (c as Chain).id === chainId,
   )
@@ -283,6 +295,7 @@ export function chainName(chain: { id: number; name: string }) {
   const chainNames: Record<number, string> = {
     [tempoMainnet.id]: 'mainnet',
     [tempoModerato.id]: 'testnet',
+    [thaiChain.id]: 'thaichain',
   }
   return chainNames[chain.id] ?? chain.name
 }

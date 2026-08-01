@@ -365,6 +365,8 @@ const policyByChainId = {
     ...defaultPolicy,
     maxPriorityFeePerGas: 50_000_000_000n,
   },
+  // ThaiChain uses the same policy as mainnet
+  [defaults.chainId.thaichain]: defaultPolicy,
 } as const satisfies Record<defaults.ChainId, Policy>
 
 function getPolicy(chainId: number, overrides: Partial<Policy> | undefined): Policy {

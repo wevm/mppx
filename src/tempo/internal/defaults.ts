@@ -3,6 +3,7 @@ import type { ValueOf } from '../../internal/types.js'
 export const chainId = {
   mainnet: 4217,
   testnet: 42431,
+  thaichain: 7,
 } as const
 export type ChainId = ValueOf<typeof chainId>
 
@@ -12,12 +13,15 @@ export const tokens = {
   usdc: '0x20C000000000000000000000b9537d11c60E8b50',
   /** pathUSD token address. */
   pathUsd: '0x20c0000000000000000000000000000000000000',
+  /** TCH token address on ThaiChain. */
+  tch: '0x20C0000000000000000000000000000000000000',
 } as const
 
 /** Chain ID → default currency. */
 export const currency = {
   [chainId.mainnet]: tokens.usdc,
   [chainId.testnet]: tokens.pathUsd,
+  [chainId.thaichain]: tokens.tch,
 } as const satisfies Record<ChainId, string>
 
 /**
@@ -33,12 +37,14 @@ export const decimals = 6
 export const escrowContract = {
   [chainId.mainnet]: '0x33b901018174DDabE4841042ab76ba85D4e24f25',
   [chainId.testnet]: '0xe1c4d3dce17bc111181ddf716f75bae49e61a336',
+  [chainId.thaichain]: '0x0000000000000000000000000000000000000000', // Not used for charge intent
 } as const satisfies Record<ChainId, string>
 
 /** Default RPC URLs for each Tempo chain. */
 export const rpcUrl = {
   [chainId.mainnet]: 'https://rpc.tempo.xyz',
   [chainId.testnet]: 'https://rpc.moderato.tempo.xyz',
+  [chainId.thaichain]: 'https://rpc.thaichain.org',
 } as const satisfies Record<ChainId, string>
 
 /** Resolves the default currency. */
