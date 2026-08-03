@@ -1,6 +1,6 @@
 {
   "scripts": {
-    "build": "pnpm build:html && zile",
+    "build": "pnpm build:html && zile && node scripts/set-workspace-bin.js",
     "build:html": "node --import tsx scripts/build:html.ts",
     "changeset:publish:main": "zile publish:prepare && changeset publish --no-git-tag --tag main && zile publish:post",
     "changeset:publish": "zile publish:prepare && changeset publish && zile publish:post",
@@ -12,7 +12,7 @@
     "check:types:examples": "pnpm -r --filter './examples/**' run check:types",
     "deps": "pnpx taze -r --no-ignore-other-workspaces --ignore-paths node_modules",
     "deps:ci": "pnpx actions-up",
-    "dev": "zile dev",
+    "dev": "zile dev && node scripts/set-workspace-bin.js",
     "dev:example": "node scripts/dev:example.ts",
     "mppx": "node --import tsx src/bin.ts",
     "test": "vp test",
@@ -244,7 +244,7 @@
   "module": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "bin": {
-    "mppx": "./dist/bin.js",
+    "mppx": "./src/bin.js",
     "mppx.src": "./src/bin.ts"
   }
 }
