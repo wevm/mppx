@@ -22,7 +22,7 @@ test('types: request signers compose with an optional shared context', () => {
   Attestation.Client.composeSigners()
 })
 
-test('types: middleware policy receives evidence from its verifier map', () => {
+test('types: middleware policy receives evidence and outcomes from its verifier map', () => {
   const tapVerifier: Attestation.Verifier<Tap.Evidence> = {
     verify: () => ({ status: 'absent' }),
   }
@@ -31,10 +31,29 @@ test('types: middleware policy receives evidence from its verifier map', () => {
   }
 
   Attestation.Server.middleware(async () => new Response(), {
-    policy({ evidence }) {
+    policy({ evidence, outcomes }) {
       expectTypeOf(evidence).toEqualTypeOf<readonly Tap.Evidence[]>()
+      expectTypeOf(outcomes[Tap.Constants.protocol]).toEqualTypeOf<
+        Attestation.Verification<Tap.Evidence>
+      >()
       return { allow: true }
     },
     verifiers,
   })
+})
+
+test('types: server verifiers require explicit replay storage and expose the algorithm', () => {
+  const nonceStore = Attestation.NonceStore.memory()
+  expectTypeOf(nonceStore).toEqualTypeOf<Attestation.NonceStore.Store>()
+
+  Tap.Server.verifier({
+    keyResolver({ algorithm }) {
+      expectTypeOf(algorithm).toEqualTypeOf<Attestation.SignatureAlgorithm>()
+      return undefined
+    },
+    nonceStore,
+  })
+
+  // @ts-expect-error replay storage must be chosen explicitly
+  Tap.Server.verifier({ keyResolver: () => undefined })
 })

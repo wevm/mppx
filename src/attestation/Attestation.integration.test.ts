@@ -53,6 +53,7 @@ describe('agent attestation with MPP payment retries', () => {
     const webBotAuthKeys = await keyPair()
     const webBotAuthKeyId = await jwkThumbprint(webBotAuthKeys.publicKey)
     const signatureAgent = 'https://agent.example'
+    const nonceStore = Attestation.NonceStore.memory()
     const seen = await createServer({
       policy({ evidence }) {
         const tap = evidence.find(
@@ -75,12 +76,14 @@ describe('agent attestation with MPP payment retries', () => {
       verifiers: {
         [Tap.Constants.protocol]: Tap.Server.verifier({
           keyResolver: ({ keyId }) => (keyId === 'tap-agent' ? tapKeys.publicKey : undefined),
+          nonceStore,
         }),
         [WebBotAuth.Constants.protocol]: WebBotAuth.Server.verifier({
           keyResolver: ({ keyId, signatureAgent: advertisedAgent }) =>
             keyId === webBotAuthKeyId && advertisedAgent === signatureAgent
               ? webBotAuthKeys.publicKey
               : undefined,
+          nonceStore,
         }),
       },
     })
@@ -209,16 +212,67 @@ describe('agent attestation with MPP payment retries', () => {
       }),
     }
 
-    expect(await Attestation.Server.verify(signed, verifiers)).toHaveLength(2)
-    expect([...consumed].some((value) => value.startsWith(`${Tap.Constants.tags.payment}:`))).toBe(
-      true,
-    )
+    expect((await Attestation.Server.verify(signed, verifiers)).evidence).toHaveLength(2)
+    expect([...consumed].some((value) => value.startsWith(`${Tap.Constants.protocol}:`))).toBe(true)
     expect([...consumed].some((value) => value.startsWith(`${WebBotAuth.Constants.tag}:`))).toBe(
       true,
     )
-    await expect(Attestation.Server.verify(signed, verifiers)).rejects.toThrow(
-      'The signature nonce has already been used.',
-    )
+    const replay = await Attestation.Server.verify(signed, verifiers)
+    for (const outcome of Object.values(replay.outcomes))
+      expect(outcome).toEqual({
+        reason: 'The signature nonce has already been used.',
+        status: 'invalid',
+      })
+  })
+
+  test('shares replay protection across separately constructed verifier instances', async () => {
+    const keys = await keyPair()
+    const nonceStore = Attestation.NonceStore.memory()
+    const signed = await Tap.Client.signer({
+      intent: Tap.Constants.intents.payment,
+      key: keys.privateKey,
+      keyId: 'tap-agent',
+    }).sign(new Request('https://merchant.example/resource'))
+    const createVerifier = () =>
+      Tap.Server.verifier({
+        keyResolver: ({ keyId }) => (keyId === 'tap-agent' ? keys.publicKey : undefined),
+        nonceStore,
+      })
+
+    expect(await createVerifier().verify(signed)).toMatchObject({ status: 'verified' })
+    expect(await createVerifier().verify(signed)).toEqual({
+      reason: 'The signature nonce has already been used.',
+      status: 'invalid',
+    })
+  })
+
+  test('rejects one TAP nonce reused across browse and payment intents', async () => {
+    const keys = await keyPair()
+    const nonceStore = Attestation.NonceStore.memory()
+    const context = {
+      created: Math.floor(Date.now() / 1_000),
+      nonce: 'A'.repeat(86),
+    } as const
+    const browse = await Tap.Client.signer({
+      intent: Tap.Constants.intents.browse,
+      key: keys.privateKey,
+      keyId: 'tap-agent',
+    }).sign(new Request('https://merchant.example/browse'), context)
+    const payment = await Tap.Client.signer({
+      intent: Tap.Constants.intents.payment,
+      key: keys.privateKey,
+      keyId: 'tap-agent',
+    }).sign(new Request('https://merchant.example/payment'), context)
+    const verifier = Tap.Server.verifier({
+      keyResolver: () => keys.publicKey,
+      nonceStore,
+    })
+
+    expect(await verifier.verify(browse)).toMatchObject({ status: 'verified' })
+    expect(await verifier.verify(payment)).toEqual({
+      reason: 'The signature nonce has already been used.',
+      status: 'invalid',
+    })
   })
 
   test('rejects duplicate signature labels during composition', async () => {
@@ -268,6 +322,7 @@ describe('agent attestation with MPP payment retries', () => {
     )
     const verification = await Tap.Server.verifier({
       keyResolver: () => tapKeys.publicKey,
+      nonceStore: Attestation.NonceStore.memory(),
     }).verify(new Request(valid, { headers: mismatchedHeaders }))
     expect(verification).toMatchObject({
       reason: 'Signature-Input and Signature do not contain the same labels.',
@@ -277,6 +332,7 @@ describe('agent attestation with MPP payment retries', () => {
     expect(
       await Tap.Server.verifier({
         keyResolver: () => tapKeys.publicKey,
+        nonceStore: Attestation.NonceStore.memory(),
       }).verify(
         new Request('https://merchant.example/resource', {
           headers: { [Attestation.Headers.signature]: 'orphan=:AQ==:' },
@@ -327,6 +383,7 @@ describe('agent attestation with MPP payment retries', () => {
     })
     const verifier = Tap.Server.verifier({
       keyResolver: ({ keyId }) => (keyId === 'tap-agent' ? keys.publicKey : undefined),
+      nonceStore: Attestation.NonceStore.memory(),
     })
 
     expect(await verifier.verify(new Request(request, { headers }))).toMatchObject({
@@ -341,6 +398,7 @@ describe('agent attestation with MPP payment retries', () => {
       verifiers: {
         [Tap.Constants.protocol]: Tap.Server.verifier({
           keyResolver: ({ keyId }) => (keyId === 'tap-agent' ? keys.publicKey : undefined),
+          nonceStore: Attestation.NonceStore.memory(),
         }),
       },
     })
@@ -381,6 +439,7 @@ describe('agent attestation with MPP payment retries', () => {
             keyId === expectedKeyId && signatureAgent === 'https://agent.example'
               ? keys.publicKey
               : undefined,
+          nonceStore: Attestation.NonceStore.memory(),
         }),
       },
     })
@@ -405,6 +464,72 @@ describe('agent attestation with MPP payment retries', () => {
     }
   })
 
+  test('signs and verifies Web Bot Auth with RSA-PSS SHA-512', async () => {
+    const keys = await rsaKeyPair()
+    const keyId = await jwkThumbprint(keys.publicKey)
+    const algorithms: Attestation.SignatureAlgorithm[] = []
+    const signed = await WebBotAuth.Client.signer({
+      key: keys.privateKey,
+      keyId,
+      signatureAgent: 'https://agent.example',
+    }).sign(new Request('https://merchant.example/resource'))
+    const result = await WebBotAuth.Server.verifier({
+      keyResolver({ algorithm, keyId: candidate }) {
+        algorithms.push(algorithm)
+        return candidate === keyId ? keys.publicKey : undefined
+      },
+      nonceStore: Attestation.NonceStore.memory(),
+    }).verify(signed)
+
+    expect(signed.headers.get(Attestation.Headers.signatureInput)).toContain(
+      `alg="${Attestation.Algorithms.rsaPssSha512}"`,
+    )
+    expect(algorithms).toEqual([Attestation.Algorithms.rsaPssSha512])
+    expect(result).toMatchObject({ status: 'verified' })
+  })
+
+  test('preserves unknown keys and resolver outages as unverified WBA outcomes', async () => {
+    const keys = await keyPair()
+    const keyId = await jwkThumbprint(keys.publicKey)
+    const signed = await WebBotAuth.Client.signer({
+      key: keys.privateKey,
+      keyId,
+      signatureAgent: 'https://agent.example',
+    }).sign(new Request('https://merchant.example/resource'))
+    const unknown = WebBotAuth.Server.verifier({
+      keyResolver: () => undefined,
+      nonceStore: Attestation.NonceStore.memory(),
+    })
+    const unavailable = WebBotAuth.Server.verifier({
+      keyResolver() {
+        throw new Error('directory unavailable')
+      },
+      nonceStore: Attestation.NonceStore.memory(),
+    })
+
+    expect(await unknown.verify(signed)).toEqual({
+      reason: 'No public key is available for the signature key ID.',
+      status: 'unverified',
+    })
+    expect(await unavailable.verify(signed)).toEqual({
+      reason: 'The public key could not be resolved.',
+      status: 'unverified',
+    })
+
+    let policyOutcome: Attestation.Verification | undefined
+    const handler = Attestation.Server.middleware(async () => new Response('unexpected'), {
+      policy({ outcomes }) {
+        policyOutcome = outcomes[WebBotAuth.Constants.protocol]
+        return { allow: false, reason: 'A verified bot is required.' }
+      },
+      verifiers: { [WebBotAuth.Constants.protocol]: unknown },
+    })
+    const response = await handler(signed)
+
+    expect(response.status).toBe(403)
+    expect(policyOutcome).toMatchObject({ status: 'unverified' })
+  })
+
   test('rejects a Web Bot Auth key that does not match its RFC 7638 keyid', async () => {
     const advertisedKeys = await keyPair()
     const signingKeys = await keyPair()
@@ -420,6 +545,7 @@ describe('agent attestation with MPP payment retries', () => {
         keyId === advertisedKeyId && candidateAgent === signatureAgent
           ? signingKeys.publicKey
           : undefined,
+      nonceStore: Attestation.NonceStore.memory(),
     })
 
     expect(await verifier.verify(signed)).toMatchObject({ status: 'invalid' })
@@ -447,6 +573,7 @@ describe('agent attestation with MPP payment retries', () => {
     expect(
       await WebBotAuth.Server.verifier({
         keyResolver: () => advertisedKeys.publicKey,
+        nonceStore: Attestation.NonceStore.memory(),
       }).verify(unsupportedDiscovery),
     ).toMatchObject({
       reason: 'The Signature-Agent discovery type is not supported.',
@@ -465,6 +592,7 @@ describe('agent attestation with MPP payment retries', () => {
             keyId === expectedKeyId && signatureAgent === 'https://agent.example'
               ? keys.publicKey
               : undefined,
+          nonceStore: Attestation.NonceStore.memory(),
         }),
       },
     })
@@ -489,6 +617,7 @@ describe('agent attestation with MPP payment retries', () => {
       verifiers: {
         [Tap.Constants.protocol]: Tap.Server.verifier({
           keyResolver: ({ keyId }) => (keyId === 'tap-agent' ? keys.publicKey : undefined),
+          nonceStore: Attestation.NonceStore.memory(),
         }),
       },
     })
@@ -515,6 +644,7 @@ describe('agent attestation with MPP payment retries', () => {
       verifiers: {
         [Tap.Constants.protocol]: Tap.Server.verifier({
           keyResolver: ({ keyId }) => (keyId === 'tap-agent' ? keys.publicKey : undefined),
+          nonceStore: Attestation.NonceStore.memory(),
         }),
       },
     })
@@ -549,6 +679,7 @@ describe('agent attestation with MPP payment retries', () => {
             keyId === expectedKeyId && signatureAgent === 'https://agent.example'
               ? keys.publicKey
               : undefined,
+          nonceStore: Attestation.NonceStore.memory(),
         }),
       },
     })
@@ -565,8 +696,15 @@ describe('agent attestation with MPP payment retries', () => {
         WebBotAuth.Constants.signatureAgentHeader,
         `${WebBotAuth.Constants.label}="https://attacker.example"`,
       )
+      const altered = new Request(signed, { headers })
 
-      expect((await globalThis.fetch(new Request(signed, { headers }))).status).toBe(401)
+      expect(
+        await WebBotAuth.Server.verifier({
+          keyResolver: () => keys.publicKey,
+          nonceStore: Attestation.NonceStore.memory(),
+        }).verify(altered),
+      ).toMatchObject({ status: 'invalid' })
+      expect((await globalThis.fetch(altered)).status).toBe(403)
       expect(seen.requests).toEqual([])
     } finally {
       seen.server.close()
@@ -580,6 +718,7 @@ describe('agent attestation with MPP payment retries', () => {
       verifiers: {
         [Tap.Constants.protocol]: Tap.Server.verifier({
           keyResolver: ({ keyId }) => (keyId === 'tap-agent' ? keys.publicKey : undefined),
+          nonceStore: Attestation.NonceStore.memory(),
         }),
       },
     })
@@ -609,6 +748,7 @@ describe('agent attestation with MPP payment retries', () => {
       verifiers: {
         [Tap.Constants.protocol]: Tap.Server.verifier({
           keyResolver: ({ keyId }) => (keyId === 'tap-agent' ? keys.publicKey : undefined),
+          nonceStore: Attestation.NonceStore.memory(),
         }),
       },
     })
@@ -725,11 +865,27 @@ async function keyPair(): Promise<CryptoKeyPair> {
   ])) as CryptoKeyPair
 }
 
+async function rsaKeyPair(): Promise<CryptoKeyPair> {
+  return (await crypto.subtle.generateKey(
+    {
+      hash: 'SHA-512',
+      modulusLength: 2_048,
+      name: 'RSA-PSS',
+      publicExponent: new Uint8Array([1, 0, 1]),
+    },
+    true,
+    ['sign', 'verify'],
+  )) as CryptoKeyPair
+}
+
 async function jwkThumbprint(key: CryptoKey): Promise<string> {
   const jwk = await crypto.subtle.exportKey('jwk', key)
-  if (jwk.kty !== 'OKP' || jwk.crv !== 'Ed25519' || !jwk.x)
-    throw new TypeError('Expected an Ed25519 public key.')
-  const canonical = JSON.stringify({ crv: jwk.crv, kty: jwk.kty, x: jwk.x })
+  let canonical: string
+  if (jwk.kty === 'OKP' && jwk.crv === 'Ed25519' && jwk.x)
+    canonical = JSON.stringify({ crv: jwk.crv, kty: jwk.kty, x: jwk.x })
+  else if (jwk.kty === 'RSA' && jwk.e && jwk.n)
+    canonical = JSON.stringify({ e: jwk.e, kty: jwk.kty, n: jwk.n })
+  else throw new TypeError('Expected an Ed25519 or RSA public key.')
   const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(canonical))
   return Buffer.from(digest).toString('base64url')
 }

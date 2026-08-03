@@ -57,7 +57,7 @@ export function signer(config: signer.Config): AttestationTypes.Signer<typeof Co
 
 export declare namespace signer {
   type Config = {
-    /** Ed25519 private key registered for the bot. */
+    /** Ed25519 or RSA-PSS SHA-512 private key registered for the bot. */
     key: CryptoKey
     /** RFC 7638 JWK thumbprint for the registered public key. */
     keyId: string

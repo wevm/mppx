@@ -1,5 +1,5 @@
 import type { MaybePromise } from '../internal/types.js'
-import type { Capabilities } from './Constants.js'
+import type { Algorithms, Capabilities } from './Constants.js'
 
 /**
  * A verified statement about an HTTP request.
@@ -20,16 +20,31 @@ export type Evidence<protocol extends string = string, value = unknown> = {
 /** Assertions a policy can require before permitting an automated request. */
 export type Capability = (typeof Capabilities)[keyof typeof Capabilities]
 
+/** RFC 9421 algorithms implemented by the request-attestation signer and verifier. */
+export type SignatureAlgorithm = (typeof Algorithms)[keyof typeof Algorithms]
+
+/** Resolves a trusted public key for a parsed request signature. */
+export type KeyResolver = (parameters: {
+  /** RFC 9421 algorithm declared by the signature. */
+  algorithm: SignatureAlgorithm
+  /** Key identifier declared by the signature. */
+  keyId: string
+  /** Request carrying the signature. */
+  request: Request
+}) => MaybePromise<CryptoKey | undefined>
+
 /**
  * The complete outcome of attempting one protocol verifier.
  *
  * `absent` means the protocol did not appear on the request. `invalid` means
- * it appeared but failed validation and must reject the request. `verified`
- * carries evidence that is safe for authorization policy to inspect.
+ * it appeared but failed validation and must reject the request. `unverified`
+ * means key material or another required verification dependency was unavailable.
+ * `verified` carries evidence that is safe for authorization policy to inspect.
  */
 export type Verification<evidence extends Evidence = Evidence> =
   | { status: 'absent' }
   | { status: 'invalid'; reason: string }
+  | { status: 'unverified'; reason: string }
   | { status: 'verified'; evidence: evidence }
 
 /**
@@ -39,7 +54,7 @@ export type Verification<evidence extends Evidence = Evidence> =
  * protocol in error reporting while the evidence type flows into the policy.
  */
 export type Verifier<evidence extends Evidence = Evidence> = {
-  /** Validates the request and returns an explicit absent, invalid, or verified outcome. */
+  /** Validates the request and returns a complete protocol verification outcome. */
   verify: (request: Request) => MaybePromise<Verification<evidence>>
 }
 
@@ -52,6 +67,17 @@ export type EvidenceFrom<verifiers extends VerifierMap> = {
     ? evidence
     : never
 }[keyof verifiers]
+
+/** Preserves each configured protocol's complete verification outcome. */
+export type VerificationsFrom<verifiers extends VerifierMap> = {
+  readonly [protocol in keyof verifiers]: Awaited<ReturnType<verifiers[protocol]['verify']>>
+}
+
+/** Evidence and protocol outcomes produced while verifying one request. */
+export type VerificationSummary<verifiers extends VerifierMap = VerifierMap> = {
+  evidence: readonly EvidenceFrom<verifiers>[]
+  outcomes: VerificationsFrom<verifiers>
+}
 
 /**
  * Values shared by every signer contributing to one HTTP request attempt.
@@ -83,13 +109,17 @@ export type Signer<protocol extends string = string> = {
 export type PolicyResult = { allow: true } | { allow: false; reason: string }
 
 /**
- * Decides whether verified request evidence is sufficient to continue.
+ * Decides whether request verification outcomes and evidence are sufficient to continue.
  *
  * The generic evidence parameter lets a middleware configuration expose the
  * precise union produced by its verifier map to the policy implementation.
  */
-export type RequestPolicy<evidence extends Evidence = Evidence> = (input: {
+export type RequestPolicy<
+  evidence extends Evidence = Evidence,
+  outcomes = Readonly<Record<string, Verification>>,
+> = (input: {
   evidence: readonly evidence[]
+  outcomes: outcomes
   request: Request
 }) => MaybePromise<PolicyResult>
 

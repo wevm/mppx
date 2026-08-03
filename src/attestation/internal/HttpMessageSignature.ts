@@ -9,11 +9,12 @@ import {
 import type { BareItem, Dictionary, InnerList, Item } from 'structured-headers'
 
 import type { MaybePromise } from '../../internal/types.js'
-import { Headers as AttestationHeaders } from '../Constants.js'
-import type { SigningContext } from '../Types.js'
+import { Algorithms, Headers as AttestationHeaders } from '../Constants.js'
+import type * as NonceStore from '../NonceStore.js'
+import type { KeyResolver, SignatureAlgorithm, SigningContext } from '../Types.js'
 import * as SigningContextInternal from './SigningContext.js'
 
-/** RFC 9421 constants used by the supported Ed25519 request-signature profile. */
+/** RFC 9421 constants used by request-attestation signature profiles. */
 export const Constants = {
   /** Derived request components supported by this narrow request profile. */
   components: {
@@ -28,11 +29,8 @@ export const Constants = {
     /** The signature's canonicalized covered-components and parameters. */
     signatureParams: '@signature-params',
   },
-  /** RFC 9421 algorithm identifier for Ed25519 signatures. */
-  algorithms: {
-    /** The Ed25519 algorithm name registered by RFC 9421. */
-    ed25519: 'ed25519',
-  },
+  /** RFC 9421 algorithm identifiers supported by request attestation. */
+  algorithms: Algorithms,
 } as const
 
 /** A covered HTTP message component and its RFC 9421 component parameters. */
@@ -47,7 +45,7 @@ export type Component = {
 export type ComponentInput = string | Component
 
 export type SignatureInput = {
-  algorithm: typeof Constants.algorithms.ed25519
+  algorithm: SignatureAlgorithm
   components: readonly Component[]
   created: number
   expires: number
@@ -58,29 +56,12 @@ export type SignatureInput = {
   tag: string
 }
 
-export type KeyResolver = (parameters: {
-  keyId: string
-  request: Request
-}) => MaybePromise<CryptoKey | undefined>
-
-export type NonceStore = {
-  /** Atomically records a nonce and returns `true` when it was previously used. */
-  consume: (nonce: string, expires: number) => MaybePromise<boolean>
-}
-
-/** Creates a process-local nonce store suitable for a single server instance. */
-export function createNonceStore(): NonceStore {
-  const values = new Map<string, number>()
-  return {
-    consume(nonce, expires) {
-      const now = Date.now()
-      for (const [value, expires] of values) if (expires <= now) values.delete(value)
-      if (values.has(nonce)) return true
-      values.set(nonce, expires)
-      return false
-    },
-  }
-}
+/** Result of validating one supported RFC 9421 signature. */
+export type VerificationResult =
+  | { status: 'absent' }
+  | { status: 'invalid'; reason: string }
+  | { status: 'unverified'; reason: string }
+  | { status: 'verified'; input: SignatureInput }
 
 /** Signs a request using the configured RFC 9421-derived component list. */
 export async function sign(
@@ -98,16 +79,17 @@ export async function sign(
   const context = options.context ?? SigningContextInternal.create()
   const created = context.created
   const expires = created + (options.expiresIn ?? 60)
+  const algorithm = algorithmFromKey(options.key)
   const parameters = new Map<string, BareItem>([
     ['created', created],
     ['expires', expires],
     ['keyid', options.keyId],
-    ['alg', Constants.algorithms.ed25519],
+    ['alg', algorithm],
     ['nonce', context.nonce],
     ['tag', options.tag],
   ])
   const input: SignatureInput = {
-    algorithm: Constants.algorithms.ed25519,
+    algorithm,
     components: options.components.map(toComponent),
     created,
     expires,
@@ -118,7 +100,7 @@ export async function sign(
     tag: options.tag,
   }
   const signature = await crypto.subtle.sign(
-    'Ed25519',
+    webCryptoAlgorithm(algorithm),
     options.key,
     toArrayBuffer(encode(signatureBase(request, input))),
   )
@@ -142,46 +124,87 @@ export async function verify(
   options: {
     keyResolver: KeyResolver
     maxAge: number
-    nonceStore?: NonceStore | undefined
+    nonceNamespace: string
+    nonceStore: NonceStore.Store
     requiredComponents: readonly string[]
     tag: string | readonly string[]
     validate?: ((input: SignatureInput, request: Request) => string | undefined) | undefined
+    validateKey?:
+      | ((
+          key: CryptoKey,
+          input: SignatureInput,
+          request: Request,
+        ) => MaybePromise<string | undefined>)
+      | undefined
   },
-): Promise<{ input?: SignatureInput; reason?: string }> {
+): Promise<VerificationResult> {
   const parsed = parse(request, options.tag)
-  if (!parsed) return {}
-  if (parsed.reason) return { reason: parsed.reason }
+  if (!parsed) return { status: 'absent' }
+  if (parsed.reason) return { status: 'invalid', reason: parsed.reason }
   if (!parsed.input || !parsed.signature)
-    return { reason: 'The HTTP message signature is malformed.' }
+    return { status: 'invalid', reason: 'The HTTP message signature is malformed.' }
   const { input, signature } = parsed
 
   if (!options.requiredComponents.every((component) => hasComponent(input.components, component)))
-    return { reason: 'The signature does not cover the required request components.' }
+    return {
+      status: 'invalid',
+      reason: 'The signature does not cover the required request components.',
+    }
   const now = Math.floor(Date.now() / 1000)
   if (input.created > now || input.expires <= now || input.expires - input.created > options.maxAge)
-    return { reason: 'The signature is expired or has an invalid lifetime.' }
+    return { status: 'invalid', reason: 'The signature is expired or has an invalid lifetime.' }
   if (options.validate) {
     const reason = options.validate(input, request)
-    if (reason) return { reason }
+    if (reason) return { status: 'invalid', reason }
   }
-  const key = await options.keyResolver({ keyId: input.keyId, request })
-  if (!key) return { reason: 'No public key is available for the signature key ID.' }
-  const valid = await crypto.subtle.verify(
-    'Ed25519',
-    key,
-    toArrayBuffer(signature),
-    toArrayBuffer(encode(signatureBase(request, input))),
-  )
-  if (!valid) return { reason: 'The HTTP message signature is invalid.' }
-  if (
-    options.nonceStore &&
-    (await options.nonceStore.consume(
-      `${input.tag}:${input.keyId}:${input.nonce}`,
-      input.expires * 1000,
-    ))
-  )
-    return { reason: 'The signature nonce has already been used.' }
-  return { input }
+  let key: CryptoKey | undefined
+  try {
+    key = await options.keyResolver({
+      algorithm: input.algorithm,
+      keyId: input.keyId,
+      request,
+    })
+  } catch {
+    return { status: 'unverified', reason: 'The public key could not be resolved.' }
+  }
+  if (!key)
+    return {
+      status: 'unverified',
+      reason: 'No public key is available for the signature key ID.',
+    }
+  if (!keySupportsAlgorithm(key, input.algorithm))
+    return {
+      status: 'invalid',
+      reason: 'The public key does not support the signature algorithm.',
+    }
+  if (options.validateKey) {
+    const reason = await options.validateKey(key, input, request)
+    if (reason) return { status: 'invalid', reason }
+  }
+  let valid: boolean
+  try {
+    valid = await crypto.subtle.verify(
+      webCryptoAlgorithm(input.algorithm),
+      key,
+      toArrayBuffer(signature),
+      toArrayBuffer(encode(signatureBase(request, input))),
+    )
+  } catch {
+    valid = false
+  }
+  if (!valid) return { status: 'invalid', reason: 'The HTTP message signature is invalid.' }
+  try {
+    if (
+      await options.nonceStore.consume(
+        `${options.nonceNamespace}:${input.keyId}:${input.nonce}`,
+        input.expires * 1000,
+      )
+    )
+      return { status: 'invalid', reason: 'The signature nonce has already been used.' }
+  } catch {
+    return { status: 'unverified', reason: 'Replay protection is unavailable.' }
+  }
+  return { status: 'verified', input }
 }
 
 function parse(
@@ -252,7 +275,7 @@ function toSignatureInput(label: string, entry: unknown): SignatureInput | undef
     !Number.isInteger(created) ||
     typeof expires !== 'number' ||
     !Number.isInteger(expires) ||
-    algorithm !== Constants.algorithms.ed25519 ||
+    !isSignatureAlgorithm(algorithm) ||
     typeof keyId !== 'string' ||
     typeof nonce !== 'string' ||
     typeof tag !== 'string'
@@ -269,6 +292,32 @@ function toSignatureInput(label: string, entry: unknown): SignatureInput | undef
     parameters,
     tag,
   }
+}
+
+function algorithmFromKey(key: CryptoKey): SignatureAlgorithm {
+  if (key.algorithm.name === 'Ed25519') return Algorithms.ed25519
+  if (
+    key.algorithm.name === 'RSA-PSS' &&
+    (key.algorithm as RsaHashedKeyAlgorithm).hash.name === 'SHA-512'
+  )
+    return Algorithms.rsaPssSha512
+  throw new TypeError('Request attestation requires an Ed25519 or RSA-PSS SHA-512 signing key.')
+}
+
+function isSignatureAlgorithm(value: unknown): value is SignatureAlgorithm {
+  return value === Algorithms.ed25519 || value === Algorithms.rsaPssSha512
+}
+
+function keySupportsAlgorithm(key: CryptoKey, algorithm: SignatureAlgorithm): boolean {
+  if (algorithm === Algorithms.ed25519) return key.algorithm.name === 'Ed25519'
+  return (
+    key.algorithm.name === 'RSA-PSS' &&
+    (key.algorithm as RsaHashedKeyAlgorithm).hash.name === 'SHA-512'
+  )
+}
+
+function webCryptoAlgorithm(algorithm: SignatureAlgorithm): AlgorithmIdentifier | RsaPssParams {
+  return algorithm === Algorithms.ed25519 ? 'Ed25519' : { name: 'RSA-PSS', saltLength: 64 }
 }
 
 function signatureBase(request: Request, input: SignatureInput): string {

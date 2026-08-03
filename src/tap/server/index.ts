@@ -1,5 +1,6 @@
 import { Capabilities } from '../../attestation/Constants.js'
 import * as HttpMessageSignature from '../../attestation/internal/HttpMessageSignature.js'
+import type * as NonceStore from '../../attestation/NonceStore.js'
 import * as Attestation from '../../attestation/Types.js'
 import { Constants } from '../Constants.js'
 import type * as Types from '../Types.js'
@@ -12,18 +13,17 @@ import type * as Types from '../Types.js'
  * are intentionally not inferred from this header-only verifier.
  */
 export function verifier(config: verifier.Config): Attestation.Verifier<Types.Evidence> {
-  const nonceStore = config.nonceStore ?? HttpMessageSignature.createNonceStore()
   return {
     async verify(request) {
       const result = await HttpMessageSignature.verify(request, {
         keyResolver: config.keyResolver,
         maxAge: Constants.maximumSignatureLifetime,
-        nonceStore,
+        nonceNamespace: Constants.protocol,
+        nonceStore: config.nonceStore,
         requiredComponents: Constants.requiredComponents,
         tag: [Constants.tags.browse, Constants.tags.payment],
       })
-      if (!result.input)
-        return result.reason ? { status: 'invalid', reason: result.reason } : { status: 'absent' }
+      if (result.status !== 'verified') return result
       return {
         status: 'verified',
         evidence: {
@@ -50,9 +50,9 @@ export function verifier(config: verifier.Config): Attestation.Verifier<Types.Ev
 
 export declare namespace verifier {
   type Config = {
-    /** Resolves a TAP-approved public key by its `keyid` parameter. */
-    keyResolver: HttpMessageSignature.KeyResolver
+    /** Resolves a TAP-approved public key by its `keyid` and signature algorithm. */
+    keyResolver: Attestation.KeyResolver
     /** Atomically consumes each nonce in shared storage for multi-instance deployments. */
-    nonceStore?: HttpMessageSignature.NonceStore | undefined
+    nonceStore: NonceStore.Store
   }
 }

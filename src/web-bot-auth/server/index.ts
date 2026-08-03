@@ -2,6 +2,7 @@ import { isInnerList, parseDictionary, Token } from 'structured-headers'
 
 import { Capabilities } from '../../attestation/Constants.js'
 import * as HttpMessageSignature from '../../attestation/internal/HttpMessageSignature.js'
+import type * as NonceStore from '../../attestation/NonceStore.js'
 import * as Attestation from '../../attestation/Types.js'
 import { Constants } from '../Constants.js'
 import * as JwkThumbprint from '../internal/JwkThumbprint.js'
@@ -15,25 +16,28 @@ import type * as Types from '../Types.js'
  * client. It must not be used on its own as user or payment authorization.
  */
 export function verifier(config: verifier.Config): Attestation.Verifier<Types.Evidence> {
-  const nonceStore = config.nonceStore ?? HttpMessageSignature.createNonceStore()
   return {
     async verify(request) {
       let signatureAgent: string | undefined
       const result = await HttpMessageSignature.verify(request, {
         async keyResolver(parameters) {
-          const key = await config.keyResolver({
+          return config.keyResolver({
             ...parameters,
             signatureAgent: signatureAgent!,
           })
-          if (!key) return undefined
+        },
+        async validateKey(key, input) {
           try {
-            return (await JwkThumbprint.fromKey(key)) === parameters.keyId ? key : undefined
+            return (await JwkThumbprint.fromKey(key)) === input.keyId
+              ? undefined
+              : 'The Web Bot Auth key does not match its RFC 7638 keyid.'
           } catch {
-            return undefined
+            return 'The Web Bot Auth key must be an extractable Ed25519 or RSA public key.'
           }
         },
         maxAge: Constants.signatureLifetime,
-        nonceStore,
+        nonceNamespace: Constants.protocol,
+        nonceStore: config.nonceStore,
         requiredComponents: Constants.requiredComponents,
         tag: Constants.tag,
         validate(_input, input) {
@@ -65,8 +69,7 @@ export function verifier(config: verifier.Config): Attestation.Verifier<Types.Ev
           return undefined
         },
       })
-      if (!result.input)
-        return result.reason ? { status: 'invalid', reason: result.reason } : { status: 'absent' }
+      if (result.status !== 'verified') return result
       return {
         status: 'verified',
         evidence: {
@@ -97,11 +100,12 @@ export declare namespace verifier {
      * must be extractable so their RFC 7638 thumbprints can be verified.
      */
     keyResolver: (parameters: {
+      algorithm: Attestation.SignatureAlgorithm
       keyId: string
       request: Request
       signatureAgent: string
     }) => Promise<CryptoKey | undefined> | CryptoKey | undefined
     /** Atomically consumes each nonce in shared storage for multi-instance deployments. */
-    nonceStore?: HttpMessageSignature.NonceStore | undefined
+    nonceStore: NonceStore.Store
   }
 }

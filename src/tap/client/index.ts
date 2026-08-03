@@ -42,7 +42,7 @@ export declare namespace signer {
   type Config = {
     /** TAP signature type for the request. */
     intent: (typeof Constants.intents)[keyof typeof Constants.intents]
-    /** Ed25519 private key provisioned to the agent provider. */
+    /** Ed25519 or RSA-PSS SHA-512 private key provisioned to the agent provider. */
     key: CryptoKey
     /** Identifier the merchant uses to resolve the signing public key. */
     keyId: string
