@@ -1,6 +1,5 @@
 export * as Client from './Client.js'
 export * as NonceStore from './NonceStore.js'
-export * as Policy from './Policy.js'
 export * as Server from './Server.js'
 export * from './Constants.js'
 export * from './Types.js'

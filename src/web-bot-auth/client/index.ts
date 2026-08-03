@@ -1,7 +1,6 @@
 import { parseDictionary, serializeDictionary } from 'structured-headers'
 import type { Dictionary } from 'structured-headers'
 
-import * as Attestation from '../../attestation/Client.js'
 import * as HttpMessageSignature from '../../attestation/internal/HttpMessageSignature.js'
 import type * as AttestationTypes from '../../attestation/Types.js'
 import { Constants } from '../Constants.js'
@@ -18,15 +17,13 @@ import * as SignatureAgent from '../internal/SignatureAgent.js'
 export function signer(config: signer.Config): AttestationTypes.Signer<typeof Constants.protocol> {
   const label = config.label ?? Constants.label
   const signatureAgentKey = config.signatureAgentKey ?? label
-  const expiresIn = config.expiresIn ?? Constants.signatureLifetime
+  const expiresIn = config.expiresIn ?? Constants.defaultSignatureLifetime
   const signatureAgent = SignatureAgent.directoryOrigin(config.signatureAgent)
   if (!JwkThumbprint.is(config.keyId))
     throw new TypeError('Web Bot Auth keyId must be an RFC 7638 SHA-256 JWK thumbprint.')
   if (!signatureAgent) throw new TypeError('Signature-Agent must identify a valid HTTPS origin.')
-  if (!Number.isInteger(expiresIn) || expiresIn <= 0 || expiresIn > Constants.signatureLifetime)
-    throw new RangeError(
-      `Web Bot Auth expiresIn must be an integer from 1 to ${Constants.signatureLifetime}.`,
-    )
+  if (!Number.isInteger(expiresIn) || expiresIn <= 0)
+    throw new RangeError('Web Bot Auth expiresIn must be a positive integer.')
   return {
     protocol: Constants.protocol,
     sign(request, context) {
@@ -70,14 +67,6 @@ export declare namespace signer {
     /** RFC 9421 dictionary label. @default 'webbot' */
     label?: string | undefined
   }
-}
-
-/** Wraps a fetch implementation with a Web Bot Auth signer. */
-export function wrapFetch(
-  fetch: typeof globalThis.fetch,
-  config: signer.Config,
-): typeof globalThis.fetch {
-  return Attestation.wrapFetch(fetch, signer(config))
 }
 
 function parseSignatureAgents(headers: Headers): Dictionary {

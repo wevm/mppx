@@ -20,8 +20,6 @@ export const Constants = {
   components: {
     /** The target host and non-default port. */
     authority: '@authority',
-    /** The case-sensitive HTTP request method. */
-    method: '@method',
     /** The request URL path without its query string. */
     path: '@path',
     /** The lowercased `Signature-Agent` request header. */
@@ -29,8 +27,6 @@ export const Constants = {
     /** The signature's canonicalized covered-components and parameters. */
     signatureParams: '@signature-params',
   },
-  /** RFC 9421 algorithm identifiers supported by request attestation. */
-  algorithms: Algorithms,
 } as const
 
 /** A covered HTTP message component and its RFC 9421 component parameters. */
@@ -337,10 +333,6 @@ function componentValue(request: Request, component: Component): string {
   if (component.id === Constants.components.path) {
     if (component.parameters?.size) throw new Error('Unsupported parameters for "@path".')
     return url.pathname
-  }
-  if (component.id === Constants.components.method) {
-    if (component.parameters?.size) throw new Error('Unsupported parameters for "@method".')
-    return request.method
   }
   if (component.parameters?.size)
     return componentDictionaryValue(request, component.id, component.parameters)

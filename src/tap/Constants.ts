@@ -2,7 +2,7 @@ import { Constants as HttpMessageSignature } from '../attestation/internal/HttpM
 
 /** TAP values required for its RFC 9421 agent-recognition signature profile. */
 export const Constants = {
-  /** Stable identifier for Trusted Agent Protocol evidence and signers. */
+  /** Stable identifier for Trusted Agent Protocol signers and replay storage. */
   protocol: 'tap',
   /** RFC 9421 signature label used when no label is configured. */
   label: 'tap',

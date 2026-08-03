@@ -1,7 +1,6 @@
-import { Capabilities } from '../../attestation/Constants.js'
 import * as HttpMessageSignature from '../../attestation/internal/HttpMessageSignature.js'
 import type * as NonceStore from '../../attestation/NonceStore.js'
-import * as Attestation from '../../attestation/Types.js'
+import type * as Attestation from '../../attestation/Types.js'
 import { Constants } from '../Constants.js'
 import type * as Types from '../Types.js'
 
@@ -12,7 +11,7 @@ import type * as Types from '../Types.js'
  * recognition and payment-container verification stay protocol-specific and
  * are intentionally not inferred from this header-only verifier.
  */
-export function verifier(config: verifier.Config): Attestation.Verifier<Types.Evidence> {
+export function verifier(config: verifier.Config): Attestation.Verifier<Types.VerifiedRequest> {
   return {
     async verify(request) {
       const result = await HttpMessageSignature.verify(request, {
@@ -26,22 +25,13 @@ export function verifier(config: verifier.Config): Attestation.Verifier<Types.Ev
       if (result.status !== 'verified') return result
       return {
         status: 'verified',
-        evidence: {
-          protocol: Constants.protocol,
-          capabilities: [
-            Capabilities.agentIdentity,
-            Capabilities.requestBinding,
-            Capabilities.replayProtection,
-            Capabilities.commerceIntent,
-          ],
-          value: {
-            keyId: result.input.keyId,
-            nonce: result.input.nonce,
-            intent:
-              result.input.tag === Constants.tags.payment
-                ? Constants.intents.payment
-                : Constants.intents.browse,
-          },
+        value: {
+          keyId: result.input.keyId,
+          nonce: result.input.nonce,
+          intent:
+            result.input.tag === Constants.tags.payment
+              ? Constants.intents.payment
+              : Constants.intents.browse,
         },
       }
     },

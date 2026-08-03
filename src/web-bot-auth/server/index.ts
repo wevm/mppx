@@ -1,9 +1,8 @@
 import { isInnerList, parseDictionary, Token } from 'structured-headers'
 
-import { Capabilities } from '../../attestation/Constants.js'
 import * as HttpMessageSignature from '../../attestation/internal/HttpMessageSignature.js'
 import type * as NonceStore from '../../attestation/NonceStore.js'
-import * as Attestation from '../../attestation/Types.js'
+import type * as Attestation from '../../attestation/Types.js'
 import { Constants } from '../Constants.js'
 import * as JwkThumbprint from '../internal/JwkThumbprint.js'
 import * as SignatureAgent from '../internal/SignatureAgent.js'
@@ -15,7 +14,10 @@ import type * as Types from '../Types.js'
  * Web Bot Auth confirms the cryptographic identity of an automated HTTP
  * client. It must not be used on its own as user or payment authorization.
  */
-export function verifier(config: verifier.Config): Attestation.Verifier<Types.Evidence> {
+export function verifier(config: verifier.Config): Attestation.Verifier<Types.VerifiedRequest> {
+  const maxAge = config.maxAge ?? Constants.defaultMaximumSignatureLifetime
+  if (!Number.isInteger(maxAge) || maxAge <= 0)
+    throw new RangeError('Web Bot Auth maxAge must be a positive integer.')
   return {
     async verify(request) {
       let signatureAgent: string | undefined
@@ -35,21 +37,21 @@ export function verifier(config: verifier.Config): Attestation.Verifier<Types.Ev
             return 'The Web Bot Auth key must be an extractable Ed25519 or RSA public key.'
           }
         },
-        maxAge: Constants.signatureLifetime,
+        maxAge,
         nonceNamespace: Constants.protocol,
         nonceStore: config.nonceStore,
         requiredComponents: Constants.requiredComponents,
         tag: Constants.tag,
-        validate(_input, input) {
-          if (!JwkThumbprint.is(_input.keyId))
+        validate(signature, request) {
+          if (!JwkThumbprint.is(signature.keyId))
             return 'The Web Bot Auth keyid must be an RFC 7638 SHA-256 JWK thumbprint.'
-          const component = _input.components.find(
+          const component = signature.components.find(
             (entry) => entry.id === HttpMessageSignature.Constants.components.signatureAgent,
           )
           const key = component?.parameters?.get('key')
           if (typeof key !== 'string')
             return 'The signed Signature-Agent component must identify a dictionary member.'
-          const value = input.headers.get(Constants.signatureAgentHeader)
+          const value = request.headers.get(Constants.signatureAgentHeader)
           if (!value) return 'The Signature-Agent header is required.'
           let agents
           try {
@@ -72,18 +74,10 @@ export function verifier(config: verifier.Config): Attestation.Verifier<Types.Ev
       if (result.status !== 'verified') return result
       return {
         status: 'verified',
-        evidence: {
-          protocol: Constants.protocol,
-          capabilities: [
-            Capabilities.agentIdentity,
-            Capabilities.requestBinding,
-            Capabilities.replayProtection,
-          ],
-          value: {
-            keyId: result.input.keyId,
-            nonce: result.input.nonce,
-            signatureAgent: signatureAgent!,
-          },
+        value: {
+          keyId: result.input.keyId,
+          nonce: result.input.nonce,
+          signatureAgent: signatureAgent!,
         },
       }
     },
@@ -105,6 +99,8 @@ export declare namespace verifier {
       request: Request
       signatureAgent: string
     }) => Promise<CryptoKey | undefined> | CryptoKey | undefined
+    /** Maximum accepted signature lifetime in seconds. @default 86400 */
+    maxAge?: number | undefined
     /** Atomically consumes each nonce in shared storage for multi-instance deployments. */
     nonceStore: NonceStore.Store
   }

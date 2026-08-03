@@ -22,24 +22,19 @@ test('types: request signers compose with an optional shared context', () => {
   Attestation.Client.composeSigners()
 })
 
-test('types: middleware policy receives evidence and outcomes from its verifier map', () => {
-  const tapVerifier: Attestation.Verifier<Tap.Evidence> = {
+test('types: server verification preserves each protocol value', () => {
+  const tapVerifier: Attestation.Verifier<Tap.VerifiedRequest> = {
     verify: () => ({ status: 'absent' }),
   }
-  const verifiers: { readonly [protocol in typeof Tap.Constants.protocol]: typeof tapVerifier } = {
-    [Tap.Constants.protocol]: tapVerifier,
-  }
-
-  Attestation.Server.middleware(async () => new Response(), {
-    policy({ evidence, outcomes }) {
-      expectTypeOf(evidence).toEqualTypeOf<readonly Tap.Evidence[]>()
-      expectTypeOf(outcomes[Tap.Constants.protocol]).toEqualTypeOf<
-        Attestation.Verification<Tap.Evidence>
-      >()
-      return { allow: true }
-    },
+  const verifiers = { tap: tapVerifier } as const
+  const verification = Attestation.Server.verify(
+    new Request('https://merchant.example/resource'),
     verifiers,
-  })
+  )
+
+  expectTypeOf<Awaited<typeof verification>['tap']>().toEqualTypeOf<
+    Attestation.Verification<Tap.VerifiedRequest>
+  >()
 })
 
 test('types: server verifiers require explicit replay storage and expose the algorithm', () => {

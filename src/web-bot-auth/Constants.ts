@@ -2,7 +2,7 @@ import { Constants as HttpMessageSignature } from '../attestation/internal/HttpM
 
 /** Web Bot Auth values required for its RFC 9421 bot-identity signature profile. */
 export const Constants = {
-  /** Stable identifier for Web Bot Auth evidence and signers. */
+  /** Stable identifier for Web Bot Auth signers and replay storage. */
   protocol: 'web-bot-auth',
   /** RFC 9421 signature label used when no label is configured. */
   label: 'webbot',
@@ -10,8 +10,10 @@ export const Constants = {
   tag: 'web-bot-auth',
   /** Structured HTTP header linking a bot signature to its HTTPS directory origin. */
   signatureAgentHeader: 'Signature-Agent',
-  /** Maximum and default lifetime, in seconds, for a bot request signature. */
-  signatureLifetime: 60,
+  /** Default lifetime, in seconds, for a bot request signature. */
+  defaultSignatureLifetime: 60,
+  /** Default verifier limit, following the draft's recommended 24-hour maximum. */
+  defaultMaximumSignatureLifetime: 24 * 60 * 60,
   /** HTTP components every Web Bot Auth signature must cover. */
   requiredComponents: [
     HttpMessageSignature.components.authority,

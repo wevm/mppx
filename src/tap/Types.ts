@@ -1,4 +1,3 @@
-import type * as Attestation from '../attestation/Types.js'
 import type { Constants } from './Constants.js'
 
 /** Verified TAP agent-recognition signature. */
@@ -10,6 +9,3 @@ export type VerifiedRequest = {
   /** TAP interaction type established by the signature tag. */
   intent: (typeof Constants.intents)[keyof typeof Constants.intents]
 }
-
-/** TAP evidence made available to generic attestation policies. */
-export type Evidence = Attestation.Evidence<typeof Constants.protocol, VerifiedRequest>

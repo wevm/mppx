@@ -187,30 +187,10 @@
       "types": "./dist/tap/index.d.ts",
       "default": "./dist/tap/index.js"
     },
-    "./attestation/tap/client": {
-      "src": "./src/tap/client/index.ts",
-      "types": "./dist/tap/client/index.d.ts",
-      "default": "./dist/tap/client/index.js"
-    },
-    "./attestation/tap/server": {
-      "src": "./src/tap/server/index.ts",
-      "types": "./dist/tap/server/index.d.ts",
-      "default": "./dist/tap/server/index.js"
-    },
     "./attestation/web-bot-auth": {
       "src": "./src/web-bot-auth/index.ts",
       "types": "./dist/web-bot-auth/index.d.ts",
       "default": "./dist/web-bot-auth/index.js"
-    },
-    "./attestation/web-bot-auth/client": {
-      "src": "./src/web-bot-auth/client/index.ts",
-      "types": "./dist/web-bot-auth/client/index.d.ts",
-      "default": "./dist/web-bot-auth/client/index.js"
-    },
-    "./attestation/web-bot-auth/server": {
-      "src": "./src/web-bot-auth/server/index.ts",
-      "types": "./dist/web-bot-auth/server/index.d.ts",
-      "default": "./dist/web-bot-auth/server/index.js"
     },
     "./html": {
       "src": "./src/Html.ts",

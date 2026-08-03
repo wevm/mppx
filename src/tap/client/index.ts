@@ -1,4 +1,3 @@
-import * as Attestation from '../../attestation/Client.js'
 import * as HttpMessageSignature from '../../attestation/internal/HttpMessageSignature.js'
 import type * as AttestationTypes from '../../attestation/Types.js'
 import { Constants } from '../Constants.js'
@@ -7,8 +6,9 @@ import { Constants } from '../Constants.js'
  * Creates a TAP request signer.
  *
  * The signer emits RFC 9421 HTTP message signatures with TAP's
- * `agent-browser-auth` or `agent-payer-auth` tag. Use it as the underlying
- * fetch for MPPX so the automatic paid retry is signed too.
+ * `agent-browser-auth` or `agent-payer-auth` tag. Pass it to
+ * `Attestation.Client.wrapFetch` so MPPX signs both the initial request and
+ * its automatic paid retry.
  */
 export function signer(config: signer.Config): AttestationTypes.Signer<typeof Constants.protocol> {
   const tag =
@@ -51,12 +51,4 @@ export declare namespace signer {
     /** RFC 9421 dictionary label. @default 'tap' */
     label?: string | undefined
   }
-}
-
-/** Wraps a fetch implementation with a TAP signer. */
-export function wrapFetch(
-  fetch: typeof globalThis.fetch,
-  config: signer.Config,
-): typeof globalThis.fetch {
-  return Attestation.wrapFetch(fetch, signer(config))
 }
