@@ -3623,6 +3623,54 @@ describe('precompile server session unit guardrails', () => {
   })
 })
 
+describe('session settlement extensions', () => {
+  test.each([
+    ['no schedule is configured', undefined],
+    ['the configured threshold is not due', { units: 11 }],
+  ] as const)('does not resolve a client when %s', async (_label, settlementSchedule) => {
+    const rawStore = Store.memory()
+    const store = channelStore(rawStore)
+    const openPayload = await createOpenPayload()
+    let clientResolutions = 0
+    await persistPrecompileChannel(store, openPayload, {
+      highestVoucherAmount: 500n,
+      highestVoucher: {
+        channelId: openPayload.channelId,
+        cumulativeAmount: 500n,
+        signature: '0x1234',
+      },
+      spent: 500n,
+      units: 10,
+    })
+
+    const payment = Mppx_server.create({
+      methods: [
+        tempo_server.session({
+          account: payer,
+          amount: '1',
+          chainId,
+          currency: token,
+          decimals: 0,
+          getClient() {
+            clientResolutions++
+            throw new Error('client should not be resolved')
+          },
+          recipient: payee,
+          settlementSchedule,
+          store: rawStore,
+          unitType: 'token',
+        }),
+      ],
+      realm: 'api.example.com',
+      secretKey: 'test-secret-key-test-secret-key-32',
+    })
+    const channel = await store.getChannel(openPayload.channelId)
+
+    await expect(payment.session.settleScheduled(channel!)).resolves.toBeUndefined()
+    expect(clientResolutions).toBe(0)
+  })
+})
+
 describe('onSessionSettlement', () => {
   function createSettleClient(channelId: Hex, settledAmount: bigint) {
     return createClient({

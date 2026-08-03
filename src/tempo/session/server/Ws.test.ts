@@ -124,6 +124,27 @@ function seedChannel(
   }))
 }
 
+function acceptingRoute(acceptedCumulative: bigint): Ws.serve.Options['route'] {
+  return async () => ({
+    status: 200,
+    withReceipt(response = new Response(null, { status: 204 })) {
+      response.headers.set(
+        'Payment-Receipt',
+        serializeSessionReceipt(
+          createSessionReceipt({
+            challengeId: challenge.id,
+            channelId,
+            acceptedCumulative,
+            spent: 0n,
+            units: 0,
+          }),
+        ),
+      )
+      return response
+    },
+  })
+}
+
 describe('parseMessage', () => {
   test('rejects non-object data in payment-receipt', () => {
     expect(Ws.parseMessage('{"mpp":"payment-receipt","data":true}')).toBeNull()
@@ -348,6 +369,7 @@ describe('isows', () => {
   test('drops reserved charges when the stream ends without delivering a chunk', async () => {
     const socket = new MockSocket()
     const store = memoryChannelStore()
+    let commits = 0
     await seedChannel(store, 1n)
 
     await Ws.serve({
@@ -375,6 +397,9 @@ describe('isows', () => {
       generate: async function* (stream) {
         await stream.charge()
         yield* []
+      },
+      onChargeCommitted() {
+        commits++
       },
     })
 
@@ -406,6 +431,7 @@ describe('isows', () => {
     const channel = await store.getChannel(channelId)
     expect(channel?.spent).toBe(0n)
     expect(channel?.units).toBe(0)
+    expect(commits).toBe(0)
   })
 
   test('aborts a blocked application generator before sending close-ready', async () => {
@@ -519,6 +545,151 @@ describe('isows', () => {
 
     expect(await store.getChannel(channelId)).toMatchObject({ spent: 7n, units: 1 })
     expect(socket.sent.some((message) => message.includes('priced-response'))).toBe(true)
+  })
+
+  test.each(['onChargeCommitted', 'settleScheduled'] as const)(
+    'runs %s after each committed charge and before emitting its message',
+    async (hookName) => {
+      const socket = new MockSocket()
+      const store = memoryChannelStore()
+      const committed: Array<{ emitted: number; spent: bigint; units: number }> = []
+      await seedChannel(store, 2n)
+
+      const hook = async (channel: ChannelStore.State) => {
+        committed.push({
+          emitted: socket.sent.filter((message) => Ws.parseMessage(message)?.mpp === 'message')
+            .length,
+          spent: channel.spent,
+          units: channel.units,
+        })
+        return undefined
+      }
+
+      await Ws.serve({
+        socket,
+        store,
+        url: 'ws://example.test/stream',
+        route: acceptingRoute(2n),
+        generate: (async function* () {
+          yield 'first'
+          yield 'second'
+        })(),
+        ...(hookName === 'onChargeCommitted'
+          ? { onChargeCommitted: hook }
+          : { settleScheduled: hook }),
+      })
+
+      socket.receive(
+        Ws.formatAuthorizationMessage(
+          makeCredential({
+            action: 'open',
+            channelId,
+            cumulativeAmount: '2',
+            signature: `0x${'77'.repeat(65)}`,
+            transaction: '0x01',
+            type: 'transaction',
+          }),
+        ),
+      )
+
+      await sleep(10)
+
+      expect(committed).toEqual([
+        { emitted: 0, spent: 1n, units: 1 },
+        { emitted: 1, spent: 2n, units: 2 },
+      ])
+      expect(
+        socket.sent
+          .map((message) => Ws.parseMessage(message))
+          .filter((message) => message?.mpp === 'message')
+          .map((message) => (message?.mpp === 'message' ? message.data : undefined)),
+      ).toEqual(['first', 'second'])
+    },
+  )
+
+  test('prefers onChargeCommitted over the deprecated settlement callback', async () => {
+    const socket = new MockSocket()
+    const store = memoryChannelStore()
+    const callbacks: string[] = []
+    await seedChannel(store, 1n)
+
+    await Ws.serve({
+      socket,
+      store,
+      url: 'ws://example.test/stream',
+      route: acceptingRoute(1n),
+      generate: (async function* () {
+        yield 'message'
+      })(),
+      onChargeCommitted() {
+        callbacks.push('current')
+      },
+      async settleScheduled() {
+        callbacks.push('deprecated')
+        return undefined
+      },
+    })
+
+    socket.receive(
+      Ws.formatAuthorizationMessage(
+        makeCredential({
+          action: 'open',
+          channelId,
+          cumulativeAmount: '1',
+          signature: `0x${'77'.repeat(65)}`,
+          transaction: '0x01',
+          type: 'transaction',
+        }),
+      ),
+    )
+
+    await sleep(10)
+
+    expect(callbacks).toEqual(['current'])
+  })
+
+  test('closes without emitting a charged message when the post-commit hook fails', async () => {
+    const socket = new MockSocket()
+    const store = memoryChannelStore()
+    await seedChannel(store, 1n)
+
+    await Ws.serve({
+      socket,
+      store,
+      url: 'ws://example.test/stream',
+      route: acceptingRoute(1n),
+      generate: (async function* () {
+        yield 'blocked'
+      })(),
+      onChargeCommitted() {
+        throw new Error('settlement failed')
+      },
+    })
+
+    socket.receive(
+      Ws.formatAuthorizationMessage(
+        makeCredential({
+          action: 'open',
+          channelId,
+          cumulativeAmount: '1',
+          signature: `0x${'77'.repeat(65)}`,
+          transaction: '0x01',
+          type: 'transaction',
+        }),
+      ),
+    )
+
+    await sleep(10)
+
+    expect(socket.closed).toBe(true)
+    expect(socket.sent.some((message) => message.includes('settlement failed'))).toBe(true)
+    expect(
+      socket.sent.some((message) => {
+        const parsed = Ws.parseMessage(message)
+        return parsed?.mpp === 'message' && parsed.data === 'blocked'
+      }),
+    ).toBe(false)
+    expect(await store.getChannel(channelId)).toMatchObject({ spent: 1n, units: 1 })
   })
 
   test('does not meter or emit application messages after close is requested on-chain', async () => {
