@@ -2134,6 +2134,138 @@ describe('compose', () => {
     expect(composed._internal?.offers).toMatchObject([{ intent: 'charge', name: 'alpha' }])
   })
 
+  test('does not run preflight or authorize hooks for filtered offers', async () => {
+    const authorize = vi.fn()
+    const preflight = vi.fn()
+    const filteredMethod = Method.toServer(mockChargeB, {
+      async authorize() {
+        authorize()
+        return undefined
+      },
+      async preflight() {
+        preflight()
+        return undefined
+      },
+      async verify() {
+        return mockReceipt('beta')
+      },
+    })
+    const mppx = Mppx.create({
+      methods: [alphaMethod, filteredMethod],
+      realm,
+      secretKey,
+      selectOffers: (offers) => offers.filter((offer) => offer.method !== filteredMethod),
+    })
+
+    const result = await mppx.compose(
+      [alphaMethod, challengeOpts],
+      [filteredMethod, challengeOpts],
+    )(new Request('https://example.com/resource'))
+
+    expect(result.status).toBe(402)
+    expect(preflight).not.toHaveBeenCalled()
+    expect(authorize).not.toHaveBeenCalled()
+  })
+
+  test('selectOffers distinguishes aliased methods that share a canonical key', async () => {
+    const mppx = Mppx.create({
+      methods: [tip1034SessionMethod, legacySessionMethod],
+      realm,
+      secretKey,
+      selectOffers(offers) {
+        expect(offers.map((offer) => offer.key)).toEqual(['tempo/session', 'tempo/session'])
+        expect(offers.map((offer) => offer.method)).toEqual([
+          tip1034SessionMethod,
+          legacySessionMethod,
+        ])
+        expect(offers.map((offer) => offer.request.methodDetails)).toEqual([
+          { sessionProtocol: 'v2' },
+          { sessionProtocol: 'v1' },
+        ])
+        return offers.filter((offer) => offer.method === legacySessionMethod)
+      },
+    })
+
+    const result = await mppx.compose(
+      [mppx.tempo.session, sessionChallengeOpts],
+      [mppx.tempo.sessionLegacy, legacySessionChallengeOpts],
+    )(new Request('https://example.com/resource'))
+
+    expect(result.status).toBe(402)
+    if (result.status !== 402) throw new Error()
+    expect(Challenge.fromResponse(result.challenge).request.methodDetails).toEqual({
+      sessionProtocol: 'v1',
+    })
+  })
+
+  test('selectOffers receives schema-transformed request values', async () => {
+    const transformedCharge = Method.from({
+      name: 'transformed',
+      intent: 'charge',
+      schema: {
+        credential: {
+          payload: z.object({ token: z.string() }),
+        },
+        request: z.pipe(
+          z.object({
+            amount: z.string(),
+            currency: z.string(),
+            decimals: z.number(),
+            recipient: z.string(),
+          }),
+          z.transform(({ amount, currency, decimals, recipient }) => ({
+            amount: String(Number(amount) * 10 ** decimals),
+            currency,
+            methodDetails: { decimals },
+            recipient,
+          })),
+        ),
+      },
+    })
+    const transformedMethod = Method.toServer(transformedCharge, {
+      async verify() {
+        return mockReceipt('transformed')
+      },
+    })
+    const mppx = Mppx.create({
+      methods: [transformedMethod],
+      realm,
+      secretKey,
+      selectOffers(offers) {
+        expect(offers[0]?.request).toEqual({
+          amount: '125',
+          currency: challengeOpts.currency,
+          methodDetails: { decimals: 2 },
+          recipient: challengeOpts.recipient,
+        })
+        return offers
+      },
+    })
+
+    const result = await mppx.compose([
+      transformedMethod,
+      { ...challengeOpts, amount: '1.25', decimals: 2 },
+    ])(new Request('https://example.com/resource'))
+
+    expect(result.status).toBe(402)
+  })
+
+  test('propagates selectOffers rejections', async () => {
+    const error = new Error('offer selection failed')
+    const mppx = Mppx.create({
+      methods: [alphaMethod],
+      realm,
+      secretKey,
+      async selectOffers() {
+        throw error
+      },
+    })
+
+    await expect(
+      mppx.compose([alphaMethod, challengeOpts])(new Request('https://example.com/resource')),
+    ).rejects.toBe(error)
+  })
+
   test('broadcasts duplicate tempo/session variants in compose order', async () => {
     const mppx = Mppx.create({
       methods: [tip1034SessionMethod, legacySessionMethod],
@@ -2330,6 +2462,27 @@ describe('compose', () => {
     expect(paymentRequired.accepts.map((accepted) => accepted.amount)).toEqual(['10000'])
   })
 
+  test('selectOffers filters x402 challenge headers', async () => {
+    const mppx = Mppx.create({
+      methods: [alphaMethod, x402Method],
+      realm,
+      secretKey,
+      selectOffers: (offers) => offers.filter((offer) => offer.method !== x402Method),
+    })
+
+    const result = await mppx.compose(
+      [alphaMethod, challengeOpts],
+      ['evm/charge', { amount: '0.01' }],
+    )(new Request('https://example.com/resource'))
+
+    expect(result.status).toBe(402)
+    if (result.status !== 402) throw new Error()
+    expect(
+      Challenge.fromResponseList(result.challenge).map((challenge) => challenge.method),
+    ).toEqual(['alpha'])
+    expect(result.challenge.headers.get(x402_Types.paymentRequiredHeader)).toBeNull()
+  })
+
   test('keeps pure x402 challenge headers when Payment auth challenges are present', async () => {
     const mppx = Mppx.create({ methods: [alphaMethod], realm, secretKey })
     const pureX402 = async () =>
@@ -2439,6 +2592,30 @@ describe('compose', () => {
     const challenges = Challenge.fromResponseList(result.challenge)
     expect(challenges).toHaveLength(1)
     expect(challenges[0]?.method).toBe('beta')
+  })
+
+  test('applies selectOffers before Accept-Payment negotiation', async () => {
+    const mppx = Mppx.create({
+      methods: [alphaMethod, betaMethod],
+      realm,
+      secretKey,
+      selectOffers: (offers) => offers.filter((offer) => offer.method !== betaMethod),
+    })
+
+    const result = await mppx.compose(
+      [alphaMethod, challengeOpts],
+      [betaMethod, challengeOpts],
+    )(
+      new Request('https://example.com/resource', {
+        headers: { 'Accept-Payment': 'beta/charge' },
+      }),
+    )
+
+    expect(result.status).toBe(402)
+    if (result.status !== 402) throw new Error()
+    expect(
+      Challenge.fromResponseList(result.challenge).map((challenge) => challenge.method),
+    ).toEqual(['alpha'])
   })
 
   test('filters compose x402 challenge headers using Accept-Payment', async () => {
@@ -2989,6 +3166,37 @@ describe('compose', () => {
       expect(dataValues[0]!.config).toEqual({ providerA: true })
       expect(dataValues[1]!.label).toBe('beta')
       expect(dataValues[1]!.config).toEqual({ providerB: true })
+    })
+
+    test('selectOffers filters html payment options', async () => {
+      const mppx = Mppx.create({
+        methods: [alphaWithHtml, betaWithHtml],
+        realm,
+        secretKey,
+        selectOffers: (offers) => offers.filter((offer) => offer.method !== betaWithHtml),
+      })
+
+      const result = await mppx.compose(
+        [alphaWithHtml, challengeOpts],
+        [betaWithHtml, challengeOpts],
+      )(
+        new Request('https://example.com/resource', {
+          headers: { Accept: 'text/html' },
+        }),
+      )
+
+      expect(result.status).toBe(402)
+      if (result.status !== 402) throw new Error()
+      const body = await result.challenge.text()
+      expect(body).toContain('/alpha-bundle.js')
+      expect(body).not.toContain('/beta-bundle.js')
+      expect(body).not.toContain('role="tablist"')
+
+      const dataMatch = body.match(
+        /<script[^>]*id="__MPPX_DATA__"[^>]*type="application\/json"[^>]*>\s*([\s\S]*?)\s*<\/script>/s,
+      )
+      const dataMap = JSON.parse(dataMatch![1]!.replace(/\\u003c/g, '<'))
+      expect(Object.values(dataMap)).toMatchObject([{ label: 'alpha' }])
     })
 
     test('returns html without tabs when single method has html', async () => {
