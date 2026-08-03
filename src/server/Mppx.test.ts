@@ -2509,29 +2509,29 @@ describe('compose', () => {
 
   test('selectOffers distinguishes aliased methods that share a canonical key', async () => {
     const mppx = Mppx.create({
-      methods: [tip1034SessionMethod, legacySessionMethod],
+      methods: [tip1034SessionMethod, alternateSessionMethod],
       realm,
       secretKey,
       selectOffers(offers) {
         expect(offers.map((offer) => offer.key)).toEqual(['tempo/session', 'tempo/session'])
-        expect(offers.map((offer) => offer.method.alias)).toEqual([undefined, 'sessionLegacy'])
+        expect(offers.map((offer) => offer.method.alias)).toEqual([undefined, 'alternateSession'])
         expect(offers.map((offer) => offer.request.methodDetails)).toEqual([
           { sessionProtocol: 'v2' },
-          { sessionProtocol: 'v1' },
+          { sessionProtocol: 'alternate' },
         ])
-        return offers.filter((offer) => offer.method.alias === 'sessionLegacy')
+        return offers.filter((offer) => offer.method.alias === 'alternateSession')
       },
     })
 
     const result = await mppx.compose(
       [mppx.tempo.session, sessionChallengeOpts],
-      [mppx.tempo.sessionLegacy, legacySessionChallengeOpts],
+      [mppx.tempo.alternateSession, alternateSessionChallengeOpts],
     )(new Request('https://example.com/resource'))
 
     expect(result.status).toBe(402)
     if (result.status !== 402) throw new Error()
     expect(Challenge.fromResponse(result.challenge).request.methodDetails).toEqual({
-      sessionProtocol: 'v1',
+      sessionProtocol: 'alternate',
     })
   })
 

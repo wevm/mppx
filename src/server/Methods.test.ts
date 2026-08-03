@@ -11,7 +11,6 @@ describe('composable method hooks', () => {
     const methods = [
       tempo.charge({ canOffer }),
       tempo.session({ account: accounts[0], canOffer }),
-      tempo.sessionLegacy({ account: accounts[0], canOffer }),
       tempo.subscription({
         account: accounts[0],
         canOffer,

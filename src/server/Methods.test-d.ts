@@ -22,15 +22,6 @@ test('all server method constructors expose typed canOffer hooks', () => {
     },
   })
 
-  tempo.sessionLegacy({
-    canOffer({ input, request }) {
-      expectTypeOf(input).toEqualTypeOf<Request>()
-      expectTypeOf(request.amount).toEqualTypeOf<string>()
-      expectTypeOf(request.methodDetails?.chainId).toEqualTypeOf<number | undefined>()
-      return true
-    },
-  })
-
   tempo.subscription({
     canOffer({ input, request }) {
       expectTypeOf(input).toEqualTypeOf<Request>()

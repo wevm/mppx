@@ -197,11 +197,11 @@ describe('Mppx type tests', () => {
 
   test('offer selection data is deeply readonly', () => {
     Mppx.create({
-      methods: [tip1034SessionMethod, legacySessionMethod],
+      methods: [tip1034SessionMethod, alternateSessionMethod],
       realm,
       secretKey,
       selectOffers(offers) {
-        expectTypeOf(offers[0]!.method.alias).toEqualTypeOf<undefined | 'sessionLegacy'>()
+        expectTypeOf(offers[0]!.method.alias).toEqualTypeOf<undefined | 'alternateSession'>()
         // @ts-expect-error offer method descriptors are readonly.
         offers[0]!.method.name = 'changed'
         // @ts-expect-error normalized offer requests are deeply readonly.
