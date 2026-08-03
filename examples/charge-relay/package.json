@@ -7,7 +7,7 @@
     "dev": "tsx src/server.ts"
   },
   "dependencies": {
-    "@hono/node-server": "2.0.11",
+    "@hono/node-server": "2.0.12",
     "@types/node": "^25.6.0",
     "@typescript/native-preview": "^7.0.0-dev.20260707.2",
     "hono": "4.12.32",
