@@ -3048,6 +3048,115 @@ describe('tempo', () => {
     })
   })
 
+  describe('intent: charge; bounded optimistic credit', () => {
+    test('retains an under-cap charge as pending payee exposure', async () => {
+      const creditStore = Store.memory()
+      const scope = 'test-usd'
+      const creditServer = Mppx_server.create({
+        methods: [
+          tempo_server.charge({
+            getClient() {
+              return client
+            },
+            currency: asset,
+            account: accounts[0],
+            optimistic: { maxExposure: 1_000_000n, scope },
+            store: creditStore,
+          }),
+        ],
+        realm,
+        secretKey,
+      })
+      const mppx = Mppx_client.create({
+        polyfill: false,
+        methods: [
+          tempo_client({
+            account: accounts[1],
+            getClient() {
+              return client
+            },
+          }),
+        ],
+      })
+      const httpServer = await Http.createServer(async (req, res) => {
+        const result = await Mppx_server.toNodeListener(
+          creditServer.charge({ amount: '1', currency: asset }),
+        )(req, res)
+        if (result.status === 402) return
+        res.end('OK')
+      })
+
+      const response = await mppx.fetch(httpServer.url)
+      expect(response.status).toBe(200)
+      const receipt = Receipt.fromResponse(response)
+      const creditKey =
+        `mppx:charge:credit:${chain.id}:${scope}:${accounts[1].address.toLowerCase()}` as const
+      expect(await creditStore.get(creditKey)).toMatchObject({
+        debt: '0',
+        reservations: {
+          [receipt.reference]: {
+            amount: '1000000',
+            phase: 'pending',
+            transactionHash: receipt.reference,
+          },
+        },
+        version: 1,
+      })
+
+      httpServer.close()
+    })
+
+    test('falls back to confirmed settlement above the payer cap', async () => {
+      const creditStore = Store.memory()
+      const scope = 'test-usd'
+      const creditServer = Mppx_server.create({
+        methods: [
+          tempo_server.charge({
+            getClient() {
+              return client
+            },
+            currency: asset,
+            account: accounts[0],
+            optimistic: { maxExposure: 999_999n, scope },
+            store: creditStore,
+          }),
+        ],
+        realm,
+        secretKey,
+      })
+      const mppx = Mppx_client.create({
+        polyfill: false,
+        methods: [
+          tempo_client({
+            account: accounts[1],
+            getClient() {
+              return client
+            },
+          }),
+        ],
+      })
+      const httpServer = await Http.createServer(async (req, res) => {
+        const result = await Mppx_server.toNodeListener(
+          creditServer.charge({ amount: '1', currency: asset }),
+        )(req, res)
+        if (result.status === 402) return
+        res.end('OK')
+      })
+
+      const response = await mppx.fetch(httpServer.url)
+      expect(response.status).toBe(200)
+      const receipt = Receipt.fromResponse(response)
+      await expect(
+        getTransactionReceipt(client, { hash: receipt.reference as `0x${string}` }),
+      ).resolves.toMatchObject({ status: 'success' })
+      const creditKey =
+        `mppx:charge:credit:${chain.id}:${scope}:${accounts[1].address.toLowerCase()}` as const
+      expect(await creditStore.get(creditKey)).toBeNull()
+
+      httpServer.close()
+    })
+  })
+
   describe('intent: charge; type: proof (zero-dollar auth)', () => {
     test('default: end-to-end zero-dollar auth via SDK', async () => {
       const mppx = Mppx_client.create({

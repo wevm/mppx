@@ -36,6 +36,7 @@ import * as Proof from '../internal/proof.js'
 import * as Selectors from '../internal/selectors.js'
 import type * as types from '../internal/types.js'
 import * as Methods from '../Methods.js'
+import * as CreditBudget from './CreditBudget.js'
 import { html as htmlContent } from './internal/html.gen.js'
 import * as Relay from './Relay.js'
 import * as SponsorBudget from './SponsorBudget.js'
@@ -66,12 +67,22 @@ export function charge<const parameters extends charge.Parameters>(
     feePayerPolicy,
     html,
     memo,
+    optimistic,
     relay,
     splits,
     supportedModes,
     validateSender,
-    waitForConfirmation = true,
+    waitForConfirmation: waitForConfirmation_parameter,
   } = parameters
+  if (optimistic && parameters.waitForConfirmation !== undefined)
+    throw new Error('`optimistic` cannot be combined with `waitForConfirmation`.')
+  if (optimistic && relay)
+    throw new Error('`optimistic` cannot be combined with delegated relay settlement.')
+  if (optimistic && !parameters.store)
+    throw new Error('`optimistic` requires a shared atomic `store`.')
+  if (optimistic && optimistic.maxExposure <= 0n)
+    throw new Error('`optimistic.maxExposure` must be greater than zero.')
+  const waitForConfirmation = waitForConfirmation_parameter ?? !optimistic
   const storeKeyPrefix = parameters.storeKeyPrefix ?? ''
   const rawStore = (parameters.store ?? Store.memory()) as Store.AtomicStore<charge.StoreItemMap>
   const store = Store.from(rawStore, { keyPrefix: storeKeyPrefix })
@@ -80,6 +91,9 @@ export function charge<const parameters extends charge.Parameters>(
   // atomic sponsor-wide budget.
   const sponsorBudgetStore = Store.from(rawStore) as Store.AtomicStore<{
     [key: `mppx:charge:sponsor-budget:${string}`]: SponsorBudget.State
+  }>
+  const creditBudgetStore = Store.from(rawStore) as Store.AtomicStore<{
+    [key: `mppx:charge:credit:${string}`]: CreditBudget.State
   }>
   const {
     maxInFlightReservations = 100,
@@ -514,6 +528,7 @@ export function charge<const parameters extends charge.Parameters>(
           }
 
           let broadcastAttempted = false
+          let creditReservation: CreditBudget.Handle | undefined
           let finalHash: `0x${string}` | undefined
           let reservation: SponsorBudget.Handle | undefined
 
@@ -638,6 +653,64 @@ export function charge<const parameters extends charge.Parameters>(
                 FeePayer.simulationTransaction(transaction, { feePayer: false }) as never,
               )
 
+            if (optimistic) {
+              const payer = transaction.from! as `0x${string}`
+              const scope =
+                optimistic.scope ?? `${currency.toLowerCase()}:${recipient.toLowerCase()}`
+              const expiresAt = transaction.validBefore
+                ? Number(transaction.validBefore) * 1_000
+                : challenge.expires
+                  ? Date.parse(challenge.expires)
+                  : Number.MAX_SAFE_INTEGER
+              creditReservation =
+                (await CreditBudget.reserve(creditBudgetStore, {
+                  amount: BigInt(amount),
+                  chainId: chainId ?? client.chain!.id,
+                  expiresAt,
+                  async getOutcome(pending) {
+                    let receipt: TransactionReceipt
+                    try {
+                      receipt = await getTransactionReceipt(client, {
+                        hash: pending.transactionHash,
+                      })
+                    } catch {
+                      return 'pending'
+                    }
+                    if (receipt.status !== 'success') return 'failed'
+                    try {
+                      const matchedLogs = await assertTransferLogs(receipt, {
+                        currency: pending.currency,
+                        sender: pending.sender,
+                        transfers: pending.transfers,
+                        validateSender,
+                      })
+                      if (pending.challengeBoundMemo)
+                        assertChallengeBoundMemo(matchedLogs, {
+                          challengeId: pending.challengeId,
+                          realm: pending.realm,
+                        })
+                      return 'success'
+                    } catch {
+                      return 'failed'
+                    }
+                  },
+                  id: finalHash.toLowerCase(),
+                  maxExposure: optimistic.maxExposure,
+                  owner: globalThis.crypto.randomUUID(),
+                  payer,
+                  payment: {
+                    challengeBoundMemo: !memo,
+                    challengeId: challenge.id,
+                    currency,
+                    realm: challenge.realm,
+                    sender: payer,
+                    transactionHash: finalHash,
+                    transfers,
+                  },
+                  scope,
+                })) ?? undefined
+            }
+
             if (
               reservation &&
               !(await SponsorBudget.transition(sponsorBudgetStore, reservation, 'broadcasting'))
@@ -645,9 +718,16 @@ export function charge<const parameters extends charge.Parameters>(
               throw new VerificationFailedError({
                 reason: 'Sponsor budget reservation ownership was lost before broadcast',
               })
+            if (
+              creditReservation &&
+              !(await CreditBudget.transition(creditBudgetStore, creditReservation, 'broadcasting'))
+            )
+              throw new VerificationFailedError({
+                reason: 'Charge credit reservation ownership was lost before broadcast',
+              })
 
             broadcastAttempted = true
-            if (waitForConfirmation) {
+            if (waitForConfirmation || (optimistic && !creditReservation)) {
               const receipt = await sendRawTransactionSync(client, {
                 serializedTransaction: serializedTransaction_final,
               })
@@ -656,6 +736,7 @@ export function charge<const parameters extends charge.Parameters>(
                 currency,
                 sender: transaction.from! as `0x${string}`,
                 transfers,
+                validateSender,
               })
               if (!memo)
                 assertChallengeBoundMemo(matchedLogs, {
@@ -686,6 +767,13 @@ export function charge<const parameters extends charge.Parameters>(
               throw new VerificationFailedError({
                 reason: 'Sponsor budget reservation ownership was lost after broadcast',
               })
+            if (
+              creditReservation &&
+              !(await CreditBudget.transition(creditBudgetStore, creditReservation, 'pending'))
+            )
+              throw new VerificationFailedError({
+                reason: 'Charge credit reservation ownership was lost after broadcast',
+              })
             return {
               method: 'tempo',
               status: 'success',
@@ -694,6 +782,8 @@ export function charge<const parameters extends charge.Parameters>(
             } as const
           } catch (error) {
             if (!broadcastAttempted) {
+              if (creditReservation)
+                await CreditBudget.release(creditBudgetStore, creditReservation)
               if (reservation) await SponsorBudget.release(sponsorBudgetStore, reservation)
               if (finalHash && finalHash.toLowerCase() !== hash.toLowerCase())
                 await releaseHashUse(store, finalHash)
@@ -710,7 +800,7 @@ export function charge<const parameters extends charge.Parameters>(
 
 export declare namespace charge {
   type StoreItemMap = {
-    [key: `mppx:charge:${string}`]: number | SponsorBudget.State
+    [key: `mppx:charge:${string}`]: CreditBudget.State | number | SponsorBudget.State
   }
 
   type Defaults = LooseOmit<Method.RequestDefaults<typeof Methods.charge>, 'feePayer' | 'recipient'>
@@ -807,6 +897,17 @@ export declare namespace charge {
      * the failure.
      */
     waitForConfirmation?: boolean | undefined
+    /**
+     * Serves transaction charges after simulation and broadcast while bounding
+     * the payee's unconfirmed exposure per payer. Explicitly reverted charges
+     * become debt and consume the configured capacity; charges above remaining
+     * capacity wait for confirmation instead.
+     *
+     * Requires a shared atomic {@link Store.AtomicStore}. The optional scope can
+     * aggregate economically interchangeable charge methods that use the same
+     * raw unit (for example, six-decimal USD stablecoins).
+     */
+    optimistic?: OptimisticCredit | undefined
   } & Client.getResolver.Parameters &
     Account.resolve.Parameters &
     Defaults
@@ -829,6 +930,13 @@ export declare namespace charge {
      * @default `maxTotalFee * 10`
      */
     maxInFlightTotalFee?: bigint | undefined
+  }
+
+  type OptimisticCredit = {
+    /** Maximum aggregate debt plus pending charge amount in raw token units. */
+    maxExposure: bigint
+    /** Caller-owned accounting scope. Defaults to the configured currency and recipient. */
+    scope?: string | undefined
   }
 
   /** Tempo API relay configuration for server-side charges. */
