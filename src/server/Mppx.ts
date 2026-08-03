@@ -902,7 +902,7 @@ export declare namespace create {
     realm?: string | undefined
     /** Secret key for HMAC-bound challenge IDs for stateless verification. Must be at least 32 bytes. Auto-detected from `MPP_SECRET_KEY` environment variable. */
     secretKey?: string | undefined
-    /** Selects a subset of composed HTTP offers before challenges are issued. Credential dispatch bypasses this hook. */
+    /** Selects a subset of composed HTTP offers before challenges are issued. Successfully matched credential dispatch bypasses this hook. */
     selectOffers?: transport extends Transport.Http
       ? SelectOffers<FlattenMethods<methods>> | undefined
       : never

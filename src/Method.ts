@@ -224,8 +224,8 @@ export type AnyServer = Server<any, any, any, any, any>
  * schema-normalized and deeply immutable. `input` is cloned so its body can be
  * safely inspected unless the upstream body was already consumed or locked, in
  * which case the clone preserves request metadata without a body. Returning
- * `false` removes only this method's offer. Credential dispatch does not invoke
- * this hook.
+ * `false` removes only this method's offer. Successfully matched credential
+ * dispatch does not invoke this hook.
  */
 export type CanOfferFn<method extends Method> = (parameters: {
   input: globalThis.Request
