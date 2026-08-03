@@ -1,5 +1,5 @@
 import { Method, z } from 'mppx'
-import { Mppx, tempo } from 'mppx/server'
+import { Mppx, tempo, Transport } from 'mppx/server'
 import { assertType, describe, expectTypeOf, test } from 'vp/test'
 
 const mockChargeA = Method.from({
@@ -156,6 +156,32 @@ describe('Mppx type tests', () => {
     // Should compile — string key entries
     const handler = mppx.compose(['alpha/charge', opts], ['beta/charge', opts])
     expectTypeOf(handler).toBeFunction()
+  })
+
+  test('selectOffers exposes typed methods, normalized requests, and the HTTP request', () => {
+    Mppx.create({
+      methods: [alphaMethod, betaMethod],
+      realm,
+      secretKey,
+      selectOffers(offers, { request }) {
+        expectTypeOf(request).toEqualTypeOf<Request>()
+        expectTypeOf(offers[0]!.key).toEqualTypeOf<'alpha/charge' | 'beta/charge'>()
+        expectTypeOf(offers[0]!.method).toEqualTypeOf<typeof alphaMethod | typeof betaMethod>()
+        expectTypeOf(offers[0]!.request.amount).toEqualTypeOf<string>()
+        return offers.filter((offer) => offer.method !== betaMethod)
+      },
+    })
+  })
+
+  test('selectOffers is only available for HTTP transport', () => {
+    Mppx.create({
+      methods: [alphaMethod],
+      realm,
+      secretKey,
+      transport: Transport.mcp(),
+      // @ts-expect-error selectOffers applies to composed HTTP offers only.
+      selectOffers: (offers) => offers,
+    })
   })
 
   test('nested handlers are accessible', () => {

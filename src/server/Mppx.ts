@@ -85,6 +85,32 @@ export type ServerMethodDescriptor<
   name: method['name']
 }>
 
+/** A configured payment offer exposed to the server's `selectOffers` hook. */
+export type ServerOffer<method extends Method.Method = Method.Method> = method extends unknown
+  ? ServerOfferFor<method>
+  : never
+
+type ServerOfferFor<method extends Method.Method> = Readonly<{
+  /** Canonical wire key for the configured method. */
+  key: `${method['name']}/${method['intent']}`
+  /** The registered server method that produced this offer. */
+  method: method
+  /** Schema-normalized request configured for this offer. */
+  request: Readonly<z.output<method['schema']['request']>>
+}>
+
+/**
+ * Selects a subset of configured offers before payment challenges are issued.
+ *
+ * The hook must select at least one offer. Returned offers must come from the input,
+ * contain no duplicates, and preserve their original order. The request is cloned
+ * so the hook may safely inspect its body.
+ */
+export type SelectOffers<methods extends readonly Method.Method[]> = (
+  offers: readonly ServerOffer<methods[number]>[],
+  context: Readonly<{ request: globalThis.Request }>,
+) => MaybePromise<readonly ServerOffer<methods[number]>[]>
+
 /** Context passed to `onChallengeCreated`. */
 export type ChallengeContext<
   method extends Method.Method = Method.Method,
@@ -450,6 +476,7 @@ export function create<
 >(config: create.Config<methods, transport>): Mppx<methods, transport> {
   const {
     realm = Env.get('realm'),
+    selectOffers,
     secretKey = Env.get('secretKey'),
     transport = Transport.http() as transport,
   } = config
@@ -804,7 +831,11 @@ export function create<
         throw new Error(`No handler for "${key}". Is this method in your methods array?`)
       return handlerFn(options)
     })
-    return compose(...(configured as ConfiguredHandler[]))
+    return composeHandlers(
+      configured as ConfiguredHandler[],
+      undefined,
+      selectOffers as SelectOffers<readonly Method.AnyServer[]> | undefined,
+    )
   }
 
   function onChallengeCreated(
@@ -862,6 +893,10 @@ export declare namespace create {
     realm?: string | undefined
     /** Secret key for HMAC-bound challenge IDs for stateless verification. Must be at least 32 bytes. Auto-detected from `MPP_SECRET_KEY` environment variable. */
     secretKey?: string | undefined
+    /** Selects a subset of composed HTTP offers before challenges are issued. Credential dispatch bypasses this hook. */
+    selectOffers?: transport extends Transport.Http
+      ? SelectOffers<FlattenMethods<methods>> | undefined
+      : never
     /** Transport to use. @default Transport.http() */
     transport?: transport | undefined
   }
@@ -895,7 +930,7 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
   return (options) => {
     const { description, meta, scope, ...rest } = options
     const staticMeta = Scope.merge({ meta, scope })
-    const internal: ConfiguredHandler['_internal'] = {
+    const internal = {
       ...method,
       ...defaults,
       ...options,
@@ -905,7 +940,8 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
       html: method.html,
       _canonicalRequest: PaymentRequest.fromMethod(method, { ...defaults, ...rest }),
       _stableBinding: stableBinding as never,
-    }
+    } as unknown as ConfiguredHandler['_internal']
+    Object.defineProperty(internal, '_method', { value: method })
 
     const handler = async (input: Transport.InputOf): Promise<MethodFn.Response> => {
       if (method.html && isServiceWorkerRequest(input))
@@ -2167,6 +2203,7 @@ declare namespace MethodFn {
 /** A configured handler — the return value of e.g. `mppx.charge({ ... })`. @internal */
 type ConfiguredHandler = ((input: Request) => Promise<MethodFn.Response<Transport.Http>>) & {
   _internal: {
+    _method: Method.AnyServer
     description?: string | undefined
     name: string
     intent: string
@@ -2284,7 +2321,20 @@ export function compose(...args: readonly unknown[]): ComposedHandler {
     input: Request,
   ) => Promise<MethodFn.Response<Transport.Http>>)[]
 
+  return composeHandlers(handlers, composeOptions)
+}
+
+function composeHandlers(
+  handlers: readonly ((input: Request) => Promise<MethodFn.Response<Transport.Http>>)[],
+  composeOptions?: Html.Options,
+  selectOffers?: SelectOffers<readonly Method.AnyServer[]>,
+): (input: Request) => Promise<MethodFn.Response<Transport.Http>> {
   if (handlers.length === 0) throw new Error('compose() requires at least one handler')
+
+  const offerSelector = selectOffers
+  const selectableOffers = offerSelector
+    ? handlers.map((handler) => createServerOffer((handler as ConfiguredHandler)._internal))
+    : undefined
 
   const composed: ComposedHandler = async (input: Request) => {
     // Serve service worker for html-enabled compose
@@ -2357,10 +2407,19 @@ export function compose(...args: readonly unknown[]): ComposedHandler {
       return handlers[0]!(input)
     }
 
+    const selectedHandlers = selectableOffers
+      ? await selectOfferHandlers({
+          handlers,
+          input,
+          offers: selectableOffers,
+          selectOffers: offerSelector!,
+        })
+      : handlers
+
     // No credential — evaluate handlers sequentially so authorize()/renewal hooks
     // can safely claim the request without racing each other.
     const results: MethodFn.Response<Transport.Http>[] = []
-    for (const handler of handlers) {
+    for (const handler of selectedHandlers) {
       const result = await handler(input)
       if (result.status === 200) return result
       results.push(result)
@@ -2373,7 +2432,7 @@ export function compose(...args: readonly unknown[]): ComposedHandler {
         result: Extract<MethodFn.Response<Transport.Http>, { status: 402 }>
       }[] = []
 
-      for (let i = 0; i < handlers.length; i++) {
+      for (let i = 0; i < selectedHandlers.length; i++) {
         const result = results[i]
         if (result?.status !== 402) continue
 
@@ -2382,7 +2441,7 @@ export function compose(...args: readonly unknown[]): ComposedHandler {
         if (!wwwAuth) continue
 
         entries.push({
-          handler: handlers[i] as ConfiguredHandler,
+          handler: selectedHandlers[i] as ConfiguredHandler,
           challenge: Challenge.deserialize(wwwAuth),
           result,
         })
@@ -2529,6 +2588,43 @@ function isComposedHandlerMetadata(
   internal: HandlerDiscoveryMetadata,
 ): internal is NonNullable<ComposedHandler['_internal']> {
   return 'offers' in internal && !('_canonicalRequest' in internal)
+}
+
+function createServerOffer(internal: ConfiguredHandler['_internal']): ServerOffer {
+  return Object.freeze({
+    key: `${internal.name}/${internal.intent}`,
+    method: internal._method,
+    request: snapshotValue(internal._canonicalRequest),
+  }) as ServerOffer
+}
+
+/** Applies and validates the server-level offer selection policy. */
+async function selectOfferHandlers(parameters: {
+  handlers: readonly ((input: Request) => Promise<MethodFn.Response<Transport.Http>>)[]
+  input: Request
+  offers: readonly ServerOffer[]
+  selectOffers: SelectOffers<readonly Method.AnyServer[]>
+}) {
+  const { handlers, input, offers, selectOffers } = parameters
+  const selected = await selectOffers(
+    Object.freeze([...offers]),
+    Object.freeze({ request: input.clone() }),
+  )
+
+  if (!Array.isArray(selected)) throw new Error('selectOffers() must return an array of offers')
+  if (selected.length === 0) throw new Error('selectOffers() must select at least one offer')
+
+  let previousIndex = -1
+  const selectedHandlers = selected.map((offer) => {
+    const index = offers.indexOf(offer)
+    if (index === -1) throw new Error('selectOffers() must return only offers from its input array')
+    if (index <= previousIndex)
+      throw new Error('selectOffers() must preserve offer order and must not return duplicates')
+    previousIndex = index
+    return handlers[index]!
+  })
+
+  return selectedHandlers
 }
 
 type ChallengeHeaderMerge = {

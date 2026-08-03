@@ -1968,8 +1968,140 @@ describe('compose', () => {
     expect(wwwAuth).toContain('method="beta"')
   })
 
-  test('retains only explicitly configured offers as composed discovery metadata', () => {
-    const mppx = Mppx.create({ methods: [alphaMethod, betaMethod], realm, secretKey })
+  test('selectOffers filters by method, configured request, and incoming request', async () => {
+    const challenged: string[] = []
+    const input = new Request('https://example.com/resource?cards=disabled', {
+      body: 'request body',
+      method: 'POST',
+    })
+    const mppx = Mppx.create({
+      methods: [alphaMethod, betaMethod],
+      realm,
+      secretKey,
+      async selectOffers(offers, { request }) {
+        expect(request).not.toBe(input)
+        expect(await request.text()).toBe('request body')
+        expect(offers).toMatchObject([
+          {
+            key: 'alpha/charge',
+            method: alphaMethod,
+            request: { amount: challengeOpts.amount },
+          },
+          {
+            key: 'beta/charge',
+            method: betaMethod,
+            request: { amount: '50' },
+          },
+        ])
+
+        if (new URL(request.url).searchParams.get('cards') === 'disabled')
+          return offers.filter(
+            (offer) => offer.method !== betaMethod || BigInt(offer.request.amount) >= 100n,
+          )
+        return offers
+      },
+    })
+    mppx.onChallengeCreated(({ method }) => {
+      challenged.push(method.name)
+    })
+
+    const result = await mppx.compose(
+      [alphaMethod, challengeOpts],
+      [betaMethod, { ...challengeOpts, amount: '50' }],
+    )(input)
+
+    expect(result.status).toBe(402)
+    if (result.status !== 402) throw new Error()
+    expect(
+      Challenge.fromResponseList(result.challenge).map((challenge) => challenge.method),
+    ).toEqual(['alpha'])
+    expect(challenged).toEqual(['alpha'])
+    expect(input.bodyUsed).toBe(false)
+  })
+
+  test('selectOffers does not prevent redemption of a previously issued offer', async () => {
+    let selectionCount = 0
+    const mppx = Mppx.create({
+      methods: [alphaMethod, betaMethod],
+      realm,
+      secretKey,
+      selectOffers(offers, { request }) {
+        selectionCount++
+        return request.headers.has('X-Hide-Beta')
+          ? offers.filter((offer) => offer.method !== betaMethod)
+          : offers
+      },
+    })
+    const handler = mppx.compose([alphaMethod, challengeOpts], [betaMethod, challengeOpts])
+    const challengeResult = await handler(new Request('https://example.com/resource'))
+    expect(challengeResult.status).toBe(402)
+    if (challengeResult.status !== 402) throw new Error()
+    const betaChallenge = Challenge.fromResponseList(challengeResult.challenge).find(
+      (challenge) => challenge.method === 'beta',
+    )!
+    const credential = Credential.from({
+      challenge: betaChallenge,
+      payload: { token: 'valid' },
+    })
+
+    const result = await handler(
+      new Request('https://example.com/resource', {
+        headers: {
+          Authorization: Credential.serialize(credential),
+          'X-Hide-Beta': 'true',
+        },
+      }),
+    )
+
+    expect(result.status).toBe(200)
+    expect(selectionCount).toBe(1)
+  })
+
+  test.each([
+    {
+      expected: 'return an array',
+      name: 'non-array result',
+      select: () => null,
+    },
+    {
+      expected: 'select at least one offer',
+      name: 'empty selection',
+      select: (offers: readonly unknown[]) => offers.slice(0, 0),
+    },
+    {
+      expected: 'only offers from its input array',
+      name: 'copied offer',
+      select: (offers: readonly unknown[]) => [{ ...(offers[0] as object) }],
+    },
+    {
+      expected: 'preserve offer order',
+      name: 'duplicate offer',
+      select: (offers: readonly unknown[]) => [offers[0], offers[0]],
+    },
+    {
+      expected: 'preserve offer order',
+      name: 'reordered offers',
+      select: (offers: readonly unknown[]) => [offers[1], offers[0]],
+    },
+  ])('rejects invalid selectOffers result: $name', async ({ expected, select }) => {
+    const mppx = Mppx.create({
+      methods: [alphaMethod, betaMethod],
+      realm,
+      secretKey,
+      selectOffers: select as never,
+    })
+    const handler = mppx.compose([alphaMethod, challengeOpts], [betaMethod, challengeOpts])
+
+    await expect(handler(new Request('https://example.com/resource'))).rejects.toThrow(expected)
+  })
+
+  test('retains all configured offers as discovery metadata when selectOffers is dynamic', () => {
+    const mppx = Mppx.create({
+      methods: [alphaMethod, betaMethod],
+      realm,
+      secretKey,
+      selectOffers: (offers) => offers.slice(0, 1),
+    })
     const configured = mppx.compose([alphaMethod, challengeOpts], [betaMethod, challengeOpts])
 
     expect(configured._internal?.offers).toMatchObject([
