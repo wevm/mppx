@@ -2,6 +2,15 @@
 // https://twitter.com/mattpocockuk/status/1622730173446557697?s=20&t=NdpAcmEFXY01xkqU3KO0Mg
 export type Compute<type> = { [key in keyof type]: type[key] } & unknown
 
+/** Recursively makes every property of a value readonly. */
+export type DeepReadonly<type> = type extends (...args: infer _arguments) => infer _return
+  ? type
+  : type extends readonly unknown[]
+    ? { readonly [key in keyof type]: DeepReadonly<type[key]> }
+    : type extends object
+      ? { readonly [key in keyof type]: DeepReadonly<type[key]> }
+      : type
+
 declare const symbol: unique symbol
 
 /**

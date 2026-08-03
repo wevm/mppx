@@ -1984,19 +1984,19 @@ describe('compose', () => {
         expect(offers).toMatchObject([
           {
             key: 'alpha/charge',
-            method: alphaMethod,
+            method: { intent: 'charge', name: 'alpha' },
             request: { amount: challengeOpts.amount },
           },
           {
             key: 'beta/charge',
-            method: betaMethod,
+            method: { intent: 'charge', name: 'beta' },
             request: { amount: '50' },
           },
         ])
 
         if (new URL(request.url).searchParams.get('cards') === 'disabled')
           return offers.filter(
-            (offer) => offer.method !== betaMethod || BigInt(offer.request.amount) >= 100n,
+            (offer) => offer.method.name !== 'beta' || BigInt(offer.request.amount) >= 100n,
           )
         return offers
       },
@@ -2018,6 +2018,96 @@ describe('compose', () => {
     expect(challenged).toEqual(['alpha'])
     expect(input.bodyUsed).toBe(false)
   })
+
+  test('offer selectors receive deeply immutable method and request snapshots', async () => {
+    const guardedSession = Method.toServer(mockSession, {
+      canOffer({ request }) {
+        expect(Object.isFrozen(request)).toBe(true)
+        expect(Object.isFrozen(request.methodDetails)).toBe(true)
+        expect(Reflect.set(request.methodDetails, 'sessionProtocol', 'changed')).toBe(false)
+        return true
+      },
+      async verify() {
+        return mockReceipt('v2')
+      },
+    })
+    const mppx = Mppx.create({
+      methods: [guardedSession],
+      realm,
+      secretKey,
+      selectOffers(offers) {
+        const offer = offers[0]!
+        expect(Object.isFrozen(offers)).toBe(true)
+        expect(Object.isFrozen(offer)).toBe(true)
+        expect(Object.isFrozen(offer.method)).toBe(true)
+        expect(Object.keys(offer.method)).toEqual(['intent', 'name'])
+        expect(Object.isFrozen(offer.request)).toBe(true)
+        expect(Object.isFrozen(offer.request.methodDetails)).toBe(true)
+        expect(Reflect.set(offer.method, 'name', 'changed')).toBe(false)
+        expect(Reflect.set(offer.request.methodDetails, 'sessionProtocol', 'changed')).toBe(false)
+        return offers
+      },
+    })
+    const handler = mppx.compose([guardedSession, sessionChallengeOpts])
+
+    for (let call = 0; call < 2; call++) {
+      const result = await handler(new Request('https://example.com/resource'))
+      expect(result.status).toBe(402)
+      if (result.status !== 402) throw new Error()
+      const challenge = Challenge.fromResponse(result.challenge)
+      expect(challenge.method).toBe('tempo')
+      expect(challenge.request.methodDetails).toEqual({ sessionProtocol: 'v2' })
+    }
+  })
+
+  test.each(['consumed', 'locked'] as const)(
+    'offer hooks preserve request metadata when the upstream body is $state',
+    async (state) => {
+      const hookInputs: Request[] = []
+      const guardedBeta = Method.toServer(mockChargeB, {
+        async canOffer({ input }) {
+          hookInputs.push(input)
+          expect(await input.text()).toBe('')
+          return true
+        },
+        async verify() {
+          return mockReceipt('beta')
+        },
+      })
+      const input = new Request('https://example.com/resource?source=upstream', {
+        body: 'request body',
+        headers: { 'X-Request-Id': 'request-1' },
+        method: 'POST',
+      })
+      const reader = state === 'locked' ? input.body!.getReader() : undefined
+      if (state === 'consumed') await input.text()
+      const mppx = Mppx.create({
+        methods: [guardedBeta],
+        realm,
+        secretKey,
+        async selectOffers(offers, { request }) {
+          hookInputs.push(request)
+          expect(await request.text()).toBe('')
+          return offers
+        },
+      })
+
+      try {
+        const result = await mppx.compose([guardedBeta, challengeOpts])(input)
+        expect(result.status).toBe(402)
+      } finally {
+        reader?.releaseLock()
+      }
+
+      expect(hookInputs).toHaveLength(2)
+      for (const hookInput of hookInputs) {
+        expect(hookInput).not.toBe(input)
+        expect(hookInput.method).toBe('POST')
+        expect(hookInput.headers.get('X-Request-Id')).toBe('request-1')
+        expect(new URL(hookInput.url).searchParams.get('source')).toBe('upstream')
+      }
+    },
+  )
 
   test('method canOffer runs before selectOffers with offer and upstream request context', async () => {
     const calls: string[] = []
@@ -2048,7 +2138,7 @@ describe('compose', () => {
       secretKey,
       selectOffers(offers) {
         calls.push('selectOffers')
-        expect(offers.map((offer) => offer.method)).toEqual([alphaMethod])
+        expect(offers.map((offer) => offer.method.name)).toEqual(['alpha'])
         return offers
       },
     })
@@ -2237,7 +2327,7 @@ describe('compose', () => {
       selectOffers(offers, { request }) {
         selectionCount++
         return request.headers.has('X-Hide-Beta')
-          ? offers.filter((offer) => offer.method !== betaMethod)
+          ? offers.filter((offer) => offer.method.name !== 'beta')
           : offers
       },
     })
@@ -2265,6 +2355,48 @@ describe('compose', () => {
     expect(result.status).toBe(200)
     expect(selectionCount).toBe(1)
   })
+
+  test.each(['malformed', 'unmatched'] as const)(
+    'applies selectOffers before rejecting a $kind payment credential',
+    async (kind) => {
+      let selectionCount = 0
+      const mppx = Mppx.create({
+        methods: [alphaMethod, betaMethod],
+        realm,
+        secretKey,
+        selectOffers(offers) {
+          selectionCount++
+          return offers.filter((offer) => offer.method.name === 'beta')
+        },
+      })
+      const authorization =
+        kind === 'malformed'
+          ? 'Payment invalid'
+          : Credential.serialize(
+              Credential.from({
+                challenge: {
+                  ...(await mppx.challenge.alpha.charge(challengeOpts)),
+                  method: 'unknown',
+                },
+                payload: { token: 'invalid' },
+              }),
+            )
+
+      const result = await mppx.compose(
+        [alphaMethod, challengeOpts],
+        [betaMethod, challengeOpts],
+      )(
+        new Request('https://example.com/resource', {
+          headers: { Authorization: authorization },
+        }),
+      )
+
+      expect(result.status).toBe(402)
+      if (result.status !== 402) throw new Error()
+      expect(Challenge.fromResponse(result.challenge).method).toBe('beta')
+      expect(selectionCount).toBe(1)
+    },
+  )
 
   test.each([
     {
@@ -2363,7 +2495,7 @@ describe('compose', () => {
       methods: [alphaMethod, filteredMethod],
       realm,
       secretKey,
-      selectOffers: (offers) => offers.filter((offer) => offer.method !== filteredMethod),
+      selectOffers: (offers) => offers.filter((offer) => offer.method.name !== 'beta'),
     })
 
     const result = await mppx.compose(
@@ -2383,15 +2515,12 @@ describe('compose', () => {
       secretKey,
       selectOffers(offers) {
         expect(offers.map((offer) => offer.key)).toEqual(['tempo/session', 'tempo/session'])
-        expect(offers.map((offer) => offer.method)).toEqual([
-          tip1034SessionMethod,
-          legacySessionMethod,
-        ])
+        expect(offers.map((offer) => offer.method.alias)).toEqual([undefined, 'sessionLegacy'])
         expect(offers.map((offer) => offer.request.methodDetails)).toEqual([
           { sessionProtocol: 'v2' },
           { sessionProtocol: 'v1' },
         ])
-        return offers.filter((offer) => offer.method === legacySessionMethod)
+        return offers.filter((offer) => offer.method.alias === 'sessionLegacy')
       },
     })
 
@@ -2676,7 +2805,7 @@ describe('compose', () => {
       methods: [alphaMethod, x402Method],
       realm,
       secretKey,
-      selectOffers: (offers) => offers.filter((offer) => offer.method !== x402Method),
+      selectOffers: (offers) => offers.filter((offer) => offer.method.name !== 'evm'),
     })
 
     const result = await mppx.compose(
@@ -2825,7 +2954,7 @@ describe('compose', () => {
       methods: [alphaMethod, betaMethod],
       realm,
       secretKey,
-      selectOffers: (offers) => offers.filter((offer) => offer.method !== betaMethod),
+      selectOffers: (offers) => offers.filter((offer) => offer.method.name !== 'beta'),
     })
 
     const result = await mppx.compose(
@@ -3424,7 +3553,7 @@ describe('compose', () => {
         methods: [alphaWithHtml, betaWithHtml],
         realm,
         secretKey,
-        selectOffers: (offers) => offers.filter((offer) => offer.method !== betaWithHtml),
+        selectOffers: (offers) => offers.filter((offer) => offer.method.name !== 'beta'),
       })
 
       const result = await mppx.compose(

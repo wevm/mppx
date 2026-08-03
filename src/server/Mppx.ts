@@ -8,7 +8,7 @@ import * as Errors from '../Errors.js'
 import * as Expires from '../Expires.js'
 import * as AcceptPayment from '../internal/AcceptPayment.js'
 import * as Env from '../internal/env.js'
-import type { MaybePromise } from '../internal/types.js'
+import type { DeepReadonly, MaybePromise } from '../internal/types.js'
 import * as Method from '../Method.js'
 import * as PaymentRequest from '../PaymentRequest.js'
 import type * as Receipt from '../Receipt.js'
@@ -93,18 +93,27 @@ export type ServerOffer<method extends Method.Method = Method.Method> = method e
 type ServerOfferFor<method extends Method.Method> = Readonly<{
   /** Canonical wire key for the configured method. */
   key: `${method['name']}/${method['intent']}`
-  /** The registered server method that produced this offer. */
-  method: method
+  /** Immutable method metadata for this offer. */
+  method: ServerOfferMethodDescriptor<method>
   /** Schema-normalized request configured for this offer. */
-  request: Readonly<z.output<method['schema']['request']>>
+  request: DeepReadonly<z.output<method['schema']['request']>>
+}>
+
+/** Immutable method metadata exposed to offer-selection hooks. */
+export type ServerOfferMethodDescriptor<method extends Method.Method = Method.Method> = Readonly<{
+  /** Optional public alias used to register this server method. */
+  alias?: method extends { alias?: infer alias } ? alias : string
+  intent: method['intent']
+  name: method['name']
 }>
 
 /**
  * Selects a subset of configured offers before payment challenges are issued.
  *
  * The hook must select at least one offer. Returned offers must come from the input,
- * contain no duplicates, and preserve their original order. The request is cloned
- * so the hook may safely inspect its body.
+ * contain no duplicates, and preserve their original order. Offers and their
+ * normalized requests are deeply immutable. The incoming request is cloned so
+ * the hook may safely inspect its body when it has not already been consumed.
  */
 export type SelectOffers<methods extends readonly Method.Method[]> = (
   offers: readonly ServerOffer<methods[number]>[],
@@ -2336,13 +2345,11 @@ function composeHandlers(
     const internal = (handler as ConfiguredHandler)._internal
     const offer =
       internal && !isComposedHandlerMetadata(internal) ? createServerOffer(internal) : undefined
-    return { handler, offer }
+    const method = internal && !isComposedHandlerMetadata(internal) ? internal._method : undefined
+    return { handler, method, offer }
   })
   const hasOfferPolicy =
-    offerSelector !== undefined ||
-    offerEntries.some(
-      ({ offer }) => (offer?.method as Method.AnyServer | undefined)?.canOffer !== undefined,
-    )
+    offerSelector !== undefined || offerEntries.some(({ method }) => method?.canOffer !== undefined)
 
   const composed: ComposedHandler = async (input: Request) => {
     // Serve service worker for html-enabled compose
@@ -2410,9 +2417,8 @@ function composeHandlers(
         if (match) return match(input)
       }
 
-      // Payment credential present but no matching handler — dispatch to first
-      // handler which will reject with an appropriate error (invalid challenge, etc.).
-      return handlers[0]!(input)
+      // Unrecognized or malformed credentials still use the currently eligible
+      // offer set before the first handler issues its rejection challenge.
     }
 
     const selectedHandlers = hasOfferPolicy
@@ -2600,8 +2606,12 @@ function isComposedHandlerMetadata(
 function createServerOffer(internal: ConfiguredHandler['_internal']): ServerOffer {
   return Object.freeze({
     key: `${internal.name}/${internal.intent}`,
-    method: internal._method,
-    request: snapshotValue(internal._canonicalRequest),
+    method: Object.freeze({
+      ...(internal._method.alias ? { alias: internal._method.alias } : {}),
+      intent: internal.intent,
+      name: internal.name,
+    }),
+    request: immutableSnapshot(internal._canonicalRequest),
   }) as ServerOffer
 }
 
@@ -2609,6 +2619,7 @@ function createServerOffer(internal: ConfiguredHandler['_internal']): ServerOffe
 async function selectOfferHandlers(parameters: {
   entries: readonly {
     handler: (input: Request) => Promise<MethodFn.Response<Transport.Http>>
+    method: Method.AnyServer | undefined
     offer: ServerOffer | undefined
   }[]
   input: Request
@@ -2617,10 +2628,10 @@ async function selectOfferHandlers(parameters: {
   const { entries, input, selectOffers } = parameters
   const eligibleEntries: (typeof entries)[number][] = []
   for (const entry of entries) {
-    const canOffer = (entry.offer?.method as Method.AnyServer | undefined)?.canOffer
+    const canOffer = entry.method?.canOffer
     if (canOffer) {
       const approved = await canOffer({
-        input: input.clone(),
+        input: cloneOfferInput(input),
         request: entry.offer!.request,
       })
       if (typeof approved !== 'boolean') throw new Error('canOffer() must return a boolean')
@@ -2639,7 +2650,7 @@ async function selectOfferHandlers(parameters: {
   })
   const selected = await selectOffers(
     Object.freeze(offers),
-    Object.freeze({ request: input.clone() }),
+    Object.freeze({ request: cloneOfferInput(input) }),
   )
 
   if (!Array.isArray(selected)) throw new Error('selectOffers() must return an array of offers')
@@ -2656,6 +2667,32 @@ async function selectOfferHandlers(parameters: {
   })
 
   return selectedHandlers
+}
+
+/** Clones a request for offer hooks, falling back to a bodyless metadata copy. */
+function cloneOfferInput(input: Request): Request {
+  try {
+    return input.clone()
+  } catch {
+    return new globalThis.Request(input.url, {
+      headers: new Headers(input.headers),
+      method: input.method,
+      signal: input.signal,
+    })
+  }
+}
+
+/** Clones and recursively freezes protocol data exposed to offer hooks. */
+function immutableSnapshot<value>(value: value): DeepReadonly<value> {
+  return deepFreeze(structuredClone(value))
+}
+
+function deepFreeze<value>(value: value): DeepReadonly<value> {
+  if (!value || typeof value !== 'object' || Object.isFrozen(value))
+    return value as DeepReadonly<value>
+
+  for (const nested of Object.values(value)) deepFreeze(nested)
+  return Object.freeze(value) as DeepReadonly<value>
 }
 
 type ChallengeHeaderMerge = {

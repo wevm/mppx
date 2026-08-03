@@ -3,7 +3,7 @@ import * as Constants from './Constants.js'
 import * as Credential from './Credential.js'
 import * as Errors from './Errors.js'
 import * as Expires from './Expires.js'
-import type { ExactPartial, LooseOmit, MaybePromise } from './internal/types.js'
+import type { DeepReadonly, ExactPartial, LooseOmit, MaybePromise } from './internal/types.js'
 import type * as Receipt from './Receipt.js'
 import type * as Html from './server/internal/html/config.js'
 import type * as Transport from './server/Transport.js'
@@ -222,13 +222,15 @@ export type AnyServer = Server<any, any, any, any, any>
  * Decides whether a configured method offer is available for an HTTP request.
  *
  * Called once per configured offer during composition. The payment request is
- * schema-normalized and `input` is cloned so its body can be safely inspected.
- * Returning `false` removes only this method's offer. Credential dispatch does
- * not invoke this hook.
+ * schema-normalized and deeply immutable. `input` is cloned so its body can be
+ * safely inspected unless the upstream body was already consumed or locked, in
+ * which case the clone preserves request metadata without a body. Returning
+ * `false` removes only this method's offer. Credential dispatch does not invoke
+ * this hook.
  */
 export type CanOfferFn<method extends Method> = (parameters: {
   input: globalThis.Request
-  request: Readonly<z.output<method['schema']['request']>>
+  request: DeepReadonly<z.output<method['schema']['request']>>
 }) => MaybePromise<boolean>
 
 /** Hooks supported by every composable server method constructor. */
