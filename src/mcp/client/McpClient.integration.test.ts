@@ -6,20 +6,22 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
 import { createMcpExpressApp } from '@modelcontextprotocol/sdk/server/express.js'
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js'
-import { sessionLegacy as tempo_session_client, tempo as tempo_client } from 'mppx/client'
+import { session as tempo_session_client, tempo as tempo_client } from 'mppx/client'
 import { Mppx as Mppx_server, tempo as tempo_server } from 'mppx/server'
 import type { Address } from 'viem'
 import { readContract } from 'viem/actions'
 import { Actions, Addresses } from 'viem/tempo'
 import { beforeAll, describe, expect, test } from 'vp/test'
 import { tempoNetwork } from '~test/config.js'
-import { deployEscrow, signTopUpChannel } from '~test/tempo/legacy/session.js'
 import { accounts, asset, client as testClient, fundAccount } from '~test/tempo/viem.js'
 
 import * as Credential from '../../Credential.js'
 import * as core_Mcp from '../../Mcp.js'
 import * as Store from '../../Store.js'
-import type { SessionReceipt } from '../../tempo/session/precompile/Protocol.js'
+import type {
+  SessionCredentialPayload,
+  SessionReceipt,
+} from '../../tempo/session/precompile/Protocol.js'
 import * as ChannelStore from '../../tempo/session/server/ChannelStore.js'
 import * as McpServer_transport from '../server/Transport.js'
 import * as McpClient from './McpClient.js'
@@ -31,14 +33,11 @@ const doubleSessionAmountRaw = chargeAmountRaw * 2n
 const topUpAmountRaw = chargeAmountRaw * 3n
 const isLocalnet = tempoNetwork === 'localnet'
 
-let escrowContract: Address
-
 function tokenGetBalanceCall(parameters: { account: Address; token: Address }) {
   return Actions.token.getBalance.call(testClient, parameters)
 }
 
 beforeAll(async () => {
-  escrowContract = await deployEscrow()
   await fundAccount({ address: accounts[4].address, token: Addresses.pathUsd })
   await fundAccount({ address: accounts[4].address, token: asset })
   await fundAccount({ address: accounts[2].address, token: Addresses.pathUsd })
@@ -164,6 +163,7 @@ describe.runIf(isLocalnet)('McpClient.wrap integration', () => {
             action: 'voucher',
             channelId: openReceipt!.channelId,
             cumulativeAmountRaw: replayedCumulativeRaw,
+            descriptor: credentialDescriptor(openCredential),
           },
         })
         const firstVoucher = await callToolWithCredential(
@@ -229,7 +229,7 @@ describe.runIf(isLocalnet)('McpClient.wrap integration', () => {
     {
       name: 'session intent can top up a live MCP channel and continue metering on the same channel',
       sessionFeePayer: true,
-      sessionMaxDeposit: '2',
+      sessionMaxDeposit: '5',
       async run(harness: Harness) {
         const openChallenge = await getPaymentChallenge(harness.sdkClient, 'session_tool')
         const openCredential = await harness.sessionMethod.createCredential({
@@ -262,14 +262,6 @@ describe.runIf(isLocalnet)('McpClient.wrap integration', () => {
         expect(meteredReceipt?.channelId).toBe(openReceipt?.channelId)
         expect(meteredReceipt?.acceptedCumulative).toBe((chargeAmountRaw * 2n).toString())
 
-        const { serializedTransaction } = await signTopUpChannel({
-          escrow: escrowContract,
-          feePayer: true,
-          payer: accounts[2],
-          channelId: openReceipt!.channelId,
-          token: asset,
-          amount: topUpAmountRaw,
-        })
         const topUpChallenge = await getPaymentChallenge(harness.sdkClient, 'session_tool')
         const topUpCredential = await harness.sessionMethod.createCredential({
           challenge: topUpChallenge,
@@ -277,7 +269,7 @@ describe.runIf(isLocalnet)('McpClient.wrap integration', () => {
             action: 'topUp',
             additionalDepositRaw: topUpAmountRaw.toString(),
             channelId: openReceipt!.channelId,
-            transaction: serializedTransaction,
+            descriptor: credentialDescriptor(openCredential),
           },
         })
         const toppedUp = await callToolWithCredential(
@@ -310,7 +302,7 @@ describe.runIf(isLocalnet)('McpClient.wrap integration', () => {
         expect(resumedReceipt?.acceptedCumulative).toBe((chargeAmountRaw * 3n).toString())
 
         const channel = await harness.sessionStore.getChannel(openReceipt!.channelId)
-        expect(channel?.deposit).toBe(chargeAmountRaw * 2n + topUpAmountRaw)
+        expect(channel?.deposit).toBe(chargeAmountRaw * 5n + topUpAmountRaw)
         expect(channel?.highestVoucherAmount).toBe(chargeAmountRaw * 3n)
         expect(channel?.spent).toBeGreaterThanOrEqual(BigInt(topUpReceipt!.spent))
         expect(channel?.units).toBeGreaterThanOrEqual(topUpReceipt?.units ?? 0)
@@ -355,6 +347,7 @@ describe.runIf(isLocalnet)('McpClient.wrap integration', () => {
             action: 'close',
             channelId: openReceipt!.channelId,
             cumulativeAmountRaw: (chargeAmountRaw * 2n).toString(),
+            descriptor: credentialDescriptor(openCredential),
           },
         })
         const closed = await callToolWithCredential(
@@ -445,7 +438,6 @@ type Harness = {
 
 async function createHarness(options?: {
   sessionFeePayer?: boolean | undefined
-  sessionDeposit?: string | undefined
   sessionMaxDeposit?: string | undefined
 }): Promise<Harness> {
   const sessionBackingStore = Store.memory()
@@ -456,11 +448,8 @@ async function createHarness(options?: {
   })
   const sessionMethod = tempo_session_client({
     account: accounts[2],
-    escrowContract,
     getClient: () => testClient,
-    ...(options?.sessionMaxDeposit
-      ? { maxDeposit: options.sessionMaxDeposit }
-      : { deposit: options?.sessionDeposit ?? '5' }),
+    ...(options?.sessionMaxDeposit ? { maxDeposit: options.sessionMaxDeposit } : {}),
   })
 
   const payment = Mppx_server.create({
@@ -470,10 +459,9 @@ async function createHarness(options?: {
         currency: asset,
         getClient: () => testClient,
       }),
-      tempo_server.sessionLegacy({
+      tempo_server.session({
         account: accounts[0],
         currency: asset,
-        escrowContract,
         getClient: () => testClient,
         store: sessionBackingStore,
         ...(options?.sessionFeePayer ? { feePayer: accounts[4] } : {}),
@@ -569,6 +557,12 @@ async function createHarness(options?: {
     sessionMethod,
     sessionStore,
   }
+}
+
+function credentialDescriptor(serializedCredential: string) {
+  const payload = Credential.deserialize<SessionCredentialPayload>(serializedCredential).payload
+  if (!payload.descriptor) throw new Error('Session credential is missing its channel descriptor.')
+  return payload.descriptor
 }
 
 async function getPaymentChallenge(client: Client, toolName: string): Promise<SessionChallenge> {

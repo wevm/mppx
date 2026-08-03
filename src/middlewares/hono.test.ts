@@ -4,7 +4,7 @@ import { Challenge, Credential, Method, Receipt, z } from 'mppx'
 import {
   evm as evm_client,
   Mppx as Mppx_client,
-  sessionLegacy as sessionIntent,
+  session as sessionIntent,
   tempo as tempo_client,
 } from 'mppx/client'
 import { Mppx, discovery, payment } from 'mppx/hono'
@@ -15,11 +15,9 @@ import {
   paymentSignatureHeader,
   type PaymentPayload,
 } from 'mppx/x402'
-import type { Address } from 'viem'
 import { Addresses } from 'viem/tempo'
 import { beforeAll, describe, expect, test } from 'vp/test'
 import * as Http from '~test/Http.js'
-import { deployEscrow } from '~test/tempo/legacy/session.js'
 import { accounts, asset, client, fundAccount } from '~test/tempo/viem.js'
 
 function createServer(app: Hono) {
@@ -389,16 +387,13 @@ describe('scope binding', () => {
 })
 
 describe('session', () => {
-  let escrowContract: Address
-
   function createSessionHarness(feePayer: boolean) {
     const mppx = Mppx.create({
       methods: [
-        tempo_server.sessionLegacy({
+        tempo_server.session({
           getClient: () => client,
           account: accounts[0],
           currency: asset,
-          escrowContract,
           ...(feePayer ? { feePayer: accounts[1] } : {}),
         } as any),
       ],
@@ -420,7 +415,6 @@ describe('session', () => {
   }
 
   beforeAll(async () => {
-    escrowContract = await deployEscrow()
     await fundAccount({ address: accounts[1].address, token: Addresses.pathUsd })
     await fundAccount({ address: accounts[1].address, token: asset })
     await fundAccount({ address: accounts[2].address, token: Addresses.pathUsd })

@@ -1,14 +1,12 @@
 import { Challenge, Credential, Method, Receipt, z } from 'mppx'
 import { Mppx as Mppx_client, tempo as tempo_client } from 'mppx/client'
 import { Mppx as Mppx_server, tempo as tempo_server } from 'mppx/server'
-import type { Address } from 'viem'
-import { afterEach, beforeAll, describe, expect, test } from 'vp/test'
+import { afterEach, describe, expect, test } from 'vp/test'
 import { tempoNetwork } from '~test/config.js'
 import * as Http from '~test/Http.js'
-import { deployEscrow } from '~test/tempo/legacy/session.js'
 import { accounts, asset, client } from '~test/tempo/viem.js'
 
-import { sessionManager } from '../tempo/legacy/client/index.js'
+import { sessionManager } from '../tempo/session/client/SessionManager.js'
 import { deserializeSessionReceipt } from '../tempo/session/precompile/Protocol.js'
 import * as ApiProxy from './Proxy.js'
 import * as Service from './Service.js'
@@ -76,13 +74,6 @@ const mppx_client = Mppx_client.create({
 
 let upstream: Awaited<ReturnType<typeof Http.createServer>> | undefined
 let proxyServer: Awaited<ReturnType<typeof Http.createServer>> | undefined
-let sessionEscrow: Address
-
-beforeAll(async () => {
-  if (!isLocalnet) return
-  sessionEscrow = await deployEscrow()
-})
-
 afterEach(() => {
   upstream?.close()
   proxyServer?.close()
@@ -926,10 +917,9 @@ describe.runIf(isLocalnet)('plain HTTP session proxy', () => {
 
     const sessionHandler = Mppx_server.create({
       methods: [
-        tempo_server.sessionLegacy({
+        tempo_server.session({
           account: accounts[0],
           currency: asset,
-          escrowContract: sessionEscrow,
           getClient: () => client,
           chainId: client.chain!.id,
         }),
@@ -956,7 +946,6 @@ describe.runIf(isLocalnet)('plain HTTP session proxy', () => {
     const manager = sessionManager({
       account: accounts[1],
       client,
-      escrowContract: sessionEscrow,
       fetch: globalThis.fetch,
       maxDeposit: '3',
     })
@@ -986,10 +975,9 @@ describe.runIf(isLocalnet)('plain HTTP session proxy', () => {
 
     const sessionHandler = Mppx_server.create({
       methods: [
-        tempo_server.sessionLegacy({
+        tempo_server.session({
           account: accounts[0],
           currency: asset,
-          escrowContract: sessionEscrow,
           getClient: () => client,
           chainId: client.chain!.id,
         }),
@@ -1016,7 +1004,7 @@ describe.runIf(isLocalnet)('plain HTTP session proxy', () => {
     const sessionClient = Mppx_client.create({
       polyfill: false,
       methods: [
-        tempo_client.sessionLegacy.method({
+        tempo_client.session({
           account: accounts[1],
           getClient: () => client,
           maxDeposit: '2',

@@ -226,21 +226,21 @@ describe('AcceptPayment', () => {
   test('selectChallengeCandidates supports duplicate method keys with challenge predicates', () => {
     const challenges = [
       {
-        id: 'v2',
+        id: 'primary',
         intent: 'session',
         method: 'tempo',
         realm: 'test',
-        request: { methodDetails: { sessionProtocol: 'v2' } },
+        request: { methodDetails: { sessionProtocol: 'primary' } },
       },
       {
-        id: 'v1',
+        id: 'fallback',
         intent: 'session',
         method: 'tempo',
         realm: 'test',
-        request: { methodDetails: { sessionProtocol: 'v1' } },
+        request: { methodDetails: { sessionProtocol: 'fallback' } },
       },
       {
-        id: 'old-server',
+        id: 'unmarked',
         intent: 'session',
         method: 'tempo',
         realm: 'test',
@@ -257,7 +257,7 @@ describe('AcceptPayment', () => {
           challenge: AcceptPayment.ChallengeCandidate['challenge']
         }) =>
           (challenge.request.methodDetails as { sessionProtocol?: string } | undefined)
-            ?.sessionProtocol === 'v2',
+            ?.sessionProtocol === 'primary',
       },
       {
         name: 'tempo',
@@ -270,7 +270,7 @@ describe('AcceptPayment', () => {
           const sessionProtocol = (
             challenge.request.methodDetails as { sessionProtocol?: string } | undefined
           )?.sessionProtocol
-          return sessionProtocol === undefined || sessionProtocol === 'v1'
+          return sessionProtocol === undefined || sessionProtocol === 'fallback'
         },
       },
     ] as const
@@ -281,7 +281,11 @@ describe('AcceptPayment', () => {
       AcceptPayment.parse('tempo/session'),
     )
 
-    expect(candidates.map(({ challenge }) => challenge.id)).toEqual(['v2', 'v1', 'old-server'])
+    expect(candidates.map(({ challenge }) => challenge.id)).toEqual([
+      'primary',
+      'fallback',
+      'unmarked',
+    ])
   })
 
   test('selectChallenge honors a specific opt-out over a broader wildcard', () => {

@@ -151,29 +151,29 @@ describe('createCredential', () => {
     })
   }
 
-  test('behavior: routes duplicate tempo/session client methods by sessionProtocol', async () => {
-    const tip1034 = taggedSessionMethod(
-      'v2',
+  test('behavior: routes duplicate tempo/session client methods by challenge predicate', async () => {
+    const primary = taggedSessionMethod(
+      'primary',
       ({ challenge }) =>
         (challenge.request.methodDetails as { sessionProtocol?: string } | undefined)
-          ?.sessionProtocol === 'v2',
+          ?.sessionProtocol === 'primary',
     )
-    const legacy = taggedSessionMethod('v1', ({ challenge }) => {
+    const fallback = taggedSessionMethod('fallback', ({ challenge }) => {
       const sessionProtocol = (
         challenge.request.methodDetails as { sessionProtocol?: string } | undefined
       )?.sessionProtocol
-      return sessionProtocol === undefined || sessionProtocol === 'v1'
+      return sessionProtocol === undefined || sessionProtocol === 'fallback'
     })
-    const mppx = Mppx.create({ polyfill: false, methods: [tip1034, legacy] })
+    const mppx = Mppx.create({ polyfill: false, methods: [primary, fallback] })
 
-    const [newCredential, legacyCredential, oldCredential] = await Promise.all([
-      mppx.createCredential(paymentRequiredResponse(sessionChallenge('new', 'v2'))),
-      mppx.createCredential(paymentRequiredResponse(sessionChallenge('v1', 'v1'))),
-      mppx.createCredential(paymentRequiredResponse(sessionChallenge('old'))),
+    const [primaryCredential, fallbackCredential, unmarkedCredential] = await Promise.all([
+      mppx.createCredential(paymentRequiredResponse(sessionChallenge('primary', 'primary'))),
+      mppx.createCredential(paymentRequiredResponse(sessionChallenge('fallback', 'fallback'))),
+      mppx.createCredential(paymentRequiredResponse(sessionChallenge('unmarked'))),
     ])
-    expect(Credential.deserialize(newCredential).payload).toEqual({ tag: 'v2' })
-    expect(Credential.deserialize(legacyCredential).payload).toEqual({ tag: 'v1' })
-    expect(Credential.deserialize(oldCredential).payload).toEqual({ tag: 'v1' })
+    expect(Credential.deserialize(primaryCredential).payload).toEqual({ tag: 'primary' })
+    expect(Credential.deserialize(fallbackCredential).payload).toEqual({ tag: 'fallback' })
+    expect(Credential.deserialize(unmarkedCredential).payload).toEqual({ tag: 'fallback' })
   })
 
   test('behavior: rejects unknown tempo/session sessionProtocol', async () => {

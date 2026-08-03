@@ -1,5 +1,4 @@
 import type { NoExtraKeys } from '../../internal/types.js'
-import { session as sessionLegacy_, settle as settleLegacy_ } from '../legacy/server/index.js'
 import {
   charge as sessionCharge_,
   session as session_,
@@ -17,23 +16,6 @@ const sessionServer = Object.assign(session_, {
   settle: settle_,
   settleBatch: settleBatch_,
 })
-
-function createSessionLegacyMethod<
-  const parameters extends NonNullable<Parameters<typeof sessionLegacy_>[0]>,
->(parameters?: parameters) {
-  return Object.assign(sessionLegacy_(parameters as never), { alias: 'sessionLegacy' as const })
-}
-
-const sessionLegacyServer = Object.assign(createSessionLegacyMethod, {
-  settle: settleLegacy_,
-  Ws: Ws_,
-})
-
-/** Creates a legacy contract-backed Tempo `session` server method. */
-export const sessionLegacy = sessionLegacyServer
-
-/** Settles a legacy contract-backed Tempo session channel. */
-export const settleLegacy = settleLegacy_
 
 function createChargeMethod<const parameters extends tempo.Parameters>(
   parameters: parameters | undefined,
@@ -86,8 +68,6 @@ export namespace tempo {
   export const common = tempo
   /** Creates a TIP-1034 Tempo `session` method for session-based TIP-20 token payments. */
   export const session = sessionServer
-  /** @deprecated Use `tempo.session()` for the TIP-1034 session server method. */
-  export const sessionLegacy = sessionLegacyServer
   /** Creates a Tempo `subscription` method for recurring TIP-20 token payments. */
   export const subscription = subscription_
   /** Renews an overdue Tempo subscription outside of the HTTP request path. */

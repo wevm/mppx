@@ -623,7 +623,7 @@ export namespace session {
     store?: Store.AtomicStore | undefined
     /** Enable SSE streaming. Pass `true` for defaults or an options object to configure SSE. */
     sse?: boolean | Transport.sse.Options | undefined
-    /** Tempo chain ID used for TIP-1034 channel escrow challenges. Defaults to the resolved client chain ID. Pass the Tempo testnet chain ID here instead of using legacy session's `testnet` boolean. */
+    /** Tempo chain ID used for TIP-1034 channel escrow challenges. Defaults to the resolved client chain ID. */
     chainId?: number | undefined
     /** TIP20EscrowChannel precompile address override. */
     escrowContract?: Address | undefined

@@ -112,17 +112,17 @@ test('tempo session public barrel hides internal session drivers', () => {
   expectTypeOf<SessionServerPublic>().not.toHaveProperty('Chain')
 })
 
-test('tempo legacy namespace keeps client, server, and channel primitives isolated', () => {
+test('tempo legacy namespace retains client and channel primitives only', () => {
   type LegacySessionPublic = typeof import('./legacy/session/index.js')
+  type LegacyNamespacePublic = typeof import('./legacy/index.js')
 
   expectTypeOf(Tempo.SessionLegacy.Client.session).toBeFunction()
   expectTypeOf(Tempo.SessionLegacy.Client.sessionManager).toBeFunction()
-  expectTypeOf(Tempo.SessionLegacy.Server.session).toBeFunction()
-  expectTypeOf(Tempo.SessionLegacy.Server.settle).toBeFunction()
   expectTypeOf(Tempo.SessionLegacy.Session.Chain).toBeObject()
   expectTypeOf(Tempo.SessionLegacy.Session.Channel).toBeObject()
   expectTypeOf(Tempo.SessionLegacy.Session.Voucher).toBeObject()
 
+  expectTypeOf<LegacyNamespacePublic>().not.toHaveProperty('Server')
   expectTypeOf<LegacySessionPublic>().not.toHaveProperty('ChannelStore')
   expectTypeOf<LegacySessionPublic>().not.toHaveProperty('Receipt')
   expectTypeOf<LegacySessionPublic>().not.toHaveProperty('Sse')

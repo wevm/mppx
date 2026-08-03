@@ -83,8 +83,8 @@ const tip1034SessionMethod = Method.toServer(mockSession, {
   },
 })
 
-const legacySessionMethod = Method.toServer(mockSession, {
-  alias: 'sessionLegacy',
+const alternateSessionMethod = Method.toServer(mockSession, {
+  alias: 'alternateSession',
   async verify() {
     return {
       method: 'tempo',
@@ -250,17 +250,17 @@ describe('Mppx type tests', () => {
 
   test('aliased duplicate handlers are accessible by nested and slash keys', () => {
     const mppx = Mppx.create({
-      methods: [tip1034SessionMethod, legacySessionMethod],
+      methods: [tip1034SessionMethod, alternateSessionMethod],
       realm,
       secretKey,
     })
 
     expectTypeOf(mppx.tempo.session).toBeFunction()
-    expectTypeOf(mppx.tempo.sessionLegacy).toBeFunction()
+    expectTypeOf(mppx.tempo.alternateSession).toBeFunction()
     expectTypeOf(mppx['tempo/session']).toBeFunction()
-    expectTypeOf(mppx['tempo/sessionLegacy']).toBeFunction()
+    expectTypeOf(mppx['tempo/alternateSession']).toBeFunction()
     expectTypeOf(mppx.challenge.tempo.session).toBeFunction()
-    expectTypeOf(mppx.challenge.tempo.sessionLegacy).toBeFunction()
+    expectTypeOf(mppx.challenge.tempo.alternateSession).toBeFunction()
   })
 
   test('slash key handlers are accessible', () => {

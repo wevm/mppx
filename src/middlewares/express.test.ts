@@ -1,17 +1,11 @@
 import express from 'express'
 import { Receipt } from 'mppx'
-import {
-  Mppx as Mppx_client,
-  sessionLegacy as sessionIntent,
-  tempo as tempo_client,
-} from 'mppx/client'
+import { Mppx as Mppx_client, session as sessionIntent, tempo as tempo_client } from 'mppx/client'
 import { Mppx, discovery, payment } from 'mppx/express'
 import { Mppx as Mppx_server, tempo as tempo_server } from 'mppx/server'
-import type { Address } from 'viem'
 import { Addresses } from 'viem/tempo'
 import { beforeAll, describe, expect, test } from 'vp/test'
 import * as Http from '~test/Http.js'
-import { deployEscrow } from '~test/tempo/legacy/session.js'
 import { accounts, asset, client, fundAccount } from '~test/tempo/viem.js'
 
 function createServer(app: express.Express) {
@@ -195,16 +189,13 @@ describe('payment', () => {
 })
 
 describe('session', () => {
-  let escrowContract: Address
-
   function createSessionHarness(feePayer: boolean) {
     const mppx = Mppx.create({
       methods: [
-        tempo_server.sessionLegacy({
+        tempo_server.session({
           getClient: () => client,
           account: accounts[0],
           currency: asset,
-          escrowContract,
           ...(feePayer ? { feePayer: accounts[1] } : {}),
         } as any),
       ],
@@ -226,7 +217,6 @@ describe('session', () => {
   }
 
   beforeAll(async () => {
-    escrowContract = await deployEscrow()
     await fundAccount({ address: accounts[1].address, token: Addresses.pathUsd })
     await fundAccount({ address: accounts[1].address, token: asset })
     await fundAccount({ address: accounts[2].address, token: Addresses.pathUsd })

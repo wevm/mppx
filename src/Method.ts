@@ -1,5 +1,4 @@
 import type * as Challenge from './Challenge.js'
-import * as Constants from './Constants.js'
 import * as Credential from './Credential.js'
 import * as Errors from './Errors.js'
 import * as Expires from './Expires.js'
@@ -385,11 +384,9 @@ export async function broadcastCredential<const methods extends readonly AnyServ
 /**
  * Parses a submitted credential into the inputs required for method execution.
  *
- * Dispatch is based on the challenge method and intent. When more than one
- * server method handles the same wire identity, session protocol details select
- * the appropriate implementation. The helper then asserts challenge expiry and
- * parses the method-specific credential payload before returning the selected
- * method and the unmodified challenge request.
+ * Dispatch is based on the challenge method and intent. The helper then asserts
+ * challenge expiry and parses the method-specific credential payload before
+ * returning the selected method and the unmodified challenge request.
  *
  * This intentionally does not verify that the challenge was issued by a
  * particular host, authorize the caller or requested resource, validate the
@@ -409,7 +406,7 @@ function prepareCredential(
     (method) =>
       method.name === credential.challenge.method && method.intent === credential.challenge.intent,
   )
-  const method = selectServerMethod(candidates, credential.challenge)
+  const method = candidates[0]
   if (!method)
     throw new Errors.InvalidChallengeError({
       id: credential.challenge.id,
@@ -430,29 +427,6 @@ function prepareCredential(
     method,
     request: credential.challenge.request,
   }
-}
-
-/** @internal */
-export function selectServerMethod(
-  methods: readonly AnyServer[],
-  challenge: Challenge.Challenge,
-): AnyServer | undefined {
-  if (methods.length <= 1) return methods[0]
-  if (
-    challenge.method !== Constants.Methods.tempo ||
-    challenge.intent !== Constants.Intents.session
-  )
-    return methods[0]
-
-  const sessionProtocol = Constants.getMethodDetail(
-    challenge.request.methodDetails,
-    Constants.MethodDetailKeys.sessionProtocol,
-  )
-  if (sessionProtocol === undefined || sessionProtocol === Constants.SessionProtocols.v1)
-    return methods.find((method) => method.alias === 'sessionLegacy') ?? methods[0]
-  if (sessionProtocol === Constants.SessionProtocols.v2)
-    return methods.find((method) => method.alias === undefined) ?? methods[0]
-  return undefined
 }
 
 /**

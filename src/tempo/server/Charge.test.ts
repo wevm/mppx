@@ -16,12 +16,6 @@ import { Abis, Account, Actions, Addresses, Secp256k1, Tick, Transaction } from 
 import type { token as viem_token } from 'viem/tempo/actions'
 import { beforeAll, describe, expect, test } from 'vp/test'
 import * as Http from '~test/Http.js'
-import {
-  closeChannelOnChain,
-  deployEscrow,
-  openChannel,
-  signVoucher,
-} from '~test/tempo/legacy/session.js'
 import { accounts, asset, chain, client, fundAccount, http } from '~test/tempo/viem.js'
 
 import * as Store from '../../Store.js'
@@ -557,72 +551,6 @@ describe('tempo', () => {
       const credential = Credential.from({
         challenge,
         payload: { hash: receipt.transactionHash, type: 'hash' as const },
-      })
-
-      {
-        const response = await fetch(httpServer.url, {
-          headers: { Authorization: Credential.serialize(credential) },
-        })
-        expect(response.status).toBe(402)
-        const body = (await response.json()) as { detail: string }
-        expect(body.detail).toContain('Payment verification failed: no matching transfer found.')
-      }
-
-      httpServer.close()
-    })
-
-    test('behavior: rejects session settlement tx hash used as charge credential', async () => {
-      const chargeAmount = parseUnits('1', 6)
-      const recipient = accounts[0].address
-      const external = accounts[3]
-
-      const escrow = await deployEscrow()
-
-      await fundAccount({ address: external.address, token: Addresses.pathUsd })
-      await fundAccount({ address: external.address, token: asset })
-
-      const salt = '0x0000000000000000000000000000000000000000000000000000000000000001' as Hex.Hex
-      const { channelId } = await openChannel({
-        escrow,
-        payer: external,
-        payee: recipient,
-        token: asset,
-        deposit: chargeAmount,
-        salt,
-      })
-
-      const voucherSig = await signVoucher(
-        client,
-        external,
-        { channelId, cumulativeAmount: chargeAmount },
-        escrow,
-        chain.id,
-      )
-
-      const { txHash: settleTxHash } = await closeChannelOnChain({
-        escrow,
-        payee: accounts[0],
-        channelId,
-        cumulativeAmount: chargeAmount,
-        signature: voucherSig,
-      })
-
-      const httpServer = await Http.createServer(async (req, res) => {
-        const result = await Mppx_server.toNodeListener(server.charge({ amount: '1' }))(req, res)
-        if (result.status === 402) return
-        res.end('OK')
-      })
-
-      const response = await fetch(httpServer.url)
-      expect(response.status).toBe(402)
-
-      const challenge = Challenge.fromResponse(response, {
-        methods: [tempo_client.charge()],
-      })
-
-      const credential = Credential.from({
-        challenge,
-        payload: { hash: settleTxHash, type: 'hash' as const },
       })
 
       {

@@ -573,7 +573,7 @@ export function create<
     const methodCandidates = (methods as readonly Method.AnyServer[]).filter(
       (m) => m.name === credMethod && m.intent === credIntent,
     )
-    const mi = Method.selectServerMethod(methodCandidates, credential.challenge)
+    const mi = methodCandidates[0]
     const eventMethod =
       mi ?? ({ intent: credIntent, name: credMethod } satisfies ServerMethodDescriptor)
 
