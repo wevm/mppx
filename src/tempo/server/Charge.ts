@@ -360,6 +360,7 @@ export function charge<const parameters extends charge.Parameters>(
 
   type Defaults = charge.DeriveDefaults<parameters>
   const method = Method.toServer<typeof Methods.charge, Defaults>(Methods.charge, {
+    canOffer: parameters.canOffer,
     defaults: {
       amount,
       currency,
@@ -809,7 +810,8 @@ export declare namespace charge {
     waitForConfirmation?: boolean | undefined
   } & Client.getResolver.Parameters &
     Account.resolve.Parameters &
-    Defaults
+    Defaults &
+    Method.ComposableHooks<typeof Methods.charge>
 
   type DeriveDefaults<parameters extends Parameters> = types.DeriveDefaults<
     parameters,

@@ -481,6 +481,7 @@ export function session<const parameters extends session.Parameters>(
     SessionTransport,
     session.Extensions
   >(Methods.session, {
+    canOffer: parameters.canOffer,
     defaults: deriveServerDefaults<parameters>({
       amount,
       currency,
@@ -635,7 +636,8 @@ export namespace session {
     feeToken?: Address | undefined
   } & Account.resolve.Parameters &
     Client.getResolver.Parameters &
-    Defaults
+    Defaults &
+    Method.ComposableHooks<typeof Methods.session>
 
   /** Defaults derived from `session()` parameters for handler type inference. */
   export type DeriveDefaults<parameters extends Parameters> = types.DeriveDefaults<

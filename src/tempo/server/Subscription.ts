@@ -94,6 +94,7 @@ export function subscription<const parameters extends subscription.Parameters>(
     undefined,
     subscription.Extensions
   >(Methods.subscription, {
+    canOffer: parameters.canOffer,
     defaults: {
       amount,
       currency,
@@ -1281,7 +1282,8 @@ export declare namespace subscription {
       storeKeyPrefix?: string | undefined
       testnet?: boolean | undefined
       waitForConfirmation?: boolean | undefined
-    } & Defaults
+    } & Defaults &
+    Method.ComposableHooks<typeof Methods.subscription>
 
   /** Derived defaults after account and chain configuration are applied. */
   type DeriveDefaults<parameters extends Parameters> = types.DeriveDefaults<

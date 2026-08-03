@@ -195,27 +195,27 @@ export type Server<
   transportOverride = undefined,
   extensions extends object = {},
   alias extends string | undefined = string | undefined,
-> = method & {
-  alias?: alias | undefined
-  authorize?: AuthorizeFn<method> | undefined
-  canOffer?: CanOfferFn<method> | undefined
-  defaults?: defaults | undefined
-  extensions?: extensions | undefined
-  html?: Html.Options | undefined
-  preflight?: PreflightFn<method> | undefined
-  request?: RequestFn<method> | undefined
-  respond?: RespondFn<method> | undefined
-  broadcast?: BroadcastFn<method> | undefined
-  stableBinding?: StableBindingFn<method> | undefined
-  transport?: transportOverride | undefined
-  validate?: ValidateFn<method> | undefined
-  /**
-   * @deprecated Use `validate` for the non-mutating pre-check and `broadcast`
-   * for settlement. `verify` combines both operations and may consume payment
-   * state, so it cannot support a safe pre-check endpoint.
-   */
-  verify: VerifyFn<method>
-}
+> = method &
+  ComposableHooks<method> & {
+    alias?: alias | undefined
+    authorize?: AuthorizeFn<method> | undefined
+    defaults?: defaults | undefined
+    extensions?: extensions | undefined
+    html?: Html.Options | undefined
+    preflight?: PreflightFn<method> | undefined
+    request?: RequestFn<method> | undefined
+    respond?: RespondFn<method> | undefined
+    broadcast?: BroadcastFn<method> | undefined
+    stableBinding?: StableBindingFn<method> | undefined
+    transport?: transportOverride | undefined
+    validate?: ValidateFn<method> | undefined
+    /**
+     * @deprecated Use `validate` for the non-mutating pre-check and `broadcast`
+     * for settlement. `verify` combines both operations and may consume payment
+     * state, so it cannot support a safe pre-check endpoint.
+     */
+    verify: VerifyFn<method>
+  }
 export type AnyServer = Server<any, any, any, any, any>
 
 /**
@@ -230,6 +230,12 @@ export type CanOfferFn<method extends Method> = (parameters: {
   input: globalThis.Request
   request: Readonly<z.output<method['schema']['request']>>
 }) => MaybePromise<boolean>
+
+/** Hooks supported by every composable server method constructor. */
+export type ComposableHooks<method extends Method> = {
+  /** Decides whether this method's configured offer is available for an HTTP request. */
+  canOffer?: CanOfferFn<method> | undefined
+}
 
 /** Credential creation function for a single method. */
 export type CreateCredentialFn<method extends Method, context = unknown> = (
@@ -602,10 +608,9 @@ export declare namespace toServer {
     transportOverride extends Transport.AnyTransport | undefined = undefined,
     extensions extends object = {},
     alias extends string | undefined = undefined,
-  > = {
+  > = ComposableHooks<method> & {
     alias?: alias | undefined
     authorize?: AuthorizeFn<method> | undefined
-    canOffer?: CanOfferFn<method> | undefined
     defaults?: defaults | undefined
     extensions?: extensions | undefined
     html?: Html.Options | undefined
@@ -615,20 +620,20 @@ export declare namespace toServer {
     stableBinding?: StableBindingFn<method> | undefined
     transport?: transportOverride | Transport.AnyTransport | undefined
   } & (
-    | {
-        broadcast: BroadcastFn<method>
-        validate?: ValidateFn<method> | undefined
-        verify?: undefined
-      }
-    | {
-        broadcast?: undefined
-        validate?: undefined
-        /**
-         * @deprecated Use `validate` and `broadcast` for new methods. This
-         * combined hook may mutate payment state and cannot power a safe
-         * validation-only endpoint.
-         */
-        verify: VerifyFn<method>
-      }
-  )
+      | {
+          broadcast: BroadcastFn<method>
+          validate?: ValidateFn<method> | undefined
+          verify?: undefined
+        }
+      | {
+          broadcast?: undefined
+          validate?: undefined
+          /**
+           * @deprecated Use `validate` and `broadcast` for new methods. This
+           * combined hook may mutate payment state and cannot power a safe
+           * validation-only endpoint.
+           */
+          verify: VerifyFn<method>
+        }
+    )
 }

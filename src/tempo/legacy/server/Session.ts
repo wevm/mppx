@@ -138,6 +138,7 @@ export function session<const parameters extends session.Parameters>(
 
   type Defaults = session.DeriveDefaults<parameters>
   return Method.toServer<typeof Methods.session, Defaults, Transport>(Methods.session, {
+    canOffer: parameters.canOffer,
     defaults: {
       amount,
       currency,
@@ -395,7 +396,8 @@ export declare namespace session {
     testnet?: boolean | undefined
   } & Account.resolve.Parameters &
     Client.getResolver.Parameters &
-    Defaults
+    Defaults &
+    Method.ComposableHooks<typeof Methods.session>
 
   type DeriveDefaults<parameters extends Parameters> = types.DeriveDefaults<
     parameters,

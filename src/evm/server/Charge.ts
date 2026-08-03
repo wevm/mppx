@@ -24,6 +24,7 @@ export function charge(parameters: charge.NativeConfig): Method.AnyServer {
   const transport = httpTransport(paths)
 
   return Method.toServer<typeof Methods.charge, charge.Defaults, typeof transport>(Methods.charge, {
+    canOffer: parameters.canOffer,
     defaults: {
       chainId: config.chainId,
       currency: config.currency,
@@ -107,7 +108,10 @@ export declare namespace charge {
   type Parameters = NativeConfig
   type Native = Method.Server<typeof Methods.charge, Defaults>
 
-  type NativeConfig = BaseConfig & CurrencyConfig & RecipientConfig
+  type NativeConfig = BaseConfig &
+    CurrencyConfig &
+    RecipientConfig &
+    Method.ComposableHooks<typeof Methods.charge>
 
   type BaseConfig = {
     /** EIP-3009 token domain metadata. Required for raw addresses and viem tokens; inferred for known assets. */

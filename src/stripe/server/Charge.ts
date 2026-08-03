@@ -226,11 +226,6 @@ export declare namespace charge {
   type Defaults = LooseOmit<Method.RequestDefaults<typeof Methods.charge>, 'recipient'>
 
   type Parameters = {
-    /**
-     * Additional application policy for deciding whether this Stripe offer is
-     * available during composition. Runs after Stripe's currency minimum check.
-     */
-    canOffer?: Method.CanOfferFn<typeof Methods.charge> | undefined
     /** Render payment page when Accept header is text/html (e.g. in browsers) */
     html?:
       | ({
@@ -249,7 +244,8 @@ export declare namespace charge {
     metadata?: Record<string, string> | undefined
     /** Optional server-side Stripe Connect settlement policy. Not included in MPP challenges. */
     connect?: ConnectSettlement | ResolveConnectSettlement | undefined
-  } & Defaults &
+  } & Method.ComposableHooks<typeof Methods.charge> &
+    Defaults &
     OneOf<
       | {
           /** Pre-configured Stripe SDK instance. Any object matching the duck-typed `StripeClient` shape works. */
