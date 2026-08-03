@@ -2019,6 +2019,215 @@ describe('compose', () => {
     expect(input.bodyUsed).toBe(false)
   })
 
+  test('method canOffer runs before selectOffers with offer and upstream request context', async () => {
+    const calls: string[] = []
+    const guardedBeta = Method.toServer(mockChargeB, {
+      async canOffer({ input, request }) {
+        calls.push('canOffer')
+        expect(input).not.toBe(upstreamRequest)
+        expect(await input.text()).toBe('request body')
+        expect(request).toEqual({
+          amount: '50',
+          currency: challengeOpts.currency,
+          decimals: challengeOpts.decimals,
+          recipient: challengeOpts.recipient,
+        })
+        return BigInt(request.amount) >= 100n
+      },
+      async verify() {
+        return mockReceipt('beta')
+      },
+    })
+    const upstreamRequest = new Request('https://example.com/resource', {
+      body: 'request body',
+      method: 'POST',
+    })
+    const mppx = Mppx.create({
+      methods: [alphaMethod, guardedBeta],
+      realm,
+      secretKey,
+      selectOffers(offers) {
+        calls.push('selectOffers')
+        expect(offers.map((offer) => offer.method)).toEqual([alphaMethod])
+        return offers
+      },
+    })
+
+    const result = await mppx.compose(
+      [alphaMethod, challengeOpts],
+      [guardedBeta, { ...challengeOpts, amount: '50' }],
+    )(upstreamRequest)
+
+    expect(result.status).toBe(402)
+    if (result.status !== 402) throw new Error()
+    expect(
+      Challenge.fromResponseList(result.challenge).map((challenge) => challenge.method),
+    ).toEqual(['alpha'])
+    expect(calls).toEqual(['canOffer', 'selectOffers'])
+    expect(upstreamRequest.bodyUsed).toBe(false)
+  })
+
+  test('method canOffer evaluates each configured offer without selectOffers', async () => {
+    const amounts: string[] = []
+    const guardedBeta = Method.toServer(mockChargeB, {
+      canOffer({ request }) {
+        amounts.push(request.amount)
+        return BigInt(request.amount) >= 100n
+      },
+      async verify() {
+        return mockReceipt('beta')
+      },
+    })
+    const mppx = Mppx.create({ methods: [guardedBeta], realm, secretKey })
+
+    const handler = mppx.compose(
+      [guardedBeta, { ...challengeOpts, amount: '50' }],
+      [guardedBeta, { ...challengeOpts, amount: '100' }],
+    )
+    expect(handler._internal?.offers).toHaveLength(2)
+
+    const result = await handler(new Request('https://example.com/resource'))
+
+    expect(result.status).toBe(402)
+    if (result.status !== 402) throw new Error()
+    expect(amounts).toEqual(['50', '100'])
+    expect(
+      Challenge.fromResponseList(result.challenge).map((challenge) => challenge.request.amount),
+    ).toEqual(['100'])
+  })
+
+  test('static compose applies method canOffer', async () => {
+    const guardedBeta = Method.toServer(mockChargeB, {
+      canOffer: () => false,
+      async verify() {
+        return mockReceipt('beta')
+      },
+    })
+    const mppx = Mppx.create({ methods: [alphaMethod, guardedBeta], realm, secretKey })
+
+    const result = await Mppx.compose(
+      mppx.alpha.charge(challengeOpts),
+      mppx.beta.charge(challengeOpts),
+    )(new Request('https://example.com/resource'))
+
+    expect(result.status).toBe(402)
+    if (result.status !== 402) throw new Error()
+    expect(
+      Challenge.fromResponseList(result.challenge).map((challenge) => challenge.method),
+    ).toEqual(['alpha'])
+  })
+
+  test('method canOffer does not gate a direct method handler', async () => {
+    const canOffer = vi.fn(() => false)
+    const guardedAlpha = Method.toServer(mockChargeA, {
+      canOffer,
+      async verify() {
+        return mockReceipt('alpha')
+      },
+    })
+    const mppx = Mppx.create({ methods: [guardedAlpha], realm, secretKey })
+
+    const result = await mppx.alpha.charge(challengeOpts)(
+      new Request('https://example.com/resource'),
+    )
+
+    expect(result.status).toBe(402)
+    expect(canOffer).not.toHaveBeenCalled()
+  })
+
+  test('method canOffer filters before preflight and authorize hooks', async () => {
+    const authorize = vi.fn()
+    const preflight = vi.fn()
+    const guardedBeta = Method.toServer(mockChargeB, {
+      async authorize() {
+        authorize()
+        return undefined
+      },
+      canOffer: () => false,
+      async preflight() {
+        preflight()
+        return undefined
+      },
+      async verify() {
+        return mockReceipt('beta')
+      },
+    })
+    const mppx = Mppx.create({ methods: [alphaMethod, guardedBeta], realm, secretKey })
+
+    const result = await mppx.compose(
+      [alphaMethod, challengeOpts],
+      [guardedBeta, challengeOpts],
+    )(new Request('https://example.com/resource'))
+
+    expect(result.status).toBe(402)
+    expect(preflight).not.toHaveBeenCalled()
+    expect(authorize).not.toHaveBeenCalled()
+  })
+
+  test.each([
+    {
+      canOffer: () => 'yes',
+      expected: 'canOffer() must return a boolean',
+      name: 'non-boolean result',
+    },
+    {
+      canOffer: () => false,
+      expected: 'No payment offers are available for this request',
+      name: 'no eligible offers',
+    },
+  ])('rejects invalid method offer availability: $name', async ({ canOffer, expected }) => {
+    const guardedAlpha = Method.toServer(mockChargeA, {
+      canOffer: canOffer as never,
+      async verify() {
+        return mockReceipt('alpha')
+      },
+    })
+    const mppx = Mppx.create({ methods: [guardedAlpha], realm, secretKey })
+
+    await expect(
+      mppx.compose([guardedAlpha, challengeOpts])(new Request('https://example.com/resource')),
+    ).rejects.toThrow(expected)
+  })
+
+  test('propagates method canOffer rejections', async () => {
+    const error = new Error('method offer selection failed')
+    const guardedAlpha = Method.toServer(mockChargeA, {
+      async canOffer() {
+        throw error
+      },
+      async verify() {
+        return mockReceipt('alpha')
+      },
+    })
+    const mppx = Mppx.create({ methods: [guardedAlpha], realm, secretKey })
+
+    await expect(
+      mppx.compose([guardedAlpha, challengeOpts])(new Request('https://example.com/resource')),
+    ).rejects.toBe(error)
+  })
+
+  test('method canOffer does not prevent redemption of an issued offer', async () => {
+    const canOffer = vi.fn(() => false)
+    const guardedBeta = Method.toServer(mockChargeB, {
+      canOffer,
+      async verify() {
+        return mockReceipt('beta')
+      },
+    })
+    const mppx = Mppx.create({ methods: [guardedBeta], realm, secretKey })
+    const challenge = await mppx.challenge.beta.charge(challengeOpts)
+    const credential = Credential.from({ challenge, payload: { token: 'valid' } })
+
+    const result = await mppx.compose([guardedBeta, challengeOpts])(
+      new Request('https://example.com/resource', {
+        headers: { Authorization: Credential.serialize(credential) },
+      }),
+    )
+
+    expect(result.status).toBe(200)
+    expect(canOffer).not.toHaveBeenCalled()
+  })
+
   test('selectOffers does not prevent redemption of a previously issued offer', async () => {
     let selectionCount = 0
     const mppx = Mppx.create({
@@ -2483,6 +2692,23 @@ describe('compose', () => {
     expect(result.challenge.headers.get(x402_Types.paymentRequiredHeader)).toBeNull()
   })
 
+  test('method canOffer filters x402 challenge headers', async () => {
+    const guardedX402 = { ...x402Method, canOffer: () => false }
+    const mppx = Mppx.create({ methods: [alphaMethod, guardedX402], realm, secretKey })
+
+    const result = await mppx.compose(
+      [alphaMethod, challengeOpts],
+      [guardedX402, { amount: '0.01' }],
+    )(new Request('https://example.com/resource'))
+
+    expect(result.status).toBe(402)
+    if (result.status !== 402) throw new Error()
+    expect(
+      Challenge.fromResponseList(result.challenge).map((challenge) => challenge.method),
+    ).toEqual(['alpha'])
+    expect(result.challenge.headers.get(x402_Types.paymentRequiredHeader)).toBeNull()
+  })
+
   test('keeps pure x402 challenge headers when Payment auth challenges are present', async () => {
     const mppx = Mppx.create({ methods: [alphaMethod], realm, secretKey })
     const pureX402 = async () =>
@@ -2605,6 +2831,31 @@ describe('compose', () => {
     const result = await mppx.compose(
       [alphaMethod, challengeOpts],
       [betaMethod, challengeOpts],
+    )(
+      new Request('https://example.com/resource', {
+        headers: { 'Accept-Payment': 'beta/charge' },
+      }),
+    )
+
+    expect(result.status).toBe(402)
+    if (result.status !== 402) throw new Error()
+    expect(
+      Challenge.fromResponseList(result.challenge).map((challenge) => challenge.method),
+    ).toEqual(['alpha'])
+  })
+
+  test('applies method canOffer before Accept-Payment negotiation', async () => {
+    const guardedBeta = Method.toServer(mockChargeB, {
+      canOffer: () => false,
+      async verify() {
+        return mockReceipt('beta')
+      },
+    })
+    const mppx = Mppx.create({ methods: [alphaMethod, guardedBeta], realm, secretKey })
+
+    const result = await mppx.compose(
+      [alphaMethod, challengeOpts],
+      [guardedBeta, challengeOpts],
     )(
       new Request('https://example.com/resource', {
         headers: { 'Accept-Payment': 'beta/charge' },
@@ -3197,6 +3448,33 @@ describe('compose', () => {
       )
       const dataMap = JSON.parse(dataMatch![1]!.replace(/\\u003c/g, '<'))
       expect(Object.values(dataMap)).toMatchObject([{ label: 'alpha' }])
+    })
+
+    test('method canOffer filters html payment options', async () => {
+      const guardedBeta = Method.toServer(mockChargeB, {
+        canOffer: () => false,
+        html: htmlOptionsB,
+        async verify() {
+          return mockReceipt('beta')
+        },
+      })
+      const mppx = Mppx.create({ methods: [alphaWithHtml, guardedBeta], realm, secretKey })
+
+      const result = await mppx.compose(
+        [alphaWithHtml, challengeOpts],
+        [guardedBeta, challengeOpts],
+      )(
+        new Request('https://example.com/resource', {
+          headers: { Accept: 'text/html' },
+        }),
+      )
+
+      expect(result.status).toBe(402)
+      if (result.status !== 402) throw new Error()
+      const body = await result.challenge.text()
+      expect(body).toContain('/alpha-bundle.js')
+      expect(body).not.toContain('/beta-bundle.js')
+      expect(body).not.toContain('role="tablist"')
     })
 
     test('returns html without tabs when single method has html', async () => {

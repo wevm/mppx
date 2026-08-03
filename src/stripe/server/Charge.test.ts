@@ -37,6 +37,85 @@ function createMockStripeClient(
   }
 }
 
+describe('stripe.charge offer availability', () => {
+  test.each([
+    { atMinimum: '0.50', belowMinimum: '0.49', currency: 'usd', decimals: 2, normalized: '50' },
+    { atMinimum: '0.30', belowMinimum: '0.29', currency: 'gbp', decimals: 2, normalized: '30' },
+    { atMinimum: '50', belowMinimum: '49', currency: 'jpy', decimals: 0, normalized: '50' },
+    { atMinimum: '10', belowMinimum: '9.99', currency: 'mxn', decimals: 2, normalized: '1000' },
+  ])(
+    'filters $currency offers below the Stripe currency minimum',
+    async ({ atMinimum, belowMinimum, currency, decimals, normalized }) => {
+      const { client } = createMockStripeClient()
+      const stripeCharge = stripe.charge({
+        client,
+        networkId: 'internal',
+        paymentMethodTypes: ['card'],
+      })
+      const server = Mppx.create({ methods: [stripeCharge], realm, secretKey })
+
+      const result = await server.compose(
+        [stripeCharge, { amount: belowMinimum, currency, decimals }],
+        [stripeCharge, { amount: atMinimum, currency, decimals }],
+      )(new Request('https://example.com/resource'))
+
+      expect(result.status).toBe(402)
+      if (result.status !== 402) throw new Error()
+      const challenges = Challenge.fromResponseList(result.challenge)
+      expect(challenges).toHaveLength(1)
+      expect(challenges[0]?.request).toMatchObject({ amount: normalized, currency })
+    },
+  )
+
+  test('composes constructor canOffer after the Stripe currency minimum', async () => {
+    const { client } = createMockStripeClient()
+    const offeredAmounts: string[] = []
+    const stripeCharge = stripe.charge({
+      client,
+      canOffer({ request }) {
+        offeredAmounts.push(request.amount)
+        return BigInt(request.amount) >= 100n
+      },
+      networkId: 'internal',
+      paymentMethodTypes: ['card'],
+    })
+    const server = Mppx.create({ methods: [stripeCharge], realm, secretKey })
+
+    const result = await server.compose(
+      [stripeCharge, { amount: '0.49', currency: 'usd', decimals: 2 }],
+      [stripeCharge, { amount: '0.50', currency: 'usd', decimals: 2 }],
+      [stripeCharge, { amount: '1', currency: 'usd', decimals: 2 }],
+    )(new Request('https://example.com/resource'))
+
+    expect(result.status).toBe(402)
+    if (result.status !== 402) throw new Error()
+    expect(offeredAmounts).toEqual(['50', '100'])
+    expect(
+      Challenge.fromResponseList(result.challenge).map(({ request }) => request.amount),
+    ).toEqual(['100'])
+  })
+
+  test('lets constructor canOffer decide availability for an unknown currency', async () => {
+    const { client } = createMockStripeClient()
+    const canOffer = vi.fn(() => true)
+    const stripeCharge = stripe.charge({
+      client,
+      canOffer,
+      networkId: 'internal',
+      paymentMethodTypes: ['card'],
+    })
+    const server = Mppx.create({ methods: [stripeCharge], realm, secretKey })
+
+    const result = await server.compose([
+      stripeCharge,
+      { amount: '0.01', currency: 'unknown', decimals: 2 },
+    ])(new Request('https://example.com/resource'))
+
+    expect(result.status).toBe(402)
+    expect(canOffer).toHaveBeenCalledOnce()
+  })
+})
+
 describe('stripe.charge with client', () => {
   test('default: verifies payment via client.paymentIntents.create', async () => {
     const { client, create } = createMockStripeClient()

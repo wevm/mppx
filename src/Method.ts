@@ -198,6 +198,7 @@ export type Server<
 > = method & {
   alias?: alias | undefined
   authorize?: AuthorizeFn<method> | undefined
+  canOffer?: CanOfferFn<method> | undefined
   defaults?: defaults | undefined
   extensions?: extensions | undefined
   html?: Html.Options | undefined
@@ -216,6 +217,19 @@ export type Server<
   verify: VerifyFn<method>
 }
 export type AnyServer = Server<any, any, any, any, any>
+
+/**
+ * Decides whether a configured method offer is available for an HTTP request.
+ *
+ * Called once per configured offer during composition. The payment request is
+ * schema-normalized and `input` is cloned so its body can be safely inspected.
+ * Returning `false` removes only this method's offer. Credential dispatch does
+ * not invoke this hook.
+ */
+export type CanOfferFn<method extends Method> = (parameters: {
+  input: globalThis.Request
+  request: Readonly<z.output<method['schema']['request']>>
+}) => MaybePromise<boolean>
 
 /** Credential creation function for a single method. */
 export type CreateCredentialFn<method extends Method, context = unknown> = (
@@ -537,6 +551,7 @@ export function toServer<
   const {
     alias,
     authorize,
+    canOffer,
     defaults,
     extensions,
     html,
@@ -563,6 +578,7 @@ export function toServer<
     ...method,
     alias,
     authorize,
+    canOffer,
     defaults,
     extensions,
     html,
@@ -589,6 +605,7 @@ export declare namespace toServer {
   > = {
     alias?: alias | undefined
     authorize?: AuthorizeFn<method> | undefined
+    canOffer?: CanOfferFn<method> | undefined
     defaults?: defaults | undefined
     extensions?: extensions | undefined
     html?: Html.Options | undefined

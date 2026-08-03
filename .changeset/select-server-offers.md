@@ -2,4 +2,4 @@
 'mppx': patch
 ---
 
-Added server-level `selectOffers` filtering for composed HTTP payment offers.
+Added server- and method-level filtering for composed HTTP payment offers, including Stripe currency minimums.

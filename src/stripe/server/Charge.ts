@@ -21,6 +21,48 @@ import * as Methods from '../Methods.js'
 import { html as htmlContent } from './internal/html.gen.js'
 
 /**
+ * Stripe's general minimum charge amounts in each currency's smallest unit.
+ * Payment methods with lower provider-specific exceptions remain conservatively
+ * subject to the general minimum.
+ *
+ * @see https://docs.stripe.com/currencies#minimum-and-maximum-charge-amounts
+ */
+const minimumChargeAmountByCurrency: Readonly<Record<string, bigint>> = {
+  aed: 200n,
+  ars: 50n,
+  aud: 50n,
+  bgn: 100n,
+  brl: 50n,
+  cad: 50n,
+  chf: 50n,
+  cop: 50n,
+  czk: 1_500n,
+  dkk: 250n,
+  eur: 50n,
+  gbp: 30n,
+  hkd: 400n,
+  huf: 17_500n,
+  idr: 50n,
+  ils: 50n,
+  inr: 50n,
+  jpy: 50n,
+  krw: 50n,
+  mxn: 1_000n,
+  myr: 200n,
+  nok: 300n,
+  nzd: 50n,
+  php: 50n,
+  pln: 200n,
+  ron: 200n,
+  rub: 50n,
+  sek: 300n,
+  sgd: 50n,
+  thb: 1_000n,
+  usd: 50n,
+  zar: 50n,
+}
+
+/**
  * Creates a Stripe charge method intent for usage on the server.
  *
  * Verifies payment by creating a Stripe PaymentIntent with the provided SPT.
@@ -48,6 +90,7 @@ import { html as htmlContent } from './internal/html.gen.js'
 export function charge<const parameters extends charge.Parameters>(parameters: parameters) {
   const {
     amount,
+    canOffer,
     currency,
     decimals,
     description,
@@ -97,6 +140,12 @@ export function charge<const parameters extends charge.Parameters>(parameters: p
             theme: htmlTheme,
           }
         : undefined,
+
+    async canOffer(context) {
+      const minimum = minimumChargeAmountByCurrency[context.request.currency.toLowerCase()]
+      if (minimum !== undefined && BigInt(context.request.amount) < minimum) return false
+      return (await canOffer?.(context)) ?? true
+    },
 
     async verify({ credential, envelope, request }) {
       const { challenge } = credential
@@ -177,6 +226,11 @@ export declare namespace charge {
   type Defaults = LooseOmit<Method.RequestDefaults<typeof Methods.charge>, 'recipient'>
 
   type Parameters = {
+    /**
+     * Additional application policy for deciding whether this Stripe offer is
+     * available during composition. Runs after Stripe's currency minimum check.
+     */
+    canOffer?: Method.CanOfferFn<typeof Methods.charge> | undefined
     /** Render payment page when Accept header is text/html (e.g. in browsers) */
     html?:
       | ({

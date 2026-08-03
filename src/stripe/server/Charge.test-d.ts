@@ -1,11 +1,26 @@
 import { Mppx, stripe } from 'mppx/server'
-import { test } from 'vp/test'
+import { expectTypeOf, test } from 'vp/test'
 
 import type { StripeClient } from '../internal/types.js'
 import type { charge as StripeCharge } from './Charge.js'
 
 const client = {} as StripeClient
 const secretKey = 'test-secret-key-test-secret-key-32'
+
+test('accepts a typed constructor canOffer policy', () => {
+  stripe.charge({
+    client,
+    canOffer({ input, request }) {
+      expectTypeOf(input).toEqualTypeOf<Request>()
+      expectTypeOf(request.amount).toEqualTypeOf<string>()
+      expectTypeOf(request.currency).toEqualTypeOf<string>()
+      expectTypeOf(request.methodDetails.networkId).toEqualTypeOf<string>()
+      return request.amount !== '0'
+    },
+    networkId: 'internal',
+    paymentMethodTypes: ['card'],
+  })
+})
 
 test('requires request fields not configured as Stripe defaults', () => {
   const server = Mppx.create({

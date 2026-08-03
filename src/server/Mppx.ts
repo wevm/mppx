@@ -2332,9 +2332,17 @@ function composeHandlers(
   if (handlers.length === 0) throw new Error('compose() requires at least one handler')
 
   const offerSelector = selectOffers
-  const selectableOffers = offerSelector
-    ? handlers.map((handler) => createServerOffer((handler as ConfiguredHandler)._internal))
-    : undefined
+  const offerEntries = handlers.map((handler) => {
+    const internal = (handler as ConfiguredHandler)._internal
+    const offer =
+      internal && !isComposedHandlerMetadata(internal) ? createServerOffer(internal) : undefined
+    return { handler, offer }
+  })
+  const hasOfferPolicy =
+    offerSelector !== undefined ||
+    offerEntries.some(
+      ({ offer }) => (offer?.method as Method.AnyServer | undefined)?.canOffer !== undefined,
+    )
 
   const composed: ComposedHandler = async (input: Request) => {
     // Serve service worker for html-enabled compose
@@ -2407,12 +2415,11 @@ function composeHandlers(
       return handlers[0]!(input)
     }
 
-    const selectedHandlers = selectableOffers
+    const selectedHandlers = hasOfferPolicy
       ? await selectOfferHandlers({
-          handlers,
+          entries: offerEntries,
           input,
-          offers: selectableOffers,
-          selectOffers: offerSelector!,
+          selectOffers: offerSelector,
         })
       : handlers
 
@@ -2600,14 +2607,38 @@ function createServerOffer(internal: ConfiguredHandler['_internal']): ServerOffe
 
 /** Applies and validates the server-level offer selection policy. */
 async function selectOfferHandlers(parameters: {
-  handlers: readonly ((input: Request) => Promise<MethodFn.Response<Transport.Http>>)[]
+  entries: readonly {
+    handler: (input: Request) => Promise<MethodFn.Response<Transport.Http>>
+    offer: ServerOffer | undefined
+  }[]
   input: Request
-  offers: readonly ServerOffer[]
-  selectOffers: SelectOffers<readonly Method.AnyServer[]>
+  selectOffers: SelectOffers<readonly Method.AnyServer[]> | undefined
 }) {
-  const { handlers, input, offers, selectOffers } = parameters
+  const { entries, input, selectOffers } = parameters
+  const eligibleEntries: (typeof entries)[number][] = []
+  for (const entry of entries) {
+    const canOffer = (entry.offer?.method as Method.AnyServer | undefined)?.canOffer
+    if (canOffer) {
+      const approved = await canOffer({
+        input: input.clone(),
+        request: entry.offer!.request,
+      })
+      if (typeof approved !== 'boolean') throw new Error('canOffer() must return a boolean')
+      if (!approved) continue
+    }
+    eligibleEntries.push(entry)
+  }
+
+  if (eligibleEntries.length === 0)
+    throw new Error('No payment offers are available for this request')
+  if (!selectOffers) return eligibleEntries.map(({ handler }) => handler)
+
+  const offers = eligibleEntries.map(({ offer }) => {
+    if (!offer) throw new Error('selectOffers() can only select configured payment offers')
+    return offer
+  })
   const selected = await selectOffers(
-    Object.freeze([...offers]),
+    Object.freeze(offers),
     Object.freeze({ request: input.clone() }),
   )
 
@@ -2621,7 +2652,7 @@ async function selectOfferHandlers(parameters: {
     if (index <= previousIndex)
       throw new Error('selectOffers() must preserve offer order and must not return duplicates')
     previousIndex = index
-    return handlers[index]!
+    return eligibleEntries[index]!.handler
   })
 
   return selectedHandlers

@@ -173,6 +173,27 @@ describe('Mppx type tests', () => {
     })
   })
 
+  test('method canOffer receives its normalized payment request and HTTP input', () => {
+    Method.toServer(mockChargeA, {
+      canOffer({ input, request }) {
+        expectTypeOf(input).toEqualTypeOf<Request>()
+        expectTypeOf(request.amount).toEqualTypeOf<string>()
+        expectTypeOf(request.currency).toEqualTypeOf<string>()
+        expectTypeOf(request.decimals).toEqualTypeOf<number>()
+        expectTypeOf(request.recipient).toEqualTypeOf<string>()
+        return true
+      },
+      async verify() {
+        return {
+          method: 'alpha',
+          reference: 'tx',
+          status: 'success' as const,
+          timestamp: new Date().toISOString(),
+        }
+      },
+    })
+  })
+
   test('selectOffers is only available for HTTP transport', () => {
     Mppx.create({
       methods: [alphaMethod],
