@@ -1,6 +1,7 @@
 ---
 title: 'concurrent HTML builds share a temporary directory'
 severity: 'minor'
+issue: 'wevm/mppx#761'
 ---
 
 ## Expected Behavior

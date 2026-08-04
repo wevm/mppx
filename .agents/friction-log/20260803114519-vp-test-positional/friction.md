@@ -1,6 +1,7 @@
 ---
 title: 'vp test positional paths do not select test files'
 severity: 'minor'
+issue: 'wevm/mppx#757'
 ---
 
 ## Expected Behavior

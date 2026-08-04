@@ -1,6 +1,7 @@
 ---
 title: 'pnpm install warns about missing local dist/bin.js links'
 severity: 'minor'
+issue: 'wevm/mppx#752'
 ---
 
 ## Expected Behavior

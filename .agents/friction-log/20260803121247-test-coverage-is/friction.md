@@ -1,6 +1,7 @@
 ---
 title: 'test coverage is configured without a coverage provider'
 severity: 'minor'
+issue: 'wevm/mppx#758'
 ---
 
 ## Expected Behavior

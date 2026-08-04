@@ -1,6 +1,7 @@
 ---
 title: 'dependency audit pins become stale between dependency updates'
 severity: 'minor'
+issue: 'wevm/mppx#759'
 ---
 
 ## Expected Behavior
