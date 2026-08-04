@@ -1,0 +1,9 @@
+{
+  "mirrors": [
+    {
+      "issue": "wevm/mppx#752",
+      "path": ".agents/friction-log/20260803102657-pnpm-install-warns/friction.md"
+    }
+  ],
+  "version": 1
+}
