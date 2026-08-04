@@ -2,6 +2,8 @@ import { Method, z } from 'mppx'
 import { Mppx, tempo, Transport } from 'mppx/server'
 import { assertType, describe, expectTypeOf, test } from 'vp/test'
 
+import type * as Attestation from '../attestation/Types.js'
+
 const mockChargeA = Method.from({
   name: 'alpha',
   intent: 'charge',
@@ -236,6 +238,26 @@ describe('Mppx type tests', () => {
       transport: Transport.mcp(),
       // @ts-expect-error selectOffers applies to composed HTTP offers only.
       selectOffers: (offers) => offers,
+    })
+  })
+
+  test('accepts request attestation for HTTP transport only', () => {
+    const verifier = {} as Attestation.Verifier
+    const mppx = Mppx.create({
+      attestation: { webBotAuth: verifier },
+      methods: [alphaMethod],
+      realm,
+      secretKey,
+    })
+    expectTypeOf(mppx.charge).toBeFunction()
+
+    Mppx.create({
+      // @ts-expect-error request attestation applies to HTTP transport only.
+      attestation: { webBotAuth: verifier },
+      methods: [alphaMethod],
+      realm,
+      secretKey,
+      transport: Transport.mcp(),
     })
   })
 

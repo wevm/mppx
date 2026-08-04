@@ -4,7 +4,7 @@ import { Constants as MppConstants, Credential, Method, Receipt, z } from 'mppx'
 import * as Attestation from 'mppx/attestation'
 import * as Tap from 'mppx/attestation/tap'
 import * as WebBotAuth from 'mppx/attestation/web-bot-auth'
-import { Fetch } from 'mppx/client'
+import { Mppx as ClientMppx } from 'mppx/client'
 import { Mppx, Request as ServerRequest } from 'mppx/server'
 import { expect, test } from 'vp/test'
 import { jwkThumbprint, keyPair } from '~test/Attestation.js'
@@ -64,42 +64,30 @@ test('composes TAP and the Web Bot Auth directory profile across an MPP payment 
       nonceStore,
     }),
   }
-  const seen = await createServer(async (request, payments) => {
-    const verification = await Attestation.Server.verify(request, verifiers)
-    if (verification.tap.status === 'invalid' || verification.webBotAuth.status === 'invalid')
-      return new Response('Request attestation is invalid.', { status: 401 })
-    if (
-      verification.tap.status !== 'verified' ||
-      verification.tap.value.intent !== Tap.Constants.intents.payment ||
-      verification.webBotAuth.status !== 'verified' ||
-      verification.webBotAuth.value.signatureAgent !== signatureAgent ||
-      verification.tap.value.nonce !== verification.webBotAuth.value.nonce
-    )
-      return new Response('TAP payment intent and Web Bot Auth are required.', { status: 403 })
-
+  const seen = await createServer(verifiers, async (request, payments) => {
     const result = await payments.charge(charge)(request)
     return result.status === 402 ? result.challenge : result.withReceipt(new Response('paid'))
   })
 
   try {
-    const signer = Attestation.Client.composeSigners(
-      WebBotAuth.Client.signer({
-        key: webBotAuthKeys.privateKey,
-        keyId: webBotAuthKeyId,
-        signatureAgent,
-      }),
-      Tap.Client.signer({
-        intent: Tap.Constants.intents.payment,
-        key: tapKeys.privateKey,
-        keyId: 'tap-agent',
-      }),
-    )
-    const fetch = Fetch.from({
-      fetch: Attestation.Client.wrapFetch(globalThis.fetch, signer),
+    const client = ClientMppx.create({
+      attestation: {
+        tap: Tap.Client.signer({
+          intent: Tap.Constants.intents.payment,
+          key: tapKeys.privateKey,
+          keyId: 'tap-agent',
+        }),
+        webBotAuth: WebBotAuth.Client.signer({
+          key: webBotAuthKeys.privateKey,
+          keyId: webBotAuthKeyId,
+          signatureAgent,
+        }),
+      },
       methods: [clientMethod],
+      polyfill: false,
     })
 
-    const response = await fetch(seen.server.url)
+    const response = await client.fetch(seen.server.url)
     expect(response.status).toBe(200)
     expect(await response.text()).toBe('paid')
     expect(seen.requests).toEqual([false, true])
@@ -119,10 +107,85 @@ test('composes TAP and the Web Bot Auth directory profile across an MPP payment 
   }
 })
 
+test('requires every configured server attestation', async () => {
+  const keys = await keyPair()
+  const seen = await createServer(
+    {
+      tap: Tap.Server.verifier({
+        keyResolver: () => keys.publicKey,
+        nonceStore: Attestation.NonceStore.memory(),
+      }),
+    },
+    async (request, payments) => {
+      const result = await payments.charge(charge)(request)
+      return result.status === 402 ? result.challenge : result.withReceipt(new Response('paid'))
+    },
+  )
+
+  try {
+    const response = await fetch(seen.server.url)
+    expect(response.status).toBe(403)
+    expect(await response.text()).toMatch(/tap.*required/)
+  } finally {
+    seen.server.close()
+  }
+})
+
+test('rejects an invalid server attestation before creating a payment challenge', async () => {
+  const trustedKeys = await keyPair()
+  const untrustedKeys = await keyPair()
+  const seen = await createServer(
+    {
+      tap: Tap.Server.verifier({
+        keyResolver: () => trustedKeys.publicKey,
+        nonceStore: Attestation.NonceStore.memory(),
+      }),
+    },
+    async (request, payments) => {
+      const result = await payments.charge(charge)(request)
+      return result.status === 402 ? result.challenge : result.withReceipt(new Response('paid'))
+    },
+  )
+
+  try {
+    const signer = Tap.Client.signer({
+      intent: Tap.Constants.intents.payment,
+      key: untrustedKeys.privateKey,
+      keyId: 'tap-agent',
+    })
+    const request = await signer.sign(new Request(seen.server.url))
+    const response = await fetch(request)
+    expect(response.status).toBe(401)
+    expect(await response.text()).toMatch(/tap.*invalid/)
+    expect(seen.requests).toEqual([false])
+  } finally {
+    seen.server.close()
+  }
+})
+
+test('rejects empty client and server attestation maps', () => {
+  expect(() =>
+    ClientMppx.create({
+      attestation: {},
+      methods: [clientMethod],
+      polyfill: false,
+    }),
+  ).toThrow('Mppx client attestation must configure at least one signer.')
+  expect(() =>
+    Mppx.create({
+      attestation: {},
+      methods: [serverMethod],
+      realm: 'localhost',
+      secretKey: 'test-secret-key-test-secret-key-32',
+    }),
+  ).toThrow('Mppx server attestation must configure at least one verifier.')
+})
+
 async function createServer(
+  verifiers: Attestation.VerifierMap,
   handler: (request: Request, payments: ReturnType<typeof createPayments>) => Promise<Response>,
 ) {
-  const payments = createPayments()
+  const payments = createPayments(verifiers)
   const requests: boolean[] = []
   const signatureInputs: string[] = []
   const listener = ServerRequest.toNodeListener(async (request) => {
@@ -135,8 +198,9 @@ async function createServer(
   return { requests, server, signatureInputs }
 }
 
-function createPayments() {
+function createPayments(attestation: Attestation.VerifierMap) {
   return Mppx.create({
+    attestation,
     methods: [serverMethod],
     realm: 'localhost',
     secretKey: 'test-secret-key-test-secret-key-32',

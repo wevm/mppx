@@ -1,5 +1,5 @@
-import { createBotFetch, jwkThumbprint } from './client.js'
-import { createProtectedHandler, listen } from './server.js'
+import { createBotClient, jwkThumbprint } from './client.js'
+import { createPaymentHandler, listen } from './server.js'
 
 const keys = (await crypto.subtle.generateKey({ name: 'Ed25519' }, true, [
   'sign',
@@ -9,7 +9,7 @@ const signatureAgent = 'https://bot.example'
 const keyId = await jwkThumbprint(keys.publicKey)
 
 const server = await listen(
-  createProtectedHandler({
+  createPaymentHandler({
     expectedKeyId: keyId,
     expectedSignatureAgent: signatureAgent,
     publicKey: keys.publicKey,
@@ -17,11 +17,22 @@ const server = await listen(
 )
 
 try {
-  const response = await createBotFetch({
+  const client = createBotClient({
     keyId,
     privateKey: keys.privateKey,
     signatureAgent,
-  })(`${server.url}/protected`)
+  })
+  client.onChallengeReceived(({ challenge }) => {
+    console.log(`challenge.received ${challenge.method}/${challenge.intent}`)
+  })
+  client.onCredentialCreated(({ method }) => {
+    console.log(`credential.created ${method.name}/${method.intent}`)
+  })
+  client.onPaymentResponse(({ response }) => {
+    console.log(`payment.response ${response.status}`)
+  })
+
+  const response = await client.fetch(`${server.url}/protected`)
 
   console.log(response.status, await response.json())
 } finally {

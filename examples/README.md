@@ -13,7 +13,7 @@ Standalone, runnable examples demonstrating the mppx HTTP 402 payment flow.
 | [session/ws](./session/ws/)                   | Pay-per-token LLM streaming with WebSocket           |
 | [stripe](./stripe/)                           | Stripe SPT charge with automatic client              |
 | [subscription](./subscription/)               | Daily news subscription using Tempo access keys      |
-| [web-bot-auth](./web-bot-auth/)               | Web Bot Auth client and server                       |
+| [web-bot-auth](./web-bot-auth/)               | Web Bot Auth with automatic MPP payment retry        |
 | [x402-mpp](./x402-mpp/)                       | Server route supporting x402 and mpp payments        |
 
 ## Running Examples

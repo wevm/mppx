@@ -1,5 +1,7 @@
-import * as Attestation from 'mppx/attestation'
 import * as WebBotAuth from 'mppx/attestation/web-bot-auth'
+import { Mppx } from 'mppx/client'
+
+import { clientMethod } from './method.js'
 
 export type BotIdentity = {
   keyId: string
@@ -16,9 +18,13 @@ export function createBotSigner(identity: BotIdentity) {
   })
 }
 
-/** Wraps fetch so each HTTP attempt carries a fresh Web Bot Auth signature. */
-export function createBotFetch(identity: BotIdentity): typeof globalThis.fetch {
-  return Attestation.Client.wrapFetch(globalThis.fetch, createBotSigner(identity))
+/** Creates a payment-aware MPP client that signs every HTTP attempt with Web Bot Auth. */
+export function createBotClient(identity: BotIdentity) {
+  return Mppx.create({
+    attestation: { webBotAuth: createBotSigner(identity) },
+    methods: [clientMethod],
+    polyfill: false,
+  })
 }
 
 /** Computes the RFC 7638 SHA-256 thumbprint used as an Ed25519 bot key ID. */

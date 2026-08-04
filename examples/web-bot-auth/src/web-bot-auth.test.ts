@@ -1,45 +1,68 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
+import { Receipt } from 'mppx'
 import * as Attestation from 'mppx/attestation'
 
-import { createBotSigner, jwkThumbprint } from './client.js'
-import { createProtectedHandler } from './server.js'
+import { createBotClient, createBotSigner, jwkThumbprint } from './client.js'
+import { createPaymentHandler, listen } from './server.js'
 
 test('requires a Web Bot Auth signature', async () => {
   const fixture = await createFixture()
   const response = await fixture.handler(new Request('https://merchant.example/protected'))
 
-  assert.equal(response.status, 401)
-  assert.deepEqual(await response.json(), {
-    authenticated: false,
-    reason: 'A Web Bot Auth signature is required.',
-    status: 'absent',
-  })
+  assert.equal(response.status, 403)
+  assert.match(await response.text(), /webBotAuth.*required/)
 })
 
-test('authenticates a trusted bot and rejects a replayed signature', async () => {
+test('attests the initial request and automatic MPP payment retry', async () => {
   const fixture = await createFixture()
-  const signer = createBotSigner({
+  const server = await listen(fixture.handler)
+  const client = createBotClient({
     keyId: fixture.keyId,
     privateKey: fixture.privateKey,
     signatureAgent: fixture.signatureAgent,
   })
-  const signed = await signer.sign(new Request('https://merchant.example/protected'))
-
-  const accepted = await fixture.handler(signed.clone())
-  assert.equal(accepted.status, 200)
-  assert.deepEqual(await accepted.json(), {
-    authenticated: true,
-    bot: {
-      keyId: fixture.keyId,
-      signatureAgent: fixture.signatureAgent,
-    },
+  const events: string[] = []
+  client.onChallengeReceived(({ challenge }) => {
+    events.push(`challenge:${challenge.method}/${challenge.intent}`)
+  })
+  client.onCredentialCreated(({ method }) => {
+    events.push(`credential:${method.name}/${method.intent}`)
+  })
+  client.onPaymentResponse(({ response }) => {
+    events.push(`response:${response.status}`)
   })
 
+  try {
+    const response = await client.fetch(`${server.url}/protected`)
+
+    assert.equal(response.status, 200)
+    assert.equal(Receipt.fromResponse(response).method, 'demo')
+    assert.deepEqual(await response.json(), {
+      payment: 'paid',
+    })
+    assert.deepEqual(events, ['challenge:demo/charge', 'credential:demo/charge', 'response:200'])
+    assert.equal(fixture.consumedNonces.length, 2)
+    assert.equal(new Set(fixture.consumedNonces).size, 2)
+  } finally {
+    await server.close()
+  }
+})
+
+test('rejects a replayed Web Bot Auth signature', async () => {
+  const fixture = await createFixture()
+  const signed = await createBotSigner({
+    keyId: fixture.keyId,
+    privateKey: fixture.privateKey,
+    signatureAgent: fixture.signatureAgent,
+  }).sign(new Request('https://merchant.example/protected'))
+
+  const accepted = await fixture.handler(signed.clone())
+  assert.equal(accepted.status, 402)
   const replayed = await fixture.handler(signed.clone())
   assert.equal(replayed.status, 401)
-  assert.equal((await replayed.json()).status, 'invalid')
+  assert.match(await replayed.text(), /webBotAuth.*invalid/)
 })
 
 test('does not authenticate an untrusted signature agent', async () => {
@@ -52,8 +75,8 @@ test('does not authenticate an untrusted signature agent', async () => {
 
   const response = await fixture.handler(signed)
 
-  assert.equal(response.status, 401)
-  assert.equal((await response.json()).status, 'unverified')
+  assert.equal(response.status, 403)
+  assert.match(await response.text(), /webBotAuth.*could not be verified/)
 })
 
 async function createFixture() {
@@ -63,12 +86,19 @@ async function createFixture() {
   ])) as CryptoKeyPair
   const keyId = await jwkThumbprint(keys.publicKey)
   const signatureAgent = 'https://bot.example'
-  const handler = createProtectedHandler({
+  const consumedNonces: string[] = []
+  const memoryNonceStore = Attestation.NonceStore.memory()
+  const handler = createPaymentHandler({
     expectedKeyId: keyId,
     expectedSignatureAgent: signatureAgent,
-    nonceStore: Attestation.NonceStore.memory(),
+    nonceStore: {
+      consume(key, expires) {
+        consumedNonces.push(key)
+        return memoryNonceStore.consume(key, expires)
+      },
+    },
     publicKey: keys.publicKey,
   })
 
-  return { handler, keyId, privateKey: keys.privateKey, signatureAgent }
+  return { consumedNonces, handler, keyId, privateKey: keys.privateKey, signatureAgent }
 }

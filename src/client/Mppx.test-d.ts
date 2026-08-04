@@ -1,6 +1,7 @@
 import type { Account, Address } from 'viem'
 import { describe, expectTypeOf, test } from 'vp/test'
 
+import type * as Attestation from '../attestation/Types.js'
 import * as Challenge from '../Challenge.js'
 import type * as Mcp from '../Mcp.js'
 import * as Method from '../Method.js'
@@ -71,6 +72,22 @@ describe('create.Config', () => {
     })
 
     expectTypeOf(mppx.fetch).toBeFunction()
+  })
+
+  test('accepts request attestation for HTTP transport only', () => {
+    const signer = {} as Attestation.Signer
+    const mppx = Mppx.create({
+      attestation: { webBotAuth: signer },
+      methods: [charge()],
+    })
+    expectTypeOf(mppx.fetch).toBeFunction()
+
+    Mppx.create({
+      // @ts-expect-error request attestation applies to HTTP transport only.
+      attestation: { webBotAuth: signer },
+      methods: [charge()],
+      transport: Transport.mcp(),
+    })
   })
 
   test('paymentPreferences callback exposes typed method keys', () => {

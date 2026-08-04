@@ -72,3 +72,6 @@ export type Signer<protocol extends string = string> = {
   /** Returns a new request containing the protocol's signature material. */
   sign: (request: Request, context?: SigningContext | undefined) => MaybePromise<Request>
 }
+
+/** Maps application-defined names to request-attestation signers. */
+export type SignerMap = Readonly<Record<string, Signer>>

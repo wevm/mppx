@@ -1,3 +1,5 @@
+import * as AttestationClient from '../attestation/Client.js'
+import type * as Attestation from '../attestation/Types.js'
 import type * as Challenge from '../Challenge.js'
 import * as Expires from '../Expires.js'
 import * as AcceptPayment from '../internal/AcceptPayment.js'
@@ -100,6 +102,7 @@ export function create<
   >,
 >(config: create.Config<methods, transport>): Mppx<methods, transport> {
   const {
+    attestation,
     maxPaymentRetries,
     onChallenge,
     orderChallenges,
@@ -111,6 +114,9 @@ export function create<
   } = config
 
   const rawFetch = config.fetch ?? globalThis.fetch
+  const attestedFetch = attestation
+    ? createAttestedFetch(rawFetch, attestation as Attestation.SignerMap)
+    : rawFetch
   const methods = config.methods.flat() as unknown as FlattenMethods<methods>
   const acceptPayment = AcceptPayment.resolve(methods, config.paymentPreferences)
   const events = Fetch.createEventDispatcher<FlattenMethods<methods>, EventResponseOf<transport>>()
@@ -121,7 +127,7 @@ export function create<
   const config_fetch = {
     acceptPayment,
     acceptPaymentPolicy,
-    ...(config.fetch && { fetch: config.fetch }),
+    ...((config.fetch || attestation) && { fetch: attestedFetch }),
     eventDispatcher: events,
     ...(maxPaymentRetries !== undefined && { maxPaymentRetries }),
     ...(resolvedOnChallenge && { onChallenge: resolvedOnChallenge }),
@@ -285,6 +291,10 @@ export declare namespace create {
     methods extends Methods = Methods,
     transport extends Transport.AnyTransport = Transport.Transport,
   > = {
+    /** Request-attestation signers applied to every outbound HTTP attempt. */
+    attestation?: transport extends Transport.Transport<RequestInit, Response>
+      ? Attestation.SignerMap | undefined
+      : never
     /** Controls when `Accept-Payment` is injected. */
     acceptPaymentPolicy?: Fetch.from.Config['acceptPaymentPolicy'] | undefined
     /** Custom fetch function to wrap. Defaults to `globalThis.fetch`. */
@@ -311,6 +321,19 @@ export declare namespace create {
     /** Transport to use (defaults to HTTP). */
     transport?: transport | undefined
   }
+}
+
+function createAttestedFetch(
+  fetch: typeof globalThis.fetch,
+  signers: Attestation.SignerMap,
+): typeof globalThis.fetch {
+  const values = Object.values(signers)
+  if (values.length === 0)
+    throw new TypeError('Mppx client attestation must configure at least one signer.')
+  return AttestationClient.wrapFetch(
+    fetch,
+    AttestationClient.composeSigners(...(values as [Attestation.Signer, ...Attestation.Signer[]])),
+  )
 }
 
 /**

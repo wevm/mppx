@@ -1,6 +1,8 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { isDeepStrictEqual } from 'node:util'
 
+import * as AttestationServer from '../attestation/Server.js'
+import type * as Attestation from '../attestation/Types.js'
 import * as Challenge from '../Challenge.js'
 import * as Constants from '../Constants.js'
 import * as Credential from '../Credential.js'
@@ -484,6 +486,7 @@ export function create<
   const transport extends Transport.AnyTransport = Transport.Http,
 >(config: create.Config<methods, transport>): Mppx<methods, transport> {
   const {
+    attestation,
     realm = Env.get('realm'),
     selectOffers,
     secretKey = Env.get('secretKey'),
@@ -499,6 +502,9 @@ export function create<
 
   const methods = config.methods.flat() as unknown as FlattenMethods<methods>
   const serverEvents = createServerEventDispatcher<FlattenMethods<methods>, transport>()
+  const verifyAttestation = attestation
+    ? createAttestationGuard(attestation as Attestation.VerifierMap)
+    : undefined
 
   const handlers: Record<string, unknown> = {}
   const intentCount: Record<string, number> = {}
@@ -510,6 +516,7 @@ export function create<
 
   for (const mi of methods) {
     const fn = createMethodFn({
+      ...(verifyAttestation && { attest: verifyAttestation }),
       authorize: mi.authorize as never,
       defaults: mi.defaults,
       method: mi,
@@ -896,6 +903,8 @@ export declare namespace create {
     methods extends Methods = Methods,
     transport extends Transport.AnyTransport = Transport.Http,
   > = {
+    /** Request-attestation verifiers required before handling an HTTP payment request. */
+    attestation?: transport extends Transport.Http ? Attestation.VerifierMap | undefined : never
     /** Array of configured methods. @example [tempo()] */
     methods: methods
     /** Server realm (e.g., hostname). Resolution order: explicit value > env vars (`MPP_REALM`, `FLY_APP_NAME`, `VERCEL_URL`, etc.) > request URL hostname > `"MPP Payment"`. */
@@ -921,6 +930,7 @@ function createMethodFn<
 // biome-ignore lint/correctness/noUnusedVariables: _
 function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.ReturnType {
   const {
+    attest,
     authorize,
     defaults,
     events,
@@ -953,6 +963,17 @@ function createMethodFn(parameters: createMethodFn.Parameters): createMethodFn.R
     Object.defineProperty(internal, '_method', { value: method })
 
     const handler = async (input: Transport.InputOf): Promise<MethodFn.Response> => {
+      if (attest && input instanceof globalThis.Request) {
+        const response = await attest(input)
+        if (response)
+          return {
+            status: 200,
+            withReceipt() {
+              return response
+            },
+          } as MethodFn.Response
+      }
+
       if (method.html && isServiceWorkerRequest(input))
         return {
           status: 402,
@@ -1497,6 +1518,7 @@ declare namespace createMethodFn {
     transport extends Transport.AnyTransport = Transport.Http,
     defaults extends Record<string, unknown> = Record<string, unknown>,
   > = {
+    attest?: (request: globalThis.Request) => Promise<globalThis.Response | undefined>
     authorize?: Method.AuthorizeFn<method>
     defaults?: defaults
     method: method
@@ -1518,6 +1540,39 @@ declare namespace createMethodFn {
     transport extends Transport.AnyTransport = Transport.Http,
     defaults extends Record<string, unknown> = Record<string, unknown>,
   > = MethodFn<method, transport, defaults>
+}
+
+function createAttestationGuard(verifiers: Attestation.VerifierMap) {
+  const entries = Object.entries(verifiers)
+  if (entries.length === 0)
+    throw new TypeError('Mppx server attestation must configure at least one verifier.')
+
+  const cache = new WeakMap<globalThis.Request, Promise<globalThis.Response | undefined>>()
+  return (request: globalThis.Request): Promise<globalThis.Response | undefined> => {
+    const cached = cache.get(request)
+    if (cached) return cached
+
+    const verification = AttestationServer.verify(request, verifiers).then((outcomes) => {
+      for (const [name, outcome] of Object.entries(outcomes))
+        if (outcome.status === 'invalid')
+          return new globalThis.Response(
+            `Request attestation "${name}" is invalid: ${outcome.reason}`,
+            { status: 401 },
+          )
+
+      for (const [name, outcome] of Object.entries(outcomes)) {
+        if (outcome.status === 'verified') continue
+        const reason =
+          outcome.status === 'unverified'
+            ? `Request attestation "${name}" could not be verified: ${outcome.reason}`
+            : `Request attestation "${name}" is required.`
+        return new globalThis.Response(reason, { status: 403 })
+      }
+      return undefined
+    })
+    cache.set(request, verification)
+    return verification
+  }
 }
 
 type ServerEventDispatcher<
