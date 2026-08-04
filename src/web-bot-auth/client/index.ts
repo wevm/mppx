@@ -8,11 +8,13 @@ import * as JwkThumbprint from '../internal/JwkThumbprint.js'
 import * as SignatureAgent from '../internal/SignatureAgent.js'
 
 /**
- * Creates a Web Bot Auth request signer.
+ * Creates a Web Bot Auth HTTPS-directory profile request signer.
  *
  * The signed `Signature-Agent` header links the request to the HTTPS origin
- * of an HTTP Message Signatures Directory. It establishes bot identity only;
- * it does not assert consumer identity or authority to make a payment.
+ * of an HTTP Message Signatures Directory. This adapter does not support
+ * direct key configuration or other Web Bot Auth discovery types. It
+ * establishes bot identity only; it does not assert consumer identity or
+ * authority to make a payment.
  */
 export function signer(config: signer.Config): AttestationTypes.Signer<typeof Constants.protocol> {
   const label = config.label ?? Constants.label
@@ -58,7 +60,7 @@ export declare namespace signer {
     key: CryptoKey
     /** RFC 7638 JWK thumbprint for the registered public key. */
     keyId: string
-    /** HTTPS directory origin, sent with the default `directory` discovery type. */
+    /** Required HTTPS directory origin, sent with the default `directory` discovery type. */
     signatureAgent: string
     /** Dictionary member name used for `Signature-Agent`. @default signature label */
     signatureAgentKey?: string | undefined

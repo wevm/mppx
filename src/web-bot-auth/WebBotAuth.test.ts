@@ -95,7 +95,7 @@ test('preserves directory lookup failures as unverified outcomes', async () => {
   })
 })
 
-test('rejects mismatched keys, unsupported discovery, and header tampering', async () => {
+test('rejects mismatched keys, non-directory discovery, and header tampering', async () => {
   const advertisedKeys = await keyPair()
   const signingKeys = await keyPair()
   const advertisedKeyId = await jwkThumbprint(advertisedKeys.publicKey)
@@ -150,7 +150,7 @@ test('rejects mismatched keys, unsupported discovery, and header tampering', asy
       nonceStore: Attestation.NonceStore.memory(),
     }).verify(unsupportedDiscovery),
   ).toMatchObject({
-    reason: 'The Signature-Agent discovery type is not supported.',
+    reason: 'The Signature-Agent discovery type is not supported by this directory profile.',
     status: 'invalid',
   })
 })

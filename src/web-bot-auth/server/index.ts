@@ -9,10 +9,13 @@ import * as SignatureAgent from '../internal/SignatureAgent.js'
 import type * as Types from '../Types.js'
 
 /**
- * Creates a verifier for Web Bot Auth request signatures.
+ * Creates a verifier for the Web Bot Auth HTTPS-directory profile.
  *
- * Web Bot Auth confirms the cryptographic identity of an automated HTTP
- * client. It must not be used on its own as user or payment authorization.
+ * It requires an `@authority` and signed `Signature-Agent` directory member;
+ * direct key configuration and other Web Bot Auth discovery types are outside
+ * this adapter's scope. Verification confirms the cryptographic identity of an
+ * automated HTTP client. It must not be used on its own as user or payment
+ * authorization.
  */
 export function verifier(config: verifier.Config): Attestation.Verifier<Types.VerifiedRequest> {
   const maxAge = config.maxAge ?? Constants.defaultMaximumSignatureLifetime
@@ -63,8 +66,11 @@ export function verifier(config: verifier.Config): Attestation.Verifier<Types.Ve
           if (!agent || isInnerList(agent) || typeof agent[0] !== 'string')
             return 'The signed Signature-Agent member must be an HTTPS URL.'
           const type = agent[1].get('type')
-          if (type !== undefined && (!(type instanceof Token) || type.toString() !== 'directory'))
-            return 'The Signature-Agent discovery type is not supported.'
+          if (
+            type !== undefined &&
+            (!(type instanceof Token) || type.toString() !== Constants.discoveryType)
+          )
+            return 'The Signature-Agent discovery type is not supported by this directory profile.'
           const origin = SignatureAgent.directoryOrigin(agent[0])
           if (!origin) return 'The Signature-Agent header must identify a valid HTTPS origin.'
           signatureAgent = origin

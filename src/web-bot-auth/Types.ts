@@ -1,4 +1,4 @@
-/** Verified Web Bot Auth request signature. */
+/** Verified Web Bot Auth HTTPS-directory profile request signature. */
 export type VerifiedRequest = {
   /** Public-key thumbprint advertised by the bot. */
   keyId: string

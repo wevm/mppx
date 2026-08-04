@@ -44,7 +44,7 @@ const charge = {
   recipient: 'merchant',
 } as const
 
-test('composes TAP and Web Bot Auth across an MPP payment retry', async () => {
+test('composes TAP and the Web Bot Auth directory profile across an MPP payment retry', async () => {
   const tapKeys = await keyPair()
   const webBotAuthKeys = await keyPair()
   const webBotAuthKeyId = await jwkThumbprint(webBotAuthKeys.publicKey)
