@@ -1,6 +1,11 @@
 import type { MaybePromise } from '../internal/types.js'
 
-/** Atomically records signature nonces for replay protection. */
+/**
+ * Atomically records signature nonces for replay protection.
+ *
+ * This is not a general-purpose key-value store: implementations must atomically insert a nonce
+ * only when absent and retain it only until its signature expires.
+ */
 export type Store = {
   /**
    * Records a nonce key and returns `true` when it was already unexpired.

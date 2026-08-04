@@ -29,6 +29,26 @@ export const Constants = {
   },
 } as const
 
+const algorithmDescriptors = {
+  [Algorithms.ed25519]: {
+    hash: undefined,
+    keyAlgorithm: 'Ed25519',
+    webCryptoAlgorithm: 'Ed25519',
+  },
+  [Algorithms.rsaPssSha512]: {
+    hash: 'SHA-512',
+    keyAlgorithm: 'RSA-PSS',
+    webCryptoAlgorithm: { name: 'RSA-PSS', saltLength: 64 },
+  },
+} as const satisfies Record<
+  SignatureAlgorithm,
+  {
+    hash: string | undefined
+    keyAlgorithm: string
+    webCryptoAlgorithm: AlgorithmIdentifier | RsaPssParams
+  }
+>
+
 /** A covered HTTP message component and its RFC 9421 component parameters. */
 export type Component = {
   /** Derived component identifier or lowercased HTTP field name. */
@@ -267,10 +287,8 @@ function toSignatureInput(label: string, entry: unknown): SignatureInput | undef
   const nonce = parameters.get('nonce')
   const tag = parameters.get('tag')
   if (
-    typeof created !== 'number' ||
-    !Number.isInteger(created) ||
-    typeof expires !== 'number' ||
-    !Number.isInteger(expires) ||
+    !isInteger(created) ||
+    !isInteger(expires) ||
     !isSignatureAlgorithm(algorithm) ||
     typeof keyId !== 'string' ||
     typeof nonce !== 'string' ||
@@ -291,29 +309,29 @@ function toSignatureInput(label: string, entry: unknown): SignatureInput | undef
 }
 
 function algorithmFromKey(key: CryptoKey): SignatureAlgorithm {
-  if (key.algorithm.name === 'Ed25519') return Algorithms.ed25519
-  if (
-    key.algorithm.name === 'RSA-PSS' &&
-    (key.algorithm as RsaHashedKeyAlgorithm).hash.name === 'SHA-512'
-  )
-    return Algorithms.rsaPssSha512
+  for (const algorithm of Object.values(Algorithms))
+    if (keySupportsAlgorithm(key, algorithm)) return algorithm
   throw new TypeError('Request attestation requires an Ed25519 or RSA-PSS SHA-512 signing key.')
 }
 
+function isInteger(value: unknown): value is number {
+  return typeof value === 'number' && Number.isInteger(value)
+}
+
 function isSignatureAlgorithm(value: unknown): value is SignatureAlgorithm {
-  return value === Algorithms.ed25519 || value === Algorithms.rsaPssSha512
+  return typeof value === 'string' && Object.hasOwn(algorithmDescriptors, value)
 }
 
 function keySupportsAlgorithm(key: CryptoKey, algorithm: SignatureAlgorithm): boolean {
-  if (algorithm === Algorithms.ed25519) return key.algorithm.name === 'Ed25519'
+  const { hash, keyAlgorithm } = algorithmDescriptors[algorithm]
   return (
-    key.algorithm.name === 'RSA-PSS' &&
-    (key.algorithm as RsaHashedKeyAlgorithm).hash.name === 'SHA-512'
+    key.algorithm.name === keyAlgorithm &&
+    (!hash || (key.algorithm as RsaHashedKeyAlgorithm).hash.name === hash)
   )
 }
 
 function webCryptoAlgorithm(algorithm: SignatureAlgorithm): AlgorithmIdentifier | RsaPssParams {
-  return algorithm === Algorithms.ed25519 ? 'Ed25519' : { name: 'RSA-PSS', saltLength: 64 }
+  return algorithmDescriptors[algorithm].webCryptoAlgorithm
 }
 
 function signatureBase(request: Request, input: SignatureInput): string {
@@ -338,6 +356,7 @@ function componentValue(request: Request, component: Component): string {
     return componentDictionaryValue(request, component.id, component.parameters)
   const value = request.headers.get(component.id)
   if (value === null) throw new Error(`Missing signed HTTP header "${component.id}".`)
+  // RFC 9421 signs the serialized field value, not a Unicode-normalized string.
   if (!/^[\x20-\x7e]*$/.test(value))
     throw new Error(`Signed HTTP header "${component.id}" is not ASCII.`)
   return value

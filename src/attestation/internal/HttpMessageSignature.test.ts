@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'vp/test'
+import { keyPair } from '~test/Attestation.js'
 
 import { Algorithms, Headers } from '../Constants.js'
 import * as NonceStore from '../NonceStore.js'
@@ -51,6 +52,22 @@ describe('Web Bot Auth draft test vectors', () => {
 
     expect(await verifyVector(request, key)).toMatchObject({ status: 'verified' })
   })
+})
+
+test('rejects non-ASCII signed HTTP header values', async () => {
+  const keys = await keyPair()
+  await expect(
+    HttpMessageSignature.sign(
+      new Request('https://example.com', { headers: { 'X-Example': 'café' } }),
+      {
+        components: ['x-example'],
+        key: keys.privateKey,
+        keyId: 'test-key',
+        label: 'test',
+        tag: 'test',
+      },
+    ),
+  ).rejects.toThrow('Signed HTTP header "x-example" is not ASCII.')
 })
 
 function vectorRequest(parameters: { input: string; signature: string }): Request {
