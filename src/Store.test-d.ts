@@ -20,6 +20,11 @@ test('default AtomicStore accepts any string key on update', () => {
   expectTypeOf(store.update).parameter(0).toBeString()
 })
 
+test('default AtomicStore accepts any string key on tryClaim', () => {
+  const store = {} as Store.AtomicStore
+  expectTypeOf<NonNullable<typeof store.tryClaim>>().parameter(0).toBeString()
+})
+
 test('memory returns AtomicStore', () => {
   const store = Store.memory()
   expectTypeOf(store).toEqualTypeOf<Store.AtomicStore>()
@@ -108,6 +113,17 @@ test('typed AtomicStore constrains keys on update', () => {
   const store = {} as Store.AtomicStore<ItemMap>
 
   expectTypeOf(store.update).parameter(0).toEqualTypeOf<`mppx:charge:${string}`>()
+})
+
+test('typed tryClaim constrains keys', () => {
+  type ItemMap = { [key: `mppx:charge:${string}`]: number }
+  const store = {} as Store.AtomicStore<ItemMap>
+
+  expectTypeOf(Store.tryClaim(store, 'mppx:charge:0x123', 1)).toEqualTypeOf<
+    boolean | Promise<boolean>
+  >()
+  // @ts-expect-error — key must match the item map
+  Store.tryClaim(store, 'other:0x123', 1)
 })
 
 test('typed Store infers value from key', async () => {

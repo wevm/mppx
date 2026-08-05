@@ -1,8 +1,8 @@
 import { describe, expect, test } from 'vp/test'
 import { keyPair } from '~test/Attestation.js'
 
+import * as Store from '../../Store.js'
 import { Algorithms, Headers } from '../Constants.js'
-import * as NonceStore from '../NonceStore.js'
 import * as HttpMessageSignature from './HttpMessageSignature.js'
 
 const signatureAgent = 'agent2="https://signature-agent.test"'
@@ -91,7 +91,7 @@ function verifyVector(request: Request, key: CryptoKey) {
     },
     maxAge: maximumVectorLifetime,
     nonceNamespace: 'web-bot-auth',
-    nonceStore: NonceStore.memory(),
+    nonceStore: Store.memory(),
     requiredComponents: [
       HttpMessageSignature.Constants.components.authority,
       HttpMessageSignature.Constants.components.signatureAgent,

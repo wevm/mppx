@@ -38,8 +38,8 @@ test('types: server verification preserves each protocol value', () => {
 })
 
 test('types: server verifiers require explicit replay storage and expose the algorithm', () => {
-  const nonceStore = Attestation.NonceStore.memory()
-  expectTypeOf(nonceStore).toEqualTypeOf<Attestation.NonceStore.Store>()
+  const nonceStore = Attestation.Store.memory()
+  expectTypeOf(nonceStore).toEqualTypeOf<Attestation.Store.AtomicStore>()
 
   Tap.Server.verifier({
     keyResolver({ algorithm }) {

@@ -1,6 +1,6 @@
 import * as HttpMessageSignature from '../../attestation/internal/HttpMessageSignature.js'
-import type * as NonceStore from '../../attestation/NonceStore.js'
 import type * as Attestation from '../../attestation/Types.js'
+import type * as Store from '../../Store.js'
 import { Constants } from '../Constants.js'
 import type * as Types from '../Types.js'
 
@@ -43,6 +43,6 @@ export declare namespace verifier {
     /** Resolves a TAP-approved public key by its `keyid` and signature algorithm. */
     keyResolver: Attestation.KeyResolver
     /** Atomically consumes each nonce in shared storage for multi-instance deployments. */
-    nonceStore: NonceStore.Store
+    nonceStore: Store.AtomicStore
   }
 }

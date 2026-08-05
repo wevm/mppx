@@ -25,7 +25,7 @@ The verifier does not fetch the caller-controlled `Signature-Agent` URL. Its `ke
 applies application trust policy, then returns the public key. A production resolver can query an
 allowlisted directory after applying the same origin checks.
 
-`Attestation.NonceStore.memory()` is suitable only for this single-process example. Multi-instance
+`Attestation.Store.memory()` is suitable only for this single-process example. Multi-instance
 deployments need shared storage with atomic insert-if-absent and expiry semantics. Web Bot Auth
 proves which bot key signed the request; the application must separately decide what the bot is
 authorized to do.

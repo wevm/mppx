@@ -9,8 +9,8 @@ import {
 import type { BareItem, Dictionary, InnerList, Item } from 'structured-headers'
 
 import type { MaybePromise } from '../../internal/types.js'
+import * as Store from '../../Store.js'
 import { Algorithms, Headers as AttestationHeaders } from '../Constants.js'
-import type * as NonceStore from '../NonceStore.js'
 import type { KeyResolver, SignatureAlgorithm, SigningContext } from '../Types.js'
 import * as SigningContextInternal from './SigningContext.js'
 
@@ -141,7 +141,7 @@ export async function verify(
     keyResolver: KeyResolver
     maxAge: number
     nonceNamespace: string
-    nonceStore: NonceStore.Store
+    nonceStore: Store.AtomicStore
     requiredComponents: readonly string[]
     tag: string | readonly string[]
     validate?: ((input: SignatureInput, request: Request) => string | undefined) | undefined
@@ -211,10 +211,11 @@ export async function verify(
   if (!valid) return { status: 'invalid', reason: 'The HTTP message signature is invalid.' }
   try {
     if (
-      await options.nonceStore.consume(
+      !(await Store.tryClaim(
+        options.nonceStore,
         `${options.nonceNamespace}:${input.keyId}:${input.nonce}`,
         input.expires * 1000,
-      )
+      ))
     )
       return { status: 'invalid', reason: 'The signature nonce has already been used.' }
   } catch {

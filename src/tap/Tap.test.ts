@@ -16,7 +16,7 @@ test('signs and verifies a request-bound TAP payment intent', async () => {
   const createVerifier = () =>
     Tap.Server.verifier({
       keyResolver: ({ keyId }) => (keyId === 'tap-agent' ? keys.publicKey : undefined),
-      nonceStore: Attestation.NonceStore.memory(),
+      nonceStore: Attestation.Store.memory(),
     })
 
   expect(await createVerifier().verify(signed)).toMatchObject({
@@ -52,7 +52,7 @@ test('signs and verifies a request-bound TAP payment intent', async () => {
 
 test('shares replay protection across verifier instances and TAP intents', async () => {
   const keys = await keyPair()
-  const nonceStore = Attestation.NonceStore.memory()
+  const nonceStore = Attestation.Store.memory()
   const context = {
     created: Math.floor(Date.now() / 1_000),
     nonce: 'A'.repeat(86),
@@ -116,7 +116,7 @@ test('verifies externally ordered signature parameters and extensions', async ()
   })
   const verifier = Tap.Server.verifier({
     keyResolver: ({ keyId }) => (keyId === 'tap-agent' ? keys.publicKey : undefined),
-    nonceStore: Attestation.NonceStore.memory(),
+    nonceStore: Attestation.Store.memory(),
   })
 
   expect(await verifier.verify(new Request(request, { headers }))).toMatchObject({

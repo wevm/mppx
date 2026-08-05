@@ -49,7 +49,7 @@ test('composes TAP and the Web Bot Auth directory profile across an MPP payment 
   const webBotAuthKeys = await keyPair()
   const webBotAuthKeyId = await jwkThumbprint(webBotAuthKeys.publicKey)
   const signatureAgent = 'https://agent.example'
-  const nonceStore = Attestation.NonceStore.memory()
+  const nonceStore = Attestation.Store.memory()
   const verifiers = {
     tap: Tap.Server.verifier({
       keyResolver: ({ keyId }) => (keyId === 'tap-agent' ? tapKeys.publicKey : undefined),
@@ -113,7 +113,7 @@ test('requires every configured server attestation', async () => {
     {
       tap: Tap.Server.verifier({
         keyResolver: () => keys.publicKey,
-        nonceStore: Attestation.NonceStore.memory(),
+        nonceStore: Attestation.Store.memory(),
       }),
     },
     async (request, payments) => {
@@ -138,7 +138,7 @@ test('rejects an invalid server attestation before creating a payment challenge'
     {
       tap: Tap.Server.verifier({
         keyResolver: () => trustedKeys.publicKey,
-        nonceStore: Attestation.NonceStore.memory(),
+        nonceStore: Attestation.Store.memory(),
       }),
     },
     async (request, payments) => {

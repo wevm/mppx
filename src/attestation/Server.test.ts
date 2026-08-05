@@ -17,11 +17,12 @@ test('returns typed protocol outcomes and namespaces shared nonces', async () =>
     }),
   ).sign(new Request('https://merchant.example/resource'))
   const consumed = new Set<string>()
-  const nonceStore: Attestation.NonceStore.Store = {
-    consume(value) {
-      if (consumed.has(value)) return true
-      consumed.add(value)
-      return false
+  const backing = Attestation.Store.memory()
+  const nonceStore: Attestation.Store.AtomicStore = {
+    ...backing,
+    tryClaim(key, expires) {
+      consumed.add(key)
+      return Attestation.Store.tryClaim(backing, key, expires)
     },
   }
   const verifiers = {

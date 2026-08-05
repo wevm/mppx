@@ -1,8 +1,8 @@
 import { isInnerList, parseDictionary, Token } from 'structured-headers'
 
 import * as HttpMessageSignature from '../../attestation/internal/HttpMessageSignature.js'
-import type * as NonceStore from '../../attestation/NonceStore.js'
 import type * as Attestation from '../../attestation/Types.js'
+import type * as Store from '../../Store.js'
 import { Constants } from '../Constants.js'
 import * as JwkThumbprint from '../internal/JwkThumbprint.js'
 import * as SignatureAgent from '../internal/SignatureAgent.js'
@@ -108,6 +108,6 @@ export declare namespace verifier {
     /** Maximum accepted signature lifetime in seconds. @default 86400 */
     maxAge?: number | undefined
     /** Atomically consumes each nonce in shared storage for multi-instance deployments. */
-    nonceStore: NonceStore.Store
+    nonceStore: Store.AtomicStore
   }
 }

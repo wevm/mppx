@@ -2,11 +2,11 @@ import * as Attestation from 'mppx/attestation'
 import * as WebBotAuth from 'mppx/attestation/web-bot-auth'
 import { Mppx, tempo } from 'mppx/server'
 
-type NonceStore = Parameters<typeof WebBotAuth.Server.verifier>[0]['nonceStore']
+type AtomicStore = Parameters<typeof WebBotAuth.Server.verifier>[0]['nonceStore']
 
 export type ServerConfig = {
   keyId: string
-  nonceStore?: NonceStore
+  nonceStore?: AtomicStore
   publicKey: CryptoKey
   recipient: `0x${string}`
   secretKey: string
@@ -23,7 +23,7 @@ export function createServer(config: ServerConfig) {
           return config.publicKey
         },
         maxAge: 60,
-        nonceStore: config.nonceStore ?? Attestation.NonceStore.memory(),
+        nonceStore: config.nonceStore ?? Attestation.Store.memory(),
       }),
     },
     methods: [

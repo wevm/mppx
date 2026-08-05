@@ -140,6 +140,17 @@ describe('keyPrefix', () => {
     expect(await backing.get('k')).toBeNull()
   })
 
+  test('scopes optimized tryClaim to prefixed backing keys', async () => {
+    const backing = Store.memory()
+    const store = Store.from(backing, { keyPrefix: 'tenant:' })
+    const expires = Date.now() + 60_000
+
+    expect(await Store.tryClaim(store, 'k', expires)).toBe(true)
+    expect(await Store.tryClaim(store, 'k', expires)).toBe(false)
+    expect(await backing.get('tenant:k')).toEqual({ expires, type: 'mppx:replay' })
+    expect(await backing.get('k')).toBeNull()
+  })
+
   test('returns the original store when keyPrefix is empty', () => {
     const backing = Store.memory()
     expect(Store.from(backing, { keyPrefix: '' })).toBe(backing)
@@ -186,6 +197,45 @@ describe('keyPrefix', () => {
     await upstash.put('k', 'value')
     expect(await upstashKv.get('tenant:k')).toBe('value')
     expect(await upstashKv.get('k')).toBeNull()
+  })
+})
+
+describe('tryClaim', () => {
+  test('uses an adapter fast path when available', async () => {
+    const backing = Store.memory()
+    const optimized = backing.tryClaim!
+    let calls = 0
+    const store = {
+      ...backing,
+      tryClaim(key: string, expires: number) {
+        calls++
+        return optimized(key, expires)
+      },
+    }
+    const expires = Date.now() + 60_000
+
+    expect(await Store.tryClaim(store, 'k', expires)).toBe(true)
+    expect(await Store.tryClaim(store, 'k', expires)).toBe(false)
+    expect(await store.get('k')).toEqual({ expires, type: 'mppx:replay' })
+    expect(calls).toBe(2)
+  })
+
+  test('falls back to atomic update and replaces expired claims', async () => {
+    const store = Store.cloudflare(fakeStringKv())
+    expect(store.tryClaim).toBeUndefined()
+    const expires = Date.now() + 60_000
+
+    expect(await Store.tryClaim(store, 'k', Date.now() - 1)).toBe(true)
+    expect(await Store.tryClaim(store, 'k', expires)).toBe(true)
+    expect(await Store.tryClaim(store, 'k', expires)).toBe(false)
+    expect(await store.get('k')).toEqual({ expires, type: 'mppx:replay' })
+  })
+
+  test('preserves legacy replay markers as consumed', async () => {
+    const store = Store.memory()
+    await store.put('k', Date.now() - 60_000)
+
+    expect(await Store.tryClaim(store, 'k', Date.now() + 60_000)).toBe(false)
   })
 })
 

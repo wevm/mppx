@@ -26,13 +26,13 @@ test('emits and verifies a signed Signature-Agent member', async () => {
     await WebBotAuth.Server.verifier({
       keyResolver: () => keys.publicKey,
       maxAge: WebBotAuth.Constants.defaultSignatureLifetime,
-      nonceStore: Attestation.NonceStore.memory(),
+      nonceStore: Attestation.Store.memory(),
     }).verify(signed),
   ).toMatchObject({ status: 'invalid' })
   expect(
     await WebBotAuth.Server.verifier({
       keyResolver: () => keys.publicKey,
-      nonceStore: Attestation.NonceStore.memory(),
+      nonceStore: Attestation.Store.memory(),
     }).verify(signed),
   ).toMatchObject({
     status: 'verified',
@@ -54,7 +54,7 @@ test('signs and verifies RSA-PSS SHA-512', async () => {
       algorithms.push(algorithm)
       return candidate === keyId ? keys.publicKey : undefined
     },
-    nonceStore: Attestation.NonceStore.memory(),
+    nonceStore: Attestation.Store.memory(),
   }).verify(signed)
 
   expect(signed.headers.get(Attestation.Headers.signatureInput)).toContain(
@@ -76,7 +76,7 @@ test('preserves directory lookup failures as unverified outcomes', async () => {
   expect(
     await WebBotAuth.Server.verifier({
       keyResolver: () => undefined,
-      nonceStore: Attestation.NonceStore.memory(),
+      nonceStore: Attestation.Store.memory(),
     }).verify(signed),
   ).toEqual({
     reason: 'No public key is available for the signature key ID.',
@@ -87,7 +87,7 @@ test('preserves directory lookup failures as unverified outcomes', async () => {
       keyResolver() {
         throw new Error('directory unavailable')
       },
-      nonceStore: Attestation.NonceStore.memory(),
+      nonceStore: Attestation.Store.memory(),
     }).verify(signed),
   ).toEqual({
     reason: 'The public key could not be resolved.',
@@ -107,7 +107,7 @@ test('rejects mismatched keys, non-directory discovery, and header tampering', a
   }).sign(new Request('https://merchant.example/resource'))
   const verifier = WebBotAuth.Server.verifier({
     keyResolver: () => signingKeys.publicKey,
-    nonceStore: Attestation.NonceStore.memory(),
+    nonceStore: Attestation.Store.memory(),
   })
 
   expect(await verifier.verify(signed)).toMatchObject({ status: 'invalid' })
@@ -120,7 +120,7 @@ test('rejects mismatched keys, non-directory discovery, and header tampering', a
   expect(
     await WebBotAuth.Server.verifier({
       keyResolver: () => signingKeys.publicKey,
-      nonceStore: Attestation.NonceStore.memory(),
+      nonceStore: Attestation.Store.memory(),
     }).verify(new Request(signed, { headers: alteredHeaders })),
   ).toMatchObject({ status: 'invalid' })
 
@@ -147,7 +147,7 @@ test('rejects mismatched keys, non-directory discovery, and header tampering', a
   expect(
     await WebBotAuth.Server.verifier({
       keyResolver: () => advertisedKeys.publicKey,
-      nonceStore: Attestation.NonceStore.memory(),
+      nonceStore: Attestation.Store.memory(),
     }).verify(unsupportedDiscovery),
   ).toMatchObject({
     reason: 'The Signature-Agent discovery type is not supported by this directory profile.',
@@ -176,7 +176,7 @@ test('validates signer and verifier configuration', async () => {
     WebBotAuth.Server.verifier({
       keyResolver: () => keys.publicKey,
       maxAge: 0,
-      nonceStore: Attestation.NonceStore.memory(),
+      nonceStore: Attestation.Store.memory(),
     }),
   ).toThrow('Web Bot Auth maxAge must be a positive integer.')
 })

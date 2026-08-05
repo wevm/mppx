@@ -16,6 +16,8 @@
  */
 import { Json } from 'ox'
 
+import type { MaybePromise } from './internal/types.js'
+
 export type StoreItemMap = Record<string, unknown>
 
 /**
@@ -47,6 +49,20 @@ export type Update<itemMap extends StoreItemMap = StoreItemMap> = <
   fn: (current: itemMap[key] | null) => Change<itemMap[key], result>,
 ) => Promise<result>
 
+/** Attempts to atomically record first use of a replay key through its expiry. */
+export type TryClaim<itemMap extends StoreItemMap = StoreItemMap> = <
+  key extends keyof itemMap & string,
+>(
+  key: key,
+  expires: number,
+) => MaybePromise<boolean>
+
+/** Persisted marker used by the {@link tryClaim} fallback. */
+export type ReplayMarker = {
+  expires: number
+  type: 'mppx:replay'
+}
+
 /** Base key-value actions available on every {@link Store}. */
 export type StoreActions<itemMap extends StoreItemMap = StoreItemMap> = {
   get: <key extends keyof itemMap & string>(key: key) => Promise<itemMap[key] | null>
@@ -57,6 +73,8 @@ export type StoreActions<itemMap extends StoreItemMap = StoreItemMap> = {
 /** Atomic actions that can be provided via the `extended` slot. */
 export type AtomicActions<itemMap extends StoreItemMap = StoreItemMap> = {
   update: Update<itemMap>
+  /** Optional single-operation fast path for recording expiring replay keys. */
+  tryClaim?: TryClaim<itemMap> | undefined
 }
 
 /**
@@ -83,6 +101,42 @@ export type AtomicStore<itemMap extends StoreItemMap = StoreItemMap> = Store<
   itemMap,
   AtomicActions<itemMap>
 >
+
+/**
+ * Attempts to atomically record first use of a replay key through its expiry.
+ *
+ * Returns `true` when this call recorded the key and `false` when it was already
+ * recorded and unexpired. `expires` is a Unix timestamp in milliseconds.
+ * Uses the adapter's optimized primitive when available and otherwise falls
+ * back to {@link AtomicStore.update}.
+ */
+export function tryClaim<itemMap extends StoreItemMap, key extends keyof itemMap & string>(
+  store: AtomicStore<itemMap>,
+  key: key,
+  expires: number,
+): MaybePromise<boolean> {
+  if (store.tryClaim) return store.tryClaim(key, expires)
+  return store.update(key, (current) => {
+    if (current !== null && (!isReplayMarker(current) || current.expires > Date.now()))
+      return { op: 'noop', result: false }
+    return {
+      op: 'set',
+      value: { expires, type: 'mppx:replay' } as itemMap[key],
+      result: true,
+    }
+  })
+}
+
+function isReplayMarker(value: unknown): value is ReplayMarker {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    'expires' in value &&
+    typeof value.expires === 'number' &&
+    'type' in value &&
+    value.type === 'mppx:replay'
+  )
+}
 
 /** Options shared by store constructors. */
 export type Options = {
@@ -124,6 +178,13 @@ function withKeyPrefix(store: Store | AtomicStore, keyPrefix = ''): Store | Atom
             fn: (current: unknown | null) => Change<unknown, result>,
           ) {
             return (store as AtomicStore).update(prefixedKey(key), fn as never)
+          },
+        }
+      : {}),
+    ...('tryClaim' in store && typeof store.tryClaim === 'function'
+      ? {
+          tryClaim(key: string, expires: number) {
+            return store.tryClaim!(prefixedKey(key), expires)
           },
         }
       : {}),
@@ -225,6 +286,13 @@ export function memory(options?: memory.Options): AtomicStore {
         if (change.op === 'set') store.set(key, Json.stringify(change.value))
         if (change.op === 'delete') store.delete(key)
         return change.result
+      },
+      tryClaim(key: string, expires: number) {
+        const current = store.has(key) ? Json.parse(store.get(key)!) : null
+        if (current !== null && (!isReplayMarker(current) || current.expires > Date.now()))
+          return false
+        store.set(key, Json.stringify({ expires, type: 'mppx:replay' }))
+        return true
       },
     },
     options,

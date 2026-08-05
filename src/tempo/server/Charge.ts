@@ -476,11 +476,13 @@ export function charge<const parameters extends charge.Parameters>(
             : feePayer
           : undefined
       const expires = challenge.expires
+      Expires.assert(expires, challenge.id)
+      const replayExpires = Date.parse(expires)
 
       switch (validated.type) {
         case 'hash': {
           const { hash, receipt } = validated
-          if (!(await markHashUsed(store, hash))) {
+          if (!(await tryClaimHash(store, hash, replayExpires))) {
             throw new VerificationFailedError({
               reason: 'Transaction hash has already been used',
             })
@@ -489,7 +491,7 @@ export function charge<const parameters extends charge.Parameters>(
         }
 
         case 'proof': {
-          if (proofStore && !(await markProofUsed(proofStore, challenge.id))) {
+          if (proofStore && !(await tryClaimProof(proofStore, challenge.id, replayExpires))) {
             throw new VerificationFailedError({
               reason: 'Proof credential has already been used',
             })
@@ -508,7 +510,7 @@ export function charge<const parameters extends charge.Parameters>(
 
           // Pre-broadcast dedup: catch exact byte-for-byte replays early.
           const hash = keccak256(serializedTransaction)
-          if (!(await markHashUsed(store, hash))) {
+          if (!(await tryClaimHash(store, hash, replayExpires))) {
             throw new VerificationFailedError({
               reason: 'Transaction hash has already been used',
             })
@@ -590,7 +592,7 @@ export function charge<const parameters extends charge.Parameters>(
 
             if (
               finalHash.toLowerCase() !== hash.toLowerCase() &&
-              !(await markHashUsed(store, finalHash))
+              !(await tryClaimHash(store, finalHash, replayExpires))
             )
               throw new VerificationFailedError({
                 reason: 'Transaction hash has already been used',
@@ -711,7 +713,7 @@ export function charge<const parameters extends charge.Parameters>(
 
 export declare namespace charge {
   type StoreItemMap = {
-    [key: `mppx:charge:${string}`]: number | SponsorBudget.State
+    [key: `mppx:charge:${string}`]: number | SponsorBudget.State | Store.ReplayMarker
   }
 
   type Defaults = LooseOmit<Method.RequestDefaults<typeof Methods.charge>, 'feePayer' | 'recipient'>
@@ -1175,14 +1177,12 @@ function getProofStoreKey(challengeId: string): `mppx:charge:${string}` {
   return `mppx:charge:proof:${challengeId}`
 }
 
-async function markHashUsed(
+async function tryClaimHash(
   store: Store.AtomicStore<charge.StoreItemMap>,
   hash: `0x${string}`,
+  expires: number,
 ): Promise<boolean> {
-  return store.update(getHashStoreKey(hash), (current) => {
-    if (current !== null) return { op: 'noop', result: false }
-    return { op: 'set', value: Date.now(), result: true }
-  })
+  return Store.tryClaim(store, getHashStoreKey(hash), expires)
 }
 
 /** @internal */
@@ -1209,14 +1209,12 @@ function parseHashCredentialSource(parameters: {
 }
 
 /** @internal */
-async function markProofUsed(
+async function tryClaimProof(
   store: Store.AtomicStore<charge.StoreItemMap>,
   challengeId: string,
+  expires: number,
 ): Promise<boolean> {
-  return store.update(getProofStoreKey(challengeId), (current) => {
-    if (current !== null) return { op: 'noop', result: false }
-    return { op: 'set', value: Date.now(), result: true }
-  })
+  return Store.tryClaim(store, getProofStoreKey(challengeId), expires)
 }
 
 function recoverAuthorizedProofSigner(parameters: {
