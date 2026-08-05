@@ -7,36 +7,25 @@ server verifies the bot identity before issuing or accepting an MPP payment chal
 ```bash
 npx gitpick wevm/mppx/examples/web-bot-auth
 pnpm i
-pnpm dev
-```
-
-The example generates a temporary keypair and prints an authenticated response:
-
-```text
-challenge.received demo/charge
-credential.created demo/charge
-payment.response 200
-200 {
-  payment: 'paid'
-}
+pnpm check:types
 ```
 
 [`src/client.ts`](./src/client.ts) passes the Web Bot Auth signer directly to `Mppx.create()` via
-`attestation`. This keeps automatic 402 handling while giving every HTTP attempt fresh `Signature-Agent`,
-`Signature-Input`, and `Signature` headers. The demo registers `onChallengeReceived`,
-`onCredentialCreated`, and `onPaymentResponse` hooks to expose the payment lifecycle.
+`attestation` and configures Tempo as its payment method. This keeps automatic 402 handling while
+giving every HTTP attempt fresh `Signature-Agent`, `Signature-Input`, and `Signature` headers.
+The returned Mppx client exposes `fetch()` and the standard client lifecycle hooks.
 
 [`src/server.ts`](./src/server.ts) passes its trusted Web Bot Auth verifier to the server's
 `Mppx.create()` `attestation` map. Mppx requires it before issuing or accepting a payment challenge.
-The example method in
-[`src/method.ts`](./src/method.ts) uses a local credential so the full flow runs without a wallet or
-network. Replace it with a Tempo, Stripe, or custom production payment method.
+The returned Mppx server exposes the standard Tempo handlers, such as
+`server.charge({ amount: '0' })`. A zero amount requests a proof credential without transferring
+funds; use a positive amount to charge for a protected resource.
 
 The verifier does not fetch the caller-controlled `Signature-Agent` URL. Its `keyResolver` first
 applies application trust policy, then returns the public key. A production resolver can query an
 allowlisted directory after applying the same origin checks.
 
-`Attestation.NonceStore.memory()` is suitable only for this single-process demo. Multi-instance
+`Attestation.NonceStore.memory()` is suitable only for this single-process example. Multi-instance
 deployments need shared storage with atomic insert-if-absent and expiry semantics. Web Bot Auth
 proves which bot key signed the request; the application must separately decide what the bot is
 authorized to do.
