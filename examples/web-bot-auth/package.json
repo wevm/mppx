@@ -6,6 +6,7 @@
     "check:types": "tsgo -b"
   },
   "dependencies": {
+    "@types/node": "^25.6.0",
     "@typescript/native-preview": "^7.0.0-dev.20260707.2",
     "mppx": "latest",
     "typescript": "catalog:",

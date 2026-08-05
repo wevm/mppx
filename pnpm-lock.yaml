@@ -407,6 +407,9 @@ importers:
 
   examples/web-bot-auth:
     dependencies:
+      '@types/node':
+        specifier: ^25.6.0
+        version: 25.6.0
       '@typescript/native-preview':
         specifier: ^7.0.0-dev.20260707.2
         version: 7.0.0-dev.20260707.2
