@@ -130,6 +130,13 @@ describe('Mppx type tests', () => {
     expectTypeOf(mppx.compose).toBeFunction()
   })
 
+  test('multi-method intent handler is callable and non-nullable', () => {
+    const mppx = Mppx.create({ methods: [alphaMethod, betaMethod], realm, secretKey })
+
+    expectTypeOf(mppx.charge).toBeFunction()
+    expectTypeOf(mppx.charge).not.toBeNullable()
+  })
+
   test('compose accepts method reference tuples', () => {
     const mppx = Mppx.create({ methods: [alphaMethod, betaMethod], realm, secretKey })
 

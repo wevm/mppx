@@ -59,6 +59,82 @@ describe('create', () => {
   })
 })
 
+describe('multi-method intent handler', () => {
+  test('composes all methods sharing an intent into a single handler', async () => {
+    const schema = {
+      credential: { payload: z.object({ sig: z.string() }) },
+      request: z.object({ amount: z.string(), currency: z.string() }),
+    }
+
+    const method1 = Method.toServer(Method.from({ name: 'foo', intent: 'charge', schema }), {
+      defaults: { currency: 'usd' },
+      verify: async () => ({
+        method: 'foo',
+        status: 'success' as const,
+        reference: '0x1',
+        timestamp: new Date().toISOString(),
+      }),
+    })
+    const method2 = Method.toServer(Method.from({ name: 'bar', intent: 'charge', schema }), {
+      defaults: { currency: 'eur' },
+      verify: async () => ({
+        method: 'bar',
+        status: 'success' as const,
+        reference: '0x2',
+        timestamp: new Date().toISOString(),
+      }),
+    })
+
+    const mppx = Mppx.create({ methods: [method1, method2], secretKey, realm })
+
+    expect(typeof mppx.charge).toBe('function')
+
+    const result = await (mppx as any).charge({ amount: '100' })(new Request('http://localhost'))
+    expect(result.status).toBe(402)
+
+    const wwwAuth = result.challenge.headers.get('www-authenticate')
+    expect(wwwAuth).toContain('method="foo"')
+    expect(wwwAuth).toContain('method="bar"')
+  })
+
+  test('single method with unique intent gets direct handler', async () => {
+    const schema = {
+      credential: { payload: z.object({ sig: z.string() }) },
+      request: z.object({ amount: z.string(), currency: z.string() }),
+    }
+
+    const method1 = Method.toServer(Method.from({ name: 'foo', intent: 'charge', schema }), {
+      defaults: { currency: 'usd' },
+      verify: async () => ({
+        method: 'foo',
+        status: 'success' as const,
+        reference: '0x1',
+        timestamp: new Date().toISOString(),
+      }),
+    })
+    const method2 = Method.toServer(Method.from({ name: 'bar', intent: 'session', schema }), {
+      defaults: { currency: 'usd' },
+      verify: async () => ({
+        method: 'bar',
+        status: 'success' as const,
+        reference: '0x2',
+        timestamp: new Date().toISOString(),
+      }),
+    })
+
+    const mppx = Mppx.create({ methods: [method1, method2], secretKey, realm })
+
+    const result = await (mppx as any).charge({ amount: '100', currency: 'usd' })(
+      new Request('http://localhost'),
+    )
+    expect(result.status).toBe(402)
+
+    const wwwAuth = result.challenge.headers.get('www-authenticate')
+    expect(wwwAuth).toContain('method="foo"')
+    expect(wwwAuth).not.toContain('method="bar"')
+  })
+})
+
 describe('request handler', () => {
   test('returns 402 when no Authorization header', async () => {
     const handler = Mppx.create({ methods: [method], realm, secretKey })

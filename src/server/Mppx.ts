@@ -374,22 +374,37 @@ type IsUniqueIntent<methods extends readonly Method.AnyServer[], intent extends 
       : never
     : never
 
-/** Only includes shorthand intent keys when the intent is unique across methods. */
-type UniqueIntentHandlers<
+/** Shorthand intent handlers. Single-method intents get direct handlers;
+ *  multi-method intents get an implicit compose wrapper. */
+type IntentHandlers<
   methods extends readonly Method.AnyServer[],
   transport extends Transport.AnyTransport,
 > = {
-  [method_name in methods[number]['intent'] as IsUniqueIntent<methods, method_name> extends true
-    ? method_name extends ReservedKey
-      ? never
-      : method_name
-    : never]: MethodFn<
-    Extract<methods[number], { intent: method_name }>,
-    EffectiveTransportOf<Extract<methods[number], { intent: method_name }>, transport>,
-    NonNullable<Extract<methods[number], { intent: method_name }>['defaults']>
-  > &
-    MethodExtensions<Extract<methods[number], { intent: method_name }>>
+  [intent in methods[number]['intent'] as intent extends ReservedKey
+    ? never
+    : intent]: IsUniqueIntent<methods, intent> extends true
+    ? MethodFn<
+        Extract<methods[number], { intent: intent }>,
+        EffectiveTransportOf<Extract<methods[number], { intent: intent }>, transport>,
+        NonNullable<Extract<methods[number], { intent: intent }>['defaults']>
+      > &
+        MethodExtensions<Extract<methods[number], { intent: intent }>>
+    : MultiMethodFn<Extract<methods[number], { intent: intent }>, transport>
 }
+
+/** Handler for an intent with multiple methods - takes the intersection of all methods' options. */
+type MultiMethodFn<methods extends Method.AnyServer, transport extends Transport.AnyTransport> = (
+  options: UnionToIntersection<MultiMethodFnDistribute<methods>>,
+) => (input: Transport.InputOf<transport>) => Promise<MethodFn.Response<transport>>
+
+type MultiMethodFnDistribute<M> =
+  M extends Method.Server<infer method, infer defaults, any, any, any>
+    ? MethodFn.Options<method, NonNullable<defaults>>
+    : never
+
+type UnionToIntersection<U> = (U extends any ? (x: U) => void : never) extends (x: infer I) => void
+  ? I
+  : never
 
 /** Nested handlers: `mppx.tempo.charge(...)`, grouped by method name then intent. */
 type PublicAlias<method extends Method.AnyServer> = method extends {
@@ -434,7 +449,7 @@ type Handlers<
     NonNullable<mi['defaults']>
   > &
     MethodExtensions<mi>
-} & UniqueIntentHandlers<methods, transport> &
+} & IntentHandlers<methods, transport> &
   NestedHandlers<methods, transport> & {
     [mi in methods[number] as PublicAlias<mi> extends string
       ? `${mi['name']}/${PublicAlias<mi>}`
@@ -539,9 +554,32 @@ export function create<
     if (aliasKey) handlers[aliasKey] = fn
   }
 
-  // Also set shorthand intent key when there's no collision
+  // Set shorthand intent key: single method gets direct handler,
+  // multiple methods get an implicit compose wrapper.
+  const processedIntents = new Set<string>()
   for (const mi of methods) {
-    if (intentCount[mi.intent] === 1) handlers[mi.intent] = handlers[`${mi.name}/${mi.intent}`]
+    if (processedIntents.has(mi.intent)) continue
+    processedIntents.add(mi.intent)
+
+    if (intentCount[mi.intent] === 1) {
+      handlers[mi.intent] = handlers[`${mi.name}/${mi.intent}`]
+    } else {
+      const intentMethods = (methods as readonly Method.AnyServer[]).filter(
+        (m) => m.intent === mi.intent,
+      )
+      handlers[mi.intent] = (options: Record<string, unknown>) => {
+        const configured = intentMethods.map((m) => {
+          const key = `${m.name}/${m.intent}`
+          const handlerFn = handlers[key] as AnyMethodFn
+          return handlerFn(options)
+        })
+        return composeHandlers(
+          configured as ConfiguredHandler[],
+          undefined,
+          selectOffers as SelectOffers<readonly Method.AnyServer[]> | undefined,
+        )
+      }
+    }
   }
 
   // Build nested handlers: mppx.tempo.charge(...)
