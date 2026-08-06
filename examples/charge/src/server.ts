@@ -6,7 +6,13 @@ import { Actions, Chain } from 'viem/tempo'
 const account = privateKeyToAccount(generatePrivateKey())
 const currency = '0x20c0000000000000000000000000000000000000' as const // pathUSD
 
+// `Mppx.create()` requires a secret key so challenge IDs can be verified
+// statelessly. The example ships with a default demo key so it works
+// out of the box, but still allows override via `MPP_SECRET_KEY`.
+const secretKey = process.env.MPP_SECRET_KEY ?? 'mppx-demo-charge-secret-key-minimum-32'
+
 const mppx = Mppx.create({
+  secretKey,
   methods: [
     tempo({
       account,

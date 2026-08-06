@@ -20,7 +20,13 @@ function subscriptionKey(source: { address: string; chainId: number }) {
   return `news:eip155:${source.chainId}:${source.address.toLowerCase()}:${planId}`
 }
 
+// `Mppx.create()` requires a secret key so challenge IDs can be verified
+// statelessly. The example ships with a default demo key so it works
+// out of the box, but still allows override via `MPP_SECRET_KEY`.
+const secretKey = process.env.MPP_SECRET_KEY ?? 'mppx-demo-subscription-secret-key-32'
+
 const mppx = Mppx.create({
+  secretKey,
   methods: [
     tempo.subscription({
       amount: pricePerPeriod,

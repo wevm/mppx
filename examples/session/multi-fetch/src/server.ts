@@ -82,7 +82,14 @@ const client = createClient({
 //     If you omit the account from the client, channel opens will work (the
 //     client's signed tx is broadcast) but closes will silently fail — the
 //     server can't sign the settle tx without a key.
+//
+// `Mppx.create()` requires a secret key so challenge IDs can be verified
+// statelessly. The example ships with a default demo key so it works
+// out of the box, but still allows override via `MPP_SECRET_KEY`.
+const secretKey = process.env.MPP_SECRET_KEY ?? 'mppx-demo-multi-fetch-secret-key-32'
+
 const mppx = Mppx.create({
+  secretKey,
   methods: [
     tempo.session({
       account,
