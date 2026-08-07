@@ -1,5 +1,5 @@
 ---
-'mppx': minor
+'mppx': patch
 ---
 
 Standardized client transports on `getChallenges` and removed the singular `getChallenge` hook.
