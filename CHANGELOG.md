@@ -1,5 +1,34 @@
 # mppx
 
+## 0.8.16
+
+### Patch Changes
+
+- c58ee80: Added composable TAP and Web Bot Auth HTTPS-directory profile signers and verifiers with Ed25519 and RSA-PSS SHA-512 support, explicit replay storage, typed verification outcomes, and shared per-attempt signing context.
+- 1d7749a: Added first-class client and server request-attestation configuration to `Mppx.create()`.
+- e2b2a8a: Removed the legacy Tempo session server implementation and server compatibility exports while retaining the v1 client for existing sessions. See the [session upgrade guide](https://mpp.dev/blog/sessions-improved) for migration instructions.
+- 4637603: Aligned published and workspace dependency versions with shared pnpm catalog pins.
+- 4834ef1: Added configurable upstream error recovery hooks to proxy services and preserved request bodies across retries.
+- 00b0063: Fix js-yaml audit vulnerability (CVE-2026-59870) by bumping override to 4.3.1.
+- 81a5c6b: Fix `Method.toServer()` to pass through `onPaymentSuccess` from options.
+- f7f8e58: Fixed multi-challenge parsing when quoted parameter values contained the Payment scheme name.
+- 8e370ba: Added structured sponsor budget configuration and support for externally enforced sponsor budgets.
+- 40f430a: Multi-method intent handler: `.charge()` now works when multiple methods share an intent, internally composing all matching methods into one handler that respects `selectOffers`.
+- 1272520: Disabled the `no-underscore-dangle` lint rule.
+- 5ff5cb7: Fixed equality checks between equivalent hex and Tempo-formatted addresses.
+- 71b8884: Add per-method `onPaymentSuccess` hook to `ComposableHooks`. Routed through the server event dispatcher for error isolation.
+- 641aa4d: Kept discovery metadata aligned with runtime challenges by preserving composed offers, dispatching nested compositions, and deriving prices from canonical payment requests.
+- cd71f9e: Made attestation verifiers accept the core `AtomicStore` directly and shared its optimized `Store.tryClaim` replay primitive with Tempo charges.
+- f3a9369: Updated production dependencies.
+- 3d7ed4b: Removed obsolete compatibility shims for legacy viem Tempo call builders.
+- 47d6df7: Added server- and method-level filtering with immutable snapshots for composed HTTP payment offers across every server method constructor, including Stripe currency minimums.
+- 30f8a12: Added a session-bound WebSocket server helper that reused the configured store and settlement policy, and applied that policy to plain HTTP responses from SSE-enabled methods. Fixed automatic settlement schedules after committed Tempo session SSE and WebSocket charges.
+- 9f0afe0: Added a stable CLI launcher for workspace dependency installation.
+- bdaea3a: Standardized client transports on `getChallenges` and removed the singular `getChallenge` hook.
+- 4b3b1c0: Add `stripe.create()` machine payments API with auto deposit address resolution, PI recording, and unified `.charge()` handler.
+- fd38304: Added non-mutating credential validation and broadcast hooks to the Tempo session server method.
+- 8f9f8cb: Fixed body-bearing EVM routes to advertise `PAYMENT-REQUIRED` alongside MPP challenges and accept standard x402 payments when mppx route binding is not required.
+
 ## 0.8.15
 
 ### Patch Changes
