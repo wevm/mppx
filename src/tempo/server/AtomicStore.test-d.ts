@@ -19,6 +19,19 @@ test('tempo.charge store parameter requires AtomicStore', () => {
   tempo.charge({ store: Store.memory() })
 })
 
+test('tempo.charge sponsor budget store requires AtomicStore', () => {
+  const nonAtomic = Store.from({
+    get: async () => null,
+    put: async () => {},
+    delete: async () => {},
+  })
+
+  tempo.charge({ sponsorBudget: false })
+  // @ts-expect-error — sponsor budget coordination requires AtomicStore
+  tempo.charge({ sponsorBudget: { store: nonAtomic } })
+  tempo.charge({ sponsorBudget: { store: Store.memory() } })
+})
+
 test('tempo.session store parameter requires AtomicStore', () => {
   type SessionParameters = NonNullable<Parameters<typeof tempo.session>[0]>
   expectTypeOf<SessionParameters['store']>().toEqualTypeOf<Store.AtomicStore | undefined>()

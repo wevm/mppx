@@ -76,6 +76,21 @@ const server = Mppx_server.create({
 })
 
 describe('tempo', () => {
+  describe('sponsor budget configuration', () => {
+    test('validates structured limits', () => {
+      expect(() => tempo_server.charge({ sponsorBudget: { maxInFlightReservations: 0 } })).toThrow(
+        '`sponsorBudget.maxInFlightReservations` must be a positive safe integer.',
+      )
+      expect(() => tempo_server.charge({ sponsorBudget: { maxInFlightTotalFee: 0n } })).toThrow(
+        '`sponsorBudget.maxInFlightTotalFee` must be greater than zero.',
+      )
+    })
+
+    test('allows aggregate exposure to be enforced externally', () => {
+      expect(() => tempo_server.charge({ sponsorBudget: false })).not.toThrow()
+    })
+  })
+
   describe('intent: charge; type: hash', () => {
     test('default', async () => {
       const mppx = Mppx_client.create({
@@ -1894,6 +1909,7 @@ describe('tempo', () => {
         }),
       })
 
+      const replayStore = Store.memory()
       const sponsoredStore = Store.memory()
       const serverWithSlowSimulation = Mppx_server.create({
         methods: [
@@ -1903,7 +1919,8 @@ describe('tempo', () => {
             },
             currency: asset,
             account: accounts[0],
-            store: sponsoredStore,
+            sponsorBudget: { store: sponsoredStore },
+            store: replayStore,
             storeKeyPrefix: 'tenant:',
           }),
         ],

@@ -67,6 +67,7 @@ export function charge<const parameters extends charge.Parameters>(
     html,
     memo,
     relay,
+    sponsorBudget,
     splits,
     supportedModes,
     validateSender,
@@ -75,21 +76,31 @@ export function charge<const parameters extends charge.Parameters>(
   const storeKeyPrefix = parameters.storeKeyPrefix ?? ''
   const rawStore = (parameters.store ?? Store.memory()) as Store.AtomicStore<charge.StoreItemMap>
   const store = Store.from(rawStore, { keyPrefix: storeKeyPrefix })
-  // Aggregate exposure belongs to the actual sponsor, not a caller-specific
-  // replay namespace. Sharing the raw store gives every tenant/process the same
-  // atomic sponsor-wide budget.
-  const sponsorBudgetStore = Store.from(rawStore) as Store.AtomicStore<{
-    [key: `mppx:charge:sponsor-budget:${string}`]: SponsorBudget.State
-  }>
   const {
-    maxInFlightReservations = 100,
-    maxInFlightTotalFee = (feePayerPolicy?.maxTotalFee ?? 50_000_000_000_000_000n) * 10n,
+    maxInFlightReservations: legacyMaxInFlightReservations,
+    maxInFlightTotalFee: legacyMaxInFlightTotalFee,
     ...transactionFeePayerPolicy
   } = feePayerPolicy ?? {}
-  if (!Number.isSafeInteger(maxInFlightReservations) || maxInFlightReservations <= 0)
-    throw new Error('`feePayerPolicy.maxInFlightReservations` must be a positive safe integer.')
-  if (maxInFlightTotalFee <= 0n)
-    throw new Error('`feePayerPolicy.maxInFlightTotalFee` must be greater than zero.')
+  const sponsorBudgetConfig = sponsorBudget === false ? undefined : (sponsorBudget ?? {})
+  const maxInFlightReservations =
+    sponsorBudgetConfig?.maxInFlightReservations ?? legacyMaxInFlightReservations ?? 100
+  const maxInFlightTotalFee =
+    sponsorBudgetConfig?.maxInFlightTotalFee ??
+    legacyMaxInFlightTotalFee ??
+    (feePayerPolicy?.maxTotalFee ?? 50_000_000_000_000_000n) * 10n
+  if (sponsorBudgetConfig) {
+    if (!Number.isSafeInteger(maxInFlightReservations) || maxInFlightReservations <= 0)
+      throw new Error('`sponsorBudget.maxInFlightReservations` must be a positive safe integer.')
+    if (maxInFlightTotalFee <= 0n)
+      throw new Error('`sponsorBudget.maxInFlightTotalFee` must be greater than zero.')
+  }
+  // Aggregate exposure belongs to the actual sponsor, not a caller-specific replay namespace.
+  // Keep it unprefixed and shared across every tenant/process using the sponsor.
+  const sponsorBudgetStore = sponsorBudgetConfig
+    ? (Store.from(sponsorBudgetConfig.store ?? rawStore) as Store.AtomicStore<{
+        [key: `mppx:charge:sponsor-budget:${string}`]: SponsorBudget.State
+      }>)
+    : undefined
   const proofStore = parameters.store
     ? Store.from(parameters.store as Store.AtomicStore<charge.StoreItemMap>, {
         keyPrefix: storeKeyPrefix,
@@ -618,20 +629,21 @@ export function charge<const parameters extends charge.Parameters>(
                 expiresAt,
                 expires ? Date.parse(expires) : Number.MAX_SAFE_INTEGER,
               )
-              reservation = await SponsorBudget.reserve(sponsorBudgetStore, {
-                chainId: reservationChainId,
-                expiresAt,
-                fee: totalFee,
-                getReceipt: (transactionHash) =>
-                  getTransactionReceipt(client, { hash: transactionHash }),
-                id: finalHash.toLowerCase(),
-                maxReservations: maxInFlightReservations,
-                maxTotalFee: maxInFlightTotalFee,
-                owner: globalThis.crypto.randomUUID(),
-                sponsor,
-                transactionHash: finalHash,
-                waitUntil,
-              })
+              if (sponsorBudgetStore)
+                reservation = await SponsorBudget.reserve(sponsorBudgetStore, {
+                  chainId: reservationChainId,
+                  expiresAt,
+                  fee: totalFee,
+                  getReceipt: (transactionHash) =>
+                    getTransactionReceipt(client, { hash: transactionHash }),
+                  id: finalHash.toLowerCase(),
+                  maxReservations: maxInFlightReservations,
+                  maxTotalFee: maxInFlightTotalFee,
+                  owner: globalThis.crypto.randomUUID(),
+                  sponsor,
+                  transactionHash: finalHash,
+                  waitUntil,
+                })
               Expires.assert(challenge.expires, challenge.id)
             }
 
@@ -644,7 +656,7 @@ export function charge<const parameters extends charge.Parameters>(
 
             if (
               reservation &&
-              !(await SponsorBudget.transition(sponsorBudgetStore, reservation, 'broadcasting'))
+              !(await SponsorBudget.transition(sponsorBudgetStore!, reservation, 'broadcasting'))
             )
               throw new VerificationFailedError({
                 reason: 'Sponsor budget reservation ownership was lost before broadcast',
@@ -655,7 +667,7 @@ export function charge<const parameters extends charge.Parameters>(
               const receipt = await sendRawTransactionSync(client, {
                 serializedTransaction: serializedTransaction_final,
               })
-              if (reservation) await SponsorBudget.release(sponsorBudgetStore, reservation)
+              if (reservation) await SponsorBudget.release(sponsorBudgetStore!, reservation)
               const matchedLogs = await assertTransferLogs(receipt, {
                 currency,
                 sender: transaction.from! as `0x${string}`,
@@ -685,7 +697,7 @@ export function charge<const parameters extends charge.Parameters>(
               })
             if (
               reservation &&
-              !(await SponsorBudget.transition(sponsorBudgetStore, reservation, 'pending'))
+              !(await SponsorBudget.transition(sponsorBudgetStore!, reservation, 'pending'))
             )
               throw new VerificationFailedError({
                 reason: 'Sponsor budget reservation ownership was lost after broadcast',
@@ -698,7 +710,7 @@ export function charge<const parameters extends charge.Parameters>(
             } as const
           } catch (error) {
             if (!broadcastAttempted) {
-              if (reservation) await SponsorBudget.release(sponsorBudgetStore, reservation)
+              if (reservation) await SponsorBudget.release(sponsorBudgetStore!, reservation)
               if (finalHash && finalHash.toLowerCase() !== hash.toLowerCase())
                 await releaseHashUse(store, finalHash)
               await releaseHashUse(store, hash)
@@ -743,13 +755,8 @@ export declare namespace charge {
     /**
      * Override the fee-sponsor policy used when co-signing Tempo charge
      * transactions. Defaults resolve per chain, including a higher
-     * priority-fee ceiling on Moderato and a bounded aggregate in-flight fee
-     * budget. Sponsored transactions reserve their declared maximum fee
-     * atomically; independent expiring-nonce transactions run concurrently
-     * while capacity remains and wait for capacity when the budget is full.
-     *
-     * If you increase `maxGas`, `maxFeePerGas`, or `maxTotalFee`, you may also
-     * need to raise `maxInFlightTotalFee`.
+     * priority-fee ceiling on Moderato. Aggregate in-flight exposure is
+     * configured separately with `sponsorBudget`.
      */
     feePayerPolicy?: FeePayerPolicy | undefined
     /**
@@ -800,6 +807,14 @@ export declare namespace charge {
      */
     relay?: RelayOptions | undefined
     /**
+     * Configures aggregate in-flight fee exposure for sponsored transactions.
+     *
+     * Set to `false` only when aggregate exposure is enforced outside mppx.
+     * The configured store must be shared by every process using the sponsor.
+     * @default `{}`
+     */
+    sponsorBudget?: SponsorBudgetConfig | false | undefined
+    /**
      * Whether to wait for the charge transaction to confirm on-chain before
      * responding. @default true
      *
@@ -826,14 +841,26 @@ export declare namespace charge {
   >
 
   type FeePayerPolicy = Partial<FeePayer.Policy> & {
-    /** Maximum number of sponsored transactions awaiting a terminal receipt. @default 100 */
+    /**
+     * Maximum number of sponsored transactions awaiting a terminal receipt.
+     * @deprecated Use `sponsorBudget.maxInFlightReservations`.
+     */
     maxInFlightReservations?: number | undefined
     /**
      * Maximum aggregate declared fee exposure awaiting terminal receipts.
      *
-     * @default `maxTotalFee * 10`
+     * @deprecated Use `sponsorBudget.maxInFlightTotalFee`.
      */
     maxInFlightTotalFee?: bigint | undefined
+  }
+
+  type SponsorBudgetConfig = {
+    /** Maximum number of sponsored transactions awaiting a terminal receipt. @default 100 */
+    maxInFlightReservations?: number | undefined
+    /** Maximum aggregate declared fee exposure. @default `feePayerPolicy.maxTotalFee * 10` */
+    maxInFlightTotalFee?: bigint | undefined
+    /** Atomic store shared by every process using the sponsor. Defaults to `store`. */
+    store?: Store.AtomicStore | undefined
   }
 
   /** Tempo API relay configuration for server-side charges. */
