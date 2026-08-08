@@ -43,7 +43,7 @@ const payments = Mppx.create({
       async broadcast(parameters: Parameters<NonNullable<typeof method.broadcast>>[0]) {
         const { credential } = parameters
         const receipt = await relay('/v1/mpp/broadcast', credential, {
-          'idempotency-key': `mppx_${credential.challenge.id}`,
+          'idempotency-key': `mpp_${credential.challenge.id}`,
         })
         return Receipt.from({ ...receipt, status: 'success' })
       },

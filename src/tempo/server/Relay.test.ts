@@ -196,7 +196,7 @@ describe('relay boundary', () => {
           headers: expect.objectContaining({
             Accept: 'application/json',
             'content-type': 'application/json',
-            'idempotency-key': expect.stringMatching(/^mppx_0x/),
+            'idempotency-key': expect.stringMatching(/^mpp_0x/),
             'tempo-api-key': 'tempo_api_key',
           }),
           method: 'POST',
@@ -282,9 +282,9 @@ describe('relay boundary', () => {
 
     const keys = calls.map((init) => (init.headers as Record<string, string>)['idempotency-key'])
     expect(keys).toEqual([
-      `mppx_${Hash.keccak256(Hex.toBytes(credential.payload.signature), { as: 'Hex' })}`,
-      `mppx_${Hash.keccak256(Hex.toBytes(credential.payload.signature), { as: 'Hex' })}`,
-      `mppx_${Hash.keccak256(Hex.toBytes('0x5678'), { as: 'Hex' })}`,
+      `mpp_${Hash.keccak256(Hex.toBytes(credential.payload.signature), { as: 'Hex' })}`,
+      `mpp_${Hash.keccak256(Hex.toBytes(credential.payload.signature), { as: 'Hex' })}`,
+      `mpp_${Hash.keccak256(Hex.toBytes('0x5678'), { as: 'Hex' })}`,
     ])
   })
 
@@ -316,7 +316,7 @@ describe('relay boundary', () => {
       ),
       { as: 'Hex' },
     )
-    expect(headers['idempotency-key']).toBe(`mppx_${expected}`)
+    expect(headers['idempotency-key']).toBe(`mpp_${expected}`)
   })
 
   test('preserves the legacy combined verify hook', async () => {

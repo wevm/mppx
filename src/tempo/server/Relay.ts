@@ -232,11 +232,11 @@ function idempotencyKey(input: RelayInput): string {
     Hex.validate(payload.signature)
   ) {
     const transactionHash = Hash.keccak256(Hex.toBytes(payload.signature), { as: 'Hex' })
-    return `mppx_${transactionHash}`
+    return `mpp_${transactionHash}`
   }
 
   const hash = Hash.sha256(Bytes.fromString(Json.canonicalize(input)), { as: 'Hex' })
-  return `mppx_${hash}`
+  return `mpp_${hash}`
 }
 
 function failure(value?: unknown) {
