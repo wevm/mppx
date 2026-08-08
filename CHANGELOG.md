@@ -1,5 +1,11 @@
 # mppx
 
+## 0.8.17
+
+### Patch Changes
+
+- b7ab48e: Changed Tempo relay idempotency keys to use the `mpp_` prefix.
+
 ## 0.8.16
 
 ### Patch Changes
