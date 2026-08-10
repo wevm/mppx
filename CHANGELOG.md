@@ -1,5 +1,12 @@
 # mppx
 
+## 0.8.17
+
+### Patch Changes
+
+- 52d8701: Reject sub-cent amounts via `canOffer` before issuing 402 challenge on stripe-managed crypto rails. Add `metadata` parameter to `stripe.create()` for forwarding key-value pairs to Stripe PaymentIntents.
+- b7ab48e: Changed Tempo relay idempotency keys to use the `mpp_` prefix.
+
 ## 0.8.16
 
 ### Patch Changes
