@@ -10,9 +10,9 @@ minimumReleaseAge: 1440
 trustPolicy: no-downgrade
 
 catalog:
-  file-type: '21.3.2'
-  ox: '0.14.33'
-  typescript: '~5.9.3'
+  file-type: '22.0.1'
+  ox: '1.6.0'
+  typescript: '~7.0.2'
 
 overrides:
   mppx: 'workspace:*'

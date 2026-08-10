@@ -16,6 +16,6 @@
     "mppx": "latest",
     "typescript": "catalog:",
     "viem": "^2.54.4",
-    "vite": "^8.1.5"
+    "vite": "^8.2.0"
   }
 }

@@ -17,7 +17,7 @@
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
     "viem": "^2.54.4",
-    "wagmi": "^3.7.4"
+    "wagmi": "^3.7.5"
   },
   "devDependencies": {
     "@types/react": "^19.2.17",
@@ -25,6 +25,6 @@
     "@typescript/native-preview": "^7.0.0-dev.20260707.2",
     "@vitejs/plugin-react": "^6.0.4",
     "typescript": "catalog:",
-    "vite": "^8.1.5"
+    "vite": "^8.2.0"
   }
 }
