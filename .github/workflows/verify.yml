@@ -39,7 +39,7 @@ jobs:
         uses: ./.github/actions/install-dependencies
 
       - name: Check for changeset
-        if: "${{ github.event_name == 'pull_request' && !(github.event.pull_request.head.ref == 'changeset-release/main' && github.event.pull_request.title == 'chore: version packages') && !contains(github.event.pull_request.labels.*.name, 'skip-changeset') }}"
+        if: "${{ github.event_name == 'pull_request' && github.event.pull_request.user.login != 'dependabot[bot]' && !(github.event.pull_request.head.ref == 'changeset-release/main' && github.event.pull_request.title == 'chore: version packages') && !contains(github.event.pull_request.labels.*.name, 'skip-changeset') }}"
         run: pnpm changeset status --since=HEAD^1
 
       - name: Ensure overrides live in pnpm-workspace.yaml
