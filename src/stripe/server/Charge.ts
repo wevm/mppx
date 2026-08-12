@@ -343,7 +343,7 @@ async function createWithClient(parameters: {
     }
     const paymentIntentOptions = {
       apiVersion: stripePreviewVersion,
-      idempotencyKey: `mppx_${challenge.id}_${spt}`,
+      idempotencyKey: `mpp_${challenge.id}_${spt}`,
       ...(settlement?.stripeAccount !== undefined && { stripeAccount: settlement.stripeAccount }),
     }
     const result = await client.paymentIntents.create(
@@ -396,7 +396,7 @@ async function createWithSecretKey(parameters: {
   const headers = {
     Authorization: `Basic ${btoa(`${secretKey}:`)}`,
     'Content-Type': 'application/x-www-form-urlencoded',
-    'Idempotency-Key': `mppx_${challenge.id}_${spt}`,
+    'Idempotency-Key': `mpp_${challenge.id}_${spt}`,
     'Stripe-Version': stripePreviewVersion,
     ...(settlement?.stripeAccount !== undefined && { 'Stripe-Account': settlement.stripeAccount }),
   }

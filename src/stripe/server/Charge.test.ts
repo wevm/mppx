@@ -167,7 +167,7 @@ describe('stripe.charge with client', () => {
       allow_redirects: 'never',
       enabled: true,
     })
-    expect(options.idempotencyKey).toMatch(/^mppx_/)
+    expect(options.idempotencyKey).toBe(`mpp_${challenge.id}_spt_test_token`)
   })
 
   test('behavior: includes metadata in client call', async () => {
