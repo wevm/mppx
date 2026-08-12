@@ -23,10 +23,17 @@ function findMethod(methods: readonly AnyServer[], name: string, intent: string)
   return methods.find((m) => m.name === name && m.intent === intent)!
 }
 
+const mockResolver = async () => '0xabc'
+
 describe('stripe.create() defaultMethods', () => {
   test('returns tempo and spt methods', async () => {
     const client = createMockStripeClient()
-    const mp = stripe({ client, networkId: 'test-profile', livemode: false })
+    const mp = stripe({
+      client,
+      networkId: 'test-profile',
+      livemode: false,
+      depositAddresses: mockResolver,
+    })
 
     const methods = await mp.defaultMethods()
 
@@ -74,7 +81,12 @@ describe('stripe.create() defaultMethods', () => {
 
   test.each(['tempo', 'spt'] as const)('exclude removes %s', async (excluded) => {
     const client = createMockStripeClient()
-    const mp = stripe({ client, networkId: 'test-profile', livemode: false })
+    const mp = stripe({
+      client,
+      networkId: 'test-profile',
+      livemode: false,
+      depositAddresses: mockResolver,
+    })
 
     const methods = await mp.defaultMethods({ exclude: [excluded] })
     const expectedName = excluded === 'spt' ? 'stripe' : excluded
@@ -91,6 +103,7 @@ describe('stripe.create() PI recording', () => {
       client,
       networkId: 'test-profile',
       livemode: false,
+      depositAddresses: mockResolver,
     })
 
     const methods = await mp.defaultMethods()
@@ -113,6 +126,7 @@ describe('stripe.create() PI recording', () => {
       client,
       networkId: 'test-profile',
       livemode: false,
+      depositAddresses: mockResolver,
     })
 
     const methods = await mp.defaultMethods()
@@ -399,5 +413,46 @@ describe('stripe.create() canOffer composition with user hook', () => {
       solanaMethod.canOffer!({ input: new Request('http://x'), request: { amount: '5000' } }),
     ).toBe(false)
     expect(userCanOffer).not.toHaveBeenCalled()
+  })
+})
+
+describe('stripe.create() graceful degradation', () => {
+  test('partial resolver failure returns successful methods and warns', async () => {
+    const client = createMockStripeClient()
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    const mp = stripe({
+      client,
+      networkId: 'test-profile',
+      livemode: false,
+      depositAddresses: async (network) => {
+        if (network === 'tempo') throw new Error('API unavailable')
+        return '0x1234567890abcdef1234567890abcdef12345678'
+      },
+    })
+
+    const methods = await mp.defaultMethods().additional({
+      base: {
+        x402: { facilitator: { verify: async () => ({}), settle: async () => ({}) } } as any,
+      },
+    })
+
+    expect(methods.find((m) => m.name === 'tempo')).toBeUndefined()
+    expect(findMethod(methods, 'evm', 'charge')).toBeDefined()
+    expect(findMethod(methods, 'stripe', 'charge')).toBeDefined()
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('tempo method excluded'))
+
+    warnSpy.mockRestore()
+  })
+
+  test('no depositAddresses returns sync SPT-only with .additional()', () => {
+    const client = createMockStripeClient()
+    const mp = stripe({ client, networkId: 'test-profile', livemode: false })
+
+    const methods = mp.defaultMethods()
+    expect(methods.additional).toBeTypeOf('function')
+
+    const withAdditional = methods.additional({})
+    expect(findMethod(withAdditional, 'stripe', 'charge')).toBeDefined()
   })
 })

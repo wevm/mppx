@@ -105,6 +105,19 @@ test('sync defaultMethods() with static depositAddresses returns SyncMethodsResu
   expectTypeOf(mppx.charge).not.toBeNullable()
 })
 
+test('no depositAddresses returns SyncMethodsResult', () => {
+  const mp = stripe.create({
+    client: {} as any,
+    networkId: 'profile_x',
+    livemode: false,
+  })
+  const methods = mp.defaultMethods()
+  expectTypeOf(methods).toHaveProperty('additional')
+
+  const mppx = Mppx.create({ methods, secretKey: 'test' })
+  expectTypeOf(mppx.charge).toBeFunction()
+})
+
 test('depositAddresses as resolver function returns DefaultMethodsBuilder', async () => {
   const mp = stripe.create({
     client: {} as any,

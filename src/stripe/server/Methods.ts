@@ -112,9 +112,9 @@ interface StripeMachinePayments<P extends stripe.Parameters = stripe.Parameters>
   ) => Promise<stripe.DepositAddress<N>>
   defaultMethods: (
     config?: DefaultMethodsConfig,
-  ) => P['depositAddresses'] extends Partial<Record<stripe.Network, string>>
-    ? SyncMethodsResult
-    : DefaultMethodsBuilder
+  ) => P['depositAddresses'] extends (network: stripe.Network) => Promise<string>
+    ? DefaultMethodsBuilder
+    : SyncMethodsResult
 }
 
 class DefaultMethodsBuilder implements PromiseLike<DefaultMethods> {
@@ -344,27 +344,37 @@ export function stripe<const P extends stripe.Parameters>(parameters: P): Stripe
   ): SyncMethodsResult | DefaultMethodsBuilder {
     const excluded = new Set(config?.exclude)
 
-    if (depositAddresses && typeof depositAddresses !== 'function') {
-      // Sync: static deposit addresses provided at stripe.create() time
-      const addresses = new Map(Object.entries(depositAddresses)) as Map<string, string>
-      return Object.assign(createMethodsFromAddresses(addresses, excluded), {
-        additional: (additional: AdditionalConfig) =>
-          createMethodsFromAddresses(addresses, excluded, additional),
-      }) as SyncMethodsResult
-    } else {
+    if (typeof depositAddresses === 'function') {
       // Async: resolve addresses dynamically
       return new DefaultMethodsBuilder(async (additional) => {
         const networks = neededNetworks(excluded, additional)
-        const results = await Promise.all(
+        const results = await Promise.allSettled(
           networks.map(async (network) => ({
             network,
             address: await resolveAddress(network),
           })),
         )
-        const addresses = new Map(results.map(({ network, address }) => [network, address]))
+        const addresses = new Map<string, string>()
+        for (const result of results) {
+          if (result.status === 'fulfilled') {
+            addresses.set(result.value.network, result.value.address)
+          } else {
+            const idx = results.indexOf(result)
+            console.warn(
+              `[stripe.create] ${networks[idx]} method excluded: ${(result.reason as Error)?.message ?? result.reason}`,
+            )
+          }
+        }
         return createMethodsFromAddresses(addresses, excluded, additional)
       })
     }
+
+    const addresses = new Map(Object.entries(depositAddresses ?? {})) as Map<string, string>
+
+    return Object.assign(createMethodsFromAddresses(addresses, excluded), {
+      additional: (additional: AdditionalConfig) =>
+        createMethodsFromAddresses(addresses, excluded, additional),
+    }) as SyncMethodsResult
   }
 
   return {
@@ -382,7 +392,7 @@ export function stripe<const P extends stripe.Parameters>(parameters: P): Stripe
 export namespace stripe {
   export const spt = charge_
 
-  /** @deprecated Use `stripe.spt()` instead. */
+  /** @deprecated Use `stripe.create({ ... }).spt.charge()` or `stripe.spt()` instead. */
   export const charge = charge_
 
   export const create = stripe
