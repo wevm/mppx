@@ -313,6 +313,7 @@ describe('stripe.charge with client', () => {
     const [input, init] = fetchMock.mock.calls[0]!
     expect(input).toBe('https://api.stripe.com/v1/payment_intents')
     const headers = new Headers(init?.headers)
+    expect(headers.get('Idempotency-Key')).toBe(`mpp_${credential.challenge.id}_spt_test_token`)
     expect(headers.get('Stripe-Account')).toBe('acct_connected')
     const body = init?.body as URLSearchParams
     expect(body.get('application_fee_amount')).toBe('12')
