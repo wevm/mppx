@@ -3,7 +3,14 @@ import { Mppx as Mppx_client, tempo as tempo_client } from 'mppx/client'
 import { Mppx as Mppx_server, tempo as tempo_server } from 'mppx/server'
 import { P256, type Hex, WebAuthnP256 } from 'ox'
 import { SignatureEnvelope, TxEnvelopeTempo } from 'ox/tempo'
-import { createClient, custom, encodeFunctionData, parseSignature, parseUnits } from 'viem'
+import {
+  createClient,
+  custom,
+  encodeFunctionData,
+  maxUint256,
+  parseSignature,
+  parseUnits,
+} from 'viem'
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts'
 import {
   getTransactionReceipt,
@@ -21,6 +28,7 @@ import { accounts, asset, chain, client, fundAccount, http } from '~test/tempo/v
 import * as Store from '../../Store.js'
 import * as Attribution from '../Attribution.js'
 import * as defaults from '../internal/defaults.js'
+import * as MachineToken from '../internal/machine-token.js'
 import * as Proof from '../internal/proof.js'
 
 const realm = 'api.example.com'
@@ -999,6 +1007,82 @@ describe('tempo', () => {
   })
 
   describe('intent: charge; type: transaction; via Mppx', () => {
+    test('behavior: advertises the machine-token hint and validates owned calls', async () => {
+      const machineTokenClient = createClient({
+        account: accounts[1],
+        chain: { ...chain, id: defaults.chainId.testnet },
+        transport: custom({
+          async request({ method }) {
+            if (method === 'eth_chainId') return `0x${defaults.chainId.testnet.toString(16)}`
+            if (method === 'eth_call') return '0x'
+            throw new Error(`Unexpected machine-token test RPC method: ${method}`)
+          },
+        }),
+      })
+      const [method] = tempo_server({
+        machineTokenEnabled: true,
+        account: accounts[0],
+        currency: asset,
+        feePayer: true,
+        getClient: () => machineTokenClient,
+        memo: `0x${'ab'.repeat(32)}`,
+        supportedModes: ['pull', 'push'],
+        testnet: true,
+      })
+      const machineTokenServer = Mppx_server.create({ methods: [method], realm, secretKey })
+      const httpServer = await Http.createServer(async (req, res) => {
+        const result = await Mppx_server.toNodeListener(
+          machineTokenServer.charge({ amount: '1', decimals: 6, recipient: accounts[0].address }),
+        )(req, res)
+        if (result.status === 402) return
+        res.end('OK')
+      })
+
+      const response = await fetch(httpServer.url)
+      const challenge = Challenge.fromResponse(response, {
+        methods: [tempo_client.charge()],
+      })
+      expect(challenge.request.methodDetails?.machineTokenEnabled).toBe(true)
+      expect(challenge.request.methodDetails).toMatchObject({
+        feePayer: true,
+        supportedModes: ['pull', 'push'],
+      })
+
+      const amount = BigInt(challenge.request.amount)
+      const memo = challenge.request.methodDetails!.memo as Hex.Hex
+      const calls = MachineToken.getRoute({
+        chainId: defaults.chainId.testnet,
+        currency: asset,
+        transfers: [{ amount, memo, recipient: accounts[0].address }],
+      })!.calls
+      const signature = await signTransaction(machineTokenClient, {
+        account: accounts[1],
+        calls,
+        gas: 100_000n,
+        maxFeePerGas: 1_000_000_000n,
+        maxPriorityFeePerGas: 1_000_000_000n,
+        nonce: 0,
+        nonceKey: maxUint256,
+        feePayer: true,
+        validBefore: Math.floor(Date.now() / 1_000) + 25,
+      } as never)
+      const credential = Credential.from({
+        challenge,
+        payload: { signature, type: 'transaction' as const },
+        source: `did:pkh:eip155:${defaults.chainId.testnet}:${accounts[1].address}`,
+      })
+      await expect(
+        method.validate?.({
+          credential: credential as never,
+          request: credential.challenge.request as never,
+        }),
+      ).resolves.toMatchObject({
+        details: { mode: 'pull', sender: accounts[1].address.toLowerCase() },
+      })
+
+      httpServer.close()
+    })
+
     test('behavior: rejects pull then push replay of the same transaction hash', async () => {
       const dedupServer = Mppx_server.create({
         methods: [
@@ -2297,6 +2381,15 @@ describe('tempo', () => {
         for await (const chunk of req) requestBody += chunk
         const request = JSON.parse(requestBody)
         feePayerRequests.push(request)
+
+        if (request.method === 'eth_sendRawTransactionSync') {
+          sequence.push('relay-broadcast')
+          const result = await client.request(request)
+          res.setHeader('content-type', 'application/json')
+          res.end(JSON.stringify({ id: request.id, jsonrpc: '2.0', result }))
+          return
+        }
+
         sequence.push('complete')
 
         const transaction = request.params[0]
@@ -2387,8 +2480,11 @@ describe('tempo', () => {
 
       const response = await mppx.fetch(httpServer.url)
       expect(response.status).toBe(200)
-      expect(feePayerRequests.map(({ method }) => method)).toEqual(['eth_fillTransaction'])
-      expect(sequence).toEqual(['simulate', 'complete', 'simulate', 'broadcast'])
+      expect(feePayerRequests.map(({ method }) => method)).toEqual([
+        'eth_fillTransaction',
+        'eth_sendRawTransactionSync',
+      ])
+      expect(sequence).toEqual(['simulate', 'complete', 'simulate', 'relay-broadcast'])
 
       const receipt = Receipt.fromResponse(response)
       expect(receipt.status).toBe('success')
@@ -2404,9 +2500,9 @@ describe('tempo', () => {
       const rejected = await mppx.fetch(httpServer.url)
 
       expect(rejected.status).not.toBe(200)
-      expect(feePayerRequests).toHaveLength(2)
+      expect(feePayerRequests).toHaveLength(3)
       expect(sequence.slice(0, 2)).toEqual(['simulate', 'complete'])
-      expect(sequence).not.toContain('broadcast')
+      expect(sequence).not.toContain('relay-broadcast')
 
       httpServer.close()
       feePayerServer.close()

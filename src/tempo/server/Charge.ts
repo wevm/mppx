@@ -1,7 +1,9 @@
 import * as SignatureEnvelope from 'ox/tempo/SignatureEnvelope'
 import {
+  createClient,
   decodeFunctionData,
   formatUnits,
+  http,
   keccak256,
   parseEventLogs,
   type TransactionReceipt,
@@ -32,6 +34,7 @@ import * as Charge_internal from '../internal/charge.js'
 import * as defaults from '../internal/defaults.js'
 import * as FeePayer from '../internal/fee-payer.js'
 import { resolveFeeToken } from '../internal/fee-token.js'
+import * as MachineToken from '../internal/machine-token.js'
 import * as Proof from '../internal/proof.js'
 import * as Selectors from '../internal/selectors.js'
 import type * as types from '../internal/types.js'
@@ -57,6 +60,7 @@ export function charge<const parameters extends charge.Parameters>(
   >,
 ): Method.Server<typeof Methods.charge, charge.DeriveDefaults<parameters>> {
   const {
+    machineTokenEnabled,
     amount,
     currency = defaults.resolveCurrency(parameters),
     decimals = defaults.decimals,
@@ -143,6 +147,7 @@ export function charge<const parameters extends charge.Parameters>(
     const currency = resolvedRequest.currency as `0x${string}`
     const recipient = resolvedRequest.recipient as `0x${string}`
     const memo = methodDetails?.memo as `0x${string}` | undefined
+    const machineTokenEnabled = methodDetails?.machineTokenEnabled === true
     const isZeroAmount = BigInt(amount) === 0n
 
     Expires.assert(challenge.expires, challenge.id)
@@ -152,6 +157,7 @@ export function charge<const parameters extends charge.Parameters>(
 
     return {
       amount,
+      machineTokenEnabled,
       chainId,
       challenge,
       client: await getClient({ chainId }),
@@ -179,6 +185,7 @@ export function charge<const parameters extends charge.Parameters>(
     context: CredentialContext,
   ) {
     const {
+      machineTokenEnabled,
       amount,
       chainId,
       challenge,
@@ -202,6 +209,8 @@ export function charge<const parameters extends charge.Parameters>(
     })
     const sender = source?.address ?? receipt.from
     const matchedLogs = await assertTransferLogs(receipt, {
+      machineTokenEnabled,
+      chainId: chainId ?? client.chain?.id,
       currency,
       sender,
       source,
@@ -266,6 +275,7 @@ export function charge<const parameters extends charge.Parameters>(
     context: CredentialContext,
   ) {
     const {
+      machineTokenEnabled,
       amount,
       chainId,
       challenge,
@@ -296,11 +306,21 @@ export function charge<const parameters extends charge.Parameters>(
       requestAllowsFeePayer &&
       !!(typeof request.feePayer === 'object' ? request.feePayer : feePayer || feePayerUrl)
     const transfers = getExpectedTransfers({ amount, memo, methodDetails, recipient })
-    const matchedCalls = assertTransferCalls(transaction.calls ?? [], {
-      currency,
-      exactCount: isFeePayerTx,
-      transfers,
-    })
+    const machineTokenTransfers = machineTokenEnabled
+      ? MachineToken.validateCalls({
+          calls: (transaction.calls ?? []) as readonly MachineToken.Call[],
+          chainId: chainId ?? client.chain?.id,
+          currency,
+          transfers,
+        })
+      : false
+    const matchedCalls =
+      machineTokenTransfers ||
+      assertTransferCalls(transaction.calls ?? [], {
+        currency,
+        exactCount: isFeePayerTx,
+        transfers,
+      })
     if (!memo)
       assertChallengeBoundCallMemo(matchedCalls, {
         challengeId: challenge.id,
@@ -308,11 +328,12 @@ export function charge<const parameters extends charge.Parameters>(
       })
 
     if (isFeePayerTx) {
-      FeePayer.validateCalls(
-        transaction.calls,
-        { amount, currency, recipient },
-        { currency, expectedTransfers: transfers },
-      )
+      if (!machineTokenTransfers)
+        FeePayer.validateCalls(
+          transaction.calls,
+          { amount, currency, recipient },
+          { currency, expectedTransfers: transfers },
+        )
       FeePayer.assertAllowedFeeToken(transaction, FeePayer.defaultAllowedFeeTokens(chainId))
     } else {
       await viem_call(
@@ -321,7 +342,13 @@ export function charge<const parameters extends charge.Parameters>(
       )
     }
 
-    return { isFeePayerTx, serializedTransaction, transaction, transfers }
+    return {
+      isFeePayerTx,
+      serializedTransaction,
+      transaction,
+      transfers,
+      usesMachineToken: !!machineTokenTransfers,
+    }
   }
 
   async function validateCredential(
@@ -350,7 +377,7 @@ export function charge<const parameters extends charge.Parameters>(
       }
 
       case 'transaction': {
-        const { isFeePayerTx, serializedTransaction, transaction, transfers } =
+        const { isFeePayerTx, serializedTransaction, transaction, transfers, usesMachineToken } =
           await validateTransactionCredential(credential, context.payload, request, context)
         return {
           details: {
@@ -364,6 +391,7 @@ export function charge<const parameters extends charge.Parameters>(
           transaction,
           transfers,
           type: 'transaction' as const,
+          usesMachineToken,
         }
       }
     }
@@ -374,6 +402,7 @@ export function charge<const parameters extends charge.Parameters>(
     canOffer: parameters.canOffer,
     onPaymentSuccess: parameters.onPaymentSuccess,
     defaults: {
+      machineTokenEnabled,
       amount,
       currency,
       decimals,
@@ -434,6 +463,8 @@ export function charge<const parameters extends charge.Parameters>(
       })()
       if (client.chain?.id !== chainId)
         throw new Error(`Client not configured with chainId ${chainId}.`)
+      if (request.machineTokenEnabled && !MachineToken.isSupported(chainId))
+        throw new Error(`Machine tokens are not supported on chainId ${chainId}.`)
 
       const resolvedFeePayer = (() => {
         if (request.feePayer === false) return credential ? false : undefined
@@ -446,6 +477,7 @@ export function charge<const parameters extends charge.Parameters>(
 
       return {
         ...request,
+        machineTokenEnabled: request.machineTokenEnabled || undefined,
         chainId,
         feePayer: resolvedFeePayer,
         memo: request.memo || undefined,
@@ -518,7 +550,8 @@ export function charge<const parameters extends charge.Parameters>(
         }
 
         case 'transaction': {
-          const { isFeePayerTx, serializedTransaction, transaction, transfers } = validated
+          const { isFeePayerTx, serializedTransaction, transaction, transfers, usesMachineToken } =
+            validated
 
           // Pre-broadcast dedup: catch exact byte-for-byte replays early.
           const hash = keccak256(serializedTransaction)
@@ -533,6 +566,10 @@ export function charge<const parameters extends charge.Parameters>(
           let reservation: SponsorBudget.Handle | undefined
 
           try {
+            const broadcastClient =
+              feePayerUrl && isFeePayerTx
+                ? createClient({ chain: client.chain!, transport: http(feePayerUrl) })
+                : client
             const allowedFeeTokens = FeePayer.defaultAllowedFeeTokens(chainId)
             if (isFeePayerTx) FeePayer.assertAllowedFeeToken(transaction, allowedFeeTokens)
             const selectableFeeTokens = allowedFeeTokens as readonly `0x${string}`[]
@@ -664,11 +701,13 @@ export function charge<const parameters extends charge.Parameters>(
 
             broadcastAttempted = true
             if (waitForConfirmation) {
-              const receipt = await sendRawTransactionSync(client, {
+              const receipt = await sendRawTransactionSync(broadcastClient, {
                 serializedTransaction: serializedTransaction_final,
               })
               if (reservation) await SponsorBudget.release(sponsorBudgetStore!, reservation)
               const matchedLogs = await assertTransferLogs(receipt, {
+                machineTokenEnabled: usesMachineToken,
+                chainId: chainId ?? client.chain?.id,
                 currency,
                 sender: transaction.from! as `0x${string}`,
                 transfers,
@@ -688,7 +727,7 @@ export function charge<const parameters extends charge.Parameters>(
             // Optimistic path: broadcast without waiting for confirmation
             // (simulation above already ran). The returned receipt assumes
             // success — callers opt in via waitForConfirmation: false.
-            const reference = await sendRawTransaction(client, {
+            const reference = await sendRawTransaction(broadcastClient, {
               serializedTransaction: serializedTransaction_final,
             })
             if (reference.toLowerCase() !== finalHash.toLowerCase())
@@ -749,7 +788,7 @@ export declare namespace charge {
     source?: { address: `0x${string}`; chainId: number } | undefined
   }
 
-  type Parameters = {
+  type Parameters = MachineToken.Options & {
     /** Render payment page when Accept header is text/html (e.g. in browsers) */
     html?: boolean | Html.Config | undefined
     /**
@@ -875,12 +914,20 @@ function chargeBinding(request: ChargeRequest) {
     request
   requestRest satisfies Record<string, never>
 
-  const { chainId, feePayer, memo, splits, supportedModes, ...methodDetailsRest } =
-    methodDetails ?? {}
+  const {
+    chainId,
+    feePayer,
+    machineTokenEnabled,
+    memo,
+    splits,
+    supportedModes,
+    ...methodDetailsRest
+  } = methodDetails ?? {}
   methodDetailsRest satisfies Record<string, never>
   void feePayer
 
   return {
+    machineTokenEnabled,
     amount,
     chainId,
     currency,
@@ -1038,6 +1085,8 @@ type TransferLog =
 async function assertTransferLogs(
   receipt: TransactionReceipt,
   parameters: {
+    machineTokenEnabled?: boolean | undefined
+    chainId?: number | undefined
     currency: `0x${string}`
     sender: `0x${string}`
     source?: { address: `0x${string}`; chainId: number } | undefined
@@ -1073,9 +1122,12 @@ async function assertTransferLogs(
       if (!memoMatches) continue
       if (
         !(await isValidTransferSender({
+          machineTokenEnabled: parameters.machineTokenEnabled,
+          chainId: parameters.chainId,
           expectedSender: parameters.sender,
           sender: log.args.from,
           source: parameters.source,
+          transactionSender: receipt.from,
           validateSender: parameters.validateSender,
         }))
       )
@@ -1181,12 +1233,21 @@ function isSameTransferLog(a: ParsedTransferLog, b: ParsedTransferLog): boolean 
 }
 
 async function isValidTransferSender(parameters: {
+  machineTokenEnabled?: boolean | undefined
+  chainId?: number | undefined
   expectedSender: `0x${string}`
   sender: `0x${string}`
   source?: { address: `0x${string}`; chainId: number } | undefined
+  transactionSender: `0x${string}`
   validateSender?: charge.ValidateSender | undefined
 }): Promise<boolean> {
   if (TempoAddress.isEqual(parameters.sender, parameters.expectedSender)) return true
+  if (
+    parameters.machineTokenEnabled &&
+    TempoAddress.isEqual(parameters.transactionSender, parameters.expectedSender) &&
+    MachineToken.isSwap({ address: parameters.sender, chainId: parameters.chainId })
+  )
+    return true
   if (!parameters.validateSender) return false
   return parameters.validateSender({
     expectedSender: parameters.expectedSender,
@@ -1345,7 +1406,7 @@ function assertChallengeBoundMemo(
 }
 
 function assertChallengeBoundCallMemo(
-  matchedCalls: readonly Charge_internal.Transfer[],
+  matchedCalls: readonly { memo?: string | undefined }[],
   parameters: { challengeId: string; realm: string },
 ) {
   const bound = matchedCalls.some((call) => {

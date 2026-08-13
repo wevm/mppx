@@ -256,6 +256,166 @@ describe('tempo.charge client', () => {
     }
   })
 
+  test('tries the enabled machine token before direct balance and auto-swap', async () => {
+    vi.resetModules()
+    const chainId = 42431
+    const machineTokenCalls = [{ data: '0x1234', to: '0x4444444444444444444444444444444444444444' }]
+    const autoSwapCalls = [{ data: '0x5678', to: '0x5555555555555555555555555555555555555555' }]
+    let hasMachineTokens = true
+    const findMachineTokenCalls = vi.fn(async (_client: unknown, _parameters: unknown) =>
+      hasMachineTokens ? machineTokenCalls : undefined,
+    )
+    const findAutoSwapCalls = vi.fn(async () => autoSwapCalls)
+    const prepareTransactionRequest = vi.fn(
+      async (_client: unknown, _parameters: { calls: readonly unknown[] }) => ({}),
+    )
+    const signTransaction = vi.fn(async () => '0xdeadbeef')
+    vi.doMock('viem/actions', () => ({
+      prepareTransactionRequest,
+      sendCallsSync: vi.fn(),
+      signTransaction,
+      signTypedData: vi.fn(),
+    }))
+    vi.doMock('../internal/machine-token.js', () => ({
+      findCalls: findMachineTokenCalls,
+    }))
+    vi.doMock('../internal/auto-swap.js', () => ({
+      defaultCurrencies: [currency],
+      findCalls: findAutoSwapCalls,
+      resolve: vi.fn(() => ({ tokenIn: [currency], slippage: 1 })),
+    }))
+
+    try {
+      const { charge: chargeWithMockedFunding } = await import('./Charge.js')
+      const client = createClient({
+        account,
+        chain: tempoLocalnet,
+        transport: http('http://127.0.0.1'),
+      })
+      const method = chargeWithMockedFunding({
+        account,
+        autoSwap: true,
+        getClient: () => client,
+      })
+
+      const credential = Credential.deserialize(
+        await method.createCredential({
+          challenge: createChallenge({
+            amount: '1',
+            chainId,
+            feePayer: true,
+            machineTokenEnabled: true,
+            supportedModes: ['pull', 'push'],
+          }),
+          context: {},
+        }),
+      )
+
+      expect(findMachineTokenCalls).toHaveBeenCalledOnce()
+      expect(findMachineTokenCalls.mock.calls[0]?.[1]).toMatchObject({
+        account: account.address,
+        chainId,
+        currency,
+      })
+      expect(findAutoSwapCalls).not.toHaveBeenCalled()
+      expect(prepareTransactionRequest.mock.calls[0]?.[1]).toMatchObject({
+        calls: machineTokenCalls,
+      })
+      expect(signTransaction).toHaveBeenCalledWith(
+        client,
+        expect.objectContaining({ feePayer: true }),
+      )
+      expect(credential.payload).toEqual({ signature: '0xdeadbeef', type: 'transaction' })
+
+      hasMachineTokens = false
+      await method.createCredential({
+        challenge: createChallenge({
+          amount: '1',
+          chainId,
+          feePayer: true,
+          machineTokenEnabled: true,
+          supportedModes: ['pull', 'push'],
+        }),
+        context: {},
+      })
+      expect(findAutoSwapCalls).toHaveBeenCalledOnce()
+      expect(prepareTransactionRequest.mock.calls[1]?.[1].calls).toEqual([
+        ...autoSwapCalls,
+        expect.objectContaining({ address: currency, functionName: 'transferWithMemo' }),
+      ])
+    } finally {
+      vi.doUnmock('viem/actions')
+      vi.doUnmock('../internal/machine-token.js')
+      vi.doUnmock('../internal/auto-swap.js')
+      vi.resetModules()
+    }
+  })
+
+  test('broadcasts local machine-token calls as one Tempo transaction', async () => {
+    vi.resetModules()
+    const chainId = 4217
+    const hash = `0x${'ab'.repeat(32)}`
+    const machineTokenCalls = [
+      { data: '0x1234', to: '0x4444444444444444444444444444444444444444' },
+      { data: '0x5678', to: '0x5555555555555555555555555555555555555555' },
+    ]
+    const sendCallsSync = vi.fn()
+    const sendTransactionSync = vi.fn(async () => ({ transactionHash: hash }))
+    vi.doMock('viem/actions', () => ({
+      prepareTransactionRequest: vi.fn(),
+      sendCallsSync,
+      sendTransactionSync,
+      signTransaction: vi.fn(),
+      signTypedData: vi.fn(),
+    }))
+    vi.doMock('../internal/machine-token.js', () => ({
+      findCalls: vi.fn(async () => machineTokenCalls),
+    }))
+
+    try {
+      const { charge: chargeWithMockedActions } = await import('./Charge.js')
+      const client = createClient({
+        account,
+        chain: tempoLocalnet,
+        transport: http('http://127.0.0.1'),
+      })
+      const method = chargeWithMockedActions({
+        account,
+        getClient: () => client,
+        mode: 'push',
+      })
+
+      const credential = Credential.deserialize(
+        await method.createCredential({
+          challenge: createChallenge({
+            amount: '1',
+            chainId,
+            feePayer: true,
+            machineTokenEnabled: true,
+            supportedModes: ['push'],
+          }),
+          context: {},
+        }),
+      )
+
+      expect(sendTransactionSync).toHaveBeenCalledWith(
+        client,
+        expect.objectContaining({
+          account,
+          calls: machineTokenCalls,
+          nonceKey: 'expiring',
+        }),
+      )
+      expect((sendTransactionSync as any).mock.calls[0]?.[1]).not.toHaveProperty('feePayer')
+      expect(sendCallsSync).not.toHaveBeenCalled()
+      expect(credential.payload).toEqual({ hash, type: 'hash' })
+    } finally {
+      vi.doUnmock('viem/actions')
+      vi.doUnmock('../internal/machine-token.js')
+      vi.resetModules()
+    }
+  })
+
   test('zero-amount proof binds to the root payer for an access-key account', async () => {
     vi.resetModules()
     // Capture the typed data so we can assert what the proof commits to.
