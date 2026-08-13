@@ -26,26 +26,31 @@ describe('Tempo machine token', () => {
 
     try {
       const MachineToken = await import('./machine-token.js')
-      const calls = await MachineToken.findCalls(client, {
+      const route = await MachineToken.findRoute(client, {
         account: payer,
         chainId,
         currency: targetToken,
         transfers,
       })
 
-      expect(calls).toHaveLength(2)
+      expect(route?.calls).toHaveLength(2)
       expect(
-        MachineToken.validateCalls({ calls: calls!, chainId, currency: targetToken, transfers }),
+        MachineToken.matchRoute({
+          calls: route!.calls,
+          chainId,
+          currency: targetToken,
+          transfers,
+        })?.transfers,
       ).toEqual(transfers)
       expect(
-        MachineToken.validateCalls({
-          calls: calls!,
+        MachineToken.matchRoute({
+          calls: route!.calls,
           chainId,
           currency: targetToken,
           transfers: [{ amount: transfers[0]!.amount, recipient }],
-        }),
+        })?.transfers,
       ).toEqual(transfers)
-      expect(MachineToken.isSwap({ address: deployment.swap, chainId })).toBe(true)
+      expect(route?.settlementSender).toBe(deployment.swap)
     } finally {
       vi.doUnmock('viem/actions')
       vi.resetModules()
@@ -62,7 +67,7 @@ describe('Tempo machine token', () => {
     try {
       const MachineToken = await import('./machine-token.js')
       await expect(
-        MachineToken.findCalls(client, {
+        MachineToken.findRoute(client, {
           account: payer,
           chainId,
           currency: targetToken,
@@ -87,7 +92,7 @@ describe('Tempo machine token', () => {
     try {
       const MachineToken = await import('./machine-token.js')
       await expect(
-        MachineToken.findCalls(client, {
+        MachineToken.findRoute(client, {
           account: payer,
           chainId,
           currency: targetToken,
@@ -109,7 +114,7 @@ describe('Tempo machine token', () => {
 
     try {
       const MachineToken = await import('./machine-token.js')
-      const calls = await MachineToken.findCalls(client, {
+      const route = await MachineToken.findRoute(client, {
         account: payer,
         chainId,
         currency: targetToken,
@@ -117,19 +122,19 @@ describe('Tempo machine token', () => {
       })
 
       expect(
-        MachineToken.validateCalls({
-          calls: [...calls!, calls![0]!],
+        MachineToken.matchRoute({
+          calls: [...route!.calls, route!.calls[0]!],
           chainId,
           currency: targetToken,
           transfers,
         }),
-      ).toBe(false)
+      ).toBeUndefined()
       expect(
-        MachineToken.validateCalls({
+        MachineToken.matchRoute({
           calls: [
-            calls![0]!,
+            route!.calls[0]!,
             {
-              ...calls![1],
+              ...route!.calls[1],
               data: encodeFunctionData({
                 abi: Abis.tip20,
                 functionName: 'transfer',
@@ -141,7 +146,7 @@ describe('Tempo machine token', () => {
           currency: targetToken,
           transfers,
         }),
-      ).toBe(false)
+      ).toBeUndefined()
     } finally {
       vi.doUnmock('viem/actions')
       vi.resetModules()
@@ -151,13 +156,24 @@ describe('Tempo machine token', () => {
   test('does not use unconfigured chains', async () => {
     const MachineToken = await import('./machine-token.js')
     await expect(
-      MachineToken.findCalls(client, {
+      MachineToken.findRoute(client, {
         account: payer,
         chainId: 69420,
         currency: targetToken,
         transfers,
       }),
     ).resolves.toBeUndefined()
-    expect(MachineToken.isSwap({ address: deployment.swap, chainId: 69420 })).toBe(false)
+    expect(MachineToken.getSettlementSender(69420)).toBeUndefined()
+  })
+
+  test('falls back for split charges', async () => {
+    const MachineToken = await import('./machine-token.js')
+    expect(
+      MachineToken.getRoute({
+        chainId,
+        currency: targetToken,
+        transfers: [...transfers, transfers[0]!],
+      }),
+    ).toBeUndefined()
   })
 })

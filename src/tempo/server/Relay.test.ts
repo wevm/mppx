@@ -102,6 +102,15 @@ afterEach(() => {
 })
 
 describe('relay boundary', () => {
+  test('rejects machine-token settlement until the relay supports it', () => {
+    expect(() =>
+      tempo.charge({
+        machineTokenEnabled: true,
+        relay: { apiKey: 'tempo_api_key' },
+      }),
+    ).toThrow('`machineTokenEnabled` is not supported with a Tempo relay.')
+  })
+
   test('sends the complete credential to the configured validation endpoint', async () => {
     const fetch = mockRelay(() => Response.json({ success: true }))
     const [method, session] = methods(fetch)

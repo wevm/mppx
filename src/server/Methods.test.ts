@@ -8,10 +8,11 @@ const recipient = '0x0000000000000000000000000000000000000001'
 describe('Tempo machine token', () => {
   test('preserves the option on direct and global charge methods', () => {
     const direct = tempo.charge({ machineTokenEnabled: true })
-    const [global] = tempo({ machineTokenEnabled: true })
+    const [global, session] = tempo({ machineTokenEnabled: true })
 
     expect((direct.defaults as { machineTokenEnabled?: boolean }).machineTokenEnabled).toBe(true)
     expect((global.defaults as { machineTokenEnabled?: boolean }).machineTokenEnabled).toBe(true)
+    expect(session.defaults).not.toHaveProperty('machineTokenEnabled')
   })
 })
 

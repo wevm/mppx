@@ -168,8 +168,8 @@ export function charge(parameters: charge.Parameters = {}) {
         return supportedModes[0]!
       })()
 
-      const machineTokenCalls = machineTokenEnabled
-        ? await MachineToken.findCalls(client, {
+      const machineTokenRoute = machineTokenEnabled
+        ? await MachineToken.findRoute(client, {
             account: account.address,
             chainId,
             currency,
@@ -178,7 +178,7 @@ export function charge(parameters: charge.Parameters = {}) {
         : undefined
 
       const swapCalls =
-        !machineTokenCalls && autoSwap
+        !machineTokenRoute && autoSwap
           ? await AutoSwap.findCalls(client, {
               account: account.address,
               amountOut: BigInt(amount),
@@ -188,7 +188,7 @@ export function charge(parameters: charge.Parameters = {}) {
             })
           : undefined
 
-      const calls = machineTokenCalls ?? [...(swapCalls ?? []), ...transferCalls]
+      const calls = machineTokenRoute?.calls ?? [...(swapCalls ?? []), ...transferCalls]
 
       const validBefore = (() => {
         const defaultExpiry = Math.floor(Date.now() / 1000) + 25

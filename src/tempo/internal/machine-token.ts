@@ -40,8 +40,8 @@ type RouteCall = {
 
 type Route = {
   calls: readonly [RouteCall, RouteCall]
-  token: Address
-  transfer: { amount: bigint; memo: Hex.Hex; recipient: Address }
+  settlementSender: Address
+  transfers: readonly [{ amount: bigint; memo: Hex.Hex; recipient: Address }]
 }
 
 export type Transfer = {
@@ -66,7 +66,7 @@ export function isSupported(chainId: number | undefined): boolean {
   return !!getDeployment(chainId)
 }
 
-/** Resolves the canonical first-party machine-token settlement route. */
+/** Resolves the canonical first-party settlement route for a compatible charge. */
 export function getRoute(parameters: {
   chainId: number | undefined
   currency: Address
@@ -97,13 +97,13 @@ export function getRoute(parameters: {
         to: deployment.swap,
       },
     ],
-    token: deployment.token,
-    transfer: { amount, memo, recipient: transfer.recipient },
+    settlementSender: deployment.swap,
+    transfers: [{ amount, memo, recipient: transfer.recipient }],
   }
 }
 
-/** Builds and simulates the first-party machine-token settlement calls. */
-export async function findCalls(
+/** Builds and simulates the first-party settlement route. */
+export async function findRoute(
   client: Client,
   parameters: {
     account: Address
@@ -111,7 +111,7 @@ export async function findCalls(
     currency: Address
     transfers: readonly Transfer[]
   },
-): Promise<readonly Call[] | undefined> {
+): Promise<Route | undefined> {
   const route = getRoute(parameters)
   if (!route) return undefined
 
@@ -120,28 +120,28 @@ export async function findCalls(
       client,
       Actions.token.getBalance.call(client, {
         account: parameters.account,
-        token: route.token,
+        token: route.calls[0].to,
       }) as never,
     )
-    if ((balance as bigint) < route.transfer.amount) return undefined
+    if ((balance as bigint) < route.transfers[0].amount) return undefined
 
     await call(client, { account: parameters.account, calls: route.calls } as never)
-    return route.calls
+    return route
   } catch {
     return undefined
   }
 }
 
-/** Validates the exact first-party machine-token settlement route. */
-export function validateCalls(parameters: {
+/** Matches an exact first-party settlement route. */
+export function matchRoute(parameters: {
   calls: readonly Call[]
   chainId: number | undefined
   currency: Address
   transfers: readonly Transfer[]
-}): readonly Transfer[] | false {
+}): Route | undefined {
   const transfer = parameters.transfers.length === 1 ? parameters.transfers[0] : undefined
   const swap = parameters.calls[1]
-  if (!transfer || parameters.calls.length !== 2 || !swap?.data) return false
+  if (!transfer || parameters.calls.length !== 2 || !swap?.data) return undefined
 
   try {
     const decoded = decodeFunctionData({ abi: swapAbi, data: swap.data })
@@ -149,7 +149,7 @@ export function validateCalls(parameters: {
       ...parameters,
       transfers: [{ ...transfer, memo: transfer.memo ?? decoded.args[4] }],
     })
-    if (!route) return false
+    if (!route) return undefined
     if (
       parameters.calls.some((call, index) => {
         const expected = route.calls[index]
@@ -163,16 +163,15 @@ export function validateCalls(parameters: {
         )
       })
     )
-      return false
+      return undefined
 
-    return [route.transfer]
+    return route
   } catch {
-    return false
+    return undefined
   }
 }
 
-/** Returns whether an address is the first-party machine-token swap. */
-export function isSwap(parameters: { address: Address; chainId: number | undefined }): boolean {
-  const deployment = getDeployment(parameters.chainId)
-  return !!deployment && isAddressEqual(parameters.address, deployment.swap)
+/** Returns the trusted sender that settles the configured route on a chain. */
+export function getSettlementSender(chainId: number | undefined): Address | undefined {
+  return getDeployment(chainId)?.swap
 }

@@ -262,8 +262,8 @@ describe('tempo.charge client', () => {
     const machineTokenCalls = [{ data: '0x1234', to: '0x4444444444444444444444444444444444444444' }]
     const autoSwapCalls = [{ data: '0x5678', to: '0x5555555555555555555555555555555555555555' }]
     let hasMachineTokens = true
-    const findMachineTokenCalls = vi.fn(async (_client: unknown, _parameters: unknown) =>
-      hasMachineTokens ? machineTokenCalls : undefined,
+    const findMachineTokenRoute = vi.fn(async (_client: unknown, _parameters: unknown) =>
+      hasMachineTokens ? { calls: machineTokenCalls } : undefined,
     )
     const findAutoSwapCalls = vi.fn(async () => autoSwapCalls)
     const prepareTransactionRequest = vi.fn(
@@ -277,7 +277,7 @@ describe('tempo.charge client', () => {
       signTypedData: vi.fn(),
     }))
     vi.doMock('../internal/machine-token.js', () => ({
-      findCalls: findMachineTokenCalls,
+      findRoute: findMachineTokenRoute,
     }))
     vi.doMock('../internal/auto-swap.js', () => ({
       defaultCurrencies: [currency],
@@ -311,8 +311,8 @@ describe('tempo.charge client', () => {
         }),
       )
 
-      expect(findMachineTokenCalls).toHaveBeenCalledOnce()
-      expect(findMachineTokenCalls.mock.calls[0]?.[1]).toMatchObject({
+      expect(findMachineTokenRoute).toHaveBeenCalledOnce()
+      expect(findMachineTokenRoute.mock.calls[0]?.[1]).toMatchObject({
         account: account.address,
         chainId,
         currency,
@@ -369,7 +369,7 @@ describe('tempo.charge client', () => {
       signTypedData: vi.fn(),
     }))
     vi.doMock('../internal/machine-token.js', () => ({
-      findCalls: vi.fn(async () => machineTokenCalls),
+      findRoute: vi.fn(async () => ({ calls: machineTokenCalls })),
     }))
 
     try {

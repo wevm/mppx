@@ -114,6 +114,8 @@ export function charge<const parameters extends charge.Parameters>(
   const { recipient, feePayer, feePayerUrl } = Account.resolve(parameters)
   if (configuredFeeToken && feePayerUrl)
     throw new Error('`feeToken` can only be configured for a local fee payer.')
+  if (machineTokenEnabled && relay)
+    throw new Error('`machineTokenEnabled` is not supported with a Tempo relay.')
 
   const getClient = Client.getResolver({
     chain: { ...tempo_chain, experimental_preconfirmationTime: 500 },
@@ -148,6 +150,9 @@ export function charge<const parameters extends charge.Parameters>(
     const recipient = resolvedRequest.recipient as `0x${string}`
     const memo = methodDetails?.memo as `0x${string}` | undefined
     const machineTokenEnabled = methodDetails?.machineTokenEnabled === true
+    const settlementSender = machineTokenEnabled
+      ? MachineToken.getSettlementSender(chainId)
+      : undefined
     const isZeroAmount = BigInt(amount) === 0n
 
     Expires.assert(challenge.expires, challenge.id)
@@ -169,6 +174,7 @@ export function charge<const parameters extends charge.Parameters>(
       recipient,
       requestAllowsFeePayer: request.feePayer !== false,
       resolvedRequest,
+      settlementSenders: settlementSender ? [settlementSender] : [],
       supportedModes,
     }
   }
@@ -185,7 +191,6 @@ export function charge<const parameters extends charge.Parameters>(
     context: CredentialContext,
   ) {
     const {
-      machineTokenEnabled,
       amount,
       chainId,
       challenge,
@@ -194,6 +199,7 @@ export function charge<const parameters extends charge.Parameters>(
       memo,
       methodDetails,
       recipient,
+      settlementSenders,
       supportedModes,
     } = context
     if (supportedModes && !supportedModes.includes('push'))
@@ -209,10 +215,9 @@ export function charge<const parameters extends charge.Parameters>(
     })
     const sender = source?.address ?? receipt.from
     const matchedLogs = await assertTransferLogs(receipt, {
-      machineTokenEnabled,
-      chainId: chainId ?? client.chain?.id,
       currency,
       sender,
+      settlementSenders,
       source,
       transfers,
       validateSender,
@@ -306,16 +311,16 @@ export function charge<const parameters extends charge.Parameters>(
       requestAllowsFeePayer &&
       !!(typeof request.feePayer === 'object' ? request.feePayer : feePayer || feePayerUrl)
     const transfers = getExpectedTransfers({ amount, memo, methodDetails, recipient })
-    const machineTokenTransfers = machineTokenEnabled
-      ? MachineToken.validateCalls({
+    const machineTokenRoute = machineTokenEnabled
+      ? MachineToken.matchRoute({
           calls: (transaction.calls ?? []) as readonly MachineToken.Call[],
           chainId: chainId ?? client.chain?.id,
           currency,
           transfers,
         })
-      : false
+      : undefined
     const matchedCalls =
-      machineTokenTransfers ||
+      machineTokenRoute?.transfers ??
       assertTransferCalls(transaction.calls ?? [], {
         currency,
         exactCount: isFeePayerTx,
@@ -328,7 +333,7 @@ export function charge<const parameters extends charge.Parameters>(
       })
 
     if (isFeePayerTx) {
-      if (!machineTokenTransfers)
+      if (!machineTokenRoute)
         FeePayer.validateCalls(
           transaction.calls,
           { amount, currency, recipient },
@@ -345,9 +350,9 @@ export function charge<const parameters extends charge.Parameters>(
     return {
       isFeePayerTx,
       serializedTransaction,
+      settlementSenders: machineTokenRoute ? [machineTokenRoute.settlementSender] : [],
       transaction,
       transfers,
-      usesMachineToken: !!machineTokenTransfers,
     }
   }
 
@@ -377,7 +382,7 @@ export function charge<const parameters extends charge.Parameters>(
       }
 
       case 'transaction': {
-        const { isFeePayerTx, serializedTransaction, transaction, transfers, usesMachineToken } =
+        const { isFeePayerTx, serializedTransaction, settlementSenders, transaction, transfers } =
           await validateTransactionCredential(credential, context.payload, request, context)
         return {
           details: {
@@ -388,10 +393,10 @@ export function charge<const parameters extends charge.Parameters>(
           },
           isFeePayerTx,
           serializedTransaction,
+          settlementSenders,
           transaction,
           transfers,
           type: 'transaction' as const,
-          usesMachineToken,
         }
       }
     }
@@ -463,6 +468,8 @@ export function charge<const parameters extends charge.Parameters>(
       })()
       if (client.chain?.id !== chainId)
         throw new Error(`Client not configured with chainId ${chainId}.`)
+      if (request.machineTokenEnabled && relay)
+        throw new Error('`machineTokenEnabled` is not supported with a Tempo relay.')
       if (request.machineTokenEnabled && !MachineToken.isSupported(chainId))
         throw new Error(`Machine tokens are not supported on chainId ${chainId}.`)
 
@@ -550,7 +557,7 @@ export function charge<const parameters extends charge.Parameters>(
         }
 
         case 'transaction': {
-          const { isFeePayerTx, serializedTransaction, transaction, transfers, usesMachineToken } =
+          const { isFeePayerTx, serializedTransaction, settlementSenders, transaction, transfers } =
             validated
 
           // Pre-broadcast dedup: catch exact byte-for-byte replays early.
@@ -706,10 +713,9 @@ export function charge<const parameters extends charge.Parameters>(
               })
               if (reservation) await SponsorBudget.release(sponsorBudgetStore!, reservation)
               const matchedLogs = await assertTransferLogs(receipt, {
-                machineTokenEnabled: usesMachineToken,
-                chainId: chainId ?? client.chain?.id,
                 currency,
                 sender: transaction.from! as `0x${string}`,
+                settlementSenders,
                 transfers,
               })
               if (!memo)
@@ -843,6 +849,9 @@ export declare namespace charge {
      * relay broadcasts pull credentials, while it recognizes a push
      * credential as already broadcast and returns its receipt without sending
      * it again.
+     *
+     * This option cannot be combined with `machineTokenEnabled` until the relay
+     * supports the first-party settlement route.
      */
     relay?: RelayOptions | undefined
     /**
@@ -1085,10 +1094,9 @@ type TransferLog =
 async function assertTransferLogs(
   receipt: TransactionReceipt,
   parameters: {
-    machineTokenEnabled?: boolean | undefined
-    chainId?: number | undefined
     currency: `0x${string}`
     sender: `0x${string}`
+    settlementSenders?: readonly `0x${string}`[] | undefined
     source?: { address: `0x${string}`; chainId: number } | undefined
     transfers: readonly ExpectedTransfer[]
     validateSender?: charge.ValidateSender | undefined
@@ -1122,10 +1130,9 @@ async function assertTransferLogs(
       if (!memoMatches) continue
       if (
         !(await isValidTransferSender({
-          machineTokenEnabled: parameters.machineTokenEnabled,
-          chainId: parameters.chainId,
           expectedSender: parameters.sender,
           sender: log.args.from,
+          settlementSenders: parameters.settlementSenders,
           source: parameters.source,
           transactionSender: receipt.from,
           validateSender: parameters.validateSender,
@@ -1233,19 +1240,17 @@ function isSameTransferLog(a: ParsedTransferLog, b: ParsedTransferLog): boolean 
 }
 
 async function isValidTransferSender(parameters: {
-  machineTokenEnabled?: boolean | undefined
-  chainId?: number | undefined
   expectedSender: `0x${string}`
   sender: `0x${string}`
+  settlementSenders?: readonly `0x${string}`[] | undefined
   source?: { address: `0x${string}`; chainId: number } | undefined
   transactionSender: `0x${string}`
   validateSender?: charge.ValidateSender | undefined
 }): Promise<boolean> {
   if (TempoAddress.isEqual(parameters.sender, parameters.expectedSender)) return true
   if (
-    parameters.machineTokenEnabled &&
     TempoAddress.isEqual(parameters.transactionSender, parameters.expectedSender) &&
-    MachineToken.isSwap({ address: parameters.sender, chainId: parameters.chainId })
+    parameters.settlementSenders?.some((sender) => TempoAddress.isEqual(parameters.sender, sender))
   )
     return true
   if (!parameters.validateSender) return false
