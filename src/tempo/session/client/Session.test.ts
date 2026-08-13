@@ -804,9 +804,14 @@ describe('precompile client session', () => {
     ).rejects.toThrow('opening deposit 50 below request amount 100')
   })
 
-  test('uses resolved escrow address for open transactions', async () => {
+  test('uses a matching client-configured escrow address for open transactions', async () => {
     const challengeEscrow = '0x0000000000000000000000000000000000000005' as Address
-    const method = session({ account, decimals: 0, getClient: () => client })
+    const method = session({
+      account,
+      decimals: 0,
+      escrow: challengeEscrow,
+      getClient: () => client,
+    })
     const payload = deserialize(
       await method.createCredential({
         challenge: makeChallenge({

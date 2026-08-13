@@ -52,18 +52,40 @@ function makeChallenge(overrides?: Partial<Challenge>): Challenge {
 }
 
 describe('resolveEscrow', () => {
-  test('prefers escrowContractOverride over challenge.request.methodDetails.escrowContract', () => {
+  test('accepts a challenge escrow matching the client override', () => {
+    const override = '0xabcdef0000000000000000000000000000000005' as Address
     const challenge = {
-      request: { methodDetails: { escrowContract: '0xChallengeEscrow' } },
+      request: { methodDetails: { escrowContract: '0xABCDEF0000000000000000000000000000000005' } },
     }
-    const result = resolveEscrow(challenge, 42431, '0xOverride' as Address)
-    expect(result).toBe('0xOverride')
+    const result = resolveEscrow(challenge, 42431, override)
+    expect(result).toBe(override)
+  })
+
+  test('rejects a challenge escrow that does not match the client override', () => {
+    const challenge = {
+      request: {
+        methodDetails: { escrowContract: '0x0000000000000000000000000000000000000006' },
+      },
+    }
+    expect(() =>
+      resolveEscrow(challenge, 42431, '0x0000000000000000000000000000000000000005'),
+    ).toThrow('does not match client escrow')
+  })
+
+  test('rejects a noncanonical challenge escrow without a client override', () => {
+    const challenge = {
+      request: {
+        methodDetails: { escrowContract: '0x0000000000000000000000000000000000000006' },
+      },
+    }
+    expect(() => resolveEscrow(challenge, 42431)).toThrow('does not match client escrow')
   })
 
   test('falls back to escrowContractOverride', () => {
     const challenge = { request: { methodDetails: {} } }
-    const result = resolveEscrow(challenge, 42431, '0xOverride' as Address)
-    expect(result).toBe('0xOverride')
+    const override = '0x0000000000000000000000000000000000000005' as Address
+    const result = resolveEscrow(challenge, 42431, override)
+    expect(result).toBe(override)
   })
 
   test('falls back to defaults when no override', () => {
@@ -74,7 +96,7 @@ describe('resolveEscrow', () => {
 
   test('throws when no escrow available', () => {
     const challenge = { request: {} }
-    expect(() => resolveEscrow(challenge, 99999)).toThrow('No `escrowContract` available')
+    expect(() => resolveEscrow(challenge, 99999)).toThrow('No trusted `escrowContract` available')
   })
 
   test('falls back to defaults when methodDetails is undefined', () => {

@@ -46,22 +46,35 @@ const descriptor = {
 const channelId = Channel.computeId({ ...descriptor, chainId, escrow: tip20ChannelEscrow })
 
 describe('precompile client ChannelOps credential builders', () => {
-  test('resolves escrow from override, challenge hint, or canonical default', () => {
+  test('requires challenge escrow to match the canonical default or client override', () => {
     const override = '0x0000000000000000000000000000000000000005' as Address
     const hinted = '0x0000000000000000000000000000000000000006' as Address
 
     expect(
       ChannelOps.resolveEscrow(
-        { request: { methodDetails: { escrowContract: hinted } } },
+        { request: { methodDetails: { escrowContract: override } } },
         override,
       ),
     ).toBe(override)
-    expect(
+    expect(() =>
+      ChannelOps.resolveEscrow(
+        { request: { methodDetails: { escrowContract: hinted } } },
+        override,
+      ),
+    ).toThrow('does not match client escrow')
+    expect(() =>
       ChannelOps.resolveEscrow({ request: { methodDetails: { escrowContract: hinted } } }),
-    ).toBe(hinted)
-    expect(ChannelOps.resolveEscrow({ request: { methodDetails: { escrow: hinted } } })).toBe(
-      hinted,
-    )
+    ).toThrow('does not match client escrow')
+    expect(() =>
+      ChannelOps.resolveEscrow({ request: { methodDetails: { escrow: hinted } } }),
+    ).toThrow('does not match client escrow')
+    const canonicalMixedCase =
+      `${tip20ChannelEscrow.slice(0, 2)}${tip20ChannelEscrow.slice(2).toUpperCase()}` as Address
+    expect(
+      ChannelOps.resolveEscrow({
+        request: { methodDetails: { escrowContract: canonicalMixedCase } },
+      }),
+    ).toBe(tip20ChannelEscrow)
     expect(
       ChannelOps.resolveEscrow({
         request: { methodDetails: { escrowContract: 'not-an-address' } },

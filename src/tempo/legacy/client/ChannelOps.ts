@@ -56,7 +56,7 @@ export function resolveChainId(challenge: Challenge): number {
   return md?.chainId ?? 0
 }
 
-/** Resolves the legacy escrow contract from local override, challenge hint, or defaults. */
+/** Resolves the legacy escrow contract from a local override or chain default. */
 export function resolveEscrow(
   challenge: { request: { methodDetails?: unknown } },
   chainId: number,
@@ -66,11 +66,14 @@ export function resolveEscrow(
     ?.escrowContract as Address | undefined
   const escrow =
     escrowContractOverride ??
-    challengeEscrow ??
     defaults.escrowContract[chainId as keyof typeof defaults.escrowContract]
   if (!escrow)
     throw new Error(
-      'No `escrowContract` available. Provide it in parameters or ensure the server challenge includes it.',
+      'No trusted `escrowContract` available. Provide it in client parameters or use a supported chain.',
+    )
+  if (challengeEscrow && challengeEscrow.toLowerCase() !== escrow.toLowerCase())
+    throw new Error(
+      `Tempo session escrow ${challengeEscrow} does not match client escrow ${escrow}.`,
     )
   return escrow
 }
