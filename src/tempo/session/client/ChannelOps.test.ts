@@ -46,7 +46,7 @@ const descriptor = {
 const channelId = Channel.computeId({ ...descriptor, chainId, escrow: tip20ChannelEscrow })
 
 describe('precompile client ChannelOps credential builders', () => {
-  test('requires challenge escrow to match the canonical default or client override', () => {
+  test('requires custom challenge escrows to be allowed or explicitly pinned', () => {
     const override = '0x0000000000000000000000000000000000000005' as Address
     const hinted = '0x0000000000000000000000000000000000000006' as Address
 
@@ -65,6 +65,13 @@ describe('precompile client ChannelOps credential builders', () => {
     expect(() =>
       ChannelOps.resolveEscrow({ request: { methodDetails: { escrowContract: hinted } } }),
     ).toThrow('does not match client escrow')
+    expect(
+      ChannelOps.resolveEscrow(
+        { request: { methodDetails: { escrowContract: hinted } } },
+        undefined,
+        true,
+      ),
+    ).toBe(hinted)
     expect(() =>
       ChannelOps.resolveEscrow({ request: { methodDetails: { escrow: hinted } } }),
     ).toThrow('does not match client escrow')

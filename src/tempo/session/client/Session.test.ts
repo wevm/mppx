@@ -804,12 +804,12 @@ describe('precompile client session', () => {
     ).rejects.toThrow('opening deposit 50 below request amount 100')
   })
 
-  test('uses a matching client-configured escrow address for open transactions', async () => {
+  test('uses a server-configured custom escrow when allowed', async () => {
     const challengeEscrow = '0x0000000000000000000000000000000000000005' as Address
     const method = session({
       account,
+      allowCustomEscrow: true,
       decimals: 0,
-      escrow: challengeEscrow,
       getClient: () => client,
     })
     const payload = deserialize(

@@ -293,6 +293,39 @@ describe('Session', () => {
   })
 
   describe('.fetch()', () => {
+    test('uses a server-advertised custom escrow when allowed', async () => {
+      const customEscrow = '0x0000000000000000000000000000000000000005' as Address
+      let openPayload: Extract<SessionCredentialPayload, { action: 'open' }> | undefined
+      const challenge = makeChallenge({
+        suggestedDeposit: '1000000',
+        methodDetails: {
+          chainId: 4217,
+          escrowContract: customEscrow,
+          sessionProtocol: Constants.SessionProtocols.v2,
+        },
+      })
+      const mockFetch = vi.fn().mockImplementation((_input, init?: RequestInit) => {
+        const authorization = new Headers(init?.headers).get(Constants.Headers.authorization)
+        if (!authorization) return Promise.resolve(make402Response(challenge))
+        const payload = Credential.deserialize<SessionCredentialPayload>(authorization).payload
+        if (payload.action === 'open') openPayload = payload
+        return Promise.resolve(makeOkResponse())
+      })
+      const s = sessionManager({
+        account,
+        allowCustomEscrow: true,
+        client,
+        fetch: mockFetch as typeof globalThis.fetch,
+        maxDeposit: '10',
+      })
+
+      expect((await s.fetch('https://api.example.com/data')).status).toBe(200)
+      if (!openPayload) throw new Error('expected open payload')
+      expect(openPayload.channelId).toBe(
+        Channel.computeId({ ...openPayload.descriptor, chainId: 4217, escrow: customEscrow }),
+      )
+    })
+
     test('passes through non-402 responses', async () => {
       const mockFetch = vi.fn().mockResolvedValue(makeOkResponse('hello'))
 

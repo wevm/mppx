@@ -212,6 +212,8 @@ export type ClientSessionMethodDetails = {
 
 /** Dependencies used to resolve a challenge into typed credential-planning data. */
 export type ResolveChallengeContextParameters = {
+  /** Whether to accept a noncanonical escrow advertised by the server. */
+  allowCustomEscrow?: boolean | undefined
   /** Challenge received from the 402 response. */
   challenge: Challenge.Challenge
   /** Optional local escrow override. */
@@ -421,13 +423,13 @@ function readSuggestedDeposit(value: unknown): string | undefined {
 export async function resolveChallengeContext(
   parameters: ResolveChallengeContextParameters,
 ): Promise<ChallengeContext> {
-  const { challenge, escrowOverride, getClient } = parameters
+  const { allowCustomEscrow, challenge, escrowOverride, getClient } = parameters
   const methodDetails = readMethodDetails(challenge)
   const client = await getClient({ chainId: methodDetails.chainId })
   const chainId = methodDetails.chainId ?? client.chain?.id
   if (!chainId) throw new Error('No chainId configured for TIP-1034 session challenge.')
 
-  const escrow = resolveEscrow(challenge, escrowOverride)
+  const escrow = resolveEscrow(challenge, escrowOverride, allowCustomEscrow)
   const payee = readAddress(challenge.request.recipient, 'recipient')
   const token = readAddress(challenge.request.currency, 'currency')
 

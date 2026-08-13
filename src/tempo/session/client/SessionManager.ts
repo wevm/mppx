@@ -319,6 +319,7 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
 
   const method = sessionPlugin({
     account: parameters.account,
+    allowCustomEscrow: parameters.allowCustomEscrow,
     autoSwap: parameters.autoSwap,
     getClient: parameters.client ? () => parameters.client! : parameters.getClient,
     resolveAccount: parameters.resolveAccount,
@@ -972,6 +973,8 @@ export namespace sessionManager {
 
   export type Parameters = Account.getResolver.Parameters &
     Client.getResolver.Parameters & {
+      /** Accept a noncanonical escrow contract advertised by the server. */
+      allowCustomEscrow?: boolean | undefined
       /** Automatically acquire the session currency from fallback stablecoins before open/top-up. */
       autoSwap?: sessionPlugin.Parameters['autoSwap']
       /** Enables same-route HEAD bootstrap from a server session snapshot before opening a new channel. */
@@ -980,7 +983,7 @@ export namespace sessionManager {
       client?: import('viem').Client | undefined
       /** Token decimals used to convert `maxDeposit` to raw units. Defaults to `6`. */
       decimals?: number | undefined
-      /** TIP20EscrowChannel precompile address override. */
+      /** Exact TIP20EscrowChannel address pin. Takes precedence over `allowCustomEscrow`. */
       escrow?: Address | undefined
       /** Fetch implementation used for HTTP probes, management posts, and paid retries. */
       fetch?: typeof globalThis.fetch | undefined

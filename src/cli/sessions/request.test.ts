@@ -3,7 +3,7 @@ import { describe, expect, test } from 'vp/test'
 
 import type * as Challenge from '../../Challenge.js'
 import {
-  resolveSessionEscrowOverride,
+  resolveAllowCustomEscrow,
   resolveSessionMaxDeposit,
   resolveSessionSelection,
 } from './request.js'
@@ -30,15 +30,16 @@ describe('resolveSessionSelection', () => {
   })
 })
 
-describe('resolveSessionEscrowOverride', () => {
-  test('accepts an explicit escrow address', () => {
-    const escrow = '0x4444444444444444444444444444444444444444'
-    expect(resolveSessionEscrowOverride({ escrow })).toBe(escrow)
+describe('resolveAllowCustomEscrow', () => {
+  test('accepts boolean method options', () => {
+    expect(resolveAllowCustomEscrow({ allowCustomEscrow: 'true' })).toBe(true)
+    expect(resolveAllowCustomEscrow({ allowCustomEscrow: 'false' })).toBe(false)
+    expect(resolveAllowCustomEscrow({})).toBeUndefined()
   })
 
-  test('rejects an invalid escrow address', () => {
-    expect(() => resolveSessionEscrowOverride({ escrow: 'invalid' })).toThrow(
-      'Session escrow must be a 20-byte address.',
+  test('rejects an invalid boolean', () => {
+    expect(() => resolveAllowCustomEscrow({ allowCustomEscrow: 'yes' })).toThrow(
+      'allowCustomEscrow must be true or false.',
     )
   })
 })

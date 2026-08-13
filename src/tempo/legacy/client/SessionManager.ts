@@ -141,6 +141,7 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
 
   const method = sessionPlugin({
     account: parameters.account,
+    allowCustomEscrow: parameters.allowCustomEscrow,
     voucherSigner: parameters.voucherSigner,
     getClient: parameters.client ? () => parameters.client! : parameters.getClient,
     escrowContract: parameters.escrowContract,
@@ -882,13 +883,15 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
 export declare namespace sessionManager {
   type Parameters = Account.getResolver.Parameters &
     Client.getResolver.Parameters & {
+      /** Accept a noncanonical escrow contract advertised by the server. */
+      allowCustomEscrow?: boolean | undefined
       /** Account that signs voucher digests. Defaults to `account`; access-key accounts sign raw vouchers as their access-key address. */
       voucherSigner?: viem_Account | undefined
       /** Viem client instance. Shorthand for `getClient: () => client`. */
       client?: import('viem').Client | undefined
       /** Token decimals used to convert `maxDeposit` to raw units. Defaults to `6`. */
       decimals?: number | undefined
-      /** Escrow contract address. */
+      /** Exact escrow contract address pin. Takes precedence over `allowCustomEscrow`. */
       escrowContract?: Address | undefined
       fetch?: typeof globalThis.fetch | undefined
       /** Maximum deposit in human-readable units (e.g. `'10'` for 10 tokens). Converted to raw units via `decimals`. */

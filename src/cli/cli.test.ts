@@ -1066,7 +1066,7 @@ describe('session multi-fetch (examples/session/multi-fetch)', () => {
   })
 
   test(
-    'uses explicit escrow and server suggestedDeposit within CLI max deposit',
+    'accepts the escrow advertised by the server and its suggestedDeposit',
     { timeout: 120_000 },
     async () => {
       await fundAccount({ address: testAccount.address, token: Addresses.pathUsd })
@@ -1116,7 +1116,16 @@ describe('session multi-fetch (examples/session/multi-fetch)', () => {
 
       try {
         const result = await serve(
-          [httpServer.url, '--rpc-url', rpcUrl, '-s', '-M', 'deposit=10', '-M', `escrow=${escrow}`],
+          [
+            httpServer.url,
+            '--rpc-url',
+            rpcUrl,
+            '-s',
+            '-M',
+            'deposit=10',
+            '-M',
+            'allowCustomEscrow=true',
+          ],
           { env: { MPPX_PRIVATE_KEY: testPrivateKey } },
         )
         expect(result.exitCode, `${result.output}\n${result.stderr}`).toBeUndefined()

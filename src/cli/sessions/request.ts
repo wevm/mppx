@@ -1,6 +1,6 @@
 import { Errors } from 'incur'
 import type { Hex } from 'ox'
-import { type Address, createClient, formatUnits, http, isAddress } from 'viem'
+import { createClient, formatUnits, http } from 'viem'
 
 import type * as Challenge from '../../Challenge.js'
 import {
@@ -84,16 +84,17 @@ function sessionDecimals(challenge: Challenge.Challenge): number {
   return typeof challenge.request.decimals === 'number' ? challenge.request.decimals : 6
 }
 
-/** @internal Resolves an explicitly trusted session escrow from CLI method options. */
-export function resolveSessionEscrowOverride(
+/** @internal Resolves whether the CLI accepts a server-advertised custom escrow. */
+export function resolveAllowCustomEscrow(
   methodOptions: Record<string, string>,
-): Address | undefined {
-  const escrow = methodOptions.escrow
-  if (escrow === undefined) return undefined
-  if (isAddress(escrow, { strict: false })) return escrow
+): boolean | undefined {
+  const value = methodOptions.allowCustomEscrow
+  if (value === undefined) return undefined
+  if (value === 'true') return true
+  if (value === 'false') return false
   throw new Errors.IncurError({
-    code: 'INVALID_SESSION_ESCROW',
-    message: 'Session escrow must be a 20-byte address.',
+    code: 'INVALID_ALLOW_CUSTOM_ESCROW',
+    message: 'allowCustomEscrow must be true or false.',
     exitCode: 2,
   })
 }
@@ -162,10 +163,10 @@ export async function runPersistentSessionRequest(
   const rpcUrl = resolveRpcUrl(options.rpcUrl, { network: options.network })
   const chain = await resolveChain({ network: options.network, rpcUrl })
   const client = createClient({ chain, transport: http(rpcUrl) })
-  const escrowOverride = resolveSessionEscrowOverride(parameters.methodOptions)
+  const allowCustomEscrow = resolveAllowCustomEscrow(parameters.methodOptions)
   const challengeContext = await resolveChallengeContext({
+    allowCustomEscrow,
     challenge: parameters.challenge,
-    escrowOverride,
     getClient: async () => client,
   })
   if (challengeContext.chainId !== chain.id)
@@ -269,11 +270,11 @@ export async function runPersistentSessionRequest(
     let replayPending = true
     const manager = sessionManager({
       account: resolvedAccount.account,
+      allowCustomEscrow,
       bootstrap: false,
       client,
       channelStore,
       decimals: sessionDecimals(parameters.challenge),
-      escrow: escrowOverride,
       maxDeposit: resolveSessionMaxDeposit(
         parameters.challenge,
         parameters.methodOptions,

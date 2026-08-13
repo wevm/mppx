@@ -81,6 +81,15 @@ describe('resolveEscrow', () => {
     expect(() => resolveEscrow(challenge, 42431)).toThrow('does not match client escrow')
   })
 
+  test('accepts a server-advertised custom escrow when allowed', () => {
+    const challengeEscrow = '0x0000000000000000000000000000000000000006' as Address
+    const challenge = {
+      request: { methodDetails: { escrowContract: challengeEscrow } },
+    }
+    expect(resolveEscrow(challenge, 42431, undefined, true)).toBe(challengeEscrow)
+    expect(resolveEscrow(challenge, 99999, undefined, true)).toBe(challengeEscrow)
+  })
+
   test('falls back to escrowContractOverride', () => {
     const challenge = { request: { methodDetails: {} } }
     const override = '0x0000000000000000000000000000000000000005' as Address

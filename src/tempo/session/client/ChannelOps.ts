@@ -110,7 +110,7 @@ async function signPreparedTempoTransaction(client: Client, prepared: unknown): 
   return (await signTransaction(client, prepared as never)) as Hex.Hex
 }
 
-/** Resolves the escrow precompile from a local override or canonical default. */
+/** Resolves the server-advertised escrow against the client's trust policy. */
 export function resolveEscrow(
   challenge: {
     request: {
@@ -118,6 +118,7 @@ export function resolveEscrow(
     }
   },
   escrowOverride?: Address | undefined,
+  allowCustomEscrow = false,
 ): Address {
   const methodDetails = challenge.request.methodDetails
   const challengeEscrow = isObject(methodDetails)
@@ -125,10 +126,15 @@ export function resolveEscrow(
       readOptionalAddress(methodDetails.escrow))
     : undefined
   const expectedEscrow = escrowOverride ?? tip20ChannelEscrow
-  if (challengeEscrow && !isSameAddress(challengeEscrow, expectedEscrow))
+  if (
+    challengeEscrow &&
+    !isSameAddress(challengeEscrow, expectedEscrow) &&
+    (!allowCustomEscrow || escrowOverride !== undefined)
+  )
     throw new Error(
       `Tempo session escrow ${challengeEscrow} does not match client escrow ${expectedEscrow}.`,
     )
+  if (challengeEscrow && !isSameAddress(challengeEscrow, expectedEscrow)) return challengeEscrow
   return expectedEscrow
 }
 

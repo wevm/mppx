@@ -119,6 +119,7 @@ function acknowledgesOpen(
 export function session(parameters: session.Parameters = {}) {
   const {
     account,
+    allowCustomEscrow,
     autoSwap: autoSwapParameter,
     channelStore,
     decimals = defaults.decimals,
@@ -184,6 +185,7 @@ export function session(parameters: session.Parameters = {}) {
     async createCredential(parameters) {
       const { challenge, context } = parameters
       const resolved = await resolveChallengeContext({
+        allowCustomEscrow,
         challenge,
         escrowOverride,
         getClient,
@@ -311,7 +313,12 @@ export function session(parameters: session.Parameters = {}) {
     if (!isTip1034SessionChallenge(challenge)) return
     const sessionContext = context === undefined ? undefined : sessionContextSchema.parse(context)
     if (hasSessionAction(sessionContext)) return
-    const resolved = await resolveChallengeContext({ challenge, escrowOverride, getClient })
+    const resolved = await resolveChallengeContext({
+      allowCustomEscrow,
+      challenge,
+      escrowOverride,
+      getClient,
+    })
     const channel = await store.get(resolved.key)
     if (!channel?.opened) return
     const snapshot =
@@ -354,6 +361,7 @@ export function session(parameters: session.Parameters = {}) {
 
       const channelKey = (
         await resolveChallengeContext({
+          allowCustomEscrow,
           challenge,
           escrowOverride,
           getClient,
@@ -397,13 +405,15 @@ export declare namespace session {
 
   type Parameters = Account.getResolver.Parameters &
     Client.getResolver.Parameters & {
+      /** Accept a noncanonical escrow contract advertised by the server. */
+      allowCustomEscrow?: boolean | undefined
       /** Automatically acquire the session currency from fallback stablecoins before open/top-up. */
       autoSwap?: AutoSwap.resolve.Value | undefined
       /** Pluggable persistence for reusable channels. Defaults to an in-memory store. */
       channelStore?: ChannelStore | undefined
       /** Token decimals for parsing human-readable amounts (default: 6). */
       decimals?: number | undefined
-      /** TIP20EscrowChannel address override. */
+      /** Exact TIP20EscrowChannel address pin. Takes precedence over `allowCustomEscrow`. */
       escrow?: Address | undefined
       /** Maximum channel deposit in human-readable units. Caps server-suggested opens and automatic top-ups. */
       maxDeposit?: string | undefined

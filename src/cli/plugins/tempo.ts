@@ -48,19 +48,19 @@ async function writeResponseBody(response: Response) {
 }
 
 const tempoOptionSchema = z.object({
+  allowCustomEscrow: z.optional(booleanOption),
   autoSwap: z.optional(booleanOption),
   channel: z.optional(z.coerce.string()),
   deposit: z.optional(z.union([z.string(), z.number()])),
-  escrow: z.optional(z.string().check(z.regex(/^0x[0-9a-fA-F]{40}$/, 'Invalid address'))),
   payWith: z.optional(z.string()),
   slippage: z.optional(z.coerce.number()),
   tokenIn: z.optional(z.string()),
 })
 const tempoOptionKeys = [
+  'allowCustomEscrow',
   'autoSwap',
   'channel',
   'deposit',
-  'escrow',
   'payWith',
   'slippage',
   'tokenIn',
@@ -251,9 +251,11 @@ export function tempo() {
 
       const methods = tempoMethods({
         account,
+        ...(tempoOpts.allowCustomEscrow !== undefined
+          ? { allowCustomEscrow: tempoOpts.allowCustomEscrow }
+          : {}),
         getClient: () => client!,
         ...(autoSwap !== undefined ? { autoSwap } : {}),
-        ...(tempoOpts.escrow !== undefined ? { escrow: tempoOpts.escrow as Address } : {}),
         maxDeposit: (() => {
           if (challenge.intent !== 'session') return undefined
           const suggestedDeposit = (challenge.request as Record<string, unknown>)
