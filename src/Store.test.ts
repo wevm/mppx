@@ -237,6 +237,66 @@ describe('tryClaim', () => {
 
     expect(await Store.tryClaim(store, 'k', Date.now() + 60_000)).toBe(false)
   })
+
+  // A fake set-if-absent honoring an absolute-ms expiry, shared by the
+  // adapter fast-path tests.
+  function fakeSetNx(seen?: string[]) {
+    const claimed = new Map<string, number>()
+    return async (key: string, _value: string, expires: number) => {
+      seen?.push(key)
+      const existing = claimed.get(key)
+      if (existing !== undefined && existing > Date.now()) return false
+      claimed.set(key, expires)
+      return true
+    }
+  }
+
+  test('redis uses a native setNx fast path over the update fallback', async () => {
+    const kv = fakeStringKv()
+    let updateCalls = 0
+    const store = Store.redis({
+      get: kv.get,
+      set: kv.put,
+      del: kv.delete,
+      update: (key, fn) => {
+        updateCalls++
+        return kv.update(key, fn)
+      },
+      setNx: fakeSetNx(),
+    })
+    const expires = Date.now() + 60_000
+
+    expect(await Store.tryClaim(store, 'k', expires)).toBe(true)
+    expect(await Store.tryClaim(store, 'k', expires)).toBe(false)
+    // The native path is used, so the update fallback never runs.
+    expect(updateCalls).toBe(0)
+  })
+
+  test('upstash uses a native setNx fast path', async () => {
+    const store = Store.upstash({ ...fakeUnknownKv(), setNx: fakeSetNx() })
+    const expires = Date.now() + 60_000
+
+    expect(await Store.tryClaim(store, 'k', expires)).toBe(true)
+    expect(await Store.tryClaim(store, 'k', expires)).toBe(false)
+  })
+
+  test('setNx fast path is forwarded through a key prefix', async () => {
+    const kv = fakeStringKv()
+    const seen: string[] = []
+    const store = Store.redis(
+      {
+        get: kv.get,
+        set: kv.put,
+        del: kv.delete,
+        update: kv.update,
+        setNx: fakeSetNx(seen),
+      },
+      { keyPrefix: 'p:' },
+    )
+
+    expect(await Store.tryClaim(store, 'k', Date.now() + 60_000)).toBe(true)
+    expect(seen).toEqual(['p:k'])
+  })
 })
 
 describe('json roundtrip behavior', () => {
