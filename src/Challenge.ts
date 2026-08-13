@@ -376,7 +376,7 @@ function extractPaymentAuthParams(header: string): string | null {
 
 /** @internal Parses auth-params with support for escaped quoted-string values. */
 function parseAuthParams(input: string): Record<string, string> {
-  const result: Record<string, string> = {}
+  const result: Record<string, string> = Object.create(null)
   let i = 0
 
   while (i < input.length) {

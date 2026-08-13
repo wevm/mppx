@@ -635,6 +635,18 @@ describe('deserialize', () => {
     expect(challenge.description).toBe(expected)
   })
 
+  test.each(['constructor', 'toString', 'valueOf', 'hasOwnProperty', '__proto__'])(
+    'behavior: accepts extension parameter named %s',
+    (name) => {
+      const header = `${paymentHeader}, ${name}="value"`
+
+      expect(Challenge.deserialize(header).id).toBe('abc123')
+      expect(() => Challenge.deserialize(`${header}, ${name}="duplicate"`)).toThrow(
+        `Duplicate parameter: ${name}`,
+      )
+    },
+  )
+
   test.each([
     {
       name: 'missing Payment scheme',
