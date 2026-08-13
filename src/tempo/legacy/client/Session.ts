@@ -105,7 +105,7 @@ export function session(parameters: session.Parameters = {}) {
   ): Address {
     if (channelId) {
       const cached = escrowContractMap.get(channelId)
-      if (cached) return cached
+      if (cached) return resolveEscrow(challenge, chainId, cached)
     }
     return resolveEscrow(challenge, chainId, parameters.escrowContract)
   }
@@ -387,7 +387,7 @@ export declare namespace session {
       decimals?: number | undefined
       /** Initial deposit amount in human-readable units (e.g. "10" for 10 tokens). When set, the method handles the full channel lifecycle (open, voucher, cumulative tracking) automatically. */
       deposit?: string | undefined
-      /** Escrow contract address override. Derived from challenge or defaults if not provided. */
+      /** Escrow contract address override. Derived from chain defaults if not provided. */
       escrowContract?: Address | undefined
       /** Maximum deposit in human-readable units (e.g. "10"). Caps the server's `suggestedDeposit`. Enables auto-management like `deposit`. */
       maxDeposit?: string | undefined

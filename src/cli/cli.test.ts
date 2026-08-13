@@ -1065,80 +1065,85 @@ describe('session multi-fetch (examples/session/multi-fetch)', () => {
     }
   })
 
-  test('uses server suggestedDeposit within CLI max deposit', { timeout: 120_000 }, async () => {
-    await fundAccount({ address: testAccount.address, token: Addresses.pathUsd })
-    await fundAccount({ address: testAccount.address, token: asset })
+  test(
+    'uses explicit escrow and server suggestedDeposit within CLI max deposit',
+    { timeout: 120_000 },
+    async () => {
+      await fundAccount({ address: testAccount.address, token: Addresses.pathUsd })
+      await fundAccount({ address: testAccount.address, token: asset })
 
-    const escrow = tip20ChannelEscrow
-    let openCredential: SessionCredentialPayload | undefined
+      const escrow = '0x0000000000000000000000000000000000000005' as Address
+      let openCredential: SessionCredentialPayload | undefined
 
-    const httpServer = await Http.createServer(async (req, res) => {
-      const authHeader = req.headers.authorization
-      if (!authHeader) {
-        res.writeHead(402, {
-          'WWW-Authenticate': Challenge.serialize(
-            Challenge.from({
-              id: 'cli-deposit-override',
-              realm: 'cli-test-deposit-override',
-              method: 'tempo',
-              intent: 'session',
-              request: {
-                amount: '1000000',
-                currency: asset,
-                decimals: 6,
-                recipient: accounts[0].address,
-                suggestedDeposit: '7000000',
-                unitType: 'token',
-                methodDetails: {
-                  chainId: chain.id,
-                  escrowContract: escrow,
-                  sessionProtocol: Constants.SessionProtocols.v2,
+      const httpServer = await Http.createServer(async (req, res) => {
+        const authHeader = req.headers.authorization
+        if (!authHeader) {
+          res.writeHead(402, {
+            'WWW-Authenticate': Challenge.serialize(
+              Challenge.from({
+                id: 'cli-deposit-override',
+                realm: 'cli-test-deposit-override',
+                method: 'tempo',
+                intent: 'session',
+                request: {
+                  amount: '1000000',
+                  currency: asset,
+                  decimals: 6,
+                  recipient: accounts[0].address,
+                  suggestedDeposit: '7000000',
+                  unitType: 'token',
+                  methodDetails: {
+                    chainId: chain.id,
+                    escrowContract: escrow,
+                    sessionProtocol: Constants.SessionProtocols.v2,
+                  },
                 },
-              },
-            }),
-          ),
-        })
-        res.end()
-        return
-      }
+              }),
+            ),
+          })
+          res.end()
+          return
+        }
 
-      try {
-        const cred = Credential.deserialize<SessionCredentialPayload>(authHeader)
-        if (cred.payload.action === 'open') openCredential = cred.payload
-      } catch {}
+        try {
+          const cred = Credential.deserialize<SessionCredentialPayload>(authHeader)
+          if (cred.payload.action === 'open') openCredential = cred.payload
+        } catch {}
 
-      res.writeHead(200)
-      res.end('scraped-content')
-    })
-
-    try {
-      await serve([httpServer.url, '--rpc-url', rpcUrl, '-s', '-M', 'deposit=10'], {
-        env: { MPPX_PRIVATE_KEY: testPrivateKey },
+        res.writeHead(200)
+        res.end('scraped-content')
       })
 
-      expect(openCredential).toBeDefined()
-      expect(openCredential?.action).toBe('open')
-      if (!openCredential || openCredential.action !== 'open')
-        throw new Error('missing open credential')
+      try {
+        await serve(
+          [httpServer.url, '--rpc-url', rpcUrl, '-s', '-M', 'deposit=10', '-M', `escrow=${escrow}`],
+          { env: { MPPX_PRIVATE_KEY: testPrivateKey } },
+        )
 
-      const transaction = Transaction.deserialize(openCredential.transaction)
-      if (!('calls' in transaction)) throw new Error('unexpected transaction type')
-      const [openCall] = transaction.calls as readonly [{ to?: Address; data?: `0x${string}` }]
-      const open = decodeFunctionData({ abi: escrowAbi, data: openCall.data ?? '0x' })
-      const openArgs = open.args as readonly [Address, Address, Address, bigint, string, Address]
+        expect(openCredential).toBeDefined()
+        expect(openCredential?.action).toBe('open')
+        if (!openCredential || openCredential.action !== 'open')
+          throw new Error('missing open credential')
 
-      expect(openCall.to?.toLowerCase()).toBe(escrow.toLowerCase())
-      expect(open.functionName).toBe('open')
-      expect(openArgs[0].toLowerCase()).toBe(accounts[0].address.toLowerCase())
-      expect(openArgs[1]).toBe('0x0000000000000000000000000000000000000000')
-      expect(openArgs[2].toLowerCase()).toBe(asset.toLowerCase())
-      expect(openArgs[3]).toBe(7_000_000n)
-      expect(openArgs[4]).toEqual(expect.any(String))
-      expect(openArgs[5].toLowerCase()).toBe(testAccount.address.toLowerCase())
-    } finally {
-      httpServer.close()
-    }
-  })
+        const transaction = Transaction.deserialize(openCredential.transaction)
+        if (!('calls' in transaction)) throw new Error('unexpected transaction type')
+        const [openCall] = transaction.calls as readonly [{ to?: Address; data?: `0x${string}` }]
+        const open = decodeFunctionData({ abi: escrowAbi, data: openCall.data ?? '0x' })
+        const openArgs = open.args as readonly [Address, Address, Address, bigint, string, Address]
+
+        expect(openCall.to?.toLowerCase()).toBe(escrow.toLowerCase())
+        expect(open.functionName).toBe('open')
+        expect(openArgs[0].toLowerCase()).toBe(accounts[0].address.toLowerCase())
+        expect(openArgs[1]).toBe('0x0000000000000000000000000000000000000000')
+        expect(openArgs[2].toLowerCase()).toBe(asset.toLowerCase())
+        expect(openArgs[3]).toBe(7_000_000n)
+        expect(openArgs[4]).toEqual(expect.any(String))
+        expect(openArgs[5].toLowerCase()).toBe(testAccount.address.toLowerCase())
+      } finally {
+        httpServer.close()
+      }
+    },
+  )
 
   test(
     'selects retained non-SSE channels with auto, explicit, and new modes',

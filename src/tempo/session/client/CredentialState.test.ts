@@ -373,7 +373,7 @@ describe('CredentialPlan', () => {
         amount: 10n,
         chainId: 42431,
         client,
-        escrow,
+        escrow: escrow.toLowerCase(),
         feePayer: true,
         payee,
         snapshot: snapshot(),

@@ -660,7 +660,7 @@ describe('deserialize', () => {
 
       expect(Challenge.deserialize(header).id).toBe('abc123')
       expect(() => Challenge.deserialize(`${header}, ${name}="duplicate"`)).toThrow(
-        `Duplicate parameter: ${name}`,
+        `Duplicate parameter: ${name.toLowerCase()}`,
       )
     },
   )

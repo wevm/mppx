@@ -757,7 +757,7 @@ function assertChallengeMatchesChannel(
     throw stateError(file, 'Session challenge payee does not match the channel.')
   if (token !== channel.descriptor.token.toLowerCase())
     throw stateError(file, 'Session challenge token does not match the channel.')
-  if (resolveEscrow(challenge).toLowerCase() !== channel.escrow.toLowerCase())
+  if (resolveEscrow(challenge, channel.escrow).toLowerCase() !== channel.escrow.toLowerCase())
     throw stateError(file, 'Session challenge escrow does not match the channel.')
   if (isObject(challenge.request.methodDetails)) {
     const methodDetails = challenge.request.methodDetails

@@ -179,6 +179,30 @@ describe('session (pure)', () => {
       ).rejects.toThrow('cumulativeAmount required for close action')
     })
 
+    test('rejects a challenge escrow that differs from the cached channel escrow', async () => {
+      const method = session({ getClient: () => pureClient, account: pureAccount })
+      const context = {
+        action: 'topUp' as const,
+        additionalDeposit: '5',
+        channelId,
+        transaction: '0xabc',
+      }
+
+      await method.createCredential({ challenge: makeChallenge(), context })
+
+      await expect(
+        method.createCredential({
+          challenge: makeChallenge({
+            methodDetails: {
+              chainId: 42431,
+              escrowContract: '0x4444444444444444444444444444444444444444',
+            },
+          }),
+          context,
+        }),
+      ).rejects.toThrow('does not match client escrow')
+    })
+
     test('manual voucher produces valid credential', async () => {
       const method = session({ getClient: () => pureClient, account: pureAccount })
 

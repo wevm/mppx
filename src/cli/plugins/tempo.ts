@@ -51,6 +51,7 @@ const tempoOptionSchema = z.object({
   autoSwap: z.optional(booleanOption),
   channel: z.optional(z.coerce.string()),
   deposit: z.optional(z.union([z.string(), z.number()])),
+  escrow: z.optional(z.string().check(z.regex(/^0x[0-9a-fA-F]{40}$/, 'Invalid address'))),
   payWith: z.optional(z.string()),
   slippage: z.optional(z.coerce.number()),
   tokenIn: z.optional(z.string()),
@@ -59,6 +60,7 @@ const tempoOptionKeys = [
   'autoSwap',
   'channel',
   'deposit',
+  'escrow',
   'payWith',
   'slippage',
   'tokenIn',
@@ -251,6 +253,7 @@ export function tempo() {
         account,
         getClient: () => client!,
         ...(autoSwap !== undefined ? { autoSwap } : {}),
+        ...(tempoOpts.escrow !== undefined ? { escrow: tempoOpts.escrow as Address } : {}),
         maxDeposit: (() => {
           if (challenge.intent !== 'session') return undefined
           const suggestedDeposit = (challenge.request as Record<string, unknown>)
