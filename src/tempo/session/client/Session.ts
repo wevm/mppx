@@ -119,7 +119,7 @@ function acknowledgesOpen(
 export function session(parameters: session.Parameters = {}) {
   const {
     account,
-    allowCustomEscrow,
+    allowCustomEscrow = false,
     autoSwap: autoSwapParameter,
     channelStore,
     decimals = defaults.decimals,
@@ -405,7 +405,7 @@ export declare namespace session {
 
   type Parameters = Account.getResolver.Parameters &
     Client.getResolver.Parameters & {
-      /** Accept a noncanonical escrow contract advertised by the server. */
+      /** Accept a noncanonical escrow contract advertised by the server. @default false */
       allowCustomEscrow?: boolean | undefined
       /** Automatically acquire the session currency from fallback stablecoins before open/top-up. */
       autoSwap?: AutoSwap.resolve.Value | undefined

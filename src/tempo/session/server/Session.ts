@@ -626,7 +626,7 @@ export namespace session {
     sse?: boolean | Transport.sse.Options | undefined
     /** Tempo chain ID used for TIP-1034 channel escrow challenges. Defaults to the resolved client chain ID. */
     chainId?: number | undefined
-    /** TIP20EscrowChannel precompile address override. */
+    /** Escrow contract advertised to clients. Defaults to the canonical TIP20EscrowChannel address. */
     escrowContract?: Address | undefined
     /** Callback invoked after any on-chain settlement or close transaction is confirmed. */
     onSessionSettlement?: OnSessionSettlement | undefined

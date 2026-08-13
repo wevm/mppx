@@ -212,7 +212,7 @@ export type ClientSessionMethodDetails = {
 
 /** Dependencies used to resolve a challenge into typed credential-planning data. */
 export type ResolveChallengeContextParameters = {
-  /** Whether to accept a noncanonical escrow advertised by the server. */
+  /** Whether to accept a noncanonical escrow advertised by the server. @default false */
   allowCustomEscrow?: boolean | undefined
   /** Challenge received from the 402 response. */
   challenge: Challenge.Challenge

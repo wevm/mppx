@@ -831,6 +831,25 @@ describe('precompile client session', () => {
     )
   })
 
+  test.each([
+    ['omitted', {}],
+    ['false', { allowCustomEscrow: false }],
+  ] as const)('rejects a custom escrow when allowCustomEscrow is %s', async (_label, options) => {
+    const method = session({ account, decimals: 0, getClient: () => client, ...options })
+
+    await expect(
+      method.createCredential({
+        challenge: makeChallenge({
+          methodDetails: {
+            chainId,
+            escrowContract: '0x0000000000000000000000000000000000000005',
+          },
+        }),
+        context: {},
+      }),
+    ).rejects.toThrow('does not match client escrow')
+  })
+
   test('uses challenge-advertised operator for open transactions', async () => {
     const operator = '0x0000000000000000000000000000000000000006' as Address
     const method = session({ account, decimals: 0, getClient: () => client })

@@ -115,6 +115,7 @@ export type PaymentResponse = Response & {
  * finalized, it resumes from the on-chain settled amount.
  */
 export function sessionManager(parameters: sessionManager.Parameters): SessionManager {
+  const allowCustomEscrow = parameters.allowCustomEscrow ?? false
   const fetchFn = parameters.fetch ?? globalThis.fetch
   const WebSocketImpl =
     parameters.webSocket ??
@@ -141,7 +142,7 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
 
   const method = sessionPlugin({
     account: parameters.account,
-    allowCustomEscrow: parameters.allowCustomEscrow,
+    allowCustomEscrow,
     voucherSigner: parameters.voucherSigner,
     getClient: parameters.client ? () => parameters.client! : parameters.getClient,
     escrowContract: parameters.escrowContract,
@@ -883,7 +884,7 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
 export declare namespace sessionManager {
   type Parameters = Account.getResolver.Parameters &
     Client.getResolver.Parameters & {
-      /** Accept a noncanonical escrow contract advertised by the server. */
+      /** Accept a noncanonical escrow contract advertised by the server. @default false */
       allowCustomEscrow?: boolean | undefined
       /** Account that signs voucher digests. Defaults to `account`; access-key accounts sign raw vouchers as their access-key address. */
       voucherSigner?: viem_Account | undefined

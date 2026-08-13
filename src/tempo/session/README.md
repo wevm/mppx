@@ -47,6 +47,83 @@ flowchart LR
 | Client channel entry               | Latest locally usable channel descriptor, deposit, and cumulative authorization.      | Client `ChannelStore`; a cache.                                                     |
 | `SessionSnapshot`                  | Server-provided recovery hint.                                                        | Untrusted until client validation.                                                  |
 
+## Escrow configuration and trust
+
+The server owns escrow configuration. Its session method uses the canonical
+TIP20EscrowChannel address by default. The method-level `escrowContract` applies
+to all routes unless a route supplies its own value. The resolved address is
+included in each session challenge so clients can construct transactions,
+channel IDs, and voucher signatures for the same contract.
+
+```ts
+// Canonical escrow: no configuration required.
+const canonicalSession = tempo.session({ account, currency, getClient, store })
+
+// Custom deployment: the server advertises this address in its challenges.
+const customSession = tempo.session({
+  account,
+  currency,
+  escrowContract: customEscrow,
+  getClient,
+  store,
+})
+
+const customRoute = mppx.session({
+  amount: '0.01',
+  escrowContract: routeEscrow,
+  unitType: 'request',
+})
+```
+
+Receiving an address in a challenge does not make it trusted. Clients accept
+only the canonical escrow by default. A challenge advertising any other address
+is rejected before the client signs a transaction or voucher.
+
+Clients that intentionally support a server's custom deployment opt in with
+`allowCustomEscrow: true`:
+
+```ts
+import { tempo } from 'mppx/client'
+
+// Default: allowCustomEscrow is false.
+const canonicalOnly = tempo.session({ account })
+
+// Trust the custom escrow address advertised by the server.
+const customCompatible = tempo.session({
+  account,
+  allowCustomEscrow: true,
+})
+
+// The same option is available on the managed client.
+const manager = tempo.session.manager({
+  account,
+  allowCustomEscrow: true,
+})
+```
+
+`allowCustomEscrow` defaults to `false`; explicitly passing `false` has the same
+behavior as omitting it. Setting it to `true` trusts the server-selected escrow
+for a new channel. After resolution, persisted channel state remains bound to
+that exact address, so a later challenge cannot switch an existing channel to a
+different escrow.
+
+The pre-existing client `escrow` option (or legacy `escrowContract`) remains an
+exact-address pin for applications that need stronger policy. A pin takes
+precedence over `allowCustomEscrow`: the advertised address must match it.
+
+CLI clients use the same default and opt-in:
+
+```bash
+# Canonical escrow only (default)
+mppx https://api.example.com/paid
+
+# Accept the custom escrow advertised by this server
+mppx https://api.example.com/paid -M allowCustomEscrow=true
+```
+
+This is a client trust decision. Servers do not set `allowCustomEscrow`, and
+wallets or other clients may choose not to expose the opt-in at all.
+
 The amounts below have intentionally different meanings.
 
 | Amount                                        | Meaning                                      | Rule                                                     |

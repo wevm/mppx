@@ -74,7 +74,7 @@ export type SessionContext = z.infer<typeof sessionContextSchema>
  * ```
  */
 export function session(parameters: session.Parameters = {}) {
-  const { decimals = defaults.decimals } = parameters
+  const { allowCustomEscrow = false, decimals = defaults.decimals } = parameters
 
   const getClient = Client.getResolver({
     chain: tempo_chain,
@@ -107,12 +107,7 @@ export function session(parameters: session.Parameters = {}) {
       const cached = escrowContractMap.get(channelId)
       if (cached) return resolveEscrow(challenge, chainId, cached)
     }
-    return resolveEscrow(
-      challenge,
-      chainId,
-      parameters.escrowContract,
-      parameters.allowCustomEscrow,
-    )
+    return resolveEscrow(challenge, chainId, parameters.escrowContract, allowCustomEscrow)
   }
 
   async function autoManageCredential(
@@ -386,7 +381,7 @@ export function session(parameters: session.Parameters = {}) {
 export declare namespace session {
   type Parameters = Account.getResolver.Parameters &
     Client.getResolver.Parameters & {
-      /** Accept a noncanonical escrow contract advertised by the server. */
+      /** Accept a noncanonical escrow contract advertised by the server. @default false */
       allowCustomEscrow?: boolean | undefined
       /** Account that signs voucher digests. Defaults to `account`; access-key accounts sign raw vouchers as their access-key address. */
       voucherSigner?: viem_Account | undefined

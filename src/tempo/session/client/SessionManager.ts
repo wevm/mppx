@@ -189,6 +189,7 @@ function resolveSessionManagerConfig(parameters: sessionManager.Parameters): Ses
  * `channelStore` can persist reusable channels between manager instances.
  */
 export function sessionManager(parameters: sessionManager.Parameters): SessionManager {
+  const allowCustomEscrow = parameters.allowCustomEscrow ?? false
   const config = resolveSessionManagerConfig(parameters)
   const getClient = Client.getResolver({
     chain: tempo_chain,
@@ -319,7 +320,7 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
 
   const method = sessionPlugin({
     account: parameters.account,
-    allowCustomEscrow: parameters.allowCustomEscrow,
+    allowCustomEscrow,
     autoSwap: parameters.autoSwap,
     getClient: parameters.client ? () => parameters.client! : parameters.getClient,
     resolveAccount: parameters.resolveAccount,
@@ -973,7 +974,7 @@ export namespace sessionManager {
 
   export type Parameters = Account.getResolver.Parameters &
     Client.getResolver.Parameters & {
-      /** Accept a noncanonical escrow contract advertised by the server. */
+      /** Accept a noncanonical escrow contract advertised by the server. @default false */
       allowCustomEscrow?: boolean | undefined
       /** Automatically acquire the session currency from fallback stablecoins before open/top-up. */
       autoSwap?: sessionPlugin.Parameters['autoSwap']

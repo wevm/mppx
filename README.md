@@ -117,10 +117,19 @@ mppx sessions list
 mppx sessions view <channel-id>
 mppx sessions close <channel-id>
 mppx sessions close --all --yes
+
+# explicitly trust a custom session escrow advertised by the server
+mppx example.com -M allowCustomEscrow=true
 ```
 
 `--session auto` is the default. Pass `new` to open another channel or a channel ID to select one
 explicitly.
+
+Tempo session clients accept only the canonical escrow contract by default. A server may advertise
+its configured custom escrow in the payment challenge, but the client rejects it unless
+`-M allowCustomEscrow=true` is supplied. This opt-in trusts the server-selected address; clients
+that do not support custom escrows should leave it unset. See the
+[session escrow trust documentation](./src/tempo/session/README.md#escrow-configuration-and-trust).
 
 You can also install globally to use the `mppx` CLI from anywhere:
 
