@@ -1072,7 +1072,7 @@ describe('session multi-fetch (examples/session/multi-fetch)', () => {
       await fundAccount({ address: testAccount.address, token: Addresses.pathUsd })
       await fundAccount({ address: testAccount.address, token: asset })
 
-      const escrow = '0x0000000000000000000000000000000000000005' as Address
+      const escrow = tip20ChannelEscrow
       let openCredential: SessionCredentialPayload | undefined
 
       const httpServer = await Http.createServer(async (req, res) => {
@@ -1115,10 +1115,11 @@ describe('session multi-fetch (examples/session/multi-fetch)', () => {
       })
 
       try {
-        await serve(
+        const result = await serve(
           [httpServer.url, '--rpc-url', rpcUrl, '-s', '-M', 'deposit=10', '-M', `escrow=${escrow}`],
           { env: { MPPX_PRIVATE_KEY: testPrivateKey } },
         )
+        expect(result.exitCode, `${result.output}\n${result.stderr}`).toBeUndefined()
 
         expect(openCredential).toBeDefined()
         expect(openCredential?.action).toBe('open')

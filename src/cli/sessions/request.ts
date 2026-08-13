@@ -1,6 +1,6 @@
 import { Errors } from 'incur'
 import type { Hex } from 'ox'
-import { createClient, formatUnits, http } from 'viem'
+import { type Address, createClient, formatUnits, http, isAddress } from 'viem'
 
 import type * as Challenge from '../../Challenge.js'
 import {
@@ -84,6 +84,20 @@ function sessionDecimals(challenge: Challenge.Challenge): number {
   return typeof challenge.request.decimals === 'number' ? challenge.request.decimals : 6
 }
 
+/** @internal Resolves an explicitly trusted session escrow from CLI method options. */
+export function resolveSessionEscrowOverride(
+  methodOptions: Record<string, string>,
+): Address | undefined {
+  const escrow = methodOptions.escrow
+  if (escrow === undefined) return undefined
+  if (isAddress(escrow, { strict: false })) return escrow
+  throw new Errors.IncurError({
+    code: 'INVALID_SESSION_ESCROW',
+    message: 'Session escrow must be a 20-byte address.',
+    exitCode: 2,
+  })
+}
+
 /** @internal Resolves the manager deposit cap in human-readable token units. */
 export function resolveSessionMaxDeposit(
   challenge: Challenge.Challenge,
@@ -148,8 +162,10 @@ export async function runPersistentSessionRequest(
   const rpcUrl = resolveRpcUrl(options.rpcUrl, { network: options.network })
   const chain = await resolveChain({ network: options.network, rpcUrl })
   const client = createClient({ chain, transport: http(rpcUrl) })
+  const escrowOverride = resolveSessionEscrowOverride(parameters.methodOptions)
   const challengeContext = await resolveChallengeContext({
     challenge: parameters.challenge,
+    escrowOverride,
     getClient: async () => client,
   })
   if (challengeContext.chainId !== chain.id)
@@ -257,6 +273,7 @@ export async function runPersistentSessionRequest(
       client,
       channelStore,
       decimals: sessionDecimals(parameters.challenge),
+      escrow: escrowOverride,
       maxDeposit: resolveSessionMaxDeposit(
         parameters.challenge,
         parameters.methodOptions,

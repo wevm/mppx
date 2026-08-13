@@ -13,6 +13,7 @@ import { sessionManager } from './SessionManager.js'
 const channelId = '0x0000000000000000000000000000000000000000000000000000000000000001' as Hex
 const challengeId = 'test-challenge-1'
 const realm = 'test.example.com'
+const escrowContract = '0x9d136eEa063eDE5418A6BC7bEafF009bBb6CFa70'
 
 function makeChallenge(overrides: Record<string, unknown> = {}): Challenge.Challenge {
   return Challenge.from({
@@ -26,7 +27,7 @@ function makeChallenge(overrides: Record<string, unknown> = {}): Challenge.Chall
       recipient: '0x742d35Cc6634C0532925a3b844Bc9e7595f8fE00',
       decimals: 6,
       methodDetails: {
-        escrowContract: '0x9d136eEa063eDE5418A6BC7bEafF009bBb6CFa70',
+        escrowContract,
         chainId: 4217,
       },
       ...overrides,
@@ -124,6 +125,7 @@ describe('Session', () => {
         const manager = sessionManagerWithMocks({
           account,
           client,
+          escrowContract,
           fetch: mockFetch as typeof globalThis.fetch,
           maxDeposit: '10',
           voucherSigner,
@@ -320,6 +322,7 @@ describe('Session', () => {
         const s = sessionManagerWithMocks({
           account,
           client,
+          escrowContract,
           fetch: mockFetch as typeof globalThis.fetch,
           maxDeposit: '10',
           voucherSigner,

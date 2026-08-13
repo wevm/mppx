@@ -2,7 +2,11 @@ import type { Hex } from 'viem'
 import { describe, expect, test } from 'vp/test'
 
 import type * as Challenge from '../../Challenge.js'
-import { resolveSessionMaxDeposit, resolveSessionSelection } from './request.js'
+import {
+  resolveSessionEscrowOverride,
+  resolveSessionMaxDeposit,
+  resolveSessionSelection,
+} from './request.js'
 
 const channelId = `0x${'12'.repeat(32)}` as Hex
 describe('resolveSessionSelection', () => {
@@ -22,6 +26,19 @@ describe('resolveSessionSelection', () => {
   test('rejects conflicting selectors', () => {
     expect(() => resolveSessionSelection('new', channelId)).toThrow(
       '--session and -M channel= select different sessions.',
+    )
+  })
+})
+
+describe('resolveSessionEscrowOverride', () => {
+  test('accepts an explicit escrow address', () => {
+    const escrow = '0x4444444444444444444444444444444444444444'
+    expect(resolveSessionEscrowOverride({ escrow })).toBe(escrow)
+  })
+
+  test('rejects an invalid escrow address', () => {
+    expect(() => resolveSessionEscrowOverride({ escrow: 'invalid' })).toThrow(
+      'Session escrow must be a 20-byte address.',
     )
   })
 })

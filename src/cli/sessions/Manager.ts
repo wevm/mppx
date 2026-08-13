@@ -54,7 +54,7 @@ function assertCloseChallengeScope(challenge: TempoSessionChallenge, channel: Ch
     challenge.request.currency.toLowerCase() !== channel.descriptor.token.toLowerCase()
   )
     throw new Error('Close challenge changed the session token.')
-  if (resolveEscrow(challenge).toLowerCase() !== channel.escrow.toLowerCase())
+  if (resolveEscrow(challenge, channel.escrow).toLowerCase() !== channel.escrow.toLowerCase())
     throw new Error('Close challenge changed the session escrow.')
   const snapshot = getSessionSnapshot(challenge)
   if (snapshot && snapshot.channelId.toLowerCase() !== channel.channelId.toLowerCase())
@@ -84,6 +84,7 @@ export async function closeWithSessionManager(
   const manager = sessionManager({
     ...parameters.manager,
     bootstrap: false,
+    escrow: parameters.channel.escrow,
     fetch: validatedFetch,
   })
   getSessionManagerInternals(manager).rehydrate(parameters)
