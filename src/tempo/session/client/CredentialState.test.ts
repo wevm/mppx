@@ -394,6 +394,45 @@ describe('CredentialPlan', () => {
       expect(resolved.chainId).toBe(4217)
     })
 
+    test('scopes adapter-backed channels by logical recipient', async () => {
+      const adapter = '0x00000000000000000000000000000000000000a0' as Address
+      const merchant = '0x00000000000000000000000000000000000000b0' as Address
+      const targetToken = '0x00000000000000000000000000000000000000c0' as Address
+      const resolved = await resolveChallengeContext({
+        challenge: paymentChallenge({
+          recipient: merchant,
+          methodDetails: {
+            chainId: 42431,
+            escrowContract: escrow,
+            settlementAdapter: adapter,
+            settlementRouteSalt: `0x${'12'.repeat(32)}`,
+            settlementTargetToken: targetToken,
+          },
+        }),
+        getClient: async () => ({ chain: { id: 42431 } }) as Client,
+      })
+
+      expect(resolved).toMatchObject({ payee: adapter, recipient: merchant, targetToken })
+      expect(resolved.key).toBe(
+        `${adapter.toLowerCase()}:${token.toLowerCase()}:${escrow.toLowerCase()}:42431:${merchant.toLowerCase()}:${targetToken.toLowerCase()}`,
+      )
+    })
+
+    test('rejects partial adapter route metadata', async () => {
+      await expect(
+        resolveChallengeContext({
+          challenge: paymentChallenge({
+            methodDetails: {
+              chainId: 42431,
+              escrowContract: escrow,
+              settlementAdapter: '0x00000000000000000000000000000000000000a0',
+            },
+          }),
+          getClient: async () => ({ chain: { id: 42431 } }) as Client,
+        }),
+      ).rejects.toThrow('are required together')
+    })
+
     test('rejects challenges without required payment fields', async () => {
       await expect(
         resolveChallengeContext({

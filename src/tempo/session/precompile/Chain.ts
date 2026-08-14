@@ -19,6 +19,7 @@ import * as ChannelOps from '../server/ChannelOps.js'
 import * as ChannelUtils from './Channel.js'
 import type { ChannelDescriptor } from './Channel.js'
 import { escrowAbi } from './escrow.abi.js'
+import { machineUsdSwapperAbi } from './machineUsdSwapper.abi.js'
 import { tip20ChannelEscrow } from './Protocol.js'
 
 /** Minimal on-chain state read back after precompile transaction receipts. */
@@ -399,6 +400,11 @@ export type ChannelTransactionOptions = {
   feeToken?: Address | undefined
 }
 
+type PrecompileTransactionOptions = ChannelTransactionOptions & {
+  prefixCalls?: readonly { to: Address; data: Hex }[] | undefined
+  suffixCalls?: readonly { to: Address; data: Hex }[] | undefined
+}
+
 type ParsedPrecompileCredentialTransaction = {
   call: Transaction.TransactionTempo['calls'][number] & { data: Hex; to: Address }
   prefixCalls: readonly Transaction.TransactionTempo['calls'][number][]
@@ -575,26 +581,6 @@ async function signTempoTransaction(client: Client, transaction: unknown): Promi
   return (await signTransaction(client, transaction as never)) as Hex
 }
 
-async function prepareFeePayerCallTransaction(
-  client: Client,
-  parameters: {
-    account: Account
-    data: Hex
-    feeToken?: Address | undefined
-    to: Address
-  },
-) {
-  const { account, data, feeToken, to } = parameters
-  // viem's stable request type does not expose Tempo fee-payer transaction
-  // fields for this call shape. Keep the cast at the boundary.
-  return prepareTransactionRequest(client, {
-    account,
-    calls: [{ to, data }],
-    feePayer: true,
-    ...(feeToken ? { feeToken } : {}),
-  } as never)
-}
-
 function sendPrecompileContractCall(
   client: Client,
   parameters: {
@@ -624,7 +610,7 @@ export async function settleOnChain(
   cumulativeAmount: bigint,
   signature: Hex,
   escrow: Address = tip20ChannelEscrow,
-  options?: ChannelTransactionOptions,
+  options?: PrecompileTransactionOptions,
 ): Promise<Hex> {
   assertUint96(cumulativeAmount)
   const args = [descriptorTuple(descriptor), cumulativeAmount, signature] as const
@@ -706,7 +692,7 @@ export async function closeOnChain(
   captureAmount: bigint,
   signature: Hex,
   escrow: Address = tip20ChannelEscrow,
-  options?: ChannelTransactionOptions,
+  options?: PrecompileTransactionOptions,
 ): Promise<Hex> {
   assertUint96(cumulativeAmount)
   assertUint96(captureAmount)
@@ -718,6 +704,35 @@ export async function closeOnChain(
     'close',
     options,
   )
+}
+
+/** Settles, converts, then fully closes an adapter-backed channel in one Tempo transaction. */
+export async function closeMachineUsdSessionOnChain(
+  client: Client,
+  descriptor: ChannelDescriptor,
+  cumulativeAmount: bigint,
+  signature: Hex,
+  adapter: Address,
+  route: { recipient: Address; targetToken: Address; routeSalt: Hex },
+  escrow: Address = tip20ChannelEscrow,
+  options?: ChannelTransactionOptions,
+): Promise<Hex> {
+  assertUint96(cumulativeAmount)
+  const descriptor_ = descriptorTuple(descriptor)
+  return closeOnChain(client, descriptor, cumulativeAmount, cumulativeAmount, signature, escrow, {
+    ...options,
+    prefixCalls: [
+      {
+        to: escrow,
+        data: encodeFunctionData({
+          abi: escrowAbi,
+          functionName: 'settle',
+          args: [descriptor_, cumulativeAmount, signature],
+        }),
+      },
+      machineUsdSessionSettlementCall(adapter, descriptor, route),
+    ],
+  })
 }
 
 /** Receipt event shape emitted by TIP20EscrowChannel precompile management calls. */
@@ -1213,7 +1228,7 @@ async function sendPrecompileTransaction(
   to: Address,
   data: Hex,
   label: string,
-  options?: ChannelTransactionOptions,
+  options?: PrecompileTransactionOptions,
 ): Promise<Hex> {
   const account = options?.account ?? client.account
   const selfSponsored =
@@ -1228,12 +1243,12 @@ async function sendPrecompileTransaction(
         candidateTokens: options.candidateFeeTokens,
         client,
       }))
-    const prepared = await prepareFeePayerCallTransaction(client, {
+    const prepared = await prepareTransactionRequest(client, {
       account,
-      data,
+      calls: [...(options.prefixCalls ?? []), { to, data }, ...(options.suffixCalls ?? [])],
+      feePayer: true,
       feeToken,
-      to,
-    })
+    } as never)
     assertPrecompileFeePayerPolicy({ prepared, policy: options.feePayerPolicy })
     const serialized = await signTempoTransaction(client, {
       ...prepared,
@@ -1260,10 +1275,29 @@ async function sendPrecompileTransaction(
         })
       : undefined)
 
-  return sendPrecompileContractCall(client, {
-    account,
-    to,
-    data,
-    feeToken,
-  })
+  if (!options?.prefixCalls?.length && !options?.suffixCalls?.length)
+    return sendPrecompileContractCall(client, { account, to, data, feeToken })
+  return sendViemTransaction(client, {
+    ...(account ? { account } : {}),
+    calls: [...(options.prefixCalls ?? []), { to, data }, ...(options.suffixCalls ?? [])],
+    ...(feeToken ? { feeToken } : {}),
+  } as never)
+}
+
+/** Encodes the MachineUsdSwapper conversion call for a settled session descriptor. */
+export function machineUsdSessionSettlementCall(
+  adapter: Address,
+  descriptor: ChannelDescriptor,
+  route: { recipient: Address; targetToken: Address; routeSalt: Hex },
+): { to: Address; data: Hex } {
+  if (!isAddressEqual(adapter, descriptor.payee))
+    throw new VerificationFailedError({ reason: 'settlement adapter is not the channel payee' })
+  return {
+    to: adapter,
+    data: encodeFunctionData({
+      abi: machineUsdSwapperAbi,
+      functionName: 'settleSession',
+      args: [descriptorTuple(descriptor), route.recipient, route.targetToken, route.routeSalt],
+    }),
+  }
 }

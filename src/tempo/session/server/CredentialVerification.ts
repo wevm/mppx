@@ -22,6 +22,7 @@ import { readChannelClosedReceiptFields } from '../precompile/Chain.js'
 import * as Channel from '../precompile/Channel.js'
 import {
   createSessionReceipt,
+  deriveMachineUsdSessionSalt,
   uint96,
   type ChannelDescriptor,
   type SessionCredentialPayload,
@@ -76,12 +77,14 @@ export function validateChannelDescriptor(
   recipient: Address,
   currency: Address,
   expectedOperator?: Address | undefined,
+  expectedPayee: Address = recipient,
+  settlementRoute?: { recipient: Address; targetToken: Address; routeSalt: Hex } | undefined,
 ): void {
   const computed = Channel.computeId({ ...descriptor, chainId, escrow })
   if (computed.toLowerCase() !== channelId.toLowerCase()) {
     throw new VerificationFailedError({ reason: 'channel descriptor does not match channelId' })
   }
-  if (!isAddressEqual(descriptor.payee, recipient)) {
+  if (!isAddressEqual(descriptor.payee, expectedPayee)) {
     throw new VerificationFailedError({
       reason: 'channel descriptor payee does not match server destination',
     })
@@ -96,6 +99,13 @@ export function validateChannelDescriptor(
       reason: 'channel descriptor operator does not match server operator',
     })
   }
+  if (
+    settlementRoute &&
+    descriptor.salt.toLowerCase() !== deriveMachineUsdSessionSalt(settlementRoute).toLowerCase()
+  )
+    throw new VerificationFailedError({
+      reason: 'channel descriptor salt does not match settlement route',
+    })
 }
 
 /** Validates on-chain channel state before accepting or charging a credential. */
@@ -346,6 +356,9 @@ export type BroadcastCredentialPayloadParameters = {
   minVoucherDelta: bigint
   /** Callback invoked after an on-chain settlement or close transaction is confirmed. */
   onSessionSettlement?: OnSessionSettlement | undefined
+  /** MachineUsdSwapper payee called atomically after cooperative close. */
+  settlementAdapter?: Address | undefined
+  settlementRoute?: { recipient: Address; targetToken: Address; routeSalt: Hex } | undefined
   /** Discriminated session credential payload to verify. */
   payload: SessionCredentialPayload
   /** Server-side channel store. */
@@ -400,6 +413,7 @@ export type ValidateCredentialPayloadParameters = Pick<
   | 'lastOnChainVerified'
   | 'minVoucherDelta'
   | 'payload'
+  | 'settlementRoute'
   | 'store'
   | 'challenge'
 >
@@ -459,6 +473,14 @@ async function validateOpenCredential(
     request.recipient,
     request.currency,
     expectedOperator,
+    request.settlementAdapter ?? request.recipient,
+    request.settlementRouteSalt && request.settlementTargetToken
+      ? {
+          recipient: request.recipient,
+          targetToken: request.settlementTargetToken,
+          routeSalt: request.settlementRouteSalt,
+        }
+      : undefined,
   )
   const transaction = Chain.validateOpenCredentialTransaction({
     challengeExpires: challenge.expires,
@@ -468,7 +490,7 @@ async function validateOpenCredential(
     expectedChannelId: channelId,
     expectedCurrency: request.currency,
     expectedOperator,
-    expectedPayee: request.recipient,
+    expectedPayee: request.settlementAdapter ?? request.recipient,
     expectedExpiringNonceHash: payload.descriptor.expiringNonceHash,
     expectedPayer: payload.descriptor.payer,
     feePayer: parameters.feePayer,
@@ -515,6 +537,14 @@ async function validateTopUpCredential(
     request.recipient,
     request.currency,
     expectedOperator,
+    request.settlementAdapter ?? request.recipient,
+    request.settlementRouteSalt && request.settlementTargetToken
+      ? {
+          recipient: request.recipient,
+          targetToken: request.settlementTargetToken,
+          routeSalt: request.settlementRouteSalt,
+        }
+      : undefined,
   )
   const channel = await ChannelStore.loadPrecompileChannel({
     descriptor: payload.descriptor,
@@ -576,6 +606,14 @@ async function validateVoucherCredential(
     request.recipient,
     request.currency,
     expectedOperator,
+    request.settlementAdapter ?? request.recipient,
+    request.settlementRouteSalt && request.settlementTargetToken
+      ? {
+          recipient: request.recipient,
+          targetToken: request.settlementTargetToken,
+          routeSalt: request.settlementRouteSalt,
+        }
+      : undefined,
   )
   const channel = await ChannelStore.loadPrecompileChannel({
     descriptor: payload.descriptor,
@@ -641,6 +679,14 @@ async function validateCloseCredential(
     request.recipient,
     request.currency,
     expectedOperator,
+    request.settlementAdapter ?? request.recipient,
+    request.settlementRouteSalt && request.settlementTargetToken
+      ? {
+          recipient: request.recipient,
+          targetToken: request.settlementTargetToken,
+          routeSalt: request.settlementRouteSalt,
+        }
+      : undefined,
   )
   const channel = await ChannelStore.loadPrecompileChannel({
     descriptor: payload.descriptor,
@@ -673,6 +719,13 @@ async function validateCloseCredential(
   const captureAmount = uint96(channel.spent > state.settled ? channel.spent : state.settled)
   if (captureAmount > state.deposit)
     throw new AmountExceedsDepositError({ reason: 'close capture amount exceeds on-chain deposit' })
+  if (
+    parameters.settlementRoute &&
+    (cumulativeAmount !== state.deposit || captureAmount !== state.deposit)
+  )
+    throw new VerificationFailedError({
+      reason: 'adapter-backed channels can only close after the full deposit is consumed',
+    })
   const account = parameters.account ?? getClientAccount(client)
   assertSettlementSender({
     operation: 'close',
@@ -747,6 +800,14 @@ async function handleOpenCredential(
     request.recipient,
     request.currency,
     expectedOperator,
+    request.settlementAdapter ?? request.recipient,
+    request.settlementRouteSalt && request.settlementTargetToken
+      ? {
+          recipient: request.recipient,
+          targetToken: request.settlementTargetToken,
+          routeSalt: request.settlementRouteSalt,
+        }
+      : undefined,
   )
 
   const result = await Chain.broadcastOpenTransaction({
@@ -758,7 +819,7 @@ async function handleOpenCredential(
     expectedChannelId: channelId,
     expectedCurrency: request.currency,
     expectedOperator,
-    expectedPayee: request.recipient,
+    expectedPayee: request.settlementAdapter ?? request.recipient,
     expectedExpiringNonceHash: payload.descriptor.expiringNonceHash,
     expectedPayer: payload.descriptor.payer,
     feePayer: parameters.feePayer,
@@ -786,8 +847,8 @@ async function handleOpenCredential(
   assertSameDescriptor(descriptor, payload.descriptor)
   validateChannelState(state, request.amount)
 
-  const updated = await store.updateChannel(channelId, (current) =>
-    ChannelStore.openChannelState({
+  const updated = await store.updateChannel(channelId, (current) => {
+    const opened = ChannelStore.openChannelState({
       authorizedSigner: authorizedSigner(descriptor),
       chainId,
       channelId,
@@ -798,8 +859,18 @@ async function handleOpenCredential(
       cumulativeAmount,
       signature: payload.signature,
       state,
-    }),
-  )
+    })
+    return request.settlementRouteSalt && request.settlementTargetToken
+      ? {
+          ...opened,
+          settlementRoute: {
+            recipient: request.recipient,
+            targetToken: request.settlementTargetToken,
+            routeSalt: request.settlementRouteSalt,
+          },
+        }
+      : opened
+  })
   if (!updated) throw new VerificationFailedError({ reason: 'failed to create channel' })
   return createSessionReceipt({
     challengeId: challenge.id,
@@ -828,6 +899,14 @@ async function handleTopUpCredential(
     request.recipient,
     request.currency,
     expectedOperator,
+    request.settlementAdapter ?? request.recipient,
+    request.settlementRouteSalt && request.settlementTargetToken
+      ? {
+          recipient: request.recipient,
+          targetToken: request.settlementTargetToken,
+          routeSalt: request.settlementRouteSalt,
+        }
+      : undefined,
   )
   const channel = await ChannelStore.loadPrecompileChannel({
     descriptor: payload.descriptor,
@@ -898,6 +977,14 @@ async function handleVoucherCredential(
     request.recipient,
     request.currency,
     expectedOperator,
+    request.settlementAdapter ?? request.recipient,
+    request.settlementRouteSalt && request.settlementTargetToken
+      ? {
+          recipient: request.recipient,
+          targetToken: request.settlementTargetToken,
+          routeSalt: request.settlementRouteSalt,
+        }
+      : undefined,
   )
   const channel = await ChannelStore.loadPrecompileChannel({
     descriptor: payload.descriptor,
@@ -958,6 +1045,14 @@ async function handleCloseCredential(
     request.recipient,
     request.currency,
     expectedOperator,
+    request.settlementAdapter ?? request.recipient,
+    request.settlementRouteSalt && request.settlementTargetToken
+      ? {
+          recipient: request.recipient,
+          targetToken: request.settlementTargetToken,
+          routeSalt: request.settlementRouteSalt,
+        }
+      : undefined,
   )
   const channel = await ChannelStore.loadPrecompileChannel({
     descriptor: payload.descriptor,
@@ -990,6 +1085,13 @@ async function handleCloseCredential(
   let captureAmount = uint96(channel.spent > state.settled ? channel.spent : state.settled)
   if (captureAmount > state.deposit)
     throw new AmountExceedsDepositError({ reason: 'close capture amount exceeds on-chain deposit' })
+  if (
+    parameters.settlementRoute &&
+    (cumulativeAmount !== state.deposit || captureAmount !== state.deposit)
+  )
+    throw new VerificationFailedError({
+      reason: 'adapter-backed channels can only close after the full deposit is consumed',
+    })
   const pendingCloseStartedAt = BigInt(Math.floor(Date.now() / 1000) || 1)
   const previousCloseRequestedAt = channel.closeRequestedAt
   let pendingCloseMarked = false
@@ -1008,6 +1110,9 @@ async function handleCloseCredential(
     return next.state
   })
   const account = parameters.account ?? getClientAccount(client)
+  const settlementRoute = parameters.settlementRoute ?? channel.settlementRoute
+  const settlementAdapter =
+    parameters.settlementAdapter ?? (settlementRoute ? channel.payee : undefined)
   let txHash: Hex | undefined
   let receipt: Awaited<ReturnType<typeof Chain.waitForSuccessfulReceipt>>
   try {
@@ -1018,23 +1123,36 @@ async function handleCloseCredential(
       payee: channel.payee,
       sender: account?.address,
     })
-    txHash = await Chain.closeOnChain(
-      client,
-      channel.descriptor,
-      cumulativeAmount,
-      captureAmount,
-      payload.signature,
-      escrow,
-      account
-        ? {
-            account,
-            ...(typeof parameters.feePayer === 'object' ? { feePayer: parameters.feePayer } : {}),
-            ...(parameters.feePayerPolicy ? { feePayerPolicy: parameters.feePayerPolicy } : {}),
-            ...(parameters.feeToken ? { feeToken: parameters.feeToken } : {}),
-            candidateFeeTokens: [channel.token],
-          }
-        : undefined,
-    )
+    const transactionOptions = account
+      ? {
+          account,
+          ...(typeof parameters.feePayer === 'object' ? { feePayer: parameters.feePayer } : {}),
+          ...(parameters.feePayerPolicy ? { feePayerPolicy: parameters.feePayerPolicy } : {}),
+          ...(parameters.feeToken ? { feeToken: parameters.feeToken } : {}),
+          candidateFeeTokens: [channel.token],
+        }
+      : undefined
+    txHash =
+      settlementAdapter && settlementRoute && state.settled < captureAmount
+        ? await Chain.closeMachineUsdSessionOnChain(
+            client,
+            channel.descriptor,
+            cumulativeAmount,
+            payload.signature,
+            settlementAdapter,
+            settlementRoute,
+            escrow,
+            transactionOptions,
+          )
+        : await Chain.closeOnChain(
+            client,
+            channel.descriptor,
+            cumulativeAmount,
+            captureAmount,
+            payload.signature,
+            escrow,
+            transactionOptions,
+          )
     receipt = await Chain.waitForSuccessfulReceipt(client, txHash)
   } catch (error) {
     if (pendingCloseMarked) {

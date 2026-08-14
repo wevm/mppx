@@ -159,6 +159,10 @@ export type SessionSettlementContext = Readonly<{
   amount: bigint
   /** Incremental amount settled in this transaction (raw token units). */
   delta: bigint
+  /** Logical merchant recipient after adapter conversion. */
+  recipient?: Address | undefined
+  /** Merchant output token after adapter conversion. */
+  targetToken?: Address | undefined
 }>
 
 /** Callback invoked after an on-chain settlement or close transaction is confirmed. */
@@ -360,6 +364,9 @@ export type SettlementTransactionOptions = {
   feeToken?: Address | undefined
   /** Callback invoked after the settlement transaction is confirmed. */
   onSessionSettlement?: OnSessionSettlement | undefined
+  /** MachineUsdSwapper payee called atomically after escrow settlement. */
+  settlementAdapter?: Address | undefined
+  settlementRoute?: { recipient: Address; targetToken: Address; routeSalt: Hex } | undefined
 }
 
 /** Inputs for applying a server-owned automatic settlement schedule. */
@@ -376,6 +383,9 @@ export type MaybeSettleScheduledParameters = {
   feePayerPolicy?: Partial<FeePayer.Policy> | undefined
   /** Optional fee token override for settlement. */
   feeToken?: Address | undefined
+  /** MachineUsdSwapper payee called atomically after escrow settlement. */
+  settlementAdapter?: Address | undefined
+  settlementRoute?: { recipient: Address; targetToken: Address; routeSalt: Hex } | undefined
   /** Callback invoked after the scheduled settlement transaction is confirmed. */
   onSessionSettlement?: OnSessionSettlement | undefined
   /** Resolved server-owned settlement cadence. */
@@ -425,6 +435,8 @@ export async function maybeSettleScheduled(
     onSessionSettlement: parameters.onSessionSettlement
       ? (ctx) => parameters.onSessionSettlement!({ ...ctx, trigger: 'scheduled' })
       : undefined,
+    settlementAdapter: parameters.settlementAdapter,
+    settlementRoute: parameters.settlementRoute,
   })
   await markSettlementComplete({ channelId: channel.channelId, store })
   return txHash
@@ -454,6 +466,9 @@ export async function settle(
     sender: account?.address,
   })
   const amount = uint96(channel.highestVoucher.cumulativeAmount)
+  const settlementRoute = options?.settlementRoute ?? channel.settlementRoute
+  const settlementAdapter =
+    options?.settlementAdapter ?? (settlementRoute ? channel.payee : undefined)
   const txHash = await Chain.settleOnChain(
     client,
     channel.descriptor,
@@ -467,6 +482,17 @@ export async function settle(
           ...(options?.feePayerPolicy ? { feePayerPolicy: options.feePayerPolicy } : {}),
           ...(options?.feeToken ? { feeToken: options.feeToken } : {}),
           candidateFeeTokens: options?.candidateFeeTokens ?? [channel.token],
+          ...(settlementAdapter && settlementRoute
+            ? {
+                suffixCalls: [
+                  Chain.machineUsdSessionSettlementCall(
+                    settlementAdapter,
+                    channel.descriptor,
+                    settlementRoute,
+                  ),
+                ],
+              }
+            : {}),
         }
       : undefined,
   )
@@ -498,6 +524,9 @@ export async function settle(
       trigger: 'settle',
       amount: newSettled,
       delta: newSettled - channel.settledOnChain,
+      ...(settlementRoute
+        ? { recipient: settlementRoute.recipient, targetToken: settlementRoute.targetToken }
+        : {}),
     })
   }
   return txHash

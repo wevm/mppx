@@ -33,6 +33,8 @@ export type TempoChannelCall = {
   data: Hex.Hex
 }
 
+export { deriveMachineUsdSessionSalt } from '../precompile/Protocol.js'
+
 type AccountWithAccessKey = Account & {
   accessKeyAddress?: unknown
 }
@@ -53,6 +55,10 @@ export type ChannelEntry = {
   chainId: number
   /** Whether the client considers the channel reusable for new vouchers. */
   opened: boolean
+  /** Logical recipient when `descriptor.payee` is a settlement adapter. */
+  settlementRecipient?: Address | undefined
+  /** Output token for an adapter-backed session. */
+  settlementTargetToken?: Address | undefined
 }
 
 function isObject(value: unknown): value is Record<string, unknown> {
@@ -244,13 +250,14 @@ export async function createOpenPayload(
     payee: Address
     /** Calls executed atomically before the channel is opened. */
     prefixCalls?: readonly TempoChannelCall[] | undefined
+    salt?: Hex.Hex | undefined
     token: Address
   },
 ): Promise<OpenCredentialPayload> {
   const authorizedSigner = resolveAuthorizedSigner(account)
   const escrow = parameters.escrow ?? tip20ChannelEscrow
   const operator = parameters.operator ?? '0x0000000000000000000000000000000000000000'
-  const salt = Hex.random(32)
+  const salt = parameters.salt ?? Hex.random(32)
 
   const deposit = uint96(parameters.deposit)
   const initialAmount = uint96(parameters.initialAmount)

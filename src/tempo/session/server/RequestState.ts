@@ -246,6 +246,9 @@ export type SessionMethodDetails = {
   minVoucherDelta?: string | undefined
   /** Channel operator address the client should encode in new open transactions. */
   operator?: Address | undefined
+  settlementAdapter?: Address | undefined
+  settlementRouteSalt?: Hex | undefined
+  settlementTargetToken?: Address | undefined
   /** Tempo session protocol version for this challenge. */
   sessionProtocol?: Constants.SessionProtocol | undefined
 }
@@ -315,6 +318,9 @@ export type ChallengePaymentFields = {
   currency: Address
   /** Payee address expected by the server. */
   recipient: Address
+  settlementAdapter?: Address | undefined
+  settlementRouteSalt?: Hex | undefined
+  settlementTargetToken?: Address | undefined
 }
 
 function isObject(value: unknown): value is Record<string, unknown> {
@@ -331,6 +337,13 @@ function isCanonicalSessionMethodDetails(value: unknown): value is SessionMethod
     (value.minVoucherDelta === undefined || typeof value.minVoucherDelta === 'string') &&
     (value.operator === undefined ||
       (typeof value.operator === 'string' && isAddress(value.operator, { strict: false }))) &&
+    (value.settlementAdapter === undefined ||
+      (typeof value.settlementAdapter === 'string' &&
+        isAddress(value.settlementAdapter, { strict: false }))) &&
+    (value.settlementRouteSalt === undefined || typeof value.settlementRouteSalt === 'string') &&
+    (value.settlementTargetToken === undefined ||
+      (typeof value.settlementTargetToken === 'string' &&
+        isAddress(value.settlementTargetToken, { strict: false }))) &&
     (value.sessionProtocol === undefined || value.sessionProtocol === Constants.SessionProtocols.v2)
   )
 }
@@ -359,10 +372,16 @@ function readChallengeAmount(value: unknown): bigint {
 
 /** Reads the destination, token, and raw amount from a session challenge request. */
 export function getChallengePaymentFields(challenge: Challenge.Challenge): ChallengePaymentFields {
+  const details = challenge.request.methodDetails as SessionMethodDetails
   return {
     amount: readChallengeAmount(challenge.request.amount),
     currency: readChallengeAddress(challenge.request.currency, 'currency'),
     recipient: readChallengeAddress(challenge.request.recipient, 'recipient'),
+    ...(details.settlementAdapter ? { settlementAdapter: details.settlementAdapter } : {}),
+    ...(details.settlementRouteSalt ? { settlementRouteSalt: details.settlementRouteSalt } : {}),
+    ...(details.settlementTargetToken
+      ? { settlementTargetToken: details.settlementTargetToken }
+      : {}),
   }
 }
 

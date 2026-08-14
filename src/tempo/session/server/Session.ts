@@ -73,6 +73,9 @@ type SessionDefaultValues = {
   decimals: number
   operator: session.Parameters['operator']
   recipient: Address | undefined
+  settlementAdapter: Address | undefined
+  settlementRouteSalt: Hex | undefined
+  settlementTargetToken: Address | undefined
   suggestedDeposit: session.Parameters['suggestedDeposit']
   unitType: session.Parameters['unitType']
 }
@@ -318,6 +321,9 @@ export function session<const parameters extends session.Parameters>(
     currency = defaults.resolveCurrency(parameters),
     decimals = defaults.decimals,
     operator,
+    settlementAdapter,
+    settlementRouteSalt,
+    settlementTargetToken,
     store: rawStore = Store.memory(),
     suggestedDeposit,
     unitType,
@@ -328,6 +334,15 @@ export function session<const parameters extends session.Parameters>(
   const store = ChannelStore.fromStore(rawStore)
   const lastOnChainVerified = new Map<Hex, number>()
   const { account, feePayer, feePayerUrl, recipient } = Account.resolve(parameters)
+  const channelOperator = operator
+  const settlementRoute =
+    settlementAdapter && recipient && settlementTargetToken && settlementRouteSalt
+      ? { recipient, targetToken: settlementTargetToken, routeSalt: settlementRouteSalt }
+      : undefined
+  if ((settlementAdapter || settlementTargetToken || settlementRouteSalt) && !settlementRoute)
+    throw new Error(
+      'settlementAdapter, settlementTargetToken, settlementRouteSalt, and recipient are required together.',
+    )
   const configuredFeePayer = feePayer ?? feePayerUrl
   const getClient = Client.getResolver({
     chain: tempo_chain,
@@ -345,6 +360,8 @@ export function session<const parameters extends session.Parameters>(
       feePayerPolicy: parameters.feePayerPolicy,
       feeToken: parameters.feeToken,
       onSessionSettlement,
+      settlementAdapter,
+      settlementRoute,
       schedule: settlementSchedule,
       store,
     })
@@ -402,6 +419,7 @@ export function session<const parameters extends session.Parameters>(
       lastOnChainVerified,
       minVoucherDelta: context.minVoucherDelta,
       payload,
+      settlementRoute,
       store,
     })
 
@@ -446,6 +464,8 @@ export function session<const parameters extends session.Parameters>(
       lastOnChainVerified,
       minVoucherDelta: context.minVoucherDelta,
       onSessionSettlement,
+      settlementAdapter,
+      settlementRoute,
       payload,
       store,
     })
@@ -467,6 +487,8 @@ export function session<const parameters extends session.Parameters>(
           feePayerPolicy: parameters.feePayerPolicy,
           feeToken: parameters.feeToken,
           onSessionSettlement,
+          settlementAdapter,
+          settlementRoute,
           schedule: settlementSchedule,
           store,
           channel,
@@ -487,8 +509,11 @@ export function session<const parameters extends session.Parameters>(
       amount,
       currency,
       decimals,
-      operator,
+      operator: channelOperator,
       recipient,
+      settlementAdapter,
+      settlementRouteSalt,
+      settlementTargetToken,
       suggestedDeposit,
       unitType,
     }),
@@ -632,6 +657,12 @@ export namespace session {
     onSessionSettlement?: OnSessionSettlement | undefined
     /** Server-owned automatic settlement cadence. Clients do not receive or control this schedule. */
     settlementSchedule?: SettlementSchedule | undefined
+    /** Contract that receives settlement and converts it for the logical recipient. */
+    settlementAdapter?: Address | undefined
+    /** Route nonce committed into the descriptor salt. */
+    settlementRouteSalt?: Hex | undefined
+    /** Merchant output token committed into the descriptor salt. */
+    settlementTargetToken?: Address | undefined
 
     /** Optional fee token used for server-driven close transactions. */
     feeToken?: Address | undefined
