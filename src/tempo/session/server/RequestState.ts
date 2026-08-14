@@ -372,7 +372,7 @@ function readChallengeAmount(value: unknown): bigint {
 
 /** Reads the destination, token, and raw amount from a session challenge request. */
 export function getChallengePaymentFields(challenge: Challenge.Challenge): ChallengePaymentFields {
-  const details = challenge.request.methodDetails as SessionMethodDetails
+  const details = (challenge.request.methodDetails ?? {}) as Partial<SessionMethodDetails>
   return {
     amount: readChallengeAmount(challenge.request.amount),
     currency: readChallengeAddress(challenge.request.currency, 'currency'),
