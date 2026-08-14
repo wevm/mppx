@@ -217,29 +217,6 @@ function wrapJsonUpdate(
   } satisfies AtomicActions
 }
 
-/**
- * Builds a native {@link TryClaim} from an adapter's atomic set-if-absent
- * primitive. `setNx` records the replay marker only when the key is absent and
- * expires it at `expires`, so the claim needs a single round-trip instead of
- * the {@link tryClaim} fallback's read-modify-write.
- */
-function wrapSetNx(
-  setNx: ((key: string, value: string, expires: number) => Promise<boolean>) | undefined,
-): Pick<AtomicActions, 'tryClaim'> | {} {
-  if (!setNx) return {}
-  return {
-    tryClaim(key, expires) {
-      // The claim is the key's existence under its TTL; the NX path never reads
-      // this value back, so the marker is only a human-readable placeholder.
-      return setNx(
-        key,
-        Json.stringify({ expires, type: 'mppx:replay' } satisfies ReplayMarker),
-        expires,
-      )
-    },
-  } satisfies Pick<AtomicActions, 'tryClaim'>
-}
-
 /** Wraps a Cloudflare KV namespace. */
 export function cloudflare(
   kv: cloudflare.AtomicParameters,
@@ -347,7 +324,6 @@ export function redis(client: redis.Parameters, options?: redis.Options): Store 
         await client.del(key)
       },
       ...wrapJsonUpdate(client.update),
-      ...wrapSetNx(client.setNx),
     },
     options,
   )
@@ -367,13 +343,6 @@ export declare namespace redis {
       key: string,
       fn: (current: string | null) => Change<string, result>,
     ) => Promise<result>
-    /**
-     * Optional atomic set-if-absent with an absolute expiry, powering a native
-     * {@link TryClaim} fast path. `expires` is an absolute Unix-ms timestamp —
-     * map it to `SET … PXAT <expires> NX`, never a relative `PX`/TTL. Resolves
-     * `true` when this call recorded the key, `false` when it already existed.
-     */
-    setNx?: (key: string, value: string, expires: number) => Promise<boolean>
   }
 
   export type AtomicParameters = Omit<Parameters, 'update'> & {
@@ -401,7 +370,6 @@ export function upstash(redis: upstash.Parameters, options?: upstash.Options): S
             update: redis.update as Update,
           }
         : {}),
-      ...wrapSetNx(redis.setNx),
     },
     options,
   )
@@ -421,14 +389,6 @@ export declare namespace upstash {
       key: string,
       fn: (current: unknown | null) => Change<unknown, result>,
     ) => Promise<result>
-    /**
-     * Optional atomic set-if-absent with an absolute expiry, powering a native
-     * {@link TryClaim} fast path. `expires` is an absolute Unix-ms timestamp —
-     * map it to `set(key, value, { nx: true, pxat: expires })`, never a
-     * relative `px`/TTL. Resolves `true` when this call recorded the key,
-     * `false` when it already existed.
-     */
-    setNx?: (key: string, value: string, expires: number) => Promise<boolean>
   }
 
   export type AtomicParameters = Omit<Parameters, 'update'> & {

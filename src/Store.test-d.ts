@@ -35,6 +35,22 @@ test('from with keyPrefix preserves AtomicStore', () => {
   expectTypeOf(store).toEqualTypeOf<Store.AtomicStore>()
 })
 
+test('from preserves a composed tryClaim implementation', () => {
+  const adapter = Store.redis({
+    get: async () => null,
+    set: async () => null,
+    del: async () => null,
+    update: async (_key, fn) => fn(null).result,
+  })
+  const store = Store.from({
+    ...adapter,
+    tryClaim: async (_key: string, _expires: number) => true,
+  })
+
+  expectTypeOf(store.tryClaim).toEqualTypeOf<(key: string, expires: number) => Promise<boolean>>()
+  expectTypeOf(Store.tryClaim(store, 'k', 1)).toEqualTypeOf<boolean | Promise<boolean>>()
+})
+
 test('from with keyPrefix preserves typed Store', () => {
   type ItemMap = { [key: `mppx:charge:${string}`]: number }
   const store = {} as Store.Store<ItemMap>

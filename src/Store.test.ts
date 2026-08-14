@@ -60,6 +60,16 @@ function fakeUnknownKv() {
   }
 }
 
+function fakeTryClaim(seen?: string[]) {
+  const claimed = new Set<string>()
+  return async (key: string, _expires: number) => {
+    seen?.push(key)
+    if (claimed.has(key)) return false
+    claimed.add(key)
+    return true
+  }
+}
+
 describe.each([
   { label: 'memory', create: () => Store.memory() },
   { label: 'cloudflare', create: () => Store.cloudflare(fakeStringKv()) },
@@ -238,58 +248,51 @@ describe('tryClaim', () => {
     expect(await Store.tryClaim(store, 'k', Date.now() + 60_000)).toBe(false)
   })
 
-  // A fake set-if-absent honoring an absolute-ms expiry, shared by the
-  // adapter fast-path tests.
-  function fakeSetNx(seen?: string[]) {
-    const claimed = new Map<string, number>()
-    return async (key: string, _value: string, expires: number) => {
-      seen?.push(key)
-      const existing = claimed.get(key)
-      if (existing !== undefined && existing > Date.now()) return false
-      claimed.set(key, expires)
-      return true
-    }
-  }
-
-  test('redis uses a native setNx fast path over the update fallback', async () => {
+  test('composes a Redis-native claim with the adapter', async () => {
     const kv = fakeStringKv()
     let updateCalls = 0
-    const store = Store.redis({
-      get: kv.get,
-      set: kv.put,
-      del: kv.delete,
-      update: (key, fn) => {
-        updateCalls++
-        return kv.update(key, fn)
-      },
-      setNx: fakeSetNx(),
+    const store = Store.from({
+      ...Store.redis({
+        get: kv.get,
+        set: kv.put,
+        del: kv.delete,
+        update: (key, fn) => {
+          updateCalls++
+          return kv.update(key, fn)
+        },
+      }),
+      tryClaim: fakeTryClaim(),
     })
     const expires = Date.now() + 60_000
 
     expect(await Store.tryClaim(store, 'k', expires)).toBe(true)
     expect(await Store.tryClaim(store, 'k', expires)).toBe(false)
-    // The native path is used, so the update fallback never runs.
     expect(updateCalls).toBe(0)
   })
 
-  test('upstash uses a native setNx fast path', async () => {
-    const store = Store.upstash({ ...fakeUnknownKv(), setNx: fakeSetNx() })
+  test('composes an Upstash-native claim with the adapter', async () => {
+    const store = Store.from({
+      ...Store.upstash(fakeUnknownKv()),
+      tryClaim: fakeTryClaim(),
+    })
     const expires = Date.now() + 60_000
 
     expect(await Store.tryClaim(store, 'k', expires)).toBe(true)
     expect(await Store.tryClaim(store, 'k', expires)).toBe(false)
   })
 
-  test('setNx fast path is forwarded through a key prefix', async () => {
+  test('prefixes a composed native claim', async () => {
     const kv = fakeStringKv()
     const seen: string[] = []
-    const store = Store.redis(
+    const store = Store.from(
       {
-        get: kv.get,
-        set: kv.put,
-        del: kv.delete,
-        update: kv.update,
-        setNx: fakeSetNx(seen),
+        ...Store.redis({
+          get: kv.get,
+          set: kv.put,
+          del: kv.delete,
+          update: kv.update,
+        }),
+        tryClaim: fakeTryClaim(seen),
       },
       { keyPrefix: 'p:' },
     )
