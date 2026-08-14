@@ -1,0 +1,22 @@
+{
+  "name": "peer-cash",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "check:types": "tsgo -p tsconfig.json",
+    "dev": "tsx src/server.ts",
+    "test": "node --import tsx --test src/*.test.ts"
+  },
+  "dependencies": {
+    "@types/node": "25.6.0",
+    "@typescript/native-preview": "7.0.0-dev.20260707.2",
+    "@zkp2p/cash": "0.4.9",
+    "hono": "4.12.34",
+    "mppx": "latest",
+    "tsx": "4.23.1",
+    "typescript": "catalog:"
+  }
+}

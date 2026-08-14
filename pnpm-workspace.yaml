@@ -42,6 +42,7 @@ overrides:
   '@hono/node-server@<2.0.10': '2.0.10'
   undici@>=7.0.0 <7.28.0: '7.28.0'
   undici@>=8.0.0 <8.9.0: '8.9.0'
+  undici-types@6.19.8: '6.19.2'
   socket.io-parser@>=4.0.0 <4.2.7: '4.2.7'
   yaml@<2.8.3: '>=2.8.3'
   brace-expansion@>=5.0.0 <5.0.9: '5.0.9'
@@ -70,6 +71,7 @@ allowBuilds:
   utf-8-validate: true
 
 minimumReleaseAgeExclude:
+  - '@zkp2p/cash@0.4.9'
   - esbuild@0.28.1
   - body-parser@2.3.0
   - brace-expansion@5.0.9
