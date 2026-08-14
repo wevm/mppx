@@ -42,8 +42,10 @@ function mockRelay(handler: RelayHandler): typeof globalThis.fetch {
 function methods(fetch: typeof globalThis.fetch, url = apiBaseUrl) {
   return tempo({
     currency: '0x123',
+    machineTokenEnabled: true,
     recipient: '0x456',
     relay: { apiBaseUrl: url, apiKey: 'tempo_api_key', fetch },
+    testnet: true,
   })
 }
 
@@ -80,6 +82,7 @@ async function createPaymentServer(
   })
 
   return {
+    challenge,
     pay: () =>
       globalThis.fetch(server.url, {
         headers: { Authorization: Credential.serialize(paymentCredential) },
@@ -102,15 +105,6 @@ afterEach(() => {
 })
 
 describe('relay boundary', () => {
-  test('rejects machine-token settlement until the relay supports it', () => {
-    expect(() =>
-      tempo.charge({
-        machineTokenEnabled: true,
-        relay: { apiKey: 'tempo_api_key' },
-      }),
-    ).toThrow('`machineTokenEnabled` is not supported with a Tempo relay.')
-  })
-
   test('sends the complete credential to the configured validation endpoint', async () => {
     const fetch = mockRelay(() => Response.json({ success: true }))
     const [method, session] = methods(fetch)
@@ -499,9 +493,10 @@ describe('relay HTTP flow', () => {
         ? Response.json({ success: true })
         : successReceipt()
     })
-    const { pay, server } = await createPaymentServer(fetch)
+    const { challenge, pay, server } = await createPaymentServer(fetch)
 
     try {
+      expect(challenge.request.methodDetails).toMatchObject({ machineTokenEnabled: true })
       const response = await pay()
       expect(response.status).toBe(200)
       expect(response.headers.get('Payment-Receipt')).toBeTruthy()
@@ -519,9 +514,10 @@ describe('relay HTTP flow', () => {
         ? Response.json({ success: true })
         : successReceipt()
     })
-    const { pay, server } = await createPaymentServer(fetch, pushedPayload)
+    const { challenge, pay, server } = await createPaymentServer(fetch, pushedPayload)
 
     try {
+      expect(challenge.request.methodDetails).toMatchObject({ machineTokenEnabled: true })
       const response = await pay()
 
       expect(response.status).toBe(200)

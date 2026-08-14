@@ -114,8 +114,6 @@ export function charge<const parameters extends charge.Parameters>(
   const { recipient, feePayer, feePayerUrl } = Account.resolve(parameters)
   if (configuredFeeToken && feePayerUrl)
     throw new Error('`feeToken` can only be configured for a local fee payer.')
-  if (machineTokenEnabled && relay)
-    throw new Error('`machineTokenEnabled` is not supported with a Tempo relay.')
 
   const getClient = Client.getResolver({
     chain: { ...tempo_chain, experimental_preconfirmationTime: 500 },
@@ -468,8 +466,6 @@ export function charge<const parameters extends charge.Parameters>(
       })()
       if (client.chain?.id !== chainId)
         throw new Error(`Client not configured with chainId ${chainId}.`)
-      if (request.machineTokenEnabled && relay)
-        throw new Error('`machineTokenEnabled` is not supported with a Tempo relay.')
       if (request.machineTokenEnabled && !MachineToken.isSupported(chainId))
         throw new Error(`Machine tokens are not supported on chainId ${chainId}.`)
 
@@ -850,8 +846,6 @@ export declare namespace charge {
      * credential as already broadcast and returns its receipt without sending
      * it again.
      *
-     * This option cannot be combined with `machineTokenEnabled` until the relay
-     * supports the first-party settlement route.
      */
     relay?: RelayOptions | undefined
     /**

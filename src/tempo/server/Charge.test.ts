@@ -1123,6 +1123,11 @@ describe('tempo', () => {
         testnet: true,
       })
       const machineTokenServer = Mppx_server.create({ methods: [method], realm, secretKey })
+      const relayServer = Mppx_server.create({
+        methods: [tempo_server.charge({ getClient: () => machineTokenClient })],
+        realm,
+        secretKey,
+      })
       const httpServer = await Http.createServer(async (req, res) => {
         const result = await Mppx_server.toNodeListener(
           machineTokenServer.charge({ amount: '1', decimals: 6, recipient: accounts[0].address }),
@@ -1143,11 +1148,8 @@ describe('tempo', () => {
         payload: { hash, type: 'hash' as const },
         source: `did:pkh:eip155:${defaults.chainId.testnet}:${accounts[1].address}`,
       })
-      const paid = await fetch(httpServer.url, {
-        headers: { Authorization: Credential.serialize(credential) },
-      })
-      expect(paid.status).toBe(200)
-      expect(Receipt.fromResponse(paid).reference).toBe(hash)
+      const receipt = await relayServer.verifyCredential(Credential.serialize(credential))
+      expect(receipt.reference).toBe(hash)
 
       httpServer.close()
     })
@@ -1203,6 +1205,16 @@ describe('tempo', () => {
         testnet: true,
       })
       const machineTokenServer = Mppx_server.create({ methods: [method], realm, secretKey })
+      const relayServer = Mppx_server.create({
+        methods: [
+          tempo_server.charge({
+            feePayer: feePayerServer.url,
+            getClient: () => machineTokenClient,
+          }),
+        ],
+        realm,
+        secretKey,
+      })
       const httpServer = await Http.createServer(async (req, res) => {
         const result = await Mppx_server.toNodeListener(
           machineTokenServer.charge({ amount: '1', decimals: 6, recipient: accounts[0].address }),
@@ -1245,12 +1257,9 @@ describe('tempo', () => {
         payload: { signature, type: 'transaction' as const },
         source: `did:pkh:eip155:${defaults.chainId.testnet}:${accounts[1].address}`,
       })
-      const paid = await fetch(httpServer.url, {
-        headers: { Authorization: Credential.serialize(credential) },
-      })
+      const receipt = await relayServer.verifyCredential(Credential.serialize(credential))
 
-      expect(paid.status).toBe(200)
-      expect(Receipt.fromResponse(paid).status).toBe('success')
+      expect(receipt.status).toBe('success')
       expect(feePayerMethods).toEqual(['eth_fillTransaction', 'eth_sendRawTransactionSync'])
 
       httpServer.close()

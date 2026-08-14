@@ -36,9 +36,9 @@ function createSessionMethod<const parameters extends tempo.Parameters>(
 /**
  * Creates the common Tempo `charge` and `session` methods from shared parameters.
  *
- * `machineTokenEnabled` and `relay` currently apply only to `charge` and cannot
- * be combined. The machine-token option is accepted globally so other Tempo
- * methods can adopt it without another provider-level configuration surface.
+ * `machineTokenEnabled` and `relay` currently apply only to `charge`. The
+ * machine-token option is accepted globally so other Tempo methods can adopt
+ * it without another provider-level configuration surface.
  *
  * @example
  * ```ts
