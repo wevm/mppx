@@ -666,16 +666,17 @@ export async function executeCredentialPlan(
   plan: CredentialPlan,
   sink: ChannelSink,
   autoSwap: AutoSwap.resolve.Resolved | false = false,
+  feeToken?: Address | undefined,
 ): Promise<SessionCredentialPayload> {
   switch (plan.type) {
     case 'open':
-      return open(plan, sink, autoSwap)
+      return open(plan, sink, autoSwap, feeToken)
     case 'recover':
       return recover(plan, sink)
     case 'voucher':
       return voucher(plan, sink)
     case 'manual':
-      return manual(plan, sink, autoSwap)
+      return manual(plan, sink, autoSwap, feeToken)
   }
 }
 
@@ -702,6 +703,7 @@ async function open(
   plan: Extract<CredentialPlan, { type: 'open' }>,
   sink: ChannelSink,
   autoSwap: AutoSwap.resolve.Resolved | false,
+  feeToken?: Address | undefined,
 ): Promise<SessionCredentialPayload> {
   const { account, resolved } = plan
   const deposit = resolveOpeningDeposit({
@@ -715,6 +717,7 @@ async function open(
     deposit,
     escrow: resolved.escrow,
     feePayer: resolved.feePayer,
+    feeToken,
     initialAmount: resolved.amount,
     operator: resolved.operator,
     payee: resolved.payee,
@@ -811,6 +814,7 @@ async function manual(
   plan: Extract<CredentialPlan, { type: 'manual' }>,
   sink: ChannelSink,
   autoSwap: AutoSwap.resolve.Resolved | false,
+  feeToken?: Address | undefined,
 ): Promise<SessionCredentialPayload> {
   const { account, context, decimals, resolved } = plan
   const { descriptor } = context
@@ -839,6 +843,7 @@ async function manual(
       resolved,
     },
     autoSwap,
+    feeToken,
   )
   await applyCumulative(sink, resolved.key, payload)
   return payload
@@ -847,12 +852,13 @@ async function manual(
 async function executeManualCredential(
   parameters: ManualCredentialParameters,
   autoSwap: AutoSwap.resolve.Resolved | false,
+  feeToken?: Address | undefined,
 ): Promise<SessionCredentialPayload> {
   switch (parameters.context.action) {
     case 'open':
       return manualOpen(parameters)
     case 'topUp':
-      return manualTopUp(parameters, autoSwap)
+      return manualTopUp(parameters, autoSwap, feeToken)
     case 'voucher':
       return manualVoucher(parameters)
     case 'close':
@@ -889,6 +895,7 @@ async function manualOpen(
 async function manualTopUp(
   parameters: ManualCredentialParameters,
   autoSwap: AutoSwap.resolve.Resolved | false,
+  feeToken?: Address | undefined,
 ): Promise<SessionCredentialPayload> {
   const { account, channelId, context, decimals, descriptor, resolved } = parameters
   const additionalDeposit = requireContextAmount(context, decimals, 'additionalDeposit', 'topUp')
@@ -916,6 +923,7 @@ async function manualTopUp(
       client: resolved.client,
       tokenOut: resolved.token,
     }),
+    feeToken,
   )
 }
 

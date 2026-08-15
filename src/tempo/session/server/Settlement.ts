@@ -20,6 +20,7 @@ import type { MaybePromise } from '../../../internal/types.js'
 import type * as Method from '../../../Method.js'
 import * as Store from '../../../Store.js'
 import type * as FeePayer from '../../internal/fee-payer.js'
+import * as MachineToken from '../../internal/machine-token.js'
 import { isSessionContentRequest } from '../../server/internal/request-body.js'
 import * as Chain from '../precompile/Chain.js'
 import { readSettledReceiptFields } from '../precompile/Chain.js'
@@ -344,6 +345,12 @@ export type SettlementSenderParameters = {
   sender: Address | undefined
 }
 
+/** Inputs used to select direct reserve settlement or the machine-token router. */
+export type ChannelSettlementSenderParameters = SettlementSenderParameters & {
+  chainId: number
+  token: Address
+}
+
 /** Options for server-driven precompile settlement transactions. */
 export type SettlementTransactionOptions = {
   /** Account used to send the settlement transaction. Defaults to the viem client account. */
@@ -411,6 +418,19 @@ export function assertSettlementSender(parameters: SettlementSenderParameters) {
   })
 }
 
+/** Validates a direct payee/operator sender, or any funded caller for a trusted router channel. */
+export function assertChannelSettlementSender(parameters: ChannelSettlementSenderParameters) {
+  const deployment = MachineToken.matchSessionDescriptor({
+    chainId: parameters.chainId,
+    descriptor: { operator: parameters.operator, token: parameters.token },
+  })
+  if (!deployment) return assertSettlementSender(parameters)
+  if (parameters.sender) return
+  throw new Error(
+    `Cannot ${parameters.operation} machine-token channel ${parameters.channelId}: no account available. Pass an account override, or provide a getClient() that returns an account-bearing client.`,
+  )
+}
+
 /** Applies automatic settlement when the server-owned schedule is due. */
 export async function maybeSettleScheduled(
   parameters: MaybeSettleScheduledParameters,
@@ -446,30 +466,49 @@ export async function settle(
   if (!channel.highestVoucher) throw new VerificationFailedError({ reason: 'no voucher to settle' })
   const escrow = options?.escrowContract ?? channel.escrowContract
   const account = options?.account ?? getClientAccount(client)
-  assertSettlementSender({
+  assertChannelSettlementSender({
     operation: 'settle',
     channelId,
+    chainId: channel.chainId,
     operator: channel.operator,
     payee: channel.payee,
     sender: account?.address,
+    token: channel.token,
   })
   const amount = uint96(channel.highestVoucher.cumulativeAmount)
-  const txHash = await Chain.settleOnChain(
-    client,
-    channel.descriptor,
-    amount,
-    channel.highestVoucher.signature,
-    escrow,
-    account
-      ? {
-          account,
-          ...(options?.feePayer ? { feePayer: options.feePayer } : {}),
-          ...(options?.feePayerPolicy ? { feePayerPolicy: options.feePayerPolicy } : {}),
-          ...(options?.feeToken ? { feeToken: options.feeToken } : {}),
-          candidateFeeTokens: options?.candidateFeeTokens ?? [channel.token],
-        }
-      : undefined,
-  )
+  const machineDeployment = MachineToken.matchSessionDescriptor({
+    chainId: channel.chainId,
+    descriptor: channel.descriptor,
+  })
+  const feeToken =
+    options?.feeToken ??
+    (machineDeployment ? MachineToken.getSessionFeeToken(channel.chainId) : undefined)
+  const transactionOptions = account
+    ? {
+        account,
+        ...(options?.feePayer ? { feePayer: options.feePayer } : {}),
+        ...(options?.feePayerPolicy ? { feePayerPolicy: options.feePayerPolicy } : {}),
+        ...(feeToken ? { feeToken } : {}),
+        candidateFeeTokens: options?.candidateFeeTokens ?? [feeToken ?? channel.token],
+      }
+    : undefined
+  const txHash = machineDeployment
+    ? await Chain.settleMachineSessionOnChain(
+        client,
+        channel.descriptor,
+        amount,
+        channel.highestVoucher.signature,
+        machineDeployment.swap,
+        transactionOptions,
+      )
+    : await Chain.settleOnChain(
+        client,
+        channel.descriptor,
+        amount,
+        channel.highestVoucher.signature,
+        escrow,
+        transactionOptions,
+      )
   const receipt = await Chain.waitForSuccessfulReceipt(client, txHash)
   const settled = readSettledReceiptFields(Chain.getChannelEvent(receipt, 'Settled', channelId))
   const { newSettled } = settled

@@ -1,4 +1,11 @@
-import { type Address, createClient, custom, decodeFunctionData, encodeFunctionResult } from 'viem'
+import {
+  type Address,
+  createClient,
+  custom,
+  decodeFunctionData,
+  encodeFunctionResult,
+  isAddressEqual,
+} from 'viem'
 import { privateKeyToAccount } from 'viem/accounts'
 import { Account as TempoAccount, Secp256k1, Transaction } from 'viem/tempo'
 import { describe, expect, test, vi } from 'vp/test'
@@ -10,6 +17,7 @@ import * as Constants from '../../../Constants.js'
 import * as Credential from '../../../Credential.js'
 import * as z from '../../../zod.js'
 import * as AutoSwap from '../../internal/auto-swap.js'
+import * as defaults from '../../internal/defaults.js'
 import * as Methods from '../../Methods.js'
 import * as Channel from '../precompile/Channel.js'
 import { escrowAbi } from '../precompile/escrow.abi.js'
@@ -39,6 +47,66 @@ const client = createClient({
           functionName: 'getChannelState',
           result: { settled: 0n, deposit: 1_000n, closeRequestedAt: 0 },
         })
+      throw new Error(`unexpected rpc request: ${args.method}`)
+    },
+  }),
+})
+
+const machineSessionPayee = '0x44D7c1EDFdfdfDFdFdFDFDFd0000000000000001' as Address
+const sessionRouteAbi = [
+  {
+    inputs: [
+      { name: 'merchant', type: 'address' },
+      { name: 'targetToken', type: 'address' },
+    ],
+    name: 'sessionRouteFor',
+    outputs: [{ name: 'routeAddress', type: 'address' }],
+    stateMutability: 'view',
+    type: 'function',
+  },
+  {
+    inputs: [{ name: 'routeAddress', type: 'address' }],
+    name: 'sessionRoutes',
+    outputs: [
+      { name: 'merchant', type: 'address' },
+      { name: 'targetToken', type: 'address' },
+    ],
+    stateMutability: 'view',
+    type: 'function',
+  },
+] as const
+const machineClient = createClient({
+  account,
+  chain: { id: chainId } as never,
+  transport: custom({
+    async request(args) {
+      if (args.method === 'eth_chainId') return `0x${chainId.toString(16)}`
+      if (args.method === 'eth_getTransactionCount') return '0x0'
+      if (args.method === 'eth_estimateGas') return '0x5208'
+      if (args.method === 'eth_maxPriorityFeePerGas') return '0x1'
+      if (args.method === 'eth_getBlockByNumber') return { baseFeePerGas: '0x1' }
+      if (args.method === 'eth_call') {
+        const call = (args.params as [{ data?: `0x${string}`; to?: Address }])[0]
+        if (call.data && call.to && isAddressEqual(call.to, defaults.machineToken[chainId].swap)) {
+          const decoded = decodeFunctionData({ abi: sessionRouteAbi, data: call.data })
+          if (decoded.functionName === 'sessionRouteFor')
+            return encodeFunctionResult({
+              abi: sessionRouteAbi,
+              functionName: 'sessionRouteFor',
+              result: machineSessionPayee,
+            })
+          return encodeFunctionResult({
+            abi: sessionRouteAbi,
+            functionName: 'sessionRoutes',
+            result: [descriptor.payee, descriptor.token],
+          })
+        }
+        return encodeFunctionResult({
+          abi: escrowAbi,
+          functionName: 'getChannelState',
+          result: { settled: 0n, deposit: 1_000n, closeRequestedAt: 0 },
+        })
+      }
       throw new Error(`unexpected rpc request: ${args.method}`)
     },
   }),
@@ -220,6 +288,147 @@ describe('precompile client session', () => {
         }),
       }),
     ).toBe(false)
+  })
+
+  test('lets normal clients use an enabled challenge while machine clients require the flag', () => {
+    const normalMethod = session({ account, getClient: () => client })
+    const machineMethod = session({
+      account,
+      getClient: () => client,
+      machineTokenEnabled: true,
+    })
+    const machineEnabledChallenge = makeSessionChallenge({
+      methodDetails: {
+        chainId,
+        escrowContract: tip20ChannelEscrow,
+        machineTokenEnabled: true,
+        sessionProtocol: Constants.SessionProtocols.v2,
+      },
+    })
+    const ordinaryChallenge = makeSessionChallenge()
+
+    expect(normalMethod.canHandleChallenge?.({ challenge: ordinaryChallenge })).toBe(true)
+    expect(normalMethod.canHandleChallenge?.({ challenge: machineEnabledChallenge })).toBe(true)
+    expect(machineMethod.canHandleChallenge?.({ challenge: ordinaryChallenge })).toBe(false)
+    expect(machineMethod.canHandleChallenge?.({ challenge: machineEnabledChallenge })).toBe(true)
+  })
+
+  test('shapes an enabled logical challenge into the canonical machine-token channel', async () => {
+    const deployment = defaults.machineToken[chainId]
+    const challenge = makeSessionChallenge({
+      methodDetails: {
+        chainId,
+        escrowContract: tip20ChannelEscrow,
+        machineTokenEnabled: true,
+        sessionProtocol: Constants.SessionProtocols.v2,
+      },
+    })
+    const credential = await session({
+      account,
+      decimals: 0,
+      getClient: () => machineClient,
+      machineTokenEnabled: true,
+      maxDeposit: '100',
+    }).createCredential({ challenge, context: {} })
+    const payload = deserialize(credential)
+
+    expect(challenge.request).toMatchObject({
+      currency: descriptor.token,
+      recipient: descriptor.payee,
+    })
+    expect(payload).toMatchObject({
+      action: 'open',
+      descriptor: {
+        operator: deployment.swap,
+        payee: machineSessionPayee,
+        token: deployment.token,
+      },
+    })
+    expect(openArgs(payload).slice(0, 4)).toEqual([
+      machineSessionPayee,
+      deployment.swap,
+      deployment.token,
+      100n,
+    ])
+  })
+
+  test('rejects closing a machine-token channel with unused deposit', async () => {
+    const deployment = defaults.machineToken[chainId]
+    const challenge = makeSessionChallenge({
+      methodDetails: {
+        chainId,
+        escrowContract: tip20ChannelEscrow,
+        machineTokenEnabled: true,
+        sessionProtocol: Constants.SessionProtocols.v2,
+      },
+    })
+    const machineDescriptor = {
+      ...descriptor,
+      operator: deployment.swap,
+      payee: machineSessionPayee,
+      token: deployment.token,
+    }
+    const channelId = Channel.computeId({
+      ...machineDescriptor,
+      chainId,
+      escrow: tip20ChannelEscrow,
+    })
+    const channelStore = createChannelStore()
+    await channelStore.set({
+      chainId,
+      channelId,
+      cumulativeAmount: 25n,
+      deposit: 1_000n,
+      descriptor: machineDescriptor,
+      escrow: tip20ChannelEscrow,
+      opened: true,
+    })
+
+    await expect(
+      session({
+        account,
+        channelStore,
+        decimals: 0,
+        getClient: () => machineClient,
+        machineTokenEnabled: true,
+      }).createCredential({
+        challenge,
+        context: {
+          action: 'close',
+          channelId,
+          cumulativeAmountRaw: '25',
+          descriptor: machineDescriptor,
+        },
+      }),
+    ).rejects.toThrow('Machine-token session refunds are not supported')
+
+    const credential = await session({
+      account,
+      channelStore,
+      decimals: 0,
+      getClient: () => machineClient,
+      machineTokenEnabled: true,
+    }).createCredential({
+      challenge,
+      context: {
+        action: 'close',
+        channelId,
+        cumulativeAmountRaw: '1000',
+        descriptor: machineDescriptor,
+      },
+    })
+    const payload = deserialize(credential)
+    if (payload.action !== 'close') throw new Error('expected close credential')
+    expect(payload).not.toHaveProperty('authorizationSignature')
+    expect(payload).not.toHaveProperty('refundSignature')
+    expect(
+      Voucher.verifyVoucher(
+        tip20ChannelEscrow,
+        chainId,
+        { channelId, cumulativeAmount: 1_000n, signature: payload.signature },
+        account.address,
+      ),
+    ).toBe(true)
   })
 
   test('drives paid SSE responses with a supplied credential', async () => {

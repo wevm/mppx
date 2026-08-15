@@ -356,7 +356,11 @@ export function resolveHighestVoucher(parameters: HighestVoucherParameters): Hig
 
   return {
     highestVoucherAmount: cumulativeAmount,
-    highestVoucher: { channelId, cumulativeAmount, signature },
+    highestVoucher: {
+      channelId,
+      cumulativeAmount,
+      signature,
+    },
   }
 }
 

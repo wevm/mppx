@@ -18,8 +18,34 @@ import { resolveFeeToken } from '../../internal/fee-token.js'
 import * as ChannelOps from '../server/ChannelOps.js'
 import * as ChannelUtils from './Channel.js'
 import type { ChannelDescriptor } from './Channel.js'
-import { escrowAbi } from './escrow.abi.js'
+import { channelDescriptorInput, escrowAbi } from './escrow.abi.js'
 import { tip20ChannelEscrow } from './Protocol.js'
+
+const machineSessionAbi = [
+  {
+    type: 'function',
+    name: 'settleSession',
+    stateMutability: 'nonpayable',
+    inputs: [
+      channelDescriptorInput,
+      { name: 'cumulativeAmount', type: 'uint96' },
+      { name: 'signature', type: 'bytes' },
+    ],
+    outputs: [],
+  },
+  {
+    type: 'function',
+    name: 'closeSession',
+    stateMutability: 'nonpayable',
+    inputs: [
+      channelDescriptorInput,
+      { name: 'cumulativeAmount', type: 'uint96' },
+      { name: 'captureAmount', type: 'uint96' },
+      { name: 'signature', type: 'bytes' },
+    ],
+    outputs: [],
+  },
+] as const
 
 /** Minimal on-chain state read back after precompile transaction receipts. */
 export type ReceiptValidationChannelState = {
@@ -637,6 +663,26 @@ export async function settleOnChain(
   )
 }
 
+/** Submit a settle transaction through the first-party machine-token session router. */
+export async function settleMachineSessionOnChain(
+  client: Client,
+  descriptor: ChannelDescriptor,
+  cumulativeAmount: bigint,
+  signature: Hex,
+  router: Address,
+  options?: ChannelTransactionOptions,
+): Promise<Hex> {
+  assertUint96(cumulativeAmount)
+  const args = [descriptorTuple(descriptor), cumulativeAmount, signature] as const
+  return sendPrecompileTransaction(
+    client,
+    router,
+    encodeFunctionData({ abi: machineSessionAbi, functionName: 'settleSession', args }),
+    'settle machine-token session',
+    options,
+  )
+}
+
 /**
  * Submit a top-up transaction on-chain.
  */
@@ -716,6 +762,28 @@ export async function closeOnChain(
     escrow,
     encodeFunctionData({ abi: escrowAbi, functionName: 'close', args }),
     'close',
+    options,
+  )
+}
+
+/** Submit a cooperative close through the first-party machine-token session router. */
+export async function closeMachineSessionOnChain(
+  client: Client,
+  descriptor: ChannelDescriptor,
+  cumulativeAmount: bigint,
+  captureAmount: bigint,
+  signature: Hex,
+  router: Address,
+  options?: ChannelTransactionOptions,
+): Promise<Hex> {
+  assertUint96(cumulativeAmount)
+  assertUint96(captureAmount)
+  const args = [descriptorTuple(descriptor), cumulativeAmount, captureAmount, signature] as const
+  return sendPrecompileTransaction(
+    client,
+    router,
+    encodeFunctionData({ abi: machineSessionAbi, functionName: 'closeSession', args }),
+    'close machine-token session',
     options,
   )
 }

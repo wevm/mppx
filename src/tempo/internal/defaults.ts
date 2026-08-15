@@ -27,10 +27,17 @@ export const machineToken = {
     token: '0x20C0000000000000000000003793c39601711f19',
   },
   [chainId.testnet]: {
-    swap: '0x07f1FE0467Ae01DE340024aa4b7DD9729b1c169b',
-    token: '0x20c000000000000000000000f85bbCa724044De0',
+    feeToken: tokens.pathUsd,
+    session: true,
+    swap: '0x0EdC4d63Daf0FdeA89C95357eC85D6Fc2eD41cB8',
+    token: '0x20c00000000000000000000004645c8f96629cE6',
   },
-} as const satisfies Partial<Record<ChainId, { swap: `0x${string}`; token: `0x${string}` }>>
+} as const satisfies Partial<
+  Record<
+    ChainId,
+    { feeToken?: `0x${string}`; session?: true; swap: `0x${string}`; token: `0x${string}` }
+  >
+>
 
 /**
  * Default token decimals for TIP-20 stablecoins (e.g. pathUSD, USDC).

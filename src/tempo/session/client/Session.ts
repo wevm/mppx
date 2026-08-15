@@ -1,4 +1,4 @@
-import { type Address, parseUnits } from 'viem'
+import { isAddressEqual, type Address, parseUnits } from 'viem'
 import { tempo as tempo_chain } from 'viem/chains'
 
 import * as MethodChallenge from '../../../client/internal/MethodChallenge.js'
@@ -14,7 +14,9 @@ import type {
 } from '../../client/ResolveAccount.js'
 import * as AutoSwap from '../../internal/auto-swap.js'
 import * as defaults from '../../internal/defaults.js'
+import * as MachineToken from '../../internal/machine-token.js'
 import * as Methods from '../../Methods.js'
+import * as Chain from '../precompile/Chain.js'
 import * as Channel from '../precompile/Channel.js'
 import {
   deserializeSessionReceipt,
@@ -23,7 +25,7 @@ import {
   requireSessionCredentialContext,
 } from '../precompile/Protocol.js'
 import { serializeCredential, type ChannelEntry } from './ChannelOps.js'
-import { createChannelStore, type ChannelStore } from './ChannelStore.js'
+import { channelKey, createChannelStore, type ChannelStore } from './ChannelStore.js'
 import {
   canSignDescriptor,
   executeCredentialPlan,
@@ -109,6 +111,65 @@ function acknowledgesOpen(
   )
 }
 
+function applyMachineTokenRoute(
+  resolved: ChallengeContext,
+  route: MachineToken.SessionRoute,
+): ChallengeContext {
+  const snapshotDescriptor = resolved.snapshot?.descriptor
+  const snapshotMatches =
+    snapshotDescriptor &&
+    isAddressEqual(snapshotDescriptor.payee, route.payee) &&
+    isAddressEqual(snapshotDescriptor.operator, route.operator) &&
+    isAddressEqual(snapshotDescriptor.token, route.token)
+  return {
+    ...resolved,
+    key: channelKey({
+      chainId: resolved.chainId,
+      escrow: resolved.escrow,
+      payee: route.payee,
+      token: route.token,
+    }),
+    operator: route.operator,
+    payee: route.payee,
+    snapshot: snapshotMatches ? resolved.snapshot : undefined,
+    token: route.token,
+  }
+}
+
+async function resolveMachineTokenChallengeContext(
+  resolved: ChallengeContext,
+  context: CredentialContext | undefined,
+): Promise<ChallengeContext> {
+  const descriptor = context?.descriptor ?? resolved.snapshot?.descriptor
+  if (
+    descriptor &&
+    MachineToken.matchSessionDescriptor({ chainId: resolved.chainId, descriptor })
+  ) {
+    const route = await MachineToken.matchSessionRoute(resolved.client, {
+      active: context?.action !== 'close',
+      chainId: resolved.chainId,
+      descriptor,
+      merchant: resolved.payee,
+      targetToken: resolved.token,
+    })
+    if (!route)
+      throw new Error('Machine-token channel is not bound to this merchant session challenge.')
+    return applyMachineTokenRoute(resolved, route)
+  }
+
+  // Explicit low-level operations may still manage a normal channel even when
+  // this client generally prefers the machine-token rail.
+  if (hasSessionAction(context)) return resolved
+
+  const route = await MachineToken.findVerifiedSessionRoute(resolved.client, {
+    chainId: resolved.chainId,
+    merchant: resolved.payee,
+    targetToken: resolved.token,
+  })
+  if (!route) throw new Error('No active machine-token route for this merchant session challenge.')
+  return applyMachineTokenRoute(resolved, route)
+}
+
 /**
  * Creates the low-level TIP-1034 session payment method for use with `Mppx.create()`.
  *
@@ -124,7 +185,9 @@ export function session(parameters: session.Parameters = {}) {
     channelStore,
     decimals = defaults.decimals,
     escrow: escrowOverride,
+    feeToken: feeTokenParameter,
     getClient: getClientParameter,
+    machineTokenEnabled = false,
     maxDeposit: maxDepositParameter,
     topUpAmount: topUpAmountParameter,
     onChannelUpdate,
@@ -180,16 +243,21 @@ export function session(parameters: session.Parameters = {}) {
     })
 
   const method = Method.toClient(Methods.session, {
-    canHandleChallenge: ({ challenge }) => isTip1034SessionChallenge(challenge),
+    canHandleChallenge: ({ challenge }) => {
+      if (!isTip1034SessionChallenge(challenge)) return false
+      return !machineTokenEnabled || MachineToken.isSessionEnabledChallenge(challenge)
+    },
     context: sessionContextSchema,
     async createCredential(parameters) {
       const { challenge, context } = parameters
-      const resolved = await resolveChallengeContext({
+      let resolved = await resolveChallengeContext({
         allowCustomEscrow,
         challenge,
         escrowOverride,
         getClient,
       })
+      if (machineTokenEnabled)
+        resolved = await resolveMachineTokenChallengeContext(resolved, context)
       const attempt = MethodResponse.getAttempt(parameters)
       let release = () => {}
       try {
@@ -223,11 +291,33 @@ export function session(parameters: session.Parameters = {}) {
                 notifyUpdate() {},
               }
             : sink
+        const machineSession =
+          plan.resolved.operator &&
+          MachineToken.matchSessionDescriptor({
+            chainId: plan.resolved.chainId,
+            descriptor: {
+              operator: plan.resolved.operator,
+              token: plan.resolved.token,
+            },
+          })
         const payload = await executeCredentialPlan(
           plan,
           credentialSink,
           AutoSwap.resolve(context?.autoSwap ?? autoSwapParameter, AutoSwap.defaultCurrencies),
+          feeTokenParameter ??
+            (machineSession ? MachineToken.getSessionFeeToken(plan.resolved.chainId) : undefined),
         )
+        if (machineSession && payload.action === 'close') {
+          const state = await Chain.getChannelState(
+            plan.resolved.client,
+            payload.channelId,
+            plan.resolved.escrow,
+          )
+          if (BigInt(payload.cumulativeAmount) !== state.deposit)
+            throw new Error(
+              'Machine-token session refunds are not supported; close requires cumulative spend to equal the on-chain deposit.',
+            )
+        }
         const credential = await serializeCredential(
           challenge,
           payload,
@@ -415,8 +505,12 @@ export declare namespace session {
       decimals?: number | undefined
       /** Exact TIP20EscrowChannel address pin. Takes precedence over `allowCustomEscrow`. */
       escrow?: Address | undefined
+      /** Fee token for channel management transactions. Machine-token sessions default to PathUSD. */
+      feeToken?: Address | undefined
       /** Maximum channel deposit in human-readable units. Caps server-suggested opens and automatic top-ups. */
       maxDeposit?: string | undefined
+      /** Uses the first-party machine-token rail when the server's logical session challenge permits it. */
+      machineTokenEnabled?: boolean | undefined
       /**
        * Preferred automatic top-up size in human-readable units. When omitted,
        * a bounded server `suggestedDeposit` is preferred, then the exact shortfall.

@@ -10,6 +10,7 @@ const deployment = defaults.machineToken[chainId]
 const targetToken = '0x20c0000000000000000000000000000000000001'
 const recipient = '0x2222222222222222222222222222222222222222'
 const payer = '0x1111111111111111111111111111111111111111'
+const sessionPayee = '0x44d7c1edfdfdfdfdfdfdfdfd0000000000000001'
 const memo = `0x${'ab'.repeat(32)}` as const
 const client = createClient({
   transport: custom({ request: async () => undefined as never }),
@@ -175,5 +176,146 @@ describe('Tempo machine token', () => {
         transfers: [...transfers, transfers[0]!],
       }),
     ).toBeUndefined()
+  })
+
+  test('resolves active session routes without exposing them to merchant configuration', async () => {
+    vi.resetModules()
+    vi.doMock('viem/actions', () => ({
+      call: vi.fn(),
+      readContract: vi.fn(async (_client, parameters: { functionName: string }) => {
+        if (parameters.functionName === 'sessionRouteFor') return sessionPayee
+        if (parameters.functionName === 'sessionRoutes') return [recipient, targetToken]
+        throw new Error(`unexpected function ${parameters.functionName}`)
+      }),
+    }))
+
+    try {
+      const MachineToken = await import('./machine-token.js')
+      await expect(
+        MachineToken.findSessionRoute(client, {
+          chainId,
+          merchant: recipient,
+          targetToken,
+        }),
+      ).resolves.toEqual({
+        merchant: recipient,
+        operator: deployment.swap,
+        payee: sessionPayee,
+        targetToken,
+        token: deployment.token,
+      })
+      await expect(
+        MachineToken.getSessionRoute(client, { chainId, payee: sessionPayee }),
+      ).resolves.toEqual({
+        merchant: recipient,
+        operator: deployment.swap,
+        payee: sessionPayee,
+        targetToken,
+        token: deployment.token,
+      })
+      await expect(
+        MachineToken.findVerifiedSessionRoute(client, {
+          chainId,
+          merchant: recipient,
+          targetToken,
+        }),
+      ).resolves.toEqual(expect.objectContaining({ merchant: recipient, payee: sessionPayee }))
+      await expect(
+        MachineToken.resolveSessionRoute(client, { chainId, payee: sessionPayee }),
+      ).resolves.toEqual({
+        merchant: recipient,
+        operator: deployment.swap,
+        payee: sessionPayee,
+        targetToken,
+        token: deployment.token,
+      })
+      await expect(
+        MachineToken.matchSessionRoute(client, {
+          chainId,
+          descriptor: {
+            operator: deployment.swap,
+            payee: sessionPayee,
+            token: deployment.token,
+          },
+          merchant: recipient,
+          targetToken,
+        }),
+      ).resolves.toEqual(expect.objectContaining({ merchant: recipient, targetToken }))
+      await expect(
+        MachineToken.matchSessionRoute(client, {
+          chainId,
+          descriptor: {
+            operator: deployment.swap,
+            payee: sessionPayee,
+            token: deployment.token,
+          },
+          merchant: payer,
+          targetToken,
+        }),
+      ).resolves.toBeUndefined()
+      expect(MachineToken.isSessionSupported(chainId)).toBe(true)
+      expect(MachineToken.isSessionSupported(defaults.chainId.mainnet)).toBe(false)
+      expect(MachineToken.getSessionFeeToken(chainId)).toBe(defaults.tokens.pathUsd)
+      expect(MachineToken.getSessionFeeToken(defaults.chainId.mainnet)).toBeUndefined()
+    } finally {
+      vi.doUnmock('viem/actions')
+      vi.resetModules()
+    }
+  })
+
+  test('separates the challenge capability flag from the trusted descriptor pair', async () => {
+    const MachineToken = await import('./machine-token.js')
+    expect(
+      MachineToken.isSessionEnabledChallenge({
+        request: { methodDetails: { chainId, machineTokenEnabled: true } },
+      }),
+    ).toBe(true)
+    expect(
+      MachineToken.isSessionEnabledChallenge({
+        request: { methodDetails: { chainId, machineTokenEnabled: false } },
+      }),
+    ).toBe(false)
+    expect(
+      MachineToken.matchSessionDescriptor({
+        chainId,
+        descriptor: { operator: deployment.swap, token: deployment.token },
+      }),
+    ).toEqual(deployment)
+    expect(
+      MachineToken.matchSessionDescriptor({
+        chainId,
+        descriptor: { operator: recipient, token: deployment.token },
+      }),
+    ).toBeUndefined()
+  })
+
+  test('rejects virtual payees that are no longer the active merchant route', async () => {
+    vi.resetModules()
+    vi.doMock('viem/actions', () => ({
+      call: vi.fn(),
+      readContract: vi.fn(async (_client, parameters: { functionName: string }) => {
+        if (parameters.functionName === 'sessionRoutes') return [recipient, targetToken]
+        if (parameters.functionName === 'sessionRouteFor')
+          return '0x0000000000000000000000000000000000000000'
+        throw new Error(`unexpected function ${parameters.functionName}`)
+      }),
+    }))
+
+    try {
+      const MachineToken = await import('./machine-token.js')
+      await expect(
+        MachineToken.resolveSessionRoute(client, { chainId, payee: sessionPayee }),
+      ).resolves.toBeUndefined()
+      await expect(
+        MachineToken.resolveSessionRoute(client, {
+          active: false,
+          chainId,
+          payee: sessionPayee,
+        }),
+      ).resolves.toEqual(expect.objectContaining({ merchant: recipient, targetToken }))
+    } finally {
+      vi.doUnmock('viem/actions')
+      vi.resetModules()
+    }
   })
 })

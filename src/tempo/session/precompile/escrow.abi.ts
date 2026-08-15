@@ -14,7 +14,7 @@ const channelStateComponents = [
   { name: 'closeRequestedAt', type: 'uint32' },
 ] as const
 
-const channelDescriptorInput = {
+export const channelDescriptorInput = {
   name: 'descriptor',
   type: 'tuple',
   components: channelDescriptorComponents,

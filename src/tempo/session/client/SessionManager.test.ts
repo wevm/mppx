@@ -1890,11 +1890,13 @@ describe('Session', () => {
     })
 
     test('surfaces close failure problem details', async () => {
+      const actions: SessionCredentialPayload['action'][] = []
       const mockFetch = vi.fn().mockImplementation((_input, init?: RequestInit) => {
         const authorization = new Headers(init?.headers).get('Authorization')
         const payload = authorization
           ? Credential.deserialize<SessionCredentialPayload>(authorization).payload
           : undefined
+        if (payload) actions.push(payload.action)
 
         if (!payload)
           return Promise.resolve(
@@ -1946,6 +1948,10 @@ describe('Session', () => {
       await expect(s.close()).rejects.toThrow(
         'Close request failed with status 500: close failed [WWW-Authenticate: Payment error="close_failed"]',
       )
+
+      const resumed = await s.fetch('https://api.example.com/resource')
+      expect(resumed.status).toBe(200)
+      expect(actions).toEqual(['open', 'close', 'voucher'])
     })
   })
 })

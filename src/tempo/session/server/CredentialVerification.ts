@@ -17,6 +17,7 @@ import {
   VerificationFailedError,
 } from '../../../Errors.js'
 import type * as FeePayer from '../../internal/fee-payer.js'
+import * as MachineToken from '../../internal/machine-token.js'
 import * as Chain from '../precompile/Chain.js'
 import { readChannelClosedReceiptFields } from '../precompile/Chain.js'
 import * as Channel from '../precompile/Channel.js'
@@ -30,7 +31,11 @@ import {
 import * as Voucher from '../precompile/Voucher.js'
 import * as ChannelStore from './ChannelStore.js'
 import { getChallengePaymentFields } from './RequestState.js'
-import { assertSettlementSender, getClientAccount, type OnSessionSettlement } from './Settlement.js'
+import {
+  assertChannelSettlementSender,
+  getClientAccount,
+  type OnSessionSettlement,
+} from './Settlement.js'
 
 /** Returns the effective voucher signer for a TIP-1034 descriptor. */
 export function authorizedSigner(descriptor: Channel.ChannelDescriptor): Address {
@@ -95,6 +100,87 @@ export function validateChannelDescriptor(
     throw new VerificationFailedError({
       reason: 'channel descriptor operator does not match server operator',
     })
+  }
+}
+
+/** Resolves a trusted machine-token descriptor into the ordinary session verification shape. */
+export async function resolveCredentialChallenge(parameters: {
+  challenge: Challenge.Challenge
+  chainId: number
+  client: Chain.TransactionClient
+  escrow: Address
+  expectedOperator?: Address | undefined
+  payload: SessionCredentialPayload
+}): Promise<{ challenge: Challenge.Challenge; expectedOperator?: Address | undefined }> {
+  const { challenge, chainId, client, escrow, payload } = parameters
+  const { descriptor } = payload
+  const channelId = ChannelStore.normalizeChannelId(payload.channelId)
+  const request = getChallengePaymentFields(challenge)
+  const expectedOperator = parameters.expectedOperator ?? zeroAddress
+  const direct =
+    isAddressEqual(descriptor.payee, request.recipient) &&
+    isAddressEqual(descriptor.token, request.currency) &&
+    isAddressEqual(descriptor.operator, expectedOperator)
+
+  if (direct) {
+    validateChannelDescriptor(
+      descriptor,
+      channelId,
+      chainId,
+      escrow,
+      request.recipient,
+      request.currency,
+      expectedOperator,
+    )
+    return { challenge, expectedOperator: parameters.expectedOperator }
+  }
+
+  const computed = Channel.computeId({ ...descriptor, chainId, escrow })
+  if (computed.toLowerCase() !== channelId.toLowerCase())
+    throw new VerificationFailedError({ reason: 'channel descriptor does not match channelId' })
+
+  if (!MachineToken.isSessionEnabledChallenge(challenge)) {
+    // Preserve the existing field-specific rejection for ordinary sessions.
+    validateChannelDescriptor(
+      descriptor,
+      channelId,
+      chainId,
+      escrow,
+      request.recipient,
+      request.currency,
+      expectedOperator,
+    )
+  }
+
+  const route = await MachineToken.matchSessionRoute(client, {
+    active: payload.action !== 'close',
+    chainId,
+    descriptor,
+    merchant: request.recipient,
+    targetToken: request.currency,
+  })
+  if (!route)
+    throw new VerificationFailedError({
+      reason: 'machine-token channel is not bound to the challenged merchant and currency',
+    })
+
+  const methodDetails =
+    challenge.request.methodDetails && typeof challenge.request.methodDetails === 'object'
+      ? challenge.request.methodDetails
+      : {}
+  // The outer Mppx layer already authenticated the original challenge. This derived
+  // request is used only by the existing descriptor and transaction validators.
+  return {
+    challenge: {
+      ...challenge,
+      request: {
+        ...challenge.request,
+        currency: route.token,
+        methodDetails: { ...methodDetails, operator: route.operator },
+        recipient: route.payee,
+      },
+    },
+    expectedOperator: route.operator,
   }
 }
 
@@ -417,18 +503,20 @@ export async function validateCredentialPayload(
   parameters: ValidateCredentialPayloadParameters,
 ): Promise<CredentialPayloadValidation> {
   const { payload } = parameters
+  const resolved = await resolveCredentialChallenge(parameters)
+  const context = { ...parameters, ...resolved }
   switch (payload.action) {
     case 'open':
-      await validateOpenCredential(parameters, payload)
+      await validateOpenCredential(context, payload)
       break
     case 'topUp':
-      await validateTopUpCredential(parameters, payload)
+      await validateTopUpCredential(context, payload)
       break
     case 'voucher':
-      await validateVoucherCredential(parameters, payload)
+      await validateVoucherCredential(context, payload)
       break
     case 'close':
-      await validateCloseCredential(parameters, payload)
+      await validateCloseCredential(context, payload)
       break
   }
   return { action: payload.action, channelId: ChannelStore.normalizeChannelId(payload.channelId) }
@@ -623,6 +711,20 @@ async function resolveVoucherChannelState(parameters: {
   }
 }
 
+function assertMachineSessionCanClose(parameters: {
+  chainId: number
+  captureAmount: bigint
+  deposit: bigint
+  descriptor: ChannelDescriptor
+}): void {
+  if (!MachineToken.matchSessionDescriptor(parameters)) return
+  if (parameters.captureAmount !== parameters.deposit)
+    throw new VerificationFailedError({
+      reason:
+        'machine-token session refunds are not supported; close requires the full deposit to be spent',
+    })
+}
+
 async function validateCloseCredential(
   parameters: ValidateCredentialPayloadParameters,
   payload: Extract<SessionCredentialPayload, { action: 'close' }>,
@@ -673,13 +775,21 @@ async function validateCloseCredential(
   const captureAmount = uint96(channel.spent > state.settled ? channel.spent : state.settled)
   if (captureAmount > state.deposit)
     throw new AmountExceedsDepositError({ reason: 'close capture amount exceeds on-chain deposit' })
+  assertMachineSessionCanClose({
+    chainId,
+    captureAmount,
+    deposit: state.deposit,
+    descriptor: payload.descriptor,
+  })
   const account = parameters.account ?? getClientAccount(client)
-  assertSettlementSender({
+  assertChannelSettlementSender({
     operation: 'close',
     channelId,
+    chainId,
     operator: channel.operator,
     payee: channel.payee,
     sender: account?.address,
+    token: channel.token,
   })
 }
 
@@ -687,7 +797,8 @@ async function validateCloseCredential(
 export async function broadcastCredentialPayload(
   context: BroadcastCredentialPayloadParameters,
 ): Promise<SessionReceipt> {
-  const receipt = await broadcastCredentialAction(context)
+  const resolved = await resolveCredentialChallenge(context)
+  const receipt = await broadcastCredentialAction({ ...context, ...resolved })
   if (refreshOnChainVerificationCache[context.payload.action])
     context.lastOnChainVerified.set(receipt.channelId, Date.now())
   return receipt
@@ -987,9 +1098,19 @@ async function handleCloseCredential(
     channel.authorizedSigner,
   )
   if (!valid) throw new InvalidSignatureError({ reason: 'invalid voucher signature' })
+  const machineDeployment = MachineToken.matchSessionDescriptor({
+    chainId,
+    descriptor: channel.descriptor,
+  })
   let captureAmount = uint96(channel.spent > state.settled ? channel.spent : state.settled)
   if (captureAmount > state.deposit)
     throw new AmountExceedsDepositError({ reason: 'close capture amount exceeds on-chain deposit' })
+  assertMachineSessionCanClose({
+    chainId,
+    captureAmount,
+    deposit: state.deposit,
+    descriptor: channel.descriptor,
+  })
   const pendingCloseStartedAt = BigInt(Math.floor(Date.now() / 1000) || 1)
   const previousCloseRequestedAt = channel.closeRequestedAt
   let pendingCloseMarked = false
@@ -1011,30 +1132,46 @@ async function handleCloseCredential(
   let txHash: Hex | undefined
   let receipt: Awaited<ReturnType<typeof Chain.waitForSuccessfulReceipt>>
   try {
-    assertSettlementSender({
+    assertChannelSettlementSender({
       operation: 'close',
       channelId,
+      chainId,
       operator: channel.operator,
       payee: channel.payee,
       sender: account?.address,
+      token: channel.token,
     })
-    txHash = await Chain.closeOnChain(
-      client,
-      channel.descriptor,
-      cumulativeAmount,
-      captureAmount,
-      payload.signature,
-      escrow,
-      account
-        ? {
-            account,
-            ...(typeof parameters.feePayer === 'object' ? { feePayer: parameters.feePayer } : {}),
-            ...(parameters.feePayerPolicy ? { feePayerPolicy: parameters.feePayerPolicy } : {}),
-            ...(parameters.feeToken ? { feeToken: parameters.feeToken } : {}),
-            candidateFeeTokens: [channel.token],
-          }
-        : undefined,
-    )
+    const feeToken =
+      parameters.feeToken ??
+      (machineDeployment ? MachineToken.getSessionFeeToken(chainId) : undefined)
+    const transactionOptions = account
+      ? {
+          account,
+          ...(typeof parameters.feePayer === 'object' ? { feePayer: parameters.feePayer } : {}),
+          ...(parameters.feePayerPolicy ? { feePayerPolicy: parameters.feePayerPolicy } : {}),
+          ...(feeToken ? { feeToken } : {}),
+          candidateFeeTokens: [feeToken ?? channel.token],
+        }
+      : undefined
+    txHash = machineDeployment
+      ? await Chain.closeMachineSessionOnChain(
+          client,
+          channel.descriptor,
+          cumulativeAmount,
+          captureAmount,
+          payload.signature,
+          machineDeployment.swap,
+          transactionOptions,
+        )
+      : await Chain.closeOnChain(
+          client,
+          channel.descriptor,
+          cumulativeAmount,
+          captureAmount,
+          payload.signature,
+          escrow,
+          transactionOptions,
+        )
     receipt = await Chain.waitForSuccessfulReceipt(client, txHash)
   } catch (error) {
     if (pendingCloseMarked) {
@@ -1050,8 +1187,15 @@ async function handleCloseCredential(
     Chain.getChannelEvent(receipt, 'ChannelClosed', channelId),
   )
   const { refundedToPayer, settledToPayee } = closed
-  if (settledToPayee > captureAmount || settledToPayee + refundedToPayer > state.deposit)
+  if (machineDeployment) {
+    if (settledToPayee !== state.deposit || refundedToPayer !== 0n)
+      throw new VerificationFailedError({
+        reason: 'machine-token ChannelClosed amounts are invalid',
+      })
+  } else if (settledToPayee > captureAmount || settledToPayee + refundedToPayer > state.deposit) {
     throw new VerificationFailedError({ reason: 'ChannelClosed amounts do not match state' })
+  }
+  const logicalSettled = machineDeployment ? captureAmount : settledToPayee
   const updated = await store.updateChannel(channelId, (current) =>
     ChannelStore.finalizeClosedChannelState({
       captureAmount,
@@ -1068,8 +1212,8 @@ async function handleCloseCredential(
           txHash,
           channelId,
           trigger: 'close' as const,
-          amount: settledToPayee,
-          delta: settledToPayee - state.settled,
+          amount: logicalSettled,
+          delta: logicalSettled - state.settled,
         }),
       )
     } catch {

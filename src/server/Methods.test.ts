@@ -6,13 +6,13 @@ import { accounts } from '~test/tempo/viem.js'
 const recipient = '0x0000000000000000000000000000000000000001'
 
 describe('Tempo machine token', () => {
-  test('preserves the option on direct and global charge methods', () => {
+  test('preserves the option on charge and session methods', () => {
     const direct = tempo.charge({ machineTokenEnabled: true })
     const [global, session] = tempo({ machineTokenEnabled: true })
 
     expect((direct.defaults as { machineTokenEnabled?: boolean }).machineTokenEnabled).toBe(true)
     expect((global.defaults as { machineTokenEnabled?: boolean }).machineTokenEnabled).toBe(true)
-    expect(session.defaults).not.toHaveProperty('machineTokenEnabled')
+    expect((session.defaults as { machineTokenEnabled?: boolean }).machineTokenEnabled).toBe(true)
   })
 })
 

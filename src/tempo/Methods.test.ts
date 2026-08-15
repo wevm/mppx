@@ -263,6 +263,41 @@ describe('session', () => {
     expect(request.methodDetails?.minVoucherDelta).toBe('100000')
   })
 
+  test('schema: binds machine-token capability without changing logical payment fields', () => {
+    const currency = '0x20c0000000000000000000000000000000000001'
+    const recipient = '0x1234567890abcdef1234567890abcdef12345678'
+    const request = Methods.session.schema.request.parse({
+      amount: '1',
+      currency,
+      decimals: 6,
+      machineTokenEnabled: true,
+      recipient,
+      unitType: 'token',
+    })
+
+    expect(request).toMatchObject({
+      currency,
+      methodDetails: { machineTokenEnabled: true },
+      recipient,
+    })
+  })
+
+  test('schema: omits refund-only machine-token credential fields', () => {
+    const authorizationSignature = `0x${'44'.repeat(65)}`
+    const refundSignature = `0x${'22'.repeat(65)}`
+    const credential = Methods.session.schema.credential.payload.parse({
+      action: 'close',
+      authorizationSignature,
+      channelId: `0x${'11'.repeat(32)}`,
+      cumulativeAmount: '100000',
+      refundSignature,
+      signature: `0x${'33'.repeat(65)}`,
+    })
+
+    expect(credential).not.toHaveProperty('authorizationSignature')
+    expect(credential).not.toHaveProperty('refundSignature')
+  })
+
   test('schema: preserves precompile session snapshots in method details', () => {
     const sessionSnapshot = {
       acceptedCumulative: '2',

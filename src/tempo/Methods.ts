@@ -256,6 +256,7 @@ export const session = Method.from({
               z.transform((v): boolean => (typeof v === 'object' ? true : v)),
             ),
           ),
+          machineTokenEnabled: z.optional(z.boolean()),
           minVoucherDelta: z.optional(z.amount()),
           operator: z.optional(z.address()),
           recipient: z.optional(z.string()),
@@ -280,6 +281,7 @@ export const session = Method.from({
           decimals,
           escrowContract,
           feePayer,
+          machineTokenEnabled,
           minVoucherDelta,
           operator,
           sessionProtocol,
@@ -302,6 +304,7 @@ export const session = Method.from({
             }),
             ...(chainId !== undefined && { chainId }),
             ...(feePayer !== undefined && { feePayer }),
+            ...(machineTokenEnabled !== undefined && { machineTokenEnabled }),
             ...(operator !== undefined && { operator }),
             ...(sessionProtocol !== undefined && {
               [Constants.MethodDetailKeys.sessionProtocol]: sessionProtocol,

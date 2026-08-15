@@ -326,7 +326,9 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
     resolveAccount: parameters.resolveAccount,
     escrow: parameters.escrow,
     decimals: config.decimals,
+    feeToken: parameters.feeToken,
     maxDeposit: parameters.maxDeposit,
+    machineTokenEnabled: parameters.machineTokenEnabled,
     topUpAmount: parameters.topUpAmount,
     channelStore: store,
     onChannelUpdate(entry) {
@@ -903,6 +905,11 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
     },
 
     async close() {
+      const previous = captureRuntimeStateSnapshot({
+        channel: runtime.channel,
+        spent: runtime.spent,
+        state: runtime.state,
+      })
       const currentSocket = runtime.socketSession
       const target = resolveCloseTarget({
         channel: runtime.channel,
@@ -911,24 +918,29 @@ export function sessionManager(parameters: sessionManager.Parameters): SessionMa
       })
       if (!target) return undefined
 
-      const activeSocket = currentSocket?.socket
-      if (currentSocket && activeSocket?.readyState === WebSocketReadyState.OPEN) {
-        const receipt = await closeSocketSession({
-          activeSocket,
-          createSessionCredential,
-          currentSocket,
-          spent: runtime.spent,
-          target,
-          waitForCloseReady: receipts.waitForCloseReady,
-          waitForReceipt: receipts.waitForReceipt,
-        })
-        activateCurrentChannel()
-        dispatch({ type: 'closeStarted' })
-        dispatch({ type: 'closed', receipt })
-        return receipt
-      }
+      try {
+        const activeSocket = currentSocket?.socket
+        if (currentSocket && activeSocket?.readyState === WebSocketReadyState.OPEN) {
+          const receipt = await closeSocketSession({
+            activeSocket,
+            createSessionCredential,
+            currentSocket,
+            spent: runtime.spent,
+            target,
+            waitForCloseReady: receipts.waitForCloseReady,
+            waitForReceipt: receipts.waitForReceipt,
+          })
+          activateCurrentChannel()
+          dispatch({ type: 'closeStarted' })
+          dispatch({ type: 'closed', receipt })
+          return receipt
+        }
 
-      return closeHttpSessionAndApply(target)
+        return await closeHttpSessionAndApply(target)
+      } catch (error) {
+        await restoreRuntime(previous)
+        throw error
+      }
     },
   }
 
@@ -986,10 +998,14 @@ export namespace sessionManager {
       decimals?: number | undefined
       /** Exact TIP20EscrowChannel address pin. Takes precedence over `allowCustomEscrow`. */
       escrow?: Address | undefined
+      /** Fee token for channel management transactions. Machine-token sessions default to PathUSD. */
+      feeToken?: Address | undefined
       /** Fetch implementation used for HTTP probes, management posts, and paid retries. */
       fetch?: typeof globalThis.fetch | undefined
       /** Maximum deposit in human-readable units (e.g. `'10'` for 10 tokens). Converted to raw units via `decimals`. */
       maxDeposit?: string | undefined
+      /** Uses the first-party machine-token rail when the server's logical session challenge permits it. */
+      machineTokenEnabled?: boolean | undefined
       /**
        * Preferred automatic top-up size in human-readable units. When omitted,
        * a bounded server `suggestedDeposit` is preferred, then the exact shortfall.

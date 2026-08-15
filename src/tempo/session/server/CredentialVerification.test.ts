@@ -88,6 +88,28 @@ describe('SessionCredentialGuards', () => {
       })
     })
 
+    test('drops refund-only machine-token fields from close credentials', () => {
+      const authorizationSignature = `0x${'ab'.repeat(65)}` as Hex
+      const refundSignature = `0x${'cd'.repeat(65)}` as Hex
+      expect(
+        requireSessionCredentialPayload({
+          action: 'close',
+          authorizationSignature,
+          channelId,
+          cumulativeAmount: '1',
+          descriptor,
+          refundSignature,
+          signature,
+        }),
+      ).toEqual({
+        action: 'close',
+        channelId,
+        cumulativeAmount: '1',
+        descriptor,
+        signature,
+      })
+    })
+
     test('validates transaction payload fields by action', () => {
       expect(
         requireSessionCredentialPayload({
