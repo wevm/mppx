@@ -51,6 +51,7 @@
     "hono": "4.12.32",
     "isows": "^1.0.7",
     "playwright": "^1.62.1",
+    "pkg-pr-new": "0.0.88",
     "prool": "^0.2.14",
     "rolldown": "1.2.2",
     "tempo.ts": "^0.14.2",

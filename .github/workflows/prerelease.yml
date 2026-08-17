@@ -22,10 +22,7 @@ jobs:
       - name: Install dependencies
         uses: ./.github/actions/install-dependencies
 
-      - name: Install dependencies
-        run: pnpm install
-
       - name: Prerelease
         run: |
           pnpm run build
-          pnpx pkg-pr-new publish --pnpm
+          pnpm exec pkg-pr-new publish

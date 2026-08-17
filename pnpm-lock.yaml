@@ -131,6 +131,9 @@ importers:
       isows:
         specifier: ^1.0.7
         version: 1.0.7(ws@8.21.1(bufferutil@4.1.0)(utf-8-validate@5.0.10))
+      pkg-pr-new:
+        specifier: 0.0.88
+        version: 0.0.88
       playwright:
         specifier: ^1.62.1
         version: 1.62.1
@@ -3634,6 +3637,10 @@ packages:
   pkce-challenge@5.0.1:
     resolution: {integrity: sha512-wQ0b/W4Fr01qtpHlqSqspcj3EhBvimsdh0KlHhH8HRZnMsEa0ea2fTULOXOS9ccQr3om+GcGRk4e+isrZWV8qQ==}
     engines: {node: '>=16.20.0'}
+
+  pkg-pr-new@0.0.88:
+    resolution: {integrity: sha512-Xc6PMJ2gher0WZP+rtjefFk26hIb7V1PTLL30bmy1Z2vsRmSvqiss7Ag1XUdyplTGYzIlFNJp4L3vMNmK44N6g==}
+    hasBin: true
 
   playwright-core@1.62.1:
     resolution: {integrity: sha512-wPYSwEBJY9GHraISXqyqtx0na0LpO3XEX7jNDhntbex7tzUS7kLnZsOlFruFJB4Hi/rhDMjXGqHewDZ68nYZVw==}
@@ -7234,6 +7241,8 @@ snapshots:
       pngjs: 7.0.0
 
   pkce-challenge@5.0.1: {}
+
+  pkg-pr-new@0.0.88: {}
 
   playwright-core@1.62.1: {}
 
