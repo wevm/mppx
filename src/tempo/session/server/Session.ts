@@ -425,6 +425,7 @@ export function session<const parameters extends session.Parameters>(
       expectedOperator: context.methodDetails.operator,
       feePayer: context.feePayer,
       feePayerPolicy: parameters.feePayerPolicy,
+      feeToken: parameters.feeToken,
       lastOnChainVerified,
       minVoucherDelta: context.minVoucherDelta,
       payload,

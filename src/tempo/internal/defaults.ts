@@ -29,8 +29,8 @@ export const machineToken = {
   [chainId.testnet]: {
     feeToken: tokens.pathUsd,
     session: true,
-    swap: '0x0EdC4d63Daf0FdeA89C95357eC85D6Fc2eD41cB8',
-    token: '0x20c00000000000000000000004645c8f96629cE6',
+    swap: '0xD2E54024506079A62ceb2b698148D240036662E4',
+    token: '0x20C000000000000000000000785C8D7ebcC0b982',
   },
 } as const satisfies Partial<
   Record<

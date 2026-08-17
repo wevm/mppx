@@ -12,7 +12,7 @@ import {
   type Hex,
 } from 'viem'
 import { privateKeyToAccount } from 'viem/accounts'
-import { Abis, Addresses, Transaction } from 'viem/tempo'
+import { Abis, Addresses, Chain as TempoChain, Transaction } from 'viem/tempo'
 import { describe, expect, test } from 'vp/test'
 
 import { VerificationFailedError } from '../../../Errors.js'
@@ -57,7 +57,7 @@ function createMockClient(
 ) {
   return createClient({
     account: feePayer,
-    chain: { id: chainId } as never,
+    chain: TempoChain.testnet,
     transport: custom({
       async request(args) {
         parameters.rpcMethods?.push(args.method)
@@ -168,13 +168,14 @@ async function createSerializedTransaction(parameters: {
     data?: `0x${string}` | undefined
     value?: bigint | undefined
   }[]
+  feeToken?: Address | false | undefined
   gas?: bigint | undefined
   signed?: boolean | undefined
 }) {
   return (await Transaction.serialize({
     chainId,
     calls: parameters.calls,
-    feeToken: descriptor.token,
+    ...(parameters.feeToken === false ? {} : { feeToken: parameters.feeToken ?? descriptor.token }),
     nonce: 0,
     ...(parameters.gas !== undefined ? { gas: parameters.gas } : {}),
     ...(parameters.signed
@@ -222,6 +223,7 @@ function autoSwapCalls(amountOut: bigint = deposit) {
 async function createOpenTransaction(
   parameters: {
     authorizedSigner?: `0x${string}` | undefined
+    feeToken?: Address | false | undefined
     gas?: bigint | undefined
     operator?: `0x${string}` | undefined
     payee?: `0x${string}` | undefined
@@ -251,6 +253,7 @@ async function createOpenTransaction(
   })
   return createSerializedTransaction({
     calls: [...(parameters.prefixCalls ?? []), { to: parameters.to ?? tip20ChannelEscrow, data }],
+    feeToken: parameters.feeToken,
     gas: parameters.gas,
     signed: parameters.signed,
   })
@@ -260,6 +263,7 @@ async function createTopUpTransaction(
   parameters: {
     additionalDeposit?: bigint | undefined
     descriptor_?: Channel.ChannelDescriptor | undefined
+    feeToken?: Address | false | undefined
     gas?: bigint | undefined
     signed?: boolean | undefined
     to?: `0x${string}` | undefined
@@ -282,6 +286,7 @@ async function createTopUpTransaction(
   })
   return createSerializedTransaction({
     calls: [...(parameters.prefixCalls ?? []), { to: parameters.to ?? tip20ChannelEscrow, data }],
+    feeToken: parameters.feeToken,
     gas: parameters.gas,
     signed: parameters.signed,
   })
@@ -827,6 +832,57 @@ describe('precompile broadcastOpenTransaction', () => {
     ).toHaveLength(2)
   })
 
+  test('fee-payer completes open with an explicit allowed fee token', async () => {
+    let broadcast: Hex | undefined
+    const serializedTransaction = await createOpenTransaction({
+      feeToken: false,
+      gas: 100_000n,
+      signed: true,
+    })
+    const transaction = Transaction.deserialize(
+      serializedTransaction as Transaction.TransactionSerializedTempo,
+    )
+    const payer = transaction.from!
+    const expiringNonceHash = Channel.computeExpiringNonceHash(
+      Channel.transactionForExpiringNonceHash({ feePayer, transaction }),
+      { sender: payer },
+    )
+    const expectedDescriptor = { ...descriptor, payer, expiringNonceHash }
+    const channelId = Channel.computeId({
+      ...expectedDescriptor,
+      chainId,
+      escrow: tip20ChannelEscrow,
+    })
+    const state = { settled: 0n, deposit, closeRequestedAt: 0 }
+
+    await Chain.broadcastOpenTransaction({
+      allowedFeeTokens: [sourceToken],
+      chainId,
+      client: createMockClient({
+        channel: { descriptor: expectedDescriptor, state },
+        onRequest(method, params) {
+          if (method === 'eth_sendRawTransactionSync') broadcast = (params as readonly [Hex])[0]
+        },
+        receipt: receipt([openedLog({ channelId, expiringNonceHash })]),
+      }),
+      escrowContract: tip20ChannelEscrow,
+      expectedAuthorizedSigner: descriptor.authorizedSigner,
+      expectedChannelId: channelId,
+      expectedCurrency: descriptor.token,
+      expectedExpiringNonceHash: expiringNonceHash,
+      expectedOperator: descriptor.operator,
+      expectedPayee: descriptor.payee,
+      expectedPayer: payer,
+      feePayer,
+      serializedTransaction,
+    })
+
+    expect(broadcast).toBeDefined()
+    expect(
+      Transaction.deserialize(broadcast as Transaction.TransactionSerializedTempo).feeToken,
+    ).toBe(sourceToken)
+  })
+
   test('hosted fee-payer relays a sender-signed open without local co-signing', async () => {
     const rpcMethods: string[] = []
     const serializedTransaction = await createOpenTransaction({ signed: true })
@@ -1193,6 +1249,41 @@ describe('precompile broadcastTopUpTransaction', () => {
     expect(
       rpcMethods.slice(0, broadcastIndex).filter((method) => method === 'eth_call'),
     ).toHaveLength(2)
+  })
+
+  test('fee-payer completes top-up with an explicit allowed fee token', async () => {
+    let broadcast: Hex | undefined
+    const serializedTransaction = await createTopUpTransaction({
+      feeToken: false,
+      gas: 100_000n,
+      signed: true,
+    })
+    const channelId = Channel.computeId({ ...descriptor, chainId, escrow: tip20ChannelEscrow })
+    const newDeposit = deposit * 2n
+
+    await Chain.broadcastTopUpTransaction({
+      additionalDeposit: deposit,
+      allowedFeeTokens: [sourceToken],
+      chainId,
+      client: createMockClient({
+        channel: { descriptor, state: { settled: 0n, deposit: newDeposit, closeRequestedAt: 0 } },
+        onRequest(method, params) {
+          if (method === 'eth_sendRawTransactionSync') broadcast = (params as readonly [Hex])[0]
+        },
+        receipt: receipt([topUpLog({ channelId, newDeposit })]),
+      }),
+      descriptor,
+      escrowContract: tip20ChannelEscrow,
+      expectedChannelId: channelId,
+      expectedCurrency: descriptor.token,
+      feePayer,
+      serializedTransaction,
+    })
+
+    expect(broadcast).toBeDefined()
+    expect(
+      Transaction.deserialize(broadcast as Transaction.TransactionSerializedTempo).feeToken,
+    ).toBe(sourceToken)
   })
 
   test('rejects top-up calldata amount mismatches before broadcasting', async () => {

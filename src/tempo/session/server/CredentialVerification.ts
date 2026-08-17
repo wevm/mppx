@@ -424,7 +424,7 @@ export type BroadcastCredentialPayloadParameters = {
   feePayer?: viem_Account | true | undefined
   /** Optional policy for fee-sponsored close/open/top-up transactions. */
   feePayerPolicy?: Partial<FeePayer.Policy> | undefined
-  /** Optional fee token override for close transactions. */
+  /** Optional fee token override for sponsored management and settlement transactions. */
   feeToken?: Address | undefined
   /** Last successful on-chain refresh timestamp per channel ID. */
   lastOnChainVerified: Map<Hex, number>
@@ -483,6 +483,7 @@ export type ValidateCredentialPayloadParameters = Pick<
   | 'expectedOperator'
   | 'feePayer'
   | 'feePayerPolicy'
+  | 'feeToken'
   | 'lastOnChainVerified'
   | 'minVoucherDelta'
   | 'payload'
@@ -549,6 +550,7 @@ async function validateOpenCredential(
     expectedOperator,
   )
   const transaction = Chain.validateOpenCredentialTransaction({
+    ...(parameters.feeToken ? { allowedFeeTokens: [parameters.feeToken] } : {}),
     challengeExpires: challenge.expires,
     chainId,
     escrowContract: escrow,
@@ -614,6 +616,7 @@ async function validateTopUpCredential(
   })
   const transaction = Chain.validateTopUpCredentialTransaction({
     additionalDeposit,
+    ...(parameters.feeToken ? { allowedFeeTokens: [parameters.feeToken] } : {}),
     challengeExpires: challenge.expires,
     chainId,
     descriptor: channel.descriptor,
@@ -861,6 +864,7 @@ async function handleOpenCredential(
   )
 
   const result = await Chain.broadcastOpenTransaction({
+    ...(parameters.feeToken ? { allowedFeeTokens: [parameters.feeToken] } : {}),
     challengeExpires: challenge.expires,
     chainId,
     client,
@@ -950,6 +954,7 @@ async function handleTopUpCredential(
   })
   const result = await Chain.broadcastTopUpTransaction({
     additionalDeposit,
+    ...(parameters.feeToken ? { allowedFeeTokens: [parameters.feeToken] } : {}),
     challengeExpires: challenge.expires,
     chainId,
     client,

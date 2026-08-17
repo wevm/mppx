@@ -957,6 +957,8 @@ export type BroadcastOpenTransactionResult = {
 
 /** Inputs for broadcasting and verifying a client-signed TIP-1034 open transaction. */
 export type BroadcastOpenTransactionParameters = {
+  /** Fee tokens allowed when the server completes a sponsored transaction. Defaults to the channel currency. */
+  allowedFeeTokens?: readonly Address[] | undefined
   /** Hook invoked after calldata validation but before broadcasting. */
   beforeBroadcast?:
     | ((result: Omit<BroadcastOpenTransactionResult, 'txHash' | 'state'>) => Promise<void> | void)
@@ -1042,7 +1044,7 @@ export function validateOpenCredentialTransaction(
   })
   if (parameters.feePayer) assertSenderSigned(transaction)
   validateCredentialSponsorship({
-    allowedFeeTokens: [parameters.expectedCurrency],
+    allowedFeeTokens: parameters.allowedFeeTokens ?? [parameters.expectedCurrency],
     challengeExpires: parameters.challengeExpires,
     chainId: parameters.chainId,
     details: {
@@ -1083,7 +1085,7 @@ export async function broadcastOpenTransaction(
     challengeExpires: parameters.challengeExpires,
     chainId: parameters.chainId,
     client: parameters.client,
-    allowedFeeTokens: [parameters.expectedCurrency],
+    allowedFeeTokens: parameters.allowedFeeTokens ?? [parameters.expectedCurrency],
     details: {
       channelId: parameters.expectedChannelId,
       currency: parameters.expectedCurrency,
@@ -1136,6 +1138,8 @@ export type BroadcastTopUpTransactionResult = {
 export type BroadcastTopUpTransactionParameters = {
   /** Additional deposit amount expected in the top-up calldata. */
   additionalDeposit: bigint
+  /** Fee tokens allowed when the server completes a sponsored transaction. Defaults to the channel currency. */
+  allowedFeeTokens?: readonly Address[] | undefined
   /** Challenge expiration propagated into fee-payer policy checks. */
   challengeExpires?: string | undefined
   /** Chain ID used for fee-payer transaction signing. */
@@ -1195,7 +1199,7 @@ export function validateTopUpCredentialTransaction(
   })
   if (parameters.feePayer) assertSenderSigned(transaction)
   validateCredentialSponsorship({
-    allowedFeeTokens: [parameters.expectedCurrency],
+    allowedFeeTokens: parameters.allowedFeeTokens ?? [parameters.expectedCurrency],
     challengeExpires: parameters.challengeExpires,
     chainId: parameters.chainId,
     details: {
@@ -1219,7 +1223,7 @@ export async function broadcastTopUpTransaction(
     challengeExpires: parameters.challengeExpires,
     chainId: parameters.chainId,
     client: parameters.client,
-    allowedFeeTokens: [parameters.expectedCurrency],
+    allowedFeeTokens: parameters.allowedFeeTokens ?? [parameters.expectedCurrency],
     details: {
       additionalDeposit: parameters.additionalDeposit.toString(),
       channelId: parameters.expectedChannelId,
