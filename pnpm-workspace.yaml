@@ -11,7 +11,7 @@ trustPolicy: no-downgrade
 
 catalog:
   file-type: '22.0.1'
-  ox: '0.14.33'
+  ox: '1.6.2'
   typescript: '~7.0.2'
 
 overrides:
