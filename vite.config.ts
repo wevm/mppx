@@ -51,7 +51,13 @@ export default defineConfig({
           name: 'node',
           alias,
           include: ['src/**/*.test.ts'],
-          exclude: ['**/node_modules/**', 'src/**/*.browser.test.ts', 'src/cli/**/*.test.ts'],
+          exclude: [
+            '**/node_modules/**',
+            'src/**/*.browser.test.ts',
+            'src/cli/**/*.test.ts',
+            'src/x402/Exact.localnet.test.ts',
+            'src/x402/Official.integration.test.ts',
+          ],
           typecheck: {
             include: ['src/**/*.test-d.ts'],
           },
@@ -59,6 +65,28 @@ export default defineConfig({
           globals: true,
           retry: 3,
           testTimeout: 10_000,
+          hookTimeout: 60_000,
+        },
+      },
+      {
+        test: {
+          name: 'x402-localnet',
+          alias,
+          include: ['src/x402/Exact.localnet.test.ts'],
+          globals: true,
+          retry: 0,
+          testTimeout: 60_000,
+          hookTimeout: 60_000,
+        },
+      },
+      {
+        test: {
+          name: 'x402-official',
+          alias,
+          include: ['src/x402/Official.integration.test.ts'],
+          globals: true,
+          retry: 0,
+          testTimeout: 60_000,
           hookTimeout: 60_000,
         },
       },

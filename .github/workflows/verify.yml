@@ -253,7 +253,7 @@ jobs:
             --name mppx-x402-anvil \
             -p 18546:8545 \
             --entrypoint anvil \
-            ghcr.io/foundry-rs/foundry:latest \
+            ghcr.io/foundry-rs/foundry@sha256:ede4c35d3e9310f6c77f09952cd666e17e4ee7cd5228290d8b4fc9d5cdd37eb1 \
             --host 0.0.0.0 \
             --port 8545 \
             --chain-id 31337 \
@@ -280,11 +280,14 @@ jobs:
             -v "${PWD}:/workspace" \
             -w /workspace \
             --entrypoint forge \
-            ghcr.io/foundry-rs/foundry:latest \
+            ghcr.io/foundry-rs/foundry@sha256:ede4c35d3e9310f6c77f09952cd666e17e4ee7cd5228290d8b4fc9d5cdd37eb1 \
             build
 
       - name: Run x402 localnet tests
-        run: pnpm exec vp test --run --project node src/x402/Exact.localnet.test.ts --reporter=verbose --bail=1
+        run: pnpm exec vp test --run --project x402-localnet --reporter=verbose --bail=1
+
+      - name: Run official x402 interoperability tests
+        run: pnpm exec vp test --run --project x402-official --reporter=verbose --bail=1
 
   test-html:
     name: Test HTML
