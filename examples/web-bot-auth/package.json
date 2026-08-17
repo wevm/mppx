@@ -6,10 +6,10 @@
     "check:types": "tsgo -b"
   },
   "dependencies": {
-    "@types/node": "^25.6.0",
+    "@types/node": "^26.2.0",
     "@typescript/native-preview": "^7.0.0-dev.20260707.2",
     "mppx": "latest",
     "typescript": "catalog:",
-    "viem": "^2.54.4"
+    "viem": "^2.55.13"
   }
 }

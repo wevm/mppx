@@ -11,12 +11,12 @@
   },
   "dependencies": {
     "@remix-run/node-fetch-server": "^0.14.0",
-    "@stripe/stripe-js": "^9.12.1",
-    "@types/node": "^25.6.0",
+    "@stripe/stripe-js": "^9.13.0",
+    "@types/node": "^26.2.0",
     "@typescript/native-preview": "^7.0.0-dev.20260707.2",
     "mppx": "latest",
     "stripe": "^17.7.0",
     "typescript": "catalog:",
-    "vite": "^8.2.0"
+    "vite": "^8.2.1"
   }
 }
