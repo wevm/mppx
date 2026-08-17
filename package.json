@@ -8,6 +8,7 @@
     "changeset:version": "changeset version && vp fmt .",
     "check": "vp lint --fix && vp fmt --write .",
     "check:ci": "vp lint && vp fmt --check .",
+    "check:package": "node --import tsx scripts/check:package.ts",
     "check:types": "pnpm build:html && tsgo -b",
     "check:types:html": "tsgo -p src/tempo/server/internal/html/tsconfig.json && tsgo -p src/stripe/server/internal/html/tsconfig.json",
     "check:types:examples": "pnpm -r --filter './examples/**' run check:types",
