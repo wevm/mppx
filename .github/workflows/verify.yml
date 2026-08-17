@@ -286,8 +286,8 @@ jobs:
       - name: Run x402 localnet tests
         run: pnpm exec vp test --run --project x402-localnet --reporter=verbose --bail=1
 
-      - name: Run official x402 interoperability tests
-        run: pnpm exec vp test --run --project x402-official --reporter=verbose --bail=1
+      - name: Run Coinbase x402 client interoperability tests
+        run: pnpm exec vp test --run --project x402-coinbase-client --reporter=verbose --bail=1
 
   test-html:
     name: Test HTML

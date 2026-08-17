@@ -56,7 +56,7 @@ export default defineConfig({
             'src/**/*.browser.test.ts',
             'src/cli/**/*.test.ts',
             'src/x402/Exact.localnet.test.ts',
-            'src/x402/Official.integration.test.ts',
+            'src/x402/CoinbaseClient.integration.test.ts',
           ],
           typecheck: {
             include: ['src/**/*.test-d.ts'],
@@ -81,9 +81,9 @@ export default defineConfig({
       },
       {
         test: {
-          name: 'x402-official',
+          name: 'x402-coinbase-client',
           alias,
-          include: ['src/x402/Official.integration.test.ts'],
+          include: ['src/x402/CoinbaseClient.integration.test.ts'],
           globals: true,
           retry: 0,
           testTimeout: 60_000,

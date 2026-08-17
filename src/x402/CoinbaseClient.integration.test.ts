@@ -62,7 +62,7 @@ type ForgeArtifact = {
   bytecode: { object: Hex }
 }
 
-type OfficialFacilitatorServer = Http.TestServer & {
+type CoinbaseFacilitatorServer = Http.TestServer & {
   stats: {
     settleRequests: number
     supportedRequests: number
@@ -70,29 +70,29 @@ type OfficialFacilitatorServer = Http.TestServer & {
   }
 }
 
-describeLocalnet('official x402 resource server interoperability', () => {
-  test('pays an official resource server with the mppx client', { timeout: 60_000 }, async () => {
-    const artifact = await loadArtifact()
-    const token = await deployToken(artifact)
-    await mint(artifact, token, payer.address, parseUnits('1000', 6))
+type CoinbaseHarness = {
+  artifact: ForgeArtifact
+  facilitator: CoinbaseFacilitatorServer
+  resourceServer: Http.TestServer
+  token: Address
+}
 
-    const facilitator = await createOfficialFacilitator()
-    const resourceServer = await createOfficialResourceServer({
-      facilitatorUrl: facilitator.url,
-      token,
-    })
+describeLocalnet('Coinbase x402 client interoperability', () => {
+  test('pays a Coinbase resource server with the mppx client', { timeout: 60_000 }, async () => {
+    const harness = await setupCoinbaseHarness()
 
     try {
-      const challenge = await fetch(`${resourceServer.url}/paid`)
+      const challenge = await fetch(`${harness.resourceServer.url}/paid`)
       expect(challenge.status).toBe(402)
 
       const paymentRequiredHeader = challenge.headers.get(Types.paymentRequiredHeader)
       expect(paymentRequiredHeader).toBeTruthy()
-      expect(Header.decodePaymentRequired(paymentRequiredHeader!)).toMatchObject({
+      const paymentRequired = Header.decodePaymentRequired(paymentRequiredHeader!)
+      expect(paymentRequired).toMatchObject({
         accepts: [
           {
             amount: paymentAmount.toString(),
-            asset: token.toLowerCase(),
+            asset: harness.token.toLowerCase(),
             network,
             payTo: recipient.address,
             scheme: 'exact',
@@ -100,10 +100,19 @@ describeLocalnet('official x402 resource server interoperability', () => {
         ],
         x402Version: 2,
       })
+      expect(paymentRequired.extensions?.mppx).toBeUndefined()
+      expect(paymentRequired.resource.url).toBe(`${harness.resourceServer.url}/paid`)
+      expect(harness.facilitator.stats).toEqual({
+        settleRequests: 0,
+        supportedRequests: 1,
+        verifyRequests: 0,
+      })
 
-      const payerBefore = await balanceOf(artifact, token, payer.address)
-      const recipientBefore = await balanceOf(artifact, token, recipient.address)
-      const response = await createMppxClient(token).fetch(`${resourceServer.url}/paid`)
+      const payerBefore = await balanceOf(harness.artifact, harness.token, payer.address)
+      const recipientBefore = await balanceOf(harness.artifact, harness.token, recipient.address)
+      const response = await createMppxClient(harness.token).fetch(
+        `${harness.resourceServer.url}/paid`,
+      )
 
       if (response.status !== 200)
         throw new Error(`Expected paid response, got ${response.status}: ${await response.text()}`)
@@ -122,23 +131,102 @@ describeLocalnet('official x402 resource server interoperability', () => {
         hash: paymentResponse.transaction as Hex,
       })
       expect(receipt.status).toBe('success')
-      expect(await balanceOf(artifact, token, payer.address)).toBe(payerBefore - paymentAmount)
-      expect(await balanceOf(artifact, token, recipient.address)).toBe(
+      expect(await balanceOf(harness.artifact, harness.token, payer.address)).toBe(
+        payerBefore - paymentAmount,
+      )
+      expect(await balanceOf(harness.artifact, harness.token, recipient.address)).toBe(
         recipientBefore + paymentAmount,
       )
-      expect(facilitator.stats).toEqual({
+      expect(harness.facilitator.stats).toEqual({
         settleRequests: 1,
         supportedRequests: 1,
         verifyRequests: 1,
       })
     } finally {
-      resourceServer.close()
-      facilitator.close()
+      closeCoinbaseHarness(harness)
+    }
+  })
+
+  test('rejects a replayed mppx credential', { timeout: 60_000 }, async () => {
+    const harness = await setupCoinbaseHarness()
+
+    try {
+      const mppx = createMppxClient(harness.token)
+      const challenge = await mppx.rawFetch(`${harness.resourceServer.url}/paid`)
+      const credential = await mppx.createCredential(challenge)
+      const paymentPayload = Header.decodePaymentSignature(credential)
+
+      expect(paymentPayload.extensions?.mppx).toBeUndefined()
+      expect(paymentPayload.resource?.url).toBe(`${harness.resourceServer.url}/paid`)
+      if (!('authorization' in paymentPayload.payload)) throw new Error()
+      expect(paymentPayload.payload.authorization.nonce).toMatch(/^0x[0-9a-f]{64}$/)
+
+      const payerBefore = await balanceOf(harness.artifact, harness.token, payer.address)
+      const recipientBefore = await balanceOf(harness.artifact, harness.token, recipient.address)
+      const headers = { [Types.paymentSignatureHeader]: credential }
+
+      const first = await mppx.rawFetch(`${harness.resourceServer.url}/paid`, { headers })
+      expect(first.status).toBe(200)
+      expect(await first.text()).toBe('paid by mppx')
+      const paymentResponseHeader = first.headers.get(Types.paymentResponseHeader)
+      expect(paymentResponseHeader).toBeTruthy()
+      const paymentResponse = Header.decodePaymentResponse(paymentResponseHeader!)
+      expect(paymentResponse.success).toBe(true)
+      const receipt = await waitForTransactionReceipt(payerClient, {
+        hash: paymentResponse.transaction as Hex,
+      })
+      expect(receipt.status).toBe('success')
+
+      const replay = await mppx.rawFetch(`${harness.resourceServer.url}/paid`, { headers })
+      expect(replay.status).toBe(402)
+      const replayHeader = replay.headers.get(Types.paymentRequiredHeader)
+      expect(replayHeader).toBeTruthy()
+      expect(Header.decodePaymentRequired(replayHeader!).error).toBeTruthy()
+      expect(await balanceOf(harness.artifact, harness.token, payer.address)).toBe(
+        payerBefore - paymentAmount,
+      )
+      expect(await balanceOf(harness.artifact, harness.token, recipient.address)).toBe(
+        recipientBefore + paymentAmount,
+      )
+      expect(harness.facilitator.stats).toEqual({
+        settleRequests: 1,
+        supportedRequests: 1,
+        verifyRequests: 2,
+      })
+    } finally {
+      closeCoinbaseHarness(harness)
     }
   })
 })
 
-async function createOfficialFacilitator(): Promise<OfficialFacilitatorServer> {
+async function setupCoinbaseHarness(): Promise<CoinbaseHarness> {
+  const artifact = await loadArtifact()
+  const token = await deployToken(artifact)
+  await mint(artifact, token, payer.address, parseUnits('1000', 6))
+  const facilitator = await createCoinbaseFacilitator()
+
+  try {
+    return {
+      artifact,
+      facilitator,
+      resourceServer: await createCoinbaseResourceServer({
+        facilitatorUrl: facilitator.url,
+        token,
+      }),
+      token,
+    }
+  } catch (error) {
+    facilitator.close()
+    throw error
+  }
+}
+
+function closeCoinbaseHarness(harness: CoinbaseHarness): void {
+  harness.resourceServer.close()
+  harness.facilitator.close()
+}
+
+async function createCoinbaseFacilitator(): Promise<CoinbaseFacilitatorServer> {
   const viemClient = createWalletClient({
     account: facilitatorAccount,
     chain,
@@ -180,7 +268,7 @@ async function createOfficialFacilitator(): Promise<OfficialFacilitatorServer> {
   return Object.assign(server, { stats })
 }
 
-async function createOfficialResourceServer(parameters: {
+async function createCoinbaseResourceServer(parameters: {
   facilitatorUrl: string
   token: Address
 }): Promise<Http.TestServer> {
@@ -211,7 +299,7 @@ async function createOfficialResourceServer(parameters: {
             },
             scheme: 'exact',
           },
-          description: 'Official x402 interoperability fixture',
+          description: 'Coinbase x402 interoperability fixture',
         },
       },
       resourceServer,
@@ -313,7 +401,7 @@ async function readFacilitatorRequest(req: IncomingMessage): Promise<{
     paymentRequirements?: PaymentRequirements
   }
   if (!body.paymentPayload || !body.paymentRequirements)
-    throw new Error('Official facilitator request is missing payment fields.')
+    throw new Error('Coinbase facilitator request is missing payment fields.')
   return {
     paymentPayload: body.paymentPayload,
     paymentRequirements: body.paymentRequirements,
