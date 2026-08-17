@@ -160,6 +160,11 @@
       "types": "./dist/server/index.d.ts",
       "default": "./dist/server/index.js"
     },
+    "./server/core": {
+      "src": "./src/server/core.ts",
+      "types": "./dist/server/core.d.ts",
+      "default": "./dist/server/core.js"
+    },
     "./stripe": {
       "src": "./src/stripe/index.ts",
       "types": "./dist/stripe/index.d.ts",
@@ -174,6 +179,11 @@
       "src": "./src/stripe/server/index.ts",
       "types": "./dist/stripe/server/index.d.ts",
       "default": "./dist/stripe/server/index.js"
+    },
+    "./stripe/server/spt": {
+      "src": "./src/stripe/server/spt.ts",
+      "types": "./dist/stripe/server/spt.d.ts",
+      "default": "./dist/stripe/server/spt.js"
     },
     "./x402": {
       "src": "./src/x402/index.ts",
