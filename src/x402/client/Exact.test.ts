@@ -8,7 +8,7 @@ import * as Assets from '../Assets.js'
 import * as Header from '../Header.js'
 import * as RouteBinding from '../internal/RouteBinding.js'
 import * as Types from '../Types.js'
-import { canHandleChallenge, createCredential } from './Exact.js'
+import { createCredential } from './Exact.js'
 
 type X402Challenge = Parameters<typeof createCredential>[0]['challenge']
 
@@ -207,7 +207,7 @@ describe('x402 exact credential helper', () => {
     expect(signTypedData).not.toHaveBeenCalled()
   })
 
-  test('signs mppx-bound EIP-3009 exact payment payloads', async () => {
+  test('signs EIP-3009 exact payment payloads', async () => {
     const signTypedData = vi.fn(async () => '0x1234')
     const config = {
       account: {
@@ -271,143 +271,9 @@ describe('x402 exact credential helper', () => {
       throw new Error()
     expect(first.payload.authorization.nonce).not.toBe(second.payload.authorization.nonce)
   })
-
-  test('signs standard EIP-3009 payloads with fresh random nonces', async () => {
-    const signTypedData = vi.fn(async () => '0x1234' as const)
-    const config = {
-      account: {
-        ...account,
-        signTypedData,
-      } as unknown as Account,
-      currencies: [usdc],
-      maxAmount: '0.01',
-      networks: [Chains.baseSepolia],
-    } as const
-
-    const first = Header.decodePaymentSignature(
-      await createCredential({
-        challenge: challenge({ extensions: undefined }),
-        config,
-        context: {},
-      }),
-    )
-    const second = Header.decodePaymentSignature(
-      await createCredential({
-        challenge: challenge({ extensions: undefined }),
-        config,
-        context: {},
-      }),
-    )
-
-    expect(signTypedData).toHaveBeenCalledTimes(2)
-    expect(first.extensions).toBeUndefined()
-    expect(first.resource?.url).toBe('https://example.com/paid')
-    if (!('authorization' in first.payload) || !('authorization' in second.payload))
-      throw new Error()
-    expect(first.payload.authorization.nonce).toMatch(/^0x[0-9a-f]{64}$/)
-    expect(second.payload.authorization.nonce).toMatch(/^0x[0-9a-f]{64}$/)
-    expect(first.payload.authorization.nonce).not.toBe(second.payload.authorization.nonce)
-  })
-
-  test('preserves non-mppx extensions without treating them as route binding', async () => {
-    const extensions = {
-      bazaar: {
-        info: { catalog: 'cdp' },
-        schema: { type: 'object' },
-      },
-    }
-    const credential = await createCredential({
-      challenge: challenge({ extensions }),
-      config: {
-        account,
-        currencies: [usdc],
-        maxAmount: '0.01',
-        networks: [Chains.baseSepolia],
-      },
-      context: {},
-    })
-    const paymentPayload = Header.decodePaymentSignature(credential)
-
-    expect(paymentPayload.extensions).toEqual(extensions)
-    if (!('authorization' in paymentPayload.payload)) throw new Error()
-    expect(paymentPayload.payload.authorization.nonce).toMatch(/^0x[0-9a-f]{64}$/)
-  })
-
-  test('rejects standard challenges without resource information before signing', async () => {
-    const signTypedData = vi.fn(async () => '0x1234' as const)
-
-    await expect(
-      createCredential({
-        challenge: challenge({ extensions: undefined, resource: undefined }),
-        config: {
-          account: { ...account, signTypedData } as unknown as Account,
-          currencies: [usdc],
-          maxAmount: '0.01',
-          networks: [Chains.baseSepolia],
-        },
-        context: {},
-      }),
-    ).rejects.toThrow('x402 exact EIP-3009 requires resource information.')
-    expect(signTypedData).not.toHaveBeenCalled()
-  })
-
-  test('recognizes supported bound and standard challenges', () => {
-    const config = {
-      account,
-      currencies: [usdc],
-      maxAmount: '0.01',
-      networks: [Chains.baseSepolia],
-    } as const
-
-    expect(canHandleChallenge({ challenge: challenge(), config })).toBe(true)
-    expect(canHandleChallenge({ challenge: challenge({ extensions: undefined }), config })).toBe(
-      true,
-    )
-  })
-
-  test.each([
-    {
-      label: 'a missing resource',
-      overrides: { resource: undefined },
-    },
-    {
-      label: 'Permit2',
-      overrides: {
-        extra: { assetTransferMethod: 'permit2', name: 'USDC', version: '2' },
-      },
-    },
-    {
-      label: 'missing token name',
-      overrides: { extra: { assetTransferMethod: 'eip3009', version: '2' } },
-    },
-    {
-      label: 'missing token version',
-      overrides: { extra: { assetTransferMethod: 'eip3009', name: 'USDC' } },
-    },
-    {
-      label: 'a disallowed network',
-      overrides: { network: 'eip155:8453' },
-    },
-    {
-      label: 'an amount over policy',
-      overrides: { amount: '10001' },
-    },
-  ])('does not claim support for $label', ({ overrides }) => {
-    expect(
-      canHandleChallenge({
-        challenge: challenge(overrides as Partial<Types.ExactRequest>),
-        config: {
-          account,
-          currencies: [usdc],
-          maxAmount: '0.01',
-          networks: [Chains.baseSepolia],
-        },
-      }),
-    ).toBe(false)
-  })
 })
 
-function challenge(overrides: Partial<Types.ExactRequest> = {}): X402Challenge {
+function challenge(overrides: Partial<Types.PaymentRequirements> = {}): X402Challenge {
   return Challenge.from({
     id: 'x402-test',
     intent: 'charge',

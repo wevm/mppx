@@ -1,9 +1,8 @@
 import { Challenge, Credential, Errors, Mcp, Receipt } from 'mppx'
-import { evm, tempo } from 'mppx/client'
+import { tempo } from 'mppx/client'
 import { Mppx as Mppx_server, tempo as tempo_server } from 'mppx/server'
 import { Header as x402_Header, Types as x402_Types, type PaymentRequired } from 'mppx/x402'
 import { Base64 } from 'ox'
-import type { Account } from 'viem'
 import { createClient, defineChain } from 'viem'
 import { describe, expect, test, vi } from 'vp/test'
 import * as Http from '~test/Http.js'
@@ -370,15 +369,6 @@ const x402PaymentRequired = {
   resource: { url: 'https://example.com/api' },
   x402Version: 2,
 } satisfies PaymentRequired
-
-const x402Eip3009Accept = {
-  ...x402PaymentRequired.accepts[0]!,
-  extra: {
-    assetTransferMethod: 'eip3009',
-    name: 'USDC',
-    version: '2',
-  },
-} satisfies x402_Types.PaymentRequirements
 
 /** Builds a valid 402 response with a WWW-Authenticate header. */
 function make402(overrides?: { expires?: string; id?: string; intent?: string; method?: string }) {
@@ -881,11 +871,7 @@ describe('Fetch.from: 402 retry path', () => {
     expect(retryHeaders.get(x402_Types.paymentSignatureHeader)).toBeNull()
   })
 
-  test('signs a standard x402 EIP-3009 challenge without mppx extensions', async () => {
-    const paymentRequired = {
-      ...x402PaymentRequired,
-      accepts: [x402Eip3009Accept],
-    } satisfies PaymentRequired
+  test('uses x402 when no signable Payment-auth challenge is available', async () => {
     let callCount = 0
     const calls: { init: RequestInit | undefined }[] = []
     const mockFetch: typeof globalThis.fetch = async (_input, init) => {
@@ -895,7 +881,8 @@ describe('Fetch.from: 402 retry path', () => {
         return new Response(null, {
           status: 402,
           headers: {
-            [x402_Types.paymentRequiredHeader]: x402_Header.encodePaymentRequired(paymentRequired),
+            [x402_Types.paymentRequiredHeader]:
+              x402_Header.encodePaymentRequired(x402PaymentRequired),
           },
         })
       return new Response('OK', { status: 200 })
@@ -904,13 +891,13 @@ describe('Fetch.from: 402 retry path', () => {
     const fetch = Fetch.from({
       fetch: mockFetch,
       methods: [
-        evm.charge({
-          account: accounts[0],
-          currencies: [evm.assets.baseSepolia.USDC],
-          maxAmount: '0.01',
-          networks: [84532],
-        }),
-      ],
+        {
+          name: 'evm',
+          intent: 'charge',
+          context: undefined,
+          createCredential: async () => 'x402-credential',
+        },
+      ] as const,
     })
 
     const response = await fetch('https://example.com/api')
@@ -918,107 +905,7 @@ describe('Fetch.from: 402 retry path', () => {
     expect(response.status).toBe(200)
     const retryHeaders = new Headers(calls[1]!.init?.headers)
     expect(retryHeaders.get('Authorization')).toBeNull()
-    const paymentSignature = retryHeaders.get(x402_Types.paymentSignatureHeader)
-    expect(paymentSignature).toBeTruthy()
-    const payload = x402_Header.decodePaymentSignature(paymentSignature!)
-    expect(payload.accepted).toEqual(x402Eip3009Accept)
-    expect(payload.extensions).toBeUndefined()
-    expect(payload.resource).toEqual(paymentRequired.resource)
-    if (!('authorization' in payload.payload)) throw new Error()
-    expect(payload.payload.authorization.nonce).toMatch(/^0x[0-9a-f]{64}$/)
-  })
-
-  test('skips unsupported and policy-rejected x402 offers before signing a later offer', async () => {
-    const paymentRequired = {
-      ...x402PaymentRequired,
-      accepts: [
-        {
-          ...x402Eip3009Accept,
-          extra: { ...x402Eip3009Accept.extra, assetTransferMethod: 'permit2' },
-        },
-        { ...x402Eip3009Accept, network: 'eip155:8453' },
-        { ...x402Eip3009Accept, amount: '10001' },
-        { ...x402Eip3009Accept, extra: { assetTransferMethod: 'eip3009' } },
-        x402Eip3009Accept,
-      ],
-    } satisfies PaymentRequired
-    let callCount = 0
-    const calls: { init: RequestInit | undefined }[] = []
-    const mockFetch: typeof globalThis.fetch = async (_input, init) => {
-      calls.push({ init })
-      callCount++
-      if (callCount === 1)
-        return new Response(null, {
-          status: 402,
-          headers: {
-            [x402_Types.paymentRequiredHeader]: x402_Header.encodePaymentRequired(paymentRequired),
-          },
-        })
-      return new Response('OK', { status: 200 })
-    }
-    const fetch = Fetch.from({
-      fetch: mockFetch,
-      methods: [
-        evm.charge({
-          account: accounts[0],
-          currencies: [evm.assets.baseSepolia.USDC],
-          maxAmount: '0.01',
-          networks: [84532],
-        }),
-      ],
-    })
-
-    const response = await fetch('https://example.com/api')
-
-    expect(response.status).toBe(200)
-    expect(calls).toHaveLength(2)
-    const paymentSignature = new Headers(calls[1]!.init?.headers).get(
-      x402_Types.paymentSignatureHeader,
-    )
-    expect(paymentSignature).toBeTruthy()
-    expect(x402_Header.decodePaymentSignature(paymentSignature!).accepted).toEqual(
-      x402Eip3009Accept,
-    )
-  })
-
-  test('does not sign or retry when every x402 offer is unsupported or rejected by policy', async () => {
-    const signTypedData = vi.fn(async () => '0x1234' as const)
-    const paymentRequired = {
-      ...x402PaymentRequired,
-      accepts: [
-        {
-          ...x402Eip3009Accept,
-          extra: { ...x402Eip3009Accept.extra, assetTransferMethod: 'permit2' },
-        },
-        { ...x402Eip3009Accept, network: 'eip155:8453' },
-        { ...x402Eip3009Accept, amount: '10001' },
-        { ...x402Eip3009Accept, extra: { assetTransferMethod: 'eip3009' } },
-      ],
-    } satisfies PaymentRequired
-    const mockFetch = vi.fn<typeof globalThis.fetch>(
-      async () =>
-        new Response(null, {
-          status: 402,
-          headers: {
-            [x402_Types.paymentRequiredHeader]: x402_Header.encodePaymentRequired(paymentRequired),
-          },
-        }),
-    )
-    const fetch = Fetch.from({
-      fetch: mockFetch,
-      methods: [
-        evm.charge({
-          account: { ...accounts[0], signTypedData } as unknown as Account,
-          currencies: [evm.assets.baseSepolia.USDC],
-          maxAmount: '0.01',
-          networks: [84532],
-        }),
-      ],
-    })
-
-    await expect(fetch('https://example.com/api')).rejects.toThrow('No method found for challenges')
-    expect(mockFetch).toHaveBeenCalledOnce()
-    expect(signTypedData).not.toHaveBeenCalled()
+    expect(retryHeaders.get(x402_Types.paymentSignatureHeader)).toBe('x402-credential')
   })
 
   test('lets orderChallenges force x402 before native Payment-auth', async () => {

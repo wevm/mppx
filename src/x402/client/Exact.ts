@@ -17,10 +17,9 @@ export async function createCredential(parameters: createCredential.Parameters):
   const request = parameters.challenge.request as Types.ExactRequest
   const accepted = Types.toPaymentRequirements(request)
   assertPolicy(parameters.config, accepted)
-  if (!request.resource) throw new Error('x402 exact EIP-3009 requires resource information.')
-  const extensions = request.extensions?.mppx
-    ? withNonceSalt(request.extensions)
-    : request.extensions
+  if (!request.resource || !request.extensions?.mppx)
+    throw new Error('x402 exact EIP-3009 requires route binding.')
+  const extensions = withNonceSalt(request.extensions)
   const transferMethod = accepted.extra?.assetTransferMethod ?? 'eip3009'
   if (transferMethod !== 'eip3009')
     throw new Error(`x402 exact ${String(transferMethod)} signing is not implemented yet.`)
@@ -33,13 +32,11 @@ export async function createCredential(parameters: createCredential.Parameters):
   const now = Math.floor(Date.now() / 1000)
   const authorization: Types.ExactEip3009Payload['authorization'] = {
     from: getAddress(account.address),
-    nonce: extensions?.mppx
-      ? RouteBinding.nonce({
-          accepted,
-          extensions,
-          resource: request.resource,
-        })
-      : randomAuthorizationNonce(),
+    nonce: RouteBinding.nonce({
+      accepted,
+      extensions,
+      resource: request.resource,
+    }),
     to: getAddress(accepted.payTo),
     validAfter: (now - 600).toString(),
     validBefore: (now + accepted.maxTimeoutSeconds).toString(),
@@ -64,7 +61,7 @@ export async function createCredential(parameters: createCredential.Parameters):
 
   return Header.encodePaymentSignature({
     accepted,
-    ...(extensions ? { extensions } : {}),
+    extensions,
     payload: {
       authorization,
       signature,
@@ -74,39 +71,11 @@ export async function createCredential(parameters: createCredential.Parameters):
   })
 }
 
-/** Returns whether this client can sign the given x402 exact challenge. */
-export function canHandleChallenge(parameters: canHandleChallenge.Parameters): boolean {
-  const request = parameters.challenge.request as Types.ExactRequest
-  let accepted: Types.PaymentRequirements
-  try {
-    accepted = Types.toPaymentRequirements(request)
-    assertPolicy(parameters.config, accepted)
-  } catch {
-    return false
-  }
-
-  if (!request.resource) return false
-
-  const transferMethod = accepted.extra?.assetTransferMethod ?? 'eip3009'
-  if (transferMethod !== 'eip3009') return false
-
-  const name = accepted.extra?.name
-  const version = accepted.extra?.version
-  return typeof name === 'string' && typeof version === 'string'
-}
-
 export declare namespace createCredential {
   type Parameters = {
     challenge: Challenge.Challenge<Types.ExactRequest>
     config: Config
     context?: Context | undefined
-  }
-}
-
-export declare namespace canHandleChallenge {
-  type Parameters = {
-    challenge: Challenge.Challenge<Types.ExactRequest>
-    config: Config
   }
 }
 
@@ -210,16 +179,8 @@ function withNonceSalt(extensions: Types.Extensions): Types.Extensions {
 }
 
 function randomNonceSalt(): string {
-  return randomBytes32().slice(2)
-}
-
-function randomAuthorizationNonce(): `0x${string}` {
-  return randomBytes32()
-}
-
-function randomBytes32(): `0x${string}` {
   const crypto = globalThis.crypto
   if (!crypto?.getRandomValues) throw new Error('x402 exact requires crypto randomness.')
   const bytes = crypto.getRandomValues(new Uint8Array(32))
-  return `0x${Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('')}`
+  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('')
 }

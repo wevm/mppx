@@ -18,13 +18,6 @@ import * as Types from '../Types.js'
  */
 export function charge(parameters: charge.Parameters) {
   return Method.toClient(Methods.charge, {
-    canHandleChallenge({ challenge }) {
-      if (!isX402Challenge(challenge)) return true
-      return x402_Exact.canHandleChallenge({
-        challenge: challenge as never,
-        config: parameters as x402_Exact.Config,
-      })
-    },
     context: z.object({
       account: z.optional(z.custom<Account>()),
     }),
