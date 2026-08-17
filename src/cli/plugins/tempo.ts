@@ -1,6 +1,5 @@
 import * as child from 'node:child_process'
 import * as fs from 'node:fs'
-import { createRequire } from 'node:module'
 import * as os from 'node:os'
 import * as path from 'node:path'
 
@@ -36,7 +35,7 @@ import {
 } from '../utils.js'
 import { createPlugin, type Plugin } from './plugin.js'
 
-const packageJson = createRequire(import.meta.url)('../../../package.json') as { name: string }
+const packageName = 'mppx'
 const booleanOption = z.union([
   z.boolean(),
   z.literal('true').transform(() => true),
@@ -1094,7 +1093,7 @@ function fallbackFromTempo(): string | undefined {
       for (const block of stdout.split('keychain:')) {
         const serviceMatch = block.match(/"svce"<blob>="([^"]*)"/)
         const accountMatch = block.match(/"acct"<blob>="([^"]*)"/)
-        if (serviceMatch?.[1] === packageJson.name && accountMatch?.[1])
+        if (serviceMatch?.[1] === packageName && accountMatch?.[1])
           mppxAccounts.push(accountMatch[1])
       }
       if (mppxAccounts.length > 0) {

@@ -46,10 +46,12 @@ import {
 } from './utils.js'
 import validate from './validate/index.js'
 
-const packageJson = createRequire(import.meta.url)('../../package.json') as {
-  name: string
-  version: string
-}
+declare const __MPPX_CLI_VERSION__: string
+
+const version =
+  typeof __MPPX_CLI_VERSION__ === 'string'
+    ? __MPPX_CLI_VERSION__
+    : (createRequire(import.meta.url)('../../package.json') as { version: string }).version
 
 const accountSummarySchema = z.object({
   address: z.string(),
@@ -213,7 +215,7 @@ function findService(
 
 const cli = Cli.create('mppx', {
   mcp: { tools: { discovery: 'direct' } },
-  version: packageJson.version,
+  version,
   description: 'Make HTTP requests with automatic payment handling',
   usage: [{ suffix: '<url> [options]' }],
   args: z.object({
@@ -260,11 +262,7 @@ const cli = Cli.create('mppx', {
       .describe('Session selection: auto, new, or channel ID'),
     silent: z.boolean().default(false).describe('Silent mode (suppress progress and info)'),
     slippage: z.number().optional().describe('Tempo auto-swap max slippage percentage'),
-    userAgent: z
-      .string()
-      .optional()
-      .default(`${packageJson.name}/${packageJson.version}`)
-      .describe('Set User-Agent header'),
+    userAgent: z.string().optional().default(`mppx/${version}`).describe('Set User-Agent header'),
     verbose: z
       .number()
       .default(0)

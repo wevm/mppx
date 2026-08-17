@@ -1,9 +1,10 @@
 {
   "scripts": {
-    "build": "pnpm build:html && zile && node scripts/set-workspace-bin.js",
+    "build": "pnpm build:html && zile && pnpm build:cli && node scripts/set-workspace-bin.js",
+    "build:cli": "node --import tsx scripts/build:cli.ts",
     "build:html": "node --import tsx scripts/build:html.ts",
-    "changeset:publish:main": "zile publish:prepare && changeset publish --no-git-tag --tag main && zile publish:post",
-    "changeset:publish": "zile publish:prepare && changeset publish && zile publish:post",
+    "changeset:publish:main": "zile publish:prepare && node --import tsx scripts/build:cli.ts && node --import tsx scripts/prepare:publish.ts && changeset publish --no-git-tag --tag main && zile publish:post",
+    "changeset:publish": "zile publish:prepare && node --import tsx scripts/build:cli.ts && node --import tsx scripts/prepare:publish.ts && changeset publish && zile publish:post",
     "changeset:version": "changeset version && vp fmt .",
     "check": "vp lint --fix && vp fmt --write .",
     "check:ci": "vp lint && vp fmt --check .",
@@ -49,6 +50,7 @@
     "file-type": "catalog:",
     "frog": "^1.0.15",
     "hono": "4.12.32",
+    "incur": "^0.4.26",
     "isows": "^1.0.7",
     "playwright": "^1.62.1",
     "pkg-pr-new": "0.0.88",
@@ -261,7 +263,6 @@
   "dependencies": {
     "@stripe/stripe-js": "9.12.1",
     "eventsource-parser": "3.1.0",
-    "incur": "^0.4.26",
     "ox": "catalog:",
     "structured-headers": "2.0.3",
     "zod": "^4.4.3"
